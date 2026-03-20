@@ -1,0 +1,52 @@
+name: Build and Test
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -v ./...
+
+      - name: Check for test files
+        run: |
+          TEST_FILES=$(find . -name '*_test.go' -not -path './vendor/*' | head -1)
+          if [ -z "$TEST_FILES" ]; then
+            echo "::warning::⚠️ No test files (*_test.go) found in the project. Please add tests."
+          else
+            echo "✅ Test files found. You can now remove this step"
+          fi
+
+# --- FUTURE ENHANCEMENTS ---
+#
+# 1. Add golangci-lint for linting
+#    Use the official golangci/golangci-lint-action@v9 GitHub Action.
+#    This should be added as a separate job in this workflow.
+#    Reference: https://github.com/golangci/golangci-lint-action
+#
+# 2. Make test warning a hard failure
+#    Once the team has tests in place, change the "Check for test files" step
+#    to fail the build if no *_test.go files are found, ensuring no PR can
+#    merge without tests.
