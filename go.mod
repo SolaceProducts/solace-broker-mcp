@@ -11,4 +11,5 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/oauth2 v0.34.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
