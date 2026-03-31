@@ -29,3 +29,7 @@ vendor/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Local config and secrets
+.env
+broker-config.yaml

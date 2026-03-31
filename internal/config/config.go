@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"gopkg.in/yaml.v3"
@@ -83,6 +85,8 @@ func LoadConfig(path string) (*ServerConfig, error) {
 		return nil, fmt.Errorf("validating config: %w", err)
 	}
 
+	loadEnvFile(path)
+
 	if err := resolveCredentials(cfg); err != nil {
 		return nil, fmt.Errorf("resolving credentials: %w", err)
 	}
@@ -108,13 +112,13 @@ func resolveCredentials(cfg *ServerConfig) error {
 		usernameVar := broker.EnvPrefix + "_USERNAME"
 		username, exists := os.LookupEnv(usernameVar)
 		if !exists {
-			return fmt.Errorf("broker %q: environment variable %s is not set (required by env_prefix %q)", alias, usernameVar, broker.EnvPrefix)
+			return fmt.Errorf("broker %q: environment variable %s is not set (required by env_prefix %q). Set it in your environment or in a .env file next to the config file", alias, usernameVar, broker.EnvPrefix)
 		}
 
 		passwordVar := broker.EnvPrefix + "_PASSWORD"
 		password, exists := os.LookupEnv(passwordVar)
 		if !exists {
-			return fmt.Errorf("broker %q: environment variable %s is not set (required by env_prefix %q)", alias, passwordVar, broker.EnvPrefix)
+			return fmt.Errorf("broker %q: environment variable %s is not set (required by env_prefix %q). Set it in your environment or in a .env file next to the config file", alias, passwordVar, broker.EnvPrefix)
 		}
 
 		broker.Auth.Username = username
@@ -139,6 +143,41 @@ func applyDefaults(cfg *ServerConfig) {
 			broker.TLSSkipVerify = defaults.DefaultTLSSkipVerify
 		}
 	}
+}
+
+// loadEnvFile loads a .env file into the process environment. It checks two
+// locations in order: the ENV_FILE environment variable (explicit path), then
+// a .env file in the same directory as the config file (convention). If neither
+// exists, it silently skips — .env files are optional. Variables already set in
+// the environment are not overwritten, so real env vars (e.g., from CI/CD)
+// take precedence over .env values.
+func loadEnvFile(configPath string) {
+	envPath := os.Getenv("ENV_FILE")
+	if envPath == "" {
+		envPath = filepath.Join(filepath.Dir(configPath), ".env")
+	}
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		return // .env file is optional — if it doesn't exist, silently skip
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if _, exists := os.LookupEnv(key); !exists {
+			os.Setenv(key, value)
+		}
+	}
+
+	log.Printf("Loaded .env file from %s", envPath)
 }
 
 // validate checks that the config has all required fields and that values are

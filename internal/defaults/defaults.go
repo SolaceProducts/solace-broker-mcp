@@ -6,8 +6,9 @@
 // is needed before production release. Review these before deploying to production.
 package defaults
 
-// DefaultPort is the HTTP port the MCP server listens on.
-const DefaultPort = "8080"
+// DefaultPort is the HTTP port the MCP server listens on. Uses 9090 to avoid
+// conflict with the Solace broker's SEMP management port (default 8080).
+const DefaultPort = "9090"
 
 // DefaultShutdownTimeoutSeconds is the maximum time in seconds the MCP server
 // waits for in-flight SEMP API calls to complete during graceful shutdown.
