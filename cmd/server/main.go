@@ -6,20 +6,49 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2/specs"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func main() {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
+	// 1. Load config
+	configPath := os.Getenv("CONFIG_PATH")
+	if configPath == "" {
+		configPath = defaults.DefaultConfigPath
 	}
 
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+	log.Printf("Loaded config with %d broker(s)", len(cfg.Brokers))
+
+	// 2. Parse embedded OpenAPI specs
+	operations, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		log.Fatalf("Failed to parse OpenAPI specs: %v", err)
+	}
+	log.Printf("Parsed %d operations from embedded specs", len(operations))
+
+	// 3. Create broker pool
+	pool := semp.NewBrokerPool(cfg)
+	log.Printf("Created broker pool with aliases: %v", pool.Aliases())
+
+	// 4. Create MCP server
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "solace-broker-mcp",
 		Version: "0.1.0",
 	}, nil)
 
+	// 5. Register tools
+	// TEMPORARY: Remove this line and delete smoketest.go when the composite tool executor is implemented.
+	registerSmokeTestTools(server, pool, operations)
+
+	// 6. Set up HTTP routes
 	mux := http.NewServeMux()
 
 	mux.Handle("/", mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
@@ -36,7 +65,8 @@ func main() {
 		w.Write([]byte(`{"status": "ok"}`))
 	})
 
-	addr := fmt.Sprintf(":%s", port)
+	// 7. Start server
+	addr := fmt.Sprintf(":%s", cfg.Port)
 	log.Printf("MCP server listening on %s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("Server failed: %v", err)
