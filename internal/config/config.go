@@ -138,11 +138,8 @@ func applyDefaults(cfg *ServerConfig) {
 	if cfg.SEMP.RequestTimeoutSeconds == 0 {
 		cfg.SEMP.RequestTimeoutSeconds = defaults.DefaultSEMPRequestTimeoutSeconds
 	}
-	for _, broker := range cfg.Brokers {
-		if !broker.TLSSkipVerify {
-			broker.TLSSkipVerify = defaults.DefaultTLSSkipVerify
-		}
-	}
+	// TLSSkipVerify is not defaulted here — Go's zero value for bool (false)
+	// already matches the intended default (verify TLS certificates).
 }
 
 // loadEnvFile loads a .env file into the process environment. It checks two
