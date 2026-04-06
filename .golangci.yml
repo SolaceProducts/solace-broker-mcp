@@ -17,10 +17,10 @@ linters:
         - name: exported
           disabled: true  # don't require doc comments on all exported symbols yet
 
-issues:
-  exclude-rules:
-    # Test files: relax errcheck and gosec
-    - path: _test\.go
-      linters:
-        - errcheck
-        - gosec
+  exclusions:
+    rules:
+      # Test files: relax errcheck and gosec
+      - path: ".*_test\\.go"
+        linters:
+          - errcheck
+          - gosec
