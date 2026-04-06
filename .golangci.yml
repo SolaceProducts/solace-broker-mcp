@@ -1,3 +1,5 @@
+version: "2"
+
 linters:
   enable:
     - errcheck      # unchecked error return values
@@ -9,11 +11,11 @@ linters:
     - ineffassign   # ineffective assignments (e.g. assigning a value that is never used)
     - noctx         # http.NewRequest must use context variant (http.NewRequestWithContext)
 
-linters-settings:
-  revive:
-    rules:
-      - name: exported
-        disabled: true  # don't require doc comments on all exported symbols yet
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true  # don't require doc comments on all exported symbols yet
 
 issues:
   exclude-rules:
