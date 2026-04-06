@@ -62,13 +62,15 @@ func main() {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status": "ok"}`))
+		if _, err := w.Write([]byte(`{"status": "ok"}`)); err != nil {
+			http.Error(w, "failed to write response", http.StatusInternalServerError)
+		}
 	})
 
 	// 7. Start server
 	addr := fmt.Sprintf(":%s", cfg.Port)
-	log.Printf("MCP server listening on %s", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	log.Printf("MCP server listening on %s", addr) //nolint:gosec // addr is derived from config, not external user input
+	if err := http.ListenAndServe(addr, mux); err != nil { //nolint:gosec // G114: no timeout by design — MCP uses long-lived streaming HTTP connections
 		log.Fatalf("Server failed: %v", err)
 	}
 }
