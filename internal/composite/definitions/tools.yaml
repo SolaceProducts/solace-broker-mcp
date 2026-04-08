@@ -1,0 +1,40 @@
+tools:
+  - name: queue-replay-recovery
+    description: >
+      Replay recovery for a queue: validates the queue exists, cancels any
+      active replay, then starts a fresh replay from the beginning of the
+      specified replay log. All three steps run sequentially to ensure safe
+      ordering — replay cannot start until the previous one is fully cancelled.
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the queue"
+      - name: queueName
+        type: string
+        required: true
+        description: "The queue to recover via replay"
+      - name: replayLogName
+        type: string
+        required: true
+        description: "The name of the Replay Log to replay from"
+    steps:
+      - id: queue
+        operation: monitor/getMsgVpnQueue
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          queueName: "{{.Params.queueName}}"
+      - id: cancelReplay
+        operation: action/doMsgVpnQueueCancelReplay
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          queueName: "{{.Params.queueName}}"
+          body: "{}"
+      - id: startReplay
+        operation: action/doMsgVpnQueueStartReplay
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          queueName: "{{.Params.queueName}}"
+          body: "{\"replayLogName\": \"{{.Params.replayLogName}}\"}"
+    result:
+      strategy: collect
