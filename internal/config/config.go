@@ -174,7 +174,7 @@ func loadEnvFile(configPath string) {
 		}
 	}
 
-	log.Printf("Loaded .env file from %s", envPath)
+	log.Printf("Loaded .env file from %q", envPath)
 }
 
 // validate checks that the config has all required fields and that values are

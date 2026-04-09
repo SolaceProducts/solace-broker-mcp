@@ -18,6 +18,9 @@ linters:
           disabled: true  # don't require doc comments on all exported symbols yet
 
   exclusions:
+    presets:
+      - common-false-positives   # gosec taint-analysis FPs (G304, G402, G706)
+      - std-error-handling       # unchecked Close(), Setenv(), etc.
     rules:
       # Test files: relax errcheck and gosec
       - path: ".*_test\\.go"
