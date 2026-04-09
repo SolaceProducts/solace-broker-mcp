@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 
@@ -25,18 +26,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
-	log.Printf("Loaded config with %d broker(s)", len(cfg.Brokers))
+	slog.Info("Loaded config", "broker_count", len(cfg.Brokers)) //nolint:gosec // G706 — slog attrs are auto-escaped; fix in gosec v2.26.0
 
 	// 2. Parse embedded OpenAPI specs
 	operations, err := sempv2.ParseSpecs(specs.FS)
 	if err != nil {
 		log.Fatalf("Failed to parse OpenAPI specs: %v", err)
 	}
-	log.Printf("Parsed %d operations from embedded specs", len(operations))
+	slog.Info("Parsed operations from embedded specs", "count", len(operations))
 
 	// 3. Create broker pool
 	pool := semp.NewBrokerPool(cfg)
-	log.Printf("Created broker pool with aliases: %v", pool.Aliases())
+	slog.Info("Created broker pool", "aliases", pool.Aliases()) //nolint:gosec // G706 — slog attrs are auto-escaped; fix in gosec v2.26.0
 
 	// 4. Create MCP server
 	server := mcp.NewServer(&mcp.Implementation{
@@ -69,7 +70,7 @@ func main() {
 
 	// 7. Start server
 	addr := fmt.Sprintf(":%s", cfg.Port)
-	log.Printf("MCP server listening on %s", addr) //nolint:gosec // addr is derived from config, not external user input
+	slog.Info("MCP server listening", "addr", addr) //nolint:gosec // G706 — slog attrs are auto-escaped; fix in gosec v2.26.0
 	if err := http.ListenAndServe(addr, mux); err != nil { //nolint:gosec // G114: no timeout by design — MCP uses long-lived streaming HTTP connections
 		log.Fatalf("Server failed: %v", err)
 	}
