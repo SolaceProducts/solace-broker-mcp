@@ -7,11 +7,15 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -103,6 +107,8 @@ func (r *Registry) RegisterListBrokers() {
 // client, and delegates to the composite executor. It is called for every MCP
 // tool call.
 func (r *Registry) handleToolCall(ctx context.Context, req *mcp.CallToolRequest, tool *composite.CompositeTool) (*mcp.CallToolResult, error) {
+	start := time.Now()
+
 	var params map[string]any
 	if err := json.Unmarshal(req.Params.Arguments, &params); err != nil {
 		return nil, fmt.Errorf("parsing tool arguments: %w", err)
@@ -110,24 +116,65 @@ func (r *Registry) handleToolCall(ctx context.Context, req *mcp.CallToolRequest,
 
 	brokerAlias, _ := params["broker"].(string)
 	if brokerAlias == "" {
+		slog.Error("tool invoked",
+			slog.String("tool", tool.Name),
+			slog.String("status", "error"),
+			slog.String("error_type", "missing_broker"),
+			slog.Duration("duration", time.Since(start)))
 		return nil, fmt.Errorf("broker parameter is required; available brokers: %s", strings.Join(r.pool.Aliases(), ", "))
 	}
 	delete(params, "broker")
 
 	client, err := r.pool.GetSempV2(brokerAlias)
 	if err != nil {
+		slog.Error("tool invoked",
+			slog.String("tool", tool.Name),
+			slog.String("broker", brokerAlias),
+			slog.String("status", "error"),
+			slog.String("error_type", "unknown_broker"),
+			slog.Duration("duration", time.Since(start)))
 		return nil, fmt.Errorf("unknown broker %q; available brokers: %s", brokerAlias, strings.Join(r.pool.Aliases(), ", "))
 	}
 
 	result, err := r.executor.Execute(ctx, *tool, client, params)
 	if err != nil {
+		logAttrs := []slog.Attr{
+			slog.String("tool", tool.Name),
+			slog.String("broker", brokerAlias),
+			slog.String("status", "error"),
+			slog.String("error_type", "execution_error"),
+			slog.Duration("duration", time.Since(start)),
+		}
+		var sempErr *sempv2.SEMPError
+		if errors.As(err, &sempErr) {
+			logAttrs = append(logAttrs,
+				slog.Int("http_status", sempErr.StatusCode),
+				slog.String("operation", sempErr.Operation))
+		} else {
+			// Non-SEMP errors (network, DNS, timeout) are safe to log —
+			// they come from Go stdlib and don't contain credentials.
+			logAttrs = append(logAttrs, slog.String("error", err.Error()))
+		}
+		slog.LogAttrs(ctx, slog.LevelError, "tool invoked", logAttrs...)
 		return nil, fmt.Errorf("executing tool %q: %w", tool.Name, err)
 	}
 
 	resultJSON, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
+		slog.Error("tool invoked",
+			slog.String("tool", tool.Name),
+			slog.String("broker", brokerAlias),
+			slog.String("status", "error"),
+			slog.String("error_type", "marshal_error"),
+			slog.Duration("duration", time.Since(start)))
 		return nil, fmt.Errorf("marshalling result for %q: %w", tool.Name, err)
 	}
+
+	slog.Info("tool invoked",
+		slog.String("tool", tool.Name),
+		slog.String("broker", brokerAlias),
+		slog.String("status", "success"),
+		slog.Duration("duration", time.Since(start)))
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: string(resultJSON)}},
