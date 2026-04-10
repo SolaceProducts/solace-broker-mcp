@@ -6,7 +6,7 @@ package config
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -91,7 +91,7 @@ func LoadConfig(path string) (*ServerConfig, error) {
 		return nil, fmt.Errorf("resolving credentials: %w", err)
 	}
 
-	log.Printf("WARNING: env_prefix naming convention is provisional — only uppercase letters, numbers, and underscores allowed. This convention may change.")
+	slog.Warn("env_prefix naming convention is provisional — only uppercase letters, numbers, and underscores allowed; this may change")
 
 	return cfg, nil
 }
@@ -153,7 +153,7 @@ func loadEnvFile(configPath string) {
 	if envPath == "" {
 		envPath = filepath.Join(filepath.Dir(configPath), ".env")
 	}
-	data, err := os.ReadFile(envPath)
+	data, err := os.ReadFile(envPath) //nolint:gosec // G703 — path from trusted config/env, not external user input
 	if err != nil {
 		return // .env file is optional — if it doesn't exist, silently skip
 	}
@@ -170,11 +170,11 @@ func loadEnvFile(configPath string) {
 		key = strings.TrimSpace(key)
 		value = strings.TrimSpace(value)
 		if _, exists := os.LookupEnv(key); !exists {
-			os.Setenv(key, value)
+			os.Setenv(key, value) //nolint:gosec // G104 — os.Setenv only fails on Plan 9; safe to ignore
 		}
 	}
 
-	log.Printf("Loaded .env file from %s", envPath)
+	slog.Info("Loaded .env file", "path", envPath) //nolint:gosec // G706 — slog attrs are auto-escaped; fix in gosec v2.26.0
 }
 
 // validate checks that the config has all required fields and that values are

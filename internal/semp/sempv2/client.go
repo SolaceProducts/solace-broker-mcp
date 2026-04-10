@@ -43,7 +43,7 @@ type HTTPClient struct {
 // tuning appropriate for concurrent SEMP calls.
 func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) *HTTPClient {
 	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: brokerCfg.TLSSkipVerify},
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: brokerCfg.TLSSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
 	}
 
 	return &HTTPClient{

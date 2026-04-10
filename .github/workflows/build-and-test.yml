@@ -4,6 +4,22 @@ on:
   push:
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.11.4
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -25,7 +41,10 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test -v ./...
+        # -race enables the Go race detector to catch data races on shared state (e.g. BrokerPool).
+        # This adds ~2-3x overhead to test execution. Acceptable now given the small test suite,
+        # but worth revisiting if test times become a problem as the suite grows.
+        run: go test -race -v ./...
 
       - name: Check for test files
         run: |
@@ -38,12 +57,7 @@ jobs:
 
 # --- FUTURE ENHANCEMENTS ---
 #
-# 1. Add golangci-lint for linting
-#    Use the official golangci/golangci-lint-action@v9 GitHub Action.
-#    This should be added as a separate job in this workflow.
-#    Reference: https://github.com/golangci/golangci-lint-action
-#
-# 2. Make test warning a hard failure
+# 1. Make test warning a hard failure
 #    Once the team has tests in place, change the "Check for test files" step
 #    to fail the build if no *_test.go files are found, ensuring no PR can
 #    merge without tests.

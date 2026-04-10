@@ -1,0 +1,29 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck      # unchecked error return values
+    - staticcheck   # dead code, nil deref, misuse patterns
+    - gosec         # security issues (TLS, credentials, etc.)
+    - govet         # vet checks including copylocks
+    - revive        # style and correctness
+    - bodyclose     # HTTP response bodies must be closed — critical for broker API calls
+    - ineffassign   # ineffective assignments (e.g. assigning a value that is never used)
+    - noctx         # http.NewRequest must use context variant (http.NewRequestWithContext)
+
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true  # don't require doc comments on all exported symbols yet
+
+  exclusions:
+    presets:
+      - common-false-positives   # gosec taint-analysis FPs (G304, G402, G706)
+      - std-error-handling       # unchecked Close(), Setenv(), etc.
+    rules:
+      # Test files: relax errcheck and gosec
+      - path: ".*_test\\.go"
+        linters:
+          - errcheck
+          - gosec

@@ -254,12 +254,12 @@ func TestClient_Execute_InvalidJSON(t *testing.T) {
 }
 
 func TestClient_Execute_Timeout(t *testing.T) {
-	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	_, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(10 * time.Second)
 	})
 	defer server.Close()
 
-	// Override with a very short timeout client.
+	// Create a client with a very short timeout.
 	brokerCfg := &config.BrokerConfig{
 		URL: server.URL,
 		Auth: config.AuthConfig{
@@ -271,7 +271,7 @@ func TestClient_Execute_Timeout(t *testing.T) {
 	sempCfg := &config.SEMPConfig{
 		RequestTimeoutSeconds: 1,
 	}
-	client = sempv2.NewHTTPClient(brokerCfg, sempCfg)
+	client := sempv2.NewHTTPClient(brokerCfg, sempCfg)
 
 	op := &sempv2.Operation{
 		ID:     "testOp",
