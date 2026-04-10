@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -36,6 +37,16 @@ type HTTPClient struct {
 	baseURL    string
 	username   string
 	password   string
+}
+
+// LogValue implements slog.LogValuer for HTTPClient. It exposes only the base
+// URL — username and password are deliberately excluded. Although these fields
+// are unexported, this provides defense in depth against reflection-based logging.
+// See docs/secure-logging-rules.md Rule 2.
+func (c *HTTPClient) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("base_url", c.baseURL),
+	)
 }
 
 // NewHTTPClient creates an HTTPClient configured for a specific broker.

@@ -44,6 +44,27 @@ type AuthConfig struct {
 	Password string // populated from {EnvPrefix}_PASSWORD env var
 }
 
+// LogValue implements slog.LogValuer for AuthConfig. It exposes only the auth
+// method — username and password are deliberately excluded to prevent credential
+// leaks in log output. See docs/secure-logging-rules.md Rule 2.
+func (a AuthConfig) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("method", a.Method),
+	)
+}
+
+// LogValue implements slog.LogValuer for BrokerConfig. It exposes connection
+// metadata (URL, TLS settings, env prefix, auth method) but excludes credentials.
+// See docs/secure-logging-rules.md Rule 2.
+func (b BrokerConfig) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("url", b.URL),
+		slog.Bool("tls_skip_verify", b.TLSSkipVerify),
+		slog.String("env_prefix", b.EnvPrefix),
+		slog.String("auth_method", b.Auth.Method),
+	)
+}
+
 // SEMPConfig holds settings that control how the MCP server communicates with
 // brokers over the SEMP API.
 type SEMPConfig struct {
@@ -91,7 +112,8 @@ func LoadConfig(path string) (*ServerConfig, error) {
 		return nil, fmt.Errorf("resolving credentials: %w", err)
 	}
 
-	slog.Warn("env_prefix naming convention is provisional — only uppercase letters, numbers, and underscores allowed; this may change")
+	slog.Warn("env_prefix naming convention is provisional",
+		slog.String("convention", "uppercase letters, numbers, and underscores only"))
 
 	return cfg, nil
 }
@@ -174,7 +196,8 @@ func loadEnvFile(configPath string) {
 		}
 	}
 
-	slog.Info("Loaded .env file", "path", envPath) //nolint:gosec // G706 — slog attrs are auto-escaped; fix in gosec v2.26.0
+	slog.Info("loaded .env file",
+		slog.String("path", envPath))
 }
 
 // validate checks that the config has all required fields and that values are
