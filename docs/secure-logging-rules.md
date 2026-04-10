@@ -12,6 +12,7 @@ These must never appear in log output, in any environment:
 |---|---|
 | SEMP passwords | `AuthConfig.Password`, `HTTPClient.password` |
 | SEMP usernames | `AuthConfig.Username`, `HTTPClient.username` |
+| SEMP bearer tokens | `AuthConfig.Token` |
 | Raw `Authorization` header values | Built in `HTTPClient.Execute()` |
 | TLS private keys | If we ever load them |
 | URLs with embedded credentials | `http://user:pass@host` patterns |
