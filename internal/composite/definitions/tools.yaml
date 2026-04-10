@@ -1,40 +1,35 @@
 tools:
-  - name: queue-replay-recovery
+  - name: get-rdp-status
     description: >
-      Replay recovery for a queue: validates the queue exists, cancels any
-      active replay, then starts a fresh replay from the beginning of the
-      specified replay log. All three steps run sequentially to ensure safe
-      ordering — replay cannot start until the previous one is fully cancelled.
+      Get the operational status of a REST Delivery Point including its
+      enabled state, up/down status, client name, client profile, last
+      failure reason, queue bindings, and REST consumer status.
     parameters:
       - name: msgVpnName
         type: string
         required: true
-        description: "The Message VPN containing the queue"
-      - name: queueName
+        description: "The Message VPN containing the RDP"
+      - name: restDeliveryPointName
         type: string
         required: true
-        description: "The queue to recover via replay"
-      - name: replayLogName
-        type: string
-        required: true
-        description: "The name of the Replay Log to replay from"
+        description: "The name of the REST Delivery Point"
     steps:
-      - id: queue
-        operation: monitor/getMsgVpnQueue
+      - id: rdpStatus
+        operation: monitor/getMsgVpnRestDeliveryPoint
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
-          queueName: "{{.Params.queueName}}"
-      - id: cancelReplay
-        operation: action/doMsgVpnQueueCancelReplay
+          restDeliveryPointName: "{{.Params.restDeliveryPointName}}"
+      - id: queueBindings
+        operation: monitor/getMsgVpnRestDeliveryPointQueueBindings
+        parallel: true
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
-          queueName: "{{.Params.queueName}}"
-          body: "{}"
-      - id: startReplay
-        operation: action/doMsgVpnQueueStartReplay
+          restDeliveryPointName: "{{.Params.restDeliveryPointName}}"
+      - id: restConsumers
+        operation: monitor/getMsgVpnRestDeliveryPointRestConsumers
+        parallel: true
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
-          queueName: "{{.Params.queueName}}"
-          body: "{\"replayLogName\": \"{{.Params.replayLogName}}\"}"
+          restDeliveryPointName: "{{.Params.restDeliveryPointName}}"
     result:
       strategy: collect
