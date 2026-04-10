@@ -2,10 +2,10 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
@@ -15,7 +15,33 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// newSlogHandler creates a slog handler with the ReplaceAttr safety net that
+// redacts values for keys matching common credential patterns. This is defense
+// in depth — credential-carrying types also implement slog.LogValuer to exclude
+// secrets, but ReplaceAttr catches anything that slips through.
+// See docs/secure-logging-rules.md Rule 3.
+func newSlogHandler() slog.Handler {
+	redactedKeys := []string{"password", "token", "secret", "authorization", "credential", "api_key", "private_key"}
+
+	return slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			key := strings.ToLower(a.Key)
+			for _, redacted := range redactedKeys {
+				if strings.Contains(key, redacted) {
+					a.Value = slog.StringValue("[REDACTED]")
+					return a
+				}
+			}
+			return a
+		},
+	})
+}
+
 func main() {
+	// 0. Set up structured logging with credential redaction safety net
+	slog.SetDefault(slog.New(newSlogHandler()))
+
 	// 1. Load config
 	configPath := os.Getenv("CONFIG_PATH")
 	if configPath == "" {
@@ -24,20 +50,26 @@ func main() {
 
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		slog.Error("failed to load config", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
-	slog.Info("Loaded config", "broker_count", len(cfg.Brokers)) //nolint:gosec // G706 — slog attrs are auto-escaped; fix in gosec v2.26.0
+	slog.Info("config loaded",
+		slog.Int("broker_count", len(cfg.Brokers)),
+		slog.String("port", cfg.Port))
 
 	// 2. Parse embedded OpenAPI specs
 	operations, err := sempv2.ParseSpecs(specs.FS)
 	if err != nil {
-		log.Fatalf("Failed to parse OpenAPI specs: %v", err)
+		slog.Error("failed to parse OpenAPI specs", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
-	slog.Info("Parsed operations from embedded specs", "count", len(operations))
+	slog.Info("parsed OpenAPI specs",
+		slog.Int("operation_count", len(operations)))
 
 	// 3. Create broker pool
 	pool := semp.NewBrokerPool(cfg)
-	slog.Info("Created broker pool", "aliases", pool.Aliases()) //nolint:gosec // G706 — slog attrs are auto-escaped; fix in gosec v2.26.0
+	slog.Info("created broker pool",
+		slog.Any("broker_aliases", pool.Aliases()))
 
 	// 4. Create MCP server
 	server := mcp.NewServer(&mcp.Implementation{
@@ -70,8 +102,10 @@ func main() {
 
 	// 7. Start server
 	addr := fmt.Sprintf(":%s", cfg.Port)
-	slog.Info("MCP server listening", "addr", addr) //nolint:gosec // G706 — slog attrs are auto-escaped; fix in gosec v2.26.0
+	slog.Info("server starting",
+		slog.String("addr", addr))
 	if err := http.ListenAndServe(addr, mux); err != nil { //nolint:gosec // G114: no timeout by design — MCP uses long-lived streaming HTTP connections
-		log.Fatalf("Server failed: %v", err)
+		slog.Error("server failed", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 }

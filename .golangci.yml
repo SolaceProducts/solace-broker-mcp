@@ -12,6 +12,9 @@ linters:
     - noctx         # http.NewRequest must use context variant (http.NewRequestWithContext)
 
   settings:
+    gosec:
+      excludes:
+        - G706  # log injection via taint analysis — false positive with log/slog typed attrs (auto-escaped). Fix merged in gosec PR #1623, pending next release after v2.25.0. Re-enable when golangci-lint bundles the fix.
     revive:
       rules:
         - name: exported
@@ -19,7 +22,7 @@ linters:
 
   exclusions:
     presets:
-      - common-false-positives   # gosec taint-analysis FPs (G304, G402, G706)
+      - common-false-positives   # gosec taint-analysis FPs (G103, G204, G304)
       - std-error-handling       # unchecked Close(), Setenv(), etc.
     rules:
       # Test files: relax errcheck and gosec
