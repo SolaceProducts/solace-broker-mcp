@@ -12,18 +12,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// mockClient implements sempv2.Client for testing.
-type mockClient struct {
-	results map[string]*sempv2.Result
-}
-
-func (m *mockClient) Execute(_ context.Context, op *sempv2.Operation, _ map[string]any) (*sempv2.Result, error) {
-	if r, ok := m.results[op.ID]; ok {
-		return r, nil
-	}
-	return &sempv2.Result{Data: map[string]any{"op": op.ID}, StatusCode: 200}, nil
-}
-
 func newTestPool() *semp.BrokerPool {
 	cfg := &config.ServerConfig{
 		Brokers: map[string]*config.BrokerConfig{

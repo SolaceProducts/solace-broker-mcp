@@ -130,8 +130,9 @@ func main() {
 	// 10. Start server with graceful shutdown
 	addr := fmt.Sprintf(":%s", cfg.Port)
 	httpServer := &http.Server{
-		Addr:    addr,
-		Handler: mux,
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: time.Duration(defaults.DefaultReadHeaderTimeoutSeconds) * time.Second,
 	}
 
 	done := make(chan os.Signal, 1)
@@ -155,7 +156,9 @@ func main() {
 
 	if err := httpServer.Shutdown(ctx); err != nil {
 		slog.Error("shutdown timed out, forcing close", slog.String("error", err.Error()))
-		httpServer.Close()
+		if closeErr := httpServer.Close(); closeErr != nil {
+			slog.Error("forced close failed", slog.String("error", closeErr.Error()))
+		}
 	}
 
 	slog.Info("server stopped")

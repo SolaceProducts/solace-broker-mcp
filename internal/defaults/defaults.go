@@ -45,5 +45,18 @@ const DefaultMaxConcurrentPerBroker = 10
 // development environments with self-signed certificates.
 const DefaultTLSSkipVerify = false
 
+// DefaultReadHeaderTimeoutSeconds is the maximum time in seconds the HTTP
+// server waits for a client to send request headers before closing the
+// connection. Protects against Slowloris attacks (gosec G112).
+//
+// Assumption: 10 seconds is sufficient for MCP clients to send headers.
+// Reasoning: MCP clients are automated software (Claude Code, ChatGPT agents)
+// that send headers instantly. 10 seconds is generous for congested networks.
+// This only covers header reading — once headers are received, the connection
+// can stay open indefinitely for MCP streaming (SSE).
+// Validation needed: Monitor for rejected connections in production to confirm
+// this value is not too aggressive for real-world network conditions.
+const DefaultReadHeaderTimeoutSeconds = 10
+
 // DefaultConfigPath is the default file path for the broker configuration YAML file.
 const DefaultConfigPath = "broker-config.yaml"
