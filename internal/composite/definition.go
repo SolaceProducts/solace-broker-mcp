@@ -1,0 +1,52 @@
+// Package composite provides a YAML-driven composite tool engine for the Solace
+// Broker MCP Server. It loads multi-step tool definitions from embedded YAML,
+// executes steps against a broker via the sempv2.Client interface, resolves Go
+// template expressions in step arguments, and combines results using configurable
+// strategies (collect, merge, unwrap).
+package composite
+
+// CompositeToolsFile is the top-level structure of the embedded YAML file.
+type CompositeToolsFile struct {
+	Tools []CompositeTool `yaml:"tools"`
+}
+
+// CompositeTool defines a multi-step tool loaded from YAML. Each tool has input
+// parameters, an ordered list of steps to execute against a broker, and a result
+// strategy that controls how step outputs are combined into the final response.
+type CompositeTool struct {
+	Name        string         `yaml:"name"`
+	Description string         `yaml:"description"`
+	Parameters  []ParameterDef `yaml:"parameters"`
+	Steps       []Step         `yaml:"steps"`
+	Result      ResultStrategy `yaml:"result"`
+}
+
+// ParameterDef defines an input parameter for a composite tool. These are
+// declared in YAML and used to generate the MCP tool's JSON Schema and to
+// populate the template context for step argument resolution.
+type ParameterDef struct {
+	Name        string `yaml:"name"`
+	Type        string `yaml:"type"`
+	Required    bool   `yaml:"required"`
+	Description string `yaml:"description"`
+}
+
+// Step defines a single operation in a composite tool. Each step references a
+// SEMPv2 operation by its prefixed ID (e.g., "monitor/getMsgVpnQueue") and
+// provides arguments as Go text/template expressions that are resolved against
+// the input parameters and prior step results.
+type Step struct {
+	ID        string            `yaml:"id"`
+	Operation string            `yaml:"operation"` // prefixed operationId (e.g., "monitor/getMsgVpnQueue")
+	Args      map[string]string `yaml:"args"`      // values are Go text/template expressions
+	Parallel  bool              `yaml:"parallel"`  // group with adjacent parallel:true steps
+}
+
+// ResultStrategy defines how step results are combined into the tool's final
+// output. Currently only "collect" is supported, which returns all step results
+// keyed by step ID. Additional strategies (merge, unwrap) are deferred pending
+// design discussion around SEMP response envelope overlap and per-step data
+// transformation needs.
+type ResultStrategy struct {
+	Strategy string `yaml:"strategy"` // only "collect" is currently supported
+}

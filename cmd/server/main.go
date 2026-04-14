@@ -1,14 +1,21 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/composite"
+	"github.com/SolaceDev/solace-broker-mcp/internal/composite/definitions"
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceDev/solace-broker-mcp/internal/registry"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2/specs"
@@ -71,17 +78,37 @@ func main() {
 	slog.Info("created broker pool",
 		slog.Any("broker_aliases", pool.Aliases()))
 
-	// 4. Create MCP server
+	// 4. Load embedded composite tool definitions
+	tools, err := composite.LoadTools(definitions.FS, "tools.yaml")
+	if err != nil {
+		slog.Error("failed to load composite tools", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	slog.Info("loaded composite tool definitions",
+		slog.Int("tool_count", len(tools)))
+
+	// 5. Create composite executor
+	executor := composite.NewCompositeExecutor(operations)
+
+	// 6. Create MCP server
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "solace-broker-mcp",
 		Version: "0.1.0",
 	}, nil)
 
-	// 5. Register tools
-	// TEMPORARY: Remove this line and delete smoketest.go when the composite tool executor is implemented.
-	registerSmokeTestTools(server, pool, operations)
+	// 7. Register composite tools
+	reg := registry.NewRegistry(server, pool, executor)
+	if err := reg.RegisterAll(tools); err != nil {
+		slog.Error("failed to register tools", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	slog.Info("registered composite tools",
+		slog.Int("tool_count", len(tools)))
 
-	// 6. Set up HTTP routes
+	// 8. Register list-brokers discovery tool
+	reg.RegisterListBrokers()
+
+	// 9. Set up HTTP routes
 	mux := http.NewServeMux()
 
 	mux.Handle("/", mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
@@ -100,12 +127,39 @@ func main() {
 		}
 	})
 
-	// 7. Start server
+	// 10. Start server with graceful shutdown
 	addr := fmt.Sprintf(":%s", cfg.Port)
-	slog.Info("server starting",
-		slog.String("addr", addr))
-	if err := http.ListenAndServe(addr, mux); err != nil { //nolint:gosec // G114: no timeout by design — MCP uses long-lived streaming HTTP connections
-		slog.Error("server failed", slog.String("error", err.Error()))
-		os.Exit(1)
+	httpServer := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: time.Duration(defaults.DefaultReadHeaderTimeoutSeconds) * time.Second,
 	}
+
+	done := make(chan os.Signal, 1)
+	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		slog.Info("server starting",
+			slog.String("addr", addr))
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("server failed", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+	}()
+
+	<-done
+	slog.Info("server shutting down", slog.String("reason", "signal"))
+
+	shutdownTimeout := time.Duration(defaults.DefaultShutdownTimeoutSeconds) * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
+	if err := httpServer.Shutdown(ctx); err != nil {
+		slog.Error("shutdown timed out, forcing close", slog.String("error", err.Error()))
+		if closeErr := httpServer.Close(); closeErr != nil {
+			slog.Error("forced close failed", slog.String("error", closeErr.Error()))
+		}
+	}
+
+	slog.Info("server stopped")
 }

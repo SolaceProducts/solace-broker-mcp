@@ -1,0 +1,35 @@
+tools:
+  - name: get-rdp-status
+    description: >
+      Get the operational status of a REST Delivery Point including its
+      enabled state, up/down status, client name, client profile, last
+      failure reason, queue bindings, and REST consumer status.
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the RDP"
+      - name: restDeliveryPointName
+        type: string
+        required: true
+        description: "The name of the REST Delivery Point"
+    steps:
+      - id: rdpStatus
+        operation: monitor/getMsgVpnRestDeliveryPoint
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          restDeliveryPointName: "{{.Params.restDeliveryPointName}}"
+      - id: queueBindings
+        operation: monitor/getMsgVpnRestDeliveryPointQueueBindings
+        parallel: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          restDeliveryPointName: "{{.Params.restDeliveryPointName}}"
+      - id: restConsumers
+        operation: monitor/getMsgVpnRestDeliveryPointRestConsumers
+        parallel: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          restDeliveryPointName: "{{.Params.restDeliveryPointName}}"
+    result:
+      strategy: collect

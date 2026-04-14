@@ -2,6 +2,7 @@ package semp
 
 import (
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 
@@ -59,6 +60,9 @@ func (p *BrokerPool) GetSempV2(alias string) (sempv2.Client, error) {
 
 	client := NewBrokerClient(alias, cfg, p.sempCfg)
 	p.clients[alias] = client
+	slog.Info("broker connection created",
+		slog.String("broker", alias),
+		slog.String("url", cfg.URL))
 	return client.SempV2(), nil
 }
 

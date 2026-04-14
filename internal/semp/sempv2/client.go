@@ -29,6 +29,28 @@ type Result struct {
 	StatusCode int            // HTTP status code
 }
 
+// SEMPError is a structured error returned when a SEMP API call receives a
+// non-2xx HTTP response. It preserves the HTTP status code, operation ID, and
+// raw response body as separate fields so callers can extract structured data
+// via errors.As() instead of parsing error strings.
+//
+// This type is the foundation for Story 13B's TranslateSEMPError() function
+// and aligns with Story 4's requirement to parse .meta.error.code and
+// .meta.error.description from SEMP responses. Future fields (SEMPErrorCode,
+// SEMPMessage) can be added without breaking existing callers.
+type SEMPError struct {
+	Operation  string // operationId that failed (e.g., "getMsgVpnQueue")
+	StatusCode int    // HTTP status code (e.g., 404)
+	Body       string // raw response body from broker
+}
+
+// Error implements the error interface. The output matches the previous
+// fmt.Errorf format so existing error messages and test assertions are
+// unchanged.
+func (e *SEMPError) Error() string {
+	return fmt.Sprintf("%s returned HTTP %d: %s", e.Operation, e.StatusCode, e.Body)
+}
+
 // HTTPClient implements the Client interface by making real HTTP calls to a
 // Solace broker's SEMPv2 API. It is configured per-broker with the broker's
 // URL, TLS settings, and authentication credentials.
@@ -97,7 +119,7 @@ func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("%s returned HTTP %d: %s", op.ID, resp.StatusCode, string(body))
+		return nil, &SEMPError{Operation: op.ID, StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
 	var data map[string]any
