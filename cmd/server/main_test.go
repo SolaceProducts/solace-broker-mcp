@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -39,7 +40,7 @@ func newTestMux() *http.ServeMux {
 
 func TestHealth_GET_ReturnsOK(t *testing.T) {
 	mux := newTestMux()
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req := httptest.NewRequestWithContext(context.Background(),http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -57,7 +58,7 @@ func TestHealth_GET_ReturnsOK(t *testing.T) {
 
 func TestHealth_POST_ReturnsMethodNotAllowed(t *testing.T) {
 	mux := newTestMux()
-	req := httptest.NewRequest(http.MethodPost, "/health", nil)
+	req := httptest.NewRequestWithContext(context.Background(),http.MethodPost, "/health", nil)
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -69,7 +70,7 @@ func TestHealth_POST_ReturnsMethodNotAllowed(t *testing.T) {
 
 func TestMCPEndpoint_POST_ReachesMCPHandler(t *testing.T) {
 	mux := newTestMux()
-	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req := httptest.NewRequestWithContext(context.Background(),http.MethodPost, "/mcp", nil)
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	rec := httptest.NewRecorder()
 
@@ -85,7 +86,7 @@ func TestMCPEndpoint_POST_ReachesMCPHandler(t *testing.T) {
 
 func TestUnknownRoute_Returns404(t *testing.T) {
 	mux := newTestMux()
-	req := httptest.NewRequest(http.MethodGet, "/unknown", nil)
+	req := httptest.NewRequestWithContext(context.Background(),http.MethodGet, "/unknown", nil)
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
