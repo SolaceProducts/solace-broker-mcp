@@ -25,7 +25,7 @@ var envPrefixPattern = regexp.MustCompile(`^[A-Z0-9_]+$`)
 type ServerConfig struct {
 	Brokers map[string]*BrokerConfig // broker alias → config
 	SEMP    SEMPConfig               // SEMP client settings
-	Port    string                   // HTTP port the MCP server listens on
+	Port    int                      // HTTP port the MCP server listens on (1-65535)
 }
 
 // BrokerConfig holds the connection and authentication configuration for a
@@ -77,7 +77,7 @@ type SEMPConfig struct {
 type yamlConfig struct {
 	Brokers map[string]*BrokerConfig `yaml:"brokers"`
 	SEMP    SEMPConfig               `yaml:"semp"`
-	Port    string                   `yaml:"port"`
+	Port    int                      `yaml:"port"`
 }
 
 // LoadConfig reads a YAML configuration file from path, applies defaults for
@@ -151,7 +151,7 @@ func resolveCredentials(cfg *ServerConfig) error {
 
 // applyDefaults fills in missing optional fields from the defaults package.
 func applyDefaults(cfg *ServerConfig) {
-	if cfg.Port == "" {
+	if cfg.Port == 0 {
 		cfg.Port = defaults.DefaultPort
 	}
 	if cfg.SEMP.MaxConcurrentPerBroker == 0 {
@@ -231,6 +231,10 @@ func validate(cfg *ServerConfig) error {
 		if broker.Auth.Method != "basic" {
 			return fmt.Errorf("broker %q: unsupported auth method %q (only \"basic\" is supported)", alias, broker.Auth.Method)
 		}
+	}
+
+	if cfg.Port < 1 || cfg.Port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535, got %d", cfg.Port)
 	}
 
 	if cfg.SEMP.MaxConcurrentPerBroker < 0 {

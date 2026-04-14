@@ -156,7 +156,7 @@ brokers:
 	}
 
 	if cfg.Port != defaults.DefaultPort {
-		t.Errorf("expected port %q, got %q", defaults.DefaultPort, cfg.Port)
+		t.Errorf("expected port %d, got %d", defaults.DefaultPort, cfg.Port)
 	}
 	if cfg.SEMP.MaxConcurrentPerBroker != defaults.DefaultMaxConcurrentPerBroker {
 		t.Errorf("expected max_concurrent %d, got %d", defaults.DefaultMaxConcurrentPerBroker, cfg.SEMP.MaxConcurrentPerBroker)

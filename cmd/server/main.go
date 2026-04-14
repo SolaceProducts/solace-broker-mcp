@@ -62,7 +62,7 @@ func main() {
 	}
 	slog.Info("config loaded",
 		slog.Int("broker_count", len(cfg.Brokers)),
-		slog.String("port", cfg.Port))
+		slog.Int("port", cfg.Port))
 
 	// 2. Parse embedded OpenAPI specs
 	operations, err := sempv2.ParseSpecs(specs.FS)
@@ -128,7 +128,7 @@ func main() {
 	})
 
 	// 10. Start server with graceful shutdown
-	addr := fmt.Sprintf(":%s", cfg.Port)
+	addr := fmt.Sprintf(":%d", cfg.Port)
 	httpServer := &http.Server{
 		Addr:              addr,
 		Handler:           mux,
