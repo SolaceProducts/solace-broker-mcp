@@ -23,9 +23,11 @@ var envPrefixPattern = regexp.MustCompile(`^[A-Z0-9_]+$`)
 // ServerConfig holds the complete MCP server configuration, including all
 // configured brokers and SEMP client settings.
 type ServerConfig struct {
-	Brokers map[string]*BrokerConfig // broker alias → config
-	SEMP    SEMPConfig               // SEMP client settings
-	Port    int                      // HTTP port the MCP server listens on (1-65535)
+	Brokers     map[string]*BrokerConfig // broker alias → config
+	SEMP        SEMPConfig               // SEMP client settings
+	Port        int                      // HTTP port the MCP server listens on (1-65535)
+	TLSCertFile string                   // path to TLS certificate file (optional, enables HTTPS)
+	TLSKeyFile  string                   // path to TLS private key file (optional, requires TLSCertFile)
 }
 
 // BrokerConfig holds the connection and authentication configuration for a
@@ -75,9 +77,11 @@ type SEMPConfig struct {
 // yamlConfig is the intermediate representation used for YAML unmarshalling.
 // It mirrors the YAML file structure before being transformed into ServerConfig.
 type yamlConfig struct {
-	Brokers map[string]*BrokerConfig `yaml:"brokers"`
-	SEMP    SEMPConfig               `yaml:"semp"`
-	Port    int                      `yaml:"port"`
+	Brokers     map[string]*BrokerConfig `yaml:"brokers"`
+	SEMP        SEMPConfig               `yaml:"semp"`
+	Port        int                      `yaml:"port"`
+	TLSCertFile string                   `yaml:"tls_cert_file"`
+	TLSKeyFile  string                   `yaml:"tls_key_file"`
 }
 
 // LoadConfig reads a YAML configuration file from path, applies defaults for
@@ -95,9 +99,11 @@ func LoadConfig(path string) (*ServerConfig, error) {
 	}
 
 	cfg := &ServerConfig{
-		Brokers: raw.Brokers,
-		SEMP:    raw.SEMP,
-		Port:    raw.Port,
+		Brokers:     raw.Brokers,
+		SEMP:        raw.SEMP,
+		Port:        raw.Port,
+		TLSCertFile: raw.TLSCertFile,
+		TLSKeyFile:  raw.TLSKeyFile,
 	}
 
 	applyDefaults(cfg)
@@ -243,6 +249,11 @@ func validate(cfg *ServerConfig) error {
 
 	if cfg.SEMP.RequestTimeoutSeconds < 0 {
 		return fmt.Errorf("semp.request_timeout_seconds must be > 0, got %d", cfg.SEMP.RequestTimeoutSeconds)
+	}
+
+	// TLS: both cert and key must be provided together, or neither.
+	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
+		return fmt.Errorf("both tls_cert_file and tls_key_file must be provided together; got cert=%q, key=%q", cfg.TLSCertFile, cfg.TLSKeyFile)
 	}
 
 	return nil

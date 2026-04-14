@@ -154,9 +154,18 @@ func main() {
 	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		slog.Info("server starting",
-			slog.String("addr", addr))
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		var err error
+		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+			slog.Info("server starting with TLS",
+				slog.String("addr", addr),
+				slog.String("cert", cfg.TLSCertFile))
+			err = httpServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+		} else {
+			slog.Info("server starting",
+				slog.String("addr", addr))
+			err = httpServer.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
 			slog.Error("server failed", slog.String("error", err.Error()))
 			os.Exit(1)
 		}
