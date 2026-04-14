@@ -33,7 +33,8 @@ func LoadTools(fsys fs.FS, filename string) ([]CompositeTool, error) {
 
 // validateTool checks the structural correctness of a composite tool definition.
 // It verifies required fields, unique step IDs, and valid result strategy
-// configuration. It defaults the result strategy to "collect" if not specified.
+// configuration. It validates that a result strategy is specified and is a
+// supported value.
 func validateTool(tool *CompositeTool) error {
 	if tool.Name == "" {
 		return fmt.Errorf("tool name is required")
@@ -64,7 +65,7 @@ func validateTool(tool *CompositeTool) error {
 	}
 
 	if tool.Result.Strategy == "" {
-		return fmt.Errorf("result strategy is required (must be collect)")
+		return fmt.Errorf("result strategy is required; only \"collect\" is currently supported")
 	}
 
 	if tool.Result.Strategy != "collect" {
