@@ -51,7 +51,7 @@ func main() {
 	slog.SetDefault(slog.New(newSlogHandler()))
 
 	// 1. Load config
-	configPath := os.Getenv("CONFIG_PATH")
+	configPath := os.Getenv("CONFIG_FILE")
 	if configPath == "" {
 		configPath = defaults.DefaultConfigPath
 	}
