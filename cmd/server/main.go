@@ -126,7 +126,7 @@ func main() {
 	// 9. Set up HTTP routes
 	mux := http.NewServeMux()
 
-	mux.Handle("/", mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
+	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
 		return server
 	}, nil))
 
