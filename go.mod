@@ -2,10 +2,14 @@ module github.com/SolaceDev/solace-broker-mcp
 
 go 1.25.0
 
-require github.com/modelcontextprotocol/go-sdk v1.4.1
+require (
+	github.com/getkin/kin-openapi v0.134.0
+	github.com/modelcontextprotocol/go-sdk v1.4.1
+	golang.org/x/sync v0.20.0
+	gopkg.in/yaml.v3 v3.0.1
+)
 
 require (
-	github.com/getkin/kin-openapi v0.134.0 // indirect
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
 	github.com/go-openapi/swag v0.23.0 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
@@ -20,7 +24,5 @@ require (
 	github.com/woodsbury/decimal128 v1.3.0 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/oauth2 v0.34.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
