@@ -18,7 +18,7 @@ These must never appear in log output, in any environment:
 | URLs with embedded credentials | `http://user:pass@host` patterns |
 | Full broker config maps | `map[string]*BrokerConfig` contains credentials via `AuthConfig` |
 
-**What to log instead:** auth method (`basic`/`bearer`), env_prefix source, broker alias, broker URL (without credentials).
+**What to log instead:** auth method (`basic`/`bearer`), broker alias, broker URL (without credentials).
 
 ---
 

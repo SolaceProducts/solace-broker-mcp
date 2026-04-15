@@ -1,7 +1,7 @@
 // Package config loads and validates the Solace Broker MCP Server configuration
-// from a YAML file. It supports multiple brokers with independent credentials
-// loaded from environment variables using per-broker env_prefix, and applies
-// defaults from the defaults package for optional fields.
+// from a YAML file. It supports ${VAR_NAME} env var substitution in any YAML
+// field, multiple brokers with independent credentials, and applies defaults
+// from the defaults package for optional fields.
 package config
 
 import (
@@ -16,10 +16,6 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"gopkg.in/yaml.v3"
 )
-
-// envPrefixPattern validates that env_prefix values contain only uppercase
-// letters, numbers, and underscores.
-var envPrefixPattern = regexp.MustCompile(`^[A-Z0-9_]+$`)
 
 // ServerConfig holds the complete MCP server configuration, including all
 // configured brokers and SEMP client settings.
@@ -36,15 +32,14 @@ type ServerConfig struct {
 type BrokerConfig struct {
 	URL           string     `yaml:"url"`             // SEMP API base URL (e.g., "https://broker:1943")
 	TLSSkipVerify bool       `yaml:"tls_skip_verify"` // skip TLS cert verification (dev only)
-	EnvPrefix     string     `yaml:"env_prefix"`      // prefix for credential env vars ({EnvPrefix}_USERNAME, {EnvPrefix}_PASSWORD)
 	Auth          AuthConfig `yaml:"auth"`             // authentication config
 }
 
 // AuthConfig holds the authentication credentials for a broker connection.
 type AuthConfig struct {
-	Method   string `yaml:"method"` // "basic" for this release
-	Username string // populated from {EnvPrefix}_USERNAME env var
-	Password string // populated from {EnvPrefix}_PASSWORD env var
+	Method   string `yaml:"method"`   // "basic" for this release
+	Username string `yaml:"username"` // basic auth username (use ${VAR_NAME} for env var)
+	Password string `yaml:"password"` // basic auth password (use ${VAR_NAME} for env var)
 }
 
 // LogValue implements slog.LogValuer for AuthConfig. It exposes only the auth
@@ -57,13 +52,12 @@ func (a AuthConfig) LogValue() slog.Value {
 }
 
 // LogValue implements slog.LogValuer for BrokerConfig. It exposes connection
-// metadata (URL, TLS settings, env prefix, auth method) but excludes credentials.
+// metadata (URL, TLS settings, auth method) but excludes credentials.
 // See docs/secure-logging-rules.md Rule 2.
 func (b BrokerConfig) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("url", b.URL),
 		slog.Bool("tls_skip_verify", b.TLSSkipVerify),
-		slog.String("env_prefix", b.EnvPrefix),
 		slog.String("auth_method", b.Auth.Method),
 	)
 }
@@ -85,22 +79,29 @@ type yamlConfig struct {
 	TLSKeyFile  string                   `yaml:"tls_key_file"`
 }
 
-// LoadConfig reads a YAML configuration file from path, applies defaults for
-// missing optional fields, validates the structure, resolves credentials from
-// environment variables, applies env var overrides, and returns a ServerConfig
-// ready for use.
+// LoadConfig reads a YAML configuration file from path, substitutes ${VAR_NAME}
+// env var references, parses YAML, applies defaults, validates, and returns a
+// ServerConfig ready for use.
 //
 // Processing order:
-//  1. Parse YAML
-//  2. Apply defaults (fill missing optional fields)
-//  3. Validate (required fields, value ranges, TLS pairing)
-//  4. Load .env file
-//  5. Resolve credentials from environment variables
-//  6. Apply env var overrides (MCP_SERVER_PORT — env var wins over YAML/default)
+//  1. Read YAML file (raw bytes)
+//  2. Load .env file (so env vars are available for substitution)
+//  3. Substitute ${VAR_NAME} in raw bytes
+//  4. Parse YAML
+//  5. Apply defaults (fill missing optional fields)
+//  6. Apply env var overrides (MCP_SERVER_PORT — runtime override)
+//  7. Validate (required fields, value ranges, TLS pairing)
 func LoadConfig(path string) (*ServerConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading config file: %w", err)
+	}
+
+	loadEnvFile(path)
+
+	data, err = substituteEnvVars(data)
+	if err != nil {
+		return nil, fmt.Errorf("substituting env vars: %w", err)
 	}
 
 	var raw yamlConfig
@@ -118,56 +119,17 @@ func LoadConfig(path string) (*ServerConfig, error) {
 
 	applyDefaults(cfg)
 
-	if err := validate(cfg); err != nil {
-		return nil, fmt.Errorf("validating config: %w", err)
-	}
-
-	loadEnvFile(path)
-
-	if err := resolveCredentials(cfg); err != nil {
-		return nil, fmt.Errorf("resolving credentials: %w", err)
-	}
-
 	if err := applyEnvOverrides(cfg); err != nil {
 		return nil, fmt.Errorf("applying env overrides: %w", err)
 	}
 
-	slog.Warn("env_prefix naming convention is provisional",
-		slog.String("convention", "uppercase letters, numbers, and underscores only"))
+	if err := validate(cfg); err != nil {
+		return nil, fmt.Errorf("validating config: %w", err)
+	}
 
 	return cfg, nil
 }
 
-// resolveCredentials reads credentials from environment variables for each
-// broker using the broker's env_prefix. For a broker with env_prefix "PROD_US",
-// it reads PROD_US_USERNAME and PROD_US_PASSWORD.
-func resolveCredentials(cfg *ServerConfig) error {
-	for alias, broker := range cfg.Brokers {
-		if broker.EnvPrefix == "" {
-			return fmt.Errorf("broker %q: env_prefix is required", alias)
-		}
-
-		if !envPrefixPattern.MatchString(broker.EnvPrefix) {
-			return fmt.Errorf("broker %q: env_prefix must contain only uppercase letters, numbers, and underscores, got %q", alias, broker.EnvPrefix)
-		}
-
-		usernameVar := broker.EnvPrefix + "_USERNAME"
-		username, exists := os.LookupEnv(usernameVar)
-		if !exists {
-			return fmt.Errorf("broker %q: environment variable %s is not set (required by env_prefix %q). Set it in your environment or in a .env file next to the config file", alias, usernameVar, broker.EnvPrefix)
-		}
-
-		passwordVar := broker.EnvPrefix + "_PASSWORD"
-		password, exists := os.LookupEnv(passwordVar)
-		if !exists {
-			return fmt.Errorf("broker %q: environment variable %s is not set (required by env_prefix %q). Set it in your environment or in a .env file next to the config file", alias, passwordVar, broker.EnvPrefix)
-		}
-
-		broker.Auth.Username = username
-		broker.Auth.Password = password
-	}
-	return nil
-}
 
 // applyDefaults fills in missing optional fields from the defaults package.
 func applyDefaults(cfg *ServerConfig) {
@@ -220,9 +182,37 @@ func loadEnvFile(configPath string) {
 		slog.String("path", envPath))
 }
 
+// envVarPattern matches ${VAR_NAME} in raw YAML bytes. VAR_NAME must be
+// uppercase letters, numbers, and underscores.
+var envVarPattern = regexp.MustCompile(`\$\{([A-Z0-9_]+)\}`)
+
+// substituteEnvVars replaces all ${VAR_NAME} occurrences in raw YAML bytes with
+// the corresponding environment variable values. Returns an error if any
+// referenced env var is not set. This runs before YAML parsing so any field
+// can reference env vars.
+func substituteEnvVars(data []byte) ([]byte, error) {
+	var missing []string
+
+	result := envVarPattern.ReplaceAllFunc(data, func(match []byte) []byte {
+		// Extract var name from ${VAR_NAME}
+		varName := string(envVarPattern.FindSubmatch(match)[1])
+		value, exists := os.LookupEnv(varName)
+		if !exists {
+			missing = append(missing, varName)
+			return match // leave as-is, error reported after
+		}
+		return []byte(value)
+	})
+
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("environment variables not set: %s", strings.Join(missing, ", "))
+	}
+
+	return result, nil
+}
+
 // validate checks that the config has all required fields and that values are
-// within acceptable ranges. Credential validation happens in resolveCredentials,
-// not here — this function validates structure only.
+// within acceptable ranges.
 func validate(cfg *ServerConfig) error {
 	if len(cfg.Brokers) == 0 {
 		return fmt.Errorf("at least one broker must be configured")
@@ -233,23 +223,23 @@ func validate(cfg *ServerConfig) error {
 			return fmt.Errorf("broker %q: url is required", alias)
 		}
 
-		if broker.EnvPrefix == "" {
-			return fmt.Errorf("broker %q: env_prefix is required", alias)
-		}
-
-		if !envPrefixPattern.MatchString(broker.EnvPrefix) {
-			return fmt.Errorf("broker %q: env_prefix must contain only uppercase letters, numbers, and underscores, got %q", alias, broker.EnvPrefix)
-		}
-
-		// ASSUMPTION: defaulting to basic auth when method is not specified.
-		// Only basic auth is supported in this PR. When OAuth is added, this
-		// default may need to change or become an error.
+		// Default to basic auth when method is not specified.
 		if broker.Auth.Method == "" {
 			broker.Auth.Method = "basic"
 		}
 
 		if broker.Auth.Method != "basic" {
 			return fmt.Errorf("broker %q: unsupported auth method %q (only \"basic\" is supported)", alias, broker.Auth.Method)
+		}
+
+		// Validate credentials are present based on auth method.
+		if broker.Auth.Method == "basic" {
+			if broker.Auth.Username == "" {
+				return fmt.Errorf("broker %q: username is required for basic auth", alias)
+			}
+			if broker.Auth.Password == "" {
+				return fmt.Errorf("broker %q: password is required for basic auth", alias)
+			}
 		}
 	}
 
