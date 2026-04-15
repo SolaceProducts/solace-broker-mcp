@@ -46,6 +46,31 @@ func newSlogHandler() slog.Handler {
 	})
 }
 
+// buildMux creates the HTTP route multiplexer with all registered routes.
+// It only handles route registration — no middleware, no server config.
+// Both main() and tests use this function to avoid route drift.
+func buildMux(server *mcp.Server) *http.ServeMux {
+	mux := http.NewServeMux()
+
+	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
+		return server
+	}, nil))
+
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write([]byte(`{"status": "ok"}`)); err != nil {
+			http.Error(w, "failed to write response", http.StatusInternalServerError)
+		}
+	})
+
+	return mux
+}
+
 func main() {
 	// 0. Set up structured logging with credential redaction safety net
 	slog.SetDefault(slog.New(newSlogHandler()))
@@ -124,23 +149,7 @@ func main() {
 	reg.RegisterListBrokers()
 
 	// 9. Set up HTTP routes
-	mux := http.NewServeMux()
-
-	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
-		return server
-	}, nil))
-
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte(`{"status": "ok"}`)); err != nil {
-			http.Error(w, "failed to write response", http.StatusInternalServerError)
-		}
-	})
+	mux := buildMux(server)
 
 	// 10. Start server with graceful shutdown
 	addr := fmt.Sprintf(":%d", cfg.Port)

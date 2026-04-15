@@ -9,38 +9,19 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// newTestMux creates the same mux configuration as main() for testing.
-// This keeps the route definitions testable without starting the full server.
-func newTestMux() *http.ServeMux {
-	mux := http.NewServeMux()
-
+// testMux creates a mux using the shared buildMux function with a minimal
+// MCP server. This ensures tests use the same route definitions as main().
+func testMux() *http.ServeMux {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "solace-broker-mcp",
 		Version: "0.1.0",
 	}, nil)
-
-	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
-		return server
-	}, nil))
-
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte(`{"status": "ok"}`)); err != nil {
-			http.Error(w, "failed to write response", http.StatusInternalServerError)
-		}
-	})
-
-	return mux
+	return buildMux(server)
 }
 
 func TestHealth_GET_ReturnsOK(t *testing.T) {
-	mux := newTestMux()
-	req := httptest.NewRequestWithContext(context.Background(),http.MethodGet, "/health", nil)
+	mux := testMux()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -57,8 +38,8 @@ func TestHealth_GET_ReturnsOK(t *testing.T) {
 }
 
 func TestHealth_POST_ReturnsMethodNotAllowed(t *testing.T) {
-	mux := newTestMux()
-	req := httptest.NewRequestWithContext(context.Background(),http.MethodPost, "/health", nil)
+	mux := testMux()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/health", nil)
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -69,8 +50,8 @@ func TestHealth_POST_ReturnsMethodNotAllowed(t *testing.T) {
 }
 
 func TestMCPEndpoint_POST_ReachesMCPHandler(t *testing.T) {
-	mux := newTestMux()
-	req := httptest.NewRequestWithContext(context.Background(),http.MethodPost, "/mcp", nil)
+	mux := testMux()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	rec := httptest.NewRecorder()
 
@@ -85,8 +66,8 @@ func TestMCPEndpoint_POST_ReachesMCPHandler(t *testing.T) {
 }
 
 func TestUnknownRoute_Returns404(t *testing.T) {
-	mux := newTestMux()
-	req := httptest.NewRequestWithContext(context.Background(),http.MethodGet, "/unknown", nil)
+	mux := testMux()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/unknown", nil)
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
