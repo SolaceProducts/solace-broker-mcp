@@ -314,3 +314,96 @@ brokers:
 		t.Errorf("expected password from env var 'env-pass', got %q", broker.Auth.Password)
 	}
 }
+
+func TestLoadConfig_PortOutOfRange(t *testing.T) {
+	t.Setenv("TEST_PORT_USERNAME", "admin")
+	t.Setenv("TEST_PORT_PASSWORD", "secret")
+
+	yaml := `
+port: 99999
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    env_prefix: "TEST_PORT"
+    auth:
+      method: basic
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for port out of range")
+	}
+	if !strings.Contains(err.Error(), "port must be between 1 and 65535") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadConfig_TLSOnlyCert_ReturnsError(t *testing.T) {
+	t.Setenv("TEST_TLS_USERNAME", "admin")
+	t.Setenv("TEST_TLS_PASSWORD", "secret")
+
+	yaml := `
+tls_cert_file: "/tmp/cert.pem"
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    env_prefix: "TEST_TLS"
+    auth:
+      method: basic
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error when only tls_cert_file is provided")
+	}
+	if !strings.Contains(err.Error(), "tls_cert_file and tls_key_file must be provided together") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadConfig_TLSBothFields_Valid(t *testing.T) {
+	t.Setenv("TEST_TLSOK_USERNAME", "admin")
+	t.Setenv("TEST_TLSOK_PASSWORD", "secret")
+
+	yaml := `
+tls_cert_file: "/tmp/cert.pem"
+tls_key_file: "/tmp/key.pem"
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    env_prefix: "TEST_TLSOK"
+    auth:
+      method: basic
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.TLSCertFile != "/tmp/cert.pem" {
+		t.Errorf("expected cert /tmp/cert.pem, got %q", cfg.TLSCertFile)
+	}
+	if cfg.TLSKeyFile != "/tmp/key.pem" {
+		t.Errorf("expected key /tmp/key.pem, got %q", cfg.TLSKeyFile)
+	}
+}
+
+func TestLoadConfig_EnvOverridePort(t *testing.T) {
+	t.Setenv("TEST_ENVPORT_USERNAME", "admin")
+	t.Setenv("TEST_ENVPORT_PASSWORD", "secret")
+	t.Setenv("MCP_SERVER_PORT", "9091")
+
+	yaml := `
+port: 8080
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    env_prefix: "TEST_ENVPORT"
+    auth:
+      method: basic
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Port != 9091 {
+		t.Errorf("expected port 9091 (from env var), got %d", cfg.Port)
+	}
+}
