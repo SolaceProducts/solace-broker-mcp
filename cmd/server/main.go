@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -86,20 +85,6 @@ func main() {
 		slog.Error("failed to load config", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-	// Override port from environment variable if set (env var > YAML config > default).
-	if envPort := os.Getenv("MCP_SERVER_PORT"); envPort != "" {
-		port, err := strconv.Atoi(envPort)
-		if err != nil {
-			slog.Error("invalid MCP_SERVER_PORT", slog.String("value", envPort))
-			os.Exit(1)
-		}
-		if port < 1 || port > 65535 {
-			slog.Error("MCP_SERVER_PORT out of range", slog.Int("value", port))
-			os.Exit(1)
-		}
-		cfg.Port = port
-	}
-
 	slog.Info("config loaded",
 		slog.Int("broker_count", len(cfg.Brokers)),
 		slog.Int("port", cfg.Port))
