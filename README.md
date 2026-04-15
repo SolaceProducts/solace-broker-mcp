@@ -71,14 +71,54 @@ The server automatically loads the `.env` file on startup. You can also set envi
 go run ./cmd/server
 ```
 
-The server listens on port `9090` by default.
+The server listens on port `9090` by default and serves the MCP endpoint at `/mcp`.
+
+### Configuration Options
+
+The server requires a YAML config file (broker definitions) and credentials (via `.env` file or environment variables). Env var overrides are available for file paths and port.
+
+**Config and credential file locations:**
+
+| Setting | Env var | Default |
+|---|---|---|
+| Config file path | `CONFIG_FILE` | `broker-config.yaml` in current directory |
+| Credentials file path | `ENV_FILE` | `.env` next to config file |
+
+**Server settings:**
+
+| Setting | Env var | YAML field | Default |
+|---|---|---|---|
+| Port | `MCP_SERVER_PORT` | `port` | `9090` |
+| TLS certificate | — | `tls_cert_file` | none (plain HTTP) |
+| TLS private key | — | `tls_key_file` | none (plain HTTP) |
+
+Priority: env var > YAML config > default.
+
+**TLS (HTTPS):**
+
+To enable HTTPS, add both `tls_cert_file` and `tls_key_file` to the YAML config:
+
+```yaml
+port: 9090
+tls_cert_file: "/etc/certs/server.pem"
+tls_key_file: "/etc/certs/server-key.pem"
+
+brokers:
+  my-broker:
+    url: "http://broker:8080"
+    env_prefix: "MY_BROKER"
+    auth:
+      method: basic
+```
+
+When both are configured, the server starts with HTTPS. When neither is configured, plain HTTP. Providing only one is a startup error.
 
 ### 5. Connect from Claude Code
 
 Add the MCP server to Claude Code:
 
 ```bash
-claude mcp add solace-broker --transport http http://localhost:9090/
+claude mcp add solace-broker --transport http http://localhost:9090/mcp
 ```
 
 Then ask Claude to interact with your brokers:
@@ -95,9 +135,11 @@ solace-broker-mcp/
 ├── internal/
 │   ├── defaults/        # Default values with assumption annotations
 │   ├── config/          # YAML config loading, env_prefix credentials
+│   ├── composite/       # YAML-driven composite tool engine (loader, executor)
+│   ├── registry/        # MCP tool registration, broker resolution, tool call logging
 │   └── semp/            # SEMP client layer (broker pool, HTTP client, spec parser)
-├── docs/                # Architecture documentation
-├── specs/               # Design specs, task breakdowns, test plans
+├── docs/                # Architecture and secure logging rules
+├── .claude/skills/      # Claude Code skills (add-logs, check-logs)
 ├── .github/workflows/   # GitHub Actions CI
 ├── broker-config.yaml   # Local broker config (gitignored)
 ├── .env                 # Local credentials (gitignored)

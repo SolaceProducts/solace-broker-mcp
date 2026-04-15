@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
@@ -23,9 +24,11 @@ var envPrefixPattern = regexp.MustCompile(`^[A-Z0-9_]+$`)
 // ServerConfig holds the complete MCP server configuration, including all
 // configured brokers and SEMP client settings.
 type ServerConfig struct {
-	Brokers map[string]*BrokerConfig // broker alias → config
-	SEMP    SEMPConfig               // SEMP client settings
-	Port    string                   // HTTP port the MCP server listens on
+	Brokers     map[string]*BrokerConfig // broker alias → config
+	SEMP        SEMPConfig               // SEMP client settings
+	Port        int                      // HTTP port the MCP server listens on (1-65535)
+	TLSCertFile string                   // path to TLS certificate file (optional, enables HTTPS)
+	TLSKeyFile  string                   // path to TLS private key file (optional, requires TLSCertFile)
 }
 
 // BrokerConfig holds the connection and authentication configuration for a
@@ -75,14 +78,25 @@ type SEMPConfig struct {
 // yamlConfig is the intermediate representation used for YAML unmarshalling.
 // It mirrors the YAML file structure before being transformed into ServerConfig.
 type yamlConfig struct {
-	Brokers map[string]*BrokerConfig `yaml:"brokers"`
-	SEMP    SEMPConfig               `yaml:"semp"`
-	Port    string                   `yaml:"port"`
+	Brokers     map[string]*BrokerConfig `yaml:"brokers"`
+	SEMP        SEMPConfig               `yaml:"semp"`
+	Port        int                      `yaml:"port"`
+	TLSCertFile string                   `yaml:"tls_cert_file"`
+	TLSKeyFile  string                   `yaml:"tls_key_file"`
 }
 
 // LoadConfig reads a YAML configuration file from path, applies defaults for
 // missing optional fields, validates the structure, resolves credentials from
-// environment variables, and returns a ServerConfig ready for use.
+// environment variables, applies env var overrides, and returns a ServerConfig
+// ready for use.
+//
+// Processing order:
+//  1. Parse YAML
+//  2. Apply defaults (fill missing optional fields)
+//  3. Validate (required fields, value ranges, TLS pairing)
+//  4. Load .env file
+//  5. Resolve credentials from environment variables
+//  6. Apply env var overrides (MCP_SERVER_PORT — env var wins over YAML/default)
 func LoadConfig(path string) (*ServerConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -95,9 +109,11 @@ func LoadConfig(path string) (*ServerConfig, error) {
 	}
 
 	cfg := &ServerConfig{
-		Brokers: raw.Brokers,
-		SEMP:    raw.SEMP,
-		Port:    raw.Port,
+		Brokers:     raw.Brokers,
+		SEMP:        raw.SEMP,
+		Port:        raw.Port,
+		TLSCertFile: raw.TLSCertFile,
+		TLSKeyFile:  raw.TLSKeyFile,
 	}
 
 	applyDefaults(cfg)
@@ -110,6 +126,10 @@ func LoadConfig(path string) (*ServerConfig, error) {
 
 	if err := resolveCredentials(cfg); err != nil {
 		return nil, fmt.Errorf("resolving credentials: %w", err)
+	}
+
+	if err := applyEnvOverrides(cfg); err != nil {
+		return nil, fmt.Errorf("applying env overrides: %w", err)
 	}
 
 	slog.Warn("env_prefix naming convention is provisional",
@@ -151,7 +171,7 @@ func resolveCredentials(cfg *ServerConfig) error {
 
 // applyDefaults fills in missing optional fields from the defaults package.
 func applyDefaults(cfg *ServerConfig) {
-	if cfg.Port == "" {
+	if cfg.Port == 0 {
 		cfg.Port = defaults.DefaultPort
 	}
 	if cfg.SEMP.MaxConcurrentPerBroker == 0 {
@@ -233,6 +253,10 @@ func validate(cfg *ServerConfig) error {
 		}
 	}
 
+	if err := ValidatePort(cfg.Port); err != nil {
+		return err
+	}
+
 	if cfg.SEMP.MaxConcurrentPerBroker < 0 {
 		return fmt.Errorf("semp.max_concurrent_per_broker must be > 0, got %d", cfg.SEMP.MaxConcurrentPerBroker)
 	}
@@ -241,6 +265,37 @@ func validate(cfg *ServerConfig) error {
 		return fmt.Errorf("semp.request_timeout_seconds must be > 0, got %d", cfg.SEMP.RequestTimeoutSeconds)
 	}
 
+	// TLS: both cert and key must be provided together, or neither.
+	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
+		return fmt.Errorf("both tls_cert_file and tls_key_file must be provided together; got cert=%q, key=%q", cfg.TLSCertFile, cfg.TLSKeyFile)
+	}
+
+	return nil
+}
+
+// ValidatePort checks that a port number is within the valid TCP range (1-65535).
+// Used by both validate() and applyEnvOverrides() to avoid duplicating the range check.
+func ValidatePort(port int) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535, got %d", port)
+	}
+	return nil
+}
+
+// applyEnvOverrides checks for environment variable overrides and applies them
+// to the config. This runs after validation and credential resolution. The
+// overridden value is validated via ValidatePort internally.
+func applyEnvOverrides(cfg *ServerConfig) error {
+	if envPort := os.Getenv("MCP_SERVER_PORT"); envPort != "" {
+		port, err := strconv.Atoi(envPort)
+		if err != nil {
+			return fmt.Errorf("invalid MCP_SERVER_PORT %q: must be a number", envPort)
+		}
+		if err := ValidatePort(port); err != nil {
+			return fmt.Errorf("MCP_SERVER_PORT: %w", err)
+		}
+		cfg.Port = port
+	}
 	return nil
 }
 

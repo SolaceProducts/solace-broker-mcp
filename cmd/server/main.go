@@ -45,12 +45,37 @@ func newSlogHandler() slog.Handler {
 	})
 }
 
+// buildMux creates the HTTP route multiplexer with all registered routes.
+// It only handles route registration — no middleware, no server config.
+// Both main() and tests use this function to avoid route drift.
+func buildMux(server *mcp.Server) *http.ServeMux {
+	mux := http.NewServeMux()
+
+	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
+		return server
+	}, nil))
+
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write([]byte(`{"status": "ok"}`)); err != nil {
+			http.Error(w, "failed to write response", http.StatusInternalServerError)
+		}
+	})
+
+	return mux
+}
+
 func main() {
 	// 0. Set up structured logging with credential redaction safety net
 	slog.SetDefault(slog.New(newSlogHandler()))
 
 	// 1. Load config
-	configPath := os.Getenv("CONFIG_PATH")
+	configPath := os.Getenv("CONFIG_FILE")
 	if configPath == "" {
 		configPath = defaults.DefaultConfigPath
 	}
@@ -62,7 +87,7 @@ func main() {
 	}
 	slog.Info("config loaded",
 		slog.Int("broker_count", len(cfg.Brokers)),
-		slog.String("port", cfg.Port))
+		slog.Int("port", cfg.Port))
 
 	// 2. Parse embedded OpenAPI specs
 	operations, err := sempv2.ParseSpecs(specs.FS)
@@ -109,26 +134,10 @@ func main() {
 	reg.RegisterListBrokers()
 
 	// 9. Set up HTTP routes
-	mux := http.NewServeMux()
-
-	mux.Handle("/", mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
-		return server
-	}, nil))
-
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte(`{"status": "ok"}`)); err != nil {
-			http.Error(w, "failed to write response", http.StatusInternalServerError)
-		}
-	})
+	mux := buildMux(server)
 
 	// 10. Start server with graceful shutdown
-	addr := fmt.Sprintf(":%s", cfg.Port)
+	addr := fmt.Sprintf(":%d", cfg.Port)
 	httpServer := &http.Server{
 		Addr:              addr,
 		Handler:           mux,
@@ -139,9 +148,18 @@ func main() {
 	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		slog.Info("server starting",
-			slog.String("addr", addr))
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		var err error
+		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+			slog.Info("server starting with TLS",
+				slog.String("addr", addr),
+				slog.String("cert", cfg.TLSCertFile))
+			err = httpServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+		} else {
+			slog.Info("server starting",
+				slog.String("addr", addr))
+			err = httpServer.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
 			slog.Error("server failed", slog.String("error", err.Error()))
 			os.Exit(1)
 		}
