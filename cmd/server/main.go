@@ -27,11 +27,16 @@ import (
 // in depth — credential-carrying types also implement slog.LogValuer to exclude
 // secrets, but ReplaceAttr catches anything that slips through.
 // See docs/secure-logging-rules.md Rule 3.
-func newSlogHandler() slog.Handler {
+//
+// The level parameter controls the minimum level emitted. main() calls this
+// twice: once at INFO to bootstrap logging before LoadConfig runs (so config
+// loading itself can emit logs), then again with the user-configured level
+// from cfg.LogLevel after validation.
+func newSlogHandler(level slog.Level) slog.Handler {
 	redactedKeys := []string{"password", "token", "secret", "authorization", "credential", "api_key", "private_key"}
 
 	return slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: level,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 			key := strings.ToLower(a.Key)
 			for _, redacted := range redactedKeys {
@@ -71,8 +76,12 @@ func buildMux(server *mcp.Server) *http.ServeMux {
 }
 
 func main() {
-	// 0. Set up structured logging with credential redaction safety net
-	slog.SetDefault(slog.New(newSlogHandler()))
+	// 0. Bootstrap slog at INFO so LoadConfig can emit logs. The handler is
+	//    swapped with the user-configured level (cfg.LogLevel) after LoadConfig
+	//    validates it. UnmarshalText is infallible here because validate() in
+	//    the config package already proved cfg.LogLevel is one of the valid
+	//    level names.
+	slog.SetDefault(slog.New(newSlogHandler(slog.LevelInfo)))
 
 	// 1. Load config
 	configPath := os.Getenv("CONFIG_FILE")
@@ -85,9 +94,17 @@ func main() {
 		slog.Error("failed to load config", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+
+	// Reconfigure slog with the user-configured level. cfg.LogLevel is
+	// validated and normalized to one of debug/info/warn/error.
+	var level slog.Level
+	_ = level.UnmarshalText([]byte(cfg.LogLevel))
+	slog.SetDefault(slog.New(newSlogHandler(level)))
+
 	slog.Info("config loaded",
 		slog.Int("broker_count", len(cfg.Brokers)),
-		slog.Int("port", cfg.Port))
+		slog.Int("port", cfg.Port),
+		slog.String("log_level", cfg.LogLevel))
 
 	// 2. Parse embedded OpenAPI specs
 	operations, err := sempv2.ParseSpecs(specs.FS)

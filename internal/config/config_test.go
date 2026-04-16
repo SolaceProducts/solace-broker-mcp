@@ -488,6 +488,89 @@ brokers:
 	}
 }
 
+func TestLoadConfig_LogLevel_Default(t *testing.T) {
+	yaml := `
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LogLevel != defaults.DefaultLogLevel {
+		t.Errorf("expected default log_level %q, got %q", defaults.DefaultLogLevel, cfg.LogLevel)
+	}
+}
+
+func TestLoadConfig_LogLevel_ValidValues(t *testing.T) {
+	for _, level := range []string{"debug", "info", "warn", "error"} {
+		t.Run(level, func(t *testing.T) {
+			yaml := `
+log_level: ` + level + `
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+			cfg, err := LoadConfig(writeTemp(t, yaml))
+			if err != nil {
+				t.Fatalf("unexpected error for level %q: %v", level, err)
+			}
+			if cfg.LogLevel != level {
+				t.Errorf("expected log_level %q, got %q", level, cfg.LogLevel)
+			}
+		})
+	}
+}
+
+func TestLoadConfig_LogLevel_CaseInsensitive(t *testing.T) {
+	yaml := `
+log_level: DEBUG
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LogLevel != "debug" {
+		t.Errorf("expected log_level normalized to 'debug', got %q", cfg.LogLevel)
+	}
+}
+
+func TestLoadConfig_LogLevel_Invalid(t *testing.T) {
+	yaml := `
+log_level: verbose
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for invalid log_level")
+	}
+	if !strings.Contains(err.Error(), "log_level") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
 func TestLoadConfig_CollectsAllErrors(t *testing.T) {
 	// Multiple issues across server-level and multiple brokers — all should
 	// surface in a single error so operators fix them in one pass.

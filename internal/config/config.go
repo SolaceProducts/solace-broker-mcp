@@ -26,9 +26,15 @@ type ServerConfig struct {
 	Brokers     map[string]*BrokerConfig // broker alias → config
 	SEMP        SEMPConfig               // SEMP client settings
 	Port        int                      // HTTP port the MCP server listens on (1-65535)
+	LogLevel    string                   // slog level name: "debug", "info", "warn", "error"
 	TLSCertFile string                   // path to TLS certificate file (optional, enables HTTPS)
 	TLSKeyFile  string                   // path to TLS private key file (optional, requires TLSCertFile)
 }
+
+// validLogLevels is the allowlist of slog levels operators may configure.
+// Matches the story spec: strict exactly these four values. Excludes slog's
+// offset syntax (e.g., "INFO+3") which UnmarshalText would otherwise accept.
+var validLogLevels = []string{"debug", "info", "warn", "error"}
 
 // BrokerConfig holds the connection and authentication configuration for a
 // single Solace broker.
@@ -89,6 +95,7 @@ type yamlConfig struct {
 	Brokers     map[string]*BrokerConfig `yaml:"brokers"`
 	SEMP        SEMPConfig               `yaml:"semp"`
 	Port        int                      `yaml:"port"`
+	LogLevel    string                   `yaml:"log_level"`
 	TLSCertFile string                   `yaml:"tls_cert_file"`
 	TLSKeyFile  string                   `yaml:"tls_key_file"`
 }
@@ -127,6 +134,7 @@ func LoadConfig(path string) (*ServerConfig, error) {
 		Brokers:     raw.Brokers,
 		SEMP:        raw.SEMP,
 		Port:        raw.Port,
+		LogLevel:    raw.LogLevel,
 		TLSCertFile: raw.TLSCertFile,
 		TLSKeyFile:  raw.TLSKeyFile,
 	}
@@ -148,6 +156,9 @@ func LoadConfig(path string) (*ServerConfig, error) {
 func applyDefaults(cfg *ServerConfig) {
 	if cfg.Port == 0 {
 		cfg.Port = defaults.DefaultPort
+	}
+	if cfg.LogLevel == "" {
+		cfg.LogLevel = defaults.DefaultLogLevel
 	}
 	if cfg.SEMP.MaxConcurrentPerBroker == 0 {
 		cfg.SEMP.MaxConcurrentPerBroker = defaults.DefaultMaxConcurrentPerBroker
@@ -241,6 +252,12 @@ func validate(cfg *ServerConfig) error {
 
 	if err := ValidatePort(cfg.Port); err != nil {
 		errs = append(errs, err)
+	}
+
+	// Normalize log_level and check against the allowlist.
+	cfg.LogLevel = strings.ToLower(cfg.LogLevel)
+	if !slices.Contains(validLogLevels, cfg.LogLevel) {
+		errs = append(errs, fmt.Errorf("log_level %q is invalid (must be one of %v)", cfg.LogLevel, validLogLevels))
 	}
 
 	if cfg.SEMP.MaxConcurrentPerBroker < 0 {

@@ -60,3 +60,8 @@ const DefaultReadHeaderTimeoutSeconds = 10
 
 // DefaultConfigPath is the default file path for the broker configuration YAML file.
 const DefaultConfigPath = "broker-config.yaml"
+
+// DefaultLogLevel is the default slog level name used when log_level is not
+// specified in the config file. Matches the current hardcoded behavior of the
+// server (slog.LevelInfo).
+const DefaultLogLevel = "info"
