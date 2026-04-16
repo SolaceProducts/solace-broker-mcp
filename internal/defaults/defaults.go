@@ -6,6 +6,8 @@
 // is needed before production release. Review these before deploying to production.
 package defaults
 
+import "time"
+
 // DefaultPort is the HTTP port the MCP server listens on. Uses 9090 to avoid
 // conflict with the Solace broker's SEMP management port (default 8080).
 const DefaultPort = 9090
@@ -20,15 +22,10 @@ const DefaultPort = 9090
 // or adjust this value.
 const DefaultShutdownTimeoutSeconds = 120
 
-// DefaultSEMPRequestTimeoutSeconds is the per-request timeout in seconds for
-// individual SEMP API calls to a broker.
-//
-// Assumption: 30 seconds is sufficient for any single SEMP request.
-// Reasoning: Standard HTTP timeout for management API calls. SEMP operations
-// are typically fast, but large result sets or broker load may slow responses.
-// Validation needed: Measure real broker response times under typical and peak
-// load to confirm or adjust this value.
-const DefaultSEMPRequestTimeoutSeconds = 30
+// DefaultSEMPRequestTimeoutDuration is the per-request timeout for individual
+// SEMP API calls to a broker. Matches the story spec default and the Solace
+// Terraform provider convention.
+const DefaultSEMPRequestTimeoutDuration = time.Minute
 
 // DefaultMaxConcurrentPerBroker is the maximum number of concurrent SEMP
 // requests allowed per broker, enforced via a per-broker semaphore.
@@ -40,10 +37,11 @@ const DefaultSEMPRequestTimeoutSeconds = 30
 // concurrency limit that balances throughput with broker stability.
 const DefaultMaxConcurrentPerBroker = 10
 
-// DefaultTLSSkipVerify controls whether TLS certificate verification is skipped
-// when connecting to brokers. Must be false in production. Only set to true in
-// development environments with self-signed certificates.
-const DefaultTLSSkipVerify = false
+// DefaultInsecureSkipVerify controls whether TLS certificate verification is
+// skipped when connecting to brokers. Must be false in production. Only set
+// to true in development environments with self-signed certificates. Matches
+// the naming of crypto/tls.Config.InsecureSkipVerify.
+const DefaultInsecureSkipVerify = false
 
 // DefaultReadHeaderTimeoutSeconds is the maximum time in seconds the HTTP
 // server waits for a client to send request headers before closing the
@@ -58,5 +56,39 @@ const DefaultTLSSkipVerify = false
 // this value is not too aggressive for real-world network conditions.
 const DefaultReadHeaderTimeoutSeconds = 10
 
-// DefaultConfigPath is the default file path for the broker configuration YAML file.
-const DefaultConfigPath = "broker-config.yaml"
+// DefaultConfigPathSystem is the production-install location for the config
+// file. Tried when CONFIG_FILE is not set. Follows the conventional Linux
+// /etc/<app>/config.yaml layout used by Linux services, K8s, and Docker.
+const DefaultConfigPathSystem = "/etc/mcp-server/config.yaml"
+
+// DefaultConfigPathLocal is the developer-convenience fallback checked after
+// the system path. Makes `go run ./cmd/server` work in the repo without any
+// env vars, while keeping production safe: if both paths exist, the system
+// path wins.
+const DefaultConfigPathLocal = "broker-config.yaml"
+
+// DefaultLogLevel is the default slog level name used when log_level is not
+// specified in the config file. Matches the current hardcoded behavior of the
+// server (slog.LevelInfo).
+const DefaultLogLevel = "info"
+
+// DefaultRequestMinInterval is the minimum spacing between successive SEMP
+// requests against the same broker, enforced by a future rate limiter (Story 5).
+// Matches the story spec and the Solace Terraform provider default (100ms).
+const DefaultRequestMinInterval = 100 * time.Millisecond
+
+// DefaultRetries is the maximum number of retry attempts for a failed SEMP
+// request before surfacing the error to the caller. Used by the future retry
+// logic (Story 5). Zero disables retries entirely. Matches the story spec and
+// Terraform provider default.
+const DefaultRetries = 10
+
+// DefaultRetryMinInterval is the starting backoff duration before the first
+// retry attempt. Subsequent retries grow toward DefaultRetryMaxInterval via
+// exponential backoff (Story 5). Matches the story spec and Terraform default.
+const DefaultRetryMinInterval = 3 * time.Second
+
+// DefaultRetryMaxInterval caps the retry backoff duration regardless of how
+// many attempts have been made. Must be >= DefaultRetryMinInterval. Matches
+// the story spec and Terraform default.
+const DefaultRetryMaxInterval = 30 * time.Second

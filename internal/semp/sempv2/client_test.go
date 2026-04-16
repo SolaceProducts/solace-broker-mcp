@@ -19,13 +19,13 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*sempv2.HTTPClient, 
 	brokerCfg := &config.BrokerConfig{
 		URL: server.URL,
 		Auth: config.AuthConfig{
-			Method:   "basic",
+			Mode:     "basic",
 			Username: "admin",
 			Password: "secret",
 		},
 	}
 	sempCfg := &config.SEMPConfig{
-		RequestTimeoutSeconds: 5,
+		RequestTimeoutDuration: 5 * time.Second,
 	}
 	client := sempv2.NewHTTPClient(brokerCfg, sempCfg)
 	return client, server
@@ -253,6 +253,48 @@ func TestClient_Execute_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestClient_Execute_BearerAuth(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		// Verify bearer token is sent
+		authHeader := r.Header.Get("Authorization")
+		if authHeader != "Bearer my-test-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"meta":{"error":{"status":"UNAUTHORIZED"}}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"data": {"status": "ok"}}`))
+	})
+	_ = client // not using the basic auth client from newTestClient
+	defer server.Close()
+
+	// Create a bearer auth client pointing at the same test server.
+	brokerCfg := &config.BrokerConfig{
+		URL: server.URL,
+		Auth: config.AuthConfig{
+			Mode:  "bearer",
+			Token: "my-test-token",
+		},
+	}
+	sempCfg := &config.SEMPConfig{RequestTimeoutDuration: 5 * time.Second}
+	bearerClient := sempv2.NewHTTPClient(brokerCfg, sempCfg)
+
+	op := &sempv2.Operation{
+		ID:     "testOp",
+		Method: "GET",
+		Path:   "/SEMP/v2/monitor/test",
+	}
+
+	result, err := bearerClient.Execute(context.Background(), op, map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.StatusCode != 200 {
+		t.Errorf("expected 200, got %d", result.StatusCode)
+	}
+}
+
 func TestClient_Execute_Timeout(t *testing.T) {
 	_, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(10 * time.Second)
@@ -263,13 +305,13 @@ func TestClient_Execute_Timeout(t *testing.T) {
 	brokerCfg := &config.BrokerConfig{
 		URL: server.URL,
 		Auth: config.AuthConfig{
-			Method:   "basic",
+			Mode:     "basic",
 			Username: "admin",
 			Password: "secret",
 		},
 	}
 	sempCfg := &config.SEMPConfig{
-		RequestTimeoutSeconds: 1,
+		RequestTimeoutDuration: time.Second,
 	}
 	client := sempv2.NewHTTPClient(brokerCfg, sempCfg)
 

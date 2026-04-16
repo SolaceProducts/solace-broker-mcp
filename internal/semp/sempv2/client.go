@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 )
@@ -57,8 +56,10 @@ func (e *SEMPError) Error() string {
 type HTTPClient struct {
 	httpClient *http.Client
 	baseURL    string
+	authMode   string
 	username   string
 	password   string
+	token      string
 }
 
 // LogValue implements slog.LogValuer for HTTPClient. It exposes only the base
@@ -76,17 +77,19 @@ func (c *HTTPClient) LogValue() slog.Value {
 // tuning appropriate for concurrent SEMP calls.
 func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) *HTTPClient {
 	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: brokerCfg.TLSSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: brokerCfg.InsecureSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
 	}
 
 	return &HTTPClient{
 		httpClient: &http.Client{
-			Timeout:   time.Duration(sempCfg.RequestTimeoutSeconds) * time.Second,
+			Timeout:   sempCfg.RequestTimeoutDuration,
 			Transport: transport,
 		},
 		baseURL:  strings.TrimSuffix(brokerCfg.URL, "/"),
+		authMode: brokerCfg.Auth.Mode,
 		username: brokerCfg.Auth.Username,
 		password: brokerCfg.Auth.Password,
+		token:    brokerCfg.Auth.Token,
 	}
 }
 
@@ -197,9 +200,19 @@ func (c *HTTPClient) buildRequest(ctx context.Context, op *Operation, reqURL str
 	return req, nil
 }
 
-// addAuth sets the Basic Auth header on the request.
+// addAuth sets the authentication header on the request based on the configured
+// auth mode. Basic auth sends Authorization: Basic base64(user:pass). Bearer
+// sends Authorization: Bearer <token>.
+//
+// By the time this runs, config validation has guaranteed that authMode is one
+// of validAuthModes and the corresponding credential fields are non-empty, so
+// no defensive emptiness checks are needed here. If a new auth mode is added,
+// config.validAuthModes must be updated AND a new case must be added below.
 func (c *HTTPClient) addAuth(req *http.Request) {
-	if c.username != "" && c.password != "" {
+	switch c.authMode {
+	case config.AuthModeBasic:
 		req.SetBasicAuth(c.username, c.password)
+	case config.AuthModeBearer:
+		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 }

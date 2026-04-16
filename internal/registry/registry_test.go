@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite"
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
@@ -16,17 +17,15 @@ func newTestPool() *semp.BrokerPool {
 	cfg := &config.ServerConfig{
 		Brokers: map[string]*config.BrokerConfig{
 			"dev": {
-				URL:       "http://localhost:8081",
-				EnvPrefix: "DEV",
-				Auth:      config.AuthConfig{Method: "basic", Username: "admin", Password: "admin"},
+				URL:  "http://localhost:8081",
+				Auth: config.AuthConfig{Mode: "basic", Username: "admin", Password: "admin"},
 			},
 			"prod": {
-				URL:       "http://localhost:8082",
-				EnvPrefix: "PROD",
-				Auth:      config.AuthConfig{Method: "basic", Username: "admin", Password: "admin"},
+				URL:  "http://localhost:8082",
+				Auth: config.AuthConfig{Mode: "basic", Username: "admin", Password: "admin"},
 			},
 		},
-		SEMP: config.SEMPConfig{RequestTimeoutSeconds: 5},
+		SEMP: config.SEMPConfig{RequestTimeoutDuration: 5 * time.Second},
 	}
 	return semp.NewBrokerPool(cfg)
 }
