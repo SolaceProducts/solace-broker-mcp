@@ -426,6 +426,68 @@ brokers:
 	}
 }
 
+func TestLoadConfig_InvalidURLScheme(t *testing.T) {
+	yaml := `
+brokers:
+  dev:
+    url: "ftp://broker.example.com"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for non-http/https URL scheme")
+	}
+	if !strings.Contains(err.Error(), "url scheme must be http or https") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadConfig_URLMissingHost(t *testing.T) {
+	yaml := `
+brokers:
+  dev:
+    url: "http://"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for URL with no host")
+	}
+	if !strings.Contains(err.Error(), "url must include a host") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadConfig_URLEmpty_ReportsRequired(t *testing.T) {
+	// Empty URL is handled by the "url is required" branch, NOT the
+	// structure-validation branch — verifying we don't double-report.
+	yaml := `
+brokers:
+  dev:
+    url: ""
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for empty URL")
+	}
+	if !strings.Contains(err.Error(), "url is required") {
+		t.Errorf("expected 'url is required' error, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "url scheme must be") {
+		t.Errorf("empty URL should not produce 'url scheme' error — double-reporting: %v", err)
+	}
+}
+
 func TestLoadConfig_CollectsAllErrors(t *testing.T) {
 	// Multiple issues across server-level and multiple brokers — all should
 	// surface in a single error so operators fix them in one pass.

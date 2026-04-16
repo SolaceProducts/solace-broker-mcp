@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -266,6 +267,8 @@ func validateBroker(alias string, broker *BrokerConfig) []error {
 
 	if broker.URL == "" {
 		errs = append(errs, fmt.Errorf("broker %q: url is required", alias))
+	} else if err := validateBrokerURL(broker.URL); err != nil {
+		errs = append(errs, fmt.Errorf("broker %q: %w", alias, err))
 	}
 
 	// Normalize auth mode (case-insensitive per story spec).
@@ -304,6 +307,26 @@ func validateBroker(alias string, broker *BrokerConfig) []error {
 func ValidatePort(port int) error {
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("port must be between 1 and 65535, got %d", port)
+	}
+	return nil
+}
+
+// validateBrokerURL checks that s is a well-formed http or https URL with a
+// host component. This is structural validation only — it does NOT verify
+// that the host resolves, is reachable, or actually runs a SEMP endpoint.
+// Those are deliberately runtime concerns surfaced on the first tool call.
+// Both http and https are permitted; production-mode https-only enforcement
+// will be added with the dev/prod flag from Story 1B.
+func validateBrokerURL(s string) error {
+	u, err := url.Parse(s)
+	if err != nil {
+		return fmt.Errorf("url is not a valid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("url scheme must be http or https, got %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("url must include a host, got %q", s)
 	}
 	return nil
 }
