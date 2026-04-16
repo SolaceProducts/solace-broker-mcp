@@ -37,10 +37,11 @@ const DefaultSEMPRequestTimeoutDuration = time.Minute
 // concurrency limit that balances throughput with broker stability.
 const DefaultMaxConcurrentPerBroker = 10
 
-// DefaultTLSSkipVerify controls whether TLS certificate verification is skipped
-// when connecting to brokers. Must be false in production. Only set to true in
-// development environments with self-signed certificates.
-const DefaultTLSSkipVerify = false
+// DefaultInsecureSkipVerify controls whether TLS certificate verification is
+// skipped when connecting to brokers. Must be false in production. Only set
+// to true in development environments with self-signed certificates. Matches
+// the naming of crypto/tls.Config.InsecureSkipVerify.
+const DefaultInsecureSkipVerify = false
 
 // DefaultReadHeaderTimeoutSeconds is the maximum time in seconds the HTTP
 // server waits for a client to send request headers before closing the

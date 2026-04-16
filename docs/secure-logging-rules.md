@@ -46,7 +46,7 @@ Never `fmt.Sprintf` into the message string with external data. Always `slog.Str
 ### Rule 2: Credential-carrying types must implement `slog.LogValuer`
 
 - `AuthConfig` — expose only `Mode`
-- `BrokerConfig` — expose `URL`, `TLSSkipVerify`, `Auth.Mode`
+- `BrokerConfig` — expose `URL`, `InsecureSkipVerify`, `Auth.Mode`
 - `HTTPClient` — lower risk (unexported fields) but should still get `LogValuer` for defense in depth
 - When Story 1B adds OAuth config, that struct gets `LogValuer` too
 

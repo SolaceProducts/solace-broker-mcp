@@ -40,9 +40,9 @@ var validLogLevels = []string{"debug", "info", "warn", "error"}
 // BrokerConfig holds the connection and authentication configuration for a
 // single Solace broker.
 type BrokerConfig struct {
-	URL           string     `yaml:"url"`             // SEMP API base URL (e.g., "https://broker:1943")
-	TLSSkipVerify bool       `yaml:"tls_skip_verify"` // skip TLS cert verification (dev only)
-	Auth          AuthConfig `yaml:"auth"`            // authentication config
+	URL                string     `yaml:"url"`                  // SEMP API base URL (e.g., "https://broker:1943")
+	InsecureSkipVerify bool       `yaml:"insecure_skip_verify"` // skip TLS cert verification (dev only, self-signed certs)
+	Auth               AuthConfig `yaml:"auth"`                 // authentication config
 }
 
 // Auth mode constants for broker authentication (Hop 2: MCP Server → Broker).
@@ -78,7 +78,7 @@ func (a AuthConfig) LogValue() slog.Value {
 func (b BrokerConfig) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("url", b.URL),
-		slog.Bool("tls_skip_verify", b.TLSSkipVerify),
+		slog.Bool("insecure_skip_verify", b.InsecureSkipVerify),
 		slog.String("auth_mode", b.Auth.Mode),
 	)
 }
@@ -249,8 +249,8 @@ func applyDefaults(cfg *ServerConfig) {
 	if cfg.SEMP.RetryMaxInterval == 0 {
 		cfg.SEMP.RetryMaxInterval = defaults.DefaultRetryMaxInterval
 	}
-	// TLSSkipVerify is not defaulted here — Go's zero value for bool (false)
-	// already matches the intended default (verify TLS certificates).
+	// InsecureSkipVerify is not defaulted here — Go's zero value for bool
+	// (false) already matches the intended default (verify TLS certificates).
 }
 
 // loadEnvFile loads a .env file into the process environment. It checks two
