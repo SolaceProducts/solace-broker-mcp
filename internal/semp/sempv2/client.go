@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 )
@@ -83,7 +82,7 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) *
 
 	return &HTTPClient{
 		httpClient: &http.Client{
-			Timeout:   time.Duration(sempCfg.RequestTimeoutSeconds) * time.Second,
+			Timeout:   sempCfg.RequestTimeout,
 			Transport: transport,
 		},
 		baseURL:  strings.TrimSuffix(brokerCfg.URL, "/"),

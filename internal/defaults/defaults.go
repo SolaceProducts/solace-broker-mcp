@@ -6,6 +6,8 @@
 // is needed before production release. Review these before deploying to production.
 package defaults
 
+import "time"
+
 // DefaultPort is the HTTP port the MCP server listens on. Uses 9090 to avoid
 // conflict with the Solace broker's SEMP management port (default 8080).
 const DefaultPort = 9090
@@ -20,15 +22,15 @@ const DefaultPort = 9090
 // or adjust this value.
 const DefaultShutdownTimeoutSeconds = 120
 
-// DefaultSEMPRequestTimeoutSeconds is the per-request timeout in seconds for
-// individual SEMP API calls to a broker.
+// DefaultSEMPRequestTimeout is the per-request timeout for individual SEMP
+// API calls to a broker.
 //
 // Assumption: 30 seconds is sufficient for any single SEMP request.
 // Reasoning: Standard HTTP timeout for management API calls. SEMP operations
 // are typically fast, but large result sets or broker load may slow responses.
 // Validation needed: Measure real broker response times under typical and peak
 // load to confirm or adjust this value.
-const DefaultSEMPRequestTimeoutSeconds = 30
+const DefaultSEMPRequestTimeout = 30 * time.Second
 
 // DefaultMaxConcurrentPerBroker is the maximum number of concurrent SEMP
 // requests allowed per broker, enforced via a per-broker semaphore.

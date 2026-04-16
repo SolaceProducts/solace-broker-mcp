@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
@@ -33,7 +34,7 @@ func newTestServerConfig(serverURL string) *config.ServerConfig {
 			},
 		},
 		SEMP: config.SEMPConfig{
-			RequestTimeoutSeconds: 5,
+			RequestTimeout: 5 * time.Second,
 		},
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"gopkg.in/yaml.v3"
@@ -85,8 +86,8 @@ func (b BrokerConfig) LogValue() slog.Value {
 // SEMPConfig holds settings that control how the MCP server communicates with
 // brokers over the SEMP API.
 type SEMPConfig struct {
-	MaxConcurrentPerBroker int `yaml:"max_concurrent_per_broker"` // semaphore size per broker
-	RequestTimeoutSeconds  int `yaml:"request_timeout_seconds"`   // HTTP request timeout for SEMP calls
+	MaxConcurrentPerBroker int           `yaml:"max_concurrent_per_broker"` // semaphore size per broker
+	RequestTimeout         time.Duration `yaml:"request_timeout"`           // HTTP request timeout for SEMP calls (e.g., "30s")
 }
 
 // yamlConfig is the intermediate representation used for YAML unmarshalling.
@@ -163,8 +164,8 @@ func applyDefaults(cfg *ServerConfig) {
 	if cfg.SEMP.MaxConcurrentPerBroker == 0 {
 		cfg.SEMP.MaxConcurrentPerBroker = defaults.DefaultMaxConcurrentPerBroker
 	}
-	if cfg.SEMP.RequestTimeoutSeconds == 0 {
-		cfg.SEMP.RequestTimeoutSeconds = defaults.DefaultSEMPRequestTimeoutSeconds
+	if cfg.SEMP.RequestTimeout == 0 {
+		cfg.SEMP.RequestTimeout = defaults.DefaultSEMPRequestTimeout
 	}
 	// TLSSkipVerify is not defaulted here — Go's zero value for bool (false)
 	// already matches the intended default (verify TLS certificates).
@@ -264,8 +265,8 @@ func validate(cfg *ServerConfig) error {
 		errs = append(errs, fmt.Errorf("semp.max_concurrent_per_broker must be > 0, got %d", cfg.SEMP.MaxConcurrentPerBroker))
 	}
 
-	if cfg.SEMP.RequestTimeoutSeconds < 0 {
-		errs = append(errs, fmt.Errorf("semp.request_timeout_seconds must be > 0, got %d", cfg.SEMP.RequestTimeoutSeconds))
+	if cfg.SEMP.RequestTimeout < 0 {
+		errs = append(errs, fmt.Errorf("semp.request_timeout must be > 0, got %s", cfg.SEMP.RequestTimeout))
 	}
 
 	// TLS: both cert and key must be provided together, or neither.

@@ -25,7 +25,7 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*sempv2.HTTPClient, 
 		},
 	}
 	sempCfg := &config.SEMPConfig{
-		RequestTimeoutSeconds: 5,
+		RequestTimeout: 5 * time.Second,
 	}
 	client := sempv2.NewHTTPClient(brokerCfg, sempCfg)
 	return client, server
@@ -277,7 +277,7 @@ func TestClient_Execute_BearerAuth(t *testing.T) {
 			Token: "my-test-token",
 		},
 	}
-	sempCfg := &config.SEMPConfig{RequestTimeoutSeconds: 5}
+	sempCfg := &config.SEMPConfig{RequestTimeout: 5 * time.Second}
 	bearerClient := sempv2.NewHTTPClient(brokerCfg, sempCfg)
 
 	op := &sempv2.Operation{
@@ -311,7 +311,7 @@ func TestClient_Execute_Timeout(t *testing.T) {
 		},
 	}
 	sempCfg := &config.SEMPConfig{
-		RequestTimeoutSeconds: 1,
+		RequestTimeout: time.Second,
 	}
 	client := sempv2.NewHTTPClient(brokerCfg, sempCfg)
 

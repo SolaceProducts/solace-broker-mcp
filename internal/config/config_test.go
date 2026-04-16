@@ -161,8 +161,8 @@ brokers:
 	if cfg.SEMP.MaxConcurrentPerBroker != defaults.DefaultMaxConcurrentPerBroker {
 		t.Errorf("expected max_concurrent %d, got %d", defaults.DefaultMaxConcurrentPerBroker, cfg.SEMP.MaxConcurrentPerBroker)
 	}
-	if cfg.SEMP.RequestTimeoutSeconds != defaults.DefaultSEMPRequestTimeoutSeconds {
-		t.Errorf("expected request_timeout %d, got %d", defaults.DefaultSEMPRequestTimeoutSeconds, cfg.SEMP.RequestTimeoutSeconds)
+	if cfg.SEMP.RequestTimeout != defaults.DefaultSEMPRequestTimeout {
+		t.Errorf("expected request_timeout %s, got %s", defaults.DefaultSEMPRequestTimeout, cfg.SEMP.RequestTimeout)
 	}
 }
 

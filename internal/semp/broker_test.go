@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
@@ -27,7 +28,7 @@ func TestBrokerClient_V2_ReturnsClient(t *testing.T) {
 			Password: "secret",
 		},
 	}
-	sempCfg := &config.SEMPConfig{RequestTimeoutSeconds: 5}
+	sempCfg := &config.SEMPConfig{RequestTimeout: 5 * time.Second}
 
 	bc := semp.NewBrokerClient("test-broker", brokerCfg, sempCfg)
 	client := bc.SempV2()
@@ -54,7 +55,7 @@ func TestBrokerClient_V2_ExecutePassesThrough(t *testing.T) {
 			Password: "secret",
 		},
 	}
-	sempCfg := &config.SEMPConfig{RequestTimeoutSeconds: 5}
+	sempCfg := &config.SEMPConfig{RequestTimeout: 5 * time.Second}
 
 	bc := semp.NewBrokerClient("test-broker", brokerCfg, sempCfg)
 	client := bc.SempV2()
