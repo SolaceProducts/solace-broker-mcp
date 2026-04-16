@@ -22,15 +22,10 @@ const DefaultPort = 9090
 // or adjust this value.
 const DefaultShutdownTimeoutSeconds = 120
 
-// DefaultSEMPRequestTimeout is the per-request timeout for individual SEMP
-// API calls to a broker.
-//
-// Assumption: 30 seconds is sufficient for any single SEMP request.
-// Reasoning: Standard HTTP timeout for management API calls. SEMP operations
-// are typically fast, but large result sets or broker load may slow responses.
-// Validation needed: Measure real broker response times under typical and peak
-// load to confirm or adjust this value.
-const DefaultSEMPRequestTimeout = 30 * time.Second
+// DefaultSEMPRequestTimeoutDuration is the per-request timeout for individual
+// SEMP API calls to a broker. Matches the story spec default and the Solace
+// Terraform provider convention.
+const DefaultSEMPRequestTimeoutDuration = time.Minute
 
 // DefaultMaxConcurrentPerBroker is the maximum number of concurrent SEMP
 // requests allowed per broker, enforced via a per-broker semaphore.
@@ -67,3 +62,24 @@ const DefaultConfigPath = "broker-config.yaml"
 // specified in the config file. Matches the current hardcoded behavior of the
 // server (slog.LevelInfo).
 const DefaultLogLevel = "info"
+
+// DefaultRequestMinInterval is the minimum spacing between successive SEMP
+// requests against the same broker, enforced by a future rate limiter (Story 5).
+// Matches the story spec and the Solace Terraform provider default (100ms).
+const DefaultRequestMinInterval = 100 * time.Millisecond
+
+// DefaultRetries is the maximum number of retry attempts for a failed SEMP
+// request before surfacing the error to the caller. Used by the future retry
+// logic (Story 5). Zero disables retries entirely. Matches the story spec and
+// Terraform provider default.
+const DefaultRetries = 10
+
+// DefaultRetryMinInterval is the starting backoff duration before the first
+// retry attempt. Subsequent retries grow toward DefaultRetryMaxInterval via
+// exponential backoff (Story 5). Matches the story spec and Terraform default.
+const DefaultRetryMinInterval = 3 * time.Second
+
+// DefaultRetryMaxInterval caps the retry backoff duration regardless of how
+// many attempts have been made. Must be >= DefaultRetryMinInterval. Matches
+// the story spec and Terraform default.
+const DefaultRetryMaxInterval = 30 * time.Second

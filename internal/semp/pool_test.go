@@ -34,7 +34,7 @@ func newTestServerConfig(serverURL string) *config.ServerConfig {
 			},
 		},
 		SEMP: config.SEMPConfig{
-			RequestTimeout: 5 * time.Second,
+			RequestTimeoutDuration: 5 * time.Second,
 		},
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 )
@@ -161,8 +162,8 @@ brokers:
 	if cfg.SEMP.MaxConcurrentPerBroker != defaults.DefaultMaxConcurrentPerBroker {
 		t.Errorf("expected max_concurrent %d, got %d", defaults.DefaultMaxConcurrentPerBroker, cfg.SEMP.MaxConcurrentPerBroker)
 	}
-	if cfg.SEMP.RequestTimeout != defaults.DefaultSEMPRequestTimeout {
-		t.Errorf("expected request_timeout %s, got %s", defaults.DefaultSEMPRequestTimeout, cfg.SEMP.RequestTimeout)
+	if cfg.SEMP.RequestTimeoutDuration != defaults.DefaultSEMPRequestTimeoutDuration {
+		t.Errorf("expected request_timeout_duration %s, got %s", defaults.DefaultSEMPRequestTimeoutDuration, cfg.SEMP.RequestTimeoutDuration)
 	}
 }
 
@@ -567,6 +568,161 @@ brokers:
 		t.Fatal("expected error for invalid log_level")
 	}
 	if !strings.Contains(err.Error(), "log_level") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadConfig_RateLimit_Defaults(t *testing.T) {
+	yaml := `
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SEMP.RequestMinInterval == nil || *cfg.SEMP.RequestMinInterval != defaults.DefaultRequestMinInterval {
+		t.Errorf("expected default request_min_interval %s, got %v", defaults.DefaultRequestMinInterval, cfg.SEMP.RequestMinInterval)
+	}
+	if cfg.SEMP.Retries == nil || *cfg.SEMP.Retries != defaults.DefaultRetries {
+		t.Errorf("expected default retries %d, got %v", defaults.DefaultRetries, cfg.SEMP.Retries)
+	}
+	if cfg.SEMP.RetryMinInterval != defaults.DefaultRetryMinInterval {
+		t.Errorf("expected default retry_min_interval %s, got %s", defaults.DefaultRetryMinInterval, cfg.SEMP.RetryMinInterval)
+	}
+	if cfg.SEMP.RetryMaxInterval != defaults.DefaultRetryMaxInterval {
+		t.Errorf("expected default retry_max_interval %s, got %s", defaults.DefaultRetryMaxInterval, cfg.SEMP.RetryMaxInterval)
+	}
+}
+
+func TestLoadConfig_RateLimit_ValidValues(t *testing.T) {
+	yaml := `
+semp:
+  request_min_interval: 50ms
+  retries: 5
+  retry_min_interval: 1s
+  retry_max_interval: 10s
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SEMP.RequestMinInterval == nil || *cfg.SEMP.RequestMinInterval != 50*time.Millisecond {
+		t.Errorf("expected request_min_interval 50ms, got %v", cfg.SEMP.RequestMinInterval)
+	}
+	if cfg.SEMP.Retries == nil || *cfg.SEMP.Retries != 5 {
+		t.Errorf("expected retries 5, got %v", cfg.SEMP.Retries)
+	}
+	if cfg.SEMP.RetryMinInterval != time.Second {
+		t.Errorf("expected retry_min_interval 1s, got %s", cfg.SEMP.RetryMinInterval)
+	}
+	if cfg.SEMP.RetryMaxInterval != 10*time.Second {
+		t.Errorf("expected retry_max_interval 10s, got %s", cfg.SEMP.RetryMaxInterval)
+	}
+}
+
+func TestLoadConfig_RateLimit_ExplicitZeroHonored(t *testing.T) {
+	// Zero is a legitimate operator value for retries (no retries) and
+	// request_min_interval (no rate limit per Solace Terraform provider).
+	// Verify applyDefaults does NOT clobber operator-set zero with the default.
+	// This is the reason both fields are pointer types -- without pointers,
+	// "0 in YAML" is indistinguishable from "omitted from YAML".
+	yaml := `
+semp:
+  request_min_interval: 0s
+  retries: 0
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SEMP.RequestMinInterval == nil || *cfg.SEMP.RequestMinInterval != 0 {
+		t.Errorf("expected operator-set request_min_interval=0 to be honored, got %v", cfg.SEMP.RequestMinInterval)
+	}
+	if cfg.SEMP.Retries == nil || *cfg.SEMP.Retries != 0 {
+		t.Errorf("expected operator-set retries=0 to be honored, got %v", cfg.SEMP.Retries)
+	}
+}
+
+func TestLoadConfig_RateLimit_NegativeRetries(t *testing.T) {
+	yaml := `
+semp:
+  retries: -1
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for negative retries")
+	}
+	if !strings.Contains(err.Error(), "semp.retries must be >= 0") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadConfig_RateLimit_NegativeRequestMinInterval(t *testing.T) {
+	yaml := `
+semp:
+  request_min_interval: -10ms
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for negative request_min_interval")
+	}
+	if !strings.Contains(err.Error(), "semp.request_min_interval must be >= 0") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadConfig_RateLimit_MaxSmallerThanMin(t *testing.T) {
+	yaml := `
+semp:
+  retry_min_interval: 30s
+  retry_max_interval: 3s
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error when retry_max_interval < retry_min_interval")
+	}
+	if !strings.Contains(err.Error(), "retry_max_interval") || !strings.Contains(err.Error(), "must be >= semp.retry_min_interval") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }

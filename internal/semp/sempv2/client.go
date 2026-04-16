@@ -82,7 +82,7 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) *
 
 	return &HTTPClient{
 		httpClient: &http.Client{
-			Timeout:   sempCfg.RequestTimeout,
+			Timeout:   sempCfg.RequestTimeoutDuration,
 			Transport: transport,
 		},
 		baseURL:  strings.TrimSuffix(brokerCfg.URL, "/"),

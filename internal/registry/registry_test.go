@@ -25,7 +25,7 @@ func newTestPool() *semp.BrokerPool {
 				Auth: config.AuthConfig{Mode: "basic", Username: "admin", Password: "admin"},
 			},
 		},
-		SEMP: config.SEMPConfig{RequestTimeout: 5 * time.Second},
+		SEMP: config.SEMPConfig{RequestTimeoutDuration: 5 * time.Second},
 	}
 	return semp.NewBrokerPool(cfg)
 }

@@ -28,7 +28,7 @@ func TestBrokerClient_V2_ReturnsClient(t *testing.T) {
 			Password: "secret",
 		},
 	}
-	sempCfg := &config.SEMPConfig{RequestTimeout: 5 * time.Second}
+	sempCfg := &config.SEMPConfig{RequestTimeoutDuration: 5 * time.Second}
 
 	bc := semp.NewBrokerClient("test-broker", brokerCfg, sempCfg)
 	client := bc.SempV2()
@@ -55,7 +55,7 @@ func TestBrokerClient_V2_ExecutePassesThrough(t *testing.T) {
 			Password: "secret",
 		},
 	}
-	sempCfg := &config.SEMPConfig{RequestTimeout: 5 * time.Second}
+	sempCfg := &config.SEMPConfig{RequestTimeoutDuration: 5 * time.Second}
 
 	bc := semp.NewBrokerClient("test-broker", brokerCfg, sempCfg)
 	client := bc.SempV2()

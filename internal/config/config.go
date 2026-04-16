@@ -84,10 +84,29 @@ func (b BrokerConfig) LogValue() slog.Value {
 }
 
 // SEMPConfig holds settings that control how the MCP server communicates with
-// brokers over the SEMP API.
+// brokers over the SEMP API. The rate-limit and retry fields below are
+// defined here but not yet consumed -- they will be wired up in Story 5 when
+// the rate limiter and retry policy are implemented.
+//
+// Field names match the Solace Terraform provider's naming convention so
+// operators familiar with terraform-provider-solacebroker get a consistent
+// experience across tools.
+//
+// RequestMinInterval and Retries use pointer types so we can distinguish
+// "field omitted in YAML" (nil) from "field set to 0" (non-nil pointer to
+// zero). Zero is a legitimate operator choice for both -- the Terraform
+// provider documents "set request_min_interval to 0 for no rate limit", and
+// retries=0 means no retries by analogy. Plain int/time.Duration cannot tell
+// those two cases apart, because both produce the zero value. After
+// applyDefaults runs, these fields are guaranteed non-nil so downstream code
+// can dereference safely.
 type SEMPConfig struct {
-	MaxConcurrentPerBroker int           `yaml:"max_concurrent_per_broker"` // semaphore size per broker
-	RequestTimeout         time.Duration `yaml:"request_timeout"`           // HTTP request timeout for SEMP calls (e.g., "30s")
+	MaxConcurrentPerBroker int            `yaml:"max_concurrent_per_broker"` // semaphore size per broker
+	RequestTimeoutDuration time.Duration  `yaml:"request_timeout_duration"`  // HTTP request timeout for SEMP calls (e.g., "30s")
+	RequestMinInterval     *time.Duration `yaml:"request_min_interval"`      // minimum spacing between SEMP requests; 0 = no throttle
+	Retries                *int           `yaml:"retries"`                   // max retry attempts for a failed SEMP call; 0 = no retries
+	RetryMinInterval       time.Duration  `yaml:"retry_min_interval"`        // starting backoff before the first retry (must be > 0)
+	RetryMaxInterval       time.Duration  `yaml:"retry_max_interval"`        // cap on retry backoff, must be >= RetryMinInterval
 }
 
 // yamlConfig is the intermediate representation used for YAML unmarshalling.
@@ -164,8 +183,26 @@ func applyDefaults(cfg *ServerConfig) {
 	if cfg.SEMP.MaxConcurrentPerBroker == 0 {
 		cfg.SEMP.MaxConcurrentPerBroker = defaults.DefaultMaxConcurrentPerBroker
 	}
-	if cfg.SEMP.RequestTimeout == 0 {
-		cfg.SEMP.RequestTimeout = defaults.DefaultSEMPRequestTimeout
+	if cfg.SEMP.RequestTimeoutDuration == 0 {
+		cfg.SEMP.RequestTimeoutDuration = defaults.DefaultSEMPRequestTimeoutDuration
+	}
+	// RequestMinInterval and Retries are pointers so we can distinguish
+	// "operator omitted the field" (nil) from "operator set it to 0" (non-nil
+	// pointer to zero). Apply the default only when nil. See the SEMPConfig
+	// struct doc for the full rationale.
+	if cfg.SEMP.RequestMinInterval == nil {
+		def := defaults.DefaultRequestMinInterval
+		cfg.SEMP.RequestMinInterval = &def
+	}
+	if cfg.SEMP.Retries == nil {
+		def := defaults.DefaultRetries
+		cfg.SEMP.Retries = &def
+	}
+	if cfg.SEMP.RetryMinInterval == 0 {
+		cfg.SEMP.RetryMinInterval = defaults.DefaultRetryMinInterval
+	}
+	if cfg.SEMP.RetryMaxInterval == 0 {
+		cfg.SEMP.RetryMaxInterval = defaults.DefaultRetryMaxInterval
 	}
 	// TLSSkipVerify is not defaulted here — Go's zero value for bool (false)
 	// already matches the intended default (verify TLS certificates).
@@ -265,8 +302,29 @@ func validate(cfg *ServerConfig) error {
 		errs = append(errs, fmt.Errorf("semp.max_concurrent_per_broker must be > 0, got %d", cfg.SEMP.MaxConcurrentPerBroker))
 	}
 
-	if cfg.SEMP.RequestTimeout < 0 {
-		errs = append(errs, fmt.Errorf("semp.request_timeout must be > 0, got %s", cfg.SEMP.RequestTimeout))
+	if cfg.SEMP.RequestTimeoutDuration <= 0 {
+		errs = append(errs, fmt.Errorf("semp.request_timeout_duration must be > 0, got %s", cfg.SEMP.RequestTimeoutDuration))
+	}
+
+	// RequestMinInterval and Retries are guaranteed non-nil by applyDefaults,
+	// so dereferencing is safe here. Story rule: non-negative for both; zero is
+	// explicitly allowed (0 = no rate limit / no retries).
+	if *cfg.SEMP.RequestMinInterval < 0 {
+		errs = append(errs, fmt.Errorf("semp.request_min_interval must be >= 0, got %s", *cfg.SEMP.RequestMinInterval))
+	}
+
+	if *cfg.SEMP.Retries < 0 {
+		errs = append(errs, fmt.Errorf("semp.retries must be >= 0, got %d", *cfg.SEMP.Retries))
+	}
+
+	if cfg.SEMP.RetryMinInterval <= 0 {
+		errs = append(errs, fmt.Errorf("semp.retry_min_interval must be > 0, got %s", cfg.SEMP.RetryMinInterval))
+	}
+
+	if cfg.SEMP.RetryMaxInterval <= 0 {
+		errs = append(errs, fmt.Errorf("semp.retry_max_interval must be > 0, got %s", cfg.SEMP.RetryMaxInterval))
+	} else if cfg.SEMP.RetryMinInterval > 0 && cfg.SEMP.RetryMaxInterval < cfg.SEMP.RetryMinInterval {
+		errs = append(errs, fmt.Errorf("semp.retry_max_interval (%s) must be >= semp.retry_min_interval (%s)", cfg.SEMP.RetryMaxInterval, cfg.SEMP.RetryMinInterval))
 	}
 
 	// TLS: both cert and key must be provided together, or neither.
