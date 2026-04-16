@@ -55,8 +55,16 @@ const DefaultTLSSkipVerify = false
 // this value is not too aggressive for real-world network conditions.
 const DefaultReadHeaderTimeoutSeconds = 10
 
-// DefaultConfigPath is the default file path for the broker configuration YAML file.
-const DefaultConfigPath = "broker-config.yaml"
+// DefaultConfigPathSystem is the production-install location for the config
+// file. Tried when CONFIG_FILE is not set. Follows the conventional Linux
+// /etc/<app>/config.yaml layout used by Linux services, K8s, and Docker.
+const DefaultConfigPathSystem = "/etc/mcp-server/config.yaml"
+
+// DefaultConfigPathLocal is the developer-convenience fallback checked after
+// the system path. Makes `go run ./cmd/server` work in the repo without any
+// env vars, while keeping production safe: if both paths exist, the system
+// path wins.
+const DefaultConfigPathLocal = "broker-config.yaml"
 
 // DefaultLogLevel is the default slog level name used when log_level is not
 // specified in the config file. Matches the current hardcoded behavior of the

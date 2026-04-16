@@ -120,6 +120,51 @@ type yamlConfig struct {
 	TLSKeyFile  string                   `yaml:"tls_key_file"`
 }
 
+// Load locates the server configuration file, loads it, and returns a ready
+// ServerConfig. It checks the following in order:
+//
+//  1. CONFIG_FILE env var — explicit operator override. Strict: any error
+//     loading this file is fatal. We do NOT silently fall through to the
+//     other paths, because if the operator explicitly pointed at a file,
+//     they meant THAT file.
+//  2. defaults.DefaultConfigPathSystem (/etc/mcp-server/config.yaml) —
+//     production-install location.
+//  3. defaults.DefaultConfigPathLocal (broker-config.yaml in CWD) —
+//     developer-convenience fallback for running out of the repo.
+//
+// Only "file does not exist" errors from step 2 or 3 trigger fallback to the
+// next path. Parse errors, permission errors, validation errors, or any other
+// failure from an existing file are always fatal — never silently masked by
+// trying another path. If nothing is found, returns an error listing all
+// paths tried.
+func Load() (*ServerConfig, error) {
+	// Step 1: CONFIG_FILE env var (explicit, strict)
+	if envPath := os.Getenv("CONFIG_FILE"); envPath != "" {
+		return LoadConfig(envPath)
+	}
+
+	// Step 2: system path
+	if _, err := os.Stat(defaults.DefaultConfigPathSystem); err == nil {
+		return LoadConfig(defaults.DefaultConfigPathSystem)
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat %s: %w", defaults.DefaultConfigPathSystem, err)
+	}
+
+	// Step 3: local path
+	if _, err := os.Stat(defaults.DefaultConfigPathLocal); err == nil {
+		return LoadConfig(defaults.DefaultConfigPathLocal)
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat %s: %w", defaults.DefaultConfigPathLocal, err)
+	}
+
+	// Nothing found
+	return nil, fmt.Errorf(
+		"no config file found; set CONFIG_FILE env var or place config at one of: %s, %s",
+		defaults.DefaultConfigPathSystem,
+		defaults.DefaultConfigPathLocal,
+	)
+}
+
 // LoadConfig reads a YAML configuration file from path, substitutes ${VAR_NAME}
 // env var references, parses YAML, applies defaults, validates, and returns a
 // ServerConfig ready for use.

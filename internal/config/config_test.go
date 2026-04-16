@@ -760,3 +760,86 @@ brokers:
 		}
 	}
 }
+
+func TestLoad_UsesConfigFileEnv(t *testing.T) {
+	yaml := `
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	path := writeTemp(t, yaml)
+	t.Setenv("CONFIG_FILE", path)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Brokers["dev"] == nil {
+		t.Error("expected broker 'dev' to be loaded")
+	}
+}
+
+func TestLoad_ConfigFileEnvMissing_ReturnsError(t *testing.T) {
+	// When CONFIG_FILE points at a non-existent file, Load MUST NOT silently
+	// fall back to the system/local paths. The operator explicitly pointed
+	// at THIS file; a silent fallback would mask the mistake.
+	t.Setenv("CONFIG_FILE", "/does/not/exist.yaml")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error when CONFIG_FILE points to missing file")
+	}
+	// The error should reference the file we tried -- not a "no config found"
+	// error that implies fallback happened.
+	if !strings.Contains(err.Error(), "reading config file") {
+		t.Errorf("expected 'reading config file' error from strict CONFIG_FILE handling, got: %v", err)
+	}
+}
+
+func TestLoad_ConfigFileEnvCorrupt_ReturnsError(t *testing.T) {
+	// CONFIG_FILE points to a file that exists but has broken YAML. Strict:
+	// error bubbles up, no fallback.
+	path := writeTemp(t, `{{{ not yaml`)
+	t.Setenv("CONFIG_FILE", path)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for malformed YAML in CONFIG_FILE path")
+	}
+	if !strings.Contains(err.Error(), "parsing config YAML") {
+		t.Errorf("expected YAML parse error, got: %v", err)
+	}
+}
+
+func TestLoad_NoConfigFileEnv_NoSystemOrLocal_ReturnsError(t *testing.T) {
+	// No CONFIG_FILE set, no /etc/mcp-server/config.yaml (unlikely on dev),
+	// and we chdir to an empty temp directory so broker-config.yaml doesn't
+	// exist in CWD. Load should error with a message listing what was tried.
+	t.Setenv("CONFIG_FILE", "")
+
+	// Switch CWD to an empty temp dir so the local fallback path has nothing
+	// to find. Restore at the end.
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	emptyDir := t.TempDir()
+	if err := os.Chdir(emptyDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(origWD)
+	})
+
+	_, err = Load()
+	if err == nil {
+		t.Skip("Load succeeded unexpectedly -- likely /etc/mcp-server/config.yaml exists on this machine; skipping")
+	}
+	if !strings.Contains(err.Error(), "no config file found") {
+		t.Errorf("expected 'no config file found' error, got: %v", err)
+	}
+}

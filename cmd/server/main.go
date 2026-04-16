@@ -83,13 +83,10 @@ func main() {
 	//    level names.
 	slog.SetDefault(slog.New(newSlogHandler(slog.LevelInfo)))
 
-	// 1. Load config
-	configPath := os.Getenv("CONFIG_FILE")
-	if configPath == "" {
-		configPath = defaults.DefaultConfigPath
-	}
-
-	cfg, err := config.LoadConfig(configPath)
+	// 1. Load config. config.Load handles path resolution internally
+	//    (CONFIG_FILE env var, then /etc/mcp-server/config.yaml, then
+	//    ./broker-config.yaml). See config.Load docs for exact semantics.
+	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("failed to load config", slog.String("error", err.Error()))
 		os.Exit(1)
