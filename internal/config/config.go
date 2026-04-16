@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -32,22 +33,33 @@ type ServerConfig struct {
 type BrokerConfig struct {
 	URL           string     `yaml:"url"`             // SEMP API base URL (e.g., "https://broker:1943")
 	TLSSkipVerify bool       `yaml:"tls_skip_verify"` // skip TLS cert verification (dev only)
-	Auth          AuthConfig `yaml:"auth"`             // authentication config
+	Auth          AuthConfig `yaml:"auth"`            // authentication config
 }
+
+// Auth mode constants for broker authentication (Hop 2: MCP Server → Broker).
+const (
+	AuthModeBasic  = "basic"
+	AuthModeBearer = "bearer"
+)
+
+// validAuthModes is the allowlist of supported auth modes for broker connections.
+// Add new modes (e.g., "oauth") here — validate() and error messages derive from this slice.
+var validAuthModes = []string{AuthModeBasic, AuthModeBearer}
 
 // AuthConfig holds the authentication credentials for a broker connection.
 type AuthConfig struct {
-	Method   string `yaml:"method"`   // "basic" for this release
+	Mode     string `yaml:"mode"`     // "basic" or "bearer"
 	Username string `yaml:"username"` // basic auth username (use ${VAR_NAME} for env var)
 	Password string `yaml:"password"` // basic auth password (use ${VAR_NAME} for env var)
+	Token    string `yaml:"token"`    // bearer token (use ${VAR_NAME} for env var)
 }
 
 // LogValue implements slog.LogValuer for AuthConfig. It exposes only the auth
-// method — username and password are deliberately excluded to prevent credential
-// leaks in log output. See docs/secure-logging-rules.md Rule 2.
+// mode — username, password, and token are deliberately excluded to prevent
+// credential leaks in log output. See docs/secure-logging-rules.md Rule 2.
 func (a AuthConfig) LogValue() slog.Value {
 	return slog.GroupValue(
-		slog.String("method", a.Method),
+		slog.String("mode", a.Mode),
 	)
 }
 
@@ -58,7 +70,7 @@ func (b BrokerConfig) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("url", b.URL),
 		slog.Bool("tls_skip_verify", b.TLSSkipVerify),
-		slog.String("auth_method", b.Auth.Method),
+		slog.String("auth_mode", b.Auth.Mode),
 	)
 }
 
@@ -129,7 +141,6 @@ func LoadConfig(path string) (*ServerConfig, error) {
 
 	return cfg, nil
 }
-
 
 // applyDefaults fills in missing optional fields from the defaults package.
 func applyDefaults(cfg *ServerConfig) {
@@ -223,22 +234,28 @@ func validate(cfg *ServerConfig) error {
 			return fmt.Errorf("broker %q: url is required", alias)
 		}
 
-		// Default to basic auth when method is not specified.
-		if broker.Auth.Method == "" {
-			broker.Auth.Method = "basic"
+		// Normalize auth mode and require it to be set (per story spec: auth_mode is required).
+		broker.Auth.Mode = strings.ToLower(broker.Auth.Mode)
+		if broker.Auth.Mode == "" {
+			return fmt.Errorf("broker %q: auth.mode is required (must be one of %v)", alias, validAuthModes)
 		}
 
-		if broker.Auth.Method != "basic" {
-			return fmt.Errorf("broker %q: unsupported auth method %q (only \"basic\" is supported)", alias, broker.Auth.Method)
+		if !slices.Contains(validAuthModes, broker.Auth.Mode) {
+			return fmt.Errorf("broker %q: unsupported auth mode %q (must be one of %v)", alias, broker.Auth.Mode, validAuthModes)
 		}
 
-		// Validate credentials are present based on auth method.
-		if broker.Auth.Method == "basic" {
+		// Validate credentials are present based on auth mode.
+		switch broker.Auth.Mode {
+		case AuthModeBasic:
 			if broker.Auth.Username == "" {
 				return fmt.Errorf("broker %q: username is required for basic auth", alias)
 			}
 			if broker.Auth.Password == "" {
 				return fmt.Errorf("broker %q: password is required for basic auth", alias)
+			}
+		case AuthModeBearer:
+			if broker.Auth.Token == "" {
+				return fmt.Errorf("broker %q: token is required for bearer auth", alias)
 			}
 		}
 	}
@@ -288,4 +305,3 @@ func applyEnvOverrides(cfg *ServerConfig) error {
 	}
 	return nil
 }
-

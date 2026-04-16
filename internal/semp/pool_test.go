@@ -18,7 +18,7 @@ func newTestServerConfig(serverURL string) *config.ServerConfig {
 			"prod-us": {
 				URL: serverURL,
 				Auth: config.AuthConfig{
-					Method:   "basic",
+					Mode:     "basic",
 					Username: "admin",
 					Password: "secret",
 				},
@@ -26,7 +26,7 @@ func newTestServerConfig(serverURL string) *config.ServerConfig {
 			"prod-eu": {
 				URL: serverURL,
 				Auth: config.AuthConfig{
-					Method:   "basic",
+					Mode:     "basic",
 					Username: "admin",
 					Password: "secret",
 				},

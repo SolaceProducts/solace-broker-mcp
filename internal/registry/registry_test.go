@@ -17,11 +17,11 @@ func newTestPool() *semp.BrokerPool {
 		Brokers: map[string]*config.BrokerConfig{
 			"dev": {
 				URL:  "http://localhost:8081",
-				Auth: config.AuthConfig{Method: "basic", Username: "admin", Password: "admin"},
+				Auth: config.AuthConfig{Mode: "basic", Username: "admin", Password: "admin"},
 			},
 			"prod": {
 				URL:  "http://localhost:8082",
-				Auth: config.AuthConfig{Method: "basic", Username: "admin", Password: "admin"},
+				Auth: config.AuthConfig{Mode: "basic", Username: "admin", Password: "admin"},
 			},
 		},
 		SEMP: config.SEMPConfig{RequestTimeoutSeconds: 5},

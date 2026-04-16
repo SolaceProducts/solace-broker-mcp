@@ -22,7 +22,7 @@ func TestBrokerClient_V2_ReturnsClient(t *testing.T) {
 	brokerCfg := &config.BrokerConfig{
 		URL: server.URL,
 		Auth: config.AuthConfig{
-			Method:   "basic",
+			Mode:     "basic",
 			Username: "admin",
 			Password: "secret",
 		},
@@ -49,7 +49,7 @@ func TestBrokerClient_V2_ExecutePassesThrough(t *testing.T) {
 	brokerCfg := &config.BrokerConfig{
 		URL: server.URL,
 		Auth: config.AuthConfig{
-			Method:   "basic",
+			Mode:     "basic",
 			Username: "admin",
 			Password: "secret",
 		},

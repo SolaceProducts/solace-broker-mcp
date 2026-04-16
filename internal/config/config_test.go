@@ -29,7 +29,7 @@ brokers:
   prod-us:
     url: "https://broker-us.example.com:1943"
     auth:
-      method: basic
+      mode: basic
       username: ${TEST_USERNAME}
       password: ${TEST_PASSWORD}
 `
@@ -49,8 +49,8 @@ brokers:
 	if broker.URL != "https://broker-us.example.com:1943" {
 		t.Errorf("unexpected URL: %s", broker.URL)
 	}
-	if broker.Auth.Method != "basic" {
-		t.Errorf("unexpected auth method: %s", broker.Auth.Method)
+	if broker.Auth.Mode != "basic" {
+		t.Errorf("unexpected auth method: %s", broker.Auth.Mode)
 	}
 	if broker.Auth.Username != "admin" {
 		t.Errorf("unexpected username: %s", broker.Auth.Username)
@@ -71,13 +71,13 @@ brokers:
   prod-us:
     url: "https://broker-us.example.com:1943"
     auth:
-      method: basic
+      mode: basic
       username: ${US_USER}
       password: ${US_PASS}
   prod-eu:
     url: "https://broker-eu.example.com:1943"
     auth:
-      method: basic
+      mode: basic
       username: ${EU_USER}
       password: ${EU_PASS}
 `
@@ -103,7 +103,7 @@ func TestLoadConfig_MissingBrokerURL(t *testing.T) {
 brokers:
   dev:
     auth:
-      method: basic
+      mode: basic
       username: admin
       password: secret
 `
@@ -122,7 +122,7 @@ brokers:
   dev:
     url: "https://broker.example.com:1943"
     auth:
-      method: basic
+      mode: basic
 `
 	_, err := LoadConfig(writeTemp(t, yaml))
 	if err == nil {
@@ -146,7 +146,7 @@ brokers:
   dev:
     url: "https://broker.example.com:1943"
     auth:
-      method: basic
+      mode: basic
       username: admin
       password: secret
 `
@@ -172,15 +172,15 @@ brokers:
   dev:
     url: "https://broker.example.com:1943"
     auth:
-      method: oauth
+      mode: oauth
       username: admin
       password: secret
 `
 	_, err := LoadConfig(writeTemp(t, yaml))
 	if err == nil {
-		t.Fatal("expected error for unsupported auth method")
+		t.Fatal("expected error for unsupported auth mode")
 	}
-	if !strings.Contains(err.Error(), "unsupported auth method") {
+	if !strings.Contains(err.Error(), "unsupported auth mode") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -195,7 +195,7 @@ brokers:
   prod:
     url: ${BROKER_URL}
     auth:
-      method: basic
+      mode: basic
       username: ${BROKER_USER}
       password: ${BROKER_PASS}
 `
@@ -222,7 +222,7 @@ brokers:
   prod:
     url: ${MISSING_URL}
     auth:
-      method: basic
+      mode: basic
       username: admin
       password: secret
 `
@@ -243,7 +243,7 @@ brokers:
   dev:
     url: "http://localhost:8080"
     auth:
-      method: basic
+      mode: basic
       username: hardcoded-user
       password: ${MIXED_PASS}
 `
@@ -268,7 +268,7 @@ brokers:
   dev:
     url: "http://localhost:8080"
     auth:
-      method: basic
+      mode: basic
       username: admin
       password: secret
 `
@@ -288,7 +288,7 @@ brokers:
   dev:
     url: "http://localhost:8080"
     auth:
-      method: basic
+      mode: basic
       username: admin
       password: secret
 `
@@ -309,7 +309,7 @@ brokers:
   dev:
     url: "http://localhost:8080"
     auth:
-      method: basic
+      mode: basic
       username: admin
       password: secret
 `
@@ -334,7 +334,7 @@ brokers:
   dev:
     url: "http://localhost:8080"
     auth:
-      method: basic
+      mode: basic
       username: admin
       password: secret
 `
@@ -344,5 +344,84 @@ brokers:
 	}
 	if cfg.Port != 9091 {
 		t.Errorf("expected port 9091 (from env var), got %d", cfg.Port)
+	}
+}
+
+func TestLoadConfig_BearerAuth(t *testing.T) {
+	t.Setenv("BEARER_TOKEN", "my-secret-token")
+
+	yaml := `
+brokers:
+  prod:
+    url: "https://broker.example.com:8080"
+    auth:
+      mode: bearer
+      token: ${BEARER_TOKEN}
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	broker := cfg.Brokers["prod"]
+	if broker.Auth.Mode != "bearer" {
+		t.Errorf("expected mode bearer, got %q", broker.Auth.Mode)
+	}
+	if broker.Auth.Token != "my-secret-token" {
+		t.Errorf("expected token from env var, got %q", broker.Auth.Token)
+	}
+}
+
+func TestLoadConfig_BearerAuth_MissingToken(t *testing.T) {
+	yaml := `
+brokers:
+  prod:
+    url: "https://broker.example.com:8080"
+    auth:
+      mode: bearer
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for missing bearer token")
+	}
+	if !strings.Contains(err.Error(), "token is required for bearer auth") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadConfig_MissingAuthMode(t *testing.T) {
+	yaml := `
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for missing auth mode")
+	}
+	if !strings.Contains(err.Error(), "auth.mode is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadConfig_AuthModeCaseInsensitive(t *testing.T) {
+	yaml := `
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: BASIC
+      username: admin
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Brokers["dev"].Auth.Mode != "basic" {
+		t.Errorf("expected mode normalized to 'basic', got %q", cfg.Brokers["dev"].Auth.Mode)
 	}
 }
