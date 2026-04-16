@@ -425,3 +425,37 @@ brokers:
 		t.Errorf("expected mode normalized to 'basic', got %q", cfg.Brokers["dev"].Auth.Mode)
 	}
 }
+
+func TestLoadConfig_CollectsAllErrors(t *testing.T) {
+	// Multiple issues across server-level and multiple brokers — all should
+	// surface in a single error so operators fix them in one pass.
+	yaml := `
+port: 99999
+brokers:
+  broker1:
+    auth:
+      mode: basic
+  broker2:
+    url: "http://localhost:8080"
+    auth:
+      mode: oauth
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for multiple validation issues")
+	}
+
+	msg := err.Error()
+	wantSubstrings := []string{
+		"port must be between 1 and 65535",
+		`broker "broker1": url is required`,
+		`broker "broker1": username is required`,
+		`broker "broker1": password is required`,
+		`broker "broker2": unsupported auth mode "oauth"`,
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(msg, want) {
+			t.Errorf("combined error missing expected substring %q\nfull error:\n%s", want, msg)
+		}
+	}
+}

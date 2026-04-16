@@ -5,6 +5,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -223,61 +224,79 @@ func substituteEnvVars(data []byte) ([]byte, error) {
 }
 
 // validate checks that the config has all required fields and that values are
-// within acceptable ranges.
+// within acceptable ranges. All validation errors are collected and returned as
+// a single joined error so operators see every issue in one run instead of
+// fixing them one-by-one across multiple reloads.
 func validate(cfg *ServerConfig) error {
+	var errs []error
+
 	if len(cfg.Brokers) == 0 {
-		return fmt.Errorf("at least one broker must be configured")
+		errs = append(errs, fmt.Errorf("at least one broker must be configured"))
 	}
 
 	for alias, broker := range cfg.Brokers {
-		if broker.URL == "" {
-			return fmt.Errorf("broker %q: url is required", alias)
-		}
-
-		// Normalize auth mode and require it to be set (per story spec: auth_mode is required).
-		broker.Auth.Mode = strings.ToLower(broker.Auth.Mode)
-		if broker.Auth.Mode == "" {
-			return fmt.Errorf("broker %q: auth.mode is required (must be one of %v)", alias, validAuthModes)
-		}
-
-		if !slices.Contains(validAuthModes, broker.Auth.Mode) {
-			return fmt.Errorf("broker %q: unsupported auth mode %q (must be one of %v)", alias, broker.Auth.Mode, validAuthModes)
-		}
-
-		// Validate credentials are present based on auth mode.
-		switch broker.Auth.Mode {
-		case AuthModeBasic:
-			if broker.Auth.Username == "" {
-				return fmt.Errorf("broker %q: username is required for basic auth", alias)
-			}
-			if broker.Auth.Password == "" {
-				return fmt.Errorf("broker %q: password is required for basic auth", alias)
-			}
-		case AuthModeBearer:
-			if broker.Auth.Token == "" {
-				return fmt.Errorf("broker %q: token is required for bearer auth", alias)
-			}
-		}
+		errs = append(errs, validateBroker(alias, broker)...)
 	}
 
 	if err := ValidatePort(cfg.Port); err != nil {
-		return err
+		errs = append(errs, err)
 	}
 
 	if cfg.SEMP.MaxConcurrentPerBroker < 0 {
-		return fmt.Errorf("semp.max_concurrent_per_broker must be > 0, got %d", cfg.SEMP.MaxConcurrentPerBroker)
+		errs = append(errs, fmt.Errorf("semp.max_concurrent_per_broker must be > 0, got %d", cfg.SEMP.MaxConcurrentPerBroker))
 	}
 
 	if cfg.SEMP.RequestTimeoutSeconds < 0 {
-		return fmt.Errorf("semp.request_timeout_seconds must be > 0, got %d", cfg.SEMP.RequestTimeoutSeconds)
+		errs = append(errs, fmt.Errorf("semp.request_timeout_seconds must be > 0, got %d", cfg.SEMP.RequestTimeoutSeconds))
 	}
 
 	// TLS: both cert and key must be provided together, or neither.
 	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
-		return fmt.Errorf("both tls_cert_file and tls_key_file must be provided together; got cert=%q, key=%q", cfg.TLSCertFile, cfg.TLSKeyFile)
+		errs = append(errs, fmt.Errorf("both tls_cert_file and tls_key_file must be provided together; got cert=%q, key=%q", cfg.TLSCertFile, cfg.TLSKeyFile))
 	}
 
-	return nil
+	return errors.Join(errs...)
+}
+
+// validateBroker returns all validation errors for a single broker. Credential
+// checks are skipped when auth.mode is missing or invalid because there are no
+// meaningful credential rules to apply without a known mode.
+func validateBroker(alias string, broker *BrokerConfig) []error {
+	var errs []error
+
+	if broker.URL == "" {
+		errs = append(errs, fmt.Errorf("broker %q: url is required", alias))
+	}
+
+	// Normalize auth mode (case-insensitive per story spec).
+	broker.Auth.Mode = strings.ToLower(broker.Auth.Mode)
+
+	if broker.Auth.Mode == "" {
+		errs = append(errs, fmt.Errorf("broker %q: auth.mode is required (must be one of %v)", alias, validAuthModes))
+		return errs
+	}
+
+	if !slices.Contains(validAuthModes, broker.Auth.Mode) {
+		errs = append(errs, fmt.Errorf("broker %q: unsupported auth mode %q (must be one of %v)", alias, broker.Auth.Mode, validAuthModes))
+		return errs
+	}
+
+	// Validate credentials are present based on auth mode.
+	switch broker.Auth.Mode {
+	case AuthModeBasic:
+		if broker.Auth.Username == "" {
+			errs = append(errs, fmt.Errorf("broker %q: username is required for basic auth", alias))
+		}
+		if broker.Auth.Password == "" {
+			errs = append(errs, fmt.Errorf("broker %q: password is required for basic auth", alias))
+		}
+	case AuthModeBearer:
+		if broker.Auth.Token == "" {
+			errs = append(errs, fmt.Errorf("broker %q: token is required for bearer auth", alias))
+		}
+	}
+
+	return errs
 }
 
 // ValidatePort checks that a port number is within the valid TCP range (1-65535).
