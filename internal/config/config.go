@@ -178,7 +178,7 @@ func Load() (*ServerConfig, error) {
 //  6. Apply env var overrides (MCP_SERVER_PORT — runtime override)
 //  7. Validate (required fields, value ranges, TLS pairing)
 func LoadConfig(path string) (*ServerConfig, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304/G703 — path is the operator-provided config file location (CONFIG_FILE env var, /etc/mcp-server/config.yaml, or ./broker-config.yaml), not untrusted external input
 	if err != nil {
 		return nil, fmt.Errorf("reading config file: %w", err)
 	}
