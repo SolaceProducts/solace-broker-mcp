@@ -2,6 +2,7 @@ package composite
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -52,6 +53,16 @@ func testOperations() map[string]*sempv2.Operation {
 			Method: "GET",
 			Path:   "/SEMP/v2/monitor/msgVpns/{msgVpnName}/queues/{queueName}",
 		},
+		"monitor/getMsgVpnClient": {
+			ID:     "getMsgVpnClient",
+			Method: "GET",
+			Path:   "/SEMP/v2/monitor/msgVpns/{msgVpnName}/clients/{clientName}",
+		},
+		"monitor/getMsgVpnClientSubscriptions": {
+			ID:     "getMsgVpnClientSubscriptions",
+			Method: "GET",
+			Path:   "/SEMP/v2/monitor/msgVpns/{msgVpnName}/clients/{clientName}/subscriptions",
+		},
 		"action/doMsgVpnQueueCancelReplay": {
 			ID:     "doMsgVpnQueueCancelReplay",
 			Method: "PUT",
@@ -62,6 +73,77 @@ func testOperations() map[string]*sempv2.Operation {
 			Method: "PUT",
 			Path:   "/SEMP/v2/action/msgVpns/{msgVpnName}/queues/{queueName}/startReplay",
 		},
+	}
+}
+
+// getQueueMetricsTool returns the get-queue-metrics tool definition for tests.
+func getQueueMetricsTool() CompositeTool {
+	return CompositeTool{
+		Name:        "get-queue-metrics",
+		Description: "Get detailed metrics for a specific queue",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "queueName", Type: "string", Required: true},
+		},
+		Steps: []Step{
+			{
+				ID:        "queueMetrics",
+				Operation: "monitor/getMsgVpnQueue",
+				Args: map[string]string{
+					"msgVpnName": "{{.Params.msgVpnName}}",
+					"queueName":  "{{.Params.queueName}}",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// getClientDetailsTool returns the get-client-details tool definition for tests.
+func getClientDetailsTool() CompositeTool {
+	return CompositeTool{
+		Name:        "get-client-details",
+		Description: "Get performance metrics for a specific connected client",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "clientName", Type: "string", Required: true},
+		},
+		Steps: []Step{
+			{
+				ID:        "clientDetails",
+				Operation: "monitor/getMsgVpnClient",
+				Args: map[string]string{
+					"msgVpnName": "{{.Params.msgVpnName}}",
+					"clientName": "{{.Params.clientName}}",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// listClientSubscriptionsTool returns the list-client-subscriptions tool definition for tests.
+func listClientSubscriptionsTool() CompositeTool {
+	return CompositeTool{
+		Name:        "list-client-subscriptions",
+		Description: "List topic subscriptions for a specific client",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "clientName", Type: "string", Required: true},
+			{Name: "maxResults", Type: "integer", Required: false},
+		},
+		Steps: []Step{
+			{
+				ID:        "subscriptions",
+				Operation: "monitor/getMsgVpnClientSubscriptions",
+				Args: map[string]string{
+					"msgVpnName": "{{.Params.msgVpnName}}",
+					"clientName": "{{.Params.clientName}}",
+					"count": `{{with index .Params "maxResults"}}{{.}}{{else}}100{{end}}`,
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
 	}
 }
 
@@ -458,6 +540,223 @@ func TestExecute_BrokerParamStripped(t *testing.T) {
 	}
 	if _, hasBroker := recorded[0].args["broker"]; hasBroker {
 		t.Error("broker param should not be passed to step args")
+	}
+}
+
+func TestExecute_GetQueueMetrics_ReturnsData(t *testing.T) {
+	client := newMockClient()
+	client.responses["getMsgVpnQueue"] = &sempv2.Result{
+		Data: map[string]any{
+			"queueName":       "Orders",
+			"spooledMsgCount": float64(1234),
+			"rxMsgRate":       float64(50),
+			"txMsgRate":       float64(48),
+		},
+		StatusCode: 200,
+	}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	params := map[string]any{
+		"msgVpnName": "default",
+		"queueName":  "Orders",
+	}
+
+	result, err := executor.Execute(context.Background(), getQueueMetricsTool(), client, params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result["queueMetrics"] == nil {
+		t.Fatal("expected queueMetrics key in result, got nil")
+	}
+
+	data, ok := result["queueMetrics"].(map[string]any)
+	if !ok {
+		t.Fatal("expected queueMetrics to be a map")
+	}
+
+	if data["queueName"] != "Orders" {
+		t.Errorf("expected queueName %q, got %v", "Orders", data["queueName"])
+	}
+}
+
+func TestExecute_GetQueueMetrics_NotFound(t *testing.T) {
+	client := newMockClient()
+	client.errors["getMsgVpnQueue"] = &sempv2.SEMPError{
+		Operation:  "getMsgVpnQueue",
+		StatusCode: 404,
+		Body:       `{"meta":{"error":{"code":400,"description":"Queue not found","status":"NOT_FOUND"}}}`,
+	}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	params := map[string]any{
+		"msgVpnName": "default",
+		"queueName":  "nonexistent-queue",
+	}
+
+	_, err := executor.Execute(context.Background(), getQueueMetricsTool(), client, params)
+	if err == nil {
+		t.Fatal("expected error for 404 response, got nil")
+	}
+
+	var sempErr *sempv2.SEMPError
+	if !errors.As(err, &sempErr) {
+		t.Errorf("expected SEMPError in error chain, got: %v", err)
+	} else if sempErr.StatusCode != 404 {
+		t.Errorf("expected status code 404, got %d", sempErr.StatusCode)
+	}
+}
+
+func TestExecute_GetClientDetails_ReturnsData(t *testing.T) {
+	client := newMockClient()
+	client.responses["getMsgVpnClient"] = &sempv2.Result{
+		Data: map[string]any{
+			"clientName":            "myapp/1",
+			"clientUsername":        "app-user",
+			"slowSubscriber":        false,
+			"txDiscardedMsgCount":   float64(0),
+		},
+		StatusCode: 200,
+	}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	params := map[string]any{
+		"msgVpnName": "default",
+		"clientName": "myapp/1",
+	}
+
+	result, err := executor.Execute(context.Background(), getClientDetailsTool(), client, params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result["clientDetails"] == nil {
+		t.Fatal("expected clientDetails key in result, got nil")
+	}
+
+	data, ok := result["clientDetails"].(map[string]any)
+	if !ok {
+		t.Fatal("expected clientDetails to be a map")
+	}
+
+	if data["clientName"] != "myapp/1" {
+		t.Errorf("expected clientName %q, got %v", "myapp/1", data["clientName"])
+	}
+}
+
+func TestExecute_GetClientDetails_NotFound(t *testing.T) {
+	client := newMockClient()
+	client.errors["getMsgVpnClient"] = &sempv2.SEMPError{
+		Operation:  "getMsgVpnClient",
+		StatusCode: 404,
+		Body:       `{"meta":{"error":{"code":400,"description":"Client not found","status":"NOT_FOUND"}}}`,
+	}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	params := map[string]any{
+		"msgVpnName": "default",
+		"clientName": "nonexistent-client",
+	}
+
+	_, err := executor.Execute(context.Background(), getClientDetailsTool(), client, params)
+	if err == nil {
+		t.Fatal("expected error for 404 response, got nil")
+	}
+
+	var sempErr *sempv2.SEMPError
+	if !errors.As(err, &sempErr) {
+		t.Errorf("expected SEMPError in error chain, got: %v", err)
+	} else if sempErr.StatusCode != 404 {
+		t.Errorf("expected status code 404, got %d", sempErr.StatusCode)
+	}
+}
+
+func TestExecute_ListClientSubscriptions_ReturnsData(t *testing.T) {
+	client := newMockClient()
+	client.responses["getMsgVpnClientSubscriptions"] = &sempv2.Result{
+		Data: map[string]any{
+			"data": []any{
+				map[string]any{"subscriptionTopic": "orders/>", "clientName": "myapp/1"},
+				map[string]any{"subscriptionTopic": "inventory/>", "clientName": "myapp/1"},
+			},
+		},
+		StatusCode: 200,
+	}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	params := map[string]any{
+		"msgVpnName": "default",
+		"clientName": "myapp/1",
+	}
+
+	result, err := executor.Execute(context.Background(), listClientSubscriptionsTool(), client, params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result["subscriptions"] == nil {
+		t.Fatal("expected subscriptions key in result, got nil")
+	}
+}
+
+func TestExecute_ListClientSubscriptions_PassesMaxResults(t *testing.T) {
+	client := newMockClient()
+	executor := NewCompositeExecutor(testOperations())
+
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: client, recorded: &recorded, mu: &mu}
+
+	params := map[string]any{
+		"msgVpnName": "default",
+		"clientName": "myapp/1",
+		"maxResults": 50,
+	}
+
+	_, err := executor.Execute(context.Background(), listClientSubscriptionsTool(), capture, params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(recorded))
+	}
+
+	if recorded[0].args["count"] != "50" {
+		t.Errorf("expected count %q, got %v", "50", recorded[0].args["count"])
+	}
+}
+
+func TestExecute_ListClientSubscriptions_DefaultsCountQuery(t *testing.T) {
+	client := newMockClient()
+	executor := NewCompositeExecutor(testOperations())
+
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: client, recorded: &recorded, mu: &mu}
+
+	// maxResults is intentionally absent — executor should default count to "100".
+	params := map[string]any{
+		"msgVpnName": "default",
+		"clientName": "myapp/1",
+	}
+
+	_, err := executor.Execute(context.Background(), listClientSubscriptionsTool(), capture, params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(recorded))
+	}
+
+	if recorded[0].args["count"] != "100" {
+		t.Errorf("expected count to default to %q, got %v", "100", recorded[0].args["count"])
 	}
 }
 

@@ -222,3 +222,202 @@ tools:
 		t.Fatal("expected error for missing step ID, got nil")
 	}
 }
+
+func TestLoadTools_GetQueueMetrics(t *testing.T) {
+	yaml := `
+tools:
+  - name: get-queue-metrics
+    description: >
+      Get detailed metrics for a specific queue including message depth,
+      throughput rates, spool usage, and configuration.
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the queue"
+      - name: queueName
+        type: string
+        required: true
+        description: "The name of the queue"
+    steps:
+      - id: queueMetrics
+        operation: monitor/getMsgVpnQueue
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          queueName: "{{.Params.queueName}}"
+    result:
+      strategy: collect
+`
+	fsys := fstest.MapFS{
+		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
+	}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	tool := tools[0]
+	if tool.Name != "get-queue-metrics" {
+		t.Errorf("expected name %q, got %q", "get-queue-metrics", tool.Name)
+	}
+	if len(tool.Parameters) != 2 {
+		t.Fatalf("expected 2 parameters, got %d", len(tool.Parameters))
+	}
+	if tool.Parameters[0].Name != "msgVpnName" || !tool.Parameters[0].Required {
+		t.Errorf("expected msgVpnName required parameter, got %+v", tool.Parameters[0])
+	}
+	if tool.Parameters[1].Name != "queueName" || !tool.Parameters[1].Required {
+		t.Errorf("expected queueName required parameter, got %+v", tool.Parameters[1])
+	}
+	if len(tool.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(tool.Steps))
+	}
+	if tool.Steps[0].ID != "queueMetrics" {
+		t.Errorf("expected step ID %q, got %q", "queueMetrics", tool.Steps[0].ID)
+	}
+	if tool.Steps[0].Operation != "monitor/getMsgVpnQueue" {
+		t.Errorf("expected operation %q, got %q", "monitor/getMsgVpnQueue", tool.Steps[0].Operation)
+	}
+}
+
+func TestLoadTools_GetClientDetails(t *testing.T) {
+	yaml := `
+tools:
+  - name: get-client-details
+    description: >
+      Get performance metrics for a specific connected client including message
+      rates, slow subscriber status, and egress discard counts.
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN the client is connected to"
+      - name: clientName
+        type: string
+        required: true
+        description: "The name of the client connection"
+    steps:
+      - id: clientDetails
+        operation: monitor/getMsgVpnClient
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          clientName: "{{.Params.clientName}}"
+    result:
+      strategy: collect
+`
+	fsys := fstest.MapFS{
+		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
+	}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	tool := tools[0]
+	if tool.Name != "get-client-details" {
+		t.Errorf("expected name %q, got %q", "get-client-details", tool.Name)
+	}
+	if len(tool.Parameters) != 2 {
+		t.Fatalf("expected 2 parameters, got %d", len(tool.Parameters))
+	}
+	if tool.Parameters[0].Name != "msgVpnName" || !tool.Parameters[0].Required {
+		t.Errorf("expected msgVpnName required parameter, got %+v", tool.Parameters[0])
+	}
+	if tool.Parameters[1].Name != "clientName" || !tool.Parameters[1].Required {
+		t.Errorf("expected clientName required parameter, got %+v", tool.Parameters[1])
+	}
+	if len(tool.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(tool.Steps))
+	}
+	if tool.Steps[0].ID != "clientDetails" {
+		t.Errorf("expected step ID %q, got %q", "clientDetails", tool.Steps[0].ID)
+	}
+	if tool.Steps[0].Operation != "monitor/getMsgVpnClient" {
+		t.Errorf("expected operation %q, got %q", "monitor/getMsgVpnClient", tool.Steps[0].Operation)
+	}
+}
+
+func TestLoadTools_ListClientSubscriptions(t *testing.T) {
+	yaml := `
+tools:
+  - name: list-client-subscriptions
+    description: >
+      List topic subscriptions for a specific client.
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN the client is connected to"
+      - name: clientName
+        type: string
+        required: true
+        description: "The name of the client connection"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of subscriptions to return (default 100, max 500)"
+    steps:
+      - id: subscriptions
+        operation: monitor/getMsgVpnClientSubscriptions
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          clientName: "{{.Params.clientName}}"
+          count: '{{with index .Params "maxResults"}}{{.}}{{else}}100{{end}}'
+    result:
+      strategy: collect
+`
+	fsys := fstest.MapFS{
+		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
+	}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	tool := tools[0]
+	if tool.Name != "list-client-subscriptions" {
+		t.Errorf("expected name %q, got %q", "list-client-subscriptions", tool.Name)
+	}
+	if len(tool.Parameters) != 3 {
+		t.Fatalf("expected 3 parameters, got %d", len(tool.Parameters))
+	}
+
+	// Verify maxResults is optional.
+	maxResults := tool.Parameters[2]
+	if maxResults.Name != "maxResults" {
+		t.Errorf("expected parameter name %q, got %q", "maxResults", maxResults.Name)
+	}
+	if maxResults.Required {
+		t.Error("expected maxResults to be optional (required=false)")
+	}
+	if maxResults.Type != "integer" {
+		t.Errorf("expected maxResults type %q, got %q", "integer", maxResults.Type)
+	}
+
+	if len(tool.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(tool.Steps))
+	}
+	if tool.Steps[0].Operation != "monitor/getMsgVpnClientSubscriptions" {
+		t.Errorf("expected operation %q, got %q", "monitor/getMsgVpnClientSubscriptions", tool.Steps[0].Operation)
+	}
+
+	// Verify the count template arg is present.
+	if _, ok := tool.Steps[0].Args["count"]; !ok {
+		t.Error("expected count arg in step, not found")
+	}
+}
