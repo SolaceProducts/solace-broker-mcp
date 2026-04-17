@@ -18,10 +18,12 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*sempv2.HTTPClient, 
 	server := httptest.NewServer(handler)
 	brokerCfg := &config.BrokerConfig{
 		URL: server.URL,
-		Auth: config.AuthConfig{
-			Mode:     "basic",
-			Username: "admin",
-			Password: "secret",
+		Auth: config.BrokerAuthConfig{
+			Mode: "basic",
+			BasicAuth: &config.BasicAuthConfig{
+				Username: "admin",
+				Password: "secret",
+			},
 		},
 	}
 	sempCfg := &config.SEMPConfig{
@@ -369,10 +371,12 @@ func TestClient_Execute_Timeout(t *testing.T) {
 	// Create a client with a very short timeout.
 	brokerCfg := &config.BrokerConfig{
 		URL: server.URL,
-		Auth: config.AuthConfig{
-			Mode:     "basic",
-			Username: "admin",
-			Password: "secret",
+		Auth: config.BrokerAuthConfig{
+			Mode: "basic",
+			BasicAuth: &config.BasicAuthConfig{
+				Username: "admin",
+				Password: "secret",
+			},
 		},
 	}
 	sempCfg := &config.SEMPConfig{

@@ -24,12 +24,22 @@ import (
 // ServerConfig holds the complete MCP server configuration, including all
 // configured brokers and SEMP client settings.
 type ServerConfig struct {
-	Brokers     map[string]*BrokerConfig // broker alias → config
-	SEMP        SEMPConfig               // SEMP client settings
-	Port        int                      // HTTP port the MCP server listens on (1-65535)
+	Brokers           map[string]*BrokerConfig // broker alias → config
+	SEMP              SEMPConfig               // SEMP client settings
+	Port              int                      // HTTP port the MCP server listens on
 	LogLevel    string                   // slog level name: "debug", "info", "warn", "error"
-	TLSCertFile string                   // path to TLS certificate file (optional, enables HTTPS)
-	TLSKeyFile  string                   // path to TLS private key file (optional, requires TLSCertFile)
+	DevelopmentMode   bool                     // use static dev token if true
+	ClientAuth        ClientAuthConfig         // authentication config for mcp client to server interactions
+	TLSCertFile string                         // path to TLS certificate file (optional, enables HTTPS)
+	TLSKeyFile  string                     // path to TLS private key file (optional, requires TLSCertFile)
+}
+
+type ClientAuthConfig struct {
+	Issuer         string                       // IdP issuer URL - required when development_mode: false
+	Audience       string                       // Expected 'aud' claim value — required when development_mode: false
+	RequiredScopes []string                     // Optional — if set, token must contain all listed scopes
+	DevToken       string                       // Static token for dev — only used when development_mode: true
+	ResourceURL    string `yaml:"resource_url"` // OAuth resource URL (e.g., "https://mcp.example.com/mcp") - defaults to localhost if not set
 }
 
 // validLogLevels is the allowlist of slog levels operators may configure.
@@ -42,7 +52,8 @@ var validLogLevels = []string{"debug", "info", "warn", "error"}
 type BrokerConfig struct {
 	URL                string     `yaml:"url"`                  // SEMP API base URL (e.g., "https://broker:1943")
 	InsecureSkipVerify bool       `yaml:"insecure_skip_verify"` // skip TLS cert verification (dev only, self-signed certs)
-	Auth               AuthConfig `yaml:"auth"`                 // authentication config
+	EnvPrefix     string           `yaml:"env_prefix"`      // prefix for credential env vars ({EnvPrefix}_USERNAME, {EnvPrefix}_PASSWORD)
+	Auth               BrokerAuthConfig `yaml:"auth"`                 // authentication config
 }
 
 // Auth mode constants for broker authentication (Hop 2: MCP Server → Broker).
@@ -55,9 +66,13 @@ const (
 // Add new modes (e.g., "oauth") here — validate() and error messages derive from this slice.
 var validAuthModes = []string{AuthModeBasic, AuthModeBearer}
 
-// AuthConfig holds the authentication credentials for a broker connection.
-type AuthConfig struct {
+// BrokerAuthConfig holds the authentication credentials for a broker connection.
+type BrokerAuthConfig struct {
 	Mode     string `yaml:"mode"`     // "basic" or "bearer"
+	BasicAuth      *BasicAuthConfig `yaml:"basic_auth,omitempty"`
+}
+
+type BasicAuthConfig struct {
 	Username string `yaml:"username"` // basic auth username (use ${VAR_NAME} for env var)
 	Password string `yaml:"password"` // basic auth password (use ${VAR_NAME} for env var)
 	Token    string `yaml:"token"`    // bearer token (use ${VAR_NAME} for env var)
@@ -66,7 +81,7 @@ type AuthConfig struct {
 // LogValue implements slog.LogValuer for AuthConfig. It exposes only the auth
 // mode — username, password, and token are deliberately excluded to prevent
 // credential leaks in log output. See docs/secure-logging-rules.md Rule 2.
-func (a AuthConfig) LogValue() slog.Value {
+func (a BrokerAuthConfig) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("mode", a.Mode),
 	)
@@ -79,7 +94,32 @@ func (b BrokerConfig) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("url", b.URL),
 		slog.Bool("insecure_skip_verify", b.InsecureSkipVerify),
+		slog.String("env_prefix", b.EnvPrefix),
 		slog.String("auth_mode", b.Auth.Mode),
+	)
+}
+
+// LogValue implements slog.LogValuer for ClientAuthConfig. It exposes OAuth
+// configuration (issuer, audience, resource URL, scopes) but excludes DevToken
+// to prevent credential leaks in log output. See docs/secure-logging-rules.md Rule 2.
+func (c ClientAuthConfig) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("issuer", c.Issuer),
+		slog.String("audience", c.Audience),
+		slog.String("resource_url", c.ResourceURL),
+		slog.Any("required_scopes", c.RequiredScopes),
+	)
+}
+
+// LogValue implements slog.LogValuer for ClientAuthConfig. It exposes OAuth
+// configuration (issuer, audience, resource URL, scopes) but excludes DevToken
+// to prevent credential leaks in log output. See docs/secure-logging-rules.md Rule 2.
+func (c ClientAuthConfig) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("issuer", c.Issuer),
+		slog.String("audience", c.Audience),
+		slog.String("resource_url", c.ResourceURL),
+		slog.Any("required_scopes", c.RequiredScopes),
 	)
 }
 
@@ -116,6 +156,8 @@ type yamlConfig struct {
 	SEMP        SEMPConfig               `yaml:"semp"`
 	Port        int                      `yaml:"port"`
 	LogLevel    string                   `yaml:"log_level"`
+	DevelopmentMode bool                     `yaml:"development_mode"`
+	ClientAuth      ClientAuthConfig         `yaml:"client_auth"`
 	TLSCertFile string                   `yaml:"tls_cert_file"`
 	TLSKeyFile  string                   `yaml:"tls_key_file"`
 }
@@ -200,6 +242,8 @@ func LoadConfig(path string) (*ServerConfig, error) {
 		SEMP:        raw.SEMP,
 		Port:        raw.Port,
 		LogLevel:    raw.LogLevel,
+		DevelopmentMode: raw.DevelopmentMode,
+		ClientAuth: raw.ClientAuth,
 		TLSCertFile: raw.TLSCertFile,
 		TLSKeyFile:  raw.TLSKeyFile,
 	}
@@ -215,6 +259,41 @@ func LoadConfig(path string) (*ServerConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// resolveCredentials reads credentials from environment variables for each
+// broker using the broker's env_prefix. For a broker with env_prefix "PROD_US",
+// it reads PROD_US_USERNAME and PROD_US_PASSWORD.
+func resolveCredentials(cfg *ServerConfig) error {
+	for alias, broker := range cfg.Brokers {
+		if broker.EnvPrefix == "" {
+			return fmt.Errorf("broker %q: env_prefix is required", alias)
+		}
+
+		if !envPrefixPattern.MatchString(broker.EnvPrefix) {
+			return fmt.Errorf("broker %q: env_prefix must contain only uppercase letters, numbers, and underscores, got %q", alias, broker.EnvPrefix)
+		}
+
+		usernameVar := broker.EnvPrefix + "_USERNAME"
+		username, exists := os.LookupEnv(usernameVar)
+		if !exists {
+			return fmt.Errorf("broker %q: environment variable %s is not set (required by env_prefix %q). Set it in your environment or in a .env file next to the config file", alias, usernameVar, broker.EnvPrefix)
+		}
+
+		passwordVar := broker.EnvPrefix + "_PASSWORD"
+		password, exists := os.LookupEnv(passwordVar)
+		if !exists {
+			return fmt.Errorf("broker %q: environment variable %s is not set (required by env_prefix %q). Set it in your environment or in a .env file next to the config file", alias, passwordVar, broker.EnvPrefix)
+		}
+
+		// Initialize BasicAuth if nil before assigning credentials
+		if broker.Auth.BasicAuth == nil {
+			broker.Auth.BasicAuth = &BasicAuthConfig{}
+		}
+		broker.Auth.BasicAuth.Username = username
+		broker.Auth.BasicAuth.Password = password
+	}
+	return nil
 }
 
 // applyDefaults fills in missing optional fields from the defaults package.
@@ -370,6 +449,38 @@ func validate(cfg *ServerConfig) error {
 		errs = append(errs, fmt.Errorf("semp.retry_max_interval must be > 0, got %s", cfg.SEMP.RetryMaxInterval))
 	} else if cfg.SEMP.RetryMinInterval > 0 && cfg.SEMP.RetryMaxInterval < cfg.SEMP.RetryMinInterval {
 		errs = append(errs, fmt.Errorf("semp.retry_max_interval (%s) must be >= semp.retry_min_interval (%s)", cfg.SEMP.RetryMaxInterval, cfg.SEMP.RetryMinInterval))
+	}
+
+	// Validate client authentication configuration based on development mode.
+	// Note that no validation is needed when development mode is enabled, as DevToken
+	// can be set or empty. When DevToken is empty, all requests pass through
+	if !cfg.DevelopmentMode {
+		// Production mode: require JWT validation fields
+		if cfg.ClientAuth.Issuer == "" {
+			return fmt.Errorf("client_auth.issuer is required when development_mode is false")
+		}
+		if cfg.ClientAuth.Audience == "" {
+			return fmt.Errorf("client_auth.audience is required when development_mode is false")
+		}
+		if cfg.ClientAuth.ResourceURL == "" {
+			return fmt.Errorf("client_auth.resource_url is required when development_mode is false")
+		}
+	}
+
+	// Validate client authentication configuration based on development mode.
+	// Note that no validation is needed when development mode is enabled, as DevToken
+	// can be set or empty. When DevToken is empty, all requests pass through
+	if !cfg.DevelopmentMode {
+		// Production mode: require JWT validation fields
+		if cfg.ClientAuth.Issuer == "" {
+			return fmt.Errorf("client_auth.issuer is required when development_mode is false")
+		}
+		if cfg.ClientAuth.Audience == "" {
+			return fmt.Errorf("client_auth.audience is required when development_mode is false")
+		}
+		if cfg.ClientAuth.ResourceURL == "" {
+			return fmt.Errorf("client_auth.resource_url is required when development_mode is false")
+		}
 	}
 
 	// TLS: both cert and key must be provided together, or neither.

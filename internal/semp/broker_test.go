@@ -22,10 +22,12 @@ func TestBrokerClient_V2_ReturnsClient(t *testing.T) {
 
 	brokerCfg := &config.BrokerConfig{
 		URL: server.URL,
-		Auth: config.AuthConfig{
-			Mode:     "basic",
-			Username: "admin",
-			Password: "secret",
+		Auth: config.BrokerAuthConfig{
+			Method: "basic",
+			BasicAuth: &config.BasicAuthConfig{
+				Username: "admin",
+				Password: "secret",
+			},
 		},
 	}
 	sempCfg := &config.SEMPConfig{RequestTimeoutDuration: 5 * time.Second}
@@ -52,10 +54,12 @@ func TestBrokerClient_V2_ExecutePassesThrough(t *testing.T) {
 
 	brokerCfg := &config.BrokerConfig{
 		URL: server.URL,
-		Auth: config.AuthConfig{
-			Mode:     "basic",
-			Username: "admin",
-			Password: "secret",
+		Auth: config.BrokerAuthConfig{
+			Method: "basic",
+			BasicAuth: &config.BasicAuthConfig{
+				Username: "admin",
+				Password: "secret",
+			},
 		},
 	}
 	sempCfg := &config.SEMPConfig{RequestTimeoutDuration: 5 * time.Second}

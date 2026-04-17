@@ -53,11 +53,11 @@ brokers:
 	if broker.Auth.Mode != "basic" {
 		t.Errorf("unexpected auth method: %s", broker.Auth.Mode)
 	}
-	if broker.Auth.Username != "admin" {
-		t.Errorf("unexpected username: %s", broker.Auth.Username)
+	if broker.Auth.BasicAuth.Username != "admin" {
+		t.Errorf("unexpected username: %s", broker.Auth.BasicAuth.Username)
 	}
-	if broker.Auth.Password != "secret" {
-		t.Errorf("unexpected password: %s", broker.Auth.Password)
+	if broker.Auth.BasicAuth.Password != "secret" {
+		t.Errorf("unexpected password: %s", broker.Auth.BasicAuth.Password)
 	}
 }
 
@@ -91,11 +91,11 @@ brokers:
 		t.Fatalf("expected 2 brokers, got %d", len(cfg.Brokers))
 	}
 
-	if cfg.Brokers["prod-us"].Auth.Username != "admin-us" {
-		t.Errorf("prod-us username mismatch: %s", cfg.Brokers["prod-us"].Auth.Username)
+	if cfg.Brokers["prod-us"].Auth.BasicAuth.Username != "admin-us" {
+		t.Errorf("prod-us username mismatch: %s", cfg.Brokers["prod-us"].Auth.BasicAuth.Username)
 	}
-	if cfg.Brokers["prod-eu"].Auth.Username != "admin-eu" {
-		t.Errorf("prod-eu username mismatch: %s", cfg.Brokers["prod-eu"].Auth.Username)
+	if cfg.Brokers["prod-eu"].Auth.BasicAuth.Username != "admin-eu" {
+		t.Errorf("prod-eu username mismatch: %s", cfg.Brokers["prod-eu"].Auth.BasicAuth.Username)
 	}
 }
 
@@ -209,10 +209,10 @@ brokers:
 	if broker.URL != "https://broker.example.com:1943" {
 		t.Errorf("expected URL from env var, got %q", broker.URL)
 	}
-	if broker.Auth.Username != "admin" {
+	if broker.BasicAuth.Username != "admin" {
 		t.Errorf("expected username from env var, got %q", broker.Auth.Username)
 	}
-	if broker.Auth.Password != "secret" {
+	if broker.BasicAuth.Password != "secret" {
 		t.Errorf("expected password from env var, got %q", broker.Auth.Password)
 	}
 }
@@ -254,10 +254,10 @@ brokers:
 	}
 
 	broker := cfg.Brokers["dev"]
-	if broker.Auth.Username != "hardcoded-user" {
+	if broker.BasicAuth.Username != "hardcoded-user" {
 		t.Errorf("expected hardcoded username, got %q", broker.Auth.Username)
 	}
-	if broker.Auth.Password != "env-secret" {
+	if broker.BasicAuth.Password != "env-secret" {
 		t.Errorf("expected password from env var, got %q", broker.Auth.Password)
 	}
 }

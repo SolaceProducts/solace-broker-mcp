@@ -99,10 +99,10 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (
 			Transport: transport,
 		},
 		baseURL:  strings.TrimSuffix(brokerCfg.URL, "/"),
-		authMode: brokerCfg.Auth.Mode,
-		username: brokerCfg.Auth.Username,
-		password: brokerCfg.Auth.Password,
-		token:    brokerCfg.Auth.Token,
+		authMode: brokerCfg.BasicAuth.Mode,
+		username: brokerCfg.BasicAuth.Username,
+		password: brokerCfg.BasicAuth.Password,
+		token:    brokerCfg.BasicAuth.Token,
 	}, nil
 }
 
