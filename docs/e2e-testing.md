@@ -17,15 +17,19 @@ Two scenarios are covered:
 1. **Standalone** — raw curl requests against the MCP server (no AI agent)
 2. **Agent** — a Go program using the MCP SDK client to connect and call tools
 
+Both scenarios run against **two independent brokers** (`broker-a`, `broker-b`) to verify multi-broker routing.
+
 ---
 
 ## Test Structure
 
 ```
 test/e2e/
-├── docker-compose.yml       # Solace PubSub+ broker container
+├── .env                     # Single source of truth: ports, credentials
+├── broker-config.yaml       # Reference MCP server config (for manual use)
+├── docker-compose.yml       # Two Solace PubSub+ broker containers
 ├── helpers.sh               # Shared bash functions (broker wait, server start, MCP helpers, assertions)
-├── run_all.sh               # Master test runner (orchestrates both scenarios)
+├── run_all.sh               # Master test runner (orchestrates both scenarios, prints summary table)
 ├── start_server.sh          # Build and start a fresh MCP server from latest source
 ├── test_standalone.sh       # Scenario 1: raw curl MCP protocol tests
 ├── test_agent.sh            # Scenario 2: builds and runs the Go agent
@@ -49,20 +53,54 @@ test/e2e/
 
 ---
 
+## Configuration
+
+All test configuration lives in a single file: `test/e2e/.env`. This file is the source of truth for ports, credentials, and MCP server env vars. It is read by:
+
+- **docker-compose.yml** — broker port mappings and admin password
+- **helpers.sh** — broker URLs, SEMP auth, fixture management
+- **MCP server** — credential resolution via `ENV_FILE` (reads `E2E_A_USERNAME`, etc.)
+
+```bash
+# Broker SEMP ports (host-side)
+BROKER_A_SEMP_PORT=8080
+BROKER_B_SEMP_PORT=8082
+
+# Broker credentials
+BROKER_USERNAME=admin
+BROKER_PASSWORD=admin
+
+# MCP server credential env vars (resolved via env_prefix in broker config)
+E2E_A_USERNAME=admin
+E2E_A_PASSWORD=admin
+E2E_B_USERNAME=admin
+E2E_B_PASSWORD=admin
+```
+
+To change ports or credentials, edit `.env` only — everything else derives from it.
+
+A reference `broker-config.yaml` is provided for manual use (e.g. starting the server by hand):
+
+```bash
+ENV_FILE=test/e2e/.env CONFIG_FILE=test/e2e/broker-config.yaml go run ./cmd/server
+```
+
+---
+
 ## Usage
 
 ### Run everything (recommended)
 
-The simplest way to run the full E2E suite. `run_all.sh` builds the MCP server from source, starts it, creates broker fixtures, runs both test scenarios, and cleans up.
+The simplest way to run the full E2E suite. `run_all.sh` builds the MCP server from source, starts it, creates broker fixtures on both brokers, runs both test scenarios, and prints a summary table.
 
 ```bash
-# 1. Start the Solace broker
+# 1. Start both Solace brokers
 docker compose -f test/e2e/docker-compose.yml up -d
 
 # 2. Run all E2E tests (waits for broker readiness automatically)
 bash test/e2e/run_all.sh
 
-# 3. Stop and remove the broker when done
+# 3. Stop and remove the brokers when done
 docker compose -f test/e2e/docker-compose.yml down -v
 ```
 
@@ -71,13 +109,13 @@ docker compose -f test/e2e/docker-compose.yml down -v
 When iterating on a specific scenario, start the server once and run tests against it repeatedly.
 
 ```bash
-# 1. Start the broker (if not already running)
+# 1. Start the brokers (if not already running)
 docker compose -f test/e2e/docker-compose.yml up -d
 
 # 2. Build and start the MCP server in the background
 bash test/e2e/start_server.sh --bg
 
-# 3. Create broker test fixtures
+# 3. Create broker test fixtures on both brokers
 source test/e2e/helpers.sh && create_fixtures
 
 # 4. Run either or both scenarios
@@ -90,7 +128,7 @@ kill $(cat test/e2e/bin/mcp-server.pid)
 
 ### Start the MCP server standalone
 
-`start_server.sh` compiles the MCP server from the latest source and starts it against the E2E broker. Useful for manual testing or development.
+`start_server.sh` compiles the MCP server from the latest source and starts it against the E2E brokers. Useful for manual testing or development.
 
 ```bash
 # Foreground (Ctrl-C to stop)
@@ -102,23 +140,26 @@ kill $(cat test/e2e/bin/mcp-server.pid)   # stop
 ```
 
 The script:
-1. Waits for the Solace broker to be fully ready (SEMP API + message spool)
+1. Waits for both Solace brokers to be fully ready (SEMP API + message spool)
 2. Builds `test/e2e/bin/mcp-server` from `./cmd/server`
-3. Writes a temporary config pointing at `localhost:8080` with `admin/admin`
-4. Starts the server on port `9090`
+3. Generates a broker config from `.env` values (ports, env prefixes)
+4. Starts the server on port `9090` with credentials from `.env`
 
 ---
 
 ## Broker Setup
 
-The Solace PubSub+ Standard Edition container is free and used for all E2E tests.
+Two Solace PubSub+ Standard Edition containers are used for E2E tests, configured in `docker-compose.yml`.
 
-| Setting | Value |
-|---|---|
-| Image | `solace/solace-pubsub-standard:latest` |
-| SEMP port | `8080` (mapped from container port 8080) |
-| Default credentials | `admin` / `admin` |
-| Default VPN | `default` (pre-created by broker) |
+| Setting | broker-a | broker-b |
+|---|---|---|
+| Image | `solace/solace-pubsub-standard:latest` | `solace/solace-pubsub-standard:latest` |
+| Container | `solace-e2e-a` | `solace-e2e-b` |
+| SEMP port | `8080` (configurable via `.env`) | `8082` (configurable via `.env`) |
+| Credentials | `admin` / `admin` (from `.env`) | `admin` / `admin` (from `.env`) |
+| Default VPN | `default` (pre-created) | `default` (pre-created) |
+| Shared memory | 1 GB | 1 GB |
+| File descriptors | 1,048,576 (nofile ulimit) | 1,048,576 (nofile ulimit) |
 
 The broker readiness check has two phases:
 1. SEMP API responds to config requests
@@ -128,18 +169,23 @@ The broker readiness check has two phases:
 
 ## MCP Server Setup
 
-The test harness builds the server binary from source and runs it as a subprocess. Configuration is written to a temporary file at test time:
+The test harness builds the server binary from source and runs it as a subprocess. Configuration is generated dynamically from `.env` values:
 
 ```yaml
 brokers:
-  e2e:
+  broker-a:
     url: "http://localhost:8080"
-    env_prefix: "E2E"
+    env_prefix: "E2E_A"
+    auth:
+      method: basic
+  broker-b:
+    url: "http://localhost:8082"
+    env_prefix: "E2E_B"
     auth:
       method: basic
 ```
 
-Credentials are passed via environment variables: `E2E_USERNAME=admin`, `E2E_PASSWORD=admin`.
+Credentials are resolved from `.env` via `ENV_FILE`: `E2E_A_USERNAME`, `E2E_A_PASSWORD`, `E2E_B_USERNAME`, `E2E_B_PASSWORD`.
 
 The server runs on port `9090` (default). Tests target `http://localhost:9090`.
 
@@ -147,7 +193,7 @@ The server runs on port `9090` (default). Tests target `http://localhost:9090`.
 
 ## Broker Test Fixtures
 
-Before tests run, the harness creates the following objects in the `default` VPN via the SEMP config API:
+Before tests run, the harness creates the following objects in the `default` VPN on **both brokers** via the SEMP config API:
 
 | Object | Name | Purpose |
 |---|---|---|
@@ -162,17 +208,19 @@ Fixtures are cleaned up before creation (to handle leftover state) and after tes
 
 ## Scenario 1: Standalone (Raw curl)
 
-`test_standalone.sh` sends raw MCP JSON-RPC requests to `POST /mcp`. It exercises:
+`test_standalone.sh` sends raw MCP JSON-RPC requests to `POST /mcp`. It exercises both brokers:
 
 | Test | What it validates |
 |---|---|
 | `test_health_endpoint` | `GET /health` returns `{"status": "ok"}` |
 | `test_initialize` | MCP handshake completes, server returns `Mcp-Session-Id` |
 | `test_list_tools` | `tools/list` returns all 5 tools (`get-rdp-status`, `list-brokers`, `get-queue-metrics`, `get-client-details`, `list-client-subscriptions`) |
-| `test_list_brokers` | `list-brokers` tool response includes the configured alias `e2e` |
-| `test_get_rdp_status` | `get-rdp-status` returns 3-step response (rdpStatus, queueBindings, restConsumers) |
+| `test_list_brokers` | `list-brokers` response includes both `broker-a` and `broker-b` |
+| `test_get_rdp_status_broker_a` | `get-rdp-status` on broker-a returns 3-step response |
 | `test_get_rdp_status_not_found` | Nonexistent RDP name returns a JSON-RPC error |
-| `test_get_queue_metrics` | `get-queue-metrics` returns queue data for `test-queue` |
+| `test_get_queue_metrics_broker_a` | `get-queue-metrics` on broker-a returns queue data |
+| `test_get_rdp_status_broker_b` | `get-rdp-status` on broker-b returns 3-step response |
+| `test_get_queue_metrics_broker_b` | `get-queue-metrics` on broker-b returns queue data |
 
 ### MCP Protocol Flow (Streamable HTTP)
 
@@ -199,9 +247,10 @@ Usage: `./bin/agent <server-url>`
 It performs:
 1. Connect to the MCP server via `StreamableClientTransport`
 2. Call `session.ListTools()` — verify all 5 tools are present
-3. Call `list-brokers` tool — verify the `e2e` alias appears
-4. Call `get-rdp-status` with the test fixtures — verify 3-step structured response
-5. Call `get-queue-metrics` with `test-queue` — verify queue data returned
+3. Call `list-brokers` tool — verify both `broker-a` and `broker-b` aliases appear
+4. For each broker (`broker-a`, `broker-b`):
+   - Call `get-rdp-status` with the test fixtures — verify 3-step structured response
+   - Call `get-queue-metrics` with `test-queue` — verify queue data returned
 
 `test_agent.sh` builds the agent binary then runs it, checking exit code and output.
 
@@ -221,6 +270,23 @@ Because LiteLLM exposes an OpenAI-compatible API, a Go OpenAI client (e.g. `gith
 
 ---
 
+## Test Output
+
+`run_all.sh` prints a summary table at the end:
+
+```
+┏━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━┳━━━━━━━━━┓
+┃ Scenario                ┃  Run  ┃ Passed  ┃ Failed  ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━╋━━━━━━━╋━━━━━━━━━╋━━━━━━━━━┫
+┃ Standalone tests        ┃     9 ┃       9 ┃       0 ┃
+┃ Agent tests             ┃     1 ┃       1 ┃       0 ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━╋━━━━━━━╋━━━━━━━━━╋━━━━━━━━━┫
+┃ TOTAL                   ┃    10 ┃      10 ┃       0 ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━┻━━━━━━━┻━━━━━━━━━┻━━━━━━━━━┛
+```
+
+---
+
 ## CI Integration
 
 The E2E tests run as a separate `e2e` job in `.github/workflows/build-and-test.yml`, gated on the `build` job passing:
@@ -231,8 +297,8 @@ lint ──┐
 ```
 
 The job:
-1. Starts the Solace broker with `docker compose up -d`
-2. Polls the broker health endpoint until ready
+1. Starts both Solace brokers with `docker compose up -d`
+2. Waits for both brokers to be fully ready (SEMP API + message spool, up to 120s)
 3. Runs `bash test/e2e/run_all.sh`
-4. On failure: dumps broker logs for debugging
-5. Always tears down the broker with `docker compose down -v`
+4. On failure: dumps last 100 lines of broker logs for debugging
+5. Always tears down the brokers with `docker compose down -v`
