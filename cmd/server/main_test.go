@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -14,7 +15,7 @@ import (
 func testMux() *http.ServeMux {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "solace-broker-mcp",
-		Version: "0.1.0",
+		Version: version.Version,
 	}, nil)
 	return buildMux(server)
 }
