@@ -77,12 +77,15 @@ func (c *HTTPClient) LogValue() slog.Value {
 // NewHTTPClient creates an HTTPClient configured for a specific broker.
 // It sets up a per-broker HTTP transport with TLS settings and connection pool
 // tuning appropriate for concurrent SEMP calls.
-func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) *HTTPClient {
+func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (*HTTPClient, error) {
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: brokerCfg.InsecureSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
 	}
 
-	jar, _ := cookiejar.New(nil) // nil options uses the default public suffix list
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating cookie jar: %w", err)
+	}
 
 	if brokerCfg.InsecureSkipVerify {
 		slog.Warn("INSECURE: TLS verification disabled for broker",
@@ -100,7 +103,7 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) *
 		username: brokerCfg.Auth.Username,
 		password: brokerCfg.Auth.Password,
 		token:    brokerCfg.Auth.Token,
-	}
+	}, nil
 }
 
 // Execute makes an authenticated HTTP request to the broker's SEMPv2 API for

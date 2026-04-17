@@ -58,7 +58,10 @@ func (p *BrokerPool) GetSempV2(alias string) (sempv2.Client, error) {
 		return nil, fmt.Errorf("unknown broker: %q", alias)
 	}
 
-	client := NewBrokerClient(alias, cfg, p.sempCfg)
+	client, err := NewBrokerClient(alias, cfg, p.sempCfg)
+	if err != nil {
+		return nil, err
+	}
 	p.clients[alias] = client
 	slog.Info("broker connection created",
 		slog.String("broker", alias),

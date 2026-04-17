@@ -27,7 +27,10 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*sempv2.HTTPClient, 
 	sempCfg := &config.SEMPConfig{
 		RequestTimeoutDuration: 5 * time.Second,
 	}
-	client := sempv2.NewHTTPClient(brokerCfg, sempCfg)
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg)
+	if err != nil {
+		t.Fatalf("NewHTTPClient() error: %v", err)
+	}
 	return client, server
 }
 
@@ -278,7 +281,10 @@ func TestClient_Execute_BearerAuth(t *testing.T) {
 		},
 	}
 	sempCfg := &config.SEMPConfig{RequestTimeoutDuration: 5 * time.Second}
-	bearerClient := sempv2.NewHTTPClient(brokerCfg, sempCfg)
+	bearerClient, err := sempv2.NewHTTPClient(brokerCfg, sempCfg)
+	if err != nil {
+		t.Fatalf("NewHTTPClient() error: %v", err)
+	}
 
 	op := &sempv2.Operation{
 		ID:     "testOp",
@@ -372,7 +378,10 @@ func TestClient_Execute_Timeout(t *testing.T) {
 	sempCfg := &config.SEMPConfig{
 		RequestTimeoutDuration: time.Second,
 	}
-	client := sempv2.NewHTTPClient(brokerCfg, sempCfg)
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg)
+	if err != nil {
+		t.Fatalf("NewHTTPClient() error: %v", err)
+	}
 
 	op := &sempv2.Operation{
 		ID:     "testOp",
@@ -380,8 +389,8 @@ func TestClient_Execute_Timeout(t *testing.T) {
 		Path:   "/SEMP/v2/monitor/test",
 	}
 
-	_, err := client.Execute(context.Background(), op, map[string]any{})
-	if err == nil {
+	_, execErr := client.Execute(context.Background(), op, map[string]any{})
+	if execErr == nil {
 		t.Fatal("expected timeout error")
 	}
 }
