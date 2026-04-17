@@ -209,7 +209,7 @@ func (c *HTTPClient) buildRequest(ctx context.Context, op *Operation, reqURL str
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "solace/broker-mcp-server/"+version.Version)
+	req.Header.Set("User-Agent", "solace/broker-mcp-server/"+version.Version())
 
 	return req, nil
 }

@@ -15,7 +15,7 @@ import (
 func testMux() *http.ServeMux {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "solace-broker-mcp",
-		Version: version.Version,
+		Version: version.Version(),
 	}, nil)
 	return buildMux(server)
 }

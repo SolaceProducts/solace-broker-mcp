@@ -78,7 +78,7 @@ func buildMux(server *mcp.Server) *http.ServeMux {
 
 func main() {
 	if len(os.Args) == 2 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
-		fmt.Println(version.Version)
+		fmt.Println(version.Version())
 		os.Exit(0)
 	}
 
@@ -105,7 +105,7 @@ func main() {
 	slog.SetDefault(slog.New(newSlogHandler(level)))
 
 	slog.Info("config loaded",
-		slog.String("version", version.Version),
+		slog.String("version", version.Version()),
 		slog.Int("broker_count", len(cfg.Brokers)),
 		slog.Int("port", cfg.Port),
 		slog.String("log_level", cfg.LogLevel))
@@ -139,7 +139,7 @@ func main() {
 	// 6. Create MCP server
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "solace-broker-mcp",
-		Version: version.Version,
+		Version: version.Version(),
 	}, nil)
 
 	// 7. Register composite tools

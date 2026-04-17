@@ -31,7 +31,7 @@ go build ./cmd/server
 
 ldflags is a **compile-time string substitution** mechanism. It does not fetch
 anything from a remote repository. The long module path
-(`github.com/SolaceDev/solace-broker-mcp/internal/version.Version`) is the
+(`github.com/SolaceDev/solace-broker-mcp/internal/version.version`) is the
 same path used in Go `import` statements — the compiler resolves it against
 whatever source is on disk and replaces the variable's initial value in the
 compiled binary.
@@ -49,7 +49,7 @@ The version value itself comes from whatever string you pass. Common sources:
 Pass the fully-qualified variable path via `-ldflags -X`:
 
 ```bash
-go build -ldflags "-X github.com/SolaceDev/solace-broker-mcp/internal/version.Version=0.1.0" ./cmd/server
+go build -ldflags "-X github.com/SolaceDev/solace-broker-mcp/internal/version.version=0.1.0" ./cmd/server
 ```
 
 ### CI / release builds
@@ -59,7 +59,7 @@ repository tag:
 
 ```bash
 VERSION=$(git describe --tags --always)
-go build -ldflags "-X github.com/SolaceDev/solace-broker-mcp/internal/version.Version=${VERSION}" ./cmd/server
+go build -ldflags "-X github.com/SolaceDev/solace-broker-mcp/internal/version.version=${VERSION}" ./cmd/server
 ```
 
 ### Cutting a new release
