@@ -30,7 +30,10 @@ func TestBrokerClient_V2_ReturnsClient(t *testing.T) {
 	}
 	sempCfg := &config.SEMPConfig{RequestTimeoutDuration: 5 * time.Second}
 
-	bc := semp.NewBrokerClient("test-broker", brokerCfg, sempCfg)
+	bc, err := semp.NewBrokerClient("test-broker", brokerCfg, sempCfg)
+	if err != nil {
+		t.Fatalf("NewBrokerClient() error: %v", err)
+	}
 	client := bc.SempV2()
 
 	if client == nil {
@@ -57,7 +60,10 @@ func TestBrokerClient_V2_ExecutePassesThrough(t *testing.T) {
 	}
 	sempCfg := &config.SEMPConfig{RequestTimeoutDuration: 5 * time.Second}
 
-	bc := semp.NewBrokerClient("test-broker", brokerCfg, sempCfg)
+	bc, err := semp.NewBrokerClient("test-broker", brokerCfg, sempCfg)
+	if err != nil {
+		t.Fatalf("NewBrokerClient() error: %v", err)
+	}
 	client := bc.SempV2()
 
 	op := &sempv2.Operation{
@@ -66,9 +72,9 @@ func TestBrokerClient_V2_ExecutePassesThrough(t *testing.T) {
 		Path:   "/SEMP/v2/monitor/test",
 	}
 
-	_, err := client.Execute(context.Background(), op, map[string]any{})
-	if err != nil {
-		t.Fatalf("Execute() error: %v", err)
+	_, execErr := client.Execute(context.Background(), op, map[string]any{})
+	if execErr != nil {
+		t.Fatalf("Execute() error: %v", execErr)
 	}
 
 	if !called {

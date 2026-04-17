@@ -19,6 +19,7 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2/specs"
+	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -76,6 +77,11 @@ func buildMux(server *mcp.Server) *http.ServeMux {
 }
 
 func main() {
+	if len(os.Args) == 2 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
+		fmt.Println(version.Version())
+		os.Exit(0)
+	}
+
 	// 0. Bootstrap slog at INFO so LoadConfig can emit logs. The handler is
 	//    swapped with the user-configured level (cfg.LogLevel) after LoadConfig
 	//    validates it. UnmarshalText is infallible here because validate() in
@@ -99,6 +105,7 @@ func main() {
 	slog.SetDefault(slog.New(newSlogHandler(level)))
 
 	slog.Info("config loaded",
+		slog.String("version", version.Version()),
 		slog.Int("broker_count", len(cfg.Brokers)),
 		slog.Int("port", cfg.Port),
 		slog.String("log_level", cfg.LogLevel))
@@ -132,7 +139,7 @@ func main() {
 	// 6. Create MCP server
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "solace-broker-mcp",
-		Version: "0.1.0",
+		Version: version.Version(),
 	}, nil)
 
 	// 7. Register composite tools

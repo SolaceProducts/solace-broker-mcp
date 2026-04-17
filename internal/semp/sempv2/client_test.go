@@ -27,7 +27,10 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*sempv2.HTTPClient, 
 	sempCfg := &config.SEMPConfig{
 		RequestTimeoutDuration: 5 * time.Second,
 	}
-	client := sempv2.NewHTTPClient(brokerCfg, sempCfg)
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg)
+	if err != nil {
+		t.Fatalf("NewHTTPClient() error: %v", err)
+	}
 	return client, server
 }
 
@@ -278,7 +281,10 @@ func TestClient_Execute_BearerAuth(t *testing.T) {
 		},
 	}
 	sempCfg := &config.SEMPConfig{RequestTimeoutDuration: 5 * time.Second}
-	bearerClient := sempv2.NewHTTPClient(brokerCfg, sempCfg)
+	bearerClient, err := sempv2.NewHTTPClient(brokerCfg, sempCfg)
+	if err != nil {
+		t.Fatalf("NewHTTPClient() error: %v", err)
+	}
 
 	op := &sempv2.Operation{
 		ID:     "testOp",
@@ -292,6 +298,65 @@ func TestClient_Execute_BearerAuth(t *testing.T) {
 	}
 	if result.StatusCode != 200 {
 		t.Errorf("expected 200, got %d", result.StatusCode)
+	}
+}
+
+func TestClient_Execute_CookieJar(t *testing.T) {
+	callCount := 0
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if callCount == 0 {
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "abc123"})
+		} else {
+			cookie, err := r.Cookie("session")
+			if err != nil {
+				t.Error("cookie not sent back on second request")
+			} else if cookie.Value != "abc123" {
+				t.Errorf("cookie value = %q, want abc123", cookie.Value)
+			}
+		}
+		callCount++
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{})
+	})
+	defer server.Close()
+
+	op := &sempv2.Operation{
+		ID:     "testOp",
+		Method: "GET",
+		Path:   "/SEMP/v2/monitor/test",
+	}
+
+	if _, err := client.Execute(context.Background(), op, map[string]any{}); err != nil {
+		t.Fatalf("first Execute() error: %v", err)
+	}
+	if _, err := client.Execute(context.Background(), op, map[string]any{}); err != nil {
+		t.Fatalf("second Execute() error: %v", err)
+	}
+
+	if callCount != 2 {
+		t.Errorf("handler called %d times, want 2", callCount)
+	}
+}
+
+func TestClient_Execute_UserAgent(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		ua := r.Header.Get("User-Agent")
+		if !strings.HasPrefix(ua, "solace/broker-mcp-server/") {
+			t.Errorf("User-Agent = %q, want prefix solace/broker-mcp-server/", ua)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{})
+	})
+	defer server.Close()
+
+	op := &sempv2.Operation{
+		ID:     "testOp",
+		Method: "GET",
+		Path:   "/SEMP/v2/monitor/test",
+	}
+
+	if _, err := client.Execute(context.Background(), op, map[string]any{}); err != nil {
+		t.Fatalf("Execute() error: %v", err)
 	}
 }
 
@@ -313,7 +378,10 @@ func TestClient_Execute_Timeout(t *testing.T) {
 	sempCfg := &config.SEMPConfig{
 		RequestTimeoutDuration: time.Second,
 	}
-	client := sempv2.NewHTTPClient(brokerCfg, sempCfg)
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg)
+	if err != nil {
+		t.Fatalf("NewHTTPClient() error: %v", err)
+	}
 
 	op := &sempv2.Operation{
 		ID:     "testOp",
@@ -321,8 +389,8 @@ func TestClient_Execute_Timeout(t *testing.T) {
 		Path:   "/SEMP/v2/monitor/test",
 	}
 
-	_, err := client.Execute(context.Background(), op, map[string]any{})
-	if err == nil {
+	_, execErr := client.Execute(context.Background(), op, map[string]any{})
+	if execErr == nil {
 		t.Fatal("expected timeout error")
 	}
 }
