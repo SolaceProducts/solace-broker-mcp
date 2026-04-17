@@ -19,6 +19,7 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2/specs"
+	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -132,7 +133,7 @@ func main() {
 	// 6. Create MCP server
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "solace-broker-mcp",
-		Version: "0.1.0",
+		Version: version.Version,
 	}, nil)
 
 	// 7. Register composite tools

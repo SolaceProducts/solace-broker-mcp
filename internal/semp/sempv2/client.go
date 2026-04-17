@@ -9,10 +9,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"strings"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 )
 
 // Client executes operations against a Solace broker's SEMPv2 API.
@@ -80,8 +82,16 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) *
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: brokerCfg.InsecureSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
 	}
 
+	jar, _ := cookiejar.New(nil) // nil options uses the default public suffix list
+
+	if brokerCfg.InsecureSkipVerify {
+		slog.Warn("INSECURE: TLS verification disabled for broker",
+			slog.String("url", brokerCfg.URL))
+	}
+
 	return &HTTPClient{
 		httpClient: &http.Client{
+			Jar:       jar,
 			Timeout:   sempCfg.RequestTimeoutDuration,
 			Transport: transport,
 		},
@@ -196,6 +206,7 @@ func (c *HTTPClient) buildRequest(ctx context.Context, op *Operation, reqURL str
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "solace/broker-mcp-server/"+version.Version)
 
 	return req, nil
 }
