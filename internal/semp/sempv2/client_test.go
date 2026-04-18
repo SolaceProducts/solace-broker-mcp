@@ -313,6 +313,9 @@ func TestClient_Execute_PathEncoding(t *testing.T) {
 				t.Errorf("path = %q, must not contain unencoded %q", gotPath, tc.wantNotInPath)
 			}
 		})
+	}
+}
+
 func TestClient_Execute_BearerAuth(t *testing.T) {
 	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		// Verify bearer token is sent
