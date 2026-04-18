@@ -253,6 +253,66 @@ func TestClient_Execute_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestClient_Execute_PathEncoding(t *testing.T) {
+	cases := []struct {
+		name          string
+		clientName    string
+		wantInPath    string
+		wantNotInPath string
+	}{
+		{
+			name:       "plain value unchanged",
+			clientName: "my-consumer",
+			wantInPath: "/clients/my-consumer",
+		},
+		{
+			name:          "slash encoded",
+			clientName:    "app/client-1",
+			wantInPath:    "/clients/app%2Fclient-1",
+			wantNotInPath: "/clients/app/client-1",
+		},
+		{
+			name:       "space encoded",
+			clientName: "my client",
+			wantInPath: "/clients/my%20client",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotPath string
+			client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.RequestURI
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{})
+			})
+			defer server.Close()
+
+			op := &sempv2.Operation{
+				ID:     "testOp",
+				Method: "GET",
+				Path:   "/SEMP/v2/monitor/msgVpns/{msgVpnName}/clients/{clientName}",
+				Parameters: []sempv2.Parameter{
+					{Name: "msgVpnName", In: "path"},
+					{Name: "clientName", In: "path"},
+				},
+			}
+
+			_, _ = client.Execute(context.Background(), op, map[string]any{
+				"msgVpnName": "default",
+				"clientName": tc.clientName,
+			})
+
+			if !strings.Contains(gotPath, tc.wantInPath) {
+				t.Errorf("path = %q, want it to contain %q", gotPath, tc.wantInPath)
+			}
+			if tc.wantNotInPath != "" && strings.Contains(gotPath, tc.wantNotInPath) {
+				t.Errorf("path = %q, must not contain unencoded %q", gotPath, tc.wantNotInPath)
+			}
+		})
+	}
+}
+
 func TestClient_Execute_Timeout(t *testing.T) {
 	_, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(10 * time.Second)
