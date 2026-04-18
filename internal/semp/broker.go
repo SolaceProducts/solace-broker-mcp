@@ -5,6 +5,8 @@
 package semp
 
 import (
+	"fmt"
+
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 )
@@ -19,11 +21,15 @@ type BrokerClient struct {
 
 // NewBrokerClient creates a BrokerClient for the given broker configuration.
 // It initializes the SEMPv2 HTTP client with the broker's connection settings.
-func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) *BrokerClient {
-	return &BrokerClient{
-		sempV2: sempv2.NewHTTPClient(brokerCfg, sempCfg),
-		alias:  alias,
+func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (*BrokerClient, error) {
+	httpClient, err := sempv2.NewHTTPClient(brokerCfg, sempCfg)
+	if err != nil {
+		return nil, fmt.Errorf("creating SEMP client for broker %q: %w", alias, err)
 	}
+	return &BrokerClient{
+		sempV2: httpClient,
+		alias:  alias,
+	}, nil
 }
 
 // SempV2 returns the SEMPv2 client for this broker. This is the client that

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
@@ -18,7 +19,7 @@ func newTestServerConfig(serverURL string) *config.ServerConfig {
 			"prod-us": {
 				URL: serverURL,
 				Auth: config.AuthConfig{
-					Method:   "basic",
+					Mode:     "basic",
 					Username: "admin",
 					Password: "secret",
 				},
@@ -26,14 +27,14 @@ func newTestServerConfig(serverURL string) *config.ServerConfig {
 			"prod-eu": {
 				URL: serverURL,
 				Auth: config.AuthConfig{
-					Method:   "basic",
+					Mode:     "basic",
 					Username: "admin",
 					Password: "secret",
 				},
 			},
 		},
 		SEMP: config.SEMPConfig{
-			RequestTimeoutSeconds: 5,
+			RequestTimeoutDuration: 5 * time.Second,
 		},
 	}
 }

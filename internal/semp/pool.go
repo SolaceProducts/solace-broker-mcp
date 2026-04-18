@@ -17,9 +17,9 @@ import (
 // Thread-safe via sync.RWMutex with a double-check pattern for lazy creation.
 type BrokerPool struct {
 	mu      sync.RWMutex
-	clients map[string]*BrokerClient       // broker alias → client (lazily populated)
+	clients map[string]*BrokerClient        // broker alias → client (lazily populated)
 	configs map[string]*config.BrokerConfig // broker alias → config (all brokers)
-	sempCfg *config.SEMPConfig             // shared SEMP settings
+	sempCfg *config.SEMPConfig              // shared SEMP settings
 }
 
 // NewBrokerPool creates a BrokerPool from the server configuration. No
@@ -58,11 +58,15 @@ func (p *BrokerPool) GetSempV2(alias string) (sempv2.Client, error) {
 		return nil, fmt.Errorf("unknown broker: %q", alias)
 	}
 
-	client := NewBrokerClient(alias, cfg, p.sempCfg)
+	client, err := NewBrokerClient(alias, cfg, p.sempCfg)
+	if err != nil {
+		return nil, err
+	}
 	p.clients[alias] = client
 	slog.Info("broker connection created",
 		slog.String("broker", alias),
-		slog.String("url", cfg.URL))
+		slog.String("url", cfg.URL),
+		slog.String("auth_mode", cfg.Auth.Mode))
 	return client.SempV2(), nil
 }
 

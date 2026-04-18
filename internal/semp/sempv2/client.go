@@ -9,11 +9,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 )
 
 // Client executes operations against a Solace broker's SEMPv2 API.
@@ -57,8 +58,10 @@ func (e *SEMPError) Error() string {
 type HTTPClient struct {
 	httpClient *http.Client
 	baseURL    string
+	authMode   string
 	username   string
 	password   string
+	token      string
 }
 
 // LogValue implements slog.LogValuer for HTTPClient. It exposes only the base
@@ -74,20 +77,33 @@ func (c *HTTPClient) LogValue() slog.Value {
 // NewHTTPClient creates an HTTPClient configured for a specific broker.
 // It sets up a per-broker HTTP transport with TLS settings and connection pool
 // tuning appropriate for concurrent SEMP calls.
-func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) *HTTPClient {
+func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (*HTTPClient, error) {
 	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: brokerCfg.TLSSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: brokerCfg.InsecureSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
+	}
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating cookie jar: %w", err)
+	}
+
+	if brokerCfg.InsecureSkipVerify {
+		slog.Warn("INSECURE: TLS verification disabled for broker",
+			slog.String("url", brokerCfg.URL))
 	}
 
 	return &HTTPClient{
 		httpClient: &http.Client{
-			Timeout:   time.Duration(sempCfg.RequestTimeoutSeconds) * time.Second,
+			Jar:       jar,
+			Timeout:   sempCfg.RequestTimeoutDuration,
 			Transport: transport,
 		},
 		baseURL:  strings.TrimSuffix(brokerCfg.URL, "/"),
+		authMode: brokerCfg.Auth.Mode,
 		username: brokerCfg.Auth.Username,
 		password: brokerCfg.Auth.Password,
-	}
+		token:    brokerCfg.Auth.Token,
+	}, nil
 }
 
 // Execute makes an authenticated HTTP request to the broker's SEMPv2 API for
@@ -193,13 +209,24 @@ func (c *HTTPClient) buildRequest(ctx context.Context, op *Operation, reqURL str
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "solace/broker-mcp-server/"+version.Version())
 
 	return req, nil
 }
 
-// addAuth sets the Basic Auth header on the request.
+// addAuth sets the authentication header on the request based on the configured
+// auth mode. Basic auth sends Authorization: Basic base64(user:pass). Bearer
+// sends Authorization: Bearer <token>.
+//
+// By the time this runs, config validation has guaranteed that authMode is one
+// of validAuthModes and the corresponding credential fields are non-empty, so
+// no defensive emptiness checks are needed here. If a new auth mode is added,
+// config.validAuthModes must be updated AND a new case must be added below.
 func (c *HTTPClient) addAuth(req *http.Request) {
-	if c.username != "" && c.password != "" {
+	switch c.authMode {
+	case config.AuthModeBasic:
 		req.SetBasicAuth(c.username, c.password)
+	case config.AuthModeBearer:
+		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 }
