@@ -18,22 +18,18 @@ func newTestServerConfig(serverURL string) *config.ServerConfig {
 		Brokers: map[string]*config.BrokerConfig{
 			"prod-us": {
 				URL: serverURL,
-				Auth: config.BrokerAuthConfig{
-					Mode: "basic",
-					BasicAuth: &config.BasicAuthConfig{
-						Username: "admin",
-						Password: "secret",
-					},
+				Auth: config.AuthConfig{
+					Mode:     "basic",
+					Username: "admin",
+					Password: "secret",
 				},
 			},
 			"prod-eu": {
 				URL: serverURL,
-				Auth: config.BrokerAuthConfig{
-					Mode: "basic",
-					BasicAuth: &config.BasicAuthConfig{
-						Username: "admin",
-						Password: "secret",
-					},
+				Auth: config.AuthConfig{
+					Mode:     "basic",
+					Username: "admin",
+					Password: "secret",
 				},
 			},
 		},

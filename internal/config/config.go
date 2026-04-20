@@ -52,8 +52,8 @@ var validLogLevels = []string{"debug", "info", "warn", "error"}
 type BrokerConfig struct {
 	URL                string     `yaml:"url"`                  // SEMP API base URL (e.g., "https://broker:1943")
 	InsecureSkipVerify bool       `yaml:"insecure_skip_verify"` // skip TLS cert verification (dev only, self-signed certs)
-	EnvPrefix     string           `yaml:"env_prefix"`      // prefix for credential env vars ({EnvPrefix}_USERNAME, {EnvPrefix}_PASSWORD)
-	Auth               BrokerAuthConfig `yaml:"auth"`                 // authentication config
+	EnvPrefix          string     `yaml:"env_prefix"`      // prefix for credential env vars ({EnvPrefix}_USERNAME, {EnvPrefix}_PASSWORD)
+	Auth               AuthConfig `yaml:"auth"`                 // authentication config
 }
 
 // Auth mode constants for broker authentication (Hop 2: MCP Server → Broker).
@@ -66,13 +66,9 @@ const (
 // Add new modes (e.g., "oauth") here — validate() and error messages derive from this slice.
 var validAuthModes = []string{AuthModeBasic, AuthModeBearer}
 
-// BrokerAuthConfig holds the authentication credentials for a broker connection.
-type BrokerAuthConfig struct {
+// AuthConfig holds the authentication credentials for a broker connection.
+type AuthConfig struct {
 	Mode     string `yaml:"mode"`     // "basic" or "bearer"
-	BasicAuth      *BasicAuthConfig `yaml:"basic_auth,omitempty"`
-}
-
-type BasicAuthConfig struct {
 	Username string `yaml:"username"` // basic auth username (use ${VAR_NAME} for env var)
 	Password string `yaml:"password"` // basic auth password (use ${VAR_NAME} for env var)
 	Token    string `yaml:"token"`    // bearer token (use ${VAR_NAME} for env var)
@@ -81,7 +77,7 @@ type BasicAuthConfig struct {
 // LogValue implements slog.LogValuer for AuthConfig. It exposes only the auth
 // mode — username, password, and token are deliberately excluded to prevent
 // credential leaks in log output. See docs/secure-logging-rules.md Rule 2.
-func (a BrokerAuthConfig) LogValue() slog.Value {
+func (a AuthConfig) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("mode", a.Mode),
 	)
@@ -96,18 +92,6 @@ func (b BrokerConfig) LogValue() slog.Value {
 		slog.Bool("insecure_skip_verify", b.InsecureSkipVerify),
 		slog.String("env_prefix", b.EnvPrefix),
 		slog.String("auth_mode", b.Auth.Mode),
-	)
-}
-
-// LogValue implements slog.LogValuer for ClientAuthConfig. It exposes OAuth
-// configuration (issuer, audience, resource URL, scopes) but excludes DevToken
-// to prevent credential leaks in log output. See docs/secure-logging-rules.md Rule 2.
-func (c ClientAuthConfig) LogValue() slog.Value {
-	return slog.GroupValue(
-		slog.String("issuer", c.Issuer),
-		slog.String("audience", c.Audience),
-		slog.String("resource_url", c.ResourceURL),
-		slog.Any("required_scopes", c.RequiredScopes),
 	)
 }
 
@@ -259,41 +243,6 @@ func LoadConfig(path string) (*ServerConfig, error) {
 	}
 
 	return cfg, nil
-}
-
-// resolveCredentials reads credentials from environment variables for each
-// broker using the broker's env_prefix. For a broker with env_prefix "PROD_US",
-// it reads PROD_US_USERNAME and PROD_US_PASSWORD.
-func resolveCredentials(cfg *ServerConfig) error {
-	for alias, broker := range cfg.Brokers {
-		if broker.EnvPrefix == "" {
-			return fmt.Errorf("broker %q: env_prefix is required", alias)
-		}
-
-		if !envPrefixPattern.MatchString(broker.EnvPrefix) {
-			return fmt.Errorf("broker %q: env_prefix must contain only uppercase letters, numbers, and underscores, got %q", alias, broker.EnvPrefix)
-		}
-
-		usernameVar := broker.EnvPrefix + "_USERNAME"
-		username, exists := os.LookupEnv(usernameVar)
-		if !exists {
-			return fmt.Errorf("broker %q: environment variable %s is not set (required by env_prefix %q). Set it in your environment or in a .env file next to the config file", alias, usernameVar, broker.EnvPrefix)
-		}
-
-		passwordVar := broker.EnvPrefix + "_PASSWORD"
-		password, exists := os.LookupEnv(passwordVar)
-		if !exists {
-			return fmt.Errorf("broker %q: environment variable %s is not set (required by env_prefix %q). Set it in your environment or in a .env file next to the config file", alias, passwordVar, broker.EnvPrefix)
-		}
-
-		// Initialize BasicAuth if nil before assigning credentials
-		if broker.Auth.BasicAuth == nil {
-			broker.Auth.BasicAuth = &BasicAuthConfig{}
-		}
-		broker.Auth.BasicAuth.Username = username
-		broker.Auth.BasicAuth.Password = password
-	}
-	return nil
 }
 
 // applyDefaults fills in missing optional fields from the defaults package.
@@ -457,29 +406,13 @@ func validate(cfg *ServerConfig) error {
 	if !cfg.DevelopmentMode {
 		// Production mode: require JWT validation fields
 		if cfg.ClientAuth.Issuer == "" {
-			return fmt.Errorf("client_auth.issuer is required when development_mode is false")
+			errs = append(errs, fmt.Errorf("client_auth.issuer is required when development_mode is false"))
 		}
 		if cfg.ClientAuth.Audience == "" {
-			return fmt.Errorf("client_auth.audience is required when development_mode is false")
+			errs = append(errs, fmt.Errorf("client_auth.audience is required when development_mode is false"))
 		}
 		if cfg.ClientAuth.ResourceURL == "" {
-			return fmt.Errorf("client_auth.resource_url is required when development_mode is false")
-		}
-	}
-
-	// Validate client authentication configuration based on development mode.
-	// Note that no validation is needed when development mode is enabled, as DevToken
-	// can be set or empty. When DevToken is empty, all requests pass through
-	if !cfg.DevelopmentMode {
-		// Production mode: require JWT validation fields
-		if cfg.ClientAuth.Issuer == "" {
-			return fmt.Errorf("client_auth.issuer is required when development_mode is false")
-		}
-		if cfg.ClientAuth.Audience == "" {
-			return fmt.Errorf("client_auth.audience is required when development_mode is false")
-		}
-		if cfg.ClientAuth.ResourceURL == "" {
-			return fmt.Errorf("client_auth.resource_url is required when development_mode is false")
+			errs = append(errs, fmt.Errorf("client_auth.resource_url is required when development_mode is false"))
 		}
 	}
 

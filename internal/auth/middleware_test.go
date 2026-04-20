@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
@@ -59,7 +60,7 @@ func Test_AuthDisabled(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 			if tt.authHeader != "" {
 				req.Header.Set("Authorization", tt.authHeader)
 			}
@@ -138,7 +139,7 @@ func Test_StaticDevToken(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 			if tt.authHeader != "" {
 				req.Header.Set("Authorization", tt.authHeader)
 			}
@@ -354,7 +355,7 @@ func Test_ValidJWTToken(t *testing.T) {
 		t.Fatalf("failed to create token: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	rec := httptest.NewRecorder()
@@ -392,7 +393,7 @@ func Test_ExpiredJWTToken(t *testing.T) {
 		t.Fatalf("failed to create token: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	rec := httptest.NewRecorder()
@@ -430,7 +431,7 @@ func Test_WrongJWTAudience(t *testing.T) {
 		t.Fatalf("failed to create token: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	rec := httptest.NewRecorder()
@@ -468,7 +469,7 @@ func Test_WrongJWTIssuer(t *testing.T) {
 		t.Fatalf("failed to create token: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	rec := httptest.NewRecorder()
@@ -507,7 +508,7 @@ func Test_InvalidJWTSignature(t *testing.T) {
 	// Tamper with the token signature (replace last char)
 	tamperedToken := token[:len(token)-5] + "XXXXX"
 
-	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 	req.Header.Set("Authorization", "Bearer "+tamperedToken)
 
 	rec := httptest.NewRecorder()
@@ -574,7 +575,7 @@ func Test_MissingRequiredScope(t *testing.T) {
 				t.Fatalf("failed to create token: %v", err)
 			}
 
-			req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 			req.Header.Set("Authorization", "Bearer "+token)
 
 			rec := httptest.NewRecorder()
@@ -614,7 +615,7 @@ func Test_NoJWTToken(t *testing.T) {
 		t.Fatalf("failed to create middleware: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 	// No Authorization header
 
 	rec := httptest.NewRecorder()
@@ -686,7 +687,7 @@ func Test_WWWAuthenticateHeaderFormat(t *testing.T) {
 				t.Fatalf("failed to create middleware: %v", err)
 			}
 
-			req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 			rec := httptest.NewRecorder()
 			middleware.ServeHTTP(rec, req)
 
@@ -787,7 +788,7 @@ func Test_ProtectedResourceMetadata(t *testing.T) {
 				t.Fatal("expected handler, got nil")
 			}
 
-			req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-protected-resource", nil)
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/.well-known/oauth-protected-resource", nil)
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
 

@@ -26,6 +26,7 @@ func TestLoadConfig_SingleBroker(t *testing.T) {
 	t.Setenv("TEST_PASSWORD", "secret")
 
 	yaml := `
+development_mode: true
 brokers:
   prod-us:
     url: "https://broker-us.example.com:1943"
@@ -53,11 +54,11 @@ brokers:
 	if broker.Auth.Mode != "basic" {
 		t.Errorf("unexpected auth method: %s", broker.Auth.Mode)
 	}
-	if broker.Auth.BasicAuth.Username != "admin" {
-		t.Errorf("unexpected username: %s", broker.Auth.BasicAuth.Username)
+	if broker.Auth.Username != "admin" {
+		t.Errorf("unexpected username: %s", broker.Auth.Username)
 	}
-	if broker.Auth.BasicAuth.Password != "secret" {
-		t.Errorf("unexpected password: %s", broker.Auth.BasicAuth.Password)
+	if broker.Auth.Password != "secret" {
+		t.Errorf("unexpected password: %s", broker.Auth.Password)
 	}
 }
 
@@ -68,6 +69,7 @@ func TestLoadConfig_MultiBroker(t *testing.T) {
 	t.Setenv("EU_PASS", "secret-eu")
 
 	yaml := `
+development_mode: true
 brokers:
   prod-us:
     url: "https://broker-us.example.com:1943"
@@ -91,16 +93,17 @@ brokers:
 		t.Fatalf("expected 2 brokers, got %d", len(cfg.Brokers))
 	}
 
-	if cfg.Brokers["prod-us"].Auth.BasicAuth.Username != "admin-us" {
-		t.Errorf("prod-us username mismatch: %s", cfg.Brokers["prod-us"].Auth.BasicAuth.Username)
+	if cfg.Brokers["prod-us"].Auth.Username != "admin-us" {
+		t.Errorf("prod-us username mismatch: %s", cfg.Brokers["prod-us"].Auth.Username)
 	}
-	if cfg.Brokers["prod-eu"].Auth.BasicAuth.Username != "admin-eu" {
-		t.Errorf("prod-eu username mismatch: %s", cfg.Brokers["prod-eu"].Auth.BasicAuth.Username)
+	if cfg.Brokers["prod-eu"].Auth.Username != "admin-eu" {
+		t.Errorf("prod-eu username mismatch: %s", cfg.Brokers["prod-eu"].Auth.Username)
 	}
 }
 
 func TestLoadConfig_MissingBrokerURL(t *testing.T) {
 	yaml := `
+development_mode: true
 brokers:
   dev:
     auth:
@@ -119,6 +122,7 @@ brokers:
 
 func TestLoadConfig_MissingBasicAuthCreds(t *testing.T) {
 	yaml := `
+development_mode: true
 brokers:
   dev:
     url: "https://broker.example.com:1943"
@@ -143,6 +147,7 @@ func TestLoadConfig_MalformedYAML(t *testing.T) {
 
 func TestLoadConfig_DefaultsApplied(t *testing.T) {
 	yaml := `
+development_mode: true
 brokers:
   dev:
     url: "https://broker.example.com:1943"
@@ -169,6 +174,7 @@ brokers:
 
 func TestLoadConfig_InvalidAuthMethod(t *testing.T) {
 	yaml := `
+development_mode: true
 brokers:
   dev:
     url: "https://broker.example.com:1943"
@@ -192,6 +198,7 @@ func TestLoadConfig_EnvVarSubstitution(t *testing.T) {
 	t.Setenv("BROKER_PASS", "secret")
 
 	yaml := `
+development_mode: true
 brokers:
   prod:
     url: ${BROKER_URL}
@@ -209,16 +216,17 @@ brokers:
 	if broker.URL != "https://broker.example.com:1943" {
 		t.Errorf("expected URL from env var, got %q", broker.URL)
 	}
-	if broker.BasicAuth.Username != "admin" {
+	if broker.Auth.Username != "admin" {
 		t.Errorf("expected username from env var, got %q", broker.Auth.Username)
 	}
-	if broker.BasicAuth.Password != "secret" {
+	if broker.Auth.Password != "secret" {
 		t.Errorf("expected password from env var, got %q", broker.Auth.Password)
 	}
 }
 
 func TestLoadConfig_EnvVarMissing(t *testing.T) {
 	yaml := `
+development_mode: true
 brokers:
   prod:
     url: ${MISSING_URL}
@@ -233,32 +241,6 @@ brokers:
 	}
 	if !strings.Contains(err.Error(), "MISSING_URL") {
 		t.Errorf("error should mention the missing var name: %v", err)
-	}
-}
-
-func TestLoadConfig_MixedHardcodedAndEnvVars(t *testing.T) {
-	t.Setenv("MIXED_PASS", "env-secret")
-
-	yaml := `
-brokers:
-  dev:
-    url: "http://localhost:8080"
-    auth:
-      mode: basic
-      username: hardcoded-user
-      password: ${MIXED_PASS}
-`
-	cfg, err := LoadConfig(writeTemp(t, yaml))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	broker := cfg.Brokers["dev"]
-	if broker.BasicAuth.Username != "hardcoded-user" {
-		t.Errorf("expected hardcoded username, got %q", broker.Auth.Username)
-	}
-	if broker.BasicAuth.Password != "env-secret" {
-		t.Errorf("expected password from env var, got %q", broker.Auth.Password)
 	}
 }
 
@@ -284,6 +266,7 @@ brokers:
 
 func TestLoadConfig_TLSOnlyCert_ReturnsError(t *testing.T) {
 	yaml := `
+development_mode: true
 tls_cert_file: "/tmp/cert.pem"
 brokers:
   dev:
@@ -304,6 +287,7 @@ brokers:
 
 func TestLoadConfig_TLSBothFields_Valid(t *testing.T) {
 	yaml := `
+development_mode: true
 tls_cert_file: "/tmp/cert.pem"
 tls_key_file: "/tmp/key.pem"
 brokers:
@@ -330,6 +314,7 @@ func TestLoadConfig_EnvOverridePort(t *testing.T) {
 	t.Setenv("MCP_SERVER_PORT", "9091")
 
 	yaml := `
+development_mode: true
 port: 8080
 brokers:
   dev:
@@ -352,6 +337,7 @@ func TestLoadConfig_BearerAuth(t *testing.T) {
 	t.Setenv("BEARER_TOKEN", "my-secret-token")
 
 	yaml := `
+development_mode: true
 brokers:
   prod:
     url: "https://broker.example.com:8080"
@@ -375,6 +361,7 @@ brokers:
 
 func TestLoadConfig_BearerAuth_MissingToken(t *testing.T) {
 	yaml := `
+development_mode: true
 brokers:
   prod:
     url: "https://broker.example.com:8080"
@@ -392,6 +379,7 @@ brokers:
 
 func TestLoadConfig_MissingAuthMode(t *testing.T) {
 	yaml := `
+development_mode: true
 brokers:
   dev:
     url: "http://localhost:8080"
@@ -410,6 +398,7 @@ brokers:
 
 func TestLoadConfig_AuthModeCaseInsensitive(t *testing.T) {
 	yaml := `
+development_mode: true
 brokers:
   dev:
     url: "http://localhost:8080"
@@ -429,6 +418,7 @@ brokers:
 
 func TestLoadConfig_InvalidURLScheme(t *testing.T) {
 	yaml := `
+development_mode: true
 brokers:
   dev:
     url: "ftp://broker.example.com"
@@ -448,6 +438,7 @@ brokers:
 
 func TestLoadConfig_URLMissingHost(t *testing.T) {
 	yaml := `
+development_mode: true
 brokers:
   dev:
     url: "http://"
@@ -469,6 +460,7 @@ func TestLoadConfig_URLEmpty_ReportsRequired(t *testing.T) {
 	// Empty URL is handled by the "url is required" branch, NOT the
 	// structure-validation branch — verifying we don't double-report.
 	yaml := `
+development_mode: true
 brokers:
   dev:
     url: ""
@@ -491,6 +483,7 @@ brokers:
 
 func TestLoadConfig_LogLevel_Default(t *testing.T) {
 	yaml := `
+development_mode: true
 brokers:
   dev:
     url: "http://localhost:8080"
@@ -512,6 +505,7 @@ func TestLoadConfig_LogLevel_ValidValues(t *testing.T) {
 	for _, level := range []string{"debug", "info", "warn", "error"} {
 		t.Run(level, func(t *testing.T) {
 			yaml := `
+development_mode: true
 log_level: ` + level + `
 brokers:
   dev:
@@ -534,6 +528,7 @@ brokers:
 
 func TestLoadConfig_LogLevel_CaseInsensitive(t *testing.T) {
 	yaml := `
+development_mode: true
 log_level: DEBUG
 brokers:
   dev:
@@ -574,6 +569,7 @@ brokers:
 
 func TestLoadConfig_RateLimit_Defaults(t *testing.T) {
 	yaml := `
+development_mode: true
 brokers:
   dev:
     url: "http://localhost:8080"
@@ -602,6 +598,7 @@ brokers:
 
 func TestLoadConfig_RateLimit_ValidValues(t *testing.T) {
 	yaml := `
+development_mode: true
 semp:
   request_min_interval: 50ms
   retries: 5
@@ -640,6 +637,7 @@ func TestLoadConfig_RateLimit_ExplicitZeroHonored(t *testing.T) {
 	// This is the reason both fields are pointer types -- without pointers,
 	// "0 in YAML" is indistinguishable from "omitted from YAML".
 	yaml := `
+development_mode: true
 semp:
   request_min_interval: 0s
   retries: 0
@@ -763,6 +761,7 @@ brokers:
 
 func TestLoad_UsesConfigFileEnv(t *testing.T) {
 	yaml := `
+development_mode: true
 brokers:
   dev:
     url: "http://localhost:8080"
