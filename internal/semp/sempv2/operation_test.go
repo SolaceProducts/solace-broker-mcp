@@ -40,8 +40,8 @@ func TestParseSpecs_OperationFields(t *testing.T) {
 		t.Errorf("monitor/getMsgVpnQueue.Path = %q, want it to contain /msgVpns/{msgVpnName}/queues/{queueName}", op.Path)
 	}
 
-	if !strings.HasPrefix(op.Path, "/SEMP/v2/monitor/") {
-		t.Errorf("monitor/getMsgVpnQueue.Path = %q, expected it to start with /SEMP/v2/monitor/", op.Path)
+	if !strings.HasPrefix(op.Path, "/SEMP/v2/__private_monitor__/") {
+		t.Errorf("monitor/getMsgVpnQueue.Path = %q, expected it to start with /SEMP/v2/__private_monitor__/", op.Path)
 	}
 
 	if len(op.Parameters) == 0 {
@@ -110,25 +110,16 @@ func TestParseSpecs_NoGhostParameters(t *testing.T) {
 	}
 }
 
-func TestParseSpecs_MultipleSpecs(t *testing.T) {
+func TestParseSpecs_MonitorOperationsPresent(t *testing.T) {
 	ops, err := sempv2.ParseSpecs(specs.FS)
 	if err != nil {
 		t.Fatalf("ParseSpecs() error: %v", err)
 	}
 
-	// Monitor spec operation.
-	if _, ok := ops["monitor/getMsgVpnQueue"]; !ok {
-		t.Error("missing monitor operation: monitor/getMsgVpnQueue")
-	}
-
-	// Action spec operation.
-	if _, ok := ops["action/doMsgVpnQueueStartReplay"]; !ok {
-		t.Error("missing action operation: action/doMsgVpnQueueStartReplay")
-	}
-
-	// Config spec operation.
-	if _, ok := ops["config/createMsgVpnQueue"]; !ok {
-		t.Error("missing config operation: config/createMsgVpnQueue")
+	for _, key := range []string{"monitor/getMsgVpnQueue", "monitor/getMsgVpnClient", "monitor/getMsgVpnClientSubscriptions"} {
+		if _, ok := ops[key]; !ok {
+			t.Errorf("missing expected operation: %s", key)
+		}
 	}
 }
 
@@ -143,8 +134,8 @@ func TestParseSpecs_PathIncludesBasePath(t *testing.T) {
 		t.Fatal("monitor/getMsgVpnQueue not found")
 	}
 
-	if !strings.HasPrefix(op.Path, "/SEMP/v2/monitor/") {
-		t.Errorf("monitor/getMsgVpnQueue.Path = %q, expected it to start with /SEMP/v2/monitor/", op.Path)
+	if !strings.HasPrefix(op.Path, "/SEMP/v2/__private_monitor__/") {
+		t.Errorf("monitor/getMsgVpnQueue.Path = %q, expected it to start with /SEMP/v2/__private_monitor__/", op.Path)
 	}
 }
 
@@ -154,31 +145,13 @@ func TestParseSpecs_NoDuplicateKeys(t *testing.T) {
 		t.Fatalf("ParseSpecs() error: %v", err)
 	}
 
-	// getMsgVpnQueue exists in all three specs. With prefixed keys, all three
-	// should be present as separate entries.
+	// Only the private monitor spec is embedded — all keys must use the monitor/ prefix.
 	monitorOp := ops["monitor/getMsgVpnQueue"]
-	configOp := ops["config/getMsgVpnQueue"]
-	actionOp := ops["action/getMsgVpnQueue"]
-
 	if monitorOp == nil {
 		t.Error("monitor/getMsgVpnQueue not found")
 	}
-	if configOp == nil {
-		t.Error("config/getMsgVpnQueue not found")
-	}
-	if actionOp == nil {
-		t.Error("action/getMsgVpnQueue not found")
-	}
-
-	// Each should have a different path prefix.
-	if monitorOp != nil && !strings.HasPrefix(monitorOp.Path, "/SEMP/v2/monitor/") {
-		t.Errorf("monitor op path = %q, want /SEMP/v2/monitor/ prefix", monitorOp.Path)
-	}
-	if configOp != nil && !strings.HasPrefix(configOp.Path, "/SEMP/v2/config/") {
-		t.Errorf("config op path = %q, want /SEMP/v2/config/ prefix", configOp.Path)
-	}
-	if actionOp != nil && !strings.HasPrefix(actionOp.Path, "/SEMP/v2/action/") {
-		t.Errorf("action op path = %q, want /SEMP/v2/action/ prefix", actionOp.Path)
+	if monitorOp != nil && !strings.HasPrefix(monitorOp.Path, "/SEMP/v2/__private_monitor__/") {
+		t.Errorf("monitor op path = %q, want /SEMP/v2/__private_monitor__/ prefix", monitorOp.Path)
 	}
 }
 
@@ -188,11 +161,9 @@ func TestParseSpecs_SpecTypeDerivation(t *testing.T) {
 		t.Fatalf("ParseSpecs() error: %v", err)
 	}
 
-	// Every key must start with one of the three valid prefixes.
+	// Every key must start with monitor/ (private monitor normalized).
 	for key := range ops {
-		if !strings.HasPrefix(key, "monitor/") &&
-			!strings.HasPrefix(key, "config/") &&
-			!strings.HasPrefix(key, "action/") {
+		if !strings.HasPrefix(key, "monitor/") {
 			t.Errorf("operation key %q does not have a valid spec type prefix", key)
 		}
 	}

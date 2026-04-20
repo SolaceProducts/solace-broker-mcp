@@ -33,9 +33,14 @@ type Parameter struct {
 
 // validSpecTypes are the recognized SEMP API types derived from basePath.
 var validSpecTypes = map[string]bool{
-	"monitor": true,
-	"config":  true,
-	"action":  true,
+	"__private_monitor__": true,
+}
+
+// privateToPublicSpecType normalizes private basePath suffixes to their public key equivalents
+// so operation map keys remain consistent (e.g. "monitor/getMsgVpnQueue") regardless of
+// whether the embedded spec uses a private or public basePath.
+var privateToPublicSpecType = map[string]string{
+	"__private_monitor__": "monitor",
 }
 
 // ParseSpecs reads all embedded Swagger 2.0 JSON spec files from the given
@@ -115,9 +120,8 @@ func ParseSpecs(fsys fs.FS) (map[string]*Operation, error) {
 	return operations, nil
 }
 
-// deriveSpecType extracts the SEMP API type from a spec's basePath.
-// For example, "/SEMP/v2/monitor" returns "monitor". Returns an error if the
-// basePath does not end with a recognized type (monitor, config, action).
+// deriveSpecType extracts the SEMP API type from a spec's basePath and normalizes
+// private variants to their public equivalents (e.g. "__private_monitor__" → "monitor").
 func deriveSpecType(basePath string) (string, error) {
 	parts := strings.Split(strings.TrimSuffix(basePath, "/"), "/")
 	if len(parts) == 0 {
@@ -125,7 +129,10 @@ func deriveSpecType(basePath string) (string, error) {
 	}
 	specType := parts[len(parts)-1]
 	if !validSpecTypes[specType] {
-		return "", fmt.Errorf("unrecognized spec type %q from basePath %q (expected monitor, config, or action)", specType, basePath)
+		return "", fmt.Errorf("unrecognized spec type %q from basePath %q", specType, basePath)
+	}
+	if normalized, ok := privateToPublicSpecType[specType]; ok {
+		return normalized, nil
 	}
 	return specType, nil
 }

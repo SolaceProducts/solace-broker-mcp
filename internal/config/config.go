@@ -1,25 +1,25 @@
 // Package config loads and validates the Solace Broker MCP Server configuration
-// from a YAML file. It supports multiple brokers with independent credentials
-// loaded from environment variables using per-broker env_prefix, and applies
-// defaults from the defaults package for optional fields.
+// from a YAML file. It supports ${VAR_NAME} env var substitution in any YAML
+// field, multiple brokers with independent credentials, and applies defaults
+// from the defaults package for optional fields.
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"gopkg.in/yaml.v3"
 )
-
-// envPrefixPattern validates that env_prefix values contain only uppercase
-// letters, numbers, and underscores.
-var envPrefixPattern = regexp.MustCompile(`^[A-Z0-9_]+$`)
 
 // ServerConfig holds the complete MCP server configuration, including all
 // configured brokers and SEMP client settings.
@@ -27,52 +27,86 @@ type ServerConfig struct {
 	Brokers     map[string]*BrokerConfig // broker alias → config
 	SEMP        SEMPConfig               // SEMP client settings
 	Port        int                      // HTTP port the MCP server listens on (1-65535)
+	LogLevel    string                   // slog level name: "debug", "info", "warn", "error"
 	TLSCertFile string                   // path to TLS certificate file (optional, enables HTTPS)
 	TLSKeyFile  string                   // path to TLS private key file (optional, requires TLSCertFile)
 }
 
+// validLogLevels is the allowlist of slog levels operators may configure.
+// Matches the story spec: strict exactly these four values. Excludes slog's
+// offset syntax (e.g., "INFO+3") which UnmarshalText would otherwise accept.
+var validLogLevels = []string{"debug", "info", "warn", "error"}
+
 // BrokerConfig holds the connection and authentication configuration for a
 // single Solace broker.
 type BrokerConfig struct {
-	URL           string     `yaml:"url"`             // SEMP API base URL (e.g., "https://broker:1943")
-	TLSSkipVerify bool       `yaml:"tls_skip_verify"` // skip TLS cert verification (dev only)
-	EnvPrefix     string     `yaml:"env_prefix"`      // prefix for credential env vars ({EnvPrefix}_USERNAME, {EnvPrefix}_PASSWORD)
-	Auth          AuthConfig `yaml:"auth"`             // authentication config
+	URL                string     `yaml:"url"`                  // SEMP API base URL (e.g., "https://broker:1943")
+	InsecureSkipVerify bool       `yaml:"insecure_skip_verify"` // skip TLS cert verification (dev only, self-signed certs)
+	Auth               AuthConfig `yaml:"auth"`                 // authentication config
 }
+
+// Auth mode constants for broker authentication (Hop 2: MCP Server → Broker).
+const (
+	AuthModeBasic  = "basic"
+	AuthModeBearer = "bearer"
+)
+
+// validAuthModes is the allowlist of supported auth modes for broker connections.
+// Add new modes (e.g., "oauth") here — validate() and error messages derive from this slice.
+var validAuthModes = []string{AuthModeBasic, AuthModeBearer}
 
 // AuthConfig holds the authentication credentials for a broker connection.
 type AuthConfig struct {
-	Method   string `yaml:"method"` // "basic" for this release
-	Username string // populated from {EnvPrefix}_USERNAME env var
-	Password string // populated from {EnvPrefix}_PASSWORD env var
+	Mode     string `yaml:"mode"`     // "basic" or "bearer"
+	Username string `yaml:"username"` // basic auth username (use ${VAR_NAME} for env var)
+	Password string `yaml:"password"` // basic auth password (use ${VAR_NAME} for env var)
+	Token    string `yaml:"token"`    // bearer token (use ${VAR_NAME} for env var)
 }
 
 // LogValue implements slog.LogValuer for AuthConfig. It exposes only the auth
-// method — username and password are deliberately excluded to prevent credential
-// leaks in log output. See docs/secure-logging-rules.md Rule 2.
+// mode — username, password, and token are deliberately excluded to prevent
+// credential leaks in log output. See docs/secure-logging-rules.md Rule 2.
 func (a AuthConfig) LogValue() slog.Value {
 	return slog.GroupValue(
-		slog.String("method", a.Method),
+		slog.String("mode", a.Mode),
 	)
 }
 
 // LogValue implements slog.LogValuer for BrokerConfig. It exposes connection
-// metadata (URL, TLS settings, env prefix, auth method) but excludes credentials.
+// metadata (URL, TLS settings, auth method) but excludes credentials.
 // See docs/secure-logging-rules.md Rule 2.
 func (b BrokerConfig) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("url", b.URL),
-		slog.Bool("tls_skip_verify", b.TLSSkipVerify),
-		slog.String("env_prefix", b.EnvPrefix),
-		slog.String("auth_method", b.Auth.Method),
+		slog.Bool("insecure_skip_verify", b.InsecureSkipVerify),
+		slog.String("auth_mode", b.Auth.Mode),
 	)
 }
 
 // SEMPConfig holds settings that control how the MCP server communicates with
-// brokers over the SEMP API.
+// brokers over the SEMP API. The rate-limit and retry fields below are
+// defined here but not yet consumed -- they will be wired up in Story 5 when
+// the rate limiter and retry policy are implemented.
+//
+// Field names match the Solace Terraform provider's naming convention so
+// operators familiar with terraform-provider-solacebroker get a consistent
+// experience across tools.
+//
+// RequestMinInterval and Retries use pointer types so we can distinguish
+// "field omitted in YAML" (nil) from "field set to 0" (non-nil pointer to
+// zero). Zero is a legitimate operator choice for both -- the Terraform
+// provider documents "set request_min_interval to 0 for no rate limit", and
+// retries=0 means no retries by analogy. Plain int/time.Duration cannot tell
+// those two cases apart, because both produce the zero value. After
+// applyDefaults runs, these fields are guaranteed non-nil so downstream code
+// can dereference safely.
 type SEMPConfig struct {
-	MaxConcurrentPerBroker int `yaml:"max_concurrent_per_broker"` // semaphore size per broker
-	RequestTimeoutSeconds  int `yaml:"request_timeout_seconds"`   // HTTP request timeout for SEMP calls
+	MaxConcurrentPerBroker int            `yaml:"max_concurrent_per_broker"` // semaphore size per broker
+	RequestTimeoutDuration time.Duration  `yaml:"request_timeout_duration"`  // HTTP request timeout for SEMP calls (e.g., "30s")
+	RequestMinInterval     *time.Duration `yaml:"request_min_interval"`      // minimum spacing between SEMP requests; 0 = no throttle
+	Retries                *int           `yaml:"retries"`                   // max retry attempts for a failed SEMP call; 0 = no retries
+	RetryMinInterval       time.Duration  `yaml:"retry_min_interval"`        // starting backoff before the first retry (must be > 0)
+	RetryMaxInterval       time.Duration  `yaml:"retry_max_interval"`        // cap on retry backoff, must be >= RetryMinInterval
 }
 
 // yamlConfig is the intermediate representation used for YAML unmarshalling.
@@ -81,26 +115,79 @@ type yamlConfig struct {
 	Brokers     map[string]*BrokerConfig `yaml:"brokers"`
 	SEMP        SEMPConfig               `yaml:"semp"`
 	Port        int                      `yaml:"port"`
+	LogLevel    string                   `yaml:"log_level"`
 	TLSCertFile string                   `yaml:"tls_cert_file"`
 	TLSKeyFile  string                   `yaml:"tls_key_file"`
 }
 
-// LoadConfig reads a YAML configuration file from path, applies defaults for
-// missing optional fields, validates the structure, resolves credentials from
-// environment variables, applies env var overrides, and returns a ServerConfig
-// ready for use.
+// Load locates the server configuration file, loads it, and returns a ready
+// ServerConfig. It checks the following in order:
+//
+//  1. CONFIG_FILE env var — explicit operator override. Strict: any error
+//     loading this file is fatal. We do NOT silently fall through to the
+//     other paths, because if the operator explicitly pointed at a file,
+//     they meant THAT file.
+//  2. defaults.DefaultConfigPathSystem (/etc/mcp-server/config.yaml) —
+//     production-install location.
+//  3. defaults.DefaultConfigPathLocal (broker-config.yaml in CWD) —
+//     developer-convenience fallback for running out of the repo.
+//
+// Only "file does not exist" errors from step 2 or 3 trigger fallback to the
+// next path. Parse errors, permission errors, validation errors, or any other
+// failure from an existing file are always fatal — never silently masked by
+// trying another path. If nothing is found, returns an error listing all
+// paths tried.
+func Load() (*ServerConfig, error) {
+	// Step 1: CONFIG_FILE env var (explicit, strict)
+	if envPath := os.Getenv("CONFIG_FILE"); envPath != "" {
+		return LoadConfig(envPath)
+	}
+
+	// Step 2: system path
+	if _, err := os.Stat(defaults.DefaultConfigPathSystem); err == nil {
+		return LoadConfig(defaults.DefaultConfigPathSystem)
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat %s: %w", defaults.DefaultConfigPathSystem, err)
+	}
+
+	// Step 3: local path
+	if _, err := os.Stat(defaults.DefaultConfigPathLocal); err == nil {
+		return LoadConfig(defaults.DefaultConfigPathLocal)
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat %s: %w", defaults.DefaultConfigPathLocal, err)
+	}
+
+	// Nothing found
+	return nil, fmt.Errorf(
+		"no config file found; set CONFIG_FILE env var or place config at one of: %s, %s",
+		defaults.DefaultConfigPathSystem,
+		defaults.DefaultConfigPathLocal,
+	)
+}
+
+// LoadConfig reads a YAML configuration file from path, substitutes ${VAR_NAME}
+// env var references, parses YAML, applies defaults, validates, and returns a
+// ServerConfig ready for use.
 //
 // Processing order:
-//  1. Parse YAML
-//  2. Apply defaults (fill missing optional fields)
-//  3. Validate (required fields, value ranges, TLS pairing)
-//  4. Load .env file
-//  5. Resolve credentials from environment variables
-//  6. Apply env var overrides (MCP_SERVER_PORT — env var wins over YAML/default)
+//  1. Read YAML file (raw bytes)
+//  2. Load .env file (so env vars are available for substitution)
+//  3. Substitute ${VAR_NAME} in raw bytes
+//  4. Parse YAML
+//  5. Apply defaults (fill missing optional fields)
+//  6. Apply env var overrides (MCP_SERVER_PORT — runtime override)
+//  7. Validate (required fields, value ranges, TLS pairing)
 func LoadConfig(path string) (*ServerConfig, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304/G703 — path is the operator-provided config file location (CONFIG_FILE env var, /etc/mcp-server/config.yaml, or ./broker-config.yaml), not untrusted external input
 	if err != nil {
 		return nil, fmt.Errorf("reading config file: %w", err)
+	}
+
+	loadEnvFile(path)
+
+	data, err = substituteEnvVars(data)
+	if err != nil {
+		return nil, fmt.Errorf("substituting env vars: %w", err)
 	}
 
 	var raw yamlConfig
@@ -112,61 +199,22 @@ func LoadConfig(path string) (*ServerConfig, error) {
 		Brokers:     raw.Brokers,
 		SEMP:        raw.SEMP,
 		Port:        raw.Port,
+		LogLevel:    raw.LogLevel,
 		TLSCertFile: raw.TLSCertFile,
 		TLSKeyFile:  raw.TLSKeyFile,
 	}
 
 	applyDefaults(cfg)
 
-	if err := validate(cfg); err != nil {
-		return nil, fmt.Errorf("validating config: %w", err)
-	}
-
-	loadEnvFile(path)
-
-	if err := resolveCredentials(cfg); err != nil {
-		return nil, fmt.Errorf("resolving credentials: %w", err)
-	}
-
 	if err := applyEnvOverrides(cfg); err != nil {
 		return nil, fmt.Errorf("applying env overrides: %w", err)
 	}
 
-	slog.Warn("env_prefix naming convention is provisional",
-		slog.String("convention", "uppercase letters, numbers, and underscores only"))
+	if err := validate(cfg); err != nil {
+		return nil, fmt.Errorf("validating config: %w", err)
+	}
 
 	return cfg, nil
-}
-
-// resolveCredentials reads credentials from environment variables for each
-// broker using the broker's env_prefix. For a broker with env_prefix "PROD_US",
-// it reads PROD_US_USERNAME and PROD_US_PASSWORD.
-func resolveCredentials(cfg *ServerConfig) error {
-	for alias, broker := range cfg.Brokers {
-		if broker.EnvPrefix == "" {
-			return fmt.Errorf("broker %q: env_prefix is required", alias)
-		}
-
-		if !envPrefixPattern.MatchString(broker.EnvPrefix) {
-			return fmt.Errorf("broker %q: env_prefix must contain only uppercase letters, numbers, and underscores, got %q", alias, broker.EnvPrefix)
-		}
-
-		usernameVar := broker.EnvPrefix + "_USERNAME"
-		username, exists := os.LookupEnv(usernameVar)
-		if !exists {
-			return fmt.Errorf("broker %q: environment variable %s is not set (required by env_prefix %q). Set it in your environment or in a .env file next to the config file", alias, usernameVar, broker.EnvPrefix)
-		}
-
-		passwordVar := broker.EnvPrefix + "_PASSWORD"
-		password, exists := os.LookupEnv(passwordVar)
-		if !exists {
-			return fmt.Errorf("broker %q: environment variable %s is not set (required by env_prefix %q). Set it in your environment or in a .env file next to the config file", alias, passwordVar, broker.EnvPrefix)
-		}
-
-		broker.Auth.Username = username
-		broker.Auth.Password = password
-	}
-	return nil
 }
 
 // applyDefaults fills in missing optional fields from the defaults package.
@@ -174,14 +222,35 @@ func applyDefaults(cfg *ServerConfig) {
 	if cfg.Port == 0 {
 		cfg.Port = defaults.DefaultPort
 	}
+	if cfg.LogLevel == "" {
+		cfg.LogLevel = defaults.DefaultLogLevel
+	}
 	if cfg.SEMP.MaxConcurrentPerBroker == 0 {
 		cfg.SEMP.MaxConcurrentPerBroker = defaults.DefaultMaxConcurrentPerBroker
 	}
-	if cfg.SEMP.RequestTimeoutSeconds == 0 {
-		cfg.SEMP.RequestTimeoutSeconds = defaults.DefaultSEMPRequestTimeoutSeconds
+	if cfg.SEMP.RequestTimeoutDuration == 0 {
+		cfg.SEMP.RequestTimeoutDuration = defaults.DefaultSEMPRequestTimeoutDuration
 	}
-	// TLSSkipVerify is not defaulted here — Go's zero value for bool (false)
-	// already matches the intended default (verify TLS certificates).
+	// RequestMinInterval and Retries are pointers so we can distinguish
+	// "operator omitted the field" (nil) from "operator set it to 0" (non-nil
+	// pointer to zero). Apply the default only when nil. See the SEMPConfig
+	// struct doc for the full rationale.
+	if cfg.SEMP.RequestMinInterval == nil {
+		def := defaults.DefaultRequestMinInterval
+		cfg.SEMP.RequestMinInterval = &def
+	}
+	if cfg.SEMP.Retries == nil {
+		def := defaults.DefaultRetries
+		cfg.SEMP.Retries = &def
+	}
+	if cfg.SEMP.RetryMinInterval == 0 {
+		cfg.SEMP.RetryMinInterval = defaults.DefaultRetryMinInterval
+	}
+	if cfg.SEMP.RetryMaxInterval == 0 {
+		cfg.SEMP.RetryMaxInterval = defaults.DefaultRetryMaxInterval
+	}
+	// InsecureSkipVerify is not defaulted here — Go's zero value for bool
+	// (false) already matches the intended default (verify TLS certificates).
 }
 
 // loadEnvFile loads a .env file into the process environment. It checks two
@@ -220,57 +289,138 @@ func loadEnvFile(configPath string) {
 		slog.String("path", envPath))
 }
 
+// envVarPattern matches ${VAR_NAME} in raw YAML bytes. VAR_NAME must be
+// uppercase letters, numbers, and underscores.
+var envVarPattern = regexp.MustCompile(`\$\{([A-Z0-9_]+)\}`)
+
+// substituteEnvVars replaces all ${VAR_NAME} occurrences in raw YAML bytes with
+// the corresponding environment variable values. Returns an error if any
+// referenced env var is not set. This runs before YAML parsing so any field
+// can reference env vars.
+func substituteEnvVars(data []byte) ([]byte, error) {
+	var missing []string
+
+	result := envVarPattern.ReplaceAllFunc(data, func(match []byte) []byte {
+		// Extract var name from ${VAR_NAME}
+		varName := string(envVarPattern.FindSubmatch(match)[1])
+		value, exists := os.LookupEnv(varName)
+		if !exists {
+			missing = append(missing, varName)
+			return match // leave as-is, error reported after
+		}
+		return []byte(value)
+	})
+
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("environment variables not set: %s", strings.Join(missing, ", "))
+	}
+
+	return result, nil
+}
+
 // validate checks that the config has all required fields and that values are
-// within acceptable ranges. Credential validation happens in resolveCredentials,
-// not here — this function validates structure only.
+// within acceptable ranges. All validation errors are collected and returned as
+// a single joined error so operators see every issue in one run instead of
+// fixing them one-by-one across multiple reloads.
 func validate(cfg *ServerConfig) error {
+	var errs []error
+
 	if len(cfg.Brokers) == 0 {
-		return fmt.Errorf("at least one broker must be configured")
+		errs = append(errs, fmt.Errorf("at least one broker must be configured"))
 	}
 
 	for alias, broker := range cfg.Brokers {
-		if broker.URL == "" {
-			return fmt.Errorf("broker %q: url is required", alias)
-		}
-
-		if broker.EnvPrefix == "" {
-			return fmt.Errorf("broker %q: env_prefix is required", alias)
-		}
-
-		if !envPrefixPattern.MatchString(broker.EnvPrefix) {
-			return fmt.Errorf("broker %q: env_prefix must contain only uppercase letters, numbers, and underscores, got %q", alias, broker.EnvPrefix)
-		}
-
-		// ASSUMPTION: defaulting to basic auth when method is not specified.
-		// Only basic auth is supported in this PR. When OAuth is added, this
-		// default may need to change or become an error.
-		if broker.Auth.Method == "" {
-			broker.Auth.Method = "basic"
-		}
-
-		if broker.Auth.Method != "basic" {
-			return fmt.Errorf("broker %q: unsupported auth method %q (only \"basic\" is supported)", alias, broker.Auth.Method)
-		}
+		errs = append(errs, validateBroker(alias, broker)...)
 	}
 
 	if err := ValidatePort(cfg.Port); err != nil {
-		return err
+		errs = append(errs, err)
+	}
+
+	// Normalize log_level and check against the allowlist.
+	cfg.LogLevel = strings.ToLower(cfg.LogLevel)
+	if !slices.Contains(validLogLevels, cfg.LogLevel) {
+		errs = append(errs, fmt.Errorf("log_level %q is invalid (must be one of %v)", cfg.LogLevel, validLogLevels))
 	}
 
 	if cfg.SEMP.MaxConcurrentPerBroker < 0 {
-		return fmt.Errorf("semp.max_concurrent_per_broker must be > 0, got %d", cfg.SEMP.MaxConcurrentPerBroker)
+		errs = append(errs, fmt.Errorf("semp.max_concurrent_per_broker must be > 0, got %d", cfg.SEMP.MaxConcurrentPerBroker))
 	}
 
-	if cfg.SEMP.RequestTimeoutSeconds < 0 {
-		return fmt.Errorf("semp.request_timeout_seconds must be > 0, got %d", cfg.SEMP.RequestTimeoutSeconds)
+	if cfg.SEMP.RequestTimeoutDuration <= 0 {
+		errs = append(errs, fmt.Errorf("semp.request_timeout_duration must be > 0, got %s", cfg.SEMP.RequestTimeoutDuration))
+	}
+
+	// RequestMinInterval and Retries are guaranteed non-nil by applyDefaults,
+	// so dereferencing is safe here. Story rule: non-negative for both; zero is
+	// explicitly allowed (0 = no rate limit / no retries).
+	if *cfg.SEMP.RequestMinInterval < 0 {
+		errs = append(errs, fmt.Errorf("semp.request_min_interval must be >= 0, got %s", *cfg.SEMP.RequestMinInterval))
+	}
+
+	if *cfg.SEMP.Retries < 0 {
+		errs = append(errs, fmt.Errorf("semp.retries must be >= 0, got %d", *cfg.SEMP.Retries))
+	}
+
+	if cfg.SEMP.RetryMinInterval <= 0 {
+		errs = append(errs, fmt.Errorf("semp.retry_min_interval must be > 0, got %s", cfg.SEMP.RetryMinInterval))
+	}
+
+	if cfg.SEMP.RetryMaxInterval <= 0 {
+		errs = append(errs, fmt.Errorf("semp.retry_max_interval must be > 0, got %s", cfg.SEMP.RetryMaxInterval))
+	} else if cfg.SEMP.RetryMinInterval > 0 && cfg.SEMP.RetryMaxInterval < cfg.SEMP.RetryMinInterval {
+		errs = append(errs, fmt.Errorf("semp.retry_max_interval (%s) must be >= semp.retry_min_interval (%s)", cfg.SEMP.RetryMaxInterval, cfg.SEMP.RetryMinInterval))
 	}
 
 	// TLS: both cert and key must be provided together, or neither.
 	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
-		return fmt.Errorf("both tls_cert_file and tls_key_file must be provided together; got cert=%q, key=%q", cfg.TLSCertFile, cfg.TLSKeyFile)
+		errs = append(errs, fmt.Errorf("both tls_cert_file and tls_key_file must be provided together; got cert=%q, key=%q", cfg.TLSCertFile, cfg.TLSKeyFile))
 	}
 
-	return nil
+	return errors.Join(errs...)
+}
+
+// validateBroker returns all validation errors for a single broker. Credential
+// checks are skipped when auth.mode is missing or invalid because there are no
+// meaningful credential rules to apply without a known mode.
+func validateBroker(alias string, broker *BrokerConfig) []error {
+	var errs []error
+
+	if broker.URL == "" {
+		errs = append(errs, fmt.Errorf("broker %q: url is required", alias))
+	} else if err := validateBrokerURL(broker.URL); err != nil {
+		errs = append(errs, fmt.Errorf("broker %q: %w", alias, err))
+	}
+
+	// Normalize auth mode (case-insensitive per story spec).
+	broker.Auth.Mode = strings.ToLower(broker.Auth.Mode)
+
+	if broker.Auth.Mode == "" {
+		errs = append(errs, fmt.Errorf("broker %q: auth.mode is required (must be one of %v)", alias, validAuthModes))
+		return errs
+	}
+
+	if !slices.Contains(validAuthModes, broker.Auth.Mode) {
+		errs = append(errs, fmt.Errorf("broker %q: unsupported auth mode %q (must be one of %v)", alias, broker.Auth.Mode, validAuthModes))
+		return errs
+	}
+
+	// Validate credentials are present based on auth mode.
+	switch broker.Auth.Mode {
+	case AuthModeBasic:
+		if broker.Auth.Username == "" {
+			errs = append(errs, fmt.Errorf("broker %q: username is required for basic auth", alias))
+		}
+		if broker.Auth.Password == "" {
+			errs = append(errs, fmt.Errorf("broker %q: password is required for basic auth", alias))
+		}
+	case AuthModeBearer:
+		if broker.Auth.Token == "" {
+			errs = append(errs, fmt.Errorf("broker %q: token is required for bearer auth", alias))
+		}
+	}
+
+	return errs
 }
 
 // ValidatePort checks that a port number is within the valid TCP range (1-65535).
@@ -278,6 +428,26 @@ func validate(cfg *ServerConfig) error {
 func ValidatePort(port int) error {
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("port must be between 1 and 65535, got %d", port)
+	}
+	return nil
+}
+
+// validateBrokerURL checks that s is a well-formed http or https URL with a
+// host component. This is structural validation only — it does NOT verify
+// that the host resolves, is reachable, or actually runs a SEMP endpoint.
+// Those are deliberately runtime concerns surfaced on the first tool call.
+// Both http and https are permitted; production-mode https-only enforcement
+// will be added with the dev/prod flag from Story 1B.
+func validateBrokerURL(s string) error {
+	u, err := url.Parse(s)
+	if err != nil {
+		return fmt.Errorf("url is not a valid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("url scheme must be http or https, got %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("url must include a host, got %q", s)
 	}
 	return nil
 }
@@ -298,4 +468,3 @@ func applyEnvOverrides(cfg *ServerConfig) error {
 	}
 	return nil
 }
-

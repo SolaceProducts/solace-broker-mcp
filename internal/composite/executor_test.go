@@ -585,7 +585,7 @@ func TestExecute_GetQueueMetrics_NotFound(t *testing.T) {
 	client := newMockClient()
 	client.errors["getMsgVpnQueue"] = &sempv2.SEMPError{
 		Operation:  "getMsgVpnQueue",
-		StatusCode: 404,
+		StatusCode: 400,
 		Body:       `{"meta":{"error":{"code":400,"description":"Queue not found","status":"NOT_FOUND"}}}`,
 	}
 
@@ -604,8 +604,8 @@ func TestExecute_GetQueueMetrics_NotFound(t *testing.T) {
 	var sempErr *sempv2.SEMPError
 	if !errors.As(err, &sempErr) {
 		t.Errorf("expected SEMPError in error chain, got: %v", err)
-	} else if sempErr.StatusCode != 404 {
-		t.Errorf("expected status code 404, got %d", sempErr.StatusCode)
+	} else if sempErr.StatusCode != 400 {
+		t.Errorf("expected status code 400, got %d", sempErr.StatusCode)
 	}
 }
 
@@ -651,7 +651,7 @@ func TestExecute_GetClientDetails_NotFound(t *testing.T) {
 	client := newMockClient()
 	client.errors["getMsgVpnClient"] = &sempv2.SEMPError{
 		Operation:  "getMsgVpnClient",
-		StatusCode: 404,
+		StatusCode: 400,
 		Body:       `{"meta":{"error":{"code":400,"description":"Client not found","status":"NOT_FOUND"}}}`,
 	}
 
@@ -670,8 +670,8 @@ func TestExecute_GetClientDetails_NotFound(t *testing.T) {
 	var sempErr *sempv2.SEMPError
 	if !errors.As(err, &sempErr) {
 		t.Errorf("expected SEMPError in error chain, got: %v", err)
-	} else if sempErr.StatusCode != 404 {
-		t.Errorf("expected status code 404, got %d", sempErr.StatusCode)
+	} else if sempErr.StatusCode != 400 {
+		t.Errorf("expected status code 400, got %d", sempErr.StatusCode)
 	}
 }
 

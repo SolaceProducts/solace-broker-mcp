@@ -26,15 +26,18 @@ Create a `broker-config.yaml` file in the repo root (this file is gitignored):
 brokers:
   my-broker:
     url: "http://my-broker.example.com:8080"
-    env_prefix: "MY_BROKER"
     auth:
       method: basic
+      username: ${MY_BROKER_USERNAME}
+      password: ${MY_BROKER_PASSWORD}
 ```
 
 Each broker needs:
-- `url` — the SEMP management API base URL
-- `env_prefix` — prefix for credential environment variables (uppercase letters, numbers, underscores only)
+- `url` — the SEMP management API base URL (hardcode or use `${VAR_NAME}` for env var)
 - `auth.method` — `basic` (only supported method currently)
+- `auth.username` / `auth.password` — credentials (use `${VAR_NAME}` to keep secrets out of YAML)
+
+Any field can use `${VAR_NAME}` syntax to reference environment variables. The server replaces these with actual values before parsing. Fields without `${...}` are used as-is.
 
 You can configure multiple brokers:
 
@@ -42,14 +45,16 @@ You can configure multiple brokers:
 brokers:
   dev:
     url: "http://dev-broker.example.com:8080"
-    env_prefix: "DEV"
     auth:
       method: basic
+      username: ${DEV_USERNAME}
+      password: ${DEV_PASSWORD}
   staging:
-    url: "http://staging-broker.example.com:8080"
-    env_prefix: "STAGING"
+    url: ${STAGING_URL}
     auth:
       method: basic
+      username: ${STAGING_USERNAME}
+      password: ${STAGING_PASSWORD}
 ```
 
 ### 3. Set up credentials
@@ -61,9 +66,7 @@ MY_BROKER_USERNAME=admin
 MY_BROKER_PASSWORD=admin
 ```
 
-The naming convention is `{ENV_PREFIX}_USERNAME` and `{ENV_PREFIX}_PASSWORD`. For multiple brokers, add credentials for each using their `env_prefix`.
-
-The server automatically loads the `.env` file on startup. You can also set environment variables directly (e.g., in CI/CD) — they take precedence over `.env` values.
+The `.env` file is loaded automatically on startup. You can also set environment variables directly (e.g., in CI/CD) — they take precedence over `.env` values. Any `${VAR_NAME}` in the YAML config will be replaced with the corresponding environment variable.
 
 ### 4. Run the server
 

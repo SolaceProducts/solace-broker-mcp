@@ -12,13 +12,13 @@ These must never appear in log output, in any environment:
 |---|---|
 | SEMP passwords | `AuthConfig.Password`, `HTTPClient.password` |
 | SEMP usernames | `AuthConfig.Username`, `HTTPClient.username` |
-| SEMP bearer tokens | `AuthConfig.Token` |
+| SEMP bearer tokens | `AuthConfig.Token`, `HTTPClient.token` |
 | Raw `Authorization` header values | Built in `HTTPClient.Execute()` |
 | TLS private keys | If we ever load them |
 | URLs with embedded credentials | `http://user:pass@host` patterns |
 | Full broker config maps | `map[string]*BrokerConfig` contains credentials via `AuthConfig` |
 
-**What to log instead:** auth method (`basic`/`bearer`), env_prefix source, broker alias, broker URL (without credentials).
+**What to log instead:** auth method (`basic`/`bearer`), broker alias, broker URL (without credentials).
 
 ---
 
@@ -45,8 +45,8 @@ Never `fmt.Sprintf` into the message string with external data. Always `slog.Str
 
 ### Rule 2: Credential-carrying types must implement `slog.LogValuer`
 
-- `AuthConfig` — expose only `Method`
-- `BrokerConfig` — expose `URL`, `TLSSkipVerify`, `EnvPrefix`, `Auth.Method`
+- `AuthConfig` — expose only `Mode`
+- `BrokerConfig` — expose `URL`, `InsecureSkipVerify`, `Auth.Mode`
 - `HTTPClient` — lower risk (unexported fields) but should still get `LogValuer` for defense in depth
 - When Story 1B adds OAuth config, that struct gets `LogValuer` too
 
