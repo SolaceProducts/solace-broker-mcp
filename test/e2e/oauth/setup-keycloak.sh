@@ -108,7 +108,7 @@ echo "Step 5: Testing OAuth token endpoint..."
 TOKEN_RESPONSE=$(curl -s -X POST "${TOKEN_ENDPOINT}" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "grant_type=client_credentials" \
-    -d "client_id=mcp-client" \
+    -d "client_id=mcp-client-confidential" \
     -d "client_secret=${CLIENT_SECRET}" \
     -d "scope=solace:read solace:write")
 
@@ -204,33 +204,7 @@ update_env_var "OAUTH_TOKEN_URL" "${TOKEN_ENDPOINT}" "${MCP_SERVER_ENV}"
 echo "✓ MCP server .env updated"
 
 # -----------------------------------------------------------------------------
-# Step 8: Configure Trusted Hosts for Dynamic Client Registration
-# -----------------------------------------------------------------------------
-echo ""
-echo "Step 8: Configuring trusted hosts..."
-
-# Get Docker bridge IP and Terraform outputs
-DOCKER_BRIDGE_IP=$(docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null || echo "172.17.0.1")
-KEYCLOAK_PORT=$(terraform output -raw keycloak_port)
-REALM_NAME=$(terraform output -raw realm_name)
-KEYCLOAK_ADMIN_USER=$(terraform output -raw keycloak_admin_username)
-KEYCLOAK_ADMIN_PASSWORD=$(terraform output -raw keycloak_admin_password)
-
-# Get admin token and configure trusted hosts
-ADMIN_TOKEN=$(curl -s -X POST "http://localhost:${KEYCLOAK_PORT}/realms/master/protocol/openid-connect/token" \
-  -d "username=${KEYCLOAK_ADMIN_USER}" -d "password=${KEYCLOAK_ADMIN_PASSWORD}" -d "grant_type=password" -d "client_id=admin-cli" | jq -r '.access_token')
-
-if [ "$ADMIN_TOKEN" != "null" ] && [ -n "$ADMIN_TOKEN" ]; then
-  curl -s -X PUT "http://localhost:${KEYCLOAK_PORT}/admin/realms/${REALM_NAME}/client-registration/default/trusted-hosts" \
-    -H "Authorization: Bearer ${ADMIN_TOKEN}" -H "Content-Type: application/json" \
-    -d '{"name":"Trusted Hosts","providerId":"trusted-hosts","config":{"host-sending-registration-request-must-match":["true"],"trusted-hosts":["'${DOCKER_BRIDGE_IP}'","localhost","127.0.0.1"]}}' > /dev/null
-  echo "✓ Trusted hosts configured: ${DOCKER_BRIDGE_IP}, localhost, 127.0.0.1"
-else
-  echo "⚠ Warning: Could not configure trusted hosts. Add manually: ${DOCKER_BRIDGE_IP}"
-fi
-
-# -----------------------------------------------------------------------------
-# Step 9: Retrieve Test User Credentials
+# Step 8: Retrieve Test User Credentials
 # -----------------------------------------------------------------------------
 TEST_USER_USERNAME=$(terraform output -raw test_user_username)
 TEST_USER_PASSWORD=$(terraform output -raw test_user_password)
@@ -250,10 +224,11 @@ echo "  • Admin console: http://localhost:8090/admin (admin/admin)"
 echo "  • Realm: solace"
 echo ""
 echo "Phase 1 (Client Credentials):"
-echo "  • Client ID: mcp-client"
+echo "  • Client ID: mcp-client-confidential"
 echo "  • Token endpoint: ${TOKEN_ENDPOINT}"
 echo ""
 echo "Phase 2 (Authorization Code + PKCE):"
+echo "  • Client ID: mcp-client"
 echo "  • Test user: ${TEST_USER_USERNAME}"
 echo "  • Password: ${TEST_USER_PASSWORD}"
 echo "  • Authorization endpoint: ${AUTHORIZATION_ENDPOINT}"

@@ -50,52 +50,47 @@ resource "keycloak_openid_client_scope" "solace_write" {
   gui_order              = 2
 }
 
-# Create a dedicated client scope for audience claim
-# This ensures ALL clients (including dynamically registered ones) get the audience claim
-resource "keycloak_openid_client_scope" "mcp_audience" {
-  realm_id               = keycloak_realm.solace.id
-  name                   = "mcp-server-audience"
-  description            = "Adds audience claim for MCP server validation"
-  include_in_token_scope = true
-  gui_order              = 3
-}
 
-# Add Audience Mapper to the client scope (not to a specific client)
-# This applies to ALL clients that use this scope, including DCR clients
-resource "keycloak_openid_audience_protocol_mapper" "mcp_audience_mapper" {
-  realm_id                 = keycloak_realm.solace.id
-  client_scope_id          = keycloak_openid_client_scope.mcp_audience.id
-  name                     = "solace-mcp-audience-mapper"
-  included_custom_audience = var.mcp_server_audience
-  add_to_access_token      = true
-}
-
-# Assign custom scopes as default for all clients in the realm (including DCR)
-resource "keycloak_realm_default_client_scopes" "solace_default_scopes" {
-  realm_id = keycloak_realm.solace.id
-
-  default_scopes = [
-    keycloak_openid_client_scope.solace_read.name,
-    keycloak_openid_client_scope.solace_write.name,
-    keycloak_openid_client_scope.mcp_audience.name,
-  ]
-}
-
-# Create MCP Client (with client credentials grant)
-resource "keycloak_openid_client" "mcp_client" {
+# =============================================================================
+# Phase 1: Confidential Client (Client Credentials Flow)
+# =============================================================================
+# This client is used for service-to-service authentication
+# Uses client_id + client_secret to obtain access tokens
+resource "keycloak_openid_client" "mcp_client_confidential" {
   realm_id  = keycloak_realm.solace.id
-  client_id = var.mcp_client_id
-  name      = "MCP Client"
+  client_id = "${var.mcp_client_id}-confidential"
+  name      = "MCP Client (Confidential)"
   enabled   = true
 
-  # Access type: confidential (enables client authentication)
+  # Access type: confidential (requires client secret)
   access_type = "CONFIDENTIAL"
+
+  # Grant types
+  standard_flow_enabled        = false  # Disable authorization code flow
+  implicit_flow_enabled        = false  # Disable implicit flow
+  direct_access_grants_enabled = false  # Disable direct access grants
+  service_accounts_enabled     = true   # Enable client credentials flow
+}
+
+# =============================================================================
+# Phase 2: Public Client (Authorization Code + PKCE Flow)
+# =============================================================================
+# This client is used for browser-based authentication (MCP clients like Claude Desktop)
+# Uses Authorization Code + PKCE without client secret
+resource "keycloak_openid_client" "mcp_client_public" {
+  realm_id  = keycloak_realm.solace.id
+  client_id = var.mcp_client_id
+  name      = "MCP Client (Public)"
+  enabled   = true
+
+  # Access type: public (for browser-based OAuth with PKCE, no client secret)
+  access_type = "PUBLIC"
 
   # Grant types
   standard_flow_enabled        = true   # Enable authorization code flow for browser-based auth
   implicit_flow_enabled        = false  # Disable implicit flow (deprecated in OAuth 2.1)
   direct_access_grants_enabled = false  # Disable direct access grants
-  service_accounts_enabled     = true   # Keep client credentials for backward compatibility
+  service_accounts_enabled     = false  # Public clients cannot use service accounts
 
   # Redirect URIs for browser-based OAuth flow
   # Claude MCP client uses these URIs to receive authorization codes
@@ -108,16 +103,44 @@ resource "keycloak_openid_client" "mcp_client" {
   pkce_code_challenge_method = "S256"  # Use SHA-256 for PKCE
 }
 
-# Assign custom scopes to the MCP client
-resource "keycloak_openid_client_default_scopes" "mcp_client_scopes" {
+# Assign custom scopes to the confidential client
+resource "keycloak_openid_client_default_scopes" "mcp_client_confidential_scopes" {
   realm_id  = keycloak_realm.solace.id
-  client_id = keycloak_openid_client.mcp_client.id
+  client_id = keycloak_openid_client.mcp_client_confidential.id
 
   default_scopes = [
     keycloak_openid_client_scope.solace_read.name,
     keycloak_openid_client_scope.solace_write.name,
-    keycloak_openid_client_scope.mcp_audience.name,
   ]
+}
+
+# Assign custom scopes to the public client
+resource "keycloak_openid_client_default_scopes" "mcp_client_public_scopes" {
+  realm_id  = keycloak_realm.solace.id
+  client_id = keycloak_openid_client.mcp_client_public.id
+
+  default_scopes = [
+    keycloak_openid_client_scope.solace_read.name,
+    keycloak_openid_client_scope.solace_write.name,
+  ]
+}
+
+# Add audience mapper to the confidential client
+resource "keycloak_openid_audience_protocol_mapper" "mcp_client_confidential_audience" {
+  realm_id                 = keycloak_realm.solace.id
+  client_id                = keycloak_openid_client.mcp_client_confidential.id
+  name                     = "solace-mcp-audience-confidential"
+  included_custom_audience = var.mcp_server_audience
+  add_to_access_token      = true
+}
+
+# Add audience mapper to the public client
+resource "keycloak_openid_audience_protocol_mapper" "mcp_client_public_audience" {
+  realm_id                 = keycloak_realm.solace.id
+  client_id                = keycloak_openid_client.mcp_client_public.id
+  name                     = "solace-mcp-audience-public"
+  included_custom_audience = var.mcp_server_audience
+  add_to_access_token      = true
 }
 
 # Create a test user for Phase 2 (Authorization Code + PKCE) testing

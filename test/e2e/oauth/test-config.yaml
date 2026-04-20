@@ -26,7 +26,7 @@ client_auth:
 # The OAuth test doesn't actually connect to the broker.
 brokers:
   test-broker:
-    url: http://192.168.132.21:8080
+    url: http://localhost:8080
     env_prefix: TEST_BROKER
     auth:
       method: basic

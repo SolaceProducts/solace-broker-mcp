@@ -32,7 +32,7 @@ Integration test for OAuth authentication middleware using real Keycloak OIDC pr
 
 ## What It Tests
 
-The integration test verifies the complete OAuth authentication flow:
+The integration test verifies **Phase 1: Client Credentials** flow:
 
 1. **Token Acquisition**: Gets a real JWT access token from Keycloak using client credentials grant
 2. **Server Startup**: Starts the MCP server with OAuth middleware enabled
@@ -44,6 +44,45 @@ This ensures that:
 - MCP server can validate JWT signatures using JWKS
 - OAuth middleware correctly authenticates requests
 - The full authentication flow works end-to-end
+
+## OAuth Flows
+
+This setup supports two OAuth flows:
+
+### Phase 1: Client Credentials (Service-to-Service)
+- **Client ID:** `mcp-client-confidential`
+- **Type:** Confidential client (requires client secret)
+- **Use Case:** Automated testing, backend service-to-service authentication
+- **Grant Type:** `client_credentials`
+
+### Phase 2: Authorization Code + PKCE (Browser-Based)
+- **Client ID:** `mcp-client`
+- **Type:** Public client (no client secret)
+- **Use Case:** MCP clients like Claude Desktop
+- **Grant Type:** `authorization_code` with PKCE
+- **Test Credentials:**
+  - Username: `testuser`
+  - Password: `testpass123`
+
+## Configuring Claude Desktop
+
+To use this OAuth server with Claude Desktop, add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "solace-broker": {
+      "command": "/path/to/solace-broker-mcp",
+      "args": ["--config", "/path/to/config.yaml"],
+      "oauth": {
+        "client_id": "mcp-client"
+      }
+    }
+  }
+}
+```
+
+**Important:** Use `mcp-client` (public client) for Claude Desktop, NOT `mcp-client-confidential`.
 
 ## Cleanup
 

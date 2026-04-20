@@ -9,13 +9,18 @@ output "realm_name" {
 }
 
 output "mcp_client_id" {
-  description = "Client ID for the MCP client"
-  value       = keycloak_openid_client.mcp_client.client_id
+  description = "Client ID for the MCP public client (Phase 2: Authorization Code + PKCE)"
+  value       = keycloak_openid_client.mcp_client_public.client_id
+}
+
+output "mcp_client_confidential_id" {
+  description = "Client ID for the MCP confidential client (Phase 1: Client Credentials)"
+  value       = keycloak_openid_client.mcp_client_confidential.client_id
 }
 
 output "mcp_client_secret" {
-  description = "Client secret for the MCP client (sensitive)"
-  value       = keycloak_openid_client.mcp_client.client_secret
+  description = "Client secret for the MCP confidential client (sensitive)"
+  value       = keycloak_openid_client.mcp_client_confidential.client_secret
   sensitive   = true
 }
 
@@ -45,12 +50,12 @@ output "audience" {
 }
 
 output "test_token_command" {
-  description = "Curl command to get a test access token"
+  description = "Curl command to get a test access token (Phase 1: Client Credentials)"
   value       = <<-EOT
     curl -X POST http://localhost:${var.keycloak_port}/realms/${var.realm_name}/protocol/openid-connect/token \
       -H "Content-Type: application/x-www-form-urlencoded" \
       -d "grant_type=client_credentials" \
-      -d "client_id=${var.mcp_client_id}" \
+      -d "client_id=${var.mcp_client_id}-confidential" \
       -d "client_secret=<USE_OUTPUT_mcp_client_secret>" \
       -d "scope=solace:read solace:write"
   EOT

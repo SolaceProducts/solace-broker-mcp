@@ -51,15 +51,16 @@ cd "${TERRAFORM_DIR}"
 ISSUER=$(terraform output -raw issuer)
 AUDIENCE=$(terraform output -raw audience)
 TOKEN_ENDPOINT=$(terraform output -raw token_endpoint)
-CLIENT_ID=$(terraform output -raw mcp_client_id)
+CLIENT_ID=$(terraform output -raw mcp_client_confidential_id)
 CLIENT_SECRET=$(terraform output -raw mcp_client_secret)
 
 echo "✓ Retrieved OAuth configuration"
 echo "  Issuer: ${ISSUER}"
+echo "  Client: ${CLIENT_ID} (confidential client for client credentials flow)"
 
-# Get access token from Keycloak
+# Get access token from Keycloak (Phase 1: Client Credentials)
 echo ""
-echo "Getting OAuth token from Keycloak..."
+echo "Getting OAuth token from Keycloak (client credentials flow)..."
 TOKEN_RESPONSE=$(curl -s -X POST "${TOKEN_ENDPOINT}" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "grant_type=client_credentials" \

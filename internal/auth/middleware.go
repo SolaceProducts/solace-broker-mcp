@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -26,8 +27,14 @@ func NewAuthMiddleware(cfg *config.ServerConfig, next http.Handler) (http.Handle
 		return nil, fmt.Errorf("failed to create token verifier: %w", err)
 	}
 
-	// Construct the metadata URL using the same logic as NewProtectedResourceMetadataHandler
-	metadataURL := cfg.ClientAuth.ResourceURL
+	// Construct the metadata URL at the server root
+	// Extract base URL (scheme://host) from resource URL
+	var metadataURL string
+	if cfg.ClientAuth.ResourceURL != "" {
+		if parsedURL, err := url.Parse(cfg.ClientAuth.ResourceURL); err == nil {
+			metadataURL = fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host)
+		}
+	}
 	if metadataURL == "" {
 		scheme := "http"
 		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
