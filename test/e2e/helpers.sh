@@ -150,18 +150,21 @@ stop_server() {
 write_config() {
     local config_file="$1"
     # Generate broker config from .env-derived values so ports stay in sync.
+    # Credentials use ${VAR_NAME} substitution — resolved by the server via ENV_FILE.
     cat > "$config_file" <<EOF
 brokers:
   broker-a:
     url: "${BROKER_A_URL}"
-    env_prefix: "E2E_A"
     auth:
-      method: basic
+      mode: basic
+      username: "\${E2E_A_USERNAME}"
+      password: "\${E2E_A_PASSWORD}"
   broker-b:
     url: "${BROKER_B_URL}"
-    env_prefix: "E2E_B"
     auth:
-      method: basic
+      mode: basic
+      username: "\${E2E_B_USERNAME}"
+      password: "\${E2E_B_PASSWORD}"
 EOF
     log_info "Config written to $config_file (broker-a=$BROKER_A_URL, broker-b=$BROKER_B_URL)"
 }
