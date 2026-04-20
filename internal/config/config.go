@@ -52,7 +52,6 @@ var validLogLevels = []string{"debug", "info", "warn", "error"}
 type BrokerConfig struct {
 	URL                string     `yaml:"url"`                  // SEMP API base URL (e.g., "https://broker:1943")
 	InsecureSkipVerify bool       `yaml:"insecure_skip_verify"` // skip TLS cert verification (dev only, self-signed certs)
-	EnvPrefix          string     `yaml:"env_prefix"`      // prefix for credential env vars ({EnvPrefix}_USERNAME, {EnvPrefix}_PASSWORD)
 	Auth               AuthConfig `yaml:"auth"`                 // authentication config
 }
 
@@ -90,7 +89,6 @@ func (b BrokerConfig) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("url", b.URL),
 		slog.Bool("insecure_skip_verify", b.InsecureSkipVerify),
-		slog.String("env_prefix", b.EnvPrefix),
 		slog.String("auth_mode", b.Auth.Mode),
 	)
 }

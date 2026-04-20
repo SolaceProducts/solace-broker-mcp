@@ -16,7 +16,7 @@ solace-broker-mcp/
 │   │   └── defaults.go            # All default values, assumption annotations
 │   │
 │   ├── config/
-│   │   └── config.go              # YAML config, env_prefix credentials, validation
+│   │   └── config.go              # YAML config, env var substitution, validation
 │   │
 │   ├── semp/
 │   │   ├── broker.go              # BrokerClient — holds per-broker sempv2 client
@@ -53,7 +53,7 @@ graph TB
     end
 
     subgraph "internal/config"
-        CONFIG["config.go<br/>YAML loading, env_prefix credentials, validation"]
+        CONFIG["config.go<br/>YAML loading, env var substitution, validation"]
     end
 
     subgraph "internal/defaults"
@@ -248,6 +248,6 @@ Completely independent — load on prod-us does not affect prod-eu.
 | **BrokerClient** | sempv2 client | Tools, steps, MCP protocol |
 | **sempv2.HTTPClient** | HTTP calls, auth headers, JSON parsing | Tools, brokers, MCP protocol |
 | **BrokerPool** | Map of configs, lazy client creation, RWMutex | Tools, MCP protocol, HTTP details |
-| **Config** | YAML parsing, env_prefix credential resolution, validation | Everything else |
+| **Config** | YAML parsing, env var substitution (${VAR_NAME}), validation | Everything else |
 
 ---

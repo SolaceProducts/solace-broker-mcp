@@ -27,6 +27,7 @@ client_auth:
 brokers:
   test-broker:
     url: http://localhost:8080
-    env_prefix: TEST_BROKER
     auth:
-      method: basic
+      mode: basic
+      username: ${TEST_BROKER_USERNAME}
+      password: ${TEST_BROKER_PASSWORD}

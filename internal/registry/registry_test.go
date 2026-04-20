@@ -18,7 +18,6 @@ func newTestPool() *semp.BrokerPool {
 		Brokers: map[string]*config.BrokerConfig{
 			"dev": {
 				URL:       "http://localhost:8081",
-				EnvPrefix: "DEV",
 				Auth: config.AuthConfig{
 					Mode:     "basic",
 					Username: "admin",
@@ -27,7 +26,6 @@ func newTestPool() *semp.BrokerPool {
 			},
 			"prod": {
 				URL:       "http://localhost:8082",
-				EnvPrefix: "PROD",
 				Auth: config.AuthConfig{
 					Mode:     "basic",
 					Username: "admin",
