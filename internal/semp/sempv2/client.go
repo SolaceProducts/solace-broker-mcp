@@ -157,7 +157,7 @@ func (c *HTTPClient) buildURL(op *Operation, args map[string]any) string {
 	for key, value := range args {
 		placeholder := "{" + key + "}"
 		if strings.Contains(path, placeholder) {
-			path = strings.ReplaceAll(path, placeholder, fmt.Sprintf("%v", value))
+			path = strings.ReplaceAll(path, placeholder, url.PathEscape(fmt.Sprintf("%v", value)))
 		}
 	}
 

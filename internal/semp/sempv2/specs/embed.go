@@ -8,7 +8,7 @@ package specs
 
 import "embed"
 
-// FS contains the embedded OpenAPI JSON spec files (monitor, config, action).
+// FS contains the embedded OpenAPI JSON spec files.
 //
 //go:embed *.json
 var FS embed.FS

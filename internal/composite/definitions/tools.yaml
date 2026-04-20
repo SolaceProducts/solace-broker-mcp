@@ -33,3 +33,77 @@ tools:
           restDeliveryPointName: "{{.Params.restDeliveryPointName}}"
     result:
       strategy: collect
+
+  - name: get-queue-metrics
+    description: >
+      Get detailed metrics for a specific queue including message depth,
+      throughput rates, spool usage, and configuration. Use this to diagnose
+      queue backlogs and identify whether consumers are bound and active.
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the queue"
+      - name: queueName
+        type: string
+        required: true
+        description: "The name of the queue"
+    steps:
+      - id: queueMetrics
+        operation: monitor/getMsgVpnQueue
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          queueName: "{{.Params.queueName}}"
+    result:
+      strategy: collect
+
+  - name: get-client-details
+    description: >
+      Get performance metrics for a specific connected client including message
+      rates, slow subscriber status, and egress discard counts. Use this to
+      diagnose slow consumer issues and backpressure problems.
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN the client is connected to"
+      - name: clientName
+        type: string
+        required: true
+        description: "The name of the client connection"
+    steps:
+      - id: clientDetails
+        operation: monitor/getMsgVpnClient
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          clientName: "{{.Params.clientName}}"
+    result:
+      strategy: collect
+
+  - name: list-client-subscriptions
+    description: >
+      List topic subscriptions for a specific client. Use this to understand
+      what topics a client is subscribed to and diagnose subscription patterns.
+      SEMP pagination metadata is included in the response if more results exist.
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN the client is connected to"
+      - name: clientName
+        type: string
+        required: true
+        description: "The name of the client connection"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of subscriptions to return (default 100, max 500)"
+    steps:
+      - id: subscriptions
+        operation: monitor/getMsgVpnClientSubscriptions
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          clientName: "{{.Params.clientName}}"
+          count: '{{with index .Params "maxResults"}}{{.}}{{else}}100{{end}}'
+    result:
+      strategy: collect
