@@ -24,12 +24,22 @@ import (
 // ServerConfig holds the complete MCP server configuration, including all
 // configured brokers and SEMP client settings.
 type ServerConfig struct {
-	Brokers     map[string]*BrokerConfig // broker alias → config
-	SEMP        SEMPConfig               // SEMP client settings
-	Port        int                      // HTTP port the MCP server listens on (1-65535)
+	Brokers           map[string]*BrokerConfig // broker alias → config
+	SEMP              SEMPConfig               // SEMP client settings
+	Port              int                      // HTTP port the MCP server listens on
 	LogLevel    string                   // slog level name: "debug", "info", "warn", "error"
-	TLSCertFile string                   // path to TLS certificate file (optional, enables HTTPS)
-	TLSKeyFile  string                   // path to TLS private key file (optional, requires TLSCertFile)
+	DevelopmentMode   bool                     // use static dev token if true
+	ClientAuth        ClientAuthConfig         // authentication config for mcp client to server interactions
+	TLSCertFile string                         // path to TLS certificate file (optional, enables HTTPS)
+	TLSKeyFile  string                     // path to TLS private key file (optional, requires TLSCertFile)
+}
+
+type ClientAuthConfig struct {
+	Issuer         string   `yaml:"issuer"`          // IdP issuer URL - required when development_mode: false
+	Audience       string   `yaml:"audience"`        // Expected 'aud' claim value — required when development_mode: false
+	RequiredScopes []string `yaml:"required_scopes"` // Optional — if set, token must contain all listed scopes
+	DevToken       string   `yaml:"dev_token"`       // Static token for dev — only used when development_mode: true
+	ResourceURL    string   `yaml:"resource_url"`    // OAuth resource URL (e.g., "https://mcp.example.com/mcp") - defaults to localhost if not set
 }
 
 // validLogLevels is the allowlist of slog levels operators may configure.
@@ -83,6 +93,18 @@ func (b BrokerConfig) LogValue() slog.Value {
 	)
 }
 
+// LogValue implements slog.LogValuer for ClientAuthConfig. It exposes OAuth
+// configuration (issuer, audience, resource URL, scopes) but excludes DevToken
+// to prevent credential leaks in log output. See docs/secure-logging-rules.md Rule 2.
+func (c ClientAuthConfig) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("issuer", c.Issuer),
+		slog.String("audience", c.Audience),
+		slog.String("resource_url", c.ResourceURL),
+		slog.Any("required_scopes", c.RequiredScopes),
+	)
+}
+
 // SEMPConfig holds settings that control how the MCP server communicates with
 // brokers over the SEMP API. The rate-limit and retry fields below are
 // defined here but not yet consumed -- they will be wired up in Story 5 when
@@ -116,6 +138,8 @@ type yamlConfig struct {
 	SEMP        SEMPConfig               `yaml:"semp"`
 	Port        int                      `yaml:"port"`
 	LogLevel    string                   `yaml:"log_level"`
+	DevelopmentMode bool                     `yaml:"development_mode"`
+	ClientAuth      ClientAuthConfig         `yaml:"client_auth"`
 	TLSCertFile string                   `yaml:"tls_cert_file"`
 	TLSKeyFile  string                   `yaml:"tls_key_file"`
 }
@@ -200,6 +224,8 @@ func LoadConfig(path string) (*ServerConfig, error) {
 		SEMP:        raw.SEMP,
 		Port:        raw.Port,
 		LogLevel:    raw.LogLevel,
+		DevelopmentMode: raw.DevelopmentMode,
+		ClientAuth: raw.ClientAuth,
 		TLSCertFile: raw.TLSCertFile,
 		TLSKeyFile:  raw.TLSKeyFile,
 	}
@@ -370,6 +396,36 @@ func validate(cfg *ServerConfig) error {
 		errs = append(errs, fmt.Errorf("semp.retry_max_interval must be > 0, got %s", cfg.SEMP.RetryMaxInterval))
 	} else if cfg.SEMP.RetryMinInterval > 0 && cfg.SEMP.RetryMaxInterval < cfg.SEMP.RetryMinInterval {
 		errs = append(errs, fmt.Errorf("semp.retry_max_interval (%s) must be >= semp.retry_min_interval (%s)", cfg.SEMP.RetryMaxInterval, cfg.SEMP.RetryMinInterval))
+	}
+
+	// Validate client authentication configuration based on development mode.
+	// Note that no validation is needed when development mode is enabled, as DevToken
+	// can be set or empty. When DevToken is empty, all requests pass through
+	if !cfg.DevelopmentMode {
+		// Production mode: require JWT validation fields
+		if cfg.ClientAuth.Issuer == "" {
+			errs = append(errs, fmt.Errorf("client_auth.issuer is required when development_mode is false"))
+		}
+		if cfg.ClientAuth.Audience == "" {
+			errs = append(errs, fmt.Errorf("client_auth.audience is required when development_mode is false"))
+		}
+		if cfg.ClientAuth.ResourceURL == "" {
+			errs = append(errs, fmt.Errorf("client_auth.resource_url is required when development_mode is false"))
+		}
+	}
+
+	// Validate issuer structure if set
+	if cfg.ClientAuth.Issuer != "" {
+		if err := validateBrokerURL(cfg.ClientAuth.Issuer); err != nil {
+			errs = append(errs, fmt.Errorf("client_auth.issuer: %w", err))
+		}
+	}
+
+	// Validate resource_url structure if set
+	if cfg.ClientAuth.ResourceURL != "" {
+		if err := validateBrokerURL(cfg.ClientAuth.ResourceURL); err != nil {
+			errs = append(errs, fmt.Errorf("client_auth.resource_url: %w", err))
+		}
 	}
 
 	// TLS: both cert and key must be provided together, or neither.

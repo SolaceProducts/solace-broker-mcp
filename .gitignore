@@ -38,3 +38,9 @@ broker-config.yaml
 # E2E test config (not secrets — safe to track)
 !test/e2e/.env
 !test/e2e/broker-config.yaml
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
