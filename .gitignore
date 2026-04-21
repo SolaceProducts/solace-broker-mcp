@@ -33,3 +33,9 @@ Thumbs.db
 # Local config and secrets
 .env
 broker-config.yaml
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup

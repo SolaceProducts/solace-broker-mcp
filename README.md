@@ -109,9 +109,10 @@ tls_key_file: "/etc/certs/server-key.pem"
 brokers:
   my-broker:
     url: "http://broker:8080"
-    env_prefix: "MY_BROKER"
     auth:
-      method: basic
+      mode: basic
+      username: "${MY_BROKER_USERNAME}"
+      password: "${MY_BROKER_PASSWORD}"
 ```
 
 When both are configured, the server starts with HTTPS. When neither is configured, plain HTTP. Providing only one is a startup error.
@@ -137,7 +138,7 @@ solace-broker-mcp/
 ├── cmd/server/          # Entry point — starts the MCP server
 ├── internal/
 │   ├── defaults/        # Default values with assumption annotations
-│   ├── config/          # YAML config loading, env_prefix credentials
+│   ├── config/          # YAML config loading, env var substitution, validation
 │   ├── composite/       # YAML-driven composite tool engine (loader, executor)
 │   ├── registry/        # MCP tool registration, broker resolution, tool call logging
 │   └── semp/            # SEMP client layer (broker pool, HTTP client, spec parser)
