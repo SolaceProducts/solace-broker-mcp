@@ -35,11 +35,11 @@ type ServerConfig struct {
 }
 
 type ClientAuthConfig struct {
-	Issuer         string                       // IdP issuer URL - required when development_mode: false
-	Audience       string                       // Expected 'aud' claim value — required when development_mode: false
-	RequiredScopes []string                     // Optional — if set, token must contain all listed scopes
-	DevToken       string                       // Static token for dev — only used when development_mode: true
-	ResourceURL    string `yaml:"resource_url"` // OAuth resource URL (e.g., "https://mcp.example.com/mcp") - defaults to localhost if not set
+	Issuer         string   `yaml:"issuer"`          // IdP issuer URL - required when development_mode: false
+	Audience       string   `yaml:"audience"`        // Expected 'aud' claim value — required when development_mode: false
+	RequiredScopes []string `yaml:"required_scopes"` // Optional — if set, token must contain all listed scopes
+	DevToken       string   `yaml:"dev_token"`       // Static token for dev — only used when development_mode: true
+	ResourceURL    string   `yaml:"resource_url"`    // OAuth resource URL (e.g., "https://mcp.example.com/mcp") - defaults to localhost if not set
 }
 
 // validLogLevels is the allowlist of slog levels operators may configure.
@@ -411,6 +411,20 @@ func validate(cfg *ServerConfig) error {
 		}
 		if cfg.ClientAuth.ResourceURL == "" {
 			errs = append(errs, fmt.Errorf("client_auth.resource_url is required when development_mode is false"))
+		}
+	}
+
+	// Validate issuer structure if set
+	if cfg.ClientAuth.Issuer != "" {
+		if err := validateBrokerURL(cfg.ClientAuth.Issuer); err != nil {
+			errs = append(errs, fmt.Errorf("client_auth.issuer: %w", err))
+		}
+	}
+
+	// Validate resource_url structure if set
+	if cfg.ClientAuth.ResourceURL != "" {
+		if err := validateBrokerURL(cfg.ClientAuth.ResourceURL); err != nil {
+			errs = append(errs, fmt.Errorf("client_auth.resource_url: %w", err))
 		}
 	}
 

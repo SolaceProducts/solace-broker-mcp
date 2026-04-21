@@ -15,7 +15,7 @@ set -e  # Exit on any error
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TERRAFORM_DIR="${SCRIPT_DIR}/terraform"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
-MCP_SERVER_ENV="${PROJECT_ROOT}/.env"
+MCP_SERVER_ENV="${SCRIPT_DIR}/.env"
 
 echo "========================================"
 echo "Starting Keycloak Setup"

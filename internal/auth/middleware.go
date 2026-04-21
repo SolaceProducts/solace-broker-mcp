@@ -28,21 +28,13 @@ func NewAuthMiddleware(cfg *config.ServerConfig, next http.Handler) (http.Handle
 	}
 
 	// Construct the metadata URL at the server root
-	// Extract base URL (scheme://host) from resource URL
+	// Config validation ensures ResourceURL is well-formed if set
 	var metadataURL string
 	if cfg.ClientAuth.ResourceURL != "" {
-		if parsedURL, err := url.Parse(cfg.ClientAuth.ResourceURL); err == nil {
-			metadataURL = fmt.Sprintf("%s://%s", parsedURL.Scheme, parsedURL.Host)
-		}
+		// Can safely parse — config validation already checked this
+		parsedURL, _ := url.Parse(cfg.ClientAuth.ResourceURL)
+		metadataURL = fmt.Sprintf("%s://%s/.well-known/oauth-protected-resource", parsedURL.Scheme, parsedURL.Host)
 	}
-	if metadataURL == "" {
-		scheme := "http"
-		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
-			scheme = "https"
-		}
-		metadataURL = fmt.Sprintf("%s://localhost:%d", scheme, cfg.Port)
-	}
-	metadataURL += "/.well-known/oauth-protected-resource"
 
 	middleware := sdkauth.RequireBearerToken(verifier, &sdkauth.RequireBearerTokenOptions{
 		ResourceMetadataURL: metadataURL,
@@ -55,18 +47,11 @@ func NewAuthMiddleware(cfg *config.ServerConfig, next http.Handler) (http.Handle
 // NewTokenVerifier creates a TokenVerifier based on the server configuration.
 // In development mode, it returns a static token verifier.
 // In production mode, it uses OIDC/JWT verification with automatic key rotation.
+// cfg has already been validated via config.validate().
 func NewTokenVerifier(cfg *config.ServerConfig) (sdkauth.TokenVerifier, error) {
 	if cfg.DevelopmentMode {
 		slog.Warn("using static dev token — development mode — not for production use")
 		return createStaticTokenVerifier(cfg.ClientAuth.DevToken), nil
-	}
-
-	// Validate required fields for production mode
-	if cfg.ClientAuth.Issuer == "" {
-		return nil, fmt.Errorf("issuer is required in production mode")
-	}
-	if cfg.ClientAuth.Audience == "" {
-		return nil, fmt.Errorf("audience is required in production mode")
 	}
 
 	slog.Info("using JWT token for authentication — production mode")
@@ -94,9 +79,13 @@ func createStaticTokenVerifier(expectedToken string) sdkauth.TokenVerifier {
 // It fetches public keys from the issuer's JWKS endpoint and handles automatic key rotation.
 func createOIDCTokenVerifier(cfg *config.ServerConfig) (sdkauth.TokenVerifier, error) {
 	// Create OIDC provider - fetches .well-known/openid-configuration and JWKS
-	oidcProvider, err := oidc.NewProvider(context.Background(), cfg.ClientAuth.Issuer)
+	// Use a timeout to fail fast if the issuer is unreachable
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	oidcProvider, err := oidc.NewProvider(ctx, cfg.ClientAuth.Issuer)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create OIDC provider: %w", err)
+		return nil, fmt.Errorf("failed to connect to identity provider at %s (is it reachable?): %w", cfg.ClientAuth.Issuer, err)
 	}
 
 	// Create verifier that validates issuer, audience, and signature
@@ -140,22 +129,22 @@ func createOIDCTokenVerifier(cfg *config.ServerConfig) (sdkauth.TokenVerifier, e
 // OAuth 2.0 Protected Resource Metadata (RFC 9728) for the MCP server.
 // This endpoint enables MCP clients to discover the authorization server
 // and initiate browser-based OAuth flows (Authorization Code + PKCE).
+// Returns nil when there's no OAuth configuration to advertise.
 func NewProtectedResourceMetadataHandler(cfg *config.ServerConfig) http.Handler {
 	// Only provide metadata endpoint when JWT validation is active
 	if cfg.DevelopmentMode && cfg.ClientAuth.DevToken == "" {
 		return nil
 	}
 
-	// Use configured resource URL, or fall back to localhost in development mode
-	// (production mode requires resource_url via config validation)
-	resourceURL := cfg.ClientAuth.ResourceURL
-	if resourceURL == "" {
-		scheme := "http"
-		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
-			scheme = "https"
-		}
-		resourceURL = fmt.Sprintf("%s://localhost:%d/mcp", scheme, cfg.Port)
+	// Skip metadata endpoint when there's no issuer configured.
+	// The endpoint's purpose is to advertise the OAuth authorization server,
+	// so serving it with an empty issuer would be misleading to clients.
+	if cfg.ClientAuth.Issuer == "" {
+		return nil
 	}
+
+	// Use configured resource URL (required in production mode via config validation)
+	resourceURL := cfg.ClientAuth.ResourceURL
 
 	// Ensure scopes is always at least an empty slice (not nil) for proper JSON serialization
 	scopes := cfg.ClientAuth.RequiredScopes

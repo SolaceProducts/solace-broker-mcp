@@ -86,7 +86,8 @@ func Test_StaticDevToken(t *testing.T) {
 		Port:            9090,
 		DevelopmentMode: true,
 		ClientAuth: config.ClientAuthConfig{
-			DevToken: validToken,
+			DevToken:    validToken,
+			ResourceURL: "http://localhost:9090/mcp",
 		},
 	}
 
@@ -162,71 +163,21 @@ func Test_StaticDevToken(t *testing.T) {
 	}
 }
 
-// Test_ConfigValidation tests that config validation fails when required fields are missing
-func Test_ConfigValidation(t *testing.T) {
-	tests := []struct {
-		name        string
-		cfg         *config.ServerConfig
-		expectError bool
-		errorMsg    string
-	}{
-		{
-			name: "production mode without issuer",
-			cfg: &config.ServerConfig{
-				Port:            9090,
-				DevelopmentMode: false,
-				ClientAuth: config.ClientAuthConfig{
-					Issuer:   "", // Missing issuer
-					Audience: "test-audience",
-				},
-			},
-			expectError: true,
-			errorMsg:    "issuer",
-		},
-		{
-			name: "production mode without audience",
-			cfg: &config.ServerConfig{
-				Port:            9090,
-				DevelopmentMode: false,
-				ClientAuth: config.ClientAuthConfig{
-					Issuer:   "https://auth.example.com",
-					Audience: "", // Missing audience
-				},
-			},
-			expectError: true,
-			errorMsg:    "audience",
-		},
-		{
-			name: "development mode without issuer - should work",
-			cfg: &config.ServerConfig{
-				Port:            9090,
-				DevelopmentMode: true,
-				ClientAuth: config.ClientAuthConfig{
-					DevToken: "dev-token",
-					Issuer:   "", // Missing but OK in dev mode
-					Audience: "",
-				},
-			},
-			expectError: false,
+// Test_DevelopmentModeFlexibility tests that development mode works without issuer/audience
+func Test_DevelopmentModeFlexibility(t *testing.T) {
+	cfg := &config.ServerConfig{
+		Port:            9090,
+		DevelopmentMode: true,
+		ClientAuth: config.ClientAuthConfig{
+			DevToken: "dev-token",
+			Issuer:   "", // Missing but OK in dev mode
+			Audience: "",
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewAuthMiddleware(tt.cfg, dummyHandler)
-
-			if tt.expectError {
-				if err == nil {
-					t.Errorf("expected error containing %q, got nil", tt.errorMsg)
-				} else if !strings.Contains(err.Error(), tt.errorMsg) {
-					t.Errorf("expected error containing %q, got: %v", tt.errorMsg, err)
-				}
-			} else {
-				if err != nil {
-					t.Errorf("expected no error, got: %v", err)
-				}
-			}
-		})
+	_, err := NewAuthMiddleware(cfg, dummyHandler)
+	if err != nil {
+		t.Errorf("expected no error in development mode without issuer/audience, got: %v", err)
 	}
 }
 
@@ -605,8 +556,9 @@ func Test_NoJWTToken(t *testing.T) {
 		Port:            9090,
 		DevelopmentMode: false,
 		ClientAuth: config.ClientAuthConfig{
-			Issuer:   mock.issuer,
-			Audience: mock.audience,
+			Issuer:      mock.issuer,
+			Audience:    mock.audience,
+			ResourceURL: "http://localhost:9090/mcp",
 		},
 	}
 
@@ -666,10 +618,17 @@ func Test_WWWAuthenticateHeaderFormat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			scheme := "http"
+			if tt.tlsEnabled {
+				scheme = "https"
+			}
 			cfg := &config.ServerConfig{
 				Port:            tt.port,
 				DevelopmentMode: tt.devMode,
-				ClientAuth:      config.ClientAuthConfig{DevToken: tt.devToken},
+				ClientAuth: config.ClientAuthConfig{
+					DevToken:    tt.devToken,
+					ResourceURL: fmt.Sprintf("%s://localhost:%d/mcp", scheme, tt.port),
+				},
 			}
 			if tt.tlsEnabled {
 				cfg.TLSCertFile = "/path/to/cert.pem"
@@ -703,7 +662,7 @@ func Test_WWWAuthenticateHeaderFormat(t *testing.T) {
 				t.Errorf("WWW-Authenticate should contain 'resource_metadata=', got: %q", wwwAuth)
 			}
 
-			scheme := "http"
+			scheme = "http"
 			if tt.expectHTTPS {
 				scheme = "https"
 			}
@@ -762,14 +721,19 @@ func Test_ProtectedResourceMetadata(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			scheme := "http"
+			if tt.tlsEnabled {
+				scheme = "https"
+			}
 			cfg := &config.ServerConfig{
-				Port:        tt.port,
+				Port:            tt.port,
 				DevelopmentMode: tt.devMode,
 				ClientAuth: config.ClientAuthConfig{
 					DevToken:       tt.devToken,
 					Issuer:         tt.issuer,
 					Audience:       "solace-mcp-server",
 					RequiredScopes: tt.scopes,
+					ResourceURL:    fmt.Sprintf("%s://localhost:%d/mcp", scheme, tt.port),
 				},
 			}
 			if tt.tlsEnabled {
@@ -808,7 +772,7 @@ func Test_ProtectedResourceMetadata(t *testing.T) {
 			}
 
 			// Compute expected resource URL
-			scheme := "http"
+			scheme = "http"
 			if tt.tlsEnabled {
 				scheme = "https"
 			}

@@ -12,7 +12,7 @@
 port: 9091
 development_mode: false
 
-# OAuth configuration - values are injected by setup-keycloak.sh into .env
+# OAuth configuration - values are injected by setup-keycloak.sh into test/e2e/oauth/.env
 client_auth:
   issuer: "http://localhost:8090/realms/solace"
   audience: "solace-mcp-server"
