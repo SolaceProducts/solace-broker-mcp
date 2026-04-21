@@ -1,9 +1,28 @@
+# Tool Description Guidelines (for tool implementers — Stories 8-12)
+#
+# Tool descriptions are the primary mechanism by which LLMs select which tool
+# to call. A poor description leads to wrong tool selection, unnecessary tool
+# calls, or missed capabilities.
+#
+# - First sentence: State what the tool returns in plain language
+#   (e.g., "Returns CPU, memory, disk, and spool utilization for the broker")
+# - When to use: Briefly describe the use case or scenario
+#   (e.g., "Use this tool to assess overall broker health during incident triage")
+# - Key parameters: Mention required parameters and what they identify
+#   (e.g., "Requires vpnName to identify the target Message VPN")
+# - What it does NOT do: Clarify scope if confusion with another tool is likely
+#   (e.g., "For per-queue metrics, use get-queue-metrics instead")
+# - Keep it concise: Aim for 2-4 sentences
+# - Avoid jargon where possible: Prefer "message backlog" over "spool utilization"
+
 tools:
   - name: get-rdp-status
     description: >
       Get the operational status of a REST Delivery Point including its
       enabled state, up/down status, client name, client profile, last
       failure reason, queue bindings, and REST consumer status.
+    annotations:
+      readOnly: true
     parameters:
       - name: msgVpnName
         type: string
@@ -39,6 +58,8 @@ tools:
       Get detailed metrics for a specific queue including message depth,
       throughput rates, spool usage, and configuration. Use this to diagnose
       queue backlogs and identify whether consumers are bound and active.
+    annotations:
+      readOnly: true
     parameters:
       - name: msgVpnName
         type: string
@@ -62,6 +83,8 @@ tools:
       Get performance metrics for a specific connected client including message
       rates, slow subscriber status, and egress discard counts. Use this to
       diagnose slow consumer issues and backpressure problems.
+    annotations:
+      readOnly: true
     parameters:
       - name: msgVpnName
         type: string
@@ -85,6 +108,8 @@ tools:
       List topic subscriptions for a specific client. Use this to understand
       what topics a client is subscribed to and diagnose subscription patterns.
       SEMP pagination metadata is included in the response if more results exist.
+    annotations:
+      readOnly: true
     parameters:
       - name: msgVpnName
         type: string

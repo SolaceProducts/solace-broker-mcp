@@ -15,10 +15,10 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite/definitions"
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
-	"github.com/SolaceDev/solace-broker-mcp/internal/registry"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2/specs"
+	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -125,13 +125,13 @@ func main() {
 		slog.Any("broker_aliases", pool.Aliases()))
 
 	// 4. Load embedded composite tool definitions
-	tools, err := composite.LoadTools(definitions.FS, "tools.yaml")
+	compositeTools, err := composite.LoadTools(definitions.FS, "tools.yaml")
 	if err != nil {
 		slog.Error("failed to load composite tools", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 	slog.Info("loaded composite tool definitions",
-		slog.Int("tool_count", len(tools)))
+		slog.Int("tool_count", len(compositeTools)))
 
 	// 5. Create composite executor
 	executor := composite.NewCompositeExecutor(operations)
@@ -142,17 +142,18 @@ func main() {
 		Version: version.Version(),
 	}, nil)
 
-	// 7. Register composite tools
-	reg := registry.NewRegistry(server, pool, executor)
-	if err := reg.RegisterAll(tools); err != nil {
-		slog.Error("failed to register tools", slog.String("error", err.Error()))
-		os.Exit(1)
+	// 7. Create tool manager and register composite tools
+	mgr := tools.NewToolManager(pool)
+	for i := range compositeTools {
+		handler := tools.NewCompositeToolHandler(compositeTools[i], executor)
+		mgr.Register(handler)
 	}
+	tools.RegisterWithServer(mgr, server, pool)
 	slog.Info("registered composite tools",
-		slog.Int("tool_count", len(tools)))
+		slog.Int("tool_count", len(compositeTools)))
 
 	// 8. Register list-brokers discovery tool
-	reg.RegisterListBrokers()
+	tools.RegisterListBrokers(server, pool)
 
 	// 9. Set up HTTP routes
 	mux := buildMux(server)
