@@ -4,6 +4,7 @@
 *.dll
 *.so
 *.dylib
+bin/
 mcp-server
 server
 
@@ -30,6 +31,7 @@ vendor/
 # OS files
 .DS_Store
 Thumbs.db
+*.bak
 
 # Local config and secrets
 .env

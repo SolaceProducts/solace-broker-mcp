@@ -89,3 +89,38 @@ jobs:
       - name: Tear down brokers
         if: always()
         run: docker compose -f test/e2e/docker-compose.yml down -v
+
+  e2e-oauth:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Setup Keycloak
+        run: bash test/e2e/oauth/setup-keycloak.sh
+
+      - name: Run OAuth integration test
+        run: bash test/e2e/oauth/test-oauth.sh
+
+      - name: Keycloak logs (on failure)
+        if: failure()
+        run: docker logs keycloak-dev 2>&1 | tail -100
+
+      - name: MCP server logs (on failure)
+        if: failure()
+        run: cat /tmp/mcp-oauth-test.log 2>/dev/null || echo "No server log found"
+
+      - name: Tear down Keycloak
+        if: always()
+        run: cd test/e2e/oauth && docker compose down -v
