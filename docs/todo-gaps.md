@@ -44,3 +44,89 @@ of relevance to the query. This wastes tokens and reduces LLM response quality.
 **Reason deferred:** Requires design discussion on transformation DSL, field
 selection conventions, and per-tool output contracts. To be addressed when
 tool output quality becomes a measurable concern.
+
+## SOL-147161 Story 21 — Production Deployment Packaging
+
+### systemd service template
+
+**Status:** Deferred
+
+**Story requirement:** Under "Acceptance Criteria" and "Work Breakdown":
+- systemd service template created (broker-mcp-server.service)
+- Includes: ExecStart, Restart policy, Environment file reference
+- User/Group configuration for security
+- Documentation for installation on bare metal/VMs
+
+**Reason deferred:** Bare metal operators can run the binary directly or write
+their own service file. The statically-linked binary has no dependencies and
+handles SIGTERM/SIGINT natively. Add a systemd template (and optionally a
+launchd plist for macOS) when operators request it.
+
+### stdio transport support
+
+**Status:** Deferred (future enhancement)
+
+**Motivation:** Streamable HTTP requires the server to be running before the
+MCP client connects. For laptop users (e.g., Claude Desktop), stdio transport
+enables auto-start — the client spawns the server as a subprocess on launch,
+removing the need for manual startup or OS-level service configuration.
+
+**Feasibility:** Straightforward. The `mcp.Server` instance (`cmd/server/main.go:137`)
+is already transport-agnostic. Steps 1-8 in `main()` (config, OpenAPI parsing,
+broker pool, tool registration) have no HTTP dependency. Adding stdio requires:
+- A flag or config option to select transport (`--transport stdio|http`)
+- Calling the SDK's stdio transport instead of `mcp.NewStreamableHTTPHandler`
+- Skipping auth middleware, health endpoint, TLS, and port binding in stdio mode
+- Allowing config without `client_auth` when not in HTTP mode
+
+**Estimated scope:** ~30 lines in `main()` or a small refactor extracting
+shared initialization into a reusable function.
+
+### Helm chart for Kubernetes
+
+**Status:** Deferred
+
+**Story requirement:** Under "Acceptance Criteria" and "Work Breakdown":
+- Helm chart created with Chart.yaml, values.yaml, templates/
+- Templates: Deployment, Service, ConfigMap, Secret
+- Configurable values: broker URLs, OAuth config, rate limiting, replicas,
+  resources
+- Default values secure (development_mode: false)
+
+**Reason deferred:** Example Kubernetes manifests are provided in
+`deploy/kubernetes/` for copy-paste-edit deployment. A full Helm chart adds
+templating, rollback, and multi-instance convenience but is not required for
+initial release. Add when Kubernetes becomes a primary deployment target or
+early adopters request it.
+
+### Kubernetes deployment section in user documentation
+
+**Status:** Pending
+
+**Requirement:** The upcoming user-facing documentation should include a
+Kubernetes deployment guide covering the example manifests in
+`deploy/kubernetes/`, how to configure the ConfigMap and Secret, health probe
+setup, and security context. Reference `docs/packaging-release.md` for the
+technical details.
+
+### Connecting MCP clients to the server
+
+**Status:** Pending
+
+**Requirement:** The user-facing documentation should explain how to connect
+MCP clients to the running server. This is the missing link between "server is
+deployed" and "I can use it from my AI assistant." Cover:
+
+- **Claude Desktop**: connecting via Custom Connectors (Settings > Connectors >
+  Add custom connector) pointing to the `/mcp` endpoint, or using the
+  `mcp-remote` npm bridge in `claude_desktop_config.json` for stdio-style
+  configuration
+- **Claude Code**: configuring the server URL in MCP settings with the `/mcp`
+  endpoint
+- **OAuth setup**: the `/mcp` endpoint is behind auth middleware; clients must
+  be configured with valid OAuth credentials when `development_mode` is false
+- **Discovery endpoint**: the server exposes
+  `/.well-known/oauth-protected-resource` (RFC 9728) for automatic
+  authorization server discovery by MCP clients
+- **Development mode**: using `development_mode: true` with a static dev token
+  for local testing without a full OAuth setup
