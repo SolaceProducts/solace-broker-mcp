@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -76,6 +77,20 @@ func buildMux() *http.ServeMux {
 func main() {
 	if len(os.Args) == 2 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
 		fmt.Println(version.Version())
+		os.Exit(0)
+	}
+
+	if len(os.Args) == 2 && os.Args[1] == "--health" {
+		port := defaults.DefaultPort
+		if v := os.Getenv("MCP_SERVER_PORT"); v != "" {
+			if p, err := strconv.Atoi(v); err == nil {
+				port = p
+			}
+		}
+		resp, err := http.Get("http://localhost:" + strconv.Itoa(port) + "/health")
+		if err != nil || resp.StatusCode != http.StatusOK {
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 

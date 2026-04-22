@@ -2,6 +2,7 @@ name: Build and Test
 
 on:
   push:
+  workflow_call:
 
 jobs:
   lint:
