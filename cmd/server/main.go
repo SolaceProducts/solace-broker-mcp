@@ -13,6 +13,7 @@ import (
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite"
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite/definitions"
+	"github.com/SolaceDev/solace-broker-mcp/internal/auth"
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
@@ -51,15 +52,11 @@ func newSlogHandler(level slog.Level) slog.Handler {
 	})
 }
 
-// buildMux creates the HTTP route multiplexer with all registered routes.
-// It only handles route registration — no middleware, no server config.
+// buildMux creates the HTTP route multiplexer with basic routes.
+// The /mcp route is registered separately in main() with auth middleware.
 // Both main() and tests use this function to avoid route drift.
-func buildMux(server *mcp.Server) *http.ServeMux {
+func buildMux() *http.ServeMux {
 	mux := http.NewServeMux()
-
-	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
-		return server
-	}, nil))
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -156,7 +153,29 @@ func main() {
 	tools.RegisterListBrokers(server, pool)
 
 	// 9. Set up HTTP routes
-	mux := buildMux(server)
+	mux := buildMux()
+
+	// Create MCP handler
+	mcpHandler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
+		return server
+	}, nil)
+
+	// Wrap MCP handler with auth middleware
+	authedHandler, err := auth.NewAuthMiddleware(cfg, mcpHandler)
+	if err != nil {
+		slog.Error("failed to create auth middleware", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
+	// Register authenticated MCP endpoint
+	mux.Handle("/mcp", authedHandler)
+
+	// Register OAuth Protected Resource Metadata endpoint (RFC 9728)
+	// This enables MCP clients to discover the authorization server for OAuth flows
+	if metadataHandler := auth.NewProtectedResourceMetadataHandler(cfg); metadataHandler != nil {
+		mux.Handle("/.well-known/oauth-protected-resource", metadataHandler)
+		slog.Info("registered OAuth protected resource metadata endpoint")
+	}
 
 	// 10. Start server with graceful shutdown
 	addr := fmt.Sprintf(":%d", cfg.Port)

@@ -17,7 +17,15 @@ func testMux() *http.ServeMux {
 		Name:    "solace-broker-mcp",
 		Version: version.Version(),
 	}, nil)
-	return buildMux(server)
+	mux := buildMux()
+
+	// Register /mcp endpoint for testing (without auth middleware)
+	mcpHandler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
+		return server
+	}, nil)
+	mux.Handle("/mcp", mcpHandler)
+
+	return mux
 }
 
 func TestHealth_GET_ReturnsOK(t *testing.T) {
