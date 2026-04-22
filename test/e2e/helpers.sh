@@ -73,14 +73,21 @@ wait_for_broker() {
     fi
     log_info "SEMP API responding after ${attempt}s ($broker_url)"
 
-    # Phase 2: Wait for message spool to be active (needed for queue operations)
+    # Phase 2: Wait for message spool to accept queue operations.
+    # The monitor API may report spool fields before the spool is actually writable,
+    # so we probe with a real queue create/delete to confirm readiness.
     while [ $attempt -lt "$max_attempts" ]; do
-        local spool_status
-        spool_status=$(curl -sf -u "$BROKER_USER:$BROKER_PASS" \
-            "$broker_url/SEMP/v2/monitor/msgVpns/$BROKER_VPN" 2>/dev/null \
-            | grep -o '"msgSpoolUsage"' || true)
-        if [ -n "$spool_status" ]; then
-            log_info "Broker fully ready after ${attempt}s (message spool active) ($broker_url)"
+        local http_code
+        http_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            -u "$BROKER_USER:$BROKER_PASS" \
+            -H "Content-Type: application/json" \
+            "$semp_config/msgVpns/$BROKER_VPN/queues" \
+            -d '{"queueName":"_e2e_spool_probe_","accessType":"non-exclusive"}')
+        if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+            # Clean up probe queue
+            curl -sf -X DELETE -u "$BROKER_USER:$BROKER_PASS" \
+                "$semp_config/msgVpns/$BROKER_VPN/queues/_e2e_spool_probe_" >/dev/null 2>&1 || true
+            log_info "Broker fully ready after ${attempt}s (message spool writable) ($broker_url)"
             return 0
         fi
         sleep 1
@@ -202,6 +209,7 @@ semp_delete() {
 create_fixtures_on() {
     local semp_config="$1"
     local label="$2"
+    local broker_url="$3"
     log_info "Creating fixtures on $label ..."
 
     semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues" \
@@ -216,7 +224,33 @@ create_fixtures_on() {
     semp_post "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp/queueBindings" \
         '{"queueBindingName":"test-queue","postRequestTarget":"/test"}' >/dev/null
 
+    # Verify fixtures are visible via the monitor API before proceeding.
+    # The private monitor endpoint can lag behind the config API.
+    verify_fixtures "$broker_url" "$label"
+
     log_info "Fixtures created on $label"
+}
+
+verify_fixtures() {
+    local broker_url="$1"
+    local label="$2"
+    local monitor="$broker_url/SEMP/v2/__private_monitor__"
+    local max_attempts=30
+    local attempt=0
+
+    log_info "Verifying fixtures visible on $label ..."
+    while [ $attempt -lt $max_attempts ]; do
+        if curl -sf -u "$BROKER_USER:$BROKER_PASS" \
+            "$monitor/msgVpns/$BROKER_VPN/queues/test-queue" >/dev/null 2>&1 && \
+           curl -sf -u "$BROKER_USER:$BROKER_PASS" \
+            "$monitor/msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp" >/dev/null 2>&1; then
+            log_info "Fixtures verified on $label (${attempt}s)"
+            return 0
+        fi
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+    log_warn "Fixtures not yet visible via monitor API on $label after ${max_attempts}s — proceeding anyway"
 }
 
 cleanup_fixtures_on() {
@@ -232,8 +266,8 @@ cleanup_fixtures_on() {
 
 create_fixtures() {
     cleanup_fixtures
-    create_fixtures_on "$BROKER_A_SEMP_CONFIG" "broker-a"
-    create_fixtures_on "$BROKER_B_SEMP_CONFIG" "broker-b"
+    create_fixtures_on "$BROKER_A_SEMP_CONFIG" "broker-a" "$BROKER_A_URL"
+    create_fixtures_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL"
 }
 
 cleanup_fixtures() {

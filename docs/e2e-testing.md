@@ -70,7 +70,7 @@ BROKER_B_SEMP_PORT=8082
 BROKER_USERNAME=admin
 BROKER_PASSWORD=admin
 
-# MCP server credential env vars (resolved via env_prefix in broker config)
+# MCP server credential env vars (used by ${VAR} substitution in broker config)
 E2E_A_USERNAME=admin
 E2E_A_PASSWORD=admin
 E2E_B_USERNAME=admin
@@ -172,20 +172,24 @@ The broker readiness check has two phases:
 The test harness builds the server binary from source and runs it as a subprocess. Configuration is generated dynamically from `.env` values:
 
 ```yaml
+development_mode: true
+
 brokers:
   broker-a:
     url: "http://localhost:8080"
-    env_prefix: "E2E_A"
     auth:
-      method: basic
+      mode: basic
+      username: "${E2E_A_USERNAME}"
+      password: "${E2E_A_PASSWORD}"
   broker-b:
     url: "http://localhost:8082"
-    env_prefix: "E2E_B"
     auth:
-      method: basic
+      mode: basic
+      username: "${E2E_B_USERNAME}"
+      password: "${E2E_B_PASSWORD}"
 ```
 
-Credentials are resolved from `.env` via `ENV_FILE`: `E2E_A_USERNAME`, `E2E_A_PASSWORD`, `E2E_B_USERNAME`, `E2E_B_PASSWORD`.
+Credentials use `${VAR}` substitution, resolved from `.env` via `ENV_FILE`.
 
 The server runs on port `9090` (default). Tests target `http://localhost:9090`.
 
