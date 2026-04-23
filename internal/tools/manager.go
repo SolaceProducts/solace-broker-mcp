@@ -85,6 +85,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 
 	handler, err := m.Route(name)
 	if err != nil {
+		errorType = "unknown_tool"
 		toolErr = err
 		return nil, err
 	}

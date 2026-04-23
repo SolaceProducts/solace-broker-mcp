@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
@@ -15,7 +16,13 @@ import (
 // injected into the input schema, sets the output schema and annotations, and
 // creates a handler closure that delegates to ToolManager.CallTool.
 func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerPool) {
-	for _, handler := range mgr.Handlers() {
+	// Sort handlers by name for deterministic registration and tools/list ordering.
+	handlers := mgr.Handlers()
+	sort.Slice(handlers, func(i, j int) bool {
+		return handlers[i].Name() < handlers[j].Name()
+	})
+
+	for _, handler := range handlers {
 		h := handler // capture for closure
 		schema := injectBrokerParam(h.Schema(), pool)
 
@@ -48,6 +55,16 @@ func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool) {
 			InputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
+			},
+			OutputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"brokers": map[string]any{
+						"type":  "array",
+						"items": map[string]any{"type": "string"},
+					},
+				},
+				"required": []string{"brokers"},
 			},
 			Annotations: &mcp.ToolAnnotations{
 				ReadOnlyHint: true,
