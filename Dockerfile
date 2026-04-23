@@ -16,6 +16,8 @@ RUN CGO_ENABLED=0 go build \
 # Stage 2: Runtime
 FROM gcr.io/distroless/static-debian12:nonroot
 
+LABEL org.opencontainers.image.source=https://github.com/SolaceDev/solace-broker-mcp
+
 COPY --from=builder /solace-broker-mcp /solace-broker-mcp
 
 EXPOSE 9090
