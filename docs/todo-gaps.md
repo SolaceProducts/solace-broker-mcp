@@ -20,3 +20,27 @@ Tracked gaps from Jira stories that are deferred or pending further discussion.
 **Reason deferred:** Requires a test broker environment and decision on test
 gating strategy (env-var skip vs. build tags). To be implemented when CI broker
 infrastructure is ready.
+
+## SOL-148427 — Implement Tool Manager Foundation
+
+### LLM-optimized response filtering
+
+**Status:** Deferred
+
+Full SEMP responses are returned unfiltered to AI agents — all fields, regardless
+of relevance to the query. This wastes tokens and reduces LLM response quality.
+
+**Filtering approaches:**
+- **SEMPv2:** `select` query parameter available for server-side field filtering
+  (already supported in step args, not yet used by any tool)
+- **SEMPv1 / other sources:** No server-side filtering available — the MCP server
+  must filter/transform responses post-retrieval
+
+**Required work:**
+- A general-purpose MCP-server-side transformation layer to handle both cases
+- Per-step data transformation in composite tool definitions
+- Result strategies beyond "collect" (merge, unwrap) — designed but not implemented
+
+**Reason deferred:** Requires design discussion on transformation DSL, field
+selection conventions, and per-tool output contracts. To be addressed when
+tool output quality becomes a measurable concern.

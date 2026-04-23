@@ -223,6 +223,67 @@ tools:
 	}
 }
 
+func TestLoadTools_Annotations(t *testing.T) {
+	yaml := `
+tools:
+  - name: monitor-tool
+    description: A monitoring tool
+    annotations:
+      readOnly: true
+    steps:
+      - id: s1
+        operation: monitor/getVpn
+    result:
+      strategy: collect
+`
+	fsys := fstest.MapFS{
+		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
+	}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	if tools[0].Annotations.ReadOnly == nil || !*tools[0].Annotations.ReadOnly {
+		t.Error("expected ReadOnly = true")
+	}
+	if tools[0].Annotations.Destructive != nil {
+		t.Error("expected Destructive = nil (omitted)")
+	}
+}
+
+func TestLoadTools_AnnotationsDefault(t *testing.T) {
+	yaml := `
+tools:
+  - name: no-annotations
+    description: A tool without annotations
+    steps:
+      - id: s1
+        operation: monitor/getVpn
+    result:
+      strategy: collect
+`
+	fsys := fstest.MapFS{
+		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
+	}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// All annotation fields should default to nil (omitted).
+	ann := tools[0].Annotations
+	if ann.ReadOnly != nil || ann.Destructive != nil || ann.Idempotent != nil || ann.OpenWorld != nil {
+		t.Errorf("expected all annotations to default to nil, got %+v", ann)
+	}
+}
+
 func TestLoadTools_GetQueueMetrics(t *testing.T) {
 	yaml := `
 tools:

@@ -14,11 +14,12 @@ type CompositeToolsFile struct {
 // parameters, an ordered list of steps to execute against a broker, and a result
 // strategy that controls how step outputs are combined into the final response.
 type CompositeTool struct {
-	Name        string         `yaml:"name"`
-	Description string         `yaml:"description"`
-	Parameters  []ParameterDef `yaml:"parameters"`
-	Steps       []Step         `yaml:"steps"`
-	Result      ResultStrategy `yaml:"result"`
+	Name        string          `yaml:"name"`
+	Description string          `yaml:"description"`
+	Parameters  []ParameterDef  `yaml:"parameters"`
+	Steps       []Step          `yaml:"steps"`
+	Result      ResultStrategy  `yaml:"result"`
+	Annotations ToolAnnotations `yaml:"annotations"`
 }
 
 // ParameterDef defines an input parameter for a composite tool. These are
@@ -49,4 +50,15 @@ type Step struct {
 // transformation needs.
 type ResultStrategy struct {
 	Strategy string `yaml:"strategy"` // only "collect" is currently supported
+}
+
+// ToolAnnotations holds behavior hints for a composite tool, matching the MCP
+// spec 2025-06-18 ToolAnnotations. These are declared in YAML and mapped to
+// the MCP SDK's ToolAnnotations during tool registration. Pointer fields
+// distinguish "omitted" (nil → SDK default applies) from "explicitly false".
+type ToolAnnotations struct {
+	ReadOnly    *bool `yaml:"readOnly"`
+	Destructive *bool `yaml:"destructive"`
+	Idempotent  *bool `yaml:"idempotent"`
+	OpenWorld   *bool `yaml:"openWorld"`
 }
