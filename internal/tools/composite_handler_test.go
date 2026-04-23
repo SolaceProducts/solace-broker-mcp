@@ -9,6 +9,8 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 )
 
+func boolPtr(b bool) *bool { return &b }
+
 // mockClient implements sempv2.Client for testing.
 type mockClient struct {
 	mu        sync.Mutex
@@ -57,7 +59,7 @@ func testTool() composite.CompositeTool {
 			},
 		},
 		Result:      composite.ResultStrategy{Strategy: "collect"},
-		Annotations: composite.ToolAnnotations{ReadOnly: true},
+		Annotations: composite.ToolAnnotations{ReadOnly: boolPtr(true)},
 	}
 }
 
@@ -195,8 +197,8 @@ func TestCompositeToolHandler_Annotations(t *testing.T) {
 	if !ann.ReadOnlyHint {
 		t.Error("expected ReadOnlyHint = true for monitoring tool")
 	}
-	if ann.DestructiveHint == nil || *ann.DestructiveHint {
-		t.Error("expected DestructiveHint = false for monitoring tool")
+	if ann.DestructiveHint != nil {
+		t.Error("expected DestructiveHint = nil (omitted in YAML) for monitoring tool")
 	}
 }
 

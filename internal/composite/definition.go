@@ -54,10 +54,11 @@ type ResultStrategy struct {
 
 // ToolAnnotations holds behavior hints for a composite tool, matching the MCP
 // spec 2025-06-18 ToolAnnotations. These are declared in YAML and mapped to
-// the MCP SDK's ToolAnnotations during tool registration.
+// the MCP SDK's ToolAnnotations during tool registration. Pointer fields
+// distinguish "omitted" (nil → SDK default applies) from "explicitly false".
 type ToolAnnotations struct {
-	ReadOnly    bool `yaml:"readOnly"`
-	Destructive bool `yaml:"destructive"`
-	Idempotent  bool `yaml:"idempotent"`
-	OpenWorld   bool `yaml:"openWorld"`
+	ReadOnly    *bool `yaml:"readOnly"`
+	Destructive *bool `yaml:"destructive"`
+	Idempotent  *bool `yaml:"idempotent"`
+	OpenWorld   *bool `yaml:"openWorld"`
 }

@@ -308,9 +308,10 @@ func TestCallTool_AnnotationsReadOnly(t *testing.T) {
 
 func TestCallTool_DestructiveWarningLogged(t *testing.T) {
 	var buf bytes.Buffer
+	old := slog.Default()
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	slog.SetDefault(logger)
-	defer slog.SetDefault(slog.Default())
+	defer slog.SetDefault(old)
 
 	mgr := NewToolManager(newTestPool())
 

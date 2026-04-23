@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -79,17 +78,21 @@ func (h *CompositeToolHandler) OutputSchema() map[string]any {
 }
 
 // Annotations converts the composite tool's YAML-declared annotations to MCP
-// SDK ToolAnnotations.
+// SDK ToolAnnotations. Nil pointers from YAML (field omitted) are passed
+// through as nil, letting the SDK defaults apply.
 func (h *CompositeToolHandler) Annotations() *mcp.ToolAnnotations {
 	a := h.tool.Annotations
-	return &mcp.ToolAnnotations{
-		ReadOnlyHint: a.ReadOnly,
-		// DestructiveHint uses *bool in the SDK. Set only when explicitly true
-		// to distinguish from the SDK default (nil = unknown).
-		DestructiveHint: boolPtr(a.Destructive),
-		IdempotentHint:  a.Idempotent,
-		OpenWorldHint:   boolPtr(a.OpenWorld),
+	ann := &mcp.ToolAnnotations{
+		DestructiveHint: a.Destructive,
+		OpenWorldHint:   a.OpenWorld,
 	}
+	if a.ReadOnly != nil {
+		ann.ReadOnlyHint = *a.ReadOnly
+	}
+	if a.Idempotent != nil {
+		ann.IdempotentHint = *a.Idempotent
+	}
+	return ann
 }
 
 // Description returns the tool's human-readable description for LLM tool selection.
@@ -106,12 +109,4 @@ func (h *CompositeToolHandler) Name() string {
 // testing and for callers that need to interact with the executor directly.
 func (h *CompositeToolHandler) Executor() *composite.CompositeExecutor {
 	return h.executor
-}
-
-// Client is a convenience alias for the sempv2.Client interface, used in
-// test setup.
-type Client = sempv2.Client
-
-func boolPtr(b bool) *bool {
-	return &b
 }

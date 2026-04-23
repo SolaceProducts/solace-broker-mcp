@@ -249,11 +249,11 @@ tools:
 		t.Fatalf("expected 1 tool, got %d", len(tools))
 	}
 
-	if !tools[0].Annotations.ReadOnly {
+	if tools[0].Annotations.ReadOnly == nil || !*tools[0].Annotations.ReadOnly {
 		t.Error("expected ReadOnly = true")
 	}
-	if tools[0].Annotations.Destructive {
-		t.Error("expected Destructive = false (default)")
+	if tools[0].Annotations.Destructive != nil {
+		t.Error("expected Destructive = nil (omitted)")
 	}
 }
 
@@ -277,10 +277,10 @@ tools:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// All annotation fields should default to false.
+	// All annotation fields should default to nil (omitted).
 	ann := tools[0].Annotations
-	if ann.ReadOnly || ann.Destructive || ann.Idempotent || ann.OpenWorld {
-		t.Errorf("expected all annotations to default to false, got %+v", ann)
+	if ann.ReadOnly != nil || ann.Destructive != nil || ann.Idempotent != nil || ann.OpenWorld != nil {
+		t.Errorf("expected all annotations to default to nil, got %+v", ann)
 	}
 }
 

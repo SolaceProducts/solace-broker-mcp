@@ -70,31 +70,38 @@ func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool) {
 
 // injectBrokerParam clones the given input schema and adds the required broker
 // parameter with a description listing all available broker aliases.
+//
+// Currently performs a shallow clone of the schema map with deep copies of the
+// mutated keys (properties, required). If future ToolHandler implementations
+// use nested schema keywords (oneOf, if/then/else, $defs), this should be
+// replaced with a full recursive deep copy.
 func injectBrokerParam(schema map[string]any, pool *semp.BrokerPool) map[string]any {
 	aliases := pool.Aliases()
 
-	// Clone properties from the original schema.
+	// Shallow-clone the schema to preserve all existing keywords.
+	cloned := make(map[string]any, len(schema)+1)
+	for k, v := range schema {
+		cloned[k] = v
+	}
+
+	// Deep-copy properties (we're adding to this map).
 	origProps, _ := schema["properties"].(map[string]any)
 	properties := make(map[string]any, len(origProps)+1)
 	for k, v := range origProps {
 		properties[k] = v
 	}
-
 	properties["broker"] = map[string]any{
 		"type":        "string",
 		"description": fmt.Sprintf("Target broker alias (required). Available brokers: %s", strings.Join(aliases, ", ")),
 	}
+	cloned["properties"] = properties
 
-	// Clone required list and prepend broker.
-	var required []string
-	required = append(required, "broker")
+	// Deep-copy required list and prepend broker.
+	required := []string{"broker"}
 	if origRequired, ok := schema["required"].([]string); ok {
 		required = append(required, origRequired...)
 	}
+	cloned["required"] = required
 
-	return map[string]any{
-		"type":       "object",
-		"properties": properties,
-		"required":   required,
-	}
+	return cloned
 }

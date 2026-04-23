@@ -139,12 +139,8 @@ func main() {
 		Version: version.Version(),
 	}, nil)
 
-	// 7. Create tool manager and register composite tools
-	mgr := tools.NewToolManager(pool)
-	for i := range compositeTools {
-		handler := tools.NewCompositeToolHandler(compositeTools[i], executor)
-		mgr.Register(handler)
-	}
+	// 7. Create tool manager from composite tool definitions
+	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor)
 	tools.RegisterWithServer(mgr, server, pool)
 	slog.Info("registered composite tools",
 		slog.Int("tool_count", len(compositeTools)))
