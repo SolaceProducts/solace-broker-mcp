@@ -83,6 +83,11 @@ docker run -d \
   ghcr.io/solacedev/solace-broker-mcp:latest
 ```
 
+> **Note:** If the repository is private, authenticate with GHCR before pulling:
+> ```bash
+> gh auth token | docker login ghcr.io -u $(gh api user --jq .login) --password-stdin
+> ```
+
 The container reads config from `/etc/mcp-server/config.yaml` by default. Credentials can be passed via `--env-file` or individual `-e` flags.
 
 Verify:
