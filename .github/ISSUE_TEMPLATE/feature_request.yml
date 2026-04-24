@@ -1,0 +1,127 @@
+name: Feature Request
+description: Suggest a new feature or enhancement
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature! Please provide details below to help us understand and evaluate your request.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What problem does this feature solve? Who is affected?
+      placeholder: |
+        Example: As an operations engineer, I need to configure queue replay parameters via MCP so that I can recover from message loss without using Solace Manager.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How should this feature work? Include examples if possible.
+      placeholder: |
+        Add a new tool `queue-configure-replay` that accepts:
+        - broker: target broker alias
+        - vpnName: message VPN name
+        - queueName: queue name
+        - replayLogName: name of the replay log
+
+        Example usage in Claude Code:
+        "Configure replay log 'critical-messages' for queue 'orders' on prod-us broker"
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What other approaches did you think about?
+      placeholder: |
+        - Using Solace Manager (requires switching tools, not scriptable)
+        - Using SEMP CLI directly (requires learning SEMP syntax, no LLM assistance)
+        - This MCP tool approach provides natural language interface via AI agents
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      description: How important is this feature to you?
+      options:
+        - Critical - Blocking my use of the MCP server
+        - High - Significantly improves my workflow
+        - Medium - Nice to have, would use occasionally
+        - Low - Minor improvement
+    validations:
+      required: true
+
+  - type: dropdown
+    id: audience
+    attributes:
+      label: Who Benefits?
+      description: Who would benefit from this feature?
+      multiple: true
+      options:
+        - Operations engineers
+        - Developers
+        - Security teams
+        - Monitoring/observability teams
+        - All users
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use Case / User Story
+      description: Describe a specific scenario where this feature would be used
+      placeholder: |
+        When a critical application experiences message loss due to a bug, I need to:
+        1. Identify affected queues using MCP
+        2. Configure replay from a specific timestamp
+        3. Start replay and monitor progress
+
+        Currently steps 2-3 require leaving Claude Code and using Solace Manager, breaking my workflow.
+
+  - type: dropdown
+    id: breaking
+    attributes:
+      label: Breaking Change?
+      description: Would this feature require changes to existing configurations or APIs?
+      options:
+        - No - Fully backward compatible
+        - Yes - Requires config changes (describe below)
+        - Yes - Requires API changes (describe below)
+        - Unsure
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: Implementation Notes (Optional)
+      description: Any technical details or constraints to consider?
+      placeholder: |
+        - Requires SEMP v2 config API endpoint: POST /msgVpns/{vpnName}/queues/{queueName}/replay
+        - Should validate that replay log exists before attempting configuration
+        - May need to check broker capabilities (not all brokers support replay)
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Links, screenshots, references, or other relevant information
+      placeholder: |
+        - Solace documentation: https://docs.solace.com/Features/Replay.htm
+        - Related SEMP API: https://docs.solace.com/API/SEMP/SEMP-API.htm
+        - Similar feature in Terraform provider: ...
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      options:
+        - label: I have searched existing issues and discussions to avoid duplicates
+          required: true
+        - label: This feature aligns with the project's goals (SEMP management via MCP)
+          required: true
+        - label: I have described the problem this solves, not just the solution
+          required: true
