@@ -1,0 +1,51 @@
+# Solace Broker MCP Server — Example Configuration
+#
+# Copy this file and edit for your environment:
+#   cp broker-config.example.yaml config.yaml
+#
+# Credentials use ${VAR_NAME} substitution. Set the referenced variables
+# via environment variables or a .env file alongside this config.
+#
+# Config file resolution order:
+#   1. CONFIG_FILE env var (explicit path)
+#   2. /etc/mcp-server/config.yaml (system install)
+#   3. ./broker-config.yaml (local development)
+
+port: 9090
+log_level: info   # debug, info, warn, error
+
+# TLS — set both to enable HTTPS, or terminate TLS at a load balancer.
+tls_cert_file: ""
+tls_key_file: ""
+
+# Set to true only for local development (disables OAuth validation).
+development_mode: false
+
+# OAuth client authentication (required when development_mode is false).
+client_auth:
+  issuer: "https://idp.example.com"
+  audience: "mcp-server"
+  resource_url: "https://mcp.example.com/mcp"
+  # required_scopes: ["scope1"]
+  # dev_token: "static-token"  # only used with development_mode: true
+
+# SEMP client settings — controls how the server talks to brokers.
+semp:
+  max_concurrent_per_broker: 10
+  request_timeout_duration: 1m
+  request_min_interval: 100ms
+  retries: 10
+  retry_min_interval: 3s
+  retry_max_interval: 30s
+
+# Broker connections. Add one entry per broker.
+# Credentials should use ${VAR_NAME} references, not hardcoded values.
+brokers:
+  my-broker:
+    url: "https://broker.example.com:943"
+    insecure_skip_verify: false
+    auth:
+      mode: basic           # basic or bearer
+      username: "${BROKER_USERNAME}"
+      password: "${BROKER_PASSWORD}"
+      # token: "${BROKER_TOKEN}"  # for bearer mode

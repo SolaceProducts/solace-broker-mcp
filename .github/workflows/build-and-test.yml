@@ -2,6 +2,9 @@ name: Build and Test
 
 on:
   push:
+    tags-ignore:
+      - 'v*'
+  workflow_call:
 
 jobs:
   lint:
