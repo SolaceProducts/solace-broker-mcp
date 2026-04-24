@@ -1,0 +1,142 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the sections below to help us reproduce and fix the issue.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: What happened? What did you expect to happen instead?
+      placeholder: |
+        Example: When calling the queue-list tool with broker "prod-us", the MCP server returns an error "connection refused" even though the broker is reachable via curl.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce this issue?
+      placeholder: |
+        1. Start MCP server with broker-config.yaml containing...
+        2. Connect Claude Code client
+        3. Call tool 'queue-list' with broker='prod-us'
+        4. See error: connection refused
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should have happened?
+      placeholder: The tool should return a list of queues from the prod-us broker.
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened?
+      placeholder: The tool returned an error "connection refused" after 30 seconds.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Paste relevant log output here. **IMPORTANT**: Redact any credentials, passwords, or tokens!
+      render: shell
+      placeholder: |
+        {"level":"error","time":"2026-04-24T10:00:00Z","msg":"tool invoked","tool":"queue-list","broker":"prod-us","status":"error","error_type":"connection_error"}
+
+  - type: input
+    id: version
+    attributes:
+      label: MCP Server Version
+      description: "Run: `./server -version` or check the binary"
+      placeholder: "v0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: go-version
+    attributes:
+      label: Go Version (if building from source)
+      description: "Run: `go version`"
+      placeholder: "go version go1.25.0 darwin/arm64"
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      description: What OS is the MCP server running on?
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Docker (specify Linux distro in Additional Context)
+        - Kubernetes
+    validations:
+      required: true
+
+  - type: input
+    id: broker-version
+    attributes:
+      label: Solace Broker Version
+      description: What version of Solace broker are you connecting to?
+      placeholder: "10.9.0"
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment Method
+      description: How are you running the MCP server?
+      options:
+        - Binary (go run)
+        - Binary (compiled)
+        - Docker
+        - Kubernetes
+        - Other (describe in Additional Context)
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration (Redacted)
+      description: Share your broker-config.yaml (REDACT all credentials!)
+      render: yaml
+      placeholder: |
+        brokers:
+          prod-us:
+            url: "https://broker.example.com:1943"
+            auth:
+              mode: basic
+              username: ${BROKER_USER}  # redacted
+              password: ${BROKER_PASS}  # redacted
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any other context, screenshots, or information that might help
+      placeholder: |
+        - This started happening after upgrading from v0.0.9 to v0.1.0
+        - The same config works fine with broker "dev-us"
+        - Network diagram: [attach screenshot]
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      options:
+        - label: I have searched existing issues to avoid duplicates
+          required: true
+        - label: I have redacted all credentials from logs and config
+          required: true
+        - label: I have included the MCP server version
+          required: true
+        - label: I have included steps to reproduce the issue
+          required: true
