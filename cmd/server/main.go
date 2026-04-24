@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -22,6 +24,7 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"gopkg.in/yaml.v3"
 )
 
 // newSlogHandler creates a slog handler with the ReplaceAttr safety net that
@@ -73,9 +76,84 @@ func buildMux() *http.ServeMux {
 	return mux
 }
 
+// healthConfig holds the minimal server settings needed by the --health probe.
+type healthConfig struct {
+	Port   int
+	Scheme string // "http" or "https"
+}
+
+// healthConfigFromFile reads port and TLS fields from the config file without
+// full validation. Used by --health so the probe targets the same port and
+// scheme as the server. Returns defaults (port 0, scheme "http") if no config
+// is found or fields are absent.
+func healthConfigFromFile() healthConfig {
+	var path string
+	if v := os.Getenv("CONFIG_FILE"); v != "" {
+		path = v
+	} else if _, err := os.Stat(defaults.DefaultConfigPathSystem); err == nil {
+		path = defaults.DefaultConfigPathSystem
+	} else if _, err := os.Stat(defaults.DefaultConfigPathLocal); err == nil {
+		path = defaults.DefaultConfigPathLocal
+	}
+	if path == "" {
+		return healthConfig{Scheme: "http"}
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // path from trusted config locations
+	if err != nil {
+		return healthConfig{Scheme: "http"}
+	}
+	var cfg struct {
+		Port        int    `yaml:"port"`
+		TLSCertFile string `yaml:"tls_cert_file"`
+		TLSKeyFile  string `yaml:"tls_key_file"`
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return healthConfig{Scheme: "http"}
+	}
+	scheme := "http"
+	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+		scheme = "https"
+	}
+	return healthConfig{Port: cfg.Port, Scheme: scheme}
+}
+
 func main() {
 	if len(os.Args) == 2 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
 		fmt.Println(version.Version())
+		os.Exit(0)
+	}
+
+	if len(os.Args) == 2 && os.Args[1] == "--health" {
+		hc := healthConfigFromFile()
+		port := defaults.DefaultPort
+		if v := os.Getenv("MCP_SERVER_PORT"); v != "" {
+			if p, err := strconv.Atoi(v); err == nil {
+				port = p
+			}
+		} else if hc.Port != 0 {
+			port = hc.Port
+		}
+		healthURL := hc.Scheme + "://localhost:" + strconv.Itoa(port) + "/health"
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil) //nolint:gosec // localhost health check with integer port; no SSRF risk
+		if err != nil {
+			os.Exit(1)
+		}
+		client := &http.Client{}
+		if hc.Scheme == "https" {
+			client.Transport = &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // localhost self-check; cert SAN may not match localhost
+			}
+		}
+		resp, err := client.Do(req) //nolint:gosec // taint propagated from healthURL above
+		if err != nil {
+			os.Exit(1)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 

@@ -1,0 +1,35 @@
+# Edit this ConfigMap with your broker URLs and settings.
+# Credentials use ${VAR_NAME} references resolved from the Secret at runtime.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: solace-broker-mcp
+  labels:
+    app.kubernetes.io/name: solace-broker-mcp
+data:
+  config.yaml: |
+    port: 9090
+    log_level: info
+    development_mode: false
+
+    client_auth:
+      issuer: "https://idp.example.com"
+      audience: "mcp-server"
+      resource_url: "https://mcp.example.com/mcp"
+
+    semp:
+      max_concurrent_per_broker: 10
+      request_timeout_duration: 1m
+      request_min_interval: 100ms
+      retries: 10
+      retry_min_interval: 3s
+      retry_max_interval: 30s
+
+    brokers:
+      my-broker:
+        url: "https://broker.example.com:943"
+        insecure_skip_verify: false
+        auth:
+          mode: basic
+          username: "${BROKER_USERNAME}"
+          password: "${BROKER_PASSWORD}"
