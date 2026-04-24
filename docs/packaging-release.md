@@ -163,8 +163,8 @@ docker run -d \
   --name solace-broker-mcp \
   -p 9090:9090 \
   -v /path/to/config.yaml:/etc/mcp-server/config.yaml:ro \
-  -e MY_BROKER_USERNAME=admin \
-  -e MY_BROKER_PASSWORD=changeme \
+  -e BROKER_USERNAME=admin \
+  -e BROKER_PASSWORD=changeme \
   ghcr.io/solacedev/solace-broker-mcp:latest
 ```
 
@@ -224,8 +224,8 @@ kind: Secret
 metadata:
   name: solace-broker-mcp
 stringData:
-  PROD_USERNAME: admin
-  PROD_PASSWORD: changeme
+  BROKER_USERNAME: admin
+  BROKER_PASSWORD: changeme
 ```
 
 > **Future:** A Helm chart for templated deployments, rollback, and
@@ -249,8 +249,8 @@ The binary is statically linked with no external dependencies.
 
 3. Set credentials and run:
    ```bash
-   export MY_BROKER_USERNAME=admin
-   export MY_BROKER_PASSWORD=changeme
+   export BROKER_USERNAME=admin
+   export BROKER_PASSWORD=changeme
    CONFIG_FILE=/etc/mcp-server/config.yaml ./solace-broker-mcp
    ```
 

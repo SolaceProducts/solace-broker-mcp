@@ -32,7 +32,7 @@ brokers:
 
 Each broker needs:
 - `url` — the SEMP management API base URL
-- `auth.mode` — `basic` or `bearer`
+- `auth.mode` — `basic` or `bearer` (examples below use basic auth; for bearer token authentication, set `auth.mode: bearer` and provide `auth.token` instead)
 - `auth.username` / `auth.password` — credentials (use `${VAR_NAME}` to reference environment variables)
 
 **2. Create a `.env` file** next to the config file:
@@ -50,7 +50,7 @@ Download the archive for your platform from the [latest release](https://github.
 
 ```bash
 tar xzf solace-broker-mcp-v*.tar.gz
-sha256sum -c checksums-sha256.txt --ignore-missing
+shasum -a 256 -c checksums-sha256.txt --ignore-missing
 ```
 
 The archive contains the binary, an example config (`broker-config.example.yaml`), and the license.
@@ -185,8 +185,8 @@ brokers:
     url: "http://broker:8080"
     auth:
       mode: basic
-      username: "${MY_BROKER_USERNAME}"
-      password: "${MY_BROKER_PASSWORD}"
+      username: "${BROKER_USERNAME}"
+      password: "${BROKER_PASSWORD}"
 ```
 
 When both are configured, the server starts with HTTPS. When neither is configured, plain HTTP. Providing only one is a startup error.

@@ -71,8 +71,8 @@ MCP client connects. For laptop users (e.g., Claude Desktop), stdio transport
 enables auto-start — the client spawns the server as a subprocess on launch,
 removing the need for manual startup or OS-level service configuration.
 
-**Feasibility:** Straightforward. The `mcp.Server` instance (`cmd/server/main.go:137`)
-is already transport-agnostic. Steps 1-8 in `main()` (config, OpenAPI parsing,
+**Feasibility:** Straightforward. The `mcp.Server` instance (`server := mcp.NewServer(...)`
+in `cmd/server/main.go`) is already transport-agnostic. Steps 1-8 in `main()` (config, OpenAPI parsing,
 broker pool, tool registration) have no HTTP dependency. Adding stdio requires:
 - A flag or config option to select transport (`--transport stdio|http`)
 - Calling the SDK's stdio transport instead of `mcp.NewStreamableHTTPHandler`

@@ -88,15 +88,20 @@ func main() {
 			}
 		}
 		healthURL := "http://localhost:" + strconv.Itoa(port) + "/health"
-		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, healthURL, nil) //nolint:gosec // localhost health check with integer port; no SSRF risk
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil) //nolint:gosec // localhost health check with integer port; no SSRF risk
 		if err != nil {
 			os.Exit(1)
 		}
 		resp, err := http.DefaultClient.Do(req) //nolint:gosec // taint propagated from healthURL above
-		if err != nil || resp.StatusCode != http.StatusOK {
+		if err != nil {
 			os.Exit(1)
 		}
-		_ = resp.Body.Close()
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
