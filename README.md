@@ -1,5 +1,11 @@
 # solace-broker-mcp
 
+[![Build Status](https://github.com/SolaceDev/solace-broker-mcp/workflows/Build%20and%20Test/badge.svg)](https://github.com/SolaceDev/solace-broker-mcp/actions)
+[![Go Report Card](https://goreportcard.com/badge/github.com/SolaceDev/solace-broker-mcp)](https://goreportcard.com/report/github.com/SolaceDev/solace-broker-mcp)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/SolaceDev/solace-broker-mcp)](go.mod)
+[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](.github/CODE_OF_CONDUCT.md)
+
 An MCP (Model Context Protocol) server for Solace broker, built with Go using the official [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk).
 
 ## Prerequisites
@@ -159,3 +165,24 @@ GitHub Actions CI runs automatically on pull requests targeting `main` and on pu
 ## Architecture
 
 See [docs/architecture.md](docs/architecture.md) for component diagrams, request flow, and design decisions.
+
+## Contributing
+
+We welcome contributions! Please see our [Contributing Guidelines](.github/CONTRIBUTING.md) for details on:
+
+- Reporting bugs and requesting features
+- Development setup and workflow
+- Coding standards and testing requirements
+- Pull request process
+
+Please read our [Code of Conduct](.github/CODE_OF_CONDUCT.md) before participating.
+
+## Security
+
+For security vulnerability reporting, please see [SECURITY.md](.github/SECURITY.md).
+
+## License
+
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+
+Copyright 2024-2026 Solace Corporation. All rights reserved.
