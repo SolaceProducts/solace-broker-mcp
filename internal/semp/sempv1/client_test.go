@@ -1,9 +1,11 @@
 package sempv1
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -392,4 +394,54 @@ func TestExecute_InputValidation(t *testing.T) {
 			t.Errorf("Message mismatch: got %q, want %q", sempErr.Message, "empty xml")
 		}
 	})
+}
+
+// TestHTTPClient_LogValue_ExcludesCredentials verifies that slog.Any on an
+// *HTTPClient exposes the broker URL but NEVER the auth credentials. This is
+// the secure-logging guarantee from docs/secure-logging-rules.md Rule 2 — if
+// a future maintainer accidentally logs the client struct, the credentials
+// stay out of the log stream.
+//
+// We install a JSON slog handler that writes to a buffer, log the client
+// under a "client" key, and assert:
+//   - base_url is present
+//   - none of the sensitive field values appear anywhere in the output
+func TestHTTPClient_LogValue_ExcludesCredentials(t *testing.T) {
+	const (
+		secretUser  = "SECRET_USERNAME_VAL"
+		secretPass  = "SECRET_PASSWORD_VAL"
+		secretToken = "SECRET_TOKEN_VAL"
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+
+	client := newTestClientWith(t, srv, config.AuthConfig{
+		Mode:     config.AuthModeBasic,
+		Username: secretUser,
+		Password: secretPass,
+		Token:    secretToken, // not used by basic mode, but set to prove it also doesn't leak
+	})
+
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(old)
+
+	slog.Info("broker", slog.Any("client", client))
+
+	out := buf.String()
+
+	if !strings.Contains(out, "base_url") {
+		t.Errorf("expected base_url in log output, got: %s", out)
+	}
+	if !strings.Contains(out, srv.URL) {
+		t.Errorf("expected base URL %q in log output, got: %s", srv.URL, out)
+	}
+
+	for _, secret := range []string{secretUser, secretPass, secretToken} {
+		if strings.Contains(out, secret) {
+			t.Errorf("credential %q leaked into log output:\n%s", secret, out)
+		}
+	}
 }

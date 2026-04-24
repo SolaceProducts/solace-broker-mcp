@@ -9,7 +9,7 @@ func TestParseReply_Success(t *testing.T) {
 	body := []byte(`<rpc-reply><rpc><show><version/></show></rpc><execute-result code="ok"/></rpc-reply>`)
 
 	inner, err := parseReply(body)
-	
+
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -27,12 +27,12 @@ func TestParseReply_Success(t *testing.T) {
 // StatusCode is asserted to be 200 for every row, per the envelope-only contract.
 func TestParseReply_Errors(t *testing.T) {
 	tests := []struct {
-		name string
-		body string
-		wantKind ErrorKind
-		wantMessage string
+		name           string
+		body           string
+		wantKind       ErrorKind
+		wantMessage    string
 		wantReasonCode int
-	} {
+	}{
 		{
 			name:        "parse error",
 			body:        `<rpc-reply><parse-error>invalid message</parse-error></rpc-reply>`,
