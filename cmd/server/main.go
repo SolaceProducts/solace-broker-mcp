@@ -27,15 +27,16 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/auth"
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite"
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite/definitions"
-	"github.com/SolaceDev/solace-broker-mcp/internal/auth"
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2/specs"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
+	sempv1tools "github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"gopkg.in/yaml.v3"
@@ -233,9 +234,16 @@ func main() {
 
 	// 7. Create tool manager from composite tool definitions
 	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor)
+
+	// 7a. Register Go-native SEMPv1 tool handlers on the same manager.
+	// They flow through the same RegisterWithServer pass below.
+	mgr.Register(sempv1tools.NewGetRedundancyStatusHandler())
+
 	tools.RegisterWithServer(mgr, server, pool)
 	slog.Info("registered composite tools",
 		slog.Int("tool_count", len(compositeTools)))
+	slog.Info("registered sempv1 tools",
+		slog.Int("tool_count", 1))
 
 	// 8. Register list-brokers discovery tool
 	tools.RegisterListBrokers(server, pool)
