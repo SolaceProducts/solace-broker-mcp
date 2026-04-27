@@ -1,0 +1,13 @@
+name: "Update Ticket After Merge"
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  run-pull-request-checks:
+    uses: SolaceDev/re-workflows/.github/workflows/transition-pr-on-merge.yaml@release/v3
