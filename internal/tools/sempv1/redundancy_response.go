@@ -69,13 +69,20 @@ type virtualRouterConfig struct {
 
 // virtualRouterStatus holds the operational status for one virtual router,
 // including its mate-priority subtree.
+//
+// Optional fields use pointer types + json `omitempty` so the JSON output
+// faithfully mirrors the wire response: when the broker omits an element
+// (e.g., backup-role status often has only <activity>), encoding/xml
+// leaves the pointer nil and json.Marshal drops the key entirely. Without
+// this, the omitted XML would still appear in JSON as Go's zero value,
+// inventing data that the broker never sent.
 type virtualRouterStatus struct {
-	Activity               string                 `xml:"activity" json:"activity"`
-	VRRP                   string                 `xml:"vrrp" json:"vrrp"`
-	VRRPInterfaces         []vrrpStatusInterface  `xml:"vrrp-interfaces>interface" json:"vrrpInterfaces"`
-	RoutingInterface       string                 `xml:"routing-interface" json:"routingInterface"`
-	VRRPPriority           int                    `xml:"vrrp-priority" json:"vrrpPriority"`
-	PriorityReportedByMate priorityReportedByMate `xml:"priority-reported-by-mate" json:"priorityReportedByMate"`
+	Activity               string                  `xml:"activity" json:"activity"`
+	VRRP                   *string                 `xml:"vrrp" json:"vrrp,omitempty"`
+	VRRPInterfaces         []vrrpStatusInterface   `xml:"vrrp-interfaces>interface" json:"vrrpInterfaces,omitempty"`
+	RoutingInterface       *string                 `xml:"routing-interface" json:"routingInterface,omitempty"`
+	VRRPPriority           *int                    `xml:"vrrp-priority" json:"vrrpPriority,omitempty"`
+	PriorityReportedByMate *priorityReportedByMate `xml:"priority-reported-by-mate" json:"priorityReportedByMate,omitempty"`
 }
 
 // vrrpStatusInterface is a per-interface VRRP state entry inside
@@ -87,13 +94,15 @@ type vrrpStatusInterface struct {
 }
 
 // priorityReportedByMate models the <priority-reported-by-mate> subtree
-// inside a <status> element.
+// inside a <status> element. All inner fields use pointer + omitempty so
+// the JSON output mirrors the wire — see the rationale comment above
+// virtualRouterStatus.
 type priorityReportedByMate struct {
-	Summary        string                        `xml:"summary" json:"summary"`
-	CSPF           string                        `xml:"cspf" json:"cspf"`
-	ADBHello       string                        `xml:"adb-hello" json:"adbHello"`
-	VRRP           string                        `xml:"vrrp" json:"vrrp"`
-	VRRPInterfaces []vrrpStatusPriorityInterface `xml:"vrrp-interfaces>interface" json:"vrrpInterfaces"`
+	Summary        *string                       `xml:"summary" json:"summary,omitempty"`
+	CSPF           *string                       `xml:"cspf" json:"cspf,omitempty"`
+	ADBHello       *string                       `xml:"adb-hello" json:"adbHello,omitempty"`
+	VRRP           *string                       `xml:"vrrp" json:"vrrp,omitempty"`
+	VRRPInterfaces []vrrpStatusPriorityInterface `xml:"vrrp-interfaces>interface" json:"vrrpInterfaces,omitempty"`
 }
 
 // vrrpStatusPriorityInterface is a per-interface entry inside the

@@ -96,4 +96,31 @@ func TestRedundancyResponse_RoundTrip(t *testing.T) {
 			t.Errorf("JSON output missing key %s", key)
 		}
 	}
+
+	// Verify the omitempty behavior on backup-role status: the wire
+	// response includes only <activity> for the backup, so the JSON should
+	// NOT contain the other status fields under backup. If any of these
+	// appear, the struct is inventing data the broker never sent (the bug
+	// we fixed by switching to pointer + omitempty).
+	backupJSON, err := json.Marshal(parsed.VirtualRouters.Backup.Status)
+	if err != nil {
+		t.Fatalf("marshalling backup status: %v", err)
+	}
+	backupStr := string(backupJSON)
+	mustNotContain := []string{
+		`"vrrp"`,
+		`"vrrpInterfaces"`,
+		`"routingInterface"`,
+		`"vrrpPriority"`,
+		`"priorityReportedByMate"`,
+	}
+	for _, key := range mustNotContain {
+		if strings.Contains(backupStr, key) {
+			t.Errorf("backup status JSON should not contain %s (broker did not emit it); got: %s",
+				key, backupStr)
+		}
+	}
+	if !strings.Contains(backupStr, `"activity"`) {
+		t.Errorf("backup status JSON should still contain activity; got: %s", backupStr)
+	}
 }
