@@ -2,6 +2,8 @@ package sempv1
 
 import (
 	"context"
+	"encoding/json"
+	"encoding/xml"
 	"fmt"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
@@ -77,14 +79,53 @@ func (h *GetRedundancyStatusHandler) Annotations() *mcp.ToolAnnotations {
 	}
 }
 
-// Handle executes the get_redundancy_status tool. The full implementation
-// (XML request, SEMPv1 call, response parsing, envelope wrapping) lands
-// in W6; this stub exists so the type satisfies tools.ToolHandler and
-// the manager can register it.
+// Handle executes the get_redundancy_status tool: builds the
+// <rpc><show><redundancy/></show></rpc> request, calls the SEMPv1 client,
+// decodes the inner <show><redundancy>...</redundancy></show> bytes into
+// redundancyResponse, and wraps the result in a step-keyed envelope under
+// the "redundancy" key. Returns broker errors unwrapped (preserving
+// *sempv1.Error for the manager's structured logging) and wraps
+// XML/JSON processing errors with a tool-name prefix.
 func (h *GetRedundancyStatusHandler) Handle(
 	ctx context.Context,
 	tc *tools.ToolContext,
 	params map[string]any,
 ) (*tools.ToolResult, error) {
-	return nil, fmt.Errorf("get_redundancy_status: not implemented (W6)")
+	xmlReq := `<rpc><show><redundancy/></show></rpc>`
+
+	// send to broker
+	result, err := tc.SEMPv1Client.Execute(ctx, xmlReq)
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 3: parse the <redundancy> payload from result.InnerXML
+	// result.InnerXML contains the inner content of <rpc>...</rpc> from the
+	// broker's <rpc-reply>. parseReply (T2) already stripped the envelope.
+	// The content is <show><redundancy>...</redundancy></show>, so wrap it
+	// and decode with a path tag.
+	var wrapper struct {
+		XMLName    xml.Name           `xml:"show"`
+		Redundancy redundancyResponse `xml:"redundancy"`
+	}
+	if err := xml.Unmarshal(result.InnerXML, &wrapper); err != nil {
+		return nil, fmt.Errorf("get_redundancy_status: parsing redundancy response: %w", err)
+	}
+
+	asJSON, err := json.Marshal(wrapper.Redundancy)
+	if err != nil {
+		return nil, fmt.Errorf("get_redundancy_status: marshalling redundancy response to JSON: %w", err)
+	}
+	var dataMap map[string]any
+	if err := json.Unmarshal(asJSON, &dataMap); err != nil {
+		return nil, fmt.Errorf("get_redundancy_status: parsing redundancy JSON response: %w", err)
+	}
+
+	envelope := map[string]any{
+		"redundancy": dataMap,
+	}
+
+	return &tools.ToolResult{
+		StructuredContent: envelope,
+	}, nil
 }
