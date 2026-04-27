@@ -1,4 +1,4 @@
-package sempv1
+package redundancy
 
 import (
 	"context"
@@ -7,10 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
-
-	// Aliased to disambiguate from this package, which is also named sempv1.
-	semp1client "github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 )
 
 // stubV1Client implements sempv1.Client for unit tests. It returns the
@@ -19,11 +17,11 @@ import (
 // response-handling, not request shape (which is a static literal in
 // Handle anyway).
 type stubV1Client struct {
-	result *semp1client.Result
+	result *sempv1.Result
 	err    error
 }
 
-func (s *stubV1Client) Execute(ctx context.Context, xml string) (*semp1client.Result, error) {
+func (s *stubV1Client) Execute(ctx context.Context, xml string) (*sempv1.Result, error) {
 	return s.result, s.err
 }
 
@@ -41,15 +39,15 @@ func extractInnerRPC(t *testing.T, envelope []byte) []byte {
 	return []byte(s[open+len("<rpc>") : close])
 }
 
-func TestGetRedundancyStatus_Name(t *testing.T) {
-	h := NewGetRedundancyStatusHandler()
+func TestHandler_Name(t *testing.T) {
+	h := NewHandler()
 	if got := h.Name(); got != "get_redundancy_status" {
 		t.Errorf("Name() = %q, want %q", got, "get_redundancy_status")
 	}
 }
 
-func TestGetRedundancyStatus_Schema_NoParams(t *testing.T) {
-	h := NewGetRedundancyStatusHandler()
+func TestHandler_Schema_NoParams(t *testing.T) {
+	h := NewHandler()
 	schema := h.Schema()
 
 	if schema["type"] != "object" {
@@ -68,8 +66,8 @@ func TestGetRedundancyStatus_Schema_NoParams(t *testing.T) {
 	}
 }
 
-func TestGetRedundancyStatus_OutputSchema_GenericEnvelope(t *testing.T) {
-	h := NewGetRedundancyStatusHandler()
+func TestHandler_OutputSchema_GenericEnvelope(t *testing.T) {
+	h := NewHandler()
 	out := h.OutputSchema()
 
 	if out["type"] != "object" {
@@ -85,8 +83,8 @@ func TestGetRedundancyStatus_OutputSchema_GenericEnvelope(t *testing.T) {
 	}
 }
 
-func TestGetRedundancyStatus_Annotations_ReadOnly(t *testing.T) {
-	h := NewGetRedundancyStatusHandler()
+func TestHandler_Annotations_ReadOnly(t *testing.T) {
+	h := NewHandler()
 	ann := h.Annotations()
 
 	if ann == nil {
@@ -100,8 +98,8 @@ func TestGetRedundancyStatus_Annotations_ReadOnly(t *testing.T) {
 	}
 }
 
-func TestGetRedundancyStatus_Description_Nonempty(t *testing.T) {
-	h := NewGetRedundancyStatusHandler()
+func TestHandler_Description_Nonempty(t *testing.T) {
+	h := NewHandler()
 	if h.Description() == "" {
 		t.Error("Description() returned empty string")
 	}
@@ -119,10 +117,10 @@ func TestHandle_Success(t *testing.T) {
 	innerBytes := extractInnerRPC(t, fullEnvelope)
 
 	stub := &stubV1Client{
-		result: &semp1client.Result{InnerXML: innerBytes},
+		result: &sempv1.Result{InnerXML: innerBytes},
 	}
 
-	h := NewGetRedundancyStatusHandler()
+	h := NewHandler()
 	tc := &tools.ToolContext{SEMPv1Client: stub}
 
 	result, err := h.Handle(context.Background(), tc, map[string]any{})
@@ -166,13 +164,13 @@ func TestHandle_Success(t *testing.T) {
 // If Handle ever wrapped these errors with anything other than %w (or
 // suppressed them entirely), this test would catch it.
 func TestHandle_ClientError_Passthrough(t *testing.T) {
-	sempErr := &semp1client.Error{
-		Kind:       semp1client.ErrorKindHTTP,
+	sempErr := &sempv1.Error{
+		Kind:       sempv1.ErrorKindHTTP,
 		StatusCode: 401,
 	}
 	stub := &stubV1Client{err: sempErr}
 
-	h := NewGetRedundancyStatusHandler()
+	h := NewHandler()
 	tc := &tools.ToolContext{SEMPv1Client: stub}
 
 	_, err := h.Handle(context.Background(), tc, map[string]any{})
@@ -180,7 +178,7 @@ func TestHandle_ClientError_Passthrough(t *testing.T) {
 		t.Fatal("Handle() returned nil error, expected sempv1 error")
 	}
 
-	var v1Err *semp1client.Error
+	var v1Err *sempv1.Error
 	if !errors.As(err, &v1Err) {
 		t.Errorf("returned error %T not unwrappable to *sempv1.Error", err)
 	}
@@ -195,12 +193,12 @@ func TestHandle_ClientError_Passthrough(t *testing.T) {
 // processing rather than the broker.
 func TestHandle_ParseError_WrapsError(t *testing.T) {
 	stub := &stubV1Client{
-		result: &semp1client.Result{
+		result: &sempv1.Result{
 			InnerXML: []byte("<not-valid-xml<<>"),
 		},
 	}
 
-	h := NewGetRedundancyStatusHandler()
+	h := NewHandler()
 	tc := &tools.ToolContext{SEMPv1Client: stub}
 
 	_, err := h.Handle(context.Background(), tc, map[string]any{})

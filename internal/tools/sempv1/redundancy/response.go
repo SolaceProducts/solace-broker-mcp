@@ -1,7 +1,3 @@
-// Package sempv1 contains Go-native MCP tool handlers that issue SEMPv1
-// (XML over HTTP) commands via the sempv1 client. Each tool's parsed
-// response struct lives alongside its handler.
-//
 // The structs in this file model the wire format of:
 //
 //	<rpc><show><redundancy/></show></rpc>
@@ -13,7 +9,7 @@
 // All types are unexported — they are internal parsing artifacts of
 // the redundancy handler. The handler converts the decoded struct into
 // a map[string]any envelope before returning to the ToolManager.
-package sempv1
+package redundancy
 
 import "encoding/xml"
 

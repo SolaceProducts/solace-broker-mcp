@@ -1,4 +1,4 @@
-package sempv1
+package redundancy
 
 import (
 	"encoding/json"
@@ -13,7 +13,7 @@ import (
 // redundancyResponse struct decodes every documented field. The fixture
 // is from a standalone broker (redundancy disabled), so values are in
 // their disabled state — what matters is field presence, not values.
-func TestRedundancyResponse_RoundTrip(t *testing.T) {
+func TestResponse_RoundTrip(t *testing.T) {
 	body, err := os.ReadFile("testdata/show_redundancy_standalone.xml")
 	if err != nil {
 		t.Fatalf("reading fixture: %v", err)

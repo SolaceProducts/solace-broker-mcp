@@ -1,4 +1,11 @@
-package sempv1
+// Package redundancy implements the get_redundancy_status MCP tool.
+// It issues a single SEMPv1 show-redundancy command against the target
+// broker and returns the parsed response in a step-keyed envelope under
+// the key "redundancy".
+//
+// The MCP-facing tool name remains get_redundancy_status (per Story 8);
+// the Go package name uses the noun form to match the show command.
+package redundancy
 
 import (
 	"context"
@@ -10,34 +17,34 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// Compile-time check that GetRedundancyStatusHandler satisfies tools.ToolHandler.
-var _ tools.ToolHandler = (*GetRedundancyStatusHandler)(nil)
+// Compile-time check that Handler satisfies tools.ToolHandler.
+var _ tools.ToolHandler = (*Handler)(nil)
 
-// GetRedundancyStatusHandler implements the get_redundancy_status MCP tool.
+// Handler implements the get_redundancy_status MCP tool.
 // It issues a single SEMPv1 show-redundancy command against the target
 // broker and returns the parsed response in a step-keyed envelope.
 //
 // See docs/semp/sempv1-tool-wiring-plan.md §7 for the output-shape
 // rationale (envelope vs. flat curation).
-type GetRedundancyStatusHandler struct{}
+type Handler struct{}
 
-// NewGetRedundancyStatusHandler returns a handler ready to register with
-// a ToolManager. The handler holds no state; one instance is sufficient
-// per server.
-func NewGetRedundancyStatusHandler() *GetRedundancyStatusHandler {
-	return &GetRedundancyStatusHandler{}
+// NewHandler returns a redundancy-status tool handler ready to register
+// with a ToolManager. The handler holds no state; one instance is
+// sufficient per server.
+func NewHandler() *Handler {
+	return &Handler{}
 }
 
 // Name returns the tool's unique identifier used for routing by the
 // ToolManager and for invocation by MCP clients.
-func (h *GetRedundancyStatusHandler) Name() string {
+func (h *Handler) Name() string {
 	return "get_redundancy_status"
 }
 
 // Description returns the LLM-facing description that helps the agent
 // decide when to call this tool. Follows the description guidelines in
 // internal/composite/definitions/tools.yaml header comment.
-func (h *GetRedundancyStatusHandler) Description() string {
+func (h *Handler) Description() string {
 	return "Returns the broker's redundancy and high-availability status, " +
 		"including config/operational status, active-standby role, mate router " +
 		"name, mate link state, and per-virtual-router activity. Use this tool " +
@@ -47,7 +54,7 @@ func (h *GetRedundancyStatusHandler) Description() string {
 // Schema returns the JSON Schema for tool input parameters. The tool
 // takes no tool-specific parameters — the broker parameter is injected
 // by the ToolManager during registration and validation.
-func (h *GetRedundancyStatusHandler) Schema() map[string]any {
+func (h *Handler) Schema() map[string]any {
 	return map[string]any{
 		"type":       "object",
 		"properties": map[string]any{},
@@ -60,7 +67,7 @@ func (h *GetRedundancyStatusHandler) Schema() map[string]any {
 // docs/semp/sempv1-tool-wiring-plan.md §7, the schema validates the
 // envelope structure but not individual response fields, so post-MVP
 // curation can flatten without a schema migration.
-func (h *GetRedundancyStatusHandler) OutputSchema() map[string]any {
+func (h *Handler) OutputSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": map[string]any{"type": "object"},
@@ -71,7 +78,7 @@ func (h *GetRedundancyStatusHandler) OutputSchema() map[string]any {
 // pure read with no side effects: ReadOnlyHint=true,
 // DestructiveHint=false. Idempotent and OpenWorld hints are left
 // unspecified (nil) — SDK defaults apply.
-func (h *GetRedundancyStatusHandler) Annotations() *mcp.ToolAnnotations {
+func (h *Handler) Annotations() *mcp.ToolAnnotations {
 	destructive := false
 	return &mcp.ToolAnnotations{
 		ReadOnlyHint:    true,
@@ -86,7 +93,7 @@ func (h *GetRedundancyStatusHandler) Annotations() *mcp.ToolAnnotations {
 // the "redundancy" key. Returns broker errors unwrapped (preserving
 // *sempv1.Error for the manager's structured logging) and wraps
 // XML/JSON processing errors with a tool-name prefix.
-func (h *GetRedundancyStatusHandler) Handle(
+func (h *Handler) Handle(
 	ctx context.Context,
 	tc *tools.ToolContext,
 	params map[string]any,

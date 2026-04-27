@@ -36,7 +36,7 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2/specs"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
-	sempv1tools "github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv1"
+	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv1/redundancy"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"gopkg.in/yaml.v3"
@@ -237,7 +237,7 @@ func main() {
 
 	// 7a. Register Go-native SEMPv1 tool handlers on the same manager.
 	// They flow through the same RegisterWithServer pass below.
-	mgr.Register(sempv1tools.NewGetRedundancyStatusHandler())
+	mgr.Register(redundancy.NewHandler())
 
 	tools.RegisterWithServer(mgr, server, pool)
 	slog.Info("registered composite tools",
