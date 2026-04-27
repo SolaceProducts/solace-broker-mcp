@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 )
 
@@ -38,10 +39,7 @@ type Result struct {
 type HTTPClient struct {
 	httpClient *http.Client
 	baseURL    string
-	authMode   string
-	username   string
-	password   string
-	token      string
+	authCfg    config.AuthConfig
 }
 
 // LogValue implements slog.LogValuer for HTTPClient. It exposes only the base
@@ -77,35 +75,9 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (
 			Timeout:   sempCfg.RequestTimeoutDuration,
 			Transport: transport,
 		},
-		baseURL:  strings.TrimSuffix(brokerCfg.URL, "/"),
-		authMode: brokerCfg.Auth.Mode,
-		username: brokerCfg.Auth.Username,
-		password: brokerCfg.Auth.Password,
-		token:    brokerCfg.Auth.Token,
+		baseURL: strings.TrimSuffix(brokerCfg.URL, "/"),
+		authCfg: brokerCfg.Auth,
 	}, nil
-}
-
-// addAuth sets the authentication header on the request based on the configured
-// auth mode. Basic auth sends Authorization: Basic base64(user:pass). Bearer
-// sends Authorization: Bearer <token>.
-//
-// By the time this runs, config validation has guaranteed that authMode is one
-// of validAuthModes and the corresponding credential fields are non-empty, so
-// no defensive emptiness checks are needed here. If a new auth mode is added,
-// config.validAuthModes must be updated AND a new case must be added below.
-//
-// This duplicates sempv2.addAuth deliberately: the logic is identical, but
-// extracting to a shared helper would couple the two clients through a new
-// internal package. Per T3 scope ("duplicate with sync comment"), we keep
-// them in parallel and rely on the config.AuthMode* constants as the shared
-// contract. If one is changed, the other must change too.
-func (c *HTTPClient) addAuth(req *http.Request) {
-	switch c.authMode {
-	case config.AuthModeBasic:
-		req.SetBasicAuth(c.username, c.password)
-	case config.AuthModeBearer:
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
 }
 
 // invalidInput returns an *Error{Kind: ErrorKindUnknown} for request-level
@@ -139,7 +111,9 @@ func (c *HTTPClient) Execute(ctx context.Context, xml string) (*Result, error) {
 	req.Header.Set("Content-Type", "application/xml")
 	req.Header.Set("User-Agent", "solace/broker-mcp-server/"+version.Version())
 
-	c.addAuth(req)
+	if err := auth.AddAuth(ctx, req, c.authCfg); err != nil {
+		return nil, fmt.Errorf("applying SEMPv1 auth: %w", err)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
