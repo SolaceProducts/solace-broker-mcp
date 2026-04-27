@@ -159,6 +159,34 @@ func TestCallTool_UnknownBroker(t *testing.T) {
 	}
 }
 
+// TestCallTool_ResolvesBothProtocolClients verifies that the manager
+// populates both SEMPv1Client and SEMPv2Client on the ToolContext for every
+// invocation, regardless of which protocol the handler ends up using.
+// Per docs/semp/sempv1-tool-wiring-plan.md §4.
+func TestCallTool_ResolvesBothProtocolClients(t *testing.T) {
+	mgr := NewToolManager(newTestPool())
+
+	handler := newStubHandler("test-tool")
+	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		if tc.SEMPv1Client == nil {
+			t.Error("ToolContext.SEMPv1Client is nil — manager did not resolve v1 client")
+		}
+		if tc.SEMPv2Client == nil {
+			t.Error("ToolContext.SEMPv2Client is nil — manager did not resolve v2 client")
+		}
+		return &ToolResult{StructuredContent: map[string]any{"step1": map[string]any{"ok": true}}}, nil
+	}
+	mgr.Register(handler)
+
+	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+		"broker":     "dev",
+		"msgVpnName": "default",
+	})
+	if err != nil {
+		t.Fatalf("CallTool() error: %v", err)
+	}
+}
+
 // --- Parameter validation tests ---
 
 func TestCallTool_ValidationError_MissingRequired(t *testing.T) {

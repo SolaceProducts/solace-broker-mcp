@@ -113,7 +113,15 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		return nil, toolErr
 	}
 
-	client, err := m.pool.GetSEMPv2(brokerAlias)
+	v1Client, err := m.pool.GetSEMPv1(brokerAlias)
+	if err != nil {
+		errorType = "unknown_broker"
+		toolErr = fmt.Errorf("unknown broker %q; available brokers: %s",
+			brokerAlias, strings.Join(m.pool.Aliases(), ", "))
+		return nil, toolErr
+	}
+
+	v2Client, err := m.pool.GetSEMPv2(brokerAlias)
 	if err != nil {
 		errorType = "unknown_broker"
 		toolErr = fmt.Errorf("unknown broker %q; available brokers: %s",
@@ -140,7 +148,10 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	}
 
 	// Execute.
-	tc := &ToolContext{SEMPv2Client: client}
+	tc := &ToolContext{
+		SEMPv1Client: v1Client, 
+		SEMPv2Client: v2Client,
+	}
 	result, err := handler.Handle(ctx, tc, handlerParams)
 	if err != nil {
 		errorType = "execution_error"
