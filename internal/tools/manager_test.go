@@ -25,6 +25,7 @@ import (
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -56,10 +57,10 @@ type stubHandler struct {
 	handleFn    func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error)
 }
 
-func (h *stubHandler) Name() string                     { return h.name }
-func (h *stubHandler) Description() string              { return h.description }
-func (h *stubHandler) Schema() map[string]any           { return h.schema }
-func (h *stubHandler) OutputSchema() map[string]any     { return h.outputSch }
+func (h *stubHandler) Name() string                      { return h.name }
+func (h *stubHandler) Description() string               { return h.description }
+func (h *stubHandler) Schema() map[string]any            { return h.schema }
+func (h *stubHandler) OutputSchema() map[string]any      { return h.outputSch }
 func (h *stubHandler) Annotations() *mcp.ToolAnnotations { return h.annotations }
 func (h *stubHandler) Handle(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
 	if h.handleFn != nil {
@@ -412,6 +413,66 @@ func TestCallTool_SEMPErrorWrapped(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "executing tool") {
 		t.Errorf("error = %v, want wrapped with 'executing tool'", err)
+	}
+}
+
+// TestLogToolResult_V1ErrorEmitsStructuredFields verifies that when a handler
+// returns a *sempv1.Error, the manager's logToolResult emits the v1-specific
+// structured log fields (kind, http_status, reason_code) and does not emit the
+// v2-specific "operation" field. Per docs/semp/sempv1-tool-wiring-plan.md §6.
+func TestLogToolResult_V1ErrorEmitsStructuredFields(t *testing.T) {
+	var buf bytes.Buffer
+	old := slog.Default()
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
+	slog.SetDefault(logger)
+	defer slog.SetDefault(old)
+
+	mgr := NewToolManager(newTestPool())
+
+	handler := newStubHandler("test-tool")
+	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		return nil, &sempv1.Error{
+			Kind:       sempv1.ErrorKindExecuteFail,
+			StatusCode: 200,
+			Message:    "test failure",
+			ReasonCode: 431,
+		}
+	}
+	mgr.Register(handler)
+
+	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+		"broker":     "dev",
+		"msgVpnName": "default",
+	})
+	if err == nil {
+		t.Fatal("expected error from sempv1 failure")
+	}
+
+	logOutput := buf.String()
+
+	// Parse the captured log line to verify structured fields are present
+	// with the expected types and values.
+	var logFields map[string]any
+	if jsonErr := json.Unmarshal([]byte(logOutput), &logFields); jsonErr != nil {
+		t.Fatalf("failed to parse log output as JSON: %v\nlog: %s", jsonErr, logOutput)
+	}
+
+	if got := logFields["kind"]; got != "execute-fail" {
+		t.Errorf("expected kind=%q, got %v", "execute-fail", got)
+	}
+	if got := logFields["http_status"]; got != float64(200) {
+		t.Errorf("expected http_status=200, got %v", got)
+	}
+	if got := logFields["reason_code"]; got != float64(431) {
+		t.Errorf("expected reason_code=431, got %v", got)
+	}
+	if got := logFields["error_type"]; got != "execution_error" {
+		t.Errorf("expected error_type=%q, got %v", "execution_error", got)
+	}
+
+	// v2-specific field must NOT appear — proves the switch took the v1 branch.
+	if _, present := logFields["operation"]; present {
+		t.Error("operation field should not be present for v1 errors (would indicate v2 branch fired)")
 	}
 }
 
