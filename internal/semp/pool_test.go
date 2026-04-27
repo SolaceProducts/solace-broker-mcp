@@ -13,6 +13,18 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 )
 
+func testSEMPConfig() *config.SEMPConfig {
+	retries := 0
+	minInterval := time.Duration(0)
+	return &config.SEMPConfig{
+		RequestTimeoutDuration: 5 * time.Second,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
+	}
+}
+
 func newTestServerConfig(serverURL string) *config.ServerConfig {
 	return &config.ServerConfig{
 		Brokers: map[string]*config.BrokerConfig{
@@ -33,9 +45,7 @@ func newTestServerConfig(serverURL string) *config.ServerConfig {
 				},
 			},
 		},
-		SEMP: config.SEMPConfig{
-			RequestTimeoutDuration: 5 * time.Second,
-		},
+		SEMP: *testSEMPConfig(),
 	}
 }
 

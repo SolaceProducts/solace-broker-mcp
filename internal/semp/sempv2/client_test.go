@@ -24,8 +24,14 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*sempv2.HTTPClient, 
 			Password: "secret",
 		},
 	}
+	retries := 0
+	minInterval := time.Duration(0)
 	sempCfg := &config.SEMPConfig{
 		RequestTimeoutDuration: 5 * time.Second,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
 	}
 	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg)
 	if err != nil {
@@ -340,7 +346,15 @@ func TestClient_Execute_BearerAuth(t *testing.T) {
 			Token: "my-test-token",
 		},
 	}
-	sempCfg := &config.SEMPConfig{RequestTimeoutDuration: 5 * time.Second}
+	retries := 0
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		RequestTimeoutDuration: 5 * time.Second,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
+	}
 	bearerClient, err := sempv2.NewHTTPClient(brokerCfg, sempCfg)
 	if err != nil {
 		t.Fatalf("NewHTTPClient() error: %v", err)
@@ -435,8 +449,14 @@ func TestClient_Execute_Timeout(t *testing.T) {
 			Password: "secret",
 		},
 	}
+	retries := 0
+	minInterval := time.Duration(0)
 	sempCfg := &config.SEMPConfig{
 		RequestTimeoutDuration: time.Second,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
 	}
 	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg)
 	if err != nil {

@@ -29,6 +29,18 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+func testSEMPCfg() config.SEMPConfig {
+	retries := 0
+	minInterval := time.Duration(0)
+	return config.SEMPConfig{
+		RequestTimeoutDuration: 5 * time.Second,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
+	}
+}
+
 func newTestPool() *semp.BrokerPool {
 	cfg := &config.ServerConfig{
 		Brokers: map[string]*config.BrokerConfig{
@@ -41,7 +53,7 @@ func newTestPool() *semp.BrokerPool {
 				Auth: config.AuthConfig{Mode: "basic", Username: "admin", Password: "admin"},
 			},
 		},
-		SEMP: config.SEMPConfig{RequestTimeoutDuration: 5 * time.Second},
+		SEMP: testSEMPCfg(),
 	}
 	return semp.NewBrokerPool(cfg)
 }

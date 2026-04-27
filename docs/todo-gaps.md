@@ -109,6 +109,44 @@ Kubernetes deployment guide covering the example manifests in
 setup, and security context. Reference `docs/packaging-release.md` for the
 technical details.
 
+## SOL-148425 — Implement Rate Limiting and Retry Logic
+
+### Error translation for AI agent consumption
+
+**Status:** Deferred
+
+**Story requirement:** Translate broker errors to human-readable messages with
+retryable field and guidance for AI agents.
+
+**Reason deferred:** SEMPv1 support is being added concurrently with a different
+error model (XML-based vs JSON). Designing a unified error translation layer
+that covers both SEMPv2 and SEMPv1 is more appropriate than building a
+SEMPv2-only solution now. Existing SEMPError messages are informative enough
+for MVP.
+
+**Required work:**
+- Structured AgentError type with Message, Retryable, Guidance fields
+- Unified TranslateError function handling SEMPv2, SEMPv1, and non-SEMP errors
+  (timeouts, connection failures)
+- Integration point in tool manager for consistent error formatting
+
+### Review retryablehttp integration for SEMPv1 compatibility
+
+**Status:** Deferred
+
+**Reason deferred:** SEMPv1 support is being added concurrently. The current
+retryablehttp integration (CheckRetry, ErrorHandler, rate limiter) is built
+around SEMPv2's HTTP status code semantics. SEMPv1 may have different error
+response formats, status code usage, or authentication flows that require
+adjustments to the retry policy, error detection, or re-auth logic.
+
+**Required work:**
+- Review whether SEMPv1 errors use the same HTTP status codes (401, 429, 503)
+  or signal errors differently
+- Verify the custom CheckRetry callback handles SEMPv1 responses correctly
+- Confirm rate limiting applies uniformly to both SEMPv1 and SEMPv2 requests
+- Adjust ErrorHandler if SEMPv1 response bodies differ from SEMPv2
+
 ### Connecting MCP clients to the server
 
 **Status:** Pending
