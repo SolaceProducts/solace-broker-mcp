@@ -140,7 +140,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	}
 
 	// Execute.
-	tc := &ToolContext{SEMPClient: client}
+	tc := &ToolContext{SEMPv2Client: client}
 	result, err := handler.Handle(ctx, tc, handlerParams)
 	if err != nil {
 		errorType = "execution_error"

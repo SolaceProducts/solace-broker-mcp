@@ -97,7 +97,7 @@ func TestCompositeToolHandler_Handle(t *testing.T) {
 	executor := composite.NewCompositeExecutor(testOperations())
 	handler := NewCompositeToolHandler(testTool(), executor)
 
-	tc := &ToolContext{SEMPClient: client}
+	tc := &ToolContext{SEMPv2Client: client}
 	result, err := handler.Handle(context.Background(), tc, map[string]any{
 		"msgVpnName": "default",
 		"queueName":  "q1",

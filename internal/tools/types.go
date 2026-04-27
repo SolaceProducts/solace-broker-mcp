@@ -27,15 +27,19 @@ package tools
 import (
 	"context"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // ToolContext holds request-scoped state for tool execution. The resolved SEMP
-// client is provided by the ToolManager after broker resolution — handlers
-// never access the broker pool directly.
+// clients are provided by the ToolManager after broker resolution — handlers
+// never access the broker pool directly. Both protocol clients are populated
+// for every tool call; handlers read whichever one their tool requires
+// (a tool may also use both for mixed-protocol operations).
 type ToolContext struct {
-	SEMPClient sempv2.Client
+	SEMPv1Client sempv1.Client
+	SEMPv2Client sempv2.Client
 	// Future: UserIdentity, RequestID, etc.
 }
 
