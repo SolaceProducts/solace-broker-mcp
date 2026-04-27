@@ -183,17 +183,7 @@ func TestClient_RateLimiter_SkippedDuringRetries(t *testing.T) {
 
 	client := newRetryTestClient(t, server, "basic", 5)
 
-	// Replace rate limiter with a counting channel to verify it's read exactly once.
-	rateLimitReads := atomic.Int32{}
-	ch := make(chan time.Time, 10) // buffered so it doesn't block
-	for range 10 {
-		ch <- time.Now()
-	}
-	originalCh := client.rateLimiter
-	_ = originalCh
-	client.rateLimiter = ch
-
-	// Wrap reading to count.
+	// Replace rate limiter with a single-buffered channel to verify it's read exactly once.
 	countingCh := make(chan time.Time, 1)
 	countingCh <- time.Now()
 	client.rateLimiter = countingCh
@@ -214,7 +204,6 @@ func TestClient_RateLimiter_SkippedDuringRetries(t *testing.T) {
 		t.Error("rate limiter channel should have been read exactly once, but extra value found")
 	default:
 		// expected: channel empty after one read
-		rateLimitReads.Add(1) // confirm we checked
 	}
 }
 

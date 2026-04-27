@@ -12,6 +12,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
@@ -89,7 +90,9 @@ type HTTPClient struct {
 	username    string
 	password    string
 	token       string
+	rateTicker  *time.Ticker    // non-nil when rate limiting enabled; stopped by Close()
 	rateLimiter <-chan time.Time // per-broker rate limiting; nil-safe via closed channel when disabled
+	jarMu       sync.Mutex      // protects cookie jar replacement during 401 re-auth
 }
 
 // LogValue implements slog.LogValuer for HTTPClient. It exposes only the base
@@ -100,6 +103,14 @@ func (c *HTTPClient) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("base_url", c.baseURL),
 	)
+}
+
+// Close releases resources held by the HTTPClient. It stops the rate limiter
+// ticker if one is running. Safe to call multiple times.
+func (c *HTTPClient) Close() {
+	if c.rateTicker != nil {
+		c.rateTicker.Stop()
+	}
 }
 
 // NewHTTPClient creates an HTTPClient configured for a specific broker.
@@ -151,7 +162,8 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (
 	// When interval > 0, each Execute() blocks until the ticker fires.
 	// When interval == 0, the closed channel makes receives non-blocking (no rate limit).
 	if *sempCfg.RequestMinInterval > 0 {
-		client.rateLimiter = time.NewTicker(*sempCfg.RequestMinInterval).C
+		client.rateTicker = time.NewTicker(*sempCfg.RequestMinInterval)
+		client.rateLimiter = client.rateTicker.C
 	} else {
 		ch := make(chan time.Time)
 		close(ch)
@@ -181,10 +193,14 @@ func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string
 
 	// Rate limit: wait for the per-broker interval before sending a new request.
 	// This does NOT apply to retries — retryablehttp handles those internally.
-	<-c.rateLimiter
-	slog.Debug("rate limiter: request permitted",
-		slog.String("broker", c.baseURL),
-		slog.String("operation", op.ID))
+	select {
+	case <-c.rateLimiter:
+		slog.Debug("rate limiter: request permitted",
+			slog.String("broker", c.baseURL),
+			slog.String("operation", op.ID))
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 
 	// Attach per-request retry state and operation ID for checkRetry/errorHandler.
 	ctx = context.WithValue(ctx, retryStateKey{}, &retryState{})
@@ -253,8 +269,10 @@ func (c *HTTPClient) checkRetry(ctx context.Context, resp *http.Response, err er
 			state.auth401Retried = true
 			// Stale session cookie is the most likely cause. Clear the jar so
 			// the retried request re-sends Basic Auth credentials from scratch.
+			c.jarMu.Lock()
 			jar, _ := cookiejar.New(nil)
 			c.httpClient.Jar = jar
+			c.jarMu.Unlock()
 			slog.Warn("retrying: 401 received, clearing session cookies",
 				slog.String("broker", c.baseURL),
 				slog.String("auth_mode", c.authMode))
