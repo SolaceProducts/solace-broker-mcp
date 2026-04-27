@@ -39,7 +39,7 @@ func newTestServerConfig(serverURL string) *config.ServerConfig {
 	}
 }
 
-func TestBrokerPool_GetSempV2_ValidAlias(t *testing.T) {
+func TestBrokerPool_GetSEMPv2_ValidAlias(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{})
@@ -48,22 +48,22 @@ func TestBrokerPool_GetSempV2_ValidAlias(t *testing.T) {
 
 	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
 
-	client, err := pool.GetSempV2("prod-us")
+	client, err := pool.GetSEMPv2("prod-us")
 	if err != nil {
-		t.Fatalf("GetSempV2() error: %v", err)
+		t.Fatalf("GetSEMPv2() error: %v", err)
 	}
 	if client == nil {
-		t.Fatal("GetSempV2() returned nil client")
+		t.Fatal("GetSEMPv2() returned nil client")
 	}
 }
 
-func TestBrokerPool_GetSempV2_UnknownAlias(t *testing.T) {
+func TestBrokerPool_GetSEMPv2_UnknownAlias(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer server.Close()
 
 	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
 
-	_, err := pool.GetSempV2("nonexistent")
+	_, err := pool.GetSEMPv2("nonexistent")
 	if err == nil {
 		t.Fatal("expected error for unknown alias")
 	}
@@ -82,13 +82,13 @@ func TestBrokerPool_LazyCreation(t *testing.T) {
 
 	// No requests should have been made yet — clients are lazy.
 	if requestCount.Load() != 0 {
-		t.Error("expected no HTTP requests before GetSempV2() call")
+		t.Error("expected no HTTP requests before GetSEMPv2() call")
 	}
 
 	// Access one broker.
-	_, err := pool.GetSempV2("prod-us")
+	_, err := pool.GetSEMPv2("prod-us")
 	if err != nil {
-		t.Fatalf("GetSempV2() error: %v", err)
+		t.Fatalf("GetSEMPv2() error: %v", err)
 	}
 
 	// Aliases should still return both brokers.
@@ -107,20 +107,20 @@ func TestBrokerPool_SharedInstance(t *testing.T) {
 
 	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
 
-	client1, err := pool.GetSempV2("prod-us")
+	client1, err := pool.GetSEMPv2("prod-us")
 	if err != nil {
-		t.Fatalf("first GetSempV2() error: %v", err)
+		t.Fatalf("first GetSEMPv2() error: %v", err)
 	}
 
-	client2, err := pool.GetSempV2("prod-us")
+	client2, err := pool.GetSEMPv2("prod-us")
 	if err != nil {
-		t.Fatalf("second GetSempV2() error: %v", err)
+		t.Fatalf("second GetSEMPv2() error: %v", err)
 	}
 
 	// Both calls should return the same underlying client instance.
 	// We verify by checking they're the same interface value.
 	if client1 != client2 {
-		t.Error("GetSempV2() returned different instances for the same alias — expected shared instance")
+		t.Error("GetSEMPv2() returned different instances for the same alias — expected shared instance")
 	}
 }
 
@@ -141,9 +141,9 @@ func TestBrokerPool_ConcurrentFirstAccess(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		go func(idx int) {
 			defer wg.Done()
-			c, err := pool.GetSempV2("prod-us")
+			c, err := pool.GetSEMPv2("prod-us")
 			if err != nil {
-				t.Errorf("goroutine %d: GetSempV2() error: %v", idx, err)
+				t.Errorf("goroutine %d: GetSEMPv2() error: %v", idx, err)
 				return
 			}
 			clients[idx] = c
@@ -187,42 +187,42 @@ func newV1TestServer() *httptest.Server {
 	}))
 }
 
-// TestBrokerPool_GetSempV1_ValidAlias parallels the V2 happy-path test: a
+// TestBrokerPool_GetSEMPv1_ValidAlias parallels the V2 happy-path test: a
 // configured alias yields a non-nil SEMPv1 client.
-func TestBrokerPool_GetSempV1_ValidAlias(t *testing.T) {
+func TestBrokerPool_GetSEMPv1_ValidAlias(t *testing.T) {
 	server := newV1TestServer()
 	defer server.Close()
 
 	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
 
-	client, err := pool.GetSempV1("prod-us")
+	client, err := pool.GetSEMPv1("prod-us")
 	if err != nil {
-		t.Fatalf("GetSempV1() error: %v", err)
+		t.Fatalf("GetSEMPv1() error: %v", err)
 	}
 	if client == nil {
-		t.Fatal("GetSempV1() returned nil client")
+		t.Fatal("GetSEMPv1() returned nil client")
 	}
 }
 
-// TestBrokerPool_GetSempV1_UnknownAlias parallels the V2 error-path test:
+// TestBrokerPool_GetSEMPv1_UnknownAlias parallels the V2 error-path test:
 // requesting an unconfigured alias returns an error, not a client.
-func TestBrokerPool_GetSempV1_UnknownAlias(t *testing.T) {
+func TestBrokerPool_GetSEMPv1_UnknownAlias(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer server.Close()
 
 	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
 
-	_, err := pool.GetSempV1("nonexistent")
+	_, err := pool.GetSEMPv1("nonexistent")
 	if err == nil {
 		t.Fatal("expected error for unknown alias")
 	}
 }
 
-// TestBrokerPool_GetSempV1_LazyCreation confirms the pool does not touch the
+// TestBrokerPool_GetSEMPv1_LazyCreation confirms the pool does not touch the
 // network at construction time — requests only fire after the first
-// GetSempV1() call that hits Execute. Aliases() still reports every
+// GetSEMPv1() call that hits Execute. Aliases() still reports every
 // configured broker regardless of whether any were accessed.
-func TestBrokerPool_GetSempV1_LazyCreation(t *testing.T) {
+func TestBrokerPool_GetSEMPv1_LazyCreation(t *testing.T) {
 	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
@@ -235,13 +235,13 @@ func TestBrokerPool_GetSempV1_LazyCreation(t *testing.T) {
 
 	// No requests should have been made yet — clients are lazy.
 	if requestCount.Load() != 0 {
-		t.Error("expected no HTTP requests before GetSempV1() call")
+		t.Error("expected no HTTP requests before GetSEMPv1() call")
 	}
 
 	// Access one broker.
-	_, err := pool.GetSempV1("prod-us")
+	_, err := pool.GetSEMPv1("prod-us")
 	if err != nil {
-		t.Fatalf("GetSempV1() error: %v", err)
+		t.Fatalf("GetSEMPv1() error: %v", err)
 	}
 
 	// Aliases should still return both brokers.
@@ -251,36 +251,36 @@ func TestBrokerPool_GetSempV1_LazyCreation(t *testing.T) {
 	}
 }
 
-// TestBrokerPool_GetSempV1_SharedInstance verifies repeated calls for the
+// TestBrokerPool_GetSEMPv1_SharedInstance verifies repeated calls for the
 // same alias return the same interface value. If they differed, each call
 // would be creating a fresh client — defeating pooling.
-func TestBrokerPool_GetSempV1_SharedInstance(t *testing.T) {
+func TestBrokerPool_GetSEMPv1_SharedInstance(t *testing.T) {
 	server := newV1TestServer()
 	defer server.Close()
 
 	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
 
-	client1, err := pool.GetSempV1("prod-us")
+	client1, err := pool.GetSEMPv1("prod-us")
 	if err != nil {
-		t.Fatalf("first GetSempV1() error: %v", err)
+		t.Fatalf("first GetSEMPv1() error: %v", err)
 	}
 
-	client2, err := pool.GetSempV1("prod-us")
+	client2, err := pool.GetSEMPv1("prod-us")
 	if err != nil {
-		t.Fatalf("second GetSempV1() error: %v", err)
+		t.Fatalf("second GetSEMPv1() error: %v", err)
 	}
 
 	if client1 != client2 {
-		t.Error("GetSempV1() returned different instances for the same alias — expected shared instance")
+		t.Error("GetSEMPv1() returned different instances for the same alias — expected shared instance")
 	}
 }
 
-// TestBrokerPool_GetSempV1_ConcurrentFirstAccess exercises the double-check
-// path: 50 goroutines call GetSempV1() on a fresh pool simultaneously, and
+// TestBrokerPool_GetSEMPv1_ConcurrentFirstAccess exercises the double-check
+// path: 50 goroutines call GetSEMPv1() on a fresh pool simultaneously, and
 // all must receive the same client instance. If the double-check were
 // missing, some goroutines would create their own BrokerClient, and the
 // returned interfaces would differ.
-func TestBrokerPool_GetSempV1_ConcurrentFirstAccess(t *testing.T) {
+func TestBrokerPool_GetSEMPv1_ConcurrentFirstAccess(t *testing.T) {
 	server := newV1TestServer()
 	defer server.Close()
 
@@ -294,9 +294,9 @@ func TestBrokerPool_GetSempV1_ConcurrentFirstAccess(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		go func(idx int) {
 			defer wg.Done()
-			c, err := pool.GetSempV1("prod-us")
+			c, err := pool.GetSEMPv1("prod-us")
 			if err != nil {
-				t.Errorf("goroutine %d: GetSempV1() error: %v", idx, err)
+				t.Errorf("goroutine %d: GetSEMPv1() error: %v", idx, err)
 				return
 			}
 			clients[idx] = c
@@ -315,17 +315,17 @@ func TestBrokerPool_GetSempV1_ConcurrentFirstAccess(t *testing.T) {
 
 // TestBrokerPool_SharedBrokerClientAcrossProtocols is the structural proof
 // of the "log once per alias" invariant from T4's Definition of Done. Both
-// GetSempV1 and GetSempV2 route through getOrCreate and must operate on the
+// GetSEMPv1 and GetSEMPv2 route through getOrCreate and must operate on the
 // same underlying *BrokerClient per alias. If they used separate cache
 // entries, the creation log line would fire twice and two different TCP
 // connection pools would be allocated per broker.
 //
-// We verify the invariant by (a) calling GetSempV1 first, which creates the
-// BrokerClient and caches it, then (b) calling GetSempV2 on the same alias
+// We verify the invariant by (a) calling GetSEMPv1 first, which creates the
+// BrokerClient and caches it, then (b) calling GetSEMPv2 on the same alias
 // and checking the v2 client's underlying pointer is the one stored at
 // creation time. The easiest observable proxy for "same BrokerClient" is
-// that a second GetSempV1 call after GetSempV2 still returns the original
-// v1 client — which can only happen if GetSempV2 didn't replace the cache
+// that a second GetSEMPv1 call after GetSEMPv2 still returns the original
+// v1 client — which can only happen if GetSEMPv2 didn't replace the cache
 // entry.
 func TestBrokerPool_SharedBrokerClientAcrossProtocols(t *testing.T) {
 	server := newV1TestServer()
@@ -333,28 +333,28 @@ func TestBrokerPool_SharedBrokerClientAcrossProtocols(t *testing.T) {
 
 	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
 
-	v1First, err := pool.GetSempV1("prod-us")
+	v1First, err := pool.GetSEMPv1("prod-us")
 	if err != nil {
-		t.Fatalf("GetSempV1() error: %v", err)
+		t.Fatalf("GetSEMPv1() error: %v", err)
 	}
 
 	// Cross-protocol access must not create a second BrokerClient.
-	v2, err := pool.GetSempV2("prod-us")
+	v2, err := pool.GetSEMPv2("prod-us")
 	if err != nil {
-		t.Fatalf("GetSempV2() error: %v", err)
+		t.Fatalf("GetSEMPv2() error: %v", err)
 	}
 	if v2 == nil {
-		t.Fatal("GetSempV2() returned nil after GetSempV1() created the BrokerClient")
+		t.Fatal("GetSEMPv2() returned nil after GetSEMPv1() created the BrokerClient")
 	}
 
-	// If GetSempV2 had silently replaced the cache entry, this second v1
+	// If GetSEMPv2 had silently replaced the cache entry, this second v1
 	// lookup would return a different client. Same instance means the cache
 	// entry was preserved across protocols.
-	v1Second, err := pool.GetSempV1("prod-us")
+	v1Second, err := pool.GetSEMPv1("prod-us")
 	if err != nil {
-		t.Fatalf("second GetSempV1() error: %v", err)
+		t.Fatalf("second GetSEMPv1() error: %v", err)
 	}
 	if v1First != v1Second {
-		t.Error("v1 client instance changed after GetSempV2() call — cache entry was not shared across protocols")
+		t.Error("v1 client instance changed after GetSEMPv2() call — cache entry was not shared across protocols")
 	}
 }

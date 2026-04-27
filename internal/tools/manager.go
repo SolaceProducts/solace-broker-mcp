@@ -113,7 +113,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		return nil, toolErr
 	}
 
-	client, err := m.pool.GetSempV2(brokerAlias)
+	client, err := m.pool.GetSEMPv2(brokerAlias)
 	if err != nil {
 		errorType = "unknown_broker"
 		toolErr = fmt.Errorf("unknown broker %q; available brokers: %s",

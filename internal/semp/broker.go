@@ -40,14 +40,14 @@ func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *conf
 	}, nil
 }
 
-// SempV1 returns the SEMPv1 client for this broker. Tools that need to send
+// SEMPv1 returns the SEMPv1 client for this broker. Tools that need to send
 // raw XML commands (e.g., <show><version/></show>) use this client.
-func (b *BrokerClient) SempV1() sempv1.Client {
+func (b *BrokerClient) SEMPv1() sempv1.Client {
 	return b.sempV1
 }
 
-// SempV2 returns the SEMPv2 client for this broker. This is the client that
+// SEMPv2 returns the SEMPv2 client for this broker. This is the client that
 // gets passed to the composite executor for making SEMP API calls.
-func (b *BrokerClient) SempV2() sempv2.Client {
+func (b *BrokerClient) SEMPv2() sempv2.Client {
 	return b.sempV2
 }

@@ -13,7 +13,7 @@ import (
 
 // BrokerPool manages BrokerClient instances for all configured brokers. It is
 // created at startup with broker configs from the YAML configuration file.
-// BrokerClients are created lazily on first GetSempV1() or GetSempV2() call
+// BrokerClients are created lazily on first GetSEMPv1() or GetSEMPv2() call
 // configured, only active brokers allocate HTTP clients and resources.
 // Thread-safe via sync.RWMutex with a double-check pattern for lazy creation.
 type BrokerPool struct {
@@ -39,7 +39,7 @@ func NewBrokerPool(cfg *config.ServerConfig) *BrokerPool {
 // lock for lazy creation. The second check after acquiring the write lock
 // handles the race where two goroutines both saw "not cached" during the fast
 // path. The log line is emitted exactly once per alias inside the creation
-// branch — both GetSempV1 and GetSempV2 delegate here, so neither accessor
+// branch — both GetSEMPv1 and GetSEMPv2 delegate here, so neither accessor
 // can trigger a duplicate log.
 func (p *BrokerPool) getOrCreate(alias string) (*BrokerClient, error) {
 	p.mu.RLock()
@@ -74,28 +74,28 @@ func (p *BrokerPool) getOrCreate(alias string) (*BrokerClient, error) {
 	return client, nil
 }
 
-// GetSempV1 returns the SEMPv1 client for the broker identified by alias. The
+// GetSEMPv1 returns the SEMPv1 client for the broker identified by alias. The
 // underlying BrokerClient is created lazily on the first call for a given
 // alias and reused for all subsequent calls. Returns an error if the alias
 // is not in the configured broker map.
-func (p *BrokerPool) GetSempV1(alias string) (sempv1.Client, error) {
+func (p *BrokerPool) GetSEMPv1(alias string) (sempv1.Client, error) {
 	client, err := p.getOrCreate(alias)
 	if err != nil {
 		return nil, err
 	}
-	return client.SempV1(), nil
+	return client.SEMPv1(), nil
 }
 
-// GetSempV2 returns the SEMPv2 client for the broker identified by alias. The
+// GetSEMPv2 returns the SEMPv2 client for the broker identified by alias. The
 // underlying BrokerClient is created lazily on the first call for a given
 // alias and reused for all subsequent calls. Returns an error if the alias
 // is not in the configured broker map.
-func (p *BrokerPool) GetSempV2(alias string) (sempv2.Client, error) {
+func (p *BrokerPool) GetSEMPv2(alias string) (sempv2.Client, error) {
 	client, err := p.getOrCreate(alias)
 	if err != nil {
 		return nil, err
 	}
-	return client.SempV2(), nil
+	return client.SEMPv2(), nil
 }
 
 // Aliases returns all configured broker aliases in sorted order. This includes

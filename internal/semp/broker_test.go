@@ -34,10 +34,10 @@ func TestBrokerClient_V2_ReturnsClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBrokerClient() error: %v", err)
 	}
-	client := bc.SempV2()
+	client := bc.SEMPv2()
 
 	if client == nil {
-		t.Fatal("SempV2() returned nil")
+		t.Fatal("SEMPv2() returned nil")
 	}
 }
 
@@ -64,7 +64,7 @@ func TestBrokerClient_V2_ExecutePassesThrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBrokerClient() error: %v", err)
 	}
-	client := bc.SempV2()
+	client := bc.SEMPv2()
 
 	op := &sempv2.Operation{
 		ID:     "testOp",
@@ -83,7 +83,7 @@ func TestBrokerClient_V2_ExecutePassesThrough(t *testing.T) {
 }
 
 // TestBrokerClient_V1_ReturnsClient verifies that NewBrokerClient populates
-// the SEMPv1 peer field and SempV1() returns a non-nil client. Parallels the
+// the SEMPv1 peer field and SEMPv1() returns a non-nil client. Parallels the
 // existing V2 test to confirm both protocols are initialized at construction.
 func TestBrokerClient_V1_ReturnsClient(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -106,15 +106,15 @@ func TestBrokerClient_V1_ReturnsClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBrokerClient() error: %v", err)
 	}
-	client := bc.SempV1()
+	client := bc.SEMPv1()
 
 	if client == nil {
-		t.Fatal("SempV1() returned nil")
+		t.Fatal("SEMPv1() returned nil")
 	}
 }
 
 // TestBrokerClient_V1_ExecutePassesThrough verifies that calling Execute on
-// the SempV1() client reaches the broker's HTTP endpoint. Parallels the V2
+// the SEMPv1() client reaches the broker's HTTP endpoint. Parallels the V2
 // pass-through test to prove the v1 accessor is wired to a real HTTPClient,
 // not a nil-or-stub value.
 func TestBrokerClient_V1_ExecutePassesThrough(t *testing.T) {
@@ -140,7 +140,7 @@ func TestBrokerClient_V1_ExecutePassesThrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBrokerClient() error: %v", err)
 	}
-	client := bc.SempV1()
+	client := bc.SEMPv1()
 
 	_, execErr := client.Execute(context.Background(), `<rpc><show><version/></show></rpc>`)
 	if execErr != nil {
