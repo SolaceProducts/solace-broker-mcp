@@ -1262,6 +1262,94 @@ func TestExecute_GetVPNHealth_SEMPError(t *testing.T) {
 	}
 }
 
+func TestExecute_ListQueues_EmptyFirstPage(t *testing.T) {
+	// First page returns an empty data array — result should be [] not null, truncated=false.
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnQueues", pageResult([]any{}, ""))
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listQueuesTool(), client, map[string]any{
+		"msgVpnName": "default",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	queues := result["queues"].(map[string]any)
+	items, ok := queues["data"].([]any)
+	if !ok {
+		t.Fatal("expected queues.data to be a slice, got nil")
+	}
+	if len(items) != 0 {
+		t.Errorf("len(items) = %d, want 0", len(items))
+	}
+	if queues["truncated"] != false {
+		t.Errorf("truncated = %v, want false", queues["truncated"])
+	}
+}
+
+
+func TestExecute_ListQueues_EmptyCursorInNextPageURI(t *testing.T) {
+	// nextPageUri is present but has no cursor query param, executor must return an error.
+	response := &sempv2.Result{
+		Data: map[string]any{
+			"data": makeQueueItems(10),
+			"meta": map[string]any{
+				"paging": map[string]any{
+					"nextPageUri": "/SEMP/v2/monitor/msgVpns/default/queues?count=100",
+				},
+			},
+		},
+		StatusCode: 200,
+	}
+
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnQueues", response)
+
+	executor := NewCompositeExecutor(testOperations())
+
+	_, err := executor.Execute(context.Background(), listQueuesTool(), client, map[string]any{
+		"msgVpnName": "default",
+	})
+	if err == nil {
+		t.Fatal("expected error for empty cursor in nextPageUri, got nil")
+	}
+	if !contains(err.Error(), "empty pagination cursor") {
+		t.Errorf("expected error mentioning 'empty pagination cursor', got: %v", err)
+	}
+}
+
+func TestExecute_ListQueues_UnparsableNextPageURI(t *testing.T) {
+	// nextPageUri cannot be parsed by url.Parse — executor must return an error.
+	response := &sempv2.Result{
+		Data: map[string]any{
+			"data": makeQueueItems(10),
+			"meta": map[string]any{
+				"paging": map[string]any{
+					"nextPageUri": ":not-a-valid-uri",
+				},
+			},
+		},
+		StatusCode: 200,
+	}
+
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnQueues", response)
+
+	executor := NewCompositeExecutor(testOperations())
+
+	_, err := executor.Execute(context.Background(), listQueuesTool(), client, map[string]any{
+		"msgVpnName": "default",
+	})
+	if err == nil {
+		t.Fatal("expected error for unparsable nextPageUri, got nil")
+	}
+	if !contains(err.Error(), "failed to parse pagination cursor") {
+		t.Errorf("expected error mentioning 'failed to parse pagination cursor', got: %v", err)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && searchString(s, substr)
 }
