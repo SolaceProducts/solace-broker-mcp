@@ -94,7 +94,7 @@ text as-is and add tool-level context.
 ```
 internal/semp/
 ├── broker.go                  // existing — add sempV1 peer field
-├── pool.go                    // existing — add GetSempV1(alias)
+├── pool.go                    // existing — add GetSEMPv1(alias)
 ├── sempv2/                    // existing
 │   ├── client.go
 │   └── operation.go
@@ -479,8 +479,8 @@ type BrokerClient struct {
     alias  string
 }
 
-func (b *BrokerClient) SempV1() sempv1.Client { return b.sempV1 }
-func (b *BrokerClient) SempV2() sempv2.Client { return b.sempV2 }
+func (b *BrokerClient) SEMPv1() sempv1.Client { return b.sempV1 }
+func (b *BrokerClient) SEMPv2() sempv2.Client { return b.sempV2 }
 ```
 
 Why:
@@ -493,8 +493,8 @@ Why:
 
 ```go
 // internal/semp/pool.go (modified)
-func (p *BrokerPool) GetSempV1(alias string) (sempv1.Client, error) { /* ... */ }
-func (p *BrokerPool) GetSempV2(alias string) (sempv2.Client, error) { /* ... */ }
+func (p *BrokerPool) GetSEMPv1(alias string) (sempv1.Client, error) { /* ... */ }
+func (p *BrokerPool) GetSEMPv2(alias string) (sempv2.Client, error) { /* ... */ }
 ```
 
 Both use the same lazy-creation, double-checked-locking pattern that exists
@@ -578,7 +578,7 @@ drifts, not gaps:
 - "Unit tests: mock XML responses" (line 1101) → covered in §8.4
 - "Mock error responses (401, 404, 500)" (line 1151) → explicit fixtures in §8.5
 - "Resource/Tool code can call either or both as needed" (line 1099) → tools
-  access `brokerClient.SempV1()` and/or `SempV2()` independently (§10.2)
+  access `brokerClient.SEMPv1()` and/or `SEMPv2()` independently (§10.2)
 
 ---
 
