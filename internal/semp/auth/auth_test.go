@@ -11,7 +11,7 @@ import (
 
 func newReq(t *testing.T) *http.Request {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, "http://example.test/SEMP", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://example.test/SEMP", nil)
 	if err != nil {
 		t.Fatalf("building request: %v", err)
 	}
