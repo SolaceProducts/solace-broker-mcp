@@ -221,8 +221,8 @@ func (m *ToolManager) logToolResult(ctx context.Context, tool string, broker *st
 
 	// Type-switch on the concrete error types instead of a shared interface.
 	//
-	// A common SempError interface was considered but rejected: see
-	// docs/semp/sempv1-tool-wiring-plan.md §6. The two protocols' error
+	// A common SempError interface was considered but rejected: see drift
+	// D7 in docs/semp/sempv1-client-design.md. The two protocols' error
 	// shapes are semantically different (HTTPStatus means different things
 	// in v1's envelope-error case vs. v2's HTTP-error case), and forcing a
 	// unified contract would mislead consumers. With only one consumer

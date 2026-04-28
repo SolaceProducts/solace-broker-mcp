@@ -163,7 +163,6 @@ func TestCallTool_UnknownBroker(t *testing.T) {
 // TestCallTool_ResolvesBothProtocolClients verifies that the manager
 // populates both SEMPv1Client and SEMPv2Client on the ToolContext for every
 // invocation, regardless of which protocol the handler ends up using.
-// Per docs/semp/sempv1-tool-wiring-plan.md §4.
 func TestCallTool_ResolvesBothProtocolClients(t *testing.T) {
 	mgr := NewToolManager(newTestPool())
 
@@ -419,7 +418,7 @@ func TestCallTool_SEMPErrorWrapped(t *testing.T) {
 // TestLogToolResult_V1ErrorEmitsStructuredFields verifies that when a handler
 // returns a *sempv1.Error, the manager's logToolResult emits the v1-specific
 // structured log fields (kind, http_status, reason_code) and does not emit the
-// v2-specific "operation" field. Per docs/semp/sempv1-tool-wiring-plan.md §6.
+// v2-specific "operation" field.
 func TestLogToolResult_V1ErrorEmitsStructuredFields(t *testing.T) {
 	var buf bytes.Buffer
 	old := slog.Default()

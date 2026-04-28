@@ -24,8 +24,12 @@ var _ tools.ToolHandler = (*Handler)(nil)
 // It issues a single SEMPv1 show-redundancy command against the target
 // broker and returns the parsed response in a step-keyed envelope.
 //
-// See docs/semp/sempv1-tool-wiring-plan.md §7 for the output-shape
-// rationale (envelope vs. flat curation).
+// Output shape: the broker's full XML response is parsed verbatim into
+// a JSON envelope under the "redundancy" key. Curation to a flat,
+// curated subset of fields is post-MVP work. This per-team decision
+// allows downstream consumers to start using the tool today against
+// the full broker output and adopt curation later without renaming
+// any fields.
 type Handler struct{}
 
 // NewHandler returns a redundancy-status tool handler ready to register
@@ -63,8 +67,7 @@ func (h *Handler) Schema() map[string]any {
 
 // OutputSchema returns the generic step-keyed envelope schema used by
 // every SEMPv1 tool: a top-level object whose keys are step IDs and
-// whose values are the parsed SEMP responses. Per
-// docs/semp/sempv1-tool-wiring-plan.md §7, the schema validates the
+// whose values are the parsed SEMP responses. The schema validates the
 // envelope structure but not individual response fields, so post-MVP
 // curation can flatten without a schema migration.
 func (h *Handler) OutputSchema() map[string]any {
