@@ -51,9 +51,9 @@ type ParameterDef struct {
 // provides arguments as Go text/template expressions that are resolved against
 // the input parameters and prior step results.
 type Step struct {
-	ID        string            `yaml:"id"`
-	Operation string            `yaml:"operation"` // prefixed operationId (e.g., "monitor/getMsgVpnQueue")
-	Args      map[string]string `yaml:"args"`      // values are Go text/template expressions
+	ID          string            `yaml:"id"`
+	Operation   string            `yaml:"operation"`   // prefixed operationId (e.g., "monitor/getMsgVpnQueue")
+	Args        map[string]string `yaml:"args"`        // values are Go text/template expressions
 	Parallel    bool              `yaml:"parallel"`    // group with adjacent parallel:true steps
 	FollowPages bool              `yaml:"followPages"` // follow SEMP nextPageUri links and aggregate all pages
 }
