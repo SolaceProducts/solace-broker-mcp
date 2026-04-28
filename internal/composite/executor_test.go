@@ -87,7 +87,73 @@ func testOperations() map[string]*sempv2.Operation {
 			Method: "PUT",
 			Path:   "/SEMP/v2/action/msgVpns/{msgVpnName}/queues/{queueName}/startReplay",
 		},
+		"monitor/getMsgVpn": {
+			ID:     "getMsgVpn",
+			Method: "GET",
+			Path:   "/SEMP/v2/__private_monitor__/msgVpns/{msgVpnName}",
+		},
+		"monitor/getMsgVpns": {
+			ID:     "getMsgVpns",
+			Method: "GET",
+			Path:   "/SEMP/v2/__private_monitor__/msgVpns",
+		},
+		"monitor/getMsgVpnQueues": {
+			ID:     "getMsgVpnQueues",
+			Method: "GET",
+			Path:   "/SEMP/v2/__private_monitor__/msgVpns/{msgVpnName}/queues",
+		},
+		"monitor/getMsgVpnClients": {
+			ID:     "getMsgVpnClients",
+			Method: "GET",
+			Path:   "/SEMP/v2/__private_monitor__/msgVpns/{msgVpnName}/clients",
+		},
 	}
+}
+
+// seqMockClient returns pre-configured responses for operations in sequence.
+// Each Execute call for an operation advances to the next response in its sequence.
+// When the sequence is exhausted the last response is repeated.
+type seqMockClient struct {
+	mu     sync.Mutex
+	calls  []callRecord
+	seqs   map[string][]*sempv2.Result
+	errors map[string]error
+	idx    map[string]int
+}
+
+func newSeqMockClient() *seqMockClient {
+	return &seqMockClient{
+		seqs:   make(map[string][]*sempv2.Result),
+		errors: make(map[string]error),
+		idx:    make(map[string]int),
+	}
+}
+
+func (m *seqMockClient) addResponses(opID string, results ...*sempv2.Result) {
+	m.seqs[opID] = append(m.seqs[opID], results...)
+}
+
+func (m *seqMockClient) Execute(_ context.Context, op *sempv2.Operation, args map[string]any) (*sempv2.Result, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.calls = append(m.calls, callRecord{opID: op.ID, args: args})
+
+	if err, ok := m.errors[op.ID]; ok {
+		return nil, err
+	}
+
+	seq, ok := m.seqs[op.ID]
+	if !ok || len(seq) == 0 {
+		return &sempv2.Result{Data: map[string]any{}, StatusCode: 200}, nil
+	}
+
+	idx := m.idx[op.ID]
+	if idx >= len(seq) {
+		idx = len(seq) - 1
+	}
+	m.idx[op.ID] = idx + 1
+	return seq[idx], nil
 }
 
 // getQueueMetricsTool returns the get-queue-metrics tool definition for tests.
@@ -771,6 +837,424 @@ func TestExecute_ListClientSubscriptions_DefaultsCountQuery(t *testing.T) {
 
 	if recorded[0].args["count"] != "100" {
 		t.Errorf("expected count to default to %q, got %v", "100", recorded[0].args["count"])
+	}
+}
+
+// getVPNHealthTool returns the get-vpn-health tool definition for tests.
+func getVPNHealthTool() CompositeTool {
+	return CompositeTool{
+		Name:        "get-vpn-health",
+		Description: "Get health and connection statistics for a Message VPN",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+		},
+		Steps: []Step{
+			{
+				ID:        "vpnHealth",
+				Operation: "monitor/getMsgVpn",
+				Args: map[string]string{
+					"msgVpnName": "{{.Params.msgVpnName}}",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// listVPNsTool returns the list-vpns tool definition for tests.
+func listVPNsTool() CompositeTool {
+	return CompositeTool{
+		Name:        "list-vpns",
+		Description: "List all Message VPNs on the broker",
+		Parameters: []ParameterDef{
+			{Name: "maxResults", Type: "integer", Required: false},
+		},
+		Steps: []Step{
+			{
+				ID:        "vpns",
+				Operation: "monitor/getMsgVpns",
+				Paginate:  true,
+				Args: map[string]string{
+					"count": "100",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "paginate"},
+	}
+}
+
+// listQueuesTool returns the list-queues tool definition for tests.
+func listQueuesTool() CompositeTool {
+	return CompositeTool{
+		Name:        "list-queues",
+		Description: "List all queues in a Message VPN",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "maxResults", Type: "integer", Required: false},
+		},
+		Steps: []Step{
+			{
+				ID:        "queues",
+				Operation: "monitor/getMsgVpnQueues",
+				Paginate:  true,
+				Args: map[string]string{
+					"msgVpnName": "{{.Params.msgVpnName}}",
+					"count":      "100",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "paginate"},
+	}
+}
+
+// listClientsTool returns the list-clients tool definition for tests.
+func listClientsTool() CompositeTool {
+	return CompositeTool{
+		Name:        "list-clients",
+		Description: "List all active client connections in a Message VPN",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "maxResults", Type: "integer", Required: false},
+		},
+		Steps: []Step{
+			{
+				ID:        "clients",
+				Operation: "monitor/getMsgVpnClients",
+				Paginate:  true,
+				Args: map[string]string{
+					"msgVpnName": "{{.Params.msgVpnName}}",
+					"count":      "100",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "paginate"},
+	}
+}
+
+// makeVPNItems builds a slice of n mock VPN objects for use in paginated responses.
+func makeVPNItems(n int) []any {
+	items := make([]any, n)
+	for i := range items {
+		items[i] = map[string]any{"msgVpnName": fmt.Sprintf("vpn-%d", i), "enabled": true}
+	}
+	return items
+}
+
+// makeQueueItems builds a slice of n mock queue objects for use in paginated responses.
+func makeQueueItems(n int) []any {
+	items := make([]any, n)
+	for i := range items {
+		items[i] = map[string]any{"queueName": fmt.Sprintf("queue-%d", i), "bindCount": float64(0)}
+	}
+	return items
+}
+
+// makeClientItems builds a slice of n mock client objects for use in paginated responses.
+func makeClientItems(n int) []any {
+	items := make([]any, n)
+	for i := range items {
+		items[i] = map[string]any{"clientName": fmt.Sprintf("client-%d", i), "slowSubscriber": false}
+	}
+	return items
+}
+
+// pageResult builds a SEMP list response with optional pagination cursor.
+func pageResult(items []any, nextCursor string) *sempv2.Result {
+	data := map[string]any{"data": items}
+	if nextCursor != "" {
+		data["meta"] = map[string]any{
+			"paging": map[string]any{
+				"nextPageUri": "/SEMP/v2/__private_monitor__/resource?cursor=" + nextCursor + "&count=100",
+			},
+		}
+	}
+	return &sempv2.Result{Data: data, StatusCode: 200}
+}
+
+func TestExecute_GetVPNHealth_ReturnsData(t *testing.T) {
+	client := newMockClient()
+	client.responses["getMsgVpn"] = &sempv2.Result{
+		Data: map[string]any{
+			"msgVpnName":                      "default",
+			"enabled":                         true,
+			"msgVpnConnections":               float64(5),
+			"msgVpnTotalUniqueSubscriptions":  float64(42),
+			"state":                           "up",
+		},
+		StatusCode: 200,
+	}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), getVPNHealthTool(), client, map[string]any{
+		"msgVpnName": "default",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	vpnData, ok := result["vpnHealth"].(map[string]any)
+	if !ok {
+		t.Fatal("expected vpnHealth key containing a map")
+	}
+	if vpnData["msgVpnName"] != "default" {
+		t.Errorf("msgVpnName = %v, want default", vpnData["msgVpnName"])
+	}
+	if vpnData["enabled"] != true {
+		t.Errorf("enabled = %v, want true", vpnData["enabled"])
+	}
+}
+
+func TestExecute_ListVPNs_SinglePage(t *testing.T) {
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpns", pageResult(makeVPNItems(3), ""))
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listVPNsTool(), client, map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	vpns, ok := result["vpns"].(map[string]any)
+	if !ok {
+		t.Fatal("expected vpns key containing a map")
+	}
+
+	items, ok := vpns["data"].([]any)
+	if !ok {
+		t.Fatal("expected vpns.data to be a slice")
+	}
+	if len(items) != 3 {
+		t.Errorf("len(items) = %d, want 3", len(items))
+	}
+	if vpns["truncated"] != false {
+		t.Errorf("truncated = %v, want false", vpns["truncated"])
+	}
+	if len(client.calls) != 1 {
+		t.Errorf("expected 1 SEMP call, got %d", len(client.calls))
+	}
+}
+
+func TestExecute_ListVPNs_MultiPage(t *testing.T) {
+	// Page 1: 10 VPNs with nextPageUri; page 2: 5 VPNs, no nextPageUri. Total: 15.
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpns",
+		pageResult(makeVPNItems(10), "cursor-page2"),
+		pageResult(makeVPNItems(5), ""),
+	)
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listVPNsTool(), client, map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	vpns := result["vpns"].(map[string]any)
+	items := vpns["data"].([]any)
+
+	if len(items) != 15 {
+		t.Errorf("len(items) = %d, want 15", len(items))
+	}
+	if vpns["truncated"] != false {
+		t.Errorf("truncated = %v, want false", vpns["truncated"])
+	}
+	if len(client.calls) != 2 {
+		t.Errorf("expected 2 SEMP calls, got %d", len(client.calls))
+	}
+	// Second call must include the cursor from the first page's nextPageUri.
+	if client.calls[1].args["cursor"] != "cursor-page2" {
+		t.Errorf("second call cursor = %v, want cursor-page2", client.calls[1].args["cursor"])
+	}
+}
+
+func TestExecute_ListQueues_MultiPage(t *testing.T) {
+	// Page 1: 100 queues + cursor; page 2: 50 queues, no cursor. Total: 150.
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnQueues",
+		pageResult(makeQueueItems(100), "cursor-q2"),
+		pageResult(makeQueueItems(50), ""),
+	)
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listQueuesTool(), client, map[string]any{
+		"msgVpnName": "default",
+		"maxResults": float64(200), // larger than 150 total so paginator follows all pages
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	queues := result["queues"].(map[string]any)
+	items := queues["data"].([]any)
+
+	if len(items) != 150 {
+		t.Errorf("len(items) = %d, want 150", len(items))
+	}
+	if queues["truncated"] != false {
+		t.Errorf("truncated = %v, want false", queues["truncated"])
+	}
+	if len(client.calls) != 2 {
+		t.Errorf("expected 2 SEMP calls, got %d", len(client.calls))
+	}
+}
+
+func TestExecute_ListQueues_TruncatesAtMaxResults(t *testing.T) {
+	// Page has 100 items but maxResults=50, paginator should stop and set truncated.
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnQueues", pageResult(makeQueueItems(100), "cursor-next"))
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listQueuesTool(), client, map[string]any{
+		"msgVpnName": "default",
+		"maxResults": float64(50),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	queues := result["queues"].(map[string]any)
+	items := queues["data"].([]any)
+
+	if len(items) != 50 {
+		t.Errorf("len(items) = %d, want 50", len(items))
+	}
+	if queues["truncated"] != true {
+		t.Errorf("truncated = %v, want true", queues["truncated"])
+	}
+	// Paginator stopped after the first page, no second call.
+	if len(client.calls) != 1 {
+		t.Errorf("expected 1 SEMP call, got %d", len(client.calls))
+	}
+}
+
+func TestExecute_ListClients_DefaultMaxResults(t *testing.T) {
+	// 80 clients on a single page, fits within the default 100 limit.
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnClients", pageResult(makeClientItems(80), ""))
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listClientsTool(), client, map[string]any{
+		"msgVpnName": "default",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	clients := result["clients"].(map[string]any)
+	items := clients["data"].([]any)
+
+	if len(items) != 80 {
+		t.Errorf("len(items) = %d, want 80", len(items))
+	}
+	if clients["truncated"] != false {
+		t.Errorf("truncated = %v, want false", clients["truncated"])
+	}
+}
+
+func TestExecute_ListClients_MultiPage(t *testing.T) {
+	// Page 1: 100 clients + cursor; page 2: 20 clients, no cursor. Total: 120.
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnClients",
+		pageResult(makeClientItems(100), "cursor-c2"),
+		pageResult(makeClientItems(20), ""),
+	)
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listClientsTool(), client, map[string]any{
+		"msgVpnName": "default",
+		"maxResults": float64(200), // larger than 120 total so paginator follows all pages
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	clients := result["clients"].(map[string]any)
+	items := clients["data"].([]any)
+
+	if len(items) != 120 {
+		t.Errorf("len(items) = %d, want 120", len(items))
+	}
+	if clients["truncated"] != false {
+		t.Errorf("truncated = %v, want false", clients["truncated"])
+	}
+	if len(client.calls) != 2 {
+		t.Errorf("expected 2 SEMP calls, got %d", len(client.calls))
+	}
+}
+
+func TestExecute_ListQueues_MaxResultsCappedAt500(t *testing.T) {
+	// maxResults=1000 exceeds the 500 cap, paginator should stop at 500.
+	page1 := pageResult(makeQueueItems(100), "c2")
+	page2 := pageResult(makeQueueItems(100), "c3")
+	page3 := pageResult(makeQueueItems(100), "c4")
+	page4 := pageResult(makeQueueItems(100), "c5")
+	page5 := pageResult(makeQueueItems(100), "c6")
+	// page6 would push beyond cap, should not be fetched.
+	page6 := pageResult(makeQueueItems(100), "")
+
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnQueues", page1, page2, page3, page4, page5, page6)
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listQueuesTool(), client, map[string]any{
+		"msgVpnName": "default",
+		"maxResults": float64(1000),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	queues := result["queues"].(map[string]any)
+	items := queues["data"].([]any)
+
+	if len(items) != 500 {
+		t.Errorf("len(items) = %d, want 500 (cap)", len(items))
+	}
+	if queues["truncated"] != true {
+		t.Errorf("truncated = %v, want true", queues["truncated"])
+	}
+}
+
+func TestExecute_ListQueues_MissingVPNName(t *testing.T) {
+	client := newSeqMockClient()
+	executor := NewCompositeExecutor(testOperations())
+
+	// msgVpnName is required by the template, omitting it should return an error.
+	_, err := executor.Execute(context.Background(), listQueuesTool(), client, map[string]any{})
+	if err == nil {
+		t.Fatal("expected error for missing msgVpnName, got nil")
+	}
+}
+
+func TestExecute_GetVPNHealth_SEMPError(t *testing.T) {
+	client := newMockClient()
+	client.errors["getMsgVpn"] = &sempv2.SEMPError{
+		Operation:  "getMsgVpn",
+		StatusCode: 400,
+		Body:       `{"meta":{"error":{"code":400,"description":"VPN not found","status":"NOT_FOUND"}}}`,
+	}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	_, err := executor.Execute(context.Background(), getVPNHealthTool(), client, map[string]any{
+		"msgVpnName": "nonexistent",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	var sempErr *sempv2.SEMPError
+	if !errors.As(err, &sempErr) {
+		t.Errorf("expected SEMPError in error chain, got: %v", err)
+	} else if sempErr.StatusCode != 400 {
+		t.Errorf("StatusCode = %d, want 400", sempErr.StatusCode)
 	}
 }
 

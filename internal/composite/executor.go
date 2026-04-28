@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/url"
 	"text/template"
 
 	"golang.org/x/sync/errgroup"
@@ -127,7 +128,13 @@ func GroupStepsIntoBatches(steps []Step) []ExecutionBatch {
 
 // executeStep executes a single step: resolves template args, looks up the
 // operation, calls the client, and stores the result in the execution context.
+// If the step has Paginate set, it delegates to executePaginatedStep to follow
+// SEMP nextPageUri links and aggregate results across pages.
 func (ce *CompositeExecutor) executeStep(ctx context.Context, step Step, client sempv2.Client, execCtx *ExecuteContext) error {
+	if step.Paginate {
+		return ce.executePaginatedStep(ctx, step, client, execCtx)
+	}
+
 	args, err := ResolveArgs(step.Args, execCtx)
 	if err != nil {
 		return fmt.Errorf("tool step %s: failed to resolve args: %w", step.ID, err)
@@ -145,6 +152,145 @@ func (ce *CompositeExecutor) executeStep(ctx context.Context, step Step, client 
 
 	execCtx.StepResults[step.ID] = result.Data
 	return nil
+}
+
+// executePaginatedStep executes a step that returns paginated results. It follows
+// SEMP's nextPageUri links until all pages are collected or maxResults is reached.
+// The merged data array is stored in execCtx.StepResults keyed by step ID, alongside
+// a truncated flag indicating whether more results exist beyond maxResults.
+func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step, client sempv2.Client, execCtx *ExecuteContext) error {
+	baseArgs, err := ResolveArgs(step.Args, execCtx)
+	if err != nil {
+		return fmt.Errorf("tool step %s: failed to resolve args: %w", step.ID, err)
+	}
+
+	op, ok := ce.operations[step.Operation]
+	if !ok {
+		return fmt.Errorf("tool step %s: operation %q not found in operation catalog", step.ID, step.Operation)
+	}
+
+	maxResults := resolveMaxResults(execCtx.Params)
+	var allItems []any
+	truncated := false
+	args := baseArgs
+
+	for {
+		result, err := client.Execute(ctx, op, args)
+		if err != nil {
+			return fmt.Errorf("tool step %s: %w", step.ID, err)
+		}
+
+		items := extractDataItems(result.Data)
+		if len(items) == 0 {
+			break
+		}
+
+		remaining := maxResults - len(allItems)
+		if len(items) >= remaining {
+			allItems = append(allItems, items[:remaining]...)
+			// Truncated if the page had more items than we needed, or if more pages exist.
+			truncated = len(items) > remaining || extractNextPageURI(result.Data) != ""
+			break
+		}
+
+		allItems = append(allItems, items...)
+
+		nextURI := extractNextPageURI(result.Data)
+		if nextURI == "" {
+			break
+		}
+
+		cursor, parseErr := parseCursorFromURI(nextURI)
+		if parseErr != nil || cursor == "" {
+			break
+		}
+
+		args = appendCursor(baseArgs, cursor)
+	}
+
+	execCtx.StepResults[step.ID] = map[string]any{
+		"data":      allItems,
+		"truncated": truncated,
+	}
+	return nil
+}
+
+// resolveMaxResults reads maxResults from the execution params, applying a
+// default of 100 and a cap of 500 as specified in SOL-148429 acceptance criteria.
+func resolveMaxResults(params map[string]any) int {
+	const defaultMax = 100
+	const capMax = 500
+
+	raw, ok := params["maxResults"]
+	if !ok {
+		return defaultMax
+	}
+
+	var n int
+	switch v := raw.(type) {
+	case float64:
+		n = int(v)
+	case int:
+		n = v
+	case int64:
+		n = int(v)
+	default:
+		return defaultMax
+	}
+
+	if n <= 0 {
+		return defaultMax
+	}
+	if n > capMax {
+		return capMax
+	}
+	return n
+}
+
+// extractDataItems returns the data array from a SEMP list response, or nil
+// if the response contains no data field or it is not a slice.
+func extractDataItems(data map[string]any) []any {
+	raw, ok := data["data"]
+	if !ok {
+		return nil
+	}
+	items, _ := raw.([]any)
+	return items
+}
+
+// extractNextPageURI returns the nextPageUri from SEMP pagination metadata,
+// or an empty string if the response has no further pages.
+func extractNextPageURI(data map[string]any) string {
+	meta, ok := data["meta"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	paging, ok := meta["paging"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	uri, _ := paging["nextPageUri"].(string)
+	return uri
+}
+
+// parseCursorFromURI extracts the cursor query parameter from a SEMP nextPageUri.
+func parseCursorFromURI(rawURI string) (string, error) {
+	u, err := url.Parse(rawURI)
+	if err != nil {
+		return "", err
+	}
+	return u.Query().Get("cursor"), nil
+}
+
+// appendCursor returns a copy of baseArgs with the cursor key added for the
+// next paginated SEMP request.
+func appendCursor(baseArgs map[string]any, cursor string) map[string]any {
+	next := make(map[string]any, len(baseArgs)+1)
+	for k, v := range baseArgs {
+		next[k] = v
+	}
+	next["cursor"] = cursor
+	return next
 }
 
 // executeBatch runs multiple parallel steps concurrently using errgroup. If any
@@ -239,15 +385,15 @@ func safeTemplateExecute(tmpl *template.Template, data any) (result string, err 
 }
 
 // ApplyResultStrategy combines step results according to the tool's result
-// strategy configuration. Currently only "collect" is supported. Additional
-// strategies (merge, unwrap) are deferred pending design discussion around
-// SEMP response envelope overlap and per-step data transformation needs.
+// strategy configuration. "collect" returns all step results keyed by step ID.
+// "paginate" uses the same envelope — the paginated data array and truncated flag
+// are already assembled by executePaginatedStep before this is called.
 func ApplyResultStrategy(strategy ResultStrategy, stepResults map[string]map[string]any) (map[string]any, error) {
 	switch strategy.Strategy {
-	case "collect":
+	case "collect", "paginate":
 		return collectStrategy(stepResults)
 	default:
-		return nil, fmt.Errorf("result strategy %q is not supported; only collect is currently supported", strategy.Strategy)
+		return nil, fmt.Errorf("result strategy %q is not supported; supported values: collect, paginate", strategy.Strategy)
 	}
 }
 

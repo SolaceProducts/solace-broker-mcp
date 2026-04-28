@@ -482,3 +482,262 @@ tools:
 		t.Error("expected count arg in step, not found")
 	}
 }
+
+func TestLoadTools_GetVPNHealth(t *testing.T) {
+	yaml := `
+tools:
+  - name: get-vpn-health
+    description: >
+      Get health and connection statistics for a Message VPN.
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The name of the Message VPN"
+    steps:
+      - id: vpnHealth
+        operation: monitor/getMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+    result:
+      strategy: collect
+`
+	fsys := fstest.MapFS{
+		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
+	}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	tool := tools[0]
+	if tool.Name != "get-vpn-health" {
+		t.Errorf("expected name %q, got %q", "get-vpn-health", tool.Name)
+	}
+	if len(tool.Parameters) != 1 {
+		t.Fatalf("expected 1 parameter, got %d", len(tool.Parameters))
+	}
+	if tool.Parameters[0].Name != "msgVpnName" || !tool.Parameters[0].Required {
+		t.Errorf("expected msgVpnName required parameter, got %+v", tool.Parameters[0])
+	}
+	if len(tool.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(tool.Steps))
+	}
+	if tool.Steps[0].ID != "vpnHealth" {
+		t.Errorf("expected step ID %q, got %q", "vpnHealth", tool.Steps[0].ID)
+	}
+	if tool.Steps[0].Operation != "monitor/getMsgVpn" {
+		t.Errorf("expected operation %q, got %q", "monitor/getMsgVpn", tool.Steps[0].Operation)
+	}
+	if tool.Steps[0].Paginate {
+		t.Error("expected Paginate=false for get-vpn-health step")
+	}
+	if tool.Result.Strategy != "collect" {
+		t.Errorf("expected strategy %q, got %q", "collect", tool.Result.Strategy)
+	}
+}
+
+func TestLoadTools_ListVPNs(t *testing.T) {
+	yaml := `
+tools:
+  - name: list-vpns
+    description: >
+      List all Message VPNs on the broker.
+    parameters:
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of VPNs to return (default 100, max 500)"
+    steps:
+      - id: vpns
+        operation: monitor/getMsgVpns
+        paginate: true
+        args:
+          count: "100"
+    result:
+      strategy: paginate
+`
+	fsys := fstest.MapFS{
+		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
+	}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	tool := tools[0]
+	if tool.Name != "list-vpns" {
+		t.Errorf("expected name %q, got %q", "list-vpns", tool.Name)
+	}
+	if len(tool.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(tools))
+	}
+	if !tool.Steps[0].Paginate {
+		t.Error("expected Paginate=true for list-vpns step")
+	}
+	if tool.Steps[0].Operation != "monitor/getMsgVpns" {
+		t.Errorf("expected operation %q, got %q", "monitor/getMsgVpns", tool.Steps[0].Operation)
+	}
+	if tool.Result.Strategy != "paginate" {
+		t.Errorf("expected strategy %q, got %q", "paginate", tool.Result.Strategy)
+	}
+}
+
+func TestLoadTools_ListQueues(t *testing.T) {
+	yaml := `
+tools:
+  - name: list-queues
+    description: >
+      List all queues in a Message VPN.
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN to list queues for"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of queues to return (default 100, max 500)"
+    steps:
+      - id: queues
+        operation: monitor/getMsgVpnQueues
+        paginate: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          count: "100"
+    result:
+      strategy: paginate
+`
+	fsys := fstest.MapFS{
+		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
+	}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	tool := tools[0]
+	if tool.Name != "list-queues" {
+		t.Errorf("expected name %q, got %q", "list-queues", tool.Name)
+	}
+	if len(tool.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(tool.Steps))
+	}
+	if !tool.Steps[0].Paginate {
+		t.Error("expected Paginate=true for list-queues step")
+	}
+	if tool.Steps[0].Operation != "monitor/getMsgVpnQueues" {
+		t.Errorf("expected operation %q, got %q", "monitor/getMsgVpnQueues", tool.Steps[0].Operation)
+	}
+	if tool.Result.Strategy != "paginate" {
+		t.Errorf("expected strategy %q, got %q", "paginate", tool.Result.Strategy)
+	}
+
+	// Verify optional maxResults parameter.
+	maxResults := tool.Parameters[1]
+	if maxResults.Name != "maxResults" {
+		t.Errorf("expected parameter name %q, got %q", "maxResults", maxResults.Name)
+	}
+	if maxResults.Required {
+		t.Error("expected maxResults to be optional (required=false)")
+	}
+}
+
+func TestLoadTools_ListClients(t *testing.T) {
+	yaml := `
+tools:
+  - name: list-clients
+    description: >
+      List all active client connections in a Message VPN.
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN to list clients for"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of clients to return (default 100, max 500)"
+    steps:
+      - id: clients
+        operation: monitor/getMsgVpnClients
+        paginate: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          count: "100"
+    result:
+      strategy: paginate
+`
+	fsys := fstest.MapFS{
+		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
+	}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	tool := tools[0]
+	if tool.Name != "list-clients" {
+		t.Errorf("expected name %q, got %q", "list-clients", tool.Name)
+	}
+	if len(tool.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(tool.Steps))
+	}
+	if !tool.Steps[0].Paginate {
+		t.Error("expected Paginate=true for list-clients step")
+	}
+	if tool.Steps[0].Operation != "monitor/getMsgVpnClients" {
+		t.Errorf("expected operation %q, got %q", "monitor/getMsgVpnClients", tool.Steps[0].Operation)
+	}
+	if tool.Result.Strategy != "paginate" {
+		t.Errorf("expected strategy %q, got %q", "paginate", tool.Result.Strategy)
+	}
+}
+
+func TestLoadTools_PaginateStrategyValid(t *testing.T) {
+	yaml := `
+tools:
+  - name: paginate-tool
+    description: A tool using paginate strategy
+    steps:
+      - id: items
+        operation: monitor/getMsgVpns
+        paginate: true
+        args:
+          count: "100"
+    result:
+      strategy: paginate
+`
+	fsys := fstest.MapFS{
+		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
+	}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error for paginate strategy: %v", err)
+	}
+
+	if tools[0].Result.Strategy != "paginate" {
+		t.Errorf("expected strategy %q, got %q", "paginate", tools[0].Result.Strategy)
+	}
+}
