@@ -60,7 +60,7 @@ type virtualRouter struct {
 // virtualRouterConfig holds the configured routing-interface and VRID.
 type virtualRouterConfig struct {
 	RoutingInterface string `xml:"routing-interface" json:"routingInterface"`
-	VRRPVRID         string `xml:"vrrp-vrid" json:"vrrpVRID"`
+	VRRPVRID         string `xml:"vrrp-vrid" json:"vrrpVrid"`
 }
 
 // virtualRouterStatus holds the operational status for one virtual router,
