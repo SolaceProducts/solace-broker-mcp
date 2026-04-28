@@ -132,6 +132,16 @@ func healthConfigFromFile() healthConfig {
 	return healthConfig{Port: cfg.Port, Scheme: scheme}
 }
 
+// registerSEMPv1Tools attaches every Go-native SEMPv1 tool handler to mgr.
+// New SEMPv1 tools should be added here as they land — this is the single
+// source of truth for which v1 tools the server exposes. The handlers flow
+// through the same RegisterWithServer pass as composite tools, so they
+// inherit input-schema validation, broker resolution, and structured
+// logging without further plumbing.
+func registerSEMPv1Tools(mgr *tools.ToolManager) {
+	mgr.Register(redundancy.NewHandler())
+}
+
 func main() {
 	if len(os.Args) == 2 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
 		fmt.Println(version.Version())
@@ -232,21 +242,19 @@ func main() {
 		Version: version.Version(),
 	}, nil)
 
-	// 7. Create tool manager from composite tool definitions
+	// 7. Create the tool manager and register every tool the server exposes.
+	// All registrations happen in one block so the log line below is a
+	// reliable phase boundary — anything before it is registered, anything
+	// after it sees a fully-loaded server.
 	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor)
-
-	// 7a. Register Go-native SEMPv1 tool handlers on the same manager.
-	// They flow through the same RegisterWithServer pass below.
-	mgr.Register(redundancy.NewHandler())
-
+	registerSEMPv1Tools(mgr)
 	tools.RegisterWithServer(mgr, server, pool)
-	slog.Info("registered composite tools",
-		slog.Int("tool_count", len(compositeTools)))
-	slog.Info("registered sempv1 tools",
-		slog.Int("tool_count", 1))
 
-	// 8. Register list-brokers discovery tool
+	// list-brokers is a discovery tool registered directly on the MCP
+	// server (it doesn't need broker resolution or the ToolManager pipeline).
 	tools.RegisterListBrokers(server, pool)
+
+	slog.Info("all tools registered")
 
 	// 9. Set up HTTP routes
 	mux := buildMux()
