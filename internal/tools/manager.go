@@ -116,17 +116,13 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 
 	v1Client, err := m.pool.GetSEMPv1(brokerAlias)
 	if err != nil {
-		errorType = "unknown_broker"
-		toolErr = fmt.Errorf("unknown broker %q; available brokers: %s",
-			brokerAlias, strings.Join(m.pool.Aliases(), ", "))
+		errorType, toolErr = m.classifyBrokerError(brokerAlias, err)
 		return nil, toolErr
 	}
 
 	v2Client, err := m.pool.GetSEMPv2(brokerAlias)
 	if err != nil {
-		errorType = "unknown_broker"
-		toolErr = fmt.Errorf("unknown broker %q; available brokers: %s",
-			brokerAlias, strings.Join(m.pool.Aliases(), ", "))
+		errorType, toolErr = m.classifyBrokerError(brokerAlias, err)
 		return nil, toolErr
 	}
 
@@ -250,4 +246,28 @@ func (m *ToolManager) logToolResult(ctx context.Context, tool string, broker *st
 	}
 
 	slog.LogAttrs(ctx, slog.LevelError, "tool invoked", attrs...)
+}
+
+// classifyBrokerError translates a BrokerPool resolution failure into the
+// errorType label and user-facing error the manager logs and returns.
+//
+// It distinguishes two cases:
+//
+//   - The alias isn't configured (semp.ErrUnknownBroker): produces an
+//     "unknown_broker" label and a message listing the available aliases
+//     so an operator can spot a typo.
+//   - Anything else (transport setup, future OAuth handshake, etc.):
+//     produces a "broker_init_error" label and wraps the original error
+//     so the underlying cause survives in logs and through errors.Is/As.
+//
+// The dispatch keeps the manager honest as the pool's failure modes grow —
+// today only the unknown-alias case is reachable, but Story 5 (rate limit /
+// retry decorators) and future OAuth token-exchange will introduce real
+// init failures that should not be reported as "unknown broker".
+func (m *ToolManager) classifyBrokerError(alias string, err error) (string, error) {
+	if errors.Is(err, semp.ErrUnknownBroker) {
+		return "unknown_broker", fmt.Errorf("unknown broker %q; available brokers: %s",
+			alias, strings.Join(m.pool.Aliases(), ", "))
+	}
+	return "broker_init_error", fmt.Errorf("connecting to broker %q: %w", alias, err)
 }

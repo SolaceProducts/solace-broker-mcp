@@ -1,6 +1,7 @@
 package semp
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -11,11 +12,20 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 )
 
+// ErrUnknownBroker is returned by GetSEMPv1, GetSEMPv2, and the underlying
+// getOrCreate when the requested alias is not in the configured broker map.
+// Callers branch on this with errors.Is to distinguish a user-supplied
+// unknown alias (caller's mistake — should list available aliases) from
+// transport or construction failures (server-side issue — should preserve
+// the underlying error).
+var ErrUnknownBroker = errors.New("unknown broker")
+
 // BrokerPool manages BrokerClient instances for all configured brokers. It is
 // created at startup with broker configs from the YAML configuration file.
-// BrokerClients are created lazily on first GetSEMPv1() or GetSEMPv2() call
-// configured, only active brokers allocate HTTP clients and resources.
-// Thread-safe via sync.RWMutex with a double-check pattern for lazy creation.
+// BrokerClients are created lazily on the first GetSEMPv1() or GetSEMPv2()
+// call for a given alias, so only brokers that are actually used allocate
+// HTTP clients and resources. Thread-safe via sync.RWMutex with a
+// double-check pattern for lazy creation.
 type BrokerPool struct {
 	mu      sync.RWMutex
 	clients map[string]*BrokerClient        // broker alias → client (lazily populated)
@@ -59,7 +69,7 @@ func (p *BrokerPool) getOrCreate(alias string) (*BrokerClient, error) {
 
 	cfg, ok := p.configs[alias]
 	if !ok {
-		return nil, fmt.Errorf("unknown broker: %q", alias)
+		return nil, fmt.Errorf("%w: %q", ErrUnknownBroker, alias)
 	}
 
 	client, err := NewBrokerClient(alias, cfg, p.sempCfg)
