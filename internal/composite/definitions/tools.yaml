@@ -139,6 +139,8 @@ tools:
       state, active connection count, total subscription count, and service
       states for SMF, REST, and MQTT protocols. Use this to assess whether a
       VPN is operational and identify service-level problems.
+    annotations:
+      readOnly: true
     parameters:
       - name: msgVpnName
         type: string
@@ -157,6 +159,8 @@ tools:
       List all Message VPNs on the broker with their enabled state, connection
       count, and basic health status. Use this to discover which VPNs exist and
       identify any that are down or have no active connections.
+    annotations:
+      readOnly: true
     parameters:
       - name: maxResults
         type: integer
@@ -165,17 +169,19 @@ tools:
     steps:
       - id: vpns
         operation: monitor/getMsgVpns
-        paginate: true
+        followPages: true
         args:
           count: "100"
     result:
-      strategy: paginate
+      strategy: collect
 
   - name: list-queues
     description: >
       List all queues in a Message VPN with depth, bind count, and throughput
       rates. Use this to get an overview of queue health across a VPN and
       identify queues with backlogs or no consumers.
+    annotations:
+      readOnly: true
     parameters:
       - name: msgVpnName
         type: string
@@ -188,18 +194,20 @@ tools:
     steps:
       - id: queues
         operation: monitor/getMsgVpnQueues
-        paginate: true
+        followPages: true
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           count: "100"
     result:
-      strategy: paginate
+      strategy: collect
 
   - name: list-clients
     description: >
       List all active client connections in a Message VPN with connection
       details, uptime, and slow subscriber status. Use this to discover which
       clients are connected and identify slow or stalled consumers.
+    annotations:
+      readOnly: true
     parameters:
       - name: msgVpnName
         type: string
@@ -212,9 +220,9 @@ tools:
     steps:
       - id: clients
         operation: monitor/getMsgVpnClients
-        paginate: true
+        followPages: true
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           count: "100"
     result:
-      strategy: paginate
+      strategy: collect

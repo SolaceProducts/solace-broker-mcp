@@ -54,8 +54,8 @@ type Step struct {
 	ID        string            `yaml:"id"`
 	Operation string            `yaml:"operation"` // prefixed operationId (e.g., "monitor/getMsgVpnQueue")
 	Args      map[string]string `yaml:"args"`      // values are Go text/template expressions
-	Parallel  bool              `yaml:"parallel"`  // group with adjacent parallel:true steps
-	Paginate  bool              `yaml:"paginate"`  // follow SEMP nextPageUri links and aggregate all pages
+	Parallel    bool              `yaml:"parallel"`    // group with adjacent parallel:true steps
+	FollowPages bool              `yaml:"followPages"` // follow SEMP nextPageUri links and aggregate all pages
 }
 
 // ResultStrategy defines how step results are combined into the tool's final

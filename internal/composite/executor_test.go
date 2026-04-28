@@ -873,13 +873,13 @@ func listVPNsTool() CompositeTool {
 			{
 				ID:        "vpns",
 				Operation: "monitor/getMsgVpns",
-				Paginate:  true,
+				FollowPages: true,
 				Args: map[string]string{
 					"count": "100",
 				},
 			},
 		},
-		Result: ResultStrategy{Strategy: "paginate"},
+		Result: ResultStrategy{Strategy: "collect"},
 	}
 }
 
@@ -896,14 +896,14 @@ func listQueuesTool() CompositeTool {
 			{
 				ID:        "queues",
 				Operation: "monitor/getMsgVpnQueues",
-				Paginate:  true,
+				FollowPages: true,
 				Args: map[string]string{
 					"msgVpnName": "{{.Params.msgVpnName}}",
 					"count":      "100",
 				},
 			},
 		},
-		Result: ResultStrategy{Strategy: "paginate"},
+		Result: ResultStrategy{Strategy: "collect"},
 	}
 }
 
@@ -920,14 +920,14 @@ func listClientsTool() CompositeTool {
 			{
 				ID:        "clients",
 				Operation: "monitor/getMsgVpnClients",
-				Paginate:  true,
+				FollowPages: true,
 				Args: map[string]string{
 					"msgVpnName": "{{.Params.msgVpnName}}",
 					"count":      "100",
 				},
 			},
 		},
-		Result: ResultStrategy{Strategy: "paginate"},
+		Result: ResultStrategy{Strategy: "collect"},
 	}
 }
 
@@ -1219,6 +1219,10 @@ func TestExecute_ListQueues_MaxResultsCappedAt500(t *testing.T) {
 	}
 	if queues["truncated"] != true {
 		t.Errorf("truncated = %v, want true", queues["truncated"])
+	}
+	// Cap stops after 5 pages (500 items), page6 must not be fetched.
+	if len(client.calls) != 5 {
+		t.Errorf("expected 5 SEMP calls, got %d", len(client.calls))
 	}
 }
 

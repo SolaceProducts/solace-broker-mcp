@@ -534,8 +534,8 @@ tools:
 	if tool.Steps[0].Operation != "monitor/getMsgVpn" {
 		t.Errorf("expected operation %q, got %q", "monitor/getMsgVpn", tool.Steps[0].Operation)
 	}
-	if tool.Steps[0].Paginate {
-		t.Error("expected Paginate=false for get-vpn-health step")
+	if tool.Steps[0].FollowPages {
+		t.Error("expected FollowPages=false for get-vpn-health step")
 	}
 	if tool.Result.Strategy != "collect" {
 		t.Errorf("expected strategy %q, got %q", "collect", tool.Result.Strategy)
@@ -556,11 +556,11 @@ tools:
     steps:
       - id: vpns
         operation: monitor/getMsgVpns
-        paginate: true
+        followPages: true
         args:
           count: "100"
     result:
-      strategy: paginate
+      strategy: collect
 `
 	fsys := fstest.MapFS{
 		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
@@ -580,16 +580,16 @@ tools:
 		t.Errorf("expected name %q, got %q", "list-vpns", tool.Name)
 	}
 	if len(tool.Steps) != 1 {
-		t.Fatalf("expected 1 step, got %d", len(tools))
+		t.Fatalf("expected 1 step, got %d", len(tool.Steps))
 	}
-	if !tool.Steps[0].Paginate {
-		t.Error("expected Paginate=true for list-vpns step")
+	if !tool.Steps[0].FollowPages {
+		t.Error("expected FollowPages=true for list-vpns step")
 	}
 	if tool.Steps[0].Operation != "monitor/getMsgVpns" {
 		t.Errorf("expected operation %q, got %q", "monitor/getMsgVpns", tool.Steps[0].Operation)
 	}
-	if tool.Result.Strategy != "paginate" {
-		t.Errorf("expected strategy %q, got %q", "paginate", tool.Result.Strategy)
+	if tool.Result.Strategy != "collect" {
+		t.Errorf("expected strategy %q, got %q", "collect", tool.Result.Strategy)
 	}
 }
 
@@ -611,12 +611,12 @@ tools:
     steps:
       - id: queues
         operation: monitor/getMsgVpnQueues
-        paginate: true
+        followPages: true
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           count: "100"
     result:
-      strategy: paginate
+      strategy: collect
 `
 	fsys := fstest.MapFS{
 		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
@@ -638,14 +638,14 @@ tools:
 	if len(tool.Steps) != 1 {
 		t.Fatalf("expected 1 step, got %d", len(tool.Steps))
 	}
-	if !tool.Steps[0].Paginate {
-		t.Error("expected Paginate=true for list-queues step")
+	if !tool.Steps[0].FollowPages {
+		t.Error("expected FollowPages=true for list-queues step")
 	}
 	if tool.Steps[0].Operation != "monitor/getMsgVpnQueues" {
 		t.Errorf("expected operation %q, got %q", "monitor/getMsgVpnQueues", tool.Steps[0].Operation)
 	}
-	if tool.Result.Strategy != "paginate" {
-		t.Errorf("expected strategy %q, got %q", "paginate", tool.Result.Strategy)
+	if tool.Result.Strategy != "collect" {
+		t.Errorf("expected strategy %q, got %q", "collect", tool.Result.Strategy)
 	}
 
 	// Verify optional maxResults parameter.
@@ -676,12 +676,12 @@ tools:
     steps:
       - id: clients
         operation: monitor/getMsgVpnClients
-        paginate: true
+        followPages: true
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           count: "100"
     result:
-      strategy: paginate
+      strategy: collect
 `
 	fsys := fstest.MapFS{
 		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
@@ -703,41 +703,13 @@ tools:
 	if len(tool.Steps) != 1 {
 		t.Fatalf("expected 1 step, got %d", len(tool.Steps))
 	}
-	if !tool.Steps[0].Paginate {
-		t.Error("expected Paginate=true for list-clients step")
+	if !tool.Steps[0].FollowPages {
+		t.Error("expected FollowPages=true for list-clients step")
 	}
 	if tool.Steps[0].Operation != "monitor/getMsgVpnClients" {
 		t.Errorf("expected operation %q, got %q", "monitor/getMsgVpnClients", tool.Steps[0].Operation)
 	}
-	if tool.Result.Strategy != "paginate" {
-		t.Errorf("expected strategy %q, got %q", "paginate", tool.Result.Strategy)
-	}
-}
-
-func TestLoadTools_PaginateStrategyValid(t *testing.T) {
-	yaml := `
-tools:
-  - name: paginate-tool
-    description: A tool using paginate strategy
-    steps:
-      - id: items
-        operation: monitor/getMsgVpns
-        paginate: true
-        args:
-          count: "100"
-    result:
-      strategy: paginate
-`
-	fsys := fstest.MapFS{
-		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
-	}
-
-	tools, err := LoadTools(fsys, "tools.yaml")
-	if err != nil {
-		t.Fatalf("unexpected error for paginate strategy: %v", err)
-	}
-
-	if tools[0].Result.Strategy != "paginate" {
-		t.Errorf("expected strategy %q, got %q", "paginate", tools[0].Result.Strategy)
+	if tool.Result.Strategy != "collect" {
+		t.Errorf("expected strategy %q, got %q", "collect", tool.Result.Strategy)
 	}
 }

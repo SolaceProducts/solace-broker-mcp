@@ -79,11 +79,11 @@ func validateTool(tool *CompositeTool) error {
 	}
 
 	if tool.Result.Strategy == "" {
-		return fmt.Errorf("result strategy is required; supported values: collect, paginate")
+		return fmt.Errorf("result strategy is required; supported values: collect")
 	}
 
-	if tool.Result.Strategy != "collect" && tool.Result.Strategy != "paginate" {
-		return fmt.Errorf("result strategy %q is not supported; supported values: collect, paginate", tool.Result.Strategy)
+	if tool.Result.Strategy != "collect" {
+		return fmt.Errorf("result strategy %q is not supported; supported values: collect", tool.Result.Strategy)
 	}
 
 	return nil

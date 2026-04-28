@@ -128,10 +128,8 @@ func GroupStepsIntoBatches(steps []Step) []ExecutionBatch {
 
 // executeStep executes a single step: resolves template args, looks up the
 // operation, calls the client, and stores the result in the execution context.
-// If the step has Paginate set, it delegates to executePaginatedStep to follow
-// SEMP nextPageUri links and aggregate results across pages.
 func (ce *CompositeExecutor) executeStep(ctx context.Context, step Step, client sempv2.Client, execCtx *ExecuteContext) error {
-	if step.Paginate {
+	if step.FollowPages {
 		return ce.executePaginatedStep(ctx, step, client, execCtx)
 	}
 
@@ -170,7 +168,7 @@ func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step
 	}
 
 	maxResults := resolveMaxResults(execCtx.Params)
-	var allItems []any
+	allItems := make([]any, 0)
 	truncated := false
 	args := baseArgs
 
@@ -201,8 +199,11 @@ func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step
 		}
 
 		cursor, parseErr := parseCursorFromURI(nextURI)
-		if parseErr != nil || cursor == "" {
-			break
+		if parseErr != nil {
+			return fmt.Errorf("tool step %s: failed to parse pagination cursor from nextPageUri %q: %w", step.ID, nextURI, parseErr)
+		}
+		if cursor == "" {
+			return fmt.Errorf("tool step %s: empty pagination cursor extracted from nextPageUri %q", step.ID, nextURI)
 		}
 
 		args = appendCursor(baseArgs, cursor)
@@ -216,7 +217,7 @@ func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step
 }
 
 // resolveMaxResults reads maxResults from the execution params, applying a
-// default of 100 and a cap of 500 as specified in SOL-148429 acceptance criteria.
+// default of 100 and a cap of 500.
 func resolveMaxResults(params map[string]any) int {
 	const defaultMax = 100
 	const capMax = 500
@@ -386,14 +387,12 @@ func safeTemplateExecute(tmpl *template.Template, data any) (result string, err 
 
 // ApplyResultStrategy combines step results according to the tool's result
 // strategy configuration. "collect" returns all step results keyed by step ID.
-// "paginate" uses the same envelope — the paginated data array and truncated flag
-// are already assembled by executePaginatedStep before this is called.
 func ApplyResultStrategy(strategy ResultStrategy, stepResults map[string]map[string]any) (map[string]any, error) {
 	switch strategy.Strategy {
-	case "collect", "paginate":
+	case "collect":
 		return collectStrategy(stepResults)
 	default:
-		return nil, fmt.Errorf("result strategy %q is not supported; supported values: collect, paginate", strategy.Strategy)
+		return nil, fmt.Errorf("result strategy %q is not supported; supported values: collect", strategy.Strategy)
 	}
 }
 
