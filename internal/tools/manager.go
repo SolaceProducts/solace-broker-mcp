@@ -25,6 +25,7 @@ import (
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -113,11 +114,15 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		return nil, toolErr
 	}
 
-	client, err := m.pool.GetSempV2(brokerAlias)
+	v1Client, err := m.pool.GetSEMPv1(brokerAlias)
 	if err != nil {
-		errorType = "unknown_broker"
-		toolErr = fmt.Errorf("unknown broker %q; available brokers: %s",
-			brokerAlias, strings.Join(m.pool.Aliases(), ", "))
+		errorType, toolErr = m.classifyBrokerError(brokerAlias, err)
+		return nil, toolErr
+	}
+
+	v2Client, err := m.pool.GetSEMPv2(brokerAlias)
+	if err != nil {
+		errorType, toolErr = m.classifyBrokerError(brokerAlias, err)
 		return nil, toolErr
 	}
 
@@ -140,7 +145,10 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	}
 
 	// Execute.
-	tc := &ToolContext{SEMPClient: client}
+	tc := &ToolContext{
+		SEMPv1Client: v1Client,
+		SEMPv2Client: v2Client,
+	}
 	result, err := handler.Handle(ctx, tc, handlerParams)
 	if err != nil {
 		errorType = "execution_error"
@@ -211,12 +219,55 @@ func (m *ToolManager) logToolResult(ctx context.Context, tool string, broker *st
 		attrs = append(attrs, slog.String("broker", *broker))
 	}
 
-	var sempErr *sempv2.SEMPError
-	if errors.As(*toolErr, &sempErr) {
+	// Type-switch on the concrete error types instead of a shared interface.
+	//
+	// A common SempError interface was considered but rejected: see drift
+	// D7 in docs/semp/sempv1-client-design.md. The two protocols' error
+	// shapes are semantically different (HTTPStatus means different things
+	// in v1's envelope-error case vs. v2's HTTP-error case), and forcing a
+	// unified contract would mislead consumers. With only one consumer
+	// (this logging branch) today, an interface would be premature.
+	//
+	// Story 13B (MCP error translation) will be the second consumer. When
+	// it lands, revisit whether an interface earns its place — driven by
+	// the actual fields both consumers need to read.
+	var sempv1Err *sempv1.Error
+	var sempv2Err *sempv2.SEMPError
+	switch {
+	case errors.As(*toolErr, &sempv1Err):
 		attrs = append(attrs,
-			slog.Int("http_status", sempErr.StatusCode),
-			slog.String("operation", sempErr.Operation))
+			slog.String("kind", sempv1Err.Kind.String()),
+			slog.Int("http_status", sempv1Err.StatusCode),
+			slog.Int("reason_code", sempv1Err.ReasonCode))
+	case errors.As(*toolErr, &sempv2Err):
+		attrs = append(attrs,
+			slog.Int("http_status", sempv2Err.StatusCode),
+			slog.String("operation", sempv2Err.Operation))
 	}
 
 	slog.LogAttrs(ctx, slog.LevelError, "tool invoked", attrs...)
+}
+
+// classifyBrokerError translates a BrokerPool resolution failure into the
+// errorType label and user-facing error the manager logs and returns.
+//
+// It distinguishes two cases:
+//
+//   - The alias isn't configured (semp.ErrUnknownBroker): produces an
+//     "unknown_broker" label and a message listing the available aliases
+//     so an operator can spot a typo.
+//   - Anything else (transport setup, future OAuth handshake, etc.):
+//     produces a "broker_init_error" label and wraps the original error
+//     so the underlying cause survives in logs and through errors.Is/As.
+//
+// The dispatch keeps the manager honest as the pool's failure modes grow —
+// today only the unknown-alias case is reachable, but Story 5 (rate limit /
+// retry decorators) and future OAuth token-exchange will introduce real
+// init failures that should not be reported as "unknown broker".
+func (m *ToolManager) classifyBrokerError(alias string, err error) (string, error) {
+	if errors.Is(err, semp.ErrUnknownBroker) {
+		return "unknown_broker", fmt.Errorf("unknown broker %q; available brokers: %s",
+			alias, strings.Join(m.pool.Aliases(), ", "))
+	}
+	return "broker_init_error", fmt.Errorf("connecting to broker %q: %w", alias, err)
 }
