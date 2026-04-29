@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -408,22 +410,45 @@ func TestCallTool_SEMPErrorWrapped(t *testing.T) {
 	handler := newStubHandler("test-tool")
 	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
 		return nil, &sempv2.SEMPError{
-			Operation:  "getMsgVpnQueue",
-			StatusCode: 404,
-			Body:       `{"error": "not found"}`,
+			Operation:   "getMsgVpnQueue",
+			StatusCode:  404,
+			Description: "Queue Not Found",
+			SEMPCode:    6,
+			SEMPStatus:  "NOT_FOUND",
+			Body:        `{"meta":{"error":{"code":6,"status":"NOT_FOUND","description":"Queue Not Found"}}}`,
 		}
 	}
 	mgr.Register(handler)
 
-	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     "dev",
 		"msgVpnName": "default",
 	})
-	if err == nil {
-		t.Fatal("expected error from SEMP failure")
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "executing tool") {
-		t.Errorf("error = %v, want wrapped with 'executing tool'", err)
+	if !result.IsError {
+		t.Fatal("expected IsError to be true")
+	}
+
+	sc, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("StructuredContent type = %T, want map[string]any", result.StructuredContent)
+	}
+	if sc["retryable"] != false {
+		t.Errorf("retryable = %v, want false", sc["retryable"])
+	}
+	if sc["status"] != 404 {
+		t.Errorf("status = %v, want 404", sc["status"])
+	}
+	if sc["operation"] != "getMsgVpnQueue" {
+		t.Errorf("operation = %v, want getMsgVpnQueue", sc["operation"])
+	}
+	if sc["sempStatus"] != "NOT_FOUND" {
+		t.Errorf("sempStatus = %v, want NOT_FOUND", sc["sempStatus"])
+	}
+	if sc["error"] != "Queue Not Found" {
+		t.Errorf("error = %v, want 'Queue Not Found'", sc["error"])
 	}
 }
 
@@ -451,12 +476,16 @@ func TestLogToolResult_V1ErrorEmitsStructuredFields(t *testing.T) {
 	}
 	mgr.Register(handler)
 
-	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     "dev",
 		"msgVpnName": "default",
 	})
-	if err == nil {
-		t.Fatal("expected error from sempv1 failure")
+	// Execution errors now return (result, nil) per MCP spec.
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError to be true")
 	}
 
 	logOutput := buf.String()
@@ -484,6 +513,147 @@ func TestLogToolResult_V1ErrorEmitsStructuredFields(t *testing.T) {
 	// v2-specific field must NOT appear — proves the switch took the v1 branch.
 	if _, present := logFields["operation"]; present {
 		t.Error("operation field should not be present for v1 errors (would indicate v2 branch fired)")
+	}
+}
+
+func TestCallTool_SEMPv1Error_IsErrorResult(t *testing.T) {
+	mgr := NewToolManager(newTestPool())
+
+	handler := newStubHandler("test-tool")
+	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		return nil, &sempv1.Error{
+			Kind:       sempv1.ErrorKindPermission,
+			StatusCode: 200,
+			Message:    "Insufficient user privileges",
+		}
+	}
+	mgr.Register(handler)
+
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+		"broker":     "dev",
+		"msgVpnName": "default",
+	})
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError to be true")
+	}
+
+	sc := result.StructuredContent.(map[string]any)
+	if sc["retryable"] != false {
+		t.Errorf("retryable = %v, want false", sc["retryable"])
+	}
+	if sc["kind"] != "permission" {
+		t.Errorf("kind = %v, want permission", sc["kind"])
+	}
+
+	text := result.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(text, "Insufficient user privileges") {
+		t.Errorf("text = %q, want it to contain broker error message", text)
+	}
+}
+
+func TestCallTool_RetriesExhausted_RetryableTrue(t *testing.T) {
+	mgr := NewToolManager(newTestPool())
+
+	handler := newStubHandler("test-tool")
+	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		return nil, &resilience.RetriesExhaustedError{
+			StatusCode: 503,
+			Attempts:   3,
+		}
+	}
+	mgr.Register(handler)
+
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+		"broker":     "dev",
+		"msgVpnName": "default",
+	})
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError to be true")
+	}
+
+	sc := result.StructuredContent.(map[string]any)
+	if sc["retryable"] != true {
+		t.Errorf("retryable = %v, want true", sc["retryable"])
+	}
+	if sc["status"] != 503 {
+		t.Errorf("status = %v, want 503", sc["status"])
+	}
+	if sc["attempts"] != 3 {
+		t.Errorf("attempts = %v, want 3", sc["attempts"])
+	}
+
+	text := result.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(text, "Internal retries exhausted") {
+		t.Errorf("text = %q, want it to mention retries exhausted", text)
+	}
+}
+
+func TestCallTool_PlainError_IsErrorResult(t *testing.T) {
+	mgr := NewToolManager(newTestPool())
+
+	handler := newStubHandler("test-tool")
+	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		return nil, fmt.Errorf("something unexpected happened")
+	}
+	mgr.Register(handler)
+
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+		"broker":     "dev",
+		"msgVpnName": "default",
+	})
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError to be true")
+	}
+
+	sc := result.StructuredContent.(map[string]any)
+	if sc["retryable"] != false {
+		t.Errorf("retryable = %v, want false", sc["retryable"])
+	}
+
+	text := result.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(text, "something unexpected happened") {
+		t.Errorf("text = %q, want it to contain original error message", text)
+	}
+
+	// No protocol-specific fields for plain errors.
+	if _, present := sc["status"]; present {
+		t.Error("status should not be present for plain errors")
+	}
+}
+
+func TestCallTool_LimitError_IncludesGuidance(t *testing.T) {
+	mgr := NewToolManager(newTestPool())
+
+	handler := newStubHandler("test-tool")
+	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		return nil, &sempv1.Error{
+			Kind:       sempv1.ErrorKindLimit,
+			StatusCode: 200,
+			Message:    "Response too big",
+		}
+	}
+	mgr.Register(handler)
+
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+		"broker":     "dev",
+		"msgVpnName": "default",
+	})
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+
+	text := result.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(text, "Reduce the scope of the request") {
+		t.Errorf("text = %q, want it to contain limit-error guidance", text)
 	}
 }
 

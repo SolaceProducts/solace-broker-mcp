@@ -113,22 +113,32 @@ technical details.
 
 ### Error translation for AI agent consumption
 
-**Status:** Deferred
+**Status:** Resolved
 
 **Story requirement:** Translate broker errors to human-readable messages with
 retryable field and guidance for AI agents.
 
-**Reason deferred:** SEMPv1 support is being added concurrently with a different
-error model (XML-based vs JSON). Designing a unified error translation layer
-that covers both SEMPv2 and SEMPv1 is more appropriate than building a
-SEMPv2-only solution now. Existing SEMPError messages are informative enough
-for MVP.
+**Implementation:** Rather than a separate AgentError type, tool execution
+errors are returned as MCP-compliant `CallToolResult` with `IsError: true`
+per the MCP spec (tool execution errors SHOULD be visible to the LLM, not
+opaque protocol errors). The result carries:
+- `Content[0].text` — human-readable message using the broker's own error
+  descriptions (SEMPv2 `meta.error.description`, SEMPv1 `Error.Message`)
+- `StructuredContent` — machine-readable fields: `error`, `retryable`,
+  `status`, plus protocol-specific data (`operation`, `sempStatus`,
+  `sempCode` for SEMPv2; `kind`, `reasonCode` for SEMPv1; `attempts` for
+  retries exhausted)
 
-**Required work:**
-- Structured AgentError type with Message, Retryable, Guidance fields
-- Unified TranslateError function handling SEMPv2, SEMPv1, and non-SEMP errors
-  (timeouts, connection failures)
-- Integration point in tool manager for consistent error formatting
+Only `RetriesExhaustedError` (429/503/5xx after internal retry exhaustion)
+is marked `retryable: true`. All client errors and SEMPv1 envelope errors
+are `retryable: false`.
+
+SEMPv2 `meta.error` is now parsed into structured `SEMPError` fields
+(`Description`, `SEMPCode`, `SEMPStatus`) instead of being discarded as a
+raw body string.
+
+See: `internal/tools/manager.go` (`buildErrorResult`, `buildErrorMessage`,
+`isRetryable`) and `internal/semp/sempv2/client.go` (`parseSEMPError`).
 
 ### Connecting MCP clients to the server
 

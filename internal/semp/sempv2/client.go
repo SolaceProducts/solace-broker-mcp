@@ -33,16 +33,22 @@ type Result struct {
 
 // SEMPError is a structured error returned when a SEMP API call receives a
 // non-2xx HTTP response. It preserves the HTTP status code, operation ID, and
-// raw response body as separate fields so callers can extract structured data
-// via errors.As() instead of parsing error strings.
+// parsed meta.error fields so callers can extract structured data via
+// errors.As() instead of parsing error strings.
 type SEMPError struct {
-	Operation  string // operationId that failed (e.g., "getMsgVpnQueue")
-	StatusCode int    // HTTP status code (e.g., 404)
-	Body       string // raw response body from broker
+	Operation   string // operationId that failed (e.g., "getMsgVpnQueue")
+	StatusCode  int    // HTTP status code (e.g., 404)
+	Description string // meta.error.description — broker's human-readable message
+	SEMPCode    int    // meta.error.code (6=NOT_FOUND, 72=UNAUTHORIZED, etc.)
+	SEMPStatus  string // meta.error.status ("NOT_FOUND", "FAIL")
+	Body        string // raw response body preserved as fallback
 }
 
 // Error implements the error interface.
 func (e *SEMPError) Error() string {
+	if e.Description != "" {
+		return fmt.Sprintf("%s returned HTTP %d: %s", e.Operation, e.StatusCode, e.Description)
+	}
 	return fmt.Sprintf("%s returned HTTP %d: %s", e.Operation, e.StatusCode, e.Body)
 }
 
@@ -142,7 +148,7 @@ func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &SEMPError{Operation: op.ID, StatusCode: resp.StatusCode, Body: string(body)}
+		return nil, parseSEMPError(op.ID, resp.StatusCode, body)
 	}
 
 	var data map[string]any
@@ -219,4 +225,33 @@ func (c *HTTPClient) buildRequest(ctx context.Context, op *Operation, reqURL str
 	req.Header.Set("User-Agent", "solace/broker-mcp-server/"+version.Version())
 
 	return req, nil
+}
+
+// parseSEMPError creates a SEMPError with best-effort extraction of the
+// broker's meta.error fields (code, status, description). If the body is not
+// valid JSON or the meta.error structure is absent, the structured fields stay
+// zero-valued and Body carries the raw response.
+func parseSEMPError(op string, statusCode int, body []byte) *SEMPError {
+	e := &SEMPError{
+		Operation:  op,
+		StatusCode: statusCode,
+		Body:       string(body),
+	}
+
+	var envelope struct {
+		Meta struct {
+			Error struct {
+				Code        int    `json:"code"`
+				Status      string `json:"status"`
+				Description string `json:"description"`
+			} `json:"error"`
+		} `json:"meta"`
+	}
+	if json.Unmarshal(body, &envelope) == nil {
+		e.SEMPCode = envelope.Meta.Error.Code
+		e.SEMPStatus = envelope.Meta.Error.Status
+		e.Description = envelope.Meta.Error.Description
+	}
+
+	return e
 }
