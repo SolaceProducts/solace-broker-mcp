@@ -107,17 +107,6 @@ func (d *Doer) Close() {
 	}
 }
 
-// RateLimiterChan returns the rate limiter channel for testing.
-// Production code should not use this.
-func (d *Doer) RateLimiterChan() <-chan time.Time {
-	return d.rateLimiter
-}
-
-// SetRateLimiterForTest replaces the rate limiter channel. Only for testing.
-func (d *Doer) SetRateLimiterForTest(ch <-chan time.Time) {
-	d.rateLimiter = ch
-}
-
 // errorHandler is called by retryablehttp when retries are exhausted (RetryMax
 // reached while CheckRetry kept returning true). At this point the response
 // body has been drained/closed by retryablehttp's retry loop, so we construct

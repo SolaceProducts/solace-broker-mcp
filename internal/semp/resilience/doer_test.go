@@ -68,7 +68,7 @@ func TestDoer_RateLimiter_BlocksUntilChannelReady(t *testing.T) {
 
 	// Replace rate limiter with a manually controlled channel.
 	ch := make(chan time.Time, 1)
-	doer.SetRateLimiterForTest(ch)
+	doer.rateLimiter = ch
 
 	// Start Do in a goroutine — it should block on the rate limiter.
 	done := make(chan error, 1)
@@ -147,7 +147,7 @@ func TestDoer_RateLimiter_PerBrokerIndependence(t *testing.T) {
 
 	// Block doer A's rate limiter.
 	chA := make(chan time.Time, 1)
-	doerA.SetRateLimiterForTest(chA)
+	doerA.rateLimiter = chA
 
 	// Doer B should work independently.
 	req := newGetRequest(t, serverB.URL)
@@ -194,7 +194,7 @@ func TestDoer_RateLimiter_SkippedDuringRetries(t *testing.T) {
 	// Replace rate limiter with a single-buffered channel (read exactly once).
 	countingCh := make(chan time.Time, 1)
 	countingCh <- time.Now()
-	doer.SetRateLimiterForTest(countingCh)
+	doer.rateLimiter = countingCh
 
 	req := newGetRequest(t, server.URL)
 	resp, err := doer.Do(context.Background(), req)
