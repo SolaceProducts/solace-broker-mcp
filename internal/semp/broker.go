@@ -16,10 +16,9 @@ import (
 // lazily by BrokerPool on first use. One instance per broker, shared across
 // all MCP sessions targeting that broker.
 type BrokerClient struct {
-	sempV1     sempv1.Client      // SEMPv1 protocol client
-	sempV2     sempv2.Client      // SEMPv2 protocol client
-	httpClient *sempv2.HTTPClient // underlying client for lifecycle management (Close)
-	alias      string             // broker alias (for error messages)
+	sempV1Client *sempv1.HTTPClient // SEMPv1 protocol client (concrete for Close)
+	sempV2Client *sempv2.HTTPClient // SEMPv2 protocol client (concrete for Close)
+	alias        string             // broker alias (for error messages)
 }
 
 // NewBrokerClient creates a BrokerClient for the given broker configuration.
@@ -35,26 +34,26 @@ func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *conf
 		return nil, fmt.Errorf("creating SEMPv2 client for broker %q: %w", alias, err)
 	}
 	return &BrokerClient{
-		sempV1:     sempV1Client,
-		sempV2:     sempV2Client,
-		httpClient: sempV2Client,
-		alias:      alias,
+		sempV1Client: sempV1Client,
+		sempV2Client: sempV2Client,
+		alias:        alias,
 	}, nil
 }
 
 // SEMPv1 returns the SEMPv1 client for this broker. Tools that need to send
 // raw XML commands (e.g., <show><version/></show>) use this client.
 func (b *BrokerClient) SEMPv1() sempv1.Client {
-	return b.sempV1
+	return b.sempV1Client
 }
 
 // SEMPv2 returns the SEMPv2 client for this broker. This is the client that
 // gets passed to the composite executor for making SEMP API calls.
 func (b *BrokerClient) SEMPv2() sempv2.Client {
-	return b.sempV2
+	return b.sempV2Client
 }
 
-// Close releases resources held by the broker client.
+// Close releases resources held by both protocol clients (rate limiter tickers).
 func (b *BrokerClient) Close() {
-	b.httpClient.Close()
+	b.sempV1Client.Close()
+	b.sempV2Client.Close()
 }

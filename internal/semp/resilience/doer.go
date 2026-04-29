@@ -1,0 +1,150 @@
+package resilience
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/hashicorp/go-retryablehttp"
+)
+
+// RetriesExhaustedError is returned by Do() when all retry attempts fail and
+// the ErrorHandler is invoked. Callers can wrap this in protocol-specific
+// error types (SEMPError, sempv1.Error) as needed.
+type RetriesExhaustedError struct {
+	StatusCode int
+	Attempts   int
+}
+
+func (e *RetriesExhaustedError) Error() string {
+	return fmt.Sprintf("request failed after %d attempts with status %d", e.Attempts, e.StatusCode)
+}
+
+// Doer wraps retryablehttp.Client with per-broker rate limiting, custom retry
+// policy, and 401 re-auth. Both SEMPv1 and SEMPv2 clients compose this to get
+// shared HTTP resilience without duplication.
+type Doer struct {
+	retryClient *retryablehttp.Client
+	httpClient  *http.Client      // underlying client for cookie jar access
+	authCfg     config.AuthConfig // for 401 auth-mode check
+	rateLimiter <-chan time.Time
+	rateTicker  *time.Ticker // non-nil when rate limiting enabled; stopped by Close()
+	brokerURL   string       // for logging context
+	jarMu       sync.Mutex   // protects cookie jar replacement during 401 re-auth
+}
+
+// New creates a Doer configured for a specific broker. It sets up retryablehttp
+// with the retry policy from SEMPConfig and a per-broker rate limiter.
+func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authCfg config.AuthConfig, brokerURL string) *Doer {
+	d := &Doer{
+		httpClient: httpClient,
+		authCfg:    authCfg,
+		brokerURL:  brokerURL,
+	}
+
+	// Configure retryablehttp client with the underlying http.Client.
+	retryClient := retryablehttp.NewClient()
+	retryClient.HTTPClient = httpClient
+	retryClient.RetryMax = *sempCfg.Retries
+	retryClient.RetryWaitMin = sempCfg.RetryMinInterval
+	retryClient.RetryWaitMax = sempCfg.RetryMaxInterval
+	retryClient.CheckRetry = d.checkRetry
+	retryClient.ErrorHandler = d.errorHandler
+	retryClient.Logger = nil // manual logging in checkRetry
+	d.retryClient = retryClient
+
+	// Per-broker rate limiter: ticker-based interval enforcement.
+	// When interval > 0, each Do() blocks until the ticker fires.
+	// When interval == 0, the closed channel makes receives non-blocking (no rate limit).
+	if *sempCfg.RequestMinInterval > 0 {
+		d.rateTicker = time.NewTicker(*sempCfg.RequestMinInterval)
+		d.rateLimiter = d.rateTicker.C
+	} else {
+		ch := make(chan time.Time)
+		close(ch)
+		d.rateLimiter = ch
+	}
+
+	return d
+}
+
+// Do sends an HTTP request through the rate limiter and retryablehttp client.
+// The caller is responsible for building the request and adding authentication.
+// On success, returns the HTTP response (body open for the caller to read).
+// On failure after retries, returns a RetriesExhaustedError or a wrapped error.
+func (d *Doer) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
+	// Rate limit: wait for the per-broker interval before sending a new request.
+	// This does NOT apply to retries — retryablehttp handles those internally.
+	select {
+	case <-d.rateLimiter:
+		slog.Debug("rate limiter: request permitted",
+			slog.String("broker", d.brokerURL))
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	// Attach per-request retry state for checkRetry.
+	ctx = context.WithValue(ctx, retryStateKey{}, &retryState{})
+	req = req.WithContext(ctx)
+
+	retryReq, err := retryablehttp.FromRequest(req)
+	if err != nil {
+		return nil, fmt.Errorf("wrapping request: %w", err)
+	}
+
+	return d.retryClient.Do(retryReq)
+}
+
+// Close releases resources held by the Doer. Stops the rate limiter ticker
+// if one is running. Safe to call multiple times.
+func (d *Doer) Close() {
+	if d.rateTicker != nil {
+		d.rateTicker.Stop()
+	}
+}
+
+// RateLimiterChan returns the rate limiter channel for testing.
+// Production code should not use this.
+func (d *Doer) RateLimiterChan() <-chan time.Time {
+	return d.rateLimiter
+}
+
+// SetRateLimiterForTest replaces the rate limiter channel. Only for testing.
+func (d *Doer) SetRateLimiterForTest(ch <-chan time.Time) {
+	d.rateLimiter = ch
+}
+
+// errorHandler is called by retryablehttp when retries are exhausted (RetryMax
+// reached while CheckRetry kept returning true). At this point the response
+// body has been drained/closed by retryablehttp's retry loop, so we construct
+// a RetriesExhaustedError from the status code and attempt count.
+func (d *Doer) errorHandler(resp *http.Response, err error, numTries int) (*http.Response, error) {
+	if err != nil {
+		return nil, fmt.Errorf("request failed after %d attempts: %w", numTries, err)
+	}
+
+	opID := "unknown"
+	if resp != nil && resp.Request != nil {
+		if id, ok := resp.Request.Context().Value(OperationIDKey{}).(string); ok {
+			opID = id
+		}
+	}
+
+	if resp != nil {
+		slog.Error("request failed after retries exhausted",
+			slog.String("broker", d.brokerURL),
+			slog.String("operation", opID),
+			slog.Int("status", resp.StatusCode),
+			slog.Int("attempts", numTries))
+		return nil, &RetriesExhaustedError{
+			StatusCode: resp.StatusCode,
+			Attempts:   numTries,
+		}
+	}
+
+	return nil, fmt.Errorf("request failed after %d attempts", numTries)
+}

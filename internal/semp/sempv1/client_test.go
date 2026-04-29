@@ -25,8 +25,14 @@ func newTestClientWith(t *testing.T, srv *httptest.Server, auth config.AuthConfi
 		URL:  srv.URL,
 		Auth: auth,
 	}
+	retries := 1
+	minInterval := time.Duration(0)
 	sempCfg := &config.SEMPConfig{
 		RequestTimeoutDuration: 2 * time.Second,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
 	}
 
 	client, err := NewHTTPClient(brokerCfg, sempCfg)
