@@ -505,6 +505,47 @@ func TestSender_ErrorHandler_ProducesRetriesExhaustedError(t *testing.T) {
 	}
 }
 
+func TestSender_ErrorHandler_NetworkError_ProducesRetriesExhaustedError(t *testing.T) {
+	// Point the sender at a server that is immediately closed (connection refused).
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	serverURL := server.URL
+	server.Close() // close immediately so all connections are refused
+
+	retries := 2
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		Retries:            &retries,
+		RequestMinInterval: &minInterval,
+		RetryMinInterval:   1 * time.Millisecond,
+		RetryMaxInterval:   10 * time.Millisecond,
+	}
+	authCfg := config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"}
+	sender := New(&http.Client{}, sempCfg, authCfg, serverURL)
+
+	req := newGetRequest(t, serverURL)
+	resp, err := sender.Do(context.Background(), req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if err == nil {
+		t.Fatal("expected error for connection refused")
+	}
+
+	var exhausted *RetriesExhaustedError
+	if !errors.As(err, &exhausted) {
+		t.Fatalf("expected RetriesExhaustedError, got %T: %v", err, err)
+	}
+	if exhausted.Attempts == 0 {
+		t.Error("expected Attempts > 0")
+	}
+	if exhausted.Err == nil {
+		t.Error("expected underlying Err to be set for network errors")
+	}
+	if exhausted.StatusCode != 0 {
+		t.Errorf("expected StatusCode 0 for network error, got %d", exhausted.StatusCode)
+	}
+}
+
 // --- No-Retry Tests ---
 
 func TestSender_NoRetry_404(t *testing.T) {

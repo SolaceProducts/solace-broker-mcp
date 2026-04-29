@@ -16,17 +16,29 @@ import (
 // the ErrorHandler is invoked. Callers can wrap this in protocol-specific
 // error types (SEMPError, sempv1.Error) as needed.
 type RetriesExhaustedError struct {
-	StatusCode int
-	Attempts   int
+	StatusCode int   // HTTP status code (0 when failure is a network error)
+	Attempts   int   // total attempts made
+	Err        error // underlying cause (nil for HTTP-status exhaustion)
 }
 
 func (e *RetriesExhaustedError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("request failed after %d attempts: %v", e.Attempts, e.Err)
+	}
 	return fmt.Sprintf("request failed after %d attempts with status %d", e.Attempts, e.StatusCode)
 }
+
+// Unwrap returns the underlying error so errors.Is/As can traverse the chain.
+func (e *RetriesExhaustedError) Unwrap() error { return e.Err }
 
 // Sender wraps retryablehttp.Client with per-broker rate limiting, custom retry
 // policy, and 401 re-auth. Both SEMPv1 and SEMPv2 clients compose this to get
 // shared HTTP resilience without duplication.
+//
+// Sender is safe for concurrent use from multiple goroutines. The cookie jar
+// replacement in checkRetry (401 re-auth) races with http.Client.Do reads of
+// the Jar field, but this is benign: the worst case is one retry using a stale
+// jar while fresh Basic Auth credentials in the header still succeed.
 type Sender struct {
 	retryClient *retryablehttp.Client
 	httpClient  *http.Client      // underlying client for cookie jar access
@@ -39,6 +51,7 @@ type Sender struct {
 
 // New creates a Sender configured for a specific broker. It sets up retryablehttp
 // with the retry policy from SEMPConfig and a per-broker rate limiter.
+// sempCfg.Retries and sempCfg.RequestMinInterval must be non-nil.
 func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authCfg config.AuthConfig, brokerURL string) *Sender {
 	d := &Sender{
 		httpClient: httpClient,
@@ -58,11 +71,20 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authCfg config.Aut
 	d.retryClient = retryClient
 
 	// Per-broker rate limiter: ticker-based interval enforcement.
-	// When interval > 0, each Do() blocks until the ticker fires.
+	// When interval > 0, each Do() blocks until the channel yields a token.
+	// The first request fires immediately (seeded token); subsequent requests
+	// wait for the ticker. A goroutine forwards ticker events into the channel.
 	// When interval == 0, the closed channel makes receives non-blocking (no rate limit).
 	if *sempCfg.RequestMinInterval > 0 {
 		d.rateTicker = time.NewTicker(*sempCfg.RequestMinInterval)
-		d.rateLimiter = d.rateTicker.C
+		ch := make(chan time.Time, 1)
+		ch <- time.Now() // seed: first request fires immediately
+		go func() {
+			for t := range d.rateTicker.C {
+				ch <- t
+			}
+		}()
+		d.rateLimiter = ch
 	} else {
 		ch := make(chan time.Time)
 		close(ch)
@@ -113,7 +135,7 @@ func (d *Sender) Close() {
 // a RetriesExhaustedError from the status code and attempt count.
 func (d *Sender) errorHandler(resp *http.Response, err error, numTries int) (*http.Response, error) {
 	if err != nil {
-		return nil, fmt.Errorf("request failed after %d attempts: %w", numTries, err)
+		return nil, &RetriesExhaustedError{Attempts: numTries, Err: err}
 	}
 
 	opID := "unknown"
