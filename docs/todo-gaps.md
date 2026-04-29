@@ -111,35 +111,6 @@ technical details.
 
 ## SOL-148425 — Implement Rate Limiting and Retry Logic
 
-### Error translation for AI agent consumption
-
-**Status:** Resolved
-
-**Story requirement:** Translate broker errors to human-readable messages with
-retryable field and guidance for AI agents.
-
-**Implementation:** Rather than a separate AgentError type, tool execution
-errors are returned as MCP-compliant `CallToolResult` with `IsError: true`
-per the MCP spec (tool execution errors SHOULD be visible to the LLM, not
-opaque protocol errors). The result carries:
-- `Content[0].text` — human-readable message using the broker's own error
-  descriptions (SEMPv2 `meta.error.description`, SEMPv1 `Error.Message`)
-- `StructuredContent` — machine-readable fields: `error`, `retryable`,
-  `status`, plus protocol-specific data (`operation`, `sempStatus`,
-  `sempCode` for SEMPv2; `kind`, `reasonCode` for SEMPv1; `attempts` for
-  retries exhausted)
-
-Only `RetriesExhaustedError` (429/503/5xx after internal retry exhaustion)
-is marked `retryable: true`. All client errors and SEMPv1 envelope errors
-are `retryable: false`.
-
-SEMPv2 `meta.error` is now parsed into structured `SEMPError` fields
-(`Description`, `SEMPCode`, `SEMPStatus`) instead of being discarded as a
-raw body string.
-
-See: `internal/tools/manager.go` (`buildErrorResult`, `buildErrorMessage`,
-`isRetryable`) and `internal/semp/sempv2/client.go` (`parseSEMPError`).
-
 ### Connecting MCP clients to the server
 
 **Status:** Pending

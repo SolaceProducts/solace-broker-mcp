@@ -56,9 +56,9 @@ func (e *SEMPError) Error() string {
 // Solace broker's SEMPv2 API. It is configured per-broker with the broker's
 // URL, TLS settings, and authentication credentials.
 //
-// Rate limiting and retry logic are delegated to the shared resilience.Doer.
+// Rate limiting and retry logic are delegated to the shared resilience.Sender.
 type HTTPClient struct {
-	doer    *resilience.Doer
+	sender    *resilience.Sender
 	baseURL string
 	authCfg config.AuthConfig
 }
@@ -75,13 +75,13 @@ func (c *HTTPClient) LogValue() slog.Value {
 // Close releases resources held by the HTTPClient (rate limiter ticker).
 // Safe to call multiple times.
 func (c *HTTPClient) Close() {
-	c.doer.Close()
+	c.sender.Close()
 }
 
 // NewHTTPClient creates an HTTPClient configured for a specific broker.
 // It sets up a per-broker HTTP transport with TLS settings and connection pool
 // tuning appropriate for concurrent SEMP calls, and delegates retry and rate
-// limiting to a shared resilience.Doer.
+// limiting to a shared resilience.Sender.
 func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (*HTTPClient, error) {
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: brokerCfg.InsecureSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
@@ -106,7 +106,7 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (
 	baseURL := strings.TrimSuffix(brokerCfg.URL, "/")
 
 	return &HTTPClient{
-		doer:    resilience.New(httpClient, sempCfg, brokerCfg.Auth, baseURL),
+		sender:    resilience.New(httpClient, sempCfg, brokerCfg.Auth, baseURL),
 		baseURL: baseURL,
 		authCfg: brokerCfg.Auth,
 	}, nil
@@ -119,7 +119,7 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (
 // error with status code context on failure.
 //
 // Rate limiting is enforced before the request (new requests only, not retries).
-// Retry logic is handled by the shared resilience.Doer.
+// Retry logic is handled by the shared resilience.Sender.
 func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string]any) (*Result, error) {
 	reqURL := c.buildURL(op, args)
 
@@ -132,11 +132,11 @@ func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string
 		return nil, fmt.Errorf("applying auth for %s: %w", op.ID, err)
 	}
 
-	// Attach operation ID for the Doer's logging context.
+	// Attach operation ID for the Sender's logging context.
 	ctx = context.WithValue(ctx, resilience.OperationIDKey{}, op.ID)
 	req = req.WithContext(ctx)
 
-	resp, err := c.doer.Do(ctx, req)
+	resp, err := c.sender.Do(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("executing %s: %w", op.ID, err)
 	}

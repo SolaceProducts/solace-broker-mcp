@@ -13,8 +13,8 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 )
 
-// newTestDoer creates a Doer configured for testing with the given auth mode and retry count.
-func newTestDoer(t *testing.T, httpClient *http.Client, authMode string, retries int) *Doer {
+// newTestSender creates a Sender configured for testing with the given auth mode and retry count.
+func newTestSender(t *testing.T, httpClient *http.Client, authMode string, retries int) *Sender {
 	t.Helper()
 	minInterval := time.Duration(0)
 	sempCfg := &config.SEMPConfig{
@@ -32,12 +32,12 @@ func newTestDoer(t *testing.T, httpClient *http.Client, authMode string, retries
 	return New(httpClient, sempCfg, authCfg, "http://test-broker")
 }
 
-// newTestDoerWithServer creates a test server and a Doer pointed at it.
-func newTestDoerWithServer(t *testing.T, handler http.HandlerFunc, authMode string, retries int) (*Doer, *httptest.Server) {
+// newTestSenderWithServer creates a test server and a Sender pointed at it.
+func newTestSenderWithServer(t *testing.T, handler http.HandlerFunc, authMode string, retries int) (*Sender, *httptest.Server) {
 	t.Helper()
 	server := httptest.NewServer(handler)
 	httpClient := server.Client()
-	d := newTestDoer(t, httpClient, authMode, retries)
+	d := newTestSender(t, httpClient, authMode, retries)
 	d.brokerURL = server.URL
 	return d, server
 }
@@ -58,9 +58,9 @@ func jsonOK(w http.ResponseWriter) {
 
 // --- Rate Limiter Tests ---
 
-func TestDoer_RateLimiter_BlocksUntilChannelReady(t *testing.T) {
+func TestSender_RateLimiter_BlocksUntilChannelReady(t *testing.T) {
 	var requestCount atomic.Int32
-	doer, server := newTestDoerWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
 		jsonOK(w)
 	}, "basic", 0)
@@ -68,13 +68,13 @@ func TestDoer_RateLimiter_BlocksUntilChannelReady(t *testing.T) {
 
 	// Replace rate limiter with a manually controlled channel.
 	ch := make(chan time.Time, 1)
-	doer.rateLimiter = ch
+	sender.rateLimiter = ch
 
 	// Start Do in a goroutine — it should block on the rate limiter.
 	done := make(chan error, 1)
 	go func() {
 		req := newGetRequest(t, server.URL)
-		resp, err := doer.Do(context.Background(), req)
+		resp, err := sender.Do(context.Background(), req)
 		if err == nil {
 			resp.Body.Close()
 		}
@@ -104,9 +104,9 @@ func TestDoer_RateLimiter_BlocksUntilChannelReady(t *testing.T) {
 	}
 }
 
-func TestDoer_RateLimiter_DisabledWhenZero(t *testing.T) {
+func TestSender_RateLimiter_DisabledWhenZero(t *testing.T) {
 	var requestCount atomic.Int32
-	doer, server := newTestDoerWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
 		jsonOK(w)
 	}, "basic", 0)
@@ -114,7 +114,7 @@ func TestDoer_RateLimiter_DisabledWhenZero(t *testing.T) {
 
 	for i := range 5 {
 		req := newGetRequest(t, server.URL)
-		resp, err := doer.Do(context.Background(), req)
+		resp, err := sender.Do(context.Background(), req)
 		if err != nil {
 			t.Fatalf("Do() #%d error: %v", i, err)
 		}
@@ -126,7 +126,7 @@ func TestDoer_RateLimiter_DisabledWhenZero(t *testing.T) {
 	}
 }
 
-func TestDoer_RateLimiter_PerBrokerIndependence(t *testing.T) {
+func TestSender_RateLimiter_PerBrokerIndependence(t *testing.T) {
 	var countA, countB atomic.Int32
 	serverA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		countA.Add(1)
@@ -140,20 +140,20 @@ func TestDoer_RateLimiter_PerBrokerIndependence(t *testing.T) {
 	}))
 	defer serverB.Close()
 
-	doerA := newTestDoer(t, serverA.Client(), "basic", 0)
-	doerA.brokerURL = serverA.URL
-	doerB := newTestDoer(t, serverB.Client(), "basic", 0)
-	doerB.brokerURL = serverB.URL
+	senderA := newTestSender(t, serverA.Client(), "basic", 0)
+	senderA.brokerURL = serverA.URL
+	senderB := newTestSender(t, serverB.Client(), "basic", 0)
+	senderB.brokerURL = serverB.URL
 
-	// Block doer A's rate limiter.
+	// Block sender A's rate limiter.
 	chA := make(chan time.Time, 1)
-	doerA.rateLimiter = chA
+	senderA.rateLimiter = chA
 
-	// Doer B should work independently.
+	// Sender B should work independently.
 	req := newGetRequest(t, serverB.URL)
-	resp, err := doerB.Do(context.Background(), req)
+	resp, err := senderB.Do(context.Background(), req)
 	if err != nil {
-		t.Fatalf("doerB Do() error: %v", err)
+		t.Fatalf("senderB Do() error: %v", err)
 	}
 	resp.Body.Close()
 
@@ -167,9 +167,9 @@ func TestDoer_RateLimiter_PerBrokerIndependence(t *testing.T) {
 	// Unblock A.
 	chA <- time.Now()
 	reqA := newGetRequest(t, serverA.URL)
-	respA, err := doerA.Do(context.Background(), reqA)
+	respA, err := senderA.Do(context.Background(), reqA)
 	if err != nil {
-		t.Fatalf("doerA Do() error: %v", err)
+		t.Fatalf("senderA Do() error: %v", err)
 	}
 	respA.Body.Close()
 
@@ -178,9 +178,9 @@ func TestDoer_RateLimiter_PerBrokerIndependence(t *testing.T) {
 	}
 }
 
-func TestDoer_RateLimiter_SkippedDuringRetries(t *testing.T) {
+func TestSender_RateLimiter_SkippedDuringRetries(t *testing.T) {
 	var requestCount atomic.Int32
-	doer, server := newTestDoerWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, r *http.Request) {
 		count := requestCount.Add(1)
 		if count <= 2 {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -194,10 +194,10 @@ func TestDoer_RateLimiter_SkippedDuringRetries(t *testing.T) {
 	// Replace rate limiter with a single-buffered channel (read exactly once).
 	countingCh := make(chan time.Time, 1)
 	countingCh <- time.Now()
-	doer.rateLimiter = countingCh
+	sender.rateLimiter = countingCh
 
 	req := newGetRequest(t, server.URL)
-	resp, err := doer.Do(context.Background(), req)
+	resp, err := sender.Do(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Do() error: %v", err)
 	}
@@ -219,9 +219,9 @@ func TestDoer_RateLimiter_SkippedDuringRetries(t *testing.T) {
 
 // --- Retry Tests: 401 ---
 
-func TestDoer_Retry_401_BasicAuth_ClearsCookiesAndRetries(t *testing.T) {
+func TestSender_Retry_401_BasicAuth_ClearsCookiesAndRetries(t *testing.T) {
 	var requestCount atomic.Int32
-	doer, server := newTestDoerWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, r *http.Request) {
 		count := requestCount.Add(1)
 		if count == 1 {
 			http.SetCookie(w, &http.Cookie{Name: "session", Value: "stale"})
@@ -238,7 +238,7 @@ func TestDoer_Retry_401_BasicAuth_ClearsCookiesAndRetries(t *testing.T) {
 	defer server.Close()
 
 	req := newGetRequest(t, server.URL)
-	resp, err := doer.Do(context.Background(), req)
+	resp, err := sender.Do(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Do() error: %v", err)
 	}
@@ -249,9 +249,9 @@ func TestDoer_Retry_401_BasicAuth_ClearsCookiesAndRetries(t *testing.T) {
 	}
 }
 
-func TestDoer_Retry_401_BasicAuth_MaxOneRetry(t *testing.T) {
+func TestSender_Retry_401_BasicAuth_MaxOneRetry(t *testing.T) {
 	var requestCount atomic.Int32
-	doer, server := newTestDoerWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write([]byte(`unauthorized`))
@@ -259,7 +259,7 @@ func TestDoer_Retry_401_BasicAuth_MaxOneRetry(t *testing.T) {
 	defer server.Close()
 
 	req := newGetRequest(t, server.URL)
-	resp, err := doer.Do(context.Background(), req)
+	resp, err := sender.Do(context.Background(), req)
 	if resp != nil {
 		resp.Body.Close()
 	}
@@ -279,9 +279,9 @@ func TestDoer_Retry_401_BasicAuth_MaxOneRetry(t *testing.T) {
 	}
 }
 
-func TestDoer_Retry_401_Bearer_FailsImmediately(t *testing.T) {
+func TestSender_Retry_401_Bearer_FailsImmediately(t *testing.T) {
 	var requestCount atomic.Int32
-	doer, server := newTestDoerWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write([]byte(`unauthorized`))
@@ -289,7 +289,7 @@ func TestDoer_Retry_401_Bearer_FailsImmediately(t *testing.T) {
 	defer server.Close()
 
 	req := newGetRequest(t, server.URL)
-	resp, err := doer.Do(context.Background(), req)
+	resp, err := sender.Do(context.Background(), req)
 	if resp != nil {
 		resp.Body.Close()
 	}
@@ -308,9 +308,9 @@ func TestDoer_Retry_401_Bearer_FailsImmediately(t *testing.T) {
 
 // --- Retry Tests: 429/503 ---
 
-func TestDoer_Retry_429_RetriesWithBackoff(t *testing.T) {
+func TestSender_Retry_429_RetriesWithBackoff(t *testing.T) {
 	var requestCount atomic.Int32
-	doer, server := newTestDoerWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, r *http.Request) {
 		count := requestCount.Add(1)
 		if count <= 3 {
 			w.WriteHeader(http.StatusTooManyRequests)
@@ -322,7 +322,7 @@ func TestDoer_Retry_429_RetriesWithBackoff(t *testing.T) {
 	defer server.Close()
 
 	req := newGetRequest(t, server.URL)
-	resp, err := doer.Do(context.Background(), req)
+	resp, err := sender.Do(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Do() error: %v", err)
 	}
@@ -336,9 +336,9 @@ func TestDoer_Retry_429_RetriesWithBackoff(t *testing.T) {
 	}
 }
 
-func TestDoer_Retry_503_RetriesWithBackoff(t *testing.T) {
+func TestSender_Retry_503_RetriesWithBackoff(t *testing.T) {
 	var requestCount atomic.Int32
-	doer, server := newTestDoerWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, r *http.Request) {
 		count := requestCount.Add(1)
 		if count <= 2 {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -350,7 +350,7 @@ func TestDoer_Retry_503_RetriesWithBackoff(t *testing.T) {
 	defer server.Close()
 
 	req := newGetRequest(t, server.URL)
-	resp, err := doer.Do(context.Background(), req)
+	resp, err := sender.Do(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Do() error: %v", err)
 	}
@@ -364,10 +364,10 @@ func TestDoer_Retry_503_RetriesWithBackoff(t *testing.T) {
 	}
 }
 
-func TestDoer_Retry_429_ExhaustsRetries(t *testing.T) {
+func TestSender_Retry_429_ExhaustsRetries(t *testing.T) {
 	var requestCount atomic.Int32
 	maxRetries := 3
-	doer, server := newTestDoerWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
 		w.WriteHeader(http.StatusTooManyRequests)
 		w.Write([]byte("rate limited"))
@@ -375,7 +375,7 @@ func TestDoer_Retry_429_ExhaustsRetries(t *testing.T) {
 	defer server.Close()
 
 	req := newGetRequest(t, server.URL)
-	resp, err := doer.Do(context.Background(), req)
+	resp, err := sender.Do(context.Background(), req)
 	if resp != nil {
 		resp.Body.Close()
 	}
@@ -400,9 +400,9 @@ func TestDoer_Retry_429_ExhaustsRetries(t *testing.T) {
 
 // --- Retry Tests: Other 5xx ---
 
-func TestDoer_Retry_500_RetriesOnce(t *testing.T) {
+func TestSender_Retry_500_RetriesOnce(t *testing.T) {
 	var requestCount atomic.Int32
-	doer, server := newTestDoerWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte("internal error"))
@@ -410,7 +410,7 @@ func TestDoer_Retry_500_RetriesOnce(t *testing.T) {
 	defer server.Close()
 
 	req := newGetRequest(t, server.URL)
-	resp, err := doer.Do(context.Background(), req)
+	resp, err := sender.Do(context.Background(), req)
 	if resp != nil {
 		resp.Body.Close()
 	}
@@ -424,9 +424,9 @@ func TestDoer_Retry_500_RetriesOnce(t *testing.T) {
 	}
 }
 
-func TestDoer_Retry_502_RetriesOnce(t *testing.T) {
+func TestSender_Retry_502_RetriesOnce(t *testing.T) {
 	var requestCount atomic.Int32
-	doer, server := newTestDoerWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
 		w.WriteHeader(http.StatusBadGateway)
 		w.Write([]byte("bad gateway"))
@@ -434,7 +434,7 @@ func TestDoer_Retry_502_RetriesOnce(t *testing.T) {
 	defer server.Close()
 
 	req := newGetRequest(t, server.URL)
-	resp, err := doer.Do(context.Background(), req)
+	resp, err := sender.Do(context.Background(), req)
 	if resp != nil {
 		resp.Body.Close()
 	}
@@ -448,9 +448,9 @@ func TestDoer_Retry_502_RetriesOnce(t *testing.T) {
 	}
 }
 
-func TestDoer_Retry_500_SucceedsOnRetry(t *testing.T) {
+func TestSender_Retry_500_SucceedsOnRetry(t *testing.T) {
 	var requestCount atomic.Int32
-	doer, server := newTestDoerWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, r *http.Request) {
 		count := requestCount.Add(1)
 		if count == 1 {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -462,7 +462,7 @@ func TestDoer_Retry_500_SucceedsOnRetry(t *testing.T) {
 	defer server.Close()
 
 	req := newGetRequest(t, server.URL)
-	resp, err := doer.Do(context.Background(), req)
+	resp, err := sender.Do(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Do() error: %v", err)
 	}
@@ -478,9 +478,9 @@ func TestDoer_Retry_500_SucceedsOnRetry(t *testing.T) {
 
 // --- Error Handling Tests ---
 
-func TestDoer_ErrorHandler_ProducesRetriesExhaustedError(t *testing.T) {
+func TestSender_ErrorHandler_ProducesRetriesExhaustedError(t *testing.T) {
 	var requestCount atomic.Int32
-	doer, server := newTestDoerWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
 		w.WriteHeader(http.StatusServiceUnavailable)
 		w.Write([]byte("broker down"))
@@ -488,7 +488,7 @@ func TestDoer_ErrorHandler_ProducesRetriesExhaustedError(t *testing.T) {
 	defer server.Close()
 
 	req := newGetRequest(t, server.URL)
-	resp, err := doer.Do(context.Background(), req)
+	resp, err := sender.Do(context.Background(), req)
 	if resp != nil {
 		resp.Body.Close()
 	}
@@ -507,9 +507,9 @@ func TestDoer_ErrorHandler_ProducesRetriesExhaustedError(t *testing.T) {
 
 // --- No-Retry Tests ---
 
-func TestDoer_NoRetry_404(t *testing.T) {
+func TestSender_NoRetry_404(t *testing.T) {
 	var requestCount atomic.Int32
-	doer, server := newTestDoerWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`not found`))
@@ -517,7 +517,7 @@ func TestDoer_NoRetry_404(t *testing.T) {
 	defer server.Close()
 
 	req := newGetRequest(t, server.URL)
-	resp, err := doer.Do(context.Background(), req)
+	resp, err := sender.Do(context.Background(), req)
 	if resp != nil {
 		resp.Body.Close()
 	}
@@ -530,9 +530,9 @@ func TestDoer_NoRetry_404(t *testing.T) {
 	}
 }
 
-func TestDoer_NoRetry_400(t *testing.T) {
+func TestSender_NoRetry_400(t *testing.T) {
 	var requestCount atomic.Int32
-	doer, server := newTestDoerWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(`bad request`))
@@ -540,7 +540,7 @@ func TestDoer_NoRetry_400(t *testing.T) {
 	defer server.Close()
 
 	req := newGetRequest(t, server.URL)
-	resp, err := doer.Do(context.Background(), req)
+	resp, err := sender.Do(context.Background(), req)
 	if resp != nil {
 		resp.Body.Close()
 	}

@@ -18,14 +18,14 @@ type retryStateKey struct{}
 
 // retryState tracks per-request retry decisions to enforce "retry once" limits.
 // Each Do() call creates its own instance via context, so concurrent requests
-// to the same Doer are safe.
+// to the same Sender are safe.
 type retryState struct {
 	auth401Retried  bool // true after first 401 re-auth attempt (basic auth only)
 	other5xxRetried bool // true after first non-429/503 5xx retry
 }
 
 // OperationIDKey is the context key callers use to attach an operation
-// identifier for logging. The Doer reads it in errorHandler and checkRetry.
+// identifier for logging. The Sender reads it in errorHandler and checkRetry.
 type OperationIDKey struct{}
 
 // getRetryState retrieves the per-request retryState from the context.
@@ -42,7 +42,7 @@ func getRetryState(ctx context.Context) *retryState {
 //   - Other 5xx: retry once only (likely a bug, not transient)
 //   - Connection errors: delegate to retryablehttp's default policy
 //   - All other status codes (4xx): no retry
-func (d *Doer) checkRetry(ctx context.Context, resp *http.Response, err error) (bool, error) {
+func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error) (bool, error) {
 	// Context cancellation: never retry.
 	if ctx.Err() != nil {
 		return false, ctx.Err()

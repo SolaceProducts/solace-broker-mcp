@@ -24,10 +24,10 @@ func (e *RetriesExhaustedError) Error() string {
 	return fmt.Sprintf("request failed after %d attempts with status %d", e.Attempts, e.StatusCode)
 }
 
-// Doer wraps retryablehttp.Client with per-broker rate limiting, custom retry
+// Sender wraps retryablehttp.Client with per-broker rate limiting, custom retry
 // policy, and 401 re-auth. Both SEMPv1 and SEMPv2 clients compose this to get
 // shared HTTP resilience without duplication.
-type Doer struct {
+type Sender struct {
 	retryClient *retryablehttp.Client
 	httpClient  *http.Client      // underlying client for cookie jar access
 	authCfg     config.AuthConfig // for 401 auth-mode check
@@ -37,10 +37,10 @@ type Doer struct {
 	jarMu       sync.Mutex   // protects cookie jar replacement during 401 re-auth
 }
 
-// New creates a Doer configured for a specific broker. It sets up retryablehttp
+// New creates a Sender configured for a specific broker. It sets up retryablehttp
 // with the retry policy from SEMPConfig and a per-broker rate limiter.
-func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authCfg config.AuthConfig, brokerURL string) *Doer {
-	d := &Doer{
+func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authCfg config.AuthConfig, brokerURL string) *Sender {
+	d := &Sender{
 		httpClient: httpClient,
 		authCfg:    authCfg,
 		brokerURL:  brokerURL,
@@ -76,7 +76,7 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authCfg config.Aut
 // The caller is responsible for building the request and adding authentication.
 // On success, returns the HTTP response (body open for the caller to read).
 // On failure after retries, returns a RetriesExhaustedError or a wrapped error.
-func (d *Doer) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
+func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
 	// Rate limit: wait for the per-broker interval before sending a new request.
 	// This does NOT apply to retries — retryablehttp handles those internally.
 	select {
@@ -99,9 +99,9 @@ func (d *Doer) Do(ctx context.Context, req *http.Request) (*http.Response, error
 	return d.retryClient.Do(retryReq)
 }
 
-// Close releases resources held by the Doer. Stops the rate limiter ticker
+// Close releases resources held by the Sender. Stops the rate limiter ticker
 // if one is running. Safe to call multiple times.
-func (d *Doer) Close() {
+func (d *Sender) Close() {
 	if d.rateTicker != nil {
 		d.rateTicker.Stop()
 	}
@@ -111,7 +111,7 @@ func (d *Doer) Close() {
 // reached while CheckRetry kept returning true). At this point the response
 // body has been drained/closed by retryablehttp's retry loop, so we construct
 // a RetriesExhaustedError from the status code and attempt count.
-func (d *Doer) errorHandler(resp *http.Response, err error, numTries int) (*http.Response, error) {
+func (d *Sender) errorHandler(resp *http.Response, err error, numTries int) (*http.Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("request failed after %d attempts: %w", numTries, err)
 	}
