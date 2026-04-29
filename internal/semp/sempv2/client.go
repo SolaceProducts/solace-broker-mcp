@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 	"github.com/hashicorp/go-retryablehttp"
 )
@@ -86,10 +87,7 @@ type HTTPClient struct {
 	retryClient *retryablehttp.Client // retryable HTTP client wrapping httpClient
 	httpClient  *http.Client          // underlying client for cookie jar access
 	baseURL     string
-	authMode    string
-	username    string
-	password    string
-	token       string
+	authCfg     config.AuthConfig
 	rateTicker  *time.Ticker    // non-nil when rate limiting enabled; stopped by Close()
 	rateLimiter <-chan time.Time // per-broker rate limiting; nil-safe via closed channel when disabled
 	jarMu       sync.Mutex      // protects cookie jar replacement during 401 re-auth
@@ -141,10 +139,7 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (
 	client := &HTTPClient{
 		httpClient: httpClient,
 		baseURL:    strings.TrimSuffix(brokerCfg.URL, "/"),
-		authMode:   brokerCfg.Auth.Mode,
-		username:   brokerCfg.Auth.Username,
-		password:   brokerCfg.Auth.Password,
-		token:      brokerCfg.Auth.Token,
+		authCfg:    brokerCfg.Auth,
 	}
 
 	// Configure retryablehttp client with the underlying http.Client.
@@ -189,7 +184,9 @@ func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string
 		return nil, fmt.Errorf("building request for %s: %w", op.ID, err)
 	}
 
-	c.addAuth(req)
+	if err := auth.AddAuth(ctx, req, c.authCfg); err != nil {
+		return nil, fmt.Errorf("applying auth for %s: %w", op.ID, err)
+	}
 
 	// Rate limit: wait for the per-broker interval before sending a new request.
 	// This does NOT apply to retries — retryablehttp handles those internally.
@@ -265,7 +262,7 @@ func (c *HTTPClient) checkRetry(ctx context.Context, resp *http.Response, err er
 
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized: // 401
-		if c.authMode == config.AuthModeBasic && !state.auth401Retried {
+		if c.authCfg.Mode == config.AuthModeBasic && !state.auth401Retried {
 			state.auth401Retried = true
 			// Stale session cookie is the most likely cause. Clear the jar so
 			// the retried request re-sends Basic Auth credentials from scratch.
@@ -275,7 +272,7 @@ func (c *HTTPClient) checkRetry(ctx context.Context, resp *http.Response, err er
 			c.jarMu.Unlock()
 			slog.Warn("retrying: 401 received, clearing session cookies",
 				slog.String("broker", c.baseURL),
-				slog.String("auth_mode", c.authMode))
+				slog.String("auth_mode", c.authCfg.Mode))
 			return true, nil
 		}
 		// Bearer token (static, can't refresh) or already retried basic auth.
@@ -402,21 +399,4 @@ func (c *HTTPClient) buildRequest(ctx context.Context, op *Operation, reqURL str
 	req.Header.Set("User-Agent", "solace/broker-mcp-server/"+version.Version())
 
 	return req, nil
-}
-
-// addAuth sets the authentication header on the request based on the configured
-// auth mode. Basic auth sends Authorization: Basic base64(user:pass). Bearer
-// sends Authorization: Bearer <token>.
-//
-// By the time this runs, config validation has guaranteed that authMode is one
-// of validAuthModes and the corresponding credential fields are non-empty, so
-// no defensive emptiness checks are needed here. If a new auth mode is added,
-// config.validAuthModes must be updated AND a new case must be added below.
-func (c *HTTPClient) addAuth(req *http.Request) {
-	switch c.authMode {
-	case config.AuthModeBasic:
-		req.SetBasicAuth(c.username, c.password)
-	case config.AuthModeBearer:
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
 }

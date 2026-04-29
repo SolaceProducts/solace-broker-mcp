@@ -175,4 +175,3 @@ func NewProtectedResourceMetadataHandler(cfg *config.ServerConfig) http.Handler 
 
 	return sdkauth.ProtectedResourceMetadataHandler(metadata)
 }
-

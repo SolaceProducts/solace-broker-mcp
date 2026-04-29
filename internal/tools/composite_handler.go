@@ -43,7 +43,7 @@ func NewCompositeToolHandler(tool composite.CompositeTool, executor *composite.C
 // Handle executes the composite tool's steps against the SEMP client in the
 // ToolContext and wraps the combined result in a ToolResult.
 func (h *CompositeToolHandler) Handle(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
-	result, err := h.executor.Execute(ctx, h.tool, tc.SEMPClient, params)
+	result, err := h.executor.Execute(ctx, h.tool, tc.SEMPv2Client, params)
 	if err != nil {
 		return nil, err
 	}

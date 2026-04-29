@@ -219,7 +219,7 @@ func listClientSubscriptionsTool() CompositeTool {
 				Args: map[string]string{
 					"msgVpnName": "{{.Params.msgVpnName}}",
 					"clientName": "{{.Params.clientName}}",
-					"count": `{{with index .Params "maxResults"}}{{.}}{{else}}100{{end}}`,
+					"count":      `{{with index .Params "maxResults"}}{{.}}{{else}}100{{end}}`,
 				},
 			},
 		},
@@ -693,10 +693,10 @@ func TestExecute_GetClientDetails_ReturnsData(t *testing.T) {
 	client := newMockClient()
 	client.responses["getMsgVpnClient"] = &sempv2.Result{
 		Data: map[string]any{
-			"clientName":            "myapp/1",
-			"clientUsername":        "app-user",
-			"slowSubscriber":        false,
-			"txDiscardedMsgCount":   float64(0),
+			"clientName":          "myapp/1",
+			"clientUsername":      "app-user",
+			"slowSubscriber":      false,
+			"txDiscardedMsgCount": float64(0),
 		},
 		StatusCode: 200,
 	}
@@ -871,8 +871,8 @@ func listVPNsTool() CompositeTool {
 		},
 		Steps: []Step{
 			{
-				ID:        "vpns",
-				Operation: "monitor/getMsgVpns",
+				ID:          "vpns",
+				Operation:   "monitor/getMsgVpns",
 				FollowPages: true,
 				Args: map[string]string{
 					"count": "100",
@@ -894,8 +894,8 @@ func listQueuesTool() CompositeTool {
 		},
 		Steps: []Step{
 			{
-				ID:        "queues",
-				Operation: "monitor/getMsgVpnQueues",
+				ID:          "queues",
+				Operation:   "monitor/getMsgVpnQueues",
 				FollowPages: true,
 				Args: map[string]string{
 					"msgVpnName": "{{.Params.msgVpnName}}",
@@ -918,8 +918,8 @@ func listClientsTool() CompositeTool {
 		},
 		Steps: []Step{
 			{
-				ID:        "clients",
-				Operation: "monitor/getMsgVpnClients",
+				ID:          "clients",
+				Operation:   "monitor/getMsgVpnClients",
 				FollowPages: true,
 				Args: map[string]string{
 					"msgVpnName": "{{.Params.msgVpnName}}",
@@ -975,11 +975,11 @@ func TestExecute_GetVPNHealth_ReturnsData(t *testing.T) {
 	client := newMockClient()
 	client.responses["getMsgVpn"] = &sempv2.Result{
 		Data: map[string]any{
-			"msgVpnName":                      "default",
-			"enabled":                         true,
-			"msgVpnConnections":               float64(5),
-			"msgVpnTotalUniqueSubscriptions":  float64(42),
-			"state":                           "up",
+			"msgVpnName":                     "default",
+			"enabled":                        true,
+			"msgVpnConnections":              float64(5),
+			"msgVpnTotalUniqueSubscriptions": float64(42),
+			"state":                          "up",
 		},
 		StatusCode: 200,
 	}
@@ -1288,7 +1288,6 @@ func TestExecute_ListQueues_EmptyFirstPage(t *testing.T) {
 		t.Errorf("truncated = %v, want false", queues["truncated"])
 	}
 }
-
 
 func TestExecute_ListQueues_EmptyCursorInNextPageURI(t *testing.T) {
 	// nextPageUri is present but has no cursor query param, executor must return an error.

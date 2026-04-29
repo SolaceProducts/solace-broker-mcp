@@ -27,15 +27,16 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/auth"
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite"
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite/definitions"
-	"github.com/SolaceDev/solace-broker-mcp/internal/auth"
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2/specs"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
+	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv1/redundancy"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"gopkg.in/yaml.v3"
@@ -129,6 +130,16 @@ func healthConfigFromFile() healthConfig {
 		scheme = "https"
 	}
 	return healthConfig{Port: cfg.Port, Scheme: scheme}
+}
+
+// registerSEMPv1Tools attaches every Go-native SEMPv1 tool handler to mgr.
+// New SEMPv1 tools should be added here as they land — this is the single
+// source of truth for which v1 tools the server exposes. The handlers flow
+// through the same RegisterWithServer pass as composite tools, so they
+// inherit input-schema validation, broker resolution, and structured
+// logging without further plumbing.
+func registerSEMPv1Tools(mgr *tools.ToolManager) {
+	mgr.Register(redundancy.NewHandler())
 }
 
 func main() {
@@ -231,14 +242,19 @@ func main() {
 		Version: version.Version(),
 	}, nil)
 
-	// 7. Create tool manager from composite tool definitions
+	// 7. Create the tool manager and register every tool the server exposes.
+	// All registrations happen in one block so the log line below is a
+	// reliable phase boundary — anything before it is registered, anything
+	// after it sees a fully-loaded server.
 	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor)
+	registerSEMPv1Tools(mgr)
 	tools.RegisterWithServer(mgr, server, pool)
-	slog.Info("registered composite tools",
-		slog.Int("tool_count", len(compositeTools)))
 
-	// 8. Register list-brokers discovery tool
+	// list-brokers is a discovery tool registered directly on the MCP
+	// server (it doesn't need broker resolution or the ToolManager pipeline).
 	tools.RegisterListBrokers(server, pool)
+
+	slog.Info("all tools registered")
 
 	// 9. Set up HTTP routes
 	mux := buildMux()

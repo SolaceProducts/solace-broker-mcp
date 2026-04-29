@@ -1,20 +1,31 @@
 package semp
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
 	"sync"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 )
 
+// ErrUnknownBroker is returned by GetSEMPv1, GetSEMPv2, and the underlying
+// getOrCreate when the requested alias is not in the configured broker map.
+// Callers branch on this with errors.Is to distinguish a user-supplied
+// unknown alias (caller's mistake — should list available aliases) from
+// transport or construction failures (server-side issue — should preserve
+// the underlying error).
+var ErrUnknownBroker = errors.New("unknown broker")
+
 // BrokerPool manages BrokerClient instances for all configured brokers. It is
 // created at startup with broker configs from the YAML configuration file.
-// BrokerClients are created lazily on first GetSempV2() call — with many brokers
-// configured, only active brokers allocate HTTP clients and resources.
-// Thread-safe via sync.RWMutex with a double-check pattern for lazy creation.
+// BrokerClients are created lazily on the first GetSEMPv1() or GetSEMPv2()
+// call for a given alias, so only brokers that are actually used allocate
+// HTTP clients and resources. Thread-safe via sync.RWMutex with a
+// double-check pattern for lazy creation.
 type BrokerPool struct {
 	mu      sync.RWMutex
 	clients map[string]*BrokerClient        // broker alias → client (lazily populated)
@@ -32,16 +43,19 @@ func NewBrokerPool(cfg *config.ServerConfig) *BrokerPool {
 	}
 }
 
-// GetSempV2 returns the SEMPv2 client for the broker identified by alias. The
-// underlying BrokerClient is created lazily on the first call for a given
-// alias and reused for all subsequent calls. Returns an error if the alias
-// is not in the configured broker map.
-func (p *BrokerPool) GetSempV2(alias string) (sempv2.Client, error) {
-	// Fast path: read lock to check existing clients.
+// getOrCreate returns the BrokerClient for alias, creating it on first access.
+// Uses a double-checked locking pattern: a fast path under an RLock for the
+// common case where the client already exists, and a slow path under a write
+// lock for lazy creation. The second check after acquiring the write lock
+// handles the race where two goroutines both saw "not cached" during the fast
+// path. The log line is emitted exactly once per alias inside the creation
+// branch — both GetSEMPv1 and GetSEMPv2 delegate here, so neither accessor
+// can trigger a duplicate log.
+func (p *BrokerPool) getOrCreate(alias string) (*BrokerClient, error) {
 	p.mu.RLock()
 	if client, ok := p.clients[alias]; ok {
 		p.mu.RUnlock()
-		return client.SempV2(), nil
+		return client, nil
 	}
 	p.mu.RUnlock()
 
@@ -50,12 +64,12 @@ func (p *BrokerPool) GetSempV2(alias string) (sempv2.Client, error) {
 	defer p.mu.Unlock()
 
 	if client, ok := p.clients[alias]; ok {
-		return client.SempV2(), nil
+		return client, nil
 	}
 
 	cfg, ok := p.configs[alias]
 	if !ok {
-		return nil, fmt.Errorf("unknown broker: %q", alias)
+		return nil, fmt.Errorf("%w: %q", ErrUnknownBroker, alias)
 	}
 
 	client, err := NewBrokerClient(alias, cfg, p.sempCfg)
@@ -67,7 +81,31 @@ func (p *BrokerPool) GetSempV2(alias string) (sempv2.Client, error) {
 		slog.String("broker", alias),
 		slog.String("url", cfg.URL),
 		slog.String("auth_mode", cfg.Auth.Mode))
-	return client.SempV2(), nil
+	return client, nil
+}
+
+// GetSEMPv1 returns the SEMPv1 client for the broker identified by alias. The
+// underlying BrokerClient is created lazily on the first call for a given
+// alias and reused for all subsequent calls. Returns an error if the alias
+// is not in the configured broker map.
+func (p *BrokerPool) GetSEMPv1(alias string) (sempv1.Client, error) {
+	client, err := p.getOrCreate(alias)
+	if err != nil {
+		return nil, err
+	}
+	return client.SEMPv1(), nil
+}
+
+// GetSEMPv2 returns the SEMPv2 client for the broker identified by alias. The
+// underlying BrokerClient is created lazily on the first call for a given
+// alias and reused for all subsequent calls. Returns an error if the alias
+// is not in the configured broker map.
+func (p *BrokerPool) GetSEMPv2(alias string) (sempv2.Client, error) {
+	client, err := p.getOrCreate(alias)
+	if err != nil {
+		return nil, err
+	}
+	return client.SEMPv2(), nil
 }
 
 // Close releases resources for all created broker clients.

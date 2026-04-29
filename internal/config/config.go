@@ -38,14 +38,14 @@ import (
 // ServerConfig holds the complete MCP server configuration, including all
 // configured brokers and SEMP client settings.
 type ServerConfig struct {
-	Brokers           map[string]*BrokerConfig // broker alias → config
-	SEMP              SEMPConfig               // SEMP client settings
-	Port              int                      // HTTP port the MCP server listens on
-	LogLevel    string                   // slog level name: "debug", "info", "warn", "error"
-	DevelopmentMode   bool                     // use static dev token if true
-	ClientAuth        ClientAuthConfig         // authentication config for mcp client to server interactions
-	TLSCertFile string                         // path to TLS certificate file (optional, enables HTTPS)
-	TLSKeyFile  string                     // path to TLS private key file (optional, requires TLSCertFile)
+	Brokers         map[string]*BrokerConfig // broker alias → config
+	SEMP            SEMPConfig               // SEMP client settings
+	Port            int                      // HTTP port the MCP server listens on
+	LogLevel        string                   // slog level name: "debug", "info", "warn", "error"
+	DevelopmentMode bool                     // use static dev token if true
+	ClientAuth      ClientAuthConfig         // authentication config for mcp client to server interactions
+	TLSCertFile     string                   // path to TLS certificate file (optional, enables HTTPS)
+	TLSKeyFile      string                   // path to TLS private key file (optional, requires TLSCertFile)
 }
 
 type ClientAuthConfig struct {
@@ -148,14 +148,14 @@ type SEMPConfig struct {
 // yamlConfig is the intermediate representation used for YAML unmarshalling.
 // It mirrors the YAML file structure before being transformed into ServerConfig.
 type yamlConfig struct {
-	Brokers     map[string]*BrokerConfig `yaml:"brokers"`
-	SEMP        SEMPConfig               `yaml:"semp"`
-	Port        int                      `yaml:"port"`
-	LogLevel    string                   `yaml:"log_level"`
+	Brokers         map[string]*BrokerConfig `yaml:"brokers"`
+	SEMP            SEMPConfig               `yaml:"semp"`
+	Port            int                      `yaml:"port"`
+	LogLevel        string                   `yaml:"log_level"`
 	DevelopmentMode bool                     `yaml:"development_mode"`
 	ClientAuth      ClientAuthConfig         `yaml:"client_auth"`
-	TLSCertFile string                   `yaml:"tls_cert_file"`
-	TLSKeyFile  string                   `yaml:"tls_key_file"`
+	TLSCertFile     string                   `yaml:"tls_cert_file"`
+	TLSKeyFile      string                   `yaml:"tls_key_file"`
 }
 
 // Load locates the server configuration file, loads it, and returns a ready
@@ -234,14 +234,14 @@ func LoadConfig(path string) (*ServerConfig, error) {
 	}
 
 	cfg := &ServerConfig{
-		Brokers:     raw.Brokers,
-		SEMP:        raw.SEMP,
-		Port:        raw.Port,
-		LogLevel:    raw.LogLevel,
+		Brokers:         raw.Brokers,
+		SEMP:            raw.SEMP,
+		Port:            raw.Port,
+		LogLevel:        raw.LogLevel,
 		DevelopmentMode: raw.DevelopmentMode,
-		ClientAuth: raw.ClientAuth,
-		TLSCertFile: raw.TLSCertFile,
-		TLSKeyFile:  raw.TLSKeyFile,
+		ClientAuth:      raw.ClientAuth,
+		TLSCertFile:     raw.TLSCertFile,
+		TLSKeyFile:      raw.TLSKeyFile,
 	}
 
 	applyDefaults(cfg)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 )
 
@@ -15,28 +16,41 @@ import (
 // lazily by BrokerPool on first use. One instance per broker, shared across
 // all MCP sessions targeting that broker.
 type BrokerClient struct {
+	sempV1     sempv1.Client      // SEMPv1 protocol client
 	sempV2     sempv2.Client      // SEMPv2 protocol client
 	httpClient *sempv2.HTTPClient // underlying client for lifecycle management (Close)
 	alias      string             // broker alias (for error messages)
 }
 
 // NewBrokerClient creates a BrokerClient for the given broker configuration.
-// It initializes the SEMPv2 HTTP client with the broker's connection settings.
+// It initializes the SEMPv1 and SEMPv2 HTTP clients with the broker's
+// connection settings.
 func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (*BrokerClient, error) {
-	httpClient, err := sempv2.NewHTTPClient(brokerCfg, sempCfg)
+	sempV1Client, err := sempv1.NewHTTPClient(brokerCfg, sempCfg)
 	if err != nil {
-		return nil, fmt.Errorf("creating SEMP client for broker %q: %w", alias, err)
+		return nil, fmt.Errorf("creating SEMPv1 client for broker %q: %w", alias, err)
+	}
+	sempV2Client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg)
+	if err != nil {
+		return nil, fmt.Errorf("creating SEMPv2 client for broker %q: %w", alias, err)
 	}
 	return &BrokerClient{
-		sempV2:     httpClient,
-		httpClient: httpClient,
+		sempV1:     sempV1Client,
+		sempV2:     sempV2Client,
+		httpClient: sempV2Client,
 		alias:      alias,
 	}, nil
 }
 
-// SempV2 returns the SEMPv2 client for this broker. This is the client that
+// SEMPv1 returns the SEMPv1 client for this broker. Tools that need to send
+// raw XML commands (e.g., <show><version/></show>) use this client.
+func (b *BrokerClient) SEMPv1() sempv1.Client {
+	return b.sempV1
+}
+
+// SEMPv2 returns the SEMPv2 client for this broker. This is the client that
 // gets passed to the composite executor for making SEMP API calls.
-func (b *BrokerClient) SempV2() sempv2.Client {
+func (b *BrokerClient) SEMPv2() sempv2.Client {
 	return b.sempV2
 }
 

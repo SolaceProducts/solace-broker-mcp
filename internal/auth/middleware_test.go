@@ -53,10 +53,10 @@ func Test_AuthDisabled(t *testing.T) {
 	}
 
 	tests := []struct {
-		name          string
-		authHeader    string
-		expectedCode  int
-		expectedBody  string
+		name         string
+		authHeader   string
+		expectedCode int
+		expectedBody string
 	}{
 		{
 			name:         "no auth header",
