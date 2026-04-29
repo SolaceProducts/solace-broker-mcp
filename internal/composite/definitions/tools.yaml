@@ -132,3 +132,97 @@ tools:
           count: '{{with index .Params "maxResults"}}{{.}}{{else}}100{{end}}'
     result:
       strategy: collect
+
+  - name: get-vpn-health
+    description: >
+      Get health and connection statistics for a Message VPN. Returns enabled
+      state, active connection count, total subscription count, and service
+      states for SMF, REST, and MQTT protocols. Use this to assess whether a
+      VPN is operational and identify service-level problems.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The name of the Message VPN"
+    steps:
+      - id: vpnHealth
+        operation: monitor/getMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+    result:
+      strategy: collect
+
+  - name: list-vpns
+    description: >
+      List all Message VPNs on the broker with their enabled state, connection
+      count, and basic health status. Use this to discover which VPNs exist and
+      identify any that are down or have no active connections.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of VPNs to return (default 100, max 500)"
+    steps:
+      - id: vpns
+        operation: monitor/getMsgVpns
+        followPages: true
+        args:
+          count: "100"
+    result:
+      strategy: collect
+
+  - name: list-queues
+    description: >
+      List all queues in a Message VPN with depth, bind count, and throughput
+      rates. Use this to get an overview of queue health across a VPN and
+      identify queues with backlogs or no consumers.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN to list queues for"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of queues to return (default 100, max 500)"
+    steps:
+      - id: queues
+        operation: monitor/getMsgVpnQueues
+        followPages: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          count: "100"
+    result:
+      strategy: collect
+
+  - name: list-clients
+    description: >
+      List all active client connections in a Message VPN with connection
+      details, uptime, and slow subscriber status. Use this to discover which
+      clients are connected and identify slow or stalled consumers.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN to list clients for"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of clients to return (default 100, max 500)"
+    steps:
+      - id: clients
+        operation: monitor/getMsgVpnClients
+        followPages: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          count: "100"
+    result:
+      strategy: collect
