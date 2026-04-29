@@ -26,35 +26,62 @@ import (
 )
 
 // RegisterWithServer registers all tools from the ToolManager with the MCP
-// server. For each handler, it builds an mcp.Tool with the broker parameter
-// injected into the input schema, sets the output schema and annotations, and
-// creates a handler closure that delegates to ToolManager.CallTool.
+// server. For each handler, it builds an mcp.Tool from the handler's Metadata
+// (with the broker parameter injected into the input schema) and creates a
+// handler closure that delegates to ToolManager.CallTool.
+//
+// This function is the only translation boundary between our internal Metadata
+// type and the SDK's mcp.Tool. Handlers and the manager work in our own
+// vocabulary; this is where it crosses over to the SDK.
 func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerPool) {
-	// Sort handlers by name for deterministic registration and tools/list ordering.
+	type registration struct {
+		name    string
+		handler ToolHandler
+		meta    Metadata
+	}
+
 	handlers := mgr.Handlers()
-	sort.Slice(handlers, func(i, j int) bool {
-		return handlers[i].Name() < handlers[j].Name()
-	})
+	regs := make([]registration, 0, len(handlers))
+	for _, h := range handlers {
+		meta := h.Metadata()
+		regs = append(regs, registration{name: meta.Name, handler: h, meta: meta})
+	}
+	// Sort by name for deterministic registration and tools/list ordering.
+	sort.Slice(regs, func(i, j int) bool { return regs[i].name < regs[j].name })
 
-	for _, handler := range handlers {
-		h := handler // capture for closure
-		schema := injectBrokerParam(h.Schema(), pool)
-
-		mcpTool := &mcp.Tool{
-			Name:         h.Name(),
-			Description:  h.Description(),
-			InputSchema:  schema,
-			OutputSchema: h.OutputSchema(),
-			Annotations:  h.Annotations(),
-		}
+	for _, reg := range regs {
+		mcpTool := toMCPTool(reg.meta, pool)
 
 		server.AddTool(mcpTool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var params map[string]any
 			if err := json.Unmarshal(req.Params.Arguments, &params); err != nil {
 				return nil, fmt.Errorf("parsing tool arguments: %w", err)
 			}
-			return mgr.CallTool(ctx, h.Name(), params)
+			return mgr.CallTool(ctx, reg.name, params)
 		})
+	}
+}
+
+// toMCPTool converts our Metadata to the SDK's mcp.Tool, injecting the broker
+// parameter into the input schema. This is the only place in the codebase
+// where our types and SDK types meet.
+func toMCPTool(m Metadata, pool *semp.BrokerPool) *mcp.Tool {
+	return &mcp.Tool{
+		Name:         m.Name,
+		Description:  m.Description,
+		InputSchema:  injectBrokerParam(m.InputSchema, pool),
+		OutputSchema: m.OutputSchema,
+		Annotations:  toMCPAnnotations(m.Annotations),
+	}
+}
+
+// toMCPAnnotations converts our Annotations to the SDK's mcp.ToolAnnotations.
+func toMCPAnnotations(a Annotations) *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{
+		ReadOnlyHint:    a.ReadOnly,
+		DestructiveHint: a.Destructive,
+		IdempotentHint:  a.Idempotent,
+		OpenWorldHint:   a.OpenWorld,
 	}
 }
 

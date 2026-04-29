@@ -18,7 +18,6 @@ import (
 	"context"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // CompositeToolHandler adapts a YAML-driven composite tool definition to the
@@ -40,6 +39,21 @@ func NewCompositeToolHandler(tool composite.CompositeTool, executor *composite.C
 	}
 }
 
+// Metadata returns a fresh Metadata value built from the YAML-loaded composite
+// tool definition. The input schema is computed from the tool's Parameters; the
+// output schema is the generic step-keyed envelope shared by every composite
+// tool's collect strategy. Each call returns a freshly allocated value with
+// fresh maps inside, so callers cannot mutate shared state.
+func (h *CompositeToolHandler) Metadata() Metadata {
+	return Metadata{
+		Name:         h.tool.Name,
+		Description:  h.tool.Description,
+		InputSchema:  buildCompositeInputSchema(h.tool.Parameters),
+		OutputSchema: StepKeyedEnvelopeSchema(),
+		Annotations:  toolAnnotations(h.tool.Annotations),
+	}
+}
+
 // Handle executes the composite tool's steps against the SEMP client in the
 // ToolContext and wraps the combined result in a ToolResult.
 func (h *CompositeToolHandler) Handle(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
@@ -50,14 +64,20 @@ func (h *CompositeToolHandler) Handle(ctx context.Context, tc *ToolContext, para
 	return &ToolResult{StructuredContent: result}, nil
 }
 
-// Schema builds a JSON Schema object from the composite tool's parameter
-// definitions. This does not include the broker parameter — the ToolManager
-// injects that during registration and validation.
-func (h *CompositeToolHandler) Schema() map[string]any {
-	properties := make(map[string]any, len(h.tool.Parameters))
+// Executor returns the underlying composite executor. This is exposed for
+// testing and for callers that need to interact with the executor directly.
+func (h *CompositeToolHandler) Executor() *composite.CompositeExecutor {
+	return h.executor
+}
+
+// buildCompositeInputSchema builds a JSON Schema object from the composite
+// tool's parameter definitions. The broker parameter is injected later by
+// register.go — handlers do not declare it.
+func buildCompositeInputSchema(params []composite.ParameterDef) map[string]any {
+	properties := make(map[string]any, len(params))
 	var required []string
 
-	for _, p := range h.tool.Parameters {
+	for _, p := range params {
 		prop := map[string]any{
 			"type": p.Type,
 		}
@@ -80,47 +100,19 @@ func (h *CompositeToolHandler) Schema() map[string]any {
 	return schema
 }
 
-// OutputSchema returns a generic envelope schema for composite tool results.
-// The collect strategy returns an object keyed by step ID, where each value is
-// a SEMP response object. This validates the envelope structure without
-// constraining individual SEMP response fields.
-func (h *CompositeToolHandler) OutputSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": map[string]any{"type": "object"},
-	}
-}
-
-// Annotations converts the composite tool's YAML-declared annotations to MCP
-// SDK ToolAnnotations. Nil pointers from YAML (field omitted) are passed
-// through as nil, letting the SDK defaults apply.
-func (h *CompositeToolHandler) Annotations() *mcp.ToolAnnotations {
-	a := h.tool.Annotations
-	ann := &mcp.ToolAnnotations{
-		DestructiveHint: a.Destructive,
-		OpenWorldHint:   a.OpenWorld,
+// toolAnnotations converts the YAML-declared annotations to our Annotations
+// type. Pointer fields stay nil when YAML omitted them, letting the registration
+// translator pass through to spec defaults.
+func toolAnnotations(a composite.ToolAnnotations) Annotations {
+	out := Annotations{
+		Destructive: a.Destructive,
+		OpenWorld:   a.OpenWorld,
 	}
 	if a.ReadOnly != nil {
-		ann.ReadOnlyHint = *a.ReadOnly
+		out.ReadOnly = *a.ReadOnly
 	}
 	if a.Idempotent != nil {
-		ann.IdempotentHint = *a.Idempotent
+		out.Idempotent = *a.Idempotent
 	}
-	return ann
-}
-
-// Description returns the tool's human-readable description for LLM tool selection.
-func (h *CompositeToolHandler) Description() string {
-	return h.tool.Description
-}
-
-// Name returns the tool's unique identifier.
-func (h *CompositeToolHandler) Name() string {
-	return h.tool.Name
-}
-
-// Executor returns the underlying composite executor. This is exposed for
-// testing and for callers that need to interact with the executor directly.
-func (h *CompositeToolHandler) Executor() *composite.CompositeExecutor {
-	return h.executor
+	return out
 }

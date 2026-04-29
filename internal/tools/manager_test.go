@@ -67,15 +67,20 @@ type stubHandler struct {
 	description string
 	schema      map[string]any
 	outputSch   map[string]any
-	annotations *mcp.ToolAnnotations
+	annotations Annotations
 	handleFn    func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error)
 }
 
-func (h *stubHandler) Name() string                      { return h.name }
-func (h *stubHandler) Description() string               { return h.description }
-func (h *stubHandler) Schema() map[string]any            { return h.schema }
-func (h *stubHandler) OutputSchema() map[string]any      { return h.outputSch }
-func (h *stubHandler) Annotations() *mcp.ToolAnnotations { return h.annotations }
+func (h *stubHandler) Metadata() Metadata {
+	return Metadata{
+		Name:         h.name,
+		Description:  h.description,
+		InputSchema:  h.schema,
+		OutputSchema: h.outputSch,
+		Annotations:  h.annotations,
+	}
+}
+
 func (h *stubHandler) Handle(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
 	if h.handleFn != nil {
 		return h.handleFn(ctx, tc, params)
@@ -98,7 +103,7 @@ func newStubHandler(name string) *stubHandler {
 			"type":                 "object",
 			"additionalProperties": map[string]any{"type": "object"},
 		},
-		annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
+		annotations: Annotations{ReadOnly: true},
 	}
 }
 
@@ -112,8 +117,8 @@ func TestRoute_ValidTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if handler.Name() != "test-tool" {
-		t.Errorf("expected handler name 'test-tool', got %q", handler.Name())
+	if name := handler.Metadata().Name; name != "test-tool" {
+		t.Errorf("expected handler name 'test-tool', got %q", name)
 	}
 }
 
@@ -354,9 +359,9 @@ func TestCallTool_AnnotationsReadOnly(t *testing.T) {
 	mgr.Register(handler)
 
 	h, _ := mgr.Route("monitor-tool")
-	ann := h.Annotations()
-	if !ann.ReadOnlyHint {
-		t.Error("expected ReadOnlyHint = true for monitoring tool")
+	ann := h.Metadata().Annotations
+	if !ann.ReadOnly {
+		t.Error("expected ReadOnly = true for monitoring tool")
 	}
 }
 
@@ -373,8 +378,8 @@ func TestCallTool_DestructiveWarningLogged(t *testing.T) {
 
 	handler := newStubHandler("destructive-tool")
 	destructive := true
-	handler.annotations = &mcp.ToolAnnotations{
-		DestructiveHint: &destructive,
+	handler.annotations = Annotations{
+		Destructive: &destructive,
 	}
 	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
 		return &ToolResult{
@@ -739,7 +744,7 @@ func TestHandlers_ReturnsAll(t *testing.T) {
 
 	names := make(map[string]bool)
 	for _, h := range handlers {
-		names[h.Name()] = true
+		names[h.Metadata().Name] = true
 	}
 	if !names["tool-a"] || !names["tool-b"] {
 		t.Errorf("expected tool-a and tool-b, got %v", names)

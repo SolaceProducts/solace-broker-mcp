@@ -14,7 +14,6 @@ import (
 	"fmt"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // Compile-time check that Handler satisfies tools.ToolHandler.
@@ -39,53 +38,20 @@ func NewHandler() *Handler {
 	return &Handler{}
 }
 
-// Name returns the tool's unique identifier used for routing by the
-// ToolManager and for invocation by MCP clients.
-func (h *Handler) Name() string {
-	return "get_redundancy_status"
-}
-
-// Description returns the LLM-facing description that helps the agent
-// decide when to call this tool. Follows the description guidelines in
-// internal/composite/definitions/tools.yaml header comment.
-func (h *Handler) Description() string {
-	return "Returns the broker's redundancy and high-availability status, " +
-		"including config/operational status, active-standby role, mate router " +
-		"name, mate link state, and per-virtual-router activity. Use this tool " +
-		"to assess HA health during incident triage. Single SEMPv1 call."
-}
-
-// Schema returns the JSON Schema for tool input parameters. The tool
-// takes no tool-specific parameters — the broker parameter is injected
-// by the ToolManager during registration and validation.
-func (h *Handler) Schema() map[string]any {
-	return map[string]any{
-		"type":       "object",
-		"properties": map[string]any{},
-	}
-}
-
-// OutputSchema returns the generic step-keyed envelope schema used by
-// every SEMPv1 tool: a top-level object whose keys are step IDs and
-// whose values are the parsed SEMP responses. The schema validates the
-// envelope structure but not individual response fields, so post-MVP
-// curation can flatten without a schema migration.
-func (h *Handler) OutputSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": map[string]any{"type": "object"},
-	}
-}
-
-// Annotations returns MCP tool annotations. get_redundancy_status is a
-// pure read with no side effects: ReadOnlyHint=true,
-// DestructiveHint=false. Idempotent and OpenWorld hints are left
-// unspecified (nil) — SDK defaults apply.
-func (h *Handler) Annotations() *mcp.ToolAnnotations {
-	destructive := false
-	return &mcp.ToolAnnotations{
-		ReadOnlyHint:    true,
-		DestructiveHint: &destructive,
+// Metadata describes the tool to the MCP layer. Returns a freshly allocated
+// value per call so the manager and registration layer cannot mutate shared
+// state. The output schema is the generic step-keyed envelope; curation to a
+// flat field set is post-MVP work tracked separately.
+func (h *Handler) Metadata() tools.Metadata {
+	return tools.Metadata{
+		Name: "get_redundancy_status",
+		Description: "Returns the broker's redundancy and high-availability status, " +
+			"including config/operational status, active-standby role, mate router " +
+			"name, mate link state, and per-virtual-router activity. Use this tool " +
+			"to assess HA health during incident triage. Single SEMPv1 call.",
+		InputSchema:  tools.EmptyObjectSchema(),
+		OutputSchema: tools.StepKeyedEnvelopeSchema(),
+		Annotations:  tools.ReadOnlyAnnotations(),
 	}
 }
 
@@ -103,17 +69,15 @@ func (h *Handler) Handle(
 ) (*tools.ToolResult, error) {
 	xmlReq := `<rpc><show><redundancy/></show></rpc>`
 
-	// send to broker
 	result, err := tc.SEMPv1Client.Execute(ctx, xmlReq)
 	if err != nil {
 		return nil, err
 	}
 
-	// Step 3: parse the <redundancy> payload from result.InnerXML
 	// result.InnerXML contains the inner content of <rpc>...</rpc> from the
-	// broker's <rpc-reply>. parseReply (T2) already stripped the envelope.
-	// The content is <show><redundancy>...</redundancy></show>, so wrap it
-	// and decode with a path tag.
+	// broker's <rpc-reply>. parseReply already stripped the envelope. The
+	// content is <show><redundancy>...</redundancy></show>, so wrap it and
+	// decode with a path tag.
 	var wrapper struct {
 		XMLName    xml.Name           `xml:"show"`
 		Redundancy redundancyResponse `xml:"redundancy"`

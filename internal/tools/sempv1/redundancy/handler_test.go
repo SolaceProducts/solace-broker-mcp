@@ -39,69 +39,51 @@ func extractInnerRPC(t *testing.T, envelope []byte) []byte {
 	return []byte(s[open+len("<rpc>") : close])
 }
 
-func TestHandler_Name(t *testing.T) {
+func TestHandler_Metadata(t *testing.T) {
 	h := NewHandler()
-	if got := h.Name(); got != "get_redundancy_status" {
-		t.Errorf("Name() = %q, want %q", got, "get_redundancy_status")
-	}
-}
+	meta := h.Metadata()
 
-func TestHandler_Schema_NoParams(t *testing.T) {
-	h := NewHandler()
-	schema := h.Schema()
-
-	if schema["type"] != "object" {
-		t.Errorf(`schema["type"] = %v, want "object"`, schema["type"])
+	if meta.Name != "get_redundancy_status" {
+		t.Errorf("Name = %q, want %q", meta.Name, "get_redundancy_status")
 	}
-	props, ok := schema["properties"].(map[string]any)
+	if meta.Description == "" {
+		t.Error("Description is empty")
+	}
+
+	// Input schema: empty object (broker is injected by ToolManager).
+	if meta.InputSchema["type"] != "object" {
+		t.Errorf(`InputSchema["type"] = %v, want "object"`, meta.InputSchema["type"])
+	}
+	props, ok := meta.InputSchema["properties"].(map[string]any)
 	if !ok {
-		t.Fatalf(`schema["properties"] is not a map[string]any: %T`, schema["properties"])
+		t.Fatalf(`InputSchema["properties"] is not a map[string]any: %T`, meta.InputSchema["properties"])
 	}
 	if len(props) != 0 {
-		t.Errorf("schema has %d properties, want 0 (broker is injected by ToolManager)", len(props))
+		t.Errorf("InputSchema has %d properties, want 0", len(props))
 	}
-	// No "required" key expected since there are no params.
-	if _, hasRequired := schema["required"]; hasRequired {
-		t.Error(`schema["required"] should not be set when properties is empty`)
+	if _, hasRequired := meta.InputSchema["required"]; hasRequired {
+		t.Error(`InputSchema["required"] should not be set when properties is empty`)
 	}
-}
 
-func TestHandler_OutputSchema_GenericEnvelope(t *testing.T) {
-	h := NewHandler()
-	out := h.OutputSchema()
-
-	if out["type"] != "object" {
-		t.Errorf(`OutputSchema()["type"] = %v, want "object"`, out["type"])
+	// Output schema: generic step-keyed envelope.
+	if meta.OutputSchema["type"] != "object" {
+		t.Errorf(`OutputSchema["type"] = %v, want "object"`, meta.OutputSchema["type"])
 	}
-	addProps, ok := out["additionalProperties"].(map[string]any)
+	addProps, ok := meta.OutputSchema["additionalProperties"].(map[string]any)
 	if !ok {
-		t.Fatalf(`OutputSchema()["additionalProperties"] is not a map[string]any: %T`,
-			out["additionalProperties"])
+		t.Fatalf(`OutputSchema["additionalProperties"] is not a map[string]any: %T`,
+			meta.OutputSchema["additionalProperties"])
 	}
 	if addProps["type"] != "object" {
 		t.Errorf(`additionalProperties["type"] = %v, want "object"`, addProps["type"])
 	}
-}
 
-func TestHandler_Annotations_ReadOnly(t *testing.T) {
-	h := NewHandler()
-	ann := h.Annotations()
-
-	if ann == nil {
-		t.Fatal("Annotations() returned nil")
+	// Annotations: read-only, explicit non-destructive.
+	if !meta.Annotations.ReadOnly {
+		t.Error("Annotations.ReadOnly = false, want true")
 	}
-	if !ann.ReadOnlyHint {
-		t.Error("ReadOnlyHint = false, want true")
-	}
-	if ann.DestructiveHint == nil || *ann.DestructiveHint {
-		t.Errorf("DestructiveHint = %v, want explicit false", ann.DestructiveHint)
-	}
-}
-
-func TestHandler_Description_Nonempty(t *testing.T) {
-	h := NewHandler()
-	if h.Description() == "" {
-		t.Error("Description() returned empty string")
+	if meta.Annotations.Destructive == nil || *meta.Annotations.Destructive {
+		t.Errorf("Annotations.Destructive = %v, want explicit false", meta.Annotations.Destructive)
 	}
 }
 

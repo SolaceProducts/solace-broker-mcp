@@ -130,7 +130,7 @@ func TestCompositeToolHandler_Schema(t *testing.T) {
 	executor := composite.NewCompositeExecutor(testOperations())
 	handler := NewCompositeToolHandler(testTool(), executor)
 
-	schema := handler.Schema()
+	schema := handler.Metadata().InputSchema
 
 	if schema["type"] != "object" {
 		t.Errorf("schema type = %v, want object", schema["type"])
@@ -173,7 +173,7 @@ func TestCompositeToolHandler_SchemaOptionalParams(t *testing.T) {
 	executor := composite.NewCompositeExecutor(testOperations())
 	handler := NewCompositeToolHandler(tool, executor)
 
-	schema := handler.Schema()
+	schema := handler.Metadata().InputSchema
 	required, _ := schema["required"].([]string)
 	for _, r := range required {
 		if r == "optional" {
@@ -186,7 +186,7 @@ func TestCompositeToolHandler_OutputSchema(t *testing.T) {
 	executor := composite.NewCompositeExecutor(testOperations())
 	handler := NewCompositeToolHandler(testTool(), executor)
 
-	schema := handler.OutputSchema()
+	schema := handler.Metadata().OutputSchema
 
 	if schema["type"] != "object" {
 		t.Errorf("output schema type = %v, want object", schema["type"])
@@ -204,15 +204,12 @@ func TestCompositeToolHandler_Annotations(t *testing.T) {
 	executor := composite.NewCompositeExecutor(testOperations())
 	handler := NewCompositeToolHandler(testTool(), executor)
 
-	ann := handler.Annotations()
-	if ann == nil {
-		t.Fatal("expected non-nil annotations")
+	ann := handler.Metadata().Annotations
+	if !ann.ReadOnly {
+		t.Error("expected ReadOnly = true for monitoring tool")
 	}
-	if !ann.ReadOnlyHint {
-		t.Error("expected ReadOnlyHint = true for monitoring tool")
-	}
-	if ann.DestructiveHint != nil {
-		t.Error("expected DestructiveHint = nil (omitted in YAML) for monitoring tool")
+	if ann.Destructive != nil {
+		t.Error("expected Destructive = nil (omitted in YAML) for monitoring tool")
 	}
 }
 
@@ -220,10 +217,11 @@ func TestCompositeToolHandler_NameAndDescription(t *testing.T) {
 	executor := composite.NewCompositeExecutor(testOperations())
 	handler := NewCompositeToolHandler(testTool(), executor)
 
-	if handler.Name() != "get-queue-metrics" {
-		t.Errorf("Name() = %q, want %q", handler.Name(), "get-queue-metrics")
+	meta := handler.Metadata()
+	if meta.Name != "get-queue-metrics" {
+		t.Errorf("Name = %q, want %q", meta.Name, "get-queue-metrics")
 	}
-	if handler.Description() != "Get detailed metrics for a specific queue." {
-		t.Errorf("Description() = %q, want correct description", handler.Description())
+	if meta.Description != "Get detailed metrics for a specific queue." {
+		t.Errorf("Description = %q, want correct description", meta.Description)
 	}
 }
