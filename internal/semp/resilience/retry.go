@@ -29,6 +29,11 @@ type retryState struct {
 type OperationIDKey struct{}
 
 // getRetryState retrieves the per-request retryState from the context.
+// The key is attached by Sender.Do() before each request; callers must go
+// through Do() so the "retry once" caps (auth401Retried, other5xxRetried)
+// are enforced. If the key is missing (direct retryablehttp use bypassing
+// Do), the fresh retryState means both caps start at false — effectively
+// allowing full RetryMax retries instead of the intended one-shot limits.
 func getRetryState(ctx context.Context) *retryState {
 	if s, ok := ctx.Value(retryStateKey{}).(*retryState); ok {
 		return s

@@ -594,6 +594,46 @@ func TestCallTool_RetriesExhausted_RetryableTrue(t *testing.T) {
 	}
 }
 
+func TestCallTool_RetriesExhausted_NetworkError(t *testing.T) {
+	mgr := NewToolManager(newTestPool())
+
+	handler := newStubHandler("test-tool")
+	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		return nil, &resilience.RetriesExhaustedError{
+			Attempts: 2,
+			Err:      fmt.Errorf("dial tcp: connection refused"),
+		}
+	}
+	mgr.Register(handler)
+
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+		"broker":     "dev",
+		"msgVpnName": "default",
+	})
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError to be true")
+	}
+
+	sc := result.StructuredContent.(map[string]any)
+	if sc["retryable"] != true {
+		t.Errorf("retryable = %v, want true", sc["retryable"])
+	}
+	if _, present := sc["status"]; present {
+		t.Error("status should not be present for network errors (StatusCode=0)")
+	}
+
+	text := result.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(text, "network error") {
+		t.Errorf("text = %q, want it to mention network error", text)
+	}
+	if !strings.Contains(text, "connection refused") {
+		t.Errorf("text = %q, want it to include underlying cause", text)
+	}
+}
+
 func TestCallTool_PlainError_IsErrorResult(t *testing.T) {
 	mgr := NewToolManager(newTestPool())
 

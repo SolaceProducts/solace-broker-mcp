@@ -307,7 +307,9 @@ func buildErrorResult(err error) *mcp.CallToolResult {
 			structured["reasonCode"] = sempv1Err.ReasonCode
 		}
 	case errors.As(err, &retriesErr):
-		structured["status"] = retriesErr.StatusCode
+		if retriesErr.StatusCode != 0 {
+			structured["status"] = retriesErr.StatusCode
+		}
 		structured["attempts"] = retriesErr.Attempts
 	}
 
@@ -338,6 +340,11 @@ func buildErrorMessage(err error) string {
 
 	switch {
 	case errors.As(err, &retriesErr):
+		if retriesErr.Err != nil {
+			return fmt.Sprintf(
+				"Request failed after %d attempts due to network error: %v. Internal retries exhausted.",
+				retriesErr.Attempts, retriesErr.Err)
+		}
 		return fmt.Sprintf(
 			"Request failed after %d attempts (HTTP %d). Internal retries exhausted.",
 			retriesErr.Attempts, retriesErr.StatusCode)
