@@ -1,0 +1,33 @@
+version: 3
+
+project:
+  locator: SolaceDev_solace-broker-mcp
+  id: SolaceDev_solace-broker-mcp
+  name: solace-broker-mcp
+  teams: []
+  labels:
+    - broker
+
+vendoredDependencies:
+  forceRescans: false
+  scanMethod: CLILicenseScan
+  licenseScanPathFilters:
+    exclude:
+      - "./.git"
+      - "./.github"
+      - "./test"
+      - "./test/e2e"
+      - "./docs"
+      - "./deploy"
+
+paths:
+  exclude:
+    - ./.git
+    - ./.github
+    - ./test
+    - ./test/e2e
+    - ./docs
+    - ./deploy
+
+telemetry:
+  scope: full
