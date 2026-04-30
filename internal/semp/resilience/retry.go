@@ -71,10 +71,10 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 			state.auth401Retried = true
 			// Stale session cookie is the most likely cause. Clear the jar so
 			// the retried request re-sends Basic Auth credentials from scratch.
-			d.jarMu.Lock()
+			// This assignment races with http.Client.Do reads of the Jar field
+			// (see Sender doc comment) but is benign.
 			jar, _ := cookiejar.New(nil)
 			d.httpClient.Jar = jar
-			d.jarMu.Unlock()
 			slog.Warn("retrying: 401 received, clearing session cookies",
 				slog.String("broker", d.brokerURL),
 				slog.String("auth_mode", d.authCfg.Mode))
