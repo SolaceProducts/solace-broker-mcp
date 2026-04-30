@@ -71,20 +71,14 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authCfg config.Aut
 	d.retryClient = retryClient
 
 	// Per-broker rate limiter: ticker-based interval enforcement.
-	// When interval > 0, each Do() blocks until the channel yields a token.
-	// The first request fires immediately (seeded token); subsequent requests
-	// wait for the ticker. A goroutine forwards ticker events into the channel.
+	// When interval > 0, each Do() blocks until the ticker fires.
+	// The very first request per broker pays one interval of latency (the ticker
+	// doesn't fire immediately); this is a one-time cost at broker init and
+	// avoids the complexity of a seeded channel with goroutine forwarding.
 	// When interval == 0, the closed channel makes receives non-blocking (no rate limit).
 	if *sempCfg.RequestMinInterval > 0 {
 		d.rateTicker = time.NewTicker(*sempCfg.RequestMinInterval)
-		ch := make(chan time.Time, 1)
-		ch <- time.Now() // seed: first request fires immediately
-		go func() {
-			for t := range d.rateTicker.C {
-				ch <- t
-			}
-		}()
-		d.rateLimiter = ch
+		d.rateLimiter = d.rateTicker.C
 	} else {
 		ch := make(chan time.Time)
 		close(ch)
