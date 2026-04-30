@@ -65,6 +65,7 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authCfg config.Aut
 	retryClient.RetryMax = *sempCfg.Retries
 	retryClient.RetryWaitMin = sempCfg.RetryMinInterval
 	retryClient.RetryWaitMax = sempCfg.RetryMaxInterval
+	retryClient.Backoff = retryablehttp.RateLimitLinearJitterBackoff
 	retryClient.CheckRetry = d.checkRetry
 	retryClient.ErrorHandler = d.errorHandler
 	retryClient.Logger = nil // manual logging in checkRetry
@@ -94,7 +95,12 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authCfg config.Aut
 // On failure after retries, returns a RetriesExhaustedError or a wrapped error.
 func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
 	// Rate limit: wait for the per-broker interval before sending a new request.
-	// This does NOT apply to retries — retryablehttp handles those internally.
+	// This does NOT apply to retries — retryablehttp handles those internally
+	// with jittered backoff (RateLimitLinearJitterBackoff). During failure
+	// episodes, total broker traffic can reach (1 + RetryMax) times the
+	// configured rate, but retries are spread over time by the backoff and
+	// jitter desynchronizes concurrent failures. The broker's Retry-After
+	// header (if present on 429/503) takes priority over computed backoff.
 	select {
 	case <-d.rateLimiter:
 		slog.Debug("rate limiter: request permitted",
