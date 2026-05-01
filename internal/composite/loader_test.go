@@ -713,3 +713,198 @@ tools:
 		t.Errorf("expected strategy %q, got %q", "collect", tool.Result.Strategy)
 	}
 }
+
+func TestLoadTools_GetMessageRates(t *testing.T) {
+	yaml := `
+tools:
+  - name: get-message-rates
+    description: >
+      Get current and average message and byte rates for a Message VPN.
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The name of the Message VPN"
+    steps:
+      - id: rates
+        operation: monitor/getMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+    result:
+      strategy: collect
+`
+	fsys := fstest.MapFS{
+		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
+	}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	tool := tools[0]
+	if tool.Name != "get-message-rates" {
+		t.Errorf("expected name %q, got %q", "get-message-rates", tool.Name)
+	}
+	if len(tool.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(tool.Steps))
+	}
+	if tool.Steps[0].Operation != "monitor/getMsgVpn" {
+		t.Errorf("expected operation %q, got %q", "monitor/getMsgVpn", tool.Steps[0].Operation)
+	}
+	if tool.Steps[0].FollowPages {
+		t.Error("expected FollowPages=false for get-message-rates step")
+	}
+	if tool.Steps[0].Parallel {
+		t.Error("expected Parallel=false for get-message-rates step")
+	}
+	if len(tool.Parameters) != 1 {
+		t.Fatalf("expected 1 parameter, got %d", len(tool.Parameters))
+	}
+	if tool.Parameters[0].Name != "msgVpnName" || !tool.Parameters[0].Required {
+		t.Error("expected required msgVpnName parameter")
+	}
+}
+
+func TestLoadTools_GetDMRStatus(t *testing.T) {
+	yaml := `
+tools:
+  - name: get-dmr-status
+    description: >
+      Get the status of a DMR cluster.
+    parameters:
+      - name: dmrClusterName
+        type: string
+        required: true
+        description: "The name of the DMR cluster"
+    steps:
+      - id: cluster
+        operation: monitor/getDmrCluster
+        args:
+          dmrClusterName: "{{.Params.dmrClusterName}}"
+      - id: links
+        operation: monitor/getDmrClusterLinks
+        parallel: true
+        args:
+          dmrClusterName: "{{.Params.dmrClusterName}}"
+    result:
+      strategy: collect
+`
+	fsys := fstest.MapFS{
+		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
+	}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	tool := tools[0]
+	if tool.Name != "get-dmr-status" {
+		t.Errorf("expected name %q, got %q", "get-dmr-status", tool.Name)
+	}
+	if len(tool.Steps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(tool.Steps))
+	}
+
+	clusterStep := tool.Steps[0]
+	if clusterStep.ID != "cluster" {
+		t.Errorf("expected step ID %q, got %q", "cluster", clusterStep.ID)
+	}
+	if clusterStep.Operation != "monitor/getDmrCluster" {
+		t.Errorf("expected operation %q, got %q", "monitor/getDmrCluster", clusterStep.Operation)
+	}
+	if clusterStep.Parallel {
+		t.Error("expected first step Parallel=false (sequential)")
+	}
+
+	linksStep := tool.Steps[1]
+	if linksStep.ID != "links" {
+		t.Errorf("expected step ID %q, got %q", "links", linksStep.ID)
+	}
+	if linksStep.Operation != "monitor/getDmrClusterLinks" {
+		t.Errorf("expected operation %q, got %q", "monitor/getDmrClusterLinks", linksStep.Operation)
+	}
+	if !linksStep.Parallel {
+		t.Error("expected second step Parallel=true")
+	}
+
+	if len(tool.Parameters) != 1 {
+		t.Fatalf("expected 1 parameter, got %d", len(tool.Parameters))
+	}
+	if tool.Parameters[0].Name != "dmrClusterName" || !tool.Parameters[0].Required {
+		t.Error("expected required dmrClusterName parameter")
+	}
+}
+
+func TestLoadTools_ListRDPs(t *testing.T) {
+	yaml := `
+tools:
+  - name: list-rdps
+    description: >
+      List all REST Delivery Points in a Message VPN.
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN to list REST Delivery Points for"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of RDPs to return (default 100, max 500)"
+    steps:
+      - id: rdps
+        operation: monitor/getMsgVpnRestDeliveryPoints
+        followPages: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          count: "100"
+    result:
+      strategy: collect
+`
+	fsys := fstest.MapFS{
+		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
+	}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	tool := tools[0]
+	if tool.Name != "list-rdps" {
+		t.Errorf("expected name %q, got %q", "list-rdps", tool.Name)
+	}
+	if len(tool.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(tool.Steps))
+	}
+	if !tool.Steps[0].FollowPages {
+		t.Error("expected FollowPages=true for list-rdps step")
+	}
+	if tool.Steps[0].Operation != "monitor/getMsgVpnRestDeliveryPoints" {
+		t.Errorf("expected operation %q, got %q", "monitor/getMsgVpnRestDeliveryPoints", tool.Steps[0].Operation)
+	}
+	if tool.Result.Strategy != "collect" {
+		t.Errorf("expected strategy %q, got %q", "collect", tool.Result.Strategy)
+	}
+
+	maxResults := tool.Parameters[1]
+	if maxResults.Name != "maxResults" {
+		t.Errorf("expected parameter name %q, got %q", "maxResults", maxResults.Name)
+	}
+	if maxResults.Required {
+		t.Error("expected maxResults to be optional (required=false)")
+	}
+}
