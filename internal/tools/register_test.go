@@ -16,7 +16,6 @@ package tools
 
 import (
 	"testing"
-	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
@@ -35,7 +34,7 @@ func newRegTestPool() *semp.BrokerPool {
 				Auth: config.AuthConfig{Mode: "basic", Username: "admin", Password: "admin"},
 			},
 		},
-		SEMP: config.SEMPConfig{RequestTimeoutDuration: 5 * time.Second},
+		SEMP: testSEMPCfg(),
 	}
 	return semp.NewBrokerPool(cfg)
 }

@@ -109,6 +109,8 @@ Kubernetes deployment guide covering the example manifests in
 setup, and security context. Reference `docs/packaging-release.md` for the
 technical details.
 
+## SOL-148425 — Implement Rate Limiting and Retry Logic
+
 ### Connecting MCP clients to the server
 
 **Status:** Pending

@@ -3,6 +3,7 @@ package sempv2_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,8 +25,14 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*sempv2.HTTPClient, 
 			Password: "secret",
 		},
 	}
+	retries := 0
+	minInterval := time.Duration(0)
 	sempCfg := &config.SEMPConfig{
 		RequestTimeoutDuration: 5 * time.Second,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
 	}
 	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg)
 	if err != nil {
@@ -233,6 +240,115 @@ func TestClient_Execute_500(t *testing.T) {
 	}
 }
 
+func TestClient_Execute_SEMPErrorParsed(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"meta":{"error":{"code":6,"status":"NOT_FOUND","description":"Message VPN Not Found"},"responseCode":404}}`))
+	})
+	defer server.Close()
+
+	op := &sempv2.Operation{
+		ID:     "getMsgVpn",
+		Method: "GET",
+		Path:   "/SEMP/v2/monitor/msgVpns/{msgVpnName}",
+	}
+
+	_, err := client.Execute(context.Background(), op, map[string]any{"msgVpnName": "missing"})
+	if err == nil {
+		t.Fatal("expected error for 404 response")
+	}
+
+	var sempErr *sempv2.SEMPError
+	if !errors.As(err, &sempErr) {
+		t.Fatalf("expected *SEMPError, got %T: %v", err, err)
+	}
+
+	if sempErr.Description != "Message VPN Not Found" {
+		t.Errorf("Description = %q, want %q", sempErr.Description, "Message VPN Not Found")
+	}
+	if sempErr.SEMPCode != 6 {
+		t.Errorf("SEMPCode = %d, want 6", sempErr.SEMPCode)
+	}
+	if sempErr.SEMPStatus != "NOT_FOUND" {
+		t.Errorf("SEMPStatus = %q, want %q", sempErr.SEMPStatus, "NOT_FOUND")
+	}
+	if !strings.Contains(sempErr.Error(), "Message VPN Not Found") {
+		t.Errorf("Error() = %q, want it to contain the Description", sempErr.Error())
+	}
+}
+
+func TestClient_Execute_SEMPErrorMalformedBody(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("<html>Access Denied</html>"))
+	})
+	defer server.Close()
+
+	op := &sempv2.Operation{
+		ID:     "testOp",
+		Method: "GET",
+		Path:   "/SEMP/v2/monitor/test",
+	}
+
+	_, err := client.Execute(context.Background(), op, map[string]any{})
+	if err == nil {
+		t.Fatal("expected error for 403 response")
+	}
+
+	var sempErr *sempv2.SEMPError
+	if !errors.As(err, &sempErr) {
+		t.Fatalf("expected *SEMPError, got %T: %v", err, err)
+	}
+
+	// Structured fields should be zero when body is not valid JSON.
+	if sempErr.Description != "" {
+		t.Errorf("Description = %q, want empty for non-JSON body", sempErr.Description)
+	}
+	if sempErr.SEMPCode != 0 {
+		t.Errorf("SEMPCode = %d, want 0 for non-JSON body", sempErr.SEMPCode)
+	}
+	if sempErr.Body != "<html>Access Denied</html>" {
+		t.Errorf("Body = %q, want raw HTML preserved", sempErr.Body)
+	}
+	if !strings.Contains(sempErr.Error(), "<html>Access Denied</html>") {
+		t.Errorf("Error() = %q, want it to fall back to Body", sempErr.Error())
+	}
+}
+
+func TestClient_Execute_SEMPErrorPartialMeta(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"meta":{"error":{"status":"INVALID_PARAMETER"}}}`))
+	})
+	defer server.Close()
+
+	op := &sempv2.Operation{
+		ID:     "testOp",
+		Method: "GET",
+		Path:   "/SEMP/v2/monitor/test",
+	}
+
+	_, err := client.Execute(context.Background(), op, map[string]any{})
+	if err == nil {
+		t.Fatal("expected error for 400 response")
+	}
+
+	var sempErr *sempv2.SEMPError
+	if !errors.As(err, &sempErr) {
+		t.Fatalf("expected *SEMPError, got %T: %v", err, err)
+	}
+
+	if sempErr.SEMPStatus != "INVALID_PARAMETER" {
+		t.Errorf("SEMPStatus = %q, want %q", sempErr.SEMPStatus, "INVALID_PARAMETER")
+	}
+	if sempErr.Description != "" {
+		t.Errorf("Description = %q, want empty when not in response", sempErr.Description)
+	}
+	if sempErr.SEMPCode != 0 {
+		t.Errorf("SEMPCode = %d, want 0 when not in response", sempErr.SEMPCode)
+	}
+}
+
 func TestClient_Execute_InvalidJSON(t *testing.T) {
 	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -340,7 +456,15 @@ func TestClient_Execute_BearerAuth(t *testing.T) {
 			Token: "my-test-token",
 		},
 	}
-	sempCfg := &config.SEMPConfig{RequestTimeoutDuration: 5 * time.Second}
+	retries := 0
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		RequestTimeoutDuration: 5 * time.Second,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
+	}
 	bearerClient, err := sempv2.NewHTTPClient(brokerCfg, sempCfg)
 	if err != nil {
 		t.Fatalf("NewHTTPClient() error: %v", err)
@@ -435,8 +559,14 @@ func TestClient_Execute_Timeout(t *testing.T) {
 			Password: "secret",
 		},
 	}
+	retries := 0
+	minInterval := time.Duration(0)
 	sempCfg := &config.SEMPConfig{
 		RequestTimeoutDuration: time.Second,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
 	}
 	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg)
 	if err != nil {

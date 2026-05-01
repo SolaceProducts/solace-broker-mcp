@@ -15,12 +15,12 @@ import (
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 )
 
 // Client executes operations against a Solace broker's SEMPv2 API.
 // Implementations: HTTPClient (real), mock (tests).
-// Future: cached or retry decorators wrapping this interface.
 type Client interface {
 	Execute(ctx context.Context, op *Operation, args map[string]any) (*Result, error)
 }
@@ -33,38 +33,38 @@ type Result struct {
 
 // SEMPError is a structured error returned when a SEMP API call receives a
 // non-2xx HTTP response. It preserves the HTTP status code, operation ID, and
-// raw response body as separate fields so callers can extract structured data
-// via errors.As() instead of parsing error strings.
-//
-// This type is the foundation for Story 13B's TranslateSEMPError() function
-// and aligns with Story 4's requirement to parse .meta.error.code and
-// .meta.error.description from SEMP responses. Future fields (SEMPErrorCode,
-// SEMPMessage) can be added without breaking existing callers.
+// parsed meta.error fields so callers can extract structured data via
+// errors.As() instead of parsing error strings.
 type SEMPError struct {
-	Operation  string // operationId that failed (e.g., "getMsgVpnQueue")
-	StatusCode int    // HTTP status code (e.g., 404)
-	Body       string // raw response body from broker
+	Operation   string // operationId that failed (e.g., "getMsgVpnQueue")
+	StatusCode  int    // HTTP status code (e.g., 404)
+	Description string // meta.error.description — broker's human-readable message
+	SEMPCode    int    // meta.error.code (6=NOT_FOUND, 72=UNAUTHORIZED, etc.)
+	SEMPStatus  string // meta.error.status ("NOT_FOUND", "FAIL")
+	Body        string // raw response body preserved as fallback
 }
 
-// Error implements the error interface. The output matches the previous
-// fmt.Errorf format so existing error messages and test assertions are
-// unchanged.
+// Error implements the error interface.
 func (e *SEMPError) Error() string {
+	if e.Description != "" {
+		return fmt.Sprintf("%s returned HTTP %d: %s", e.Operation, e.StatusCode, e.Description)
+	}
 	return fmt.Sprintf("%s returned HTTP %d: %s", e.Operation, e.StatusCode, e.Body)
 }
 
 // HTTPClient implements the Client interface by making real HTTP calls to a
 // Solace broker's SEMPv2 API. It is configured per-broker with the broker's
 // URL, TLS settings, and authentication credentials.
+//
+// Rate limiting and retry logic are delegated to the shared resilience.Sender.
 type HTTPClient struct {
-	httpClient *http.Client
-	baseURL    string
-	authCfg    config.AuthConfig
+	sender    *resilience.Sender
+	baseURL string
+	authCfg config.AuthConfig
 }
 
 // LogValue implements slog.LogValuer for HTTPClient. It exposes only the base
-// URL — username and password are deliberately excluded. Although these fields
-// are unexported, this provides defense in depth against reflection-based logging.
+// URL — credentials are deliberately excluded.
 // See docs/secure-logging-rules.md Rule 2.
 func (c *HTTPClient) LogValue() slog.Value {
 	return slog.GroupValue(
@@ -72,9 +72,16 @@ func (c *HTTPClient) LogValue() slog.Value {
 	)
 }
 
+// Close releases resources held by the HTTPClient (rate limiter ticker).
+// Safe to call multiple times.
+func (c *HTTPClient) Close() {
+	c.sender.Close()
+}
+
 // NewHTTPClient creates an HTTPClient configured for a specific broker.
 // It sets up a per-broker HTTP transport with TLS settings and connection pool
-// tuning appropriate for concurrent SEMP calls.
+// tuning appropriate for concurrent SEMP calls, and delegates retry and rate
+// limiting to a shared resilience.Sender.
 func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (*HTTPClient, error) {
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: brokerCfg.InsecureSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
@@ -90,13 +97,17 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (
 			slog.String("url", brokerCfg.URL))
 	}
 
+	httpClient := &http.Client{
+		Jar:       jar,
+		Timeout:   sempCfg.RequestTimeoutDuration,
+		Transport: transport,
+	}
+
+	baseURL := strings.TrimSuffix(brokerCfg.URL, "/")
+
 	return &HTTPClient{
-		httpClient: &http.Client{
-			Jar:       jar,
-			Timeout:   sempCfg.RequestTimeoutDuration,
-			Transport: transport,
-		},
-		baseURL: strings.TrimSuffix(brokerCfg.URL, "/"),
+		sender:    resilience.New(httpClient, sempCfg, brokerCfg.Auth, baseURL),
+		baseURL: baseURL,
 		authCfg: brokerCfg.Auth,
 	}, nil
 }
@@ -106,6 +117,9 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (
 // template are substituted from args, query parameters are appended, and body
 // parameters are sent as JSON. Returns a structured Result on success or an
 // error with status code context on failure.
+//
+// Rate limiting is enforced before the request (new requests only, not retries).
+// Retry logic is handled by the shared resilience.Sender.
 func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string]any) (*Result, error) {
 	reqURL := c.buildURL(op, args)
 
@@ -118,12 +132,14 @@ func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string
 		return nil, fmt.Errorf("applying auth for %s: %w", op.ID, err)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	// Attach operation ID for the Sender's logging context.
+	ctx = context.WithValue(ctx, resilience.OperationIDKey{}, op.ID)
+	req = req.WithContext(ctx)
+
+	resp, err := c.sender.Do(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("executing %s: %w", op.ID, err)
 	}
-	// Close the response body on any return path after this point to release
-	// the underlying TCP connection back to the pool.
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
@@ -132,7 +148,7 @@ func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &SEMPError{Operation: op.ID, StatusCode: resp.StatusCode, Body: string(body)}
+		return nil, parseSEMPError(op.ID, resp.StatusCode, body)
 	}
 
 	var data map[string]any
@@ -209,4 +225,33 @@ func (c *HTTPClient) buildRequest(ctx context.Context, op *Operation, reqURL str
 	req.Header.Set("User-Agent", "solace/broker-mcp-server/"+version.Version())
 
 	return req, nil
+}
+
+// parseSEMPError creates a SEMPError with best-effort extraction of the
+// broker's meta.error fields (code, status, description). If the body is not
+// valid JSON or the meta.error structure is absent, the structured fields stay
+// zero-valued and Body carries the raw response.
+func parseSEMPError(op string, statusCode int, body []byte) *SEMPError {
+	e := &SEMPError{
+		Operation:  op,
+		StatusCode: statusCode,
+		Body:       string(body),
+	}
+
+	var envelope struct {
+		Meta struct {
+			Error struct {
+				Code        int    `json:"code"`
+				Status      string `json:"status"`
+				Description string `json:"description"`
+			} `json:"error"`
+		} `json:"meta"`
+	}
+	if json.Unmarshal(body, &envelope) == nil {
+		e.SEMPCode = envelope.Meta.Error.Code
+		e.SEMPStatus = envelope.Meta.Error.Status
+		e.Description = envelope.Meta.Error.Description
+	}
+
+	return e
 }

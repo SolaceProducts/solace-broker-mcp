@@ -108,6 +108,15 @@ func (p *BrokerPool) GetSEMPv2(alias string) (sempv2.Client, error) {
 	return client.SEMPv2(), nil
 }
 
+// Close releases resources for all created broker clients.
+func (p *BrokerPool) Close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, client := range p.clients {
+		client.Close()
+	}
+}
+
 // Aliases returns all configured broker aliases in sorted order. This includes
 // all brokers from the configuration, not just those that have been accessed.
 func (p *BrokerPool) Aliases() []string {
