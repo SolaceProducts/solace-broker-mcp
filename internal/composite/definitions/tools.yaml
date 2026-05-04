@@ -14,6 +14,10 @@
 #   (e.g., "For per-queue metrics, use get-queue-metrics instead")
 # - Keep it concise: Aim for 2-4 sentences
 # - Avoid jargon where possible: Prefer "message backlog" over "spool utilization"
+# - Pagination limits: For list tools with maxResults, state the default and cap
+#   in the description (e.g., "Returns up to 100 by default (max 500 via maxResults)").
+#   These values are defined as constants in executor.go (defaultMax, capMax) —
+#   keep descriptions in sync if those constants change.
 
 tools:
   - name: get-rdp-status
@@ -105,9 +109,9 @@ tools:
 
   - name: list-client-subscriptions
     description: >
-      List topic subscriptions for a specific client. Use this to understand
-      what topics a client is subscribed to and diagnose subscription patterns.
-      SEMP pagination metadata is included in the response if more results exist.
+      List topic subscriptions for a specific client. Returns up to 100
+      by default (max 500 via maxResults). Use this to understand what topics
+      a client is subscribed to and diagnose subscription patterns.
     annotations:
       readOnly: true
     parameters:
@@ -156,9 +160,10 @@ tools:
 
   - name: list-vpns
     description: >
-      List all Message VPNs on the broker with their enabled state, connection
-      count, and basic health status. Use this to discover which VPNs exist and
-      identify any that are down or have no active connections.
+      List Message VPNs on the broker with their enabled state, connection
+      count, and basic health status. Returns up to 100 by default (max 500
+      via maxResults). Use this to discover which VPNs exist and identify any
+      that are down or have no active connections.
     annotations:
       readOnly: true
     parameters:
@@ -177,9 +182,10 @@ tools:
 
   - name: list-queues
     description: >
-      List all queues in a Message VPN with depth, bind count, and throughput
-      rates. Use this to get an overview of queue health across a VPN and
-      identify queues with backlogs or no consumers.
+      List queues in a Message VPN with depth, bind count, and throughput
+      rates. Returns up to 100 by default (max 500 via maxResults). Use this
+      to get an overview of queue health across a VPN and identify queues with
+      backlogs or no consumers.
     annotations:
       readOnly: true
     parameters:
@@ -203,9 +209,10 @@ tools:
 
   - name: list-clients
     description: >
-      List all active client connections in a Message VPN with connection
-      details, uptime, and slow subscriber status. Use this to discover which
-      clients are connected and identify slow or stalled consumers.
+      List active client connections in a Message VPN with connection
+      details, uptime, and slow subscriber status. Returns up to 100 by
+      default (max 500 via maxResults). Use this to discover which clients
+      are connected and identify slow or stalled consumers.
     annotations:
       readOnly: true
     parameters:
