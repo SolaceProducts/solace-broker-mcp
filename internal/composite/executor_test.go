@@ -1125,6 +1125,10 @@ func TestExecute_ListQueues_TruncatesAtMaxResults(t *testing.T) {
 	if queues["truncated"] != true {
 		t.Errorf("truncated = %v, want true", queues["truncated"])
 	}
+	wantMsg := "Results limited to 50. Use maxResults (up to 500) to retrieve more."
+	if queues["truncatedMessage"] != wantMsg {
+		t.Errorf("truncatedMessage = %v, want %q", queues["truncatedMessage"], wantMsg)
+	}
 	// Paginator stopped after the first page, no second call.
 	if len(client.calls) != 1 {
 		t.Errorf("expected 1 SEMP call, got %d", len(client.calls))
@@ -1219,6 +1223,10 @@ func TestExecute_ListQueues_MaxResultsCappedAt500(t *testing.T) {
 	}
 	if queues["truncated"] != true {
 		t.Errorf("truncated = %v, want true", queues["truncated"])
+	}
+	wantMsg := "Results limited to 500. Use maxResults (up to 500) to retrieve more."
+	if queues["truncatedMessage"] != wantMsg {
+		t.Errorf("truncatedMessage = %v, want %q", queues["truncatedMessage"], wantMsg)
 	}
 	// Cap stops after 5 pages (500 items), page6 must not be fetched.
 	if len(client.calls) != 5 {
