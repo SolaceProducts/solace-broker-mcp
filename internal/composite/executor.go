@@ -209,18 +209,34 @@ func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step
 		args = appendCursor(baseArgs, cursor)
 	}
 
-	execCtx.StepResults[step.ID] = map[string]any{
+	result := map[string]any{
 		"data":      allItems,
 		"truncated": truncated,
 	}
+	if truncated {
+		if maxResults >= capMax {
+			result["truncatedMessage"] = fmt.Sprintf(
+				"More results exist but the maximum limit of %d has been reached. Not all results are shown.",
+				capMax)
+		} else {
+			result["truncatedMessage"] = fmt.Sprintf(
+				"Results limited to %d. Use maxResults (up to %d) to retrieve more.",
+				maxResults, capMax)
+		}
+	}
+	execCtx.StepResults[step.ID] = result
 	return nil
 }
+
+// Pagination constants used by resolveMaxResults and truncation messages.
+const (
+	defaultMax = 100
+	capMax     = 500
+)
 
 // resolveMaxResults reads maxResults from the execution params, applying a
 // default of 100 and a cap of 500.
 func resolveMaxResults(params map[string]any) int {
-	const defaultMax = 100
-	const capMax = 500
 
 	raw, ok := params["maxResults"]
 	if !ok {
