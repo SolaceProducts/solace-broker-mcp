@@ -36,6 +36,7 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2/specs"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
+	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv1/brokerhealth"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv1/redundancy"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -140,6 +141,7 @@ func healthConfigFromFile() healthConfig {
 // logging without further plumbing.
 func registerSEMPv1Tools(mgr *tools.ToolManager) {
 	mgr.Register(redundancy.NewHandler())
+	mgr.Register(brokerhealth.NewHandler())
 }
 
 func main() {
