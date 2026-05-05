@@ -1224,7 +1224,7 @@ func TestExecute_ListQueues_MaxResultsCappedAt500(t *testing.T) {
 	if queues["truncated"] != true {
 		t.Errorf("truncated = %v, want true", queues["truncated"])
 	}
-	wantMsg := "Results limited to 500. Use maxResults (up to 500) to retrieve more."
+	wantMsg := "More results exist but the maximum limit of 500 has been reached. Not all results are shown."
 	if queues["truncatedMessage"] != wantMsg {
 		t.Errorf("truncatedMessage = %v, want %q", queues["truncatedMessage"], wantMsg)
 	}

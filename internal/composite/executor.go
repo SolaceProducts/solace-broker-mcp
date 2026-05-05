@@ -214,9 +214,15 @@ func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step
 		"truncated": truncated,
 	}
 	if truncated {
-		result["truncatedMessage"] = fmt.Sprintf(
-			"Results limited to %d. Use maxResults (up to %d) to retrieve more.",
-			maxResults, capMax)
+		if maxResults >= capMax {
+			result["truncatedMessage"] = fmt.Sprintf(
+				"More results exist but the maximum limit of %d has been reached. Not all results are shown.",
+				capMax)
+		} else {
+			result["truncatedMessage"] = fmt.Sprintf(
+				"Results limited to %d. Use maxResults (up to %d) to retrieve more.",
+				maxResults, capMax)
+		}
 	}
 	execCtx.StepResults[step.ID] = result
 	return nil
