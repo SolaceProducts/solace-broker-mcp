@@ -225,3 +225,61 @@ func TestCompositeToolHandler_NameAndDescription(t *testing.T) {
 		t.Errorf("Description = %q, want correct description", meta.Description)
 	}
 }
+
+// TestCompositeToolHandler_Metadata_FreshPointersAcrossCalls verifies the
+// Metadata() contract: every call returns freshly-allocated state, including
+// the *bool fields on Annotations. Without this guarantee, a caller mutating
+// *Metadata().Annotations.Destructive would silently corrupt the YAML-backed
+// handler state and leak into every subsequent registration/call.
+//
+// This is a regression test for a real bug caught in PR review where
+// toolAnnotations was passing the YAML-backed *bool pointers straight through
+// instead of cloning them.
+func TestCompositeToolHandler_Metadata_FreshPointersAcrossCalls(t *testing.T) {
+	tool := testTool()
+	destructive, openWorld := true, true
+	tool.Annotations.Destructive = &destructive
+	tool.Annotations.OpenWorld = &openWorld
+
+	executor := composite.NewCompositeExecutor(testOperations())
+	handler := NewCompositeToolHandler(tool, executor)
+
+	m1 := handler.Metadata()
+	m2 := handler.Metadata()
+
+	if m1.Annotations.Destructive == m2.Annotations.Destructive {
+		t.Error("Metadata() returned the same Destructive *bool address across calls; must be a fresh allocation per call")
+	}
+	if m1.Annotations.OpenWorld == m2.Annotations.OpenWorld {
+		t.Error("Metadata() returned the same OpenWorld *bool address across calls; must be a fresh allocation per call")
+	}
+
+	// Mutating a returned *bool must not affect later Metadata() calls or
+	// the underlying handler state.
+	*m1.Annotations.Destructive = false
+	m3 := handler.Metadata()
+	if m3.Annotations.Destructive == nil || *m3.Annotations.Destructive != true {
+		t.Errorf("after mutating m1.Annotations.Destructive=false, m3.Annotations.Destructive = %v; expected fresh pointer to true",
+			m3.Annotations.Destructive)
+	}
+}
+
+// TestCloneBoolPtr exercises cloneBoolPtr directly: nil-passes-through, and
+// non-nil produces a fresh allocation with the same value.
+func TestCloneBoolPtr(t *testing.T) {
+	if got := cloneBoolPtr(nil); got != nil {
+		t.Errorf("cloneBoolPtr(nil) = %v, want nil", got)
+	}
+
+	src := true
+	got := cloneBoolPtr(&src)
+	if got == nil {
+		t.Fatal("cloneBoolPtr(&true) returned nil")
+	}
+	if *got != true {
+		t.Errorf("cloneBoolPtr(&true) value = %v, want true", *got)
+	}
+	if got == &src {
+		t.Error("cloneBoolPtr returned the same pointer as input; must be a fresh allocation")
+	}
+}

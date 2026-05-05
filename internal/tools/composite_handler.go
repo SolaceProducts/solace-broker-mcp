@@ -101,12 +101,15 @@ func buildCompositeInputSchema(params []composite.ParameterDef) map[string]any {
 }
 
 // toolAnnotations converts the YAML-declared annotations to our Annotations
-// type. Pointer fields stay nil when YAML omitted them, letting the registration
-// translator pass through to spec defaults.
+// type. Pointer fields stay nil when YAML omitted them, letting the
+// registration translator pass through to spec defaults. The *bool fields are
+// CLONED rather than reused: Metadata() promises fresh state per call, and
+// reusing the YAML-backed pointers would let a caller mutating *m.Destructive
+// leak into the handler's persistent state and every subsequent Metadata() call.
 func toolAnnotations(a composite.ToolAnnotations) Annotations {
 	out := Annotations{
-		Destructive: a.Destructive,
-		OpenWorld:   a.OpenWorld,
+		Destructive: cloneBoolPtr(a.Destructive),
+		OpenWorld:   cloneBoolPtr(a.OpenWorld),
 	}
 	if a.ReadOnly != nil {
 		out.ReadOnly = *a.ReadOnly
@@ -115,4 +118,15 @@ func toolAnnotations(a composite.ToolAnnotations) Annotations {
 		out.Idempotent = *a.Idempotent
 	}
 	return out
+}
+
+// cloneBoolPtr returns a freshly-allocated *bool with the same value as p,
+// or nil if p is nil. Used so Metadata()'s promise of fresh state per call
+// holds even for the *bool fields on Annotations.
+func cloneBoolPtr(p *bool) *bool {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
 }

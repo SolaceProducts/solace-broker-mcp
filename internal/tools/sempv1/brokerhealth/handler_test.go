@@ -80,6 +80,59 @@ func (s *fixtureClient) Execute(_ context.Context, xmlReq string) (*sempv1.Resul
 	return &sempv1.Result{InnerXML: []byte(s2[open+len("<rpc>") : close])}, nil
 }
 
+// TestHandler_Metadata exercises the tool's MCP surface directly: name,
+// description, input schema, output schema, and annotations. Without this
+// coverage a typo in Metadata() would only be caught at server registration
+// time, when the LLM-facing wire contract is already broken. Mirrors the
+// equivalent TestHandler_Metadata in the redundancy tool.
+func TestHandler_Metadata(t *testing.T) {
+	h := NewHandler()
+	meta := h.Metadata()
+
+	if meta.Name != "get-broker-health" {
+		t.Errorf("Name = %q, want %q", meta.Name, "get-broker-health")
+	}
+	if meta.Description == "" {
+		t.Error("Description is empty")
+	}
+
+	// Input schema: empty object (broker is injected by ToolManager).
+	if meta.InputSchema["type"] != "object" {
+		t.Errorf(`InputSchema["type"] = %v, want "object"`, meta.InputSchema["type"])
+	}
+	props, ok := meta.InputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf(`InputSchema["properties"] is not a map[string]any: %T`, meta.InputSchema["properties"])
+	}
+	if len(props) != 0 {
+		t.Errorf("InputSchema has %d properties, want 0", len(props))
+	}
+	if _, hasRequired := meta.InputSchema["required"]; hasRequired {
+		t.Error(`InputSchema["required"] should not be set when properties is empty`)
+	}
+
+	// Output schema: generic step-keyed envelope.
+	if meta.OutputSchema["type"] != "object" {
+		t.Errorf(`OutputSchema["type"] = %v, want "object"`, meta.OutputSchema["type"])
+	}
+	addProps, ok := meta.OutputSchema["additionalProperties"].(map[string]any)
+	if !ok {
+		t.Fatalf(`OutputSchema["additionalProperties"] is not a map[string]any: %T`,
+			meta.OutputSchema["additionalProperties"])
+	}
+	if addProps["type"] != "object" {
+		t.Errorf(`additionalProperties["type"] = %v, want "object"`, addProps["type"])
+	}
+
+	// Annotations: read-only, explicit non-destructive.
+	if !meta.Annotations.ReadOnly {
+		t.Error("Annotations.ReadOnly = false, want true")
+	}
+	if meta.Annotations.Destructive == nil || *meta.Annotations.Destructive {
+		t.Errorf("Annotations.Destructive = %v, want explicit false", meta.Annotations.Destructive)
+	}
+}
+
 // TestHandle_Success runs the happy path: all four fixtures decode, the
 // envelope carries all four step keys, and each step's payload is non-empty.
 func TestHandle_Success(t *testing.T) {
