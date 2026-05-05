@@ -1426,7 +1426,6 @@ func getDMRStatusTool() CompositeTool {
 			{
 				ID:        "links",
 				Operation: "monitor/getDmrClusterLinks",
-				Parallel:  true,
 				Args: map[string]string{
 					"dmrClusterName": "{{.Params.dmrClusterName}}",
 				},

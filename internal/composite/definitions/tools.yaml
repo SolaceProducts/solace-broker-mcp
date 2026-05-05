@@ -266,7 +266,6 @@ tools:
           dmrClusterName: "{{.Params.dmrClusterName}}"
       - id: links
         operation: monitor/getDmrClusterLinks
-        parallel: true
         args:
           dmrClusterName: "{{.Params.dmrClusterName}}"
     result:

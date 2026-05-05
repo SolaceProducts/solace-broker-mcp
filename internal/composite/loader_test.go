@@ -788,7 +788,6 @@ tools:
           dmrClusterName: "{{.Params.dmrClusterName}}"
       - id: links
         operation: monitor/getDmrClusterLinks
-        parallel: true
         args:
           dmrClusterName: "{{.Params.dmrClusterName}}"
     result:
@@ -833,8 +832,8 @@ tools:
 	if linksStep.Operation != "monitor/getDmrClusterLinks" {
 		t.Errorf("expected operation %q, got %q", "monitor/getDmrClusterLinks", linksStep.Operation)
 	}
-	if !linksStep.Parallel {
-		t.Error("expected second step Parallel=true")
+	if linksStep.Parallel {
+		t.Error("expected second step Parallel=false (no concurrent partner step)")
 	}
 
 	if len(tool.Parameters) != 1 {
@@ -900,6 +899,12 @@ tools:
 		t.Errorf("expected strategy %q, got %q", "collect", tool.Result.Strategy)
 	}
 
+	if len(tool.Parameters) != 2 {
+		t.Fatalf("expected 2 parameters, got %d", len(tool.Parameters))
+	}
+	if tool.Parameters[0].Name != "msgVpnName" {
+		t.Errorf("expected first parameter name %q, got %q", "msgVpnName", tool.Parameters[0].Name)
+	}
 	maxResults := tool.Parameters[1]
 	if maxResults.Name != "maxResults" {
 		t.Errorf("expected parameter name %q, got %q", "maxResults", maxResults.Name)
