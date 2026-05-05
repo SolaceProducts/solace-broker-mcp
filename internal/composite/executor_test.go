@@ -107,6 +107,21 @@ func testOperations() map[string]*sempv2.Operation {
 			Method: "GET",
 			Path:   "/SEMP/v2/__private_monitor__/msgVpns/{msgVpnName}/clients",
 		},
+		"monitor/getDmrCluster": {
+			ID:     "getDmrCluster",
+			Method: "GET",
+			Path:   "/SEMP/v2/__private_monitor__/dmrClusters/{dmrClusterName}",
+		},
+		"monitor/getDmrClusterLinks": {
+			ID:     "getDmrClusterLinks",
+			Method: "GET",
+			Path:   "/SEMP/v2/__private_monitor__/dmrClusters/{dmrClusterName}/links",
+		},
+		"monitor/getMsgVpnRestDeliveryPoints": {
+			ID:     "getMsgVpnRestDeliveryPoints",
+			Method: "GET",
+			Path:   "/SEMP/v2/__private_monitor__/msgVpns/{msgVpnName}/restDeliveryPoints",
+		},
 	}
 }
 
@@ -958,6 +973,15 @@ func makeClientItems(n int) []any {
 	return items
 }
 
+// makeRDPItems builds a slice of n mock RDP objects for use in paginated responses.
+func makeRDPItems(n int) []any {
+	items := make([]any, n)
+	for i := range items {
+		items[i] = map[string]any{"restDeliveryPointName": fmt.Sprintf("rdp-%d", i), "enabled": true}
+	}
+	return items
+}
+
 // pageResult builds a SEMP list response with optional pagination cursor.
 func pageResult(items []any, nextCursor string) *sempv2.Result {
 	data := map[string]any{"data": items}
@@ -1368,4 +1392,237 @@ func searchString(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// getMessageRatesTool returns the get-message-rates tool definition for tests.
+func getMessageRatesTool() CompositeTool {
+	return CompositeTool{
+		Name:        "get-message-rates",
+		Description: "Get current and average message and byte rates for a Message VPN",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+		},
+		Steps: []Step{
+			{
+				ID:        "rates",
+				Operation: "monitor/getMsgVpn",
+				Args: map[string]string{
+					"msgVpnName": "{{.Params.msgVpnName}}",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// getDMRStatusTool returns the get-dmr-status tool definition for tests.
+func getDMRStatusTool() CompositeTool {
+	return CompositeTool{
+		Name:        "get-dmr-status",
+		Description: "Get the status of a DMR cluster",
+		Parameters: []ParameterDef{
+			{Name: "dmrClusterName", Type: "string", Required: true},
+		},
+		Steps: []Step{
+			{
+				ID:        "cluster",
+				Operation: "monitor/getDmrCluster",
+				Args: map[string]string{
+					"dmrClusterName": "{{.Params.dmrClusterName}}",
+				},
+			},
+			{
+				ID:        "links",
+				Operation: "monitor/getDmrClusterLinks",
+				Args: map[string]string{
+					"dmrClusterName": "{{.Params.dmrClusterName}}",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// listRDPsTool returns the list-rdps tool definition for tests.
+func listRDPsTool() CompositeTool {
+	return CompositeTool{
+		Name:        "list-rdps",
+		Description: "List all REST Delivery Points in a Message VPN",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "maxResults", Type: "integer", Required: false},
+		},
+		Steps: []Step{
+			{
+				ID:          "rdps",
+				Operation:   "monitor/getMsgVpnRestDeliveryPoints",
+				FollowPages: true,
+				Args: map[string]string{
+					"msgVpnName": "{{.Params.msgVpnName}}",
+					"count":      "100",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+func TestExecute_GetMessageRates_ReturnsData(t *testing.T) {
+	client := newMockClient()
+	client.responses["getMsgVpn"] = &sempv2.Result{
+		Data: map[string]any{
+			"rxMsgRate":              float64(150),
+			"txMsgRate":              float64(200),
+			"rxByteRate":             float64(15000),
+			"txByteRate":             float64(20000),
+			"averageRxMsgRate":       float64(140),
+			"averageTxMsgRate":       float64(190),
+			"averageRxByteRate":      float64(14000),
+			"averageTxByteRate":      float64(19000),
+		},
+		StatusCode: 200,
+	}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), getMessageRatesTool(), client, map[string]any{
+		"msgVpnName": "default",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rates, ok := result["rates"].(map[string]any)
+	if !ok {
+		t.Fatal("expected rates key containing a map")
+	}
+	if rates["rxMsgRate"] != float64(150) {
+		t.Errorf("rxMsgRate = %v, want 150", rates["rxMsgRate"])
+	}
+	if rates["txMsgRate"] != float64(200) {
+		t.Errorf("txMsgRate = %v, want 200", rates["txMsgRate"])
+	}
+}
+
+func TestExecute_GetDMRStatus_ReturnsClusterAndLinks(t *testing.T) {
+	client := newMockClient()
+	client.responses["getDmrCluster"] = &sempv2.Result{
+		Data: map[string]any{
+			"dmrClusterName": "cluster-1",
+			"enabled":        true,
+		},
+		StatusCode: 200,
+	}
+	client.responses["getDmrClusterLinks"] = &sempv2.Result{
+		Data: map[string]any{
+			"data": []any{
+				map[string]any{"remoteNodeName": "node-a", "up": true},
+				map[string]any{"remoteNodeName": "node-b", "up": false},
+			},
+		},
+		StatusCode: 200,
+	}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), getDMRStatusTool(), client, map[string]any{
+		"dmrClusterName": "cluster-1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	clusterData, ok := result["cluster"].(map[string]any)
+	if !ok {
+		t.Fatal("expected cluster key containing a map")
+	}
+	if clusterData["dmrClusterName"] != "cluster-1" {
+		t.Errorf("dmrClusterName = %v, want cluster-1", clusterData["dmrClusterName"])
+	}
+
+	if _, ok := result["links"]; !ok {
+		t.Fatal("expected links key in result")
+	}
+}
+
+func TestExecute_GetDMRStatus_SEMPError(t *testing.T) {
+	client := newMockClient()
+	client.errors["getDmrCluster"] = &sempv2.SEMPError{
+		Operation:  "getDmrCluster",
+		StatusCode: 404,
+	}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	_, err := executor.Execute(context.Background(), getDMRStatusTool(), client, map[string]any{
+		"dmrClusterName": "nonexistent",
+	})
+	if err == nil {
+		t.Fatal("expected error when cluster step fails, got nil")
+	}
+}
+
+func TestExecute_ListRDPs_SinglePage(t *testing.T) {
+	rdpItems := []any{
+		map[string]any{"restDeliveryPointName": "rdp-1", "enabled": true, "up": true},
+		map[string]any{"restDeliveryPointName": "rdp-2", "enabled": true, "up": false},
+	}
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnRestDeliveryPoints", pageResult(rdpItems, ""))
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listRDPsTool(), client, map[string]any{
+		"msgVpnName": "default",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rdps, ok := result["rdps"].(map[string]any)
+	if !ok {
+		t.Fatal("expected rdps key containing a map")
+	}
+	items, ok := rdps["data"].([]any)
+	if !ok {
+		t.Fatal("expected rdps.data to be a slice")
+	}
+	if len(items) != 2 {
+		t.Errorf("len(items) = %d, want 2", len(items))
+	}
+	if rdps["truncated"] != false {
+		t.Errorf("truncated = %v, want false", rdps["truncated"])
+	}
+	if len(client.calls) != 1 {
+		t.Errorf("expected 1 SEMP call, got %d", len(client.calls))
+	}
+}
+
+func TestExecute_ListRDPs_TruncatesAtMaxResults(t *testing.T) {
+	// Page has 100 RDPs but maxResults=50, paginator should stop and set truncated.
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnRestDeliveryPoints", pageResult(makeRDPItems(100), "cursor-next"))
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listRDPsTool(), client, map[string]any{
+		"msgVpnName": "default",
+		"maxResults": float64(50),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rdps := result["rdps"].(map[string]any)
+	items := rdps["data"].([]any)
+
+	if len(items) != 50 {
+		t.Errorf("len(items) = %d, want 50", len(items))
+	}
+	if rdps["truncated"] != true {
+		t.Errorf("truncated = %v, want true", rdps["truncated"])
+	}
+	if len(client.calls) != 1 {
+		t.Errorf("expected 1 SEMP call, got %d", len(client.calls))
+	}
 }

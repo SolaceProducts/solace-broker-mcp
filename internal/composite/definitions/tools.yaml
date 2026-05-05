@@ -233,3 +233,74 @@ tools:
           count: "100"
     result:
       strategy: collect
+
+  - name: get-message-rates
+    description: >
+      Get current and average message and byte throughput rates for a Message
+      VPN. Use this to assess traffic volume and identify high-traffic VPNs.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The name of the Message VPN"
+    steps:
+      - id: rates
+        operation: monitor/getMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+    result:
+      strategy: collect
+
+  - name: get-dmr-status
+    description: >
+      Get the status of a DMR cluster including its enabled state, uptime, and
+      all link statuses. Returns the cluster object and a links array. To find
+      upLinkCount and downLinkCount, count links where up is true or false
+      respectively. Use this to diagnose mesh connectivity issues.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: dmrClusterName
+        type: string
+        required: true
+        description: "The name of the DMR cluster"
+    steps:
+      - id: cluster
+        operation: monitor/getDmrCluster
+        args:
+          dmrClusterName: "{{.Params.dmrClusterName}}"
+      - id: links
+        operation: monitor/getDmrClusterLinks
+        args:
+          dmrClusterName: "{{.Params.dmrClusterName}}"
+    result:
+      strategy: collect
+
+  - name: list-rdps
+    description: >
+      List all REST Delivery Points in a Message VPN with their enabled state,
+      up/down status, and last failure reason. Use this to discover which RDPs
+      exist and identify any that are down. For detailed RDP status including
+      consumers and queue bindings, use get-rdp-status.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN to list REST Delivery Points for"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of RDPs to return (default 100, max 500)"
+    steps:
+      - id: rdps
+        operation: monitor/getMsgVpnRestDeliveryPoints
+        followPages: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          count: "100"
+    result:
+      strategy: collect
