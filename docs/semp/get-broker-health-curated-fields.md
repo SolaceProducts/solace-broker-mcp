@@ -1,11 +1,11 @@
-# `get_broker_health` — Curated Field List
+# `get-broker-health` — Curated Field List
 
 **Status:** proposal pending review.
 **Story:** SOL-148428 (Story 8 — Broker-Level Monitoring Tools).
 **Branch:** `amorade/sempv1-tools` (built on top of `amorade/sempv1-client`).
 **Last updated:** 2026-04-29
 
-This document captures the curated field set the `get_broker_health` MCP tool will surface to LLMs, with evidence for each inclusion and a record of every field that was considered and dropped.
+This document captures the curated field set the `get-broker-health` MCP tool will surface to LLMs, with evidence for each inclusion and a record of every field that was considered and dropped.
 
 ## Why curate?
 
@@ -254,7 +254,7 @@ These appear in operator runbooks but were missing from Story 8's list:
 
 1. **5th SEMPv1 call** for `<show><system><health>` to surface `compute-latency-current-value`? Pro: only CPU-pressure proxy in SEMP. Con: extra call, extra fixture, extra struct.
 2. **MB precision for spool usage?** Story 8 listed `currentSpoolUsageMB` and `maxSpoolUsageMB`. Curated list provides percent and message-count instead. Add MB fields if needed.
-3. **`cpu-cores` and `system-memory` (total) as context fields?** Operators don't use them for health, but an LLM may want them when answering "describe my broker." Could be exposed in a separate `get_broker_info` tool rather than `get_broker_health`.
+3. **`cpu-cores` and `system-memory` (total) as context fields?** Operators don't use them for health, but an LLM may want them when answering "describe my broker." Could be exposed in a separate `get_broker_info` tool rather than `get-broker-health`.
 4. **Curation strategy in code:** separate health-view structs (Option 1) vs `json:"-"` tags on the full XSD-aligned structs (Option 2)?
 
 ## Next steps

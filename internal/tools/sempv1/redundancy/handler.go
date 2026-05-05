@@ -1,9 +1,9 @@
-// Package redundancy implements the get_redundancy_status MCP tool.
+// Package redundancy implements the get-redundancy-status MCP tool.
 // It issues a single SEMPv1 show-redundancy command against the target
 // broker and returns the parsed response in a step-keyed envelope under
 // the key "redundancy".
 //
-// The MCP-facing tool name remains get_redundancy_status (per Story 8);
+// The MCP-facing tool name remains get-redundancy-status (per Story 8);
 // the Go package name uses the noun form to match the show command.
 package redundancy
 
@@ -19,7 +19,7 @@ import (
 // Compile-time check that Handler satisfies tools.ToolHandler.
 var _ tools.ToolHandler = (*Handler)(nil)
 
-// Handler implements the get_redundancy_status MCP tool.
+// Handler implements the get-redundancy-status MCP tool.
 // It issues a single SEMPv1 show-redundancy command against the target
 // broker and returns the parsed response in a step-keyed envelope.
 //
@@ -44,7 +44,7 @@ func NewHandler() *Handler {
 // flat field set is post-MVP work tracked separately.
 func (h *Handler) Metadata() tools.Metadata {
 	return tools.Metadata{
-		Name: "get_redundancy_status",
+		Name: "get-redundancy-status",
 		Description: "Returns the broker's redundancy and high-availability status, " +
 			"including config/operational status, active-standby role, mate router " +
 			"name, mate link state, and per-virtual-router activity. Use this tool " +
@@ -55,7 +55,7 @@ func (h *Handler) Metadata() tools.Metadata {
 	}
 }
 
-// Handle executes the get_redundancy_status tool: builds the
+// Handle executes the get-redundancy-status tool: builds the
 // <rpc><show><redundancy/></show></rpc> request, calls the SEMPv1 client,
 // decodes the inner <show><redundancy>...</redundancy></show> bytes into
 // redundancyResponse, and wraps the result in a step-keyed envelope under
@@ -83,16 +83,16 @@ func (h *Handler) Handle(
 		Redundancy redundancyResponse `xml:"redundancy"`
 	}
 	if err := xml.Unmarshal(result.InnerXML, &wrapper); err != nil {
-		return nil, fmt.Errorf("get_redundancy_status: parsing redundancy response: %w", err)
+		return nil, fmt.Errorf("get-redundancy-status: parsing redundancy response: %w", err)
 	}
 
 	asJSON, err := json.Marshal(wrapper.Redundancy)
 	if err != nil {
-		return nil, fmt.Errorf("get_redundancy_status: marshalling redundancy response to JSON: %w", err)
+		return nil, fmt.Errorf("get-redundancy-status: marshalling redundancy response to JSON: %w", err)
 	}
 	var dataMap map[string]any
 	if err := json.Unmarshal(asJSON, &dataMap); err != nil {
-		return nil, fmt.Errorf("get_redundancy_status: parsing redundancy JSON response: %w", err)
+		return nil, fmt.Errorf("get-redundancy-status: parsing redundancy JSON response: %w", err)
 	}
 
 	envelope := map[string]any{

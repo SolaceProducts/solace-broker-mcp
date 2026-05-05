@@ -152,7 +152,7 @@ func TestHandle_ClientError_Passthrough(t *testing.T) {
 }
 
 // TestHandle_ParseError_WrapsError verifies that XML parse failures inside
-// Handle are wrapped with the get_broker_health: prefix so the resulting
+// Handle are wrapped with the get-broker-health: prefix so the resulting
 // log line clearly attributes the failure to this tool's processing rather
 // than the broker itself.
 func TestHandle_ParseError_WrapsError(t *testing.T) {
@@ -169,8 +169,8 @@ func TestHandle_ParseError_WrapsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("Handle returned nil error, expected parse failure")
 	}
-	if !strings.Contains(err.Error(), "get_broker_health:") {
-		t.Errorf("error %q should contain 'get_broker_health:' prefix to attribute failure", err)
+	if !strings.Contains(err.Error(), "get-broker-health:") {
+		t.Errorf("error %q should contain 'get-broker-health:' prefix to attribute failure", err)
 	}
 	if !strings.Contains(err.Error(), "system") {
 		t.Errorf("error %q should mention which step failed (expected 'system')", err)

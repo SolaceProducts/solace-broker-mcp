@@ -1,4 +1,4 @@
-// Package brokerhealth implements the get_broker_health MCP tool.
+// Package brokerhealth implements the get-broker-health MCP tool.
 //
 // The tool issues four SEMPv1 commands in parallel against the target broker
 // and returns a curated subset of the responses in a step-keyed envelope:
@@ -26,7 +26,7 @@ import (
 
 // toolName is the prefix used for tool-side error wrapping. Centralizing
 // it prevents typos and keeps the prefix in lockstep with Metadata().Name.
-const toolName = "get_broker_health"
+const toolName = "get-broker-health"
 
 // Static SEMPv1 request strings — declared here rather than inline in Handle
 // so the four-call shape is visible at a glance.
@@ -40,7 +40,7 @@ const (
 // Compile-time check that Handler satisfies tools.ToolHandler.
 var _ tools.ToolHandler = (*Handler)(nil)
 
-// Handler implements the get_broker_health MCP tool. The handler holds no
+// Handler implements the get-broker-health MCP tool. The handler holds no
 // state; one instance is sufficient per server.
 type Handler struct{}
 

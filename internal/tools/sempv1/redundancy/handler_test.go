@@ -43,8 +43,8 @@ func TestHandler_Metadata(t *testing.T) {
 	h := NewHandler()
 	meta := h.Metadata()
 
-	if meta.Name != "get_redundancy_status" {
-		t.Errorf("Name = %q, want %q", meta.Name, "get_redundancy_status")
+	if meta.Name != "get-redundancy-status" {
+		t.Errorf("Name = %q, want %q", meta.Name, "get-redundancy-status")
 	}
 	if meta.Description == "" {
 		t.Error("Description is empty")
@@ -170,7 +170,7 @@ func TestHandle_ClientError_Passthrough(t *testing.T) {
 }
 
 // TestHandle_ParseError_WrapsError verifies that XML parse failures
-// inside Handle are wrapped with the get_redundancy_status: prefix, so
+// inside Handle are wrapped with the get-redundancy-status: prefix, so
 // the resulting log line clearly attributes the failure to this tool's
 // processing rather than the broker.
 func TestHandle_ParseError_WrapsError(t *testing.T) {
