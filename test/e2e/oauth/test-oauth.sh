@@ -85,8 +85,8 @@ go build -o "${PROJECT_ROOT}/bin/mcp-test" ./cmd/server
 echo "✓ Built MCP server"
 
 # Set broker credentials as environment variables (required by config)
-export TEST_BROKER_USERNAME="${TEST_BROKER_USERNAME:-admin}"
-export TEST_BROKER_PASSWORD="${TEST_BROKER_PASSWORD:-admin}"
+export BROKER_USERNAME=admin
+export BROKER_PASSWORD=admin
 
 # Use static test config file
 TEST_CONFIG="${SCRIPT_DIR}/test-config.yaml"

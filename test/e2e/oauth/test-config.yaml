@@ -4,8 +4,8 @@
 # Prerequisites:
 #   1. Run ./setup-keycloak.sh to start Keycloak and configure OAuth
 #   2. Set environment variables for broker credentials:
-#      - TEST_BROKER_USERNAME (default: admin)
-#      - TEST_BROKER_PASSWORD (default: admin)
+#      - BROKER_USERNAME (default: admin)
+#      - BROKER_PASSWORD (default: admin)
 #
 # To use a different broker, modify the URL below:
 
@@ -29,5 +29,5 @@ brokers:
     url: http://localhost:8080
     auth:
       mode: basic
-      username: ${TEST_BROKER_USERNAME}
-      password: ${TEST_BROKER_PASSWORD}
+      username: ${BROKER_USERNAME}
+      password: ${BROKER_PASSWORD}
