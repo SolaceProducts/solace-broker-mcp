@@ -1,0 +1,258 @@
+// Copyright 2024-2026 Solace Corporation. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package brokerhealth
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
+	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
+)
+
+// fixtureClient routes incoming SEMPv1 requests by their XML body to the
+// matching testdata fixture. It satisfies sempv1.Client and is the standard
+// stub for handler tests in this package.
+//
+// Optional knobs let individual tests override behavior per-step:
+//   - errorFor[XML] forces a specific Execute call to return that error
+//     instead of the fixture (used for client-error and partial-failure tests)
+//   - replaceXML[XML] replaces the InnerXML returned for that call (used
+//     for parse-error tests that need to inject malformed XML for one step)
+type fixtureClient struct {
+	errorFor   map[string]error
+	replaceXML map[string][]byte
+	calls      int32
+}
+
+func (s *fixtureClient) Execute(_ context.Context, xmlReq string) (*sempv1.Result, error) {
+	atomic.AddInt32(&s.calls, 1)
+
+	if err, ok := s.errorFor[xmlReq]; ok {
+		return nil, err
+	}
+
+	var path string
+	switch xmlReq {
+	case versionXML:
+		path = "testdata/show_version.xml"
+	case systemXML:
+		path = "testdata/show_system.xml"
+	case memoryXML:
+		path = "testdata/show_memory.xml"
+	case spoolXML:
+		path = "testdata/show_message_spool_detail.xml"
+	default:
+		return nil, fmt.Errorf("fixtureClient: unexpected request %s", xmlReq)
+	}
+
+	if override, ok := s.replaceXML[xmlReq]; ok {
+		return &sempv1.Result{InnerXML: override}, nil
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	s2 := string(raw)
+	open := strings.Index(s2, "<rpc>")
+	close := strings.LastIndex(s2, "</rpc>")
+	if open < 0 || close < 0 {
+		return nil, fmt.Errorf("fixtureClient: no <rpc>...</rpc> in %s", path)
+	}
+	return &sempv1.Result{InnerXML: []byte(s2[open+len("<rpc>") : close])}, nil
+}
+
+// TestHandler_Metadata exercises the tool's MCP surface directly: name,
+// description, input schema, output schema, and annotations. Without this
+// coverage a typo in Metadata() would only be caught at server registration
+// time, when the LLM-facing wire contract is already broken. Mirrors the
+// equivalent TestHandler_Metadata in the redundancy tool.
+func TestHandler_Metadata(t *testing.T) {
+	h := NewHandler()
+	meta := h.Metadata()
+
+	if meta.Name != "get-broker-health" {
+		t.Errorf("Name = %q, want %q", meta.Name, "get-broker-health")
+	}
+	if meta.Description == "" {
+		t.Error("Description is empty")
+	}
+
+	// Input schema: empty object (broker is injected by ToolManager).
+	if meta.InputSchema["type"] != "object" {
+		t.Errorf(`InputSchema["type"] = %v, want "object"`, meta.InputSchema["type"])
+	}
+	props, ok := meta.InputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf(`InputSchema["properties"] is not a map[string]any: %T`, meta.InputSchema["properties"])
+	}
+	if len(props) != 0 {
+		t.Errorf("InputSchema has %d properties, want 0", len(props))
+	}
+	if _, hasRequired := meta.InputSchema["required"]; hasRequired {
+		t.Error(`InputSchema["required"] should not be set when properties is empty`)
+	}
+
+	// Output schema: generic step-keyed envelope.
+	if meta.OutputSchema["type"] != "object" {
+		t.Errorf(`OutputSchema["type"] = %v, want "object"`, meta.OutputSchema["type"])
+	}
+	addProps, ok := meta.OutputSchema["additionalProperties"].(map[string]any)
+	if !ok {
+		t.Fatalf(`OutputSchema["additionalProperties"] is not a map[string]any: %T`,
+			meta.OutputSchema["additionalProperties"])
+	}
+	if addProps["type"] != "object" {
+		t.Errorf(`additionalProperties["type"] = %v, want "object"`, addProps["type"])
+	}
+
+	// Annotations: read-only, explicit non-destructive.
+	if !meta.Annotations.ReadOnly {
+		t.Error("Annotations.ReadOnly = false, want true")
+	}
+	if meta.Annotations.Destructive == nil || *meta.Annotations.Destructive {
+		t.Errorf("Annotations.Destructive = %v, want explicit false", meta.Annotations.Destructive)
+	}
+}
+
+// TestHandle_Success runs the happy path: all four fixtures decode, the
+// envelope carries all four step keys, and each step's payload is non-empty.
+func TestHandle_Success(t *testing.T) {
+	h := NewHandler()
+	tc := &tools.ToolContext{SEMPv1Client: &fixtureClient{}}
+
+	result, err := h.Handle(context.Background(), tc, map[string]any{})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if result == nil || result.StructuredContent == nil {
+		t.Fatal("Handle returned nil result")
+	}
+
+	for _, key := range []string{"version", "system", "memory", "spool"} {
+		v, ok := result.StructuredContent[key]
+		if !ok {
+			t.Errorf("envelope missing key %q", key)
+			continue
+		}
+		m, ok := v.(map[string]any)
+		if !ok {
+			t.Errorf("envelope[%q] is not a map: %T", key, v)
+			continue
+		}
+		if len(m) == 0 {
+			t.Errorf("envelope[%q] is empty", key)
+		}
+	}
+
+	// Spot-check one curated value reaches the envelope unchanged.
+	if version, ok := result.StructuredContent["version"].(map[string]any); ok {
+		if got := version["description"]; got != "Solace PubSub+ Standard Version 10.25.0.217" {
+			t.Errorf("version.description = %v, want fixture value", got)
+		}
+	}
+}
+
+// TestHandle_ClientError_Passthrough verifies that errors from the SEMPv1
+// client surface UNWRAPPED, so the manager's logToolResult can extract
+// structured fields via errors.As(err, &*sempv1.Error). Wrapping with
+// fmt.Errorf %w would still let errors.As work, but the redundancy tool
+// established the convention of pure pass-through for v1 Execute errors.
+func TestHandle_ClientError_Passthrough(t *testing.T) {
+	sempErr := &sempv1.Error{
+		Kind:       sempv1.ErrorKindHTTP,
+		StatusCode: 401,
+	}
+	stub := &fixtureClient{
+		errorFor: map[string]error{
+			memoryXML: sempErr,
+		},
+	}
+
+	h := NewHandler()
+	tc := &tools.ToolContext{SEMPv1Client: stub}
+
+	_, err := h.Handle(context.Background(), tc, map[string]any{})
+	if err == nil {
+		t.Fatal("Handle returned nil error, expected client failure")
+	}
+
+	var v1Err *sempv1.Error
+	if !errors.As(err, &v1Err) {
+		t.Fatalf("returned error %T not unwrappable to *sempv1.Error: %v", err, err)
+	}
+	if v1Err.StatusCode != 401 {
+		t.Errorf("StatusCode = %d, want 401", v1Err.StatusCode)
+	}
+}
+
+// TestHandle_ParseError_WrapsError verifies that XML parse failures inside
+// Handle are wrapped with the get-broker-health: prefix so the resulting
+// log line clearly attributes the failure to this tool's processing rather
+// than the broker itself.
+func TestHandle_ParseError_WrapsError(t *testing.T) {
+	stub := &fixtureClient{
+		replaceXML: map[string][]byte{
+			systemXML: []byte("<not-valid-xml<<>"),
+		},
+	}
+
+	h := NewHandler()
+	tc := &tools.ToolContext{SEMPv1Client: stub}
+
+	_, err := h.Handle(context.Background(), tc, map[string]any{})
+	if err == nil {
+		t.Fatal("Handle returned nil error, expected parse failure")
+	}
+	if !strings.Contains(err.Error(), "get-broker-health:") {
+		t.Errorf("error %q should contain 'get-broker-health:' prefix to attribute failure", err)
+	}
+	if !strings.Contains(err.Error(), "system") {
+		t.Errorf("error %q should mention which step failed (expected 'system')", err)
+	}
+}
+
+// TestHandle_PartialFailure verifies the hard-failure policy: if any one
+// of the four parallel calls errors, the whole tool errors. The user-facing
+// envelope is never returned partially populated, since broker health is
+// a coherent picture and a partial response could mislead consumers.
+func TestHandle_PartialFailure(t *testing.T) {
+	stub := &fixtureClient{
+		errorFor: map[string]error{
+			spoolXML: &sempv1.Error{
+				Kind:       sempv1.ErrorKindExecuteFail,
+				StatusCode: 200,
+				Message:    "synthetic failure for partial-failure test",
+			},
+		},
+	}
+
+	h := NewHandler()
+	tc := &tools.ToolContext{SEMPv1Client: stub}
+
+	result, err := h.Handle(context.Background(), tc, map[string]any{})
+	if err == nil {
+		t.Fatal("Handle returned nil error, expected partial-failure to surface")
+	}
+	if result != nil {
+		t.Errorf("Handle returned non-nil result on partial failure: %v", result)
+	}
+}

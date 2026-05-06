@@ -128,7 +128,7 @@ Each protocol owns its own error type in its own package:
 Rationale (reversed from an earlier shared-struct proposal — see drift D7):
 
 - **18 of 22 planned tools are v2-only** (Stories 9, 10, 11, 12, 14, 15, 16).
-  Only 2 tools are v1-only (`get_broker_health`, `get_redundancy_status`) and
+  Only 2 tools are v1-only (`get-broker-health`, `get-redundancy-status`) and
   2 tools are mixed. The "one shared struct helps cross-protocol callers"
   argument was theoretical; in practice tools know which protocol they call.
 - **A shared struct forces semantic gymnastics:** `StatusCode == 200 means
@@ -399,8 +399,8 @@ dependency graph small (consistent with v2's stdlib `encoding/json` choice).
 **The tool, not the client.** The client accepts an opaque XML string.
 
 ```
-internal/tools/get_redundancy_status.go  ← owns buildShowRedundancyXML()
-internal/tools/get_broker_health.go      ← owns buildShowVersionXML() etc.
+internal/tools/get-redundancy-status.go  ← owns buildShowRedundancyXML()
+internal/tools/get-broker-health.go      ← owns buildShowVersionXML() etc.
 internal/semp/sempv1/                    ← knows nothing about commands
 ```
 
@@ -537,12 +537,12 @@ whether the repo already has an integration-test pattern for v2 that we'd match.
 Phase 1 of this work is the client foundation only (this document). Phase 2
 wires a pilot tool end-to-end on top of the foundation to prove it works.
 
-Candidate: `get_redundancy_status`. Rationale:
+Candidate: `get-redundancy-status`. Rationale:
 - Single v1 call — smallest surface that exercises the full path
 - Story 8 explicitly calls this out as SEMPv1-only
 - Simple XML payload, small response, no pagination concerns
 
-`get_broker_health` is richer (4 parallel calls) but introduces concurrency
+`get-broker-health` is richer (4 parallel calls) but introduces concurrency
 concerns that belong in a separate follow-up.
 
 **Decision deferred** — revisit after Phase 1 lands.
@@ -601,7 +601,7 @@ drifts, not gaps:
 | # | Question | Current plan |
 |---|---|---|
 | Rate limit | Where does the retry decorator live? | Story 5; leave TODO comment |
-| Pilot choice | `get_redundancy_status` vs. `get_broker_health`? | Decide after Phase 1 |
+| Pilot choice | `get-redundancy-status` vs. `get-broker-health`? | Decide after Phase 1 |
 | Integration tests | Build tag + skip, or always-on with Docker? | Parked |
 
 ---

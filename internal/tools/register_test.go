@@ -128,6 +128,180 @@ func TestRegisterListBrokers(t *testing.T) {
 	// No panic = registered successfully.
 }
 
+// TestToMCPAnnotations exercises the translation boundary between our
+// Annotations type and the SDK's *mcp.ToolAnnotations. The contract the
+// refactor depends on is preserving nil-vs-explicit-false semantics on the
+// pointer fields: nil means "unspecified, apply spec defaults", *false
+// means "explicitly disabled". A future change that conflated these would
+// silently flip default behavior on every tool.
+func TestToMCPAnnotations(t *testing.T) {
+	tr := func(b bool) *bool { return &b }
+
+	cases := []struct {
+		name string
+		in   Annotations
+		// pointer-equality check is too strict (toMCPAnnotations clones not
+		// required by the boundary contract); we compare values via custom
+		// matchers below.
+		wantReadOnlyHint    bool
+		wantIdempotentHint  bool
+		wantDestructiveHint *bool // nil-vs-*false matters
+		wantOpenWorldHint   *bool
+	}{
+		{
+			name:                "empty annotations passes nil pointers + zero values through",
+			in:                  Annotations{},
+			wantReadOnlyHint:    false,
+			wantIdempotentHint:  false,
+			wantDestructiveHint: nil,
+			wantOpenWorldHint:   nil,
+		},
+		{
+			name:                "ReadOnly true sets ReadOnlyHint",
+			in:                  Annotations{ReadOnly: true},
+			wantReadOnlyHint:    true,
+			wantDestructiveHint: nil,
+			wantOpenWorldHint:   nil,
+		},
+		{
+			name:                "Destructive *true preserved as *true",
+			in:                  Annotations{Destructive: tr(true)},
+			wantDestructiveHint: tr(true),
+		},
+		{
+			name:                "Destructive *false preserved as *false (NOT nil)",
+			in:                  Annotations{Destructive: tr(false)},
+			wantDestructiveHint: tr(false),
+		},
+		{
+			name:              "OpenWorld *true preserved as *true",
+			in:                Annotations{OpenWorld: tr(true)},
+			wantOpenWorldHint: tr(true),
+		},
+		{
+			name:                "all four fields populated",
+			in:                  Annotations{ReadOnly: true, Idempotent: true, Destructive: tr(false), OpenWorld: tr(true)},
+			wantReadOnlyHint:    true,
+			wantIdempotentHint:  true,
+			wantDestructiveHint: tr(false),
+			wantOpenWorldHint:   tr(true),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := toMCPAnnotations(tc.in)
+			if got == nil {
+				t.Fatal("toMCPAnnotations returned nil")
+			}
+			if got.ReadOnlyHint != tc.wantReadOnlyHint {
+				t.Errorf("ReadOnlyHint = %v, want %v", got.ReadOnlyHint, tc.wantReadOnlyHint)
+			}
+			if got.IdempotentHint != tc.wantIdempotentHint {
+				t.Errorf("IdempotentHint = %v, want %v", got.IdempotentHint, tc.wantIdempotentHint)
+			}
+			if !boolPtrEqual(got.DestructiveHint, tc.wantDestructiveHint) {
+				t.Errorf("DestructiveHint = %v, want %v", fmtBoolPtr(got.DestructiveHint), fmtBoolPtr(tc.wantDestructiveHint))
+			}
+			if !boolPtrEqual(got.OpenWorldHint, tc.wantOpenWorldHint) {
+				t.Errorf("OpenWorldHint = %v, want %v", fmtBoolPtr(got.OpenWorldHint), fmtBoolPtr(tc.wantOpenWorldHint))
+			}
+		})
+	}
+}
+
+// TestToMCPTool checks that every Metadata field reaches the corresponding
+// mcp.Tool field, that InputSchema is run through injectBrokerParam, and
+// that Annotations are translated via toMCPAnnotations.
+func TestToMCPTool(t *testing.T) {
+	pool := newRegTestPool()
+	tr := func(b bool) *bool { return &b }
+
+	meta := Metadata{
+		Name:        "test-tool",
+		Description: "describe me",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"foo": map[string]any{"type": "string"}},
+			"required":   []string{"foo"},
+		},
+		OutputSchema: map[string]any{
+			"type":                 "object",
+			"additionalProperties": map[string]any{"type": "object"},
+		},
+		Annotations: Annotations{ReadOnly: true, Destructive: tr(false)},
+	}
+
+	got := toMCPTool(meta, pool)
+	if got == nil {
+		t.Fatal("toMCPTool returned nil")
+	}
+	if got.Name != "test-tool" {
+		t.Errorf("Name = %q, want %q", got.Name, "test-tool")
+	}
+	if got.Description != "describe me" {
+		t.Errorf("Description = %q, want %q", got.Description, "describe me")
+	}
+
+	// InputSchema must have broker injected.
+	in, ok := got.InputSchema.(map[string]any)
+	if !ok {
+		t.Fatalf("InputSchema is not map[string]any: %T", got.InputSchema)
+	}
+	props, _ := in["properties"].(map[string]any)
+	if _, hasBroker := props["broker"]; !hasBroker {
+		t.Error("InputSchema.properties missing injected 'broker' parameter")
+	}
+	if _, hasFoo := props["foo"]; !hasFoo {
+		t.Error("InputSchema.properties lost original 'foo' parameter")
+	}
+
+	// OutputSchema passes through unchanged.
+	out, ok := got.OutputSchema.(map[string]any)
+	if !ok {
+		t.Fatalf("OutputSchema is not map[string]any: %T", got.OutputSchema)
+	}
+	if out["type"] != "object" {
+		t.Errorf("OutputSchema lost type field, got %v", out["type"])
+	}
+
+	// Annotations went through toMCPAnnotations: ReadOnlyHint=true,
+	// DestructiveHint=*false (preserved, NOT nil).
+	if got.Annotations == nil {
+		t.Fatal("Annotations is nil")
+	}
+	if !got.Annotations.ReadOnlyHint {
+		t.Error("ReadOnlyHint = false, want true")
+	}
+	if got.Annotations.DestructiveHint == nil || *got.Annotations.DestructiveHint != false {
+		t.Errorf("DestructiveHint = %v, want explicit *false", fmtBoolPtr(got.Annotations.DestructiveHint))
+	}
+}
+
+// boolPtrEqual returns true when both pointers are nil OR both point to the
+// same bool value. Used by TestToMCPAnnotations to assert the preserved
+// nil-vs-*false semantics.
+func boolPtrEqual(a, b *bool) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+// fmtBoolPtr renders a *bool for error messages: "nil", "*true", or "*false".
+func fmtBoolPtr(p *bool) string {
+	if p == nil {
+		return "nil"
+	}
+	if *p {
+		return "*true"
+	}
+	return "*false"
+}
+
 func containsStr(s, substr string) bool {
 	for i := 0; i <= len(s)-len(substr); i++ {
 		if s[i:i+len(substr)] == substr {

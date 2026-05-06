@@ -1,0 +1,21 @@
+<rpc-reply semp-version="soltr/10_25_0VMR">
+  <rpc>
+    <show>
+      <system>
+        <system-uptime-seconds>87143</system-uptime-seconds>
+        <last-restart-reason></last-restart-reason>
+        <max-bridges>25</max-bridges>
+        <max-connections>100</max-connections>
+        <max-queue-messages>100</max-queue-messages>
+        <max-kafka-bridges>0</max-kafka-bridges>
+        <max-kafka-broker-connections>0</max-kafka-broker-connections>
+        <max-subscriptions>50000</max-subscriptions>
+        <subscription-exception-enable>Enabled</subscription-exception-enable>
+        <subscription-exception-enable-defer>Enabled</subscription-exception-enable-defer>
+        <cpu-cores>5</cpu-cores>
+        <system-memory>7.72626</system-memory>
+      </system>
+    </show>
+  </rpc>
+<execute-result code="ok"/>
+</rpc-reply>

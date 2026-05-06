@@ -62,7 +62,7 @@ func NewToolManagerFromComposite(pool *semp.BrokerPool, tools []composite.Compos
 // same name is already registered — duplicate tool names indicate a
 // configuration error that should be caught at startup.
 func (m *ToolManager) Register(handler ToolHandler) {
-	name := handler.Name()
+	name := handler.Metadata().Name
 	if _, exists := m.handlers[name]; exists {
 		panic(fmt.Sprintf("duplicate tool registration: %q", name))
 	}
@@ -131,15 +131,19 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	// should not see it.
 	handlerParams := stripBrokerParam(params)
 
+	// Read metadata once. Each call returns a fresh value with fresh maps,
+	// so caching here keeps allocations down without aliasing risk.
+	meta := handler.Metadata()
+
 	// Validate parameters against the handler's input schema.
-	if err := ValidateParams(handlerParams, handler.Schema()); err != nil {
+	if err := ValidateParams(handlerParams, meta.InputSchema); err != nil {
 		errorType = "validation_error"
 		toolErr = err
 		return nil, toolErr
 	}
 
 	// Log warning for destructive tools.
-	if ann := handler.Annotations(); ann != nil && ann.DestructiveHint != nil && *ann.DestructiveHint {
+	if meta.Annotations.Destructive != nil && *meta.Annotations.Destructive {
 		slog.Warn("executing destructive operation",
 			slog.String("tool", name),
 			slog.String("broker", brokerAlias))
@@ -165,7 +169,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	}
 
 	// Validate output against schema.
-	if err := ValidateOutput(result.StructuredContent, handler.OutputSchema()); err != nil {
+	if err := ValidateOutput(result.StructuredContent, meta.OutputSchema); err != nil {
 		errorType = "output_validation_error"
 		toolErr = fmt.Errorf("tool %q output validation: %w", name, err)
 		return nil, toolErr
