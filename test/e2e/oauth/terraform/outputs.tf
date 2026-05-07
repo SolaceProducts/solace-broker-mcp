@@ -57,7 +57,7 @@ output "test_token_command" {
       -d "grant_type=client_credentials" \
       -d "client_id=${var.mcp_client_id}-confidential" \
       -d "client_secret=<USE_OUTPUT_mcp_client_secret>" \
-      -d "scope=solace:read solace:write"
+      -d "grant_type=client_credentials"
   EOT
 }
 
@@ -80,7 +80,7 @@ output "test_user_password" {
 output "phase2_login_url" {
   description = "URL to initiate Phase 2 OAuth flow (Authorization Code + PKCE)"
   value       = <<-EOT
-    http://localhost:${var.keycloak_port}/realms/${var.realm_name}/protocol/openid-connect/auth?client_id=${var.mcp_client_id}&response_type=code&scope=solace:read%20solace:write&redirect_uri=http://localhost:8080/callback&code_challenge=REPLACE_WITH_PKCE_CHALLENGE&code_challenge_method=S256
+    http://localhost:${var.keycloak_port}/realms/${var.realm_name}/protocol/openid-connect/auth?client_id=${var.mcp_client_id}&response_type=code&redirect_uri=http://localhost:8080/callback&code_challenge=REPLACE_WITH_PKCE_CHALLENGE&code_challenge_method=S256
   EOT
 }
 

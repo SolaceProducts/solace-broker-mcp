@@ -17,9 +17,6 @@ client_auth:
   issuer: "http://localhost:8090/realms/solace"
   audience: "solace-mcp-server"
   resource_url: "http://localhost:9091/mcp"
-  required_scopes:
-    - solace:read
-    - solace:write
 
 # Broker configuration
 # Note: This broker is only needed for config validation.

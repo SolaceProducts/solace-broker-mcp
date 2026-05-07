@@ -65,8 +65,7 @@ TOKEN_RESPONSE=$(curl -s -X POST "${TOKEN_ENDPOINT}" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "grant_type=client_credentials" \
     -d "client_id=${CLIENT_ID}" \
-    -d "client_secret=${CLIENT_SECRET}" \
-    -d "scope=solace:read solace:write")
+    -d "client_secret=${CLIENT_SECRET}")
 
 ACCESS_TOKEN=$(echo "${TOKEN_RESPONSE}" | grep -o '"access_token":"[^"]*' | cut -d'"' -f4)
 
