@@ -10,6 +10,7 @@ concurrency:
 
 permissions:
   contents: read
+  packages: read
   pull-requests: write
   id-token: write
   actions: read
@@ -24,7 +25,3 @@ jobs:
     with:
       use_vault: true
       config_file: '.github/workflow-config.json'
-
-  build-and-test:
-    name: Build and Test
-    uses: ./.github/workflows/build-and-test.yml
