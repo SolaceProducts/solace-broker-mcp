@@ -4,8 +4,8 @@
 # Prerequisites:
 #   1. Run ./setup-keycloak.sh to start Keycloak and configure OAuth
 #   2. Set environment variables for broker credentials:
-#      - BROKER_USERNAME (default: admin)
-#      - BROKER_PASSWORD (default: admin)
+#      - BROKER_USERNAME (set by test-oauth.sh, defaults to "admin")
+#      - BROKER_PASSWORD (set by test-oauth.sh, defaults to "admin")
 #
 # To use a different broker, modify the URL below:
 

@@ -119,7 +119,6 @@ KC_ADMIN_TOKEN=$(curl -s -X POST "http://localhost:${KEYCLOAK_PORT:-8090}/realms
     | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
 KC_BASE="http://localhost:${KEYCLOAK_PORT:-8090}/admin/realms/solace"
-KC_AUTH="-H \"Authorization: Bearer $KC_ADMIN_TOKEN\""
 
 # --- Audience mapper on "basic" scope ---
 BASIC_SCOPE_ID=$(curl -s "$KC_BASE/client-scopes" \
@@ -140,7 +139,7 @@ if [ "$EXISTING_MAPPERS" = "False" ]; then
             "protocol": "openid-connect",
             "protocolMapper": "oidc-audience-mapper",
             "config": {
-                "included.custom.audience": "solace-mcp-server",
+                "included.custom.audience": "'"$(terraform output -raw audience)"'",
                 "id.token.claim": "false",
                 "access.token.claim": "true"
             }

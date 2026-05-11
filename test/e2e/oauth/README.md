@@ -11,12 +11,11 @@ Integration test for OAuth authentication middleware using real Keycloak OIDC pr
 
 2. Test configuration (optional):
    - Edit `test-config.yaml` to customize broker URL or port
-   - Set environment variables for broker credentials:
+   - Optionally override broker credentials (defaults to `admin`/`admin`):
      ```bash
-     export BROKER_USERNAME=admin
-     export BROKER_PASSWORD=admin
+     export BROKER_USERNAME=myuser
+     export BROKER_PASSWORD=mypass
      ```
-   - Default values are used if not set
 
 3. Required tools:
    - `docker` (for Keycloak)

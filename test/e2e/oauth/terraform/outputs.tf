@@ -56,8 +56,7 @@ output "test_token_command" {
       -H "Content-Type: application/x-www-form-urlencoded" \
       -d "grant_type=client_credentials" \
       -d "client_id=${var.mcp_client_id}-confidential" \
-      -d "client_secret=<USE_OUTPUT_mcp_client_secret>" \
-      -d "grant_type=client_credentials"
+      -d "client_secret=<USE_OUTPUT_mcp_client_secret>"
   EOT
 }
 
