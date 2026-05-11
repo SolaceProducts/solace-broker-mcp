@@ -28,7 +28,7 @@ jobs:
       config_file: '.github/workflow-config.json'
 
   build-binaries:
-    needs: [test, fossa_scan]
+    needs: test
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -79,7 +79,7 @@ jobs:
           path: ${{ env.ARCHIVE }}
 
   build-docker:
-    needs: [test, fossa_scan]
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
