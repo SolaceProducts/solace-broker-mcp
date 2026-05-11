@@ -169,6 +169,141 @@ func TestClient_Execute_QueryParams_ArrayCSVRawCommas(t *testing.T) {
 	}
 }
 
+// TestClient_Execute_QueryParams_ArrayCSV_StringSlice pins the []string input
+// path: array params constructed in Go code (not via YAML) must still produce
+// raw-comma CSV.
+func TestClient_Execute_QueryParams_ArrayCSV_StringSlice(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		raw := r.URL.RawQuery
+		if !strings.Contains(raw, "select=a,b,c") {
+			t.Errorf("RawQuery = %q, expected select=a,b,c", raw)
+		}
+		if strings.Contains(raw, "%2C") || strings.Contains(raw, "%2c") {
+			t.Errorf("RawQuery = %q, expected raw commas in array params, not %%2C", raw)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{})
+	})
+	defer server.Close()
+
+	op := &sempv2.Operation{
+		ID:     "testOp",
+		Method: "GET",
+		Path:   "/SEMP/v2/monitor/test",
+		Parameters: []sempv2.Parameter{
+			{Name: "select", In: "query", Type: "array"},
+		},
+	}
+
+	_, err := client.Execute(context.Background(), op, map[string]any{
+		"select": []string{"a", "b", "c"},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+}
+
+// TestClient_Execute_QueryParams_ArrayCSV_AnySlice pins the []any input path:
+// YAML unmarshalling produces []any for a list, and that shape must serialize
+// the same as []string.
+func TestClient_Execute_QueryParams_ArrayCSV_AnySlice(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		raw := r.URL.RawQuery
+		if !strings.Contains(raw, "select=a,b,c") {
+			t.Errorf("RawQuery = %q, expected select=a,b,c", raw)
+		}
+		if strings.Contains(raw, "%2C") || strings.Contains(raw, "%2c") {
+			t.Errorf("RawQuery = %q, expected raw commas in array params, not %%2C", raw)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{})
+	})
+	defer server.Close()
+
+	op := &sempv2.Operation{
+		ID:     "testOp",
+		Method: "GET",
+		Path:   "/SEMP/v2/monitor/test",
+		Parameters: []sempv2.Parameter{
+			{Name: "select", In: "query", Type: "array"},
+		},
+	}
+
+	_, err := client.Execute(context.Background(), op, map[string]any{
+		"select": []any{"a", "b", "c"},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+}
+
+// TestClient_Execute_QueryParams_ArrayCSV_TrimsAndDropsEmpty pins the
+// whitespace-trim and empty-element-drop behavior so a sloppy input like
+// "a, b , ,c" still produces a clean "a,b,c" on the wire.
+func TestClient_Execute_QueryParams_ArrayCSV_TrimsAndDropsEmpty(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		raw := r.URL.RawQuery
+		if !strings.Contains(raw, "select=a,b,c") {
+			t.Errorf("RawQuery = %q, expected trimmed select=a,b,c", raw)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{})
+	})
+	defer server.Close()
+
+	op := &sempv2.Operation{
+		ID:     "testOp",
+		Method: "GET",
+		Path:   "/SEMP/v2/monitor/test",
+		Parameters: []sempv2.Parameter{
+			{Name: "select", In: "query", Type: "array"},
+		},
+	}
+
+	_, err := client.Execute(context.Background(), op, map[string]any{
+		"select": "a, b , ,c",
+	})
+	if err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+}
+
+// TestClient_Execute_QueryParams_ArrayCSV_CoexistsWithRegularParam ensures the
+// raw-comma array param and a standard-encoded query param both reach the
+// broker in the same request.
+func TestClient_Execute_QueryParams_ArrayCSV_CoexistsWithRegularParam(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		raw := r.URL.RawQuery
+		if !strings.Contains(raw, "select=a,b") {
+			t.Errorf("RawQuery = %q, missing raw-comma select=a,b", raw)
+		}
+		if r.URL.Query().Get("count") != "100" {
+			t.Errorf("count = %q, want 100", r.URL.Query().Get("count"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{})
+	})
+	defer server.Close()
+
+	op := &sempv2.Operation{
+		ID:     "testOp",
+		Method: "GET",
+		Path:   "/SEMP/v2/monitor/test",
+		Parameters: []sempv2.Parameter{
+			{Name: "select", In: "query", Type: "array"},
+			{Name: "count", In: "query"},
+		},
+	}
+
+	_, err := client.Execute(context.Background(), op, map[string]any{
+		"select": "a,b",
+		"count":  "100",
+	})
+	if err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+}
+
 func TestClient_Execute_RequestBody(t *testing.T) {
 	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "PUT" {

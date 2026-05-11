@@ -42,6 +42,7 @@ tools:
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           restDeliveryPointName: "{{.Params.restDeliveryPointName}}"
+          select: "clientName, clientProfileName, enabled, lastFailureReason, lastFailureTime, msgVpnName, restDeliveryPointName, timeConnectionsBlocked, up"
       - id: queueBindings
         operation: monitor/getMsgVpnRestDeliveryPointQueueBindings
         parallel: true
