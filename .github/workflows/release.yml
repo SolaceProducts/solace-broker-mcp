@@ -123,7 +123,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   release:
-    needs: [build-binaries, build-docker]
+    needs: [build-binaries, build-docker, fossa_scan]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
