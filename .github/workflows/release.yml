@@ -8,10 +8,24 @@ on:
 permissions:
   contents: write
   packages: write
+  id-token: write
+  pull-requests: write
+  actions: read
+  issues: write
+  checks: write
+  statuses: write
 
 jobs:
   test:
     uses: ./.github/workflows/build-and-test.yml
+
+  fossa_scan:
+    name: FOSSA Scan
+    uses: SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml@main
+    with:
+      git_ref: ${{ github.ref_name }}
+      use_vault: true
+      config_file: '.github/workflow-config.json'
 
   build-binaries:
     needs: test
@@ -109,7 +123,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   release:
-    needs: [build-binaries, build-docker]
+    needs: [build-binaries, build-docker, fossa_scan]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
