@@ -181,6 +181,7 @@ func (c *HTTPClient) buildURL(op *Operation, args map[string]any) string {
 // based on the operation's parameter definitions.
 func (c *HTTPClient) buildRequest(ctx context.Context, op *Operation, reqURL string, args map[string]any) (*http.Request, error) {
 	queryParams := url.Values{}
+	var arrayQueryParts []string // pre-encoded "name=v1,v2,v3" segments for array-typed params
 	var bodyData []byte
 
 	for _, param := range op.Parameters {
@@ -188,9 +189,19 @@ func (c *HTTPClient) buildRequest(ctx context.Context, op *Operation, reqURL str
 		case "path":
 			continue
 		case "query":
-			if val, ok := args[param.Name]; ok {
-				queryParams.Set(param.Name, fmt.Sprintf("%v", val))
+			val, ok := args[param.Name]
+			if !ok {
+				continue
 			}
+			if param.Type == "array" {
+				// SEMP v2 declares select/where as type=array, collectionFormat=csv: a single
+				// query param whose value is a comma-joined list. url.Values.Encode percent-
+				// encodes the commas to %2C, which the broker rejects ("'a,b,c' not a valid
+				// attribute"). Encode each element individually and join with raw commas.
+				arrayQueryParts = append(arrayQueryParts, encodeCSVQueryParam(param.Name, val))
+				continue
+			}
+			queryParams.Set(param.Name, fmt.Sprintf("%v", val))
 		case "body":
 			if body, ok := args["body"]; ok {
 				var err error
@@ -207,8 +218,17 @@ func (c *HTTPClient) buildRequest(ctx context.Context, op *Operation, reqURL str
 		}
 	}
 
-	if len(queryParams) > 0 {
-		reqURL = reqURL + "?" + queryParams.Encode()
+	queryString := queryParams.Encode()
+	if len(arrayQueryParts) > 0 {
+		joined := strings.Join(arrayQueryParts, "&")
+		if queryString != "" {
+			queryString += "&" + joined
+		} else {
+			queryString = joined
+		}
+	}
+	if queryString != "" {
+		reqURL = reqURL + "?" + queryString
 	}
 
 	var bodyReader io.Reader
@@ -225,6 +245,36 @@ func (c *HTTPClient) buildRequest(ctx context.Context, op *Operation, reqURL str
 	req.Header.Set("User-Agent", "solace/broker-mcp-server/"+version.Version())
 
 	return req, nil
+}
+
+// encodeCSVQueryParam serializes an array-typed query parameter in SEMP v2's
+// collectionFormat=csv shape: each element is percent-encoded individually,
+// then joined with literal commas (e.g. "select=a,b,c"). The input value is
+// either a comma-joined string (the typical YAML path) or a slice; both are
+// flattened to a single comma-separated query param value.
+func encodeCSVQueryParam(name string, val any) string {
+	var parts []string
+	switch v := val.(type) {
+	case []string:
+		parts = v
+	case []any:
+		parts = make([]string, len(v))
+		for i, e := range v {
+			parts[i] = fmt.Sprintf("%v", e)
+		}
+	default:
+		parts = strings.Split(fmt.Sprintf("%v", v), ",")
+	}
+
+	encoded := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		encoded = append(encoded, url.QueryEscape(p))
+	}
+	return url.QueryEscape(name) + "=" + strings.Join(encoded, ",")
 }
 
 // parseSEMPError creates a SEMPError with best-effort extraction of the

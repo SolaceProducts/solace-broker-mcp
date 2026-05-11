@@ -134,6 +134,41 @@ func TestClient_Execute_QueryParams(t *testing.T) {
 	}
 }
 
+// TestClient_Execute_QueryParams_ArrayCSVRawCommas pins the wire format for
+// SEMP v2 array query params (select, where): a single param whose value uses
+// raw commas, not %2C. The broker treats %2C-encoded commas as part of the
+// attribute name and rejects the request with "not a valid attribute".
+func TestClient_Execute_QueryParams_ArrayCSVRawCommas(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		raw := r.URL.RawQuery
+		if !strings.Contains(raw, "select=clientName,msgVpnName,uptime") {
+			t.Errorf("RawQuery = %q, expected raw-comma-joined select=clientName,msgVpnName,uptime", raw)
+		}
+		if strings.Contains(raw, "%2C") || strings.Contains(raw, "%2c") {
+			t.Errorf("RawQuery = %q, expected raw commas in array params, not %%2C", raw)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{})
+	})
+	defer server.Close()
+
+	op := &sempv2.Operation{
+		ID:     "testOp",
+		Method: "GET",
+		Path:   "/SEMP/v2/monitor/test",
+		Parameters: []sempv2.Parameter{
+			{Name: "select", In: "query", Type: "array"},
+		},
+	}
+
+	_, err := client.Execute(context.Background(), op, map[string]any{
+		"select": "clientName,msgVpnName,uptime",
+	})
+	if err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+}
+
 func TestClient_Execute_RequestBody(t *testing.T) {
 	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "PUT" {
