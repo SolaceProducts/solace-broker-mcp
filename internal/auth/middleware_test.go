@@ -484,83 +484,6 @@ func Test_InvalidJWTSignature(t *testing.T) {
 	}
 }
 
-// Test_MissingRequiredScope tests that tokens missing required scopes get 403
-func Test_MissingRequiredScope(t *testing.T) {
-	mock := newMockOIDCServer(t)
-	defer mock.close()
-
-	cfg := &config.ServerConfig{
-		Port:            9090,
-		DevelopmentMode: false,
-		ClientAuth: config.ClientAuthConfig{
-			Issuer:         mock.issuer,
-			Audience:       mock.audience,
-			RequiredScopes: []string{"read", "write", "admin"},
-		},
-	}
-
-	middleware, err := NewAuthMiddleware(cfg, dummyHandler)
-	if err != nil {
-		t.Fatalf("failed to create middleware: %v", err)
-	}
-
-	tests := []struct {
-		name         string
-		scopes       string
-		expectedCode int
-	}{
-		{
-			name:         "all required scopes present",
-			scopes:       "read write admin",
-			expectedCode: http.StatusOK,
-		},
-		{
-			name:         "missing one scope",
-			scopes:       "read write",
-			expectedCode: http.StatusForbidden,
-		},
-		{
-			name:         "no scopes",
-			scopes:       "",
-			expectedCode: http.StatusForbidden,
-		},
-		{
-			name:         "extra scopes but all required present",
-			scopes:       "read write admin delete",
-			expectedCode: http.StatusOK,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			token, err := mock.createToken(map[string]interface{}{
-				"scope": tt.scopes,
-			})
-			if err != nil {
-				t.Fatalf("failed to create token: %v", err)
-			}
-
-			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
-			req.Header.Set("Authorization", "Bearer "+token)
-
-			rec := httptest.NewRecorder()
-			middleware.ServeHTTP(rec, req)
-
-			if rec.Code != tt.expectedCode {
-				t.Errorf("expected status %d, got %d: %s", tt.expectedCode, rec.Code, rec.Body.String())
-			}
-
-			// Verify WWW-Authenticate header for 403
-			if rec.Code == http.StatusForbidden {
-				wwwAuth := rec.Header().Get("WWW-Authenticate")
-				if wwwAuth == "" {
-					t.Error("expected WWW-Authenticate header on 403 response")
-				}
-			}
-		})
-	}
-}
-
 // Test_NoJWTToken tests that requests without JWT tokens are rejected
 func Test_NoJWTToken(t *testing.T) {
 	mock := newMockOIDCServer(t)
@@ -723,14 +646,12 @@ func Test_ProtectedResourceMetadata(t *testing.T) {
 		devToken      string
 		tlsEnabled    bool
 		issuer        string
-		scopes        []string
 		expectHandler bool
 	}{
-		{"production with issuer", 9090, false, "", false, "https://auth.example.com", []string{"read", "write"}, true},
-		{"production with TLS", 9443, false, "", true, "https://auth.example.com", []string{"admin"}, true},
-		{"dev mode with token", 9090, true, "dev-token", false, "https://auth.example.com", []string{"read"}, true},
-		{"dev mode without token", 9090, true, "", false, "", nil, false},
-		{"production empty scopes", 9090, false, "", false, "https://auth.example.com", []string{}, true},
+		{"production with issuer", 9090, false, "", false, "https://auth.example.com", true},
+		{"production with TLS", 9443, false, "", true, "https://auth.example.com", true},
+		{"dev mode with token", 9090, true, "dev-token", false, "https://auth.example.com", true},
+		{"dev mode without token", 9090, true, "", false, "", false},
 	}
 
 	for _, tt := range tests {
@@ -743,11 +664,10 @@ func Test_ProtectedResourceMetadata(t *testing.T) {
 				Port:            tt.port,
 				DevelopmentMode: tt.devMode,
 				ClientAuth: config.ClientAuthConfig{
-					DevToken:       tt.devToken,
-					Issuer:         tt.issuer,
-					Audience:       "solace-mcp-server",
-					RequiredScopes: tt.scopes,
-					ResourceURL:    fmt.Sprintf("%s://localhost:%d/mcp", scheme, tt.port),
+					DevToken:    tt.devToken,
+					Issuer:      tt.issuer,
+					Audience:    "solace-mcp-server",
+					ResourceURL: fmt.Sprintf("%s://localhost:%d/mcp", scheme, tt.port),
 				},
 			}
 			if tt.tlsEnabled {
@@ -794,11 +714,6 @@ func Test_ProtectedResourceMetadata(t *testing.T) {
 			checkStringField(t, metadata, "resource", expectedResource)
 			checkStringArray(t, metadata, "authorization_servers", []string{tt.issuer})
 			checkStringArray(t, metadata, "bearer_methods_supported", []string{"header"})
-
-			// scopes_supported is optional per RFC 9728, may be omitted when empty
-			if len(tt.scopes) > 0 {
-				checkStringArray(t, metadata, "scopes_supported", tt.scopes)
-			}
 		})
 	}
 }

@@ -50,16 +50,8 @@ func NewAuthMiddleware(cfg *config.ServerConfig, next http.Handler) (http.Handle
 		metadataURL = fmt.Sprintf("%s://%s/.well-known/oauth-protected-resource", parsedURL.Scheme, parsedURL.Host)
 	}
 
-	// Skip scope enforcement in development mode — static dev tokens carry no
-	// scopes, so requiring them would always reject the token with 403.
-	var scopes []string
-	if !cfg.DevelopmentMode {
-		scopes = cfg.ClientAuth.RequiredScopes
-	}
-
 	middleware := sdkauth.RequireBearerToken(verifier, &sdkauth.RequireBearerTokenOptions{
 		ResourceMetadataURL: metadataURL,
-		Scopes:              scopes,
 	})
 
 	return middleware(next), nil
@@ -167,16 +159,10 @@ func NewProtectedResourceMetadataHandler(cfg *config.ServerConfig) http.Handler 
 	// Use configured resource URL (required in production mode via config validation)
 	resourceURL := cfg.ClientAuth.ResourceURL
 
-	// Ensure scopes is always at least an empty slice (not nil) for proper JSON serialization
-	scopes := cfg.ClientAuth.RequiredScopes
-	if scopes == nil {
-		scopes = []string{}
-	}
-
 	metadata := &oauthex.ProtectedResourceMetadata{
 		Resource:               resourceURL,
 		AuthorizationServers:   []string{cfg.ClientAuth.Issuer},
-		ScopesSupported:        scopes,
+		ScopesSupported:        []string{},
 		BearerMethodsSupported: []string{"header"},
 	}
 

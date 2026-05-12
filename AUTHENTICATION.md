@@ -113,7 +113,7 @@ Authorization: Bearer my-secret-dev-token-123
 
 **Reconnect, don't re-authenticate.** If your MCP client disconnects, use the "reconnect" action — not "re-authenticate." Re-authentication triggers an OAuth browser login flow, which will fail because there is no authorization server in dev mode. Simply reconnecting will re-use the configured static token.
 
-**Do not mix Mode 3 fields with dev mode.** If you include OAuth/JWT fields (`issuer`, `audience`, `resource_url`, `required_scopes`) in your config alongside `development_mode: true`, the server will advertise the configured authorization server in its metadata endpoint. This causes MCP clients to attempt OAuth flows that will fail, producing confusing errors like "Trusted Hosts rejected request" or "the requested endpoint does not exist." Keep your dev mode config clean — only set `dev_token` under `client_auth`.
+**Do not mix Mode 3 fields with dev mode.** If you include OAuth/JWT fields (`issuer`, `audience`, `resource_url`) in your config alongside `development_mode: true`, the server will advertise the configured authorization server in its metadata endpoint. This causes MCP clients to attempt OAuth flows that will fail, producing confusing errors like "Trusted Hosts rejected request" or "the requested endpoint does not exist." Keep your dev mode config clean — only set `dev_token` under `client_auth`.
 
 ---
 
@@ -145,22 +145,6 @@ client_auth:
 
 3. Start the MCP server
 
-#### Optional: Enforce scopes
-
-If you want to require specific scopes in access tokens, add `required_scopes`:
-
-```yaml
-client_auth:
-  issuer: "https://your-idp.example.com/realms/your-realm"
-  audience: "solace-mcp-server"
-  resource_url: "https://your-mcp-server.example.com/mcp"
-  required_scopes:
-    - solace:read
-    - solace:write
-```
-
-When `required_scopes` is set, tokens missing any listed scope are rejected with `403 Forbidden`. When omitted, any valid token with the correct issuer and audience is accepted — no scope enforcement is performed.
-
 ### Configuration fields
 
 | Field | Required | Description |
@@ -168,7 +152,6 @@ When `required_scopes` is set, tokens missing any listed scope are rejected with
 | `issuer` | Yes | The OIDC issuer URL of your identity provider. The server uses this to fetch the `.well-known/openid-configuration` and JWKS keys for token validation. |
 | `audience` | Yes | The expected `aud` claim in access tokens. Tokens without this audience are rejected. Must match what your IdP includes in issued tokens. |
 | `resource_url` | Yes | The public URL of your MCP server endpoint. Used in the OAuth Protected Resource Metadata response to tell clients where the protected resource lives. |
-| `required_scopes` | No | List of scopes that must be present in the access token. If omitted, no scope enforcement is performed. |
 
 ### Configuring your MCP client
 
@@ -240,11 +223,7 @@ For example, if your MCP server config has `audience: "solace-mcp-server"`, the 
 
 > **Why not use a pre-registered client?** The MCP specification uses Dynamic Client Registration to avoid requiring users to manually configure client IDs and secrets in their MCP client. This makes setup zero-configuration for end users — they just point the MCP client at the server URL and authenticate via browser.
 
-#### 3. Create custom scopes (optional)
-
-If you want to enforce fine-grained access control via `required_scopes`, create the corresponding scopes in your IdP and assign them as default scopes so they are included in tokens without the user needing to explicitly request them. Ensure these custom scopes are also permitted in your IdP's client registration policy so dynamically registered clients can use them.
-
-#### 4. Create users
+#### 3. Create users
 
 Create user accounts in your IdP that will authenticate via the browser login flow. These users will log in with their individual credentials when the MCP client (e.g., Claude) opens a browser window during the OAuth flow.
 
@@ -280,9 +259,8 @@ Create user accounts in your IdP that will authenticate via the browser login fl
 
 ### "403 Forbidden" with a valid token
 
-- If `required_scopes` is set, check that the token contains all listed scopes — missing any one will cause rejection
 - Verify the audience mapper is configured in your IdP so the `aud` claim matches your `audience` config value
-- Decode your JWT (e.g., at jwt.io) to inspect the actual `scope` and `aud` claims
+- Decode your JWT (e.g., at jwt.io) to inspect the actual `aud` claim
 
 ### Browser login window doesn't appear
 
@@ -299,7 +277,7 @@ This error occurs during Dynamic Client Registration when the IdP's client regis
 
 - The `openid` scope is not recognized as a client scope in your IdP (some IdPs handle it at the protocol level). Create a placeholder `openid` client scope and add it to the allowed list.
 - Internal IdP scopes (e.g., `service_account`) are automatically assigned during registration but not in the allowed list. Add them to the registration policy.
-- Custom scopes are not in the allowed list. If using `required_scopes`, ensure those scopes are also permitted in the registration policy.
+- Custom scopes are not in the allowed list. If using custom scopes, ensure they are permitted in the registration policy.
 
 Check your IdP's logs for the specific scope being rejected.
 

@@ -49,11 +49,10 @@ type ServerConfig struct {
 }
 
 type ClientAuthConfig struct {
-	Issuer         string   `yaml:"issuer"`          // IdP issuer URL - required when development_mode: false
-	Audience       string   `yaml:"audience"`        // Expected 'aud' claim value — required when development_mode: false
-	RequiredScopes []string `yaml:"required_scopes"` // Optional — if set, token must contain all listed scopes
-	DevToken       string   `yaml:"dev_token"`       // Static token for dev — only used when development_mode: true
-	ResourceURL    string   `yaml:"resource_url"`    // OAuth resource URL (e.g., "https://mcp.example.com/mcp") - defaults to localhost if not set
+	Issuer      string `yaml:"issuer"`       // IdP issuer URL - required when development_mode: false
+	Audience    string `yaml:"audience"`     // Expected 'aud' claim value — required when development_mode: false
+	DevToken    string `yaml:"dev_token"`    // Static token for dev — only used when development_mode: true
+	ResourceURL string `yaml:"resource_url"` // OAuth resource URL (e.g., "https://mcp.example.com/mcp") - defaults to localhost if not set
 }
 
 // validLogLevels is the allowlist of slog levels operators may configure.
@@ -108,14 +107,13 @@ func (b BrokerConfig) LogValue() slog.Value {
 }
 
 // LogValue implements slog.LogValuer for ClientAuthConfig. It exposes OAuth
-// configuration (issuer, audience, resource URL, scopes) but excludes DevToken
+// configuration (issuer, audience, resource URL) but excludes DevToken
 // to prevent credential leaks in log output. See docs/secure-logging-rules.md Rule 2.
 func (c ClientAuthConfig) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("issuer", c.Issuer),
 		slog.String("audience", c.Audience),
 		slog.String("resource_url", c.ResourceURL),
-		slog.Any("required_scopes", c.RequiredScopes),
 	)
 }
 
