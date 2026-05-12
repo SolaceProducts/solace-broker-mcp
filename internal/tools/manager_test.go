@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -749,4 +750,47 @@ func TestHandlers_ReturnsAll(t *testing.T) {
 	if !names["tool-a"] || !names["tool-b"] {
 		t.Errorf("expected tool-a and tool-b, got %v", names)
 	}
+}
+
+func TestToolManager_ConcurrentRegisterAndRoute(t *testing.T) {
+	const workers = 20
+	mgr := NewToolManager(newTestPool())
+
+	// Pre-register tools that readers will look up.
+	for i := range workers {
+		mgr.Register(newStubHandler(fmt.Sprintf("pre-tool-%d", i)))
+	}
+
+	var wg sync.WaitGroup
+
+	// Writers: register new tools concurrently.
+	for i := range workers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			mgr.Register(newStubHandler(fmt.Sprintf("new-tool-%d", i)))
+		}(i)
+	}
+
+	// Readers: call Route, Handlers, and CallTool concurrently with writers.
+	for i := range workers {
+		wg.Add(3)
+		go func(i int) {
+			defer wg.Done()
+			_, _ = mgr.Route(fmt.Sprintf("pre-tool-%d", i))
+		}(i)
+		go func() {
+			defer wg.Done()
+			_ = mgr.Handlers()
+		}()
+		go func(i int) {
+			defer wg.Done()
+			// CallTool exercises Route internally; broker resolution will fail
+			// (no real broker) but the important thing is no data race.
+			_, _ = mgr.CallTool(context.Background(), fmt.Sprintf("pre-tool-%d", i),
+				map[string]any{"broker": "no-such-broker"})
+		}(i)
+	}
+
+	wg.Wait()
 }

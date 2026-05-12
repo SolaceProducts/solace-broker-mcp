@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite"
@@ -33,8 +34,11 @@ import (
 
 // ToolManager validates parameters, resolves broker connections, routes tool
 // calls to handlers, and produces structured MCP responses.
+//
+// All public methods are safe for concurrent use.
 type ToolManager struct {
 	pool     *semp.BrokerPool
+	mu       sync.RWMutex
 	handlers map[string]ToolHandler
 }
 
@@ -63,6 +67,8 @@ func NewToolManagerFromComposite(pool *semp.BrokerPool, tools []composite.Compos
 // configuration error that should be caught at startup.
 func (m *ToolManager) Register(handler ToolHandler) {
 	name := handler.Metadata().Name
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if _, exists := m.handlers[name]; exists {
 		panic(fmt.Sprintf("duplicate tool registration: %q", name))
 	}
@@ -72,7 +78,9 @@ func (m *ToolManager) Register(handler ToolHandler) {
 // Route looks up a handler by tool name. Returns an error if the tool is not
 // registered.
 func (m *ToolManager) Route(name string) (ToolHandler, error) {
+	m.mu.RLock()
 	handler, ok := m.handlers[name]
+	m.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("unknown tool %q", name)
 	}
@@ -82,10 +90,12 @@ func (m *ToolManager) Route(name string) (ToolHandler, error) {
 // Handlers returns all registered tool handlers. The returned slice is
 // unordered — callers should sort if deterministic ordering is needed.
 func (m *ToolManager) Handlers() []ToolHandler {
+	m.mu.RLock()
 	handlers := make([]ToolHandler, 0, len(m.handlers))
 	for _, h := range m.handlers {
 		handlers = append(handlers, h)
 	}
+	m.mu.RUnlock()
 	return handlers
 }
 
