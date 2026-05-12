@@ -844,6 +844,54 @@ tools:
 	}
 }
 
+func TestLoadTools_UnknownFieldRejected(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{
+			name: "unknown top-level tool field",
+			yaml: `
+tools:
+  - name: test-tool
+    description: A test tool
+    bogusField: oops
+    steps:
+      - id: s1
+        operation: monitor/getVpn
+    result:
+      strategy: collect
+`,
+		},
+		{
+			name: "unknown step field",
+			yaml: `
+tools:
+  - name: test-tool
+    description: A test tool
+    steps:
+      - id: s1
+        operation: monitor/getVpn
+        paralel: true
+    result:
+      strategy: collect
+`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fsys := fstest.MapFS{
+				"tools.yaml": &fstest.MapFile{Data: []byte(tc.yaml)},
+			}
+			_, err := LoadTools(fsys, "tools.yaml")
+			if err == nil {
+				t.Fatal("expected error for unknown field, got nil")
+			}
+		})
+	}
+}
+
 func TestLoadTools_ListRDPs(t *testing.T) {
 	yaml := `
 tools:
