@@ -28,15 +28,21 @@ solace-broker-mcp/
 │   │           ├── embed.go       # //go:embed for spec files
 │   │           └── *.json         # Swagger 2.0 specs (monitor, config, action)
 │   │
-│   ├── composite/                 # (Task 4 — not yet implemented)
+│   ├── composite/                 # YAML-driven composite tool engine
 │   │   ├── definition.go          # Tool/step/parameter structs
 │   │   ├── loader.go              # YAML loading + validation
 │   │   ├── executor.go            # Step orchestration, templates, result strategies
 │   │   └── definitions/
-│   │       └── tools.yaml         # Tool definitions (queue-replay-recovery)
+│   │       └── tools.yaml         # Tool definitions (11 composite tools)
 │   │
-│   └── registry/                  # (Task 5 — not yet implemented)
-│       └── registry.go            # MCP tool registration, broker resolution
+│   └── tools/                     # MCP tool registration, routing, native handlers
+│       ├── manager.go             # ToolManager — registers and routes tool calls
+│       ├── register.go            # Wires composite + native tools into MCP server
+│       ├── composite_handler.go   # Bridges composite executor to MCP SDK
+│       ├── validation.go          # Parameter validation helpers
+│       └── sempv1/                # Native SEMPv1 tool handlers
+│           ├── brokerhealth/      # get-broker-health
+│           └── redundancy/        # get-redundancy-status
 │
 ├── docs/                          # This directory
 └── specs/                         # Design specs, task breakdowns, test plans
@@ -71,13 +77,13 @@ graph TB
         end
     end
 
-    subgraph "internal/composite (Task 4)"
+    subgraph "internal/composite"
         EXECUTOR["executor.go<br/>Step orchestration<br/>Template resolution"]
         LOADER["loader.go<br/>YAML tool definitions"]
     end
 
-    subgraph "internal/registry (Task 5)"
-        REGISTRY["registry.go<br/>MCP tool registration<br/>Broker resolution per call"]
+    subgraph "internal/tools"
+        REGISTRY["tools/<br/>ToolManager, register.go<br/>MCP tool registration<br/>Broker resolution per call"]
     end
 
     subgraph "External"
@@ -103,12 +109,8 @@ graph TB
     CLIENT --> BROKER_X
     CLIENT --> BROKER_Y
 
-    style EXECUTOR stroke-dasharray: 5 5
-    style LOADER stroke-dasharray: 5 5
-    style REGISTRY stroke-dasharray: 5 5
 ```
 
-*Dashed borders = not yet implemented.*
 
 ---
 
