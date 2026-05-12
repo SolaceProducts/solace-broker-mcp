@@ -63,6 +63,7 @@ brokers:
 	broker := cfg.Brokers["prod-us"]
 	if broker == nil {
 		t.Fatal("expected broker 'prod-us' to exist")
+		return
 	}
 	if broker.URL != "https://broker-us.example.com:1943" {
 		t.Errorf("unexpected URL: %s", broker.URL)
@@ -873,7 +874,7 @@ brokers:
 	if alphaIdx < 0 || monkeyIdx < 0 || zebraIdx < 0 {
 		t.Fatalf("expected all three aliases in error, got: %s", msg)
 	}
-	if !(alphaIdx < monkeyIdx && monkeyIdx < zebraIdx) {
+	if alphaIdx >= monkeyIdx || monkeyIdx >= zebraIdx {
 		t.Errorf("expected errors in alphabetical order (alpha < monkey < zebra), got positions %d %d %d\nfull error:\n%s",
 			alphaIdx, monkeyIdx, zebraIdx, msg)
 	}
