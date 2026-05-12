@@ -16,7 +16,7 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
-        runAsUser: 65534
+        runAsUser: 65532  # distroless nonroot UID (gcr.io/distroless/static-debian12:nonroot)
       containers:
         - name: solace-broker-mcp
           image: ghcr.io/solacedev/solace-broker-mcp:latest
