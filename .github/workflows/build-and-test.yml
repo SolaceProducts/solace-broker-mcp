@@ -8,7 +8,24 @@ on:
       - 'v*'
   workflow_call:
 
+permissions:
+  contents: read
+  packages: read
+  pull-requests: write
+  id-token: write
+  actions: read
+  checks: write
+  statuses: write
+
 jobs:
+  fossa_scan:
+    if: github.event_name == 'push'
+    name: FOSSA Scan
+    uses: SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml@main
+    with:
+      use_vault: true
+      config_file: '.github/workflow-config.json'
+
   lint:
     runs-on: ubuntu-latest
     steps:
