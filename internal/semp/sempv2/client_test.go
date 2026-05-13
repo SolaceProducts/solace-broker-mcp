@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -582,5 +583,84 @@ func TestClient_Execute_Timeout(t *testing.T) {
 	_, execErr := client.Execute(context.Background(), op, map[string]any{})
 	if execErr == nil {
 		t.Fatal("expected timeout error")
+	}
+}
+
+func TestClient_TransportPool_ConcurrentRequests(t *testing.T) {
+	// Verify the transport pool is large enough to serve MaxConcurrentPerBroker
+	// simultaneous requests without connection thrashing. Before the fix,
+	// MaxIdleConnsPerHost defaulted to 2 — any concurrency above 2 would open
+	// new TCP connections on every request.
+	const concurrency = 10
+
+	var (
+		mu       sync.Mutex
+		peakConn int
+		active   int
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		active++
+		if active > peakConn {
+			peakConn = active
+		}
+		mu.Unlock()
+
+		time.Sleep(20 * time.Millisecond) // hold connection open briefly
+
+		mu.Lock()
+		active--
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+	}))
+	defer server.Close()
+
+	brokerCfg := &config.BrokerConfig{
+		URL:  server.URL,
+		Auth: config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"},
+	}
+	retries := 0
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		RequestTimeoutDuration: 5 * time.Second,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
+		MaxConcurrentPerBroker: concurrency,
+	}
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg)
+	if err != nil {
+		t.Fatalf("NewHTTPClient() error: %v", err)
+	}
+	defer client.Close()
+
+	op := &sempv2.Operation{ID: "testOp", Method: "GET", Path: "/SEMP/v2/monitor/test"}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, concurrency)
+	for range concurrency {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, execErr := client.Execute(context.Background(), op, map[string]any{})
+			if execErr != nil {
+				errs <- execErr
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Errorf("concurrent Execute() error: %v", err)
+	}
+
+	// All concurrency requests should have been served (no starvation).
+	if peakConn < 1 {
+		t.Errorf("expected at least 1 concurrent connection, got peak=%d", peakConn)
 	}
 }

@@ -83,8 +83,15 @@ func (c *HTTPClient) Close() {
 // tuning appropriate for concurrent SEMP calls, and delegates retry and rate
 // limiting to a shared resilience.Sender.
 func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (*HTTPClient, error) {
+	// MaxIdleConnsPerHost is set to MaxConcurrentPerBroker so the transport
+	// keeps enough idle connections to satisfy the concurrency cap without
+	// opening a new TCP connection on every request beyond Go's default of 2.
+	// MaxIdleConns (global cap) is set to 2× to avoid it becoming a
+	// bottleneck when multiple brokers share a single process.
 	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: brokerCfg.InsecureSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
+		TLSClientConfig:     &tls.Config{InsecureSkipVerify: brokerCfg.InsecureSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
+		MaxIdleConnsPerHost: sempCfg.MaxConcurrentPerBroker,
+		MaxIdleConns:        sempCfg.MaxConcurrentPerBroker * 2,
 	}
 
 	jar, err := cookiejar.New(nil)
