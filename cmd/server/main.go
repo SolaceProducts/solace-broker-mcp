@@ -191,6 +191,8 @@ func main() {
 	//    level names.
 	slog.SetDefault(slog.New(newSlogHandler(slog.LevelInfo)))
 
+	slog.Info("server starting", slog.String("version", version.Version()))
+
 	// 1. Load config. config.Load handles path resolution internally
 	//    (CONFIG_FILE env var, then /etc/mcp-server/config.yaml, then
 	//    ./broker-config.yaml). See config.Load docs for exact semantics.
@@ -207,7 +209,6 @@ func main() {
 	slog.SetDefault(slog.New(newSlogHandler(level)))
 
 	slog.Info("config loaded",
-		slog.String("version", version.Version()),
 		slog.Int("broker_count", len(cfg.Brokers)),
 		slog.Int("port", cfg.Port),
 		slog.String("log_level", cfg.LogLevel))
@@ -292,17 +293,17 @@ func main() {
 	}
 
 	done := make(chan os.Signal, 1)
-	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
 		var err error
 		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
-			slog.Info("server starting with TLS",
+			slog.Info("server listening with TLS",
 				slog.String("addr", addr),
 				slog.String("cert", cfg.TLSCertFile))
 			err = httpServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
 		} else {
-			slog.Info("server starting",
+			slog.Info("server listening",
 				slog.String("addr", addr))
 			err = httpServer.ListenAndServe()
 		}
