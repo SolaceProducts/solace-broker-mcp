@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -586,36 +588,44 @@ func TestClient_Execute_Timeout(t *testing.T) {
 	}
 }
 
-func TestClient_TransportPool_ConcurrentRequests(t *testing.T) {
-	// Verify the transport pool is large enough to serve MaxConcurrentPerBroker
-	// simultaneous requests without connection thrashing. Before the fix,
-	// MaxIdleConnsPerHost defaulted to 2 — any concurrency above 2 would open
-	// new TCP connections on every request.
+// TestClient_TransportPool_ReusesConnections proves the transport pool is sized
+// to hold every connection opened during a burst of MaxConcurrentPerBroker
+// requests, so a subsequent burst reuses them all without re-handshaking.
+//
+// Without the fix, http.Transport's default MaxIdleConnsPerHost=2 would close
+// 8 of the 10 connections after batch 1, forcing batch 2 to open 8 fresh
+// TCP+TLS connections. The test counts distinct connections via the server's
+// ConnState callback (StateNew) and asserts batch 2 opens zero new ones.
+func TestClient_TransportPool_ReusesConnections(t *testing.T) {
 	const concurrency = 10
 
-	var (
-		mu       sync.Mutex
-		peakConn int
-		active   int
-	)
+	var newConns atomic.Int32
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		active++
-		if active > peakConn {
-			peakConn = active
-		}
-		mu.Unlock()
+	// batch coordinates the in-flight requests of a single round: each request
+	// signals arrival and then blocks on release, so all `concurrency` requests
+	// are forced to occupy distinct TCP connections simultaneously rather than
+	// pipelining over one keep-alive socket.
+	type batch struct {
+		arrived chan struct{}
+		release chan struct{}
+	}
+	var current atomic.Pointer[batch]
 
-		time.Sleep(20 * time.Millisecond) // hold connection open briefly
-
-		mu.Lock()
-		active--
-		mu.Unlock()
-
+	handler := func(w http.ResponseWriter, _ *http.Request) {
+		bs := current.Load()
+		bs.arrived <- struct{}{}
+		<-bs.release
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
-	}))
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+	}
+
+	server := httptest.NewUnstartedServer(http.HandlerFunc(handler))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			newConns.Add(1)
+		}
+	}
+	server.Start()
 	defer server.Close()
 
 	brokerCfg := &config.BrokerConfig{
@@ -634,33 +644,50 @@ func TestClient_TransportPool_ConcurrentRequests(t *testing.T) {
 	}
 	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg)
 	if err != nil {
-		t.Fatalf("NewHTTPClient() error: %v", err)
+		t.Fatalf("NewHTTPClient: %v", err)
 	}
 	defer client.Close()
 
 	op := &sempv2.Operation{ID: "testOp", Method: "GET", Path: "/SEMP/v2/monitor/test"}
 
-	var wg sync.WaitGroup
-	errs := make(chan error, concurrency)
-	for range concurrency {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, execErr := client.Execute(context.Background(), op, map[string]any{})
-			if execErr != nil {
-				errs <- execErr
-			}
-		}()
+	runBatch := func() {
+		bs := &batch{
+			arrived: make(chan struct{}, concurrency),
+			release: make(chan struct{}),
+		}
+		current.Store(bs)
+		var wg sync.WaitGroup
+		for range concurrency {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if _, execErr := client.Execute(context.Background(), op, map[string]any{}); execErr != nil {
+					t.Errorf("Execute: %v", execErr)
+				}
+			}()
+		}
+		for range concurrency {
+			<-bs.arrived
+		}
+		close(bs.release)
+		wg.Wait()
 	}
-	wg.Wait()
-	close(errs)
 
-	for err := range errs {
-		t.Errorf("concurrent Execute() error: %v", err)
+	runBatch()
+	afterBatch1 := newConns.Load()
+
+	// Give clients time to return connections to the idle pool before batch 2.
+	time.Sleep(50 * time.Millisecond)
+
+	runBatch()
+	afterBatch2 := newConns.Load()
+
+	if afterBatch1 != concurrency {
+		t.Errorf("batch 1: expected exactly %d new connections, got %d", concurrency, afterBatch1)
 	}
-
-	// All concurrency requests should have been served (no starvation).
-	if peakConn < 1 {
-		t.Errorf("expected at least 1 concurrent connection, got peak=%d", peakConn)
+	if afterBatch2 != afterBatch1 {
+		t.Errorf("batch 2: expected zero new connections (full pool reuse), but %d new connections opened (total: %d → %d). "+
+			"This usually means MaxIdleConnsPerHost is smaller than the concurrency cap.",
+			afterBatch2-afterBatch1, afterBatch1, afterBatch2)
 	}
 }
