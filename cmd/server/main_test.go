@@ -131,31 +131,28 @@ func TestStartServer_PortConflict_SendsToChannel(t *testing.T) {
 }
 
 func TestStartServer_NormalShutdown_NoErrorSent(t *testing.T) {
-	// A server that is shut down cleanly should not send to the error channel.
-	lc := &net.ListenConfig{}
-	l, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := l.Addr().String()
-	l.Close() // release port so startServer can bind
-
+	// Verify that ErrServerClosed (the result of a clean Shutdown) is filtered
+	// out and not sent to the error channel.
+	//
+	// We call Shutdown before startServer so http.Server.ListenAndServe sees
+	// shuttingDown=true on entry and returns ErrServerClosed without binding
+	// any port. This exercises the same filter path without the port-reuse
+	// race of binding-then-rebinding to the same address.
 	srv := &http.Server{
-		Addr:    addr,
+		Addr:    "127.0.0.1:0",
 		Handler: http.NewServeMux(),
 	}
-
-	errCh := startServer(srv, "", "")
-	// Immediately shut down — this produces ErrServerClosed, not an error.
 	if err := srv.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
 
+	errCh := startServer(srv, "", "")
+
 	select {
 	case startErr := <-errCh:
-		t.Errorf("expected no error on clean shutdown, got: %v", startErr)
+		t.Errorf("expected no error for ErrServerClosed, got: %v", startErr)
 	case <-time.After(200 * time.Millisecond):
-		// expected: no error sent for ErrServerClosed
+		// expected: ListenAndServe returned ErrServerClosed and was filtered out
 	}
 }
 

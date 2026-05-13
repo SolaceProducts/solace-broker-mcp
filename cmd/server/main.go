@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -154,7 +155,7 @@ func startServer(srv *http.Server, tlsCertFile, tlsKeyFile string) <-chan error 
 				slog.String("addr", srv.Addr))
 			listenErr = srv.ListenAndServe()
 		}
-		if listenErr != nil && listenErr != http.ErrServerClosed {
+		if listenErr != nil && !errors.Is(listenErr, http.ErrServerClosed) {
 			slog.Error("server failed", slog.String("error", listenErr.Error()))
 			errCh <- listenErr
 		}
@@ -326,13 +327,14 @@ func main() {
 
 	serverErr := startServer(httpServer, cfg.TLSCertFile, cfg.TLSKeyFile)
 
-	startupFailed := false
+	var startupErr error
 	select {
 	case <-done:
 		slog.Info("server shutting down", slog.String("reason", "signal"))
-	case <-serverErr:
-		// Error already logged in startServer. Run cleanup before exiting.
-		startupFailed = true
+	case startupErr = <-serverErr:
+		// Error already logged in startServer. Capture it so future telemetry
+		// hooks (e.g., metrics flush, error reporting) have access to the value,
+		// then run cleanup before exiting non-zero.
 	}
 
 	shutdownTimeout := time.Duration(defaults.DefaultShutdownTimeoutSeconds) * time.Second
@@ -347,7 +349,7 @@ func main() {
 	}
 
 	slog.Info("server stopped")
-	if startupFailed {
+	if startupErr != nil {
 		os.Exit(1)
 	}
 }
