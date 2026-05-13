@@ -713,6 +713,7 @@ func Test_ProtectedResourceMetadata(t *testing.T) {
 			expectedResource := fmt.Sprintf("%s://localhost:%d/mcp", scheme, tt.port)
 			checkStringField(t, metadata, "resource", expectedResource)
 			checkStringArray(t, metadata, "authorization_servers", []string{tt.issuer})
+			checkStringArray(t, metadata, "scopes_supported", []string{"openid"})
 			checkStringArray(t, metadata, "bearer_methods_supported", []string{"header"})
 		})
 	}

@@ -162,7 +162,7 @@ func NewProtectedResourceMetadataHandler(cfg *config.ServerConfig) http.Handler 
 	metadata := &oauthex.ProtectedResourceMetadata{
 		Resource:               resourceURL,
 		AuthorizationServers:   []string{cfg.ClientAuth.Issuer},
-		ScopesSupported:        []string{},
+		ScopesSupported:        []string{"openid"},
 		BearerMethodsSupported: []string{"header"},
 	}
 
