@@ -51,6 +51,15 @@ func newGetRequest(t *testing.T, url string) *http.Request {
 	return req
 }
 
+func newMethodRequest(t *testing.T, method, url string) *http.Request {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), method, url+"/test", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	return req
+}
+
 func jsonOK(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
@@ -568,6 +577,76 @@ func TestSender_NoRetry_404(t *testing.T) {
 
 	if requestCount.Load() != 1 {
 		t.Errorf("expected 1 request (no retry for 404), got %d", requestCount.Load())
+	}
+}
+
+func TestSender_NoRetry_POST_On503(t *testing.T) {
+	var requestCount atomic.Int32
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte("unavailable"))
+	}, "basic", 10)
+	defer server.Close()
+
+	req := newMethodRequest(t, http.MethodPost, server.URL)
+	resp, err := sender.Do(context.Background(), req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if err != nil {
+		t.Fatalf("expected non-error response, got error: %v", err)
+	}
+
+	// POST must never be retried — exactly 1 request regardless of status.
+	if requestCount.Load() != 1 {
+		t.Errorf("expected 1 request (no retry for POST), got %d", requestCount.Load())
+	}
+}
+
+func TestSender_NoRetry_PATCH_On503(t *testing.T) {
+	var requestCount atomic.Int32
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte("unavailable"))
+	}, "basic", 10)
+	defer server.Close()
+
+	req := newMethodRequest(t, http.MethodPatch, server.URL)
+	resp, err := sender.Do(context.Background(), req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if err != nil {
+		t.Fatalf("expected non-error response, got error: %v", err)
+	}
+
+	// PATCH must never be retried — exactly 1 request regardless of status.
+	if requestCount.Load() != 1 {
+		t.Errorf("expected 1 request (no retry for PATCH), got %d", requestCount.Load())
+	}
+}
+
+func TestSender_NoRetry_POST_On500(t *testing.T) {
+	var requestCount atomic.Int32
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("error"))
+	}, "basic", 10)
+	defer server.Close()
+
+	req := newMethodRequest(t, http.MethodPost, server.URL)
+	resp, err := sender.Do(context.Background(), req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if err != nil {
+		t.Fatalf("expected non-error response, got error: %v", err)
+	}
+	if requestCount.Load() != 1 {
+		t.Errorf("expected 1 request (no retry for POST on 500), got %d", requestCount.Load())
 	}
 }
 
