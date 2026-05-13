@@ -259,7 +259,7 @@ func main() {
 
 	slog.Info("all tools registered")
 
-	// 9. Set up HTTP routes
+	// 8. Set up HTTP routes
 	mux := buildMux()
 
 	// Create MCP handler
@@ -284,7 +284,7 @@ func main() {
 		slog.Info("registered OAuth protected resource metadata endpoint")
 	}
 
-	// 10. Start server with graceful shutdown
+	// 9. Start server with graceful shutdown
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	httpServer := &http.Server{
 		Addr:              addr,
