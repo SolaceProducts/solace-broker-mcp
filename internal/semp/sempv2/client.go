@@ -121,7 +121,10 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (
 // Rate limiting is enforced before the request (new requests only, not retries).
 // Retry logic is handled by the shared resilience.Sender.
 func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string]any) (*Result, error) {
-	reqURL := c.buildURL(op, args)
+	reqURL, err := c.buildURL(op, args)
+	if err != nil {
+		return nil, err
+	}
 
 	req, err := c.buildRequest(ctx, op, reqURL, args)
 	if err != nil {
@@ -164,7 +167,10 @@ func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string
 
 // buildURL substitutes path parameter placeholders in the operation's path
 // template with values from args and prepends the broker's base URL.
-func (c *HTTPClient) buildURL(op *Operation, args map[string]any) string {
+// Returns an error if any {placeholder} tokens remain unfilled after
+// substitution — this catches missing required path parameters before a
+// silently-wrong HTTP call is made.
+func (c *HTTPClient) buildURL(op *Operation, args map[string]any) (string, error) {
 	path := op.Path
 
 	for key, value := range args {
@@ -174,7 +180,25 @@ func (c *HTTPClient) buildURL(op *Operation, args map[string]any) string {
 		}
 	}
 
-	return c.baseURL + "/" + strings.TrimPrefix(path, "/")
+	// Detect any unfilled {placeholder} tokens left in the path.
+	if strings.Contains(path, "{") {
+		var missing []string
+		for rest := path; len(rest) > 0; {
+			start := strings.Index(rest, "{")
+			if start < 0 {
+				break
+			}
+			end := strings.Index(rest[start:], "}")
+			if end < 0 {
+				break
+			}
+			missing = append(missing, rest[start:start+end+1])
+			rest = rest[start+end+1:]
+		}
+		return "", fmt.Errorf("operation %s: unfilled path parameters: %s", op.ID, strings.Join(missing, ", "))
+	}
+
+	return c.baseURL + "/" + strings.TrimPrefix(path, "/"), nil
 }
 
 // buildRequest constructs the HTTP request with query parameters and JSON body

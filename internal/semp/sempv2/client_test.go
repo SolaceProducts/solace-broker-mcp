@@ -83,6 +83,53 @@ func TestClient_Execute_Success(t *testing.T) {
 	}
 }
 
+func TestClient_Execute_MissingPathParam_ReturnsError(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		// Should never be reached — buildURL should return an error before any HTTP call.
+		t.Error("handler called unexpectedly; buildURL should have errored")
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	defer server.Close()
+
+	op := testOp("GET",
+		sempv2.Parameter{Name: "msgVpnName", In: "path"},
+		sempv2.Parameter{Name: "queueName", In: "path"},
+	)
+
+	// Provide msgVpnName but omit queueName — {queueName} stays unfilled.
+	_, err := client.Execute(context.Background(), op, map[string]any{
+		"msgVpnName": "default",
+		// queueName intentionally absent
+	})
+	if err == nil {
+		t.Fatal("expected error for missing path parameter, got nil")
+	}
+	if !strings.Contains(err.Error(), "{queueName}") {
+		t.Errorf("error = %q, expected it to name the missing placeholder {queueName}", err.Error())
+	}
+}
+
+func TestClient_Execute_AllPathParamsProvided_NoError(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{})
+	})
+	defer server.Close()
+
+	op := testOp("GET",
+		sempv2.Parameter{Name: "msgVpnName", In: "path"},
+		sempv2.Parameter{Name: "queueName", In: "path"},
+	)
+
+	_, err := client.Execute(context.Background(), op, map[string]any{
+		"msgVpnName": "default",
+		"queueName":  "q1",
+	})
+	if err != nil {
+		t.Fatalf("Execute() with all path params: unexpected error: %v", err)
+	}
+}
+
 func TestClient_Execute_PathParams(t *testing.T) {
 	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.Path, "/msgVpns/my-vpn/queues/my-queue") {
