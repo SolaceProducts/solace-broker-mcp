@@ -34,7 +34,7 @@ brokers:
       password: "${BROKER_PASSWORD}"
 ```
 
-`development_mode: true` disables OAuth authentication for local use. For production, set `development_mode: false` and configure the `client_auth` section with your OAuth provider (issuer, audience, resource URL).
+`development_mode: true` disables OAuth authentication for local use. For production, set `development_mode: false` and configure the `client_auth` section with your OAuth provider (issuer, audience, resource URL). Refer to the [Client Authentication](client-authentication.md) guide for specific setup instructions.
 
 Each broker needs:
 - `url` — the SEMP management API base URL
