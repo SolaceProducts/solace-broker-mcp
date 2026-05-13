@@ -15,6 +15,8 @@
 package config
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -825,6 +827,87 @@ func TestLoad_ConfigFileEnvCorrupt_ReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "parsing config YAML") {
 		t.Errorf("expected YAML parse error, got: %v", err)
+	}
+}
+
+// captureSlog redirects the default slog logger to a buffer for the duration
+// of the test and returns the buffer. The original logger is restored via
+// t.Cleanup.
+func captureSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	orig := slog.Default()
+	slog.SetDefault(slog.New(h))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+	return &buf
+}
+
+func TestLoadEnvFile_StripsMatchedQuotes(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, ".env")
+	content := `
+DOUBLE_QUOTED="bar"
+SINGLE_QUOTED='qux'
+UNBALANCED="unbalanced'
+UNQUOTED=plain
+`
+	if err := os.WriteFile(envFile, []byte(content), 0o600); err != nil {
+		t.Fatalf("writing .env: %v", err)
+	}
+	t.Setenv("ENV_FILE", envFile)
+	// Unset keys so loadEnvFile sets them.
+	for _, k := range []string{"DOUBLE_QUOTED", "SINGLE_QUOTED", "UNBALANCED", "UNQUOTED"} {
+		t.Setenv(k, "")
+		os.Unsetenv(k)
+	}
+
+	loadEnvFile(filepath.Join(dir, "config.yaml"))
+
+	cases := []struct{ key, want string }{
+		{"DOUBLE_QUOTED", "bar"},
+		{"SINGLE_QUOTED", "qux"},
+		{"UNBALANCED", "\"unbalanced'"},
+		{"UNQUOTED", "plain"},
+	}
+	for _, c := range cases {
+		if got := os.Getenv(c.key); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.key, got, c.want)
+		}
+	}
+}
+
+func TestLoadEnvFile_LogsWarningOnUnreadable(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envFile, []byte("FOO=bar\n"), 0o600); err != nil {
+		t.Fatalf("writing .env: %v", err)
+	}
+	if err := os.Chmod(envFile, 0o000); err != nil {
+		t.Fatalf("chmod .env: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(envFile, 0o600) }) //nolint:errcheck
+
+	t.Setenv("ENV_FILE", envFile)
+	buf := captureSlog(t)
+
+	loadEnvFile(filepath.Join(dir, "config.yaml"))
+
+	logged := buf.String()
+	if !strings.Contains(logged, "WARN") || !strings.Contains(logged, "env file unreadable") {
+		t.Errorf("expected WARN 'env file unreadable' in log output, got: %s", logged)
+	}
+}
+
+func TestLoadEnvFile_MissingFileIsSilent(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ENV_FILE", filepath.Join(dir, "nonexistent.env"))
+	buf := captureSlog(t)
+
+	loadEnvFile(filepath.Join(dir, "config.yaml"))
+
+	if strings.Contains(buf.String(), "WARN") {
+		t.Errorf("expected no WARN for missing .env, got: %s", buf.String())
 	}
 }
 
