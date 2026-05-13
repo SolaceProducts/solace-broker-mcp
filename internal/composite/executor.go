@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"text/template"
 
@@ -170,9 +171,23 @@ func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step
 	maxResults := resolveMaxResults(execCtx.Params)
 	allItems := make([]any, 0)
 	truncated := false
+	pageLimitHit := false
 	args := baseArgs
 
-	for {
+	for pageCount := 0; ; pageCount++ {
+		if pageCount >= maxPages {
+			// Hard safety cap: stop following pages and surface an incomplete result
+			// rather than looping forever against a broker that returns a perpetual
+			// nextPageUri (broker bug or adversarial input).
+			slog.Warn("pagination page cap reached; result may be incomplete",
+				slog.String("step", step.ID),
+				slog.Int("pages", maxPages),
+				slog.Int("items_collected", len(allItems)))
+			truncated = true
+			pageLimitHit = true
+			break
+		}
+
 		result, err := client.Execute(ctx, op, args)
 		if err != nil {
 			return fmt.Errorf("tool step %s: %w", step.ID, err)
@@ -214,11 +229,16 @@ func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step
 		"truncated": truncated,
 	}
 	if truncated {
-		if maxResults >= capMax {
+		switch {
+		case pageLimitHit:
+			result["truncatedMessage"] = fmt.Sprintf(
+				"Pagination stopped after %d pages; result is incomplete. This may indicate a broker issue with persistent nextPageUri.",
+				maxPages)
+		case maxResults >= capMax:
 			result["truncatedMessage"] = fmt.Sprintf(
 				"More results exist but the maximum limit of %d has been reached. Not all results are shown.",
 				capMax)
-		} else {
+		default:
 			result["truncatedMessage"] = fmt.Sprintf(
 				"Results limited to %d. Use maxResults (up to %d) to retrieve more.",
 				maxResults, capMax)
@@ -228,11 +248,22 @@ func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step
 	return nil
 }
 
-// Pagination constants used by resolveMaxResults and truncation messages.
+// Pagination limits used by resolveMaxResults and the pagination loop.
+// defaultMax and capMax are const; maxPages is var so tests can override it.
 const (
 	defaultMax = 100
 	capMax     = 500
 )
+
+// maxPages is the hard ceiling on pagination loop iterations. It prevents
+// an infinite loop when a broker (or adversarial input) returns a perpetual
+// nextPageUri. In practice the item-count cap (capMax) terminates the loop
+// first; maxPages is a safety net for edge cases like very large page sizes
+// or bugs in item extraction.
+//
+// Declared as var (not const) so package-internal tests can temporarily lower
+// it to exercise the page-cap termination path.
+var maxPages = 1000
 
 // resolveMaxResults reads maxResults from the execution params, applying a
 // default of 100 and a cap of 500.

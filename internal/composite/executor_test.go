@@ -1598,6 +1598,49 @@ func TestExecute_ListRDPs_SinglePage(t *testing.T) {
 	}
 }
 
+func TestExecute_ListQueues_PageCapTerminatesLoop(t *testing.T) {
+	// Lower the page cap so the test completes quickly without needing capMax pages.
+	orig := maxPages
+	maxPages = 3
+	t.Cleanup(func() { maxPages = orig })
+
+	// seqMockClient repeats the last response forever — one page with 1 item
+	// and a cursor, so the paginator would loop indefinitely without the cap.
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnQueues", pageResult(makeQueueItems(1), "cursor-perpetual"))
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listQueuesTool(), client, map[string]any{
+		"msgVpnName": "default",
+		"maxResults": float64(capMax + 1), // above capMax so item cap doesn't fire first
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	queues := result["queues"].(map[string]any)
+
+	// Page cap fires after maxPages=3 iterations; 1 item per page → 3 items collected.
+	items := queues["data"].([]any)
+	if len(items) != 3 {
+		t.Errorf("len(items) = %d, want 3 (one per page before cap)", len(items))
+	}
+	if queues["truncated"] != true {
+		t.Errorf("truncated = %v, want true", queues["truncated"])
+	}
+	wantMsg := fmt.Sprintf(
+		"Pagination stopped after %d pages; result is incomplete. This may indicate a broker issue with persistent nextPageUri.",
+		3)
+	if queues["truncatedMessage"] != wantMsg {
+		t.Errorf("truncatedMessage = %v, want %q", queues["truncatedMessage"], wantMsg)
+	}
+	// Exactly maxPages=3 SEMP calls made.
+	if len(client.calls) != 3 {
+		t.Errorf("expected 3 SEMP calls (one per page before cap), got %d", len(client.calls))
+	}
+}
+
 func TestExecute_ListRDPs_TruncatesAtMaxResults(t *testing.T) {
 	// Page has 100 RDPs but maxResults=50, paginator should stop and set truncated.
 	client := newSeqMockClient()
