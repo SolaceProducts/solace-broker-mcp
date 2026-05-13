@@ -133,6 +133,35 @@ func healthConfigFromFile() healthConfig {
 	return healthConfig{Port: cfg.Port, Scheme: scheme}
 }
 
+// startServer starts httpServer in a background goroutine and returns a channel
+// that receives any startup/runtime error (excluding http.ErrServerClosed, which
+// is the normal result of Shutdown). The channel is buffered so the goroutine
+// never blocks if the receiver is gone.
+//
+// This replaces the previous pattern of calling os.Exit(1) inside the goroutine,
+// which bypassed all deferred cleanup and the graceful-shutdown path.
+func startServer(srv *http.Server, tlsCertFile, tlsKeyFile string) <-chan error {
+	errCh := make(chan error, 1)
+	go func() {
+		var listenErr error
+		if tlsCertFile != "" && tlsKeyFile != "" {
+			slog.Info("server listening with TLS",
+				slog.String("addr", srv.Addr),
+				slog.String("cert", tlsCertFile))
+			listenErr = srv.ListenAndServeTLS(tlsCertFile, tlsKeyFile)
+		} else {
+			slog.Info("server listening",
+				slog.String("addr", srv.Addr))
+			listenErr = srv.ListenAndServe()
+		}
+		if listenErr != nil && listenErr != http.ErrServerClosed {
+			slog.Error("server failed", slog.String("error", listenErr.Error()))
+			errCh <- listenErr
+		}
+	}()
+	return errCh
+}
+
 // registerSEMPv1Tools attaches every Go-native SEMPv1 tool handler to mgr.
 // New SEMPv1 tools should be added here as they land — this is the single
 // source of truth for which v1 tools the server exposes. The handlers flow
@@ -295,26 +324,16 @@ func main() {
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
 
-	go func() {
-		var err error
-		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
-			slog.Info("server listening with TLS",
-				slog.String("addr", addr),
-				slog.String("cert", cfg.TLSCertFile))
-			err = httpServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
-		} else {
-			slog.Info("server listening",
-				slog.String("addr", addr))
-			err = httpServer.ListenAndServe()
-		}
-		if err != nil && err != http.ErrServerClosed {
-			slog.Error("server failed", slog.String("error", err.Error()))
-			os.Exit(1)
-		}
-	}()
+	serverErr := startServer(httpServer, cfg.TLSCertFile, cfg.TLSKeyFile)
 
-	<-done
-	slog.Info("server shutting down", slog.String("reason", "signal"))
+	startupFailed := false
+	select {
+	case <-done:
+		slog.Info("server shutting down", slog.String("reason", "signal"))
+	case <-serverErr:
+		// Error already logged in startServer. Run cleanup before exiting.
+		startupFailed = true
+	}
 
 	shutdownTimeout := time.Duration(defaults.DefaultShutdownTimeoutSeconds) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
@@ -328,4 +347,7 @@ func main() {
 	}
 
 	slog.Info("server stopped")
+	if startupFailed {
+		os.Exit(1)
+	}
 }

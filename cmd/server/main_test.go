@@ -16,11 +16,13 @@ package main
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -99,6 +101,61 @@ func TestUnknownRoute_Returns404(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("GET /unknown status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestStartServer_PortConflict_SendsToChannel(t *testing.T) {
+	// Occupy a port to force an "address already in use" startup error.
+	lc := &net.ListenConfig{}
+	l, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	srv := &http.Server{
+		Addr:    l.Addr().String(),
+		Handler: http.NewServeMux(),
+	}
+
+	errCh := startServer(srv, "", "")
+
+	select {
+	case startErr := <-errCh:
+		if startErr == nil {
+			t.Fatal("expected error for port conflict, got nil")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout: expected startup error to be sent to channel, not os.Exit")
+	}
+}
+
+func TestStartServer_NormalShutdown_NoErrorSent(t *testing.T) {
+	// A server that is shut down cleanly should not send to the error channel.
+	lc := &net.ListenConfig{}
+	l, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	l.Close() // release port so startServer can bind
+
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: http.NewServeMux(),
+	}
+
+	errCh := startServer(srv, "", "")
+	// Immediately shut down — this produces ErrServerClosed, not an error.
+	if err := srv.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	select {
+	case startErr := <-errCh:
+		t.Errorf("expected no error on clean shutdown, got: %v", startErr)
+	case <-time.After(200 * time.Millisecond):
+		// expected: no error sent for ErrServerClosed
 	}
 }
 
