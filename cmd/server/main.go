@@ -293,6 +293,7 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprint(w, `{"error":"not_found","error_description":"the requested endpoint does not exist"}`)
+		slog.Debug("catch-all 404: no route matched", slog.String("method", r.Method), slog.String("path", r.URL.Path))
 	}))
 
 	// 10. Start server with graceful shutdown
