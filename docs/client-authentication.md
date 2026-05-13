@@ -16,9 +16,6 @@ The Solace Broker MCP Server supports three authentication modes for MCP client 
 
 ```yaml
 development_mode: true
-
-client_auth:
-  dev_token: ""  # Leave empty or omit this line
 ```
 
 3. Start the MCP server
@@ -73,7 +70,7 @@ client_auth:
   dev_token: "${DEV_TOKEN}"
 ```
 
-Then set the environment variable before starting the server:
+Then set the environment variable before starting the server. This can be done in one of two ways. The token value can be configured in your .env file or exported as shown below:
 ```bash
 export DEV_TOKEN="my-secret-dev-token-123"
 ```
@@ -153,11 +150,87 @@ client_auth:
 | `audience` | Yes | The expected `aud` claim in access tokens. Tokens without this audience are rejected. Must match what your IdP includes in issued tokens. |
 | `resource_url` | Yes | The public URL of your MCP server endpoint. Used in the OAuth Protected Resource Metadata response to tell clients where the protected resource lives. |
 
-### Configuring your MCP client
+### Client registration methods
 
-#### Claude Code
+There are two ways for MCP clients to register with your identity provider. Both use the browser-based OAuth 2.1 Authorization Code flow with PKCE — the user authenticates via browser in both cases. The difference is how the MCP client obtains its OAuth client credentials.
 
-Claude Code supports OAuth natively. Add the MCP server with no special flags — Claude will automatically discover the OAuth configuration and initiate the browser login flow:
+| | Client Pre-Registration | Dynamic Client Registration |
+|---|---|---|
+| User setup | Provide client_id when adding the server | Just add the server URL |
+| IdP requirements | Standard OAuth client setup | Must allow anonymous client registration |
+| Best for | Locked-down IdPs, enterprise environments | Zero-config end-user experience |
+
+#### Option A: Client pre-registration
+
+Pre-register an OAuth client in your IdP and provide the credentials to the MCP client. This avoids the need for your IdP to support Dynamic Client Registration.
+
+##### Claude Code
+
+```bash
+claude mcp add --transport http \
+  --client-id your-client-id \
+  --client-secret \
+  --callback-port 8080 \
+  solace-broker https://your-mcp-server.example.com/mcp
+```
+
+- `--client-id` — the client ID from your IdP
+- `--client-secret` — prompts for masked input; stored securely in the system keychain
+- `--callback-port` — must match a redirect URI registered in your IdP (e.g., `http://localhost:8080/callback`)
+
+Alternatively, configure via `.mcp.json` in your project root:
+
+```json
+{
+  "mcpServers": {
+    "solace-broker": {
+      "type": "http",
+      "url": "https://your-mcp-server.example.com/mcp",
+      "oauth": {
+        "clientId": "your-client-id",
+        "callbackPort": 8080
+      }
+    }
+  }
+}
+```
+
+Then set the client secret via the CLI:
+
+```bash
+claude mcp add-json solace-broker \
+  '{"type":"http","url":"https://your-mcp-server.example.com/mcp","oauth":{"clientId":"your-client-id","callbackPort":8080}}' \
+  --client-secret
+```
+
+The `--client-secret` flag prompts for masked input and stores the secret securely in the system keychain.
+
+##### What happens
+
+1. The MCP client connects to the server and receives a `401 Unauthorized` response
+2. The client fetches the OAuth Protected Resource Metadata to discover the authorization server
+3. The client **skips DCR** — it already has client credentials from your configuration
+4. The client initiates an OAuth 2.1 Authorization Code flow (with PKCE) — a browser window opens for the user to log in
+5. After successful login, the client receives a JWT access token and includes it in subsequent requests
+6. The MCP server validates each token's signature (via the IdP's JWKS endpoint), issuer, audience, and expiry
+- Tokens are automatically refreshed by the client when they expire
+- You'll see a log message: `"using JWT token for authentication — production mode"`
+
+##### IdP requirements
+
+Create an OAuth client in your IdP with the following settings:
+
+- **Client type:** Confidential (with client secret) or Public (PKCE-only, no secret)
+- **Flow:** Authorization Code (also called "Standard flow" in Keycloak)
+- **PKCE:** Required, with `S256` challenge method
+- **Redirect URI:** `http://localhost:<port>/callback` — must match the `--callback-port` used in the CLI command
+- **Scopes:** At minimum, `openid`
+
+#### Option B: Dynamic Client Registration (zero-config)
+
+The MCP client discovers the authorization server automatically and registers itself at runtime. No pre-shared client credentials are needed.
+
+##### Claude Code
 
 ```bash
 claude mcp add solace-broker --transport http https://your-mcp-server.example.com/mcp
@@ -165,7 +238,7 @@ claude mcp add solace-broker --transport http https://your-mcp-server.example.co
 
 When you first use the server, Claude will open a browser window for you to authenticate with your identity provider.
 
-### What happens
+##### What happens
 
 1. The MCP client connects to the server and receives a `401 Unauthorized` response with a `WWW-Authenticate` header containing a `resource_metadata` URL
 2. The client fetches the OAuth Protected Resource Metadata (RFC 9728) from `/.well-known/oauth-protected-resource`
@@ -177,15 +250,9 @@ When you first use the server, Claude will open a browser window for you to auth
 - Tokens are automatically refreshed by the client when they expire
 - You'll see a log message: `"using JWT token for authentication — production mode"`
 
-### Setting up your identity provider
+##### IdP requirements
 
-The MCP server works with any OIDC-compliant identity provider. The MCP OAuth flow uses **Dynamic Client Registration** (RFC 7591) — the MCP client registers itself with the IdP at runtime rather than using a pre-configured client ID. This means your IdP must be configured to allow anonymous client registration.
-
-Below are the key configuration requirements — refer to your IdP's documentation for the specifics.
-
-#### 1. Allow Dynamic Client Registration
-
-The MCP client (e.g., Claude) does not use a pre-registered OAuth client. Instead, it dynamically registers a new client with your IdP during the first authentication attempt. Your IdP must:
+Your IdP must support anonymous Dynamic Client Registration (RFC 7591):
 
 - **Expose a registration endpoint** — typically at `<issuer>/clients-registrations/openid-connect` or similar (advertised in the authorization server metadata as `registration_endpoint`)
 - **Allow anonymous registration** — the MCP client has no pre-existing credentials with the IdP
@@ -202,13 +269,17 @@ Most IdPs enforce policies on what dynamically registered clients can do. The fo
 | **Trusted hosts** | If your IdP runs in a container or on a different network, ensure the host trust policy does not reject registration requests based on source IP. The request may arrive from a container bridge IP rather than localhost. |
 | **Redirect URI validation** | Dynamically registered clients specify `http://localhost:*` redirect URIs. The IdP must allow these. |
 
-#### 2. Configure an audience mapper for all clients
+### Setting up your identity provider
 
-The MCP server validates the `aud` (audience) claim in every access token. Your IdP must include your configured `audience` value in tokens issued to **any** client — including dynamically registered ones.
+The steps below apply to both registration methods. Refer to your IdP's documentation for specifics.
 
-This is the most common pitfall: audience mappers configured only on a specific pre-registered client will not apply to tokens issued to dynamically registered clients.
+#### 1. Configure an audience mapper
 
-**The audience mapper must be attached to a scope or mechanism that applies to all clients in the realm**, not just specific pre-registered ones. How to achieve this depends on your IdP:
+The MCP server validates the `aud` (audience) claim in every access token. Your IdP must include your configured `audience` value in issued tokens.
+
+If you use DCR, the audience mapper must be attached to a scope or mechanism that applies to **all clients in the realm** — not just specific pre-registered ones. This is the most common pitfall: audience mappers configured only on one client will not apply to tokens issued to dynamically registered clients.
+
+How to achieve this depends on your IdP:
 
 - **Keycloak:** Add an audience protocol mapper to a built-in client scope (e.g., `basic`) that Keycloak assigns to all clients regardless of registration method.
 - **Auth0:** Configure the audience as an API resource. Tokens issued for that API will include the audience automatically.
@@ -221,11 +292,9 @@ For example, if your MCP server config has `audience: "solace-mcp-server"`, the 
 }
 ```
 
-> **Why not use a pre-registered client?** The MCP specification uses Dynamic Client Registration to avoid requiring users to manually configure client IDs and secrets in their MCP client. This makes setup zero-configuration for end users — they just point the MCP client at the server URL and authenticate via browser.
+#### 2. Create users
 
-#### 3. Create users
-
-Create user accounts in your IdP that will authenticate via the browser login flow. These users will log in with their individual credentials when the MCP client (e.g., Claude) opens a browser window during the OAuth flow.
+Create user accounts in your IdP that will authenticate via the browser login flow. These users will log in with their individual credentials when the MCP client opens a browser window during the OAuth flow.
 
 ---
 
@@ -287,3 +356,15 @@ This error occurs during Dynamic Client Registration when the IdP rejects the re
 
 - The IdP is running in a container (e.g., Docker/Podman), so requests arrive from the container bridge gateway IP, not localhost. Disable source-host matching in the registration policy or add the gateway IP to the trusted hosts list.
 - The redirect URIs in the registration request don't match the trusted hosts. Ensure `localhost` and `127.0.0.1` are permitted.
+
+### "invalid_redirect_uri" with pre-registered client
+
+- The redirect URI in the authorization request doesn't match what's registered in your IdP
+- Verify that `http://localhost:<port>/callback` is in the client's valid redirect URIs, where `<port>` matches your `--callback-port`
+- Some IdPs require an exact match — wildcards may not be supported for pre-registered clients
+
+### "invalid_client" with pre-registered client
+
+- The `--client-id` doesn't match any client in your IdP
+- If using a confidential client, the client secret may be incorrect — re-add the server with `claude mcp add ... --client-secret` to re-enter it
+- Verify the client is not disabled or expired in your IdP
