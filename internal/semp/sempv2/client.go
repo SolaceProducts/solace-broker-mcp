@@ -180,25 +180,41 @@ func (c *HTTPClient) buildURL(op *Operation, args map[string]any) (string, error
 		}
 	}
 
-	// Detect any unfilled {placeholder} tokens left in the path.
-	if strings.Contains(path, "{") {
-		var missing []string
-		for rest := path; len(rest) > 0; {
-			start := strings.Index(rest, "{")
-			if start < 0 {
-				break
-			}
-			end := strings.Index(rest[start:], "}")
-			if end < 0 {
-				break
-			}
-			missing = append(missing, rest[start:start+end+1])
-			rest = rest[start+end+1:]
-		}
-		return "", fmt.Errorf("operation %s: unfilled path parameters: %s", op.ID, strings.Join(missing, ", "))
+	// Detect any unfilled {placeholder} tokens left in the path. A "{" with no
+	// matching "}" means the path template itself is malformed — in that case
+	// fall through and let the broker surface the bad URL via a 4xx, since the
+	// problem isn't a missing argument.
+	missing := unfilledPlaceholders(path)
+	if len(missing) > 0 {
+		return "", fmt.Errorf("operation %s (path %q): unfilled path parameters: %s", op.ID, op.Path, strings.Join(missing, ", "))
 	}
 
 	return c.baseURL + "/" + strings.TrimPrefix(path, "/"), nil
+}
+
+// unfilledPlaceholders returns the de-duplicated list of "{name}" tokens
+// remaining in path after argument substitution. Each placeholder is reported
+// once even if it appears multiple times in the template.
+func unfilledPlaceholders(path string) []string {
+	var missing []string
+	seen := make(map[string]struct{})
+	for rest := path; len(rest) > 0; {
+		start := strings.Index(rest, "{")
+		if start < 0 {
+			break
+		}
+		end := strings.Index(rest[start:], "}")
+		if end < 0 {
+			break
+		}
+		placeholder := rest[start : start+end+1]
+		if _, dup := seen[placeholder]; !dup {
+			seen[placeholder] = struct{}{}
+			missing = append(missing, placeholder)
+		}
+		rest = rest[start+end+1:]
+	}
+	return missing
 }
 
 // buildRequest constructs the HTTP request with query parameters and JSON body
