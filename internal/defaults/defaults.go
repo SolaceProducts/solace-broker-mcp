@@ -16,9 +16,12 @@ const DefaultPort = 9090
 // waits for in-flight requests to complete during graceful shutdown before
 // forcibly closing remaining connections.
 //
-// 30 seconds gives long-lived MCP streaming sessions time to drain while
-// staying under typical orchestrator kill windows. After this timeout,
-// httpServer.Close() rips any remaining connections.
+// Decided: 30 seconds.
+// Reasoning: 30s gives long-lived MCP streaming sessions time to drain while
+// staying under typical orchestrator kill windows.
+// Trade-off: DefaultSEMPRequestTimeoutDuration is 60s, so a worst-case
+// in-flight SEMP call may be aborted by httpServer.Close() at the end of
+// the shutdown window. Accepted in favor of bounded, predictable shutdown.
 const DefaultShutdownTimeoutSeconds = 30
 
 // DefaultSEMPRequestTimeoutDuration is the per-request timeout for individual

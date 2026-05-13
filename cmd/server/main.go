@@ -209,7 +209,6 @@ func main() {
 	slog.SetDefault(slog.New(newSlogHandler(level)))
 
 	slog.Info("config loaded",
-		slog.String("version", version.Version()),
 		slog.Int("broker_count", len(cfg.Brokers)),
 		slog.Int("port", cfg.Port),
 		slog.String("log_level", cfg.LogLevel))
