@@ -650,6 +650,89 @@ func TestSender_NoRetry_POST_On500(t *testing.T) {
 	}
 }
 
+// TestSender_NoRetry_POST_ConnectionError exercises the reason the HTTP method
+// is captured on retryState: when the server is unreachable, checkRetry receives
+// (nil resp, non-nil err). Without the captured method, the guard couldn't tell
+// it was a POST and would fall through to retryablehttp's default policy, which
+// retries connection errors. We assert exactly one attempt and a wrapped
+// RetriesExhaustedError with Attempts=1.
+func TestSender_NoRetry_POST_ConnectionError(t *testing.T) {
+	// Bring a server up to obtain a URL, then close it so all dials are refused.
+	var requestCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+	}))
+	serverURL := server.URL
+	server.Close()
+
+	retries := 5
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		Retries:            &retries,
+		RequestMinInterval: &minInterval,
+		RetryMinInterval:   1 * time.Millisecond,
+		RetryMaxInterval:   10 * time.Millisecond,
+	}
+	authCfg := config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"}
+	sender := New(&http.Client{}, sempCfg, authCfg, serverURL)
+
+	req := newMethodRequest(t, http.MethodPost, serverURL)
+	resp, err := sender.Do(context.Background(), req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if err == nil {
+		t.Fatal("expected connection error for closed server")
+	}
+
+	var exhausted *RetriesExhaustedError
+	if !errors.As(err, &exhausted) {
+		t.Fatalf("expected RetriesExhaustedError, got %T: %v", err, err)
+	}
+	if exhausted.Attempts != 1 {
+		t.Errorf("expected exactly 1 attempt for POST connection error (no retry), got %d", exhausted.Attempts)
+	}
+	if requestCount.Load() != 0 {
+		t.Errorf("expected 0 successful requests (server closed), got %d", requestCount.Load())
+	}
+}
+
+// TestSender_NoRetry_PATCH_ConnectionError mirrors the POST connection-error
+// case for PATCH.
+func TestSender_NoRetry_PATCH_ConnectionError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	serverURL := server.URL
+	server.Close()
+
+	retries := 5
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		Retries:            &retries,
+		RequestMinInterval: &minInterval,
+		RetryMinInterval:   1 * time.Millisecond,
+		RetryMaxInterval:   10 * time.Millisecond,
+	}
+	authCfg := config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"}
+	sender := New(&http.Client{}, sempCfg, authCfg, serverURL)
+
+	req := newMethodRequest(t, http.MethodPatch, serverURL)
+	resp, err := sender.Do(context.Background(), req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if err == nil {
+		t.Fatal("expected connection error for closed server")
+	}
+
+	var exhausted *RetriesExhaustedError
+	if !errors.As(err, &exhausted) {
+		t.Fatalf("expected RetriesExhaustedError, got %T: %v", err, err)
+	}
+	if exhausted.Attempts != 1 {
+		t.Errorf("expected exactly 1 attempt for PATCH connection error (no retry), got %d", exhausted.Attempts)
+	}
+}
+
 func TestSender_NoRetry_400(t *testing.T) {
 	var requestCount atomic.Int32
 	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, r *http.Request) {
