@@ -4,8 +4,8 @@
 # Prerequisites:
 #   1. Run ./setup-keycloak.sh to start Keycloak and configure OAuth
 #   2. Set environment variables for broker credentials:
-#      - TEST_BROKER_USERNAME (default: admin)
-#      - TEST_BROKER_PASSWORD (default: admin)
+#      - BROKER_USERNAME (set by test-oauth.sh, defaults to "admin")
+#      - BROKER_PASSWORD (set by test-oauth.sh, defaults to "admin")
 #
 # To use a different broker, modify the URL below:
 
@@ -17,9 +17,6 @@ client_auth:
   issuer: "http://localhost:8090/realms/solace"
   audience: "solace-mcp-server"
   resource_url: "http://localhost:9091/mcp"
-  required_scopes:
-    - solace:read
-    - solace:write
 
 # Broker configuration
 # Note: This broker is only needed for config validation.
@@ -29,5 +26,5 @@ brokers:
     url: http://localhost:8080
     auth:
       mode: basic
-      username: ${TEST_BROKER_USERNAME}
-      password: ${TEST_BROKER_PASSWORD}
+      username: ${BROKER_USERNAME}
+      password: ${BROKER_PASSWORD}
