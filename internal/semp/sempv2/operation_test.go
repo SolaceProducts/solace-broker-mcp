@@ -77,6 +77,7 @@ func TestParseSpecs_RefParametersResolved(t *testing.T) {
 	op := ops["monitor/getMsgVpnQueue"]
 	if op == nil {
 		t.Fatal("monitor/getMsgVpnQueue not found")
+		return
 	}
 
 	found := false
@@ -132,6 +133,7 @@ func TestParseSpecs_PathIncludesBasePath(t *testing.T) {
 	op := ops["monitor/getMsgVpnQueue"]
 	if op == nil {
 		t.Fatal("monitor/getMsgVpnQueue not found")
+		return
 	}
 
 	if !strings.HasPrefix(op.Path, "/SEMP/v2/__private_monitor__/") {

@@ -3,7 +3,6 @@ package sempv2
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -83,9 +82,7 @@ func (c *HTTPClient) Close() {
 // tuning appropriate for concurrent SEMP calls, and delegates retry and rate
 // limiting to a shared resilience.Sender.
 func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (*HTTPClient, error) {
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: brokerCfg.InsecureSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
-	}
+	transport := resilience.NewTunedTransport(brokerCfg, sempCfg)
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {
