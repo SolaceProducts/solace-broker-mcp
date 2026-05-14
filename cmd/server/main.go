@@ -278,11 +278,23 @@ func main() {
 	mux.Handle("/mcp", authedHandler)
 
 	// Register OAuth Protected Resource Metadata endpoint (RFC 9728)
-	// This enables MCP clients to discover the authorization server for OAuth flows
+	// This enables MCP clients to discover the authorization server for OAuth flows.
 	if metadataHandler := auth.NewProtectedResourceMetadataHandler(cfg); metadataHandler != nil {
 		mux.Handle("/.well-known/oauth-protected-resource", metadataHandler)
 		slog.Info("registered OAuth protected resource metadata endpoint")
 	}
+
+	// Catch-all: return JSON 404 for any unregistered path. MCP SDK clients
+	// probe multiple OAuth discovery endpoints during (re-)authentication
+	// (e.g. /.well-known/oauth-authorization-server, /authorize, /register).
+	// Go's default plain-text "404 page not found" causes JSON parse errors
+	// in those clients. A JSON body lets them fail gracefully.
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":"not_found","error_description":"the requested endpoint does not exist"}`)
+		slog.Debug("catch-all 404: no route matched", slog.String("method", r.Method), slog.String("path", r.URL.Path))
+	}))
 
 	// 9. Start server with graceful shutdown
 	addr := fmt.Sprintf(":%d", cfg.Port)

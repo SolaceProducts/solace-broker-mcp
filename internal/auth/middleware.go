@@ -52,7 +52,6 @@ func NewAuthMiddleware(cfg *config.ServerConfig, next http.Handler) (http.Handle
 
 	middleware := sdkauth.RequireBearerToken(verifier, &sdkauth.RequireBearerTokenOptions{
 		ResourceMetadataURL: metadataURL,
-		Scopes:              cfg.ClientAuth.RequiredScopes,
 	})
 
 	return middleware(next), nil
@@ -160,16 +159,10 @@ func NewProtectedResourceMetadataHandler(cfg *config.ServerConfig) http.Handler 
 	// Use configured resource URL (required in production mode via config validation)
 	resourceURL := cfg.ClientAuth.ResourceURL
 
-	// Ensure scopes is always at least an empty slice (not nil) for proper JSON serialization
-	scopes := cfg.ClientAuth.RequiredScopes
-	if scopes == nil {
-		scopes = []string{}
-	}
-
 	metadata := &oauthex.ProtectedResourceMetadata{
 		Resource:               resourceURL,
 		AuthorizationServers:   []string{cfg.ClientAuth.Issuer},
-		ScopesSupported:        scopes,
+		ScopesSupported:        []string{"openid"},
 		BearerMethodsSupported: []string{"header"},
 	}
 

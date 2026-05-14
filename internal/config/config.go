@@ -49,11 +49,10 @@ type ServerConfig struct {
 }
 
 type ClientAuthConfig struct {
-	Issuer         string   `yaml:"issuer"`          // IdP issuer URL - required when development_mode: false
-	Audience       string   `yaml:"audience"`        // Expected 'aud' claim value — required when development_mode: false
-	RequiredScopes []string `yaml:"required_scopes"` // Optional — if set, token must contain all listed scopes
-	DevToken       string   `yaml:"dev_token"`       // Static token for dev — only used when development_mode: true
-	ResourceURL    string   `yaml:"resource_url"`    // OAuth resource URL (e.g., "https://mcp.example.com/mcp") - defaults to localhost if not set
+	Issuer      string `yaml:"issuer"`       // IdP issuer URL - required when development_mode: false
+	Audience    string `yaml:"audience"`     // Expected 'aud' claim value — required when development_mode: false
+	DevToken    string `yaml:"dev_token"`    // Static token for dev — only used when development_mode: true
+	ResourceURL string `yaml:"resource_url"` // OAuth resource URL (e.g., "https://mcp.example.com/mcp") - defaults to localhost if not set
 }
 
 // validLogLevels is the allowlist of slog levels operators may configure.
@@ -108,14 +107,13 @@ func (b BrokerConfig) LogValue() slog.Value {
 }
 
 // LogValue implements slog.LogValuer for ClientAuthConfig. It exposes OAuth
-// configuration (issuer, audience, resource URL, scopes) but excludes DevToken
+// configuration (issuer, audience, resource URL) but excludes DevToken
 // to prevent credential leaks in log output. See docs/secure-logging-rules.md Rule 2.
 func (c ClientAuthConfig) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("issuer", c.Issuer),
 		slog.String("audience", c.Audience),
 		slog.String("resource_url", c.ResourceURL),
-		slog.Any("required_scopes", c.RequiredScopes),
 	)
 }
 
@@ -295,10 +293,12 @@ func applyDefaults(cfg *ServerConfig) {
 
 // loadEnvFile loads a .env file into the process environment. It checks two
 // locations in order: the ENV_FILE environment variable (explicit path), then
-// a .env file in the same directory as the config file (convention). If neither
-// exists, it silently skips — .env files are optional. Variables already set in
-// the environment are not overwritten, so real env vars (e.g., from CI/CD)
-// take precedence over .env values.
+// a .env file in the same directory as the config file (convention). If the
+// file does not exist it is silently skipped — .env files are optional. Any
+// other read error (e.g. permission denied) is logged at WARN so operators
+// get a pointer to the real cause rather than a downstream "env var not set"
+// error. Variables already set in the environment are not overwritten, so
+// real env vars (e.g., from CI/CD) take precedence over .env values.
 func loadEnvFile(configPath string) {
 	envPath := os.Getenv("ENV_FILE")
 	if envPath == "" {
@@ -306,7 +306,10 @@ func loadEnvFile(configPath string) {
 	}
 	data, err := os.ReadFile(envPath) //nolint:gosec // G703 — path from trusted config/env, not external user input
 	if err != nil {
-		return // .env file is optional — if it doesn't exist, silently skip
+		if !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("env file unreadable", slog.String("path", envPath))
+		}
+		return
 	}
 
 	for _, line := range strings.Split(string(data), "\n") {
@@ -319,7 +322,10 @@ func loadEnvFile(configPath string) {
 			continue
 		}
 		key = strings.TrimSpace(key)
-		value = strings.TrimSpace(value)
+		if key == "" {
+			continue
+		}
+		value = stripMatchedQuotes(strings.TrimSpace(value))
 		if _, exists := os.LookupEnv(key); !exists {
 			os.Setenv(key, value) //nolint:gosec // G104 — os.Setenv only fails on Plan 9; safe to ignore
 		}
@@ -327,6 +333,18 @@ func loadEnvFile(configPath string) {
 
 	slog.Info("loaded .env file",
 		slog.String("path", envPath))
+}
+
+// stripMatchedQuotes removes one matching pair of surrounding double or single
+// quotes from a .env value — e.g. "secret" → secret, 'pw' → pw. Unbalanced
+// or unquoted values are returned unchanged.
+func stripMatchedQuotes(s string) string {
+	if len(s) >= 2 {
+		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
 }
 
 // envVarPattern matches ${VAR_NAME} in raw YAML bytes. VAR_NAME must be

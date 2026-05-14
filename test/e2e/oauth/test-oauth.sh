@@ -65,8 +65,7 @@ TOKEN_RESPONSE=$(curl -s -X POST "${TOKEN_ENDPOINT}" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "grant_type=client_credentials" \
     -d "client_id=${CLIENT_ID}" \
-    -d "client_secret=${CLIENT_SECRET}" \
-    -d "scope=solace:read solace:write")
+    -d "client_secret=${CLIENT_SECRET}")
 
 ACCESS_TOKEN=$(echo "${TOKEN_RESPONSE}" | grep -o '"access_token":"[^"]*' | cut -d'"' -f4)
 
@@ -85,8 +84,8 @@ go build -o "${PROJECT_ROOT}/bin/mcp-test" ./cmd/server
 echo "✓ Built MCP server"
 
 # Set broker credentials as environment variables (required by config)
-export TEST_BROKER_USERNAME="${TEST_BROKER_USERNAME:-admin}"
-export TEST_BROKER_PASSWORD="${TEST_BROKER_PASSWORD:-admin}"
+export BROKER_USERNAME=${BROKER_USERNAME:-admin}
+export BROKER_PASSWORD=${BROKER_PASSWORD:-admin}
 
 # Use static test config file
 TEST_CONFIG="${SCRIPT_DIR}/test-config.yaml"

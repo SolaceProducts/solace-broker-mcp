@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"text/template"
 
@@ -49,13 +50,27 @@ type ExecutionBatch struct {
 // because different calls may target different brokers.
 type CompositeExecutor struct {
 	operations map[string]*sempv2.Operation
+	// maxPages is the hard ceiling on pagination loop iterations, defending
+	// against a broker (or adversarial input) that returns a perpetual
+	// nextPageUri. In practice the item-count cap (capMax) terminates the
+	// loop first; maxPages is a safety net for edge cases like very large
+	// page sizes or bugs in item extraction. Stored on the executor rather
+	// than as a package-level var so tests can override it without racing
+	// other parallel tests on a shared global.
+	maxPages int
 }
+
+// defaultMaxPages is the production value of CompositeExecutor.maxPages.
+const defaultMaxPages = 1000
 
 // NewCompositeExecutor creates an executor with the given operation catalog.
 // The operations map is keyed by prefixed operation ID (e.g.,
 // "monitor/getMsgVpnQueue") matching the format produced by sempv2.ParseSpecs().
 func NewCompositeExecutor(operations map[string]*sempv2.Operation) *CompositeExecutor {
-	return &CompositeExecutor{operations: operations}
+	return &CompositeExecutor{
+		operations: operations,
+		maxPages:   defaultMaxPages,
+	}
 }
 
 // Execute runs all steps of a composite tool against the given client and
@@ -152,10 +167,15 @@ func (ce *CompositeExecutor) executeStep(ctx context.Context, step Step, client 
 	return nil
 }
 
-// executePaginatedStep executes a step that returns paginated results. It follows
-// SEMP's nextPageUri links until all pages are collected or maxResults is reached.
-// The merged data array is stored in execCtx.StepResults keyed by step ID, alongside
-// a truncated flag indicating whether more results exist beyond maxResults.
+// executePaginatedStep executes a step that returns paginated results. It
+// follows SEMP's nextPageUri links until one of three termination conditions
+// fires: (1) the merged item count reaches maxResults, (2) the broker stops
+// returning a nextPageUri or an empty page, or (3) the loop has run for
+// CompositeExecutor.maxPages iterations (a defense-in-depth backstop against
+// a perpetual nextPageUri).
+// The merged data array is stored in execCtx.StepResults keyed by step ID,
+// alongside a truncated flag indicating whether more results exist beyond
+// what was returned.
 func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step, client sempv2.Client, execCtx *ExecuteContext) error {
 	baseArgs, err := ResolveArgs(step.Args, execCtx)
 	if err != nil {
@@ -170,9 +190,23 @@ func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step
 	maxResults := resolveMaxResults(execCtx.Params)
 	allItems := make([]any, 0)
 	truncated := false
+	pageLimitHit := false
 	args := baseArgs
 
-	for {
+	for pageCount := 0; ; pageCount++ {
+		if pageCount >= ce.maxPages {
+			// Hard safety cap: stop following pages and surface an incomplete result
+			// rather than looping forever against a broker that returns a perpetual
+			// nextPageUri (broker bug or adversarial input).
+			slog.Warn("pagination page cap reached; result may be incomplete",
+				slog.String("step", step.ID),
+				slog.Int("pages", pageCount),
+				slog.Int("items_collected", len(allItems)))
+			truncated = true
+			pageLimitHit = true
+			break
+		}
+
 		result, err := client.Execute(ctx, op, args)
 		if err != nil {
 			return fmt.Errorf("tool step %s: %w", step.ID, err)
@@ -214,11 +248,16 @@ func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step
 		"truncated": truncated,
 	}
 	if truncated {
-		if maxResults >= capMax {
+		switch {
+		case pageLimitHit:
+			result["truncatedMessage"] = fmt.Sprintf(
+				"Pagination stopped after %d pages; result is incomplete. This usually indicates a broker issue with a persistent nextPageUri — narrow the query (e.g., by msgVpnName or a where filter) or contact your broker administrator.",
+				ce.maxPages)
+		case maxResults >= capMax:
 			result["truncatedMessage"] = fmt.Sprintf(
 				"More results exist but the maximum limit of %d has been reached. Not all results are shown.",
 				capMax)
-		} else {
+		default:
 			result["truncatedMessage"] = fmt.Sprintf(
 				"Results limited to %d. Use maxResults (up to %d) to retrieve more.",
 				maxResults, capMax)
@@ -228,7 +267,9 @@ func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step
 	return nil
 }
 
-// Pagination constants used by resolveMaxResults and truncation messages.
+// Item-count limits used by resolveMaxResults and truncation messages. The
+// page-count ceiling lives on CompositeExecutor.maxPages (see the struct
+// definition above) because the test override needs to be per-instance.
 const (
 	defaultMax = 100
 	capMax     = 500

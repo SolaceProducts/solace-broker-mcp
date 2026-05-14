@@ -87,6 +87,153 @@ terraform apply -auto-approve
 echo "✓ Keycloak configuration applied"
 
 # -----------------------------------------------------------------------------
+# Step 3b: Configure Keycloak for MCP Dynamic Client Registration
+# -----------------------------------------------------------------------------
+# The Keycloak Terraform provider does not support client registration policies
+# or modifying built-in client scopes, so we configure them via the Admin API.
+#
+# Three things need configuration for RFC 7591 dynamic client registration:
+#
+#   1. Audience mapper on the "basic" scope — the "basic" scope is the ONLY
+#      scope Keycloak guarantees on DCR clients (when the SDK specifies
+#      scope: "openid" in the registration request, realm defaults are not
+#      assigned). Adding the audience mapper here ensures all tokens include
+#      the MCP server audience regardless of how the client was registered.
+#
+#   2. "Allowed Client Scopes" policy — add "openid" and "service_account".
+#      Modern Keycloak handles "openid" at the protocol level (not as a client
+#      scope), so we create a placeholder scope to satisfy the policy check.
+#      "service_account" is an internal scope Keycloak assigns during DCR.
+#
+#   3. "Trusted Hosts" policy — disable host-sending-registration-request-must-match
+#      (Keycloak runs in a container, so requests arrive from the bridge gateway
+#      IP, not localhost)
+echo ""
+echo "Step 3b: Configuring Keycloak for dynamic client registration..."
+
+KC_ADMIN_TOKEN=$(curl -s -X POST "http://localhost:${KEYCLOAK_PORT:-8090}/realms/master/protocol/openid-connect/token" \
+    -d "grant_type=password" \
+    -d "client_id=admin-cli" \
+    -d "username=${KEYCLOAK_ADMIN_USER:-admin}" \
+    -d "password=${KEYCLOAK_ADMIN_PASS:-admin}" \
+    | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+KC_BASE="http://localhost:${KEYCLOAK_PORT:-8090}/admin/realms/solace"
+
+# --- Audience mapper on "basic" scope ---
+BASIC_SCOPE_ID=$(curl -s "$KC_BASE/client-scopes" \
+    -H "Authorization: Bearer $KC_ADMIN_TOKEN" \
+    | python3 -c "import sys,json; cs=json.load(sys.stdin); print(next(c['id'] for c in cs if c['name']=='basic'))")
+
+EXISTING_MAPPERS=$(curl -s "$KC_BASE/client-scopes/$BASIC_SCOPE_ID/protocol-mappers/models" \
+    -H "Authorization: Bearer $KC_ADMIN_TOKEN" \
+    | python3 -c "import sys,json; print('solace-mcp-audience' in [m['name'] for m in json.load(sys.stdin)])")
+
+if [ "$EXISTING_MAPPERS" = "False" ]; then
+    AUD_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X POST "$KC_BASE/client-scopes/$BASIC_SCOPE_ID/protocol-mappers/models" \
+        -H "Authorization: Bearer $KC_ADMIN_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "name": "solace-mcp-audience",
+            "protocol": "openid-connect",
+            "protocolMapper": "oidc-audience-mapper",
+            "config": {
+                "included.custom.audience": "'"$(terraform output -raw audience)"'",
+                "id.token.claim": "false",
+                "access.token.claim": "true"
+            }
+        }')
+    if [ "$AUD_STATUS" = "201" ]; then
+        echo "  ✓ Audience mapper added to 'basic' scope"
+    else
+        echo "  ✗ Failed to add audience mapper (HTTP $AUD_STATUS)"
+        exit 1
+    fi
+else
+    echo "  ✓ Audience mapper already exists on 'basic' scope"
+fi
+
+# --- Create "openid" client scope (placeholder for DCR policy) ---
+OPENID_EXISTS=$(curl -s "$KC_BASE/client-scopes" \
+    -H "Authorization: Bearer $KC_ADMIN_TOKEN" \
+    | python3 -c "import sys,json; print('openid' in [c['name'] for c in json.load(sys.stdin)])")
+
+if [ "$OPENID_EXISTS" = "False" ]; then
+    OPENID_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X POST "$KC_BASE/client-scopes" \
+        -H "Authorization: Bearer $KC_ADMIN_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "name": "openid",
+            "description": "OpenID Connect scope placeholder for DCR policy compatibility",
+            "protocol": "openid-connect",
+            "attributes": {"include.in.token.scope": "true"}
+        }')
+    if [ "$OPENID_STATUS" = "201" ]; then
+        echo "  ✓ Created 'openid' client scope"
+    else
+        echo "  ✗ Failed to create 'openid' scope (HTTP $OPENID_STATUS)"
+        exit 1
+    fi
+else
+    echo "  ✓ 'openid' client scope already exists"
+fi
+
+# --- Client registration policies ---
+KC_COMPONENTS=$(curl -s "$KC_BASE/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy" \
+    -H "Authorization: Bearer $KC_ADMIN_TOKEN")
+
+update_policy() {
+    local provider_id=$1
+    local payload=$2
+    local component_id
+    component_id=$(echo "$KC_COMPONENTS" | python3 -c "
+import sys, json
+cs = json.load(sys.stdin)
+print(next(c['id'] for c in cs if c['providerId']=='$provider_id' and c['subType']=='anonymous'))
+")
+    curl -s -X PUT "$KC_BASE/components/$component_id" \
+        -H "Authorization: Bearer $KC_ADMIN_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "$payload" -o /dev/null -w "%{http_code}"
+}
+
+SCOPE_STATUS=$(update_policy "allowed-client-templates" '{
+    "name": "Allowed Client Scopes",
+    "providerId": "allowed-client-templates",
+    "providerType": "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy",
+    "parentId": "solace",
+    "subType": "anonymous",
+    "config": {
+        "allow-default-scopes": ["true"],
+        "allowed-client-scopes": ["openid", "service_account"]
+    }
+}')
+
+HOSTS_STATUS=$(update_policy "trusted-hosts" '{
+    "name": "Trusted Hosts",
+    "providerId": "trusted-hosts",
+    "providerType": "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy",
+    "parentId": "solace",
+    "subType": "anonymous",
+    "config": {
+        "host-sending-registration-request-must-match": ["false"],
+        "trusted-hosts": ["localhost", "127.0.0.1"],
+        "client-uris-must-match": ["true"]
+    }
+}')
+
+if [ "$SCOPE_STATUS" = "204" ] && [ "$HOSTS_STATUS" = "204" ]; then
+    echo "  ✓ Client registration policies configured"
+else
+    echo "  ✗ Failed to configure registration policies (scope: $SCOPE_STATUS, hosts: $HOSTS_STATUS)"
+    exit 1
+fi
+
+echo "✓ Dynamic client registration configured"
+
+# -----------------------------------------------------------------------------
 # Step 4: Retrieve OAuth Configuration
 # -----------------------------------------------------------------------------
 echo ""
@@ -109,8 +256,7 @@ TOKEN_RESPONSE=$(curl -s -X POST "${TOKEN_ENDPOINT}" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "grant_type=client_credentials" \
     -d "client_id=mcp-client-confidential" \
-    -d "client_secret=${CLIENT_SECRET}" \
-    -d "scope=solace:read solace:write")
+    -d "client_secret=${CLIENT_SECRET}")
 
 # Check if we got an access token
 if echo "${TOKEN_RESPONSE}" | grep -q "access_token"; then
@@ -160,13 +306,6 @@ else
     exit 1
 fi
 
-# Check scopes
-if echo "${DECODED}" | grep -q "solace:read" && echo "${DECODED}" | grep -q "solace:write"; then
-    echo "✓ Scopes are correct: solace:read solace:write"
-else
-    echo "✗ Scopes are missing or incorrect"
-    exit 1
-fi
 
 # -----------------------------------------------------------------------------
 # Step 7: Update MCP Server Configuration
