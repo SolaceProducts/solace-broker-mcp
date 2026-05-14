@@ -503,8 +503,11 @@ func ValidatePort(port int) error {
 }
 
 // validateBrokerURL checks that s is a well-formed URL with an http or https
-// scheme and a host component. When productionMode is true, http:// is
-// rejected — credentials would otherwise be transmitted in plaintext.
+// scheme and a host component. This is structural validation only — it does
+// NOT verify that the host resolves, is reachable, or actually runs a SEMP
+// endpoint. Those are deliberately runtime concerns surfaced on the first
+// tool call. When productionMode is true, http:// is rejected — credentials
+// would otherwise be transmitted in plaintext.
 func validateBrokerURL(s string, productionMode bool) error {
 	u, err := url.Parse(s)
 	if err != nil {
