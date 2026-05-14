@@ -42,18 +42,21 @@ tools:
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           restDeliveryPointName: "{{.Params.restDeliveryPointName}}"
+          select: "clientName, clientProfileName, enabled, lastFailureReason, lastFailureTime, msgVpnName, restDeliveryPointName, timeConnectionsBlocked, up"
       - id: queueBindings
         operation: monitor/getMsgVpnRestDeliveryPointQueueBindings
         parallel: true
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           restDeliveryPointName: "{{.Params.restDeliveryPointName}}"
+          select: "lastFailureReason, lastFailureTime, postRequestTarget, queueBindingName, restDeliveryPointName, up, uptime"
       - id: restConsumers
         operation: monitor/getMsgVpnRestDeliveryPointRestConsumers
         parallel: true
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           restDeliveryPointName: "{{.Params.restDeliveryPointName}}"
+          select: "authenticationScheme, enabled, httpRequestOutstandingTxMsgCount, httpRequestTimedOutTxMsgCount, httpRequestTxMsgCount, httpResponseErrorRxMsgCount, httpResponseSuccessRxMsgCount, lastConnectionFailureReason, lastConnectionFailureTime, lastFailureReason, lastFailureTime, outgoingConnectionCount, remoteHost, remotePort, restConsumerName, restDeliveryPointName, up"
     result:
       strategy: collect
 
@@ -79,6 +82,7 @@ tools:
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           queueName: "{{.Params.queueName}}"
+          select: "accessType, averageRxMsgRate, averageTxMsgRate, bindCount, durable, egressEnabled, ingressEnabled, lowPriorityMsgCongestionState, maxBindCount, maxMsgSize, maxMsgSpoolUsage, maxMsgSpoolUsageExceededDiscardedMsgCount, maxRedeliveryCount, maxRedeliveryExceededDiscardedMsgCount, maxTtl, maxTtlExceededDiscardedMsgCount, msgSpoolUsage, msgVpnName, noLocalDeliveryDiscardedMsgCount, owner, queueName, redeliveredMsgCount, rxByteRate, rxMsgRate, spooledMsgCount, txByteRate, txMsgRate, txUnackedMsgCount"
     result:
       strategy: collect
 
@@ -104,6 +108,7 @@ tools:
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           clientName: "{{.Params.clientName}}"
+          select: "averageRxMsgRate, averageTxMsgRate, clientAddress, clientName, clientUsername, elidingTopicCount, keepalive, msgVpnName, platform, rxByteRate, rxDiscardedMsgCount, rxFlowCount, rxMsgCount, rxMsgRate, slowSubscriber, softwareVersion, subscriptionCount, txByteRate, txDiscardedMsgCount, txFlowCount, txMsgCount, txMsgRate, uptime"
     result:
       strategy: collect
 
@@ -155,6 +160,7 @@ tools:
         operation: monitor/getMsgVpn
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
+          select: "discardedRxMsgCount, discardedTxMsgCount, enabled, maxConnectionCount, msgSpoolMsgCount, msgSpoolUsage, msgVpnConnections, msgVpnConnectionsServiceMqtt, msgVpnConnectionsServiceRestIncoming, msgVpnConnectionsServiceRestOutgoing, msgVpnConnectionsServiceSmf, msgVpnConnectionsServiceWeb, msgVpnName, msgVpnTotalUniqueSubscriptions, serviceAmqpPlainTextFailureReason, serviceAmqpPlainTextUp, serviceMqttPlainTextFailureReason, serviceMqttPlainTextUp, serviceMqttTlsFailureReason, serviceMqttTlsUp, serviceRestIncomingPlainTextFailureReason, serviceRestIncomingPlainTextUp, serviceRestIncomingTlsFailureReason, serviceRestIncomingTlsUp, serviceSmfPlainTextFailureReason, serviceSmfPlainTextUp, serviceSmfTlsFailureReason, serviceSmfTlsUp, state"
     result:
       strategy: collect
 
@@ -177,6 +183,7 @@ tools:
         followPages: true
         args:
           count: "100"
+          select: "discardedRxMsgCount, discardedTxMsgCount, dmrEnabled, enabled, msgSpoolMsgCount, msgSpoolUsage, msgVpnConnections, msgVpnConnectionsServiceMqtt, msgVpnConnectionsServiceRestIncoming, msgVpnConnectionsServiceSmf, msgVpnConnectionsServiceWeb, msgVpnName, msgVpnTotalUniqueSubscriptions, replicationEnabled, serviceMqttPlainTextFailureReason, serviceMqttPlainTextUp, serviceRestIncomingPlainTextFailureReason, serviceRestIncomingPlainTextUp, serviceSmfPlainTextFailureReason, serviceSmfPlainTextUp, state"
     result:
       strategy: collect
 
@@ -204,6 +211,7 @@ tools:
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           count: "100"
+          select: "accessType, bindCount, egressEnabled, ingressEnabled, lowPriorityMsgCongestionState, maxMsgSpoolUsage, msgSpoolUsage, msgVpnName, queueName, rxMsgRate, spooledMsgCount, txMsgRate, txUnackedMsgCount"
     result:
       strategy: collect
 
@@ -231,6 +239,7 @@ tools:
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           count: "100"
+          select: "clientAddress, clientName, clientUsername, msgVpnName, platform, rxMsgRate, slowSubscriber, txMsgRate, uptime"
     result:
       strategy: collect
 
@@ -250,6 +259,7 @@ tools:
         operation: monitor/getMsgVpn
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
+          select: "averageRxByteRate, averageRxMsgRate, averageTxByteRate, averageTxMsgRate, msgVpnName, rxByteRate, rxMsgRate, txByteRate, txMsgRate"
     result:
       strategy: collect
 
@@ -271,10 +281,12 @@ tools:
         operation: monitor/getDmrCluster
         args:
           dmrClusterName: "{{.Params.dmrClusterName}}"
+          select: "dmrClusterName, enabled, failureReason, nodeName, subscriptionDbBuildPercentage, syncComplete, topologyIssueCount, up, uptime"
       - id: links
         operation: monitor/getDmrClusterLinks
         args:
           dmrClusterName: "{{.Params.dmrClusterName}}"
+          select: "connectionRetryCount, dmrClusterName, enabled, failureReason, remoteNodeName, span, transportTlsEnabled, up, uptime"
     result:
       strategy: collect
 
@@ -302,5 +314,6 @@ tools:
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           count: "100"
+          select: "clientName, enabled, lastFailureReason, lastFailureTime, msgVpnName, restDeliveryPointName, up"
     result:
       strategy: collect
