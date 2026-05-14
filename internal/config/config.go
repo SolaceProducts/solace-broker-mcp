@@ -514,7 +514,7 @@ func validateBrokerURL(s string, productionMode bool) error {
 		return fmt.Errorf("url scheme must be http or https, got %q", u.Scheme)
 	}
 	if productionMode && u.Scheme == "http" {
-		return fmt.Errorf("url scheme must be https when development_mode is false (got %q); set development_mode: true to allow http", s)
+		return fmt.Errorf("url scheme must be https to protect credentials in transit (got %q)", s)
 	}
 	if u.Host == "" {
 		return fmt.Errorf("url must include a host, got %q", s)

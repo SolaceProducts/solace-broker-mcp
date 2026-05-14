@@ -469,8 +469,8 @@ client_auth:
 	if err == nil {
 		t.Fatal("expected error for http:// broker URL in production mode")
 	}
-	if !strings.Contains(err.Error(), "development_mode is false") {
-		t.Errorf("error should mention development_mode: %v", err)
+	if !strings.Contains(err.Error(), "must be https") {
+		t.Errorf("error should steer toward https as the fix: %v", err)
 	}
 	if !strings.Contains(err.Error(), "prod-us") {
 		t.Errorf("error should mention the broker alias: %v", err)
