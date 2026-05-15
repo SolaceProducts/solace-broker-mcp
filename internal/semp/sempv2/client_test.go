@@ -717,6 +717,52 @@ func TestClient_Execute_UserAgent(t *testing.T) {
 	}
 }
 
+func TestClient_Execute_NoBody_NoContentType(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if ct := r.Header.Get("Content-Type"); ct != "" {
+			t.Errorf("Content-Type = %q, want empty for GET request with no body", ct)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{})
+	})
+	defer server.Close()
+
+	op := &sempv2.Operation{
+		ID:     "testOp",
+		Method: "GET",
+		Path:   "/SEMP/v2/monitor/test",
+	}
+
+	if _, err := client.Execute(context.Background(), op, map[string]any{}); err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+}
+
+func TestClient_Execute_AcceptHeader(t *testing.T) {
+	for _, method := range []string{"GET", "PUT", "DELETE"} {
+		t.Run(method, func(t *testing.T) {
+			client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if accept := r.Header.Get("Accept"); accept != "application/json" {
+					t.Errorf("Accept = %q, want application/json", accept)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{})
+			})
+			defer server.Close()
+
+			op := &sempv2.Operation{
+				ID:     "testOp",
+				Method: method,
+				Path:   "/SEMP/v2/monitor/test",
+			}
+
+			if _, err := client.Execute(context.Background(), op, map[string]any{}); err != nil {
+				t.Fatalf("Execute() method=%s error: %v", method, err)
+			}
+		})
+	}
+}
+
 func TestClient_Execute_Timeout(t *testing.T) {
 	_, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(10 * time.Second)
