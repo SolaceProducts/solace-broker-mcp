@@ -16,11 +16,13 @@ package main
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -99,6 +101,58 @@ func TestUnknownRoute_Returns404(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("GET /unknown status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestStartServer_PortConflict_SendsToChannel(t *testing.T) {
+	// Occupy a port to force an "address already in use" startup error.
+	lc := &net.ListenConfig{}
+	l, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	srv := &http.Server{
+		Addr:    l.Addr().String(),
+		Handler: http.NewServeMux(),
+	}
+
+	errCh := startServer(srv, "", "")
+
+	select {
+	case startErr := <-errCh:
+		if startErr == nil {
+			t.Fatal("expected error for port conflict, got nil")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout: expected startup error to be sent to channel, not os.Exit")
+	}
+}
+
+func TestStartServer_NormalShutdown_NoErrorSent(t *testing.T) {
+	// Verify that ErrServerClosed (the result of a clean Shutdown) is filtered
+	// out and not sent to the error channel.
+	//
+	// We call Shutdown before startServer so http.Server.ListenAndServe sees
+	// shuttingDown=true on entry and returns ErrServerClosed without binding
+	// any port. This exercises the same filter path without the port-reuse
+	// race of binding-then-rebinding to the same address.
+	srv := &http.Server{
+		Addr:    "127.0.0.1:0",
+		Handler: http.NewServeMux(),
+	}
+	if err := srv.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	errCh := startServer(srv, "", "")
+
+	select {
+	case startErr := <-errCh:
+		t.Errorf("expected no error for ErrServerClosed, got: %v", startErr)
+	case <-time.After(200 * time.Millisecond):
+		// expected: ListenAndServe returned ErrServerClosed and was filtered out
 	}
 }
 
