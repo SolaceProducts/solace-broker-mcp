@@ -8,6 +8,12 @@ on:
       - 'v*'
   workflow_call:
 
+# Minimal token permissions — read-only access to repo contents.
+# golangci-lint-action uses checks: write to post inline annotations on PRs.
+permissions:
+  contents: read
+  checks: write
+
 jobs:
   lint:
     runs-on: ubuntu-latest
