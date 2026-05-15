@@ -32,25 +32,6 @@ resource "keycloak_realm" "solace" {
   client_session_max_lifespan     = "24h"
 }
 
-# Create Client Scopes: solace:read
-resource "keycloak_openid_client_scope" "solace_read" {
-  realm_id               = keycloak_realm.solace.id
-  name                   = "solace:read"
-  description            = "Read access to Solace broker"
-  include_in_token_scope = true
-  gui_order              = 1
-}
-
-# Create Client Scopes: solace:write
-resource "keycloak_openid_client_scope" "solace_write" {
-  realm_id               = keycloak_realm.solace.id
-  name                   = "solace:write"
-  description            = "Write access to Solace broker"
-  include_in_token_scope = true
-  gui_order              = 2
-}
-
-
 # =============================================================================
 # Phase 1: Confidential Client (Client Credentials Flow)
 # =============================================================================
@@ -101,46 +82,6 @@ resource "keycloak_openid_client" "mcp_client_public" {
 
   # PKCE (Proof Key for Code Exchange) - OAuth 2.1 requirement
   pkce_code_challenge_method = "S256"  # Use SHA-256 for PKCE
-}
-
-# Assign custom scopes to the confidential client
-resource "keycloak_openid_client_default_scopes" "mcp_client_confidential_scopes" {
-  realm_id  = keycloak_realm.solace.id
-  client_id = keycloak_openid_client.mcp_client_confidential.id
-
-  default_scopes = [
-    keycloak_openid_client_scope.solace_read.name,
-    keycloak_openid_client_scope.solace_write.name,
-  ]
-}
-
-# Assign custom scopes to the public client
-resource "keycloak_openid_client_default_scopes" "mcp_client_public_scopes" {
-  realm_id  = keycloak_realm.solace.id
-  client_id = keycloak_openid_client.mcp_client_public.id
-
-  default_scopes = [
-    keycloak_openid_client_scope.solace_read.name,
-    keycloak_openid_client_scope.solace_write.name,
-  ]
-}
-
-# Add audience mapper to the confidential client
-resource "keycloak_openid_audience_protocol_mapper" "mcp_client_confidential_audience" {
-  realm_id                 = keycloak_realm.solace.id
-  client_id                = keycloak_openid_client.mcp_client_confidential.id
-  name                     = "solace-mcp-audience-confidential"
-  included_custom_audience = var.mcp_server_audience
-  add_to_access_token      = true
-}
-
-# Add audience mapper to the public client
-resource "keycloak_openid_audience_protocol_mapper" "mcp_client_public_audience" {
-  realm_id                 = keycloak_realm.solace.id
-  client_id                = keycloak_openid_client.mcp_client_public.id
-  name                     = "solace-mcp-audience-public"
-  included_custom_audience = var.mcp_server_audience
-  add_to_access_token      = true
 }
 
 # Create a test user for Phase 2 (Authorization Code + PKCE) testing

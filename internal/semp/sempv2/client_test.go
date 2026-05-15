@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -83,6 +86,97 @@ func TestClient_Execute_Success(t *testing.T) {
 	}
 }
 
+func TestClient_Execute_MissingPathParam_ReturnsError(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		// Should never be reached — buildURL should return an error before any HTTP call.
+		t.Error("handler called unexpectedly; buildURL should have errored")
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	defer server.Close()
+
+	op := testOp("GET",
+		sempv2.Parameter{Name: "msgVpnName", In: "path"},
+		sempv2.Parameter{Name: "queueName", In: "path"},
+	)
+
+	// Provide msgVpnName but omit queueName — {queueName} stays unfilled.
+	_, err := client.Execute(context.Background(), op, map[string]any{
+		"msgVpnName": "default",
+		// queueName intentionally absent
+	})
+	if err == nil {
+		t.Fatal("expected error for missing path parameter, got nil")
+	}
+	if !strings.Contains(err.Error(), "{queueName}") {
+		t.Errorf("error = %q, expected it to name the missing placeholder {queueName}", err.Error())
+	}
+	// Error message should include the operation's path template so an operator
+	// can correlate the error to the spec.
+	if !strings.Contains(err.Error(), op.Path) {
+		t.Errorf("error = %q, expected it to include op.Path %q for debuggability", err.Error(), op.Path)
+	}
+}
+
+// TestClient_Execute_MissingPathParam_DeduplicatedInError ensures a repeated
+// placeholder appears only once in the error message even when the template
+// references it multiple times.
+func TestClient_Execute_MissingPathParam_DeduplicatedInError(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("handler called unexpectedly; buildURL should have errored")
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	defer server.Close()
+
+	op := &sempv2.Operation{
+		ID:     "testOp",
+		Method: "GET",
+		// {vpn} appears twice in the template; should be reported once.
+		Path: "/v2/x/{vpn}/y/{vpn}/z",
+		Parameters: []sempv2.Parameter{
+			{Name: "vpn", In: "path"},
+		},
+	}
+
+	_, err := client.Execute(context.Background(), op, map[string]any{})
+	if err == nil {
+		t.Fatal("expected error for missing path parameter")
+	}
+	// The error embeds op.Path (which contains {vpn} twice) plus the
+	// deduplicated list of unfilled placeholders. Inspect only the list
+	// portion after "unfilled path parameters:" to verify dedupe.
+	const marker = "unfilled path parameters:"
+	idx := strings.Index(err.Error(), marker)
+	if idx < 0 {
+		t.Fatalf("error message missing %q section: %q", marker, err.Error())
+	}
+	listPortion := err.Error()[idx+len(marker):]
+	occurrences := strings.Count(listPortion, "{vpn}")
+	if occurrences != 1 {
+		t.Errorf("expected {vpn} to appear exactly once in the unfilled-params list, got %d (list: %q)", occurrences, listPortion)
+	}
+}
+
+func TestClient_Execute_AllPathParamsProvided_NoError(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{})
+	})
+	defer server.Close()
+
+	op := testOp("GET",
+		sempv2.Parameter{Name: "msgVpnName", In: "path"},
+		sempv2.Parameter{Name: "queueName", In: "path"},
+	)
+
+	_, err := client.Execute(context.Background(), op, map[string]any{
+		"msgVpnName": "default",
+		"queueName":  "q1",
+	})
+	if err != nil {
+		t.Fatalf("Execute() with all path params: unexpected error: %v", err)
+	}
+}
+
 func TestClient_Execute_PathParams(t *testing.T) {
 	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.Path, "/msgVpns/my-vpn/queues/my-queue") {
@@ -128,6 +222,176 @@ func TestClient_Execute_QueryParams(t *testing.T) {
 
 	_, err := client.Execute(context.Background(), op, map[string]any{
 		"select": "queueName,spoolUsage",
+	})
+	if err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+}
+
+// TestClient_Execute_QueryParams_ArrayCSVRawCommas pins the wire format for
+// SEMP v2 array query params (select, where): a single param whose value uses
+// raw commas, not %2C. The broker treats %2C-encoded commas as part of the
+// attribute name and rejects the request with "not a valid attribute".
+func TestClient_Execute_QueryParams_ArrayCSVRawCommas(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		raw := r.URL.RawQuery
+		if !strings.Contains(raw, "select=clientName,msgVpnName,uptime") {
+			t.Errorf("RawQuery = %q, expected raw-comma-joined select=clientName,msgVpnName,uptime", raw)
+		}
+		if strings.Contains(raw, "%2C") || strings.Contains(raw, "%2c") {
+			t.Errorf("RawQuery = %q, expected raw commas in array params, not %%2C", raw)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{})
+	})
+	defer server.Close()
+
+	op := &sempv2.Operation{
+		ID:     "testOp",
+		Method: "GET",
+		Path:   "/SEMP/v2/monitor/test",
+		Parameters: []sempv2.Parameter{
+			{Name: "select", In: "query", Type: "array"},
+		},
+	}
+
+	_, err := client.Execute(context.Background(), op, map[string]any{
+		"select": "clientName,msgVpnName,uptime",
+	})
+	if err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+}
+
+// TestClient_Execute_QueryParams_ArrayCSV_StringSlice pins the []string input
+// path: array params constructed in Go code (not via YAML) must still produce
+// raw-comma CSV.
+func TestClient_Execute_QueryParams_ArrayCSV_StringSlice(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		raw := r.URL.RawQuery
+		if !strings.Contains(raw, "select=a,b,c") {
+			t.Errorf("RawQuery = %q, expected select=a,b,c", raw)
+		}
+		if strings.Contains(raw, "%2C") || strings.Contains(raw, "%2c") {
+			t.Errorf("RawQuery = %q, expected raw commas in array params, not %%2C", raw)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{})
+	})
+	defer server.Close()
+
+	op := &sempv2.Operation{
+		ID:     "testOp",
+		Method: "GET",
+		Path:   "/SEMP/v2/monitor/test",
+		Parameters: []sempv2.Parameter{
+			{Name: "select", In: "query", Type: "array"},
+		},
+	}
+
+	_, err := client.Execute(context.Background(), op, map[string]any{
+		"select": []string{"a", "b", "c"},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+}
+
+// TestClient_Execute_QueryParams_ArrayCSV_AnySlice pins the []any input path:
+// YAML unmarshalling produces []any for a list, and that shape must serialize
+// the same as []string.
+func TestClient_Execute_QueryParams_ArrayCSV_AnySlice(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		raw := r.URL.RawQuery
+		if !strings.Contains(raw, "select=a,b,c") {
+			t.Errorf("RawQuery = %q, expected select=a,b,c", raw)
+		}
+		if strings.Contains(raw, "%2C") || strings.Contains(raw, "%2c") {
+			t.Errorf("RawQuery = %q, expected raw commas in array params, not %%2C", raw)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{})
+	})
+	defer server.Close()
+
+	op := &sempv2.Operation{
+		ID:     "testOp",
+		Method: "GET",
+		Path:   "/SEMP/v2/monitor/test",
+		Parameters: []sempv2.Parameter{
+			{Name: "select", In: "query", Type: "array"},
+		},
+	}
+
+	_, err := client.Execute(context.Background(), op, map[string]any{
+		"select": []any{"a", "b", "c"},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+}
+
+// TestClient_Execute_QueryParams_ArrayCSV_TrimsAndDropsEmpty pins the
+// whitespace-trim and empty-element-drop behavior so a sloppy input like
+// "a, b , ,c" still produces a clean "a,b,c" on the wire.
+func TestClient_Execute_QueryParams_ArrayCSV_TrimsAndDropsEmpty(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		raw := r.URL.RawQuery
+		if !strings.Contains(raw, "select=a,b,c") {
+			t.Errorf("RawQuery = %q, expected trimmed select=a,b,c", raw)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{})
+	})
+	defer server.Close()
+
+	op := &sempv2.Operation{
+		ID:     "testOp",
+		Method: "GET",
+		Path:   "/SEMP/v2/monitor/test",
+		Parameters: []sempv2.Parameter{
+			{Name: "select", In: "query", Type: "array"},
+		},
+	}
+
+	_, err := client.Execute(context.Background(), op, map[string]any{
+		"select": "a, b , ,c",
+	})
+	if err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+}
+
+// TestClient_Execute_QueryParams_ArrayCSV_CoexistsWithRegularParam ensures the
+// raw-comma array param and a standard-encoded query param both reach the
+// broker in the same request.
+func TestClient_Execute_QueryParams_ArrayCSV_CoexistsWithRegularParam(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		raw := r.URL.RawQuery
+		if !strings.Contains(raw, "select=a,b") {
+			t.Errorf("RawQuery = %q, missing raw-comma select=a,b", raw)
+		}
+		if r.URL.Query().Get("count") != "100" {
+			t.Errorf("count = %q, want 100", r.URL.Query().Get("count"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{})
+	})
+	defer server.Close()
+
+	op := &sempv2.Operation{
+		ID:     "testOp",
+		Method: "GET",
+		Path:   "/SEMP/v2/monitor/test",
+		Parameters: []sempv2.Parameter{
+			{Name: "select", In: "query", Type: "array"},
+			{Name: "count", In: "query"},
+		},
+	}
+
+	_, err := client.Execute(context.Background(), op, map[string]any{
+		"select": "a,b",
+		"count":  "100",
 	})
 	if err != nil {
 		t.Fatalf("Execute() error: %v", err)
@@ -544,6 +808,52 @@ func TestClient_Execute_UserAgent(t *testing.T) {
 	}
 }
 
+func TestClient_Execute_NoBody_NoContentType(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if ct := r.Header.Get("Content-Type"); ct != "" {
+			t.Errorf("Content-Type = %q, want empty for GET request with no body", ct)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{})
+	})
+	defer server.Close()
+
+	op := &sempv2.Operation{
+		ID:     "testOp",
+		Method: "GET",
+		Path:   "/SEMP/v2/monitor/test",
+	}
+
+	if _, err := client.Execute(context.Background(), op, map[string]any{}); err != nil {
+		t.Fatalf("Execute() error: %v", err)
+	}
+}
+
+func TestClient_Execute_AcceptHeader(t *testing.T) {
+	for _, method := range []string{"GET", "PUT", "DELETE"} {
+		t.Run(method, func(t *testing.T) {
+			client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if accept := r.Header.Get("Accept"); accept != "application/json" {
+					t.Errorf("Accept = %q, want application/json", accept)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{})
+			})
+			defer server.Close()
+
+			op := &sempv2.Operation{
+				ID:     "testOp",
+				Method: method,
+				Path:   "/SEMP/v2/monitor/test",
+			}
+
+			if _, err := client.Execute(context.Background(), op, map[string]any{}); err != nil {
+				t.Fatalf("Execute() method=%s error: %v", method, err)
+			}
+		})
+	}
+}
+
 func TestClient_Execute_Timeout(t *testing.T) {
 	_, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(10 * time.Second)
@@ -582,5 +892,109 @@ func TestClient_Execute_Timeout(t *testing.T) {
 	_, execErr := client.Execute(context.Background(), op, map[string]any{})
 	if execErr == nil {
 		t.Fatal("expected timeout error")
+	}
+}
+
+// TestClient_TransportPool_ReusesConnections proves the transport pool is sized
+// to hold every connection opened during a burst of MaxConcurrentPerBroker
+// requests, so a subsequent burst reuses them all without re-handshaking.
+//
+// Without the fix, http.Transport's default MaxIdleConnsPerHost=2 would close
+// 8 of the 10 connections after batch 1, forcing batch 2 to open 8 fresh
+// TCP+TLS connections. The test counts distinct connections via the server's
+// ConnState callback (StateNew) and asserts batch 2 opens zero new ones.
+func TestClient_TransportPool_ReusesConnections(t *testing.T) {
+	const concurrency = 10
+
+	var newConns atomic.Int32
+
+	// batch coordinates the in-flight requests of a single round: each request
+	// signals arrival and then blocks on release, so all `concurrency` requests
+	// are forced to occupy distinct TCP connections simultaneously rather than
+	// pipelining over one keep-alive socket.
+	type batch struct {
+		arrived chan struct{}
+		release chan struct{}
+	}
+	var current atomic.Pointer[batch]
+
+	handler := func(w http.ResponseWriter, _ *http.Request) {
+		bs := current.Load()
+		bs.arrived <- struct{}{}
+		<-bs.release
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+	}
+
+	server := httptest.NewUnstartedServer(http.HandlerFunc(handler))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			newConns.Add(1)
+		}
+	}
+	server.Start()
+	defer server.Close()
+
+	brokerCfg := &config.BrokerConfig{
+		URL:  server.URL,
+		Auth: config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"},
+	}
+	retries := 0
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		RequestTimeoutDuration: 5 * time.Second,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
+		MaxConcurrentPerBroker: concurrency,
+	}
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg)
+	if err != nil {
+		t.Fatalf("NewHTTPClient: %v", err)
+	}
+	defer client.Close()
+
+	op := &sempv2.Operation{ID: "testOp", Method: "GET", Path: "/SEMP/v2/monitor/test"}
+
+	runBatch := func() {
+		bs := &batch{
+			arrived: make(chan struct{}, concurrency),
+			release: make(chan struct{}),
+		}
+		current.Store(bs)
+		var wg sync.WaitGroup
+		for range concurrency {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if _, execErr := client.Execute(context.Background(), op, map[string]any{}); execErr != nil {
+					t.Errorf("Execute: %v", execErr)
+				}
+			}()
+		}
+		for range concurrency {
+			<-bs.arrived
+		}
+		close(bs.release)
+		wg.Wait()
+	}
+
+	runBatch()
+	afterBatch1 := newConns.Load()
+
+	// Give clients time to return connections to the idle pool before batch 2.
+	time.Sleep(50 * time.Millisecond)
+
+	runBatch()
+	afterBatch2 := newConns.Load()
+
+	if afterBatch1 != concurrency {
+		t.Errorf("batch 1: expected exactly %d new connections, got %d", concurrency, afterBatch1)
+	}
+	if afterBatch2 != afterBatch1 {
+		t.Errorf("batch 2: expected zero new connections (full pool reuse), but %d new connections opened (total: %d → %d). "+
+			"This usually means MaxIdleConnsPerHost is smaller than the concurrency cap.",
+			afterBatch2-afterBatch1, afterBatch1, afterBatch2)
 	}
 }

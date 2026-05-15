@@ -8,6 +8,9 @@ on:
       - 'v*'
   workflow_call:
 
+# Minimal token permissions — read-only access to repo contents.
+# golangci-lint-action uses checks: write to post inline annotations on PRs.
+# FOSSA scan requires id-token, pull-requests, actions, packages, and statuses.
 permissions:
   contents: read
   packages: read
@@ -19,7 +22,7 @@ permissions:
 
 jobs:
   fossa_scan:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
     name: FOSSA Scan
     uses: SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml@main
     with:

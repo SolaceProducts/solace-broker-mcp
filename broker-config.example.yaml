@@ -26,7 +26,6 @@ client_auth:
   issuer: "https://idp.example.com"
   audience: "mcp-server"
   resource_url: "https://mcp.example.com/mcp"
-  # required_scopes: ["scope1"]
   # dev_token: "static-token"  # only used with development_mode: true
 
 # SEMP client settings — controls how the server talks to brokers.

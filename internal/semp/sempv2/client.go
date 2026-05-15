@@ -3,7 +3,6 @@ package sempv2
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -83,9 +82,7 @@ func (c *HTTPClient) Close() {
 // tuning appropriate for concurrent SEMP calls, and delegates retry and rate
 // limiting to a shared resilience.Sender.
 func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (*HTTPClient, error) {
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: brokerCfg.InsecureSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
-	}
+	transport := resilience.NewTunedTransport(brokerCfg, sempCfg)
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -121,7 +118,10 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (
 // Rate limiting is enforced before the request (new requests only, not retries).
 // Retry logic is handled by the shared resilience.Sender.
 func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string]any) (*Result, error) {
-	reqURL := c.buildURL(op, args)
+	reqURL, err := c.buildURL(op, args)
+	if err != nil {
+		return nil, err
+	}
 
 	req, err := c.buildRequest(ctx, op, reqURL, args)
 	if err != nil {
@@ -164,7 +164,10 @@ func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string
 
 // buildURL substitutes path parameter placeholders in the operation's path
 // template with values from args and prepends the broker's base URL.
-func (c *HTTPClient) buildURL(op *Operation, args map[string]any) string {
+// Returns an error if any {placeholder} tokens remain unfilled after
+// substitution — this catches missing required path parameters before a
+// silently-wrong HTTP call is made.
+func (c *HTTPClient) buildURL(op *Operation, args map[string]any) (string, error) {
 	path := op.Path
 
 	for key, value := range args {
@@ -174,13 +177,48 @@ func (c *HTTPClient) buildURL(op *Operation, args map[string]any) string {
 		}
 	}
 
-	return c.baseURL + "/" + strings.TrimPrefix(path, "/")
+	// Detect any unfilled {placeholder} tokens left in the path. A "{" with no
+	// matching "}" means the path template itself is malformed — in that case
+	// fall through and let the broker surface the bad URL via a 4xx, since the
+	// problem isn't a missing argument.
+	missing := unfilledPlaceholders(path)
+	if len(missing) > 0 {
+		return "", fmt.Errorf("operation %s (path %q): unfilled path parameters: %s", op.ID, op.Path, strings.Join(missing, ", "))
+	}
+
+	return c.baseURL + "/" + strings.TrimPrefix(path, "/"), nil
+}
+
+// unfilledPlaceholders returns the de-duplicated list of "{name}" tokens
+// remaining in path after argument substitution. Each placeholder is reported
+// once even if it appears multiple times in the template.
+func unfilledPlaceholders(path string) []string {
+	var missing []string
+	seen := make(map[string]struct{})
+	for rest := path; len(rest) > 0; {
+		start := strings.Index(rest, "{")
+		if start < 0 {
+			break
+		}
+		end := strings.Index(rest[start:], "}")
+		if end < 0 {
+			break
+		}
+		placeholder := rest[start : start+end+1]
+		if _, dup := seen[placeholder]; !dup {
+			seen[placeholder] = struct{}{}
+			missing = append(missing, placeholder)
+		}
+		rest = rest[start+end+1:]
+	}
+	return missing
 }
 
 // buildRequest constructs the HTTP request with query parameters and JSON body
 // based on the operation's parameter definitions.
 func (c *HTTPClient) buildRequest(ctx context.Context, op *Operation, reqURL string, args map[string]any) (*http.Request, error) {
 	queryParams := url.Values{}
+	var arrayQueryParts []string // pre-encoded "name=v1,v2,v3" segments for array-typed params
 	var bodyData []byte
 
 	for _, param := range op.Parameters {
@@ -188,9 +226,19 @@ func (c *HTTPClient) buildRequest(ctx context.Context, op *Operation, reqURL str
 		case "path":
 			continue
 		case "query":
-			if val, ok := args[param.Name]; ok {
-				queryParams.Set(param.Name, fmt.Sprintf("%v", val))
+			val, ok := args[param.Name]
+			if !ok {
+				continue
 			}
+			if param.Type == "array" {
+				// SEMP v2 declares select/where as type=array, collectionFormat=csv: a single
+				// query param whose value is a comma-joined list. url.Values.Encode percent-
+				// encodes the commas to %2C, which the broker rejects ("'a,b,c' not a valid
+				// attribute"). Encode each element individually and join with raw commas.
+				arrayQueryParts = append(arrayQueryParts, encodeCSVQueryParam(param.Name, val))
+				continue
+			}
+			queryParams.Set(param.Name, fmt.Sprintf("%v", val))
 		case "body":
 			if body, ok := args["body"]; ok {
 				var err error
@@ -207,8 +255,17 @@ func (c *HTTPClient) buildRequest(ctx context.Context, op *Operation, reqURL str
 		}
 	}
 
-	if len(queryParams) > 0 {
-		reqURL = reqURL + "?" + queryParams.Encode()
+	queryString := queryParams.Encode()
+	if len(arrayQueryParts) > 0 {
+		joined := strings.Join(arrayQueryParts, "&")
+		if queryString != "" {
+			queryString += "&" + joined
+		} else {
+			queryString = joined
+		}
+	}
+	if queryString != "" {
+		reqURL = reqURL + "?" + queryString
 	}
 
 	var bodyReader io.Reader
@@ -221,10 +278,43 @@ func (c *HTTPClient) buildRequest(ctx context.Context, op *Operation, reqURL str
 		return nil, err
 	}
 
-	req.Header.Set("Content-Type", "application/json")
+	if bodyData != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "solace/broker-mcp-server/"+version.Version())
 
 	return req, nil
+}
+
+// encodeCSVQueryParam serializes an array-typed query parameter in SEMP v2's
+// collectionFormat=csv shape: each element is percent-encoded individually,
+// then joined with literal commas (e.g. "select=a,b,c"). The input value is
+// either a comma-joined string (the typical YAML path) or a slice; both are
+// flattened to a single comma-separated query param value.
+func encodeCSVQueryParam(name string, val any) string {
+	var parts []string
+	switch v := val.(type) {
+	case []string:
+		parts = v
+	case []any:
+		parts = make([]string, len(v))
+		for i, e := range v {
+			parts[i] = fmt.Sprintf("%v", e)
+		}
+	default:
+		parts = strings.Split(fmt.Sprintf("%v", v), ",")
+	}
+
+	encoded := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		encoded = append(encoded, url.QueryEscape(p))
+	}
+	return url.QueryEscape(name) + "=" + strings.Join(encoded, ",")
 }
 
 // parseSEMPError creates a SEMPError with best-effort extraction of the

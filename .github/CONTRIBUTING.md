@@ -123,7 +123,7 @@ go run ./cmd/server
 
 ## Coding Standards
 
-This project follows the principles documented in `docs/good-code.md`. Key guidelines:
+This project follows standard Go coding principles. Key guidelines:
 
 ### Go Style
 

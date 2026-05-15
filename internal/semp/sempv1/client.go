@@ -2,7 +2,6 @@ package sempv1
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"log/slog"
@@ -62,9 +61,7 @@ func (c *HTTPClient) Close() {
 // delegates retry and rate limiting to a shared resilience.Sender. No network
 // I/O happens here — connection setup is lazy on the first Execute call.
 func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (*HTTPClient, error) {
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: brokerCfg.InsecureSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
-	}
+	transport := resilience.NewTunedTransport(brokerCfg, sempCfg)
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating cookie jar: %w", err)

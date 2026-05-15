@@ -15,6 +15,7 @@
 package composite
 
 import (
+	"bytes"
 	"fmt"
 	"io/fs"
 
@@ -32,7 +33,9 @@ func LoadTools(fsys fs.FS, filename string) ([]CompositeTool, error) {
 	}
 
 	var file CompositeToolsFile
-	if err := yaml.Unmarshal(data, &file); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&file); err != nil {
 		return nil, fmt.Errorf("parsing composite tool file %q: %w", filename, err)
 	}
 

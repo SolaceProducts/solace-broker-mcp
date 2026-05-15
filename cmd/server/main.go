@@ -191,6 +191,8 @@ func main() {
 	//    level names.
 	slog.SetDefault(slog.New(newSlogHandler(slog.LevelInfo)))
 
+	slog.Info("server starting", slog.String("version", version.Version()))
+
 	// 1. Load config. config.Load handles path resolution internally
 	//    (CONFIG_FILE env var, then /etc/mcp-server/config.yaml, then
 	//    ./broker-config.yaml). See config.Load docs for exact semantics.
@@ -207,7 +209,6 @@ func main() {
 	slog.SetDefault(slog.New(newSlogHandler(level)))
 
 	slog.Info("config loaded",
-		slog.String("version", version.Version()),
 		slog.Int("broker_count", len(cfg.Brokers)),
 		slog.Int("port", cfg.Port),
 		slog.String("log_level", cfg.LogLevel))
@@ -258,7 +259,7 @@ func main() {
 
 	slog.Info("all tools registered")
 
-	// 9. Set up HTTP routes
+	// 8. Set up HTTP routes
 	mux := buildMux()
 
 	// Create MCP handler
@@ -277,13 +278,25 @@ func main() {
 	mux.Handle("/mcp", authedHandler)
 
 	// Register OAuth Protected Resource Metadata endpoint (RFC 9728)
-	// This enables MCP clients to discover the authorization server for OAuth flows
+	// This enables MCP clients to discover the authorization server for OAuth flows.
 	if metadataHandler := auth.NewProtectedResourceMetadataHandler(cfg); metadataHandler != nil {
 		mux.Handle("/.well-known/oauth-protected-resource", metadataHandler)
 		slog.Info("registered OAuth protected resource metadata endpoint")
 	}
 
-	// 10. Start server with graceful shutdown
+	// Catch-all: return JSON 404 for any unregistered path. MCP SDK clients
+	// probe multiple OAuth discovery endpoints during (re-)authentication
+	// (e.g. /.well-known/oauth-authorization-server, /authorize, /register).
+	// Go's default plain-text "404 page not found" causes JSON parse errors
+	// in those clients. A JSON body lets them fail gracefully.
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":"not_found","error_description":"the requested endpoint does not exist"}`)
+		slog.Debug("catch-all 404: no route matched", slog.String("method", r.Method), slog.String("path", r.URL.Path))
+	}))
+
+	// 9. Start server with graceful shutdown
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	httpServer := &http.Server{
 		Addr:              addr,
@@ -292,17 +305,17 @@ func main() {
 	}
 
 	done := make(chan os.Signal, 1)
-	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
 		var err error
 		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
-			slog.Info("server starting with TLS",
+			slog.Info("server listening with TLS",
 				slog.String("addr", addr),
 				slog.String("cert", cfg.TLSCertFile))
 			err = httpServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
 		} else {
-			slog.Info("server starting",
+			slog.Info("server listening",
 				slog.String("addr", addr))
 			err = httpServer.ListenAndServe()
 		}
