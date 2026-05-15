@@ -62,7 +62,7 @@ Configured under the `brokers` map. Each key is a broker alias used as the `brok
 | `auth.token` | — | Bearer token (used when `auth.mode: bearer`). |
 | `insecure_skip_verify` | `false` | Skip TLS certificate verification. Development only — do not use in production. |
 
-**Production URL enforcement:** when `development_mode: false`, the server rejects `http://` broker URLs at startup. Use `https://` for all production broker connections.
+**Production recommendation:** use `https://` broker URLs in production environments.
 
 ```yaml
 brokers:
