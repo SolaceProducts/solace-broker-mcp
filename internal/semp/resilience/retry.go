@@ -20,8 +20,9 @@ type retryStateKey struct{}
 // Each Do() call creates its own instance via context, so concurrent requests
 // to the same Sender are safe.
 type retryState struct {
-	auth401Retried  bool // true after first 401 re-auth attempt (basic auth only)
-	other5xxRetried bool // true after first non-429/503 5xx retry
+	auth401Retried  bool   // true after first 401 re-auth attempt (basic auth only)
+	other5xxRetried bool   // true after first non-429/503 5xx retry
+	method          string // HTTP method captured at Do() time for idempotency check
 }
 
 // OperationIDKey is the context key callers use to attach an operation
@@ -42,6 +43,7 @@ func getRetryState(ctx context.Context) *retryState {
 }
 
 // checkRetry is the custom retry policy for retryablehttp. It implements:
+//   - POST and PATCH: never retried (non-idempotent — see guard below)
 //   - 401: basic auth → clear cookie jar + retry once; bearer → fail immediately
 //   - 429, 503: full retries with exponential backoff
 //   - Other 5xx: retry once only (likely a bug, not transient)
@@ -53,6 +55,20 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 		return false, ctx.Err()
 	}
 
+	// Non-idempotent methods are never retried. POST and PATCH can produce
+	// side effects (resource creation, partial config update) that are not safe
+	// to repeat even on transient errors — a double-write is worse than a
+	// visible failure. This check covers both HTTP errors and connection errors.
+	//
+	// PUT and DELETE are deliberately NOT in this guard: RFC 9110 §9.2.2 defines
+	// both as idempotent, so a retry yields the same final state as a single call.
+	// SEMPv2 routes resource replacement through PUT; treating it as non-idempotent
+	// would defeat the retry policy for legitimately transient failures.
+	state := getRetryState(ctx)
+	if state.method == http.MethodPost || state.method == http.MethodPatch {
+		return false, nil
+	}
+
 	// Connection errors: delegate to retryablehttp's default policy which
 	// handles network errors, DNS failures, TLS handshake errors, etc.
 	if err != nil {
@@ -62,8 +78,6 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 	if resp == nil {
 		return false, nil
 	}
-
-	state := getRetryState(ctx)
 
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized: // 401
