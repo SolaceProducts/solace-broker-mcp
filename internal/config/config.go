@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -387,8 +388,8 @@ func validate(cfg *ServerConfig) error {
 		errs = append(errs, fmt.Errorf("at least one broker must be configured"))
 	}
 
-	for alias, broker := range cfg.Brokers {
-		errs = append(errs, validateBroker(alias, broker, !cfg.DevelopmentMode)...)
+	for _, alias := range slices.Sorted(maps.Keys(cfg.Brokers)) {
+		errs = append(errs, validateBroker(alias, cfg.Brokers[alias], !cfg.DevelopmentMode)...)
 	}
 
 	if err := ValidatePort(cfg.Port); err != nil {
@@ -426,7 +427,7 @@ func validate(cfg *ServerConfig) error {
 
 	if cfg.SEMP.RetryMaxInterval <= 0 {
 		errs = append(errs, fmt.Errorf("semp.retry_max_interval must be > 0, got %s", cfg.SEMP.RetryMaxInterval))
-	} else if cfg.SEMP.RetryMinInterval > 0 && cfg.SEMP.RetryMaxInterval < cfg.SEMP.RetryMinInterval {
+	} else if cfg.SEMP.RetryMaxInterval < cfg.SEMP.RetryMinInterval {
 		errs = append(errs, fmt.Errorf("semp.retry_max_interval (%s) must be >= semp.retry_min_interval (%s)", cfg.SEMP.RetryMaxInterval, cfg.SEMP.RetryMinInterval))
 	}
 
@@ -544,8 +545,8 @@ func validateBrokerURL(s string, productionMode bool) error {
 }
 
 // applyEnvOverrides checks for environment variable overrides and applies them
-// to the config. This runs after validation and credential resolution. The
-// overridden value is validated via ValidatePort internally.
+// to the config. This runs before validate() so overridden values are still
+// range-checked. The overridden value is validated via ValidatePort internally.
 func applyEnvOverrides(cfg *ServerConfig) error {
 	if envPort := os.Getenv("MCP_SERVER_PORT"); envPort != "" {
 		port, err := strconv.Atoi(envPort)

@@ -31,7 +31,7 @@ func writeTemp(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("writing temp config: %v", err)
 	}
 	return path
@@ -63,6 +63,7 @@ brokers:
 	broker := cfg.Brokers["prod-us"]
 	if broker == nil {
 		t.Fatal("expected broker 'prod-us' to exist")
+		return
 	}
 	if broker.URL != "https://broker-us.example.com:1943" {
 		t.Errorf("unexpected URL: %s", broker.URL)
@@ -843,6 +844,39 @@ brokers:
 		if !strings.Contains(msg, want) {
 			t.Errorf("combined error missing expected substring %q\nfull error:\n%s", want, msg)
 		}
+	}
+}
+
+func TestValidate_BrokerErrorsAreSorted(t *testing.T) {
+	// Broker map iteration is non-deterministic; sorted aliases ensure the
+	// joined error string always lists errors in alphabetical alias order.
+	yaml := `
+development_mode: true
+brokers:
+  zebra:
+    auth:
+      mode: basic
+  alpha:
+    auth:
+      mode: basic
+  monkey:
+    auth:
+      mode: basic
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected validation errors")
+	}
+	msg := err.Error()
+	alphaIdx := strings.Index(msg, `"alpha"`)
+	monkeyIdx := strings.Index(msg, `"monkey"`)
+	zebraIdx := strings.Index(msg, `"zebra"`)
+	if alphaIdx < 0 || monkeyIdx < 0 || zebraIdx < 0 {
+		t.Fatalf("expected all three aliases in error, got: %s", msg)
+	}
+	if alphaIdx >= monkeyIdx || monkeyIdx >= zebraIdx {
+		t.Errorf("expected errors in alphabetical order (alpha < monkey < zebra), got positions %d %d %d\nfull error:\n%s",
+			alphaIdx, monkeyIdx, zebraIdx, msg)
 	}
 }
 
