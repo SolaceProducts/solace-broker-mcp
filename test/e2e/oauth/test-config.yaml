@@ -10,7 +10,7 @@
 # To use a different broker, modify the URL below:
 
 port: 9091
-development_mode: false
+development_mode: true  # localhost http:// URLs are intentional for this e2e test environment
 
 # OAuth configuration - values are injected by setup-keycloak.sh into test/e2e/oauth/.env
 client_auth:

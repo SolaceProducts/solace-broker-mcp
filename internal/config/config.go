@@ -388,7 +388,7 @@ func validate(cfg *ServerConfig) error {
 	}
 
 	for alias, broker := range cfg.Brokers {
-		errs = append(errs, validateBroker(alias, broker)...)
+		errs = append(errs, validateBroker(alias, broker, !cfg.DevelopmentMode)...)
 	}
 
 	if err := ValidatePort(cfg.Port); err != nil {
@@ -448,14 +448,14 @@ func validate(cfg *ServerConfig) error {
 
 	// Validate issuer structure if set
 	if cfg.ClientAuth.Issuer != "" {
-		if err := validateBrokerURL(cfg.ClientAuth.Issuer); err != nil {
+		if err := validateBrokerURL(cfg.ClientAuth.Issuer, !cfg.DevelopmentMode); err != nil {
 			errs = append(errs, fmt.Errorf("client_auth.issuer: %w", err))
 		}
 	}
 
 	// Validate resource_url structure if set
 	if cfg.ClientAuth.ResourceURL != "" {
-		if err := validateBrokerURL(cfg.ClientAuth.ResourceURL); err != nil {
+		if err := validateBrokerURL(cfg.ClientAuth.ResourceURL, !cfg.DevelopmentMode); err != nil {
 			errs = append(errs, fmt.Errorf("client_auth.resource_url: %w", err))
 		}
 	}
@@ -471,12 +471,12 @@ func validate(cfg *ServerConfig) error {
 // validateBroker returns all validation errors for a single broker. Credential
 // checks are skipped when auth.mode is missing or invalid because there are no
 // meaningful credential rules to apply without a known mode.
-func validateBroker(alias string, broker *BrokerConfig) []error {
+func validateBroker(alias string, broker *BrokerConfig, productionMode bool) []error {
 	var errs []error
 
 	if broker.URL == "" {
 		errs = append(errs, fmt.Errorf("broker %q: url is required", alias))
-	} else if err := validateBrokerURL(broker.URL); err != nil {
+	} else if err := validateBrokerURL(broker.URL, productionMode); err != nil {
 		errs = append(errs, fmt.Errorf("broker %q: %w", alias, err))
 	}
 
@@ -520,19 +520,22 @@ func ValidatePort(port int) error {
 	return nil
 }
 
-// validateBrokerURL checks that s is a well-formed http or https URL with a
-// host component. This is structural validation only — it does NOT verify
-// that the host resolves, is reachable, or actually runs a SEMP endpoint.
-// Those are deliberately runtime concerns surfaced on the first tool call.
-// Both http and https are permitted; production-mode https-only enforcement
-// will be added with the dev/prod flag from Story 1B.
-func validateBrokerURL(s string) error {
+// validateBrokerURL checks that s is a well-formed URL with an http or https
+// scheme and a host component. This is structural validation only — it does
+// NOT verify that the host resolves, is reachable, or actually runs a SEMP
+// endpoint. Those are deliberately runtime concerns surfaced on the first
+// tool call. When productionMode is true, http:// is rejected — credentials
+// would otherwise be transmitted in plaintext.
+func validateBrokerURL(s string, productionMode bool) error {
 	u, err := url.Parse(s)
 	if err != nil {
 		return fmt.Errorf("url is not a valid URL: %w", err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return fmt.Errorf("url scheme must be http or https, got %q", u.Scheme)
+	}
+	if productionMode && u.Scheme == "http" {
+		return fmt.Errorf("url scheme must be https to protect credentials in transit (got %q)", s)
 	}
 	if u.Host == "" {
 		return fmt.Errorf("url must include a host, got %q", s)

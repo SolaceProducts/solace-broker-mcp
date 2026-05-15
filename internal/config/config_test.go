@@ -452,6 +452,77 @@ brokers:
 	}
 }
 
+func TestLoadConfig_RejectsHTTPBrokerInProductionMode(t *testing.T) {
+	yaml := `
+development_mode: false
+brokers:
+  prod-us:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+client_auth:
+  issuer: "https://idp.example.com"
+  audience: "solace-mcp"
+  resource_url: "https://mcp.example.com"
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for http:// broker URL in production mode")
+	}
+	if !strings.Contains(err.Error(), "must be https") {
+		t.Errorf("error should steer toward https as the fix: %v", err)
+	}
+	if !strings.Contains(err.Error(), "prod-us") {
+		t.Errorf("error should mention the broker alias: %v", err)
+	}
+}
+
+func TestLoadConfig_RejectsHTTPClientAuthInProductionMode(t *testing.T) {
+	yaml := `
+development_mode: false
+brokers:
+  prod-us:
+    url: "https://broker.example.com:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+client_auth:
+  issuer: "http://idp.example.com"
+  audience: "solace-mcp"
+  resource_url: "http://mcp.example.com"
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for http:// client_auth URLs in production mode")
+	}
+	if !strings.Contains(err.Error(), "client_auth.issuer") {
+		t.Errorf("error should mention client_auth.issuer: %v", err)
+	}
+	if !strings.Contains(err.Error(), "client_auth.resource_url") {
+		t.Errorf("error should mention client_auth.resource_url: %v", err)
+	}
+}
+
+func TestLoadConfig_AllowsHTTPBrokerInDevelopmentMode(t *testing.T) {
+	yaml := `
+development_mode: true
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("http:// should be allowed in development_mode: %v", err)
+	}
+}
+
 func TestLoadConfig_URLMissingHost(t *testing.T) {
 	yaml := `
 development_mode: true
