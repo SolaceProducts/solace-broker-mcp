@@ -1,4 +1,4 @@
-# Solace Broker MCP Server
+# User Guide
 
 ## Overview
 
@@ -6,11 +6,11 @@ The Solace Broker MCP Server is an [MCP (Model Context Protocol)](https://modelc
 
 Use cases include:
 
-- **Incident triage** -- ask an AI assistant to check broker health, find queues with backlogs, or identify slow consumers instead of navigating SEMP APIs manually.
-- **Operational monitoring** -- get a quick overview of VPN health, client connections, and message rates across multiple brokers from a single conversational interface.
-- **Multi-broker management** -- configure connections to multiple brokers and switch between them by name during a conversation.
+- **Incident triage** — ask an AI assistant to check broker health, find queues with backlogs, or identify slow consumers instead of navigating SEMP APIs manually.
+- **Operational monitoring** — get a quick overview of VPN health, client connections, and message rates across multiple brokers from a single conversational interface.
+- **Multi-broker management** — configure connections to multiple brokers and switch between them by name during a conversation.
 
-The server is built in Go using the official [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk)
+The server is built in Go using the official [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk).
 
 ## Prerequisites
 
@@ -19,6 +19,7 @@ Before installing the Solace Broker MCP Server, ensure you have the following:
 | Requirement | Details |
 |---|---|
 | **Solace PubSub+ broker** | One or more brokers with SEMP management enabled. The server connects to the SEMP management API (typically port 8080 for HTTP or 1943 for HTTPS). |
+| **SEMPv1+v2 reachability** | The machine running the MCP server must have network access to both the SEMPv1 (`/SEMP`) and SEMPv2 (`/SEMP/v2`) endpoints on each broker's SEMP management port. |
 | **Broker credentials** | A SEMP username and password (basic auth) to access each broker. |
 | **Runtime environment** | One of: Docker, a supported OS/architecture for the binary (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64), or Kubernetes. |
 | **MCP client** | An MCP-compatible AI client such as Claude Code or Claude Desktop. |
@@ -27,9 +28,9 @@ Before installing the Solace Broker MCP Server, ensure you have the following:
 
 ## Limitations and Considerations
 
-- **No stdio transport** -- The server runs as a standalone HTTP service and must be started before connecting an MCP client. It cannot be auto-launched as a subprocess by clients like Claude Desktop.
-- **Pagination limits** -- List tools return up to 100 results by default and cap at 500 via the `maxResults` parameter. Brokers with more than 500 queues, clients, or VPNs will require multiple queries.
-- **OAuth required in production** -- When `development_mode` is `false`, all MCP client connections must present a valid OAuth/JWT token. Plan your identity provider integration before deploying to shared environments.
+- **No stdio transport** — The server runs as a standalone HTTP service and must be started before connecting an MCP client. It cannot be auto-launched as a subprocess by clients like Claude Desktop.
+- **Pagination limits** — List tools return up to 100 results by default and cap at 500 via the `maxResults` parameter. Brokers with more than 500 queues, clients, or VPNs will require multiple queries.
+- **OAuth required in production** — When `development_mode` is `false`, all MCP client connections must present a valid OAuth/JWT token. Plan your identity provider integration before deploying to shared environments.
 
 ## Tools
 
@@ -84,51 +85,43 @@ The server exposes 14 read-only tools. Every tool requires a `broker` parameter 
 |---|---|
 | `get-dmr-status` | DMR cluster status: enabled state, uptime, and all link statuses. Use to diagnose mesh connectivity issues. |
 
+## Connecting an MCP Client
+
+Once the server is running, connect Claude Code to it:
+
+```bash
+claude mcp add solace-broker --transport http http://localhost:9090/mcp
+```
+
+For details on securing this connection with a static token or OAuth/OIDC, see the [Authentication](authentication.md) guide.
+
 ## Recommended Environments
 
 ### Authentication
 
-There are two authentication boundaries to configure:
+The server supports open access, static token, and OAuth/OIDC authentication for MCP clients, and basic auth or bearer token for broker connections. See the [Authentication](authentication.md) guide for setup instructions.
 
-**MCP Client → MCP Server (first hop)**
-
-How MCP clients authenticate to the server. Three modes are available depending on your deployment:
-
-- **Open (development only)** -- set `development_mode: true` with no static token. No credentials required; intended for local evaluation only.
-- **Static token (development only)** -- set `development_mode: true` and configure a `static_token`. Clients pass this token as a Bearer token in the `Authorization` header.
-- **OAuth / OIDC (production)** -- set `development_mode: false` and configure an identity provider (issuer, audience, resource URL) in the `client_auth` section. Clients must present a valid JWT.
-
-For detailed setup instructions, see the [Client Authentication](client-authentication.md) guide.
-
-**MCP Server → Broker (second hop)**
-
-How the server authenticates to each Solace broker. Configured per broker in the config file:
-
-- **Basic auth** -- provide a `username` and `password` for the broker.
-- **Bearer token** -- provide a bearer `token` when the broker is configured for token-based authentication.
-
-### Deployment Targets
+## Deployment Targets
 
 | Environment | Notes |
 |---|---|
 | **Local / laptop** | Run the binary directly or via Docker. Use `development_mode: true` to skip OAuth setup. |
 | **Docker / Docker Compose** | Multi-platform images available at `ghcr.io/solacedev/solace-broker-mcp`. Built-in health check. |
-| **Kubernetes** | Example manifests in `deploy/kubernetes/`. Runs as non-root (UID 65534) with a read-only root filesystem. Health probes preconfigured. |
 | **Bare metal / VM** | Statically-linked binary with no external dependencies. Handles SIGTERM/SIGINT for graceful shutdown. |
 
 ## Troubleshooting
 
 ### Server won't start
 
-- **Config file not found** -- The server looks for the yaml configuration file in this order: `CONFIG_FILE` env var, `/etc/mcp-server/config.yaml`, then `./broker-config.yaml`. Set `CONFIG_FILE` explicitly if your file is elsewhere.
-- **TLS misconfiguration** -- Both `tls_cert_file` and `tls_key_file` must be set together. Providing only one is a startup error.
-- **OAuth config missing** -- When `development_mode` is `false`, the `client_auth` section (issuer, audience, resource_url) is required. For local testing, set `development_mode: true`.
+- **Config file not found** — The server looks for the yaml configuration file in this order: `CONFIG_FILE` env var, `/etc/mcp-server/config.yaml`, then `./broker-config.yaml`. Set `CONFIG_FILE` explicitly if your file is elsewhere.
+- **TLS misconfiguration** — Both `tls_cert_file` and `tls_key_file` must be set together. Providing only one is a startup error.
+- **OAuth config missing** — When `development_mode` is `false`, the `client_auth` section (issuer, audience, resource_url) is required. For local testing, set `development_mode: true`.
 
 ### Cannot connect to broker
 
-- **SEMP not enabled** -- Verify the broker's SEMP management interface is accessible at the configured URL (e.g., `http://broker:8080/SEMP`).
-- **Authentication failure** -- Check that credentials in the `.env` file are correct. For basic auth, verify both `username` and `password`. For bearer mode, verify the `token`.
-- **TLS certificate errors** -- If the broker uses a self-signed certificate, set `insecure_skip_verify: true` in the broker config (development only -- do not use in production).
+- **SEMP not enabled** — Verify the broker's SEMP management interface is accessible at the configured URL (e.g., `http://broker:8080/SEMP`).
+- **Authentication failure** — Check that credentials in the `.env` file are correct. For basic auth, verify both `username` and `password`. For bearer mode, verify the `token`.
+- **TLS certificate errors** — If the broker uses a self-signed certificate, enable `insecure_skip_verify` in the broker config. See [Configuration](configuration.md#broker-settings) for details.
 
 ### Tool returns an error
 
@@ -142,9 +135,9 @@ Tool errors include structured fields to help diagnose the problem:
 | `operation` | The SEMP operation that failed (e.g., `monitor/getMsgVpnQueues`). |
 
 Common causes:
-- **404** -- The specified VPN, queue, client, or RDP does not exist. Check the name for typos.
-- **401 / 403** -- Broker credentials lack permission for the requested operation. Verify the SEMP user has monitor-level access.
-- **429 / 503** -- Rate limiting or broker overload. These are retryable -- the server will retry automatically based on the configured retry policy.
+- **404** — The specified VPN, queue, client, or RDP does not exist. Check the name for typos.
+- **401 / 403** — Broker credentials lack permission for the requested operation. Verify the SEMP user has monitor-level access.
+- **429 / 503** — Rate limiting or broker overload. These are retryable — the server will retry automatically based on the configured retry policy.
 
 ### Health check fails
 
@@ -163,13 +156,3 @@ curl http://localhost:9090/health
 The `--health` flag probes the running server's `/health` endpoint — the server must already be running for it to succeed. It reads the config file to determine the port and TLS settings, so ensure the same config file is accessible to both the server process and the health probe.
 
 If the health check fails, verify the server process is running and the configured port is not in use by another process.
-
-### Logging
-
-The server writes structured JSON logs to stderr. Adjust the log level in the config file:
-
-```yaml
-log_level: debug   # debug, info, warn, error
-```
-
-Credentials are automatically redacted in all log output. Every tool invocation is logged with the tool name, target broker, status, and duration.
