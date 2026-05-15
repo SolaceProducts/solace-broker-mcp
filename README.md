@@ -76,7 +76,7 @@ BROKER_PASSWORD=admin
 
 The `.env` file is loaded automatically. Environment variables set directly (e.g., in CI/CD) take precedence over `.env` values. See [Configuration Options](#configuration-options) for all settings including port, TLS, and file path overrides.
 
-### Binary
+### Binary Deployment
 
 Download the archive for your platform from the [latest release](https://github.com/SolaceDev/solace-broker-mcp/releases/latest), verify the checksum, and extract:
 
@@ -104,7 +104,7 @@ curl http://localhost:9090/health
 
 The binary is statically linked with no external dependencies. It handles `SIGTERM` and `SIGINT` for graceful shutdown.
 
-### Docker
+### Docker Deployment
 
 ```bash
 docker run -d \

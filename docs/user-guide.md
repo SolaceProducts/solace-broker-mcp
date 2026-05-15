@@ -34,7 +34,7 @@ Before installing the Solace Broker MCP Server, ensure you have the following:
 
 ## Tools
 
-The server exposes 14 read-only tools. All broker-querying tools requires a `broker` parameter to identify which configured broker to query; `list-brokers` is the exception and returns the available broker aliases.
+The server exposes 14 read-only tools. All broker-querying tools require a `broker` parameter to identify which configured broker to query; `list-brokers` is the exception and returns the available broker aliases.
 
 ### Discovery
 
