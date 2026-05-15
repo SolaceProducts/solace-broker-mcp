@@ -8,6 +8,8 @@
 
 An MCP (Model Context Protocol) server for Solace broker, built with Go using the official [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk).
 
+For details, see the [User Guide](docs/user-guide.md), [Configuration](docs/configuration.md), and [Authentication](docs/authentication.md) guides.
+
 ## Prerequisites
 
 - Access to one or more Solace brokers with SEMP management enabled
@@ -34,7 +36,7 @@ brokers:
       password: "${BROKER_PASSWORD}"
 ```
 
-`development_mode: true` disables OAuth authentication for local use. For production, set `development_mode: false` and configure the `client_auth` section with your OAuth provider (issuer, audience, resource URL).
+`development_mode: true` disables OAuth authentication for local use. For production, set `development_mode: false` and configure the `client_auth` section with your OAuth provider (issuer, audience, resource URL). Refer to the [Authentication](docs/authentication.md) guide for specific setup instructions.
 
 Each broker needs:
 - `url` — the SEMP management API base URL
@@ -230,7 +232,23 @@ GitHub Actions CI runs automatically on pull requests targeting `main` and on pu
 
 ## Architecture
 
-See [docs/architecture.md](docs/architecture.md) for component diagrams, request flow, and design decisions.
+```
+                                           ┌───────────────────┐
+                                           │  OAuth IdP        │
+                                           │  (Keycloak etc.,  │ ◀── JWT validation
+                                           │                   │     (production only)
+                                           └─────────┬─────────┘
+                                                     │
+                                                     ▼
+┌──────────────────┐   MCP over HTTP    ┌──────────────────────────┐   SEMPv1 + SEMPv2    ┌──────────────────┐
+│                  │                    │   Broker MCP Server      │                      │                  │
+│   AI Agent       │ ─────────────────▶ │                          │ ───────────────────▶ │  Solace          │
+│  (Claude Code,   │   JSON-RPC         │  • Auth (OAuth / token)  │   HTTP(S) /SEMP      │  PubSub+         │
+│  Claude Desktop) │   + Bearer JWT     │  • 14 read-only tools    │                      │  Broker(s)       │
+│                  │                    │  • Rate-limit + retry    │                      │                  │
+│                  │ ◀───────────────── │  • SEMP client pool      │ ◀─────────────────── │                  │
+└──────────────────┘                    └──────────────────────────┘   basic / bearer     └──────────────────┘
+```
 
 ## Contributing
 
