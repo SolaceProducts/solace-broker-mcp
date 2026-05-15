@@ -96,12 +96,12 @@ gh run list --workflow=release.yml --limit 1
 gh run view --log
 ```
 
-**Expected output**: Binaries created in ~2-3 minutes
-- `solace-broker-mcp-linux-amd64`
-- `solace-broker-mcp-darwin-amd64`
-- `solace-broker-mcp-darwin-arm64`
-- `solace-broker-mcp-windows-amd64.exe`
-- `checksums.txt`
+**Expected output**: Archives created in ~2-3 minutes
+- `solace-broker-mcp-{version}-linux-amd64.tar.gz`
+- `solace-broker-mcp-{version}-linux-arm64.tar.gz`
+- `solace-broker-mcp-{version}-darwin-amd64.tar.gz`
+- `solace-broker-mcp-{version}-darwin-arm64.tar.gz`
+- `checksums-sha256.txt`
 
 ### 5. Verify GitHub Release
 
@@ -118,8 +118,8 @@ https://github.com/SolaceDev/solace-broker-mcp/releases/tag/v0.1.0
 **Verify:**
 - [ ] Release title is correct ("v0.1.0")
 - [ ] Release notes are auto-generated from merged PRs
-- [ ] All 5 binaries are attached
-- [ ] Checksums file is attached
+- [ ] All 4 archives are attached
+- [ ] `checksums-sha256.txt` is attached
 - [ ] "Latest" badge is applied
 
 ### 6. Test the Release Binaries
@@ -127,17 +127,17 @@ https://github.com/SolaceDev/solace-broker-mcp/releases/tag/v0.1.0
 **Download and test a binary:**
 ```bash
 # macOS arm64 example
-curl -LO https://github.com/SolaceDev/solace-broker-mcp/releases/download/v0.1.0/solace-broker-mcp-darwin-arm64
-chmod +x solace-broker-mcp-darwin-arm64
-./solace-broker-mcp-darwin-arm64 -version
+curl -LO https://github.com/SolaceDev/solace-broker-mcp/releases/download/v0.1.0/solace-broker-mcp-v0.1.0-darwin-arm64.tar.gz
+tar xzf solace-broker-mcp-v0.1.0-darwin-arm64.tar.gz
+./solace-broker-mcp -version
 # Should output: v0.1.0
 ```
 
 **Verify checksum:**
 ```bash
-curl -LO https://github.com/SolaceDev/solace-broker-mcp/releases/download/v0.1.0/checksums.txt
-shasum -a 256 -c checksums.txt --ignore-missing
-# Should output: solace-broker-mcp-darwin-arm64: OK
+curl -LO https://github.com/SolaceDev/solace-broker-mcp/releases/download/v0.1.0/checksums-sha256.txt
+shasum -a 256 -c checksums-sha256.txt --ignore-missing
+# Should output: solace-broker-mcp-v0.1.0-darwin-arm64.tar.gz: OK
 ```
 
 ### 7. Update README (Optional Enhancement)

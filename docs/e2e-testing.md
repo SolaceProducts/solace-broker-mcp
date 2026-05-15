@@ -218,7 +218,7 @@ Fixtures are cleaned up before creation (to handle leftover state) and after tes
 |---|---|
 | `test_health_endpoint` | `GET /health` returns `{"status": "ok"}` |
 | `test_initialize` | MCP handshake completes, server returns `Mcp-Session-Id` |
-| `test_list_tools` | `tools/list` returns all 5 tools (`get-rdp-status`, `list-brokers`, `get-queue-metrics`, `get-client-details`, `list-client-subscriptions`) |
+| `test_list_tools` | `tools/list` returns all 14 tools (composite: `get-rdp-status`, `get-queue-metrics`, `get-client-details`, `list-client-subscriptions`, `get-vpn-health`, `list-vpns`, `list-queues`, `list-clients`, `get-message-rates`, `get-dmr-status`, `list-rdps`; native: `list-brokers`, `get-broker-health`, `get-redundancy-status`) |
 | `test_list_brokers` | `list-brokers` response includes both `broker-a` and `broker-b` |
 | `test_get_rdp_status_broker_a` | `get-rdp-status` on broker-a returns 3-step response |
 | `test_get_rdp_status_not_found` | Nonexistent RDP name returns a JSON-RPC error |
@@ -250,7 +250,7 @@ Usage: `./bin/agent <server-url>`
 
 It performs:
 1. Connect to the MCP server via `StreamableClientTransport`
-2. Call `session.ListTools()` — verify all 5 tools are present
+2. Call `session.ListTools()` — verify all 14 tools are present
 3. Call `list-brokers` tool — verify both `broker-a` and `broker-b` aliases appear
 4. For each broker (`broker-a`, `broker-b`):
    - Call `get-rdp-status` with the test fixtures — verify 3-step structured response
