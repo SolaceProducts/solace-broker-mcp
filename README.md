@@ -8,7 +8,31 @@
 
 An MCP (Model Context Protocol) server for Solace broker, built with Go using the official [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk).
 
-For details, see the [User Guide](docs/user-guide.md), [Configuration](docs/configuration.md), and [Authentication](docs/authentication.md) guides.
+## Architecture
+
+```
+                                           ┌───────────────────┐
+                                           │  OAuth IdP        │
+                                           │  (Keycloak etc.,  │ ◀── JWT validation
+                                           │                   │     (production only)
+                                           └─────────┬─────────┘
+                                                     │
+                                                     ▼
+┌──────────────────┐   MCP over HTTP    ┌──────────────────────────┐   SEMPv1 + SEMPv2    ┌──────────────────┐
+│                  │                    │   Broker MCP Server      │                      │                  │
+│   AI Agent       │ ─────────────────▶ │                          │ ───────────────────▶ │  Solace          │
+│  (Claude Code,   │   JSON-RPC         │  • Auth (OAuth / token)  │   HTTP(S) /SEMP      │  PubSub+         │
+│  Claude Desktop) │   + Bearer JWT     │  • 14 read-only tools    │                      │  Broker(s)       │
+│                  │                    │  • Rate-limit + retry    │                      │                  │
+│                  │ ◀───────────────── │  • SEMP client pool      │ ◀─────────────────── │                  │
+└──────────────────┘                    └──────────────────────────┘   basic / bearer     └──────────────────┘
+```
+
+## Documentation
+
+- [User Guide](docs/user-guide.md) — overview, tools reference, deployment, and troubleshooting
+- [Configuration](docs/configuration.md) — server settings, broker config, client auth, and rate-limit/retry knobs
+- [Authentication](docs/authentication.md) — OAuth/OIDC and static token setup for MCP clients
 
 ## Prerequisites
 
@@ -229,26 +253,6 @@ solace-broker-mcp/
 ## CI
 
 GitHub Actions CI runs automatically on pull requests targeting `main` and on pushes to `main`. The workflow runs lint (golangci-lint), build, `go vet`, unit tests, E2E tests against real Solace brokers, and OAuth integration tests.
-
-## Architecture
-
-```
-                                           ┌───────────────────┐
-                                           │  OAuth IdP        │
-                                           │  (Keycloak etc.,  │ ◀── JWT validation
-                                           │                   │     (production only)
-                                           └─────────┬─────────┘
-                                                     │
-                                                     ▼
-┌──────────────────┐   MCP over HTTP    ┌──────────────────────────┐   SEMPv1 + SEMPv2    ┌──────────────────┐
-│                  │                    │   Broker MCP Server      │                      │                  │
-│   AI Agent       │ ─────────────────▶ │                          │ ───────────────────▶ │  Solace          │
-│  (Claude Code,   │   JSON-RPC         │  • Auth (OAuth / token)  │   HTTP(S) /SEMP      │  PubSub+         │
-│  Claude Desktop) │   + Bearer JWT     │  • 14 read-only tools    │                      │  Broker(s)       │
-│                  │                    │  • Rate-limit + retry    │                      │                  │
-│                  │ ◀───────────────── │  • SEMP client pool      │ ◀─────────────────── │                  │
-└──────────────────┘                    └──────────────────────────┘   basic / bearer     └──────────────────┘
-```
 
 ## Contributing
 
