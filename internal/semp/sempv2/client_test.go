@@ -86,6 +86,97 @@ func TestClient_Execute_Success(t *testing.T) {
 	}
 }
 
+func TestClient_Execute_MissingPathParam_ReturnsError(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		// Should never be reached — buildURL should return an error before any HTTP call.
+		t.Error("handler called unexpectedly; buildURL should have errored")
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	defer server.Close()
+
+	op := testOp("GET",
+		sempv2.Parameter{Name: "msgVpnName", In: "path"},
+		sempv2.Parameter{Name: "queueName", In: "path"},
+	)
+
+	// Provide msgVpnName but omit queueName — {queueName} stays unfilled.
+	_, err := client.Execute(context.Background(), op, map[string]any{
+		"msgVpnName": "default",
+		// queueName intentionally absent
+	})
+	if err == nil {
+		t.Fatal("expected error for missing path parameter, got nil")
+	}
+	if !strings.Contains(err.Error(), "{queueName}") {
+		t.Errorf("error = %q, expected it to name the missing placeholder {queueName}", err.Error())
+	}
+	// Error message should include the operation's path template so an operator
+	// can correlate the error to the spec.
+	if !strings.Contains(err.Error(), op.Path) {
+		t.Errorf("error = %q, expected it to include op.Path %q for debuggability", err.Error(), op.Path)
+	}
+}
+
+// TestClient_Execute_MissingPathParam_DeduplicatedInError ensures a repeated
+// placeholder appears only once in the error message even when the template
+// references it multiple times.
+func TestClient_Execute_MissingPathParam_DeduplicatedInError(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("handler called unexpectedly; buildURL should have errored")
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	defer server.Close()
+
+	op := &sempv2.Operation{
+		ID:     "testOp",
+		Method: "GET",
+		// {vpn} appears twice in the template; should be reported once.
+		Path: "/v2/x/{vpn}/y/{vpn}/z",
+		Parameters: []sempv2.Parameter{
+			{Name: "vpn", In: "path"},
+		},
+	}
+
+	_, err := client.Execute(context.Background(), op, map[string]any{})
+	if err == nil {
+		t.Fatal("expected error for missing path parameter")
+	}
+	// The error embeds op.Path (which contains {vpn} twice) plus the
+	// deduplicated list of unfilled placeholders. Inspect only the list
+	// portion after "unfilled path parameters:" to verify dedupe.
+	const marker = "unfilled path parameters:"
+	idx := strings.Index(err.Error(), marker)
+	if idx < 0 {
+		t.Fatalf("error message missing %q section: %q", marker, err.Error())
+	}
+	listPortion := err.Error()[idx+len(marker):]
+	occurrences := strings.Count(listPortion, "{vpn}")
+	if occurrences != 1 {
+		t.Errorf("expected {vpn} to appear exactly once in the unfilled-params list, got %d (list: %q)", occurrences, listPortion)
+	}
+}
+
+func TestClient_Execute_AllPathParamsProvided_NoError(t *testing.T) {
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{})
+	})
+	defer server.Close()
+
+	op := testOp("GET",
+		sempv2.Parameter{Name: "msgVpnName", In: "path"},
+		sempv2.Parameter{Name: "queueName", In: "path"},
+	)
+
+	_, err := client.Execute(context.Background(), op, map[string]any{
+		"msgVpnName": "default",
+		"queueName":  "q1",
+	})
+	if err != nil {
+		t.Fatalf("Execute() with all path params: unexpected error: %v", err)
+	}
+}
+
 func TestClient_Execute_PathParams(t *testing.T) {
 	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.Path, "/msgVpns/my-vpn/queues/my-queue") {
