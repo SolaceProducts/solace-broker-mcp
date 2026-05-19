@@ -261,6 +261,78 @@ brokers:
 	}
 }
 
+// ${VAR} references inside YAML comments must NOT trigger env var lookups —
+// the line is inert at parse time and has no effect on the loaded config.
+func TestLoadConfig_EnvVarInWholeLineComment(t *testing.T) {
+	yaml := `
+development_mode: true
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+      # token: ${UNSET_BEARER_TOKEN}  # alternate bearer-auth example
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("commented-out ${UNSET_BEARER_TOKEN} must not fail load: %v", err)
+	}
+	if cfg.Brokers["prod"].Auth.Token != "" {
+		t.Errorf("expected token unset for commented-out line, got %q", cfg.Brokers["prod"].Auth.Token)
+	}
+}
+
+// Trailing inline comments must also be skipped, while ${VAR} in the live
+// portion of the same line is still substituted.
+func TestLoadConfig_EnvVarInInlineComment(t *testing.T) {
+	t.Setenv("INLINE_PASSWORD", "live-secret")
+
+	yaml := `
+development_mode: true
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: ${INLINE_PASSWORD}  # was ${UNSET_OLD_PASSWORD}
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("inline comment ${UNSET_OLD_PASSWORD} must not fail load: %v", err)
+	}
+	if cfg.Brokers["prod"].Auth.Password != "live-secret" {
+		t.Errorf("expected password substituted to %q, got %q", "live-secret", cfg.Brokers["prod"].Auth.Password)
+	}
+}
+
+// A # character that appears inside a quoted string is part of the value, not
+// a comment marker. ${VAR} on the same line must still be substituted and the
+// # preserved in the parsed value.
+func TestLoadConfig_HashInsideQuotedValue(t *testing.T) {
+	t.Setenv("PWD_HEAD", "live")
+
+	yaml := `
+development_mode: true
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: "${PWD_HEAD}#tail"
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := cfg.Brokers["prod"].Auth.Password; got != "live#tail" {
+		t.Errorf("expected password %q, got %q", "live#tail", got)
+	}
+}
+
 func TestLoadConfig_PortOutOfRange(t *testing.T) {
 	yaml := `
 port: 99999
