@@ -569,6 +569,46 @@ brokers:
 	}
 }
 
+// TestLoadConfig_RejectsBrokerURLWithCredentials_AndRedactsThemInError pins
+// two related behaviours: (a) an inline user:pass URL in a broker entry is
+// rejected at validation, and (b) the password never appears in the error
+// message — even though the offending URL is part of the error context.
+// Together they prevent the disclosure path from validation errors through
+// slog.Error("failed to load config", err) at startup.
+func TestLoadConfig_RejectsBrokerURLWithCredentials_AndRedactsThemInError(t *testing.T) {
+	const inlinePassword = "hunter2-super-secret-must-not-leak"
+	yaml := `
+development_mode: true
+client_auth:
+  dev_token: test
+brokers:
+  prod-us:
+    url: "https://admin:` + inlinePassword + `@broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for broker URL with embedded credentials")
+	}
+
+	// The full error string is what main() will log via slog.Error — that
+	// is the disclosure surface. Assert the password is NOT present anywhere
+	// in it (case-sensitive: the literal would survive %q escaping).
+	if strings.Contains(err.Error(), inlinePassword) {
+		t.Errorf("password leaked through validation error\nfull error: %v", err)
+	}
+	// Operator-friendly: the error should point at the right place to fix.
+	if !strings.Contains(err.Error(), "auth block") {
+		t.Errorf("error should steer operator to the auth block, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "prod-us") {
+		t.Errorf("error should name the broker alias, got: %v", err)
+	}
+}
+
 func TestLoadConfig_LogLevel_Default(t *testing.T) {
 	yaml := `
 development_mode: true

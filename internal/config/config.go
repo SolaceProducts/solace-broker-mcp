@@ -527,6 +527,11 @@ func ValidatePort(port int) error {
 // endpoint. Those are deliberately runtime concerns surfaced on the first
 // tool call. When productionMode is true, http:// is rejected — credentials
 // would otherwise be transmitted in plaintext.
+//
+// URLs with embedded userinfo (e.g. "https://user:pass@host") are rejected:
+// credentials belong in the auth block, not the URL, and accepting them
+// invites disclosure via logs, error messages, and any future field that
+// echoes the URL back to operators.
 func validateBrokerURL(s string, productionMode bool) error {
 	u, err := url.Parse(s)
 	if err != nil {
@@ -535,13 +540,33 @@ func validateBrokerURL(s string, productionMode bool) error {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return fmt.Errorf("url scheme must be http or https, got %q", u.Scheme)
 	}
+	if u.User != nil {
+		// Surface a clear error WITHOUT echoing the userinfo. Operators get
+		// directed to the auth block; logs do not capture the credential.
+		return fmt.Errorf("url must not include credentials (use the auth block instead), got %q", sanitizeURL(u))
+	}
 	if productionMode && u.Scheme == "http" {
-		return fmt.Errorf("url scheme must be https to protect credentials in transit (got %q)", s)
+		return fmt.Errorf("url scheme must be https to protect credentials in transit (got %q)", sanitizeURL(u))
 	}
 	if u.Host == "" {
-		return fmt.Errorf("url must include a host, got %q", s)
+		return fmt.Errorf("url must include a host, got %q", sanitizeURL(u))
 	}
 	return nil
+}
+
+// sanitizeURL returns u's string form with any userinfo stripped, so the
+// result is safe to embed in error messages and log lines. The previous
+// validateBrokerURL implementation formatted the raw URL via %q, which
+// would have leaked any user:pass@ portion through the config-load error
+// to slog.Error and onward to any log aggregator the operator forgot was
+// retained. Defense in depth alongside the userinfo rejection above.
+func sanitizeURL(u *url.URL) string {
+	if u.User == nil {
+		return u.String()
+	}
+	cp := *u
+	cp.User = nil
+	return cp.String()
 }
 
 // applyEnvOverrides checks for environment variable overrides and applies them
