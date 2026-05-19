@@ -134,6 +134,22 @@ func healthConfigFromFile() healthConfig {
 	return healthConfig{Port: cfg.Port, Scheme: scheme}
 }
 
+// newHTTPServer builds the MCP server's *http.Server with the production
+// timeout posture from internal/defaults. Extracted so timeout fields can be
+// asserted in a unit test without spinning up a real listener. See the
+// constants in internal/defaults for the rationale on each timeout value;
+// WriteTimeout is deliberately zero to preserve long-lived MCP streamable
+// HTTP / SSE responses.
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: time.Duration(defaults.DefaultReadHeaderTimeoutSeconds) * time.Second,
+		ReadTimeout:       time.Duration(defaults.DefaultReadTimeoutSeconds) * time.Second,
+		IdleTimeout:       time.Duration(defaults.DefaultIdleTimeoutSeconds) * time.Second,
+	}
+}
+
 // startServer starts httpServer in a background goroutine and returns a channel
 // that receives any startup/runtime error (excluding http.ErrServerClosed, which
 // is the normal result of Shutdown). The channel is buffered so the goroutine
@@ -328,11 +344,7 @@ func main() {
 
 	// 9. Start server with graceful shutdown
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	httpServer := &http.Server{
-		Addr:              addr,
-		Handler:           mux,
-		ReadHeaderTimeout: time.Duration(defaults.DefaultReadHeaderTimeoutSeconds) * time.Second,
-	}
+	httpServer := newHTTPServer(addr, mux)
 
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGTERM)

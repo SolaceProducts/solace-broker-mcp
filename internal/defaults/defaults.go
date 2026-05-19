@@ -58,6 +58,36 @@ const DefaultInsecureSkipVerify = false
 // this value is not too aggressive for real-world network conditions.
 const DefaultReadHeaderTimeoutSeconds = 10
 
+// DefaultReadTimeoutSeconds bounds the time from accepting a connection to
+// finishing the request body. Together with DefaultReadHeaderTimeoutSeconds
+// it closes the slow-body variant of the Slowloris attack: a client that
+// sends headers in time but then trickles the body forever.
+//
+// Assumption: 30 seconds is generous for MCP request bodies.
+// Reasoning: MCP tool calls carry JSON-RPC payloads that are typically a few
+// KB. 30s tolerates congested networks while bounding the worst case.
+// Trade-off: a request that legitimately takes >30s to send its body will
+// be dropped. Accepted — MCP clients do not stream the request body.
+const DefaultReadTimeoutSeconds = 30
+
+// DefaultIdleTimeoutSeconds bounds how long an idle HTTP/1.1 keep-alive
+// connection sits open after a request completes before the server closes it.
+// Prevents idle-connection exhaustion: without this, an attacker can open
+// thousands of sockets, send one request each, and hold them open until the
+// kernel reaps the file descriptors.
+//
+// Assumption: 120 seconds balances reuse with resource bounds.
+// Reasoning: 2 minutes lets a chatty MCP client reuse the connection for
+// follow-up calls while bounding worst-case fd usage to (concurrent clients)
+// × 2 minutes of idle slots.
+//
+// NOTE: WriteTimeout is intentionally NOT set on the MCP server. The /mcp
+// endpoint serves long-lived MCP streamable HTTP / SSE responses; a server-
+// wide write deadline would cut legitimate streams. The slow-read attack
+// surface is mitigated by the OS's TCP send buffer plus IdleTimeout reaping
+// idle sockets — neither perfect, but the alternative breaks the product.
+const DefaultIdleTimeoutSeconds = 120
+
 // DefaultConfigPathSystem is the production-install location for the config
 // file. Tried when CONFIG_FILE is not set. Follows the conventional Linux
 // /etc/<app>/config.yaml layout used by Linux services, K8s, and Docker.
