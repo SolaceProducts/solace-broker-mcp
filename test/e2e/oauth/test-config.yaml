@@ -13,10 +13,19 @@ port: 9091
 development_mode: true  # localhost http:// URLs are intentional for this e2e test environment
 
 # OAuth configuration - values are injected by setup-keycloak.sh into test/e2e/oauth/.env
+#
+# NOTE: With development_mode: true the static dev_token verifier is used at
+# runtime (not OIDC), so the issuer/audience fields are effectively unused
+# for actual JWT verification. The OAuth test in this directory exercised
+# the pre-SOL-149921 auth-bypass path (dev_mode + empty dev_token = pass
+# everything through), which is no longer permitted. To run a true OIDC
+# test path, this config needs to be switched to development_mode: false
+# with https:// URLs — out of scope for SOL-149921, tracked separately.
 client_auth:
   issuer: "http://localhost:8090/realms/solace"
   audience: "solace-mcp-server"
   resource_url: "http://localhost:9091/mcp"
+  dev_token: oauth-test-static-dev-token
 
 # Broker configuration
 # Note: This broker is only needed for config validation.

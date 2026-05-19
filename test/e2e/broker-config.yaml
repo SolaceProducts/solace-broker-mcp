@@ -10,7 +10,9 @@
 
 # ── Auth settings ───────────────────────────────────────────────────────────
 development_mode: true                # Skip OAuth validation (uses static dev token)
-# client_auth:                        # Required when development_mode is false:
+client_auth:
+  dev_token: e2e-static-dev-token     # Required when development_mode is true.
+# client_auth:                        # When development_mode is false, set these instead:
 #   issuer: "https://idp.example.com" #   IdP issuer URL
 #   audience: "solace-mcp"            #   Expected 'aud' claim
 #   resource_url: "https://mcp.example.com/mcp"  # OAuth resource URL

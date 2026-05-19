@@ -160,7 +160,8 @@ write_config() {
     # Credentials use ${VAR_NAME} substitution — resolved by the server via ENV_FILE.
     cat > "$config_file" <<EOF
 development_mode: true
-
+client_auth:
+  dev_token: e2e-static-dev-token
 brokers:
   broker-a:
     url: "${BROKER_A_URL}"
