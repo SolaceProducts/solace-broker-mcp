@@ -132,7 +132,7 @@ Both options use the same browser-based OAuth 2.1 Authorization Code flow with P
 
 ### Step 1: Set up your identity provider
 
-You need an OAuth 2.1 / OpenID Connect identity provider. Any OIDC-compliant provider will work (Keycloak, Auth0, Okta, etc.).
+You need an OAuth 2.1 / OpenID Connect identity provider. Note that any OIDC-compliant provider will work (configuration examples specific to Keycloak are provided).
 
 #### 1.1 Create a realm or tenant
 
@@ -162,10 +162,6 @@ The mapper must apply globally to all clients — not just specific pre-register
 > - **Add to access token:** ON
 >
 > Use **Included Custom Audience** for a free-form string. **Included Client Audience** is only for referencing an existing Keycloak client by its Client ID.
-
-> **Auth0:** Configure the audience as an API resource (**APIs** → **Create API**). Tokens issued for that API include the audience claim automatically.
-
-> **Okta:** Configure the audience in the authorization server settings under **Security** → **API** → **Authorization Servers**.
 
 #### 1.3 Register an OAuth client (Option A only)
 
