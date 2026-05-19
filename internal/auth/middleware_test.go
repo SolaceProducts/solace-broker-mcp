@@ -37,61 +37,6 @@ var dummyHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request)
 	w.Write([]byte("OK"))
 })
 
-// Test_AuthDisabled tests that all requests pass through when development_mode=true and dev_token=""
-func Test_AuthDisabled(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Port:            9090,
-		DevelopmentMode: true,
-		ClientAuth: config.ClientAuthConfig{
-			DevToken: "", // Empty dev token means auth disabled
-		},
-	}
-
-	middleware, err := NewAuthMiddleware(cfg, dummyHandler)
-	if err != nil {
-		t.Fatalf("failed to create middleware: %v", err)
-	}
-
-	tests := []struct {
-		name         string
-		authHeader   string
-		expectedCode int
-		expectedBody string
-	}{
-		{
-			name:         "no auth header",
-			authHeader:   "",
-			expectedCode: http.StatusOK,
-			expectedBody: "OK",
-		},
-		{
-			name:         "with bearer token",
-			authHeader:   "Bearer some-random-token",
-			expectedCode: http.StatusOK,
-			expectedBody: "OK",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
-			if tt.authHeader != "" {
-				req.Header.Set("Authorization", tt.authHeader)
-			}
-
-			rec := httptest.NewRecorder()
-			middleware.ServeHTTP(rec, req)
-
-			if rec.Code != tt.expectedCode {
-				t.Errorf("expected status %d, got %d", tt.expectedCode, rec.Code)
-			}
-			if strings.TrimSpace(rec.Body.String()) != tt.expectedBody {
-				t.Errorf("expected body %q, got %q", tt.expectedBody, rec.Body.String())
-			}
-		})
-	}
-}
-
 // Test_StaticDevToken tests static token validation in development mode
 func Test_StaticDevToken(t *testing.T) {
 	const validToken = "dev-secret-token-12345"

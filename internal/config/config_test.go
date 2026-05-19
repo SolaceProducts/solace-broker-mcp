@@ -43,6 +43,8 @@ func TestLoadConfig_SingleBroker(t *testing.T) {
 
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 brokers:
   prod-us:
     url: "https://broker-us.example.com:1943"
@@ -87,6 +89,8 @@ func TestLoadConfig_MultiBroker(t *testing.T) {
 
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 brokers:
   prod-us:
     url: "https://broker-us.example.com:1943"
@@ -121,6 +125,8 @@ brokers:
 func TestLoadConfig_MissingBrokerURL(t *testing.T) {
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 brokers:
   dev:
     auth:
@@ -140,6 +146,8 @@ brokers:
 func TestLoadConfig_MissingBasicAuthCreds(t *testing.T) {
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 brokers:
   dev:
     url: "https://broker.example.com:1943"
@@ -162,9 +170,38 @@ func TestLoadConfig_MalformedYAML(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_DevModeRequiresDevToken(t *testing.T) {
+	// development_mode: true with an empty dev_token used to silently disable
+	// all client authentication and pass every request through. That is an
+	// auth bypass triggered by a one-line config omission — the validator
+	// must reject it instead.
+	yaml := `
+development_mode: true
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error when development_mode is true and dev_token is empty")
+	}
+	if !strings.Contains(err.Error(), "dev_token") {
+		t.Errorf("error should name the offending field (dev_token), got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "development_mode") {
+		t.Errorf("error should mention development_mode for operator context, got: %v", err)
+	}
+}
+
 func TestLoadConfig_DefaultsApplied(t *testing.T) {
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 brokers:
   dev:
     url: "https://broker.example.com:1943"
@@ -192,6 +229,8 @@ brokers:
 func TestLoadConfig_InvalidAuthMethod(t *testing.T) {
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 brokers:
   dev:
     url: "https://broker.example.com:1943"
@@ -216,6 +255,8 @@ func TestLoadConfig_EnvVarSubstitution(t *testing.T) {
 
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 brokers:
   prod:
     url: ${BROKER_URL}
@@ -244,6 +285,8 @@ brokers:
 func TestLoadConfig_EnvVarMissing(t *testing.T) {
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 brokers:
   prod:
     url: ${MISSING_URL}
@@ -284,6 +327,8 @@ brokers:
 func TestLoadConfig_TLSOnlyCert_ReturnsError(t *testing.T) {
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 tls_cert_file: "/tmp/cert.pem"
 brokers:
   dev:
@@ -305,6 +350,8 @@ brokers:
 func TestLoadConfig_TLSBothFields_Valid(t *testing.T) {
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 tls_cert_file: "/tmp/cert.pem"
 tls_key_file: "/tmp/key.pem"
 brokers:
@@ -332,6 +379,8 @@ func TestLoadConfig_EnvOverridePort(t *testing.T) {
 
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 port: 8080
 brokers:
   dev:
@@ -355,6 +404,8 @@ func TestLoadConfig_BearerAuth(t *testing.T) {
 
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 brokers:
   prod:
     url: "https://broker.example.com:8080"
@@ -379,6 +430,8 @@ brokers:
 func TestLoadConfig_BearerAuth_MissingToken(t *testing.T) {
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 brokers:
   prod:
     url: "https://broker.example.com:8080"
@@ -397,6 +450,8 @@ brokers:
 func TestLoadConfig_MissingAuthMode(t *testing.T) {
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 brokers:
   dev:
     url: "http://localhost:8080"
@@ -416,6 +471,8 @@ brokers:
 func TestLoadConfig_AuthModeCaseInsensitive(t *testing.T) {
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 brokers:
   dev:
     url: "http://localhost:8080"
@@ -436,6 +493,8 @@ brokers:
 func TestLoadConfig_InvalidURLScheme(t *testing.T) {
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 brokers:
   dev:
     url: "ftp://broker.example.com"
@@ -510,6 +569,8 @@ client_auth:
 func TestLoadConfig_AllowsHTTPBrokerInDevelopmentMode(t *testing.T) {
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 brokers:
   dev:
     url: "http://localhost:8080"
@@ -527,6 +588,8 @@ brokers:
 func TestLoadConfig_URLMissingHost(t *testing.T) {
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 brokers:
   dev:
     url: "http://"
@@ -549,6 +612,8 @@ func TestLoadConfig_URLEmpty_ReportsRequired(t *testing.T) {
 	// structure-validation branch — verifying we don't double-report.
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 brokers:
   dev:
     url: ""
@@ -572,6 +637,8 @@ brokers:
 func TestLoadConfig_LogLevel_Default(t *testing.T) {
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 brokers:
   dev:
     url: "http://localhost:8080"
@@ -594,6 +661,8 @@ func TestLoadConfig_LogLevel_ValidValues(t *testing.T) {
 		t.Run(level, func(t *testing.T) {
 			yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 log_level: ` + level + `
 brokers:
   dev:
@@ -617,6 +686,8 @@ brokers:
 func TestLoadConfig_LogLevel_CaseInsensitive(t *testing.T) {
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 log_level: DEBUG
 brokers:
   dev:
@@ -658,6 +729,8 @@ brokers:
 func TestLoadConfig_RateLimit_Defaults(t *testing.T) {
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 brokers:
   dev:
     url: "http://localhost:8080"
@@ -687,6 +760,8 @@ brokers:
 func TestLoadConfig_RateLimit_ValidValues(t *testing.T) {
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 semp:
   request_min_interval: 50ms
   retries: 5
@@ -726,6 +801,8 @@ func TestLoadConfig_RateLimit_ExplicitZeroHonored(t *testing.T) {
 	// "0 in YAML" is indistinguishable from "omitted from YAML".
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 semp:
   request_min_interval: 0s
   retries: 0
@@ -852,6 +929,8 @@ func TestValidate_BrokerErrorsAreSorted(t *testing.T) {
 	// joined error string always lists errors in alphabetical alias order.
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 brokers:
   zebra:
     auth:
@@ -883,6 +962,8 @@ brokers:
 func TestLoad_UsesConfigFileEnv(t *testing.T) {
 	yaml := `
 development_mode: true
+client_auth:
+  dev_token: test
 brokers:
   dev:
     url: "http://localhost:8080"

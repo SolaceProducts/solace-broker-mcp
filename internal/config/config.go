@@ -432,9 +432,15 @@ func validate(cfg *ServerConfig) error {
 	}
 
 	// Validate client authentication configuration based on development mode.
-	// Note that no validation is needed when development mode is enabled, as DevToken
-	// can be set or empty. When DevToken is empty, all requests pass through
-	if !cfg.DevelopmentMode {
+	// Production mode requires the OIDC fields. Development mode requires a
+	// static dev_token — an empty token used to silently disable client auth
+	// entirely (auth bypass via a single blank YAML field), which the
+	// validator must reject.
+	if cfg.DevelopmentMode {
+		if cfg.ClientAuth.DevToken == "" {
+			errs = append(errs, fmt.Errorf("client_auth.dev_token is required when development_mode is true (set a non-empty token to enable static auth)"))
+		}
+	} else {
 		// Production mode: require JWT validation fields
 		if cfg.ClientAuth.Issuer == "" {
 			errs = append(errs, fmt.Errorf("client_auth.issuer is required when development_mode is false"))

@@ -31,11 +31,6 @@ import (
 )
 
 func NewAuthMiddleware(cfg *config.ServerConfig, next http.Handler) (http.Handler, error) {
-	if cfg.DevelopmentMode && cfg.ClientAuth.DevToken == "" {
-		slog.Warn("authentication disabled — development mode with no dev token — not for production use")
-		return next, nil
-	}
-
 	verifier, err := NewTokenVerifier(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create token verifier: %w", err)
@@ -144,11 +139,6 @@ func createOIDCTokenVerifier(cfg *config.ServerConfig) (sdkauth.TokenVerifier, e
 // and initiate browser-based OAuth flows (Authorization Code + PKCE).
 // Returns nil when there's no OAuth configuration to advertise.
 func NewProtectedResourceMetadataHandler(cfg *config.ServerConfig) http.Handler {
-	// Only provide metadata endpoint when JWT validation is active
-	if cfg.DevelopmentMode && cfg.ClientAuth.DevToken == "" {
-		return nil
-	}
-
 	// Skip metadata endpoint when there's no issuer configured.
 	// The endpoint's purpose is to advertise the OAuth authorization server,
 	// so serving it with an empty issuer would be misleading to clients.
