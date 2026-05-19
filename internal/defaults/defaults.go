@@ -39,6 +39,15 @@ const DefaultSEMPRequestTimeoutDuration = time.Minute
 // concurrency limit that balances throughput with broker stability.
 const DefaultMaxConcurrentPerBroker = 10
 
+// MaxConcurrentPerBrokerCeiling caps the operator-configurable
+// semp.max_concurrent_per_broker. The value backs a per-broker semaphore plus
+// the HTTP transport's MaxIdleConnsPerHost / MaxIdleConns (×2), so it
+// allocates fixed-size structures proportional to itself × the broker count.
+// 1024 leaves ~100× headroom above the documented typical 1-10 range while
+// rejecting pathological configurations (e.g. a million) that would OOM the
+// process.
+const MaxConcurrentPerBrokerCeiling = 1024
+
 // DefaultInsecureSkipVerify controls whether TLS certificate verification is
 // skipped when connecting to brokers. Must be false in production. Only set
 // to true in development environments with self-signed certificates. Matches

@@ -749,6 +749,55 @@ brokers:
 	}
 }
 
+func TestLoadConfig_MaxConcurrentPerBroker_OutOfRange(t *testing.T) {
+	// Per-broker semaphore size drives both the in-memory semaphore and the
+	// HTTP transport's idle-connection pool (MaxIdleConnsPerHost +
+	// MaxIdleConns × 2). Unbounded above lets a misconfig or compromised
+	// config over-allocate and OOM the process.
+	cases := []struct {
+		name        string
+		value       string
+		wantInError string
+	}{
+		{
+			name:        "negative",
+			value:       "-1",
+			wantInError: "semp.max_concurrent_per_broker",
+		},
+		{
+			name:        "above ceiling",
+			value:       "1000000",
+			wantInError: "semp.max_concurrent_per_broker",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			yaml := `
+development_mode: true
+client_auth:
+  dev_token: test
+semp:
+  max_concurrent_per_broker: ` + tc.value + `
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+			_, err := LoadConfig(writeTemp(t, yaml))
+			if err == nil {
+				t.Fatalf("expected error for max_concurrent_per_broker=%s", tc.value)
+			}
+			if !strings.Contains(err.Error(), tc.wantInError) {
+				t.Errorf("error should name the offending field, got: %v", err)
+			}
+		})
+	}
+}
+
 func TestLoadConfig_RateLimit_NegativeRetries(t *testing.T) {
 	yaml := `
 semp:
