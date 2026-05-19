@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
@@ -142,7 +143,7 @@ func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := resilience.ReadCappedBody(resp.Body, defaults.MaxSEMPResponseBytes)
 	if err != nil {
 		return nil, fmt.Errorf("reading response for %s: %w", op.ID, err)
 	}
