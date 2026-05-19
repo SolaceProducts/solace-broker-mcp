@@ -512,6 +512,29 @@ client_auth:
 	}
 }
 
+func TestLoadConfig_AllowsInsecureSkipVerifyInDevelopmentMode(t *testing.T) {
+	// Symmetric to TestLoadConfig_AllowsHTTPBrokerInDevelopmentMode:
+	// development_mode is meant to relax production-only guards. Locks in
+	// the dev-mode allowance so a future refactor can't tighten it without
+	// the test catching the regression.
+	yaml := `
+development_mode: true
+client_auth:
+  dev_token: test
+brokers:
+  dev:
+    url: "https://broker.example.com:8080"
+    insecure_skip_verify: true
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	if _, err := LoadConfig(writeTemp(t, yaml)); err != nil {
+		t.Errorf("insecure_skip_verify: true should be allowed in development_mode: %v", err)
+	}
+}
+
 func TestLoadConfig_RejectsHTTPClientAuthInProductionMode(t *testing.T) {
 	yaml := `
 development_mode: false
