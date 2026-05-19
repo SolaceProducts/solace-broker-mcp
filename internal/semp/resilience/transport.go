@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 )
 
 // idleConnTimeout is how long an idle keep-alive connection sits in the pool
@@ -33,9 +34,12 @@ const idleConnTimeout = 90 * time.Second
 // not a true multi-host budget.
 func NewTunedTransport(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) *http.Transport {
 	return &http.Transport{
-		TLSClientConfig:     &tls.Config{InsecureSkipVerify: brokerCfg.InsecureSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
-		MaxIdleConnsPerHost: sempCfg.MaxConcurrentPerBroker,
-		MaxIdleConns:        sempCfg.MaxConcurrentPerBroker * 2,
-		IdleConnTimeout:     idleConnTimeout,
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: brokerCfg.InsecureSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
+		MaxIdleConnsPerHost:   sempCfg.MaxConcurrentPerBroker,
+		MaxIdleConns:          sempCfg.MaxConcurrentPerBroker * 2,
+		IdleConnTimeout:       idleConnTimeout,
+		TLSHandshakeTimeout:   time.Duration(defaults.DefaultTLSHandshakeTimeoutSeconds) * time.Second,
+		ResponseHeaderTimeout: time.Duration(defaults.DefaultResponseHeaderTimeoutSeconds) * time.Second,
+		ExpectContinueTimeout: time.Duration(defaults.DefaultExpectContinueTimeoutSeconds) * time.Second,
 	}
 }

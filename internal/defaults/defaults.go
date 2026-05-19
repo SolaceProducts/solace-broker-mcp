@@ -29,6 +29,39 @@ const DefaultShutdownTimeoutSeconds = 30
 // Terraform provider convention.
 const DefaultSEMPRequestTimeoutDuration = time.Minute
 
+// DefaultTLSHandshakeTimeoutSeconds bounds how long the SEMP transport will
+// wait for a TLS handshake to complete with a broker. Without this granular
+// timeout, a broker stuck in handshake (stalled certificate validation, HSM
+// latency, partial network split) ties up a MaxConcurrentPerBroker semaphore
+// slot for the full DefaultSEMPRequestTimeoutDuration window before failing.
+//
+// Assumption: 10 seconds is generous for a real TLS handshake.
+// Reasoning: Even under congested networks a TLS 1.2/1.3 handshake completes
+// in well under a second; 10s tolerates extreme outliers while bounding the
+// failure window to a small fraction of the request timeout.
+const DefaultTLSHandshakeTimeoutSeconds = 10
+
+// DefaultResponseHeaderTimeoutSeconds bounds the time the SEMP transport
+// waits after sending a request before the broker returns response headers.
+// Must stay strictly less than DefaultSEMPRequestTimeoutDuration so the
+// granular timeout actually fires before the outer client.Timeout. A broker
+// that accepts the TCP connection then never sends headers would otherwise
+// hold the per-broker semaphore slot for the full request timeout.
+//
+// Assumption: 30 seconds is comfortably under the 60s request timeout.
+// Reasoning: SEMP operations send response headers as soon as the broker
+// dispatches the request. Anything past 30s indicates a stuck broker, not
+// a slow one — fail fast.
+const DefaultResponseHeaderTimeoutSeconds = 30
+
+// DefaultExpectContinueTimeoutSeconds is the time the transport waits for a
+// "100 Continue" intermediate response after sending a request with an
+// "Expect: 100-continue" header before sending the body. SEMP requests do
+// not use Expect/100-continue, but setting this is standard HTTP-client
+// hygiene and ensures a misconfigured peer that signals 100-continue can't
+// stall the request indefinitely.
+const DefaultExpectContinueTimeoutSeconds = 1
+
 // DefaultMaxConcurrentPerBroker is the maximum number of concurrent SEMP
 // requests allowed per broker, enforced via a per-broker semaphore.
 //
