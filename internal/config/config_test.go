@@ -480,6 +480,38 @@ client_auth:
 	}
 }
 
+func TestLoadConfig_RejectsInsecureSkipVerifyInProductionMode(t *testing.T) {
+	// Symmetric to the http-scheme rejection: production mode must not
+	// silently accept insecure_skip_verify=true. The combination is dev-only
+	// by intent (see DefaultInsecureSkipVerify) and a misconfig exposes
+	// broker credentials to any attacker on the MCP-server-to-broker path.
+	yaml := `
+development_mode: false
+brokers:
+  prod-us:
+    url: "https://broker.example.com:8080"
+    insecure_skip_verify: true
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+client_auth:
+  issuer: "https://idp.example.com"
+  audience: "solace-mcp"
+  resource_url: "https://mcp.example.com"
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for insecure_skip_verify=true in production mode")
+	}
+	if !strings.Contains(err.Error(), "insecure_skip_verify") {
+		t.Errorf("error should name the field, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "prod-us") {
+		t.Errorf("error should name the broker alias, got: %v", err)
+	}
+}
+
 func TestLoadConfig_RejectsHTTPClientAuthInProductionMode(t *testing.T) {
 	yaml := `
 development_mode: false

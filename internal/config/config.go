@@ -481,6 +481,13 @@ func validateBroker(alias string, broker *BrokerConfig, productionMode bool) []e
 		errs = append(errs, fmt.Errorf("broker %q: %w", alias, err))
 	}
 
+	// Symmetric to the http-scheme rejection above: production mode must
+	// not accept insecure_skip_verify=true. It disables broker-cert
+	// verification entirely, defeating credential-in-transit protection.
+	if productionMode && broker.InsecureSkipVerify {
+		errs = append(errs, fmt.Errorf("broker %q: insecure_skip_verify must be false when development_mode is false", alias))
+	}
+
 	// Normalize auth mode (case-insensitive per story spec).
 	broker.Auth.Mode = strings.ToLower(broker.Auth.Mode)
 
