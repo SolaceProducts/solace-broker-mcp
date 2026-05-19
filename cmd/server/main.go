@@ -254,6 +254,14 @@ func main() {
 
 	// 3. Create broker pool
 	pool := semp.NewBrokerPool(cfg)
+	// Release per-broker rate-limiter tickers (and any other client-held
+	// resources) on the normal shutdown path. The defer fires after main()
+	// returns — i.e. after httpServer.Shutdown completes — so no in-flight
+	// tool call holds a Sender when pool.Close iterates clients. Earlier
+	// os.Exit(1) paths in main() bypass this defer; that is acceptable
+	// because process exit reaps the resources anyway. Close is idempotent
+	// (see TestBrokerPool_Close_*).
+	defer pool.Close()
 	slog.Info("created broker pool",
 		slog.Any("broker_aliases", pool.Aliases()))
 

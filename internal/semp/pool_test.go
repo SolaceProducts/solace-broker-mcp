@@ -323,6 +323,45 @@ func TestBrokerPool_GetSEMPv1_ConcurrentFirstAccess(t *testing.T) {
 	}
 }
 
+// TestBrokerPool_Close_BeforeAnyAccess confirms Close is safe to call on a
+// freshly constructed pool that never had a client created. With no lazy
+// creations, the iteration loop in Close has nothing to do; it must not
+// panic.
+func TestBrokerPool_Close_BeforeAnyAccess(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer server.Close()
+
+	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
+	pool.Close() // must not panic
+}
+
+// TestBrokerPool_Close_AfterLazyCreation exercises the production path that
+// matters for cmd/server/main.go's shutdown defer: lazily create a client
+// (which spins up a rate-limiter ticker inside the Sender), then Close the
+// pool. The ticker is internal, so we verify the observable contract: no
+// panic, and Close is idempotent — calling it twice must remain safe.
+func TestBrokerPool_Close_AfterLazyCreation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{})
+	}))
+	defer server.Close()
+
+	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
+
+	// Force one client into existence (lazy creation path).
+	if _, err := pool.GetSEMPv2("prod-us"); err != nil {
+		t.Fatalf("GetSEMPv2: %v", err)
+	}
+
+	// First Close: shuts down the broker client(s) that exist.
+	pool.Close()
+	// Second Close: must remain safe — main()'s defer fires once, but
+	// future call sites or test helpers may exercise multi-close. The
+	// per-broker Sender.Close is documented as safe to call multiple times.
+	pool.Close()
+}
+
 // TestBrokerPool_SharedBrokerClientAcrossProtocols is the structural proof
 // of the "log once per alias" invariant from T4's Definition of Done. Both
 // GetSEMPv1 and GetSEMPv2 route through getOrCreate and must operate on the
