@@ -609,6 +609,63 @@ brokers:
 	}
 }
 
+// TestBrokerConfig_LogValue_RedactsURLCredentials pins that the LogValuer
+// itself strips userinfo from the URL — independent of whether validation
+// has run. validateBrokerURL already rejects credentialed URLs, but
+// LogValue should not assume that: any future code path that logs a
+// BrokerConfig before validation (e.g., a debug line in LoadConfig itself)
+// would otherwise echo the credential to slog.
+func TestBrokerConfig_LogValue_RedactsURLCredentials(t *testing.T) {
+	const inlinePassword = "hunter2-super-secret-must-not-leak"
+	b := BrokerConfig{
+		URL: "https://admin:" + inlinePassword + "@broker.example.com:1943",
+		Auth: AuthConfig{
+			Mode:     "basic",
+			Username: "admin",
+			Password: "irrelevant-to-this-test",
+		},
+	}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	logger.Info("broker config", slog.Any("broker", b))
+
+	out := buf.String()
+	if strings.Contains(out, inlinePassword) {
+		t.Errorf("password leaked through BrokerConfig.LogValue output:\n%s", out)
+	}
+	// Sanity: the host must still be present so logs remain useful.
+	if !strings.Contains(out, "broker.example.com") {
+		t.Errorf("host stripped from LogValue output (sanitization too aggressive):\n%s", out)
+	}
+}
+
+// TestClientAuthConfig_LogValue_RedactsURLCredentials applies the same
+// LogValue-level defense in depth to ClientAuthConfig. Issuer and
+// ResourceURL both go through validateBrokerURL, but LogValue should not
+// rely on that ordering.
+func TestClientAuthConfig_LogValue_RedactsURLCredentials(t *testing.T) {
+	const inlinePassword = "hunter2-issuer-secret-must-not-leak"
+	c := ClientAuthConfig{
+		Issuer:      "https://admin:" + inlinePassword + "@idp.example.com/realms/main",
+		Audience:    "mcp",
+		ResourceURL: "https://admin:" + inlinePassword + "@mcp.example.com/mcp",
+	}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	logger.Info("client auth config", slog.Any("client_auth", c))
+
+	out := buf.String()
+	if strings.Contains(out, inlinePassword) {
+		t.Errorf("password leaked through ClientAuthConfig.LogValue output:\n%s", out)
+	}
+	if !strings.Contains(out, "idp.example.com") {
+		t.Errorf("issuer host stripped from LogValue output (sanitization too aggressive):\n%s", out)
+	}
+	if !strings.Contains(out, "mcp.example.com") {
+		t.Errorf("resource_url host stripped from LogValue output (sanitization too aggressive):\n%s", out)
+	}
+}
+
 func TestLoadConfig_LogLevel_Default(t *testing.T) {
 	yaml := `
 development_mode: true

@@ -98,10 +98,13 @@ func (a AuthConfig) LogValue() slog.Value {
 
 // LogValue implements slog.LogValuer for BrokerConfig. It exposes connection
 // metadata (URL, TLS settings, auth method) but excludes credentials.
+// The URL is routed through sanitizeURLString so any userinfo is stripped
+// before reaching the log — defense in depth against logging a BrokerConfig
+// before validateBrokerURL has had a chance to reject credentialed URLs.
 // See docs/secure-logging-rules.md Rule 2.
 func (b BrokerConfig) LogValue() slog.Value {
 	return slog.GroupValue(
-		slog.String("url", b.URL),
+		slog.String("url", sanitizeURLString(b.URL)),
 		slog.Bool("insecure_skip_verify", b.InsecureSkipVerify),
 		slog.String("auth_mode", b.Auth.Mode),
 	)
@@ -109,12 +112,14 @@ func (b BrokerConfig) LogValue() slog.Value {
 
 // LogValue implements slog.LogValuer for ClientAuthConfig. It exposes OAuth
 // configuration (issuer, audience, resource URL) but excludes DevToken
-// to prevent credential leaks in log output. See docs/secure-logging-rules.md Rule 2.
+// to prevent credential leaks in log output. Issuer and ResourceURL are
+// routed through sanitizeURLString for the same defense-in-depth reason
+// as BrokerConfig.LogValue. See docs/secure-logging-rules.md Rule 2.
 func (c ClientAuthConfig) LogValue() slog.Value {
 	return slog.GroupValue(
-		slog.String("issuer", c.Issuer),
+		slog.String("issuer", sanitizeURLString(c.Issuer)),
 		slog.String("audience", c.Audience),
-		slog.String("resource_url", c.ResourceURL),
+		slog.String("resource_url", sanitizeURLString(c.ResourceURL)),
 	)
 }
 
@@ -567,6 +572,22 @@ func sanitizeURL(u *url.URL) string {
 	cp := *u
 	cp.User = nil
 	return cp.String()
+}
+
+// sanitizeURLString parses s and returns the URL with any userinfo stripped.
+// Empty input passes through unchanged. Unparseable input is replaced with
+// "<unparseable url>" rather than echoed back: we cannot prove the original
+// string is credential-free, so the safe default is to drop it. Used by the
+// LogValuer implementations on BrokerConfig and ClientAuthConfig.
+func sanitizeURLString(s string) string {
+	if s == "" {
+		return ""
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		return "<unparseable url>"
+	}
+	return sanitizeURL(u)
 }
 
 // applyEnvOverrides checks for environment variable overrides and applies them
