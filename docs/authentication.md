@@ -128,7 +128,7 @@ Before starting, decide how your MCP client will register with your identity pro
 | IdP requirements | Standard OAuth client setup | Must support anonymous DCR (RFC 7591) |
 | Best for | Most setups; more control | Zero-config end-user experience |
 
-Both options use the same browser-based OAuth 2.1 Authorization Code flow with PKCE. The difference is only in how the MCP client obtains its client ID.
+Both options use the same browser-based OAuth 2.1 Authorization Code flow with PKCE. The difference is in how the MCP client obtains its client credentials (and whether it uses DCR) — Option A may also involve a client secret for confidential clients, while Option B never does.
 
 ### Step 1: Set up your identity provider
 
@@ -169,12 +169,13 @@ Skip this step if you are using Option B (Dynamic Client Registration).
 
 Create a client in your IdP with the following settings:
 
+- **Client ID:** any name (e.g. `mcp-client`) — you will pass this as `--client-id` in step 4
 - **Flow:** Authorization Code with PKCE
 - **PKCE challenge method:** `S256`
 - **Client type:** Public (no secret) or Confidential (with secret) — a public client is recommended for MCP clients like Claude Code and Claude Desktop, since they run on a user's machine where a client secret cannot be stored securely. For Option B (Dynamic Client Registration), the MCP client should always be registered as public.
 - **Redirect URI:** `http://localhost:<port>/callback`, where `<port>` matches the `--callback-port` you will use when adding the server to Claude Code
 
-> **Keycloak:** **Clients** → **Create client** → set a **Client ID** → click **Next**.
+> **Keycloak:** **Clients** → **Create client** → set a **Client ID** (e.g. `mcp-client`) → click **Next**.
 > - **Client authentication:** leave **OFF** for a public client (no secret required); turn **ON** for a confidential client (requires `--client-secret`)
 >
 > Enable **Standard flow**, disable all other flows → **Next** → **Save**. Under **Access settings**, set **Valid redirect URIs** to `http://localhost:*`. Under **Advanced**, set **Proof Key for Code Exchange Code Challenge Method** to `S256` → **Save**.
@@ -198,7 +199,9 @@ client_auth:
   resource_url: "https://your-mcp-server.example.com/mcp"
 ```
 
-The `audience` value must exactly match what you configured in step 1.2. Adjust `resource_url` to match the URL your MCP server is listening on.
+Refer to the Keycloack configuration below for an example.
+
+The `audience` value must exactly match what you configured in step 1.2. Set `resource_url` to the externally reachable URL of your MCP endpoint — this is advertised to clients for OAuth discovery, so it must be the public-facing URL, not the server's internal bind address (these differ when running behind a reverse proxy or ingress).
 
 | Field | Description |
 |-------|-------------|
