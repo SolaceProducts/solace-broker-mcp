@@ -17,18 +17,39 @@
 // the registered tools with hardcoded calls against both configured brokers.
 //
 // Usage: agent <server-url>
+//
+// The agent reads MCP_DEV_TOKEN from the environment and attaches it as a
+// Bearer Authorization header on every request via a custom RoundTripper.
+// This matches the dev_token configured in test/e2e/helpers.sh write_config()
+// so the broker MCP server's static dev-token verifier accepts the agent.
 package main
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// bearerRoundTripper wraps http.DefaultTransport to add a Bearer Authorization
+// header to every outbound request. Used by the e2e agent so the broker MCP
+// server's auth middleware accepts our session-initialize and tool calls.
+type bearerRoundTripper struct {
+	token string
+	rt    http.RoundTripper
+}
+
+func (b *bearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Clone the request so we do not mutate the caller's copy.
+	cloned := req.Clone(req.Context())
+	cloned.Header.Set("Authorization", "Bearer "+b.token)
+	return b.rt.RoundTrip(cloned)
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -48,15 +69,24 @@ func main() {
 }
 
 func run(ctx context.Context, serverURL string) error {
-	// Connect to the MCP server
+	// Connect to the MCP server with a Bearer token attached to every request.
 	fmt.Printf("Connecting to %s ...\n", serverURL)
 	client := mcp.NewClient(&mcp.Implementation{
 		Name:    "e2e-agent",
 		Version: "1.0.0",
 	}, nil)
 
+	token := os.Getenv("MCP_DEV_TOKEN")
+	if token == "" {
+		return fmt.Errorf("MCP_DEV_TOKEN env var is required (set by test harness; matches dev_token in broker config)")
+	}
+	httpClient := &http.Client{
+		Transport: &bearerRoundTripper{token: token, rt: http.DefaultTransport},
+	}
+
 	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
-		Endpoint: serverURL + "/mcp",
+		Endpoint:   serverURL + "/mcp",
+		HTTPClient: httpClient,
 	}, nil)
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)

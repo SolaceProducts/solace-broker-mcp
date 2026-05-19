@@ -29,6 +29,13 @@ SEMP_CONFIG="$BROKER_A_SEMP_CONFIG"
 MCP_PORT=9090
 MCP_URL="http://localhost:$MCP_PORT"
 MCP_SERVER_PID=""
+# Static dev token injected into the broker MCP server config by write_config().
+# Every curl to $MCP_URL/mcp authenticates with this token via Bearer header
+# so the static-dev-token verifier (development_mode: true path) accepts
+# the request. Must match the dev_token value in write_config(). Exported
+# so the Go agent in test/e2e/agent reads it from the environment and attaches
+# it to its outgoing requests via a custom RoundTripper.
+export MCP_DEV_TOKEN="e2e-static-dev-token"
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -284,6 +291,7 @@ mcp_initialize() {
     response=$(curl -sf -D - -X POST "$MCP_URL/mcp" \
         -H "Content-Type: application/json" \
         -H "Accept: application/json, text/event-stream" \
+        -H "Authorization: Bearer $MCP_DEV_TOKEN" \
         -d '{
             "jsonrpc": "2.0",
             "id": 1,
@@ -308,6 +316,7 @@ mcp_initialize() {
     curl -sf -X POST "$MCP_URL/mcp" \
         -H "Content-Type: application/json" \
         -H "Accept: application/json, text/event-stream" \
+        -H "Authorization: Bearer $MCP_DEV_TOKEN" \
         -H "Mcp-Session-Id: $session_id" \
         -d '{
             "jsonrpc": "2.0",
@@ -327,6 +336,7 @@ mcp_request() {
     raw=$(curl -s -X POST "$MCP_URL/mcp" \
         -H "Content-Type: application/json" \
         -H "Accept: application/json, text/event-stream" \
+        -H "Authorization: Bearer $MCP_DEV_TOKEN" \
         -H "Mcp-Session-Id: $session_id" \
         -d "$body")
 
