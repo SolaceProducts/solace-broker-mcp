@@ -769,6 +769,11 @@ func TestLoadConfig_MaxConcurrentPerBroker_OutOfRange(t *testing.T) {
 			value:       "1000000",
 			wantInError: "semp.max_concurrent_per_broker",
 		},
+		{
+			name:        "just above ceiling",
+			value:       "1025",
+			wantInError: "semp.max_concurrent_per_broker",
+		},
 	}
 
 	for _, tc := range cases {
@@ -796,6 +801,28 @@ brokers:
 			}
 		})
 	}
+
+	// Boundary: 1024 must pass (inclusive upper bound). Locks in the
+	// inclusive semantic against future drift.
+	t.Run("at ceiling passes", func(t *testing.T) {
+		yaml := `
+development_mode: true
+client_auth:
+  dev_token: test
+semp:
+  max_concurrent_per_broker: 1024
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+		if _, err := LoadConfig(writeTemp(t, yaml)); err != nil {
+			t.Errorf("max_concurrent_per_broker: 1024 should pass (inclusive upper bound), got: %v", err)
+		}
+	})
 }
 
 func TestLoadConfig_RateLimit_NegativeRetries(t *testing.T) {
