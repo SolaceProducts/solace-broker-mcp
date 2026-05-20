@@ -130,13 +130,17 @@ func (b BrokerConfig) LogValue() slog.Value {
 	)
 }
 
-// LogValue implements slog.LogValuer for ClientAuthConfig. It exposes OAuth
-// configuration (issuer, audience, resource URL) but excludes DevToken
-// to prevent credential leaks in log output. Issuer and ResourceURL are
-// routed through sanitizeURLString for the same defense-in-depth reason
-// as BrokerConfig.LogValue. See docs/secure-logging-rules.md Rule 2.
+// LogValue implements slog.LogValuer for ClientAuthConfig. It exposes the auth
+// mode and OAuth configuration (issuer, audience, resource URL) but excludes
+// DevToken to prevent credential leaks in log output. Mode is listed first
+// because it is the most important operator-facing piece of information —
+// operators need to confirm which auth mode the server loaded at startup.
+// Issuer and ResourceURL are routed through sanitizeURLString for the same
+// defense-in-depth reason as BrokerConfig.LogValue.
+// See docs/secure-logging-rules.md Rule 2.
 func (c ClientAuthConfig) LogValue() slog.Value {
 	return slog.GroupValue(
+		slog.String("mode", c.Mode),
 		slog.String("issuer", sanitizeURLString(c.Issuer)),
 		slog.String("audience", c.Audience),
 		slog.String("resource_url", sanitizeURLString(c.ResourceURL)),
