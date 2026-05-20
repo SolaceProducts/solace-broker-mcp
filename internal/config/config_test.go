@@ -1413,3 +1413,29 @@ brokers:
 		})
 	}
 }
+
+func TestLoadConfig_AuthMode_Static_NoToken(t *testing.T) {
+	// mode: static without a dev_token is exactly the SOL-149921 vulnerability
+	// in its new form — must be rejected with a specific error.
+	yaml := `
+client_auth:
+  mode: static
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error when client_auth.mode is static and dev_token is empty")
+	}
+	if !strings.Contains(err.Error(), "client_auth.dev_token is required") {
+		t.Errorf("error should name dev_token, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), `"static"`) {
+		t.Errorf("error should quote mode value, got: %v", err)
+	}
+}
