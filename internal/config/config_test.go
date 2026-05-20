@@ -1439,3 +1439,125 @@ brokers:
 		t.Errorf("error should quote mode value, got: %v", err)
 	}
 }
+
+func TestLoadConfig_AuthMode_OAuth_MissingIssuer(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: oauth
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"
+brokers:
+  dev:
+    url: "https://broker.example.com"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "client_auth.issuer is required") {
+		t.Fatalf("expected client_auth.issuer required error, got: %v", err)
+	}
+}
+
+func TestLoadConfig_AuthMode_OAuth_MissingAudience(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  resource_url: "https://mcp.example.com/mcp"
+brokers:
+  dev:
+    url: "https://broker.example.com"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "client_auth.audience is required") {
+		t.Fatalf("expected client_auth.audience required error, got: %v", err)
+	}
+}
+
+func TestLoadConfig_AuthMode_OAuth_MissingResourceURL(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp"
+brokers:
+  dev:
+    url: "https://broker.example.com"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "client_auth.resource_url is required") {
+		t.Fatalf("expected client_auth.resource_url required error, got: %v", err)
+	}
+}
+
+func TestLoadConfig_AuthMode_OAuth_HTTPIssuer(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: oauth
+  issuer: "http://idp.example.com"
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"
+brokers:
+  dev:
+    url: "https://broker.example.com"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "scheme must be https") {
+		t.Fatalf("expected https-required error for issuer under mode: oauth, got: %v", err)
+	}
+}
+
+func TestLoadConfig_AuthMode_OAuth_HTTPBroker(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"
+brokers:
+  dev:
+    url: "http://broker.example.com"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "scheme must be https") {
+		t.Fatalf("expected https-required error for broker URL under mode: oauth, got: %v", err)
+	}
+}
+
+func TestLoadConfig_AuthMode_Static_HTTPBroker(t *testing.T) {
+	// http:// broker URLs are explicitly allowed under mode: static (dev profile).
+	yaml := `
+client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  dev:
+    url: "http://broker.example.com"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("http:// broker URL should be allowed under mode: static, got: %v", err)
+	}
+}
