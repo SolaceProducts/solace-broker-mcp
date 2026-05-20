@@ -19,6 +19,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -358,28 +359,70 @@ func stripMatchedQuotes(s string) string {
 var envVarPattern = regexp.MustCompile(`\$\{([A-Z0-9_]+)\}`)
 
 // substituteEnvVars replaces all ${VAR_NAME} occurrences in raw YAML bytes with
-// the corresponding environment variable values. Returns an error if any
-// referenced env var is not set. This runs before YAML parsing so any field
-// can reference env vars.
+// the corresponding environment variable values. YAML comments are skipped —
+// a ${VAR} reference inside a # comment has no effect on the parsed config and
+// must not cause loading to fail (SOL-149904). Returns an error listing any
+// referenced env vars that are not set (comments excluded). This runs before
+// YAML parsing so any field can reference env vars.
 func substituteEnvVars(data []byte) ([]byte, error) {
 	var missing []string
+	var result bytes.Buffer
+	result.Grow(len(data))
 
-	result := envVarPattern.ReplaceAllFunc(data, func(match []byte) []byte {
-		// Extract var name from ${VAR_NAME}
-		varName := string(envVarPattern.FindSubmatch(match)[1])
-		value, exists := os.LookupEnv(varName)
-		if !exists {
-			missing = append(missing, varName)
-			return match // leave as-is, error reported after
-		}
-		return []byte(value)
-	})
+	for _, line := range bytes.SplitAfter(data, []byte("\n")) {
+		active, comment := splitYAMLComment(line)
+		substituted := envVarPattern.ReplaceAllFunc(active, func(match []byte) []byte {
+			varName := string(envVarPattern.FindSubmatch(match)[1])
+			value, exists := os.LookupEnv(varName)
+			if !exists {
+				missing = append(missing, varName)
+				return match // leave as-is, error reported after
+			}
+			return []byte(value)
+		})
+		result.Write(substituted)
+		result.Write(comment)
+	}
 
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("environment variables not set: %s", strings.Join(missing, ", "))
 	}
 
-	return result, nil
+	return result.Bytes(), nil
+}
+
+// splitYAMLComment returns (active, comment) where active is the portion of
+// line before any unquoted YAML comment marker (#) and comment is the rest
+// (including the # itself). A # starts a comment when it is at the start of
+// the line OR preceded by whitespace, AND not inside a single- or
+// double-quoted string on the same line.
+//
+// Limitations: block scalars (|, >) treat # as literal text — this helper
+// does not track block-scalar context. The broker MCP config schema uses only
+// scalar values and nested structs, never block scalars, so this is acceptable.
+// If a block-scalar field is ever added, extend this helper accordingly.
+func splitYAMLComment(line []byte) (active, comment []byte) {
+	inSingle := false
+	inDouble := false
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		switch {
+		case c == '"' && !inSingle:
+			// Treat a preceding backslash as escaping the quote (heuristic,
+			// not a full YAML lexer — double-backslash isn't unescaped here).
+			if !inDouble || i == 0 || line[i-1] != '\\' {
+				inDouble = !inDouble
+			}
+		case c == '\'' && !inDouble:
+			// YAML escapes ' inside a single-quoted string as ''. A naive
+			// toggle re-enters the string at the second quote, which leaves
+			// the in/out state correct at any later #.
+			inSingle = !inSingle
+		case c == '#' && !inSingle && !inDouble && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t'):
+			return line[:i], line[i:]
+		}
+	}
+	return line, nil
 }
 
 // validate checks that the config has all required fields and that values are
