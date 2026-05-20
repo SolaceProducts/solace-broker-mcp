@@ -889,3 +889,201 @@ tools:
 		t.Error("expected maxResults to be optional (required=false)")
 	}
 }
+
+func TestLoadTools_GetReplicationStatus(t *testing.T) {
+	yaml := `
+tools:
+  - name: get-replication-status
+    description: >
+      Get replication state for a Message VPN.
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The name of the Message VPN"
+    steps:
+      - id: replication
+        operation: monitor/getMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+    result:
+      strategy: collect
+`
+	fsys := fstest.MapFS{
+		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
+	}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	tool := tools[0]
+	if tool.Name != "get-replication-status" {
+		t.Errorf("expected name %q, got %q", "get-replication-status", tool.Name)
+	}
+	if len(tool.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(tool.Steps))
+	}
+	if tool.Steps[0].ID != "replication" {
+		t.Errorf("expected step ID %q, got %q", "replication", tool.Steps[0].ID)
+	}
+	if tool.Steps[0].Operation != "monitor/getMsgVpn" {
+		t.Errorf("expected operation %q, got %q", "monitor/getMsgVpn", tool.Steps[0].Operation)
+	}
+	if tool.Steps[0].FollowPages {
+		t.Error("expected FollowPages=false for get-replication-status step")
+	}
+	if tool.Steps[0].Parallel {
+		t.Error("expected Parallel=false for get-replication-status step")
+	}
+	if len(tool.Parameters) != 1 {
+		t.Fatalf("expected 1 parameter, got %d", len(tool.Parameters))
+	}
+	if tool.Parameters[0].Name != "msgVpnName" || !tool.Parameters[0].Required {
+		t.Error("expected required msgVpnName parameter")
+	}
+}
+
+func TestLoadTools_ListSlowSubscribers(t *testing.T) {
+	yaml := `
+tools:
+  - name: list-slow-subscribers
+    description: >
+      List clients flagged as slow subscribers.
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN to search for slow subscribers"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of slow subscribers to return (default 100, max 500)"
+    steps:
+      - id: slowSubscribers
+        operation: monitor/getMsgVpnClients
+        followPages: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          count: "100"
+          where: "slowSubscriber==true"
+    result:
+      strategy: collect
+`
+	fsys := fstest.MapFS{
+		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
+	}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	tool := tools[0]
+	if tool.Name != "list-slow-subscribers" {
+		t.Errorf("expected name %q, got %q", "list-slow-subscribers", tool.Name)
+	}
+	if len(tool.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(tool.Steps))
+	}
+	if tool.Steps[0].ID != "slowSubscribers" {
+		t.Errorf("expected step ID %q, got %q", "slowSubscribers", tool.Steps[0].ID)
+	}
+	if tool.Steps[0].Operation != "monitor/getMsgVpnClients" {
+		t.Errorf("expected operation %q, got %q", "monitor/getMsgVpnClients", tool.Steps[0].Operation)
+	}
+	if !tool.Steps[0].FollowPages {
+		t.Error("expected FollowPages=true for list-slow-subscribers step")
+	}
+	if tool.Result.Strategy != "collect" {
+		t.Errorf("expected strategy %q, got %q", "collect", tool.Result.Strategy)
+	}
+
+	if len(tool.Parameters) != 2 {
+		t.Fatalf("expected 2 parameters, got %d", len(tool.Parameters))
+	}
+	if tool.Parameters[0].Name != "msgVpnName" || !tool.Parameters[0].Required {
+		t.Error("expected required msgVpnName parameter")
+	}
+	if tool.Parameters[1].Name != "maxResults" || tool.Parameters[1].Required {
+		t.Error("expected optional maxResults parameter")
+	}
+}
+
+func TestLoadTools_GetDiscardStats(t *testing.T) {
+	yaml := `
+tools:
+  - name: get-discard-stats
+    description: >
+      Get per-queue message discard counts for a Message VPN.
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN to summarize discards for"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of queues to aggregate (default 100, max 500)"
+    steps:
+      - id: queueDiscards
+        operation: monitor/getMsgVpnQueues
+        followPages: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          count: "100"
+    result:
+      strategy: collect
+`
+	fsys := fstest.MapFS{
+		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
+	}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	tool := tools[0]
+	if tool.Name != "get-discard-stats" {
+		t.Errorf("expected name %q, got %q", "get-discard-stats", tool.Name)
+	}
+	if len(tool.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(tool.Steps))
+	}
+	if tool.Steps[0].ID != "queueDiscards" {
+		t.Errorf("expected step ID %q, got %q", "queueDiscards", tool.Steps[0].ID)
+	}
+	if tool.Steps[0].Operation != "monitor/getMsgVpnQueues" {
+		t.Errorf("expected operation %q, got %q", "monitor/getMsgVpnQueues", tool.Steps[0].Operation)
+	}
+	if !tool.Steps[0].FollowPages {
+		t.Error("expected FollowPages=true for get-discard-stats step")
+	}
+	if tool.Result.Strategy != "collect" {
+		t.Errorf("expected strategy %q, got %q", "collect", tool.Result.Strategy)
+	}
+
+	if len(tool.Parameters) != 2 {
+		t.Fatalf("expected 2 parameters, got %d", len(tool.Parameters))
+	}
+	if tool.Parameters[0].Name != "msgVpnName" || !tool.Parameters[0].Required {
+		t.Error("expected required msgVpnName parameter")
+	}
+	if tool.Parameters[1].Name != "maxResults" || tool.Parameters[1].Required {
+		t.Error("expected optional maxResults parameter")
+	}
+}

@@ -307,3 +307,84 @@ tools:
           select: "clientName, enabled, lastFailureReason, lastFailureTime, msgVpnName, restDeliveryPointName, up"
     result:
       strategy: collect
+
+  - name: get-replication-status
+    description: >
+      Get replication state for a Message VPN including role, sync eligibility,
+      bridge status, transaction mode, and queued message counts. Use this to
+      diagnose replication lag and sync issues. Note: lagSeconds is not exposed
+      by SEMP; use replicationActiveSyncIneligiblePeakTime as a proxy.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The name of the Message VPN"
+    steps:
+      - id: replication
+        operation: monitor/getMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          select: "msgVpnName, replicationAckPropagationIntervalMsgCount, replicationActiveAsyncQueuedMsgCount, replicationActiveSyncEligiblePeakTime, replicationActiveSyncIneligiblePeakTime, replicationActiveSyncQueuedAsAsyncMsgCount, replicationActiveSyncQueuedMsgCount, replicationActiveTransitionToSyncIneligibleCount, replicationBridgeBoundToQueue, replicationBridgeUp, replicationEnabled, replicationQueueBound, replicationQueueMaxMsgSpoolUsage, replicationRejectMsgWhenSyncIneligibleEnabled, replicationRemoteBridgeUp, replicationRole, replicationSyncEligible, replicationTransactionMode"
+    result:
+      strategy: collect
+
+  - name: list-slow-subscribers
+    description: >
+      List clients in a Message VPN flagged as slow subscribers (egress rate
+      falling behind ingress, causing backpressure). Returns identifying info
+      plus discard counts. Server-side filtered via SEMP where clause — only
+      matching clients are returned. Use this to find clients responsible for
+      queue backlogs.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN to search for slow subscribers"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of slow subscribers to return (default 100, max 500)"
+    steps:
+      - id: slowSubscribers
+        operation: monitor/getMsgVpnClients
+        followPages: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          count: "100"
+          where: "slowSubscriber==true"
+          select: "clientAddress, clientName, clientUsername, msgVpnName, platform, rxMsgRate, slowSubscriber, txDiscardedMsgCount, txMsgRate, uptime"
+    result:
+      strategy: collect
+
+  - name: get-discard-stats
+    description: >
+      Get per-queue message discard counts for a Message VPN. Returns each
+      queue with its TTL-expired, max-redelivery-exceeded, spool-quota-exceeded,
+      and other discard category counters. Use this to diagnose why messages
+      are being dropped across queues. Aggregation across queues (sum totals)
+      is left to the caller — broker does not provide pre-aggregated discards.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN to summarize discards for"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of queues to aggregate (default 100, max 500)"
+    steps:
+      - id: queueDiscards
+        operation: monitor/getMsgVpnQueues
+        followPages: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          count: "100"
+          select: "clientProfileDeniedDiscardedMsgCount, destinationGroupErrorDiscardedMsgCount, disabledDiscardedMsgCount, lowPriorityMsgCongestionDiscardedMsgCount, maxMsgSizeExceededDiscardedMsgCount, maxMsgSpoolUsageExceededDiscardedMsgCount, maxRedeliveryExceededDiscardedMsgCount, maxRedeliveryExceededToDmqMsgCount, maxTtlExceededDiscardedMsgCount, maxTtlExpiredDiscardedMsgCount, maxTtlExpiredToDmqMsgCount, msgVpnName, noLocalDeliveryDiscardedMsgCount, queueName, xaTransactionNotSupportedDiscardedMsgCount"
+    result:
+      strategy: collect
