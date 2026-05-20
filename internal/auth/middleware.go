@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -31,9 +30,16 @@ import (
 )
 
 func NewAuthMiddleware(cfg *config.ServerConfig, next http.Handler) (http.Handler, error) {
-	if cfg.DevelopmentMode && cfg.ClientAuth.DevToken == "" {
-		slog.Warn("authentication disabled — development mode with no dev token — not for production use")
+	// Auth backend selection mirrors client_auth.mode. Insecure-mode signaling
+	// lives in cmd/server/main.go via auth.LogStartupBanner — DO NOT add WARN
+	// logs here. See docs/superpowers/specs/2026-05-20-client-auth-mode-design.md.
+	switch cfg.ClientAuth.Mode {
+	case config.AuthModeDisabled:
 		return next, nil
+	case config.AuthModeStatic, config.AuthModeOAuth:
+		// fall through to the verifier construction below
+	default:
+		return nil, fmt.Errorf("internal: NewAuthMiddleware called with unsupported client_auth.mode %q (validator should have rejected this)", cfg.ClientAuth.Mode)
 	}
 
 	verifier, err := NewTokenVerifier(cfg)
@@ -41,11 +47,10 @@ func NewAuthMiddleware(cfg *config.ServerConfig, next http.Handler) (http.Handle
 		return nil, fmt.Errorf("failed to create token verifier: %w", err)
 	}
 
-	// Construct the metadata URL at the server root
-	// Config validation ensures ResourceURL is well-formed if set
+	// Construct the metadata URL at the server root.
+	// Config validation ensures ResourceURL is well-formed if set.
 	var metadataURL string
 	if cfg.ClientAuth.ResourceURL != "" {
-		// Can safely parse — config validation already checked this
 		parsedURL, _ := url.Parse(cfg.ClientAuth.ResourceURL)
 		metadataURL = fmt.Sprintf("%s://%s/.well-known/oauth-protected-resource", parsedURL.Scheme, parsedURL.Host)
 	}
@@ -57,18 +62,21 @@ func NewAuthMiddleware(cfg *config.ServerConfig, next http.Handler) (http.Handle
 	return middleware(next), nil
 }
 
-// NewTokenVerifier creates a TokenVerifier based on the server configuration.
-// In development mode, it returns a static token verifier.
-// In production mode, it uses OIDC/JWT verification with automatic key rotation.
-// cfg has already been validated via config.validate().
+// NewTokenVerifier creates a TokenVerifier based on cfg.ClientAuth.Mode.
+//   - AuthModeStatic → constant-time compare against cfg.ClientAuth.DevToken
+//   - AuthModeOAuth  → OIDC/JWT verification with automatic key rotation
+//
+// cfg has already been validated via config.validate(); other modes are
+// programming errors.
 func NewTokenVerifier(cfg *config.ServerConfig) (sdkauth.TokenVerifier, error) {
-	if cfg.DevelopmentMode {
-		slog.Warn("using static dev token — development mode — not for production use")
+	switch cfg.ClientAuth.Mode {
+	case config.AuthModeStatic:
 		return createStaticTokenVerifier(cfg.ClientAuth.DevToken), nil
+	case config.AuthModeOAuth:
+		return createOIDCTokenVerifier(cfg)
+	default:
+		return nil, fmt.Errorf("internal: NewTokenVerifier called with unsupported client_auth.mode %q (validator should have rejected this)", cfg.ClientAuth.Mode)
 	}
-
-	slog.Info("using JWT token for authentication — production mode")
-	return createOIDCTokenVerifier(cfg)
 }
 
 // createStaticTokenVerifier returns a TokenVerifier that validates against a static token.
