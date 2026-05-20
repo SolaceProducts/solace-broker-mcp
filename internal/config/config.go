@@ -44,17 +44,24 @@ type ServerConfig struct {
 	SEMP            SEMPConfig               // SEMP client settings
 	Port            int                      // HTTP port the MCP server listens on
 	LogLevel        string                   // slog level name: "debug", "info", "warn", "error"
-	DevelopmentMode bool                     // use static dev token if true
+	// DevelopmentMode is no longer used. Retained only so external Go callers
+	// that referenced this field continue to compile; the YAML key is parsed
+	// (so old configs don't fail with "unknown field") and a deprecation
+	// warning logs at boot if present. Operational profile and auth backend
+	// are now derived from ClientAuth.Mode. See IsProductionMode().
+	//
+	// Deprecated: use ClientAuth.Mode and ServerConfig.IsProductionMode().
+	DevelopmentMode bool
 	ClientAuth      ClientAuthConfig         // authentication config for mcp client to server interactions
 	TLSCertFile     string                   // path to TLS certificate file (optional, enables HTTPS)
 	TLSKeyFile      string                   // path to TLS private key file (optional, requires TLSCertFile)
 }
 
 type ClientAuthConfig struct {
-	Issuer      string `yaml:"issuer"`       // IdP issuer URL - required when development_mode: false
-	Audience    string `yaml:"audience"`     // Expected 'aud' claim value — required when development_mode: false
-	DevToken    string `yaml:"dev_token"`    // Static token for dev — only used when development_mode: true
-	ResourceURL string `yaml:"resource_url"` // OAuth resource URL (e.g., "https://mcp.example.com/mcp") - defaults to localhost if not set
+	Issuer      string `yaml:"issuer"`       // IdP issuer URL — required when mode == "oauth"
+	Audience    string `yaml:"audience"`     // Expected 'aud' claim value — required when mode == "oauth"
+	DevToken    string `yaml:"dev_token"`    // Static token for dev — required when mode == "static"
+	ResourceURL string `yaml:"resource_url"` // OAuth resource URL (e.g., "https://mcp.example.com/mcp") — required when mode == "oauth"
 	// Mode selects the client authentication backend. One of AuthModeDisabled,
 	// AuthModeStatic, or AuthModeOAuth. Required — no default. The validator
 	// rejects configs that omit it. See docs/superpowers/specs/2026-05-20-client-auth-mode-design.md
@@ -180,7 +187,7 @@ type yamlConfig struct {
 	SEMP            SEMPConfig               `yaml:"semp"`
 	Port            int                      `yaml:"port"`
 	LogLevel        string                   `yaml:"log_level"`
-	DevelopmentMode bool                     `yaml:"development_mode"`
+	DevelopmentMode *bool                    `yaml:"development_mode"` // *bool so we can detect presence-in-YAML (deprecation warning); the value is ignored
 	ClientAuth      ClientAuthConfig         `yaml:"client_auth"`
 	TLSCertFile     string                   `yaml:"tls_cert_file"`
 	TLSKeyFile      string                   `yaml:"tls_key_file"`
@@ -261,15 +268,18 @@ func LoadConfig(path string) (*ServerConfig, error) {
 		return nil, fmt.Errorf("parsing config YAML: %w", err)
 	}
 
+	if raw.DevelopmentMode != nil {
+		slog.Warn("development_mode is deprecated and ignored; auth profile is now derived from client_auth.mode (one of disabled, static, oauth) — please remove development_mode from your config")
+	}
+
 	cfg := &ServerConfig{
-		Brokers:         raw.Brokers,
-		SEMP:            raw.SEMP,
-		Port:            raw.Port,
-		LogLevel:        raw.LogLevel,
-		DevelopmentMode: raw.DevelopmentMode,
-		ClientAuth:      raw.ClientAuth,
-		TLSCertFile:     raw.TLSCertFile,
-		TLSKeyFile:      raw.TLSKeyFile,
+		Brokers:     raw.Brokers,
+		SEMP:        raw.SEMP,
+		Port:        raw.Port,
+		LogLevel:    raw.LogLevel,
+		ClientAuth:  raw.ClientAuth,
+		TLSCertFile: raw.TLSCertFile,
+		TLSKeyFile:  raw.TLSKeyFile,
 	}
 
 	applyDefaults(cfg)

@@ -42,7 +42,6 @@ func TestLoadConfig_SingleBroker(t *testing.T) {
 	t.Setenv("TEST_PASSWORD", "secret")
 
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -89,7 +88,6 @@ func TestLoadConfig_MultiBroker(t *testing.T) {
 	t.Setenv("EU_PASS", "secret-eu")
 
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -126,7 +124,6 @@ brokers:
 
 func TestLoadConfig_MissingBrokerURL(t *testing.T) {
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -148,7 +145,6 @@ brokers:
 
 func TestLoadConfig_MissingBasicAuthCreds(t *testing.T) {
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -176,7 +172,6 @@ func TestLoadConfig_MalformedYAML(t *testing.T) {
 
 func TestLoadConfig_DefaultsApplied(t *testing.T) {
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -206,7 +201,6 @@ brokers:
 
 func TestLoadConfig_InvalidAuthMethod(t *testing.T) {
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -233,7 +227,6 @@ func TestLoadConfig_EnvVarSubstitution(t *testing.T) {
 	t.Setenv("BROKER_PASS", "secret")
 
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -264,7 +257,6 @@ brokers:
 
 func TestLoadConfig_EnvVarMissing(t *testing.T) {
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -289,7 +281,6 @@ brokers:
 // the line is inert at parse time and has no effect on the loaded config.
 func TestLoadConfig_EnvVarInWholeLineComment(t *testing.T) {
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -317,7 +308,6 @@ func TestLoadConfig_EnvVarInInlineComment(t *testing.T) {
 	t.Setenv("INLINE_PASSWORD", "live-secret")
 
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -345,7 +335,6 @@ func TestLoadConfig_HashInsideQuotedValue(t *testing.T) {
 	t.Setenv("PWD_HEAD", "live")
 
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -388,7 +377,6 @@ brokers:
 
 func TestLoadConfig_TLSOnlyCert_ReturnsError(t *testing.T) {
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -412,7 +400,6 @@ brokers:
 
 func TestLoadConfig_TLSBothFields_Valid(t *testing.T) {
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -442,7 +429,6 @@ func TestLoadConfig_EnvOverridePort(t *testing.T) {
 	t.Setenv("MCP_SERVER_PORT", "9091")
 
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -468,7 +454,6 @@ func TestLoadConfig_BearerAuth(t *testing.T) {
 	t.Setenv("BEARER_TOKEN", "my-secret-token")
 
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -495,7 +480,6 @@ brokers:
 
 func TestLoadConfig_BearerAuth_MissingToken(t *testing.T) {
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -516,7 +500,6 @@ brokers:
 
 func TestLoadConfig_MissingAuthMode(t *testing.T) {
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -538,7 +521,6 @@ brokers:
 
 func TestLoadConfig_AuthModeCaseInsensitive(t *testing.T) {
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -561,7 +543,6 @@ brokers:
 
 func TestLoadConfig_InvalidURLScheme(t *testing.T) {
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -584,7 +565,6 @@ brokers:
 
 func TestLoadConfig_RejectsHTTPBrokerInProductionMode(t *testing.T) {
 	yaml := `
-development_mode: false
 brokers:
   prod-us:
     url: "http://broker.example.com:8080"
@@ -612,7 +592,6 @@ client_auth:
 
 func TestLoadConfig_RejectsHTTPClientAuthInProductionMode(t *testing.T) {
 	yaml := `
-development_mode: false
 brokers:
   prod-us:
     url: "https://broker.example.com:8080"
@@ -640,7 +619,6 @@ client_auth:
 
 func TestLoadConfig_AllowsHTTPBrokerInDevelopmentMode(t *testing.T) {
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -660,7 +638,6 @@ brokers:
 
 func TestLoadConfig_URLMissingHost(t *testing.T) {
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -685,7 +662,6 @@ func TestLoadConfig_URLEmpty_ReportsRequired(t *testing.T) {
 	// Empty URL is handled by the "url is required" branch, NOT the
 	// structure-validation branch — verifying we don't double-report.
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -718,7 +694,6 @@ brokers:
 func TestLoadConfig_RejectsBrokerURLWithCredentials_AndRedactsThemInError(t *testing.T) {
 	const inlinePassword = "hunter2-super-secret-must-not-leak"
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -809,7 +784,6 @@ func TestClientAuthConfig_LogValue_RedactsURLCredentials(t *testing.T) {
 
 func TestLoadConfig_LogLevel_Default(t *testing.T) {
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -834,7 +808,6 @@ func TestLoadConfig_LogLevel_ValidValues(t *testing.T) {
 	for _, level := range []string{"debug", "info", "warn", "error"} {
 		t.Run(level, func(t *testing.T) {
 			yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -860,7 +833,6 @@ brokers:
 
 func TestLoadConfig_LogLevel_CaseInsensitive(t *testing.T) {
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -904,7 +876,6 @@ brokers:
 
 func TestLoadConfig_RateLimit_Defaults(t *testing.T) {
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -936,7 +907,6 @@ brokers:
 
 func TestLoadConfig_RateLimit_ValidValues(t *testing.T) {
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -978,7 +948,6 @@ func TestLoadConfig_RateLimit_ExplicitZeroHonored(t *testing.T) {
 	// This is the reason both fields are pointer types -- without pointers,
 	// "0 in YAML" is indistinguishable from "omitted from YAML".
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -1107,7 +1076,6 @@ func TestValidate_BrokerErrorsAreSorted(t *testing.T) {
 	// Broker map iteration is non-deterministic; sorted aliases ensure the
 	// joined error string always lists errors in alphabetical alias order.
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -1141,7 +1109,6 @@ brokers:
 
 func TestLoad_UsesConfigFileEnv(t *testing.T) {
 	yaml := `
-development_mode: true
 client_auth:
   mode: static
   dev_token: test
@@ -1559,5 +1526,40 @@ brokers:
 	_, err := LoadConfig(writeTemp(t, yaml))
 	if err != nil {
 		t.Fatalf("http:// broker URL should be allowed under mode: static, got: %v", err)
+	}
+}
+
+func TestLoadConfig_DevelopmentModeDeprecationWarning(t *testing.T) {
+	// Legacy development_mode YAML field must still parse so operators with
+	// old configs reach the helpful client_auth.mode error — not a generic
+	// "unknown field" YAML error. But its presence must emit a deprecation
+	// warning so operators clean up.
+	buf := &bytes.Buffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prev)
+
+	yaml := `
+development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	if _, err := LoadConfig(writeTemp(t, yaml)); err != nil {
+		t.Fatalf("config should parse and validate, got: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "development_mode is deprecated") {
+		t.Errorf("expected deprecation warning in slog output, got: %s", out)
+	}
+	if !strings.Contains(out, "client_auth.mode") {
+		t.Errorf("warning should point operator at the new field, got: %s", out)
 	}
 }
