@@ -1375,3 +1375,41 @@ func TestIsProductionMode(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadConfig_AuthMode_CaseInsensitive(t *testing.T) {
+	// Mode value normalization matches what validate() does for log_level
+	// and broker auth.mode — operators get a forgiving config experience.
+	cases := []string{"DISABLED", "Static", "OAuth"}
+	for _, mode := range cases {
+		t.Run(mode, func(t *testing.T) {
+			extra := ""
+			switch strings.ToLower(mode) {
+			case "static":
+				extra = "  dev_token: test"
+			case "oauth":
+				extra = `  issuer: "https://idp.example.com"
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"`
+			}
+			yaml := `
+client_auth:
+  mode: ` + mode + `
+` + extra + `
+brokers:
+  dev:
+    url: "https://broker.example.com"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+			cfg, err := LoadConfig(writeTemp(t, yaml))
+			if err != nil {
+				t.Fatalf("expected case-insensitive accept for mode=%q, got: %v", mode, err)
+			}
+			if cfg.ClientAuth.Mode != strings.ToLower(mode) {
+				t.Errorf("expected normalized mode %q, got %q", strings.ToLower(mode), cfg.ClientAuth.Mode)
+			}
+		})
+	}
+}
