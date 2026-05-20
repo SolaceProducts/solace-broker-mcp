@@ -31,6 +31,13 @@
 | `test/e2e/agent/main.go` | Bearer round tripper reading `MCP_DEV_TOKEN` from env | Modified |
 | `test/e2e/oauth/test-config.yaml` | Mark broken with TODO referencing follow-up | Modified |
 | `CHANGELOG.md` | Breaking-change entry under `[Unreleased]` with migration map | Modified |
+| `README.md` | Quickstart YAML + explanatory paragraph + TLS example fixture | Modified |
+| `docs/authentication.md` | Rewrite the three-mode walkthrough for `mode: disabled` / `static` / `oauth`; drop the "do not mix" warning that no longer applies | Modified |
+| `docs/configuration.md` | Rewrite client-auth settings table to reflect new mode field | Modified |
+| `docs/user-guide.md` | Update prereq, limitations, deployment, and troubleshooting references | Modified |
+| `docs/internal/e2e-testing.md` | Update e2e config example fixture | Modified |
+| `docs/internal/packaging-release.md` | Update production security-considerations section | Modified |
+| `docs/internal/todo-gaps.md` | Update stale references to the old config shape | Modified |
 
 ---
 
@@ -1634,7 +1641,420 @@ EOF
 
 ---
 
-## Task 16: Final verification — full build, vet, test, log scan
+## Task 16: Update operator-facing documentation
+
+Rewrite the operator-facing docs (README, authentication, configuration, user guide) to reflect the new `client_auth.mode` enum. These are visible to end users, so wording matters.
+
+**Files:**
+- Modify: `README.md`
+- Modify: `docs/authentication.md` (heavy rewrite — three-mode walkthrough)
+- Modify: `docs/configuration.md` (client-auth table)
+- Modify: `docs/user-guide.md` (4 references)
+
+- [ ] **Step 1: Update `README.md`**
+
+Replace the YAML at `README.md:52` (the quickstart):
+
+Before:
+```yaml
+development_mode: true
+
+brokers:
+  my-broker:
+    url: "http://my-broker.example.com:8080"
+    auth:
+      mode: basic
+      username: "${BROKER_USERNAME}"
+      password: "${BROKER_PASSWORD}"
+```
+
+After:
+```yaml
+client_auth:
+  mode: disabled        # no client auth — local development only
+
+brokers:
+  my-broker:
+    url: "http://my-broker.example.com:8080"
+    auth:
+      mode: basic
+      username: "${BROKER_USERNAME}"
+      password: "${BROKER_PASSWORD}"
+```
+
+Replace the explanatory paragraph at `README.md:63`:
+
+Before:
+> `development_mode: true` disables OAuth authentication for local use. For production, set `development_mode: false` and configure the `client_auth` section with your OAuth provider (issuer, audience, resource URL). Refer to the [Authentication](docs/authentication.md) guide for specific setup instructions.
+
+After:
+> `client_auth.mode: disabled` skips client authentication entirely — only use this for local development. For production, set `client_auth.mode: oauth` and provide `issuer`, `audience`, and `resource_url`. A third mode, `static`, accepts a fixed bearer token for local development with realistic auth flow. See the [Authentication](docs/authentication.md) guide for full setup instructions.
+
+Replace the TLS example fixture at `README.md:211`:
+
+Before:
+```yaml
+port: 9090
+development_mode: true
+tls_cert_file: "/etc/certs/server.pem"
+tls_key_file: "/etc/certs/server-key.pem"
+```
+
+After:
+```yaml
+port: 9090
+client_auth:
+  mode: disabled
+tls_cert_file: "/etc/certs/server.pem"
+tls_key_file: "/etc/certs/server-key.pem"
+```
+
+- [ ] **Step 2: Update `docs/configuration.md` client-auth table**
+
+Replace the table at `docs/configuration.md:81-87` with:
+
+```markdown
+| YAML field | Description |
+|---|---|
+| `client_auth.mode` | **Required.** One of `disabled`, `static`, or `oauth`. Selects the client auth backend and the operational profile (dev vs. production). |
+| `client_auth.dev_token` | Static bearer token. Required when `client_auth.mode` is `static`. |
+| `client_auth.issuer` | IdP issuer URL. Required when `client_auth.mode` is `oauth`. |
+| `client_auth.audience` | Expected `aud` claim value. Required when `client_auth.mode` is `oauth`. |
+| `client_auth.resource_url` | OAuth resource URL (e.g., `https://mcp.example.com/mcp`). Required when `client_auth.mode` is `oauth`. |
+```
+
+Also update the description paragraph at `docs/configuration.md:79`:
+
+Before:
+> Configured under the `client_auth` key. Controls how MCP clients authenticate to this server. See the [Authentication](authentication.md) guide for full setup instructions.
+
+After:
+> Configured under the `client_auth` key. The `mode` field is required and selects the auth backend; required peer fields follow from the mode. The previous `development_mode` flag is deprecated — its presence is parsed but ignored, with a deprecation warning logged at startup. See the [Authentication](authentication.md) guide for full setup instructions.
+
+- [ ] **Step 3: Update `docs/user-guide.md`**
+
+Line 26 (prereq table — OAuth provider row):
+
+Before:
+> An OIDC-compliant identity provider (e.g., Keycloak, Auth0, Okta) is required when `development_mode` is `false`. Not needed for local development or evaluation.
+
+After:
+> An OIDC-compliant identity provider (e.g., Keycloak, Auth0, Okta) is required when `client_auth.mode` is `oauth`. Not needed when `mode` is `disabled` or `static` (local development).
+
+Line 33 (limitations — OAuth required in production):
+
+Before:
+> **OAuth required in production** — When `development_mode` is `false`, all MCP client connections must present a valid OAuth/JWT token. Plan your identity provider integration before deploying to shared environments.
+
+After:
+> **OAuth required in production** — Production deployments use `client_auth.mode: oauth`; the validator rejects `disabled` and `static` as production modes. All MCP client connections must present a valid OAuth/JWT token. Plan your identity provider integration before deploying to shared environments.
+
+Line 108 (deployment table — local row):
+
+Before:
+> Run the binary directly or via Docker. Use `development_mode: true` to skip OAuth setup.
+
+After:
+> Run the binary directly or via Docker. Use `client_auth.mode: disabled` (no auth) or `static` (with a dev token) to skip OAuth setup.
+
+Line 118 (troubleshooting — OAuth config missing):
+
+Before:
+> **OAuth config missing** — When `development_mode` is `false`, the `client_auth` section (issuer, audience, resource_url) is required. For local testing, set `development_mode: true`.
+
+After:
+> **OAuth config missing** — When `client_auth.mode` is `oauth`, the `issuer`, `audience`, and `resource_url` fields are required. For local testing, set `client_auth.mode: disabled` or `static`.
+
+- [ ] **Step 4: Rewrite `docs/authentication.md` for the new three-mode model**
+
+This is the heaviest doc change. The existing structure is good — keep the three-mode framing — but every code block and reference needs to switch from `development_mode` + `dev_token` to `client_auth.mode`. Make these specific changes:
+
+**Intro (line 1-3):** unchanged — three authentication modes is still accurate.
+
+**Rename the H2 mode headings** to make the new field name visible at a glance:
+
+- `## Mode 1: No Authentication (Open Access)` → `## Mode 1: No Authentication (`mode: disabled`)`
+- `## Mode 2: Static Dev Token (Simple Authentication)` → `## Mode 2: Static Dev Token (`mode: static`)`
+- `## Mode 3: OAuth / JWT (Production Authentication)` → `## Mode 3: OAuth / JWT (`mode: oauth`)`
+
+**Mode 1 configuration (lines 17–19):** replace
+
+```yaml
+development_mode: true
+```
+
+with
+
+```yaml
+client_auth:
+  mode: disabled
+```
+
+**Mode 1 "What happens" (line 39):** replace the log-line example
+
+Before:
+> You'll see a warning in the logs: `"authentication disabled — development mode with no dev token — not for production use"`
+
+After:
+> You'll see a prominent banner in the logs at startup:
+> ```
+> ============================================================
+>   INSECURE MODE: client_auth.mode = disabled
+>   Client authentication is DISABLED.
+>   All MCP requests pass through without verification.
+>   This is development mode — NOT FOR PRODUCTION USE.
+> ============================================================
+> ```
+
+**Mode 2 configuration (lines 57–62):** replace
+
+```yaml
+development_mode: true
+
+client_auth:
+  dev_token: "my-secret-dev-token-123"
+```
+
+with
+
+```yaml
+client_auth:
+  mode: static
+  dev_token: "my-secret-dev-token-123"
+```
+
+**Mode 2 env-var example (lines 66–71):** replace
+
+```yaml
+development_mode: true
+
+client_auth:
+  dev_token: "${DEV_TOKEN}"
+```
+
+with
+
+```yaml
+client_auth:
+  mode: static
+  dev_token: "${DEV_TOKEN}"
+```
+
+**Mode 2 "What happens" (line 107):** replace
+
+Before:
+> You'll see a log message: `"using static dev token — development mode — not for production use"`
+
+After:
+> You'll see a prominent banner in the logs at startup:
+> ```
+> ============================================================
+>   INSECURE MODE: client_auth.mode = static
+>   Authentication uses a shared static dev token.
+>   This is development mode — NOT FOR PRODUCTION USE.
+> ============================================================
+> ```
+
+**Mode 2 "Important notes" — DELETE the entire "Do not mix Mode 3 fields with dev mode" paragraph (line 113).** Under the new validator, mode selection is explicit and a single mode field, so the mixing footgun no longer exists. The whole paragraph from "**Do not mix Mode 3 fields with dev mode.**" through "Keep your dev mode config clean — only set `dev_token` under `client_auth`." is removed.
+
+**Mode 3 configuration (lines 193–200):** replace
+
+```yaml
+development_mode: false
+
+client_auth:
+  issuer: "https://your-idp.example.com/realms/your-realm"
+  audience: "solace-mcp-server"
+  resource_url: "https://your-mcp-server.example.com/mcp"
+```
+
+with
+
+```yaml
+client_auth:
+  mode: oauth
+  issuer: "https://your-idp.example.com/realms/your-realm"
+  audience: "solace-mcp-server"
+  resource_url: "https://your-mcp-server.example.com/mcp"
+```
+
+**Mode 3 Keycloak example (lines 213–220):** replace the blockquote YAML
+
+Before:
+```yaml
+development_mode: false
+
+client_auth:
+  issuer: "http://localhost:8080/realms/solace"
+  audience: "solace-mcp-server"
+  resource_url: "http://localhost:9090/mcp"
+```
+
+After (note: this example uses `http://localhost` for Keycloak which is **rejected** by the new validator under `mode: oauth` — call that out explicitly):
+```yaml
+client_auth:
+  mode: oauth
+  issuer: "https://localhost:8443/realms/solace"
+  audience: "solace-mcp-server"
+  resource_url: "http://localhost:9090/mcp"
+```
+
+And add a note immediately after the Keycloak blockquote:
+> **Note:** Under `mode: oauth` the validator enforces `https://` on the `issuer` URL. If you are running Keycloak locally for testing, you must terminate TLS in front of it (e.g., via Caddy or a reverse proxy) or run Keycloak with a TLS cert. The `resource_url` may remain `http://` for local-bind testing.
+
+**Troubleshooting — `"authentication disabled" warning in Mode 1` (lines 296–299):** replace with
+
+```markdown
+### Banner appears at startup ("INSECURE MODE")
+
+This is expected for `mode: disabled` and `mode: static`. The banner is the deliberate signal that you're running without production-grade auth. If you intended production, switch to `mode: oauth`.
+```
+
+**Troubleshooting — `"401 Unauthorized" errors in Mode 2` (lines 301–305):** replace the third bullet
+
+Before:
+> - Check that `development_mode: true` is set in your config
+
+After:
+> - Check that `client_auth.mode: static` and `client_auth.dev_token` are both set in your config
+
+- [ ] **Step 5: Build / spot-check**
+
+Run: `go build ./...`
+Expected: clean. (Docs don't affect build; this confirms nothing else regressed.)
+
+Open the rendered docs in a markdown previewer or skim them top-to-bottom. Confirm there are no remaining `development_mode` references in the operator-facing files:
+
+Run: `grep -nE "development_mode|dev_token" docs/authentication.md docs/configuration.md docs/user-guide.md README.md`
+Expected: only references to `dev_token` (still a field) under `mode: static` examples. Zero `development_mode` references.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add README.md docs/authentication.md docs/configuration.md docs/user-guide.md
+git commit -m "$(cat <<'EOF'
+SOL-149989: Update operator-facing docs for client_auth.mode
+
+README, authentication guide, configuration reference, and user guide
+all updated to describe the new three-mode model
+(disabled / static / oauth). The authentication.md "Do not mix Mode 3
+fields with dev mode" warning is removed — that footgun no longer
+exists under the new validator. Banner content examples replace the
+old WARN-log text.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+## Task 17: Update internal documentation
+
+Bring the internal docs (e2e testing notes, packaging guide, todo-gaps) in line with the new config shape. These are smaller, more focused edits.
+
+**Files:**
+- Modify: `docs/internal/e2e-testing.md`
+- Modify: `docs/internal/packaging-release.md`
+- Modify: `docs/internal/todo-gaps.md`
+
+- [ ] **Step 1: Update `docs/internal/e2e-testing.md:175`**
+
+Replace the YAML fixture:
+
+Before:
+```yaml
+development_mode: true
+
+brokers:
+  broker-a:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: "${E2E_A_USERNAME}"
+      password: "${E2E_A_PASSWORD}"
+```
+
+After:
+```yaml
+client_auth:
+  mode: static
+  dev_token: e2e-static-dev-token
+
+brokers:
+  broker-a:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: "${E2E_A_USERNAME}"
+      password: "${E2E_A_PASSWORD}"
+```
+
+(Keep the rest of the snippet — broker-b config — unchanged.)
+
+- [ ] **Step 2: Update `docs/internal/packaging-release.md:325-328`**
+
+Replace the first two bullets in "Security Considerations":
+
+Before:
+```markdown
+- **Always set `development_mode: false` in production.** Development mode
+  disables OAuth token validation and uses a static dev token.
+- **Configure `client_auth`** with a proper OIDC issuer, audience, and resource
+  URL for production OAuth validation.
+```
+
+After:
+```markdown
+- **Always set `client_auth.mode: oauth` in production.** The validator
+  rejects `disabled` and `static` as production modes. A WARN-level boot
+  banner fires for `disabled` and `static`, making misconfiguration visible
+  in logs.
+- **Configure `client_auth.issuer`, `audience`, and `resource_url`** for
+  production OAuth validation. The validator enforces `https://` on all
+  three under `mode: oauth`.
+```
+
+- [ ] **Step 3: Update `docs/internal/todo-gaps.md`**
+
+This file contains gap notes referencing the old config shape. Update lines 80, 94, 129, 133 to reflect the new model. Inspect each in context first (e.g., `sed -n '75,140p' docs/internal/todo-gaps.md`) and update conservatively — keep the gap framing, just fix outdated field names.
+
+Specific edits (paraphrased; verify against the actual line context):
+
+- **Line 80** (`Allowing config without client_auth when not in HTTP mode`) — no change required if it's about the absence of the block entirely; the gap framing still applies.
+
+- **Line 94** (`Default values secure (development_mode: false)`) — update to `Default values secure (client_auth.mode required, no insecure default)`.
+
+- **Line 129** (`be configured with valid OAuth credentials when development_mode is false`) — update to `be configured with valid OAuth credentials when client_auth.mode is oauth`.
+
+- **Line 133** (`Development mode: using development_mode: true with a static dev token`) — update to `Development mode: using client_auth.mode: static with a dev token`.
+
+- [ ] **Step 4: Confirm no operator-doc references slipped through**
+
+Run: `grep -rnE "development_mode" docs/ README.md CHANGELOG.md`
+Expected: matches only in (a) `docs/superpowers/specs/...` (the design spec — historical/reference, OK), (b) `docs/superpowers/plans/...` (this plan — OK), (c) `CHANGELOG.md` (the migration map mentions the deprecated field — OK).
+
+If any other matches surface, fix them in this task.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add docs/internal/e2e-testing.md docs/internal/packaging-release.md docs/internal/todo-gaps.md
+git commit -m "$(cat <<'EOF'
+SOL-149989: Update internal docs for client_auth.mode
+
+E2E testing notes, packaging release guide, and todo-gaps now reference
+the new client_auth.mode field instead of the deprecated
+development_mode flag.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+## Task 18: Final verification — full build, vet, test, log scan
 
 Confirm the whole tree is clean before opening the PR.
 
@@ -1663,7 +2083,7 @@ Expected: 0 CRITICAL and 0 HIGH issues on the diff. (Medium/low non-blocking but
 - [ ] **Step 5: Sanity-check the diff**
 
 Run: `git log --oneline main..HEAD`
-Expected: ~15 commits, all prefixed `SOL-149989:`, one per task.
+Expected: ~17 commits, all prefixed `SOL-149989:`, one per task (1–17).
 
 Run: `git diff main..HEAD --stat`
 Expected: changes confined to the files listed in the file map; no surprise edits.
@@ -1729,6 +2149,8 @@ Expected: PR URL returned. Comment on SOL-149989 with the PR URL.
 - [x] CHANGELOG entry — Task 15
 - [x] Stale fields ignored (spec §"Stale-field handling") — implicit in Task 3 (validator only checks required fields; extras are inert)
 - [x] Banner content matches spec §"Banner content" — Task 10 constants
+- [x] Operator-facing docs updated (README, authentication.md, configuration.md, user-guide.md) — Task 16
+- [x] Internal docs updated (e2e-testing.md, packaging-release.md, todo-gaps.md) — Task 17
 
 ### Placeholder scan
 
