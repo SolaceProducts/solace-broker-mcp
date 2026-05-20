@@ -55,6 +55,11 @@ type ClientAuthConfig struct {
 	Audience    string `yaml:"audience"`     // Expected 'aud' claim value — required when development_mode: false
 	DevToken    string `yaml:"dev_token"`    // Static token for dev — only used when development_mode: true
 	ResourceURL string `yaml:"resource_url"` // OAuth resource URL (e.g., "https://mcp.example.com/mcp") - defaults to localhost if not set
+	// Mode selects the client authentication backend. One of AuthModeDisabled,
+	// AuthModeStatic, or AuthModeOAuth. Required — no default. The validator
+	// rejects configs that omit it. See docs/superpowers/specs/2026-05-20-client-auth-mode-design.md
+	// for the design rationale.
+	Mode string `yaml:"mode"`
 }
 
 // validLogLevels is the allowlist of slog levels operators may configure.
@@ -79,6 +84,20 @@ const (
 // validAuthModes is the allowlist of supported auth modes for broker connections.
 // Add new modes (e.g., "oauth") here — validate() and error messages derive from this slice.
 var validAuthModes = []string{AuthModeBasic, AuthModeBearer}
+
+// Client authentication modes (Hop 1: MCP client → MCP server). Choosing one
+// of these is mandatory; there is no default. Operational profile (https://
+// enforcement, self-signed cert allowance, etc.) is derived from the mode via
+// IsProductionMode() — DO NOT reintroduce cfg.DevelopmentMode checks.
+const (
+	AuthModeDisabled = "disabled" // no client auth; every request passes through (dev only)
+	AuthModeStatic   = "static"   // shared static dev token; constant-time compare (dev only)
+	AuthModeOAuth    = "oauth"    // OAuth/OIDC JWT validation (production)
+)
+
+// validAuthClientModes is the allowlist for client_auth.mode. The validator
+// rejects any other value. Add new modes here and extend the validate() switch.
+var validAuthClientModes = []string{AuthModeDisabled, AuthModeStatic, AuthModeOAuth}
 
 // AuthConfig holds the authentication credentials for a broker connection.
 type AuthConfig struct {
@@ -567,6 +586,15 @@ func ValidatePort(port int) error {
 		return fmt.Errorf("port must be between 1 and 65535, got %d", port)
 	}
 	return nil
+}
+
+// IsProductionMode reports whether the server is configured for production
+// (OAuth client auth). This is the single source of truth for production-vs-dev
+// operational behavior — https:// enforcement on broker/issuer/resource URLs,
+// self-signed cert allowance, etc. DO NOT reintroduce cfg.DevelopmentMode
+// checks; that field is deprecated and ignored.
+func (c *ServerConfig) IsProductionMode() bool {
+	return c.ClientAuth.Mode == AuthModeOAuth
 }
 
 // validateBrokerURL checks that s is a well-formed URL with an http or https

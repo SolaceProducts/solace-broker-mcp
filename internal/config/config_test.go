@@ -1213,3 +1213,23 @@ func TestLoad_NoConfigFileEnv_NoSystemOrLocal_ReturnsError(t *testing.T) {
 		t.Errorf("expected 'no config file found' error, got: %v", err)
 	}
 }
+
+func TestIsProductionMode(t *testing.T) {
+	tests := []struct {
+		mode string
+		want bool
+	}{
+		{AuthModeDisabled, false},
+		{AuthModeStatic, false},
+		{AuthModeOAuth, true},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.mode, func(t *testing.T) {
+			cfg := &ServerConfig{ClientAuth: ClientAuthConfig{Mode: tt.mode}}
+			if got := cfg.IsProductionMode(); got != tt.want {
+				t.Errorf("IsProductionMode() for mode=%q: got %v, want %v", tt.mode, got, tt.want)
+			}
+		})
+	}
+}
