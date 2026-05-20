@@ -30,6 +30,11 @@ MCP_PORT=9090
 MCP_URL="http://localhost:$MCP_PORT"
 MCP_SERVER_PID=""
 
+# Static dev token used to authenticate every e2e curl/agent request to the
+# broker MCP server. Must match dev_token in write_config() and broker-config.yaml.
+# Exported so test/e2e/agent reads it from env (see test/e2e/agent/main.go).
+export MCP_DEV_TOKEN="e2e-static-dev-token"
+
 # ── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -159,7 +164,9 @@ write_config() {
     # Generate broker config from .env-derived values so ports stay in sync.
     # Credentials use ${VAR_NAME} substitution — resolved by the server via ENV_FILE.
     cat > "$config_file" <<EOF
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: e2e-static-dev-token
 
 brokers:
   broker-a:
@@ -283,6 +290,7 @@ mcp_initialize() {
     response=$(curl -sf -D - -X POST "$MCP_URL/mcp" \
         -H "Content-Type: application/json" \
         -H "Accept: application/json, text/event-stream" \
+        -H "Authorization: Bearer $MCP_DEV_TOKEN" \
         -d '{
             "jsonrpc": "2.0",
             "id": 1,
@@ -307,6 +315,7 @@ mcp_initialize() {
     curl -sf -X POST "$MCP_URL/mcp" \
         -H "Content-Type: application/json" \
         -H "Accept: application/json, text/event-stream" \
+        -H "Authorization: Bearer $MCP_DEV_TOKEN" \
         -H "Mcp-Session-Id: $session_id" \
         -d '{
             "jsonrpc": "2.0",
@@ -326,6 +335,7 @@ mcp_request() {
     raw=$(curl -s -X POST "$MCP_URL/mcp" \
         -H "Content-Type: application/json" \
         -H "Accept: application/json, text/event-stream" \
+        -H "Authorization: Bearer $MCP_DEV_TOKEN" \
         -H "Mcp-Session-Id: $session_id" \
         -d "$body")
 

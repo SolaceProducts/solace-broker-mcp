@@ -9,11 +9,15 @@
 # Credentials use ${VAR} substitution, resolved from .env via ENV_FILE.
 
 # ── Auth settings ───────────────────────────────────────────────────────────
-development_mode: true                # Skip OAuth validation (uses static dev token)
-# client_auth:                        # Required when development_mode is false:
-#   issuer: "https://idp.example.com" #   IdP issuer URL
-#   audience: "solace-mcp"            #   Expected 'aud' claim
-#   resource_url: "https://mcp.example.com/mcp"  # OAuth resource URL
+client_auth:
+  mode: static
+  dev_token: e2e-static-dev-token
+# For production (mode: oauth), set instead:
+# client_auth:
+#   mode: oauth
+#   issuer: "https://idp.example.com"
+#   audience: "solace-mcp"
+#   resource_url: "https://mcp.example.com/mcp"
 
 # ── Server settings ─────────────────────────────────────────────────────────
 port: 9090                            # HTTP port (default: 9090, env override: MCP_SERVER_PORT)
