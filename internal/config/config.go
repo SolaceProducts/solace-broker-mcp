@@ -460,7 +460,7 @@ func validate(cfg *ServerConfig) error {
 	}
 
 	for _, alias := range slices.Sorted(maps.Keys(cfg.Brokers)) {
-		errs = append(errs, validateBroker(alias, cfg.Brokers[alias], !cfg.DevelopmentMode)...)
+		errs = append(errs, validateBroker(alias, cfg.Brokers[alias], cfg.IsProductionMode())...)
 	}
 
 	if err := ValidatePort(cfg.Port); err != nil {
@@ -502,32 +502,49 @@ func validate(cfg *ServerConfig) error {
 		errs = append(errs, fmt.Errorf("semp.retry_max_interval (%s) must be >= semp.retry_min_interval (%s)", cfg.SEMP.RetryMaxInterval, cfg.SEMP.RetryMinInterval))
 	}
 
-	// Validate client authentication configuration based on development mode.
-	// Note that no validation is needed when development mode is enabled, as DevToken
-	// can be set or empty. When DevToken is empty, all requests pass through
-	if !cfg.DevelopmentMode {
-		// Production mode: require JWT validation fields
+	// Validate client authentication configuration. mode is the single source
+	// of truth for auth backend selection AND production-vs-dev operational
+	// profile (via IsProductionMode). Required fields follow from the mode.
+	// See docs/superpowers/specs/2026-05-20-client-auth-mode-design.md.
+	//
+	// Modes are tiered, not interleaved:
+	//   - disabled / static: dev-only, http:// broker URLs allowed
+	//   - oauth: production, https:// required everywhere
+	cfg.ClientAuth.Mode = strings.ToLower(cfg.ClientAuth.Mode)
+	switch cfg.ClientAuth.Mode {
+	case "":
+		errs = append(errs, fmt.Errorf("client_auth.mode is required (must be one of %v)", validAuthClientModes))
+	case AuthModeDisabled:
+		// no further required fields
+	case AuthModeStatic:
+		if cfg.ClientAuth.DevToken == "" {
+			errs = append(errs, fmt.Errorf("client_auth.dev_token is required when client_auth.mode is %q", AuthModeStatic))
+		}
+	case AuthModeOAuth:
 		if cfg.ClientAuth.Issuer == "" {
-			errs = append(errs, fmt.Errorf("client_auth.issuer is required when development_mode is false"))
+			errs = append(errs, fmt.Errorf("client_auth.issuer is required when client_auth.mode is %q", AuthModeOAuth))
 		}
 		if cfg.ClientAuth.Audience == "" {
-			errs = append(errs, fmt.Errorf("client_auth.audience is required when development_mode is false"))
+			errs = append(errs, fmt.Errorf("client_auth.audience is required when client_auth.mode is %q", AuthModeOAuth))
 		}
 		if cfg.ClientAuth.ResourceURL == "" {
-			errs = append(errs, fmt.Errorf("client_auth.resource_url is required when development_mode is false"))
+			errs = append(errs, fmt.Errorf("client_auth.resource_url is required when client_auth.mode is %q", AuthModeOAuth))
 		}
+	default:
+		errs = append(errs, fmt.Errorf("client_auth.mode %q is invalid (must be one of %v)", cfg.ClientAuth.Mode, validAuthClientModes))
 	}
 
-	// Validate issuer structure if set
+	// Validate issuer structure if set (under mode: oauth — required; under
+	// other modes — ignored if present, as documented in the spec).
 	if cfg.ClientAuth.Issuer != "" {
-		if err := validateBrokerURL(cfg.ClientAuth.Issuer, !cfg.DevelopmentMode); err != nil {
+		if err := validateBrokerURL(cfg.ClientAuth.Issuer, cfg.IsProductionMode()); err != nil {
 			errs = append(errs, fmt.Errorf("client_auth.issuer: %w", err))
 		}
 	}
 
 	// Validate resource_url structure if set
 	if cfg.ClientAuth.ResourceURL != "" {
-		if err := validateBrokerURL(cfg.ClientAuth.ResourceURL, !cfg.DevelopmentMode); err != nil {
+		if err := validateBrokerURL(cfg.ClientAuth.ResourceURL, cfg.IsProductionMode()); err != nil {
 			errs = append(errs, fmt.Errorf("client_auth.resource_url: %w", err))
 		}
 	}

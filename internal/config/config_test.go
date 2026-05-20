@@ -1307,6 +1307,55 @@ func TestLoad_NoConfigFileEnv_NoSystemOrLocal_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_AuthMode_Missing(t *testing.T) {
+	// client_auth.mode is required — omitting it must fail validation with a
+	// specific, actionable error. This is the central anti-confusion guarantee
+	// of the refactor: there is no value of "I didn't write anything" that
+	// resolves to no-auth.
+	yaml := `
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error when client_auth.mode is missing")
+	}
+	if !strings.Contains(err.Error(), "client_auth.mode is required") {
+		t.Errorf("error should state client_auth.mode is required, got: %v", err)
+	}
+	for _, m := range []string{"disabled", "static", "oauth"} {
+		if !strings.Contains(err.Error(), m) {
+			t.Errorf("error should list valid mode %q, got: %v", m, err)
+		}
+	}
+}
+
+func TestLoadConfig_AuthMode_Invalid(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: production
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for unknown client_auth.mode value")
+	}
+	if !strings.Contains(err.Error(), `client_auth.mode "production" is invalid`) {
+		t.Errorf("error should quote the bad value, got: %v", err)
+	}
+}
+
 func TestIsProductionMode(t *testing.T) {
 	tests := []struct {
 		mode string
