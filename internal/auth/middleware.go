@@ -150,25 +150,14 @@ func createOIDCTokenVerifier(cfg *config.ServerConfig) (sdkauth.TokenVerifier, e
 // OAuth 2.0 Protected Resource Metadata (RFC 9728) for the MCP server.
 // This endpoint enables MCP clients to discover the authorization server
 // and initiate browser-based OAuth flows (Authorization Code + PKCE).
-// Returns nil when there's no OAuth configuration to advertise.
+// Only served under client_auth.mode == "oauth"; returns nil otherwise.
 func NewProtectedResourceMetadataHandler(cfg *config.ServerConfig) http.Handler {
-	// Only provide metadata endpoint when JWT validation is active
-	if cfg.DevelopmentMode && cfg.ClientAuth.DevToken == "" {
+	if cfg.ClientAuth.Mode != config.AuthModeOAuth {
 		return nil
 	}
-
-	// Skip metadata endpoint when there's no issuer configured.
-	// The endpoint's purpose is to advertise the OAuth authorization server,
-	// so serving it with an empty issuer would be misleading to clients.
-	if cfg.ClientAuth.Issuer == "" {
-		return nil
-	}
-
-	// Use configured resource URL (required in production mode via config validation)
-	resourceURL := cfg.ClientAuth.ResourceURL
 
 	metadata := &oauthex.ProtectedResourceMetadata{
-		Resource:               resourceURL,
+		Resource:               cfg.ClientAuth.ResourceURL,
 		AuthorizationServers:   []string{cfg.ClientAuth.Issuer},
 		ScopesSupported:        []string{"openid"},
 		BearerMethodsSupported: []string{"header"},

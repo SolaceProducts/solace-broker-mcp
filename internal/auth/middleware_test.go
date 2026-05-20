@@ -648,8 +648,8 @@ func Test_ProtectedResourceMetadata(t *testing.T) {
 	}{
 		{"production with issuer", 9090, false, config.AuthModeOAuth, "", false, "https://auth.example.com", true},
 		{"production with TLS", 9443, false, config.AuthModeOAuth, "", true, "https://auth.example.com", true},
-		{"dev mode with token", 9090, true, config.AuthModeStatic, "dev-token", false, "https://auth.example.com", true},
-		{"dev mode without token", 9090, true, config.AuthModeDisabled, "", false, "", false},
+		{"static mode with token", 9090, true, config.AuthModeStatic, "dev-token", false, "https://auth.example.com", false},
+		{"disabled mode", 9090, true, config.AuthModeDisabled, "", false, "", false},
 	}
 
 	for _, tt := range tests {
@@ -715,5 +715,31 @@ func Test_ProtectedResourceMetadata(t *testing.T) {
 			checkStringArray(t, metadata, "scopes_supported", []string{"openid"})
 			checkStringArray(t, metadata, "bearer_methods_supported", []string{"header"})
 		})
+	}
+}
+
+func Test_PRMHandler_Disabled(t *testing.T) {
+	cfg := &config.ServerConfig{ClientAuth: config.ClientAuthConfig{Mode: config.AuthModeDisabled}}
+	if h := NewProtectedResourceMetadataHandler(cfg); h != nil {
+		t.Errorf("expected nil PRM handler for mode: disabled, got %T", h)
+	}
+}
+
+func Test_PRMHandler_Static(t *testing.T) {
+	cfg := &config.ServerConfig{ClientAuth: config.ClientAuthConfig{Mode: config.AuthModeStatic, DevToken: "x"}}
+	if h := NewProtectedResourceMetadataHandler(cfg); h != nil {
+		t.Errorf("expected nil PRM handler for mode: static, got %T", h)
+	}
+}
+
+func Test_PRMHandler_OAuth(t *testing.T) {
+	cfg := &config.ServerConfig{ClientAuth: config.ClientAuthConfig{
+		Mode:        config.AuthModeOAuth,
+		Issuer:      "https://idp.example.com",
+		Audience:    "mcp",
+		ResourceURL: "https://mcp.example.com/mcp",
+	}}
+	if h := NewProtectedResourceMetadataHandler(cfg); h == nil {
+		t.Error("expected non-nil PRM handler for mode: oauth")
 	}
 }
