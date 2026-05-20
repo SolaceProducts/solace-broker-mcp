@@ -35,14 +35,15 @@ func (e *RetriesExhaustedError) Unwrap() error { return e.Err }
 // shared HTTP resilience without duplication.
 //
 // Sender is safe for concurrent use from multiple goroutines. The cookie jar
-// replacement in checkRetry (401 re-auth) races with http.Client.Do reads of
-// the Jar field, but this is benign: the worst case is one retry using a stale
-// jar while fresh Basic Auth credentials in the header still succeed.
-// NOTE: if per-user broker sessions are introduced, jar replacement will need
-// to be scoped per user.
+// is wrapped in a *SafeCookieJar so the 401 re-auth path can clear session
+// state via an atomic swap without racing concurrent http.Client.Do reads
+// of the Jar field.
+//
+// NOTE: if per-user broker sessions are introduced, jar replacement will
+// need to be scoped per user.
 type Sender struct {
 	retryClient *retryablehttp.Client
-	httpClient  *http.Client      // underlying client for cookie jar access
+	cookieJar   *SafeCookieJar    // for 401 re-auth: Clear() swaps in a fresh inner jar atomically
 	authCfg     config.AuthConfig // for 401 auth-mode check
 	rateLimiter <-chan time.Time
 	rateTicker  *time.Ticker // non-nil when rate limiting enabled; stopped by Close()
@@ -50,13 +51,16 @@ type Sender struct {
 }
 
 // New creates a Sender configured for a specific broker. It sets up retryablehttp
-// with the retry policy from SEMPConfig and a per-broker rate limiter.
+// with the retry policy from SEMPConfig and a per-broker rate limiter. The
+// caller is expected to have set httpClient.Jar to the same *SafeCookieJar so
+// 401 re-auth (Clear) and the cookie attachment in http.Client.Do operate on
+// the same jar instance.
 // sempCfg.Retries and sempCfg.RequestMinInterval must be non-nil.
-func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authCfg config.AuthConfig, brokerURL string) *Sender {
+func New(httpClient *http.Client, cookieJar *SafeCookieJar, sempCfg *config.SEMPConfig, authCfg config.AuthConfig, brokerURL string) *Sender {
 	d := &Sender{
-		httpClient: httpClient,
-		authCfg:    authCfg,
-		brokerURL:  brokerURL,
+		cookieJar: cookieJar,
+		authCfg:   authCfg,
+		brokerURL: brokerURL,
 	}
 
 	// Configure retryablehttp client with the underlying http.Client.
