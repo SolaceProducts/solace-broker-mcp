@@ -569,6 +569,103 @@ brokers:
 	}
 }
 
+// TestLoadConfig_RejectsBrokerURLWithCredentials_AndRedactsThemInError pins
+// two related behaviours: (a) an inline user:pass URL in a broker entry is
+// rejected at validation, and (b) the password never appears in the error
+// message — even though the offending URL is part of the error context.
+// Together they prevent the disclosure path from validation errors through
+// slog.Error("failed to load config", err) at startup.
+func TestLoadConfig_RejectsBrokerURLWithCredentials_AndRedactsThemInError(t *testing.T) {
+	const inlinePassword = "hunter2-super-secret-must-not-leak"
+	yaml := `
+development_mode: true
+client_auth:
+  dev_token: test
+brokers:
+  prod-us:
+    url: "https://admin:` + inlinePassword + `@broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for broker URL with embedded credentials")
+	}
+
+	// The full error string is what main() will log via slog.Error — that
+	// is the disclosure surface. Assert the password is NOT present anywhere
+	// in it (case-sensitive: the literal would survive %q escaping).
+	if strings.Contains(err.Error(), inlinePassword) {
+		t.Errorf("password leaked through validation error\nfull error: %v", err)
+	}
+	// Operator-friendly: the error should point at the right place to fix.
+	if !strings.Contains(err.Error(), "auth block") {
+		t.Errorf("error should steer operator to the auth block, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "prod-us") {
+		t.Errorf("error should name the broker alias, got: %v", err)
+	}
+}
+
+// TestBrokerConfig_LogValue_RedactsURLCredentials pins that the LogValuer
+// itself strips userinfo from the URL — independent of whether validation
+// has run. validateBrokerURL already rejects credentialed URLs, but
+// LogValue should not assume that: any future code path that logs a
+// BrokerConfig before validation (e.g., a debug line in LoadConfig itself)
+// would otherwise echo the credential to slog.
+func TestBrokerConfig_LogValue_RedactsURLCredentials(t *testing.T) {
+	const inlinePassword = "hunter2-super-secret-must-not-leak"
+	b := BrokerConfig{
+		URL: "https://admin:" + inlinePassword + "@broker.example.com:1943",
+		Auth: AuthConfig{
+			Mode:     "basic",
+			Username: "admin",
+			Password: "irrelevant-to-this-test",
+		},
+	}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	logger.Info("broker config", slog.Any("broker", b))
+
+	out := buf.String()
+	if strings.Contains(out, inlinePassword) {
+		t.Errorf("password leaked through BrokerConfig.LogValue output:\n%s", out)
+	}
+	// Sanity: the host must still be present so logs remain useful.
+	if !strings.Contains(out, "broker.example.com") {
+		t.Errorf("host stripped from LogValue output (sanitization too aggressive):\n%s", out)
+	}
+}
+
+// TestClientAuthConfig_LogValue_RedactsURLCredentials applies the same
+// LogValue-level defense in depth to ClientAuthConfig. Issuer and
+// ResourceURL both go through validateBrokerURL, but LogValue should not
+// rely on that ordering.
+func TestClientAuthConfig_LogValue_RedactsURLCredentials(t *testing.T) {
+	const inlinePassword = "hunter2-issuer-secret-must-not-leak"
+	c := ClientAuthConfig{
+		Issuer:      "https://admin:" + inlinePassword + "@idp.example.com/realms/main",
+		Audience:    "mcp",
+		ResourceURL: "https://admin:" + inlinePassword + "@mcp.example.com/mcp",
+	}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	logger.Info("client auth config", slog.Any("client_auth", c))
+
+	out := buf.String()
+	if strings.Contains(out, inlinePassword) {
+		t.Errorf("password leaked through ClientAuthConfig.LogValue output:\n%s", out)
+	}
+	if !strings.Contains(out, "idp.example.com") {
+		t.Errorf("issuer host stripped from LogValue output (sanitization too aggressive):\n%s", out)
+	}
+	if !strings.Contains(out, "mcp.example.com") {
+		t.Errorf("resource_url host stripped from LogValue output (sanitization too aggressive):\n%s", out)
+	}
+}
+
 func TestLoadConfig_LogLevel_Default(t *testing.T) {
 	yaml := `
 development_mode: true
