@@ -178,7 +178,7 @@ Create a client in your IdP with the following settings:
 > **Keycloak:** **Clients** → **Create client** → set a **Client ID** (e.g. `mcp-client`) → click **Next**.
 > - **Client authentication:** leave **OFF** for a public client (no secret required); turn **ON** for a confidential client (requires `--client-secret`)
 >
-> Enable **Standard flow**, disable all other flows → **Next** → **Save**. Under **Access settings**, set **Valid redirect URIs** to `http://localhost:*`. Under **Advanced**, set **Proof Key for Code Exchange Code Challenge Method** to `S256` → **Save**.
+> Enable **Standard flow** and disable all other flows. Enable **Require PKCE** and set the **PKCE Method** to `S256` → click **Next**. Under **Login settings**, set **Valid redirect URIs** to `http://localhost:*` → **Save**.
 
 #### 1.4 Create users
 
@@ -273,7 +273,7 @@ A browser window will open for you to log in on first use. Your IdP must support
 >
 > **1. Create an `openid` client scope placeholder** — Keycloak handles `openid` at the protocol level but its DCR policy checks for a scope by that name. Go to **Client Scopes** → **Create client scope** → **Name:** `openid`, **Protocol:** `openid-connect` → **Save**.
 >
-> **2. Update the Allowed Client Scopes policy** — Go to **Realm Settings** → **Client Registration** → **Client Registration Policies** tab → under **Anonymous Access Policies**, click **Allowed Client Scopes** → add `openid` and `service_account` to the allowed list → **Save**.
+> **2. Update the Allowed Client Scopes policy** — Go to **Clients** → **Client Registration**  tab → under **Anonymous Access Policies**, click **Allowed Client Scopes** → add `openid` and `service_account` to the allowed list → **Save**.
 >
 > **3. Update the Trusted Hosts policy** — If Keycloak is running in a container, DCR requests arrive from the container bridge IP rather than `localhost`. Go to **Realm Settings** → **Client Registration** → **Client Registration Policies** tab → under **Anonymous Access Policies**, click **Trusted Hosts** → turn off **Host Sending Registration Request Must Match** → **Save**.
 
