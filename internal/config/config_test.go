@@ -1568,12 +1568,12 @@ brokers:
 	}
 }
 
-// TestLoadConfig_StaticMode_IgnoresMalformedIssuer guards the validator
+// TestLoadConfig_StaticMode_IgnoresOffModeOAuthFields guards the validator
 // against the missing-vs-malformed asymmetry called out in the PR #62 review:
 // under mode: static, OAuth-only fields (issuer, resource_url) are ignored if
 // missing — they must also be ignored if malformed. Validating them under
 // mode: static contradicts the spec ("off-mode fields are ignored").
-func TestLoadConfig_StaticMode_IgnoresMalformedIssuer(t *testing.T) {
+func TestLoadConfig_StaticMode_IgnoresOffModeOAuthFields(t *testing.T) {
 	yaml := `
 client_auth:
   mode: static
@@ -1591,5 +1591,34 @@ brokers:
 	_, err := LoadConfig(writeTemp(t, yaml))
 	if err != nil {
 		t.Fatalf("malformed issuer/resource_url should be ignored under mode: static, got: %v", err)
+	}
+}
+
+// TestLoadConfig_OAuthMode_RejectsMalformedIssuer is the symmetric companion
+// to TestLoadConfig_StaticMode_IgnoresOffModeOAuthFields. Under mode: oauth,
+// a structurally malformed issuer must still be rejected — guarding against
+// a future refactor accidentally weakening the validateBrokerURL call inside
+// the AuthModeOAuth case.
+func TestLoadConfig_OAuthMode_RejectsMalformedIssuer(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: oauth
+  issuer: ":::not a url"
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"
+brokers:
+  dev:
+    url: "https://broker.example.com"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected validation error for malformed issuer under mode: oauth")
+	}
+	if !strings.Contains(err.Error(), "client_auth.issuer") {
+		t.Errorf("error should mention client_auth.issuer, got: %v", err)
 	}
 }
