@@ -80,7 +80,7 @@ func Test_NewAuthMiddleware_Disabled(t *testing.T) {
 	}
 }
 
-// Test_StaticDevToken tests static token validation in development mode
+// Test_StaticDevToken tests static token validation in static (dev-token) mode.
 func Test_StaticDevToken(t *testing.T) {
 	const validToken = "dev-secret-token-12345"
 
