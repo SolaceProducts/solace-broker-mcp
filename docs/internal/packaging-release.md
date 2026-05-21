@@ -322,10 +322,13 @@ which has no shell, curl, or wget.
 
 ## Security Considerations
 
-- **Always set `development_mode: false` in production.** Development mode
-  disables OAuth token validation and uses a static dev token.
-- **Configure `client_auth`** with a proper OIDC issuer, audience, and resource
-  URL for production OAuth validation.
+- **Always set `client_auth.mode: oauth` in production.** The validator
+  rejects `disabled` and `static` as production modes. A WARN-level boot
+  banner fires for `disabled` and `static`, making misconfiguration visible
+  in logs.
+- **Configure `client_auth.issuer`, `audience`, and `resource_url`** for
+  production OAuth validation. The validator enforces `https://` on all
+  three under `mode: oauth`.
 - **Use `${VAR_NAME}` references** for credentials in the config file. Never
   hardcode passwords or tokens.
 - **Enable TLS** via `tls_cert_file` and `tls_key_file`, or terminate TLS at
