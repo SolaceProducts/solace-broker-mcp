@@ -23,14 +23,14 @@ Before installing the Solace Broker MCP Server, ensure you have the following:
 | **Broker credentials** | A SEMP username and password (basic auth) to access each broker. |
 | **Runtime environment** | One of: Docker, a supported OS/architecture for the binary (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64), or Kubernetes. |
 | **MCP client** | An MCP-compatible AI client such as Claude Code or Claude Desktop. |
-| **OAuth provider** (production only) | An OIDC-compliant identity provider (e.g., Keycloak, Auth0, Okta) is required when `development_mode` is `false`. Not needed for local development or evaluation. |
+| **OAuth provider** (production only) | An OIDC-compliant identity provider (e.g., Keycloak, Auth0, Okta) is required when `client_auth.mode` is `oauth`. Not needed when `mode` is `disabled` or `static` (local development). |
 | **Go 1.25+** (development only) | Only required if building from source. Not needed for binary or Docker deployments. |
 
 ## Limitations and Considerations
 
 - **No stdio transport** — The server runs as a standalone HTTP service and must be started before connecting an MCP client. It cannot be auto-launched as a subprocess by clients like Claude Desktop.
 - **Pagination limits** — List tools return up to 100 results by default and cap at 500 via the `maxResults` parameter. Brokers with more than 500 queues, clients, or VPNs will require multiple queries.
-- **OAuth required in production** — When `development_mode` is `false`, all MCP client connections must present a valid OAuth/JWT token. Plan your identity provider integration before deploying to shared environments.
+- **OAuth required in production** — Production deployments use `client_auth.mode: oauth`; the validator rejects `disabled` and `static` as production modes. All MCP client connections must present a valid OAuth/JWT token. Plan your identity provider integration before deploying to shared environments.
 
 ## Tools
 
@@ -105,7 +105,7 @@ The server supports open access, static token, and OAuth/OIDC authentication for
 
 | Environment | Notes |
 |---|---|
-| **Local / laptop** | Run the binary directly or via Docker. Use `development_mode: true` to skip OAuth setup. |
+| **Local / laptop** | Run the binary directly or via Docker. Use `client_auth.mode: disabled` (no auth) or `static` (with a dev token) to skip OAuth setup. |
 | **Docker / Docker Compose** | Multi-platform images available at `ghcr.io/solacedev/solace-broker-mcp`. Built-in health check. |
 | **Bare metal / VM** | Statically-linked binary with no external dependencies. Handles SIGTERM/SIGINT for graceful shutdown. |
 
@@ -115,7 +115,7 @@ The server supports open access, static token, and OAuth/OIDC authentication for
 
 - **Config file not found** — The server looks for the yaml configuration file in this order: `CONFIG_FILE` env var, `/etc/mcp-server/config.yaml`, then `./broker-config.yaml`. Set `CONFIG_FILE` explicitly if your file is elsewhere.
 - **TLS misconfiguration** — Both `tls_cert_file` and `tls_key_file` must be set together. Providing only one is a startup error.
-- **OAuth config missing** — When `development_mode` is `false`, the `client_auth` section (issuer, audience, resource_url) is required. For local testing, set `development_mode: true`.
+- **OAuth config missing** — When `client_auth.mode` is `oauth`, the `issuer`, `audience`, and `resource_url` fields are required. For local testing, set `client_auth.mode: disabled` or `static`.
 
 ### Cannot connect to broker
 
