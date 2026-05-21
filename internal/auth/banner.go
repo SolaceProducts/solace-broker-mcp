@@ -51,14 +51,13 @@ func LogStartupBanner(cfg *config.ServerConfig) {
 const disabledBanner = `
 ============================================================
   INSECURE MODE: client_auth.mode = disabled
-  Client authentication is DISABLED.
-  All MCP requests pass through without verification.
-  This is development mode — NOT FOR PRODUCTION USE.
+  Client → MCP server auth is OFF. Broker auth is unaffected.
+  Development mode — NOT FOR PRODUCTION USE.
 ============================================================`
 
 const staticBanner = `
 ============================================================
   INSECURE MODE: client_auth.mode = static
-  Authentication uses a shared static dev token.
-  This is development mode — NOT FOR PRODUCTION USE.
+  Client → MCP server auth uses a static dev token. Broker auth is unaffected.
+  Development mode — NOT FOR PRODUCTION USE.
 ============================================================`

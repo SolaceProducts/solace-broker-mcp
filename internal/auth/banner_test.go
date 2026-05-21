@@ -44,7 +44,8 @@ func Test_StartupBanner_Disabled(t *testing.T) {
 		"level=WARN",
 		"INSECURE MODE",
 		"client_auth.mode = disabled",
-		"Client authentication is DISABLED",
+		"Client → MCP server auth is OFF",
+		"Broker auth is unaffected",
 		"NOT FOR PRODUCTION USE",
 	} {
 		if !strings.Contains(out, want) {
@@ -63,7 +64,8 @@ func Test_StartupBanner_Static(t *testing.T) {
 		"level=WARN",
 		"INSECURE MODE",
 		"client_auth.mode = static",
-		"static dev token",
+		"Client → MCP server auth uses a static dev token",
+		"Broker auth is unaffected",
 		"NOT FOR PRODUCTION USE",
 	} {
 		if !strings.Contains(out, want) {
