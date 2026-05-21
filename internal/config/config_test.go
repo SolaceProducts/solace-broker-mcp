@@ -617,7 +617,7 @@ client_auth:
 	}
 }
 
-func TestLoadConfig_AllowsHTTPBrokerInDevelopmentMode(t *testing.T) {
+func TestLoadConfig_AllowsHTTPBrokerInStaticMode(t *testing.T) {
 	yaml := `
 client_auth:
   mode: static
@@ -632,7 +632,7 @@ brokers:
 `
 	_, err := LoadConfig(writeTemp(t, yaml))
 	if err != nil {
-		t.Fatalf("http:// should be allowed in development_mode: %v", err)
+		t.Fatalf("http:// should be allowed under client_auth.mode: static: %v", err)
 	}
 }
 

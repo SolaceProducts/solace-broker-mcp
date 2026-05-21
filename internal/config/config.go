@@ -40,21 +40,13 @@ import (
 // ServerConfig holds the complete MCP server configuration, including all
 // configured brokers and SEMP client settings.
 type ServerConfig struct {
-	Brokers         map[string]*BrokerConfig // broker alias → config
-	SEMP            SEMPConfig               // SEMP client settings
-	Port            int                      // HTTP port the MCP server listens on
-	LogLevel        string                   // slog level name: "debug", "info", "warn", "error"
-	// DevelopmentMode is no longer used. Retained only so external Go callers
-	// that referenced this field continue to compile; the YAML key is parsed
-	// (so old configs don't fail with "unknown field") and a deprecation
-	// warning logs at boot if present. Operational profile and auth backend
-	// are now derived from ClientAuth.Mode. See IsProductionMode().
-	//
-	// Deprecated: use ClientAuth.Mode and ServerConfig.IsProductionMode().
-	DevelopmentMode bool
-	ClientAuth      ClientAuthConfig         // authentication config for mcp client to server interactions
-	TLSCertFile     string                   // path to TLS certificate file (optional, enables HTTPS)
-	TLSKeyFile      string                   // path to TLS private key file (optional, requires TLSCertFile)
+	Brokers     map[string]*BrokerConfig // broker alias → config
+	SEMP        SEMPConfig               // SEMP client settings
+	Port        int                      // HTTP port the MCP server listens on
+	LogLevel    string                   // slog level name: "debug", "info", "warn", "error"
+	ClientAuth  ClientAuthConfig         // authentication config for mcp client to server interactions
+	TLSCertFile string                   // path to TLS certificate file (optional, enables HTTPS)
+	TLSKeyFile  string                   // path to TLS private key file (optional, requires TLSCertFile)
 }
 
 type ClientAuthConfig struct {
@@ -95,7 +87,8 @@ var validAuthModes = []string{AuthModeBasic, AuthModeBearer}
 // Client authentication modes (Hop 1: MCP client → MCP server). Choosing one
 // of these is mandatory; there is no default. Operational profile (https://
 // enforcement, self-signed cert allowance, etc.) is derived from the mode via
-// IsProductionMode() — DO NOT reintroduce cfg.DevelopmentMode checks.
+// IsProductionMode(). Operational profile is mode-derived; do not add a
+// separate dev-mode toggle on ServerConfig.
 const (
 	AuthModeDisabled = "disabled" // no client auth; every request passes through (dev only)
 	AuthModeStatic   = "static"   // shared static dev token; constant-time compare (dev only)
@@ -611,8 +604,8 @@ func ValidatePort(port int) error {
 // IsProductionMode reports whether the server is configured for production
 // (OAuth client auth). This is the single source of truth for production-vs-dev
 // operational behavior — https:// enforcement on broker/issuer/resource URLs,
-// self-signed cert allowance, etc. DO NOT reintroduce cfg.DevelopmentMode
-// checks; that field is deprecated and ignored.
+// self-signed cert allowance, etc. Operational profile is mode-derived;
+// do not add a separate dev-mode toggle on ServerConfig.
 func (c *ServerConfig) IsProductionMode() bool {
 	return c.ClientAuth.Mode == AuthModeOAuth
 }

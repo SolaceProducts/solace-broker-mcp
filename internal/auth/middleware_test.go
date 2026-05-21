@@ -39,7 +39,9 @@ var dummyHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request)
 
 // Test_NewAuthMiddleware_Disabled tests that all requests pass through when
 // client_auth.mode is "disabled" — the explicit no-auth dev mode replacing
-// the old (silent) development_mode + empty dev_token bypass.
+// the old (pre-SOL-149989) silent dev-mode + empty dev-token bypass —
+// which is now structurally impossible: client_auth.mode is required and
+// has no implicit "disabled if dev_token empty" fallback.
 func Test_NewAuthMiddleware_Disabled(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Port: 9090,
@@ -83,8 +85,7 @@ func Test_StaticDevToken(t *testing.T) {
 	const validToken = "dev-secret-token-12345"
 
 	cfg := &config.ServerConfig{
-		Port:            9090,
-		DevelopmentMode: true,
+		Port: 9090,
 		ClientAuth: config.ClientAuthConfig{
 			Mode:        config.AuthModeStatic,
 			DevToken:    validToken,
@@ -164,11 +165,12 @@ func Test_StaticDevToken(t *testing.T) {
 	}
 }
 
-// Test_DevelopmentModeFlexibility tests that development mode works without issuer/audience
-func Test_DevelopmentModeFlexibility(t *testing.T) {
+// Test_StaticMode_AllowsMissingIssuerAndAudience verifies that static mode
+// constructs middleware successfully when OAuth-only fields (issuer, audience)
+// are absent — these fields are ignored off-mode per the client_auth.mode spec.
+func Test_StaticMode_AllowsMissingIssuerAndAudience(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Port:            9090,
-		DevelopmentMode: true,
+		Port: 9090,
 		ClientAuth: config.ClientAuthConfig{
 			Mode:     config.AuthModeStatic,
 			DevToken: "dev-token",
@@ -287,8 +289,7 @@ func Test_ValidJWTToken(t *testing.T) {
 	defer mock.close()
 
 	cfg := &config.ServerConfig{
-		Port:            9090,
-		DevelopmentMode: false,
+		Port: 9090,
 		ClientAuth: config.ClientAuthConfig{
 			Mode:     config.AuthModeOAuth,
 			Issuer:   mock.issuer,
@@ -326,8 +327,7 @@ func Test_ExpiredJWTToken(t *testing.T) {
 	defer mock.close()
 
 	cfg := &config.ServerConfig{
-		Port:            9090,
-		DevelopmentMode: false,
+		Port: 9090,
 		ClientAuth: config.ClientAuthConfig{
 			Mode:     config.AuthModeOAuth,
 			Issuer:   mock.issuer,
@@ -365,8 +365,7 @@ func Test_WrongJWTAudience(t *testing.T) {
 	defer mock.close()
 
 	cfg := &config.ServerConfig{
-		Port:            9090,
-		DevelopmentMode: false,
+		Port: 9090,
 		ClientAuth: config.ClientAuthConfig{
 			Mode:     config.AuthModeOAuth,
 			Issuer:   mock.issuer,
@@ -404,8 +403,7 @@ func Test_WrongJWTIssuer(t *testing.T) {
 	defer mock.close()
 
 	cfg := &config.ServerConfig{
-		Port:            9090,
-		DevelopmentMode: false,
+		Port: 9090,
 		ClientAuth: config.ClientAuthConfig{
 			Mode:     config.AuthModeOAuth,
 			Issuer:   mock.issuer,
@@ -443,8 +441,7 @@ func Test_InvalidJWTSignature(t *testing.T) {
 	defer mock.close()
 
 	cfg := &config.ServerConfig{
-		Port:            9090,
-		DevelopmentMode: false,
+		Port: 9090,
 		ClientAuth: config.ClientAuthConfig{
 			Mode:     config.AuthModeOAuth,
 			Issuer:   mock.issuer,
@@ -483,8 +480,7 @@ func Test_NoJWTToken(t *testing.T) {
 	defer mock.close()
 
 	cfg := &config.ServerConfig{
-		Port:            9090,
-		DevelopmentMode: false,
+		Port: 9090,
 		ClientAuth: config.ClientAuthConfig{
 			Mode:        config.AuthModeOAuth,
 			Issuer:      mock.issuer,
@@ -518,7 +514,6 @@ func Test_NoJWTToken(t *testing.T) {
 // the OIDC provider is unreachable during initialization in production mode.
 func Test_OIDCProviderUnreachable(t *testing.T) {
 	cfg := &config.ServerConfig{
-		DevelopmentMode: false,
 		ClientAuth: config.ClientAuthConfig{
 			Mode:     config.AuthModeOAuth,
 			Issuer:   "https://nonexistent.example.com",
@@ -538,15 +533,14 @@ func Test_WWWAuthenticateHeaderFormat(t *testing.T) {
 	tests := []struct {
 		name        string
 		port        int
-		devMode     bool
 		mode        string
 		devToken    string
 		tlsEnabled  bool
 		expectHTTPS bool
 	}{
-		{"dev token mode", 9090, true, config.AuthModeStatic, "dev-secret-token", false, false},
-		{"production mode", 9090, false, config.AuthModeOAuth, "", false, false},
-		{"production with TLS", 9443, false, config.AuthModeOAuth, "", true, true},
+		{"dev token mode", 9090, config.AuthModeStatic, "dev-secret-token", false, false},
+		{"production mode", 9090, config.AuthModeOAuth, "", false, false},
+		{"production with TLS", 9443, config.AuthModeOAuth, "", true, true},
 	}
 
 	for _, tt := range tests {
@@ -556,8 +550,7 @@ func Test_WWWAuthenticateHeaderFormat(t *testing.T) {
 				scheme = "https"
 			}
 			cfg := &config.ServerConfig{
-				Port:            tt.port,
-				DevelopmentMode: tt.devMode,
+				Port: tt.port,
 				ClientAuth: config.ClientAuthConfig{
 					Mode:        tt.mode,
 					DevToken:    tt.devToken,
@@ -639,17 +632,16 @@ func Test_ProtectedResourceMetadata(t *testing.T) {
 	tests := []struct {
 		name          string
 		port          int
-		devMode       bool
 		mode          string
 		devToken      string
 		tlsEnabled    bool
 		issuer        string
 		expectHandler bool
 	}{
-		{"production with issuer", 9090, false, config.AuthModeOAuth, "", false, "https://auth.example.com", true},
-		{"production with TLS", 9443, false, config.AuthModeOAuth, "", true, "https://auth.example.com", true},
-		{"static mode with token", 9090, true, config.AuthModeStatic, "dev-token", false, "https://auth.example.com", false},
-		{"disabled mode", 9090, true, config.AuthModeDisabled, "", false, "", false},
+		{"production with issuer", 9090, config.AuthModeOAuth, "", false, "https://auth.example.com", true},
+		{"production with TLS", 9443, config.AuthModeOAuth, "", true, "https://auth.example.com", true},
+		{"static mode with token", 9090, config.AuthModeStatic, "dev-token", false, "https://auth.example.com", false},
+		{"disabled mode", 9090, config.AuthModeDisabled, "", false, "", false},
 	}
 
 	for _, tt := range tests {
@@ -659,8 +651,7 @@ func Test_ProtectedResourceMetadata(t *testing.T) {
 				scheme = "https"
 			}
 			cfg := &config.ServerConfig{
-				Port:            tt.port,
-				DevelopmentMode: tt.devMode,
+				Port: tt.port,
 				ClientAuth: config.ClientAuthConfig{
 					Mode:        tt.mode,
 					DevToken:    tt.devToken,
