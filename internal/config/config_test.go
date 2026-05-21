@@ -1567,3 +1567,29 @@ brokers:
 		t.Errorf("warning should point operator at the new field, got: %s", out)
 	}
 }
+
+// TestLoadConfig_StaticMode_IgnoresMalformedIssuer guards the validator
+// against the missing-vs-malformed asymmetry called out in the PR #62 review:
+// under mode: static, OAuth-only fields (issuer, resource_url) are ignored if
+// missing — they must also be ignored if malformed. Validating them under
+// mode: static contradicts the spec ("off-mode fields are ignored").
+func TestLoadConfig_StaticMode_IgnoresMalformedIssuer(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: static
+  dev_token: test
+  issuer: "not a valid url"
+  resource_url: ":::also bad"
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("malformed issuer/resource_url should be ignored under mode: static, got: %v", err)
+	}
+}

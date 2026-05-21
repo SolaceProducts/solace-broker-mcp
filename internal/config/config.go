@@ -533,30 +533,19 @@ func validate(cfg *ServerConfig) error {
 	case AuthModeOAuth:
 		if cfg.ClientAuth.Issuer == "" {
 			errs = append(errs, fmt.Errorf("client_auth.issuer is required when client_auth.mode is %q", AuthModeOAuth))
+		} else if err := validateBrokerURL(cfg.ClientAuth.Issuer, cfg.IsProductionMode()); err != nil {
+			errs = append(errs, fmt.Errorf("client_auth.issuer: %w", err))
 		}
 		if cfg.ClientAuth.Audience == "" {
 			errs = append(errs, fmt.Errorf("client_auth.audience is required when client_auth.mode is %q", AuthModeOAuth))
 		}
 		if cfg.ClientAuth.ResourceURL == "" {
 			errs = append(errs, fmt.Errorf("client_auth.resource_url is required when client_auth.mode is %q", AuthModeOAuth))
+		} else if err := validateBrokerURL(cfg.ClientAuth.ResourceURL, cfg.IsProductionMode()); err != nil {
+			errs = append(errs, fmt.Errorf("client_auth.resource_url: %w", err))
 		}
 	default:
 		errs = append(errs, fmt.Errorf("client_auth.mode %q is invalid (must be one of %v)", cfg.ClientAuth.Mode, validAuthClientModes))
-	}
-
-	// Validate issuer structure if set (under mode: oauth — required; under
-	// other modes — ignored if present, as documented in the spec).
-	if cfg.ClientAuth.Issuer != "" {
-		if err := validateBrokerURL(cfg.ClientAuth.Issuer, cfg.IsProductionMode()); err != nil {
-			errs = append(errs, fmt.Errorf("client_auth.issuer: %w", err))
-		}
-	}
-
-	// Validate resource_url structure if set
-	if cfg.ClientAuth.ResourceURL != "" {
-		if err := validateBrokerURL(cfg.ClientAuth.ResourceURL, cfg.IsProductionMode()); err != nil {
-			errs = append(errs, fmt.Errorf("client_auth.resource_url: %w", err))
-		}
 	}
 
 	// TLS: both cert and key must be provided together, or neither.
