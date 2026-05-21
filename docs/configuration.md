@@ -8,13 +8,13 @@ The server searches for the config file in this order:
 
 | Priority | Source | Value |
 |---|---|---|
-| 1 | `CONFIG_FILE` env var | Any path you set |
+| 1 | `CONFIG_FILE` env var | Custom path |
 | 2 | System path | `/etc/mcp-server/config.yaml` |
 | 3 | Local path | `./broker-config.yaml` |
 
-Set `CONFIG_FILE` explicitly if your file is in a non-standard location.
+Set `CONFIG_FILE` explicitly if the file is in a non-standard location.
 
-A separate credentials file (default: `.env` next to the config file) is loaded automatically. Override the path with the `ENV_FILE` env var.
+The server loads a separate credentials file automatically (default: `.env` in the same directory as the config file). Override the path with the `ENV_FILE` env var.
 
 ## Environment variable substitution
 
@@ -28,7 +28,7 @@ brokers:
       password: "${BROKER_PASSWORD}"
 ```
 
-Variables are resolved at startup. The `.env` file is loaded automatically before substitution. Precedence: env var > `.env` file > YAML literal.
+The server resolves variables at startup. The `.env` file loads automatically before substitution. Precedence: environment variable > `.env` file > YAML literal value.
 
 ## Server settings
 
@@ -39,7 +39,7 @@ Variables are resolved at startup. The `.env` file is loaded automatically befor
 | `tls_key_file` | — | none | Path to TLS private key (PEM). |
 | `log_level` | — | `info` | Log verbosity: `debug`, `info`, `warn`, `error`. |
 
-**TLS:** both `tls_cert_file` and `tls_key_file` must be set together — providing only one is a startup error. When both are set, the server starts with HTTPS; when neither is set, plain HTTP.
+**TLS:** Provide both `tls_cert_file` and `tls_key_file` together — providing only one is a startup error. When both are set, the server starts with HTTPS; when neither is set, plain HTTP.
 
 ```yaml
 port: 9090
@@ -47,22 +47,22 @@ tls_cert_file: "/etc/certs/server.pem"
 tls_key_file: "/etc/certs/server-key.pem"
 ```
 
-**Logging:** the server writes structured JSON logs to stderr. Credentials are automatically redacted in all log output. Every tool invocation is logged with the tool name, target broker, status, and duration.
+**Logging:** The server writes structured JSON logs to stderr. The server automatically redacts credentials in all log output. Every tool invocation is logged with the tool name, target broker, status, and duration.
 
-## Broker settings
+## Event Broker settings
 
-Configured under the `brokers` map. Each key is a broker alias used as the `broker` parameter in MCP tools.
+Configured under the `brokers` map. Each key defines an event broker alias for the `broker` parameter in MCP tools.
 
 | YAML field | Default | Description |
 |---|---|---|
-| `url` | — | SEMP management API base URL (e.g., `https://broker:1943`). |
+| `url` | — | SEMP management API base URL (for example, `https://broker:1943`). |
 | `auth.mode` | — | `basic` or `bearer`. |
 | `auth.username` | — | Basic auth username. |
 | `auth.password` | — | Basic auth password. |
 | `auth.token` | — | Bearer token (used when `auth.mode: bearer`). |
 | `insecure_skip_verify` | `false` | Skip TLS certificate verification. Development only — do not use in production. |
 
-**Production recommendation:** use `https://` broker URLs in production environments.
+**Production recommendation:** Solace recommends using `https://` event broker URLs in production environments.
 
 ```yaml
 brokers:
@@ -88,13 +88,13 @@ Configured under the `client_auth` key. The `mode` field is required and selects
 
 ## Rate limiting and retry
 
-Configured under the `semp` key. Controls how the server throttles and retries requests to broker SEMP APIs.
+Configured under the `semp` key. Controls how the server throttles and retries requests to event broker SEMP APIs.
 
 | YAML field | Default | Description |
 |---|---|---|
-| `semp.request_min_interval` | `100ms` | Minimum spacing between successive SEMP requests per broker. Set to `0` to disable throttling. |
+| `semp.request_min_interval` | `100ms` | Minimum spacing between successive SEMP requests per event broker. Set to `0` to disable throttling. |
 | `semp.request_timeout_duration` | `1m` | HTTP request timeout for individual SEMP calls. |
 | `semp.retries` | `10` | Maximum retry attempts for a failed SEMP call. Set to `0` to disable retries. |
 | `semp.retry_min_interval` | `3s` | Starting backoff before the first retry. |
 | `semp.retry_max_interval` | `30s` | Maximum backoff cap regardless of retry count. |
-| `semp.max_concurrent_per_broker` | `10` | Maximum concurrent SEMP requests per broker. |
+| `semp.max_concurrent_per_broker` | `10` | Maximum concurrent SEMP requests per event broker. |
