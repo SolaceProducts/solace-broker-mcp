@@ -322,10 +322,11 @@ which has no shell, curl, or wget.
 
 ## Security Considerations
 
-- **Always set `client_auth.mode: oauth` in production.** The validator
-  rejects `disabled` and `static` as production modes. A WARN-level boot
-  banner fires for `disabled` and `static`, making misconfiguration visible
-  in logs.
+- **Always set `client_auth.mode: oauth` in production.** A WARN-level boot
+  banner fires for `disabled` and `static` modes (visible in startup logs),
+  and those modes use the development profile (allowing `http://` URLs).
+  Operators are expected to detect and prevent dev-mode configs in production
+  via log alerting and deployment review.
 - **Configure `client_auth.issuer`, `audience`, and `resource_url`** for
   production OAuth validation. The validator enforces `https://` on all
   three under `mode: oauth`.

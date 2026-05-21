@@ -762,6 +762,7 @@ func TestBrokerConfig_LogValue_RedactsURLCredentials(t *testing.T) {
 func TestClientAuthConfig_LogValue_RedactsURLCredentials(t *testing.T) {
 	const inlinePassword = "hunter2-issuer-secret-must-not-leak"
 	c := ClientAuthConfig{
+		Mode:        AuthModeOAuth,
 		Issuer:      "https://admin:" + inlinePassword + "@idp.example.com/realms/main",
 		Audience:    "mcp",
 		ResourceURL: "https://admin:" + inlinePassword + "@mcp.example.com/mcp",
@@ -779,6 +780,9 @@ func TestClientAuthConfig_LogValue_RedactsURLCredentials(t *testing.T) {
 	}
 	if !strings.Contains(out, "mcp.example.com") {
 		t.Errorf("resource_url host stripped from LogValue output (sanitization too aggressive):\n%s", out)
+	}
+	if !strings.Contains(out, `"mode":"oauth"`) {
+		t.Errorf("LogValue output should include mode key, got: %s", out)
 	}
 }
 
