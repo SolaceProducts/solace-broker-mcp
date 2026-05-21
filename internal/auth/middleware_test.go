@@ -181,7 +181,7 @@ func Test_StaticMode_AllowsMissingIssuerAndAudience(t *testing.T) {
 
 	_, err := NewAuthMiddleware(cfg, dummyHandler)
 	if err != nil {
-		t.Errorf("expected no error in development mode without issuer/audience, got: %v", err)
+		t.Errorf("expected no error under client_auth.mode: static without issuer/audience, got: %v", err)
 	}
 }
 
