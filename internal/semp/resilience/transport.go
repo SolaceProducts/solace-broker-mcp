@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
-	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 )
 
 // idleConnTimeout is how long an idle keep-alive connection sits in the pool
@@ -15,6 +14,19 @@ import (
 // can produce a "connection reset by peer" on the first request after a quiet
 // period and trigger an unnecessary retry.
 const idleConnTimeout = 90 * time.Second
+
+// tlsHandshakeTimeout bounds how long the transport waits for a TLS
+// handshake. Without it, a broker stuck in handshake holds a
+// MaxConcurrentPerBroker semaphore slot for the full request timeout
+// window. 10s tolerates network outliers while bounding the failure
+// window to a small fraction of the request timeout.
+const tlsHandshakeTimeout = 10 * time.Second
+
+// expectContinueTimeout caps how long the transport waits for a "100
+// Continue" before sending the body. SEMP requests do not use
+// Expect/100-continue, but setting this is standard HTTP-client
+// hygiene against a misconfigured peer that signals 100-continue.
+const expectContinueTimeout = 1 * time.Second
 
 // NewTunedTransport builds an *http.Transport sized for the per-broker
 // concurrency cap. Both SEMPv1 and SEMPv2 clients use it so the connection
@@ -46,8 +58,8 @@ func NewTunedTransport(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfi
 		MaxIdleConnsPerHost:   sempCfg.MaxConcurrentPerBroker,
 		MaxIdleConns:          sempCfg.MaxConcurrentPerBroker * 2,
 		IdleConnTimeout:       idleConnTimeout,
-		TLSHandshakeTimeout:   time.Duration(defaults.DefaultTLSHandshakeTimeoutSeconds) * time.Second,
+		TLSHandshakeTimeout:   tlsHandshakeTimeout,
 		ResponseHeaderTimeout: sempCfg.RequestTimeoutDuration / 2,
-		ExpectContinueTimeout: time.Duration(defaults.DefaultExpectContinueTimeoutSeconds) * time.Second,
+		ExpectContinueTimeout: expectContinueTimeout,
 	}
 }

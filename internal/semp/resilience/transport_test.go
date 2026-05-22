@@ -44,9 +44,8 @@ func TestNewTunedTransport_GranularTimeoutsAreSet(t *testing.T) {
 
 	tr := NewTunedTransport(brokerCfg, sempCfg)
 
-	wantTLS := time.Duration(defaults.DefaultTLSHandshakeTimeoutSeconds) * time.Second
-	if tr.TLSHandshakeTimeout != wantTLS {
-		t.Errorf("TLSHandshakeTimeout = %s, want %s", tr.TLSHandshakeTimeout, wantTLS)
+	if tr.TLSHandshakeTimeout != tlsHandshakeTimeout {
+		t.Errorf("TLSHandshakeTimeout = %s, want %s", tr.TLSHandshakeTimeout, tlsHandshakeTimeout)
 	}
 	wantHdr := sempCfg.RequestTimeoutDuration / 2
 	if tr.ResponseHeaderTimeout != wantHdr {
@@ -55,9 +54,8 @@ func TestNewTunedTransport_GranularTimeoutsAreSet(t *testing.T) {
 	if tr.ResponseHeaderTimeout >= sempCfg.RequestTimeoutDuration {
 		t.Errorf("ResponseHeaderTimeout (%s) must be strictly less than RequestTimeoutDuration (%s); the granular timeout will never fire", tr.ResponseHeaderTimeout, sempCfg.RequestTimeoutDuration)
 	}
-	wantExpect := time.Duration(defaults.DefaultExpectContinueTimeoutSeconds) * time.Second
-	if tr.ExpectContinueTimeout != wantExpect {
-		t.Errorf("ExpectContinueTimeout = %s, want %s", tr.ExpectContinueTimeout, wantExpect)
+	if tr.ExpectContinueTimeout != expectContinueTimeout {
+		t.Errorf("ExpectContinueTimeout = %s, want %s", tr.ExpectContinueTimeout, expectContinueTimeout)
 	}
 }
 
