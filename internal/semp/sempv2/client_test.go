@@ -1,6 +1,7 @@
 package sempv2_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 )
 
@@ -50,6 +53,44 @@ func testOp(method string, params ...sempv2.Parameter) *sempv2.Operation {
 		Method:     method,
 		Path:       "/SEMP/v2/monitor/msgVpns/{msgVpnName}/queues/{queueName}",
 		Parameters: params,
+	}
+}
+
+// TestClient_Execute_OversizedResponseBody_ReturnsTypedError verifies that a
+// broker (or MITM) streaming more than MaxSEMPResponseBytes fails fast with
+// ErrResponseTooLarge rather than OOMing the process.
+func TestClient_Execute_OversizedResponseBody_ReturnsTypedError(t *testing.T) {
+	chunk := bytes.Repeat([]byte("x"), 64*1024) // 64 KiB
+	totalBytes := defaults.MaxSEMPResponseBytes + len(chunk)
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Stream chunks until we've sent more than the cap. Using a streaming
+		// write avoids allocating 16+ MiB in a single Go buffer.
+		written := 0
+		for written < totalBytes {
+			n, err := w.Write(chunk)
+			if err != nil {
+				return
+			}
+			written += n
+		}
+	})
+	defer server.Close()
+
+	op := testOp("GET",
+		sempv2.Parameter{Name: "msgVpnName", In: "path"},
+		sempv2.Parameter{Name: "queueName", In: "path"},
+	)
+
+	_, err := client.Execute(context.Background(), op, map[string]any{
+		"msgVpnName": "default",
+		"queueName":  "test-queue",
+	})
+	if err == nil {
+		t.Fatal("expected error for oversized response body, got nil")
+	}
+	if !errors.Is(err, resilience.ErrResponseTooLarge) {
+		t.Errorf("err = %v, want errors.Is(_, resilience.ErrResponseTooLarge)", err)
 	}
 }
 

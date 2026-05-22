@@ -29,6 +29,22 @@ const DefaultShutdownTimeoutSeconds = 30
 // Terraform provider convention.
 const DefaultSEMPRequestTimeoutDuration = time.Minute
 
+// MaxSEMPResponseBytes caps the in-memory buffering of a broker's SEMP
+// response body. Without this cap, a misbehaving broker or a man-in-the-
+// middle could stream gigabytes of data within the request timeout and OOM
+// the MCP server.
+//
+// Decided: 16 MiB.
+// Reasoning: SEMPv2 list responses are bounded by the broker's page size
+// (typically 500 items). At an extreme of ~30 KB per item, a single page
+// sits around 15 MB — 16 MiB gives a safety margin above any realistic
+// page response while bounding worst-case allocation to a few percent of
+// process memory.
+// Trade-off: a broker that legitimately returned > 16 MiB in a single
+// response would now fail with a typed "response too large" error. The
+// SEMP pagination contract makes this implausible in practice.
+const MaxSEMPResponseBytes = 16 * 1024 * 1024
+
 // DefaultMaxConcurrentPerBroker is the maximum number of concurrent SEMP
 // requests allowed per broker, enforced via a per-broker semaphore.
 //
