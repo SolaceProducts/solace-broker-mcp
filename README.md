@@ -13,7 +13,7 @@ An MCP (Model Context Protocol) server for Solace event brokers, built with Go u
 - [Overview](#overview)
 - [Features](#features)
 - [Architecture](#architecture)
-- [Documentation](#documentation)
+- [Guides](#guides)
 - [Prerequisites](#prerequisites)
 - [Quickstart](#quickstart)
   - [Configuration](#configuration)
@@ -68,7 +68,7 @@ The server implements the MCP HTTP transport specification and exposes event bro
 └──────────────────┘                    └──────────────────────────┘   basic / bearer     └──────────────────┘
 ```
 
-## Documentation
+## Guides
 
 - [User Guide](docs/user-guide.md) — overview, tools reference, deployment, and troubleshooting
 - [Configuration](docs/configuration.md) — server settings, event broker config, client auth, and rate-limit/retry knobs
