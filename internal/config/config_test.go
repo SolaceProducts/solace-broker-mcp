@@ -480,11 +480,11 @@ client_auth:
 	}
 }
 
-func TestLoadConfig_RejectsInsecureSkipVerifyInProductionMode(t *testing.T) {
-	// Symmetric to the http-scheme rejection: production mode must not
-	// silently accept insecure_skip_verify=true. The combination is dev-only
-	// by intent (see DefaultInsecureSkipVerify) and a misconfig exposes
-	// broker credentials to any attacker on the MCP-server-to-broker path.
+func TestLoadConfig_WarnsOnInsecureSkipVerifyInProductionMode(t *testing.T) {
+	// Per PR #52 review (bczoma): production mode allows insecure_skip_verify
+	// for parity with other tooling, but emits a startup WARN naming the
+	// broker so operators see it in triage logs.
+	buf := captureSlog(t)
 	yaml := `
 development_mode: false
 brokers:
@@ -500,23 +500,22 @@ client_auth:
   audience: "solace-mcp"
   resource_url: "https://mcp.example.com"
 `
-	_, err := LoadConfig(writeTemp(t, yaml))
-	if err == nil {
-		t.Fatal("expected error for insecure_skip_verify=true in production mode")
+	if _, err := LoadConfig(writeTemp(t, yaml)); err != nil {
+		t.Fatalf("insecure_skip_verify=true should not fail validation: %v", err)
 	}
-	if !strings.Contains(err.Error(), "insecure_skip_verify") {
-		t.Errorf("error should name the field, got: %v", err)
+	out := buf.String()
+	if !strings.Contains(out, "INSECURE") || !strings.Contains(out, "insecure_skip_verify") {
+		t.Errorf("expected WARN naming insecure_skip_verify, got: %s", out)
 	}
-	if !strings.Contains(err.Error(), "prod-us") {
-		t.Errorf("error should name the broker alias, got: %v", err)
+	if !strings.Contains(out, "prod-us") {
+		t.Errorf("expected WARN to name broker alias, got: %s", out)
 	}
 }
 
-func TestLoadConfig_AllowsInsecureSkipVerifyInDevelopmentMode(t *testing.T) {
-	// Symmetric to TestLoadConfig_AllowsHTTPBrokerInDevelopmentMode:
-	// development_mode is meant to relax production-only guards. Locks in
-	// the dev-mode allowance so a future refactor can't tighten it without
-	// the test catching the regression.
+func TestLoadConfig_NoWarnOnInsecureSkipVerifyInDevelopmentMode(t *testing.T) {
+	// In development_mode the insecure flag is the expected default for
+	// local broker setups, so no startup WARN should fire.
+	buf := captureSlog(t)
 	yaml := `
 development_mode: true
 client_auth:
@@ -532,6 +531,9 @@ brokers:
 `
 	if _, err := LoadConfig(writeTemp(t, yaml)); err != nil {
 		t.Errorf("insecure_skip_verify: true should be allowed in development_mode: %v", err)
+	}
+	if strings.Contains(buf.String(), "insecure_skip_verify") {
+		t.Errorf("did not expect insecure_skip_verify WARN in dev mode, got: %s", buf.String())
 	}
 }
 

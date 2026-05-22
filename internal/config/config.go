@@ -389,7 +389,14 @@ func validate(cfg *ServerConfig) error {
 	}
 
 	for _, alias := range slices.Sorted(maps.Keys(cfg.Brokers)) {
-		errs = append(errs, validateBroker(alias, cfg.Brokers[alias], !cfg.DevelopmentMode)...)
+		broker := cfg.Brokers[alias]
+		errs = append(errs, validateBroker(alias, broker, !cfg.DevelopmentMode)...)
+		// Surface insecure_skip_verify=true at startup so operators see it
+		// in triage logs without scraping per-request SEMP-client warns.
+		if !cfg.DevelopmentMode && broker.InsecureSkipVerify {
+			slog.Warn("INSECURE: insecure_skip_verify=true in production mode; broker TLS certificate will not be validated",
+				slog.String("broker", alias))
+		}
 	}
 
 	if err := ValidatePort(cfg.Port); err != nil {
@@ -481,12 +488,10 @@ func validateBroker(alias string, broker *BrokerConfig, productionMode bool) []e
 		errs = append(errs, fmt.Errorf("broker %q: %w", alias, err))
 	}
 
-	// Symmetric to the http-scheme rejection above: production mode must
-	// not accept insecure_skip_verify=true. It disables broker-cert
-	// verification entirely, defeating credential-in-transit protection.
-	if productionMode && broker.InsecureSkipVerify {
-		errs = append(errs, fmt.Errorf("broker %q: insecure_skip_verify must be false when development_mode is false", alias))
-	}
+	// insecure_skip_verify=true in production is logged as a WARN at config
+	// load (see validate()) rather than rejected outright — parity with
+	// other tooling (e.g. Terraform providers) and keeps test/dev paths
+	// simple. SEMP clients also log a per-broker WARN at first access.
 
 	// Normalize auth mode (case-insensitive per story spec).
 	broker.Auth.Mode = strings.ToLower(broker.Auth.Mode)
