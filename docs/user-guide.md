@@ -38,7 +38,7 @@ The Solace Event Broker MCP Server requires:
 ## Limitations and Considerations
 
 - **No stdio transport** — The server runs as a standalone HTTP service and must be started before connecting an MCP client. It cannot be auto-launched as a subprocess by clients like Claude Desktop.
-- **Pagination limits** — List tools return up to 100 results by default and cap at 500 via the `maxResults` parameter. Brokers with more than 500 queues, clients, or VPNs will require multiple queries.
+- **Pagination limits** — List tools return up to 100 results by default and cap at 500 via the `maxResults` parameter. Brokers with more than 500 queues, clients, or VPNs require multiple queries.
 - **OAuth required in production** — Production deployments use `client_auth.mode: oauth`; the boot banner flags `disabled` and `static` as insecure modes. All MCP client connections must present a valid OAuth/JWT token. Plan your identity provider integration before deploying to shared environments.
 
 ## Quick Start

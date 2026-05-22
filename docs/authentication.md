@@ -49,7 +49,7 @@ No authentication headers required.
 
 - All client requests are accepted automatically
 - No tokens or credentials are needed
-- You'll see a prominent banner in the logs at startup:
+- A prominent banner appears in the logs at startup:
   ```
   ============================================================
     INSECURE MODE: client_auth.mode = disabled
@@ -129,7 +129,7 @@ Authorization: Bearer my-secret-dev-token-123
 - If the token matches, the request is accepted
 - If the token is missing or incorrect, the request is rejected with an authentication error
 - Tokens are fixed and do not expire until the user changes them
-- You'll see a prominent banner in the logs at startup:
+- A prominent banner appears in the logs at startup:
   ```
   ============================================================
     INSECURE MODE: client_auth.mode = static
@@ -149,7 +149,7 @@ Authorization: Bearer my-secret-dev-token-123
 
 ### Choose a Client Registration Method
 
-Before starting, decide how the MCP client will register with the identity provider:
+Before starting, decide how the MCP client registers with the identity provider:
 
 | | Option A: Client pre-registration | Option B: Dynamic Client Registration |
 |---|---|---|
@@ -246,7 +246,7 @@ The `audience` value must exactly match the value configured in step 1.2. Set `r
 >   resource_url: "http://localhost:9090/mcp"
 > ```
 
-> **Note:** Under `mode: oauth` the validator enforces `https://` on the `issuer` URL. If you are running Keycloak locally for testing, you must terminate TLS in front of it (e.g., via Caddy or a reverse proxy) or run Keycloak with a TLS cert. The `resource_url` may remain `http://` for local-bind testing.
+> **Note:** Under `mode: oauth` the validator enforces `https://` on the `issuer` URL. When running Keycloak locally for testing, terminate TLS in front of it (for example, via Caddy or a reverse proxy) or run Keycloak with a TLS cert. The `resource_url` may remain `http://` for local-bind testing.
 
 ### Step 3: Start the MCP Server
 
@@ -326,7 +326,7 @@ On success, the server logs: `"using JWT token for authentication — production
 
 ### Banner appears at startup ("INSECURE MODE")
 
-This is expected for `mode: disabled` and `mode: static`. The banner is the deliberate signal that you're running without production-grade auth. If you intended production, switch to `mode: oauth`.
+This is expected for `mode: disabled` and `mode: static`. The banner is the deliberate signal that the server is running without production-grade auth. If production mode was intended, switch to `mode: oauth`.
 
 ### "401 Unauthorized" errors in Mode 2
 
@@ -339,7 +339,7 @@ This is expected for `mode: disabled` and `mode: static`. The banner is the deli
 - If using environment variables like `${DEV_TOKEN}`, export the variable before starting the server
 - Check the server logs for configuration parsing errors
 
-### Re-authentication errors in Claude (Modes 1 and 2)
+### Re-Authentication Errors in Claude (Modes 1 and 2)
 
 - Use the reconnect command instead of re-authenticate
 - In Claude Code, click the reconnect icon next to the server name
