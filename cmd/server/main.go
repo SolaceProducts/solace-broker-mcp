@@ -232,6 +232,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Loud, refactor-robust signal of the configured client auth mode.
+	// MUST run before the slog handler gets reconfigured to the user log
+	// level — at this point the bootstrap handler is at INFO, so WARN
+	// banner entries are always visible regardless of cfg.LogLevel.
+	// DO NOT move this into middleware; see internal/auth/banner.go.
+	auth.LogStartupBanner(cfg)
+
 	// Reconfigure slog with the user-configured level. cfg.LogLevel is
 	// validated and normalized to one of debug/info/warn/error.
 	var level slog.Level

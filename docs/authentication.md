@@ -2,7 +2,7 @@
 
 The Solace Broker MCP Server supports three authentication modes for MCP client to MCP server communication. Instructions on how to use these modes are provided below.
 
-## Mode 1: No Authentication (Open Access)
+## Mode 1: No Authentication (`mode: disabled`)
 
 **When to use:** Local development only, when you want to quickly test the MCP server without setting up authentication.
 
@@ -15,7 +15,8 @@ The Solace Broker MCP Server supports three authentication modes for MCP client 
 2. Set the following values:
 
 ```yaml
-development_mode: true
+client_auth:
+  mode: disabled
 ```
 
 3. Start the MCP server
@@ -36,11 +37,19 @@ That's it! No authentication headers are needed.
 
 - All client requests are accepted automatically
 - No tokens or credentials are needed
-- You'll see a warning in the logs: `"authentication disabled — development mode with no dev token — not for production use"`
+- You'll see a prominent banner in the logs at startup:
+  ```
+  ============================================================
+    INSECURE MODE: client_auth.mode = disabled
+    Client authentication is DISABLED.
+    All MCP requests pass through without verification.
+    This is development mode — NOT FOR PRODUCTION USE.
+  ============================================================
+  ```
 
 ---
 
-## Mode 2: Static Dev Token (Simple Authentication)
+## Mode 2: Static Dev Token (`mode: static`)
 
 **When to use:** Local development or testing when you want basic protection without setting up a full OAuth identity provider.
 
@@ -55,18 +64,16 @@ That's it! No authentication headers are needed.
 3. Set the following values:
 
 ```yaml
-development_mode: true
-
 client_auth:
+  mode: static
   dev_token: "my-secret-dev-token-123"
 ```
 
 **Tip:** For better security, use an environment variable instead of hardcoding the token:
 
 ```yaml
-development_mode: true
-
 client_auth:
+  mode: static
   dev_token: "${DEV_TOKEN}"
 ```
 
@@ -104,17 +111,22 @@ Authorization: Bearer my-secret-dev-token-123
 - If the token matches, the request is accepted
 - If the token is missing or incorrect, the request is rejected with an authentication error
 - Tokens are fixed and do not expire until the user changes them
-- You'll see a log message: `"using static dev token — development mode — not for production use"`
+- You'll see a prominent banner in the logs at startup:
+  ```
+  ============================================================
+    INSECURE MODE: client_auth.mode = static
+    Authentication uses a shared static dev token.
+    This is development mode — NOT FOR PRODUCTION USE.
+  ============================================================
+  ```
 
 ### Important notes
 
 **Reconnect, don't re-authenticate.** If your MCP client disconnects, use the "reconnect" action — not "re-authenticate." Re-authentication triggers an OAuth browser login flow, which will fail because there is no authorization server in dev mode. Simply reconnecting will re-use the configured static token.
 
-**Do not mix Mode 3 fields with dev mode.** If you include OAuth/JWT fields (`issuer`, `audience`, `resource_url`) in your config alongside `development_mode: true`, the server will advertise the configured authorization server in its metadata endpoint. This causes MCP clients to attempt OAuth flows that will fail, producing confusing errors like "Trusted Hosts rejected request" or "the requested endpoint does not exist." Keep your dev mode config clean — only set `dev_token` under `client_auth`.
-
 ---
 
-## Mode 3: OAuth / JWT (Production Authentication)
+## Mode 3: OAuth / JWT (`mode: oauth`)
 
 **When to use:** Production deployments or any environment where you need browser-based authentication with an identity provider (IdP). This mode uses the OAuth 2.1 Authorization Code flow with PKCE, allowing MCP clients (like Claude) to authenticate users via a browser login.
 
@@ -191,15 +203,14 @@ Create user accounts in your IdP. These users will log in via the browser window
 Open your `broker-config.yaml` and set:
 
 ```yaml
-development_mode: false
-
 client_auth:
+  mode: oauth
   issuer: "https://your-idp.example.com/realms/your-realm"
   audience: "solace-mcp-server"
   resource_url: "https://your-mcp-server.example.com/mcp"
 ```
 
-Refer to the Keycloack configuration below for an example.
+Refer to the Keycloak configuration below for an example.
 
 The `audience` value must exactly match what you configured in step 1.2. Set `resource_url` to the externally reachable URL of your MCP endpoint — this is advertised to clients for OAuth discovery, so it must be the public-facing URL, not the server's internal bind address (these differ when running behind a reverse proxy or ingress).
 
@@ -209,15 +220,16 @@ The `audience` value must exactly match what you configured in step 1.2. Set `re
 | `audience` | Must exactly match the audience value configured in your IdP in step 1.2. |
 | `resource_url` | The public URL of your MCP server endpoint, advertised to MCP clients for OAuth discovery. |
 
-> **Keycloak:** The issuer URL follows the pattern `http://<host>:<port>/realms/<realm-name>`. For example, Keycloak running locally on port 8080 with a realm named `solace`:
+> **Keycloak:** The issuer URL follows the pattern `https://<host>:<port>/realms/<realm-name>`. For example, Keycloak running locally on port 8443 with TLS and a realm named `solace`:
 > ```yaml
-> development_mode: false
->
 > client_auth:
->   issuer: "http://localhost:8080/realms/solace"
+>   mode: oauth
+>   issuer: "https://localhost:8443/realms/solace"
 >   audience: "solace-mcp-server"
 >   resource_url: "http://localhost:9090/mcp"
 > ```
+
+> **Note:** Under `mode: oauth` the validator enforces `https://` on the `issuer` URL. If you are running Keycloak locally for testing, you must terminate TLS in front of it (e.g., via Caddy or a reverse proxy) or run Keycloak with a TLS cert. The `resource_url` may remain `http://` for local-bind testing.
 
 ### Step 3: Start the MCP server
 
@@ -293,16 +305,15 @@ You'll see this in the server logs on success: `"using JWT token for authenticat
 
 ## Troubleshooting
 
-### "authentication disabled" warning in Mode 1
+### Banner appears at startup ("INSECURE MODE")
 
-- Check that `dev_token` is actually set to a non-empty value
-- Verify that any environment variables (e.g., `${DEV_TOKEN}`) are properly exported
+This is expected for `mode: disabled` and `mode: static`. The banner is the deliberate signal that you're running without production-grade auth. If you intended production, switch to `mode: oauth`.
 
 ### "401 Unauthorized" errors in Mode 2
 
 - Verify that your client is sending the `Authorization: Bearer <token>` header
 - Confirm the token value matches exactly what's in your configuration (no extra spaces or quotes)
-- Check that `development_mode: true` is set in your config
+- Check that `client_auth.mode: static` and `client_auth.dev_token` are both set in your config
 
 ### Token doesn't seem to be loaded
 

@@ -40,21 +40,25 @@ import (
 // ServerConfig holds the complete MCP server configuration, including all
 // configured brokers and SEMP client settings.
 type ServerConfig struct {
-	Brokers         map[string]*BrokerConfig // broker alias → config
-	SEMP            SEMPConfig               // SEMP client settings
-	Port            int                      // HTTP port the MCP server listens on
-	LogLevel        string                   // slog level name: "debug", "info", "warn", "error"
-	DevelopmentMode bool                     // use static dev token if true
-	ClientAuth      ClientAuthConfig         // authentication config for mcp client to server interactions
-	TLSCertFile     string                   // path to TLS certificate file (optional, enables HTTPS)
-	TLSKeyFile      string                   // path to TLS private key file (optional, requires TLSCertFile)
+	Brokers     map[string]*BrokerConfig // broker alias → config
+	SEMP        SEMPConfig               // SEMP client settings
+	Port        int                      // HTTP port the MCP server listens on
+	LogLevel    string                   // slog level name: "debug", "info", "warn", "error"
+	ClientAuth  ClientAuthConfig         // authentication config for mcp client to server interactions
+	TLSCertFile string                   // path to TLS certificate file (optional, enables HTTPS)
+	TLSKeyFile  string                   // path to TLS private key file (optional, requires TLSCertFile)
 }
 
 type ClientAuthConfig struct {
-	Issuer      string `yaml:"issuer"`       // IdP issuer URL - required when development_mode: false
-	Audience    string `yaml:"audience"`     // Expected 'aud' claim value — required when development_mode: false
-	DevToken    string `yaml:"dev_token"`    // Static token for dev — only used when development_mode: true
-	ResourceURL string `yaml:"resource_url"` // OAuth resource URL (e.g., "https://mcp.example.com/mcp") - defaults to localhost if not set
+	Issuer      string `yaml:"issuer"`       // IdP issuer URL — required when mode == "oauth"
+	Audience    string `yaml:"audience"`     // Expected 'aud' claim value — required when mode == "oauth"
+	DevToken    string `yaml:"dev_token"`    // Static token for dev — required when mode == "static"
+	ResourceURL string `yaml:"resource_url"` // OAuth resource URL (e.g., "https://mcp.example.com/mcp") — required when mode == "oauth"
+	// Mode selects the client authentication backend. One of AuthModeDisabled,
+	// AuthModeStatic, or AuthModeOAuth. Required — no default. The validator
+	// rejects configs that omit it. See docs/superpowers/specs/2026-05-20-client-auth-mode-design.md
+	// for the design rationale.
+	Mode string `yaml:"mode"`
 }
 
 // validLogLevels is the allowlist of slog levels operators may configure.
@@ -79,6 +83,21 @@ const (
 // validAuthModes is the allowlist of supported auth modes for broker connections.
 // Add new modes (e.g., "oauth") here — validate() and error messages derive from this slice.
 var validAuthModes = []string{AuthModeBasic, AuthModeBearer}
+
+// Client authentication modes (Hop 1: MCP client → MCP server). Choosing one
+// of these is mandatory; there is no default. Operational profile (https://
+// enforcement, self-signed cert allowance, etc.) is derived from the mode via
+// IsProductionMode(). Operational profile is mode-derived; do not add a
+// separate dev-mode toggle on ServerConfig.
+const (
+	AuthModeDisabled = "disabled" // no client auth; every request passes through (dev only)
+	AuthModeStatic   = "static"   // shared static dev token; constant-time compare (dev only)
+	AuthModeOAuth    = "oauth"    // OAuth/OIDC JWT validation (production)
+)
+
+// validAuthClientModes is the allowlist for client_auth.mode. The validator
+// rejects any other value. Add new modes here and extend the validate() switch.
+var validAuthClientModes = []string{AuthModeDisabled, AuthModeStatic, AuthModeOAuth}
 
 // AuthConfig holds the authentication credentials for a broker connection.
 type AuthConfig struct {
@@ -111,13 +130,17 @@ func (b BrokerConfig) LogValue() slog.Value {
 	)
 }
 
-// LogValue implements slog.LogValuer for ClientAuthConfig. It exposes OAuth
-// configuration (issuer, audience, resource URL) but excludes DevToken
-// to prevent credential leaks in log output. Issuer and ResourceURL are
-// routed through sanitizeURLString for the same defense-in-depth reason
-// as BrokerConfig.LogValue. See docs/secure-logging-rules.md Rule 2.
+// LogValue implements slog.LogValuer for ClientAuthConfig. It exposes the auth
+// mode and OAuth configuration (issuer, audience, resource URL) but excludes
+// DevToken to prevent credential leaks in log output. Mode is listed first
+// because it is the most important operator-facing piece of information —
+// operators need to confirm which auth mode the server loaded at startup.
+// Issuer and ResourceURL are routed through sanitizeURLString for the same
+// defense-in-depth reason as BrokerConfig.LogValue.
+// See docs/secure-logging-rules.md Rule 2.
 func (c ClientAuthConfig) LogValue() slog.Value {
 	return slog.GroupValue(
+		slog.String("mode", c.Mode),
 		slog.String("issuer", sanitizeURLString(c.Issuer)),
 		slog.String("audience", c.Audience),
 		slog.String("resource_url", sanitizeURLString(c.ResourceURL)),
@@ -157,7 +180,7 @@ type yamlConfig struct {
 	SEMP            SEMPConfig               `yaml:"semp"`
 	Port            int                      `yaml:"port"`
 	LogLevel        string                   `yaml:"log_level"`
-	DevelopmentMode bool                     `yaml:"development_mode"`
+	DevelopmentMode *bool                    `yaml:"development_mode"` // *bool so we can detect presence-in-YAML (deprecation warning); the value is ignored
 	ClientAuth      ClientAuthConfig         `yaml:"client_auth"`
 	TLSCertFile     string                   `yaml:"tls_cert_file"`
 	TLSKeyFile      string                   `yaml:"tls_key_file"`
@@ -238,15 +261,18 @@ func LoadConfig(path string) (*ServerConfig, error) {
 		return nil, fmt.Errorf("parsing config YAML: %w", err)
 	}
 
+	if raw.DevelopmentMode != nil {
+		slog.Warn("development_mode is deprecated and ignored; auth profile is now derived from client_auth.mode (one of disabled, static, oauth) — please remove development_mode from your config")
+	}
+
 	cfg := &ServerConfig{
-		Brokers:         raw.Brokers,
-		SEMP:            raw.SEMP,
-		Port:            raw.Port,
-		LogLevel:        raw.LogLevel,
-		DevelopmentMode: raw.DevelopmentMode,
-		ClientAuth:      raw.ClientAuth,
-		TLSCertFile:     raw.TLSCertFile,
-		TLSKeyFile:      raw.TLSKeyFile,
+		Brokers:     raw.Brokers,
+		SEMP:        raw.SEMP,
+		Port:        raw.Port,
+		LogLevel:    raw.LogLevel,
+		ClientAuth:  raw.ClientAuth,
+		TLSCertFile: raw.TLSCertFile,
+		TLSKeyFile:  raw.TLSKeyFile,
 	}
 
 	applyDefaults(cfg)
@@ -437,7 +463,7 @@ func validate(cfg *ServerConfig) error {
 	}
 
 	for _, alias := range slices.Sorted(maps.Keys(cfg.Brokers)) {
-		errs = append(errs, validateBroker(alias, cfg.Brokers[alias], !cfg.DevelopmentMode)...)
+		errs = append(errs, validateBroker(alias, cfg.Brokers[alias], cfg.IsProductionMode())...)
 	}
 
 	if err := ValidatePort(cfg.Port); err != nil {
@@ -479,34 +505,40 @@ func validate(cfg *ServerConfig) error {
 		errs = append(errs, fmt.Errorf("semp.retry_max_interval (%s) must be >= semp.retry_min_interval (%s)", cfg.SEMP.RetryMaxInterval, cfg.SEMP.RetryMinInterval))
 	}
 
-	// Validate client authentication configuration based on development mode.
-	// Note that no validation is needed when development mode is enabled, as DevToken
-	// can be set or empty. When DevToken is empty, all requests pass through
-	if !cfg.DevelopmentMode {
-		// Production mode: require JWT validation fields
+	// Validate client authentication configuration. mode is the single source
+	// of truth for auth backend selection AND production-vs-dev operational
+	// profile (via IsProductionMode). Required fields follow from the mode.
+	// See docs/superpowers/specs/2026-05-20-client-auth-mode-design.md.
+	//
+	// Modes are tiered, not interleaved:
+	//   - disabled / static: dev-only, http:// broker URLs allowed
+	//   - oauth: production, https:// required everywhere
+	cfg.ClientAuth.Mode = strings.ToLower(cfg.ClientAuth.Mode)
+	switch cfg.ClientAuth.Mode {
+	case "":
+		errs = append(errs, fmt.Errorf("client_auth.mode is required (must be one of %v)", validAuthClientModes))
+	case AuthModeDisabled:
+		// no further required fields
+	case AuthModeStatic:
+		if cfg.ClientAuth.DevToken == "" {
+			errs = append(errs, fmt.Errorf("client_auth.dev_token is required when client_auth.mode is %q", AuthModeStatic))
+		}
+	case AuthModeOAuth:
 		if cfg.ClientAuth.Issuer == "" {
-			errs = append(errs, fmt.Errorf("client_auth.issuer is required when development_mode is false"))
-		}
-		if cfg.ClientAuth.Audience == "" {
-			errs = append(errs, fmt.Errorf("client_auth.audience is required when development_mode is false"))
-		}
-		if cfg.ClientAuth.ResourceURL == "" {
-			errs = append(errs, fmt.Errorf("client_auth.resource_url is required when development_mode is false"))
-		}
-	}
-
-	// Validate issuer structure if set
-	if cfg.ClientAuth.Issuer != "" {
-		if err := validateBrokerURL(cfg.ClientAuth.Issuer, !cfg.DevelopmentMode); err != nil {
+			errs = append(errs, fmt.Errorf("client_auth.issuer is required when client_auth.mode is %q", AuthModeOAuth))
+		} else if err := validateBrokerURL(cfg.ClientAuth.Issuer, cfg.IsProductionMode()); err != nil {
 			errs = append(errs, fmt.Errorf("client_auth.issuer: %w", err))
 		}
-	}
-
-	// Validate resource_url structure if set
-	if cfg.ClientAuth.ResourceURL != "" {
-		if err := validateBrokerURL(cfg.ClientAuth.ResourceURL, !cfg.DevelopmentMode); err != nil {
+		if cfg.ClientAuth.Audience == "" {
+			errs = append(errs, fmt.Errorf("client_auth.audience is required when client_auth.mode is %q", AuthModeOAuth))
+		}
+		if cfg.ClientAuth.ResourceURL == "" {
+			errs = append(errs, fmt.Errorf("client_auth.resource_url is required when client_auth.mode is %q", AuthModeOAuth))
+		} else if err := validateBrokerURL(cfg.ClientAuth.ResourceURL, cfg.IsProductionMode()); err != nil {
 			errs = append(errs, fmt.Errorf("client_auth.resource_url: %w", err))
 		}
+	default:
+		errs = append(errs, fmt.Errorf("client_auth.mode %q is invalid (must be one of %v)", cfg.ClientAuth.Mode, validAuthClientModes))
 	}
 
 	// TLS: both cert and key must be provided together, or neither.
@@ -567,6 +599,15 @@ func ValidatePort(port int) error {
 		return fmt.Errorf("port must be between 1 and 65535, got %d", port)
 	}
 	return nil
+}
+
+// IsProductionMode reports whether the server is configured for production
+// (OAuth client auth). This is the single source of truth for production-vs-dev
+// operational behavior — https:// enforcement on broker/issuer/resource URLs,
+// self-signed cert allowance, etc. Operational profile is mode-derived;
+// do not add a separate dev-mode toggle on ServerConfig.
+func (c *ServerConfig) IsProductionMode() bool {
+	return c.ClientAuth.Mode == AuthModeOAuth
 }
 
 // validateBrokerURL checks that s is a well-formed URL with an http or https
