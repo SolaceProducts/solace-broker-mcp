@@ -13,7 +13,7 @@ An MCP (Model Context Protocol) server for Solace event brokers, built with Go u
 - [Overview](#overview)
 - [Features](#features)
 - [Architecture](#architecture)
-- [Documentation](#documentation)
+- [Guides](#guides)
 - [Prerequisites](#prerequisites)
 - [Quickstart](#quickstart)
   - [Configuration](#configuration)
@@ -82,7 +82,7 @@ The server exposes read-only tools grouped by what they inspect. Every tool exce
 | REST Delivery Points | `list-rdps`, `get-rdp-status` | List RDPs; inspect bindings, REST consumers, and last failure reason |
 | DMR | `get-dmr-status` | Inspect DMR cluster and link status for mesh connectivity issues |
 
-## Documentation
+## Guides
 
 - [User Guide](docs/user-guide.md) — overview, tools reference, deployment, and troubleshooting
 - [Configuration](docs/configuration.md) — server settings, event broker config, client auth, and rate-limit/retry knobs
