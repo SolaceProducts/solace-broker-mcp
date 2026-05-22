@@ -488,11 +488,6 @@ func validateBroker(alias string, broker *BrokerConfig, productionMode bool) []e
 		errs = append(errs, fmt.Errorf("broker %q: %w", alias, err))
 	}
 
-	// insecure_skip_verify=true in production is logged as a WARN at config
-	// load (see validate()) rather than rejected outright — parity with
-	// other tooling (e.g. Terraform providers) and keeps test/dev paths
-	// simple. SEMP clients also log a per-broker WARN at first access.
-
 	// Normalize auth mode (case-insensitive per story spec).
 	broker.Auth.Mode = strings.ToLower(broker.Auth.Mode)
 
