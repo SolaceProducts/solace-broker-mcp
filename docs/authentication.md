@@ -24,7 +24,7 @@ The Solace Event Broker MCP Server supports three authentication modes for MCP c
 
 1. Open the configuration file (`broker-config.yaml`)
 
-2. Set the following:
+2. Set the following values:
 
 ```yaml
 client_auth:
@@ -45,7 +45,7 @@ claude mcp add solace-broker --transport http http://localhost:9090/mcp
 
 No authentication headers required.
 
-### What happens
+### What Happens
 
 - All client requests are accepted automatically
 - No tokens or credentials are needed
@@ -115,9 +115,7 @@ claude mcp add --transport http solace-broker http://localhost:9090/mcp \
   -H "Authorization: Bearer my-secret-dev-token-123"
 ```
 
-This command configures the authentication header.
-
-#### Other MCP clients
+#### Other MCP Clients
 
 For other MCP clients or manual HTTP requests, include the token in the `Authorization` header:
 
@@ -125,7 +123,7 @@ For other MCP clients or manual HTTP requests, include the token in the `Authori
 Authorization: Bearer my-secret-dev-token-123
 ```
 
-### What happens
+### What Happens
 
 - The server validates each request by comparing the provided token to the configured `dev_token`
 - If the token matches, the request is accepted
@@ -140,16 +138,16 @@ Authorization: Bearer my-secret-dev-token-123
   ============================================================
   ```
 
-### Important notes
+### Important Notes
 
-**Important:** **Reconnect, do not re-authenticate.** If the MCP client disconnects, use the reconnect command or button in the client (in Claude Code: the reconnect icon next to the server name). Do not use "re-authenticate," which triggers an OAuth flow that fails in dev mode. Reconnecting re-uses the configured static token.
+**Important: Reconnect, do not re-authenticate.** If the MCP client disconnects, use the reconnect command or button in the client (in Claude Code: the reconnect icon next to the server name). Do not use "re-authenticate," which triggers an OAuth flow that fails in dev mode. Reconnecting re-uses the configured static token.
 ---
 
 ## Mode 3: OAuth / JWT (`mode: oauth`)
 
 **When to use:** Production deployments or any environment where browser-based authentication with an identity provider (IdP) is required. This mode uses the OAuth 2.1 Authorization Code flow with PKCE, allowing MCP clients (like Claude) to authenticate users via a browser login.
 
-### Choose a client registration method
+### Choose a Client Registration Method
 
 Before starting, decide how the MCP client will register with the identity provider:
 
@@ -161,11 +159,11 @@ Before starting, decide how the MCP client will register with the identity provi
 
 Both options use the same OAuth 2.1 Authorization Code flow with PKCE. The difference: Option A requires pre-registering a client ID (and optionally a client secret). Option B uses Dynamic Client Registration (DCR) to obtain a client ID at runtime—no client secret needed.
 
-### Step 1: Set up the identity provider
+### Step 1: Set Up the Identity Provider
 
 An OAuth 2.1 / OpenID Connect identity provider such as Keycloak, Auth0, or Okta is required. This guide uses Keycloak for examples, but any OIDC-compliant provider works.
 
-#### 1.1 Create a realm or tenant
+#### 1.1 Create a Realm or Tenant
 
 Most IdPs organize clients and users into an isolated namespace — called a realm, tenant, or organization depending on the provider. Create one dedicated to the MCP server deployment.
 
@@ -180,7 +178,7 @@ Most IdPs organize clients and users into an isolated namespace — called a rea
 >
 > **Tip:** To automate steps 1.1–1.4, the project includes a setup script at `test/e2e/oauth/setup-keycloak.sh` that starts Keycloak, creates the realm, and configures the audience mapper, OAuth clients, DCR policies, and a test user — all via Terraform. Run it from the project root: `cd test/e2e/oauth && ./setup-keycloak.sh`.
 
-#### 1.2 Configure an audience mapper
+#### 1.2 Configure an Audience Mapper
 
 The MCP server validates the `aud` claim in every access token. Configure the IdP to include the chosen audience value in issued tokens.
 
@@ -194,7 +192,7 @@ The mapper must apply globally to all clients — not just specific pre-register
 >
 > Use **Included Custom Audience** for a free-form string. **Included Client Audience** is only for referencing an existing Keycloak client by its Client ID.
 
-#### 1.3 Register an OAuth client (Option A only)
+#### 1.3 Register an OAuth Client (Option A Only)
 
 Skip this step when using Option B (Dynamic Client Registration).
 
@@ -211,13 +209,13 @@ Create a client in the IdP with the following settings:
 >
 > Enable **Standard flow** and disable all other flows. Enable **Require PKCE** and set the **PKCE Method** to `S256` → click **Next**. Under **Login settings**, set **Valid redirect URIs** to `http://localhost:*` → **Save**.
 
-#### 1.4 Create users
+#### 1.4 Create Users
 
 Create user accounts in the IdP. These users log in via the browser window that opens during the OAuth flow.
 
 > **Keycloak:** **Users** → **Create new user** → enter a username → **Create**. Go to the **Credentials** tab → **Set password**, enter a password, and turn **Temporary** off.
 
-### Step 2: Configure the MCP server
+### Step 2: Configure the MCP Server
 
 Open `broker-config.yaml` and set:
 
@@ -229,7 +227,7 @@ client_auth:
   resource_url: "https://your-mcp-server.example.com/mcp"
 ```
 
-Refer to the Keycloak configuration below for an example.
+See the Keycloak configuration below for an example.
 
 The `audience` value must exactly match the value configured in step 1.2. Set `resource_url` to the externally reachable URL of the MCP endpoint — this is advertised to clients for OAuth discovery, so it must be the public-facing URL, not the server's internal bind address (these differ when running behind a reverse proxy or ingress).
 
@@ -250,7 +248,7 @@ The `audience` value must exactly match the value configured in step 1.2. Set `r
 
 > **Note:** Under `mode: oauth` the validator enforces `https://` on the `issuer` URL. If you are running Keycloak locally for testing, you must terminate TLS in front of it (e.g., via Caddy or a reverse proxy) or run Keycloak with a TLS cert. The `resource_url` may remain `http://` for local-bind testing.
 
-### Step 3: Start the MCP server
+### Step 3: Start the MCP Server
 
 Run the server:
 
@@ -258,9 +256,9 @@ Run the server:
 go run ./cmd/server
 ```
 
-### Step 4: Add the server to Claude Code
+### Step 4: Add the Server to Claude Code
 
-#### Option A: Client pre-registration
+#### Option A: Client Pre-Registration
 
 With the MCP server running on `http://localhost:9090`, add it using the Claude Code CLI:
 
@@ -310,7 +308,7 @@ A browser window opens on first use for user login. The IdP must support anonymo
 >
 > **3. Update the Trusted Hosts policy** — If Keycloak is running in a container, DCR requests arrive from the container bridge IP rather than `localhost`. Go to **Realm Settings** → **Client Registration** → **Client Registration Policies** tab → under **Anonymous Access Policies**, click **Trusted Hosts** → turn off **Host Sending Registration Request Must Match** → **Save**.
 
-### How it works
+### How It Works
 
 1. Claude Code connects to the MCP server and receives a `401 Unauthorized` response
 2. Claude Code fetches the OAuth Protected Resource Metadata from `/.well-known/oauth-protected-resource` to discover the authorization server
@@ -336,7 +334,7 @@ This is expected for `mode: disabled` and `mode: static`. The banner is the deli
 - Confirm the token value matches exactly what's in your configuration (no extra spaces or quotes)
 - Check that `client_auth.mode: static` and `client_auth.dev_token` are both set in your config
 
-### Token does not load
+### Token Does Not Load
 
 - If using environment variables like `${DEV_TOKEN}`, export the variable before starting the server
 - Check the server logs for configuration parsing errors
@@ -358,7 +356,7 @@ This is expected for `mode: disabled` and `mode: static`. The banner is the deli
 - Verify the audience mapper is configured in the IdP so the `aud` claim matches the `audience` config value
 - Decode the JWT (for example, at jwt.io) to inspect the actual `aud` claim
 
-### Browser login window does not appear
+### Browser Login Window Does Not Appear
 
 - Verify the MCP client supports OAuth (Claude Code and Claude Desktop do)
 - Check that the `resource_url` matches the URL the client is connecting to

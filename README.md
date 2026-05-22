@@ -71,7 +71,7 @@ The server implements the MCP HTTP transport specification and exposes event bro
 ## Guides
 
 - [User Guide](docs/user-guide.md) — overview, tools reference, deployment, and troubleshooting
-- [Configuration](docs/configuration.md) — server settings, event broker config, client auth, and rate-limit/retry knobs
+- [Configuration](docs/configuration.md) — server settings, event broker config, client auth, and rate-limit/retry settings
 - [Authentication](docs/authentication.md) — OAuth/OIDC and static token setup for MCP clients
 
 ## Prerequisites
@@ -79,7 +79,7 @@ The server implements the MCP HTTP transport specification and exposes event bro
 - Access to one or more Solace event brokers with SEMP management enabled
 - [Docker](https://docs.docker.com/get-docker/) (for Docker deployment) or a supported OS/arch for the binary (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64)
 - **For Development / Building from Source:**
-  - [Go 1.25+](https://go.dev/dl/) — required to build and run the server from source
+  - [Go 1.25+](https://go.dev/dl/) — required to build and run the MCP server from source
   - Not needed if using pre-built binaries or Docker images
 
 ## Quickstart
@@ -130,23 +130,15 @@ Select a deployment method:
 
 Download the archive for your platform from the [latest release](https://github.com/SolaceDev/solace-broker-mcp/releases/latest). Available platforms: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64.
 
-For example, on Linux x86_64:
+Verify the checksum and extract:
 
 ```bash
-# Download the archive and checksums file
-wget https://github.com/SolaceDev/solace-broker-mcp/releases/download/v1.0.0/solace-broker-mcp-v1.0.0-linux-amd64.tar.gz
-wget https://github.com/SolaceDev/solace-broker-mcp/releases/download/v1.0.0/checksums-sha256.txt
-
-# Verify checksum
-shasum -a 256 -c checksums-sha256.txt --ignore-missing
-
-# Extract
-tar xzf solace-broker-mcp-v1.0.0-linux-amd64.tar.gz
+tar xzf solace-broker-mcp-v*.tar.gz
 ```
 
 The archive contains the binary, an example config (`broker-config.example.yaml`), and the license. Copy the example config to `broker-config.yaml` and modify as needed.
 
-Run the server with the config file:
+Run the MCP server with the config file:
 
 ```bash
 CONFIG_FILE=/path/to/config.yaml ./solace-broker-mcp
@@ -179,7 +171,7 @@ docker run -d \
 > gh auth token | docker login ghcr.io -u $(gh api user --jq .login) --password-stdin
 > ```
 
-The container reads config from `/etc/mcp-server/config.yaml` by default. Pass credentials via `--env-file` or individual `-e` flags.
+The container reads config from `/etc/mcp-server/config.yaml` by default. Pass the credentials via `--env-file` or individual `-e` flags.
 
 Verify:
 
@@ -206,7 +198,7 @@ services:
 
 ### Connect from Claude Code
 
-Once the server is running (via binary, Docker, or `go run`), add it as an MCP server:
+Once the MCP server is running (via binary, Docker, or `go run`), add it as an MCP server:
 
 ```bash
 claude mcp add solace-broker --transport http http://localhost:9090/mcp
@@ -232,13 +224,13 @@ go mod download
 
 Create `broker-config.yaml` and `.env` in the repo root (both are gitignored). See [Configuration](#configuration) for the file format and examples.
 
-### 3. Run the server
+### 3. Run the MCP server
 
 ```bash
 go run ./cmd/server
 ```
 
-The server listens on port `9090` by default and serves the MCP endpoint at `/mcp`. A health check endpoint is available at `/health`.
+The MCP server listens on port `9090` by default and serves the MCP endpoint at `/mcp`. A health check endpoint is available at `/health`.
 
 ### Configuration Options
 
