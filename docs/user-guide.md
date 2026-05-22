@@ -32,8 +32,8 @@ The Solace Event Broker MCP Server requires:
 | **Broker credentials** | A SEMP username and password (basic auth) to access each broker. |
 | **Runtime environment** | One of: Docker, a supported OS/architecture for the binary (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64), or Kubernetes. |
 | **MCP client** | An MCP-compatible AI client such as Claude Code or Claude Desktop. |
-| **OAuth provider** (production only) | An OIDC-compliant identity provider (e.g., Keycloak, Auth0, Okta) is required when `client_auth.mode` is `oauth`. Not needed when `mode` is `disabled` or `static` (local development). |
-| **Go 1.25+** (development only) | Only required if building from source. Not needed for binary or Docker deployments. |
+| **OAuth provider** (production only) | An OIDC-compliant identity provider (for example, Keycloak, Auth0, Okta) is required when `client_auth.mode` is `oauth`. An OAuth provider is not required when `mode` is `disabled` or `static` (local development). |
+| **Go 1.25+** (development only) | Only required if building from source. Go is not required for binary or Docker deployments. |
 
 ## Limitations and Considerations
 
@@ -168,19 +168,19 @@ The server supports open access, static token, and OAuth/OIDC authentication for
 
 ## Troubleshooting
 
-### Server won't start
+### Server Won't Start
 
 - **Config file not found** — The server looks for the yaml configuration file in this order: `CONFIG_FILE` env var, `/etc/mcp-server/config.yaml`, then `./broker-config.yaml`. Set `CONFIG_FILE` explicitly if the file is in a non-standard location.
 - **TLS misconfiguration** — Both `tls_cert_file` and `tls_key_file` must be set together. Providing only one is a startup error.
 - **OAuth config missing** — When `client_auth.mode` is `oauth`, the `issuer`, `audience`, and `resource_url` fields are required. For local testing, set `client_auth.mode: disabled` or `static`.
 
-### Cannot connect to broker
+### Cannot Connect to Broker
 
 - **SEMP not enabled** — Verify the broker's SEMP management interface is accessible at the configured URL (for example, `http://broker:8080/SEMP`).
 - **Authentication failure** — Check that credentials in the `.env` file are correct. For basic auth, verify both `username` and `password`. For bearer mode, verify the `token`.
 - **TLS certificate errors** — If the event broker uses a self-signed certificate, enable `insecure_skip_verify` in the broker config. See [Configuration](configuration.md) for details.
 
-### Tool returns an error
+### Tool Returns an Error
 
 Tool errors include structured fields to help diagnose the problem:
 
@@ -211,7 +211,7 @@ claude mcp add --transport http solace-broker http://localhost:9090/mcp \
   -H "Authorization: Bearer <your-dev-token>"
 ```
 
-### Health check fails
+### Health Check Fails
 
 The server exposes a health endpoint and a CLI flag:
 
@@ -225,6 +225,6 @@ curl http://localhost:9090/health
 # Exit code 0 = healthy, 1 = unhealthy
 ```
 
-The `--health` flag probes the running server's `/health` endpoint without requiring curl or network tools. This is useful for container health checks, scripts, and environments where curl is not available. The server must be running for the check to succeed. The flag reads the config file to determine the port and TLS settings. Ensure the same config file is accessible to both the server process and the health probe.
+The `--health` flag probes the running server's `/health` endpoint without requiring curl or network tools. This flag is useful for container health checks, scripts, and environments where curl is not available. The server must be running for the check to succeed. The flag reads the config file to determine the port and TLS settings. Ensure the same config file is accessible to both the server process and the health probe.
 
 If the health check fails, verify the server process is running and the configured port is not in use by another process.

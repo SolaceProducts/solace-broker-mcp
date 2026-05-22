@@ -2,7 +2,7 @@
 
 The server is configured via a YAML config file plus a `.env` file for credentials. See the [Quickstart](../README.md#quickstart) in the README for a minimal working example.
 
-## Config file location
+## Config File Location
 
 The server searches for the config file in this order:
 
@@ -16,7 +16,7 @@ Set `CONFIG_FILE` explicitly if the file is in a non-standard location.
 
 The server loads a separate credentials file automatically (default: `.env` in the same directory as the config file). Override the path with the `ENV_FILE` env var.
 
-## Environment variable substitution
+## Environment Variable Substitution
 
 Use `${VAR_NAME}` anywhere in the YAML config to reference an environment variable:
 
@@ -30,7 +30,7 @@ brokers:
 
 The server resolves variables at startup. The `.env` file loads automatically before substitution. Precedence: environment variable > `.env` file > YAML literal value.
 
-## Server settings
+## Server Settings
 
 | YAML field | Env var | Default | Description |
 |---|---|---|---|
@@ -49,7 +49,7 @@ tls_key_file: "/etc/certs/server-key.pem"
 
 **Logging:** The server writes structured JSON logs to stderr. The server automatically redacts credentials in all log output. Every tool invocation is logged with the tool name, target broker, status, and duration.
 
-## Event Broker settings
+## Event Broker Settings
 
 Configured under the `brokers` map. Each key defines an event broker alias for the `broker` parameter in MCP tools.
 
@@ -76,7 +76,7 @@ brokers:
       password: "${BROKER_PASSWORD}"
 ```
 
-## Client authentication settings
+## Client Authentication Settings
 
 Configured under the `client_auth` key. The `mode` field is required and selects the auth backend; required peer fields follow from the mode. The previous `development_mode` flag is deprecated — its presence is parsed but ignored, with a deprecation warning logged at startup. See the [Authentication](authentication.md) guide for full setup instructions.
 
@@ -88,7 +88,7 @@ Configured under the `client_auth` key. The `mode` field is required and selects
 | `client_auth.audience` | Expected `aud` claim value. Required when `client_auth.mode` is `oauth`. |
 | `client_auth.resource_url` | OAuth resource URL (e.g., `https://mcp.example.com/mcp`). Required when `client_auth.mode` is `oauth`. |
 
-## Rate limiting and retry
+## Rate Limiting and Retry
 
 Configured under the `semp` key. Controls how the server throttles and retries requests to event broker SEMP APIs.
 
