@@ -103,7 +103,7 @@ brokers:
       password: "${BROKER_PASSWORD}"
 ```
 
-`client_auth.mode: disabled` skips client authentication entirely — only use this for local development. For production, set `client_auth.mode: oauth` and provide `issuer`, `audience`, and `resource_url`. A third mode, `static`, accepts a fixed bearer token for local development with realistic auth flow. See the [Authentication](docs/authentication.md) guide for full setup instructions.
+`client_auth.mode: disabled` skips client authentication entirely — only use this for local development. For production, set `client_auth.mode: oauth` and provide `issuer`, `audience`, and `resource_url`. A third mode, `static`, accepts a fixed bearer token for local development with realistic auth flow. See [Authentication](docs/authentication.md) for full setup instructions.
 
 Each event broker needs:
 - `url` — the SEMP management API base URL

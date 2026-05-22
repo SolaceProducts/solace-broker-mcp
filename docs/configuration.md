@@ -76,7 +76,7 @@ brokers:
 
 ## Client Authentication Settings
 
-Configured under the `client_auth` key. The `mode` field is required and selects the auth backend; required peer fields follow from the mode. The previous `development_mode` flag is deprecated — its presence is parsed but ignored, with a deprecation warning logged at startup. See the [Authentication](authentication.md) guide for full setup instructions.
+Configured under the `client_auth` key. The `mode` field is required and selects the auth backend; required peer fields follow from the mode. The previous `development_mode` flag is deprecated — its presence is parsed but ignored, with a deprecation warning logged at startup. See [Authentication](authentication.md) for full setup instructions.
 
 | YAML field | Description |
 |---|---|
@@ -84,7 +84,7 @@ Configured under the `client_auth` key. The `mode` field is required and selects
 | `client_auth.dev_token` | Static bearer token. Required when `client_auth.mode` is `static`. |
 | `client_auth.issuer` | IdP issuer URL. Required when `client_auth.mode` is `oauth`. |
 | `client_auth.audience` | Expected `aud` claim value. Required when `client_auth.mode` is `oauth`. |
-| `client_auth.resource_url` | OAuth resource URL (e.g., `https://mcp.example.com/mcp`). Required when `client_auth.mode` is `oauth`. |
+| `client_auth.resource_url` | OAuth resource URL (for example, `https://mcp.example.com/mcp`). Required when `client_auth.mode` is `oauth`. |
 
 ## Rate Limiting and Retry
 
