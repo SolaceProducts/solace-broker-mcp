@@ -32,6 +32,14 @@ const idleConnTimeout = 90 * time.Second
 // per-host cap. Each broker has its own transport, so this only ever applies
 // to connections to a single broker — the headroom is a defensive cushion,
 // not a true multi-host budget.
+//
+// ResponseHeaderTimeout is derived from sempCfg.RequestTimeoutDuration (half)
+// rather than a hardcoded constant. The granular timeout must stay strictly
+// less than the outer client-level request timeout, otherwise the outer
+// timeout wins and the regression this transport tuning fixes (a stuck
+// broker holding a MaxConcurrentPerBroker semaphore slot for the full
+// request window) silently returns when operators set an aggressive
+// request_timeout_duration in broker-config.yaml.
 func NewTunedTransport(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) *http.Transport {
 	return &http.Transport{
 		TLSClientConfig:       &tls.Config{InsecureSkipVerify: brokerCfg.InsecureSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
@@ -39,7 +47,7 @@ func NewTunedTransport(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfi
 		MaxIdleConns:          sempCfg.MaxConcurrentPerBroker * 2,
 		IdleConnTimeout:       idleConnTimeout,
 		TLSHandshakeTimeout:   time.Duration(defaults.DefaultTLSHandshakeTimeoutSeconds) * time.Second,
-		ResponseHeaderTimeout: time.Duration(defaults.DefaultResponseHeaderTimeoutSeconds) * time.Second,
+		ResponseHeaderTimeout: sempCfg.RequestTimeoutDuration / 2,
 		ExpectContinueTimeout: time.Duration(defaults.DefaultExpectContinueTimeoutSeconds) * time.Second,
 	}
 }

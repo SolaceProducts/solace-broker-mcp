@@ -28,6 +28,10 @@ import (
 // stuck in handshake or one that accepts the connection then never sends
 // headers fails fast rather than holding a MaxConcurrentPerBroker semaphore
 // slot for the full client-level request timeout.
+//
+// ResponseHeaderTimeout is derived from sempCfg.RequestTimeoutDuration so the
+// "strictly less than the outer client timeout" relationship is preserved
+// even when an operator customizes request_timeout_duration in broker config.
 func TestNewTunedTransport_GranularTimeoutsAreSet(t *testing.T) {
 	brokerCfg := &config.BrokerConfig{
 		URL:                "https://broker.example.com:1943",
@@ -35,6 +39,7 @@ func TestNewTunedTransport_GranularTimeoutsAreSet(t *testing.T) {
 	}
 	sempCfg := &config.SEMPConfig{
 		MaxConcurrentPerBroker: 10,
+		RequestTimeoutDuration: defaults.DefaultSEMPRequestTimeoutDuration,
 	}
 
 	tr := NewTunedTransport(brokerCfg, sempCfg)
@@ -43,9 +48,12 @@ func TestNewTunedTransport_GranularTimeoutsAreSet(t *testing.T) {
 	if tr.TLSHandshakeTimeout != wantTLS {
 		t.Errorf("TLSHandshakeTimeout = %s, want %s", tr.TLSHandshakeTimeout, wantTLS)
 	}
-	wantHdr := time.Duration(defaults.DefaultResponseHeaderTimeoutSeconds) * time.Second
+	wantHdr := sempCfg.RequestTimeoutDuration / 2
 	if tr.ResponseHeaderTimeout != wantHdr {
 		t.Errorf("ResponseHeaderTimeout = %s, want %s", tr.ResponseHeaderTimeout, wantHdr)
+	}
+	if tr.ResponseHeaderTimeout >= sempCfg.RequestTimeoutDuration {
+		t.Errorf("ResponseHeaderTimeout (%s) must be strictly less than RequestTimeoutDuration (%s); the granular timeout will never fire", tr.ResponseHeaderTimeout, sempCfg.RequestTimeoutDuration)
 	}
 	wantExpect := time.Duration(defaults.DefaultExpectContinueTimeoutSeconds) * time.Second
 	if tr.ExpectContinueTimeout != wantExpect {
@@ -53,14 +61,24 @@ func TestNewTunedTransport_GranularTimeoutsAreSet(t *testing.T) {
 	}
 }
 
-// TestResponseHeaderTimeout_StrictlyLessThanRequestTimeout pins the contract
-// the constant comment relies on: the granular header timeout must fire
-// before the outer client-level request timeout, otherwise the outer timeout
-// wins and the granular one has no effect.
-func TestResponseHeaderTimeout_StrictlyLessThanRequestTimeout(t *testing.T) {
-	hdr := time.Duration(defaults.DefaultResponseHeaderTimeoutSeconds) * time.Second
-	req := defaults.DefaultSEMPRequestTimeoutDuration
-	if hdr >= req {
-		t.Errorf("DefaultResponseHeaderTimeoutSeconds (%s) must be strictly less than DefaultSEMPRequestTimeoutDuration (%s); the granular timeout will never fire", hdr, req)
+// TestResponseHeaderTimeout_TracksOperatorConfiguredRequestTimeout verifies
+// the derived relationship still holds when an operator sets an aggressive
+// request_timeout_duration (e.g. 10s) — the regression the PR fixes (a stuck
+// broker holding a semaphore slot for the full outer timeout) must not
+// silently come back because the granular timeout was hardcoded.
+func TestResponseHeaderTimeout_TracksOperatorConfiguredRequestTimeout(t *testing.T) {
+	brokerCfg := &config.BrokerConfig{URL: "https://broker.example.com:1943"}
+	sempCfg := &config.SEMPConfig{
+		MaxConcurrentPerBroker: 10,
+		RequestTimeoutDuration: 10 * time.Second,
+	}
+
+	tr := NewTunedTransport(brokerCfg, sempCfg)
+
+	if tr.ResponseHeaderTimeout >= sempCfg.RequestTimeoutDuration {
+		t.Errorf("ResponseHeaderTimeout (%s) must be strictly less than RequestTimeoutDuration (%s)", tr.ResponseHeaderTimeout, sempCfg.RequestTimeoutDuration)
+	}
+	if want := 5 * time.Second; tr.ResponseHeaderTimeout != want {
+		t.Errorf("ResponseHeaderTimeout = %s, want %s (half of operator-configured request timeout)", tr.ResponseHeaderTimeout, want)
 	}
 }

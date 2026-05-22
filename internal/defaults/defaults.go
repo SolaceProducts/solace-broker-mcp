@@ -41,19 +41,6 @@ const DefaultSEMPRequestTimeoutDuration = time.Minute
 // failure window to a small fraction of the request timeout.
 const DefaultTLSHandshakeTimeoutSeconds = 10
 
-// DefaultResponseHeaderTimeoutSeconds bounds the time the SEMP transport
-// waits after sending a request before the broker returns response headers.
-// Must stay strictly less than DefaultSEMPRequestTimeoutDuration so the
-// granular timeout actually fires before the outer client.Timeout. A broker
-// that accepts the TCP connection then never sends headers would otherwise
-// hold the per-broker semaphore slot for the full request timeout.
-//
-// Assumption: 30 seconds is comfortably under the 60s request timeout.
-// Reasoning: SEMP operations send response headers as soon as the broker
-// dispatches the request. Anything past 30s indicates a stuck broker, not
-// a slow one — fail fast.
-const DefaultResponseHeaderTimeoutSeconds = 30
-
 // DefaultExpectContinueTimeoutSeconds is the time the transport waits for a
 // "100 Continue" intermediate response after sending a request with an
 // "Expect: 100-continue" header before sending the body. SEMP requests do
