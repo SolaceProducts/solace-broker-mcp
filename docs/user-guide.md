@@ -142,16 +142,6 @@ The server exposes 14 read-only tools. All broker-querying tools require a `brok
 |---|---|
 | `get-dmr-status` | DMR cluster status: enabled state, uptime, and all link statuses. Use to diagnose mesh connectivity issues. |
 
-## Connecting an MCP Client
-
-Once the server is running, connect Claude Code to it:
-
-```bash
-claude mcp add solace-broker --transport http http://localhost:9090/mcp
-```
-
-For details on securing this connection with a static token or OAuth/OIDC, see the [Authentication](authentication.md) guide.
-
 ## Recommended Environments
 
 ### Authentication
@@ -193,7 +183,7 @@ Tool errors include structured fields to help diagnose the problem:
 
 Common causes:
 - **404** — The specified VPN, queue, client, or RDP does not exist. Check the name for typos.
-- **401 / 403** —Event broker credentials lack permission for the requested operation. Verify the SEMP user has monitor-level access.
+- **401 / 403** — Event broker credentials lack permission for the requested operation. Verify the SEMP user has monitor-level access.
 - **429 / 503** — Rate limiting or event broker overload. These are retryable — the server retries automatically based on the configured retry policy.
 
 ### "Session not found" errors
@@ -207,7 +197,7 @@ After restarting the MCP server, "session not found" errors indicate the client 
 claude mcp remove solace-broker
 
 # Re-add with auth header (if using Mode 2)
-claude mcp add --transport http solace-broker http://localhost:9090/mcp \
+claude mcp add solace-broker --transport http http://localhost:9090/mcp \
   -H "Authorization: Bearer <your-dev-token>"
 ```
 

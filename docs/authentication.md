@@ -4,9 +4,9 @@ The Solace Event Broker MCP Server supports three authentication modes for MCP c
 
 ## Table of Contents
 
-- [Mode 1: No Authentication (Open Access)](#mode-1-no-authentication-open-access)
-- [Mode 2: Static Dev Token (Simple Authentication)](#mode-2-static-dev-token-simple-authentication)
-- [Mode 3: OAuth / JWT (Production Authentication)](#mode-3-oauth--jwt-production-authentication)
+- [Mode 1: No Authentication (`mode: disabled`)](#mode-1-no-authentication-mode-disabled)
+- [Mode 2: Static Dev Token (`mode: static`)](#mode-2-static-dev-token-mode-static)
+- [Mode 3: OAuth / JWT (`mode: oauth`)](#mode-3-oauth--jwt-mode-oauth)
   - [Choose a client registration method](#choose-a-client-registration-method)
   - [Step 1: Set up the identity provider](#step-1-set-up-the-identity-provider)
   - [Step 2: Configure the MCP server](#step-2-configure-the-mcp-server)
@@ -111,7 +111,7 @@ export DEV_TOKEN="my-secret-dev-token-123"
 With the MCP server running on `http://localhost:9090`, add it using the Claude Code CLI:
 
 ```bash
-claude mcp add --transport http solace-broker http://localhost:9090/mcp \
+claude mcp add solace-broker --transport http http://localhost:9090/mcp \
   -H "Authorization: Bearer my-secret-dev-token-123"
 ```
 
@@ -263,10 +263,9 @@ go run ./cmd/server
 With the MCP server running on `http://localhost:9090`, add it using the Claude Code CLI:
 
 ```bash
-claude mcp add --transport http \
+claude mcp add solace-broker --transport http http://localhost:9090/mcp \
   --client-id mcp-client \
-  --callback-port 8081 \
-  solace-broker http://localhost:9090/mcp
+  --callback-port 8081
 ```
 
 - `--client-id` — the client ID registered in step 1.3
@@ -295,7 +294,7 @@ Alternatively, configure via `.mcp.json` in the project root:
 With the MCP server running on `http://localhost:9090`, add it using the Claude Code CLI:
 
 ```bash
-claude mcp add --transport http solace-broker http://localhost:9090/mcp
+claude mcp add solace-broker --transport http http://localhost:9090/mcp
 ```
 
 A browser window opens on first use for user login. The IdP must support anonymous Dynamic Client Registration (RFC 7591).
@@ -362,7 +361,7 @@ This is expected for `mode: disabled` and `mode: static`. The banner is the deli
 - Check that the `resource_url` matches the URL the client is connecting to
 - Verify the `/.well-known/oauth-protected-resource` endpoint returns valid metadata:
   ```bash
-  curl http://localhost:9091/.well-known/oauth-protected-resource
+  curl http://localhost:9090/.well-known/oauth-protected-resource
   ```
 
 ### "Allowed Client Scopes rejected request to client-registration service"

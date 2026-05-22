@@ -60,11 +60,11 @@ The server implements the MCP HTTP transport specification and exposes event bro
                                                      ▼
 ┌──────────────────┐   MCP over HTTP    ┌──────────────────────────┐   SEMPv1 + SEMPv2    ┌──────────────────┐
 │                  │                    │   Broker MCP Server      │                      │                  │
-│   AI Agent       │ ─────────────────▶│                          │ ───────────────────▶ │  Solace          │
+│   AI Agent       │ ─────────────────▶ │                          │ ───────────────────▶ │  Solace          │
 │  (Claude Code,   │   JSON-RPC         │  • Auth (OAuth / token)  │   HTTP(S) /SEMP      │  Event           │
 │  Claude Desktop) │   + Bearer JWT     │  • 14 read-only tools    │                      │  Broker(s)       │
 │                  │                    │  • Rate-limit + retry    │                      │                  │
-│                  │ ◀───────────────── │  • SEMP client pool      │ ◀───────────────────│                  │
+│                  │ ◀───────────────── │  • SEMP client pool      │ ◀─────────────────── │                  │
 └──────────────────┘                    └──────────────────────────┘   basic / bearer     └──────────────────┘
 ```
 
@@ -146,9 +146,13 @@ Select a deployment method:
 
 Download the archive for your platform from the [latest release](https://github.com/SolaceDev/solace-broker-mcp/releases/latest). Available platforms: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64.
 
-Verify the checksum and extract:
+Download the checksums file, verify the checksum, and extract:
 
 ```bash
+# Verify checksum
+shasum -a 256 -c checksums-sha256.txt --ignore-missing
+
+# Extract
 tar xzf solace-broker-mcp-v*.tar.gz
 ```
 
@@ -157,7 +161,7 @@ The archive contains the binary, an example config (`broker-config.example.yaml`
 Run the MCP server with the config file:
 
 ```bash
-CONFIG_FILE=/path/to/config.yaml ./solace-broker-mcp
+CONFIG_FILE=./broker-config.yaml ./solace-broker-mcp
 ```
 
 If the config file is named `broker-config.yaml` in the current directory, the server does not require `CONFIG_FILE`.
