@@ -1019,12 +1019,12 @@ tools:
 	}
 }
 
-func TestLoadTools_GetDiscardStats(t *testing.T) {
+func TestLoadTools_ListQueueDiscards(t *testing.T) {
 	yaml := `
 tools:
-  - name: get-discard-stats
+  - name: list-queue-discards
     description: >
-      Get per-queue message discard counts for a Message VPN.
+      List per-queue message discard counts for a Message VPN.
     parameters:
       - name: msgVpnName
         type: string
@@ -1033,7 +1033,7 @@ tools:
       - name: maxResults
         type: integer
         required: false
-        description: "Maximum number of queues to aggregate (default 100, max 500)"
+        description: "Maximum number of queues to return (default 100, max 500)"
     steps:
       - id: queueDiscards
         operation: monitor/getMsgVpnQueues
@@ -1058,8 +1058,8 @@ tools:
 	}
 
 	tool := tools[0]
-	if tool.Name != "get-discard-stats" {
-		t.Errorf("expected name %q, got %q", "get-discard-stats", tool.Name)
+	if tool.Name != "list-queue-discards" {
+		t.Errorf("expected name %q, got %q", "list-queue-discards", tool.Name)
 	}
 	if len(tool.Steps) != 1 {
 		t.Fatalf("expected 1 step, got %d", len(tool.Steps))
@@ -1071,7 +1071,7 @@ tools:
 		t.Errorf("expected operation %q, got %q", "monitor/getMsgVpnQueues", tool.Steps[0].Operation)
 	}
 	if !tool.Steps[0].FollowPages {
-		t.Error("expected FollowPages=true for get-discard-stats step")
+		t.Error("expected FollowPages=true for list-queue-discards step")
 	}
 	if tool.Result.Strategy != "collect" {
 		t.Errorf("expected strategy %q, got %q", "collect", tool.Result.Strategy)

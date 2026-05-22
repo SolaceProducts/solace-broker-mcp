@@ -1696,11 +1696,11 @@ func listSlowSubscribersTool() CompositeTool {
 	}
 }
 
-// getDiscardStatsTool returns the get-discard-stats tool definition for tests.
-func getDiscardStatsTool() CompositeTool {
+// listQueueDiscardsTool returns the list-queue-discards tool definition for tests.
+func listQueueDiscardsTool() CompositeTool {
 	return CompositeTool{
-		Name:        "get-discard-stats",
-		Description: "Get per-queue message discard counts for a Message VPN",
+		Name:        "list-queue-discards",
+		Description: "List per-queue message discard counts for a Message VPN",
 		Parameters: []ParameterDef{
 			{Name: "msgVpnName", Type: "string", Required: true},
 			{Name: "maxResults", Type: "integer", Required: false},
@@ -1736,7 +1736,7 @@ func makeSlowSubscriberItems(n int) []any {
 }
 
 // makeQueueDiscardItems builds a slice of n mock queue objects with discard
-// counters for use in get-discard-stats paginated responses.
+// counters for use in list-queue-discards paginated responses.
 func makeQueueDiscardItems(n int) []any {
 	items := make([]any, n)
 	for i := range items {
@@ -1807,6 +1807,17 @@ func TestExecute_GetReplicationStatus_SEMPError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when replication step fails, got nil")
 	}
+
+	var sempErr *sempv2.SEMPError
+	if !errors.As(err, &sempErr) {
+		t.Fatalf("expected SEMPError in error chain, got %T: %v", err, err)
+	}
+	if sempErr.StatusCode != 404 {
+		t.Errorf("StatusCode = %d, want 404", sempErr.StatusCode)
+	}
+	if sempErr.Operation != "getMsgVpn" {
+		t.Errorf("Operation = %q, want %q", sempErr.Operation, "getMsgVpn")
+	}
 }
 
 func TestExecute_ListSlowSubscribers_ReturnsFiltered(t *testing.T) {
@@ -1847,6 +1858,41 @@ func TestExecute_ListSlowSubscribers_ReturnsFiltered(t *testing.T) {
 	}
 }
 
+func TestExecute_ListSlowSubscribers_Empty(t *testing.T) {
+	// Empty is the steady-state return value: most VPNs don't have slow
+	// subscribers most of the time. Pins the len(items) == 0 → break path
+	// through the paginator.
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnClients", pageResult([]any{}, ""))
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listSlowSubscribersTool(), client, map[string]any{
+		"msgVpnName": "default",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	subs, ok := result["slowSubscribers"].(map[string]any)
+	if !ok {
+		t.Fatal("expected slowSubscribers key containing a map")
+	}
+	items, ok := subs["data"].([]any)
+	if !ok {
+		t.Fatal("expected slowSubscribers.data to be a slice")
+	}
+	if len(items) != 0 {
+		t.Errorf("len(items) = %d, want 0", len(items))
+	}
+	if subs["truncated"] != false {
+		t.Errorf("truncated = %v, want false", subs["truncated"])
+	}
+	if len(client.calls) != 1 {
+		t.Errorf("expected 1 SEMP call, got %d", len(client.calls))
+	}
+}
+
 func TestExecute_ListSlowSubscribers_TruncatesAtMaxResults(t *testing.T) {
 	client := newSeqMockClient()
 	client.addResponses("getMsgVpnClients", pageResult(makeSlowSubscriberItems(100), "cursor-next"))
@@ -1875,13 +1921,13 @@ func TestExecute_ListSlowSubscribers_TruncatesAtMaxResults(t *testing.T) {
 	}
 }
 
-func TestExecute_GetDiscardStats_SinglePage(t *testing.T) {
+func TestExecute_ListQueueDiscards_SinglePage(t *testing.T) {
 	client := newSeqMockClient()
 	client.addResponses("getMsgVpnQueues", pageResult(makeQueueDiscardItems(5), ""))
 
 	executor := NewCompositeExecutor(testOperations())
 
-	result, err := executor.Execute(context.Background(), getDiscardStatsTool(), client, map[string]any{
+	result, err := executor.Execute(context.Background(), listQueueDiscardsTool(), client, map[string]any{
 		"msgVpnName": "default",
 	})
 	if err != nil {
@@ -1910,13 +1956,13 @@ func TestExecute_GetDiscardStats_SinglePage(t *testing.T) {
 	}
 }
 
-func TestExecute_GetDiscardStats_TruncatesAtMaxResults(t *testing.T) {
+func TestExecute_ListQueueDiscards_TruncatesAtMaxResults(t *testing.T) {
 	client := newSeqMockClient()
 	client.addResponses("getMsgVpnQueues", pageResult(makeQueueDiscardItems(100), "cursor-next"))
 
 	executor := NewCompositeExecutor(testOperations())
 
-	result, err := executor.Execute(context.Background(), getDiscardStatsTool(), client, map[string]any{
+	result, err := executor.Execute(context.Background(), listQueueDiscardsTool(), client, map[string]any{
 		"msgVpnName": "default",
 		"maxResults": float64(50),
 	})
