@@ -17,14 +17,18 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -75,7 +79,10 @@ func newSlogHandler(level slog.Level) slog.Handler {
 // buildMux creates the HTTP route multiplexer with basic routes.
 // The /mcp route is registered separately in main() with auth middleware.
 // Both main() and tests use this function to avoid route drift.
-func buildMux() *http.ServeMux {
+//
+// aliases returns the list of broker names to check.
+// ping tests connectivity to a single broker; it returns nil on success.
+func buildMux(aliases func() []string, ping func(ctx context.Context, broker string) error) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -85,9 +92,61 @@ func buildMux() *http.ServeMux {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte(`{"status": "ok"}`)); err != nil {
+		if _, err := w.Write([]byte(`{"status": "healthy"}`)); err != nil {
 			http.Error(w, "failed to write response", http.StatusInternalServerError)
 		}
+	})
+
+	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+
+		brokers := aliases()
+		type brokerResult struct {
+			broker string
+			err    error
+		}
+		results := make(chan brokerResult, len(brokers))
+
+		var wg sync.WaitGroup
+		wg.Add(len(brokers))
+
+		// map: ping each broker concurrently
+		for _, broker := range brokers {
+			go func(broker string) {
+				defer wg.Done()
+				reqCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+				defer cancel()
+				results <- brokerResult{broker: broker, err: ping(reqCtx, broker)}
+			}(broker)
+		}
+
+		wg.Wait()
+		close(results)
+
+		// reduce: partition into ready brokers and errors
+		var readyBrokers []string
+		var errs []string
+		for res := range results {
+			if res.err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %s", res.broker, res.err.Error()))
+			} else {
+				readyBrokers = append(readyBrokers, res.broker)
+			}
+		}
+
+		if len(errs) > 0 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			resp, _ := json.Marshal(map[string]any{"ready": false, "errors": errs})
+			_, _ = w.Write(resp)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		resp, _ := json.Marshal(map[string]any{"ready": true, "brokers": readyBrokers})
+		_, _ = w.Write(resp)
 	})
 
 	return mux
@@ -321,7 +380,34 @@ func main() {
 	slog.Info("all tools registered")
 
 	// 8. Set up HTTP routes
-	mux := buildMux()
+	mux := buildMux(pool.Aliases, func(ctx context.Context, broker string) error {
+		brokerCfg, ok := cfg.Brokers[broker]
+		if !ok {
+			return fmt.Errorf("unknown broker %q", broker)
+		}
+		u, err := url.Parse(brokerCfg.URL)
+		if err != nil {
+			return fmt.Errorf("broker %q: invalid URL: %w", broker, err)
+		}
+		host := u.Hostname()
+		port := u.Port()
+		if port == "" {
+			if u.Scheme == "https" {
+				port = "443"
+			} else {
+				port = "80"
+			}
+		}
+		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+		if err != nil {
+			slog.Warn("broker TCP connectivity check failed",
+				slog.String("broker", broker),
+				slog.String("error", err.Error()))
+			return err
+		}
+		_ = conn.Close()
+		return nil
+	})
 
 	// Create MCP handler
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {

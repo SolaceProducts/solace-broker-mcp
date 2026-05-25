@@ -16,6 +16,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -35,7 +37,7 @@ func testMux() *http.ServeMux {
 		Name:    "solace-broker-mcp",
 		Version: version.Version(),
 	}, nil)
-	mux := buildMux()
+	mux := buildMux(func() []string { return nil }, func(_ context.Context, _ string) error { return nil })
 
 	// Register /mcp endpoint for testing (without auth middleware)
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
@@ -56,8 +58,8 @@ func TestHealth_GET_ReturnsOK(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("GET /health status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	if rec.Body.String() != `{"status": "ok"}` {
-		t.Errorf("GET /health body = %q, want %q", rec.Body.String(), `{"status": "ok"}`)
+	if rec.Body.String() != `{"status": "healthy"}` {
+		t.Errorf("GET /health body = %q, want %q", rec.Body.String(), `{"status": "healthy"}`)
 	}
 	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("GET /health Content-Type = %q, want %q", ct, "application/json")
@@ -292,5 +294,68 @@ func TestHealthConfigFromFile_PartialTLSIsHTTP(t *testing.T) {
 	got := healthConfigFromFile()
 	if got.Scheme != "http" {
 		t.Errorf("Scheme = %q, want http (only cert set, no key)", got.Scheme)
+	}
+}
+
+func TestReady_POST_ReturnsMethodNotAllowed(t *testing.T) {
+	mux := buildMux(func() []string { return nil }, func(_ context.Context, _ string) error { return nil })
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/ready", nil)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST /ready status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestReady_GET_AllBrokersReachable(t *testing.T) {
+	brokers := []string{"prod-1", "prod-2"}
+	mux := buildMux(
+		func() []string { return brokers },
+		func(_ context.Context, _ string) error { return nil },
+	)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ready", nil)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("GET /ready status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if body["ready"] != true {
+		t.Errorf("ready = %v, want true", body["ready"])
+	}
+}
+
+func TestReady_GET_OneBrokerUnreachable(t *testing.T) {
+	brokers := []string{"prod-1", "prod-2"}
+	mux := buildMux(
+		func() []string { return brokers },
+		func(_ context.Context, broker string) error {
+			if broker == "prod-2" {
+				return errors.New("connection refused")
+			}
+			return nil
+		},
+	)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ready", nil)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("GET /ready status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if body["ready"] != false {
+		t.Errorf("ready = %v, want false", body["ready"])
 	}
 }
