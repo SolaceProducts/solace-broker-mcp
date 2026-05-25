@@ -5,7 +5,8 @@
 BINARY      := solace-broker-mcp
 PKG         := ./cmd/server
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS     := -s -w -X github.com/SolaceDev/solace-broker-mcp/internal/version.version=$(VERSION)
+# Deferred (=) so $(shell git describe) only runs for targets that actually use LDFLAGS.
+LDFLAGS      = -s -w -X github.com/SolaceDev/solace-broker-mcp/internal/version.version=$(VERSION)
 IMAGE       ?= solace-broker-mcp
 IMAGE_TAG   ?= dev
 COMPOSE_E2E := docker compose -f test/e2e/docker-compose.yml
@@ -19,8 +20,12 @@ help: ## Show this help
 # ── Build ────────────────────────────────────────────────────────────────────
 
 .PHONY: build
-build: ## Build the server binary
+build: ## Build the server binary (version-stamped, matches Dockerfile)
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(BINARY) $(PKG)
+
+.PHONY: build-all
+build-all: ## Build every package (matches CI's `go build -v ./...`)
+	go build -v ./...
 
 .PHONY: run
 run: ## Run the server from source (uses ./broker-config.yaml)
@@ -49,7 +54,7 @@ lint: ## golangci-lint (CI pins v2.11.4)
 	golangci-lint run
 
 .PHONY: check
-check: vet lint test-race ## Run vet, lint, and race-enabled tests
+check: build-all vet lint test-race ## Run build, vet, lint, and race-enabled tests (full CI parity)
 
 # ── E2E ──────────────────────────────────────────────────────────────────────
 
@@ -64,6 +69,11 @@ e2e: ## Run the E2E suite (requires brokers from `make e2e-up`)
 .PHONY: e2e-down
 e2e-down: ## Stop and remove E2E brokers
 	$(COMPOSE_E2E) down -v
+
+.PHONY: e2e-all
+e2e-all: ## Full E2E cycle: bring brokers up, run suite, tear down (tears down even on failure)
+	$(COMPOSE_E2E) up -d
+	bash test/e2e/run_all.sh; status=$$?; $(COMPOSE_E2E) down -v; exit $$status
 
 # ── Docker ───────────────────────────────────────────────────────────────────
 
