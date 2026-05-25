@@ -1,0 +1,113 @@
+name: solace-ha
+
+networks:
+  solace-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24
+
+x-broker-common: &broker-common
+  image: solace/solace-pubsub-standard:latest
+  shm_size: 1g
+  ulimits:
+    nofile:
+      soft: 2448
+      hard: 1048576
+  # The broker's matelink resolver walks /etc/resolv.conf search domains
+  # and any host-side wildcard catch-all (e.g. *.sol-local.net) hijacks the
+  # name lookup before docker DNS. Pinning IPs and using extra_hosts puts
+  # primary/backup/monitoring into /etc/hosts so DNS is bypassed entirely.
+  extra_hosts:
+    - "primary:172.21.0.2"
+    - "backup:172.21.0.3"
+    - "monitoring:172.21.0.4"
+
+services:
+  primary:
+    <<: *broker-common
+    container_name: primary
+    hostname: primary
+    networks:
+      solace-net:
+        ipv4_address: 172.21.0.2
+    ports:
+      - "2222:2222"
+      - "8080:8080"
+      # Host 55001 → container 55555. Windows-side dynamic port reservations
+      # on WSL2 frequently include 55491-55590, which blocks the default
+      # 55555 host bind. 55001 sits well below any common reserved range.
+      - "55001:55555"
+    environment:
+      username_admin_globalaccesslevel: admin
+      username_admin_password: ${ADMIN_PASSWORD}
+      system_scaling_maxconnectioncount: 100
+      routername: primary
+      nodetype: message_routing
+      configsync_enable: "yes"
+      redundancy_enable: "yes"
+      redundancy_group_node_primary_connectvia: primary:8300
+      redundancy_group_node_primary_nodetype: message_routing
+      redundancy_group_node_backup_connectvia: backup:8300
+      redundancy_group_node_backup_nodetype: message_routing
+      redundancy_group_node_monitoring_connectvia: monitoring:8300
+      redundancy_group_node_monitoring_nodetype: monitoring
+      redundancy_authentication_presharedkey_key: ${PSK}
+      redundancy_activestandbyrole: primary
+      redundancy_matelink_connectvia: backup
+      redundancy_matelink_tls_enable: "no"
+
+  backup:
+    <<: *broker-common
+    container_name: backup
+    hostname: backup
+    networks:
+      solace-net:
+        ipv4_address: 172.21.0.3
+    ports:
+      - "2223:2222"
+      - "8081:8080"
+      - "55002:55555"
+    environment:
+      username_admin_globalaccesslevel: admin
+      username_admin_password: ${ADMIN_PASSWORD}
+      system_scaling_maxconnectioncount: 100
+      routername: backup
+      nodetype: message_routing
+      configsync_enable: "yes"
+      redundancy_enable: "yes"
+      redundancy_group_node_primary_connectvia: primary:8300
+      redundancy_group_node_primary_nodetype: message_routing
+      redundancy_group_node_backup_connectvia: backup:8300
+      redundancy_group_node_backup_nodetype: message_routing
+      redundancy_group_node_monitoring_connectvia: monitoring:8300
+      redundancy_group_node_monitoring_nodetype: monitoring
+      redundancy_authentication_presharedkey_key: ${PSK}
+      redundancy_activestandbyrole: backup
+      redundancy_matelink_connectvia: primary
+      redundancy_matelink_tls_enable: "no"
+
+  monitoring:
+    <<: *broker-common
+    container_name: monitoring
+    hostname: monitoring
+    networks:
+      solace-net:
+        ipv4_address: 172.21.0.4
+    ports:
+      - "2224:2222"
+      - "8082:8080"
+    environment:
+      username_admin_globalaccesslevel: admin
+      username_admin_password: ${ADMIN_PASSWORD}
+      system_scaling_maxconnectioncount: 100
+      routername: monitoring
+      nodetype: monitoring
+      redundancy_enable: "yes"
+      redundancy_group_node_primary_connectvia: primary:8300
+      redundancy_group_node_primary_nodetype: message_routing
+      redundancy_group_node_backup_connectvia: backup:8300
+      redundancy_group_node_backup_nodetype: message_routing
+      redundancy_group_node_monitoring_connectvia: monitoring:8300
+      redundancy_group_node_monitoring_nodetype: monitoring
+      redundancy_authentication_presharedkey_key: ${PSK}
