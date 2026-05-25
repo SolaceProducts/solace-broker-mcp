@@ -29,6 +29,22 @@ const DefaultShutdownTimeoutSeconds = 30
 // Terraform provider convention.
 const DefaultSEMPRequestTimeoutDuration = time.Minute
 
+// MaxSEMPResponseBytes caps the in-memory buffering of a broker's SEMP
+// response body. Without this cap, a misbehaving broker or a man-in-the-
+// middle could stream gigabytes of data within the request timeout and OOM
+// the MCP server.
+//
+// Decided: 16 MiB.
+// Reasoning: SEMPv2 list responses are bounded by the broker's page size
+// (typically 500 items). At an extreme of ~30 KB per item, a single page
+// sits around 15 MB — 16 MiB gives a safety margin above any realistic
+// page response while bounding worst-case allocation to a few percent of
+// process memory.
+// Trade-off: a broker that legitimately returned > 16 MiB in a single
+// response would now fail with a typed "response too large" error. The
+// SEMP pagination contract makes this implausible in practice.
+const MaxSEMPResponseBytes = 16 * 1024 * 1024
+
 // DefaultMaxConcurrentPerBroker is the maximum number of concurrent SEMP
 // requests allowed per broker, enforced via a per-broker semaphore.
 //
@@ -38,6 +54,15 @@ const DefaultSEMPRequestTimeoutDuration = time.Minute
 // Validation needed: Load test against real brokers to determine the optimal
 // concurrency limit that balances throughput with broker stability.
 const DefaultMaxConcurrentPerBroker = 10
+
+// MaxConcurrentPerBrokerCeiling caps the operator-configurable
+// semp.max_concurrent_per_broker. The value backs a per-broker semaphore plus
+// the HTTP transport's MaxIdleConnsPerHost / MaxIdleConns (×2), so it
+// allocates fixed-size structures proportional to itself × the broker count.
+// 1024 leaves ~100× headroom above the documented typical 1-10 range while
+// rejecting pathological configurations (e.g. a million) that would OOM the
+// process.
+const MaxConcurrentPerBrokerCeiling = 1024
 
 // DefaultInsecureSkipVerify controls whether TLS certificate verification is
 // skipped when connecting to brokers. Must be false in production. Only set
@@ -57,6 +82,36 @@ const DefaultInsecureSkipVerify = false
 // Validation needed: Monitor for rejected connections in production to confirm
 // this value is not too aggressive for real-world network conditions.
 const DefaultReadHeaderTimeoutSeconds = 10
+
+// DefaultReadTimeoutSeconds bounds the time from accepting a connection to
+// finishing the request body. Together with DefaultReadHeaderTimeoutSeconds
+// it closes the slow-body variant of the Slowloris attack: a client that
+// sends headers in time but then trickles the body forever.
+//
+// Assumption: 30 seconds is generous for MCP request bodies.
+// Reasoning: MCP tool calls carry JSON-RPC payloads that are typically a few
+// KB. 30s tolerates congested networks while bounding the worst case.
+// Trade-off: a request that legitimately takes >30s to send its body will
+// be dropped. Accepted — MCP clients do not stream the request body.
+const DefaultReadTimeoutSeconds = 30
+
+// DefaultIdleTimeoutSeconds bounds how long an idle HTTP/1.1 keep-alive
+// connection sits open after a request completes before the server closes it.
+// Prevents idle-connection exhaustion: without this, an attacker can open
+// thousands of sockets, send one request each, and hold them open until the
+// kernel reaps the file descriptors.
+//
+// Assumption: 120 seconds balances reuse with resource bounds.
+// Reasoning: 2 minutes lets a chatty MCP client reuse the connection for
+// follow-up calls while bounding worst-case fd usage to (concurrent clients)
+// × 2 minutes of idle slots.
+//
+// NOTE: WriteTimeout is intentionally NOT set on the MCP server. The /mcp
+// endpoint serves long-lived MCP streamable HTTP / SSE responses; a server-
+// wide write deadline would cut legitimate streams. The slow-read attack
+// surface is mitigated by the OS's TCP send buffer plus IdleTimeout reaping
+// idle sockets — neither perfect, but the alternative breaks the product.
+const DefaultIdleTimeoutSeconds = 120
 
 // DefaultConfigPathSystem is the production-install location for the config
 // file. Tried when CONFIG_FILE is not set. Follows the conventional Linux

@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 )
 
@@ -55,6 +57,36 @@ func newTestClient(t *testing.T, srv *httptest.Server) *HTTPClient {
 }
 
 const successEnvelope = `<rpc-reply><rpc><show><version/></show></rpc><execute-result code="ok"/></rpc-reply>`
+
+// TestExecute_OversizedResponseBody_ReturnsTypedError verifies that a broker
+// (or MITM) streaming more than MaxSEMPResponseBytes fails fast with
+// ErrResponseTooLarge rather than OOMing the process.
+func TestExecute_OversizedResponseBody_ReturnsTypedError(t *testing.T) {
+	chunk := bytes.Repeat([]byte("x"), 64*1024) // 64 KiB
+	totalBytes := defaults.MaxSEMPResponseBytes + len(chunk)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Stream chunks until we've sent more than the cap. Using a streaming
+		// write avoids allocating 16+ MiB in a single Go buffer.
+		written := 0
+		for written < totalBytes {
+			n, err := w.Write(chunk)
+			if err != nil {
+				return // client disconnected, which is what we expect
+			}
+			written += n
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	_, err := client.Execute(context.Background(), `<rpc/>`)
+	if err == nil {
+		t.Fatal("expected error for oversized response body, got nil")
+	}
+	if !errors.Is(err, resilience.ErrResponseTooLarge) {
+		t.Errorf("err = %v, want errors.Is(_, resilience.ErrResponseTooLarge)", err)
+	}
+}
 
 // TestExecute_RequestConstruction asserts that Execute builds the HTTP request
 // with the correct method, path, content type, user agent, body, and auth

@@ -3,12 +3,12 @@ package sempv1
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
@@ -133,7 +133,7 @@ func (c *HTTPClient) Execute(ctx context.Context, xml string) (*Result, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := resilience.ReadCappedBody(resp.Body, defaults.MaxSEMPResponseBytes)
 	if err != nil {
 		return nil, fmt.Errorf("reading SEMPv1 response body: %w", err)
 	}

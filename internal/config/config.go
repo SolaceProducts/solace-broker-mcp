@@ -476,8 +476,8 @@ func validate(cfg *ServerConfig) error {
 		errs = append(errs, fmt.Errorf("log_level %q is invalid (must be one of %v)", cfg.LogLevel, validLogLevels))
 	}
 
-	if cfg.SEMP.MaxConcurrentPerBroker < 0 {
-		errs = append(errs, fmt.Errorf("semp.max_concurrent_per_broker must be > 0, got %d", cfg.SEMP.MaxConcurrentPerBroker))
+	if n := cfg.SEMP.MaxConcurrentPerBroker; n < 1 || n > defaults.MaxConcurrentPerBrokerCeiling {
+		errs = append(errs, fmt.Errorf("semp.max_concurrent_per_broker must be between 1 and %d, got %d", defaults.MaxConcurrentPerBrokerCeiling, n))
 	}
 
 	if cfg.SEMP.RequestTimeoutDuration <= 0 {
