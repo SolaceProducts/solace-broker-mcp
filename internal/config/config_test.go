@@ -1777,7 +1777,7 @@ func TestValidateAndCanonicalizeBrokers(t *testing.T) {
 	})
 
 	t.Run("case-only collision rejected", func(t *testing.T) {
-		_, errs := validateAndCanonicalizeBrokers(mk("Prod", "prod"))
+		canonical, errs := validateAndCanonicalizeBrokers(mk("Prod", "prod"))
 		if len(errs) == 0 {
 			t.Fatal("expected collision error")
 		}
@@ -1787,6 +1787,9 @@ func TestValidateAndCanonicalizeBrokers(t *testing.T) {
 		}
 		if !strings.Contains(msg, "case-insensitively") {
 			t.Errorf("collision error should mention case-insensitive comparison, got: %s", msg)
+		}
+		if _, ok := canonical["prod"]; ok {
+			t.Errorf("expected canonical map to exclude collision-loser; got entry for %q", "prod")
 		}
 	})
 
@@ -1800,6 +1803,24 @@ func TestValidateAndCanonicalizeBrokers(t *testing.T) {
 			if !strings.Contains(msg, original) {
 				t.Errorf("collision error should quote %s, got: %s", original, msg)
 			}
+		}
+	})
+
+	t.Run("two separate collision groups reported independently", func(t *testing.T) {
+		_, errs := validateAndCanonicalizeBrokers(mk("Prod", "prod", "Dev", "DEV"))
+		if len(errs) == 0 {
+			t.Fatal("expected collision errors")
+		}
+		msg := errors.Join(errs...).Error()
+		// All four originals appear somewhere in the joined error output.
+		for _, original := range []string{"Prod", "prod", "Dev", "DEV"} {
+			if !strings.Contains(msg, `"`+original+`"`) {
+				t.Errorf("expected error to mention %q, got: %s", original, msg)
+			}
+		}
+		// At least two separate collision messages.
+		if count := strings.Count(msg, "collide"); count < 2 {
+			t.Errorf("expected at least 2 collision messages, got %d in: %s", count, msg)
 		}
 	})
 
@@ -1860,7 +1881,7 @@ func TestBrokerLookupIsCaseInsensitive(t *testing.T) {
 	if !ok {
 		t.Fatal("Broker(ProdEast) returned !ok")
 	}
-	for _, alias := range []string{"PRODEAST", "prodeast", "ProdEast", "pRoDeAsT"} {
+	for _, alias := range []string{"PRODEAST", "prodeast", "pRoDeAsT"} {
 		got, ok := cfg.Broker(alias)
 		if !ok {
 			t.Errorf("Broker(%q) returned !ok", alias)
@@ -1965,5 +1986,26 @@ func TestLoadConfigPreservesDisplayName(t *testing.T) {
 	}
 	if b.DisplayName() != "ProdEast" {
 		t.Errorf("DisplayName() = %q, want ProdEast", b.DisplayName())
+	}
+}
+
+func TestLoadConfigUsesDisplayNameInValidationErrors(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: disabled
+brokers:
+  ProdEast:
+    url: ""
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for missing broker URL")
+	}
+	if !strings.Contains(err.Error(), "ProdEast") {
+		t.Errorf("per-broker validation error should preserve original casing %q, got: %v", "ProdEast", err)
 	}
 }

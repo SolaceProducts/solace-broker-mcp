@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"sync"
 
@@ -21,6 +20,19 @@ import (
 // the underlying error).
 var ErrUnknownBroker = errors.New("unknown broker")
 
+// BrokerSource is the minimum config surface the pool depends on for broker
+// resolution. *config.ServerConfig satisfies it implicitly via Go's structural
+// typing — both methods already exist there with these exact signatures.
+//
+// Narrowing the pool's config dependency to this interface is deliberate
+// (plan §13): it makes any other config field (Port, ClientAuth, SEMP, etc.)
+// structurally unreachable from inside the pool, so future pool methods
+// cannot accidentally read or mutate unrelated config state.
+type BrokerSource interface {
+	Broker(alias string) (*config.BrokerConfig, bool)
+	BrokerAliases() []string
+}
+
 // BrokerPool manages BrokerClient instances for all configured brokers. It is
 // created at startup with broker configs from the YAML configuration file.
 // BrokerClients are created lazily on the first GetSEMPv1() or GetSEMPv2()
@@ -33,18 +45,14 @@ type BrokerPool struct {
 	// for all access — direct map reads/writes bypass case-folding and will
 	// silently miss when callers pass mixed-case aliases.
 	clients map[string]*BrokerClient
-	// configs is keyed by canonical (lowercase) alias. Use configFor for all
-	// access — direct map reads bypass case-folding and will silently miss
-	// when callers pass mixed-case aliases.
-	configs map[string]*config.BrokerConfig
+	src     BrokerSource       // broker resolution surface (see BrokerSource doc)
 	sempCfg *config.SEMPConfig // shared SEMP settings
 }
 
 // configFor returns the BrokerConfig for alias (any case), or false if unknown.
-// All map access on p.configs MUST go through this helper.
+// Delegates to the BrokerSource, which performs the case-folding.
 func (p *BrokerPool) configFor(alias string) (*config.BrokerConfig, bool) {
-	cfg, ok := p.configs[strings.ToLower(alias)]
-	return cfg, ok
+	return p.src.Broker(alias)
 }
 
 // clientFor returns the cached BrokerClient for alias (any case), or false.
@@ -62,10 +70,14 @@ func (p *BrokerPool) setClient(alias string, c *BrokerClient) {
 
 // NewBrokerPool creates a BrokerPool from the server configuration. No
 // BrokerClients are allocated — they are created lazily on first access.
+//
+// The pool's broker-resolution dependency is narrowed to the BrokerSource
+// interface; SEMP knobs are taken separately because they are a distinct
+// concern (network behavior, not broker identity).
 func NewBrokerPool(cfg *config.ServerConfig) *BrokerPool {
 	return &BrokerPool{
 		clients: make(map[string]*BrokerClient),
-		configs: cfg.Brokers(),
+		src:     cfg,
 		sempCfg: &cfg.SEMP,
 	}
 }
@@ -139,7 +151,7 @@ func (p *BrokerPool) GetSEMPv2(alias string) (sempv2.Client, error) {
 // or false if the alias is not configured. Intended for callers that need the
 // canonical display name after a successful GetSEMPv1/GetSEMPv2 lookup.
 func (p *BrokerPool) BrokerConfig(alias string) (*config.BrokerConfig, bool) {
-	return p.configFor(alias)
+	return p.src.Broker(alias)
 }
 
 // Close releases resources for all created broker clients.
@@ -152,13 +164,8 @@ func (p *BrokerPool) Close() {
 }
 
 // Aliases returns all configured broker aliases in their original (display)
-// casing, sorted alphabetically. This includes all brokers from the
-// configuration, not just those that have been accessed.
+// casing, sorted alphabetically. Delegates to the BrokerSource, which performs
+// the sort.
 func (p *BrokerPool) Aliases() []string {
-	aliases := make([]string, 0, len(p.configs))
-	for _, cfg := range p.configs {
-		aliases = append(aliases, cfg.DisplayName())
-	}
-	sort.Strings(aliases)
-	return aliases
+	return p.src.BrokerAliases()
 }

@@ -60,13 +60,6 @@ func (c *ServerConfig) Broker(alias string) (*BrokerConfig, bool) {
 	return b, ok
 }
 
-// Brokers returns the canonical (lowercase-keyed) broker map. Intended for
-// the pool's constructor; most callers should use Broker(alias) instead.
-// The returned map is the live internal map — do not mutate it.
-func (c *ServerConfig) Brokers() map[string]*BrokerConfig {
-	return c.brokers
-}
-
 // BrokerAliases returns the configured broker aliases in their original
 // (display) casing, sorted alphabetically.
 func (c *ServerConfig) BrokerAliases() []string {
@@ -470,9 +463,18 @@ func validateAndCanonicalizeBrokers(brokers map[string]*BrokerConfig) (map[strin
 		errs = append(errs, fmt.Errorf("broker aliases %s collide: aliases are compared case-insensitively, please rename one", strings.Join(quoted, " and ")))
 	}
 
-	// Phase 3: build canonical map. Skip entries that are part of a collision
-	// (ambiguous which broker would win); structurally invalid aliases still
-	// get inserted so downstream per-broker validation can attach more errors.
+	// Phase 3: build canonical map. The asymmetry between how collision-losers
+	// and structurally-invalid aliases are handled is deliberate.
+	//
+	// Collision-losers are dropped from the canonical map. The collision error
+	// already blocks startup, so running per-broker validation on them would
+	// surface downstream errors on entries the operator is about to rename —
+	// added noise without value.
+	//
+	// Structurally-invalid aliases (regex failures) are kept in the canonical
+	// map so phase 4 (per-broker validation) can also surface URL/auth/
+	// credential errors on them in the same pass. This matches the broader
+	// validate() intent of accumulating every issue in a single startup attempt.
 	for alias, broker := range brokers {
 		lower := strings.ToLower(alias)
 		if len(seen[lower]) > 1 {

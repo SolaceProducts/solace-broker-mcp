@@ -533,8 +533,198 @@ These construct individual `*BrokerConfig` values for testing client-level behav
 
 **Build-breaking change to watch:** `cmd/server/main.go:265` — `len(cfg.Brokers)` is a cross-package access. After unexporting, this **will not compile** until replaced with `len(cfg.BrokerAliases())` or a new `cfg.BrokerCount() int` accessor. This is the only `cmd/server` site touching the field, and it's the most important miss to catch *before* any other change lands — without it, `go build ./...` will fail at the first try.
 
-**Highest-risk design choice:** `internal/semp/pool.go:41` — `NewBrokerPool` currently takes `cfg.Brokers` directly. The replacement path depends on whether we expose a canonical-keyed map accessor on `ServerConfig` or have the pool build its internal map by iterating `cfg.BrokerAliases()`. Either works; decide at the keyboard once the accessor shape is concrete.
+**Highest-risk design choice:** `internal/semp/pool.go:41` — `NewBrokerPool` currently takes `cfg.Brokers` directly. The replacement path depends on whether we expose a canonical-keyed map accessor on `ServerConfig` or have the pool build its internal map by iterating `cfg.BrokerAliases()`. Either works; decide at the keyboard once the accessor shape is concrete. **Updated post-implementation:** see §12 — the actual answer was "neither map approach; pool holds `*ServerConfig` instead."
 
 **Easy-to-miss change:** `internal/config/config_test.go` has 19 `cfg.Brokers[...]` read sites — easy to forget some during a search-and-replace. Use `grep -n "cfg\.Brokers" internal/config/config_test.go` as a final check before compiling.
 
 **Test-helper conversion:** the 3 cross-package test helpers (§11.4) are the only places where the unexporting actually forces a structural change. Their conversion is mechanical but needs the Option-A-vs-C decision from §6 settled first.
+
+## 12. Mid-implementation correction — pool's `configs` field
+
+This section was added **after** initial implementation finished. It documents a design issue discovered during review of the implementation diff, the investigation that grounded the decision, and the resulting follow-up change. Captured here so the plan reflects what was actually built, not just the original intent.
+
+### 12.1 What we found
+
+The original plan (§5.2) assumed `BrokerPool` would continue to hold its own `configs map[string]*config.BrokerConfig` field, populated at construction from `ServerConfig`. The implementation agent built that, and added an exported `ServerConfig.Brokers()` accessor (returning the live internal map) so the pool's constructor could pull it in.
+
+Review of the resulting diff surfaced two related concerns:
+
+1. **`Brokers()` re-opens the encapsulation hole we deliberately closed in planning.** Unexporting `brokers` was justified by §3.3 ("the type system owns the canonicalization rule"). Adding a method that returns the live map by reference makes the unexport cosmetic — any caller can still mutate, iterate case-sensitively, or otherwise bypass canonicalization through the returned reference. Doc-comment-and-discipline does not match the planning principle.
+
+2. **`pool.configs` was never a separate source of truth.** `p.configs = cfg.Brokers()` is a Go map assignment — reference, not copy. The pool and `ServerConfig` aliased the *same* underlying map. This means we had **one source of truth wearing two names**, which is worse than two real copies: a reader sees `pool.configs` and assumes the pool owns it; a writer mutating either name silently reaches into the other.
+
+### 12.2 Independent investigation
+
+To verify whether `pool.configs` had any genuine purpose we'd missed, an independent agent audited the pre-change pool (`c29a9df:internal/semp/pool.go`). Findings:
+
+- **Three readers, all replaceable.** `p.configs` is read in exactly three places: a keyed lookup in `getOrCreate` (equivalent to `cfg.Broker(alias)`), and `len`/`range` in `Aliases()` (equivalent to `cfg.BrokerAliases()`).
+- **No mutations, ever.** The pool never writes to `p.configs` after `NewBrokerPool` sets it.
+- **No other readers.** `p.configs` is not touched outside `pool.go`.
+- **The original assignment was an alias, not a copy.** `p.configs = cfg.Brokers` (pre-change) shares the map with `ServerConfig`.
+- **Historical reason for the field's existence:** at the time `pool.go` was written, `ServerConfig.Brokers` was a plain exported map field with no accessor API. The pool projected the public field into a local struct field to narrow its dependency surface ("the pool needs alias→config and SEMP settings, not the whole `ServerConfig`"). That's a defensible choice in a pre-accessor world.
+
+**Investigation's bottom line:** *"Once `ServerConfig` gains alias-lookup and alias-enumeration accessors (which this ticket adds), `p.configs` becomes a redundant aliased reference and the pool can equivalently hold `*config.ServerConfig`."*
+
+### 12.3 Decision
+
+Remove `configs` from `BrokerPool`. Hold `*config.ServerConfig` directly.
+
+**Why this is the right call (not scope creep):**
+
+- The `configs` field is a *vestige of the pre-accessor world this ticket itself eliminates*. Removing it is the natural completion of the type-system enforcement work we already committed to (§3.3, §3.3a), not a separate refactor.
+- It eliminates the `Brokers()` accessor that contradicted §3.3.
+- It eliminates the one-source-of-truth-with-two-names ambiguity that the original plan inherited without examining.
+- The diff is small (~15 lines, mostly deletions) and doesn't touch the pool's external API.
+- We are already in this code with full context. Deferring to a follow-up ticket means re-loading context later AND shipping a known-redundant field in the interim.
+
+**What changes:**
+
+- `BrokerPool.configs` field removed.
+- `BrokerPool` gains a `cfg *config.ServerConfig` field (single source of truth).
+- `NewBrokerPool(cfg *config.ServerConfig)` stores `cfg` directly; no map copying, no construction loop.
+- `configFor(alias)` becomes a one-liner: `return p.cfg.Broker(alias)`.
+- `Aliases()` becomes `return p.cfg.BrokerAliases()` (already returns display forms; no sort needed at this layer since `BrokerAliases()` sorts).
+- `BrokerConfig(alias)` (used by `manager.go` for display-name resolution) becomes `return p.cfg.Broker(alias)`.
+- `clientFor` / `setClient` and the `clients` map are **unchanged** — the client cache is genuinely the pool's own state, not a vestige.
+- `ServerConfig.Brokers()` method is **removed**.
+
+**What stays the same:**
+
+- Pool's external API: `GetSEMPv1`, `GetSEMPv2`, `Aliases`, `Close`, `BrokerConfig` — all unchanged signatures.
+- Tests at the pool's public boundary — no changes needed.
+- `manager.go` integration — unchanged.
+
+### 12.4 Updated enforcement story
+
+Previously (§3.3a table), the within-package "pool internal access" row described `pool.configs`/`pool.clients` as needing convention-based discipline. After this correction:
+
+| Surface | Enforcement strength (revised) |
+|---|---|
+| External packages accessing `cfg.brokers` | Compile-time blocked. Strong. |
+| External packages accessing `pool.clients` | Compile-time blocked (already unexported). Strong. |
+| Pool-internal access to broker configs | **Routes through `p.cfg.Broker(alias)` — same accessor external callers use.** No second map to discipline. Strong by collapse: there is no longer a within-package alternative path to discipline against. |
+| Pool-internal access to `pool.clients` | Convention + helper (`clientFor`/`setClient`) + doc comments. Same-package — Go cannot block this. (Unchanged from §3.3a.) |
+
+The encapsulation story is *cleaner* after this correction than the original plan envisioned: one of the two "convention-enforced" within-package surfaces collapses into "the surface no longer exists." The other (`clients` map) genuinely is pool-owned state and keeps its convention-based protection.
+
+### 12.5 Why we missed this in planning
+
+Honest retrospective for the record: we accepted the pool's existing data shape ("it holds a configs map") and worked within it. That's a reasonable scoping choice — you can't audit every adjacent design decision in one ticket — but it meant we patched around a structure that didn't need to exist. Surfaced only when reviewing the implementation diff and asking "what problem does this `Brokers()` workaround actually solve?"
+
+Generalizable lesson: **when introducing an invariant-enforcing API (here: the accessor methods), audit existing structures that hold the same data via the old API path.** They may have been correct only in the absence of the new API.
+
+## 13. Second mid-implementation correction — narrow the pool's config dependency to an interface
+
+This section captures a second correction discovered during pre-commit review of §12's refactor. Like §12, it is documented here so the plan reflects what was actually shipped, not just the original intent.
+
+### 13.1 What we found
+
+§12 replaced `BrokerPool.configs map[string]*config.BrokerConfig` with `BrokerPool.cfg *config.ServerConfig` — pool now holds the whole config instead of a redundant map. This solves the "one source of truth wearing two names" problem.
+
+But the new shape has its own asymmetry with the planning principle in §3.3 ("the type system owns the canonicalization rule"). A `*config.ServerConfig` field exposes the entire config struct to any pool method:
+
+- Reads: `p.cfg.Port`, `p.cfg.ClientAuth.DevToken`, `p.cfg.LogLevel`, etc. — all compile and execute
+- Writes: `p.cfg.Port = 9999`, `p.cfg.ClientAuth.Mode = "..."`, etc. — also compile and execute
+
+The pool only uses two operations on config: `cfg.Broker(alias)` (for `getOrCreate`'s lookup) and `cfg.BrokerAliases()` (for `Aliases()`). Every other field on `ServerConfig` is *available but irrelevant* — which is exactly the failure shape we worked to eliminate for `cfg.brokers` in the original ticket.
+
+### 13.2 The principle, applied consistently
+
+For `cfg.brokers`, the planning argument was:
+
+> *"If both safe and unsafe paths exist, contributors will use the unsafe one because it doesn't look unsafe."* (§3.3a)
+
+That principle applies identically here. `p.cfg.Port = 9999` written by a future contributor adding a pool method looks like normal Go. Nothing about the line screams "wait, that's outside this struct's purpose." The pool's role is broker resolution and client caching — not port configuration, not auth mode, not logging level. But the compiler can't see the boundary because `*ServerConfig` exposes everything.
+
+The fix is the same shape we used for `cfg.brokers`: **make the unsafe surface structurally unreachable.** For the config map, we unexported the field. For the pool's config dependency, we narrow the type to an interface that exposes only what's actually needed.
+
+### 13.3 The interface
+
+```go
+// In internal/semp/pool.go:
+
+// BrokerSource is the minimum config surface the pool depends on.
+// Implemented implicitly by *config.ServerConfig via Go's structural typing.
+type BrokerSource interface {
+    Broker(alias string) (*config.BrokerConfig, bool)
+    BrokerAliases() []string
+}
+```
+
+Two methods. Nothing else. `*config.ServerConfig` satisfies it (the methods already exist with these exact signatures, added in commit 1). No code change required on the config side.
+
+### 13.4 What this gives us, concretely
+
+| Surface | Before §13 | After §13 |
+|---|---|---|
+| `p.cfg.Broker(alias)` | Works | Works (via interface dispatch) |
+| `p.cfg.BrokerAliases()` | Works | Works (via interface dispatch) |
+| `p.cfg.Port` (read) | Compiles | **Does not compile** |
+| `p.cfg.ClientAuth.Mode = "x"` (write) | Compiles | **Does not compile** |
+| `p.cfg.SEMP` (read) | Compiles | **Does not compile** |
+
+The interface mechanically prevents the pool from depending on *any* config field beyond broker resolution. The compiler enforces the boundary. No convention, no doc comment, no code review vigilance required.
+
+This is the same enforcement level we get for cross-package access to `cfg.brokers` — compile-time blocking, not convention.
+
+### 13.5 Why this is enforcement-by-construction, not over-engineering
+
+The standard test for "interface worth its keep" is: does it earn at least one of {multiplicity, substitutability, narrowing}?
+
+- **Multiplicity:** Today, one implementation (`*config.ServerConfig`). No second one planned.
+- **Substitutability:** No need today.
+- **Narrowing:** **Yes.** The pool's interface to config goes from ~10 fields + 2 methods (full struct) to 2 methods. Compile-time enforcement against accidental coupling to the rest.
+
+Narrowing alone is sufficient when the rejected surface is large and the risk of misuse is concrete. Here it's both: `ServerConfig` carries auth tokens, ports, logging config, TLS paths — none of which the pool should ever touch.
+
+The cost is one new type in one file. Read by anyone who reads `pool.go`. Tiny.
+
+### 13.6 What does NOT change
+
+- **Pool's external API:** `NewBrokerPool`, `GetSEMPv1`, `GetSEMPv2`, `Aliases`, `Close`, `BrokerConfig` — all unchanged. `NewBrokerPool` still takes `*config.ServerConfig` (Go's structural typing means the caller doesn't have to know about the interface).
+- **`ServerConfig` itself:** No new methods, no removed methods, no renamed methods. `Broker(alias)` and `BrokerAliases()` already existed (commit 1).
+- **Tests:** No changes required. Existing tests construct `BrokerPool` via `LoadConfig` + `NewBrokerPool` — same path.
+
+### 13.7 Updated enforcement table (replaces §3.3a / §12.4 table)
+
+| Surface | Enforcement strength |
+|---|---|
+| External packages accessing `cfg.brokers` | Compile-time blocked. Strong. |
+| External packages accessing `pool.clients` | Compile-time blocked. Strong. |
+| Pool-internal access to broker configs | **Routes through `p.src.Broker(alias)` / `p.src.BrokerAliases()` — and only those two operations are reachable. Compile-time enforced.** |
+| Pool-internal access to other config fields (Port, ClientAuth, SEMP, …) | **Compile-time blocked by the `BrokerSource` interface.** |
+| Pool-internal access to `pool.clients` | Convention + helper (`clientFor`/`setClient`) + doc comments. Same-package — Go cannot block this. (Unchanged.) |
+
+The story is now fully consistent: every place we identified a "rule in the contributor's head" risk has been moved to "rule in the type system" — except the one Go cannot mechanically enforce (same-package access to `pool.clients`), which keeps its convention-based protection per the Go-language limitations documented in §3.3a.
+
+### 13.8 Why we missed this in §12
+
+Same shape of retrospective as §12.5. When fixing the aliased-map problem in §12, we picked the simplest replacement (`*config.ServerConfig`) without auditing whether the new dependency was wider than needed. The interface narrowing only became visible when a reviewer asked: *"Why does the pool need to maintain a reference to ServerConfig? It has many other details too."*
+
+Generalizable lesson, building on §12.5: **when you replace one dependency with another, audit the new dependency's surface for the same risks you were fixing.** Otherwise you're trading one shape of over-coupling for another.
+
+### 13.9 Why this isn't infinite-regress
+
+A reasonable concern after §12 and §13: are we going to keep finding "one more thing to fix" forever?
+
+No. The two corrections share a single root cause — the original plan didn't audit the pool's data model when introducing the new accessor API. §12 fixed the redundant-map problem. §13 fixes the over-broad-replacement problem. These are two sides of the same audit oversight, surfaced in two passes only because we caught them in two separate reviews.
+
+The pool now has exactly the dependency surface it needs: one HTTP client cache it owns, plus a narrow interface to ask for broker configs. There's no further "what about this other field?" question to surface, because the interface explicitly enumerates the full dependency. The corrections terminate here.
+
+### 13.10 Why `sempCfg` is not also narrowed to an interface
+
+The pool holds two references into `ServerConfig`: a narrow `BrokerSource` interface (broker resolution) and a wide `*config.SEMPConfig` pointer (SEMP knobs forwarded to downstream clients). The asymmetry is deliberate; the reasoning has two parts.
+
+**First — what the pool actually does with each:**
+
+- **Broker side:** the pool reads broker configs to construct clients. The methods do real work (case-folding via `strings.ToLower`, display-form projection, sort). Worth encapsulating regardless of access concerns.
+- **SEMP side:** the pool does NOT read any SEMP field. It stores the pointer and forwards it to `NewBrokerClient`, where downstream layers (`resilience/transport.go`, `resilience/sender.go`, `sempv1/client.go`, `sempv2/client.go`) read the fields they need. Narrowing the pool's SEMP access to an interface would be theatrical — barring access to fields nobody at the pool layer reads.
+
+**Second — what's on the other side of each pointer:**
+
+- `*config.ServerConfig` contains auth credentials (`ClientAuth.DevToken`), the server port, the log level, TLS file paths, and broker definitions. A pool method reaching into any of those except brokers/SEMP is a layering violation. The rejected surface is **large AND contains categorically wrong-layer state.**
+- `*config.SEMPConfig` contains six SEMP-related fields. Same neighborhood as the pool's role (broker network behavior). No credentials, no wrong-layer concerns. The rejected surface is **small AND categorically same-layer.**
+
+**Honest framing:** this is a judgment call, not a mechanical application of the principle. The principle ("narrow access to what's used; protect against accidental over-coupling") doesn't pick the line by itself; the calibration ("narrow when the rejected surface is large AND categorically wrong-layer") does. Same principle, different surfaces, different outputs.
+
+**Revisit if:** `SEMPConfig` gains fields the pool shouldn't see (credentials, lifecycle hooks, etc.), OR the pool starts reading SEMP fields directly rather than forwarding the pointer.
