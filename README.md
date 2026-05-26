@@ -32,7 +32,7 @@ An MCP (Model Context Protocol) server for Solace event brokers, built with Go u
 
 An HTTP service that exposes Solace event broker management and monitoring to AI assistants through the Model Context Protocol (MCP). The server provides 14 read-only tools that query event broker health, inspect queues, diagnose client issues, and monitor message traffic using SEMP v1 and v2 API calls.
 
-MCP-compatible clients, for example the Claude Code, invoke these tools using natural language. The AI assistant translates requests into tool calls. The server handles authentication, rate limiting, retries, and response formatting.
+MCP-compatible clients, for example Claude Code, invoke these tools using natural language. The AI assistant translates requests into tool calls. The server handles authentication, rate limiting, retries, and response formatting.
 
 ## Features
 
@@ -60,11 +60,11 @@ The server implements the MCP HTTP transport specification and exposes event bro
                                                      ▼
 ┌──────────────────┐   MCP over HTTP    ┌──────────────────────────┐   SEMPv1 + SEMPv2    ┌──────────────────┐
 │                  │                    │   Broker MCP Server      │                      │                  │
-│   AI Agent       │ ─────────────────▶│                          │ ───────────────────▶ │  Solace          │
+│   AI Agent       │ ─────────────────▶ │                          │ ───────────────────▶ │  Solace          │
 │  (Claude Code,   │   JSON-RPC         │  • Auth (OAuth / token)  │   HTTP(S) /SEMP      │  Event           │
 │  Claude Desktop) │   + Bearer JWT     │  • 14 read-only tools    │                      │  Broker(s)       │
 │                  │                    │  • Rate-limit + retry    │                      │                  │
-│                  │ ◀─────────────────│  • SEMP client pool      │ ◀─────────────────── │                  │
+│                  │ ◀───────────────── │  • SEMP client pool      │ ◀───────────────── │                  │
 └──────────────────┘                    └──────────────────────────┘   basic / bearer     └──────────────────┘
 ```
 
@@ -124,7 +124,8 @@ The `.env` file is loaded automatically. Environment variables set directly (for
 Select a deployment method:
 - **[Binary](#binary-deployment)** - Single executable with no dependencies; suitable for local development and VM deployment
 - **[Docker](#docker-deployment)** - Containerized deployment; suitable for production and Kubernetes environments
-- **[Development](#development-setup)** - Run from source with Go for development
+
+For contributors running from source, see [Development Setup](#development-setup).
 
 ### Binary Deployment
 
