@@ -28,6 +28,10 @@ vendor/
 *.swo
 *~
 
+# Git worktrees
+.worktrees/
+.claude/worktrees/
+
 # OS files
 .DS_Store
 Thumbs.db
