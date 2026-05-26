@@ -140,7 +140,7 @@ Authorization: Bearer my-secret-dev-token-123
 
 ### Important Notes
 
-**Important: Reconnect, do not re-authenticate.** If the MCP client disconnects, use the reconnect command or button in the client (in Claude Code: the reconnect icon next to the server name). Do not use "re-authenticate," which triggers an OAuth flow that fails in dev mode. Reconnecting re-uses the configured static token.
+**Important: Reconnect, do not re-authenticate.** If the MCP client disconnects, access the server in your client's MCP server list and choose "reconnect" (not "re-authenticate"). Re-authenticating triggers an OAuth flow that fails in dev mode. Reconnecting re-uses the configured static token.
 ---
 
 ## Mode 3: OAuth / JWT (`mode: oauth`)
@@ -340,8 +340,7 @@ This is expected for `mode: disabled` and `mode: static`. The banner is the deli
 
 ### Re-Authentication Errors in Claude (Modes 1 and 2)
 
-- Use the reconnect command instead of re-authenticate
-- In Claude Code, click the reconnect icon next to the server name
+- Access the server in your client's MCP server list and choose "reconnect" (not "re-authenticate")
 - Modes 1 and 2 do not have an authorization server configured to handle OAuth flows
 
 ### "failed to connect to identity provider" on server startup

@@ -64,7 +64,7 @@ Aliases must be 1–63 characters, contain only letters, digits, and hyphens, an
 | `auth.token` | — | Bearer token (used when `auth.mode: bearer`). |
 | `insecure_skip_verify` | `false` | Skip TLS certificate verification. Development only — do not use in production. |
 
-**Production recommendation:** Solace recommends using `https://` event broker URLs in production environments.
+Solace recommends using `https://` event broker URLs in production environments.
 
 ```yaml
 brokers:
