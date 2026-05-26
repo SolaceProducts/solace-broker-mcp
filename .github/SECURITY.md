@@ -74,9 +74,9 @@ When deploying the Solace Broker MCP Server, follow these security guidelines:
 ### Production Deployment
 
 - **Use TLS/HTTPS**: Always configure `tls_cert_file` and `tls_key_file` in production
-- **Enable authentication**: Set `development_mode: false` and configure JWT validation
+- **Enable authentication**: Set `client_auth.mode` to `oauth` and configure JWT validation
   - Provide valid `issuer` and `audience` in `client_auth` config
-- **Never use dev tokens in production**: The `dev_token` field is for local testing only
+- **Never use dev tokens in production**: The `dev_token` field (used with `mode: static`) is for local development only
 
 ### Credential Management
 
@@ -147,14 +147,14 @@ The MCP server makes SEMP (Solace Element Management Protocol) calls to brokers 
 
 ### MCP Client Authentication
 
-When `development_mode: false`:
+When `client_auth.mode` is `"oauth"`:
 - MCP clients must provide a valid JWT token
 - Tokens are validated against the configured OIDC provider
 - Any valid JWT with the correct issuer and audience is accepted
 
-When `development_mode: true`:
-- Static `dev_token` is accepted (if configured)
-- **Never deploy with development_mode: true in production**
+When `client_auth.mode` is `"disabled"` or `"static"`:
+- Static `dev_token` is accepted when `mode: static`
+- **Never deploy with `client_auth.mode: disabled` or `client_auth.mode: static` in production**
 
 ## Vulnerability Disclosure Policy
 

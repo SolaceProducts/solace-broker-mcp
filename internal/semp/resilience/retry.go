@@ -7,7 +7,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"net/http/cookiejar"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/hashicorp/go-retryablehttp"
@@ -85,10 +84,15 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 			state.auth401Retried = true
 			// Stale session cookie is the most likely cause. Clear the jar so
 			// the retried request re-sends Basic Auth credentials from scratch.
-			// This assignment races with http.Client.Do reads of the Jar field
-			// (see Sender doc comment) but is benign.
-			jar, _ := cookiejar.New(nil)
-			d.httpClient.Jar = jar
+			// SafeCookieJar.Clear performs an atomic swap of the inner jar,
+			// so concurrent http.Client.Do reads see either the old jar or
+			// the new one — never a torn read.
+			if err := d.cookieJar.Clear(); err != nil {
+				slog.Warn("retrying: 401 received but failed to clear cookie jar",
+					slog.String("broker", d.brokerURL),
+					slog.String("error", err.Error()))
+				return false, nil
+			}
 			slog.Warn("retrying: 401 received, clearing session cookies",
 				slog.String("broker", d.brokerURL),
 				slog.String("auth_mode", d.authCfg.Mode))

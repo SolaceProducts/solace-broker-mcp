@@ -10,10 +10,14 @@
 # To use a different broker, modify the URL below:
 
 port: 9091
-development_mode: true  # localhost http:// URLs are intentional for this e2e test environment
-
-# OAuth configuration - values are injected by setup-keycloak.sh into test/e2e/oauth/.env
+# TODO(SOL-149989 follow-up): this e2e OAuth test path is currently broken.
+# Under the new client_auth.mode design, mode: oauth requires https://
+# (no localhost http:// exemption), so the test Keycloak needs a TLS cert
+# before this test can pass. Tracked as a follow-up ticket under epic
+# SOL-149480. The config below is left in its target shape (mode: oauth)
+# so the diff against a fixed version is small.
 client_auth:
+  mode: oauth
   issuer: "http://localhost:8090/realms/solace"
   audience: "solace-mcp-server"
   resource_url: "http://localhost:9091/mcp"

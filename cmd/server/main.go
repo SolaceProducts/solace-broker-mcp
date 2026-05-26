@@ -134,6 +134,22 @@ func healthConfigFromFile() healthConfig {
 	return healthConfig{Port: cfg.Port, Scheme: scheme}
 }
 
+// newHTTPServer builds the MCP server's *http.Server with the production
+// timeout posture from internal/defaults. Extracted so timeout fields can be
+// asserted in a unit test without spinning up a real listener. See the
+// constants in internal/defaults for the rationale on each timeout value;
+// WriteTimeout is deliberately zero to preserve long-lived MCP streamable
+// HTTP / SSE responses.
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: time.Duration(defaults.DefaultReadHeaderTimeoutSeconds) * time.Second,
+		ReadTimeout:       time.Duration(defaults.DefaultReadTimeoutSeconds) * time.Second,
+		IdleTimeout:       time.Duration(defaults.DefaultIdleTimeoutSeconds) * time.Second,
+	}
+}
+
 // startServer starts httpServer in a background goroutine and returns a channel
 // that receives any startup/runtime error (excluding http.ErrServerClosed, which
 // is the normal result of Shutdown). The channel is buffered so the goroutine
@@ -232,6 +248,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Loud, refactor-robust signal of the configured client auth mode.
+	// MUST run before the slog handler gets reconfigured to the user log
+	// level — at this point the bootstrap handler is at INFO, so WARN
+	// banner entries are always visible regardless of cfg.LogLevel.
+	// DO NOT move this into middleware; see internal/auth/banner.go.
+	auth.LogStartupBanner(cfg)
+
 	// Reconfigure slog with the user-configured level. cfg.LogLevel is
 	// validated and normalized to one of debug/info/warn/error.
 	var level slog.Level
@@ -239,7 +262,7 @@ func main() {
 	slog.SetDefault(slog.New(newSlogHandler(level)))
 
 	slog.Info("config loaded",
-		slog.Int("broker_count", len(cfg.Brokers)),
+		slog.Int("broker_count", len(cfg.BrokerAliases())),
 		slog.Int("port", cfg.Port),
 		slog.String("log_level", cfg.LogLevel))
 
@@ -254,6 +277,14 @@ func main() {
 
 	// 3. Create broker pool
 	pool := semp.NewBrokerPool(cfg)
+	// Release per-broker rate-limiter tickers (and any other client-held
+	// resources) on the normal shutdown path. The defer fires after main()
+	// returns — i.e. after httpServer.Shutdown completes — so no in-flight
+	// tool call holds a Sender when pool.Close iterates clients. Earlier
+	// os.Exit(1) paths in main() bypass this defer; that is acceptable
+	// because process exit reaps the resources anyway. Close is idempotent
+	// (see TestBrokerPool_Close_*).
+	defer pool.Close()
 	slog.Info("created broker pool",
 		slog.Any("broker_aliases", pool.Aliases()))
 
@@ -328,11 +359,7 @@ func main() {
 
 	// 9. Start server with graceful shutdown
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	httpServer := &http.Server{
-		Addr:              addr,
-		Handler:           mux,
-		ReadHeaderTimeout: time.Duration(defaults.DefaultReadHeaderTimeoutSeconds) * time.Second,
-	}
+	httpServer := newHTTPServer(addr, mux)
 
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGTERM)

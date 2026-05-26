@@ -17,30 +17,21 @@ package tools
 import (
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func newRegTestPool() *semp.BrokerPool {
-	cfg := &config.ServerConfig{
-		Brokers: map[string]*config.BrokerConfig{
-			"dev": {
-				URL:  "http://localhost:8081",
-				Auth: config.AuthConfig{Mode: "basic", Username: "admin", Password: "admin"},
-			},
-			"prod": {
-				URL:  "http://localhost:8082",
-				Auth: config.AuthConfig{Mode: "basic", Username: "admin", Password: "admin"},
-			},
-		},
-		SEMP: testSEMPCfg(),
-	}
+func newRegTestPool(t *testing.T) *semp.BrokerPool {
+	t.Helper()
+	cfg := writeTestConfig(t,
+		[2]string{"dev", "http://localhost:8081"},
+		[2]string{"prod", "http://localhost:8082"},
+	)
 	return semp.NewBrokerPool(cfg)
 }
 
 func TestInjectBrokerParam(t *testing.T) {
-	pool := newRegTestPool()
+	pool := newRegTestPool(t)
 	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -75,7 +66,7 @@ func TestInjectBrokerParam(t *testing.T) {
 }
 
 func TestInjectBrokerParam_BrokerDescriptionListsAliases(t *testing.T) {
-	pool := newRegTestPool()
+	pool := newRegTestPool(t)
 	schema := map[string]any{
 		"type":       "object",
 		"properties": map[string]any{},
@@ -94,7 +85,7 @@ func TestInjectBrokerParam_BrokerDescriptionListsAliases(t *testing.T) {
 }
 
 func TestInjectBrokerParam_NoRequired(t *testing.T) {
-	pool := newRegTestPool()
+	pool := newRegTestPool(t)
 	schema := map[string]any{
 		"type":       "object",
 		"properties": map[string]any{},
@@ -108,7 +99,7 @@ func TestInjectBrokerParam_NoRequired(t *testing.T) {
 }
 
 func TestRegisterWithServer(t *testing.T) {
-	pool := newRegTestPool()
+	pool := newRegTestPool(t)
 	mgr := NewToolManager(pool)
 	mgr.Register(newStubHandler("test-tool"))
 
@@ -121,7 +112,7 @@ func TestRegisterWithServer(t *testing.T) {
 }
 
 func TestRegisterListBrokers(t *testing.T) {
-	pool := newRegTestPool()
+	pool := newRegTestPool(t)
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
 
 	RegisterListBrokers(server, pool)
@@ -214,7 +205,7 @@ func TestToMCPAnnotations(t *testing.T) {
 // mcp.Tool field, that InputSchema is run through injectBrokerParam, and
 // that Annotations are translated via toMCPAnnotations.
 func TestToMCPTool(t *testing.T) {
-	pool := newRegTestPool()
+	pool := newRegTestPool(t)
 	tr := func(b bool) *bool { return &b }
 
 	meta := Metadata{

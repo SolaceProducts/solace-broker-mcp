@@ -37,13 +37,16 @@ var dummyHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request)
 	w.Write([]byte("OK"))
 })
 
-// Test_AuthDisabled tests that all requests pass through when development_mode=true and dev_token=""
-func Test_AuthDisabled(t *testing.T) {
+// Test_NewAuthMiddleware_Disabled tests that all requests pass through when
+// client_auth.mode is "disabled" — the explicit no-auth dev mode replacing
+// the old (pre-SOL-149989) silent dev-mode + empty dev-token bypass —
+// which is now structurally impossible: client_auth.mode is required and
+// has no implicit "disabled if dev_token empty" fallback.
+func Test_NewAuthMiddleware_Disabled(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Port:            9090,
-		DevelopmentMode: true,
+		Port: 9090,
 		ClientAuth: config.ClientAuthConfig{
-			DevToken: "", // Empty dev token means auth disabled
+			Mode: config.AuthModeDisabled,
 		},
 	}
 
@@ -56,20 +59,10 @@ func Test_AuthDisabled(t *testing.T) {
 		name         string
 		authHeader   string
 		expectedCode int
-		expectedBody string
 	}{
-		{
-			name:         "no auth header",
-			authHeader:   "",
-			expectedCode: http.StatusOK,
-			expectedBody: "OK",
-		},
-		{
-			name:         "with bearer token",
-			authHeader:   "Bearer some-random-token",
-			expectedCode: http.StatusOK,
-			expectedBody: "OK",
-		},
+		{"no auth header", "", http.StatusOK},
+		{"with bearer token", "Bearer some-random-token", http.StatusOK},
+		{"with garbage", "not-even-bearer", http.StatusOK},
 	}
 
 	for _, tt := range tests {
@@ -78,28 +71,23 @@ func Test_AuthDisabled(t *testing.T) {
 			if tt.authHeader != "" {
 				req.Header.Set("Authorization", tt.authHeader)
 			}
-
 			rec := httptest.NewRecorder()
 			middleware.ServeHTTP(rec, req)
-
 			if rec.Code != tt.expectedCode {
 				t.Errorf("expected status %d, got %d", tt.expectedCode, rec.Code)
-			}
-			if strings.TrimSpace(rec.Body.String()) != tt.expectedBody {
-				t.Errorf("expected body %q, got %q", tt.expectedBody, rec.Body.String())
 			}
 		})
 	}
 }
 
-// Test_StaticDevToken tests static token validation in development mode
+// Test_StaticDevToken tests static token validation in static (dev-token) mode.
 func Test_StaticDevToken(t *testing.T) {
 	const validToken = "dev-secret-token-12345"
 
 	cfg := &config.ServerConfig{
-		Port:            9090,
-		DevelopmentMode: true,
+		Port: 9090,
 		ClientAuth: config.ClientAuthConfig{
+			Mode:        config.AuthModeStatic,
 			DevToken:    validToken,
 			ResourceURL: "http://localhost:9090/mcp",
 		},
@@ -177,12 +165,14 @@ func Test_StaticDevToken(t *testing.T) {
 	}
 }
 
-// Test_DevelopmentModeFlexibility tests that development mode works without issuer/audience
-func Test_DevelopmentModeFlexibility(t *testing.T) {
+// Test_StaticMode_AllowsMissingIssuerAndAudience verifies that static mode
+// constructs middleware successfully when OAuth-only fields (issuer, audience)
+// are absent — these fields are ignored off-mode per the client_auth.mode spec.
+func Test_StaticMode_AllowsMissingIssuerAndAudience(t *testing.T) {
 	cfg := &config.ServerConfig{
-		Port:            9090,
-		DevelopmentMode: true,
+		Port: 9090,
 		ClientAuth: config.ClientAuthConfig{
+			Mode:     config.AuthModeStatic,
 			DevToken: "dev-token",
 			Issuer:   "", // Missing but OK in dev mode
 			Audience: "",
@@ -191,7 +181,7 @@ func Test_DevelopmentModeFlexibility(t *testing.T) {
 
 	_, err := NewAuthMiddleware(cfg, dummyHandler)
 	if err != nil {
-		t.Errorf("expected no error in development mode without issuer/audience, got: %v", err)
+		t.Errorf("expected no error under client_auth.mode: static without issuer/audience, got: %v", err)
 	}
 }
 
@@ -299,9 +289,9 @@ func Test_ValidJWTToken(t *testing.T) {
 	defer mock.close()
 
 	cfg := &config.ServerConfig{
-		Port:            9090,
-		DevelopmentMode: false,
+		Port: 9090,
 		ClientAuth: config.ClientAuthConfig{
+			Mode:     config.AuthModeOAuth,
 			Issuer:   mock.issuer,
 			Audience: mock.audience,
 		},
@@ -337,9 +327,9 @@ func Test_ExpiredJWTToken(t *testing.T) {
 	defer mock.close()
 
 	cfg := &config.ServerConfig{
-		Port:            9090,
-		DevelopmentMode: false,
+		Port: 9090,
 		ClientAuth: config.ClientAuthConfig{
+			Mode:     config.AuthModeOAuth,
 			Issuer:   mock.issuer,
 			Audience: mock.audience,
 		},
@@ -375,9 +365,9 @@ func Test_WrongJWTAudience(t *testing.T) {
 	defer mock.close()
 
 	cfg := &config.ServerConfig{
-		Port:            9090,
-		DevelopmentMode: false,
+		Port: 9090,
 		ClientAuth: config.ClientAuthConfig{
+			Mode:     config.AuthModeOAuth,
 			Issuer:   mock.issuer,
 			Audience: mock.audience,
 		},
@@ -413,9 +403,9 @@ func Test_WrongJWTIssuer(t *testing.T) {
 	defer mock.close()
 
 	cfg := &config.ServerConfig{
-		Port:            9090,
-		DevelopmentMode: false,
+		Port: 9090,
 		ClientAuth: config.ClientAuthConfig{
+			Mode:     config.AuthModeOAuth,
 			Issuer:   mock.issuer,
 			Audience: mock.audience,
 		},
@@ -451,9 +441,9 @@ func Test_InvalidJWTSignature(t *testing.T) {
 	defer mock.close()
 
 	cfg := &config.ServerConfig{
-		Port:            9090,
-		DevelopmentMode: false,
+		Port: 9090,
 		ClientAuth: config.ClientAuthConfig{
+			Mode:     config.AuthModeOAuth,
 			Issuer:   mock.issuer,
 			Audience: mock.audience,
 		},
@@ -490,9 +480,9 @@ func Test_NoJWTToken(t *testing.T) {
 	defer mock.close()
 
 	cfg := &config.ServerConfig{
-		Port:            9090,
-		DevelopmentMode: false,
+		Port: 9090,
 		ClientAuth: config.ClientAuthConfig{
+			Mode:        config.AuthModeOAuth,
 			Issuer:      mock.issuer,
 			Audience:    mock.audience,
 			ResourceURL: "http://localhost:9090/mcp",
@@ -524,8 +514,8 @@ func Test_NoJWTToken(t *testing.T) {
 // the OIDC provider is unreachable during initialization in production mode.
 func Test_OIDCProviderUnreachable(t *testing.T) {
 	cfg := &config.ServerConfig{
-		DevelopmentMode: false,
 		ClientAuth: config.ClientAuthConfig{
+			Mode:     config.AuthModeOAuth,
 			Issuer:   "https://nonexistent.example.com",
 			Audience: "test",
 		},
@@ -543,14 +533,14 @@ func Test_WWWAuthenticateHeaderFormat(t *testing.T) {
 	tests := []struct {
 		name        string
 		port        int
-		devMode     bool
+		mode        string
 		devToken    string
 		tlsEnabled  bool
 		expectHTTPS bool
 	}{
-		{"dev token mode", 9090, true, "dev-secret-token", false, false},
-		{"production mode", 9090, false, "", false, false},
-		{"production with TLS", 9443, false, "", true, true},
+		{"dev token mode", 9090, config.AuthModeStatic, "dev-secret-token", false, false},
+		{"production mode", 9090, config.AuthModeOAuth, "", false, false},
+		{"production with TLS", 9443, config.AuthModeOAuth, "", true, true},
 	}
 
 	for _, tt := range tests {
@@ -560,9 +550,9 @@ func Test_WWWAuthenticateHeaderFormat(t *testing.T) {
 				scheme = "https"
 			}
 			cfg := &config.ServerConfig{
-				Port:            tt.port,
-				DevelopmentMode: tt.devMode,
+				Port: tt.port,
 				ClientAuth: config.ClientAuthConfig{
+					Mode:        tt.mode,
 					DevToken:    tt.devToken,
 					ResourceURL: fmt.Sprintf("%s://localhost:%d/mcp", scheme, tt.port),
 				},
@@ -571,7 +561,7 @@ func Test_WWWAuthenticateHeaderFormat(t *testing.T) {
 				cfg.TLSCertFile = "/path/to/cert.pem"
 				cfg.TLSKeyFile = "/path/to/key.pem"
 			}
-			if !tt.devMode {
+			if tt.mode == config.AuthModeOAuth {
 				mock := newMockOIDCServer(t)
 				defer mock.close()
 				cfg.ClientAuth.Issuer = mock.issuer
@@ -642,16 +632,16 @@ func Test_ProtectedResourceMetadata(t *testing.T) {
 	tests := []struct {
 		name          string
 		port          int
-		devMode       bool
+		mode          string
 		devToken      string
 		tlsEnabled    bool
 		issuer        string
 		expectHandler bool
 	}{
-		{"production with issuer", 9090, false, "", false, "https://auth.example.com", true},
-		{"production with TLS", 9443, false, "", true, "https://auth.example.com", true},
-		{"dev mode with token", 9090, true, "dev-token", false, "https://auth.example.com", true},
-		{"dev mode without token", 9090, true, "", false, "", false},
+		{"production with issuer", 9090, config.AuthModeOAuth, "", false, "https://auth.example.com", true},
+		{"production with TLS", 9443, config.AuthModeOAuth, "", true, "https://auth.example.com", true},
+		{"static mode with token", 9090, config.AuthModeStatic, "dev-token", false, "https://auth.example.com", false},
+		{"disabled mode", 9090, config.AuthModeDisabled, "", false, "", false},
 	}
 
 	for _, tt := range tests {
@@ -661,9 +651,9 @@ func Test_ProtectedResourceMetadata(t *testing.T) {
 				scheme = "https"
 			}
 			cfg := &config.ServerConfig{
-				Port:            tt.port,
-				DevelopmentMode: tt.devMode,
+				Port: tt.port,
 				ClientAuth: config.ClientAuthConfig{
+					Mode:        tt.mode,
 					DevToken:    tt.devToken,
 					Issuer:      tt.issuer,
 					Audience:    "solace-mcp-server",
@@ -716,5 +706,31 @@ func Test_ProtectedResourceMetadata(t *testing.T) {
 			checkStringArray(t, metadata, "scopes_supported", []string{"openid"})
 			checkStringArray(t, metadata, "bearer_methods_supported", []string{"header"})
 		})
+	}
+}
+
+func Test_PRMHandler_Disabled(t *testing.T) {
+	cfg := &config.ServerConfig{ClientAuth: config.ClientAuthConfig{Mode: config.AuthModeDisabled}}
+	if h := NewProtectedResourceMetadataHandler(cfg); h != nil {
+		t.Errorf("expected nil PRM handler for mode: disabled, got %T", h)
+	}
+}
+
+func Test_PRMHandler_Static(t *testing.T) {
+	cfg := &config.ServerConfig{ClientAuth: config.ClientAuthConfig{Mode: config.AuthModeStatic, DevToken: "x"}}
+	if h := NewProtectedResourceMetadataHandler(cfg); h != nil {
+		t.Errorf("expected nil PRM handler for mode: static, got %T", h)
+	}
+}
+
+func Test_PRMHandler_OAuth(t *testing.T) {
+	cfg := &config.ServerConfig{ClientAuth: config.ClientAuthConfig{
+		Mode:        config.AuthModeOAuth,
+		Issuer:      "https://idp.example.com",
+		Audience:    "mcp",
+		ResourceURL: "https://mcp.example.com/mcp",
+	}}
+	if h := NewProtectedResourceMetadataHandler(cfg); h == nil {
+		t.Error("expected non-nil PRM handler for mode: oauth")
 	}
 }

@@ -10,9 +10,9 @@ data:
   config.yaml: |
     port: 9090
     log_level: info
-    development_mode: false
 
     client_auth:
+      mode: oauth
       issuer: "https://idp.example.com"
       audience: "mcp-server"
       resource_url: "https://mcp.example.com/mcp"

@@ -19,6 +19,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -39,21 +40,47 @@ import (
 // ServerConfig holds the complete MCP server configuration, including all
 // configured brokers and SEMP client settings.
 type ServerConfig struct {
-	Brokers         map[string]*BrokerConfig // broker alias → config
-	SEMP            SEMPConfig               // SEMP client settings
-	Port            int                      // HTTP port the MCP server listens on
-	LogLevel        string                   // slog level name: "debug", "info", "warn", "error"
-	DevelopmentMode bool                     // use static dev token if true
-	ClientAuth      ClientAuthConfig         // authentication config for mcp client to server interactions
-	TLSCertFile     string                   // path to TLS certificate file (optional, enables HTTPS)
-	TLSKeyFile      string                   // path to TLS private key file (optional, requires TLSCertFile)
+	// brokers is keyed by canonical (lowercase) alias after validate() runs.
+	// Access from outside this package via Broker(alias) and BrokerAliases();
+	// within the package, prefer the accessors so canonicalization is not
+	// bypassed by accident.
+	brokers     map[string]*BrokerConfig
+	SEMP        SEMPConfig       // SEMP client settings
+	Port        int              // HTTP port the MCP server listens on
+	LogLevel    string           // slog level name: "debug", "info", "warn", "error"
+	ClientAuth  ClientAuthConfig // authentication config for mcp client to server interactions
+	TLSCertFile string           // path to TLS certificate file (optional, enables HTTPS)
+	TLSKeyFile  string           // path to TLS private key file (optional, requires TLSCertFile)
+}
+
+// Broker returns the broker config for alias (compared case-insensitively),
+// and a bool indicating whether the alias is known.
+func (c *ServerConfig) Broker(alias string) (*BrokerConfig, bool) {
+	b, ok := c.brokers[strings.ToLower(alias)]
+	return b, ok
+}
+
+// BrokerAliases returns the configured broker aliases in their original
+// (display) casing, sorted alphabetically.
+func (c *ServerConfig) BrokerAliases() []string {
+	out := make([]string, 0, len(c.brokers))
+	for _, b := range c.brokers {
+		out = append(out, b.displayName)
+	}
+	slices.Sort(out)
+	return out
 }
 
 type ClientAuthConfig struct {
-	Issuer      string `yaml:"issuer"`       // IdP issuer URL - required when development_mode: false
-	Audience    string `yaml:"audience"`     // Expected 'aud' claim value — required when development_mode: false
-	DevToken    string `yaml:"dev_token"`    // Static token for dev — only used when development_mode: true
-	ResourceURL string `yaml:"resource_url"` // OAuth resource URL (e.g., "https://mcp.example.com/mcp") - defaults to localhost if not set
+	Issuer      string `yaml:"issuer"`       // IdP issuer URL — required when mode == "oauth"
+	Audience    string `yaml:"audience"`     // Expected 'aud' claim value — required when mode == "oauth"
+	DevToken    string `yaml:"dev_token"`    // Static token for dev — required when mode == "static"
+	ResourceURL string `yaml:"resource_url"` // OAuth resource URL (e.g., "https://mcp.example.com/mcp") — required when mode == "oauth"
+	// Mode selects the client authentication backend. One of AuthModeDisabled,
+	// AuthModeStatic, or AuthModeOAuth. Required — no default. The validator
+	// rejects configs that omit it. See docs/superpowers/specs/2026-05-20-client-auth-mode-design.md
+	// for the design rationale.
+	Mode string `yaml:"mode"`
 }
 
 // validLogLevels is the allowlist of slog levels operators may configure.
@@ -67,6 +94,14 @@ type BrokerConfig struct {
 	URL                string     `yaml:"url"`                  // SEMP API base URL (e.g., "https://broker:1943")
 	InsecureSkipVerify bool       `yaml:"insecure_skip_verify"` // skip TLS cert verification (dev only, self-signed certs)
 	Auth               AuthConfig `yaml:"auth"`                 // authentication config
+	displayName        string     `yaml:"-"`                    // original alias casing from YAML, set by validate()
+}
+
+// DisplayName returns the broker alias in its original casing as written in
+// the YAML config. Use this in logs, error messages, and any user-facing
+// output so operators see the identifier they configured.
+func (b *BrokerConfig) DisplayName() string {
+	return b.displayName
 }
 
 // Auth mode constants for broker authentication (Hop 2: MCP Server → Broker).
@@ -78,6 +113,21 @@ const (
 // validAuthModes is the allowlist of supported auth modes for broker connections.
 // Add new modes (e.g., "oauth") here — validate() and error messages derive from this slice.
 var validAuthModes = []string{AuthModeBasic, AuthModeBearer}
+
+// Client authentication modes (Hop 1: MCP client → MCP server). Choosing one
+// of these is mandatory; there is no default. Operational profile (https://
+// enforcement, self-signed cert allowance, etc.) is derived from the mode via
+// IsProductionMode(). Operational profile is mode-derived; do not add a
+// separate dev-mode toggle on ServerConfig.
+const (
+	AuthModeDisabled = "disabled" // no client auth; every request passes through (dev only)
+	AuthModeStatic   = "static"   // shared static dev token; constant-time compare (dev only)
+	AuthModeOAuth    = "oauth"    // OAuth/OIDC JWT validation (production)
+)
+
+// validAuthClientModes is the allowlist for client_auth.mode. The validator
+// rejects any other value. Add new modes here and extend the validate() switch.
+var validAuthClientModes = []string{AuthModeDisabled, AuthModeStatic, AuthModeOAuth}
 
 // AuthConfig holds the authentication credentials for a broker connection.
 type AuthConfig struct {
@@ -98,23 +148,32 @@ func (a AuthConfig) LogValue() slog.Value {
 
 // LogValue implements slog.LogValuer for BrokerConfig. It exposes connection
 // metadata (URL, TLS settings, auth method) but excludes credentials.
+// The URL is routed through sanitizeURLString so any userinfo is stripped
+// before reaching the log — defense in depth against logging a BrokerConfig
+// before validateBrokerURL has had a chance to reject credentialed URLs.
 // See docs/secure-logging-rules.md Rule 2.
 func (b BrokerConfig) LogValue() slog.Value {
 	return slog.GroupValue(
-		slog.String("url", b.URL),
+		slog.String("url", sanitizeURLString(b.URL)),
 		slog.Bool("insecure_skip_verify", b.InsecureSkipVerify),
 		slog.String("auth_mode", b.Auth.Mode),
 	)
 }
 
-// LogValue implements slog.LogValuer for ClientAuthConfig. It exposes OAuth
-// configuration (issuer, audience, resource URL) but excludes DevToken
-// to prevent credential leaks in log output. See docs/secure-logging-rules.md Rule 2.
+// LogValue implements slog.LogValuer for ClientAuthConfig. It exposes the auth
+// mode and OAuth configuration (issuer, audience, resource URL) but excludes
+// DevToken to prevent credential leaks in log output. Mode is listed first
+// because it is the most important operator-facing piece of information —
+// operators need to confirm which auth mode the server loaded at startup.
+// Issuer and ResourceURL are routed through sanitizeURLString for the same
+// defense-in-depth reason as BrokerConfig.LogValue.
+// See docs/secure-logging-rules.md Rule 2.
 func (c ClientAuthConfig) LogValue() slog.Value {
 	return slog.GroupValue(
-		slog.String("issuer", c.Issuer),
+		slog.String("mode", c.Mode),
+		slog.String("issuer", sanitizeURLString(c.Issuer)),
 		slog.String("audience", c.Audience),
-		slog.String("resource_url", c.ResourceURL),
+		slog.String("resource_url", sanitizeURLString(c.ResourceURL)),
 	)
 }
 
@@ -151,7 +210,7 @@ type yamlConfig struct {
 	SEMP            SEMPConfig               `yaml:"semp"`
 	Port            int                      `yaml:"port"`
 	LogLevel        string                   `yaml:"log_level"`
-	DevelopmentMode bool                     `yaml:"development_mode"`
+	DevelopmentMode *bool                    `yaml:"development_mode"` // *bool so we can detect presence-in-YAML (deprecation warning); the value is ignored
 	ClientAuth      ClientAuthConfig         `yaml:"client_auth"`
 	TLSCertFile     string                   `yaml:"tls_cert_file"`
 	TLSKeyFile      string                   `yaml:"tls_key_file"`
@@ -232,15 +291,18 @@ func LoadConfig(path string) (*ServerConfig, error) {
 		return nil, fmt.Errorf("parsing config YAML: %w", err)
 	}
 
+	if raw.DevelopmentMode != nil {
+		slog.Warn("development_mode is deprecated and ignored; auth profile is now derived from client_auth.mode (one of disabled, static, oauth) — please remove development_mode from your config")
+	}
+
 	cfg := &ServerConfig{
-		Brokers:         raw.Brokers,
-		SEMP:            raw.SEMP,
-		Port:            raw.Port,
-		LogLevel:        raw.LogLevel,
-		DevelopmentMode: raw.DevelopmentMode,
-		ClientAuth:      raw.ClientAuth,
-		TLSCertFile:     raw.TLSCertFile,
-		TLSKeyFile:      raw.TLSKeyFile,
+		brokers:     raw.Brokers,
+		SEMP:        raw.SEMP,
+		Port:        raw.Port,
+		LogLevel:    raw.LogLevel,
+		ClientAuth:  raw.ClientAuth,
+		TLSCertFile: raw.TLSCertFile,
+		TLSKeyFile:  raw.TLSKeyFile,
 	}
 
 	applyDefaults(cfg)
@@ -352,29 +414,163 @@ func stripMatchedQuotes(s string) string {
 // uppercase letters, numbers, and underscores.
 var envVarPattern = regexp.MustCompile(`\$\{([A-Z0-9_]+)\}`)
 
+// brokerAliasPattern enforces the broker alias contract: 1–63 chars, only
+// letters/digits/hyphens, must start and end alphanumeric. Applied to the
+// original casing as written in YAML.
+var brokerAliasPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+
+// isValidAlias reports whether s satisfies the broker alias contract.
+func isValidAlias(s string) bool {
+	return brokerAliasPattern.MatchString(s)
+}
+
+// validateAndCanonicalizeBrokers validates each alias against the contract,
+// detects case-only collisions, sets displayName on every BrokerConfig, and
+// returns a new map keyed by canonical (lowercase) alias. All errors are
+// accumulated so operators see every issue in one run.
+//
+// What the returned canonical map contains:
+//   - Structurally-valid, non-colliding entries (the happy case).
+//   - Structurally-invalid entries (regex failures) — kept so that
+//     validate()'s per-broker pass (URL, auth, credentials) can attach more
+//     errors to them in the same startup attempt.
+//
+// What the returned canonical map omits:
+//   - Nil broker entries (e.g. YAML `brokers: { prod: }`) — reported with a
+//     standalone error and skipped to avoid nil-pointer derefs downstream.
+//   - Case-collision losers — running per-broker validation on entries the
+//     operator is about to rename would be noise; the collision error itself
+//     already blocks startup.
+//
+// See the phase-3 block comment below for the rationale behind the
+// kept-vs-omitted asymmetry.
+func validateAndCanonicalizeBrokers(brokers map[string]*BrokerConfig) (map[string]*BrokerConfig, []error) {
+	var errs []error
+	canonical := make(map[string]*BrokerConfig, len(brokers))
+
+	// Phase 1: per-alias structural validation; set displayName on all entries.
+	// Nil broker values (e.g. YAML `brokers: { prod: }`) are reported here and
+	// excluded from subsequent phases so we never dereference them downstream.
+	for alias, broker := range brokers {
+		if broker == nil {
+			errs = append(errs, fmt.Errorf("broker %q: configuration block is empty (missing url, auth, etc.)", alias))
+			continue
+		}
+		broker.displayName = alias
+		if !isValidAlias(alias) {
+			errs = append(errs, fmt.Errorf("broker alias %q is invalid: must be 1-63 characters, contain only letters, digits, and hyphens, and start and end with a letter or digit", alias))
+		}
+	}
+
+	// Phase 2: case-collision detection (group by lowercase form).
+	seen := make(map[string][]string, len(brokers))
+	for alias := range brokers {
+		lower := strings.ToLower(alias)
+		seen[lower] = append(seen[lower], alias)
+	}
+	for _, originals := range seen {
+		if len(originals) < 2 {
+			continue
+		}
+		slices.Sort(originals)
+		quoted := make([]string, len(originals))
+		for i, o := range originals {
+			quoted[i] = fmt.Sprintf("%q", o)
+		}
+		errs = append(errs, fmt.Errorf("broker aliases %s collide: aliases are compared case-insensitively, please rename one", strings.Join(quoted, " and ")))
+	}
+
+	// Phase 3: build canonical map. The asymmetry between how collision-losers
+	// and structurally-invalid aliases are handled is deliberate.
+	//
+	// Collision-losers are dropped from the canonical map. The collision error
+	// already blocks startup, so running per-broker validation on them would
+	// surface downstream errors on entries the operator is about to rename —
+	// added noise without value.
+	//
+	// Structurally-invalid aliases (regex failures) are kept in the canonical
+	// map so phase 4 (per-broker validation) can also surface URL/auth/
+	// credential errors on them in the same pass. This matches the broader
+	// validate() intent of accumulating every issue in a single startup attempt.
+	for alias, broker := range brokers {
+		if broker == nil {
+			continue // already reported in phase 1; never insert nil into canonical
+		}
+		lower := strings.ToLower(alias)
+		if len(seen[lower]) > 1 {
+			continue
+		}
+		canonical[lower] = broker
+	}
+
+	return canonical, errs
+}
+
 // substituteEnvVars replaces all ${VAR_NAME} occurrences in raw YAML bytes with
-// the corresponding environment variable values. Returns an error if any
-// referenced env var is not set. This runs before YAML parsing so any field
-// can reference env vars.
+// the corresponding environment variable values. YAML comments are skipped —
+// a ${VAR} reference inside a # comment has no effect on the parsed config and
+// must not cause loading to fail (SOL-149904). Returns an error listing any
+// referenced env vars that are not set (comments excluded). This runs before
+// YAML parsing so any field can reference env vars.
 func substituteEnvVars(data []byte) ([]byte, error) {
 	var missing []string
+	var result bytes.Buffer
+	result.Grow(len(data))
 
-	result := envVarPattern.ReplaceAllFunc(data, func(match []byte) []byte {
-		// Extract var name from ${VAR_NAME}
-		varName := string(envVarPattern.FindSubmatch(match)[1])
-		value, exists := os.LookupEnv(varName)
-		if !exists {
-			missing = append(missing, varName)
-			return match // leave as-is, error reported after
-		}
-		return []byte(value)
-	})
+	for _, line := range bytes.SplitAfter(data, []byte("\n")) {
+		active, comment := splitYAMLComment(line)
+		substituted := envVarPattern.ReplaceAllFunc(active, func(match []byte) []byte {
+			varName := string(envVarPattern.FindSubmatch(match)[1])
+			value, exists := os.LookupEnv(varName)
+			if !exists {
+				missing = append(missing, varName)
+				return match // leave as-is, error reported after
+			}
+			return []byte(value)
+		})
+		result.Write(substituted)
+		result.Write(comment)
+	}
 
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("environment variables not set: %s", strings.Join(missing, ", "))
 	}
 
-	return result, nil
+	return result.Bytes(), nil
+}
+
+// splitYAMLComment returns (active, comment) where active is the portion of
+// line before any unquoted YAML comment marker (#) and comment is the rest
+// (including the # itself). A # starts a comment when it is at the start of
+// the line OR preceded by whitespace, AND not inside a single- or
+// double-quoted string on the same line.
+//
+// Limitations: block scalars (|, >) treat # as literal text — this helper
+// does not track block-scalar context. The broker MCP config schema uses only
+// scalar values and nested structs, never block scalars, so this is acceptable.
+// If a block-scalar field is ever added, extend this helper accordingly.
+func splitYAMLComment(line []byte) (active, comment []byte) {
+	inSingle := false
+	inDouble := false
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		switch {
+		case c == '"' && !inSingle:
+			// Treat a preceding backslash as escaping the quote (heuristic,
+			// not a full YAML lexer — double-backslash isn't unescaped here).
+			if !inDouble || i == 0 || line[i-1] != '\\' {
+				inDouble = !inDouble
+			}
+		case c == '\'' && !inDouble:
+			// YAML escapes ' inside a single-quoted string as ''. A naive
+			// toggle re-enters the string at the second quote, which leaves
+			// the in/out state correct at any later #.
+			inSingle = !inSingle
+		case c == '#' && !inSingle && !inDouble && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t'):
+			return line[:i], line[i:]
+		}
+	}
+	return line, nil
 }
 
 // validate checks that the config has all required fields and that values are
@@ -384,18 +580,22 @@ func substituteEnvVars(data []byte) ([]byte, error) {
 func validate(cfg *ServerConfig) error {
 	var errs []error
 
-	if len(cfg.Brokers) == 0 {
+	if len(cfg.brokers) == 0 {
 		errs = append(errs, fmt.Errorf("at least one broker must be configured"))
 	}
 
-	for _, alias := range slices.Sorted(maps.Keys(cfg.Brokers)) {
-		broker := cfg.Brokers[alias]
-		errs = append(errs, validateBroker(alias, broker, !cfg.DevelopmentMode)...)
+	canonical, aliasErrs := validateAndCanonicalizeBrokers(cfg.brokers)
+	errs = append(errs, aliasErrs...)
+	cfg.brokers = canonical
+
+	for _, lower := range slices.Sorted(maps.Keys(cfg.brokers)) {
+		broker := cfg.brokers[lower]
+		errs = append(errs, validateBroker(broker, cfg.IsProductionMode())...)
 		// Surface insecure_skip_verify=true at startup so operators see it
 		// in triage logs without scraping per-request SEMP-client warns.
-		if !cfg.DevelopmentMode && broker.InsecureSkipVerify {
+		if cfg.IsProductionMode() && broker.InsecureSkipVerify {
 			slog.Warn("INSECURE: insecure_skip_verify=true in production mode; broker TLS certificate will not be validated",
-				slog.String("broker", alias))
+				slog.String("broker", broker.DisplayName()))
 		}
 	}
 
@@ -409,8 +609,8 @@ func validate(cfg *ServerConfig) error {
 		errs = append(errs, fmt.Errorf("log_level %q is invalid (must be one of %v)", cfg.LogLevel, validLogLevels))
 	}
 
-	if cfg.SEMP.MaxConcurrentPerBroker < 0 {
-		errs = append(errs, fmt.Errorf("semp.max_concurrent_per_broker must be > 0, got %d", cfg.SEMP.MaxConcurrentPerBroker))
+	if n := cfg.SEMP.MaxConcurrentPerBroker; n < 1 || n > defaults.MaxConcurrentPerBrokerCeiling {
+		errs = append(errs, fmt.Errorf("semp.max_concurrent_per_broker must be between 1 and %d, got %d", defaults.MaxConcurrentPerBrokerCeiling, n))
 	}
 
 	if cfg.SEMP.RequestTimeoutDuration <= 0 {
@@ -438,34 +638,40 @@ func validate(cfg *ServerConfig) error {
 		errs = append(errs, fmt.Errorf("semp.retry_max_interval (%s) must be >= semp.retry_min_interval (%s)", cfg.SEMP.RetryMaxInterval, cfg.SEMP.RetryMinInterval))
 	}
 
-	// Validate client authentication configuration based on development mode.
-	// Note that no validation is needed when development mode is enabled, as DevToken
-	// can be set or empty. When DevToken is empty, all requests pass through
-	if !cfg.DevelopmentMode {
-		// Production mode: require JWT validation fields
+	// Validate client authentication configuration. mode is the single source
+	// of truth for auth backend selection AND production-vs-dev operational
+	// profile (via IsProductionMode). Required fields follow from the mode.
+	// See docs/superpowers/specs/2026-05-20-client-auth-mode-design.md.
+	//
+	// Modes are tiered, not interleaved:
+	//   - disabled / static: dev-only, http:// broker URLs allowed
+	//   - oauth: production, https:// required everywhere
+	cfg.ClientAuth.Mode = strings.ToLower(cfg.ClientAuth.Mode)
+	switch cfg.ClientAuth.Mode {
+	case "":
+		errs = append(errs, fmt.Errorf("client_auth.mode is required (must be one of %v)", validAuthClientModes))
+	case AuthModeDisabled:
+		// no further required fields
+	case AuthModeStatic:
+		if cfg.ClientAuth.DevToken == "" {
+			errs = append(errs, fmt.Errorf("client_auth.dev_token is required when client_auth.mode is %q", AuthModeStatic))
+		}
+	case AuthModeOAuth:
 		if cfg.ClientAuth.Issuer == "" {
-			errs = append(errs, fmt.Errorf("client_auth.issuer is required when development_mode is false"))
-		}
-		if cfg.ClientAuth.Audience == "" {
-			errs = append(errs, fmt.Errorf("client_auth.audience is required when development_mode is false"))
-		}
-		if cfg.ClientAuth.ResourceURL == "" {
-			errs = append(errs, fmt.Errorf("client_auth.resource_url is required when development_mode is false"))
-		}
-	}
-
-	// Validate issuer structure if set
-	if cfg.ClientAuth.Issuer != "" {
-		if err := validateBrokerURL(cfg.ClientAuth.Issuer, !cfg.DevelopmentMode); err != nil {
+			errs = append(errs, fmt.Errorf("client_auth.issuer is required when client_auth.mode is %q", AuthModeOAuth))
+		} else if err := validateBrokerURL(cfg.ClientAuth.Issuer, cfg.IsProductionMode()); err != nil {
 			errs = append(errs, fmt.Errorf("client_auth.issuer: %w", err))
 		}
-	}
-
-	// Validate resource_url structure if set
-	if cfg.ClientAuth.ResourceURL != "" {
-		if err := validateBrokerURL(cfg.ClientAuth.ResourceURL, !cfg.DevelopmentMode); err != nil {
+		if cfg.ClientAuth.Audience == "" {
+			errs = append(errs, fmt.Errorf("client_auth.audience is required when client_auth.mode is %q", AuthModeOAuth))
+		}
+		if cfg.ClientAuth.ResourceURL == "" {
+			errs = append(errs, fmt.Errorf("client_auth.resource_url is required when client_auth.mode is %q", AuthModeOAuth))
+		} else if err := validateBrokerURL(cfg.ClientAuth.ResourceURL, cfg.IsProductionMode()); err != nil {
 			errs = append(errs, fmt.Errorf("client_auth.resource_url: %w", err))
 		}
+	default:
+		errs = append(errs, fmt.Errorf("client_auth.mode %q is invalid (must be one of %v)", cfg.ClientAuth.Mode, validAuthClientModes))
 	}
 
 	// TLS: both cert and key must be provided together, or neither.
@@ -479,8 +685,9 @@ func validate(cfg *ServerConfig) error {
 // validateBroker returns all validation errors for a single broker. Credential
 // checks are skipped when auth.mode is missing or invalid because there are no
 // meaningful credential rules to apply without a known mode.
-func validateBroker(alias string, broker *BrokerConfig, productionMode bool) []error {
+func validateBroker(broker *BrokerConfig, productionMode bool) []error {
 	var errs []error
+	alias := broker.displayName
 
 	if broker.URL == "" {
 		errs = append(errs, fmt.Errorf("broker %q: url is required", alias))
@@ -528,12 +735,26 @@ func ValidatePort(port int) error {
 	return nil
 }
 
+// IsProductionMode reports whether the server is configured for production
+// (OAuth client auth). This is the single source of truth for production-vs-dev
+// operational behavior — https:// enforcement on broker/issuer/resource URLs,
+// self-signed cert allowance, etc. Operational profile is mode-derived;
+// do not add a separate dev-mode toggle on ServerConfig.
+func (c *ServerConfig) IsProductionMode() bool {
+	return c.ClientAuth.Mode == AuthModeOAuth
+}
+
 // validateBrokerURL checks that s is a well-formed URL with an http or https
 // scheme and a host component. This is structural validation only — it does
 // NOT verify that the host resolves, is reachable, or actually runs a SEMP
 // endpoint. Those are deliberately runtime concerns surfaced on the first
 // tool call. When productionMode is true, http:// is rejected — credentials
 // would otherwise be transmitted in plaintext.
+//
+// URLs with embedded userinfo (e.g. "https://user:pass@host") are rejected:
+// credentials belong in the auth block, not the URL, and accepting them
+// invites disclosure via logs, error messages, and any future field that
+// echoes the URL back to operators.
 func validateBrokerURL(s string, productionMode bool) error {
 	u, err := url.Parse(s)
 	if err != nil {
@@ -542,13 +763,49 @@ func validateBrokerURL(s string, productionMode bool) error {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return fmt.Errorf("url scheme must be http or https, got %q", u.Scheme)
 	}
+	if u.User != nil {
+		// Surface a clear error WITHOUT echoing the userinfo. Operators get
+		// directed to the auth block; logs do not capture the credential.
+		return fmt.Errorf("url must not include credentials (use the auth block instead), got %q", sanitizeURL(u))
+	}
 	if productionMode && u.Scheme == "http" {
-		return fmt.Errorf("url scheme must be https to protect credentials in transit (got %q)", s)
+		return fmt.Errorf("url scheme must be https to protect credentials in transit (got %q)", sanitizeURL(u))
 	}
 	if u.Host == "" {
-		return fmt.Errorf("url must include a host, got %q", s)
+		return fmt.Errorf("url must include a host, got %q", sanitizeURL(u))
 	}
 	return nil
+}
+
+// sanitizeURL returns u's string form with any userinfo stripped, so the
+// result is safe to embed in error messages and log lines. The previous
+// validateBrokerURL implementation formatted the raw URL via %q, which
+// would have leaked any user:pass@ portion through the config-load error
+// to slog.Error and onward to any log aggregator the operator forgot was
+// retained. Defense in depth alongside the userinfo rejection above.
+func sanitizeURL(u *url.URL) string {
+	if u.User == nil {
+		return u.String()
+	}
+	cp := *u
+	cp.User = nil
+	return cp.String()
+}
+
+// sanitizeURLString parses s and returns the URL with any userinfo stripped.
+// Empty input passes through unchanged. Unparseable input is replaced with
+// "<unparseable url>" rather than echoed back: we cannot prove the original
+// string is credential-free, so the safe default is to drop it. Used by the
+// LogValuer implementations on BrokerConfig and ClientAuthConfig.
+func sanitizeURLString(s string) string {
+	if s == "" {
+		return ""
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		return "<unparseable url>"
+	}
+	return sanitizeURL(u)
 }
 
 // applyEnvOverrides checks for environment variable overrides and applies them

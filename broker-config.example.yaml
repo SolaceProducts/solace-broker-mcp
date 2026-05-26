@@ -18,15 +18,29 @@ log_level: info   # debug, info, warn, error
 tls_cert_file: ""
 tls_key_file: ""
 
-# Set to true only for local development (disables OAuth validation).
-development_mode: false
-
-# OAuth client authentication (required when development_mode is false).
+# Client authentication for the MCP server (Hop 1: MCP client → MCP server).
+# mode is required. Choose one of:
+#   - oauth    — JWT validation via OIDC (production)
+#   - static   — shared static dev token (development only)
+#   - disabled — no client auth, every request passes through (development only)
+#
+# Note: the previous `development_mode` flag is deprecated and ignored.
+# Operational profile (https:// requirement, etc.) is now derived from
+# client_auth.mode: oauth = production, disabled/static = development.
 client_auth:
+  mode: oauth
   issuer: "https://idp.example.com"
   audience: "mcp-server"
   resource_url: "https://mcp.example.com/mcp"
-  # dev_token: "static-token"  # only used with development_mode: true
+
+# Development examples (uncomment one and comment out the oauth block above):
+#
+# client_auth:
+#   mode: disabled
+#
+# client_auth:
+#   mode: static
+#   dev_token: "static-token"
 
 # SEMP client settings — controls how the server talks to brokers.
 semp:
@@ -39,6 +53,8 @@ semp:
 
 # Broker connections. Add one entry per broker.
 # Credentials should use ${VAR_NAME} references, not hardcoded values.
+# Broker aliases: 1-63 chars, [A-Za-z0-9-], must start and end alphanumeric.
+# Aliases are case-insensitive — "Prod" and "prod" collide.
 brokers:
   my-broker:
     url: "https://broker.example.com:943"

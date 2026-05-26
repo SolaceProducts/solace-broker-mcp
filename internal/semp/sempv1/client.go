@@ -3,13 +3,12 @@ package sempv1
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
-	"net/http/cookiejar"
 	"strings"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
@@ -62,7 +61,7 @@ func (c *HTTPClient) Close() {
 // I/O happens here — connection setup is lazy on the first Execute call.
 func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (*HTTPClient, error) {
 	transport := resilience.NewTunedTransport(brokerCfg, sempCfg)
-	jar, err := cookiejar.New(nil)
+	jar, err := resilience.NewSafeCookieJar()
 	if err != nil {
 		return nil, fmt.Errorf("creating cookie jar: %w", err)
 	}
@@ -80,7 +79,7 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (
 	baseURL := strings.TrimSuffix(brokerCfg.URL, "/")
 
 	return &HTTPClient{
-		sender:    resilience.New(httpClient, sempCfg, brokerCfg.Auth, baseURL),
+		sender:    resilience.New(httpClient, jar, sempCfg, brokerCfg.Auth, baseURL),
 		baseURL: baseURL,
 		authCfg: brokerCfg.Auth,
 	}, nil
@@ -134,7 +133,7 @@ func (c *HTTPClient) Execute(ctx context.Context, xml string) (*Result, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := resilience.ReadCappedBody(resp.Body, defaults.MaxSEMPResponseBytes)
 	if err != nil {
 		return nil, fmt.Errorf("reading SEMPv1 response body: %w", err)
 	}

@@ -2,8 +2,11 @@ package semp_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +15,29 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 )
+
+// writeTestConfig writes a minimal broker-config YAML to t.TempDir, loads it
+// via LoadConfig (exercising the real validate+canonicalize path), and
+// returns the resulting *ServerConfig. brokers is an ordered list of
+// (alias, url) pairs — order matters so callers can write tests against
+// specific aliases without map iteration churn.
+func writeTestConfig(t *testing.T, brokers ...[2]string) *config.ServerConfig {
+	t.Helper()
+	var b []byte
+	b = append(b, []byte("client_auth:\n  mode: disabled\nbrokers:\n")...)
+	for _, kv := range brokers {
+		b = append(b, []byte(fmt.Sprintf("  %s:\n    url: %s\n    auth:\n      mode: basic\n      username: admin\n      password: secret\n", kv[0], kv[1]))...)
+	}
+	path := filepath.Join(t.TempDir(), "broker-config.yaml")
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	return cfg
+}
 
 func testSEMPConfig() *config.SEMPConfig {
 	retries := 0
@@ -25,28 +51,12 @@ func testSEMPConfig() *config.SEMPConfig {
 	}
 }
 
-func newTestServerConfig(serverURL string) *config.ServerConfig {
-	return &config.ServerConfig{
-		Brokers: map[string]*config.BrokerConfig{
-			"prod-us": {
-				URL: serverURL,
-				Auth: config.AuthConfig{
-					Mode:     "basic",
-					Username: "admin",
-					Password: "secret",
-				},
-			},
-			"prod-eu": {
-				URL: serverURL,
-				Auth: config.AuthConfig{
-					Mode:     "basic",
-					Username: "admin",
-					Password: "secret",
-				},
-			},
-		},
-		SEMP: *testSEMPConfig(),
-	}
+func newTestServerConfig(t *testing.T, serverURL string) *config.ServerConfig {
+	t.Helper()
+	return writeTestConfig(t,
+		[2]string{"prod-us", serverURL},
+		[2]string{"prod-eu", serverURL},
+	)
 }
 
 func TestBrokerPool_GetSEMPv2_ValidAlias(t *testing.T) {
@@ -56,7 +66,7 @@ func TestBrokerPool_GetSEMPv2_ValidAlias(t *testing.T) {
 	}))
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
 
 	client, err := pool.GetSEMPv2("prod-us")
 	if err != nil {
@@ -71,7 +81,7 @@ func TestBrokerPool_GetSEMPv2_UnknownAlias(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
 
 	_, err := pool.GetSEMPv2("nonexistent")
 	if err == nil {
@@ -88,7 +98,7 @@ func TestBrokerPool_LazyCreation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
 
 	// No requests should have been made yet — clients are lazy.
 	if requestCount.Load() != 0 {
@@ -115,7 +125,7 @@ func TestBrokerPool_SharedInstance(t *testing.T) {
 	}))
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
 
 	client1, err := pool.GetSEMPv2("prod-us")
 	if err != nil {
@@ -141,7 +151,7 @@ func TestBrokerPool_ConcurrentFirstAccess(t *testing.T) {
 	}))
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
 
 	const goroutines = 50
 	clients := make([]interface{}, goroutines)
@@ -175,7 +185,7 @@ func TestBrokerPool_Aliases(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
 
 	aliases := pool.Aliases()
 	if len(aliases) != 2 {
@@ -203,7 +213,7 @@ func TestBrokerPool_GetSEMPv1_ValidAlias(t *testing.T) {
 	server := newV1TestServer()
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
 
 	client, err := pool.GetSEMPv1("prod-us")
 	if err != nil {
@@ -220,7 +230,7 @@ func TestBrokerPool_GetSEMPv1_UnknownAlias(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
 
 	_, err := pool.GetSEMPv1("nonexistent")
 	if err == nil {
@@ -241,7 +251,7 @@ func TestBrokerPool_GetSEMPv1_LazyCreation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
 
 	// No requests should have been made yet — clients are lazy.
 	if requestCount.Load() != 0 {
@@ -268,7 +278,7 @@ func TestBrokerPool_GetSEMPv1_SharedInstance(t *testing.T) {
 	server := newV1TestServer()
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
 
 	client1, err := pool.GetSEMPv1("prod-us")
 	if err != nil {
@@ -294,7 +304,7 @@ func TestBrokerPool_GetSEMPv1_ConcurrentFirstAccess(t *testing.T) {
 	server := newV1TestServer()
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
 
 	const goroutines = 50
 	clients := make([]interface{}, goroutines)
@@ -323,6 +333,45 @@ func TestBrokerPool_GetSEMPv1_ConcurrentFirstAccess(t *testing.T) {
 	}
 }
 
+// TestBrokerPool_Close_BeforeAnyAccess confirms Close is safe to call on a
+// freshly constructed pool that never had a client created. With no lazy
+// creations, the iteration loop in Close has nothing to do; it must not
+// panic.
+func TestBrokerPool_Close_BeforeAnyAccess(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer server.Close()
+
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
+	pool.Close() // must not panic
+}
+
+// TestBrokerPool_Close_AfterLazyCreation exercises the production path that
+// matters for cmd/server/main.go's shutdown defer: lazily create a client
+// (which spins up a rate-limiter ticker inside the Sender), then Close the
+// pool. The ticker is internal, so we verify the observable contract: no
+// panic, and Close is idempotent — calling it twice must remain safe.
+func TestBrokerPool_Close_AfterLazyCreation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{})
+	}))
+	defer server.Close()
+
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
+
+	// Force one client into existence (lazy creation path).
+	if _, err := pool.GetSEMPv2("prod-us"); err != nil {
+		t.Fatalf("GetSEMPv2: %v", err)
+	}
+
+	// First Close: shuts down the broker client(s) that exist.
+	pool.Close()
+	// Second Close: must remain safe — main()'s defer fires once, but
+	// future call sites or test helpers may exercise multi-close. The
+	// per-broker Sender.Close is documented as safe to call multiple times.
+	pool.Close()
+}
+
 // TestBrokerPool_SharedBrokerClientAcrossProtocols is the structural proof
 // of the "log once per alias" invariant from T4's Definition of Done. Both
 // GetSEMPv1 and GetSEMPv2 route through getOrCreate and must operate on the
@@ -341,7 +390,7 @@ func TestBrokerPool_SharedBrokerClientAcrossProtocols(t *testing.T) {
 	server := newV1TestServer()
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
 
 	v1First, err := pool.GetSEMPv1("prod-us")
 	if err != nil {
@@ -366,5 +415,59 @@ func TestBrokerPool_SharedBrokerClientAcrossProtocols(t *testing.T) {
 	}
 	if v1First != v1Second {
 		t.Error("v1 client instance changed after GetSEMPv2() call — cache entry was not shared across protocols")
+	}
+}
+
+// --- Broker alias contract tests (SOL-149789) ---
+
+// TestBrokerPool_GetSEMPv2_CaseInsensitive: looking up a broker with mixed
+// case returns the same cached client instance as the canonical form.
+func TestBrokerPool_GetSEMPv2_CaseInsensitive(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	}))
+	defer server.Close()
+
+	cfg := writeTestConfig(t, [2]string{"ProdEast", server.URL})
+	pool := semp.NewBrokerPool(cfg)
+
+	first, err := pool.GetSEMPv2("ProdEast")
+	if err != nil {
+		t.Fatalf("GetSEMPv2(ProdEast): %v", err)
+	}
+	for _, alias := range []string{"prodeast", "PRODEAST", "ProdEast", "pRoDeAsT"} {
+		got, err := pool.GetSEMPv2(alias)
+		if err != nil {
+			t.Errorf("GetSEMPv2(%q): %v", alias, err)
+			continue
+		}
+		if got != first {
+			t.Errorf("GetSEMPv2(%q) returned a different client than the canonical lookup", alias)
+		}
+	}
+}
+
+// TestBrokerPool_Aliases_PreservesDisplayCasing: pool.Aliases() returns the
+// original casing from the source config, not the canonical lowercase form.
+func TestBrokerPool_Aliases_PreservesDisplayCasing(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer server.Close()
+
+	cfg := writeTestConfig(t,
+		[2]string{"ProdEast", server.URL},
+		[2]string{"DevWest", server.URL},
+	)
+	pool := semp.NewBrokerPool(cfg)
+
+	got := pool.Aliases()
+	want := []string{"DevWest", "ProdEast"}
+	if len(got) != len(want) {
+		t.Fatalf("Aliases() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Aliases()[%d] = %q, want %q", i, got[i], want[i])
+		}
 	}
 }

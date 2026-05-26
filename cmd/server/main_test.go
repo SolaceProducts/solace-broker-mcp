@@ -92,6 +92,27 @@ func TestMCPEndpoint_POST_ReachesMCPHandler(t *testing.T) {
 	}
 }
 
+func TestNewHTTPServer_TimeoutsAreSet(t *testing.T) {
+	// Asserts the production timeout posture: ReadHeaderTimeout / ReadTimeout
+	// / IdleTimeout are all non-zero (close Slowloris-class and idle
+	// keep-alive exhaustion vectors), and WriteTimeout is deliberately zero
+	// (preserves long-lived MCP streamable HTTP / SSE responses).
+	srv := newHTTPServer(":0", http.NewServeMux())
+
+	if want := 10 * time.Second; srv.ReadHeaderTimeout != want {
+		t.Errorf("ReadHeaderTimeout = %s, want %s", srv.ReadHeaderTimeout, want)
+	}
+	if want := 30 * time.Second; srv.ReadTimeout != want {
+		t.Errorf("ReadTimeout = %s, want %s", srv.ReadTimeout, want)
+	}
+	if want := 120 * time.Second; srv.IdleTimeout != want {
+		t.Errorf("IdleTimeout = %s, want %s", srv.IdleTimeout, want)
+	}
+	if srv.WriteTimeout != 0 {
+		t.Errorf("WriteTimeout = %s, want 0 (intentional — preserves SSE streams)", srv.WriteTimeout)
+	}
+}
+
 func TestUnknownRoute_Returns404(t *testing.T) {
 	mux := testMux()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/unknown", nil)

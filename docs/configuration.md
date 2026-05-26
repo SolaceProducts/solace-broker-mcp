@@ -53,6 +53,8 @@ tls_key_file: "/etc/certs/server-key.pem"
 
 Configured under the `brokers` map. Each key is a broker alias used as the `broker` parameter in MCP tools.
 
+Aliases must be 1–63 characters, contain only letters, digits, and hyphens, and start and end with an alphanumeric character. Comparison is case-insensitive — `Prod` and `prod` collide and the server will refuse to start. Original casing is preserved in all user-facing output.
+
 | YAML field | Default | Description |
 |---|---|---|
 | `url` | — | SEMP management API base URL (e.g., `https://broker:1943`). |
@@ -76,15 +78,15 @@ brokers:
 
 ## Client authentication settings
 
-Configured under the `client_auth` key. Controls how MCP clients authenticate to this server. See the [Authentication](authentication.md) guide for full setup instructions.
+Configured under the `client_auth` key. The `mode` field is required and selects the auth backend; required peer fields follow from the mode. The previous `development_mode` flag is deprecated — its presence is parsed but ignored, with a deprecation warning logged at startup. See the [Authentication](authentication.md) guide for full setup instructions.
 
 | YAML field | Description |
 |---|---|
-| `development_mode` | `true` disables OAuth for local use. `false` (production) requires a valid JWT on every MCP request. |
-| `client_auth.issuer` | IdP issuer URL. Required when `development_mode: false`. |
-| `client_auth.audience` | Expected `aud` claim value. Required when `development_mode: false`. |
-| `client_auth.resource_url` | OAuth resource URL (e.g., `https://mcp.example.com/mcp`). Defaults to localhost if not set. |
-| `client_auth.dev_token` | Static bearer token for development. Only used when `development_mode: true`. |
+| `client_auth.mode` | **Required.** One of `disabled`, `static`, or `oauth`. Selects the client auth backend and the operational profile (dev vs. production). |
+| `client_auth.dev_token` | Static bearer token. Required when `client_auth.mode` is `static`. |
+| `client_auth.issuer` | IdP issuer URL. Required when `client_auth.mode` is `oauth`. |
+| `client_auth.audience` | Expected `aud` claim value. Required when `client_auth.mode` is `oauth`. |
+| `client_auth.resource_url` | OAuth resource URL (e.g., `https://mcp.example.com/mcp`). Required when `client_auth.mode` is `oauth`. |
 
 ## Rate limiting and retry
 

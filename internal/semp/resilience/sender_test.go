@@ -13,6 +13,17 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 )
 
+// mustNewSafeCookieJar creates an empty SafeCookieJar for tests; fails the
+// test on the (unreachable in practice) error path.
+func mustNewSafeCookieJar(t *testing.T) *SafeCookieJar {
+	t.Helper()
+	jar, err := NewSafeCookieJar()
+	if err != nil {
+		t.Fatalf("NewSafeCookieJar: %v", err)
+	}
+	return jar
+}
+
 // newTestSender creates a Sender configured for testing with the given auth mode and retry count.
 func newTestSender(t *testing.T, httpClient *http.Client, authMode string, retries int) *Sender {
 	t.Helper()
@@ -29,7 +40,9 @@ func newTestSender(t *testing.T, httpClient *http.Client, authMode string, retri
 		Password: "secret",
 		Token:    "static-token",
 	}
-	return New(httpClient, sempCfg, authCfg, "http://test-broker")
+	jar := mustNewSafeCookieJar(t)
+	httpClient.Jar = jar
+	return New(httpClient, jar, sempCfg, authCfg, "http://test-broker")
 }
 
 // newTestSenderWithServer creates a test server and a Sender pointed at it.
@@ -529,7 +542,8 @@ func TestSender_ErrorHandler_NetworkError_ProducesRetriesExhaustedError(t *testi
 		RetryMaxInterval:   10 * time.Millisecond,
 	}
 	authCfg := config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"}
-	sender := New(&http.Client{}, sempCfg, authCfg, serverURL)
+	jar := mustNewSafeCookieJar(t)
+	sender := New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, serverURL)
 
 	req := newGetRequest(t, serverURL)
 	resp, err := sender.Do(context.Background(), req)
@@ -674,7 +688,8 @@ func TestSender_NoRetry_POST_ConnectionError(t *testing.T) {
 		RetryMaxInterval:   10 * time.Millisecond,
 	}
 	authCfg := config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"}
-	sender := New(&http.Client{}, sempCfg, authCfg, serverURL)
+	jar := mustNewSafeCookieJar(t)
+	sender := New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, serverURL)
 
 	req := newMethodRequest(t, http.MethodPost, serverURL)
 	resp, err := sender.Do(context.Background(), req)
@@ -713,7 +728,8 @@ func TestSender_NoRetry_PATCH_ConnectionError(t *testing.T) {
 		RetryMaxInterval:   10 * time.Millisecond,
 	}
 	authCfg := config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"}
-	sender := New(&http.Client{}, sempCfg, authCfg, serverURL)
+	jar := mustNewSafeCookieJar(t)
+	sender := New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, serverURL)
 
 	req := newMethodRequest(t, http.MethodPatch, serverURL)
 	resp, err := sender.Do(context.Background(), req)

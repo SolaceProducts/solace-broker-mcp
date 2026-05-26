@@ -49,7 +49,8 @@ Both binary and Docker deployments use the same YAML config file and `.env` cred
 **1. Create a config file** (e.g., `config.yaml`):
 
 ```yaml
-development_mode: true
+client_auth:
+  mode: disabled        # no client auth — local development only
 
 brokers:
   my-broker:
@@ -60,12 +61,14 @@ brokers:
       password: "${BROKER_PASSWORD}"
 ```
 
-`development_mode: true` disables OAuth authentication for local use. For production, set `development_mode: false` and configure the `client_auth` section with your OAuth provider (issuer, audience, resource URL). Refer to the [Authentication](docs/authentication.md) guide for specific setup instructions.
+`client_auth.mode: disabled` skips client authentication entirely — only use this for local development. For production, set `client_auth.mode: oauth` and provide `issuer`, `audience`, and `resource_url`. A third mode, `static`, accepts a fixed bearer token for local development with realistic auth flow. See the [Authentication](docs/authentication.md) guide for full setup instructions.
 
 Each broker needs:
 - `url` — the SEMP management API base URL
 - `auth.mode` — `basic` or `bearer` (examples below use basic auth; for bearer token authentication, set `auth.mode: bearer` and provide `auth.token` instead)
 - `auth.username` / `auth.password` — credentials (use `${VAR_NAME}` to reference environment variables)
+
+**Broker alias contract.** The map key under `brokers:` (e.g. `my-broker`) is the alias that appears in tool inputs (`broker="my-broker"`), logs, and `list-brokers` output. Aliases must be 1–63 characters, contain only letters, digits, and hyphens, and start and end with an alphanumeric character. Comparison is case-insensitive — `Prod` and `prod` collide and the server will refuse to start. Original casing is preserved in all user-facing output.
 
 **2. Create a `.env` file** next to the config file:
 
@@ -208,7 +211,8 @@ To enable HTTPS, add both `tls_cert_file` and `tls_key_file` to the YAML config:
 
 ```yaml
 port: 9090
-development_mode: true
+client_auth:
+  mode: disabled
 tls_cert_file: "/etc/certs/server.pem"
 tls_key_file: "/etc/certs/server-key.pem"
 

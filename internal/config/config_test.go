@@ -16,6 +16,8 @@ package config
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -42,7 +44,9 @@ func TestLoadConfig_SingleBroker(t *testing.T) {
 	t.Setenv("TEST_PASSWORD", "secret")
 
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 brokers:
   prod-us:
     url: "https://broker-us.example.com:1943"
@@ -56,11 +60,11 @@ brokers:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(cfg.Brokers) != 1 {
-		t.Fatalf("expected 1 broker, got %d", len(cfg.Brokers))
+	if len(cfg.brokers) != 1 {
+		t.Fatalf("expected 1 broker, got %d", len(cfg.brokers))
 	}
 
-	broker := cfg.Brokers["prod-us"]
+	broker := cfg.brokers["prod-us"]
 	if broker == nil {
 		t.Fatal("expected broker 'prod-us' to exist")
 		return
@@ -86,7 +90,9 @@ func TestLoadConfig_MultiBroker(t *testing.T) {
 	t.Setenv("EU_PASS", "secret-eu")
 
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 brokers:
   prod-us:
     url: "https://broker-us.example.com:1943"
@@ -106,21 +112,23 @@ brokers:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(cfg.Brokers) != 2 {
-		t.Fatalf("expected 2 brokers, got %d", len(cfg.Brokers))
+	if len(cfg.brokers) != 2 {
+		t.Fatalf("expected 2 brokers, got %d", len(cfg.brokers))
 	}
 
-	if cfg.Brokers["prod-us"].Auth.Username != "admin-us" {
-		t.Errorf("prod-us username mismatch: %s", cfg.Brokers["prod-us"].Auth.Username)
+	if cfg.brokers["prod-us"].Auth.Username != "admin-us" {
+		t.Errorf("prod-us username mismatch: %s", cfg.brokers["prod-us"].Auth.Username)
 	}
-	if cfg.Brokers["prod-eu"].Auth.Username != "admin-eu" {
-		t.Errorf("prod-eu username mismatch: %s", cfg.Brokers["prod-eu"].Auth.Username)
+	if cfg.brokers["prod-eu"].Auth.Username != "admin-eu" {
+		t.Errorf("prod-eu username mismatch: %s", cfg.brokers["prod-eu"].Auth.Username)
 	}
 }
 
 func TestLoadConfig_MissingBrokerURL(t *testing.T) {
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 brokers:
   dev:
     auth:
@@ -139,7 +147,9 @@ brokers:
 
 func TestLoadConfig_MissingBasicAuthCreds(t *testing.T) {
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 brokers:
   dev:
     url: "https://broker.example.com:1943"
@@ -164,7 +174,9 @@ func TestLoadConfig_MalformedYAML(t *testing.T) {
 
 func TestLoadConfig_DefaultsApplied(t *testing.T) {
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 brokers:
   dev:
     url: "https://broker.example.com:1943"
@@ -191,7 +203,9 @@ brokers:
 
 func TestLoadConfig_InvalidAuthMethod(t *testing.T) {
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 brokers:
   dev:
     url: "https://broker.example.com:1943"
@@ -215,7 +229,9 @@ func TestLoadConfig_EnvVarSubstitution(t *testing.T) {
 	t.Setenv("BROKER_PASS", "secret")
 
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 brokers:
   prod:
     url: ${BROKER_URL}
@@ -229,7 +245,7 @@ brokers:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	broker := cfg.Brokers["prod"]
+	broker := cfg.brokers["prod"]
 	if broker.URL != "https://broker.example.com:1943" {
 		t.Errorf("expected URL from env var, got %q", broker.URL)
 	}
@@ -243,7 +259,9 @@ brokers:
 
 func TestLoadConfig_EnvVarMissing(t *testing.T) {
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 brokers:
   prod:
     url: ${MISSING_URL}
@@ -258,6 +276,84 @@ brokers:
 	}
 	if !strings.Contains(err.Error(), "MISSING_URL") {
 		t.Errorf("error should mention the missing var name: %v", err)
+	}
+}
+
+// ${VAR} references inside YAML comments must NOT trigger env var lookups —
+// the line is inert at parse time and has no effect on the loaded config.
+func TestLoadConfig_EnvVarInWholeLineComment(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+      # token: ${UNSET_BEARER_TOKEN}  # alternate bearer-auth example
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("commented-out ${UNSET_BEARER_TOKEN} must not fail load: %v", err)
+	}
+	if cfg.brokers["prod"].Auth.Token != "" {
+		t.Errorf("expected token unset for commented-out line, got %q", cfg.brokers["prod"].Auth.Token)
+	}
+}
+
+// Trailing inline comments must also be skipped, while ${VAR} in the live
+// portion of the same line is still substituted.
+func TestLoadConfig_EnvVarInInlineComment(t *testing.T) {
+	t.Setenv("INLINE_PASSWORD", "live-secret")
+
+	yaml := `
+client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: ${INLINE_PASSWORD}  # was ${UNSET_OLD_PASSWORD}
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("inline comment ${UNSET_OLD_PASSWORD} must not fail load: %v", err)
+	}
+	if cfg.brokers["prod"].Auth.Password != "live-secret" {
+		t.Errorf("expected password substituted to %q, got %q", "live-secret", cfg.brokers["prod"].Auth.Password)
+	}
+}
+
+// A # character that appears inside a quoted string is part of the value, not
+// a comment marker. ${VAR} on the same line must still be substituted and the
+// # preserved in the parsed value.
+func TestLoadConfig_HashInsideQuotedValue(t *testing.T) {
+	t.Setenv("PWD_HEAD", "live")
+
+	yaml := `
+client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: "${PWD_HEAD}#tail"
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := cfg.brokers["prod"].Auth.Password; got != "live#tail" {
+		t.Errorf("expected password %q, got %q", "live#tail", got)
 	}
 }
 
@@ -283,7 +379,9 @@ brokers:
 
 func TestLoadConfig_TLSOnlyCert_ReturnsError(t *testing.T) {
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 tls_cert_file: "/tmp/cert.pem"
 brokers:
   dev:
@@ -304,7 +402,9 @@ brokers:
 
 func TestLoadConfig_TLSBothFields_Valid(t *testing.T) {
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 tls_cert_file: "/tmp/cert.pem"
 tls_key_file: "/tmp/key.pem"
 brokers:
@@ -331,7 +431,9 @@ func TestLoadConfig_EnvOverridePort(t *testing.T) {
 	t.Setenv("MCP_SERVER_PORT", "9091")
 
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 port: 8080
 brokers:
   dev:
@@ -354,7 +456,9 @@ func TestLoadConfig_BearerAuth(t *testing.T) {
 	t.Setenv("BEARER_TOKEN", "my-secret-token")
 
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 brokers:
   prod:
     url: "https://broker.example.com:8080"
@@ -367,7 +471,7 @@ brokers:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	broker := cfg.Brokers["prod"]
+	broker := cfg.brokers["prod"]
 	if broker.Auth.Mode != "bearer" {
 		t.Errorf("expected mode bearer, got %q", broker.Auth.Mode)
 	}
@@ -378,7 +482,9 @@ brokers:
 
 func TestLoadConfig_BearerAuth_MissingToken(t *testing.T) {
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 brokers:
   prod:
     url: "https://broker.example.com:8080"
@@ -396,7 +502,9 @@ brokers:
 
 func TestLoadConfig_MissingAuthMode(t *testing.T) {
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 brokers:
   dev:
     url: "http://localhost:8080"
@@ -415,7 +523,9 @@ brokers:
 
 func TestLoadConfig_AuthModeCaseInsensitive(t *testing.T) {
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 brokers:
   dev:
     url: "http://localhost:8080"
@@ -428,14 +538,16 @@ brokers:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Brokers["dev"].Auth.Mode != "basic" {
-		t.Errorf("expected mode normalized to 'basic', got %q", cfg.Brokers["dev"].Auth.Mode)
+	if cfg.brokers["dev"].Auth.Mode != "basic" {
+		t.Errorf("expected mode normalized to 'basic', got %q", cfg.brokers["dev"].Auth.Mode)
 	}
 }
 
 func TestLoadConfig_InvalidURLScheme(t *testing.T) {
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 brokers:
   dev:
     url: "ftp://broker.example.com"
@@ -455,7 +567,6 @@ brokers:
 
 func TestLoadConfig_RejectsHTTPBrokerInProductionMode(t *testing.T) {
 	yaml := `
-development_mode: false
 brokers:
   prod-us:
     url: "http://broker.example.com:8080"
@@ -464,6 +575,7 @@ brokers:
       username: admin
       password: secret
 client_auth:
+  mode: oauth
   issuer: "https://idp.example.com"
   audience: "solace-mcp"
   resource_url: "https://mcp.example.com"
@@ -486,7 +598,6 @@ func TestLoadConfig_WarnsOnInsecureSkipVerifyInProductionMode(t *testing.T) {
 	// broker so operators see it in triage logs.
 	buf := captureSlog(t)
 	yaml := `
-development_mode: false
 brokers:
   prod-us:
     url: "https://broker.example.com:8080"
@@ -496,6 +607,7 @@ brokers:
       username: admin
       password: secret
 client_auth:
+  mode: oauth
   issuer: "https://idp.example.com"
   audience: "solace-mcp"
   resource_url: "https://mcp.example.com"
@@ -517,8 +629,8 @@ func TestLoadConfig_NoWarnOnInsecureSkipVerifyInDevelopmentMode(t *testing.T) {
 	// local broker setups, so no startup WARN should fire.
 	buf := captureSlog(t)
 	yaml := `
-development_mode: true
 client_auth:
+  mode: static
   dev_token: test
 brokers:
   dev:
@@ -539,7 +651,6 @@ brokers:
 
 func TestLoadConfig_RejectsHTTPClientAuthInProductionMode(t *testing.T) {
 	yaml := `
-development_mode: false
 brokers:
   prod-us:
     url: "https://broker.example.com:8080"
@@ -548,6 +659,7 @@ brokers:
       username: admin
       password: secret
 client_auth:
+  mode: oauth
   issuer: "http://idp.example.com"
   audience: "solace-mcp"
   resource_url: "http://mcp.example.com"
@@ -564,9 +676,11 @@ client_auth:
 	}
 }
 
-func TestLoadConfig_AllowsHTTPBrokerInDevelopmentMode(t *testing.T) {
+func TestLoadConfig_AllowsHTTPBrokerInStaticMode(t *testing.T) {
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 brokers:
   dev:
     url: "http://localhost:8080"
@@ -577,13 +691,15 @@ brokers:
 `
 	_, err := LoadConfig(writeTemp(t, yaml))
 	if err != nil {
-		t.Fatalf("http:// should be allowed in development_mode: %v", err)
+		t.Fatalf("http:// should be allowed under client_auth.mode: static: %v", err)
 	}
 }
 
 func TestLoadConfig_URLMissingHost(t *testing.T) {
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 brokers:
   dev:
     url: "http://"
@@ -605,7 +721,9 @@ func TestLoadConfig_URLEmpty_ReportsRequired(t *testing.T) {
 	// Empty URL is handled by the "url is required" branch, NOT the
 	// structure-validation branch — verifying we don't double-report.
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 brokers:
   dev:
     url: ""
@@ -626,9 +744,112 @@ brokers:
 	}
 }
 
+// TestLoadConfig_RejectsBrokerURLWithCredentials_AndRedactsThemInError pins
+// two related behaviours: (a) an inline user:pass URL in a broker entry is
+// rejected at validation, and (b) the password never appears in the error
+// message — even though the offending URL is part of the error context.
+// Together they prevent the disclosure path from validation errors through
+// slog.Error("failed to load config", err) at startup.
+func TestLoadConfig_RejectsBrokerURLWithCredentials_AndRedactsThemInError(t *testing.T) {
+	const inlinePassword = "hunter2-super-secret-must-not-leak"
+	yaml := `
+client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  prod-us:
+    url: "https://admin:` + inlinePassword + `@broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for broker URL with embedded credentials")
+	}
+
+	// The full error string is what main() will log via slog.Error — that
+	// is the disclosure surface. Assert the password is NOT present anywhere
+	// in it (case-sensitive: the literal would survive %q escaping).
+	if strings.Contains(err.Error(), inlinePassword) {
+		t.Errorf("password leaked through validation error\nfull error: %v", err)
+	}
+	// Operator-friendly: the error should point at the right place to fix.
+	if !strings.Contains(err.Error(), "auth block") {
+		t.Errorf("error should steer operator to the auth block, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "prod-us") {
+		t.Errorf("error should name the broker alias, got: %v", err)
+	}
+}
+
+// TestBrokerConfig_LogValue_RedactsURLCredentials pins that the LogValuer
+// itself strips userinfo from the URL — independent of whether validation
+// has run. validateBrokerURL already rejects credentialed URLs, but
+// LogValue should not assume that: any future code path that logs a
+// BrokerConfig before validation (e.g., a debug line in LoadConfig itself)
+// would otherwise echo the credential to slog.
+func TestBrokerConfig_LogValue_RedactsURLCredentials(t *testing.T) {
+	const inlinePassword = "hunter2-super-secret-must-not-leak"
+	b := BrokerConfig{
+		URL: "https://admin:" + inlinePassword + "@broker.example.com:1943",
+		Auth: AuthConfig{
+			Mode:     "basic",
+			Username: "admin",
+			Password: "irrelevant-to-this-test",
+		},
+	}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	logger.Info("broker config", slog.Any("broker", b))
+
+	out := buf.String()
+	if strings.Contains(out, inlinePassword) {
+		t.Errorf("password leaked through BrokerConfig.LogValue output:\n%s", out)
+	}
+	// Sanity: the host must still be present so logs remain useful.
+	if !strings.Contains(out, "broker.example.com") {
+		t.Errorf("host stripped from LogValue output (sanitization too aggressive):\n%s", out)
+	}
+}
+
+// TestClientAuthConfig_LogValue_RedactsURLCredentials applies the same
+// LogValue-level defense in depth to ClientAuthConfig. Issuer and
+// ResourceURL both go through validateBrokerURL, but LogValue should not
+// rely on that ordering.
+func TestClientAuthConfig_LogValue_RedactsURLCredentials(t *testing.T) {
+	const inlinePassword = "hunter2-issuer-secret-must-not-leak"
+	c := ClientAuthConfig{
+		Mode:        AuthModeOAuth,
+		Issuer:      "https://admin:" + inlinePassword + "@idp.example.com/realms/main",
+		Audience:    "mcp",
+		ResourceURL: "https://admin:" + inlinePassword + "@mcp.example.com/mcp",
+	}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	logger.Info("client auth config", slog.Any("client_auth", c))
+
+	out := buf.String()
+	if strings.Contains(out, inlinePassword) {
+		t.Errorf("password leaked through ClientAuthConfig.LogValue output:\n%s", out)
+	}
+	if !strings.Contains(out, "idp.example.com") {
+		t.Errorf("issuer host stripped from LogValue output (sanitization too aggressive):\n%s", out)
+	}
+	if !strings.Contains(out, "mcp.example.com") {
+		t.Errorf("resource_url host stripped from LogValue output (sanitization too aggressive):\n%s", out)
+	}
+	if !strings.Contains(out, `"mode":"oauth"`) {
+		t.Errorf("LogValue output should include mode key, got: %s", out)
+	}
+}
+
 func TestLoadConfig_LogLevel_Default(t *testing.T) {
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 brokers:
   dev:
     url: "http://localhost:8080"
@@ -650,7 +871,9 @@ func TestLoadConfig_LogLevel_ValidValues(t *testing.T) {
 	for _, level := range []string{"debug", "info", "warn", "error"} {
 		t.Run(level, func(t *testing.T) {
 			yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 log_level: ` + level + `
 brokers:
   dev:
@@ -673,7 +896,9 @@ brokers:
 
 func TestLoadConfig_LogLevel_CaseInsensitive(t *testing.T) {
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 log_level: DEBUG
 brokers:
   dev:
@@ -714,7 +939,9 @@ brokers:
 
 func TestLoadConfig_RateLimit_Defaults(t *testing.T) {
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 brokers:
   dev:
     url: "http://localhost:8080"
@@ -743,7 +970,9 @@ brokers:
 
 func TestLoadConfig_RateLimit_ValidValues(t *testing.T) {
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 semp:
   request_min_interval: 50ms
   retries: 5
@@ -782,7 +1011,9 @@ func TestLoadConfig_RateLimit_ExplicitZeroHonored(t *testing.T) {
 	// This is the reason both fields are pointer types -- without pointers,
 	// "0 in YAML" is indistinguishable from "omitted from YAML".
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 semp:
   request_min_interval: 0s
   retries: 0
@@ -804,6 +1035,84 @@ brokers:
 	if cfg.SEMP.Retries == nil || *cfg.SEMP.Retries != 0 {
 		t.Errorf("expected operator-set retries=0 to be honored, got %v", cfg.SEMP.Retries)
 	}
+}
+
+func TestLoadConfig_MaxConcurrentPerBroker_OutOfRange(t *testing.T) {
+	// Per-broker semaphore size drives both the in-memory semaphore and the
+	// HTTP transport's idle-connection pool (MaxIdleConnsPerHost +
+	// MaxIdleConns × 2). Unbounded above lets a misconfig or compromised
+	// config over-allocate and OOM the process.
+	cases := []struct {
+		name        string
+		value       string
+		wantInError string
+	}{
+		{
+			name:        "negative",
+			value:       "-1",
+			wantInError: "semp.max_concurrent_per_broker",
+		},
+		{
+			name:        "above ceiling",
+			value:       "1000000",
+			wantInError: "semp.max_concurrent_per_broker",
+		},
+		{
+			name:        "just above ceiling",
+			value:       "1025",
+			wantInError: "semp.max_concurrent_per_broker",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			yaml := `
+development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
+semp:
+  max_concurrent_per_broker: ` + tc.value + `
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+			_, err := LoadConfig(writeTemp(t, yaml))
+			if err == nil {
+				t.Fatalf("expected error for max_concurrent_per_broker=%s", tc.value)
+			}
+			if !strings.Contains(err.Error(), tc.wantInError) {
+				t.Errorf("error should name the offending field, got: %v", err)
+			}
+		})
+	}
+
+	// Boundary: 1024 must pass (inclusive upper bound). Locks in the
+	// inclusive semantic against future drift.
+	t.Run("at ceiling passes", func(t *testing.T) {
+		yaml := `
+development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
+semp:
+  max_concurrent_per_broker: 1024
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+		if _, err := LoadConfig(writeTemp(t, yaml)); err != nil {
+			t.Errorf("max_concurrent_per_broker: 1024 should pass (inclusive upper bound), got: %v", err)
+		}
+	})
 }
 
 func TestLoadConfig_RateLimit_NegativeRetries(t *testing.T) {
@@ -908,7 +1217,9 @@ func TestValidate_BrokerErrorsAreSorted(t *testing.T) {
 	// Broker map iteration is non-deterministic; sorted aliases ensure the
 	// joined error string always lists errors in alphabetical alias order.
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 brokers:
   zebra:
     auth:
@@ -939,7 +1250,9 @@ brokers:
 
 func TestLoad_UsesConfigFileEnv(t *testing.T) {
 	yaml := `
-development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
 brokers:
   dev:
     url: "http://localhost:8080"
@@ -955,7 +1268,7 @@ brokers:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Brokers["dev"] == nil {
+	if cfg.brokers["dev"] == nil {
 		t.Error("expected broker 'dev' to be loaded")
 	}
 }
@@ -1099,5 +1412,681 @@ func TestLoad_NoConfigFileEnv_NoSystemOrLocal_ReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no config file found") {
 		t.Errorf("expected 'no config file found' error, got: %v", err)
+	}
+}
+
+func TestLoadConfig_AuthMode_Missing(t *testing.T) {
+	// client_auth.mode is required — omitting it must fail validation with a
+	// specific, actionable error. This is the central anti-confusion guarantee
+	// of the refactor: there is no value of "I didn't write anything" that
+	// resolves to no-auth.
+	yaml := `
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error when client_auth.mode is missing")
+	}
+	if !strings.Contains(err.Error(), "client_auth.mode is required") {
+		t.Errorf("error should state client_auth.mode is required, got: %v", err)
+	}
+	for _, m := range []string{"disabled", "static", "oauth"} {
+		if !strings.Contains(err.Error(), m) {
+			t.Errorf("error should list valid mode %q, got: %v", m, err)
+		}
+	}
+}
+
+func TestLoadConfig_AuthMode_Invalid(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: production
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for unknown client_auth.mode value")
+	}
+	if !strings.Contains(err.Error(), `client_auth.mode "production" is invalid`) {
+		t.Errorf("error should quote the bad value, got: %v", err)
+	}
+}
+
+func TestIsProductionMode(t *testing.T) {
+	tests := []struct {
+		mode string
+		want bool
+	}{
+		{AuthModeDisabled, false},
+		{AuthModeStatic, false},
+		{AuthModeOAuth, true},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.mode, func(t *testing.T) {
+			cfg := &ServerConfig{ClientAuth: ClientAuthConfig{Mode: tt.mode}}
+			if got := cfg.IsProductionMode(); got != tt.want {
+				t.Errorf("IsProductionMode() for mode=%q: got %v, want %v", tt.mode, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadConfig_AuthMode_CaseInsensitive(t *testing.T) {
+	// Mode value normalization matches what validate() does for log_level
+	// and broker auth.mode — operators get a forgiving config experience.
+	cases := []string{"DISABLED", "Static", "OAuth"}
+	for _, mode := range cases {
+		t.Run(mode, func(t *testing.T) {
+			extra := ""
+			switch strings.ToLower(mode) {
+			case "static":
+				extra = "  dev_token: test"
+			case "oauth":
+				extra = `  issuer: "https://idp.example.com"
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"`
+			}
+			yaml := `
+client_auth:
+  mode: ` + mode + `
+` + extra + `
+brokers:
+  dev:
+    url: "https://broker.example.com"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+			cfg, err := LoadConfig(writeTemp(t, yaml))
+			if err != nil {
+				t.Fatalf("expected case-insensitive accept for mode=%q, got: %v", mode, err)
+			}
+			if cfg.ClientAuth.Mode != strings.ToLower(mode) {
+				t.Errorf("expected normalized mode %q, got %q", strings.ToLower(mode), cfg.ClientAuth.Mode)
+			}
+		})
+	}
+}
+
+func TestLoadConfig_AuthMode_Static_NoToken(t *testing.T) {
+	// mode: static without a dev_token is exactly the SOL-149921 vulnerability
+	// in its new form — must be rejected with a specific error.
+	yaml := `
+client_auth:
+  mode: static
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error when client_auth.mode is static and dev_token is empty")
+	}
+	if !strings.Contains(err.Error(), "client_auth.dev_token is required") {
+		t.Errorf("error should name dev_token, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), `"static"`) {
+		t.Errorf("error should quote mode value, got: %v", err)
+	}
+}
+
+func TestLoadConfig_AuthMode_OAuth_MissingIssuer(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: oauth
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"
+brokers:
+  dev:
+    url: "https://broker.example.com"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "client_auth.issuer is required") {
+		t.Fatalf("expected client_auth.issuer required error, got: %v", err)
+	}
+}
+
+func TestLoadConfig_AuthMode_OAuth_MissingAudience(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  resource_url: "https://mcp.example.com/mcp"
+brokers:
+  dev:
+    url: "https://broker.example.com"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "client_auth.audience is required") {
+		t.Fatalf("expected client_auth.audience required error, got: %v", err)
+	}
+}
+
+func TestLoadConfig_AuthMode_OAuth_MissingResourceURL(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp"
+brokers:
+  dev:
+    url: "https://broker.example.com"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "client_auth.resource_url is required") {
+		t.Fatalf("expected client_auth.resource_url required error, got: %v", err)
+	}
+}
+
+func TestLoadConfig_AuthMode_OAuth_HTTPIssuer(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: oauth
+  issuer: "http://idp.example.com"
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"
+brokers:
+  dev:
+    url: "https://broker.example.com"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "scheme must be https") {
+		t.Fatalf("expected https-required error for issuer under mode: oauth, got: %v", err)
+	}
+}
+
+func TestLoadConfig_AuthMode_OAuth_HTTPBroker(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"
+brokers:
+  dev:
+    url: "http://broker.example.com"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "scheme must be https") {
+		t.Fatalf("expected https-required error for broker URL under mode: oauth, got: %v", err)
+	}
+}
+
+func TestLoadConfig_AuthMode_Static_HTTPBroker(t *testing.T) {
+	// http:// broker URLs are explicitly allowed under mode: static (dev profile).
+	yaml := `
+client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  dev:
+    url: "http://broker.example.com"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("http:// broker URL should be allowed under mode: static, got: %v", err)
+	}
+}
+
+func TestLoadConfig_DevelopmentModeDeprecationWarning(t *testing.T) {
+	// Legacy development_mode YAML field must still parse so operators with
+	// old configs reach the helpful client_auth.mode error — not a generic
+	// "unknown field" YAML error. But its presence must emit a deprecation
+	// warning so operators clean up.
+	buf := &bytes.Buffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prev)
+
+	yaml := `
+development_mode: true
+client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	if _, err := LoadConfig(writeTemp(t, yaml)); err != nil {
+		t.Fatalf("config should parse and validate, got: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "development_mode is deprecated") {
+		t.Errorf("expected deprecation warning in slog output, got: %s", out)
+	}
+	if !strings.Contains(out, "client_auth.mode") {
+		t.Errorf("warning should point operator at the new field, got: %s", out)
+	}
+}
+
+// TestLoadConfig_StaticMode_IgnoresOffModeOAuthFields guards the validator
+// against the missing-vs-malformed asymmetry called out in the PR #62 review:
+// under mode: static, OAuth-only fields (issuer, resource_url) are ignored if
+// missing — they must also be ignored if malformed. Validating them under
+// mode: static contradicts the spec ("off-mode fields are ignored").
+func TestLoadConfig_StaticMode_IgnoresOffModeOAuthFields(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: static
+  dev_token: test
+  issuer: "not a valid url"
+  resource_url: ":::also bad"
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("malformed issuer/resource_url should be ignored under mode: static, got: %v", err)
+	}
+}
+
+// TestLoadConfig_OAuthMode_RejectsMalformedIssuer is the symmetric companion
+// to TestLoadConfig_StaticMode_IgnoresOffModeOAuthFields. Under mode: oauth,
+// a structurally malformed issuer must still be rejected — guarding against
+// a future refactor accidentally weakening the validateBrokerURL call inside
+// the AuthModeOAuth case.
+func TestLoadConfig_OAuthMode_RejectsMalformedIssuer(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: oauth
+  issuer: ":::not a url"
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"
+brokers:
+  dev:
+    url: "https://broker.example.com"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected validation error for malformed issuer under mode: oauth")
+	}
+	if !strings.Contains(err.Error(), "client_auth.issuer") {
+		t.Errorf("error should mention client_auth.issuer, got: %v", err)
+	}
+}
+
+// --- Broker alias contract tests (SOL-149789) ---
+
+// Layer 1: pure-helper tests — contract predicate and canonicalization.
+
+func TestIsValidAlias(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		// Valid
+		{"single char", "a", true},
+		{"single digit", "1", true},
+		{"lowercase word", "prod", true},
+		{"mixed case", "ProdEast", true},
+		{"with hyphen", "prod-east-1", true},
+		{"length 63 boundary", strings.Repeat("a", 63), true},
+
+		// Invalid
+		{"empty", "", false},
+		{"whitespace only", "  ", false},
+		{"leading hyphen", "-prod", false},
+		{"trailing hyphen", "prod-", false},
+		{"embedded space", "prod east", false},
+		{"underscore", "prod_east", false},
+		{"dot", "prod.east", false},
+		{"length 64 overflow", strings.Repeat("a", 64), false},
+		{"leading whitespace", " prod", false},
+		{"unicode", "prodé", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isValidAlias(tc.in); got != tc.want {
+				t.Errorf("isValidAlias(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateAndCanonicalizeBrokers(t *testing.T) {
+	mk := func(aliases ...string) map[string]*BrokerConfig {
+		m := make(map[string]*BrokerConfig, len(aliases))
+		for _, a := range aliases {
+			m[a] = &BrokerConfig{URL: "https://example", Auth: AuthConfig{Mode: "basic", Username: "u", Password: "p"}}
+		}
+		return m
+	}
+
+	t.Run("happy path lowercase keys", func(t *testing.T) {
+		canonical, errs := validateAndCanonicalizeBrokers(mk("prod-us", "dev"))
+		if len(errs) != 0 {
+			t.Fatalf("unexpected errors: %v", errs)
+		}
+		if _, ok := canonical["prod-us"]; !ok {
+			t.Errorf("canonical map missing prod-us")
+		}
+		if got := canonical["dev"].displayName; got != "dev" {
+			t.Errorf("displayName = %q, want dev", got)
+		}
+	})
+
+	t.Run("mixed case canonicalizes", func(t *testing.T) {
+		canonical, errs := validateAndCanonicalizeBrokers(mk("ProdEast"))
+		if len(errs) != 0 {
+			t.Fatalf("unexpected errors: %v", errs)
+		}
+		b, ok := canonical["prodeast"]
+		if !ok {
+			t.Fatal("canonical map missing prodeast")
+		}
+		if b.displayName != "ProdEast" {
+			t.Errorf("displayName = %q, want ProdEast", b.displayName)
+		}
+	})
+
+	t.Run("case-only collision rejected", func(t *testing.T) {
+		canonical, errs := validateAndCanonicalizeBrokers(mk("Prod", "prod"))
+		if len(errs) == 0 {
+			t.Fatal("expected collision error")
+		}
+		msg := errors.Join(errs...).Error()
+		if !strings.Contains(msg, `"Prod"`) || !strings.Contains(msg, `"prod"`) {
+			t.Errorf("collision error should quote both originals, got: %s", msg)
+		}
+		if !strings.Contains(msg, "case-insensitively") {
+			t.Errorf("collision error should mention case-insensitive comparison, got: %s", msg)
+		}
+		if _, ok := canonical["prod"]; ok {
+			t.Errorf("expected canonical map to exclude collision-loser; got entry for %q", "prod")
+		}
+	})
+
+	t.Run("3-way collision lists all originals", func(t *testing.T) {
+		_, errs := validateAndCanonicalizeBrokers(mk("Prod", "PROD", "prod"))
+		if len(errs) == 0 {
+			t.Fatal("expected collision error")
+		}
+		msg := errors.Join(errs...).Error()
+		for _, original := range []string{`"Prod"`, `"PROD"`, `"prod"`} {
+			if !strings.Contains(msg, original) {
+				t.Errorf("collision error should quote %s, got: %s", original, msg)
+			}
+		}
+	})
+
+	t.Run("two separate collision groups reported independently", func(t *testing.T) {
+		_, errs := validateAndCanonicalizeBrokers(mk("Prod", "prod", "Dev", "DEV"))
+		if len(errs) == 0 {
+			t.Fatal("expected collision errors")
+		}
+		msg := errors.Join(errs...).Error()
+		// All four originals appear somewhere in the joined error output.
+		for _, original := range []string{"Prod", "prod", "Dev", "DEV"} {
+			if !strings.Contains(msg, `"`+original+`"`) {
+				t.Errorf("expected error to mention %q, got: %s", original, msg)
+			}
+		}
+		// At least two separate collision messages.
+		if count := strings.Count(msg, "collide"); count < 2 {
+			t.Errorf("expected at least 2 collision messages, got %d in: %s", count, msg)
+		}
+	})
+
+	t.Run("invalid alias reported", func(t *testing.T) {
+		_, errs := validateAndCanonicalizeBrokers(mk("prod east"))
+		if len(errs) == 0 {
+			t.Fatal("expected error for invalid alias")
+		}
+		msg := errors.Join(errs...).Error()
+		if !strings.Contains(msg, `"prod east"`) {
+			t.Errorf("error should quote the invalid alias, got: %s", msg)
+		}
+		if !strings.Contains(msg, "1-63") {
+			t.Errorf("error should describe the contract, got: %s", msg)
+		}
+	})
+
+	t.Run("mixed valid and invalid", func(t *testing.T) {
+		canonical, errs := validateAndCanonicalizeBrokers(mk("dev", "prod east"))
+		if len(errs) == 0 {
+			t.Fatal("expected error for invalid alias")
+		}
+		if _, ok := canonical["dev"]; !ok {
+			t.Errorf("valid alias dev should be canonicalized despite sibling invalid")
+		}
+	})
+
+	t.Run("empty map returns empty canonical no errors", func(t *testing.T) {
+		canonical, errs := validateAndCanonicalizeBrokers(map[string]*BrokerConfig{})
+		if len(errs) != 0 {
+			t.Errorf("unexpected errors: %v", errs)
+		}
+		if len(canonical) != 0 {
+			t.Errorf("canonical map should be empty, got %d entries", len(canonical))
+		}
+	})
+}
+
+// Layer 2: accessor contract tests — public API behavior.
+
+func loadAliasContractTestConfig(t *testing.T, aliases ...string) *ServerConfig {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString("client_auth:\n  mode: disabled\nbrokers:\n")
+	for _, a := range aliases {
+		fmt.Fprintf(&b, "  %s:\n    url: https://broker.example.com\n    auth:\n      mode: basic\n      username: admin\n      password: secret\n", a)
+	}
+	cfg, err := LoadConfig(writeTemp(t, b.String()))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	return cfg
+}
+
+func TestBrokerLookupIsCaseInsensitive(t *testing.T) {
+	cfg := loadAliasContractTestConfig(t, "ProdEast")
+	want, ok := cfg.Broker("ProdEast")
+	if !ok {
+		t.Fatal("Broker(ProdEast) returned !ok")
+	}
+	for _, alias := range []string{"PRODEAST", "prodeast", "pRoDeAsT"} {
+		got, ok := cfg.Broker(alias)
+		if !ok {
+			t.Errorf("Broker(%q) returned !ok", alias)
+			continue
+		}
+		if got != want {
+			t.Errorf("Broker(%q) returned different pointer than Broker(%q)", alias, "ProdEast")
+		}
+	}
+}
+
+func TestBrokerDisplayNamePreservation(t *testing.T) {
+	cfg := loadAliasContractTestConfig(t, "ProdEast")
+	b, ok := cfg.Broker("prodeast")
+	if !ok {
+		t.Fatal("Broker(prodeast) returned !ok")
+	}
+	if b.DisplayName() != "ProdEast" {
+		t.Errorf("DisplayName() = %q, want ProdEast", b.DisplayName())
+	}
+}
+
+func TestBrokerAliasesReturnsDisplayForms(t *testing.T) {
+	cfg := loadAliasContractTestConfig(t, "ProdEast", "DevWest")
+	got := cfg.BrokerAliases()
+	want := []string{"DevWest", "ProdEast"}
+	if len(got) != len(want) {
+		t.Fatalf("BrokerAliases() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("BrokerAliases()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestBrokerLookupUnknownReturnsFalse(t *testing.T) {
+	cfg := loadAliasContractTestConfig(t, "prod")
+	if b, ok := cfg.Broker("nonexistent"); ok || b != nil {
+		t.Errorf("Broker(nonexistent) = (%v, %v), want (nil, false)", b, ok)
+	}
+}
+
+// Layer 3: end-to-end loader tests.
+
+func TestLoadConfigRejectsInvalidAlias(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: disabled
+brokers:
+  "prod east":
+    url: https://broker.example.com
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for invalid alias")
+	}
+	if !strings.Contains(err.Error(), `"prod east"`) {
+		t.Errorf("error should quote the invalid alias, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "1-63") {
+		t.Errorf("error should describe the contract, got: %v", err)
+	}
+}
+
+func TestLoadConfigRejectsCaseCollision(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: disabled
+brokers:
+  Prod:
+    url: https://broker.example.com
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+  prod:
+    url: https://broker.example.com
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for case collision")
+	}
+	if !strings.Contains(err.Error(), `"Prod"`) || !strings.Contains(err.Error(), `"prod"`) {
+		t.Errorf("error should quote both originals, got: %v", err)
+	}
+}
+
+func TestLoadConfigPreservesDisplayName(t *testing.T) {
+	cfg := loadAliasContractTestConfig(t, "ProdEast")
+	b, ok := cfg.Broker("prodeast")
+	if !ok {
+		t.Fatal("Broker(prodeast) returned !ok")
+	}
+	if b.DisplayName() != "ProdEast" {
+		t.Errorf("DisplayName() = %q, want ProdEast", b.DisplayName())
+	}
+}
+
+func TestLoadConfigUsesDisplayNameInValidationErrors(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: disabled
+brokers:
+  ProdEast:
+    url: ""
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for missing broker URL")
+	}
+	if !strings.Contains(err.Error(), "ProdEast") {
+		t.Errorf("per-broker validation error should preserve original casing %q, got: %v", "ProdEast", err)
+	}
+}
+
+// TestLoadConfigRejectsNilBrokerEntry pins that a YAML broker entry with no
+// body (e.g. `prod:` with nothing under it) is reported as a user-facing
+// error rather than causing a nil-pointer panic during validation.
+func TestLoadConfigRejectsNilBrokerEntry(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: disabled
+brokers:
+  prod:
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for nil broker entry")
+	}
+	if !strings.Contains(err.Error(), `"prod"`) {
+		t.Errorf("error should quote the offending alias, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "empty") {
+		t.Errorf("error should explain the entry is empty, got: %v", err)
 	}
 }
