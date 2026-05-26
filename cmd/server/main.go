@@ -127,14 +127,20 @@ func buildMux(aliases func() []string, ping func(ctx context.Context, broker str
 		wg.Wait()
 		close(results)
 
-		// reduce: partition into ready brokers and errors
-		var readyBrokers []string
-		var errs []string
+		// Collect goroutine results into a map, then emit in the original broker
+		// order so the JSON response is deterministic regardless of goroutine
+		// scheduling. Initialize as empty slices so they marshal as [] not null.
+		resultsByBroker := make(map[string]error, len(brokers))
 		for res := range results {
-			if res.err != nil {
-				errs = append(errs, fmt.Sprintf("%s: %s", res.broker, res.err.Error()))
+			resultsByBroker[res.broker] = res.err
+		}
+		readyBrokers := []string{}
+		errs := []string{}
+		for _, broker := range brokers {
+			if err := resultsByBroker[broker]; err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %s", broker, err.Error()))
 			} else {
-				readyBrokers = append(readyBrokers, res.broker)
+				readyBrokers = append(readyBrokers, broker)
 			}
 		}
 

@@ -23,6 +23,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -323,12 +324,26 @@ func TestReady_GET_AllBrokersReachable(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("GET /ready status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	var body map[string]any
+	if contentType := rec.Header().Get("Content-Type"); contentType != "application/json" {
+		t.Errorf("GET /ready Content-Type = %q, want %q", contentType, "application/json")
+	}
+	var body struct {
+		Ready   bool     `json:"ready"`
+		Brokers []string `json:"brokers"`
+	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("response is not valid JSON: %v", err)
 	}
-	if body["ready"] != true {
-		t.Errorf("ready = %v, want true", body["ready"])
+	if !body.Ready {
+		t.Errorf("ready = %v, want true", body.Ready)
+	}
+	if len(body.Brokers) != len(brokers) {
+		t.Errorf("brokers len = %d, want %d", len(body.Brokers), len(brokers))
+	}
+	for i, expectedBroker := range brokers {
+		if body.Brokers[i] != expectedBroker {
+			t.Errorf("brokers[%d] = %q, want %q", i, body.Brokers[i], expectedBroker)
+		}
 	}
 }
 
@@ -351,11 +366,20 @@ func TestReady_GET_OneBrokerUnreachable(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("GET /ready status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
-	var body map[string]any
+	var body struct {
+		Ready  bool     `json:"ready"`
+		Errors []string `json:"errors"`
+	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("response is not valid JSON: %v", err)
 	}
-	if body["ready"] != false {
-		t.Errorf("ready = %v, want false", body["ready"])
+	if body.Ready {
+		t.Errorf("ready = %v, want false", body.Ready)
+	}
+	if len(body.Errors) == 0 {
+		t.Fatal("errors array is empty, want at least one entry")
+	}
+	if !strings.Contains(body.Errors[0], "prod-2") {
+		t.Errorf("errors[0] = %q, want it to reference failing broker %q", body.Errors[0], "prod-2")
 	}
 }

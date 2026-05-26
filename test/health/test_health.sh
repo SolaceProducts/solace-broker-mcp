@@ -4,7 +4,7 @@
 # of the full e2e suite.
 
 set -euo pipefail
-source "$(dirname "$0")/../helpers.sh"
+source "$(dirname "$0")/../e2e-basic-mcp/helpers.sh"
 
 STARTED_DOCKER=false
 SECONDARY_MCP_PORT=9091
@@ -94,7 +94,8 @@ test_ready_both_reachable() {
 test_ready_unreachable_broker() {
     SECONDARY_CONFIG=$(mktemp /tmp/e2e-secondary-XXXXXX)
     cat > "$SECONDARY_CONFIG" <<EOF
-development_mode: true
+client_auth:
+  mode: disabled
 port: $SECONDARY_MCP_PORT
 brokers:
   broker-dead:
