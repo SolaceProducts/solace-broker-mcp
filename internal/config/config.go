@@ -438,7 +438,13 @@ func validateAndCanonicalizeBrokers(brokers map[string]*BrokerConfig) (map[strin
 	canonical := make(map[string]*BrokerConfig, len(brokers))
 
 	// Phase 1: per-alias structural validation; set displayName on all entries.
+	// Nil broker values (e.g. YAML `brokers: { prod: }`) are reported here and
+	// excluded from subsequent phases so we never dereference them downstream.
 	for alias, broker := range brokers {
+		if broker == nil {
+			errs = append(errs, fmt.Errorf("broker %q: configuration block is empty (missing url, auth, etc.)", alias))
+			continue
+		}
 		broker.displayName = alias
 		if !isValidAlias(alias) {
 			errs = append(errs, fmt.Errorf("broker alias %q is invalid: must be 1-63 characters, contain only letters, digits, and hyphens, and start and end with a letter or digit", alias))
@@ -476,6 +482,9 @@ func validateAndCanonicalizeBrokers(brokers map[string]*BrokerConfig) (map[strin
 	// credential errors on them in the same pass. This matches the broader
 	// validate() intent of accumulating every issue in a single startup attempt.
 	for alias, broker := range brokers {
+		if broker == nil {
+			continue // already reported in phase 1; never insert nil into canonical
+		}
 		lower := strings.ToLower(alias)
 		if len(seen[lower]) > 1 {
 			continue

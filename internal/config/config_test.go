@@ -2009,3 +2009,25 @@ brokers:
 		t.Errorf("per-broker validation error should preserve original casing %q, got: %v", "ProdEast", err)
 	}
 }
+
+// TestLoadConfigRejectsNilBrokerEntry pins that a YAML broker entry with no
+// body (e.g. `prod:` with nothing under it) is reported as a user-facing
+// error rather than causing a nil-pointer panic during validation.
+func TestLoadConfigRejectsNilBrokerEntry(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: disabled
+brokers:
+  prod:
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for nil broker entry")
+	}
+	if !strings.Contains(err.Error(), `"prod"`) {
+		t.Errorf("error should quote the offending alias, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "empty") {
+		t.Errorf("error should explain the entry is empty, got: %v", err)
+	}
+}
