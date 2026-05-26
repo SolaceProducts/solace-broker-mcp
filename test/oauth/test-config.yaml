@@ -10,24 +10,18 @@
 # To use a different broker, modify the URL below:
 
 port: 9091
-# TODO(SOL-149989 follow-up): this e2e OAuth test path is currently broken.
-# Under the new client_auth.mode design, mode: oauth requires https://
-# (no localhost http:// exemption), so the test Keycloak needs a TLS cert
-# before this test can pass. Tracked as a follow-up ticket under epic
-# SOL-149480. The config below is left in its target shape (mode: oauth)
-# so the diff against a fixed version is small.
 client_auth:
   mode: oauth
-  issuer: "http://localhost:8090/realms/solace"
+  issuer: "https://localhost:8443/realms/solace"
   audience: "solace-mcp-server"
-  resource_url: "http://localhost:9091/mcp"
+  resource_url: "https://localhost:9091/mcp"
 
 # Broker configuration
 # Note: This broker is only needed for config validation.
 # The OAuth test doesn't actually connect to the broker.
 brokers:
   test-broker:
-    url: http://localhost:8080
+    url: https://localhost:8080
     auth:
       mode: basic
       username: ${BROKER_USERNAME}

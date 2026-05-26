@@ -3,14 +3,20 @@ services:
     image: quay.io/keycloak/keycloak:latest
     container_name: keycloak-dev
     ports:
-      - "8090:8080"
+      - "8090:8080"   # HTTP  — admin API, Terraform provider
+      - "8443:8443"   # HTTPS — OIDC endpoints (issuer, token, JWKS)
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HTTPS_CERTIFICATE_FILE: /opt/keycloak/conf/certs/keycloak.crt
+      KC_HTTPS_CERTIFICATE_KEY_FILE: /opt/keycloak/conf/certs/keycloak.key
+    volumes:
+      - ./certs/keycloak.crt:/opt/keycloak/conf/certs/keycloak.crt:ro
+      - ./certs/keycloak.key:/opt/keycloak/conf/certs/keycloak.key:ro
     command:
       - start-dev
     healthcheck:
-      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/8080' || exit 1"]
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/8443' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 30
