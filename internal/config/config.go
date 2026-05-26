@@ -429,10 +429,21 @@ func isValidAlias(s string) bool {
 // returns a new map keyed by canonical (lowercase) alias. All errors are
 // accumulated so operators see every issue in one run.
 //
-// On error, the returned map still contains entries for every input that
-// passed the structural and collision checks — validate() continues with the
-// canonical map so existing per-broker checks (URL, credentials) can run and
-// surface their errors in the same pass.
+// What the returned canonical map contains:
+//   - Structurally-valid, non-colliding entries (the happy case).
+//   - Structurally-invalid entries (regex failures) — kept so that
+//     validate()'s per-broker pass (URL, auth, credentials) can attach more
+//     errors to them in the same startup attempt.
+//
+// What the returned canonical map omits:
+//   - Nil broker entries (e.g. YAML `brokers: { prod: }`) — reported with a
+//     standalone error and skipped to avoid nil-pointer derefs downstream.
+//   - Case-collision losers — running per-broker validation on entries the
+//     operator is about to rename would be noise; the collision error itself
+//     already blocks startup.
+//
+// See the phase-3 block comment below for the rationale behind the
+// kept-vs-omitted asymmetry.
 func validateAndCanonicalizeBrokers(brokers map[string]*BrokerConfig) (map[string]*BrokerConfig, []error) {
 	var errs []error
 	canonical := make(map[string]*BrokerConfig, len(brokers))
