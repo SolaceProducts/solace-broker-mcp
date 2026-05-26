@@ -5,9 +5,53 @@ listing, RDP discovery, client/subscriber state, message-rate and discard
 counters). Runs two Solace brokers in containers, provisions baseline + extended
 fixtures, and drives both SEMP-layer and messaging-layer broker state.
 
-> **Status:** Design-gated. The Go agent binary is not yet implemented. The
-> sections below define the CLI surface that must be reviewed and approved by
-> the architect reviewer before any Go fixture code lands.
+## Quickstart
+
+```bash
+bash test/e2e-monitoring/run_all.sh
+```
+
+Brings up `solace-a` and `solace-b` via `docker-compose`, applies all fixtures
+on both brokers, runs fixture-state verification, and tears everything down.
+Exit 0 on success. Cleanup runs on every exit path including `Ctrl-C` and
+`SIGTERM`; re-running after a forced kill (`SIGKILL` of the parent) succeeds —
+the cleanup-first pattern in `helpers.sh` handles stale fixtures from prior
+aborted runs.
+
+## Fixtures
+
+All fixtures apply to both brokers in parallel (`solace-a`, `solace-b`).
+`list-brokers`, `list-rdps`, and the existing RDP/queue tools run against the
+base fixture copied from `e2e-basic-mcp` — no new fixture needed.
+
+| ID       | Fixture                  | Required broker state                                                                                                                                  | Lifecycle                          | MCP tools supported                                                                |
+| -------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------- | ---------------------------------------------------------------------------------- |
+| F1       | Multi-VPN                | Additional non-default VPN `test-vpn` on each broker, created with `enabled=false`                                                                     | one-shot SEMP                      | `list-vpns`, `get-vpn-health` (enabled + disabled state coverage)                  |
+| F2       | Multi-queue              | `test-queue-2` (bound to a test RDP) and `test-queue-3` (unbound), both non-exclusive on default VPN                                                   | one-shot SEMP                      | `list-queues` (multi-entry + pagination), `get-queue-metrics` (named-object lookup) |
+| F3       | Connected client         | One long-lived persistent receiver per broker on default VPN with deterministic `clientName` and ≥1 named topic subscription                           | background goroutine in agent      | `list-clients`, `get-client-details`, `list-client-subscriptions`                  |
+| F4       | Sustained traffic        | Persistent publisher to topic `t1` at 100 msg/s, 256-byte payload; the F3 receiver drains via its subscription                                         | background goroutine               | `get-message-rates`                                                                |
+| F5       | Slow subscriber          | Fast publisher + throttled consumer bound to dedicated queue `test-queue-slow`; sustained until broker flips `slowSubscriber=true` on the consumer's client | background goroutine          | `list-slow-subscribers`, `slowSubscriber` field on `list-clients` / `get-client-details` |
+| F6-spool | Discards via spool quota | Queue `test-queue-discards-spool` with `maxMsgSpoolUsage=1 MB` + `egressEnabled=false`; one-shot publish ~2 MB                                          | one-shot SEMP + one-shot Go publish | `get-discard-stats` — `maxMsgSpoolUsageExceededDiscardedMsgCount > 0`              |
+| F6-ttl   | Discards via TTL expiry  | Queue `test-queue-discards-ttl` with `maxTtl=1 s` + no consumer; one-shot publish + 2 s wait                                                            | one-shot SEMP + one-shot Go publish | `get-discard-stats` — `maxTtlExpiredDiscardedMsgCount > 0`                         |
+
+Activation order is deterministic: F1 and F2 (SEMP-only) before F3/F4/F5
+(client-bearing). F6 runs in parallel — its queues are independent of the
+others.
+
+## Build prerequisites
+
+The agent links the Solace Go messaging client (`solace.dev/go/messaging`),
+which depends on a native library. CGO must be available.
+
+| Platform                                          | Needed                       | Install                                                                                       |
+| ------------------------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------- |
+| Linux (Ubuntu / Debian)                           | `gcc`, `libssl-dev`          | `sudo apt-get install build-essential libssl-dev`                                             |
+| macOS                                             | Xcode CLI tools, OpenSSL 3   | `xcode-select --install && brew install openssl@3`                                            |
+| macOS (Homebrew `openssl@3` in non-standard path) | `CGO_LDFLAGS`, `CGO_CFLAGS`  | `export CGO_LDFLAGS="-L$(brew --prefix openssl@3)/lib" CGO_CFLAGS="-I$(brew --prefix openssl@3)/include"` |
+| Windows                                           | WSL2 only (treat as Linux)   | —                                                                                             |
+
+Any actively supported Go version works. `run_all.sh` warns at start-up if the
+toolchain or OpenSSL headers are missing.
 
 ## Design note — expanded agent role
 
@@ -39,7 +83,7 @@ agent <subcommand> [flags]
 | `test <mcp-url>`    | (existing) MCP SDK validation        | —                                                                                               | —           | —                                                                            |
 | `connected-client`  | F3 long-lived receiver               | `--broker {a\|b}`, `--vpn`, `--client-name`, `--queue`, `--subscriptions`                       | F3          | `list-clients`, `get-client-details`, `list-client-subscriptions`            |
 | `publisher`         | F4 / F5-driver sustained publisher   | `--broker`, `--vpn`, `--topic`, `--rate`, `--size`, `--message-type`, `--duration`              | F4, F5      | `get-message-rates`                                                          |
-| `slow-consumer`     | F5 throttled receiver                | `--broker`, `--vpn`, `--client-name`, `--queue`, `--ack-delay`, `--max-unacked`                 | F5          | `list-slow-subscribers` (asserts `slowSubscriber=true`)                      |
+| `slow-consumer`     | F5 throttled receiver                | `--broker`, `--vpn`, `--client-name`, `--queue`, `--ack-delay`, `--max-unacked`                 | F5          | `list-slow-subscribers`, `slowSubscriber` field on `list-clients` / `get-client-details` |
 | `publish-batch`     | F6 one-shot publisher                | `--broker`, `--vpn`, `--topic`, `--count`, `--size`, `--rate`                                   | F6-spool, F6-ttl | `get-discard-stats`                                                     |
 
 ### Common conventions
@@ -88,6 +132,16 @@ All non-`test` subcommands share the following contract:
 ./bin/agent publisher --broker=a --topic=t-slow --rate=200 --size=256 --message-type=persistent
 ```
 
+`agent publisher` with `--duration` (auto-exits, useful when a wrapping script
+prefers a bounded process to one it has to signal):
+
+```bash
+./bin/agent publisher --broker=a --topic=t1 --rate=100 --size=256 --message-type=persistent --duration=30s
+```
+
+Omit `--duration` for long-running fixtures (the default); `helpers.sh` reaps
+the process via its pidfile during teardown.
+
 `agent slow-consumer` (F5):
 
 ```bash
@@ -128,8 +182,9 @@ fixture sizes change.
 ### F5 — slow subscriber
 
 - `slowSubscriber=true` flips when the broker has had to block delivery for "a
-  few seconds" — exact threshold is undocumented; F5 must poll for up to
-  **~60 s**.
+  few seconds" — exact threshold is undocumented. Typical settle is **~30 s**;
+  the assertion polls for up to **~60 s** before failing. Don't tune the
+  window down based on the typical number — the broker is variable.
 - Throttling recipe: don't ack (or `--ack-delay ≥ 5000 ms`); the broker flow
   window stalls; eventually the flag flips.
 
