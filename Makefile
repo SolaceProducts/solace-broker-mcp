@@ -4,12 +4,15 @@
 
 BINARY      := solace-broker-mcp
 PKG         := ./cmd/server
-VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# Filter VERSION through a safe-character regex so a poisoned git tag cannot
+# inject shell when spliced into -ldflags or docker build-args.
+VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null | grep -E '^[A-Za-z0-9._+-]+$$' || echo dev)
 # Deferred (=) so $(shell git describe) only runs for targets that actually use LDFLAGS.
 LDFLAGS      = -s -w -X github.com/SolaceDev/solace-broker-mcp/internal/version.version=$(VERSION)
 IMAGE       ?= solace-broker-mcp
 IMAGE_TAG   ?= dev
-COMPOSE_E2E := docker compose -f test/e2e/docker-compose.yml
+E2E_DIR     := test/e2e-basic-mcp
+COMPOSE_E2E := docker compose -f $(E2E_DIR)/docker-compose.yml
 
 .DEFAULT_GOAL := help
 
@@ -59,24 +62,26 @@ check: build-all vet lint test-race ## Run build, vet, lint, and race-enabled te
 # ── E2E ──────────────────────────────────────────────────────────────────────
 
 .PHONY: e2e-up
-e2e-up: ## Start Solace brokers for E2E tests
+e2e-up: ## Start Solace brokers for E2E tests (does not wait for health — use `e2e-all` for the full cycle)
 	$(COMPOSE_E2E) up -d
 
 .PHONY: e2e
 e2e: ## Run the E2E suite (requires brokers from `make e2e-up`)
-	bash test/e2e/run_all.sh
+	bash $(E2E_DIR)/run_all.sh
 
 .PHONY: e2e-down
 e2e-down: ## Stop and remove E2E brokers
 	$(COMPOSE_E2E) down -v
 
 .PHONY: e2e-all
-e2e-all: ## Full E2E cycle: bring brokers up, run suite, tear down (tears down even on failure)
+e2e-all: ## Full E2E cycle: brokers up, wait for health, run suite, tear down (tears down even on failure)
 	$(COMPOSE_E2E) up -d
-	bash test/e2e/run_all.sh; status=$$?; $(COMPOSE_E2E) down -v; exit $$status
+	@. $(E2E_DIR)/helpers.sh && wait_for_all_brokers 120 && bash $(E2E_DIR)/run_all.sh; t=$$?; \
+	$(COMPOSE_E2E) down -v || echo "WARN: e2e-all teardown failed"; \
+	exit $$t
 
 # ── Docker ───────────────────────────────────────────────────────────────────
 
 .PHONY: docker
 docker: ## Build the Docker image (override with IMAGE=, IMAGE_TAG=, VERSION=)
-	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE):$(IMAGE_TAG) .
+	docker build --build-arg VERSION="$(VERSION)" -t "$(IMAGE):$(IMAGE_TAG)" .
