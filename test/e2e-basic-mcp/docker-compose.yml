@@ -14,7 +14,7 @@ services:
         soft: 1048576
         hard: 1048576
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf -u admin:${BROKER_PASSWORD:-admin} http://localhost:8080/SEMP/v2/config/about || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -35,7 +35,7 @@ services:
         soft: 1048576
         hard: 1048576
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf -u admin:${BROKER_PASSWORD:-admin} http://localhost:8080/SEMP/v2/config/about || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 30
