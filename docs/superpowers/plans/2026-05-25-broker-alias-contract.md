@@ -728,3 +728,49 @@ The pool holds two references into `ServerConfig`: a narrow `BrokerSource` inter
 **Honest framing:** this is a judgment call, not a mechanical application of the principle. The principle ("narrow access to what's used; protect against accidental over-coupling") doesn't pick the line by itself; the calibration ("narrow when the rejected surface is large AND categorically wrong-layer") does. Same principle, different surfaces, different outputs.
 
 **Revisit if:** `SEMPConfig` gains fields the pool shouldn't see (credentials, lifecycle hooks, etc.), OR the pool starts reading SEMP fields directly rather than forwarding the pointer.
+
+## 14. Third mid-implementation correction — remove the pool's `configFor`/`clientFor`/`setClient` helpers
+
+This section was added after a PR review by Andrea Ross flagged that the pool helpers carry an implicit lock requirement which would be easy for a future contributor to miss.
+
+### 14.1 What we found
+
+Andrea's observation:
+
+> *`clientFor` and `setClient` don't take `p.mu` themselves. Today the only caller is `getOrCreate`, which holds the right lock at each call site, so this is fine. But the helpers are now named, documented, and visible inside the package as the obvious way to touch `p.clients`. A future contributor adding, say, a `HasClient(alias string) bool` method who reaches for `p.clientFor(alias)` will introduce a data race that won't surface except under load and a `-race` run.*
+
+The helpers we added in §5.2 made the trap *easier* to fall into, not harder. The §3.3 principle was to prefer type-system enforcement over discipline; named, reusable-looking helpers with implicit lock requirements violated that principle by inviting use of a surface whose safety property lives off the call site.
+
+### 14.2 Alternatives considered
+
+| Option | Verdict |
+|---|---|
+| Docstring only | Weak; relies on the contributor reading the docs |
+| `Locked` suffix rename (Go stdlib convention) | Defensible only with a second caller to disambiguate; here there was just one |
+| `TryLock`-based runtime assertion | Catches "forgot lock entirely" but adds runtime cost |
+| `clientCache` wrapper type owning the lock | Strongest, but over-engineered for a two-method state today |
+| **Inline the helpers into `getOrCreate`** | Removes the trap entirely; no helpers means no misuse |
+
+Self-locking helpers were ruled out structurally: Go's `sync.RWMutex` is not reentrant, and the double-checked locking pattern in `getOrCreate` requires the read and the write to happen under the *caller's* lock.
+
+### 14.3 Decision
+
+Inline `configFor`, `clientFor`, and `setClient` into `getOrCreate`. Remove all three. The "chokepoint for case-folding" justification from §5.2 was speculative; `getOrCreate` is the only function that touches `p.clients`, so there was no second caller for the helpers to factor.
+
+What stays:
+
+- The `clients` field doc is now a concise statement of the two operational invariants — case-folding (`strings.ToLower` before indexing) and lock discipline (`p.mu` for all access) — plus the realized-vs-configured distinction between `p.clients` and `p.src`.
+- `BrokerSource` interface stays — it solves a structurally different problem (§14.4).
+
+### 14.4 Why `BrokerSource` survives but the pool helpers don't
+
+The two abstractions look superficially similar but are solving different problems:
+
+| | `BrokerSource` (kept) | `clientFor`/`setClient` (removed) |
+|---|---|---|
+| Touches mutable state? | No (`cfg.brokers` is immutable post-startup) | Yes (`p.clients` is mutated by `setClient`, read by `clientFor`) |
+| Requires caller discipline? | No — methods are self-contained | Yes — caller must hold `p.mu` |
+| Enforcement | Type-level narrowing (compile-time) | Convention (docstring) |
+| Misuse mode? | None | Forget the lock, race ships silently |
+
+`BrokerSource` shrinks the *type surface* the pool can see (compile-time). The helpers shrank only *call-site verbosity* (no compile-time effect). The helpers had a failure mode that ships silently; `BrokerSource` has no failure mode the compiler doesn't catch. That's the line — not stylistic neatness, but whether the abstraction has a misuse mode.

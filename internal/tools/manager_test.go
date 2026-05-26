@@ -182,6 +182,28 @@ func TestCallTool_UnknownBroker(t *testing.T) {
 	}
 }
 
+// TestCallTool_UnknownBroker_PreservesCallerCasing pins the design choice
+// documented in plan §11.2: on lookup failure (ErrUnknownBroker), the error
+// echoes the operator's raw alias input verbatim, not a lowercased form. This
+// asymmetry — display form on success, raw form on failure — exists because
+// the operator needs to see their own typo to fix it.
+func TestCallTool_UnknownBroker_PreservesCallerCasing(t *testing.T) {
+	mgr := NewToolManager(newTestPool(t))
+	mgr.Register(newStubHandler("test-tool"))
+
+	const rawAlias = "PRODEAST-DOESNT-EXIST"
+	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+		"broker":     rawAlias,
+		"msgVpnName": "default",
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown broker")
+	}
+	if !strings.Contains(err.Error(), rawAlias) {
+		t.Errorf("error should preserve operator's original casing %q verbatim, got: %v", rawAlias, err)
+	}
+}
+
 // TestCallTool_ResolvesBothProtocolClients verifies that the manager
 // populates both SEMPv1Client and SEMPv2Client on the ToolContext for every
 // invocation, regardless of which protocol the handler ends up using.

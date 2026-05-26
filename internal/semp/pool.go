@@ -41,31 +41,16 @@ type BrokerSource interface {
 // double-check pattern for lazy creation.
 type BrokerPool struct {
 	mu sync.RWMutex
-	// clients is keyed by canonical (lowercase) alias. Use clientFor/setClient
-	// for all access — direct map reads/writes bypass case-folding and will
-	// silently miss when callers pass mixed-case aliases.
+	// clients caches lazily-constructed BrokerClient instances, keyed by
+	// canonical (lowercase) alias. Holds realized clients only; for the set
+	// of configured aliases, ask p.src.
+	//
+	// Index with strings.ToLower(alias) — mixed-case input would silently
+	// miss without it. Access must hold p.mu (RLock for read-only,
+	// Lock for read+write); bare map access faults under -race.
 	clients map[string]*BrokerClient
 	src     BrokerSource       // broker resolution surface (see BrokerSource doc)
 	sempCfg *config.SEMPConfig // shared SEMP settings
-}
-
-// configFor returns the BrokerConfig for alias (any case), or false if unknown.
-// Delegates to the BrokerSource, which performs the case-folding.
-func (p *BrokerPool) configFor(alias string) (*config.BrokerConfig, bool) {
-	return p.src.Broker(alias)
-}
-
-// clientFor returns the cached BrokerClient for alias (any case), or false.
-// All reads on p.clients MUST go through this helper.
-func (p *BrokerPool) clientFor(alias string) (*BrokerClient, bool) {
-	c, ok := p.clients[strings.ToLower(alias)]
-	return c, ok
-}
-
-// setClient stores a newly-created BrokerClient under the canonical key.
-// All writes to p.clients MUST go through this helper.
-func (p *BrokerPool) setClient(alias string, c *BrokerClient) {
-	p.clients[strings.ToLower(alias)] = c
 }
 
 // NewBrokerPool creates a BrokerPool from the server configuration. No
@@ -90,9 +75,14 @@ func NewBrokerPool(cfg *config.ServerConfig) *BrokerPool {
 // path. The log line is emitted exactly once per alias inside the creation
 // branch — both GetSEMPv1 and GetSEMPv2 delegate here, so neither accessor
 // can trigger a duplicate log.
+//
+// This is the sole reader/writer of p.clients. See the field doc on p.clients
+// for the invariants any future method must observe.
 func (p *BrokerPool) getOrCreate(alias string) (*BrokerClient, error) {
+	canonical := strings.ToLower(alias)
+
 	p.mu.RLock()
-	if client, ok := p.clientFor(alias); ok {
+	if client, ok := p.clients[canonical]; ok {
 		p.mu.RUnlock()
 		return client, nil
 	}
@@ -102,11 +92,11 @@ func (p *BrokerPool) getOrCreate(alias string) (*BrokerClient, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if client, ok := p.clientFor(alias); ok {
+	if client, ok := p.clients[canonical]; ok {
 		return client, nil
 	}
 
-	cfg, ok := p.configFor(alias)
+	cfg, ok := p.src.Broker(alias)
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownBroker, alias)
 	}
@@ -115,7 +105,7 @@ func (p *BrokerPool) getOrCreate(alias string) (*BrokerClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	p.setClient(alias, client)
+	p.clients[canonical] = client
 	slog.Info("broker connection created",
 		slog.String("broker", cfg.DisplayName()),
 		slog.String("url", cfg.URL),
