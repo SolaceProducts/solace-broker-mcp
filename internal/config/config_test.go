@@ -16,6 +16,8 @@ package config
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -58,11 +60,11 @@ brokers:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(cfg.Brokers) != 1 {
-		t.Fatalf("expected 1 broker, got %d", len(cfg.Brokers))
+	if len(cfg.brokers) != 1 {
+		t.Fatalf("expected 1 broker, got %d", len(cfg.brokers))
 	}
 
-	broker := cfg.Brokers["prod-us"]
+	broker := cfg.brokers["prod-us"]
 	if broker == nil {
 		t.Fatal("expected broker 'prod-us' to exist")
 		return
@@ -110,15 +112,15 @@ brokers:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(cfg.Brokers) != 2 {
-		t.Fatalf("expected 2 brokers, got %d", len(cfg.Brokers))
+	if len(cfg.brokers) != 2 {
+		t.Fatalf("expected 2 brokers, got %d", len(cfg.brokers))
 	}
 
-	if cfg.Brokers["prod-us"].Auth.Username != "admin-us" {
-		t.Errorf("prod-us username mismatch: %s", cfg.Brokers["prod-us"].Auth.Username)
+	if cfg.brokers["prod-us"].Auth.Username != "admin-us" {
+		t.Errorf("prod-us username mismatch: %s", cfg.brokers["prod-us"].Auth.Username)
 	}
-	if cfg.Brokers["prod-eu"].Auth.Username != "admin-eu" {
-		t.Errorf("prod-eu username mismatch: %s", cfg.Brokers["prod-eu"].Auth.Username)
+	if cfg.brokers["prod-eu"].Auth.Username != "admin-eu" {
+		t.Errorf("prod-eu username mismatch: %s", cfg.brokers["prod-eu"].Auth.Username)
 	}
 }
 
@@ -243,7 +245,7 @@ brokers:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	broker := cfg.Brokers["prod"]
+	broker := cfg.brokers["prod"]
 	if broker.URL != "https://broker.example.com:1943" {
 		t.Errorf("expected URL from env var, got %q", broker.URL)
 	}
@@ -297,8 +299,8 @@ brokers:
 	if err != nil {
 		t.Fatalf("commented-out ${UNSET_BEARER_TOKEN} must not fail load: %v", err)
 	}
-	if cfg.Brokers["prod"].Auth.Token != "" {
-		t.Errorf("expected token unset for commented-out line, got %q", cfg.Brokers["prod"].Auth.Token)
+	if cfg.brokers["prod"].Auth.Token != "" {
+		t.Errorf("expected token unset for commented-out line, got %q", cfg.brokers["prod"].Auth.Token)
 	}
 }
 
@@ -323,8 +325,8 @@ brokers:
 	if err != nil {
 		t.Fatalf("inline comment ${UNSET_OLD_PASSWORD} must not fail load: %v", err)
 	}
-	if cfg.Brokers["prod"].Auth.Password != "live-secret" {
-		t.Errorf("expected password substituted to %q, got %q", "live-secret", cfg.Brokers["prod"].Auth.Password)
+	if cfg.brokers["prod"].Auth.Password != "live-secret" {
+		t.Errorf("expected password substituted to %q, got %q", "live-secret", cfg.brokers["prod"].Auth.Password)
 	}
 }
 
@@ -350,7 +352,7 @@ brokers:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := cfg.Brokers["prod"].Auth.Password; got != "live#tail" {
+	if got := cfg.brokers["prod"].Auth.Password; got != "live#tail" {
 		t.Errorf("expected password %q, got %q", "live#tail", got)
 	}
 }
@@ -469,7 +471,7 @@ brokers:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	broker := cfg.Brokers["prod"]
+	broker := cfg.brokers["prod"]
 	if broker.Auth.Mode != "bearer" {
 		t.Errorf("expected mode bearer, got %q", broker.Auth.Mode)
 	}
@@ -536,8 +538,8 @@ brokers:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Brokers["dev"].Auth.Mode != "basic" {
-		t.Errorf("expected mode normalized to 'basic', got %q", cfg.Brokers["dev"].Auth.Mode)
+	if cfg.brokers["dev"].Auth.Mode != "basic" {
+		t.Errorf("expected mode normalized to 'basic', got %q", cfg.brokers["dev"].Auth.Mode)
 	}
 }
 
@@ -1209,7 +1211,7 @@ brokers:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Brokers["dev"] == nil {
+	if cfg.brokers["dev"] == nil {
 		t.Error("expected broker 'dev' to be loaded")
 	}
 }
@@ -1698,5 +1700,336 @@ brokers:
 	}
 	if !strings.Contains(err.Error(), "client_auth.issuer") {
 		t.Errorf("error should mention client_auth.issuer, got: %v", err)
+	}
+}
+
+// --- Broker alias contract tests (SOL-149789) ---
+
+// Layer 1: pure-helper tests — contract predicate and canonicalization.
+
+func TestIsValidAlias(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		// Valid
+		{"single char", "a", true},
+		{"single digit", "1", true},
+		{"lowercase word", "prod", true},
+		{"mixed case", "ProdEast", true},
+		{"with hyphen", "prod-east-1", true},
+		{"length 63 boundary", strings.Repeat("a", 63), true},
+
+		// Invalid
+		{"empty", "", false},
+		{"whitespace only", "  ", false},
+		{"leading hyphen", "-prod", false},
+		{"trailing hyphen", "prod-", false},
+		{"embedded space", "prod east", false},
+		{"underscore", "prod_east", false},
+		{"dot", "prod.east", false},
+		{"length 64 overflow", strings.Repeat("a", 64), false},
+		{"leading whitespace", " prod", false},
+		{"unicode", "prodé", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isValidAlias(tc.in); got != tc.want {
+				t.Errorf("isValidAlias(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateAndCanonicalizeBrokers(t *testing.T) {
+	mk := func(aliases ...string) map[string]*BrokerConfig {
+		m := make(map[string]*BrokerConfig, len(aliases))
+		for _, a := range aliases {
+			m[a] = &BrokerConfig{URL: "https://example", Auth: AuthConfig{Mode: "basic", Username: "u", Password: "p"}}
+		}
+		return m
+	}
+
+	t.Run("happy path lowercase keys", func(t *testing.T) {
+		canonical, errs := validateAndCanonicalizeBrokers(mk("prod-us", "dev"))
+		if len(errs) != 0 {
+			t.Fatalf("unexpected errors: %v", errs)
+		}
+		if _, ok := canonical["prod-us"]; !ok {
+			t.Errorf("canonical map missing prod-us")
+		}
+		if got := canonical["dev"].displayName; got != "dev" {
+			t.Errorf("displayName = %q, want dev", got)
+		}
+	})
+
+	t.Run("mixed case canonicalizes", func(t *testing.T) {
+		canonical, errs := validateAndCanonicalizeBrokers(mk("ProdEast"))
+		if len(errs) != 0 {
+			t.Fatalf("unexpected errors: %v", errs)
+		}
+		b, ok := canonical["prodeast"]
+		if !ok {
+			t.Fatal("canonical map missing prodeast")
+		}
+		if b.displayName != "ProdEast" {
+			t.Errorf("displayName = %q, want ProdEast", b.displayName)
+		}
+	})
+
+	t.Run("case-only collision rejected", func(t *testing.T) {
+		canonical, errs := validateAndCanonicalizeBrokers(mk("Prod", "prod"))
+		if len(errs) == 0 {
+			t.Fatal("expected collision error")
+		}
+		msg := errors.Join(errs...).Error()
+		if !strings.Contains(msg, `"Prod"`) || !strings.Contains(msg, `"prod"`) {
+			t.Errorf("collision error should quote both originals, got: %s", msg)
+		}
+		if !strings.Contains(msg, "case-insensitively") {
+			t.Errorf("collision error should mention case-insensitive comparison, got: %s", msg)
+		}
+		if _, ok := canonical["prod"]; ok {
+			t.Errorf("expected canonical map to exclude collision-loser; got entry for %q", "prod")
+		}
+	})
+
+	t.Run("3-way collision lists all originals", func(t *testing.T) {
+		_, errs := validateAndCanonicalizeBrokers(mk("Prod", "PROD", "prod"))
+		if len(errs) == 0 {
+			t.Fatal("expected collision error")
+		}
+		msg := errors.Join(errs...).Error()
+		for _, original := range []string{`"Prod"`, `"PROD"`, `"prod"`} {
+			if !strings.Contains(msg, original) {
+				t.Errorf("collision error should quote %s, got: %s", original, msg)
+			}
+		}
+	})
+
+	t.Run("two separate collision groups reported independently", func(t *testing.T) {
+		_, errs := validateAndCanonicalizeBrokers(mk("Prod", "prod", "Dev", "DEV"))
+		if len(errs) == 0 {
+			t.Fatal("expected collision errors")
+		}
+		msg := errors.Join(errs...).Error()
+		// All four originals appear somewhere in the joined error output.
+		for _, original := range []string{"Prod", "prod", "Dev", "DEV"} {
+			if !strings.Contains(msg, `"`+original+`"`) {
+				t.Errorf("expected error to mention %q, got: %s", original, msg)
+			}
+		}
+		// At least two separate collision messages.
+		if count := strings.Count(msg, "collide"); count < 2 {
+			t.Errorf("expected at least 2 collision messages, got %d in: %s", count, msg)
+		}
+	})
+
+	t.Run("invalid alias reported", func(t *testing.T) {
+		_, errs := validateAndCanonicalizeBrokers(mk("prod east"))
+		if len(errs) == 0 {
+			t.Fatal("expected error for invalid alias")
+		}
+		msg := errors.Join(errs...).Error()
+		if !strings.Contains(msg, `"prod east"`) {
+			t.Errorf("error should quote the invalid alias, got: %s", msg)
+		}
+		if !strings.Contains(msg, "1-63") {
+			t.Errorf("error should describe the contract, got: %s", msg)
+		}
+	})
+
+	t.Run("mixed valid and invalid", func(t *testing.T) {
+		canonical, errs := validateAndCanonicalizeBrokers(mk("dev", "prod east"))
+		if len(errs) == 0 {
+			t.Fatal("expected error for invalid alias")
+		}
+		if _, ok := canonical["dev"]; !ok {
+			t.Errorf("valid alias dev should be canonicalized despite sibling invalid")
+		}
+	})
+
+	t.Run("empty map returns empty canonical no errors", func(t *testing.T) {
+		canonical, errs := validateAndCanonicalizeBrokers(map[string]*BrokerConfig{})
+		if len(errs) != 0 {
+			t.Errorf("unexpected errors: %v", errs)
+		}
+		if len(canonical) != 0 {
+			t.Errorf("canonical map should be empty, got %d entries", len(canonical))
+		}
+	})
+}
+
+// Layer 2: accessor contract tests — public API behavior.
+
+func loadAliasContractTestConfig(t *testing.T, aliases ...string) *ServerConfig {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString("client_auth:\n  mode: disabled\nbrokers:\n")
+	for _, a := range aliases {
+		fmt.Fprintf(&b, "  %s:\n    url: https://broker.example.com\n    auth:\n      mode: basic\n      username: admin\n      password: secret\n", a)
+	}
+	cfg, err := LoadConfig(writeTemp(t, b.String()))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	return cfg
+}
+
+func TestBrokerLookupIsCaseInsensitive(t *testing.T) {
+	cfg := loadAliasContractTestConfig(t, "ProdEast")
+	want, ok := cfg.Broker("ProdEast")
+	if !ok {
+		t.Fatal("Broker(ProdEast) returned !ok")
+	}
+	for _, alias := range []string{"PRODEAST", "prodeast", "pRoDeAsT"} {
+		got, ok := cfg.Broker(alias)
+		if !ok {
+			t.Errorf("Broker(%q) returned !ok", alias)
+			continue
+		}
+		if got != want {
+			t.Errorf("Broker(%q) returned different pointer than Broker(%q)", alias, "ProdEast")
+		}
+	}
+}
+
+func TestBrokerDisplayNamePreservation(t *testing.T) {
+	cfg := loadAliasContractTestConfig(t, "ProdEast")
+	b, ok := cfg.Broker("prodeast")
+	if !ok {
+		t.Fatal("Broker(prodeast) returned !ok")
+	}
+	if b.DisplayName() != "ProdEast" {
+		t.Errorf("DisplayName() = %q, want ProdEast", b.DisplayName())
+	}
+}
+
+func TestBrokerAliasesReturnsDisplayForms(t *testing.T) {
+	cfg := loadAliasContractTestConfig(t, "ProdEast", "DevWest")
+	got := cfg.BrokerAliases()
+	want := []string{"DevWest", "ProdEast"}
+	if len(got) != len(want) {
+		t.Fatalf("BrokerAliases() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("BrokerAliases()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestBrokerLookupUnknownReturnsFalse(t *testing.T) {
+	cfg := loadAliasContractTestConfig(t, "prod")
+	if b, ok := cfg.Broker("nonexistent"); ok || b != nil {
+		t.Errorf("Broker(nonexistent) = (%v, %v), want (nil, false)", b, ok)
+	}
+}
+
+// Layer 3: end-to-end loader tests.
+
+func TestLoadConfigRejectsInvalidAlias(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: disabled
+brokers:
+  "prod east":
+    url: https://broker.example.com
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for invalid alias")
+	}
+	if !strings.Contains(err.Error(), `"prod east"`) {
+		t.Errorf("error should quote the invalid alias, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "1-63") {
+		t.Errorf("error should describe the contract, got: %v", err)
+	}
+}
+
+func TestLoadConfigRejectsCaseCollision(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: disabled
+brokers:
+  Prod:
+    url: https://broker.example.com
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+  prod:
+    url: https://broker.example.com
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for case collision")
+	}
+	if !strings.Contains(err.Error(), `"Prod"`) || !strings.Contains(err.Error(), `"prod"`) {
+		t.Errorf("error should quote both originals, got: %v", err)
+	}
+}
+
+func TestLoadConfigPreservesDisplayName(t *testing.T) {
+	cfg := loadAliasContractTestConfig(t, "ProdEast")
+	b, ok := cfg.Broker("prodeast")
+	if !ok {
+		t.Fatal("Broker(prodeast) returned !ok")
+	}
+	if b.DisplayName() != "ProdEast" {
+		t.Errorf("DisplayName() = %q, want ProdEast", b.DisplayName())
+	}
+}
+
+func TestLoadConfigUsesDisplayNameInValidationErrors(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: disabled
+brokers:
+  ProdEast:
+    url: ""
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for missing broker URL")
+	}
+	if !strings.Contains(err.Error(), "ProdEast") {
+		t.Errorf("per-broker validation error should preserve original casing %q, got: %v", "ProdEast", err)
+	}
+}
+
+// TestLoadConfigRejectsNilBrokerEntry pins that a YAML broker entry with no
+// body (e.g. `prod:` with nothing under it) is reported as a user-facing
+// error rather than causing a nil-pointer panic during validation.
+func TestLoadConfigRejectsNilBrokerEntry(t *testing.T) {
+	yaml := `
+client_auth:
+  mode: disabled
+brokers:
+  prod:
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for nil broker entry")
+	}
+	if !strings.Contains(err.Error(), `"prod"`) {
+		t.Errorf("error should quote the offending alias, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "empty") {
+		t.Errorf("error should explain the entry is empty, got: %v", err)
 	}
 }
