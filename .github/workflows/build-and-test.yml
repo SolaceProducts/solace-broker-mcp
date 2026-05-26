@@ -149,3 +149,38 @@ jobs:
       - name: Tear down Keycloak
         if: always()
         run: cd test/oauth && docker compose down -v
+
+  e2e-monitoring:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Start Solace brokers
+        run: docker compose -f test/e2e-monitoring/docker-compose.yml up -d
+
+      - name: Wait for brokers
+        run: |
+          source test/e2e-monitoring/helpers.sh
+          wait_for_all_brokers 120
+
+      - name: Run E2E tests
+        run: bash test/e2e-monitoring/run_all.sh
+
+      - name: Broker logs (on failure)
+        if: failure()
+        run: |
+          echo "=== solace-e2e-a ==="
+          docker logs solace-e2e-a 2>&1 | tail -100
+          echo "=== solace-e2e-b ==="
+          docker logs solace-e2e-b 2>&1 | tail -100
+
+      - name: Tear down brokers
+        if: always()
+        run: docker compose -f test/e2e-monitoring/docker-compose.yml down -v
