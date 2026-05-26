@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -163,7 +164,7 @@ func oidcHTTPClient() *http.Client {
 	if certFile == "" {
 		return nil
 	}
-	certPEM, err := os.ReadFile(certFile)
+	certPEM, err := os.ReadFile(filepath.Clean(certFile))
 	if err != nil {
 		return nil
 	}
