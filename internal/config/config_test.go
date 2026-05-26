@@ -1012,6 +1012,7 @@ func TestLoadConfig_MaxConcurrentPerBroker_OutOfRange(t *testing.T) {
 			yaml := `
 development_mode: true
 client_auth:
+  mode: static
   dev_token: test
 semp:
   max_concurrent_per_broker: ` + tc.value + `
@@ -1039,6 +1040,7 @@ brokers:
 		yaml := `
 development_mode: true
 client_auth:
+  mode: static
   dev_token: test
 semp:
   max_concurrent_per_broker: 1024
