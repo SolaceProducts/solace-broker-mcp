@@ -287,7 +287,9 @@ func LoadConfig(path string) (*ServerConfig, error) {
 	}
 
 	var raw yamlConfig
-	if err := yaml.Unmarshal(data, &raw); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("parsing config YAML: %w", err)
 	}
 

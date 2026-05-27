@@ -172,6 +172,59 @@ func TestLoadConfig_MalformedYAML(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_RejectsUnknownFields(t *testing.T) {
+	// Unknown YAML keys are a foot-gun: a typo like `developmnet_mode` or
+	// `max_concurrent_per_brokr` was previously accepted silently, leaving
+	// the operator's override as a no-op. KnownFields(true) on the YAML
+	// decoder forces typos to surface at config load.
+	cases := []struct {
+		name        string
+		yaml        string
+		wantInError string
+	}{
+		{
+			name: "top-level typo",
+			yaml: `
+developmnet_mode: true
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`,
+			wantInError: "developmnet_mode",
+		},
+		{
+			name: "nested broker typo",
+			yaml: `
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    insecure_skip_verfy: true
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`,
+			wantInError: "insecure_skip_verfy",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := LoadConfig(writeTemp(t, tc.yaml))
+			if err == nil {
+				t.Fatal("expected error for unknown YAML field")
+			}
+			if !strings.Contains(err.Error(), tc.wantInError) {
+				t.Errorf("error should name the offending field %q, got: %v", tc.wantInError, err)
+			}
+		})
+	}
+}
+
 func TestLoadConfig_DefaultsApplied(t *testing.T) {
 	yaml := `
 client_auth:
