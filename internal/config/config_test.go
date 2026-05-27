@@ -185,7 +185,6 @@ func TestLoadConfig_RejectsUnknownFields(t *testing.T) {
 		{
 			name: "top-level typo",
 			yaml: `
-development_mode: true
 developmnet_mode: true
 brokers:
   dev:
@@ -200,7 +199,6 @@ brokers:
 		{
 			name: "nested broker typo",
 			yaml: `
-development_mode: true
 brokers:
   dev:
     url: "http://localhost:8080"
