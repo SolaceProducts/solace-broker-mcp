@@ -592,6 +592,63 @@ client_auth:
 	}
 }
 
+func TestLoadConfig_WarnsOnInsecureSkipVerifyInProductionMode(t *testing.T) {
+	// Per PR #52 review (bczoma): production mode allows insecure_skip_verify
+	// for parity with other tooling, but emits a startup WARN naming the
+	// broker so operators see it in triage logs.
+	buf := captureSlog(t)
+	yaml := `
+brokers:
+  prod-us:
+    url: "https://broker.example.com:8080"
+    insecure_skip_verify: true
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "solace-mcp"
+  resource_url: "https://mcp.example.com"
+`
+	if _, err := LoadConfig(writeTemp(t, yaml)); err != nil {
+		t.Fatalf("insecure_skip_verify=true should not fail validation: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "INSECURE: TLS verification disabled for broker") {
+		t.Errorf("expected aligned INSECURE TLS WARN, got: %s", out)
+	}
+	if !strings.Contains(out, "broker=prod-us") {
+		t.Errorf("expected WARN to identify broker via broker=<alias>, got: %s", out)
+	}
+}
+
+func TestLoadConfig_NoWarnOnInsecureSkipVerifyInDevelopmentMode(t *testing.T) {
+	// In development_mode the insecure flag is the expected default for
+	// local broker setups, so no startup WARN should fire.
+	buf := captureSlog(t)
+	yaml := `
+client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  dev:
+    url: "https://broker.example.com:8080"
+    insecure_skip_verify: true
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	if _, err := LoadConfig(writeTemp(t, yaml)); err != nil {
+		t.Errorf("insecure_skip_verify: true should be allowed in development_mode: %v", err)
+	}
+	if strings.Contains(buf.String(), "INSECURE: TLS verification disabled for broker") {
+		t.Errorf("did not expect INSECURE TLS WARN in dev mode, got: %s", buf.String())
+	}
+}
+
 func TestLoadConfig_RejectsHTTPClientAuthInProductionMode(t *testing.T) {
 	yaml := `
 brokers:
