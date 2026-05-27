@@ -219,7 +219,7 @@ func TestSanitizeClaim_logInjection_endToEnd(t *testing.T) {
 	t.Run("json handler", func(t *testing.T) {
 		var buf bytes.Buffer
 		logger := slog.New(slog.NewJSONHandler(&buf, nil))
-		logger.Info("tool invoked", slog.Any("identity", id))
+		logger.Info("tool invoked", slog.Any("", id))
 
 		// Output is one line — assert that splitting on '\n' produces exactly
 		// one non-empty line. A successful injection would produce two.
@@ -232,7 +232,7 @@ func TestSanitizeClaim_logInjection_endToEnd(t *testing.T) {
 	t.Run("text handler", func(t *testing.T) {
 		var buf bytes.Buffer
 		logger := slog.New(slog.NewTextHandler(&buf, nil))
-		logger.Info("tool invoked", slog.Any("identity", id))
+		logger.Info("tool invoked", slog.Any("", id))
 
 		lines := splitNonEmptyLines(buf.String())
 		if len(lines) != 1 {
