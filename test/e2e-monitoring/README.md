@@ -7,32 +7,54 @@ fixtures, and drives both SEMP-layer and messaging-layer broker state.
 
 ## Quickstart
 
+Brokers must already be running. Bring them up once and leave them up across
+runs:
+
+```bash
+docker compose -f test/e2e-monitoring/docker-compose.yml up -d
+```
+
+Then run the suite:
+
 ```bash
 bash test/e2e-monitoring/run_all.sh
 ```
 
-Brings up `solace-a` and `solace-b` via `docker-compose`, applies all fixtures
-on both brokers, runs fixture-state verification, and tears everything down.
-Exit 0 on success. Cleanup runs on every exit path including `Ctrl-C` and
-`SIGTERM`; re-running after a forced kill (`SIGKILL` of the parent) succeeds —
-the cleanup-first pattern in `helpers.sh` handles stale fixtures from prior
-aborted runs.
+`run_all.sh` builds the MCP server, applies all fixtures to both brokers
+(`solace-e2e-mon-a`, `solace-e2e-mon-b`), runs both test scenarios
+(standalone curl + Go agent), then cleans up fixtures and stops the MCP
+server. Brokers are left running for the next invocation. Exit 0 on success.
+
+Cleanup runs on every exit path including `Ctrl-C` and `SIGTERM`; re-running
+after a forced kill (`SIGKILL` of the parent) succeeds — the cleanup-first
+pattern in `helpers.sh` handles stale fixtures from prior aborted runs.
+
+Tear down brokers when done:
+
+```bash
+docker compose -f test/e2e-monitoring/docker-compose.yml down -v
+```
 
 ## Fixtures
 
-All fixtures apply to both brokers in parallel (`solace-a`, `solace-b`).
-`list-brokers`, `list-rdps`, and the existing RDP/queue tools run against the
-base fixture copied from `e2e-basic-mcp` — no new fixture needed.
+All fixtures apply to both brokers in parallel (`solace-e2e-mon-a`,
+`solace-e2e-mon-b`). `list-brokers`, `list-rdps`, and the existing RDP/queue
+tools run against the base fixture copied from `e2e-basic-mcp` — no new
+fixture needed.
 
-| ID       | Fixture                  | Required broker state                                                                                                                                  | Lifecycle                          | MCP tools supported                                                                |
-| -------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------- | ---------------------------------------------------------------------------------- |
-| F1       | Multi-VPN                | Additional non-default VPN `test-vpn` on each broker, created with `enabled=false`                                                                     | one-shot SEMP                      | `list-vpns`, `get-vpn-health` (enabled + disabled state coverage)                  |
-| F2       | Multi-queue              | `test-queue-2` (bound to a test RDP) and `test-queue-3` (unbound), both non-exclusive on default VPN                                                   | one-shot SEMP                      | `list-queues` (multi-entry + pagination), `get-queue-metrics` (named-object lookup) |
-| F3       | Connected client         | One long-lived persistent receiver per broker on default VPN with deterministic `clientName` and ≥1 named topic subscription                           | background goroutine in agent      | `list-clients`, `get-client-details`, `list-client-subscriptions`                  |
-| F4       | Sustained traffic        | Persistent publisher to topic `t1` at 100 msg/s, 256-byte payload; the F3 receiver drains via its subscription                                         | background goroutine               | `get-message-rates`                                                                |
-| F5       | Slow subscriber          | Fast publisher + throttled consumer bound to dedicated queue `test-queue-slow`; sustained until broker flips `slowSubscriber=true` on the consumer's client | background goroutine          | `list-slow-subscribers`, `slowSubscriber` field on `list-clients` / `get-client-details` |
-| F6-spool | Discards via spool quota | Queue `test-queue-discards-spool` with `maxMsgSpoolUsage=1 MB` + `egressEnabled=false`; one-shot publish ~2 MB                                          | one-shot SEMP + one-shot Go publish | `get-discard-stats` — `maxMsgSpoolUsageExceededDiscardedMsgCount > 0`              |
-| F6-ttl   | Discards via TTL expiry  | Queue `test-queue-discards-ttl` with `maxTtl=1 s` + no consumer; one-shot publish + 2 s wait                                                            | one-shot SEMP + one-shot Go publish | `get-discard-stats` — `maxTtlExpiredDiscardedMsgCount > 0`                         |
+F1 and F2 are implemented today. F3–F6 are planned (tracked under
+SOL-150024); the Go agent work that drives the client-bearing fixtures has
+not yet landed.
+
+| ID       | Status      | Fixture                  | Required broker state                                                                                                                                  | Lifecycle                          | MCP tools supported                                                                |
+| -------- | ----------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------- | ---------------------------------------------------------------------------------- |
+| F1       | Implemented | Multi-VPN                | Additional non-default VPN `test-vpn` on each broker, created with `enabled=false`                                                                     | one-shot SEMP                      | `list-vpns`, `get-vpn-health` (enabled + disabled state coverage)                  |
+| F2       | Implemented | Multi-queue              | `test-queue-2` (bound to a test RDP) and `test-queue-3` (unbound), both non-exclusive on default VPN                                                   | one-shot SEMP                      | `list-queues` (multi-entry + pagination), `get-queue-metrics` (named-object lookup) |
+| F3       | Planned     | Connected client         | One long-lived persistent receiver per broker on default VPN with deterministic `clientName` and ≥1 named topic subscription                           | background goroutine in agent      | `list-clients`, `get-client-details`, `list-client-subscriptions`                  |
+| F4       | Planned     | Sustained traffic        | Persistent publisher to topic `t1` at 100 msg/s, 256-byte payload; the F3 receiver drains via its subscription                                         | background goroutine               | `get-message-rates`                                                                |
+| F5       | Planned     | Slow subscriber          | Fast publisher + throttled consumer bound to dedicated queue `test-queue-slow`; sustained until broker flips `slowSubscriber=true` on the consumer's client | background goroutine          | `list-slow-subscribers`, `slowSubscriber` field on `list-clients` / `get-client-details` |
+| F6-spool | Planned     | Discards via spool quota | Queue `test-queue-discards-spool` with `maxMsgSpoolUsage=1 MB` + `egressEnabled=false`; one-shot publish ~2 MB                                          | one-shot SEMP + one-shot Go publish | `get-discard-stats` — `maxMsgSpoolUsageExceededDiscardedMsgCount > 0`              |
+| F6-ttl   | Planned     | Discards via TTL expiry  | Queue `test-queue-discards-ttl` with `maxTtl=1 s` + no consumer; one-shot publish + 2 s wait                                                            | one-shot SEMP + one-shot Go publish | `get-discard-stats` — `maxTtlExpiredDiscardedMsgCount > 0`                         |
 
 Activation order is deterministic: F1 and F2 (SEMP-only) before F3/F4/F5
 (client-bearing). F6 runs in parallel — its queues are independent of the
@@ -52,6 +74,9 @@ which depends on a native library. CGO must be available.
 
 Any actively supported Go version works. `run_all.sh` warns at start-up if the
 toolchain or OpenSSL headers are missing.
+
+The shell harness also requires `jq` for JSON assertions in the standalone
+scenario (Linux: `sudo apt-get install jq`, macOS: `brew install jq`).
 
 ## Design note — expanded agent role
 

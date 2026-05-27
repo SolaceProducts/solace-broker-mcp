@@ -21,89 +21,55 @@ test_initialize() {
 }
 
 test_list_tools() {
-    local session_id
-    session_id=$(mcp_initialize)
-
-    local response
-    response=$(mcp_request "$session_id" '{
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/list",
-        "params": {}
-    }')
-
-    assert_contains "$response" "get-rdp-status" "tools/list should include get-rdp-status" || return 1
-    assert_contains "$response" "list-brokers" "tools/list should include list-brokers" || return 1
-    assert_contains "$response" "get-queue-metrics" "tools/list should include get-queue-metrics" || return 1
-    assert_contains "$response" "get-client-details" "tools/list should include get-client-details" || return 1
-    assert_contains "$response" "list-client-subscriptions" "tools/list should include list-client-subscriptions" || return 1
+    local sid response
+    sid=$(mcp_initialize)
+    response=$(mcp_request "$sid" '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')
+    for tool in get-rdp-status list-brokers get-queue-metrics get-client-details list-client-subscriptions; do
+        assert_contains "$response" "$tool" "tools/list should include $tool" || return 1
+    done
 }
 
 test_list_brokers() {
-    local session_id
-    session_id=$(mcp_initialize)
-
     local response
-    response=$(mcp_request "$session_id" '{
-        "jsonrpc": "2.0",
-        "id": 3,
-        "method": "tools/call",
-        "params": {
-            "name": "list-brokers",
-            "arguments": {}
-        }
-    }')
-
+    response=$(mcp_call_tool "list-brokers" '{}')
     assert_contains "$response" "broker-a" "list-brokers should include 'broker-a'" || return 1
     assert_contains "$response" "broker-b" "list-brokers should include 'broker-b'" || return 1
 }
 
-# ── Broker A tests ───────────────────────────────────────────────────────────
+# ── Per-broker tests (parameterized) ─────────────────────────────────────────
 
-test_get_rdp_status_broker_a() {
-    local session_id
-    session_id=$(mcp_initialize)
-
-    local response
-    response=$(mcp_request "$session_id" '{
-        "jsonrpc": "2.0",
-        "id": 4,
-        "method": "tools/call",
-        "params": {
-            "name": "get-rdp-status",
-            "arguments": {
-                "broker": "broker-a",
-                "msgVpnName": "default",
-                "restDeliveryPointName": "test-rdp"
-            }
-        }
-    }')
-
-    assert_contains "$response" "rdpStatus" "Response should contain rdpStatus step" || return 1
+_check_rdp_status() {
+    local broker="$1"
+    local args response
+    args=$(jq -nc --arg b "$broker" \
+        '{broker:$b,msgVpnName:"default",restDeliveryPointName:"test-rdp"}')
+    response=$(mcp_call_tool "get-rdp-status" "$args")
+    assert_contains "$response" "rdpStatus"     "Response should contain rdpStatus step"     || return 1
     assert_contains "$response" "queueBindings" "Response should contain queueBindings step" || return 1
     assert_contains "$response" "restConsumers" "Response should contain restConsumers step" || return 1
-    assert_contains "$response" "test-rdp" "Response should mention the RDP name" || return 1
+    assert_contains "$response" "test-rdp"      "Response should mention the RDP name"       || return 1
 }
 
+_check_queue_metrics() {
+    local broker="$1"
+    local args response
+    args=$(jq -nc --arg b "$broker" \
+        '{broker:$b,msgVpnName:"default",queueName:"test-queue"}')
+    response=$(mcp_call_tool "get-queue-metrics" "$args")
+    assert_contains "$response" "queueMetrics" "Response should contain queueMetrics step" || return 1
+    assert_contains "$response" "test-queue"   "Response should mention the queue name"    || return 1
+}
+
+test_get_rdp_status_broker_a()    { _check_rdp_status broker-a; }
+test_get_rdp_status_broker_b()    { _check_rdp_status broker-b; }
+test_get_queue_metrics_broker_a() { _check_queue_metrics broker-a; }
+test_get_queue_metrics_broker_b() { _check_queue_metrics broker-b; }
+
 test_get_rdp_status_not_found() {
-    local session_id
-    session_id=$(mcp_initialize)
-
-    local response
-    response=$(mcp_request "$session_id" '{
-        "jsonrpc": "2.0",
-        "id": 5,
-        "method": "tools/call",
-        "params": {
-            "name": "get-rdp-status",
-            "arguments": {
-                "broker": "broker-a",
-                "msgVpnName": "default",
-                "restDeliveryPointName": "nonexistent-rdp"
-            }
-        }
-    }')
-
+    local args response
+    args=$(jq -nc \
+        '{broker:"broker-a",msgVpnName:"default",restDeliveryPointName:"nonexistent-rdp"}')
+    response=$(mcp_call_tool "get-rdp-status" "$args")
     if echo "$response" | grep -q '"error"'; then
         return 0
     fi
@@ -112,82 +78,9 @@ test_get_rdp_status_not_found() {
     return 1
 }
 
-test_get_queue_metrics_broker_a() {
-    local session_id
-    session_id=$(mcp_initialize)
-
-    local response
-    response=$(mcp_request "$session_id" '{
-        "jsonrpc": "2.0",
-        "id": 6,
-        "method": "tools/call",
-        "params": {
-            "name": "get-queue-metrics",
-            "arguments": {
-                "broker": "broker-a",
-                "msgVpnName": "default",
-                "queueName": "test-queue"
-            }
-        }
-    }')
-
-    assert_contains "$response" "queueMetrics" "Response should contain queueMetrics step" || return 1
-    assert_contains "$response" "test-queue" "Response should mention the queue name" || return 1
-}
-
-# ── Broker B tests ───────────────────────────────────────────────────────────
-
-test_get_rdp_status_broker_b() {
-    local session_id
-    session_id=$(mcp_initialize)
-
-    local response
-    response=$(mcp_request "$session_id" '{
-        "jsonrpc": "2.0",
-        "id": 7,
-        "method": "tools/call",
-        "params": {
-            "name": "get-rdp-status",
-            "arguments": {
-                "broker": "broker-b",
-                "msgVpnName": "default",
-                "restDeliveryPointName": "test-rdp"
-            }
-        }
-    }')
-
-    assert_contains "$response" "rdpStatus" "Response should contain rdpStatus step" || return 1
-    assert_contains "$response" "queueBindings" "Response should contain queueBindings step" || return 1
-    assert_contains "$response" "restConsumers" "Response should contain restConsumers step" || return 1
-    assert_contains "$response" "test-rdp" "Response should mention the RDP name" || return 1
-}
-
-test_get_queue_metrics_broker_b() {
-    local session_id
-    session_id=$(mcp_initialize)
-
-    local response
-    response=$(mcp_request "$session_id" '{
-        "jsonrpc": "2.0",
-        "id": 8,
-        "method": "tools/call",
-        "params": {
-            "name": "get-queue-metrics",
-            "arguments": {
-                "broker": "broker-b",
-                "msgVpnName": "default",
-                "queueName": "test-queue"
-            }
-        }
-    }')
-
-    assert_contains "$response" "queueMetrics" "Response should contain queueMetrics step" || return 1
-    assert_contains "$response" "test-queue" "Response should mention the queue name" || return 1
-}
-
 # ── Run ──────────────────────────────────────────────────────────────────────
 
-run_test "Health endpoint"                    test_health_endpoint
+run_test "Health endpoint"                   test_health_endpoint
 run_test "MCP initialize"                    test_initialize
 run_test "List tools"                        test_list_tools
 run_test "List brokers (both)"               test_list_brokers

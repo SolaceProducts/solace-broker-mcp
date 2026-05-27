@@ -176,10 +176,10 @@ jobs:
       - name: Broker logs (on failure)
         if: failure()
         run: |
-          echo "=== solace-e2e-a ==="
-          docker logs solace-e2e-a 2>&1 | tail -100
-          echo "=== solace-e2e-b ==="
-          docker logs solace-e2e-b 2>&1 | tail -100
+          echo "=== solace-e2e-mon-a ==="
+          docker logs solace-e2e-mon-a 2>&1 | tail -100
+          echo "=== solace-e2e-mon-b ==="
+          docker logs solace-e2e-mon-b 2>&1 | tail -100
 
       - name: Tear down brokers
         if: always()

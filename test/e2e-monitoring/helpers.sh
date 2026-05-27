@@ -32,7 +32,7 @@ MCP_SERVER_PID=""
 
 # Static dev token used to authenticate every e2e curl/agent request to the
 # broker MCP server. Must match dev_token in write_config() and broker-config.yaml.
-# Exported so test/e2e/agent reads it from env (see test/e2e/agent/main.go).
+# Exported so the agent reads it from env (see test/e2e-monitoring/agent/main.go).
 export MCP_DEV_TOKEN="e2e-static-dev-token"
 
 # ── Colors ───────────────────────────────────────────────────────────────────
@@ -184,6 +184,11 @@ stop_server() {
         wait "$MCP_SERVER_PID" 2>/dev/null || true
         MCP_SERVER_PID=""
     fi
+    # Remove the temp config written by start_server.sh --bg, if any.
+    local configfile_ref="$BIN_DIR/mcp-server.config"
+    if [ -f "$configfile_ref" ]; then
+        rm -f "$(cat "$configfile_ref")" "$configfile_ref"
+    fi
 }
 
 write_config() {
@@ -218,17 +223,17 @@ semp_post() {
     local semp_config="$1"
     local path="$2"
     local data="$3"
-    local response
-    response=$(curl -s -o /dev/null -w "%{http_code}" -X POST -u "$BROKER_USER:$BROKER_PASS" \
+    local response status body
+    response=$(curl -s -w $'\n%{http_code}' -X POST -u "$BROKER_USER:$BROKER_PASS" \
         -H "Content-Type: application/json" \
         "$semp_config/$path" -d "$data")
-    if [ "$response" -ge 200 ] && [ "$response" -lt 300 ]; then
+    status="${response##*$'\n'}"
+    body="${response%$'\n'*}"
+    if [ "$status" -ge 200 ] && [ "$status" -lt 300 ]; then
         return 0
     else
-        log_fail "SEMP POST $path returned HTTP $response"
-        curl -s -X POST -u "$BROKER_USER:$BROKER_PASS" \
-            -H "Content-Type: application/json" \
-            "$semp_config/$path" -d "$data" >&2
+        log_fail "SEMP POST $path returned HTTP $status"
+        [ -n "$body" ] && printf '%s\n' "$body" >&2
         return 1
     fi
 }
@@ -410,6 +415,22 @@ mcp_initialize() {
         }' >/dev/null 2>&1 || true
 
     echo "$session_id"
+}
+
+# Initialize a session and call a single tool. Returns the SSE-extracted JSON response.
+# Args:
+#   $1 = tool name (e.g. "get-rdp-status")
+#   $2 = tool arguments as a JSON object literal (e.g. '{"broker":"broker-a"}')
+# Use jq for the args to keep escaping sane:
+#   args=$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')
+#   mcp_call_tool "list-queues" "$args"
+mcp_call_tool() {
+    local tool="$1"
+    local args_json="$2"
+    local sid
+    sid=$(mcp_initialize) || return 1
+    mcp_request "$sid" "$(jq -nc --arg t "$tool" --argjson a "$args_json" \
+        '{jsonrpc:"2.0",id:1,method:"tools/call",params:{name:$t,arguments:$a}}')"
 }
 
 # Sends an MCP request with the given session ID. Returns the JSON response body.
