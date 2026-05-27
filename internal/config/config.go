@@ -594,7 +594,7 @@ func validate(cfg *ServerConfig) error {
 		// Surface insecure_skip_verify=true at startup so operators see it
 		// in triage logs without scraping per-request SEMP-client warns.
 		if cfg.IsProductionMode() && broker.InsecureSkipVerify {
-			slog.Warn("INSECURE: insecure_skip_verify=true in production mode; broker TLS certificate will not be validated",
+			slog.Warn("INSECURE: TLS verification disabled for broker",
 				slog.String("broker", broker.DisplayName()))
 		}
 	}

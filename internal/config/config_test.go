@@ -616,11 +616,11 @@ client_auth:
 		t.Fatalf("insecure_skip_verify=true should not fail validation: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "INSECURE") || !strings.Contains(out, "insecure_skip_verify") {
-		t.Errorf("expected WARN naming insecure_skip_verify, got: %s", out)
+	if !strings.Contains(out, "INSECURE: TLS verification disabled for broker") {
+		t.Errorf("expected aligned INSECURE TLS WARN, got: %s", out)
 	}
-	if !strings.Contains(out, "prod-us") {
-		t.Errorf("expected WARN to name broker alias, got: %s", out)
+	if !strings.Contains(out, "broker=prod-us") {
+		t.Errorf("expected WARN to identify broker via broker=<alias>, got: %s", out)
 	}
 }
 
@@ -644,8 +644,8 @@ brokers:
 	if _, err := LoadConfig(writeTemp(t, yaml)); err != nil {
 		t.Errorf("insecure_skip_verify: true should be allowed in development_mode: %v", err)
 	}
-	if strings.Contains(buf.String(), "insecure_skip_verify") {
-		t.Errorf("did not expect insecure_skip_verify WARN in dev mode, got: %s", buf.String())
+	if strings.Contains(buf.String(), "INSECURE: TLS verification disabled for broker") {
+		t.Errorf("did not expect INSECURE TLS WARN in dev mode, got: %s", buf.String())
 	}
 }
 
