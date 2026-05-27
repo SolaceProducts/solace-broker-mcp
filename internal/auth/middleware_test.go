@@ -734,3 +734,106 @@ func Test_PRMHandler_OAuth(t *testing.T) {
 		t.Error("expected non-nil PRM handler for mode: oauth")
 	}
 }
+
+// Test_OIDCVerifier_PopulatesTokenInfo_AllClaims verifies that the OIDC
+// verifier extracts sub/iss/client_id/jti and stashes the latter three in
+// TokenInfo.Extra under fixed keys. SOL-149606 wires these into audit logs;
+// this test pins the contract between the verifier and the identity layer in
+// internal/tools.
+func Test_OIDCVerifier_PopulatesTokenInfo_AllClaims(t *testing.T) {
+	mock := newMockOIDCServer(t)
+	defer mock.close()
+
+	cfg := &config.ServerConfig{
+		ClientAuth: config.ClientAuthConfig{
+			Mode:     config.AuthModeOAuth,
+			Issuer:   mock.issuer,
+			Audience: mock.audience,
+		},
+	}
+
+	verifier, err := NewTokenVerifier(cfg)
+	if err != nil {
+		t.Fatalf("NewTokenVerifier: %v", err)
+	}
+
+	token, err := mock.createToken(map[string]interface{}{
+		"sub":       "user-42",
+		"client_id": "cursor-ide",
+		"jti":       "jti-abc-123",
+	})
+	if err != nil {
+		t.Fatalf("createToken: %v", err)
+	}
+
+	info, err := verifier(context.Background(), token, nil)
+	if err != nil {
+		t.Fatalf("verifier returned error: %v", err)
+	}
+
+	if info.UserID != "user-42" {
+		t.Errorf("UserID = %q, want %q", info.UserID, "user-42")
+	}
+	if got := info.Extra["iss"]; got != mock.issuer {
+		t.Errorf("Extra[iss] = %v, want %q", got, mock.issuer)
+	}
+	if got := info.Extra["client_id"]; got != "cursor-ide" {
+		t.Errorf("Extra[client_id] = %v, want %q", got, "cursor-ide")
+	}
+	if got := info.Extra["jti"]; got != "jti-abc-123" {
+		t.Errorf("Extra[jti] = %v, want %q", got, "jti-abc-123")
+	}
+}
+
+// Test_OIDCVerifier_MissingOptionalClaims_LeftEmptyString verifies that when
+// the IdP omits optional claims (jti, client_id), the verifier still
+// populates the Extra keys — with empty string values. The identity layer
+// normalizes empty to "<absent>" for audit logs; this test pins that the keys
+// are always present in Extra so the normalizer has something to read.
+func Test_OIDCVerifier_MissingOptionalClaims_LeftEmptyString(t *testing.T) {
+	mock := newMockOIDCServer(t)
+	defer mock.close()
+
+	cfg := &config.ServerConfig{
+		ClientAuth: config.ClientAuthConfig{
+			Mode:     config.AuthModeOAuth,
+			Issuer:   mock.issuer,
+			Audience: mock.audience,
+		},
+	}
+
+	verifier, err := NewTokenVerifier(cfg)
+	if err != nil {
+		t.Fatalf("NewTokenVerifier: %v", err)
+	}
+
+	// Token with no client_id, no jti — only the required claims set by
+	// createToken (sub, iss, aud, exp, iat).
+	token, err := mock.createToken(map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("createToken: %v", err)
+	}
+
+	info, err := verifier(context.Background(), token, nil)
+	if err != nil {
+		t.Fatalf("verifier returned error: %v", err)
+	}
+
+	// Required claim — iss is set by the mock to the issuer URL.
+	if got := info.Extra["iss"]; got != mock.issuer {
+		t.Errorf("Extra[iss] = %v, want %q", got, mock.issuer)
+	}
+	// Missing claims unmarshal to the zero value of their Go type (string→"").
+	// The Extra key MUST still be present — identity normalization depends on
+	// reading the key, not on probing for its existence.
+	for _, key := range []string{"client_id", "jti"} {
+		v, ok := info.Extra[key]
+		if !ok {
+			t.Errorf("Extra[%q] missing — verifier should always set the key", key)
+			continue
+		}
+		if s, isString := v.(string); !isString || s != "" {
+			t.Errorf("Extra[%q] = %v (%T), want \"\"", key, v, v)
+		}
+	}
+}

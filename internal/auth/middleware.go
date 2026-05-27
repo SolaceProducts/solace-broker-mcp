@@ -121,11 +121,19 @@ func createOIDCTokenVerifier(cfg *config.ServerConfig) (sdkauth.TokenVerifier, e
 			return nil, fmt.Errorf("%w: %v", sdkauth.ErrInvalidToken, err)
 		}
 
-		// Extract claims
+		// Extract claims.
+		//
+		// iss, client_id, and jti feed the per-invocation audit-log identity
+		// surface (SOL-149606). They are stashed in TokenInfo.Extra under the
+		// exact keys "iss", "client_id", "jti"; internal/tools/identity.go
+		// reads them by those keys. Drift-detection tests in that package pin
+		// the allowlist.
 		var claims struct {
 			Sub      string `json:"sub"`
 			Scope    string `json:"scope"`
+			Iss      string `json:"iss"`
 			ClientID string `json:"client_id"`
+			Jti      string `json:"jti"`
 		}
 
 		if err := idToken.Claims(&claims); err != nil {
@@ -142,6 +150,11 @@ func createOIDCTokenVerifier(cfg *config.ServerConfig) (sdkauth.TokenVerifier, e
 			UserID:     claims.Sub,
 			Scopes:     scopes,
 			Expiration: idToken.Expiry,
+			Extra: map[string]any{
+				"iss":       claims.Iss,
+				"client_id": claims.ClientID,
+				"jti":       claims.Jti,
+			},
 		}, nil
 	}, nil
 }
