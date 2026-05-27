@@ -571,7 +571,7 @@ should be the first thing that breaks.
 | `TestVerifier_populatesExpectedExtraKeys` | Construct a fake JWT, run it through `createOIDCTokenVerifier`'s claims extraction, and assert `TokenInfo.Extra` contains the keys `"iss"`, `"client_id"`, `"jti"`. If a future verifier refactor stops populating one of these, this test catches it before audit logs go quiet. |
 | `TestClaimsStruct_hasAllAuditedClaims` | Reflect over the anonymous `claims` struct in `createOIDCTokenVerifier` and assert it has the four JSON tags we audit (`sub`, `iss`, `client_id`, `jti`). If someone removes one in a refactor, this catches it. |
 | `TestIdentity_audited_fields_matchLogValueOutput` | Reflect over `Identity`'s exported audit surface and assert it matches the keys emitted by `LogValue()`. If a field is added to `Identity` but not wired into `LogValue` (or vice versa), the test fails. This prevents the schema and the emitter from drifting apart silently. |
-| `TestSDKVersion_pinned` | Read `go.mod` and assert `github.com/modelcontextprotocol/go-sdk` is at the version this PR was tested against. SDK upgrades are intentional events; this test forces the upgrade PR to consciously re-run the drift-detection suite. |
+| ~~`TestSDKVersion_pinned`~~ | **Removed post-implementation — see §13.** The version pin was redundant with `go.mod` review and produced noise on every SDK bump without detecting actual shape changes. The shape-asserting tests above carry the real defense. |
 
 These tests pay for themselves the first time an SDK upgrade or
 upstream verifier change introduces a quiet regression. They are
@@ -656,3 +656,49 @@ stdlib docs on Group inlining). This:
 This revision does not change Identity's API, fields, or LogValue
 implementation — only how the manager wires the value into log calls
 (`slog.Any("", id)` instead of `slog.Any("identity", id)`).
+
+## 13. Revision — removed `TestSDKVersion_pinned`
+
+**Surfaced post-implementation:** the implementer landed
+`TestSDKVersion_pinned` exactly as §9.2 described — pins a constant
+`pinnedSDKVersion = "v1.5.0"` and asserts `go.mod` matches. On review,
+the test does not earn its keep.
+
+**What we found.** The test fails on **any** SDK version change,
+including safe ones. The signal it produces — "someone modified
+go.mod" — is already visible in every PR's diff. It does not detect
+the actual risk (a shape change in `TokenInfo` or `Extra`); the
+sibling tests `TestTokenInfoStruct_hasExpectedFields` and
+`TestTokenInfoExtra_isMapStringAny` do that, and they survive minor
+bumps that don't break our assumptions.
+
+**Alternatives considered.**
+
+1. **Keep as-is.** Trains reviewers to mechanically update the
+   constant on every SDK bump — the exact "loosen the test to make it
+   pass" anti-pattern §9.2's top-of-file comment was meant to prevent.
+2. **Weaken to a substring/major-version match.** Still produces
+   noise on minor bumps; still doesn't detect shape changes.
+3. **Remove the test and constant.** Shape tests carry the real
+   defense; go.mod diff carries the deliberate-event signal.
+
+**Decision:** removed `TestSDKVersion_pinned` and `pinnedSDKVersion`.
+The `os` import in `identity_test.go` becomes unused and is dropped
+with it. The two shape-asserting tests in §9.2 stay; they are the
+actual contract enforcement.
+
+**Why this isn't infinite regress.** The remaining drift-detection
+tests (`TestTokenInfoStruct_hasExpectedFields`,
+`TestTokenInfoExtra_isMapStringAny`,
+`TestVerifier_populatesExpectedExtraKeys`,
+`TestClaimsStruct_hasAllAuditedClaims`,
+`TestIdentity_audited_fields_matchLogValueOutput`) catch every
+class of silent regression the version pin was supposed to defend
+against, with actionable failure messages and without firing on safe
+upgrades. The version pin was redundant with go.mod review.
+
+**Why we missed this in initial planning.** The plan's intent
+("force a deliberate event on SDK upgrade") was sound; we missed
+that "deliberate event" is already enforced by code review of
+`go.mod`. A test that duplicates a review checkpoint adds noise
+without signal.

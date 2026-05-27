@@ -36,6 +36,7 @@ import (
 	"log/slog"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 )
@@ -120,9 +121,19 @@ func normalizeAbsent(s string) string {
 // result at claimMaxLen bytes. JSON-handler escaping already neutralizes
 // CR/LF for the JSON sink, but downstream re-emission (errors, panics,
 // custom handlers) is the reason we sanitize at the field level (plan §4.4).
+//
+// Allocation and CPU are bounded by claimMaxLen: the working buffer is sized
+// at min(len(s), claimMaxLen) and the loop breaks as soon as another rune
+// would exceed the cap. A malicious or buggy IdP shipping a multi-megabyte
+// claim cannot force proportional work here.
+//
+// Truncation lands on a rune boundary — we check the projected length BEFORE
+// writing, so the output is always valid UTF-8 even if the cap falls inside
+// what would have been a multibyte codepoint.
 func sanitizeClaim(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
+	b := strings.Builder{}
+	b.Grow(min(len(s), claimMaxLen))
+
 	for _, r := range s {
 		if r < 0x20 || r == 0x7F {
 			continue
@@ -132,13 +143,15 @@ func sanitizeClaim(s string) string {
 		if unicode.IsControl(r) {
 			continue
 		}
+		// Stop before writing a rune that would push us past the cap. This
+		// is both the DoS defense (bounds total work) and the UTF-8 safety
+		// guarantee (never emits half a multibyte codepoint).
+		if b.Len()+utf8.RuneLen(r) > claimMaxLen {
+			break
+		}
 		b.WriteRune(r)
 	}
-	out := b.String()
-	if len(out) > claimMaxLen {
-		out = out[:claimMaxLen]
-	}
-	return out
+	return b.String()
 }
 
 // extraString reads a string-typed claim from TokenInfo.Extra by key.

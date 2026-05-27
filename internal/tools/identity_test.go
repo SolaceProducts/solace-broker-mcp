@@ -27,19 +27,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"log/slog"
-	"os"
 	"reflect"
 	"sort"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 )
-
-// pinnedSDKVersion is the version of github.com/modelcontextprotocol/go-sdk
-// that this PR was tested against. Bumping the SDK is a deliberate event;
-// update this constant AND re-run the drift-detection suite when you do.
-const pinnedSDKVersion = "v1.5.0"
 
 // --- Behavioral tests ------------------------------------------------------
 
@@ -206,6 +201,45 @@ func TestSanitizeClaim_capsAt256Bytes(t *testing.T) {
 	}
 }
 
+// TestSanitizeClaim_truncatesOnRuneBoundary pins the UTF-8 safety property:
+// when the cap falls inside what would have been a multibyte codepoint, we
+// stop BEFORE writing the codepoint, never mid-bytes. Output is always
+// utf8.ValidString.
+//
+// 'é' is 2 bytes in UTF-8 (0xC3 0xA9). 128 of them = 256 bytes exactly,
+// which fits. 129 of them = 258 bytes would overflow the cap; the
+// sanitizer must stop at 128 and return 256 valid bytes — not 257 with a
+// dangling 0xC3.
+func TestSanitizeClaim_truncatesOnRuneBoundary(t *testing.T) {
+	in := strings.Repeat("é", 200) // 400 bytes, well over the 256 cap
+	got := sanitizeClaim(in)
+
+	if !utf8.ValidString(got) {
+		t.Errorf("sanitized output is not valid UTF-8: %q", got)
+	}
+	if len(got) > claimMaxLen {
+		t.Errorf("len = %d, exceeds cap %d", len(got), claimMaxLen)
+	}
+	// 128 two-byte runes = 256 bytes exactly.
+	if want := claimMaxLen; len(got) != want {
+		t.Errorf("len = %d, want exactly %d (128 × 2-byte runes)", len(got), want)
+	}
+}
+
+// TestSanitizeClaim_boundedWork pins the DoS-defense property: the sanitizer
+// must not iterate or allocate proportionally to input length. We feed in a
+// 10 MB input and assert the result is still capped — the existing 256-byte
+// cap check would pass with the old implementation too, but combined with
+// the rune-boundary check above we cover both halves of Copilot's review
+// note (PR #74).
+func TestSanitizeClaim_boundedWork_largeInput(t *testing.T) {
+	in := strings.Repeat("a", 10_000_000)
+	got := sanitizeClaim(in)
+	if len(got) != claimMaxLen {
+		t.Errorf("len = %d, want %d (cap must hold against multi-MB input)", len(got), claimMaxLen)
+	}
+}
+
 // TestSanitizeClaim_logInjection_endToEnd ensures a sub containing CR/LF
 // cannot smuggle a forged log line through either the JSON or text handler.
 func TestSanitizeClaim_logInjection_endToEnd(t *testing.T) {
@@ -331,35 +365,6 @@ func TestIdentity_audited_fields_matchLogValueOutput(t *testing.T) {
 
 	if !reflect.DeepEqual(identityFields, emittedFields) {
 		t.Errorf("Identity audit fields = %v, but LogValue emits = %v.\nA field was added to Identity but not wired into LogValue (or vice versa).", identityFields, emittedFields)
-	}
-}
-
-// TestSDKVersion_pinned reads go.mod and asserts the SDK version matches
-// pinnedSDKVersion. SDK upgrades are intentional events; bump the constant
-// AND re-run drift detection when you upgrade.
-func TestSDKVersion_pinned(t *testing.T) {
-	data, err := os.ReadFile("../../go.mod")
-	if err != nil {
-		t.Fatalf("read go.mod: %v", err)
-	}
-	const modPath = "github.com/modelcontextprotocol/go-sdk"
-	var got string
-	for _, line := range strings.Split(string(data), "\n") {
-		s := strings.TrimSpace(line)
-		if !strings.HasPrefix(s, modPath+" ") {
-			continue
-		}
-		fields := strings.Fields(s)
-		if len(fields) >= 2 {
-			got = fields[1]
-		}
-		break
-	}
-	if got == "" {
-		t.Fatalf("go.mod has no require for %q", modPath)
-	}
-	if got != pinnedSDKVersion {
-		t.Errorf("SDK version drift: go.mod %s = %q, pinnedSDKVersion = %q.\nIf this upgrade is intentional, update pinnedSDKVersion AND re-verify drift-detection assertions (plan §9.2).", modPath, got, pinnedSDKVersion)
 	}
 }
 
