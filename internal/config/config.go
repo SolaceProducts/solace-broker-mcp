@@ -287,7 +287,9 @@ func LoadConfig(path string) (*ServerConfig, error) {
 	}
 
 	var raw yamlConfig
-	if err := yaml.Unmarshal(data, &raw); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("parsing config YAML: %w", err)
 	}
 
@@ -589,7 +591,14 @@ func validate(cfg *ServerConfig) error {
 	cfg.brokers = canonical
 
 	for _, lower := range slices.Sorted(maps.Keys(cfg.brokers)) {
-		errs = append(errs, validateBroker(cfg.brokers[lower], cfg.IsProductionMode())...)
+		broker := cfg.brokers[lower]
+		errs = append(errs, validateBroker(broker, cfg.IsProductionMode())...)
+		// Surface insecure_skip_verify=true at startup so operators see it
+		// in triage logs without scraping per-request SEMP-client warns.
+		if cfg.IsProductionMode() && broker.InsecureSkipVerify {
+			slog.Warn("INSECURE: TLS verification disabled for broker",
+				slog.String("broker", broker.DisplayName()))
+		}
 	}
 
 	if err := ValidatePort(cfg.Port); err != nil {

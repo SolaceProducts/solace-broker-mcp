@@ -32,7 +32,7 @@ MCP_SERVER_PID=""
 
 # Static dev token used to authenticate every e2e curl/agent request to the
 # broker MCP server. Must match dev_token in write_config() and broker-config.yaml.
-# Exported so test/e2e/agent reads it from env (see test/e2e/agent/main.go).
+# Exported so test/e2e-basic-mcp/agent reads it from env (see test/e2e-basic-mcp/agent/main.go).
 export MCP_DEV_TOKEN="e2e-static-dev-token"
 
 # ── Colors ───────────────────────────────────────────────────────────────────
@@ -49,10 +49,10 @@ TESTS_FAILED=0
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 
-log_info()  { echo -e "${CYAN}[INFO]${NC}  $*"; }
-log_ok()    { echo -e "${GREEN}[PASS]${NC}  $*"; }
-log_fail()  { echo -e "${RED}[FAIL]${NC}  $*"; }
-log_warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
+log_info()  { echo -e "${CYAN}[INFO]${NC}  $*" >&2; }
+log_ok()    { echo -e "${GREEN}[PASS]${NC}  $*" >&2; }
+log_fail()  { echo -e "${RED}[FAIL]${NC}  $*" >&2; }
+log_warn()  { echo -e "${YELLOW}[WARN]${NC}  $*" >&2; }
 
 # ── Broker Readiness ─────────────────────────────────────────────────────────
 
@@ -81,6 +81,13 @@ wait_for_broker() {
     # Phase 2: Wait for message spool to accept queue operations.
     # The monitor API may report spool fields before the spool is actually writable,
     # so we probe with a real queue create/delete to confirm readiness.
+    #
+    # Best-effort cleanup of any probe queue left behind by a previous run that
+    # was killed between create and delete — otherwise every create below would
+    # return HTTP 400 "already exists" and we'd time out blaming the broker.
+    curl -sf -X DELETE -u "$BROKER_USER:$BROKER_PASS" \
+        "$semp_config/msgVpns/$BROKER_VPN/queues/_e2e_spool_probe_" >/dev/null 2>&1 || true
+
     while [ $attempt -lt "$max_attempts" ]; do
         local http_code
         http_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
@@ -157,6 +164,11 @@ stop_server() {
         wait "$MCP_SERVER_PID" 2>/dev/null || true
         MCP_SERVER_PID=""
     fi
+    # Remove the temp config written by start_server.sh --bg, if any.
+    local configfile_ref="$BIN_DIR/mcp-server.config"
+    if [ -f "$configfile_ref" ]; then
+        rm -f "$(cat "$configfile_ref")" "$configfile_ref"
+    fi
 }
 
 write_config() {
@@ -191,19 +203,22 @@ semp_post() {
     local semp_config="$1"
     local path="$2"
     local data="$3"
-    local response
-    response=$(curl -s -o /dev/null -w "%{http_code}" -X POST -u "$BROKER_USER:$BROKER_PASS" \
+    local response http_code body
+    # Capture body and HTTP status in a single request — the body is logged on
+    # failure for diagnostics, so we cannot afford to re-issue the (possibly
+    # non-idempotent) POST.
+    response=$(curl -s -X POST -u "$BROKER_USER:$BROKER_PASS" \
         -H "Content-Type: application/json" \
+        -w "\n%{http_code}" \
         "$semp_config/$path" -d "$data")
-    if [ "$response" -ge 200 ] && [ "$response" -lt 300 ]; then
-        return 0
-    else
-        log_fail "SEMP POST $path returned HTTP $response"
-        curl -s -X POST -u "$BROKER_USER:$BROKER_PASS" \
-            -H "Content-Type: application/json" \
-            "$semp_config/$path" -d "$data" >&2
-        return 1
-    fi
+    http_code="${response##*$'\n'}"
+    body="${response%$'\n'*}"
+
+    [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ] && return 0
+
+    log_fail "SEMP POST $path returned HTTP $http_code"
+    echo "$body" >&2
+    return 1
 }
 
 semp_delete() {
