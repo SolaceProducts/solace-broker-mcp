@@ -527,6 +527,103 @@ func Test_OIDCProviderUnreachable(t *testing.T) {
 	}
 }
 
+// Test_OIDCJWKSRefreshTimeout verifies that lazy JWKS refresh during token
+// verification respects the bounded HTTP client timeout instead of blocking
+// indefinitely on a hung IdP. Reproduces SOL-150219.
+func Test_OIDCJWKSRefreshTimeout(t *testing.T) {
+	origTimeout := oidcHTTPClientTimeout
+	oidcHTTPClientTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { oidcHTTPClientTimeout = origTimeout })
+
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate RSA key: %v", err)
+	}
+	signer, err := jose.NewSigner(
+		jose.SigningKey{Algorithm: jose.RS256, Key: privateKey},
+		(&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", "test-key-1"),
+	)
+	if err != nil {
+		t.Fatalf("failed to create signer: %v", err)
+	}
+
+	// Mock IdP: discovery responds fast; /jwks blocks until either the
+	// request context is canceled (the fixed path: http.Client.Timeout fires
+	// at 500ms) or the test cleanup releases it (safety net for the buggy
+	// path so the test process doesn't hang on server.Close()).
+	mux := http.NewServeMux()
+	var issuer string
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"issuer":   issuer,
+			"jwks_uri": issuer + "/jwks",
+		})
+	})
+	releaseJWKS := make(chan struct{})
+	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-releaseJWKS:
+		}
+	})
+
+	server := httptest.NewServer(mux)
+	// Cleanup order (LIFO): releaseJWKS closes FIRST so any in-flight handler
+	// unblocks before server.Close() waits on its handler wg.
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(releaseJWKS) })
+	issuer = server.URL
+
+	audience := "test-audience"
+	cfg := &config.ServerConfig{
+		Port: 9090,
+		ClientAuth: config.ClientAuthConfig{
+			Mode:     config.AuthModeOAuth,
+			Issuer:   issuer,
+			Audience: audience,
+		},
+	}
+
+	middleware, err := NewAuthMiddleware(cfg, dummyHandler)
+	if err != nil {
+		t.Fatalf("failed to create middleware: %v", err)
+	}
+
+	token, err := jwt.Signed(signer).Claims(map[string]interface{}{
+		"iss": issuer,
+		"aud": audience,
+		"sub": "test-user",
+		"exp": time.Now().Add(time.Hour).Unix(),
+		"iat": time.Now().Unix(),
+	}).Serialize()
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
+	}
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	// 2s budget = 4x the 500ms HTTP client timeout. Without the fix /jwks
+	// hangs and this fails the budget; with the fix verification completes
+	// (returning 401) at ~500ms.
+	done := make(chan struct{})
+	go func() {
+		middleware.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401 after JWKS timeout, got %d: %s", rec.Code, rec.Body.String())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("token verification did not return within 2s — JWKS refresh likely hung (SOL-150219 regression)")
+	}
+}
+
 // Test_WWWAuthenticateHeaderFormat verifies that 401 responses include the correct
 // WWW-Authenticate header with resource_metadata parameter per MCP spec and RFC 9728.
 func Test_WWWAuthenticateHeaderFormat(t *testing.T) {

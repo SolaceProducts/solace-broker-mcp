@@ -24,10 +24,16 @@ import (
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"github.com/coreos/go-oidc/v3/oidc"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
 )
+
+// oidcHTTPClientTimeout bounds the HTTP client injected into go-oidc for both
+// startup discovery and lazy JWKS refresh. Package-private to allow tests to
+// override with a shorter value; production reads defaults.DefaultOIDCHTTPTimeout.
+var oidcHTTPClientTimeout = defaults.DefaultOIDCHTTPTimeout
 
 func NewAuthMiddleware(cfg *config.ServerConfig, next http.Handler) (http.Handler, error) {
 	// Auth backend selection mirrors client_auth.mode. Insecure-mode signaling
@@ -99,9 +105,15 @@ func createStaticTokenVerifier(expectedToken string) sdkauth.TokenVerifier {
 // createOIDCTokenVerifier creates a TokenVerifier that validates JWTs using OIDC.
 // It fetches public keys from the issuer's JWKS endpoint and handles automatic key rotation.
 func createOIDCTokenVerifier(cfg *config.ServerConfig) (sdkauth.TokenVerifier, error) {
-	// Create OIDC provider - fetches .well-known/openid-configuration and JWKS
-	// Use a timeout to fail fast if the issuer is unreachable
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Inject a bounded HTTP client so that both startup discovery and the lazy
+	// JWKS refresh path (RemoteKeySet, triggered by an unknown kid) cannot
+	// wedge on a slow or hung IdP. The discovery deadline below caps total
+	// discovery time; http.Client.Timeout caps each individual request and is
+	// the only bound that applies to lazy refresh (go-oidc's RemoteKeySet
+	// strips cancellation from the construction context via WithoutCancel).
+	httpClient := &http.Client{Timeout: oidcHTTPClientTimeout}
+	clientCtx := oidc.ClientContext(context.Background(), httpClient)
+	ctx, cancel := context.WithTimeout(clientCtx, 30*time.Second)
 	defer cancel()
 
 	oidcProvider, err := oidc.NewProvider(ctx, cfg.ClientAuth.Issuer)
