@@ -14,8 +14,9 @@ set -e  # Exit on any error
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TERRAFORM_DIR="${SCRIPT_DIR}/terraform"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 MCP_SERVER_ENV="${SCRIPT_DIR}/.env"
+CERT_FILE="${SCRIPT_DIR}/certs/keycloak.crt"
 
 echo "========================================"
 echo "Starting Keycloak Setup"
@@ -252,7 +253,7 @@ echo "✓ OAuth configuration retrieved"
 echo ""
 echo "Step 5: Testing OAuth token endpoint..."
 
-TOKEN_RESPONSE=$(curl -s -X POST "${TOKEN_ENDPOINT}" \
+TOKEN_RESPONSE=$(curl -s --cacert "$CERT_FILE" -X POST "${TOKEN_ENDPOINT}" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "grant_type=client_credentials" \
     -d "client_id=mcp-client-confidential" \
@@ -358,7 +359,7 @@ echo "Keycloak Setup Complete! ✓"
 echo "========================================"
 echo ""
 echo "Summary:"
-echo "  • Keycloak running at: http://localhost:8090"
+echo "  • Keycloak running at: https://localhost:8443 (OIDC)"
 echo "  • Admin console: http://localhost:8090/admin (admin/admin)"
 echo "  • Realm: solace"
 echo ""

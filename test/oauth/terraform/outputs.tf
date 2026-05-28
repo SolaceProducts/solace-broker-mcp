@@ -25,23 +25,23 @@ output "mcp_client_secret" {
 }
 
 output "token_endpoint" {
-  description = "OAuth2 token endpoint"
-  value       = "http://localhost:${var.keycloak_port}/realms/${var.realm_name}/protocol/openid-connect/token"
+  description = "OAuth2 token endpoint (HTTPS)"
+  value       = "https://localhost:${var.keycloak_https_port}/realms/${var.realm_name}/protocol/openid-connect/token"
 }
 
 output "jwks_uri" {
-  description = "JWKS endpoint for public keys"
-  value       = "http://localhost:${var.keycloak_port}/realms/${var.realm_name}/protocol/openid-connect/certs"
+  description = "JWKS endpoint for public keys (HTTPS)"
+  value       = "https://localhost:${var.keycloak_https_port}/realms/${var.realm_name}/protocol/openid-connect/certs"
 }
 
 output "openid_configuration" {
-  description = "OpenID Connect discovery endpoint"
-  value       = "http://localhost:${var.keycloak_port}/realms/${var.realm_name}/.well-known/openid-configuration"
+  description = "OpenID Connect discovery endpoint (HTTPS)"
+  value       = "https://localhost:${var.keycloak_https_port}/realms/${var.realm_name}/.well-known/openid-configuration"
 }
 
 output "issuer" {
   description = "Token issuer (for AUTH_ISSUER in MCP server)"
-  value       = "http://localhost:${var.keycloak_port}/realms/${var.realm_name}"
+  value       = "https://localhost:${var.keycloak_https_port}/realms/${var.realm_name}"
 }
 
 output "audience" {
@@ -52,7 +52,7 @@ output "audience" {
 output "test_token_command" {
   description = "Curl command to get a test access token (Phase 1: Client Credentials)"
   value       = <<-EOT
-    curl -X POST http://localhost:${var.keycloak_port}/realms/${var.realm_name}/protocol/openid-connect/token \
+    curl --cacert ./certs/keycloak.crt -X POST https://localhost:${var.keycloak_https_port}/realms/${var.realm_name}/protocol/openid-connect/token \
       -H "Content-Type: application/x-www-form-urlencoded" \
       -d "grant_type=client_credentials" \
       -d "client_id=${var.mcp_client_id}-confidential" \
@@ -62,7 +62,7 @@ output "test_token_command" {
 
 output "authorization_endpoint" {
   description = "OAuth2 authorization endpoint (for Phase 2: Authorization Code + PKCE)"
-  value       = "http://localhost:${var.keycloak_port}/realms/${var.realm_name}/protocol/openid-connect/auth"
+  value       = "https://localhost:${var.keycloak_https_port}/realms/${var.realm_name}/protocol/openid-connect/auth"
 }
 
 output "test_user_username" {
@@ -79,7 +79,7 @@ output "test_user_password" {
 output "phase2_login_url" {
   description = "URL to initiate Phase 2 OAuth flow (Authorization Code + PKCE)"
   value       = <<-EOT
-    http://localhost:${var.keycloak_port}/realms/${var.realm_name}/protocol/openid-connect/auth?client_id=${var.mcp_client_id}&response_type=code&redirect_uri=http://localhost:8080/callback&code_challenge=REPLACE_WITH_PKCE_CHALLENGE&code_challenge_method=S256
+    https://localhost:${var.keycloak_https_port}/realms/${var.realm_name}/protocol/openid-connect/auth?client_id=${var.mcp_client_id}&response_type=code&redirect_uri=http://localhost:8080/callback&code_challenge=REPLACE_WITH_PKCE_CHALLENGE&code_challenge_method=S256
   EOT
 }
 

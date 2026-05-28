@@ -16,8 +16,9 @@ set -e
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 TERRAFORM_DIR="${SCRIPT_DIR}/terraform"
+CERT_FILE="${SCRIPT_DIR}/certs/keycloak.crt"
 
 echo "========================================"
 echo "OAuth Integration Test"
@@ -61,7 +62,7 @@ echo "  Client: ${CLIENT_ID} (confidential client for client credentials flow)"
 # Get access token from Keycloak (Phase 1: Client Credentials)
 echo ""
 echo "Getting OAuth token from Keycloak (client credentials flow)..."
-TOKEN_RESPONSE=$(curl -s -X POST "${TOKEN_ENDPOINT}" \
+TOKEN_RESPONSE=$(curl -s --cacert "$CERT_FILE" -X POST "${TOKEN_ENDPOINT}" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "grant_type=client_credentials" \
     -d "client_id=${CLIENT_ID}" \
@@ -80,6 +81,7 @@ echo "✓ Obtained access token"
 echo ""
 echo "Building MCP server..."
 cd "${PROJECT_ROOT}"
+mkdir -p "${PROJECT_ROOT}/bin"
 go build -o "${PROJECT_ROOT}/bin/mcp-test" ./cmd/server
 echo "✓ Built MCP server"
 
@@ -100,6 +102,7 @@ echo "✓ Using test configuration: ${TEST_CONFIG}"
 # Start MCP server
 echo ""
 echo "Starting MCP server with OAuth..."
+export SSL_CERT_FILE="${SCRIPT_DIR}/certs/keycloak.crt"
 export CONFIG_FILE="${TEST_CONFIG}"
 "${PROJECT_ROOT}/bin/mcp-test" > /tmp/mcp-oauth-test.log 2>&1 &
 MCP_SERVER_PID=$!
