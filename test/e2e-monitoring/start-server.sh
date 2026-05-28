@@ -2,8 +2,8 @@
 # Build the MCP server from latest source and start it against the E2E brokers.
 #
 # Usage:
-#   bash test/e2e-monitoring/start_server.sh           # foreground (Ctrl-C to stop)
-#   bash test/e2e-monitoring/start_server.sh --bg      # background (prints PID, writes pidfile)
+#   bash test/e2e-monitoring/start-server.sh           # foreground (Ctrl-C to stop)
+#   bash test/e2e-monitoring/start-server.sh --bg      # background (prints PID, writes pidfile)
 #
 # The server runs on port 9090 by default. Override with MCP_PORT env var.
 # Requires both Solace brokers to be running (SEMP ports per test/e2e-monitoring/.env,
@@ -36,17 +36,21 @@ cleanup_on_exit() {
 }
 
 if [ "$MODE" = "background" ]; then
-    # Start in background, write pidfile + config path for external stop/cleanup
+    # Same trap as foreground so an aborted launch (Ctrl-C, kill, HUP) still
+    # tears down the spawned server and temp config. On the happy path we
+    # detach by clearing MCP_SERVER_PID so the trap's stop_server is a no-op
+    # (it gates on that variable) and the server keeps running; the trap still
+    # cleans up the temp config.
+    trap cleanup_on_exit EXIT INT TERM HUP
     start_server "$CONFIG_FILE"
     PIDFILE="$BIN_DIR/mcp-server.pid"
-    CONFIGFILE_REF="$BIN_DIR/mcp-server.config"
     echo "$MCP_SERVER_PID" > "$PIDFILE"
-    echo "$CONFIG_FILE" > "$CONFIGFILE_REF"
     log_info "Server running in background (PID=$MCP_SERVER_PID, pidfile=$PIDFILE)"
-    log_info "Stop with: kill \$(cat $PIDFILE) && rm -f \$(cat $CONFIGFILE_REF) $CONFIGFILE_REF"
+    log_info "Stop with: kill \$(cat $PIDFILE)"
+    MCP_SERVER_PID=""
 else
     # Foreground: start server, trap Ctrl-C for clean shutdown
-    trap cleanup_on_exit EXIT INT TERM
+    trap cleanup_on_exit EXIT INT TERM HUP
     start_server "$CONFIG_FILE"
     log_info "Server running in foreground. Press Ctrl-C to stop."
     wait "$MCP_SERVER_PID" 2>/dev/null || true

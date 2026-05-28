@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package main implements a standalone Go MCP SDK client agent for E2E testing.
+// Package main implements a standalone Go MCP SDK client for E2E testing.
 // It connects to the MCP server via StreamableClientTransport and exercises
 // the registered tools with hardcoded calls against both configured brokers.
 //
-// Usage: agent <server-url>
+// Usage: mcp-tester <server-url>
 package main
 
 import (
@@ -45,11 +45,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "FAIL: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("PASS: all agent checks passed")
+	fmt.Println("PASS: all mcp-tester checks passed")
 }
 
 // bearerRoundTripper wraps http.DefaultTransport to add a Bearer Authorization
-// header to every outbound request. Used by the e2e agent so the broker MCP
+// header to every outbound request. Used by mcp-tester so the broker MCP
 // server's auth middleware (mode: static) accepts our session-initialize and
 // tool calls.
 type bearerRoundTripper struct {
@@ -76,7 +76,7 @@ func run(ctx context.Context, serverURL string) error {
 	// Connect to the MCP server
 	fmt.Printf("Connecting to %s ...\n", serverURL)
 	client := mcp.NewClient(&mcp.Implementation{
-		Name:    "e2e-agent",
+		Name:    "e2e-mcp-tester",
 		Version: "1.0.0",
 	}, nil)
 

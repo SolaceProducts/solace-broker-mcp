@@ -26,14 +26,16 @@ BROKER_URL="$BROKER_A_URL"
 SEMP_CONFIG="$BROKER_A_SEMP_CONFIG"
 
 # ── MCP server settings ─────────────────────────────────────────────────────
-MCP_PORT=9090
+MCP_PORT="${MCP_PORT:-9090}"
 MCP_URL="http://localhost:$MCP_PORT"
 MCP_SERVER_PID=""
 
-# Static dev token used to authenticate every e2e curl/agent request to the
-# broker MCP server. Must match dev_token in write_config() and broker-config.yaml.
-# Exported so the agent reads it from env (see test/e2e-monitoring/agent/main.go).
-export MCP_DEV_TOKEN="e2e-static-dev-token"
+# Static dev token used to authenticate every e2e curl/mcp-tester request to
+# the broker MCP server. Defined in .env (single source of truth); exported
+# here so child processes (mcp-tester) see it. write_config() and
+# broker-config.yaml reference it as ${MCP_DEV_TOKEN} so the server's env
+# substitution resolves it at config load.
+export MCP_DEV_TOKEN
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -49,10 +51,10 @@ TESTS_FAILED=0
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 
-log_info()  { echo -e "${CYAN}[INFO]${NC}  $*"; }
-log_ok()    { echo -e "${GREEN}[PASS]${NC}  $*"; }
-log_fail()  { echo -e "${RED}[FAIL]${NC}  $*"; }
-log_warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
+log_info()  { echo -e "${CYAN}[INFO]${NC}  $*" >&2; }
+log_ok()    { echo -e "${GREEN}[PASS]${NC}  $*" >&2; }
+log_fail()  { echo -e "${RED}[FAIL]${NC}  $*" >&2; }
+log_warn()  { echo -e "${YELLOW}[WARN]${NC}  $*" >&2; }
 
 # ── Broker Readiness ─────────────────────────────────────────────────────────
 
@@ -60,8 +62,11 @@ wait_for_broker() {
     local broker_url="${1:-$BROKER_URL}"
     local max_attempts="${2:-60}"
     local semp_config="$broker_url/SEMP/v2/config"
+    # Shared budget across both phases: SEMP API readiness + message-spool
+    # readiness must complete within max_attempts seconds combined. The
+    # attempt counter is intentionally not reset between phases.
     local attempt=0
-    log_info "Waiting for Solace broker at $broker_url ..."
+    log_info "Waiting for Solace broker at $broker_url (budget: ${max_attempts}s) ..."
 
     # Phase 1: Wait for SEMP API to respond
     while [ $attempt -lt "$max_attempts" ]; do
@@ -73,7 +78,7 @@ wait_for_broker() {
         attempt=$((attempt + 1))
     done
     if [ $attempt -ge "$max_attempts" ]; then
-        log_fail "Broker SEMP API not ready after ${max_attempts}s ($broker_url)"
+        log_fail "Broker SEMP API not ready within ${max_attempts}s budget ($broker_url)"
         return 1
     fi
     log_info "SEMP API responding after ${attempt}s ($broker_url)"
@@ -81,6 +86,14 @@ wait_for_broker() {
     # Phase 2: Wait for message spool to accept queue operations.
     # The monitor API may report spool fields before the spool is actually writable,
     # so we probe with a real queue create/delete to confirm readiness.
+    # If a previous run was killed in the middle, the probe queue may still
+    # exist on the broker. Delete it before we try to create a fresh one,
+    # otherwise the create returns "already exists" and we time out blaming
+    # the broker.
+    curl -sf -X DELETE -u "$BROKER_USER:$BROKER_PASS" \
+        "$semp_config/msgVpns/$BROKER_VPN/queues/_e2e_spool_probe_" >/dev/null 2>&1 || true
+
+    local phase2_start=$attempt
     while [ $attempt -lt "$max_attempts" ]; do
         local http_code
         http_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
@@ -98,7 +111,7 @@ wait_for_broker() {
         sleep 1
         attempt=$((attempt + 1))
     done
-    log_fail "Broker message spool not ready after ${max_attempts}s ($broker_url)"
+    log_fail "Broker message spool not ready after $((attempt - phase2_start))s in phase 2 (${max_attempts}s total budget exhausted) ($broker_url)"
     return 1
 }
 
@@ -143,6 +156,12 @@ build_server() {
     log_info "Server binary built: $BIN_DIR/mcp-server"
 }
 
+build_mcp_tester() {
+    log_info "Building mcp-tester binary ..."
+    (cd "$SCRIPT_DIR/mcp-tester" && go build -o "$BIN_DIR/mcp-tester" .)
+    log_info "mcp-tester binary built: $BIN_DIR/mcp-tester"
+}
+
 start_server() {
     local config_file="$1"
     log_info "Starting MCP server (config=$config_file, port=$MCP_PORT) ..."
@@ -178,17 +197,62 @@ start_server() {
 }
 
 stop_server() {
-    if [ -n "$MCP_SERVER_PID" ] && kill -0 "$MCP_SERVER_PID" 2>/dev/null; then
-        log_info "Stopping MCP server (PID=$MCP_SERVER_PID) ..."
-        kill "$MCP_SERVER_PID" 2>/dev/null || true
-        wait "$MCP_SERVER_PID" 2>/dev/null || true
-        MCP_SERVER_PID=""
+    # `wait` only works on direct children of the current shell. When this
+    # helper is sourced into test-monitoring-tools.sh and MCP_SERVER_PID was
+    # read from a pidfile (server is a child of start-server.sh, not us), we
+    # poll with `kill -0` instead. Escalate to SIGKILL if the server hasn't
+    # exited within the grace window — mirrors stop_broker_drivers.
+    if [ -z "$MCP_SERVER_PID" ] || ! kill -0 "$MCP_SERVER_PID" 2>/dev/null; then
+        return 0
     fi
-    # Remove the temp config written by start_server.sh --bg, if any.
-    local configfile_ref="$BIN_DIR/mcp-server.config"
-    if [ -f "$configfile_ref" ]; then
-        rm -f "$(cat "$configfile_ref")" "$configfile_ref"
+    log_info "Stopping MCP server (PID=$MCP_SERVER_PID) ..."
+    kill -TERM "$MCP_SERVER_PID" 2>/dev/null || true
+
+    local elapsed=0
+    while kill -0 "$MCP_SERVER_PID" 2>/dev/null && [ "$elapsed" -lt 5 ]; do
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    if kill -0 "$MCP_SERVER_PID" 2>/dev/null; then
+        log_warn "MCP server did not exit within 5s; sending SIGKILL"
+        kill -KILL "$MCP_SERVER_PID" 2>/dev/null || true
     fi
+    MCP_SERVER_PID=""
+}
+
+# Path pattern for broker-driver PID files. Defined once here so the
+# stop helper and any future code use the same convention.
+BROKER_DRIVER_PIDFILE_GLOB="$BIN_DIR/broker-driver-f*.pid"
+
+# Stop any long-lived broker-driver processes that fixtures F3-F6 spawn.
+# Reads each PID file under bin/, sends a polite termination signal (TERM),
+# waits up to 5 seconds for them to exit cleanly, then forces (KILL).
+# Safe to call when there are no PID files (no-op until F3 lands).
+stop_broker_drivers() {
+    local pidfiles=( $BROKER_DRIVER_PIDFILE_GLOB )
+    [ -e "${pidfiles[0]}" ] || return 0
+
+    local pids=()
+    for f in "${pidfiles[@]}"; do
+        local pid; pid=$(<"$f")
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -TERM "$pid"
+            pids+=("$pid")
+        fi
+    done
+
+    local elapsed=0
+    while [ ${#pids[@]} -gt 0 ] && [ "$elapsed" -lt 5 ]; do
+        sleep 1; elapsed=$((elapsed+1))
+        local still=(); for p in "${pids[@]}"; do
+            kill -0 "$p" 2>/dev/null && still+=("$p")
+        done
+        pids=( "${still[@]}" )
+    done
+
+    for p in "${pids[@]}"; do kill -KILL "$p" 2>/dev/null; done
+    rm -f $BROKER_DRIVER_PIDFILE_GLOB
 }
 
 write_config() {
@@ -198,7 +262,7 @@ write_config() {
     cat > "$config_file" <<EOF
 client_auth:
   mode: static
-  dev_token: e2e-static-dev-token
+  dev_token: "\${MCP_DEV_TOKEN}"
 
 brokers:
   broker-a:
@@ -270,26 +334,61 @@ create_fixtures_on() {
     log_info "Fixtures created on $label"
 }
 
-verify_fixtures() {
+# Polls the monitor API until the given object is visible (HTTP 2xx).
+# Returns 0 on success, 1 on timeout. Logs a warning on timeout but does
+# not fail — callers proceed-anyway so a transient monitor lag doesn't
+# block the scaffold. The leaf segment of object_path is used as the
+# human description in logs.
+#
+# Args:
+#   $1 broker_url    e.g. http://localhost:8090
+#   $2 label         human label for logs, e.g. "broker-a"
+#   $3 object_path   path under SEMP/v2/__private_monitor__,
+#                    e.g. "msgVpns/default/queues/test-queue-2"
+#   $4 max_attempts  optional, default 30
+verify_monitor_object() {
     local broker_url="$1"
     local label="$2"
+    local object_path="$3"
+    local max_attempts="${4:-30}"
     local monitor="$broker_url/SEMP/v2/__private_monitor__"
-    local max_attempts=30
+    local description="${object_path##*/}"
     local attempt=0
 
-    log_info "Verifying fixtures visible on $label ..."
     while [ $attempt -lt $max_attempts ]; do
         if curl -sf -u "$BROKER_USER:$BROKER_PASS" \
-            "$monitor/msgVpns/$BROKER_VPN/queues/test-queue" >/dev/null 2>&1 && \
-           curl -sf -u "$BROKER_USER:$BROKER_PASS" \
-            "$monitor/msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp" >/dev/null 2>&1; then
-            log_info "Fixtures verified on $label (${attempt}s)"
+            "$monitor/$object_path" >/dev/null 2>&1; then
+            log_info "  monitor visible: $description on $label (${attempt}s)"
             return 0
         fi
         sleep 1
         attempt=$((attempt + 1))
     done
-    log_warn "Fixtures not yet visible via monitor API on $label after ${max_attempts}s — proceeding anyway"
+    log_warn "  monitor NOT visible: $description on $label after ${max_attempts}s — proceeding anyway"
+    return 1
+}
+
+verify_fixtures() {
+    local broker_url="$1"
+    local label="$2"
+    log_info "Verifying base fixtures visible on $label ..."
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/queues/test-queue"
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp"
+}
+
+verify_multi_vpn_on() {
+    local broker_url="$1"
+    local label="$2"
+    log_info "Verifying multi-VPN fixture visible on $label ..."
+    verify_monitor_object "$broker_url" "$label" "msgVpns/test-vpn"
+}
+
+verify_multi_queue_on() {
+    local broker_url="$1"
+    local label="$2"
+    log_info "Verifying multi-queue fixtures visible on $label ..."
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/queues/test-queue-2"
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/queues/test-queue-3"
 }
 
 cleanup_fixtures_on() {
@@ -309,9 +408,11 @@ cleanup_fixtures_on() {
 create_multi_vpn_on() {
     local semp_config="$1"
     local label="$2"
+    local broker_url="$3"
     log_info "Creating multi-VPN fixture on $label ..."
     semp_post "$semp_config" "msgVpns" \
         '{"msgVpnName":"test-vpn","enabled":false}' >/dev/null
+    verify_multi_vpn_on "$broker_url" "$label"
     log_info "Multi-VPN fixture created on $label (test-vpn, enabled=false)"
 }
 
@@ -331,6 +432,7 @@ cleanup_multi_vpn_on() {
 create_multi_queue_on() {
     local semp_config="$1"
     local label="$2"
+    local broker_url="$3"
     log_info "Creating multi-queue fixtures on $label ..."
 
     semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues" \
@@ -342,6 +444,7 @@ create_multi_queue_on() {
     semp_post "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp/queueBindings" \
         '{"queueBindingName":"test-queue-2","postRequestTarget":"/test"}' >/dev/null
 
+    verify_multi_queue_on "$broker_url" "$label"
     log_info "Multi-queue fixtures created on $label (test-queue-2 bound to test-rdp, test-queue-3 unbound)"
 }
 
@@ -359,10 +462,10 @@ create_fixtures() {
     cleanup_fixtures
     create_fixtures_on "$BROKER_A_SEMP_CONFIG" "broker-a" "$BROKER_A_URL"
     create_fixtures_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL"
-    create_multi_queue_on "$BROKER_A_SEMP_CONFIG" "broker-a"
-    create_multi_queue_on "$BROKER_B_SEMP_CONFIG" "broker-b"
-    create_multi_vpn_on "$BROKER_A_SEMP_CONFIG" "broker-a"
-    create_multi_vpn_on "$BROKER_B_SEMP_CONFIG" "broker-b"
+    create_multi_queue_on "$BROKER_A_SEMP_CONFIG" "broker-a" "$BROKER_A_URL"
+    create_multi_queue_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL"
+    create_multi_vpn_on "$BROKER_A_SEMP_CONFIG" "broker-a" "$BROKER_A_URL"
+    create_multi_vpn_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL"
 }
 
 cleanup_fixtures() {
@@ -447,8 +550,9 @@ mcp_request() {
         -H "Mcp-Session-Id: $session_id" \
         -d "$body")
 
-    # Extract JSON from SSE "data: {...}" line, or return raw if not SSE
-    echo "$raw" | grep '^data: ' | sed 's/^data: //' | head -1
+    # Extract JSON from SSE "data: {...}" lines. Keep all data: lines — a single
+    # logical response can span multiple lines or events per the SSE spec.
+    echo "$raw" | grep '^data: ' | sed 's/^data: //'
 }
 
 # ── Assertions ───────────────────────────────────────────────────────────────
@@ -457,7 +561,9 @@ assert_contains() {
     local haystack="$1"
     local needle="$2"
     local msg="${3:-Response should contain '$needle'}"
-    if echo "$haystack" | grep -q "$needle"; then
+    # -F: treat needle as a fixed string, not a regex. Without this, metacharacters
+    # (. * [ ] etc.) in tool responses or expected values silently change matching.
+    if echo "$haystack" | grep -qF "$needle"; then
         return 0
     else
         log_fail "$msg"
@@ -471,7 +577,7 @@ assert_not_contains() {
     local haystack="$1"
     local needle="$2"
     local msg="${3:-Response should NOT contain '$needle'}"
-    if echo "$haystack" | grep -q "$needle"; then
+    if echo "$haystack" | grep -qF "$needle"; then
         log_fail "$msg"
         return 1
     fi
@@ -518,11 +624,6 @@ print_summary() {
     echo -e "  ${label}: ${TESTS_RUN} run, ${GREEN}${TESTS_PASSED} passed${NC}, ${RED}${TESTS_FAILED} failed${NC}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
-
-    # Write results file if E2E_RESULTS_DIR is set (used by run_all.sh)
-    if [ -n "${E2E_RESULTS_DIR:-}" ]; then
-        echo "${label}|${TESTS_RUN}|${TESTS_PASSED}|${TESTS_FAILED}" >> "$E2E_RESULTS_DIR/results.txt"
-    fi
 
     [ "$TESTS_FAILED" -eq 0 ]
 }

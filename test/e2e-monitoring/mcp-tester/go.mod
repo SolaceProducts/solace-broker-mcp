@@ -1,4 +1,4 @@
-module github.com/SolaceDev/solace-broker-mcp/test/e2e-monitoring/agent
+module github.com/SolaceDev/solace-broker-mcp/test/e2e-monitoring/mcp-tester
 
 go 1.25.0
 

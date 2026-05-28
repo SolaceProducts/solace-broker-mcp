@@ -7,33 +7,27 @@ fixtures, and drives both SEMP-layer and messaging-layer broker state.
 
 ## Quickstart
 
-Brokers must already be running. Bring them up once and leave them up across
-runs:
+Three commands for a full test run:
 
 ```bash
-docker compose -f test/e2e-monitoring/docker-compose.yml up -d
-```
+# 1. Bring brokers up. Safe to re-run; does nothing if already up.
+bash test/e2e-monitoring/setup-brokers.sh
 
-Then run the suite:
+# 2. Run the monitoring-tools test suite. Safe to re-run many times.
+bash test/e2e-monitoring/test-monitoring-tools.sh
 
-```bash
-bash test/e2e-monitoring/run_all.sh
-```
-
-`run_all.sh` builds the MCP server, applies all fixtures to both brokers
-(`solace-e2e-mon-a`, `solace-e2e-mon-b`), runs both test scenarios
-(standalone curl + Go agent), then cleans up fixtures and stops the MCP
-server. Brokers are left running for the next invocation. Exit 0 on success.
-
-Cleanup runs on every exit path including `Ctrl-C` and `SIGTERM`; re-running
-after a forced kill (`SIGKILL` of the parent) succeeds — the cleanup-first
-pattern in `helpers.sh` handles stale fixtures from prior aborted runs.
-
-Tear down brokers when done:
-
-```bash
+# 3. Tear brokers down when you're done.
 docker compose -f test/e2e-monitoring/docker-compose.yml down -v
 ```
+
+During development you can repeat step 2 as many times as you need without
+restarting brokers. `test-monitoring-tools.sh` builds the MCP server, applies
+all fixtures to both brokers (`solace-e2e-mon-a`, `solace-e2e-mon-b`), then
+cleans up fixtures and stops the MCP server on exit. Cleanup runs on every
+exit path including `Ctrl-C`, `SIGTERM`, and terminal close (`SIGHUP`);
+re-running after a forced kill (`SIGKILL` of the parent) succeeds — the
+cleanup-first pattern in `helpers.sh` handles stale fixtures from prior
+aborted runs.
 
 ## Fixtures
 
@@ -43,18 +37,18 @@ tools run against the base fixture copied from `e2e-basic-mcp` — no new
 fixture needed.
 
 F1 and F2 are implemented today. F3–F6 are planned (tracked under
-SOL-150024); the Go agent work that drives the client-bearing fixtures has
-not yet landed.
+SOL-150024); the `broker-driver` work that drives the client-bearing
+fixtures has not yet landed.
 
 | ID       | Status      | Fixture                  | Required broker state                                                                                                                                  | Lifecycle                          | MCP tools supported                                                                |
 | -------- | ----------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------- | ---------------------------------------------------------------------------------- |
 | F1       | Implemented | Multi-VPN                | Additional non-default VPN `test-vpn` on each broker, created with `enabled=false`                                                                     | one-shot SEMP                      | `list-vpns`, `get-vpn-health` (enabled + disabled state coverage)                  |
 | F2       | Implemented | Multi-queue              | `test-queue-2` (bound to a test RDP) and `test-queue-3` (unbound), both non-exclusive on default VPN                                                   | one-shot SEMP                      | `list-queues` (multi-entry + pagination), `get-queue-metrics` (named-object lookup) |
-| F3       | Planned     | Connected client         | One long-lived persistent receiver per broker on default VPN with deterministic `clientName` and ≥1 named topic subscription                           | background goroutine in agent      | `list-clients`, `get-client-details`, `list-client-subscriptions`                  |
-| F4       | Planned     | Sustained traffic        | Persistent publisher to topic `t1` at 100 msg/s, 256-byte payload; the F3 receiver drains via its subscription                                         | background goroutine               | `get-message-rates`                                                                |
-| F5       | Planned     | Slow subscriber          | Fast publisher + throttled consumer bound to dedicated queue `test-queue-slow`; sustained until broker flips `slowSubscriber=true` on the consumer's client | background goroutine          | `list-slow-subscribers`, `slowSubscriber` field on `list-clients` / `get-client-details` |
-| F6-spool | Planned     | Discards via spool quota | Queue `test-queue-discards-spool` with `maxMsgSpoolUsage=1 MB` + `egressEnabled=false`; one-shot publish ~2 MB                                          | one-shot SEMP + one-shot Go publish | `get-discard-stats` — `maxMsgSpoolUsageExceededDiscardedMsgCount > 0`              |
-| F6-ttl   | Planned     | Discards via TTL expiry  | Queue `test-queue-discards-ttl` with `maxTtl=1 s` + no consumer; one-shot publish + 2 s wait                                                            | one-shot SEMP + one-shot Go publish | `get-discard-stats` — `maxTtlExpiredDiscardedMsgCount > 0`                         |
+| F3       | Planned     | Connected client         | One long-lived persistent receiver per broker on default VPN with deterministic `clientName` and ≥1 named topic subscription. **Verification:** client appears in `list-clients` and reports the expected subscription. | background broker-driver | `list-clients`, `get-client-details`, `list-client-subscriptions`                  |
+| F4       | Planned     | Sustained traffic        | Publisher targets 100 msg/s, 256-byte payload, persistent; broker observes ~92 msg/s sustained after ~5 s settle. **Verification:** `rxMsgRate ≥ 80` and `txMsgRate ≥ 80` after 25 s of fixture runtime. | background broker-driver | `get-message-rates`                                                                |
+| F5       | Planned     | Slow subscriber          | Fast publisher + throttled consumer bound to dedicated queue `test-queue-slow`. **Verification:** `slowSubscriber=true` within 60 s. | background broker-driver | `list-slow-subscribers`, `slowSubscriber` field on `list-clients` / `get-client-details` |
+| F6-spool | Planned     | Discards via spool quota | Queue `test-queue-discards-spool` with `maxMsgSpoolUsage=1 MB` + `egressEnabled=false`; one-shot publish ~2 MB. **Verification:** `maxMsgSpoolUsageExceededDiscardedMsgCount > 0` after one-shot publish. | one-shot SEMP + one-shot broker-driver publish | `get-discard-stats`              |
+| F6-ttl   | Planned     | Discards via TTL expiry  | Queue `test-queue-discards-ttl` with `maxTtl=1 s` + no consumer; one-shot publish + 2 s wait. **Verification:** `maxTtlExpiredDiscardedMsgCount > 0` after one-shot publish. | one-shot SEMP + one-shot broker-driver publish | `get-discard-stats`                         |
 
 Activation order is deterministic: F1 and F2 (SEMP-only) before F3/F4/F5
 (client-bearing). F6 runs in parallel — its queues are independent of the
@@ -62,8 +56,10 @@ others.
 
 ## Build prerequisites
 
-The agent links the Solace Go messaging client (`solace.dev/go/messaging`),
-which depends on a native library. CGO must be available.
+The `broker-driver` binary links the Solace Go messaging client
+(`solace.dev/go/messaging`), which depends on a native library. CGO must be
+available. The `mcp-tester` binary is pure Go and has no native dependencies
+— anyone working only on MCP-tool testing can skip this section.
 
 | Platform                                          | Needed                       | Install                                                                                       |
 | ------------------------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------- |
@@ -72,40 +68,63 @@ which depends on a native library. CGO must be available.
 | macOS (Homebrew `openssl@3` in non-standard path) | `CGO_LDFLAGS`, `CGO_CFLAGS`  | `export CGO_LDFLAGS="-L$(brew --prefix openssl@3)/lib" CGO_CFLAGS="-I$(brew --prefix openssl@3)/include"` |
 | Windows                                           | WSL2 only (treat as Linux)   | —                                                                                             |
 
-Any actively supported Go version works. `run_all.sh` warns at start-up if the
-toolchain or OpenSSL headers are missing.
+Any actively supported Go version works. `test-monitoring-tools.sh` warns at
+start-up if the toolchain or OpenSSL headers are missing.
 
 The shell harness also requires `jq` for JSON assertions in the standalone
 scenario (Linux: `sudo apt-get install jq`, macOS: `brew install jq`).
 
-## Design note — expanded agent role
+## Two binaries
 
-In [test/e2e-basic-mcp](../e2e-basic-mcp), the agent binary's sole role is MCP
-tool testing: it speaks the MCP protocol against the running server and
-validates tool responses.
+The suite ships two Go programs, each in its own directory with its own
+`go.mod`:
 
-SOL-150024 expands the agent's role. In this suite, the agent also drives
-**runtime broker activity** for fixtures F3–F6 (connected client, sustained
-publisher, slow consumer, publish-batch). This is a deliberate departure from
-the basic-mcp pattern because SEMP `curl` alone cannot produce messaging-layer
-state — only a real SMF client can open a connection, publish at a target rate,
-or stall acks long enough to flip `slowSubscriber=true`.
+- **`mcp-tester/`** — connects to the MCP server, calls tools, verifies the
+  responses. Pure Go.
+- **`broker-driver/`** — connects directly to the Solace brokers via the
+  Solace messaging client. Publishes, consumes, and sustains traffic to
+  produce the broker states the monitoring tools observe. Requires the C
+  library `libsolclient` at build time (see Build prerequisites).
 
-The `test` subcommand preserves the original MCP-test-runner role. New
-subcommands drive fixture state. Both modes share the same binary and the same
-`.env`-derived broker credentials.
+A developer working only on `mcp-tester/` does not need the `libsolclient`
+toolchain.
 
-## Agent CLI surface
+## Design note — broker-driver role
+
+In [test/e2e-basic-mcp](../e2e-basic-mcp), MCP tool testing is the only job:
+a single binary (named `agent/` there, predating this suite's split) speaks
+the MCP protocol against the running server and validates tool responses.
+
+SOL-150024 adds a second binary — `broker-driver` — that produces **runtime
+broker activity** for fixtures F3–F6 (connected client, sustained publisher,
+slow consumer, publish-batch). This is a deliberate departure from the
+basic-mcp pattern because SEMP `curl` alone cannot produce messaging-layer
+state — only a real SMF client can open a connection, publish at a target
+rate, or stall acks long enough to flip `slowSubscriber=true`.
+
+The two binaries share the same `.env`-derived broker credentials but are
+otherwise independent, so the heavy CGO dependency stays scoped to
+`broker-driver`.
+
+## mcp-tester invocation
+
+```
+mcp-tester <mcp-server-url>
+```
+
+Single argument — the MCP server URL. Speaks the MCP protocol against the
+running server and validates tool responses. No subcommands.
+
+## broker-driver CLI surface
 
 ### Subcommand pattern
 
 ```
-agent <subcommand> [flags]
+broker-driver <subcommand> [flags]
 ```
 
 | Subcommand          | Purpose                              | Key flags                                                                                       | Fixture     | MCP tools exercised                                                          |
 | ------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------- | ----------- | ---------------------------------------------------------------------------- |
-| `test <mcp-url>`    | (existing) MCP SDK validation        | —                                                                                               | —           | —                                                                            |
 | `connected-client`  | F3 long-lived receiver               | `--broker {a\|b}`, `--vpn`, `--client-name`, `--queue`, `--subscriptions`                       | F3          | `list-clients`, `get-client-details`, `list-client-subscriptions`            |
 | `publisher`         | F4 / F5-driver sustained publisher   | `--broker`, `--vpn`, `--topic`, `--rate`, `--size`, `--message-type`, `--duration`              | F4, F5      | `get-message-rates`                                                          |
 | `slow-consumer`     | F5 throttled receiver                | `--broker`, `--vpn`, `--client-name`, `--queue`, `--ack-delay`, `--max-unacked`                 | F5          | `list-slow-subscribers`, `slowSubscriber` field on `list-clients` / `get-client-details` |
@@ -113,11 +132,12 @@ agent <subcommand> [flags]
 
 ### Common conventions
 
-All non-`test` subcommands share the following contract:
+All `broker-driver` subcommands share the following contract:
 
-- **Broker target.** `--broker=a` or `--broker=b` selects which container. The
-  agent resolves `host:port` from the suite's `.env` (`BROKER_A_SMF_PORT`,
-  `BROKER_B_SMF_PORT`); never accept a raw URL on the CLI.
+- **Broker target.** `--broker=a` or `--broker=b` selects which container.
+  `broker-driver` resolves `host:port` from the suite's `.env`
+  (`BROKER_A_SMF_PORT`, `BROKER_B_SMF_PORT`); never accept a raw URL on the
+  CLI.
 - **VPN.** Defaults to `default`. Override with `--vpn` only when targeting the
   multi-VPN fixture (`test-vpn`).
 - **Credentials.** Sourced from `.env` — `E2E_A_USERNAME` / `E2E_A_PASSWORD`
@@ -127,66 +147,70 @@ All non-`test` subcommands share the following contract:
   grace window: disconnect SMF session cleanly, flush any in-flight publishes,
   exit 0. On grace expiry, exit 1.
 - **PID file.** Each long-running subcommand writes
-  `bin/agent-<subcommand>-<broker>.pid` on startup and removes it on clean
-  exit. `helpers.sh` reaps stragglers via these pidfiles during teardown.
+  `bin/broker-driver-f<N>-<broker>.pid` on startup (e.g.
+  `bin/broker-driver-f4-a.pid` for the F4 publisher on broker-a) and removes
+  it on clean exit. `helpers.sh`'s `stop_broker_drivers` reaps stragglers via
+  these pidfiles during teardown — the glob it watches is
+  `bin/broker-driver-f*.pid`.
 - **One-shot vs long-running.** `publish-batch` is one-shot (publishes
   `--count` messages, then exits). `connected-client`, `publisher`, and
   `slow-consumer` are long-running until signaled or `--duration` elapses.
 
 ### Example invocations
 
-`agent connected-client` (F3):
+`broker-driver connected-client` (F3):
 
 ```bash
-./bin/agent connected-client \
+./bin/broker-driver connected-client \
     --broker=a \
     --client-name=e2e-monitoring-connected-a \
     --queue=test-queue \
     --subscriptions=t1
 ```
 
-`agent publisher` for F4 (sustained traffic):
+`broker-driver publisher` for F4 (sustained traffic):
 
 ```bash
-./bin/agent publisher --broker=a --topic=t1 --rate=100 --size=256 --message-type=persistent
+./bin/broker-driver publisher --broker=a --topic=t1 --rate=100 --size=256 --message-type=persistent
 ```
 
-`agent publisher` for F5 driver (overruns slow consumer):
+`broker-driver publisher` for F5 driver (overruns slow consumer):
 
 ```bash
-./bin/agent publisher --broker=a --topic=t-slow --rate=200 --size=256 --message-type=persistent
+./bin/broker-driver publisher --broker=a --topic=t-slow --rate=200 --size=256 --message-type=persistent
 ```
 
-`agent publisher` with `--duration` (auto-exits, useful when a wrapping script
-prefers a bounded process to one it has to signal):
+`broker-driver publisher` with `--duration` (auto-exits, useful when a
+wrapping script prefers a bounded process to one it has to signal):
 
 ```bash
-./bin/agent publisher --broker=a --topic=t1 --rate=100 --size=256 --message-type=persistent --duration=30s
+./bin/broker-driver publisher --broker=a --topic=t1 --rate=100 --size=256 --message-type=persistent --duration=30s
 ```
 
 Omit `--duration` for long-running fixtures (the default); `helpers.sh` reaps
 the process via its pidfile during teardown.
 
-`agent slow-consumer` (F5):
+`broker-driver slow-consumer` (F5):
 
 ```bash
-./bin/agent slow-consumer \
+./bin/broker-driver slow-consumer \
     --broker=a \
     --client-name=e2e-monitoring-slow-a \
     --queue=test-queue-slow \
     --ack-delay=10000
 ```
 
-`agent publish-batch` for F6-spool (publish ~2 MB to overflow 1 MB quota):
+`broker-driver publish-batch` for F6-spool (publish ~2 MB to overflow 1 MB
+quota):
 
 ```bash
-./bin/agent publish-batch --broker=a --topic=t-discards-spool --count=8000 --size=256 --message-type=persistent
+./bin/broker-driver publish-batch --broker=a --topic=t-discards-spool --count=8000 --size=256 --message-type=persistent
 ```
 
-`agent publish-batch` for F6-ttl:
+`broker-driver publish-batch` for F6-ttl:
 
 ```bash
-./bin/agent publish-batch --broker=a --topic=t-discards-ttl --count=200 --size=256 --message-type=persistent
+./bin/broker-driver publish-batch --broker=a --topic=t-discards-ttl --count=200 --size=256 --message-type=persistent
 ```
 
 ## Empirical timing notes
@@ -223,17 +247,22 @@ fixture sizes change.
 
 ## Cleanup order
 
-Strict ordering — violations leave dangling state that fails the next run:
+`test-monitoring-tools.sh` runs the following cleanup steps, in this order,
+when it exits (for any reason — normal end, error, Ctrl-C, killed):
 
-1. Kill agent fixture goroutines (or kill the agent binary via its pidfile).
-2. `DELETE` queue bindings on RDPs.
-3. `DELETE` REST consumers.
-4. `DELETE` RDPs.
-5. `DELETE` queues.
-6. `DELETE` VPNs (cascade removes the user).
+1. **Stop the MCP server** (`stop_server` in `helpers.sh`).
+2. **Stop the broker-driver processes** (`stop_broker_drivers` in
+   `helpers.sh`). Each broker-driver fixture writes a PID file named
+   `bin/broker-driver-f<N>-<broker>.pid` (e.g. `bin/broker-driver-f4-a.pid`)
+   when it starts. The stop helper finds all of them, sends a polite
+   termination signal, waits up to 5 seconds, then force-kills anything
+   still running.
+3. **Delete broker fixtures** (`cleanup_fixtures` in `helpers.sh`).
+   Order: bindings → consumers → RDPs → queues → VPNs.
+4. **Remove the MCP server PID file** (`bin/mcp-server.pid`).
 
-`helpers.sh` enforces this order in `cleanup_fixtures` / `cleanup_*_on`
-helpers.
+Step 2 must run before step 3 — the broker refuses to delete a queue with
+an attached client.
 
 ## Code-reuse strategy
 

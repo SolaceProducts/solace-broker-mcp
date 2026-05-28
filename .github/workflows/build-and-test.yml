@@ -163,15 +163,10 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: Start Solace brokers
-        run: docker compose -f test/e2e-monitoring/docker-compose.yml up -d
-
-      - name: Wait for brokers
-        run: |
-          source test/e2e-monitoring/helpers.sh
-          wait_for_all_brokers 120
+        run: bash test/e2e-monitoring/setup-brokers.sh
 
       - name: Run E2E tests
-        run: bash test/e2e-monitoring/run_all.sh
+        run: bash test/e2e-monitoring/test-monitoring-tools.sh
 
       - name: Broker logs (on failure)
         if: failure()
