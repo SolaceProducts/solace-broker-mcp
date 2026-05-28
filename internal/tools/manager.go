@@ -137,6 +137,14 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		return nil, toolErr
 	}
 
+	// Resolution succeeded — switch the locally-tracked alias to the display
+	// (original-casing) form so all downstream log sites (destructive warn,
+	// success/error tool-invoked logs) report the configured identifier
+	// rather than whatever case the caller happened to type.
+	if bc, ok := m.pool.BrokerConfig(brokerAlias); ok {
+		brokerAlias = bc.DisplayName()
+	}
+
 	// Strip broker from params before validation and execution — handlers
 	// should not see it.
 	handlerParams := stripBrokerParam(params)

@@ -40,13 +40,35 @@ import (
 // ServerConfig holds the complete MCP server configuration, including all
 // configured brokers and SEMP client settings.
 type ServerConfig struct {
-	Brokers     map[string]*BrokerConfig // broker alias → config
-	SEMP        SEMPConfig               // SEMP client settings
-	Port        int                      // HTTP port the MCP server listens on
-	LogLevel    string                   // slog level name: "debug", "info", "warn", "error"
-	ClientAuth  ClientAuthConfig         // authentication config for mcp client to server interactions
-	TLSCertFile string                   // path to TLS certificate file (optional, enables HTTPS)
-	TLSKeyFile  string                   // path to TLS private key file (optional, requires TLSCertFile)
+	// brokers is keyed by canonical (lowercase) alias after validate() runs.
+	// Access from outside this package via Broker(alias) and BrokerAliases();
+	// within the package, prefer the accessors so canonicalization is not
+	// bypassed by accident.
+	brokers     map[string]*BrokerConfig
+	SEMP        SEMPConfig       // SEMP client settings
+	Port        int              // HTTP port the MCP server listens on
+	LogLevel    string           // slog level name: "debug", "info", "warn", "error"
+	ClientAuth  ClientAuthConfig // authentication config for mcp client to server interactions
+	TLSCertFile string           // path to TLS certificate file (optional, enables HTTPS)
+	TLSKeyFile  string           // path to TLS private key file (optional, requires TLSCertFile)
+}
+
+// Broker returns the broker config for alias (compared case-insensitively),
+// and a bool indicating whether the alias is known.
+func (c *ServerConfig) Broker(alias string) (*BrokerConfig, bool) {
+	b, ok := c.brokers[strings.ToLower(alias)]
+	return b, ok
+}
+
+// BrokerAliases returns the configured broker aliases in their original
+// (display) casing, sorted alphabetically.
+func (c *ServerConfig) BrokerAliases() []string {
+	out := make([]string, 0, len(c.brokers))
+	for _, b := range c.brokers {
+		out = append(out, b.displayName)
+	}
+	slices.Sort(out)
+	return out
 }
 
 type ClientAuthConfig struct {
@@ -72,6 +94,14 @@ type BrokerConfig struct {
 	URL                string     `yaml:"url"`                  // SEMP API base URL (e.g., "https://broker:1943")
 	InsecureSkipVerify bool       `yaml:"insecure_skip_verify"` // skip TLS cert verification (dev only, self-signed certs)
 	Auth               AuthConfig `yaml:"auth"`                 // authentication config
+	displayName        string     `yaml:"-"`                    // original alias casing from YAML, set by validate()
+}
+
+// DisplayName returns the broker alias in its original casing as written in
+// the YAML config. Use this in logs, error messages, and any user-facing
+// output so operators see the identifier they configured.
+func (b *BrokerConfig) DisplayName() string {
+	return b.displayName
 }
 
 // Auth mode constants for broker authentication (Hop 2: MCP Server → Broker).
@@ -257,7 +287,9 @@ func LoadConfig(path string) (*ServerConfig, error) {
 	}
 
 	var raw yamlConfig
-	if err := yaml.Unmarshal(data, &raw); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("parsing config YAML: %w", err)
 	}
 
@@ -266,7 +298,7 @@ func LoadConfig(path string) (*ServerConfig, error) {
 	}
 
 	cfg := &ServerConfig{
-		Brokers:     raw.Brokers,
+		brokers:     raw.Brokers,
 		SEMP:        raw.SEMP,
 		Port:        raw.Port,
 		LogLevel:    raw.LogLevel,
@@ -384,6 +416,98 @@ func stripMatchedQuotes(s string) string {
 // uppercase letters, numbers, and underscores.
 var envVarPattern = regexp.MustCompile(`\$\{([A-Z0-9_]+)\}`)
 
+// brokerAliasPattern enforces the broker alias contract: 1–63 chars, only
+// letters/digits/hyphens, must start and end alphanumeric. Applied to the
+// original casing as written in YAML.
+var brokerAliasPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+
+// isValidAlias reports whether s satisfies the broker alias contract.
+func isValidAlias(s string) bool {
+	return brokerAliasPattern.MatchString(s)
+}
+
+// validateAndCanonicalizeBrokers validates each alias against the contract,
+// detects case-only collisions, sets displayName on every BrokerConfig, and
+// returns a new map keyed by canonical (lowercase) alias. All errors are
+// accumulated so operators see every issue in one run.
+//
+// What the returned canonical map contains:
+//   - Structurally-valid, non-colliding entries (the happy case).
+//   - Structurally-invalid entries (regex failures) — kept so that
+//     validate()'s per-broker pass (URL, auth, credentials) can attach more
+//     errors to them in the same startup attempt.
+//
+// What the returned canonical map omits:
+//   - Nil broker entries (e.g. YAML `brokers: { prod: }`) — reported with a
+//     standalone error and skipped to avoid nil-pointer derefs downstream.
+//   - Case-collision losers — running per-broker validation on entries the
+//     operator is about to rename would be noise; the collision error itself
+//     already blocks startup.
+//
+// See the phase-3 block comment below for the rationale behind the
+// kept-vs-omitted asymmetry.
+func validateAndCanonicalizeBrokers(brokers map[string]*BrokerConfig) (map[string]*BrokerConfig, []error) {
+	var errs []error
+	canonical := make(map[string]*BrokerConfig, len(brokers))
+
+	// Phase 1: per-alias structural validation; set displayName on all entries.
+	// Nil broker values (e.g. YAML `brokers: { prod: }`) are reported here and
+	// excluded from subsequent phases so we never dereference them downstream.
+	for alias, broker := range brokers {
+		if broker == nil {
+			errs = append(errs, fmt.Errorf("broker %q: configuration block is empty (missing url, auth, etc.)", alias))
+			continue
+		}
+		broker.displayName = alias
+		if !isValidAlias(alias) {
+			errs = append(errs, fmt.Errorf("broker alias %q is invalid: must be 1-63 characters, contain only letters, digits, and hyphens, and start and end with a letter or digit", alias))
+		}
+	}
+
+	// Phase 2: case-collision detection (group by lowercase form).
+	seen := make(map[string][]string, len(brokers))
+	for alias := range brokers {
+		lower := strings.ToLower(alias)
+		seen[lower] = append(seen[lower], alias)
+	}
+	for _, originals := range seen {
+		if len(originals) < 2 {
+			continue
+		}
+		slices.Sort(originals)
+		quoted := make([]string, len(originals))
+		for i, o := range originals {
+			quoted[i] = fmt.Sprintf("%q", o)
+		}
+		errs = append(errs, fmt.Errorf("broker aliases %s collide: aliases are compared case-insensitively, please rename one", strings.Join(quoted, " and ")))
+	}
+
+	// Phase 3: build canonical map. The asymmetry between how collision-losers
+	// and structurally-invalid aliases are handled is deliberate.
+	//
+	// Collision-losers are dropped from the canonical map. The collision error
+	// already blocks startup, so running per-broker validation on them would
+	// surface downstream errors on entries the operator is about to rename —
+	// added noise without value.
+	//
+	// Structurally-invalid aliases (regex failures) are kept in the canonical
+	// map so phase 4 (per-broker validation) can also surface URL/auth/
+	// credential errors on them in the same pass. This matches the broader
+	// validate() intent of accumulating every issue in a single startup attempt.
+	for alias, broker := range brokers {
+		if broker == nil {
+			continue // already reported in phase 1; never insert nil into canonical
+		}
+		lower := strings.ToLower(alias)
+		if len(seen[lower]) > 1 {
+			continue
+		}
+		canonical[lower] = broker
+	}
+
+	return canonical, errs
+}
+
 // substituteEnvVars replaces all ${VAR_NAME} occurrences in raw YAML bytes with
 // the corresponding environment variable values. YAML comments are skipped —
 // a ${VAR} reference inside a # comment has no effect on the parsed config and
@@ -458,12 +582,23 @@ func splitYAMLComment(line []byte) (active, comment []byte) {
 func validate(cfg *ServerConfig) error {
 	var errs []error
 
-	if len(cfg.Brokers) == 0 {
+	if len(cfg.brokers) == 0 {
 		errs = append(errs, fmt.Errorf("at least one broker must be configured"))
 	}
 
-	for _, alias := range slices.Sorted(maps.Keys(cfg.Brokers)) {
-		errs = append(errs, validateBroker(alias, cfg.Brokers[alias], cfg.IsProductionMode())...)
+	canonical, aliasErrs := validateAndCanonicalizeBrokers(cfg.brokers)
+	errs = append(errs, aliasErrs...)
+	cfg.brokers = canonical
+
+	for _, lower := range slices.Sorted(maps.Keys(cfg.brokers)) {
+		broker := cfg.brokers[lower]
+		errs = append(errs, validateBroker(broker, cfg.IsProductionMode())...)
+		// Surface insecure_skip_verify=true at startup so operators see it
+		// in triage logs without scraping per-request SEMP-client warns.
+		if cfg.IsProductionMode() && broker.InsecureSkipVerify {
+			slog.Warn("INSECURE: TLS verification disabled for broker",
+				slog.String("broker", broker.DisplayName()))
+		}
 	}
 
 	if err := ValidatePort(cfg.Port); err != nil {
@@ -552,8 +687,9 @@ func validate(cfg *ServerConfig) error {
 // validateBroker returns all validation errors for a single broker. Credential
 // checks are skipped when auth.mode is missing or invalid because there are no
 // meaningful credential rules to apply without a known mode.
-func validateBroker(alias string, broker *BrokerConfig, productionMode bool) []error {
+func validateBroker(broker *BrokerConfig, productionMode bool) []error {
 	var errs []error
+	alias := broker.displayName
 
 	if broker.URL == "" {
 		errs = append(errs, fmt.Errorf("broker %q: url is required", alias))

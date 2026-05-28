@@ -363,7 +363,7 @@ func main() {
 	slog.SetDefault(slog.New(newSlogHandler(level)))
 
 	slog.Info("config loaded",
-		slog.Int("broker_count", len(cfg.Brokers)),
+		slog.Int("broker_count", len(cfg.BrokerAliases())),
 		slog.Int("port", cfg.Port),
 		slog.String("log_level", cfg.LogLevel))
 
