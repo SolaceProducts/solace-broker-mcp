@@ -228,9 +228,9 @@ client_auth:
   dev_token: "sam-mcp-dev-token-local-only"
 ```
 
-Then in your SAM project, add an MCP-tooled agent that points at this server with the matching bearer token. Full walkthrough: [SAM Integration](docs/sam-integration.md).
+Then in your SAM project, add an MCP-tooled agent that points at this server with the matching bearer token. For complete setup instructions, see: [SAM Integration](docs/sam-integration.md).
 
-Example queries through SAM's WebUI:
+Example queries through the SAM web UI:
 
 ```
 What brokers are configured?
