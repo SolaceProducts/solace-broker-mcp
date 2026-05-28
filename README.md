@@ -162,6 +162,20 @@ Then ask Claude to interact with your brokers:
 List queues in the default VPN on the dev broker
 ```
 
+## Tools
+
+The server exposes 14 read-only tools grouped by what they inspect. Every tool except `list-brokers` takes a `broker` parameter naming a configured broker alias. See [the user guide](docs/user-guide.md#tools) for per-tool descriptions, parameters, and pagination defaults.
+
+| Category | Tools | What it does |
+|---|---|---|
+| Discovery | `list-brokers` | List configured broker aliases for use as the `broker` parameter |
+| Broker health | `get-broker-health`, `get-redundancy-status` | Snapshot of version, uptime, resources, spool, and HA / mate-link state |
+| Message VPN | `list-vpns`, `get-vpn-health`, `get-message-rates` | List VPNs, check per-VPN service health, read message and byte rates |
+| Queues | `list-queues`, `get-queue-metrics` | List queues with depth and throughput; drill into spool, bindings, consumers |
+| Clients | `list-clients`, `get-client-details`, `list-client-subscriptions` | List connections, inspect per-client rates and discards, list subscriptions |
+| REST Delivery Points | `list-rdps`, `get-rdp-status` | List RDPs; inspect bindings, REST consumers, and last failure reason |
+| DMR | `get-dmr-status` | Inspect DMR cluster and link status for mesh connectivity issues |
+
 ## Development Setup
 
 ### 1. Clone and install dependencies
