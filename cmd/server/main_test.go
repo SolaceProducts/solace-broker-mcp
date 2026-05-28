@@ -23,10 +23,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -379,7 +379,76 @@ func TestReady_GET_OneBrokerUnreachable(t *testing.T) {
 	if len(body.Errors) == 0 {
 		t.Fatal("errors array is empty, want at least one entry")
 	}
-	if !strings.Contains(body.Errors[0], "prod-2") {
-		t.Errorf("errors[0] = %q, want it to reference failing broker %q", body.Errors[0], "prod-2")
+	want := "prod-2: unreachable"
+	if body.Errors[0] != want {
+		t.Errorf("errors[0] = %q, want %q", body.Errors[0], want)
+	}
+}
+
+func TestNewBrokerReachabilityProbe_UnknownBroker(t *testing.T) {
+	cfg := &config.ServerConfig{
+		Brokers: map[string]*config.BrokerConfig{},
+	}
+	probe := newBrokerReachabilityProbe(cfg)
+
+	err := probe(context.Background(), "no-such-broker")
+	if err == nil {
+		t.Fatal("expected error for unknown broker, got nil")
+	}
+	if want := `unknown broker "no-such-broker"`; err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestNewBrokerReachabilityProbe_ExplicitPort(t *testing.T) {
+	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	addr := l.Addr().String()
+	_, port, _ := net.SplitHostPort(addr)
+	cfg := &config.ServerConfig{
+		Brokers: map[string]*config.BrokerConfig{
+			"broker-a": {URL: "http://127.0.0.1:" + port},
+		},
+	}
+	probe := newBrokerReachabilityProbe(cfg)
+
+	if err := probe(context.Background(), "broker-a"); err != nil {
+		t.Errorf("expected success for reachable broker, got: %v", err)
+	}
+}
+
+func TestNewBrokerReachabilityProbe_HTTPSDefaultsTo443(t *testing.T) {
+	cfg := &config.ServerConfig{
+		Brokers: map[string]*config.BrokerConfig{
+			"broker-a": {URL: "https://192.0.2.1"},
+		},
+	}
+	probe := newBrokerReachabilityProbe(cfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	err := probe(ctx, "broker-a")
+	if err == nil {
+		t.Fatal("expected dial error to 192.0.2.1:443, got nil")
+	}
+}
+
+func TestNewBrokerReachabilityProbe_HTTPDefaultsTo80(t *testing.T) {
+	cfg := &config.ServerConfig{
+		Brokers: map[string]*config.BrokerConfig{
+			"broker-a": {URL: "http://192.0.2.1"},
+		},
+	}
+	probe := newBrokerReachabilityProbe(cfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	err := probe(ctx, "broker-a")
+	if err == nil {
+		t.Fatal("expected dial error to 192.0.2.1:80, got nil")
 	}
 }
