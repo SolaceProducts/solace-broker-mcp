@@ -20,6 +20,7 @@ An MCP (Model Context Protocol) server for Solace event brokers, built with Go u
   - [Binary Deployment](#binary-deployment)
   - [Docker Deployment](#docker-deployment)
   - [Connect from Claude Code](#connect-from-claude-code)
+  - [Connect from Solace Agent Mesh (SAM)](#connect-from-solace-agent-mesh-sam)
 - [Development Setup](#development-setup)
   - [Configuration Options](#configuration-options)
 - [Project Structure](#project-structure)
@@ -73,6 +74,7 @@ The server implements the MCP HTTP transport specification and exposes event bro
 - [User Guide](docs/user-guide.md) — overview, tools reference, deployment, and troubleshooting
 - [Configuration](docs/configuration.md) — server settings, event broker config, client auth, and rate-limit/retry settings
 - [Authentication](docs/authentication.md) — OAuth/OIDC and static token setup for MCP clients
+- [SAM Integration](docs/sam-integration.md) — wire this MCP server into a Solace Agent Mesh project as an agent
 
 ## Prerequisites
 
@@ -213,6 +215,26 @@ Example query:
 
 ```
 List queues in the default VPN on the dev broker
+```
+
+### Connect from Solace Agent Mesh (SAM)
+
+Once the MCP server is running, configure it to accept a static dev token:
+
+```yaml
+# broker-config.yaml
+client_auth:
+  mode: static
+  dev_token: "sam-mcp-dev-token-local-only"
+```
+
+Then in your SAM project, add an MCP-tooled agent that points at this server with the matching bearer token. Full walkthrough: [SAM Integration](docs/sam-integration.md).
+
+Example queries through SAM's WebUI:
+
+```
+What brokers are configured?
+List the queues on broker-one's default VPN.
 ```
 
 ## Development Setup
