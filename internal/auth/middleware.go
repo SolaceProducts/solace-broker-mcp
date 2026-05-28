@@ -108,7 +108,11 @@ func createOIDCTokenVerifier(cfg *config.ServerConfig) (sdkauth.TokenVerifier, e
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if httpClient := oidcHTTPClient(); httpClient != nil {
+	httpClient, err := oidcHTTPClient()
+	if err != nil {
+		return nil, err
+	}
+	if httpClient != nil {
 		ctx = oidc.ClientContext(ctx, httpClient)
 	}
 
@@ -155,31 +159,29 @@ func createOIDCTokenVerifier(cfg *config.ServerConfig) (sdkauth.TokenVerifier, e
 }
 
 // oidcHTTPClient returns a custom HTTP client that trusts the CA bundle in
-// SSL_CERT_FILE, or nil when that variable is unset/unreadable. On macOS and
+// SSL_CERT_FILE, or (nil, nil) when that variable is unset. On macOS and
 // Windows, Go's default TLS verification delegates to the OS-native trust
 // store and ignores SSL_CERT_FILE; an explicit RootCAs pool bypasses that
 // delegation so the env var works consistently on every platform.
-func oidcHTTPClient() *http.Client {
+func oidcHTTPClient() (*http.Client, error) {
 	certFile := os.Getenv("SSL_CERT_FILE")
 	if certFile == "" {
-		return nil
+		return nil, nil
 	}
 	certPEM, err := os.ReadFile(filepath.Clean(certFile))
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("SSL_CERT_FILE %q: %w", certFile, err)
 	}
 	pool, err := x509.SystemCertPool()
 	if err != nil {
 		pool = x509.NewCertPool()
 	}
-	pool.AppendCertsFromPEM(certPEM)
-	return &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs: pool,
-			},
-		},
+	if !pool.AppendCertsFromPEM(certPEM) {
+		return nil, fmt.Errorf("SSL_CERT_FILE %q contains no valid PEM certificates", certFile)
 	}
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.TLSClientConfig = &tls.Config{RootCAs: pool}
+	return &http.Client{Transport: t}, nil
 }
 
 // NewProtectedResourceMetadataHandler creates an HTTP handler that serves

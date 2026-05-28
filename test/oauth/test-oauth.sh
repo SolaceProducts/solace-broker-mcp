@@ -81,6 +81,7 @@ echo "✓ Obtained access token"
 echo ""
 echo "Building MCP server..."
 cd "${PROJECT_ROOT}"
+mkdir -p "${PROJECT_ROOT}/bin"
 go build -o "${PROJECT_ROOT}/bin/mcp-test" ./cmd/server
 echo "✓ Built MCP server"
 

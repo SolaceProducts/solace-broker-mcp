@@ -17,8 +17,9 @@ client_auth:
   resource_url: "https://localhost:9091/mcp"
 
 # Broker configuration
-# Note: This broker is only needed for config validation.
-# The OAuth test doesn't actually connect to the broker.
+# Note: This broker is only needed for config validation — the OAuth test
+# doesn't actually connect to it. The https:// scheme is required because
+# mode: oauth enforces TLS on all URLs (see validateBrokerURL).
 brokers:
   test-broker:
     url: https://localhost:8080
