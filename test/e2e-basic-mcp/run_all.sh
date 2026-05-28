@@ -15,11 +15,9 @@ cleanup() {
     log_info "Running cleanup ..."
     stop_server
     cleanup_fixtures
-    rm -f "$CONFIG_FILE"
     rm -f "$BIN_DIR/mcp-server.pid"
     rm -rf "$E2E_RESULTS_DIR"
 }
-CONFIG_FILE=$(mktemp /tmp/e2e-config-XXXXXX.yaml)
 trap cleanup EXIT
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -43,20 +41,28 @@ create_fixtures
 log_info ""
 log_info "=== Scenario 1: Standalone (curl) ==="
 log_info ""
-bash "$SCRIPT_DIR/test_standalone.sh"
-STANDALONE_EXIT=$?
+if bash "$SCRIPT_DIR/test_standalone.sh"; then
+    STANDALONE_EXIT=0
+else
+    STANDALONE_EXIT=$?
+fi
 
 # 4. Run Scenario 2: Agent
 log_info ""
 log_info "=== Scenario 2: Agent (Go MCP SDK) ==="
 log_info ""
-bash "$SCRIPT_DIR/test_agent.sh"
-AGENT_EXIT=$?
+if bash "$SCRIPT_DIR/test_agent.sh"; then
+    AGENT_EXIT=0
+else
+    AGENT_EXIT=$?
+fi
 
 # 5. Summary table
 TOTAL_RUN=0
 TOTAL_PASSED=0
 TOTAL_FAILED=0
+SAW_STANDALONE=0
+SAW_AGENT=0
 
 echo ""
 echo "┏━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━┳━━━━━━━━━┓"
@@ -69,7 +75,20 @@ if [ -f "$E2E_RESULTS_DIR/results.txt" ]; then
         TOTAL_RUN=$((TOTAL_RUN + run))
         TOTAL_PASSED=$((TOTAL_PASSED + passed))
         TOTAL_FAILED=$((TOTAL_FAILED + failed))
+        case "$label" in
+            "Standalone tests") SAW_STANDALONE=1 ;;
+            "Agent tests")      SAW_AGENT=1      ;;
+        esac
     done < "$E2E_RESULTS_DIR/results.txt"
+fi
+
+# Scenarios that exited non-zero before reaching print_summary leave no line in
+# results.txt — emit a placeholder row so they don't silently vanish from the table.
+if [ "$SAW_STANDALONE" -eq 0 ] && [ "$STANDALONE_EXIT" -ne 0 ]; then
+    printf "┃ %-23s ┃ %5s ┃ %7s ┃ %7s ┃\n" "Standalone tests" "CRASH" "--" "--"
+fi
+if [ "$SAW_AGENT" -eq 0 ] && [ "$AGENT_EXIT" -ne 0 ]; then
+    printf "┃ %-23s ┃ %5s ┃ %7s ┃ %7s ┃\n" "Agent tests" "CRASH" "--" "--"
 fi
 
 echo "┣━━━━━━━━━━━━━━━━━━━━━━━━━╋━━━━━━━╋━━━━━━━━━╋━━━━━━━━━┫"
