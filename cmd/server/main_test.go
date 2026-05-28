@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -385,10 +386,32 @@ func TestReady_GET_OneBrokerUnreachable(t *testing.T) {
 	}
 }
 
-func TestNewBrokerReachabilityProbe_UnknownBroker(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Brokers: map[string]*config.BrokerConfig{},
+// probeTestConfig writes a minimal YAML config with the given brokers and
+// returns the loaded *config.ServerConfig. Each broker entry is an
+// (alias, url) pair.
+// probeTestConfig writes a minimal YAML config with the given brokers and
+// returns the loaded *config.ServerConfig. Each entry is an [alias, url] pair.
+func probeTestConfig(t *testing.T, brokers ...[2]string) *config.ServerConfig {
+	t.Helper()
+	var yamlContent string
+	yamlContent += "client_auth:\n  mode: disabled\nbrokers:\n"
+	for _, broker := range brokers {
+		alias, brokerURL := broker[0], broker[1]
+		yamlContent += fmt.Sprintf("  %s:\n    url: %s\n    auth:\n      mode: basic\n      username: admin\n      password: secret\n", alias, brokerURL)
 	}
+	path := filepath.Join(t.TempDir(), "broker-config.yaml")
+	if err := os.WriteFile(path, []byte(yamlContent), os.FileMode(0o600)); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	return cfg
+}
+
+func TestNewBrokerReachabilityProbe_UnknownBroker(t *testing.T) {
+	cfg := probeTestConfig(t, [2]string{"existing", "http://127.0.0.1:8080"})
 	probe := newBrokerReachabilityProbe(cfg)
 
 	err := probe(context.Background(), "no-such-broker")
@@ -409,11 +432,7 @@ func TestNewBrokerReachabilityProbe_ExplicitPort(t *testing.T) {
 
 	addr := l.Addr().String()
 	_, port, _ := net.SplitHostPort(addr)
-	cfg := &config.ServerConfig{
-		Brokers: map[string]*config.BrokerConfig{
-			"broker-a": {URL: "http://127.0.0.1:" + port},
-		},
-	}
+	cfg := probeTestConfig(t, [2]string{"broker-a", "http://127.0.0.1:" + port})
 	probe := newBrokerReachabilityProbe(cfg)
 
 	if err := probe(context.Background(), "broker-a"); err != nil {
@@ -422,11 +441,7 @@ func TestNewBrokerReachabilityProbe_ExplicitPort(t *testing.T) {
 }
 
 func TestNewBrokerReachabilityProbe_HTTPSDefaultsTo443(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Brokers: map[string]*config.BrokerConfig{
-			"broker-a": {URL: "https://192.0.2.1"},
-		},
-	}
+	cfg := probeTestConfig(t, [2]string{"broker-a", "https://192.0.2.1"})
 	probe := newBrokerReachabilityProbe(cfg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -438,11 +453,7 @@ func TestNewBrokerReachabilityProbe_HTTPSDefaultsTo443(t *testing.T) {
 }
 
 func TestNewBrokerReachabilityProbe_HTTPDefaultsTo80(t *testing.T) {
-	cfg := &config.ServerConfig{
-		Brokers: map[string]*config.BrokerConfig{
-			"broker-a": {URL: "http://192.0.2.1"},
-		},
-	}
+	cfg := probeTestConfig(t, [2]string{"broker-a", "http://192.0.2.1"})
 	probe := newBrokerReachabilityProbe(cfg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)

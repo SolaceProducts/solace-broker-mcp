@@ -251,7 +251,7 @@ func startServer(srv *http.Server, tlsCertFile, tlsKeyFile string) <-chan error 
 // production implementation of buildMux's probeBroker parameter.
 func newBrokerReachabilityProbe(cfg *config.ServerConfig) func(context.Context, string) error {
 	return func(ctx context.Context, broker string) error {
-		brokerCfg, ok := cfg.Brokers[broker]
+		brokerCfg, ok := cfg.Broker(broker)
 		if !ok {
 			return fmt.Errorf("unknown broker %q", broker)
 		}
