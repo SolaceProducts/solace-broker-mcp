@@ -37,7 +37,7 @@ MCP-compatible clients, for example Claude Code, invoke these tools using natura
 
 ## Features
 
-- **14 read-only monitoring tools** — Event broker health, message VPNs, queues, clients, REST delivery points, and DMR cluster status
+- **13 read-only monitoring tools** — Event broker health, message VPNs, queues, clients, and REST delivery points
 - **Client authentication** — Development mode (no auth), static bearer tokens, or OAuth 2.1/OIDC with JWT validation
 - **Multi-broker configuration** — Connect to multiple brokers and address them by configured alias
 - **Retry and rate limiting** — Configurable backoff intervals and concurrent request limits per broker
@@ -81,7 +81,6 @@ The server exposes read-only tools grouped by what they inspect. Every tool exce
 | Queues | `list-queues`, `get-queue-metrics` | List queues with depth and throughput; drill into spool, bindings, consumers |
 | Clients | `list-clients`, `get-client-details`, `list-client-subscriptions` | List connections, inspect per-client rates and discards, list subscriptions |
 | REST Delivery Points | `list-rdps`, `get-rdp-status` | List RDPs; inspect bindings, REST consumers, and last failure reason |
-| DMR | `get-dmr-status` | Inspect DMR cluster and link status for mesh connectivity issues |
 
 ## Guides
 

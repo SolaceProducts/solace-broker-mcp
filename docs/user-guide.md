@@ -136,12 +136,6 @@ The server exposes 14 read-only tools. All broker-querying tools require a `brok
 | `list-rdps` | List all RDPs in a VPN with enabled state, up/down status, and last failure reason. Default 100 results, max 500. |
 | `get-rdp-status` | Detailed RDP status: enabled state, up/down status, client name, last failure reason, queue bindings, and REST consumer status. |
 
-### DMR (Dynamic Message Routing)
-
-| Tool | Description |
-|---|---|
-| `get-dmr-status` | DMR cluster status: enabled state, uptime, and all link statuses. Use to diagnose mesh connectivity issues. |
-
 ## Recommended Environments
 
 ### Authentication
