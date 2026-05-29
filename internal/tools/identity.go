@@ -133,7 +133,7 @@ func normalizeAbsent(s string) string {
 //   - Cf — Format characters. Includes bidi/RTL overrides (U+202A–U+202E,
 //     U+2066–U+2069), zero-width joiners, BOM, soft hyphen, language tags.
 //     Bidi controls are the CWE-1007 surface: a sub like
-//     "alice‮nimda" renders as "aliceadmin" in any bidi-aware UI,
+//     "alice\u202Enimda" renders as "aliceadmin" in any bidi-aware UI,
 //     misattributing the action to the wrong user in SIEMs/terminals.
 //   - Zl / Zp — Line and Paragraph separator (U+2028, U+2029). Some
 //     renderers honor these as line breaks; they're CWE-117-adjacent.
