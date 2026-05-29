@@ -46,6 +46,13 @@ import (
 // visually distinct from any real claim value (RFC 7519 §4.1.2 / OIDC Core §2).
 const absentSentinel = "<absent>"
 
+// verifierBugSentinel marks an identity field whose value was malformed by our
+// own verifier — specifically, a non-string value stashed in TokenInfo.Extra
+// where a string was expected. The sentinel is deliberately distinct from
+// absentSentinel so log consumers can tell "IdP didn't issue this claim"
+// (normal) from "our code put garbage in Extra" (alarm). See plan §14.
+const verifierBugSentinel = "<verifier-bug>"
+
 // claimMaxLen caps each sanitized identity field at 256 bytes. Real sub/jti
 // values from production IdPs are 20–50 chars; the cap fires only on malicious
 // or buggy IdPs and prevents log-flood DoS (plan §4.4).
@@ -116,11 +123,25 @@ func normalizeAbsent(s string) string {
 	return s
 }
 
-// sanitizeClaim defends against log-injection (CWE-117) by stripping every
-// control character (any rune below 0x20, plus 0x7F DEL) and capping the
-// result at claimMaxLen bytes. JSON-handler escaping already neutralizes
-// CR/LF for the JSON sink, but downstream re-emission (errors, panics,
-// custom handlers) is the reason we sanitize at the field level (plan §4.4).
+// sanitizeClaim defends against log-injection (CWE-117) and audit-spoofing
+// (CWE-1007) by stripping non-graphic Unicode and capping the result at
+// claimMaxLen bytes. The four stripped categories are:
+//
+//   - Cc — Control characters. Includes the ASCII C0 block (NUL, TAB, LF,
+//     CR, ESC, …), DEL, and the C1 block (U+0080–U+009F). This is the
+//     CWE-117 surface: LF and CR can break log-line framing.
+//   - Cf — Format characters. Includes bidi/RTL overrides (U+202A–U+202E,
+//     U+2066–U+2069), zero-width joiners, BOM, soft hyphen, language tags.
+//     Bidi controls are the CWE-1007 surface: a sub like
+//     "alice‮nimda" renders as "aliceadmin" in any bidi-aware UI,
+//     misattributing the action to the wrong user in SIEMs/terminals.
+//   - Zl / Zp — Line and Paragraph separator (U+2028, U+2029). Some
+//     renderers honor these as line breaks; they're CWE-117-adjacent.
+//
+// Plan §4.4 covers the broader rationale. JSON-handler escaping already
+// neutralizes CR/LF for the JSON sink, but field-level sanitization
+// protects re-emission through error messages, panic strings, custom
+// handlers, and metric labels.
 //
 // Allocation and CPU are bounded by claimMaxLen: the working buffer is sized
 // at min(len(s), claimMaxLen) and the loop breaks as soon as another rune
@@ -135,12 +156,10 @@ func sanitizeClaim(s string) string {
 	b.Grow(min(len(s), claimMaxLen))
 
 	for _, r := range s {
-		if r < 0x20 || r == 0x7F {
-			continue
-		}
-		// Belt-and-suspenders: drop any other unicode-classified control
-		// runes (ANSI escape leads, format effectors, etc.).
-		if unicode.IsControl(r) {
+		// Single filter, complete spec — see godoc above. Cc covers both
+		// ASCII (C0/DEL) and C1 controls, so no separate fast-path is
+		// needed.
+		if unicode.In(r, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp) {
 			continue
 		}
 		// Stop before writing a rune that would push us past the cap. This
@@ -156,13 +175,23 @@ func sanitizeClaim(s string) string {
 
 // extraString reads a string-typed claim from TokenInfo.Extra by key.
 //
-// A missing key returns "" — the normal "IdP did not issue this claim" case,
-// which downstream normalization maps to the "<absent>" sentinel.
+// Three outcomes:
 //
-// A present-but-non-string value is a contract violation by the verifier
-// (commit 1 stashes only strings) and must be loud, not silent: a quiet
-// fallback would mask a verifier bug from every audit log. We panic with
-// the offending key and the observed type so the bug surfaces immediately.
+//   - Key missing: returns "" — the normal "IdP did not issue this claim" case,
+//     which downstream normalization maps to the "<absent>" sentinel.
+//
+//   - Key present, value is a string: returns the string. Happy path.
+//
+//   - Key present, value is NOT a string: contract violation by our own
+//     verifier (commit 1 stashes only strings). We emit an ERROR-level slog
+//     entry naming the key and observed type, then return verifierBugSentinel.
+//     The audit-log line for this request still gets emitted (with the
+//     sentinel as the field value) — the panic version we shipped initially
+//     killed the request before logToolResult's defer registered, inverting
+//     the audit guarantee on exactly the request class where it mattered
+//     most. The slog.Error preserves loudness for ops alerting; the distinct
+//     sentinel lets SIEM rules distinguish this case from "<absent>". See
+//     plan §14 for the change-of-mind rationale.
 func extraString(t *sdkauth.TokenInfo, key string) string {
 	v, ok := t.Extra[key]
 	if !ok {
@@ -170,7 +199,10 @@ func extraString(t *sdkauth.TokenInfo, key string) string {
 	}
 	s, isString := v.(string)
 	if !isString {
-		panic(fmt.Sprintf("internal: TokenInfo.Extra[%q] is %T, expected string", key, v))
+		slog.Error("internal: TokenInfo.Extra has unexpected type — verifier contract violation",
+			slog.String("key", key),
+			slog.String("got_type", fmt.Sprintf("%T", v)))
+		return verifierBugSentinel
 	}
 	return s
 }

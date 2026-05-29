@@ -702,3 +702,94 @@ upgrades. The version pin was redundant with go.mod review.
 that "deliberate event" is already enforced by code review of
 `go.mod`. A test that duplicates a review checkpoint adds noise
 without signal.
+
+## 14. Revision — `extraString` no longer panics; emits slog.Error + `<verifier-bug>` sentinel
+
+**Surfaced by PR #74 review (bczoma, 2026-05-28):** the original §5.5
+chose to panic when `TokenInfo.Extra[key]` was present but not a
+string, on the reasoning that "a silent fallback would mask a verifier
+bug from every audit log." The reviewer pointed out that the panic
+itself *inverts the audit guarantee on exactly the request class where
+it matters most*: `NewIdentityFromTokenInfo` is called as an argument
+to `mgr.CallTool(...)` in the shim, so a panic during argument
+evaluation kills the request before `CallTool`'s `defer logToolResult`
+is registered. The result: zero audit log entries for the offending
+request — the loud failure the panic was meant to surface produces
+*silence* on the audit channel.
+
+**What the review identified.** Both panic and silent fallback fail
+the same goal (preserve audit lines) by different mechanisms — panic
+deletes the line, silent fallback degrades the line indistinguishably
+from "claim was missing legitimately." There is a third option:
+**slog.Error + a distinct sentinel.** It keeps loudness (ERROR is
+alarmable, the panic stack trace was not more alarmable than that)
+while preserving the audit line with a value that ops can distinguish
+from the normal "<absent>" case.
+
+**Decision:** `extraString` now emits `slog.Error` naming the offending
+key and observed type, then returns a new sentinel
+`verifierBugSentinel = "<verifier-bug>"`. The audit line for the
+request still emits with the sentinel as the field value. SIEM rules
+can grep for `"<verifier-bug>"` to alarm on contract violations,
+distinct from `"<absent>"` which signals the normal "IdP did not issue
+this claim" case.
+
+**Test changes.** `TestExtraString_panicsOnNonStringValue` becomes
+`TestExtraString_nonStringValue_emitsErrorAndReturnsSentinel`, which
+asserts (a) no panic, (b) return value is `verifierBugSentinel` and
+distinct from `absentSentinel`, (c) an ERROR-level slog entry was
+emitted naming the bad key and observed type.
+
+**Why we missed this in initial planning.** The §5.5 reasoning
+correctly identified silent fallback as a failure mode; it did not
+notice that panic *during argument evaluation in the shim* produces
+the same failure mode through a different path. The fix is the
+synthesis option the original analysis didn't consider.
+
+## 15. Revision — sanitizer extends to Cf/Zl/Zp categories
+
+**Surfaced by PR #74 review (bczoma, 2026-05-28):** the original
+sanitizer (§4.4) stripped only `unicode.Cc` (Control category) plus
+an explicit ASCII fast-path for `r < 0x20 || r == 0x7F`. The reviewer
+identified CWE-1007 (visual spoofing) as an active attack path: a
+malicious IdP issues a sub like `"alice‮nimda"` containing
+U+202E RIGHT-TO-LEFT OVERRIDE. The bytes pass through our sanitizer
+unchanged because U+202E is category `Cf` (Format), not `Cc`. Any
+bidi-aware UI (SIEM dashboards, terminals, JSON viewers) renders the
+value visually as `"aliceadmin"`. The audit log attributes the action
+to a different user than the one who actually performed it — the
+exact attribution guarantee SOL-149606 is meant to provide.
+
+**Decision:** widen the sanitizer's filter from `unicode.IsControl(r)`
+to `unicode.In(r, unicode.Cc, unicode.Cf, unicode.Zl, unicode.Zp)`.
+The four categories are:
+
+- `Cc` — Control characters (CWE-117 surface; covers ASCII C0+DEL+C1).
+- `Cf` — Format characters (CWE-1007 surface; bidi overrides, zero-width
+  joiners, BOM, soft hyphen, language tags).
+- `Zl` — Line separator U+2028 (CWE-117-adjacent in renderers that
+  honor it as a line break).
+- `Zp` — Paragraph separator U+2029 (same rationale as Zl).
+
+The new filter is a strict superset of the old one; no rune that was
+previously stripped is now passed through. Verified by a Go test
+iterating `[0x00, 0x1F]` and `{0x7F}` against `unicode.Is(unicode.Cc, r)`
+— every codepoint the old explicit ASCII check caught is also in
+`Cc`, so the explicit fast-path was redundant and is removed.
+
+**Test added.** `TestSanitizeClaim_stripsBidiAndFormatChars` covers
+ten subtests: RLO (U+202E), PDF (U+202C), LRO (U+202D), zero-width
+joiner (U+200D), zero-width non-joiner (U+200C), BOM (U+FEFF), soft
+hyphen (U+00AD), line separator (U+2028), paragraph separator (U+2029),
+and C1 control NEL (U+0085). Inputs use `\u` escapes so the source
+file stays pure ASCII — a literal BOM would break Go's parser, and
+literal bidi controls in source would make the file dangerous to view
+in any bidi-aware editor (the whole point of stripping them).
+
+**Why we missed this in initial planning.** §4.4 framed sanitization
+around CWE-117 (log injection via CR/LF) and didn't enumerate CWE-1007
+(visual spoofing). The two CWEs share an attacker (IdP-influenced claim
+content) and a defender (the sanitizer), but the attack vectors and
+the Unicode categories that carry them differ. The original plan named
+the attack class implicitly ("strip CR/LF/ANSI/length cap") without
+generalizing to "strip non-graphic Unicode that affects rendering."

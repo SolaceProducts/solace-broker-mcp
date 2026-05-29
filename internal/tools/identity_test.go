@@ -151,24 +151,51 @@ func TestNewIdentityFromTokenInfo_extraKeyMissing_normalizesToAbsent(t *testing.
 	}
 }
 
-// TestExtraString_panicsOnNonStringValue pins the verifier contract: commit 1
-// stashes only strings into Extra. A non-string value would indicate a real
-// verifier bug, and the audit layer refuses to silently paper over it.
-func TestExtraString_panicsOnNonStringValue(t *testing.T) {
+// TestExtraString_nonStringValue_emitsErrorAndReturnsSentinel pins the
+// verifier-contract violation behavior raised in PR #74 review. A non-string
+// value in TokenInfo.Extra is a programmer error in our verifier (commit 1
+// stashes only strings); we surface it via slog.Error + a distinct sentinel
+// instead of panicking, so the audit log line for the offending request is
+// still emitted. See plan §14.
+//
+// Three properties this test pins:
+//  1. The function does NOT panic (the panic version dropped the audit line).
+//  2. The return value is verifierBugSentinel, NOT absentSentinel — log
+//     consumers must be able to distinguish "claim missing" from "code bug."
+//  3. An ERROR-level log entry is emitted naming the bad key and the observed
+//     type, so ops alerting can fire on the contract violation.
+func TestExtraString_nonStringValue_emitsErrorAndReturnsSentinel(t *testing.T) {
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
+	defer slog.SetDefault(old)
+
 	info := &sdkauth.TokenInfo{
 		Extra: map[string]any{"iss": 42}, // wrong type — verifier never does this
 	}
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic when Extra holds a non-string value")
-		}
-		msg, _ := r.(string)
-		if !strings.Contains(msg, `"iss"`) || !strings.Contains(msg, "int") {
-			t.Errorf("panic message should name the bad key and type, got: %v", r)
-		}
-	}()
-	_ = NewIdentityFromTokenInfo(info)
+
+	// (1) must not panic
+	id := NewIdentityFromTokenInfo(info)
+
+	// (2) sentinel is verifierBugSentinel, not absentSentinel
+	if id.iss != verifierBugSentinel {
+		t.Errorf("iss = %q, want %q (verifier-bug sentinel)", id.iss, verifierBugSentinel)
+	}
+	if verifierBugSentinel == absentSentinel {
+		t.Fatal("verifierBugSentinel must differ from absentSentinel — log consumers rely on the distinction")
+	}
+
+	// (3) an ERROR was emitted naming the key and type
+	logged := buf.String()
+	if !strings.Contains(logged, `"level":"ERROR"`) {
+		t.Errorf("expected ERROR-level log entry, got: %s", logged)
+	}
+	if !strings.Contains(logged, `"key":"iss"`) {
+		t.Errorf("expected log entry to name the bad key %q, got: %s", "iss", logged)
+	}
+	if !strings.Contains(logged, `"got_type":"int"`) {
+		t.Errorf("expected log entry to name the observed type %q, got: %s", "int", logged)
+	}
 }
 
 func TestSanitizeClaim_stripsControlChars(t *testing.T) {
@@ -198,6 +225,42 @@ func TestSanitizeClaim_capsAt256Bytes(t *testing.T) {
 	got := sanitizeClaim(in)
 	if len(got) != claimMaxLen {
 		t.Errorf("len = %d, want %d", len(got), claimMaxLen)
+	}
+}
+
+// TestSanitizeClaim_stripsBidiAndFormatChars pins the CWE-1007 audit-spoofing
+// defense raised in PR #74 review. A malicious IdP issues a sub like
+// "alice‮nimda" (RIGHT-TO-LEFT OVERRIDE between "alice" and "nimda").
+// Without the Cf-category strip, the bytes pass through unchanged, and any
+// bidi-aware UI (SIEM dashboards, terminals, JSON viewers) renders the value
+// visually as "aliceadmin" — misattributing the action to a different user.
+// The sanitizer must strip the override and emit a value that renders in
+// source order.
+func TestSanitizeClaim_stripsBidiAndFormatChars(t *testing.T) {
+	// Inputs use \u escapes so this source file stays pure ASCII.
+	// A literal BOM in source would break Go's parser, and literal
+	// bidi controls in source make this file dangerous to view in
+	// any bidi-aware editor (which is the whole point of stripping them).
+	cases := []struct {
+		name, in, want string
+	}{
+		{"RLO (U+202E)", "alice\u202Enimda", "alicenimda"},
+		{"PDF (U+202C)", "x\u202Cy", "xy"},
+		{"LRO (U+202D)", "a\u202Db", "ab"},
+		{"zero-width joiner (U+200D)", "user\u200Dname", "username"},
+		{"zero-width non-joiner (U+200C)", "user\u200Cname", "username"},
+		{"BOM (U+FEFF)", "\uFEFFuser", "user"},
+		{"soft hyphen (U+00AD)", "ad\u00ADmin", "admin"},
+		{"line separator (U+2028 Zl)", "a\u2028b", "ab"},
+		{"paragraph separator (U+2029 Zp)", "a\u2029b", "ab"},
+		{"C1 control NEL (U+0085)", "a\u0085b", "ab"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := sanitizeClaim(c.in); got != c.want {
+				t.Errorf("sanitizeClaim(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
 	}
 }
 
