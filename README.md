@@ -13,6 +13,7 @@ An MCP (Model Context Protocol) server for Solace event brokers, built with Go u
 - [Overview](#overview)
 - [Features](#features)
 - [Architecture](#architecture)
+- [Tools](#tools)
 - [Guides](#guides)
 - [Prerequisites](#prerequisites)
 - [Quickstart](#quickstart)
