@@ -16,6 +16,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -35,7 +39,7 @@ func testMux() *http.ServeMux {
 		Name:    "solace-broker-mcp",
 		Version: version.Version(),
 	}, nil)
-	mux := buildMux()
+	mux := buildMux(func() []string { return nil }, func(_ context.Context, _ string) error { return nil })
 
 	// Register /mcp endpoint for testing (without auth middleware)
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
@@ -56,8 +60,8 @@ func TestHealth_GET_ReturnsOK(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("GET /health status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	if rec.Body.String() != `{"status": "ok"}` {
-		t.Errorf("GET /health body = %q, want %q", rec.Body.String(), `{"status": "ok"}`)
+	if rec.Body.String() != `{"status": "healthy"}` {
+		t.Errorf("GET /health body = %q, want %q", rec.Body.String(), `{"status": "healthy"}`)
 	}
 	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("GET /health Content-Type = %q, want %q", ct, "application/json")
@@ -292,5 +296,170 @@ func TestHealthConfigFromFile_PartialTLSIsHTTP(t *testing.T) {
 	got := healthConfigFromFile()
 	if got.Scheme != "http" {
 		t.Errorf("Scheme = %q, want http (only cert set, no key)", got.Scheme)
+	}
+}
+
+func TestReady_POST_ReturnsMethodNotAllowed(t *testing.T) {
+	mux := buildMux(func() []string { return nil }, func(_ context.Context, _ string) error { return nil })
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/ready", nil)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST /ready status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestReady_GET_AllBrokersReachable(t *testing.T) {
+	brokers := []string{"prod-1", "prod-2"}
+	mux := buildMux(
+		func() []string { return brokers },
+		func(_ context.Context, _ string) error { return nil },
+	)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ready", nil)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("GET /ready status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if contentType := rec.Header().Get("Content-Type"); contentType != "application/json" {
+		t.Errorf("GET /ready Content-Type = %q, want %q", contentType, "application/json")
+	}
+	var body struct {
+		Ready   bool     `json:"ready"`
+		Brokers []string `json:"brokers"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if !body.Ready {
+		t.Errorf("ready = %v, want true", body.Ready)
+	}
+	if len(body.Brokers) != len(brokers) {
+		t.Errorf("brokers len = %d, want %d", len(body.Brokers), len(brokers))
+	}
+	for i, expectedBroker := range brokers {
+		if body.Brokers[i] != expectedBroker {
+			t.Errorf("brokers[%d] = %q, want %q", i, body.Brokers[i], expectedBroker)
+		}
+	}
+}
+
+func TestReady_GET_OneBrokerUnreachable(t *testing.T) {
+	brokers := []string{"prod-1", "prod-2"}
+	mux := buildMux(
+		func() []string { return brokers },
+		func(_ context.Context, broker string) error {
+			if broker == "prod-2" {
+				return errors.New("connection refused")
+			}
+			return nil
+		},
+	)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ready", nil)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("GET /ready status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	var body struct {
+		Ready  bool     `json:"ready"`
+		Errors []string `json:"errors"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if body.Ready {
+		t.Errorf("ready = %v, want false", body.Ready)
+	}
+	if len(body.Errors) == 0 {
+		t.Fatal("errors array is empty, want at least one entry")
+	}
+	want := "prod-2: unreachable"
+	if body.Errors[0] != want {
+		t.Errorf("errors[0] = %q, want %q", body.Errors[0], want)
+	}
+}
+
+// probeTestConfig writes a minimal YAML config with the given brokers and
+// returns the loaded *config.ServerConfig. Each broker entry is an
+// (alias, url) pair.
+// probeTestConfig writes a minimal YAML config with the given brokers and
+// returns the loaded *config.ServerConfig. Each entry is an [alias, url] pair.
+func probeTestConfig(t *testing.T, brokers ...[2]string) *config.ServerConfig {
+	t.Helper()
+	var yamlContent string
+	yamlContent += "client_auth:\n  mode: disabled\nbrokers:\n"
+	for _, broker := range brokers {
+		alias, brokerURL := broker[0], broker[1]
+		yamlContent += fmt.Sprintf("  %s:\n    url: %s\n    auth:\n      mode: basic\n      username: admin\n      password: secret\n", alias, brokerURL)
+	}
+	path := filepath.Join(t.TempDir(), "broker-config.yaml")
+	if err := os.WriteFile(path, []byte(yamlContent), os.FileMode(0o600)); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	return cfg
+}
+
+func TestNewBrokerReachabilityProbe_UnknownBroker(t *testing.T) {
+	cfg := probeTestConfig(t, [2]string{"existing", "http://127.0.0.1:8080"})
+	probe := newBrokerReachabilityProbe(cfg)
+
+	err := probe(context.Background(), "no-such-broker")
+	if err == nil {
+		t.Fatal("expected error for unknown broker, got nil")
+	}
+	if want := `unknown broker "no-such-broker"`; err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestNewBrokerReachabilityProbe_ExplicitPort(t *testing.T) {
+	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	addr := l.Addr().String()
+	_, port, _ := net.SplitHostPort(addr)
+	cfg := probeTestConfig(t, [2]string{"broker-a", "http://127.0.0.1:" + port})
+	probe := newBrokerReachabilityProbe(cfg)
+
+	if err := probe(context.Background(), "broker-a"); err != nil {
+		t.Errorf("expected success for reachable broker, got: %v", err)
+	}
+}
+
+func TestNewBrokerReachabilityProbe_HTTPSDefaultsTo443(t *testing.T) {
+	cfg := probeTestConfig(t, [2]string{"broker-a", "https://192.0.2.1"})
+	probe := newBrokerReachabilityProbe(cfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	err := probe(ctx, "broker-a")
+	if err == nil {
+		t.Fatal("expected dial error to 192.0.2.1:443, got nil")
+	}
+}
+
+func TestNewBrokerReachabilityProbe_HTTPDefaultsTo80(t *testing.T) {
+	cfg := probeTestConfig(t, [2]string{"broker-a", "http://192.0.2.1"})
+	probe := newBrokerReachabilityProbe(cfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	err := probe(ctx, "broker-a")
+	if err == nil {
+		t.Fatal("expected dial error to 192.0.2.1:80, got nil")
 	}
 }

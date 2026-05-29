@@ -1,7 +1,13 @@
 variable "keycloak_port" {
-  description = "Port to expose Keycloak on localhost"
+  description = "HTTP port for Keycloak admin API and Terraform provider"
   type        = number
   default     = 8090
+}
+
+variable "keycloak_https_port" {
+  description = "HTTPS port for Keycloak OIDC endpoints (issuer, token, JWKS)"
+  type        = number
+  default     = 8443
 }
 
 variable "keycloak_admin_username" {

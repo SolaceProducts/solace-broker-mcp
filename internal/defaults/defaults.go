@@ -130,6 +130,15 @@ const DefaultReadTimeoutSeconds = 30
 // idle sockets — neither perfect, but the alternative breaks the product.
 const DefaultIdleTimeoutSeconds = 120
 
+// DefaultReadinessProbeTimeoutSeconds is the per-broker timeout for the TCP
+// connectivity check performed by the /ready endpoint.
+//
+// Decided: 2 seconds.
+// Reasoning: the probe only opens and closes a TCP connection — no TLS
+// handshake, no SEMP request. 2s is generous for an in-cluster dial while
+// keeping the /ready response snappy for orchestrator liveness probes.
+const DefaultReadinessProbeTimeoutSeconds = 2
+
 // DefaultConfigPathSystem is the production-install location for the config
 // file. Tried when CONFIG_FILE is not set. Follows the conventional Linux
 // /etc/<app>/config.yaml layout used by Linux services, K8s, and Docker.
