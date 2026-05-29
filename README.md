@@ -13,6 +13,7 @@ An MCP (Model Context Protocol) server for Solace event brokers, built with Go u
 - [Overview](#overview)
 - [Features](#features)
 - [Architecture](#architecture)
+- [Tools](#tools)
 - [Guides](#guides)
 - [Prerequisites](#prerequisites)
 - [Quickstart](#quickstart)
@@ -69,6 +70,20 @@ The server implements the MCP HTTP transport specification and exposes event bro
 └──────────────────┘                    └──────────────────────────┘   basic / bearer     └──────────────────┘
 ```
 
+## Tools
+
+The server exposes read-only tools grouped by what they inspect. Every tool except `list-brokers` takes a `broker` parameter naming a configured broker alias. See the [user guide](docs/user-guide.md#tools) for per-tool descriptions, parameters, and pagination defaults.
+
+| Category | Tools | Description |
+|---|---|---|
+| Discovery | `list-brokers` | List configured broker aliases for use as the `broker` parameter |
+| Broker health | `get-broker-health`, `get-redundancy-status` | Snapshot of version, uptime, resources, spool, and HA and mate-link state |
+| Message VPN | `list-vpns`, `get-vpn-health`, `get-message-rates` | List VPNs, check per-VPN service health, read message and byte rates |
+| Queues | `list-queues`, `get-queue-metrics` | List queues with depth and throughput; drill into spool, bindings, consumers |
+| Clients | `list-clients`, `get-client-details`, `list-client-subscriptions` | List connections, inspect per-client rates and discards, list subscriptions |
+| REST Delivery Points | `list-rdps`, `get-rdp-status` | List RDPs; inspect bindings, REST consumers, and last failure reason |
+| DMR | `get-dmr-status` | Inspect DMR cluster and link status for mesh connectivity issues |
+
 ## Guides
 
 - [User Guide](docs/user-guide.md) — overview, tools reference, deployment, and troubleshooting
@@ -111,6 +126,8 @@ Each event broker needs:
 - `url` — the SEMP management API base URL
 - `auth.mode` — `basic` or `bearer` (examples below use basic auth; for bearer token authentication, set `auth.mode: bearer` and provide `auth.token` instead)
 - `auth.username` / `auth.password` — credentials (use `${VAR_NAME}` to reference environment variables)
+
+**Broker alias contract.** The map key under `brokers:` (e.g. `my-broker`) is the alias that appears in tool inputs (`broker="my-broker"`), logs, and `list-brokers` output. Aliases must be 1–63 characters, contain only letters, digits, and hyphens, and start and end with an alphanumeric character. Comparison is case-insensitive — `Prod` and `prod` collide and the server will refuse to start. Original casing is preserved in all user-facing output.
 
 **2. Create a `.env` file** next to the config file:
 

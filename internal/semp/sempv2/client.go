@@ -91,7 +91,7 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (
 
 	if brokerCfg.InsecureSkipVerify {
 		slog.Warn("INSECURE: TLS verification disabled for broker",
-			slog.String("url", brokerCfg.URL))
+			slog.String("broker", brokerCfg.DisplayName()))
 	}
 
 	httpClient := &http.Client{

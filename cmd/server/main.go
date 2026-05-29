@@ -17,14 +17,18 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -75,7 +79,10 @@ func newSlogHandler(level slog.Level) slog.Handler {
 // buildMux creates the HTTP route multiplexer with basic routes.
 // The /mcp route is registered separately in main() with auth middleware.
 // Both main() and tests use this function to avoid route drift.
-func buildMux() *http.ServeMux {
+//
+// aliases returns the list of broker names to check.
+// probeBroker tests connectivity to a single broker; it returns nil on success.
+func buildMux(aliases func() []string, probeBroker func(ctx context.Context, broker string) error) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -85,9 +92,67 @@ func buildMux() *http.ServeMux {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte(`{"status": "ok"}`)); err != nil {
+		if _, err := w.Write([]byte(`{"status": "healthy"}`)); err != nil {
 			http.Error(w, "failed to write response", http.StatusInternalServerError)
 		}
+	})
+
+	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+
+		// Config validation ensures there is at least one broker configured, so aliases()
+		// is never empty in production.
+		brokers := aliases()
+		type brokerResult struct {
+			broker string
+			err    error
+		}
+		results := make(chan brokerResult, len(brokers))
+
+		var wg sync.WaitGroup
+		wg.Add(len(brokers))
+
+		// Probe each broker concurrently, then collect in configured order.
+		for _, broker := range brokers {
+			go func(broker string) {
+				defer wg.Done()
+				timeout := time.Duration(defaults.DefaultReadinessProbeTimeoutSeconds) * time.Second
+				reqCtx, cancel := context.WithTimeout(r.Context(), timeout)
+				defer cancel()
+				results <- brokerResult{broker: broker, err: probeBroker(reqCtx, broker)}
+			}(broker)
+		}
+
+		wg.Wait()
+		close(results)
+
+		resultsByBroker := make(map[string]error, len(brokers))
+		for res := range results {
+			resultsByBroker[res.broker] = res.err
+		}
+		readyBrokers := []string{}
+		errs := []string{}
+		for _, broker := range brokers {
+			if err := resultsByBroker[broker]; err != nil {
+				errs = append(errs, fmt.Sprintf("%s: unreachable", broker))
+			} else {
+				readyBrokers = append(readyBrokers, broker)
+			}
+		}
+
+		if len(errs) > 0 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			resp, _ := json.Marshal(map[string]any{"ready": false, "errors": errs})
+			_, _ = w.Write(resp)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		resp, _ := json.Marshal(map[string]any{"ready": true, "brokers": readyBrokers})
+		_, _ = w.Write(resp)
 	})
 
 	return mux
@@ -179,6 +244,42 @@ func startServer(srv *http.Server, tlsCertFile, tlsKeyFile string) <-chan error 
 	return errCh
 }
 
+// newBrokerReachabilityProbe returns a probe function that checks whether a
+// broker's SEMP port is accepting TCP connections. The returned function
+// resolves the broker alias against cfg, parses the URL, defaults the port
+// (443 for HTTPS, 80 otherwise), and performs a TCP dial. It is the
+// production implementation of buildMux's probeBroker parameter.
+func newBrokerReachabilityProbe(cfg *config.ServerConfig) func(context.Context, string) error {
+	return func(ctx context.Context, broker string) error {
+		brokerCfg, ok := cfg.Broker(broker)
+		if !ok {
+			return fmt.Errorf("unknown broker %q", broker)
+		}
+		u, err := url.Parse(brokerCfg.URL)
+		if err != nil {
+			return fmt.Errorf("broker %q: invalid URL: %w", broker, err)
+		}
+		host := u.Hostname()
+		port := u.Port()
+		if port == "" {
+			if u.Scheme == "https" {
+				port = "443"
+			} else {
+				port = "80"
+			}
+		}
+		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+		if err != nil {
+			slog.Warn("broker TCP connectivity check failed",
+				slog.String("broker", broker),
+				slog.String("error", err.Error()))
+			return err
+		}
+		_ = conn.Close()
+		return nil
+	}
+}
+
 // registerSEMPv1Tools attaches every Go-native SEMPv1 tool handler to mgr.
 // New SEMPv1 tools should be added here as they land — this is the single
 // source of truth for which v1 tools the server exposes. The handlers flow
@@ -262,7 +363,7 @@ func main() {
 	slog.SetDefault(slog.New(newSlogHandler(level)))
 
 	slog.Info("config loaded",
-		slog.Int("broker_count", len(cfg.Brokers)),
+		slog.Int("broker_count", len(cfg.BrokerAliases())),
 		slog.Int("port", cfg.Port),
 		slog.String("log_level", cfg.LogLevel))
 
@@ -321,7 +422,7 @@ func main() {
 	slog.Info("all tools registered")
 
 	// 8. Set up HTTP routes
-	mux := buildMux()
+	mux := buildMux(pool.Aliases, newBrokerReachabilityProbe(cfg))
 
 	// Create MCP handler
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {

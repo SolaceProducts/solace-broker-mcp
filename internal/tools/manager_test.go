@@ -20,10 +20,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
@@ -33,32 +34,33 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func testSEMPCfg() config.SEMPConfig {
-	retries := 0
-	minInterval := time.Duration(0)
-	return config.SEMPConfig{
-		RequestTimeoutDuration: 5 * time.Second,
-		Retries:                &retries,
-		RequestMinInterval:     &minInterval,
-		RetryMinInterval:       1 * time.Millisecond,
-		RetryMaxInterval:       10 * time.Millisecond,
+// writeTestConfig writes a minimal broker-config YAML to t.TempDir, loads it
+// via LoadConfig (exercising the real validate+canonicalize path), and
+// returns the resulting *ServerConfig.
+func writeTestConfig(t *testing.T, brokers ...[2]string) *config.ServerConfig {
+	t.Helper()
+	var b []byte
+	b = append(b, []byte("client_auth:\n  mode: disabled\nbrokers:\n")...)
+	for _, kv := range brokers {
+		b = append(b, []byte(fmt.Sprintf("  %s:\n    url: %s\n    auth:\n      mode: basic\n      username: admin\n      password: admin\n", kv[0], kv[1]))...)
 	}
+	path := filepath.Join(t.TempDir(), "broker-config.yaml")
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	return cfg
 }
 
-func newTestPool() *semp.BrokerPool {
-	cfg := &config.ServerConfig{
-		Brokers: map[string]*config.BrokerConfig{
-			"dev": {
-				URL:  "http://localhost:8081",
-				Auth: config.AuthConfig{Mode: "basic", Username: "admin", Password: "admin"},
-			},
-			"prod": {
-				URL:  "http://localhost:8082",
-				Auth: config.AuthConfig{Mode: "basic", Username: "admin", Password: "admin"},
-			},
-		},
-		SEMP: testSEMPCfg(),
-	}
+func newTestPool(t *testing.T) *semp.BrokerPool {
+	t.Helper()
+	cfg := writeTestConfig(t,
+		[2]string{"dev", "http://localhost:8081"},
+		[2]string{"prod", "http://localhost:8082"},
+	)
 	return semp.NewBrokerPool(cfg)
 }
 
@@ -111,7 +113,7 @@ func newStubHandler(name string) *stubHandler {
 // --- Route tests ---
 
 func TestRoute_ValidTool(t *testing.T) {
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 	mgr.Register(newStubHandler("test-tool"))
 
 	handler, err := mgr.Route("test-tool")
@@ -124,7 +126,7 @@ func TestRoute_ValidTool(t *testing.T) {
 }
 
 func TestRoute_UnknownTool(t *testing.T) {
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 
 	_, err := mgr.Route("nonexistent")
 	if err == nil {
@@ -136,7 +138,7 @@ func TestRoute_UnknownTool(t *testing.T) {
 }
 
 func TestRegister_DuplicatePanics(t *testing.T) {
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 	mgr.Register(newStubHandler("dup"))
 
 	defer func() {
@@ -150,7 +152,7 @@ func TestRegister_DuplicatePanics(t *testing.T) {
 // --- Broker resolution tests ---
 
 func TestCallTool_MissingBroker(t *testing.T) {
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 	mgr.Register(newStubHandler("test-tool"))
 
 	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
@@ -165,7 +167,7 @@ func TestCallTool_MissingBroker(t *testing.T) {
 }
 
 func TestCallTool_UnknownBroker(t *testing.T) {
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 	mgr.Register(newStubHandler("test-tool"))
 
 	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
@@ -180,11 +182,33 @@ func TestCallTool_UnknownBroker(t *testing.T) {
 	}
 }
 
+// TestCallTool_UnknownBroker_PreservesCallerCasing pins the design choice
+// documented in plan §11.2: on lookup failure (ErrUnknownBroker), the error
+// echoes the operator's raw alias input verbatim, not a lowercased form. This
+// asymmetry — display form on success, raw form on failure — exists because
+// the operator needs to see their own typo to fix it.
+func TestCallTool_UnknownBroker_PreservesCallerCasing(t *testing.T) {
+	mgr := NewToolManager(newTestPool(t))
+	mgr.Register(newStubHandler("test-tool"))
+
+	const rawAlias = "PRODEAST-DOESNT-EXIST"
+	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+		"broker":     rawAlias,
+		"msgVpnName": "default",
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown broker")
+	}
+	if !strings.Contains(err.Error(), rawAlias) {
+		t.Errorf("error should preserve operator's original casing %q verbatim, got: %v", rawAlias, err)
+	}
+}
+
 // TestCallTool_ResolvesBothProtocolClients verifies that the manager
 // populates both SEMPv1Client and SEMPv2Client on the ToolContext for every
 // invocation, regardless of which protocol the handler ends up using.
 func TestCallTool_ResolvesBothProtocolClients(t *testing.T) {
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 
 	handler := newStubHandler("test-tool")
 	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
@@ -210,7 +234,7 @@ func TestCallTool_ResolvesBothProtocolClients(t *testing.T) {
 // --- Parameter validation tests ---
 
 func TestCallTool_ValidationError_MissingRequired(t *testing.T) {
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 	mgr.Register(newStubHandler("test-tool"))
 
 	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
@@ -229,7 +253,7 @@ func TestCallTool_ValidationError_MissingRequired(t *testing.T) {
 }
 
 func TestCallTool_ValidationError_WrongType(t *testing.T) {
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 
 	handler := newStubHandler("typed-tool")
 	handler.schema = map[string]any{
@@ -255,7 +279,7 @@ func TestCallTool_ValidationError_WrongType(t *testing.T) {
 // --- Structured output tests ---
 
 func TestCallTool_StructuredOutput(t *testing.T) {
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 
 	handler := newStubHandler("test-tool")
 	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
@@ -306,7 +330,7 @@ func TestCallTool_StructuredOutput(t *testing.T) {
 // --- Output schema validation tests ---
 
 func TestCallTool_OutputValidationPasses(t *testing.T) {
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 
 	handler := newStubHandler("test-tool")
 	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
@@ -328,7 +352,7 @@ func TestCallTool_OutputValidationPasses(t *testing.T) {
 }
 
 func TestCallTool_OutputValidationFails(t *testing.T) {
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 
 	handler := newStubHandler("test-tool")
 	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
@@ -355,7 +379,7 @@ func TestCallTool_OutputValidationFails(t *testing.T) {
 // --- Annotations tests ---
 
 func TestCallTool_AnnotationsReadOnly(t *testing.T) {
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 	handler := newStubHandler("monitor-tool")
 	mgr.Register(handler)
 
@@ -375,7 +399,7 @@ func TestCallTool_DestructiveWarningLogged(t *testing.T) {
 	slog.SetDefault(logger)
 	defer slog.SetDefault(old)
 
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 
 	handler := newStubHandler("destructive-tool")
 	destructive := true
@@ -411,7 +435,7 @@ func TestCallTool_DestructiveWarningLogged(t *testing.T) {
 // --- Error handling tests ---
 
 func TestCallTool_SEMPErrorWrapped(t *testing.T) {
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 
 	handler := newStubHandler("test-tool")
 	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
@@ -469,7 +493,7 @@ func TestLogToolResult_V1ErrorEmitsStructuredFields(t *testing.T) {
 	slog.SetDefault(logger)
 	defer slog.SetDefault(old)
 
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 
 	handler := newStubHandler("test-tool")
 	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
@@ -523,7 +547,7 @@ func TestLogToolResult_V1ErrorEmitsStructuredFields(t *testing.T) {
 }
 
 func TestCallTool_SEMPv1Error_IsErrorResult(t *testing.T) {
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 
 	handler := newStubHandler("test-tool")
 	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
@@ -561,7 +585,7 @@ func TestCallTool_SEMPv1Error_IsErrorResult(t *testing.T) {
 }
 
 func TestCallTool_RetriesExhausted_RetryableTrue(t *testing.T) {
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 
 	handler := newStubHandler("test-tool")
 	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
@@ -601,7 +625,7 @@ func TestCallTool_RetriesExhausted_RetryableTrue(t *testing.T) {
 }
 
 func TestCallTool_RetriesExhausted_NetworkError(t *testing.T) {
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 
 	handler := newStubHandler("test-tool")
 	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
@@ -641,7 +665,7 @@ func TestCallTool_RetriesExhausted_NetworkError(t *testing.T) {
 }
 
 func TestCallTool_PlainError_IsErrorResult(t *testing.T) {
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 
 	handler := newStubHandler("test-tool")
 	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
@@ -677,7 +701,7 @@ func TestCallTool_PlainError_IsErrorResult(t *testing.T) {
 }
 
 func TestCallTool_LimitError_IncludesGuidance(t *testing.T) {
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 
 	handler := newStubHandler("test-tool")
 	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
@@ -704,7 +728,7 @@ func TestCallTool_LimitError_IncludesGuidance(t *testing.T) {
 }
 
 func TestCallTool_BrokerStrippedFromHandlerParams(t *testing.T) {
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 
 	var receivedParams map[string]any
 	handler := newStubHandler("test-tool")
@@ -734,7 +758,7 @@ func TestCallTool_BrokerStrippedFromHandlerParams(t *testing.T) {
 // --- Handlers list test ---
 
 func TestHandlers_ReturnsAll(t *testing.T) {
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 	mgr.Register(newStubHandler("tool-a"))
 	mgr.Register(newStubHandler("tool-b"))
 
@@ -754,7 +778,7 @@ func TestHandlers_ReturnsAll(t *testing.T) {
 
 func TestToolManager_ConcurrentRegisterAndRoute(t *testing.T) {
 	const workers = 20
-	mgr := NewToolManager(newTestPool())
+	mgr := NewToolManager(newTestPool(t))
 
 	// Pre-register tools that readers will look up.
 	for i := range workers {

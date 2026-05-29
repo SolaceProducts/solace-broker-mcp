@@ -53,6 +53,8 @@ tls_key_file: "/etc/certs/server-key.pem"
 
 Configured under the `brokers` map. Each key defines an event broker alias for the `broker` parameter in MCP tools.
 
+Aliases must be 1–63 characters, contain only letters, digits, and hyphens, and start and end with an alphanumeric character. Comparison is case-insensitive — `Prod` and `prod` collide and the server will refuse to start. Original casing is preserved in all user-facing output.
+
 | YAML field | Default | Description |
 |---|---|---|
 | `url` | — | SEMP management API base URL (for example, `https://broker:1943`). |
