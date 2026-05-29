@@ -752,7 +752,7 @@ synthesis option the original analysis didn't consider.
 sanitizer (§4.4) stripped only `unicode.Cc` (Control category) plus
 an explicit ASCII fast-path for `r < 0x20 || r == 0x7F`. The reviewer
 identified CWE-1007 (visual spoofing) as an active attack path: a
-malicious IdP issues a sub like `"alice‮nimda"` containing
+malicious IdP issues a sub like `"alice\u202Enimda"` containing
 U+202E RIGHT-TO-LEFT OVERRIDE. The bytes pass through our sanitizer
 unchanged because U+202E is category `Cf` (Format), not `Cc`. Any
 bidi-aware UI (SIEM dashboards, terminals, JSON viewers) renders the
