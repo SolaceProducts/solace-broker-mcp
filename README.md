@@ -31,7 +31,7 @@ An MCP (Model Context Protocol) server for Solace event brokers, built with Go u
 
 ## Overview
 
-An HTTP service that exposes Solace event broker management and monitoring to AI assistants through the Model Context Protocol (MCP). The server provides 14 read-only tools that query event broker health, inspect queues, diagnose client issues, and monitor message traffic using SEMP v1 and v2 API calls.
+An HTTP service that exposes Solace event broker management and monitoring to AI assistants through the Model Context Protocol (MCP). The server provides 13 read-only tools that query event broker health, inspect queues, diagnose client issues, and monitor message traffic using SEMP v1 and v2 API calls.
 
 MCP-compatible clients, for example Claude Code, invoke these tools using natural language. The AI assistant translates requests into tool calls. The server handles authentication, rate limiting, retries, and response formatting.
 
@@ -63,7 +63,7 @@ The server implements the MCP HTTP transport specification and exposes event bro
 │                  │                    │   Broker MCP Server      │                      │                  │
 │   AI Agent       │ ────────────────▶ │                          │  ──────────────────▶ │  Solace          │
 │  (Claude Code,   │   JSON-RPC         │  • Auth (OAuth / token)  │   HTTP(S) /SEMP      │  Event           │
-│  Claude Desktop) │   + Bearer JWT     │  • 14 read-only tools    │                      │  Broker(s)       │
+│  Claude Desktop) │   + Bearer JWT     │  • 13 read-only tools    │                      │  Broker(s)       │
 │                  │                    │  • Rate-limit + retry    │                      │                  │
 │                  │ ◀──────────────── │  • SEMP client pool      │ ◀──────────────────  │                  │
 └──────────────────┘                    └──────────────────────────┘   basic / bearer     └──────────────────┘

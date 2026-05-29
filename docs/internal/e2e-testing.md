@@ -252,7 +252,7 @@ Usage: `./bin/agent <server-url>`
 
 It performs:
 1. Connect to the MCP server via `StreamableClientTransport`
-2. Call `session.ListTools()` — verify all 14 tools are present
+2. Call `session.ListTools()` — verify all 13 tools are present
 3. Call `list-brokers` tool — verify both `broker-a` and `broker-b` aliases appear
 4. For each broker (`broker-a`, `broker-b`):
    - Call `get-rdp-status` with the test fixtures — verify 3-step structured response
