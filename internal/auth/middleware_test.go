@@ -18,10 +18,14 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -836,4 +840,86 @@ func Test_OIDCVerifier_MissingOptionalClaims_LeftEmptyString(t *testing.T) {
 			t.Errorf("Extra[%q] = %v (%T), want \"\"", key, v, v)
 		}
 	}
+}
+
+func Test_oidcHTTPClient_SSLCertFile(t *testing.T) {
+	// Set up an HTTPS OIDC discovery server with a self-signed cert.
+	var tlsServer *httptest.Server
+	tlsServer = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"issuer":   tlsServer.URL,
+			"jwks_uri": tlsServer.URL + "/jwks",
+		})
+	}))
+	defer tlsServer.Close()
+
+	// Write the server's CA cert to a temp file.
+	tmpDir := t.TempDir()
+	serverCert, _ := x509.ParseCertificate(tlsServer.TLS.Certificates[0].Certificate[0])
+	validCert := filepath.Join(tmpDir, "ca.crt")
+	os.WriteFile(validCert, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverCert.Raw}), 0600)
+
+	garbageFile := filepath.Join(tmpDir, "garbage.crt")
+	os.WriteFile(garbageFile, []byte("not a certificate"), 0600)
+
+	unreadableFile := filepath.Join(tmpDir, "unreadable.crt")
+	os.WriteFile(unreadableFile, []byte("data"), 0000)
+
+	// Table-driven: verify oidcHTTPClient returns the expected result per branch.
+	clientTests := []struct {
+		name      string
+		envValue  string
+		wantNil   bool
+		wantError bool
+	}{
+		{"env empty", "", true, false},
+		{"nonexistent file", "/no/such/file.crt", true, true},
+		{"unreadable file", unreadableFile, true, true},
+		{"non-PEM contents", garbageFile, true, true},
+		{"valid PEM", validCert, false, false},
+	}
+	for _, tt := range clientTests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("SSL_CERT_FILE", tt.envValue)
+			client, err := oidcHTTPClient()
+			if tt.wantError && err == nil {
+				t.Error("expected error")
+			}
+			if !tt.wantError && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if tt.wantNil && client != nil {
+				t.Error("expected nil client")
+			}
+			if !tt.wantNil && client == nil {
+				t.Error("expected non-nil client")
+			}
+		})
+	}
+
+	// Integration: prove the cert actually enables TLS to the self-signed server.
+	cfg := &config.ServerConfig{
+		ClientAuth: config.ClientAuthConfig{
+			Mode:     config.AuthModeOAuth,
+			Issuer:   tlsServer.URL,
+			Audience: "test",
+		},
+	}
+
+	t.Run("TLS fails without SSL_CERT_FILE", func(t *testing.T) {
+		t.Setenv("SSL_CERT_FILE", "")
+		_, err := NewTokenVerifier(cfg)
+		if err == nil {
+			t.Error("expected TLS error when SSL_CERT_FILE is unset")
+		}
+	})
+
+	t.Run("TLS succeeds with SSL_CERT_FILE", func(t *testing.T) {
+		t.Setenv("SSL_CERT_FILE", validCert)
+		_, err := NewTokenVerifier(cfg)
+		if err != nil {
+			t.Errorf("expected success with SSL_CERT_FILE set, got: %v", err)
+		}
+	})
 }

@@ -6,47 +6,104 @@
 [![Go Version](https://img.shields.io/github/go-mod/go-version/SolaceDev/solace-broker-mcp)](go.mod)
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](.github/CODE_OF_CONDUCT.md)
 
-An MCP (Model Context Protocol) server for Solace broker, built with Go using the official [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk).
+An MCP (Model Context Protocol) server for Solace event brokers, built with Go using the official [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk).
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Tools](#tools)
+- [Guides](#guides)
+- [Prerequisites](#prerequisites)
+- [Quickstart](#quickstart)
+  - [Configuration](#configuration)
+  - [Binary Deployment](#binary-deployment)
+  - [Docker Deployment](#docker-deployment)
+  - [Connect from Claude Code](#connect-from-claude-code)
+- [Development Setup](#development-setup)
+  - [Configuration Options](#configuration-options)
+- [Project Structure](#project-structure)
+- [CI](#ci)
+- [Contributing](#contributing)
+- [Security](#security)
+- [License](#license)
+
+## Overview
+
+An HTTP service that exposes Solace event broker management and monitoring to AI assistants through the Model Context Protocol (MCP). The server provides 14 read-only tools that query event broker health, inspect queues, diagnose client issues, and monitor message traffic using SEMP v1 and v2 API calls.
+
+MCP-compatible clients, for example Claude Code, invoke these tools using natural language. The AI assistant translates requests into tool calls. The server handles authentication, rate limiting, retries, and response formatting.
+
+## Features
+
+- **14 read-only monitoring tools** — Event broker health, message VPNs, queues, clients, REST delivery points, and DMR cluster status
+- **Client authentication** — Development mode (no auth), static bearer tokens, or OAuth 2.1/OIDC with JWT validation
+- **Multi-broker configuration** — Connect to multiple brokers and address them by configured alias
+- **Retry and rate limiting** — Configurable backoff intervals and concurrent request limits per broker
+- **Deployment options** — Standalone binary, Docker container, or Go source
+- **TLS/HTTPS support** — Optional certificate-based transport encryption
+- **Structured logging** — JSON output with automatic credential redaction
 
 ## Architecture
+
+The server implements the MCP HTTP transport specification and exposes event broker operations as MCP tools. When an AI assistant invokes a tool, the server executes the corresponding SEMP API request against the target event broker and returns structured data to the client.
+
+**Component diagram:**
 
 ```
                                            ┌───────────────────┐
                                            │  OAuth IdP        │
-                                           │  (Keycloak etc.,  │ ◀── JWT validation
+                                           │  (Keycloak etc.)  │ ◀── JWT validation
                                            │                   │     (production only)
                                            └─────────┬─────────┘
                                                      │
                                                      ▼
 ┌──────────────────┐   MCP over HTTP    ┌──────────────────────────┐   SEMPv1 + SEMPv2    ┌──────────────────┐
 │                  │                    │   Broker MCP Server      │                      │                  │
-│   AI Agent       │ ─────────────────▶ │                          │ ───────────────────▶ │  Solace          │
-│  (Claude Code,   │   JSON-RPC         │  • Auth (OAuth / token)  │   HTTP(S) /SEMP      │  PubSub+         │
+│   AI Agent       │ ────────────────▶ │                          │  ──────────────────▶ │  Solace          │
+│  (Claude Code,   │   JSON-RPC         │  • Auth (OAuth / token)  │   HTTP(S) /SEMP      │  Event           │
 │  Claude Desktop) │   + Bearer JWT     │  • 14 read-only tools    │                      │  Broker(s)       │
 │                  │                    │  • Rate-limit + retry    │                      │                  │
-│                  │ ◀───────────────── │  • SEMP client pool      │ ◀─────────────────── │                  │
+│                  │ ◀──────────────── │  • SEMP client pool      │ ◀──────────────────  │                  │
 └──────────────────┘                    └──────────────────────────┘   basic / bearer     └──────────────────┘
 ```
 
-## Documentation
+## Tools
+
+The server exposes read-only tools grouped by what they inspect. Every tool except `list-brokers` takes a `broker` parameter naming a configured broker alias. See the [user guide](docs/user-guide.md#tools) for per-tool descriptions, parameters, and pagination defaults.
+
+| Category | Tools | Description |
+|---|---|---|
+| Discovery | `list-brokers` | List configured broker aliases for use as the `broker` parameter |
+| Broker health | `get-broker-health`, `get-redundancy-status` | Snapshot of version, uptime, resources, spool, and HA and mate-link state |
+| Message VPN | `list-vpns`, `get-vpn-health`, `get-message-rates` | List VPNs, check per-VPN service health, read message and byte rates |
+| Queues | `list-queues`, `get-queue-metrics` | List queues with depth and throughput; drill into spool, bindings, consumers |
+| Clients | `list-clients`, `get-client-details`, `list-client-subscriptions` | List connections, inspect per-client rates and discards, list subscriptions |
+| REST Delivery Points | `list-rdps`, `get-rdp-status` | List RDPs; inspect bindings, REST consumers, and last failure reason |
+| DMR | `get-dmr-status` | Inspect DMR cluster and link status for mesh connectivity issues |
+
+## Guides
 
 - [User Guide](docs/user-guide.md) — overview, tools reference, deployment, and troubleshooting
-- [Configuration](docs/configuration.md) — server settings, broker config, client auth, and rate-limit/retry knobs
+- [Configuration](docs/configuration.md) — server settings, event broker config, client auth, and rate-limit/retry settings
 - [Authentication](docs/authentication.md) — OAuth/OIDC and static token setup for MCP clients
 
 ## Prerequisites
 
-- Access to one or more Solace brokers with SEMP management enabled
+- Access to one or more Solace event brokers with SEMP management enabled
 - [Docker](https://docs.docker.com/get-docker/) (for Docker deployment) or a supported OS/arch for the binary (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64)
-- [Go](https://go.dev/dl/) (latest stable version) — only needed for development
+- **For Development / Building from Source:**
+  - [Go 1.25+](https://go.dev/dl/) — required to build and run the MCP server from source
+  - Not needed if using pre-built binaries or Docker images
 
 ## Quickstart
 
 ### Configuration
 
-Both binary and Docker deployments use the same YAML config file and `.env` credentials file.
+All deployment methods use the same YAML config file and `.env` credentials file.
 
-**1. Create a config file** (e.g., `config.yaml`):
+**1. Create a config file** (`broker-config.yaml`):
 
 ```yaml
 client_auth:
@@ -61,11 +118,11 @@ brokers:
       password: "${BROKER_PASSWORD}"
 ```
 
-`client_auth.mode: disabled` skips client authentication entirely — only use this for local development. For production, set `client_auth.mode: oauth` and provide `issuer`, `audience`, and `resource_url`. A third mode, `static`, accepts a fixed bearer token for local development with realistic auth flow. See the [Authentication](docs/authentication.md) guide for full setup instructions.
+`client_auth.mode: disabled` skips client authentication entirely — only use this for local development. For production, set `client_auth.mode: oauth` and provide `issuer`, `audience`, and `resource_url`. A third mode, `static`, accepts a fixed bearer token for local development with realistic auth flow. See [Authentication](docs/authentication.md) for full setup instructions.
 
 **Audit-log identity.** In `oauth` and `static` modes, every tool-invocation log line carries the caller's `sub`, `iss`, `client_id`, and `jti` claims (the latter three appear as `<absent>` when the IdP does not issue them). A separate sentinel `<verifier-bug>` is reserved for an internal coding error — it should never appear in production, and its presence indicates a bug in the server's claim-extraction code, not in the caller's token; alert on it. The request still completes and the audit line is still written. In `disabled` mode no client auth runs, so log lines carry no identity fields at all. **`disabled` and `static` modes are not real audit trails**: `disabled` lines have no attribution, and `static` lines attribute every invocation to the hardcoded `dev-user`. Use `oauth` mode for any deployment whose audit logs need to answer "who ran what tool against which broker?"
 
-Each broker needs:
+Each event broker needs:
 - `url` — the SEMP management API base URL
 - `auth.mode` — `basic` or `bearer` (examples below use basic auth; for bearer token authentication, set `auth.mode: bearer` and provide `auth.token` instead)
 - `auth.username` / `auth.password` — credentials (use `${VAR_NAME}` to reference environment variables)
@@ -79,26 +136,39 @@ BROKER_USERNAME=admin
 BROKER_PASSWORD=admin
 ```
 
-The `.env` file is loaded automatically. Environment variables set directly (e.g., in CI/CD) take precedence over `.env` values. See [Configuration Options](#configuration-options) for all settings including port, TLS, and file path overrides.
+The `.env` file is loaded automatically. Environment variables set directly (for example, in CI/CD) take precedence over `.env` values. See [Configuration Options](#configuration-options) for all settings, including port, TLS, and file path overrides.
+
+---
+
+Select a deployment method:
+- **[Binary](#binary-deployment)** - Single executable with no dependencies; suitable for local development and VM deployment
+- **[Docker](#docker-deployment)** - Containerized deployment; suitable for production and Kubernetes environments
+
+For contributors running from source, see [Development Setup](#development-setup).
 
 ### Binary Deployment
 
-Download the archive for your platform from the [latest release](https://github.com/SolaceDev/solace-broker-mcp/releases/latest), verify the checksum, and extract:
+Download the archive for your platform from the [latest release](https://github.com/SolaceDev/solace-broker-mcp/releases/latest). Available platforms: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64.
+
+Download the checksums file, verify the checksum, and extract:
 
 ```bash
-tar xzf solace-broker-mcp-v*.tar.gz
+# Verify checksum
 shasum -a 256 -c checksums-sha256.txt --ignore-missing
+
+# Extract
+tar xzf solace-broker-mcp-v*.tar.gz
 ```
 
-The archive contains the binary, an example config (`broker-config.example.yaml`), and the license.
+The archive contains the binary, an example config (`broker-config.example.yaml`), and the license. Copy the example config to `broker-config.yaml` and modify as needed.
 
-Run the server with your config file:
+Run the MCP server with the config file:
 
 ```bash
-CONFIG_FILE=/path/to/config.yaml ./solace-broker-mcp
+CONFIG_FILE=./broker-config.yaml ./solace-broker-mcp
 ```
 
-If the config file is named `broker-config.yaml` in the current directory, `CONFIG_FILE` is not needed.
+If the config file is named `broker-config.yaml` in the current directory, the server does not require `CONFIG_FILE`.
 
 Verify:
 
@@ -125,7 +195,7 @@ docker run -d \
 > gh auth token | docker login ghcr.io -u $(gh api user --jq .login) --password-stdin
 > ```
 
-The container reads config from `/etc/mcp-server/config.yaml` by default. Credentials can be passed via `--env-file` or individual `-e` flags.
+The container reads config from `/etc/mcp-server/config.yaml` by default. Pass the credentials via `--env-file` or individual `-e` flags.
 
 Verify:
 
@@ -152,13 +222,13 @@ services:
 
 ### Connect from Claude Code
 
-Once the server is running (via binary, Docker, or `go run`), add it as an MCP server:
+Once the MCP server is running (via binary, Docker, or `go run`), add it as an MCP server:
 
 ```bash
 claude mcp add solace-broker --transport http http://localhost:9090/mcp
 ```
 
-Then ask Claude to interact with your brokers:
+Example query:
 
 ```
 List queues in the default VPN on the dev broker
@@ -174,21 +244,22 @@ cd solace-broker-mcp
 go mod download
 ```
 
-### 2. Create broker config and credentials
+### 2. Create event broker config and credentials
 
-Create `broker-config.yaml` and `.env` in the repo root (both are gitignored). See [Configuration](#configuration) in the Quickstart section for the file format and examples.
+Create `broker-config.yaml` and `.env` in the repo root (both are gitignored). See [Configuration](#configuration) for the file format and examples.
 
-### 3. Run the server
+### 3. Run the MCP server
 
 ```bash
 go run ./cmd/server
 ```
 
-The server listens on port `9090` by default and serves the MCP endpoint at `/mcp`. A health check endpoint is available at `/health`.
+The MCP server listens on port `9090` by default and serves the MCP endpoint at `/mcp`. A health check endpoint is available at `/health`.
 
 ### Configuration Options
 
-The server requires a YAML config file (broker definitions) and credentials (via `.env` file or environment variables). Env var overrides are available for file paths and port.
+The server requires a YAML config file (event broker definitions) and credentials (via `.env` file or environment variables). Environment variables override file paths and port settings.
+
 
 **Config and credential file locations:**
 
@@ -243,13 +314,13 @@ solace-broker-mcp/
 │   ├── config/          # YAML config loading, env var substitution, validation
 │   ├── composite/       # YAML-driven composite tool engine (loader, executor)
 │   ├── defaults/        # Default values with assumption annotations
-│   ├── semp/            # SEMP client layer (broker pool, HTTP client, spec parser)
-│   ├── tools/           # MCP tool registration, broker resolution, tool call logging
+│   ├── semp/            # SEMP client layer (event broker pool, HTTP client, spec parser)
+│   ├── tools/           # MCP tool registration, event broker resolution, tool call logging
 │   └── version/         # Build-time version injection
 ├── docs/                # Architecture and secure logging rules
 ├── .claude/skills/      # Claude Code skills (add-logs, check-logs)
 ├── .github/workflows/   # GitHub Actions CI
-├── broker-config.yaml   # Local broker config (gitignored)
+├── broker-config.yaml   # Local event broker config (gitignored)
 ├── .env                 # Local credentials (gitignored)
 ├── go.mod
 ├── go.sum
