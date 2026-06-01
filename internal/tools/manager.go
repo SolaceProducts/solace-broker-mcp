@@ -102,12 +102,16 @@ func (m *ToolManager) Handlers() []ToolHandler {
 // CallTool is the main entry point for tool execution. It routes to the
 // handler, resolves the broker, validates parameters, executes the tool, and
 // returns a structured MCP result with both StructuredContent and TextContent.
-func (m *ToolManager) CallTool(ctx context.Context, name string, params map[string]any) (*mcp.CallToolResult, error) {
+//
+// The id parameter carries per-invocation audit identity (SOL-149606). Pass
+// Identity{} (zero value, present=false) from non-HTTP call sites — tests,
+// internal composite-tool steps — to mirror disabled-mode log shape.
+func (m *ToolManager) CallTool(ctx context.Context, name string, params map[string]any, id Identity) (*mcp.CallToolResult, error) {
 	start := time.Now()
 	var brokerAlias, errorType string
 	var toolErr error
 
-	defer m.logToolResult(ctx, name, &brokerAlias, start, &errorType, &toolErr)
+	defer m.logToolResult(ctx, name, &brokerAlias, start, &errorType, &toolErr, id)
 
 	handler, err := m.Route(name)
 	if err != nil {
@@ -164,7 +168,8 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	if meta.Annotations.Destructive != nil && *meta.Annotations.Destructive {
 		slog.Warn("executing destructive operation",
 			slog.String("tool", name),
-			slog.String("broker", brokerAlias))
+			slog.String("broker", brokerAlias),
+			slog.Any("", id))
 	}
 
 	// Execute.
@@ -222,13 +227,20 @@ func stripBrokerParam(params map[string]any) map[string]any {
 // logToolResult is called via defer to log every tool invocation. On success
 // (toolErr is nil) it logs at INFO. On failure it logs at ERROR with the
 // error type and, for SEMP errors, the HTTP status and operation.
-func (m *ToolManager) logToolResult(ctx context.Context, tool string, broker *string, start time.Time, errorType *string, toolErr *error) {
+//
+// The id argument carries per-invocation audit identity (SOL-149606). It is
+// passed through slog.Any so Identity.LogValue is invoked once at emit time
+// — in disabled mode the LogValuer returns an empty group, so the JSON
+// handler emits no identity key at all (byte-identical to pre-SOL-149606
+// log lines).
+func (m *ToolManager) logToolResult(ctx context.Context, tool string, broker *string, start time.Time, errorType *string, toolErr *error, id Identity) {
 	if *toolErr == nil {
-		slog.Info("tool invoked",
+		slog.LogAttrs(ctx, slog.LevelInfo, "tool invoked",
 			slog.String("tool", tool),
 			slog.String("broker", *broker),
 			slog.String("status", "success"),
-			slog.Duration("duration", time.Since(start)))
+			slog.Duration("duration", time.Since(start)),
+			slog.Any("", id))
 		return
 	}
 
@@ -237,6 +249,7 @@ func (m *ToolManager) logToolResult(ctx context.Context, tool string, broker *st
 		slog.String("status", "error"),
 		slog.String("error_type", *errorType),
 		slog.Duration("duration", time.Since(start)),
+		slog.Any("", id),
 	}
 	if *broker != "" {
 		attrs = append(attrs, slog.String("broker", *broker))

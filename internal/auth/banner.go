@@ -53,6 +53,7 @@ const disabledBanner = `
   INSECURE MODE: client_auth.mode = disabled
   Client → MCP server auth is OFF. Broker auth is unaffected.
   Development mode — NOT FOR PRODUCTION USE.
+  Tool-invocation logs from this run are NOT a valid audit trail.
 ============================================================`
 
 const staticBanner = `
@@ -60,4 +61,5 @@ const staticBanner = `
   INSECURE MODE: client_auth.mode = static
   Client → MCP server auth uses a static dev token. Broker auth is unaffected.
   Development mode — NOT FOR PRODUCTION USE.
+  Tool-invocation logs from this run are NOT a valid audit trail.
 ============================================================`

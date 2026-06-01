@@ -108,16 +108,6 @@ func testOperations() map[string]*sempv2.Operation {
 			Method: "GET",
 			Path:   "/SEMP/v2/__private_monitor__/msgVpns/{msgVpnName}/clients",
 		},
-		"monitor/getDmrCluster": {
-			ID:     "getDmrCluster",
-			Method: "GET",
-			Path:   "/SEMP/v2/__private_monitor__/dmrClusters/{dmrClusterName}",
-		},
-		"monitor/getDmrClusterLinks": {
-			ID:     "getDmrClusterLinks",
-			Method: "GET",
-			Path:   "/SEMP/v2/__private_monitor__/dmrClusters/{dmrClusterName}/links",
-		},
 		"monitor/getMsgVpnRestDeliveryPoints": {
 			ID:     "getMsgVpnRestDeliveryPoints",
 			Method: "GET",
@@ -1416,34 +1406,6 @@ func getMessageRatesTool() CompositeTool {
 	}
 }
 
-// getDMRStatusTool returns the get-dmr-status tool definition for tests.
-func getDMRStatusTool() CompositeTool {
-	return CompositeTool{
-		Name:        "get-dmr-status",
-		Description: "Get the status of a DMR cluster",
-		Parameters: []ParameterDef{
-			{Name: "dmrClusterName", Type: "string", Required: true},
-		},
-		Steps: []Step{
-			{
-				ID:        "cluster",
-				Operation: "monitor/getDmrCluster",
-				Args: map[string]string{
-					"dmrClusterName": "{{.Params.dmrClusterName}}",
-				},
-			},
-			{
-				ID:        "links",
-				Operation: "monitor/getDmrClusterLinks",
-				Args: map[string]string{
-					"dmrClusterName": "{{.Params.dmrClusterName}}",
-				},
-			},
-		},
-		Result: ResultStrategy{Strategy: "collect"},
-	}
-}
-
 // listRDPsTool returns the list-rdps tool definition for tests.
 func listRDPsTool() CompositeTool {
 	return CompositeTool{
@@ -1502,64 +1464,6 @@ func TestExecute_GetMessageRates_ReturnsData(t *testing.T) {
 	}
 	if rates["txMsgRate"] != float64(200) {
 		t.Errorf("txMsgRate = %v, want 200", rates["txMsgRate"])
-	}
-}
-
-func TestExecute_GetDMRStatus_ReturnsClusterAndLinks(t *testing.T) {
-	client := newMockClient()
-	client.responses["getDmrCluster"] = &sempv2.Result{
-		Data: map[string]any{
-			"dmrClusterName": "cluster-1",
-			"enabled":        true,
-		},
-		StatusCode: 200,
-	}
-	client.responses["getDmrClusterLinks"] = &sempv2.Result{
-		Data: map[string]any{
-			"data": []any{
-				map[string]any{"remoteNodeName": "node-a", "up": true},
-				map[string]any{"remoteNodeName": "node-b", "up": false},
-			},
-		},
-		StatusCode: 200,
-	}
-
-	executor := NewCompositeExecutor(testOperations())
-
-	result, err := executor.Execute(context.Background(), getDMRStatusTool(), client, map[string]any{
-		"dmrClusterName": "cluster-1",
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	clusterData, ok := result["cluster"].(map[string]any)
-	if !ok {
-		t.Fatal("expected cluster key containing a map")
-	}
-	if clusterData["dmrClusterName"] != "cluster-1" {
-		t.Errorf("dmrClusterName = %v, want cluster-1", clusterData["dmrClusterName"])
-	}
-
-	if _, ok := result["links"]; !ok {
-		t.Fatal("expected links key in result")
-	}
-}
-
-func TestExecute_GetDMRStatus_SEMPError(t *testing.T) {
-	client := newMockClient()
-	client.errors["getDmrCluster"] = &sempv2.SEMPError{
-		Operation:  "getDmrCluster",
-		StatusCode: 404,
-	}
-
-	executor := NewCompositeExecutor(testOperations())
-
-	_, err := executor.Execute(context.Background(), getDMRStatusTool(), client, map[string]any{
-		"dmrClusterName": "nonexistent",
-	})
-	if err == nil {
-		t.Fatal("expected error when cluster step fails, got nil")
 	}
 }
 

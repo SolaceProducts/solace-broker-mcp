@@ -31,13 +31,13 @@ An MCP (Model Context Protocol) server for Solace event brokers, built with Go u
 
 ## Overview
 
-An HTTP service that exposes Solace event broker management and monitoring to AI assistants through the Model Context Protocol (MCP). The server provides 14 read-only tools that query event broker health, inspect queues, diagnose client issues, and monitor message traffic using SEMP v1 and v2 API calls.
+An HTTP service that exposes Solace event broker management and monitoring to AI assistants through the Model Context Protocol (MCP). The server provides 13 read-only tools that query event broker health, inspect queues, diagnose client issues, and monitor message traffic using SEMP v1 and v2 API calls.
 
 MCP-compatible clients, for example Claude Code, invoke these tools using natural language. The AI assistant translates requests into tool calls. The server handles authentication, rate limiting, retries, and response formatting.
 
 ## Features
 
-- **14 read-only monitoring tools** — Event broker health, message VPNs, queues, clients, REST delivery points, and DMR cluster status
+- **13 read-only monitoring tools** — Event broker health, message VPNs, queues, clients, and REST delivery points
 - **Client authentication** — Development mode (no auth), static bearer tokens, or OAuth 2.1/OIDC with JWT validation
 - **Multi-broker configuration** — Connect to multiple brokers and address them by configured alias
 - **Retry and rate limiting** — Configurable backoff intervals and concurrent request limits per broker
@@ -63,7 +63,7 @@ The server implements the MCP HTTP transport specification and exposes event bro
 │                  │                    │   Broker MCP Server      │                      │                  │
 │   AI Agent       │ ────────────────▶ │                          │  ──────────────────▶ │  Solace          │
 │  (Claude Code,   │   JSON-RPC         │  • Auth (OAuth / token)  │   HTTP(S) /SEMP      │  Event           │
-│  Claude Desktop) │   + Bearer JWT     │  • 14 read-only tools    │                      │  Broker(s)       │
+│  Claude Desktop) │   + Bearer JWT     │  • 13 read-only tools    │                      │  Broker(s)       │
 │                  │                    │  • Rate-limit + retry    │                      │                  │
 │                  │ ◀──────────────── │  • SEMP client pool      │ ◀──────────────────  │                  │
 └──────────────────┘                    └──────────────────────────┘   basic / bearer     └──────────────────┘
@@ -81,7 +81,6 @@ The server exposes read-only tools grouped by what they inspect. Every tool exce
 | Queues | `list-queues`, `get-queue-metrics` | List queues with depth and throughput; drill into spool, bindings, consumers |
 | Clients | `list-clients`, `get-client-details`, `list-client-subscriptions` | List connections, inspect per-client rates and discards, list subscriptions |
 | REST Delivery Points | `list-rdps`, `get-rdp-status` | List RDPs; inspect bindings, REST consumers, and last failure reason |
-| DMR | `get-dmr-status` | Inspect DMR cluster and link status for mesh connectivity issues |
 
 ## Guides
 
@@ -119,6 +118,8 @@ brokers:
 ```
 
 `client_auth.mode: disabled` skips client authentication entirely — only use this for local development. For production, set `client_auth.mode: oauth` and provide `issuer`, `audience`, and `resource_url`. A third mode, `static`, accepts a fixed bearer token for local development with realistic auth flow. See [Authentication](docs/authentication.md) for full setup instructions.
+
+**Audit-log identity.** In `oauth` and `static` modes, every tool-invocation log line carries the caller's `sub`, `iss`, `client_id`, and `jti` claims (the latter three appear as `<absent>` when the IdP does not issue them). A separate sentinel `<verifier-bug>` is reserved for an internal coding error — it should never appear in production, and its presence indicates a bug in the server's claim-extraction code, not in the caller's token; alert on it. The request still completes and the audit line is still written. In `disabled` mode no client auth runs, so log lines carry no identity fields at all. **`disabled` and `static` modes are not real audit trails**: `disabled` lines have no attribution, and `static` lines attribute every invocation to the hardcoded `dev-user`. Use `oauth` mode for any deployment whose audit logs need to answer "who ran what tool against which broker?"
 
 Each event broker needs:
 - `url` — the SEMP management API base URL

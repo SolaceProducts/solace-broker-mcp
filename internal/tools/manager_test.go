@@ -31,6 +31,7 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
+	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -157,7 +158,7 @@ func TestCallTool_MissingBroker(t *testing.T) {
 
 	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"msgVpnName": "default",
-	})
+	}, Identity{})
 	if err == nil {
 		t.Fatal("expected error for missing broker")
 	}
@@ -173,7 +174,7 @@ func TestCallTool_UnknownBroker(t *testing.T) {
 	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     "nonexistent",
 		"msgVpnName": "default",
-	})
+	}, Identity{})
 	if err == nil {
 		t.Fatal("expected error for unknown broker")
 	}
@@ -195,7 +196,7 @@ func TestCallTool_UnknownBroker_PreservesCallerCasing(t *testing.T) {
 	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     rawAlias,
 		"msgVpnName": "default",
-	})
+	}, Identity{})
 	if err == nil {
 		t.Fatal("expected error for unknown broker")
 	}
@@ -225,7 +226,7 @@ func TestCallTool_ResolvesBothProtocolClients(t *testing.T) {
 	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     "dev",
 		"msgVpnName": "default",
-	})
+	}, Identity{})
 	if err != nil {
 		t.Fatalf("CallTool() error: %v", err)
 	}
@@ -240,7 +241,7 @@ func TestCallTool_ValidationError_MissingRequired(t *testing.T) {
 	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker": "dev",
 		// msgVpnName missing
-	})
+	}, Identity{})
 	if err == nil {
 		t.Fatal("expected validation error for missing required field")
 	}
@@ -267,7 +268,7 @@ func TestCallTool_ValidationError_WrongType(t *testing.T) {
 	_, err := mgr.CallTool(context.Background(), "typed-tool", map[string]any{
 		"broker": "dev",
 		"count":  "not-a-number",
-	})
+	}, Identity{})
 	if err == nil {
 		t.Fatal("expected validation error for wrong type")
 	}
@@ -294,7 +295,7 @@ func TestCallTool_StructuredOutput(t *testing.T) {
 	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     "dev",
 		"msgVpnName": "default",
-	})
+	}, Identity{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -345,7 +346,7 @@ func TestCallTool_OutputValidationPasses(t *testing.T) {
 	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     "dev",
 		"msgVpnName": "default",
-	})
+	}, Identity{})
 	if err != nil {
 		t.Fatalf("expected output validation to pass, got: %v", err)
 	}
@@ -367,7 +368,7 @@ func TestCallTool_OutputValidationFails(t *testing.T) {
 	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     "dev",
 		"msgVpnName": "default",
-	})
+	}, Identity{})
 	if err == nil {
 		t.Fatal("expected output validation error")
 	}
@@ -418,7 +419,7 @@ func TestCallTool_DestructiveWarningLogged(t *testing.T) {
 	_, err := mgr.CallTool(context.Background(), "destructive-tool", map[string]any{
 		"broker":     "dev",
 		"msgVpnName": "default",
-	})
+	}, Identity{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -453,7 +454,7 @@ func TestCallTool_SEMPErrorWrapped(t *testing.T) {
 	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     "dev",
 		"msgVpnName": "default",
-	})
+	}, Identity{})
 	if err != nil {
 		t.Fatalf("expected nil protocol error, got: %v", err)
 	}
@@ -509,7 +510,7 @@ func TestLogToolResult_V1ErrorEmitsStructuredFields(t *testing.T) {
 	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     "dev",
 		"msgVpnName": "default",
-	})
+	}, Identity{})
 	// Execution errors now return (result, nil) per MCP spec.
 	if err != nil {
 		t.Fatalf("expected nil protocol error, got: %v", err)
@@ -562,7 +563,7 @@ func TestCallTool_SEMPv1Error_IsErrorResult(t *testing.T) {
 	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     "dev",
 		"msgVpnName": "default",
-	})
+	}, Identity{})
 	if err != nil {
 		t.Fatalf("expected nil protocol error, got: %v", err)
 	}
@@ -599,7 +600,7 @@ func TestCallTool_RetriesExhausted_RetryableTrue(t *testing.T) {
 	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     "dev",
 		"msgVpnName": "default",
-	})
+	}, Identity{})
 	if err != nil {
 		t.Fatalf("expected nil protocol error, got: %v", err)
 	}
@@ -639,7 +640,7 @@ func TestCallTool_RetriesExhausted_NetworkError(t *testing.T) {
 	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     "dev",
 		"msgVpnName": "default",
-	})
+	}, Identity{})
 	if err != nil {
 		t.Fatalf("expected nil protocol error, got: %v", err)
 	}
@@ -676,7 +677,7 @@ func TestCallTool_PlainError_IsErrorResult(t *testing.T) {
 	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     "dev",
 		"msgVpnName": "default",
-	})
+	}, Identity{})
 	if err != nil {
 		t.Fatalf("expected nil protocol error, got: %v", err)
 	}
@@ -716,7 +717,7 @@ func TestCallTool_LimitError_IncludesGuidance(t *testing.T) {
 	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     "dev",
 		"msgVpnName": "default",
-	})
+	}, Identity{})
 	if err != nil {
 		t.Fatalf("expected nil protocol error, got: %v", err)
 	}
@@ -745,7 +746,7 @@ func TestCallTool_BrokerStrippedFromHandlerParams(t *testing.T) {
 	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     "dev",
 		"msgVpnName": "default",
-	})
+	}, Identity{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -812,9 +813,198 @@ func TestToolManager_ConcurrentRegisterAndRoute(t *testing.T) {
 			// CallTool exercises Route internally; broker resolution will fail
 			// (no real broker) but the important thing is no data race.
 			_, _ = mgr.CallTool(context.Background(), fmt.Sprintf("pre-tool-%d", i),
-				map[string]any{"broker": "no-such-broker"})
+				map[string]any{"broker": "no-such-broker"}, Identity{})
 		}(i)
 	}
 
 	wg.Wait()
+}
+
+// --- SOL-149606 identity-in-audit-log tests --------------------------------
+
+// idFixture builds an Identity equivalent to what the OAuth-mode shim would
+// produce for a representative JWT — used by the per-line audit-log tests.
+func idFixture() Identity {
+	return NewIdentityFromTokenInfo(&sdkauth.TokenInfo{
+		UserID: "auth0|abc123",
+		Extra: map[string]any{
+			"iss":       "https://example.auth0.com/",
+			"client_id": "cursor-ide",
+			"jti":       "jti-xyz",
+		},
+	})
+}
+
+// captureLog runs fn with a fresh JSON slog handler installed as the default
+// logger and returns the captured (single-line) JSON object.
+func captureLog(t *testing.T, level slog.Level, fn func()) map[string]any {
+	t.Helper()
+	var buf bytes.Buffer
+	old := slog.Default()
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: level}))
+	slog.SetDefault(logger)
+	defer slog.SetDefault(old)
+
+	fn()
+
+	// Each test produces one log line we care about; if multiple lines were
+	// emitted (e.g., a destructive WARN plus the trailing INFO), return the
+	// LAST one — that's the tool-invocation result line. Callers that need
+	// the WARN explicitly use captureAllLogs.
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) == 0 || lines[0] == "" {
+		t.Fatalf("no log lines captured")
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &parsed); err != nil {
+		t.Fatalf("parse log: %v\n%s", err, buf.String())
+	}
+	return parsed
+}
+
+// captureAllLogs returns every emitted JSON log object in order.
+func captureAllLogs(t *testing.T, level slog.Level, fn func()) []map[string]any {
+	t.Helper()
+	var buf bytes.Buffer
+	old := slog.Default()
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: level}))
+	slog.SetDefault(logger)
+	defer slog.SetDefault(old)
+
+	fn()
+
+	var out []map[string]any
+	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(line), &parsed); err != nil {
+			t.Fatalf("parse log line %q: %v", line, err)
+		}
+		out = append(out, parsed)
+	}
+	return out
+}
+
+func assertIdentityFields(t *testing.T, logged map[string]any, want map[string]string) {
+	t.Helper()
+	for k, v := range want {
+		got, ok := logged[k]
+		if !ok {
+			t.Errorf("expected identity field %q in log line, got %v", k, logged)
+			continue
+		}
+		if got != v {
+			t.Errorf("log[%q] = %v, want %q", k, got, v)
+		}
+	}
+}
+
+func TestCallTool_logsIdentityFields_success(t *testing.T) {
+	mgr := NewToolManager(newTestPool(t))
+	mgr.Register(newStubHandler("test-tool"))
+
+	logged := captureLog(t, slog.LevelInfo, func() {
+		_, err := mgr.CallTool(context.Background(), "test-tool",
+			map[string]any{"broker": "dev", "msgVpnName": "default"}, idFixture())
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+	})
+
+	if logged["status"] != "success" {
+		t.Errorf("status = %v, want success", logged["status"])
+	}
+	assertIdentityFields(t, logged, map[string]string{
+		"sub":       "auth0|abc123",
+		"iss":       "https://example.auth0.com/",
+		"client_id": "cursor-ide",
+		"jti":       "jti-xyz",
+	})
+}
+
+func TestCallTool_logsIdentityFields_error(t *testing.T) {
+	mgr := NewToolManager(newTestPool(t))
+	mgr.Register(newStubHandler("test-tool"))
+
+	logged := captureLog(t, slog.LevelError, func() {
+		// Missing broker → triggers the error-path logToolResult emit.
+		_, _ = mgr.CallTool(context.Background(), "test-tool",
+			map[string]any{"msgVpnName": "default"}, idFixture())
+	})
+
+	if logged["status"] != "error" {
+		t.Errorf("status = %v, want error", logged["status"])
+	}
+	assertIdentityFields(t, logged, map[string]string{
+		"sub":       "auth0|abc123",
+		"iss":       "https://example.auth0.com/",
+		"client_id": "cursor-ide",
+		"jti":       "jti-xyz",
+	})
+}
+
+func TestCallTool_logsIdentity_destructiveWarn(t *testing.T) {
+	mgr := NewToolManager(newTestPool(t))
+
+	handler := newStubHandler("destructive-tool")
+	destructive := true
+	handler.annotations = Annotations{Destructive: &destructive}
+	mgr.Register(handler)
+
+	logs := captureAllLogs(t, slog.LevelWarn, func() {
+		_, err := mgr.CallTool(context.Background(), "destructive-tool",
+			map[string]any{"broker": "dev", "msgVpnName": "default"}, idFixture())
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+	})
+
+	var warn map[string]any
+	for _, l := range logs {
+		if l["msg"] == "executing destructive operation" {
+			warn = l
+			break
+		}
+	}
+	if warn == nil {
+		t.Fatalf("destructive WARN not captured; logs: %v", logs)
+	}
+	assertIdentityFields(t, warn, map[string]string{
+		"sub":       "auth0|abc123",
+		"iss":       "https://example.auth0.com/",
+		"client_id": "cursor-ide",
+		"jti":       "jti-xyz",
+	})
+}
+
+// TestCallTool_disabledMode_emitsNoIdentityFields pins the empty-group
+// behavior: Identity{present:false} produces a log line with no identity,
+// sub, iss, client_id, or jti keys. If slog ever changes how it emits an
+// empty GroupValue this test will catch it.
+func TestCallTool_disabledMode_emitsNoIdentityFields(t *testing.T) {
+	mgr := NewToolManager(newTestPool(t))
+	mgr.Register(newStubHandler("test-tool"))
+
+	logged := captureLog(t, slog.LevelInfo, func() {
+		_, err := mgr.CallTool(context.Background(), "test-tool",
+			map[string]any{"broker": "dev", "msgVpnName": "default"}, Identity{})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+	})
+
+	for _, k := range []string{"identity", "sub", "iss", "client_id", "jti"} {
+		if _, present := logged[k]; present {
+			t.Errorf("disabled-mode log line must not carry %q, got %v", k, logged[k])
+		}
+	}
+	// Sanity: existing fields are still emitted.
+	if logged["status"] != "success" {
+		t.Errorf("status = %v, want success", logged["status"])
+	}
+	if logged["tool"] != "test-tool" {
+		t.Errorf("tool = %v, want test-tool", logged["tool"])
+	}
 }

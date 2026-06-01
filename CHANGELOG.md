@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Per-invocation caller identity on tool-invocation log lines (`sub`, `iss`, `client_id`, `jti`) in `oauth` and `static` client-auth modes. Missing optional claims surface as the `<absent>` sentinel so log consumers see a stable schema; `disabled` mode emits no identity fields. Tracked under SOL-149606.
 - Apache 2.0 LICENSE file for open source compliance
 - CONTRIBUTING.md with comprehensive contribution guidelines including DCO requirements
 - CODE_OF_CONDUCT.md with Contributor Covenant 2.1
@@ -19,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Contributing and License sections in README.md
 
 ### Changed
+
+- `ToolManager.CallTool` now takes a trailing `Identity` argument carrying per-invocation audit identity. This is an internal Go API (the package is `internal/tools`); on-the-wire MCP tool schemas and operator-visible config are unchanged. Tracked under SOL-149606.
 
 - **BREAKING**: Client auth config consolidated into single required `client_auth.mode` enum (`disabled` | `static` | `oauth`). The legacy `development_mode` flag is deprecated and ignored — its presence in YAML logs a deprecation warning at startup. The previous "development_mode + empty dev_token = silent no-auth" path (SOL-149921) is replaced by the explicit `mode: disabled`. Migration:
 
