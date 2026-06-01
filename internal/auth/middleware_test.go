@@ -41,6 +41,30 @@ var dummyHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request)
 	w.Write([]byte("OK"))
 })
 
+// TestMain seeds the process-global system certificate pool with a clean
+// environment before any test runs.
+//
+// On Linux (but not macOS), crypto/x509 reads SSL_CERT_FILE when it lazily
+// loads the system roots, and caches the result process-wide via sync.Once
+// (crypto/x509/root.go). The first trigger wins: whichever test first calls
+// x509.SystemCertPool() — which oidcHTTPClient does on the SSL_CERT_FILE path —
+// or performs a TLS handshake with nil RootCAs, seeds that cache with the
+// SSL_CERT_FILE value in effect at that moment, for the rest of the binary.
+//
+// Without this, a test that points SSL_CERT_FILE at a test CA (e.g.
+// Test_OIDCJWKSRefreshTimeout_SSLCertFile) would leak that CA into the global
+// roots and break sibling tests that assert an untrusted server is rejected
+// (Test_oidcHTTPClient_SSLCertFile's "TLS fails without SSL_CERT_FILE"). Firing
+// the sync.Once here, with the env cleared, makes those assertions
+// deterministic regardless of test order. macOS ignores SSL_CERT_FILE for
+// system roots, which is why the leak only surfaces in Linux CI.
+func TestMain(m *testing.M) {
+	os.Unsetenv("SSL_CERT_FILE")
+	os.Unsetenv("SSL_CERT_DIR")
+	_, _ = x509.SystemCertPool()
+	os.Exit(m.Run())
+}
+
 // Test_NewAuthMiddleware_Disabled tests that all requests pass through when
 // client_auth.mode is "disabled" — the explicit no-auth dev mode replacing
 // the old (pre-SOL-149989) silent dev-mode + empty dev-token bypass —
