@@ -8,12 +8,11 @@ set -euo pipefail
 source "$(dirname "$0")/helpers.sh"
 
 # ── Cleanup on exit ─────────────────────────────────────────────────────────
-# Order matters: stop_broker_drivers must run before cleanup_fixtures because
-# the broker refuses to delete a queue with an attached client.
+# cleanup_fixtures handles ordering internally: it calls stop_broker_drivers
+# first so no client is attached when SEMP queue deletes run.
 cleanup() {
     log_info "Running cleanup ..."
     stop_server
-    stop_broker_drivers
     cleanup_fixtures
     rm -f "$BIN_DIR/mcp-server.pid"
 }
@@ -32,10 +31,12 @@ if [ -f "$PIDFILE" ]; then
     MCP_SERVER_PID=$(cat "$PIDFILE")
 fi
 
-# 2. Create test fixtures (F1 multi-VPN + F2 multi-queue)
+# 2. Build broker-driver (CGo + libsolclient) — needed by F3 onward.
+build_broker_driver
+
+# 3. Create test fixtures (F1 multi-VPN, F2 multi-queue, F3 connected client)
 create_fixtures
 
-# 3. Real assertions land in step 13 (SEMP-direct fixture verification)
-#    and SOL-150025 (tool-level tests). For now this is the scaffold only.
-
-log_ok "Scaffold run complete (no assertions yet)"
+# 4. SEMP-direct fixture-state verification (SOL-150024 acceptance criteria).
+#    Tool-level functional tests land in SOL-150025.
+bash "$SCRIPT_DIR/verify-fixtures.sh"

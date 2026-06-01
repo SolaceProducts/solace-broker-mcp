@@ -13,6 +13,11 @@ BIN_DIR="$SCRIPT_DIR/bin"
 # shellcheck source=.env
 source "$SCRIPT_DIR/.env"
 
+# Exported so broker-driver (spawned as a child by create_connected_client_on
+# and the F4-F6 helpers to come) can resolve --broker=a|b to a SMF host:port
+# from the same single source of truth.
+export BROKER_A_SMF_PORT BROKER_B_SMF_PORT
+
 BROKER_A_URL="http://localhost:${BROKER_A_SEMP_PORT}"
 BROKER_B_URL="http://localhost:${BROKER_B_SEMP_PORT}"
 BROKER_USER="${BROKER_USERNAME}"
@@ -29,6 +34,10 @@ SEMP_CONFIG="$BROKER_A_SEMP_CONFIG"
 MCP_PORT="${MCP_PORT:-9090}"
 MCP_URL="http://localhost:$MCP_PORT"
 MCP_SERVER_PID=""
+# Server stdout/stderr is captured here (under gitignored bin/) so a startup
+# or runtime failure is diagnosable — locally and in CI — instead of vanishing
+# into /dev/null.
+MCP_SERVER_LOG="$BIN_DIR/mcp-server.log"
 
 # Static dev token used to authenticate every e2e curl/mcp-tester request to
 # the broker MCP server. Defined in .env (single source of truth); exported
@@ -36,6 +45,14 @@ MCP_SERVER_PID=""
 # broker-config.yaml reference it as ${MCP_DEV_TOKEN} so the server's env
 # substitution resolves it at config load.
 export MCP_DEV_TOKEN
+
+# setsid is Linux-only; fall back to a plain exec on macOS where nohup alone
+# is sufficient to keep the child alive after the parent shell exits.
+if command -v setsid >/dev/null 2>&1; then
+    _SESSION_WRAP="setsid"
+else
+    _SESSION_WRAP=""
+fi
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -129,13 +146,13 @@ check_build_deps() {
 
     case "$os" in
         Linux)
+            # Only a C compiler is needed: solace.dev/go/messaging statically
+            # links libsolclient (and its OpenSSL dependency) on Linux, so there
+            # is no libssl-dev build requirement nor a libssl runtime dependency.
             command -v gcc >/dev/null 2>&1 || missing+=("gcc")
-            if ! ldconfig -p 2>/dev/null | grep -q 'libssl\.so'; then
-                missing+=("libssl-dev")
-            fi
             if [ ${#missing[@]} -gt 0 ]; then
                 log_warn "Missing build dependencies: ${missing[*]}"
-                log_warn "  Install with: sudo apt-get install ${missing[*]}"
+                log_warn "  Install with: sudo apt-get install build-essential"
             fi
             ;;
         Darwin)
@@ -162,6 +179,12 @@ build_mcp_tester() {
     log_info "mcp-tester binary built: $BIN_DIR/mcp-tester"
 }
 
+build_broker_driver() {
+    log_info "Building broker-driver binary (CGo: libsolclient via solace.dev/go/messaging) ..."
+    (cd "$SCRIPT_DIR/broker-driver" && go build -o "$BIN_DIR/broker-driver" .)
+    log_info "broker-driver binary built: $BIN_DIR/broker-driver"
+}
+
 start_server() {
     local config_file="$1"
     log_info "Starting MCP server (config=$config_file, port=$MCP_PORT) ..."
@@ -179,7 +202,7 @@ start_server() {
     # ENV_FILE tells the MCP server to also load .env for credential resolution.
     CONFIG_FILE="$config_file" \
     ENV_FILE="$SCRIPT_DIR/.env" \
-        "$BIN_DIR/mcp-server" 2>/dev/null &
+        "$BIN_DIR/mcp-server" >"$MCP_SERVER_LOG" 2>&1 &
     MCP_SERVER_PID=$!
 
     # Wait for server to be ready
@@ -192,7 +215,8 @@ start_server() {
         sleep 0.5
         attempt=$((attempt + 1))
     done
-    log_fail "MCP server failed to start"
+    log_fail "MCP server failed to start; last 50 lines of $MCP_SERVER_LOG:"
+    tail -n 50 "$MCP_SERVER_LOG" >&2 2>/dev/null || true
     return 1
 }
 
@@ -248,11 +272,15 @@ stop_broker_drivers() {
         local still=(); for p in "${pids[@]}"; do
             kill -0 "$p" 2>/dev/null && still+=("$p")
         done
-        pids=( "${still[@]}" )
+        pids=( ${still[@]+"${still[@]}"} )
     done
 
-    for p in "${pids[@]}"; do kill -KILL "$p" 2>/dev/null; done
+    for p in ${pids[@]+"${pids[@]}"}; do kill -KILL "$p" 2>/dev/null; done
     rm -f $BROKER_DRIVER_PIDFILE_GLOB
+    # Allow the broker to finish cleaning up stale SMF sessions before
+    # subsequent SEMP config operations run. Only reached when broker-drivers
+    # were actually running (the early return 0 above skips this otherwise).
+    sleep 3
 }
 
 write_config() {
@@ -307,6 +335,21 @@ semp_delete() {
     local path="$2"
     curl -sf -X DELETE -u "$BROKER_USER:$BROKER_PASS" \
         "$semp_config/$path" >/dev/null 2>&1 || true
+}
+
+# GET against the broker's private monitor endpoint, returning the JSON body
+# on stdout. Returns non-zero on any non-2xx, so callers can short-circuit
+# with `body=$(semp_monitor_get ...) || return 1`.
+#
+# Args:
+#   $1 broker_url    e.g. http://localhost:8090
+#   $2 path          path under SEMP/v2/__private_monitor__,
+#                    e.g. "msgVpns/test-vpn"
+semp_monitor_get() {
+    local broker_url="$1"
+    local path="$2"
+    curl -sf -u "$BROKER_USER:$BROKER_PASS" \
+        "$broker_url/SEMP/v2/__private_monitor__/$path"
 }
 
 create_fixtures_on() {
@@ -372,23 +415,23 @@ verify_fixtures() {
     local broker_url="$1"
     local label="$2"
     log_info "Verifying base fixtures visible on $label ..."
-    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/queues/test-queue"
-    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp"
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/queues/test-queue" || true
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp" || true
 }
 
 verify_multi_vpn_on() {
     local broker_url="$1"
     local label="$2"
     log_info "Verifying multi-VPN fixture visible on $label ..."
-    verify_monitor_object "$broker_url" "$label" "msgVpns/test-vpn"
+    verify_monitor_object "$broker_url" "$label" "msgVpns/test-vpn" || true
 }
 
 verify_multi_queue_on() {
     local broker_url="$1"
     local label="$2"
     log_info "Verifying multi-queue fixtures visible on $label ..."
-    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/queues/test-queue-2"
-    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/queues/test-queue-3"
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/queues/test-queue-2" || true
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/queues/test-queue-3" || true
 }
 
 cleanup_fixtures_on() {
@@ -458,17 +501,238 @@ cleanup_multi_queue_on() {
     log_info "Multi-queue fixtures cleaned up on $label"
 }
 
+# F3 connected client — single source of truth for the fixture's identifiers,
+# referenced by both create_connected_client_on and verify-fixtures.sh.
+F3_CLIENT_NAME_A="e2e-monitoring-connected-a"
+F3_CLIENT_NAME_B="e2e-monitoring-connected-b"
+F3_SUBSCRIPTIONS="e2e-monitoring/connected/t1,e2e-monitoring/connected/t2"
+
+# Spawn a long-lived broker-driver process that binds a persistent receiver
+# to test-queue and holds direct topic subscriptions, satisfying F3. The
+# process self-writes a PID file that stop_broker_drivers later reaps.
+# Depends on create_fixtures_on having created test-queue first.
+create_connected_client_on() {
+    local label="$1"
+    local broker_url="$2"
+    local broker_letter="$3"     # "a" or "b" — resolves SMF host:port in broker-driver
+    local client_name="$4"
+    local pidfile="$BIN_DIR/broker-driver-f3-$broker_letter.pid"
+    local logfile="$BIN_DIR/broker-driver-f3-$broker_letter.log"
+    log_info "Creating connected-client fixture on $label (clientName=$client_name) ..."
+
+    # nohup + setsid so the driver survives an aborted parent shell and is in
+    # its own session; the bash harness still finds it via the pidfile glob.
+    nohup ${_SESSION_WRAP:+$_SESSION_WRAP} "$BIN_DIR/broker-driver" connected-client \
+        --broker="$broker_letter" \
+        --vpn="$BROKER_VPN" \
+        --client-name="$client_name" \
+        --queue=test-queue \
+        --subscriptions="$F3_SUBSCRIPTIONS" \
+        --pidfile="$pidfile" \
+        >"$logfile" 2>&1 &
+
+    # Wait for the driver to self-write its pidfile (signals readiness).
+    local attempt=0
+    while [ $attempt -lt 20 ] && [ ! -s "$pidfile" ]; do
+        sleep 0.5
+        attempt=$((attempt + 1))
+    done
+    if [ ! -s "$pidfile" ]; then
+        log_fail "broker-driver did not create pidfile on $label within 10s; see $logfile"
+        return 1
+    fi
+
+    # Then wait until the broker actually reports the client by name.
+    verify_monitor_object "$broker_url" "$label" \
+        "msgVpns/$BROKER_VPN/clients/$client_name"
+    log_info "Connected-client fixture created on $label (PID=$(<"$pidfile"))"
+}
+
+# stop_broker_drivers handles termination via the PID file, so this is a
+# label-only nop kept for symmetry with the F1/F2 create/cleanup pairs.
+cleanup_connected_client_on() {
+    local label="$1"
+    log_info "Connected-client cleanup on $label deferred to stop_broker_drivers"
+}
+
+# F4 sustained-traffic constants. The topic must be one of F3_SUBSCRIPTIONS
+# so the F3 direct receiver drains the persistent publish — that's how
+# AC 5's txMsgRate threshold becomes reachable.
+F4_TOPIC="e2e-monitoring/connected/t1"
+F4_RATE=100      # msg/s, matches the ticket-spec target
+F4_SIZE=256      # bytes per message
+
+# Spawn a long-lived broker-driver publisher that hits F4_RATE messages per
+# second on F4_TOPIC. The F3 connected-client receiver subscribes to that
+# topic, so the broker observes both rxMsgRate (from publisher) and
+# txMsgRate (delivered to F3 receiver).
+create_sustained_traffic_on() {
+    local label="$1"
+    local broker_url="$2"
+    local broker_letter="$3"
+    local pidfile="$BIN_DIR/broker-driver-f4-$broker_letter.pid"
+    local logfile="$BIN_DIR/broker-driver-f4-$broker_letter.log"
+    log_info "Creating sustained-traffic fixture on $label (rate=$F4_RATE/s topic=$F4_TOPIC) ..."
+
+    nohup ${_SESSION_WRAP:+$_SESSION_WRAP} "$BIN_DIR/broker-driver" publisher \
+        --broker="$broker_letter" \
+        --vpn="$BROKER_VPN" \
+        --topic="$F4_TOPIC" \
+        --rate="$F4_RATE" \
+        --size="$F4_SIZE" \
+        --message-type=persistent \
+        --pidfile="$pidfile" \
+        >"$logfile" 2>&1 &
+
+    local attempt=0
+    while [ $attempt -lt 20 ] && [ ! -s "$pidfile" ]; do
+        sleep 0.5
+        attempt=$((attempt + 1))
+    done
+    if [ ! -s "$pidfile" ]; then
+        log_fail "broker-driver publisher did not create pidfile on $label within 10s; see $logfile"
+        return 1
+    fi
+    log_info "Sustained-traffic fixture started on $label (PID=$(<"$pidfile"))"
+}
+
+cleanup_sustained_traffic_on() {
+    local label="$1"
+    log_info "Sustained-traffic cleanup on $label deferred to stop_broker_drivers"
+}
+
+# F6-spool constants.
+F6_SPOOL_QUEUE="test-queue-discards-spool"
+F6_SPOOL_TOPIC="e2e-monitoring/discards/spool"
+F6_SPOOL_COUNT=8000   # × 256 B ≈ 2 MB; overflows the 1 MB spool quota
+F6_SPOOL_SIZE=256
+F6_SPOOL_MAX_MB=1     # maxMsgSpoolUsage in MB
+
+# Provisions test-queue-discards-spool with a 1 MB spool cap and
+# egressEnabled=false, then runs a one-shot publish-batch that fills ~2 MB
+# worth of messages. The broker discards the overflow and increments
+# maxMsgSpoolUsageExceededDiscardedMsgCount — a cumulative counter, so no
+# sustained traffic is needed after the one-shot publish.
+create_discard_spool_on() {
+    local semp_config="$1"
+    local label="$2"
+    local broker_url="$3"
+    local broker_letter="$4"
+    log_info "Creating discard-spool fixture on $label (queue=$F6_SPOOL_QUEUE maxSpool=${F6_SPOOL_MAX_MB}MB) ..."
+
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues" \
+        "{\"queueName\":\"$F6_SPOOL_QUEUE\",\"accessType\":\"non-exclusive\",\"permission\":\"consume\",\"ingressEnabled\":true,\"egressEnabled\":false,\"maxMsgSpoolUsage\":$F6_SPOOL_MAX_MB}" >/dev/null
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues/$F6_SPOOL_QUEUE/subscriptions" \
+        "{\"subscriptionTopic\":\"$F6_SPOOL_TOPIC\"}" >/dev/null
+
+    "$BIN_DIR/broker-driver" publish-batch \
+        --broker="$broker_letter" \
+        --topic="$F6_SPOOL_TOPIC" \
+        --count="$F6_SPOOL_COUNT" \
+        --size="$F6_SPOOL_SIZE" \
+        --message-type=persistent
+
+    log_info "Discard-spool fixture created on $label"
+}
+
+# Drops the F6-spool queue (cascades to its topic subscription).
+cleanup_discard_spool_on() {
+    local semp_config="$1"
+    local label="$2"
+    log_info "Cleaning up discard-spool fixture on $label ..."
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/queues/$F6_SPOOL_QUEUE"
+}
+
+# F6-ttl constants.
+F6_TTL_QUEUE="test-queue-discards-ttl"
+F6_TTL_TOPIC="e2e-monitoring/discards/ttl"
+F6_TTL_COUNT=200     # small batch; messages expire by TTL, not spool
+F6_TTL_SIZE=256
+F6_TTL_MAX_TTL_S=1   # maxTtl in seconds
+F6_TTL_WAIT_S=2      # sleep after publish to let the 1 s TTL expire
+
+# Provisions test-queue-discards-ttl with a 1 s TTL and no consumer, publishes
+# a one-shot batch with --dmq-eligible=false so the broker increments
+# maxTtlExpiredDiscardedMsgCount rather than moving expired messages to the DMQ.
+# Sleeps F6_TTL_WAIT_S after publishing so the TTL window closes before
+# verify-fixtures.sh runs the AC 9 assertion.
+create_discard_ttl_on() {
+    local semp_config="$1"
+    local label="$2"
+    local broker_letter="$3"
+    log_info "Creating discard-ttl fixture on $label (queue=$F6_TTL_QUEUE maxTtl=${F6_TTL_MAX_TTL_S}s) ..."
+
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues" \
+        "{\"queueName\":\"$F6_TTL_QUEUE\",\"accessType\":\"non-exclusive\",\"permission\":\"consume\",\"ingressEnabled\":true,\"egressEnabled\":true,\"maxTtl\":$F6_TTL_MAX_TTL_S,\"respectTtlEnabled\":true}" >/dev/null
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues/$F6_TTL_QUEUE/subscriptions" \
+        "{\"subscriptionTopic\":\"$F6_TTL_TOPIC\"}" >/dev/null
+
+    "$BIN_DIR/broker-driver" publish-batch \
+        --broker="$broker_letter" \
+        --topic="$F6_TTL_TOPIC" \
+        --count="$F6_TTL_COUNT" \
+        --size="$F6_TTL_SIZE" \
+        --message-type=persistent \
+        --dmq-eligible=false
+
+    log_info "Waiting ${F6_TTL_WAIT_S}s for TTL to expire ..."
+    sleep "$F6_TTL_WAIT_S"
+    log_info "Discard-ttl fixture created on $label"
+}
+
+# Drops the F6-ttl queue (cascades to its topic subscription).
+cleanup_discard_ttl_on() {
+    local semp_config="$1"
+    local label="$2"
+    log_info "Cleaning up discard-ttl fixture on $label ..."
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/queues/$F6_TTL_QUEUE"
+}
+
+# Epoch (seconds since Unix) at which the last F4 publisher finished
+# starting. verify-fixtures.sh reads this to wait out the AC 5 settle
+# window (≥ 25 s) before sampling rxMsgRate / txMsgRate. Exported so the
+# child verifier process inherits it. Use := so sourcing helpers.sh in the
+# child verifier does not clobber the value exported by the parent runner.
+: "${F4_READY_EPOCH:=}"
+export F4_READY_EPOCH
+
 create_fixtures() {
     cleanup_fixtures
+    # NFR-4: one-shot SEMP (F1, F2) before client-bearing (F3+) so the
+    # queues a receiver binds to are already provisioned.
     create_fixtures_on "$BROKER_A_SEMP_CONFIG" "broker-a" "$BROKER_A_URL"
     create_fixtures_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL"
     create_multi_queue_on "$BROKER_A_SEMP_CONFIG" "broker-a" "$BROKER_A_URL"
     create_multi_queue_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL"
     create_multi_vpn_on "$BROKER_A_SEMP_CONFIG" "broker-a" "$BROKER_A_URL"
     create_multi_vpn_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL"
+    create_connected_client_on "broker-a" "$BROKER_A_URL" a "$F3_CLIENT_NAME_A"
+    create_connected_client_on "broker-b" "$BROKER_B_URL" b "$F3_CLIENT_NAME_B"
+    create_sustained_traffic_on "broker-a" "$BROKER_A_URL" a
+    create_sustained_traffic_on "broker-b" "$BROKER_B_URL" b
+    F4_READY_EPOCH=$(date +%s)
+    export F4_READY_EPOCH
+    # F6 is independent of F3/F4 — run after them but the queues have no
+    # client dependency so order within F6 does not matter.
+    create_discard_spool_on "$BROKER_A_SEMP_CONFIG" "broker-a" "$BROKER_A_URL" a
+    create_discard_spool_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL" b
+    create_discard_ttl_on "$BROKER_A_SEMP_CONFIG" "broker-a" a
+    create_discard_ttl_on "$BROKER_B_SEMP_CONFIG" "broker-b" b
 }
 
 cleanup_fixtures() {
+    # Reap client-bearing fixtures first — broker refuses to delete a queue
+    # while a client is bound, so stop_broker_drivers must run before any
+    # SEMP queue/RDP deletes downstream.
+    stop_broker_drivers
+    cleanup_discard_ttl_on "$BROKER_A_SEMP_CONFIG" "broker-a"
+    cleanup_discard_ttl_on "$BROKER_B_SEMP_CONFIG" "broker-b"
+    cleanup_discard_spool_on "$BROKER_A_SEMP_CONFIG" "broker-a"
+    cleanup_discard_spool_on "$BROKER_B_SEMP_CONFIG" "broker-b"
+    cleanup_sustained_traffic_on "broker-a"
+    cleanup_sustained_traffic_on "broker-b"
+    cleanup_connected_client_on "broker-a"
+    cleanup_connected_client_on "broker-b"
     cleanup_multi_vpn_on "$BROKER_A_SEMP_CONFIG" "broker-a"
     cleanup_multi_vpn_on "$BROKER_B_SEMP_CONFIG" "broker-b"
     cleanup_multi_queue_on "$BROKER_A_SEMP_CONFIG" "broker-a"

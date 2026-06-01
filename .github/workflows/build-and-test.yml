@@ -63,7 +63,10 @@ jobs:
         run: go build -v ./...
 
       - name: Vet
-        run: go vet ./...
+        run: |
+          go vet ./...
+          (cd test/e2e-monitoring/mcp-tester && go vet ./...)
+          (cd test/e2e-monitoring/broker-driver && go vet ./...)
 
       - name: Test
         # -race enables the Go race detector to catch data races on shared state (e.g. BrokerPool).
@@ -175,6 +178,10 @@ jobs:
           docker logs solace-e2e-mon-a 2>&1 | tail -100
           echo "=== solace-e2e-mon-b ==="
           docker logs solace-e2e-mon-b 2>&1 | tail -100
+
+      - name: MCP server log (on failure)
+        if: failure()
+        run: cat test/e2e-monitoring/bin/mcp-server.log 2>/dev/null || echo "No server log found"
 
       - name: Tear down brokers
         if: always()
