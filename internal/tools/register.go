@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
+	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -57,7 +58,16 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 			if err := json.Unmarshal(req.Params.Arguments, &params); err != nil {
 				return nil, fmt.Errorf("parsing tool arguments: %w", err)
 			}
-			return mgr.CallTool(ctx, reg.name, params)
+			// Extract per-invocation audit identity from the SDK request
+			// extras (SOL-149606). Both req.Extra and req.Extra.TokenInfo
+			// can be nil in disabled mode (no middleware) or under test
+			// scaffolding that constructs a bare CallToolRequest; the
+			// constructor handles nil cleanly.
+			var info *sdkauth.TokenInfo
+			if req.Extra != nil {
+				info = req.Extra.TokenInfo
+			}
+			return mgr.CallTool(ctx, reg.name, params, NewIdentityFromTokenInfo(info))
 		})
 	}
 }
