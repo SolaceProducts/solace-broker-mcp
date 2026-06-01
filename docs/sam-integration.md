@@ -5,7 +5,7 @@ This guide shows how to integrate this MCP server with SAM. For general MCP supp
 ## Prerequisites
 
 - A working SAM project (`sam init` complete, agents start cleanly)
-- Ability to run this MCP server locally with configured broker-config.yaml and .env files. For instructions, see [Quickstart](../README.md#quickstart)
+- Ability to run this MCP server locally with configured `broker-config.yaml` and `.env` files. For instructions, see [Quickstart](../README.md#quickstart)
 
 ## Steps
 
@@ -98,7 +98,7 @@ The bearer token in the SAM `.env` and the `dev_token` in the MCP server configu
 
 ## Additional SAM MCP Configuration
 
-The following topics are convered in the [SAM MCP Integration tutorial](https://github.com/SolaceLabs/solace-agent-mesh/blob/main/docs/docs/documentation/developing/tutorials/mcp-integration.md):
+The following topics are covered in the [SAM MCP Integration tutorial](https://github.com/SolaceLabs/solace-agent-mesh/blob/main/docs/docs/documentation/developing/tutorials/mcp-integration.md):
 
 - Other connection types (`stdio`, `sse`, Docker)
 - Tool filtering (`tool_name`, `allow_list`, `deny_list`)

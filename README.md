@@ -236,7 +236,7 @@ List queues in the default VPN on the dev broker
 
 ### Connect from Solace Agent Mesh (SAM)
 
-Once the MCP server is running, configure it to accept a static dev token:
+Once the MCP server is running, configure it to accept a static dev token (local development only). For production, use `client_auth.mode: oauth` — see [Authentication](docs/authentication.md).
 
 ```yaml
 # broker-config.yaml
