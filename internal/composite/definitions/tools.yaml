@@ -145,10 +145,11 @@ tools:
     steps:
       - id: subscriptions
         operation: monitor/getMsgVpnClientSubscriptions
+        followPages: true
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           clientName: "{{.Params.clientName}}"
-          count: '{{with index .Params "maxResults"}}{{.}}{{else}}100{{end}}'
+          count: "100"
     result:
       strategy: collect
 
