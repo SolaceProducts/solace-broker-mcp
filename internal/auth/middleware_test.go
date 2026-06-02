@@ -41,6 +41,30 @@ var dummyHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request)
 	w.Write([]byte("OK"))
 })
 
+// TestMain seeds the process-global system certificate pool with a clean
+// environment before any test runs.
+//
+// On Linux (but not macOS), crypto/x509 reads SSL_CERT_FILE when it lazily
+// loads the system roots, and caches the result process-wide via sync.Once
+// (crypto/x509/root.go). The first trigger wins: whichever test first calls
+// x509.SystemCertPool() — which oidcHTTPClient does on the SSL_CERT_FILE path —
+// or performs a TLS handshake with nil RootCAs, seeds that cache with the
+// SSL_CERT_FILE value in effect at that moment, for the rest of the binary.
+//
+// Without this, a test that points SSL_CERT_FILE at a test CA (e.g.
+// Test_OIDCJWKSRefreshTimeout_SSLCertFile) would leak that CA into the global
+// roots and break sibling tests that assert an untrusted server is rejected
+// (Test_oidcHTTPClient_SSLCertFile's "TLS fails without SSL_CERT_FILE"). Firing
+// the sync.Once here, with the env cleared, makes those assertions
+// deterministic regardless of test order. macOS ignores SSL_CERT_FILE for
+// system roots, which is why the leak only surfaces in Linux CI.
+func TestMain(m *testing.M) {
+	os.Unsetenv("SSL_CERT_FILE")
+	os.Unsetenv("SSL_CERT_DIR")
+	_, _ = x509.SystemCertPool()
+	os.Exit(m.Run())
+}
+
 // Test_NewAuthMiddleware_Disabled tests that all requests pass through when
 // client_auth.mode is "disabled" — the explicit no-auth dev mode replacing
 // the old (pre-SOL-149989) silent dev-mode + empty dev-token bypass —
@@ -531,6 +555,214 @@ func Test_OIDCProviderUnreachable(t *testing.T) {
 	}
 }
 
+// Test_OIDCJWKSRefreshTimeout verifies that lazy JWKS refresh during token
+// verification respects the bounded HTTP client timeout instead of blocking
+// indefinitely on a hung IdP. Reproduces SOL-150219.
+func Test_OIDCJWKSRefreshTimeout(t *testing.T) {
+	origTimeout := oidcHTTPClientTimeout
+	oidcHTTPClientTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { oidcHTTPClientTimeout = origTimeout })
+
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate RSA key: %v", err)
+	}
+	signer, err := jose.NewSigner(
+		jose.SigningKey{Algorithm: jose.RS256, Key: privateKey},
+		(&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", "test-key-1"),
+	)
+	if err != nil {
+		t.Fatalf("failed to create signer: %v", err)
+	}
+
+	// Mock IdP: discovery responds fast; /jwks blocks until either the
+	// request context is canceled (the fixed path: http.Client.Timeout fires
+	// at 500ms) or the test cleanup releases it (safety net for the buggy
+	// path so the test process doesn't hang on server.Close()).
+	mux := http.NewServeMux()
+	var issuer string
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"issuer":   issuer,
+			"jwks_uri": issuer + "/jwks",
+		})
+	})
+	releaseJWKS := make(chan struct{})
+	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-releaseJWKS:
+		}
+	})
+
+	server := httptest.NewServer(mux)
+	// Cleanup order (LIFO): releaseJWKS closes FIRST so any in-flight handler
+	// unblocks before server.Close() waits on its handler wg.
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(releaseJWKS) })
+	issuer = server.URL
+
+	audience := "test-audience"
+	cfg := &config.ServerConfig{
+		Port: 9090,
+		ClientAuth: config.ClientAuthConfig{
+			Mode:     config.AuthModeOAuth,
+			Issuer:   issuer,
+			Audience: audience,
+		},
+	}
+
+	middleware, err := NewAuthMiddleware(cfg, dummyHandler)
+	if err != nil {
+		t.Fatalf("failed to create middleware: %v", err)
+	}
+
+	token, err := jwt.Signed(signer).Claims(map[string]interface{}{
+		"iss": issuer,
+		"aud": audience,
+		"sub": "test-user",
+		"exp": time.Now().Add(time.Hour).Unix(),
+		"iat": time.Now().Unix(),
+	}).Serialize()
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
+	}
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	// 2s budget = 4x the 500ms HTTP client timeout. Without the fix /jwks
+	// hangs and this fails the budget; with the fix verification completes
+	// (returning 401) at ~500ms.
+	done := make(chan struct{})
+	go func() {
+		middleware.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401 after JWKS timeout, got %d: %s", rec.Code, rec.Body.String())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("token verification did not return within 2s — JWKS refresh likely hung (SOL-150219 regression)")
+	}
+}
+
+// Test_OIDCJWKSRefreshTimeout_SSLCertFile is the SSL_CERT_FILE counterpart of
+// Test_OIDCJWKSRefreshTimeout. It exercises the corporate-CA deployment path
+// (the client returned by oidcHTTPClient when SSL_CERT_FILE is set), which the
+// original SOL-150219 fix left unbounded because the custom-CA client
+// overwrote the bounded one. The IdP is served over TLS so SSL_CERT_FILE is
+// load-bearing, and /jwks hangs to prove the bound still fires on this path.
+func Test_OIDCJWKSRefreshTimeout_SSLCertFile(t *testing.T) {
+	origTimeout := oidcHTTPClientTimeout
+	oidcHTTPClientTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { oidcHTTPClientTimeout = origTimeout })
+
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate RSA key: %v", err)
+	}
+	signer, err := jose.NewSigner(
+		jose.SigningKey{Algorithm: jose.RS256, Key: privateKey},
+		(&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", "test-key-1"),
+	)
+	if err != nil {
+		t.Fatalf("failed to create signer: %v", err)
+	}
+
+	// Mock IdP over TLS: discovery responds fast; /jwks blocks until either the
+	// request context is canceled (the fixed path: http.Client.Timeout fires at
+	// 500ms) or test cleanup releases it (safety net for the buggy path).
+	mux := http.NewServeMux()
+	var issuer string
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"issuer":   issuer,
+			"jwks_uri": issuer + "/jwks",
+		})
+	})
+	releaseJWKS := make(chan struct{})
+	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-releaseJWKS:
+		}
+	})
+
+	server := httptest.NewTLSServer(mux)
+	// Cleanup order (LIFO): releaseJWKS closes FIRST so any in-flight handler
+	// unblocks before server.Close() waits on its handler wg.
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(releaseJWKS) })
+	issuer = server.URL
+
+	// Trust the self-signed server cert via SSL_CERT_FILE so discovery and the
+	// JWKS client validate TLS. Without this the verifier could not be built.
+	serverCert, err := x509.ParseCertificate(server.TLS.Certificates[0].Certificate[0])
+	if err != nil {
+		t.Fatalf("failed to parse server cert: %v", err)
+	}
+	caPath := filepath.Join(t.TempDir(), "ca.crt")
+	if err := os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverCert.Raw}), 0600); err != nil {
+		t.Fatalf("failed to write CA file: %v", err)
+	}
+	t.Setenv("SSL_CERT_FILE", caPath)
+
+	audience := "test-audience"
+	cfg := &config.ServerConfig{
+		Port: 9090,
+		ClientAuth: config.ClientAuthConfig{
+			Mode:     config.AuthModeOAuth,
+			Issuer:   issuer,
+			Audience: audience,
+		},
+	}
+
+	middleware, err := NewAuthMiddleware(cfg, dummyHandler)
+	if err != nil {
+		t.Fatalf("failed to create middleware: %v", err)
+	}
+
+	token, err := jwt.Signed(signer).Claims(map[string]interface{}{
+		"iss": issuer,
+		"aud": audience,
+		"sub": "test-user",
+		"exp": time.Now().Add(time.Hour).Unix(),
+		"iat": time.Now().Unix(),
+	}).Serialize()
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
+	}
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	// 2s budget = 4x the 500ms HTTP client timeout. Without the bound on the
+	// SSL_CERT_FILE path, /jwks hangs and this fails the budget; with it,
+	// verification completes (returning 401) at ~500ms.
+	done := make(chan struct{})
+	go func() {
+		middleware.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401 after JWKS timeout, got %d: %s", rec.Code, rec.Body.String())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("token verification did not return within 2s — JWKS refresh likely hung on SSL_CERT_FILE path (SOL-150219 regression)")
+	}
+}
+
 // Test_WWWAuthenticateHeaderFormat verifies that 401 responses include the correct
 // WWW-Authenticate header with resource_metadata parameter per MCP spec and RFC 9728.
 func Test_WWWAuthenticateHeaderFormat(t *testing.T) {
@@ -739,6 +971,109 @@ func Test_PRMHandler_OAuth(t *testing.T) {
 	}
 }
 
+// Test_OIDCVerifier_PopulatesTokenInfo_AllClaims verifies that the OIDC
+// verifier extracts sub/iss/client_id/jti and stashes the latter three in
+// TokenInfo.Extra under fixed keys. SOL-149606 wires these into audit logs;
+// this test pins the contract between the verifier and the identity layer in
+// internal/tools.
+func Test_OIDCVerifier_PopulatesTokenInfo_AllClaims(t *testing.T) {
+	mock := newMockOIDCServer(t)
+	defer mock.close()
+
+	cfg := &config.ServerConfig{
+		ClientAuth: config.ClientAuthConfig{
+			Mode:     config.AuthModeOAuth,
+			Issuer:   mock.issuer,
+			Audience: mock.audience,
+		},
+	}
+
+	verifier, err := NewTokenVerifier(cfg)
+	if err != nil {
+		t.Fatalf("NewTokenVerifier: %v", err)
+	}
+
+	token, err := mock.createToken(map[string]interface{}{
+		"sub":       "user-42",
+		"client_id": "cursor-ide",
+		"jti":       "jti-abc-123",
+	})
+	if err != nil {
+		t.Fatalf("createToken: %v", err)
+	}
+
+	info, err := verifier(context.Background(), token, nil)
+	if err != nil {
+		t.Fatalf("verifier returned error: %v", err)
+	}
+
+	if info.UserID != "user-42" {
+		t.Errorf("UserID = %q, want %q", info.UserID, "user-42")
+	}
+	if got := info.Extra["iss"]; got != mock.issuer {
+		t.Errorf("Extra[iss] = %v, want %q", got, mock.issuer)
+	}
+	if got := info.Extra["client_id"]; got != "cursor-ide" {
+		t.Errorf("Extra[client_id] = %v, want %q", got, "cursor-ide")
+	}
+	if got := info.Extra["jti"]; got != "jti-abc-123" {
+		t.Errorf("Extra[jti] = %v, want %q", got, "jti-abc-123")
+	}
+}
+
+// Test_OIDCVerifier_MissingOptionalClaims_LeftEmptyString verifies that when
+// the IdP omits optional claims (jti, client_id), the verifier still
+// populates the Extra keys — with empty string values. The identity layer
+// normalizes empty to "<absent>" for audit logs; this test pins that the keys
+// are always present in Extra so the normalizer has something to read.
+func Test_OIDCVerifier_MissingOptionalClaims_LeftEmptyString(t *testing.T) {
+	mock := newMockOIDCServer(t)
+	defer mock.close()
+
+	cfg := &config.ServerConfig{
+		ClientAuth: config.ClientAuthConfig{
+			Mode:     config.AuthModeOAuth,
+			Issuer:   mock.issuer,
+			Audience: mock.audience,
+		},
+	}
+
+	verifier, err := NewTokenVerifier(cfg)
+	if err != nil {
+		t.Fatalf("NewTokenVerifier: %v", err)
+	}
+
+	// Token with no client_id, no jti — only the required claims set by
+	// createToken (sub, iss, aud, exp, iat).
+	token, err := mock.createToken(map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("createToken: %v", err)
+	}
+
+	info, err := verifier(context.Background(), token, nil)
+	if err != nil {
+		t.Fatalf("verifier returned error: %v", err)
+	}
+
+	// Required claim — iss is set by the mock to the issuer URL.
+	if got := info.Extra["iss"]; got != mock.issuer {
+		t.Errorf("Extra[iss] = %v, want %q", got, mock.issuer)
+	}
+	// Missing claims unmarshal to the zero value of their Go type (string→"").
+	// The Extra key MUST still be present — identity normalization depends on
+	// reading the key, not on probing for its existence.
+	for _, key := range []string{"client_id", "jti"} {
+		v, ok := info.Extra[key]
+		if !ok {
+			t.Errorf("Extra[%q] missing — verifier should always set the key", key)
+			continue
+		}
+		if s, isString := v.(string); !isString || s != "" {
+			t.Errorf("Extra[%q] = %v (%T), want \"\"", key, v, v)
+		}
+	}
+}
+
 func Test_oidcHTTPClient_SSLCertFile(t *testing.T) {
 	// Set up an HTTPS OIDC discovery server with a self-signed cert.
 	var tlsServer *httptest.Server
@@ -764,13 +1099,16 @@ func Test_oidcHTTPClient_SSLCertFile(t *testing.T) {
 	os.WriteFile(unreadableFile, []byte("data"), 0000)
 
 	// Table-driven: verify oidcHTTPClient returns the expected result per branch.
+	// oidcHTTPClient always returns a bounded client on success, including when
+	// SSL_CERT_FILE is unset, so the JWKS-refresh timeout (SOL-150219) applies
+	// on every code path. It returns (nil, err) only on a cert-loading failure.
 	clientTests := []struct {
 		name      string
 		envValue  string
 		wantNil   bool
 		wantError bool
 	}{
-		{"env empty", "", true, false},
+		{"env empty", "", false, false},
 		{"nonexistent file", "/no/such/file.crt", true, true},
 		{"unreadable file", unreadableFile, true, true},
 		{"non-PEM contents", garbageFile, true, true},
@@ -791,6 +1129,13 @@ func Test_oidcHTTPClient_SSLCertFile(t *testing.T) {
 			}
 			if !tt.wantNil && client == nil {
 				t.Error("expected non-nil client")
+			}
+			// Invariant (SOL-150219): every client oidcHTTPClient hands back
+			// must carry the bound. This is the cheap guard against anyone
+			// reintroducing an unbounded OIDC client on either branch.
+			if client != nil && client.Timeout != oidcHTTPClientTimeout {
+				t.Errorf("client.Timeout = %v, want %v (OIDC client must be bounded)",
+					client.Timeout, oidcHTTPClientTimeout)
 			}
 		})
 	}
