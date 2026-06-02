@@ -333,17 +333,15 @@ tools:
 
   - name: list-slow-subscribers
     description: >
-      List clients in a Message VPN flagged with the broker's slowSubscriber
+      Lists clients in a Message VPN flagged with the broker's slowSubscriber
       flag. Narrow signal: fires when the broker has data to send but the
       client's TCP receive window has been closed for several seconds in the
       last minute — primarily catches direct-messaging or replication-bridge
       backpressure. Does NOT flip for slow guaranteed-message consumers (slow
       to ACK), because the broker self-throttles via the transmit window
       before TCP egress can stall. To find slow guaranteed consumers, use
-      list-queues / get-queue-metrics and look for queues with growing
-      spooledMsgCount, high txUnackedMsgCount, bindCount > 0, and rxMsgRate
-      > txMsgRate. Server-side filtered via SEMP where clause — only matching
-      clients are returned.
+      list-queues / get-queue-metrics. Server-side filtered via SEMP where
+      clause — only matching clients are returned.
     annotations:
       readOnly: true
     parameters:
