@@ -62,9 +62,14 @@ tools:
 
   - name: get-queue-metrics
     description: >
-      Get detailed metrics for a specific queue including message depth,
-      throughput rates, spool usage, and configuration. Use this to diagnose
-      queue backlogs and identify whether consumers are bound and active.
+      Get detailed metrics for a queue: spooledMsgCount, txUnackedMsgCount,
+      bindCount, rxMsgRate, txMsgRate, redelivery counts, congestion state, and
+      spool usage. Use this to diagnose queue backlogs. Primary signal for
+      detecting a slow guaranteed-message consumer: spooledMsgCount growing AND
+      bindCount > 0 AND rxMsgRate > txMsgRate AND txUnackedMsgCount near the
+      per-flow unacked limit. The per-client slowSubscriber field does not flip
+      for slow ACKs, so this tool — not get-client-details — is the right
+      starting point.
     annotations:
       readOnly: true
     parameters:
@@ -82,15 +87,20 @@ tools:
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           queueName: "{{.Params.queueName}}"
-          select: "accessType, averageRxMsgRate, averageTxMsgRate, bindCount, durable, egressEnabled, ingressEnabled, lowPriorityMsgCongestionState, maxBindCount, maxMsgSize, maxMsgSpoolUsage, maxMsgSpoolUsageExceededDiscardedMsgCount, maxRedeliveryCount, maxRedeliveryExceededDiscardedMsgCount, maxTtl, maxTtlExceededDiscardedMsgCount, msgSpoolUsage, msgVpnName, noLocalDeliveryDiscardedMsgCount, owner, queueName, redeliveredMsgCount, rxByteRate, rxMsgRate, spooledMsgCount, txByteRate, txMsgRate, txUnackedMsgCount"
+          select: "accessType, averageRxMsgRate, averageTxMsgRate, bindCount, durable, egressEnabled, ingressEnabled, lowPriorityMsgCongestionState, maxBindCount, maxDeliveredUnackedMsgsPerFlow, maxMsgSize, maxMsgSpoolUsage, maxMsgSpoolUsageExceededDiscardedMsgCount, maxRedeliveryCount, maxRedeliveryExceededDiscardedMsgCount, maxTtl, maxTtlExceededDiscardedMsgCount, msgSpoolUsage, msgVpnName, noLocalDeliveryDiscardedMsgCount, owner, queueName, redeliveredMsgCount, rxByteRate, rxMsgRate, spooledMsgCount, txByteRate, txMsgRate, txUnackedMsgCount"
     result:
       strategy: collect
 
   - name: get-client-details
     description: >
-      Get performance metrics for a specific connected client including message
-      rates, slow subscriber status, and egress discard counts. Use this to
-      diagnose slow consumer issues and backpressure problems.
+      Get per-client performance metrics including the slowSubscriber field.
+      slowSubscriber=true means the broker's TCP egress to the client has been
+      blocked for several seconds in the last minute (TCP window closed);
+      primarily catches slow direct-messaging clients. slowSubscriber=false does
+      not rule out slow consumers — for slow guaranteed-message consumers (slow
+      to ACK), use get-queue-metrics: a queue with growing spooledMsgCount, high
+      txUnackedMsgCount, and rxMsgRate > txMsgRate while bindCount > 0 indicates
+      consumer-side slowness.
     annotations:
       readOnly: true
     parameters:
@@ -190,10 +200,13 @@ tools:
 
   - name: list-queues
     description: >
-      List queues in a Message VPN with depth, bind count, and throughput
-      rates. Returns up to 100 by default (max 500 via maxResults). Use this
-      to get an overview of queue health across a VPN and identify queues with
-      backlogs or no consumers.
+      List queues in a VPN with depth (spooledMsgCount), unacked count
+      (txUnackedMsgCount), bindCount, congestion state, and rates. Returns up to
+      100 by default (max 500 via maxResults). Primary VPN-wide scan for slow
+      guaranteed-message consumers: queues with spooledMsgCount growing,
+      txUnackedMsgCount high, rxMsgRate > txMsgRate, and bindCount > 0 indicate
+      consumer-side slowness even when slowSubscriber is false on the bound
+      client.
     annotations:
       readOnly: true
     parameters:
@@ -218,10 +231,13 @@ tools:
 
   - name: list-clients
     description: >
-      List active client connections in a Message VPN with connection
-      details, uptime, and slow subscriber status. Returns up to 100 by
-      default (max 500 via maxResults). Use this to discover which clients
-      are connected and identify slow or stalled consumers.
+      List active clients in a VPN with rates, uptime, and the slowSubscriber
+      field. Returns up to 100 by default (max 500 via maxResults).
+      slowSubscriber=true flags TCP-egress stalls (mainly relevant to direct
+      messaging) — it does not flip for slow guaranteed-message consumers. To
+      scan a VPN for slow guaranteed consumers, use list-queues and look for
+      queues with growing spooledMsgCount, high txUnackedMsgCount, and rxMsgRate
+      > txMsgRate while bindCount > 0.
     annotations:
       readOnly: true
     parameters:
