@@ -29,6 +29,23 @@ const DefaultShutdownTimeoutSeconds = 30
 // Terraform provider convention.
 const DefaultSEMPRequestTimeoutDuration = time.Minute
 
+// DefaultOIDCHTTPTimeout bounds the HTTP client used by go-oidc for both
+// startup discovery and lazy JWKS refresh during token verification.
+// Without a hard ceiling, a slow or hung identity provider can wedge the
+// JWKS-refresh goroutine indefinitely (the goroutine survives caller
+// cancellation via context.WithoutCancel) and stall per-request token
+// verification past the inbound request's own server-side deadlines.
+//
+// Decided: 10 seconds.
+// Reasoning: a healthy JWKS fetch is sub-100ms; 10s gives ~100x headroom
+// while staying at or below DefaultReadTimeoutSeconds=30, so the inbound
+// MCP request still has time to respond before its own server-side bound
+// fires. Matches DefaultReadHeaderTimeoutSeconds=10.
+// Trade-off: a legitimately slow IdP (multi-second response) will cause
+// auth to fail closed. Accepted — the inbound request was going to time
+// out anyway.
+const DefaultOIDCHTTPTimeout = 10 * time.Second
+
 // MaxSEMPResponseBytes caps the in-memory buffering of a broker's SEMP
 // response body. Without this cap, a misbehaving broker or a man-in-the-
 // middle could stream gigabytes of data within the request timeout and OOM

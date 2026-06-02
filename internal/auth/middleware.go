@@ -28,10 +28,16 @@ import (
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"github.com/coreos/go-oidc/v3/oidc"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
 )
+
+// oidcHTTPClientTimeout bounds the HTTP client injected into go-oidc for both
+// startup discovery and lazy JWKS refresh. Package-private to allow tests to
+// override with a shorter value; production reads defaults.DefaultOIDCHTTPTimeout.
+var oidcHTTPClientTimeout = defaults.DefaultOIDCHTTPTimeout
 
 func NewAuthMiddleware(cfg *config.ServerConfig, next http.Handler) (http.Handler, error) {
 	// Auth backend selection mirrors client_auth.mode. Insecure-mode signaling
@@ -103,18 +109,20 @@ func createStaticTokenVerifier(expectedToken string) sdkauth.TokenVerifier {
 // createOIDCTokenVerifier creates a TokenVerifier that validates JWTs using OIDC.
 // It fetches public keys from the issuer's JWKS endpoint and handles automatic key rotation.
 func createOIDCTokenVerifier(cfg *config.ServerConfig) (sdkauth.TokenVerifier, error) {
-	// Create OIDC provider - fetches .well-known/openid-configuration and JWKS
-	// Use a timeout to fail fast if the issuer is unreachable
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
+	// oidcHTTPClient always returns a client bounded by oidcHTTPClientTimeout,
+	// so attaching it here covers both startup discovery and the lazy JWKS
+	// refresh path (RemoteKeySet, triggered by an unknown kid). The discovery
+	// deadline below caps total discovery time; http.Client.Timeout caps each
+	// individual request and is the only bound that reaches lazy refresh
+	// (go-oidc's RemoteKeySet strips cancellation from the construction context
+	// via WithoutCancel).
 	httpClient, err := oidcHTTPClient()
 	if err != nil {
 		return nil, err
 	}
-	if httpClient != nil {
-		ctx = oidc.ClientContext(ctx, httpClient)
-	}
+	clientCtx := oidc.ClientContext(context.Background(), httpClient)
+	ctx, cancel := context.WithTimeout(clientCtx, 30*time.Second)
+	defer cancel()
 
 	oidcProvider, err := oidc.NewProvider(ctx, cfg.ClientAuth.Issuer)
 	if err != nil {
@@ -171,15 +179,24 @@ func createOIDCTokenVerifier(cfg *config.ServerConfig) (sdkauth.TokenVerifier, e
 	}, nil
 }
 
-// oidcHTTPClient returns a custom HTTP client that trusts the CA bundle in
-// SSL_CERT_FILE, or (nil, nil) when that variable is unset. On macOS and
-// Windows, Go's default TLS verification delegates to the OS-native trust
-// store and ignores SSL_CERT_FILE; an explicit RootCAs pool bypasses that
-// delegation so the env var works consistently on every platform.
+// oidcHTTPClient returns an HTTP client for OIDC discovery and JWKS refresh.
+// The client is always bounded by oidcHTTPClientTimeout so that neither
+// startup discovery nor lazy JWKS refresh can wedge on a slow or hung IdP
+// (SOL-150219). When SSL_CERT_FILE is set the client additionally trusts that
+// CA bundle: on macOS and Windows, Go's default TLS verification delegates to
+// the OS-native trust store and ignores SSL_CERT_FILE, so an explicit RootCAs
+// pool bypasses that delegation and makes the env var work consistently on
+// every platform.
+//
+// This is the single place the OIDC client's timeout is established; callers
+// must attach the returned client via oidc.ClientContext rather than building
+// their own, so the bound cannot be silently dropped.
 func oidcHTTPClient() (*http.Client, error) {
+	client := &http.Client{Timeout: oidcHTTPClientTimeout}
+
 	certFile := os.Getenv("SSL_CERT_FILE")
 	if certFile == "" {
-		return nil, nil
+		return client, nil
 	}
 	certPEM, err := os.ReadFile(filepath.Clean(certFile))
 	if err != nil {
@@ -194,7 +211,8 @@ func oidcHTTPClient() (*http.Client, error) {
 	}
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.TLSClientConfig = &tls.Config{RootCAs: pool}
-	return &http.Client{Transport: t}, nil
+	client.Transport = t
+	return client, nil
 }
 
 // NewProtectedResourceMetadataHandler creates an HTTP handler that serves
