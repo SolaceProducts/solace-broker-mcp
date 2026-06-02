@@ -39,6 +39,8 @@ func main() {
 		os.Exit(runPublisher(args))
 	case "publish-batch":
 		os.Exit(runPublishBatch(args))
+	case "slow-consumer":
+		os.Exit(runSlowConsumer(args))
 	case "-h", "--help", "help":
 		usage()
 		os.Exit(0)
@@ -57,7 +59,8 @@ Usage: broker-driver <subcommand> [flags]
 Subcommands:
   connected-client    F3: persistent receiver + client subscriptions, idles until signal
   publisher           F4: persistent publisher at fixed rate, idles until signal
-  publish-batch       F6: one-shot persistent publisher, exits after --count messages sent`)
+  publish-batch       F6: one-shot persistent publisher, exits after --count messages sent
+  slow-consumer       F5: fast publisher + slow client-ack queue consumer, idles until signal`)
 }
 
 // fatalf prints to stderr and exits non-zero. Used by subcommands to surface
