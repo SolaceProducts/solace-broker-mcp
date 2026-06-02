@@ -430,10 +430,11 @@ tools:
     steps:
       - id: subscriptions
         operation: monitor/getMsgVpnClientSubscriptions
+        followPages: true
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           clientName: "{{.Params.clientName}}"
-          count: '{{with index .Params "maxResults"}}{{.}}{{else}}100{{end}}'
+          count: "100"
     result:
       strategy: collect
 `
@@ -476,10 +477,11 @@ tools:
 	if tool.Steps[0].Operation != "monitor/getMsgVpnClientSubscriptions" {
 		t.Errorf("expected operation %q, got %q", "monitor/getMsgVpnClientSubscriptions", tool.Steps[0].Operation)
 	}
-
-	// Verify the count template arg is present.
-	if _, ok := tool.Steps[0].Args["count"]; !ok {
-		t.Error("expected count arg in step, not found")
+	if !tool.Steps[0].FollowPages {
+		t.Error("expected FollowPages=true for list-client-subscriptions step")
+	}
+	if tool.Steps[0].Args["count"] != "100" {
+		t.Errorf("expected count arg %q, got %q", "100", tool.Steps[0].Args["count"])
 	}
 }
 

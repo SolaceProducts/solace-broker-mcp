@@ -220,12 +220,13 @@ func listClientSubscriptionsTool() CompositeTool {
 		},
 		Steps: []Step{
 			{
-				ID:        "subscriptions",
-				Operation: "monitor/getMsgVpnClientSubscriptions",
+				ID:          "subscriptions",
+				Operation:   "monitor/getMsgVpnClientSubscriptions",
+				FollowPages: true,
 				Args: map[string]string{
 					"msgVpnName": "{{.Params.msgVpnName}}",
 					"clientName": "{{.Params.clientName}}",
-					"count":      `{{with index .Params "maxResults"}}{{.}}{{else}}100{{end}}`,
+					"count":      "100",
 				},
 			},
 		},
@@ -761,88 +762,162 @@ func TestExecute_GetClientDetails_NotFound(t *testing.T) {
 	}
 }
 
+// makeSubscriptionItems builds a slice of n mock subscription objects for use in paginated responses.
+func makeSubscriptionItems(n int) []any {
+	items := make([]any, n)
+	for i := range items {
+		items[i] = map[string]any{
+			"subscriptionTopic": fmt.Sprintf("topic/%d/>", i),
+			"clientName":        "myapp/1",
+		}
+	}
+	return items
+}
+
 func TestExecute_ListClientSubscriptions_ReturnsData(t *testing.T) {
-	client := newMockClient()
-	client.responses["getMsgVpnClientSubscriptions"] = &sempv2.Result{
-		Data: map[string]any{
-			"data": []any{
-				map[string]any{"subscriptionTopic": "orders/>", "clientName": "myapp/1"},
-				map[string]any{"subscriptionTopic": "inventory/>", "clientName": "myapp/1"},
-			},
-		},
-		StatusCode: 200,
-	}
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnClientSubscriptions", pageResult(makeSubscriptionItems(2), ""))
 
 	executor := NewCompositeExecutor(testOperations())
 
-	params := map[string]any{
+	result, err := executor.Execute(context.Background(), listClientSubscriptionsTool(), client, map[string]any{
 		"msgVpnName": "default",
 		"clientName": "myapp/1",
-	}
-
-	result, err := executor.Execute(context.Background(), listClientSubscriptionsTool(), client, params)
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if result["subscriptions"] == nil {
-		t.Fatal("expected subscriptions key in result, got nil")
+	subs := result["subscriptions"].(map[string]any)
+	items := subs["data"].([]any)
+
+	if len(items) != 2 {
+		t.Errorf("len(items) = %d, want 2", len(items))
+	}
+	if subs["truncated"] != false {
+		t.Errorf("truncated = %v, want false", subs["truncated"])
 	}
 }
 
-func TestExecute_ListClientSubscriptions_PassesMaxResults(t *testing.T) {
-	client := newMockClient()
+func TestExecute_ListClientSubscriptions_DefaultMaxResults(t *testing.T) {
+	// 80 subscriptions on a single page, fits within the default 100 limit.
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnClientSubscriptions", pageResult(makeSubscriptionItems(80), ""))
+
 	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listClientSubscriptionsTool(), client, map[string]any{
+		"msgVpnName": "default",
+		"clientName": "myapp/1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	subs := result["subscriptions"].(map[string]any)
+	items := subs["data"].([]any)
+
+	if len(items) != 80 {
+		t.Errorf("len(items) = %d, want 80", len(items))
+	}
+	if subs["truncated"] != false {
+		t.Errorf("truncated = %v, want false", subs["truncated"])
+	}
+}
+
+func TestExecute_ListClientSubscriptions_MultiPage(t *testing.T) {
+	// Page 1: 100 subscriptions + cursor; page 2: 30 subscriptions, no cursor. Total: 130.
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnClientSubscriptions",
+		pageResult(makeSubscriptionItems(100), "cursor-s2"),
+		pageResult(makeSubscriptionItems(30), ""),
+	)
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listClientSubscriptionsTool(), client, map[string]any{
+		"msgVpnName": "default",
+		"clientName": "myapp/1",
+		"maxResults": float64(200),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	subs := result["subscriptions"].(map[string]any)
+	items := subs["data"].([]any)
+
+	if len(items) != 130 {
+		t.Errorf("len(items) = %d, want 130", len(items))
+	}
+	if subs["truncated"] != false {
+		t.Errorf("truncated = %v, want false", subs["truncated"])
+	}
+	if len(client.calls) != 2 {
+		t.Errorf("expected 2 SEMP calls, got %d", len(client.calls))
+	}
+}
+
+func TestExecute_ListClientSubscriptions_TruncatesAtMaxResults(t *testing.T) {
+	// Page has 100 items but maxResults=50 — paginator should stop and set truncated.
+	// Regression test: the previous tool definition silently capped at one SEMP page
+	// without signalling truncation, hiding subscriptions from the agent.
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnClientSubscriptions", pageResult(makeSubscriptionItems(100), "cursor-next"))
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listClientSubscriptionsTool(), client, map[string]any{
+		"msgVpnName": "default",
+		"clientName": "myapp/1",
+		"maxResults": float64(50),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	subs := result["subscriptions"].(map[string]any)
+	items := subs["data"].([]any)
+
+	if len(items) != 50 {
+		t.Errorf("len(items) = %d, want 50", len(items))
+	}
+	if subs["truncated"] != true {
+		t.Errorf("truncated = %v, want true", subs["truncated"])
+	}
+	wantMsg := "Results limited to 50. Use maxResults (up to 500) to retrieve more."
+	if subs["truncatedMessage"] != wantMsg {
+		t.Errorf("truncatedMessage = %v, want %q", subs["truncatedMessage"], wantMsg)
+	}
+}
+
+func TestExecute_ListClientSubscriptions_FixedCountOnWire(t *testing.T) {
+	// Regression test: count must always be "100" on the SEMP wire regardless of
+	// maxResults. The earlier tool definition piped maxResults straight into count,
+	// which exceeds SEMPv2's per-page cap of 100 and produced 400 errors at higher
+	// values.
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnClientSubscriptions", pageResult(makeSubscriptionItems(10), ""))
 
 	var recorded []callRecord
 	var mu sync.Mutex
 	capture := &argCapturingClient{inner: client, recorded: &recorded, mu: &mu}
 
-	params := map[string]any{
-		"msgVpnName": "default",
-		"clientName": "myapp/1",
-		"maxResults": 50,
-	}
-
-	_, err := executor.Execute(context.Background(), listClientSubscriptionsTool(), capture, params)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(recorded) != 1 {
-		t.Fatalf("expected 1 call, got %d", len(recorded))
-	}
-
-	if recorded[0].args["count"] != "50" {
-		t.Errorf("expected count %q, got %v", "50", recorded[0].args["count"])
-	}
-}
-
-func TestExecute_ListClientSubscriptions_DefaultsCountQuery(t *testing.T) {
-	client := newMockClient()
 	executor := NewCompositeExecutor(testOperations())
-
-	var recorded []callRecord
-	var mu sync.Mutex
-	capture := &argCapturingClient{inner: client, recorded: &recorded, mu: &mu}
-
-	// maxResults is intentionally absent — executor should default count to "100".
-	params := map[string]any{
+	_, err := executor.Execute(context.Background(), listClientSubscriptionsTool(), capture, map[string]any{
 		"msgVpnName": "default",
 		"clientName": "myapp/1",
-	}
-
-	_, err := executor.Execute(context.Background(), listClientSubscriptionsTool(), capture, params)
+		"maxResults": float64(500),
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(recorded) != 1 {
-		t.Fatalf("expected 1 call, got %d", len(recorded))
+	if len(recorded) < 1 {
+		t.Fatalf("expected at least 1 call, got %d", len(recorded))
 	}
-
 	if recorded[0].args["count"] != "100" {
-		t.Errorf("expected count to default to %q, got %v", "100", recorded[0].args["count"])
+		t.Errorf("expected count %q on the wire, got %v", "100", recorded[0].args["count"])
 	}
 }
 
