@@ -103,6 +103,12 @@ func TestHandler_Metadata(t *testing.T) {
 	if _, hasRequired := meta.InputSchema["required"]; hasRequired {
 		t.Error("vpnName must be optional — required should not be set")
 	}
+	// minLength: 1 makes empty strings fail upstream validation so the tool
+	// can't silently downgrade to broker-wide when the caller intended a
+	// specific VPN. Pin it so a future schema refactor can't relax this.
+	if vpnProp["minLength"] != 1 {
+		t.Errorf(`vpnName.minLength = %v, want 1 — empty strings must be rejected upstream`, vpnProp["minLength"])
+	}
 
 	if meta.OutputSchema["type"] != "object" {
 		t.Errorf(`OutputSchema["type"] = %v, want "object"`, meta.OutputSchema["type"])
@@ -246,9 +252,12 @@ func TestHandle_PerVPN_Success(t *testing.T) {
 	}
 }
 
-// TestHandle_EmptyVpnName_FallsBackToBrokerWide guards against an LLM passing
-// vpnName="" by accident: an empty string should NOT scope to a single VPN
-// (the broker would reject it), but instead fall through to broker-wide.
+// TestHandle_EmptyVpnName_FallsBackToBrokerWide is the defense-in-depth
+// behavior: the InputSchema's minLength:1 rejects empty vpnName upstream so
+// production callers can never reach this branch, but if validation is
+// bypassed (e.g. a direct Go caller, or a buggy validator), Handle still
+// does the safe thing by falling through to broker-wide rather than
+// issuing a per-VPN RPC with an empty name.
 func TestHandle_EmptyVpnName_FallsBackToBrokerWide(t *testing.T) {
 	h := NewHandler()
 	stub := &fixtureClient{}

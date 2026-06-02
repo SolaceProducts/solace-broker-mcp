@@ -99,28 +99,32 @@ func NewHandler() *Handler {
 func (h *Handler) Metadata() tools.Metadata {
 	return tools.Metadata{
 		Name: toolName,
-		Description: "Returns pre-aggregated message discard counters from " +
-			"the broker. Without vpnName, returns broker-wide totals across " +
-			"two categories: client-level discards (ingress/egress — no " +
-			"subscription match, topic-parse errors, msg-too-big, TTL " +
-			"exceeded, transmit congestion, client-not-connected, etc.) " +
-			"and spool-level discards (max-redelivery exceeded, TTL " +
-			"expired to DMQ, spool/queue over quota, max-msg-size " +
-			"exceeded, replication-standby discards, etc.). With vpnName, " +
-			"returns only client-level discards scoped to that VPN — the " +
-			"broker does not expose per-VPN spool discards via SEMPv1. " +
-			"Use this for broker-level health checks (\"are we dropping " +
-			"messages anywhere?\"); use list-queue-discards for per-queue " +
-			"breakdowns.",
+		Description: "Returns pre-aggregated message discard counters. " +
+			"Important: SEMPv1 exposes spool-level discards (max-redelivery " +
+			"exceeded, TTL expired to DMQ, spool/queue over quota, " +
+			"max-msg-size exceeded, replication-standby discards, etc.) " +
+			"only at broker-wide scope — there is no per-VPN spool " +
+			"breakdown. To answer \"how many messages did VPN X drop at " +
+			"the spool/queue layer?\", use list-queue-discards instead. " +
+			"Without vpnName: returns broker-wide totals — client-level " +
+			"discards (ingress/egress: no-subscription-match, topic-parse " +
+			"errors, msg-too-big, TTL exceeded, transmit congestion, " +
+			"client-not-connected, etc.) plus the broker-wide spool-level " +
+			"discards. With vpnName: returns only client-level discards " +
+			"scoped to that VPN. Use this for broker-level health checks " +
+			"(\"are we dropping messages anywhere?\").",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"vpnName": map[string]any{
-					"type": "string",
+					"type":      "string",
+					"minLength": 1,
 					"description": "Optional. If provided, scopes the discard " +
 						"counts to a single Message VPN (client-level only). " +
 						"If omitted, returns broker-wide totals including " +
-						"spool-level discards.",
+						"spool-level discards. Must be non-empty when " +
+						"present — empty strings are rejected so the tool " +
+						"never silently downgrades to broker-wide.",
 				},
 			},
 		},
