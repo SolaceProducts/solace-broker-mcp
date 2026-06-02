@@ -893,6 +893,26 @@ mcp_request() {
     echo "$raw" | grep '^data: ' | sed 's/^data: //'
 }
 
+# Unwraps the tool payload from the JSON-RPC envelope returned by mcp_call_tool.
+# A tool's real output is escaped JSON nested in .result.content[0].text; this
+# returns that inner payload so assertions can run assert_json_field against the
+# tool's structured output rather than substring-matching the whole envelope.
+#   response=$(mcp_call_tool "get-vpn-health" "$args")
+#   content=$(extract_content "$response")
+#   assert_json_field "$content" ".enabled" "false"
+extract_content() {
+    # Surface JSON-RPC errors inline. Without this, an error envelope
+    # ({"error":{...}} instead of {"result":...}) makes the jq below emit the
+    # literal "null", and the caller's assertion fails with a cryptic
+    # "Actual: null" that hides the real tool/broker error. log_fail writes to
+    # stderr, so the stdout payload contract is unchanged and callers need no
+    # update — the error just appears in the log next to the assertion failure.
+    local err
+    err=$(jq -r '.error.message // empty' <<<"$1")
+    [ -n "$err" ] && log_fail "MCP call returned error: $err"
+    jq -r '.result.content[0].text' <<<"$1"
+}
+
 # ── Assertions ───────────────────────────────────────────────────────────────
 
 assert_contains() {
