@@ -251,8 +251,8 @@ Then in your SAM project, add an MCP-tooled agent that points at this server wit
 Example queries through the SAM web UI:
 
 ```
-What brokers are configured?
-List the queues on broker-one's default VPN.
+What event brokers are configured?
+List the queues on event-broker-one's default VPN.
 ```
 
 ## Development Setup

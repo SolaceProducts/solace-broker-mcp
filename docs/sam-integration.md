@@ -86,7 +86,7 @@ Agent card tool manifest populated with 14 tools.
 Registered new agent 'SolaceBrokerAgent' in registry.
 ```
 
-Open the SAM web UI (`http://localhost:8000`) and ask the orchestrator a broker-related question — it delegates to the `SolaceBrokerAgent`, which calls the MCP tools.
+Open the SAM web UI (`http://localhost:8000`) and ask the orchestrator a broker-related question — the orchestrator delegates to the `SolaceBrokerAgent`, which calls the MCP tools.
 
 ## Authentication Chain
 
