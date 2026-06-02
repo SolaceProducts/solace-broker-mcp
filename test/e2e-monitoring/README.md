@@ -36,7 +36,7 @@ All fixtures apply to both brokers in parallel (`solace-e2e-mon-a`,
 tools run against the base fixture copied from `e2e-basic-mcp` — no new
 fixture needed.
 
-F1, F2, F3, F4, and F6 are implemented today, driven by the
+F1, F2, F3, F4, F5, and F6 are implemented today, driven by the
 `broker-driver` binary for the client-bearing fixtures (F3–F6).
 
 | ID       | Status      | Fixture                  | Required broker state                                                                                                                                  | Lifecycle                          | MCP tools supported                                                                |
@@ -45,12 +45,14 @@ F1, F2, F3, F4, and F6 are implemented today, driven by the
 | F2       | Implemented | Multi-queue              | `test-queue-2` (bound to a test RDP) and `test-queue-3` (unbound), both non-exclusive on default VPN                                                   | one-shot SEMP                      | `list-queues` (multi-entry + pagination), `get-queue-metrics` (named-object lookup) |
 | F3       | Implemented | Connected client         | One long-lived persistent receiver per broker on default VPN with deterministic `clientName` and ≥1 named topic subscription. **Verification:** client appears in `list-clients` and reports the expected subscription. | background broker-driver | `list-clients`, `get-client-details`, `list-client-subscriptions`                  |
 | F4       | Implemented | Sustained traffic        | Publisher targets 100 msg/s, 256-byte payload, persistent; broker observes ~92 msg/s sustained after ~5 s settle. **Verification:** `rxMsgRate ≥ 80` and `txMsgRate ≥ 80` after 25 s of fixture runtime. | background broker-driver | `get-message-rates`                                                                |
+| F5       | Implemented | Slow guaranteed consumer | Queue `test-queue-slow-consumer` (`maxDeliveredUnackedMsgsPerFlow=10`) fed fast while a queue-bound receiver ACKs every 2 s, so unacked pins at the per-flow ceiling and the spool backs up. **Verification (queue-level signals, not client `slowSubscriber` — SOL-150328/SOL-150344):** `bindCount > 0`, `txUnackedMsgCount ≥ 10`, `rxMsgRate > txMsgRate`, and `spooledMsgCount` growing across two samples. | background broker-driver | `get-queue-metrics`, `list-queues` |
 | F6-spool | Implemented | Discards via spool quota | Queue `test-queue-discards-spool` with `maxMsgSpoolUsage=1 MB` + `egressEnabled=false`; one-shot publish ~2 MB. **Verification:** `maxMsgSpoolUsageExceededDiscardedMsgCount > 0` after one-shot publish. | one-shot SEMP + one-shot broker-driver publish | `get-discard-stats`              |
 | F6-ttl   | Implemented | Discards via TTL expiry  | Queue `test-queue-discards-ttl` with `maxTtl=1 s` + no consumer; one-shot publish + 2 s wait. **Verification:** `maxTtlExpiredDiscardedMsgCount > 0` after one-shot publish. | one-shot SEMP + one-shot broker-driver publish | `get-discard-stats`                         |
 
 Activation order is deterministic: F1 and F2 (SEMP-only) before F3/F4
-(client-bearing). F6 runs in parallel — its queues are independent of the
-others.
+(client-bearing). F5 and F6 follow F3/F4 — each owns a dedicated queue
+independent of the others. F5's consumer binds to its queue, so teardown reaps
+the broker-driver before deleting the queue (see Cleanup order).
 
 ## Build prerequisites
 
@@ -58,9 +60,7 @@ The `broker-driver` binary links the Solace Go messaging client
 (`solace.dev/go/messaging`), which depends on a native library. CGO must be
 available. On Linux the native library (including its OpenSSL dependency) is
 statically linked, so only a C compiler is required — no `libssl-dev`, and the
-built binary has no `libssl`/`libcrypto` runtime dependency. The `mcp-tester`
-binary is pure Go and has no native dependencies — anyone working only on
-MCP-tool testing can skip this section.
+built binary has no `libssl`/`libcrypto` runtime dependency.
 
 | Platform                                          | Needed                       | Install                                                                                       |
 | ------------------------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------- |
@@ -77,20 +77,17 @@ the OpenSSL headers) is missing.
 The shell harness also requires `jq` for JSON assertions in the standalone
 scenario (Linux: `sudo apt-get install jq`, macOS: `brew install jq`).
 
-## Two binaries
+## broker-driver binary
 
-The suite ships two Go programs, each in its own directory with its own
-`go.mod`:
+The suite ships one Go program in its own directory with its own `go.mod`:
 
-- **`mcp-tester/`** — connects to the MCP server, calls tools, verifies the
-  responses. Pure Go.
 - **`broker-driver/`** — connects directly to the Solace brokers via the
   Solace messaging client. Publishes, consumes, and sustains traffic to
   produce the broker states the monitoring tools observe. Requires the C
   library `libsolclient` at build time (see Build prerequisites).
 
-A developer working only on `mcp-tester/` does not need the `libsolclient`
-toolchain.
+The MCP tools themselves are exercised through the bash + `curl` helpers in
+`helpers.sh` (`mcp_call_tool`), not a dedicated Go client.
 
 ## Design note — broker-driver role
 
@@ -98,24 +95,13 @@ In [test/e2e-basic-mcp](../e2e-basic-mcp), MCP tool testing is the only job:
 a single binary (named `agent/` there, predating this suite's split) speaks
 the MCP protocol against the running server and validates tool responses.
 
-SOL-150024 adds a second binary — `broker-driver` — that produces **runtime
-broker activity** for fixtures F3–F6 (connected client, sustained publisher,
-publish-batch). This is a deliberate departure from the basic-mcp pattern
-because SEMP `curl` alone cannot produce messaging-layer state — only a real
-SMF client can open a connection or publish at a target rate.
-
-The two binaries share the same `.env`-derived broker credentials but are
-otherwise independent, so the heavy CGO dependency stays scoped to
-`broker-driver`.
-
-## mcp-tester invocation
-
-```
-mcp-tester <mcp-server-url>
-```
-
-Single argument — the MCP server URL. Speaks the MCP protocol against the
-running server and validates tool responses. No subcommands.
+SOL-150024 adds `broker-driver` — a binary that produces **runtime broker
+activity** for fixtures F3–F6 (connected client, sustained publisher,
+publish-batch, slow consumer). This is a deliberate departure from the
+basic-mcp pattern because SEMP `curl` alone cannot produce messaging-layer
+state — only a real SMF client can open a connection or publish at a target
+rate. The heavy CGO dependency stays scoped to `broker-driver`; the MCP-tool
+assertions run through plain `curl`.
 
 ## broker-driver CLI surface
 
@@ -130,6 +116,7 @@ broker-driver <subcommand> [flags]
 | `connected-client`  | F3 long-lived receiver               | `--broker {a\|b}`, `--vpn`, `--client-name`, `--queue`, `--subscriptions`                       | F3          | `list-clients`, `get-client-details`, `list-client-subscriptions`            |
 | `publisher`         | F4 sustained publisher               | `--broker`, `--vpn`, `--topic`, `--rate`, `--size`, `--message-type`, `--duration`              | F4          | `get-message-rates`                                                          |
 | `publish-batch`     | F6 one-shot publisher                | `--broker`, `--vpn`, `--topic`, `--count`, `--size`, `--rate`                                   | F6-spool, F6-ttl | `get-discard-stats`                                                     |
+| `slow-consumer`     | F5 fast publisher + slow consumer    | `--broker`, `--vpn`, `--queue`, `--topic`, `--rate`, `--size`, `--ack-delay`                     | F5          | `get-queue-metrics`, `list-queues`                                          |
 
 ### Common conventions
 
@@ -197,6 +184,19 @@ quota):
 ```bash
 ./bin/broker-driver publish-batch --broker=a --topic=t-discards-ttl --count=200 --size=256 --message-type=persistent
 ```
+
+`broker-driver slow-consumer` for F5 (fast publish into a queue + a queue-bound
+consumer that ACKs slowly, so the queue-level slow-consumer signals develop):
+
+```bash
+./bin/broker-driver slow-consumer \
+    --broker=a \
+    --queue=test-queue-slow-consumer \
+    --topic=e2e-monitoring/slow-consumer/topic \
+    --rate=100 --size=256 --ack-delay=2s
+```
+
+Long-running like F3/F4; `helpers.sh` reaps it via its pidfile during teardown.
 
 ## Empirical timing notes
 

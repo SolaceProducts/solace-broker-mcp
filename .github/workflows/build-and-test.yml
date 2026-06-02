@@ -65,7 +65,6 @@ jobs:
       - name: Vet
         run: |
           go vet ./...
-          (cd test/e2e-monitoring/mcp-tester && go vet ./...)
           (cd test/e2e-monitoring/broker-driver && go vet ./...)
 
       - name: Test

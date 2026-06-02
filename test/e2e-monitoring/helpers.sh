@@ -39,9 +39,9 @@ MCP_SERVER_PID=""
 # into /dev/null.
 MCP_SERVER_LOG="$BIN_DIR/mcp-server.log"
 
-# Static dev token used to authenticate every e2e curl/mcp-tester request to
+# Static dev token used to authenticate every e2e curl request to
 # the broker MCP server. Defined in .env (single source of truth); exported
-# here so child processes (mcp-tester) see it. write_config() and
+# here so child processes see it. write_config() and
 # broker-config.yaml reference it as ${MCP_DEV_TOKEN} so the server's env
 # substitution resolves it at config load.
 export MCP_DEV_TOKEN
@@ -171,12 +171,6 @@ build_server() {
     log_info "Building MCP server binary ..."
     (cd "$REPO_ROOT" && go build -o "$BIN_DIR/mcp-server" ./cmd/server)
     log_info "Server binary built: $BIN_DIR/mcp-server"
-}
-
-build_mcp_tester() {
-    log_info "Building mcp-tester binary ..."
-    (cd "$SCRIPT_DIR/mcp-tester" && go build -o "$BIN_DIR/mcp-tester" .)
-    log_info "mcp-tester binary built: $BIN_DIR/mcp-tester"
 }
 
 build_broker_driver() {
@@ -507,6 +501,27 @@ F3_CLIENT_NAME_A="e2e-monitoring-connected-a"
 F3_CLIENT_NAME_B="e2e-monitoring-connected-b"
 F3_SUBSCRIPTIONS="e2e-monitoring/connected/t1,e2e-monitoring/connected/t2"
 
+# Polls for a broker-driver's self-written pidfile — the driver's readiness
+# signal — up to 10s (20 * 0.5s). Returns non-zero and logs which driver failed
+# and where to look if the file is still absent/empty. Shared by the F3/F4/F5
+# fixture starters, which differ only in the driver description ($what).
+wait_for_pidfile() {
+    local pidfile="$1"
+    local label="$2"
+    local logfile="$3"
+    local what="$4"           # driver description for the failure message
+    local max_attempts=20     # 20 * 0.5s = 10s
+    local attempt=0
+    while [ $attempt -lt $max_attempts ] && [ ! -s "$pidfile" ]; do
+        sleep 0.5
+        attempt=$((attempt + 1))
+    done
+    if [ ! -s "$pidfile" ]; then
+        log_fail "$what did not create pidfile on $label within 10s; see $logfile"
+        return 1
+    fi
+}
+
 # Spawn a long-lived broker-driver process that binds a persistent receiver
 # to test-queue and holds direct topic subscriptions, satisfying F3. The
 # process self-writes a PID file that stop_broker_drivers later reaps.
@@ -532,15 +547,7 @@ create_connected_client_on() {
         >"$logfile" 2>&1 &
 
     # Wait for the driver to self-write its pidfile (signals readiness).
-    local attempt=0
-    while [ $attempt -lt 20 ] && [ ! -s "$pidfile" ]; do
-        sleep 0.5
-        attempt=$((attempt + 1))
-    done
-    if [ ! -s "$pidfile" ]; then
-        log_fail "broker-driver did not create pidfile on $label within 10s; see $logfile"
-        return 1
-    fi
+    wait_for_pidfile "$pidfile" "$label" "$logfile" "broker-driver" || return 1
 
     # Then wait until the broker actually reports the client by name.
     verify_monitor_object "$broker_url" "$label" \
@@ -584,21 +591,73 @@ create_sustained_traffic_on() {
         --pidfile="$pidfile" \
         >"$logfile" 2>&1 &
 
-    local attempt=0
-    while [ $attempt -lt 20 ] && [ ! -s "$pidfile" ]; do
-        sleep 0.5
-        attempt=$((attempt + 1))
-    done
-    if [ ! -s "$pidfile" ]; then
-        log_fail "broker-driver publisher did not create pidfile on $label within 10s; see $logfile"
-        return 1
-    fi
+    wait_for_pidfile "$pidfile" "$label" "$logfile" "broker-driver publisher" || return 1
     log_info "Sustained-traffic fixture started on $label (PID=$(<"$pidfile"))"
 }
 
 cleanup_sustained_traffic_on() {
     local label="$1"
     log_info "Sustained-traffic cleanup on $label deferred to stop_broker_drivers"
+}
+
+# F5 slow-consumer constants. A dedicated queue subscribes to F5_TOPIC; the
+# broker-driver slow-consumer process publishes into that topic fast while a
+# queue-bound receiver ACKs only every F5_ACK_DELAY. F5_MAX_UNACKED caps the
+# queue's per-flow delivery window low so txUnackedMsgCount pins near the
+# ceiling and spooledMsgCount grows — the queue-level signals SOL-150344
+# asserts, replacing the per-client slowSubscriber flag (SOL-150328).
+F5_QUEUE="test-queue-slow-consumer"
+F5_TOPIC="e2e-monitoring/slow-consumer/topic"
+F5_PUBLISH_RATE=100   # msg/s into the queue's topic
+F5_PUBLISH_SIZE=256   # bytes per message
+F5_ACK_DELAY="2s"     # delay before ACKing each message (the throttle)
+F5_MAX_UNACKED=10     # maxDeliveredUnackedMsgsPerFlow on the F5 queue
+
+# Provisions F5_QUEUE with a low per-flow unacked window and a subscription to
+# F5_TOPIC, then spawns a long-lived broker-driver slow-consumer that floods the
+# topic and ACKs slowly. The process self-writes a PID file that
+# stop_broker_drivers reaps; the queue is dropped in cleanup (F5 owns it, unlike
+# F3/F4 which reuse test-queue).
+create_slow_consumer_on() {
+    local semp_config="$1"
+    local label="$2"
+    local broker_url="$3"
+    local broker_letter="$4"     # "a" or "b" — resolves SMF host:port in broker-driver
+    local pidfile="$BIN_DIR/broker-driver-f5-$broker_letter.pid"
+    local logfile="$BIN_DIR/broker-driver-f5-$broker_letter.log"
+    log_info "Creating slow-consumer fixture on $label (queue=$F5_QUEUE maxUnacked=$F5_MAX_UNACKED ackDelay=$F5_ACK_DELAY) ..."
+
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues" \
+        "{\"queueName\":\"$F5_QUEUE\",\"accessType\":\"non-exclusive\",\"permission\":\"consume\",\"ingressEnabled\":true,\"egressEnabled\":true,\"maxDeliveredUnackedMsgsPerFlow\":$F5_MAX_UNACKED}" >/dev/null
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues/$F5_QUEUE/subscriptions" \
+        "{\"subscriptionTopic\":\"$F5_TOPIC\"}" >/dev/null
+
+    # nohup + setsid so the driver survives an aborted parent shell; the harness
+    # still finds it via the pidfile glob (broker-driver-f*.pid).
+    nohup ${_SESSION_WRAP:+$_SESSION_WRAP} "$BIN_DIR/broker-driver" slow-consumer \
+        --broker="$broker_letter" \
+        --vpn="$BROKER_VPN" \
+        --queue="$F5_QUEUE" \
+        --topic="$F5_TOPIC" \
+        --rate="$F5_PUBLISH_RATE" \
+        --size="$F5_PUBLISH_SIZE" \
+        --ack-delay="$F5_ACK_DELAY" \
+        --pidfile="$pidfile" \
+        >"$logfile" 2>&1 &
+
+    wait_for_pidfile "$pidfile" "$label" "$logfile" "broker-driver slow-consumer" || return 1
+
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/queues/$F5_QUEUE"
+    log_info "Slow-consumer fixture started on $label (PID=$(<"$pidfile"))"
+}
+
+# Drops the F5 queue (cascades its topic subscription). The driver is reaped by
+# stop_broker_drivers first, so the bind is gone before the queue delete.
+cleanup_slow_consumer_on() {
+    local semp_config="$1"
+    local label="$2"
+    log_info "Cleaning up slow-consumer fixture on $label ..."
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/queues/$F5_QUEUE"
 }
 
 # F6-spool constants.
@@ -696,6 +755,13 @@ cleanup_discard_ttl_on() {
 : "${F4_READY_EPOCH:=}"
 export F4_READY_EPOCH
 
+# Epoch at which the F5 slow-consumer drivers finished starting.
+# verify-fixtures.sh reads this to wait out the F5 settle window before
+# sampling the queue-level signals. Same := guard as F4_READY_EPOCH so a
+# child verifier sourcing helpers.sh does not clobber the parent's value.
+: "${F5_READY_EPOCH:=}"
+export F5_READY_EPOCH
+
 create_fixtures() {
     cleanup_fixtures
     # NFR-4: one-shot SEMP (F1, F2) before client-bearing (F3+) so the
@@ -712,6 +778,12 @@ create_fixtures() {
     create_sustained_traffic_on "broker-b" "$BROKER_B_URL" b
     F4_READY_EPOCH=$(date +%s)
     export F4_READY_EPOCH
+    # F5 owns its queue and is independent of F3/F4; its consumer binds to that
+    # queue so it must be reaped before the queue delete (cleanup handles order).
+    create_slow_consumer_on "$BROKER_A_SEMP_CONFIG" "broker-a" "$BROKER_A_URL" a
+    create_slow_consumer_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL" b
+    F5_READY_EPOCH=$(date +%s)
+    export F5_READY_EPOCH
     # F6 is independent of F3/F4 — run after them but the queues have no
     # client dependency so order within F6 does not matter.
     create_discard_spool_on "$BROKER_A_SEMP_CONFIG" "broker-a" "$BROKER_A_URL" a
@@ -729,6 +801,8 @@ cleanup_fixtures() {
     cleanup_discard_ttl_on "$BROKER_B_SEMP_CONFIG" "broker-b"
     cleanup_discard_spool_on "$BROKER_A_SEMP_CONFIG" "broker-a"
     cleanup_discard_spool_on "$BROKER_B_SEMP_CONFIG" "broker-b"
+    cleanup_slow_consumer_on "$BROKER_A_SEMP_CONFIG" "broker-a"
+    cleanup_slow_consumer_on "$BROKER_B_SEMP_CONFIG" "broker-b"
     cleanup_sustained_traffic_on "broker-a"
     cleanup_sustained_traffic_on "broker-b"
     cleanup_connected_client_on "broker-a"

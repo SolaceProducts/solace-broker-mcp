@@ -147,6 +147,84 @@ test_ac5_sustained_traffic_state_b() {
     verify_sustained_traffic_state "broker-b" "$BROKER_B_URL"
 }
 
+# ── F5 — slow guaranteed-message consumer ───────────────────────────────────
+# Detection via queue-level signals (SOL-150344), NOT the per-client
+# slowSubscriber flag (which never flips for a slow-ACK consumer — SOL-150328).
+# On the F5 queue, within the settle window: a consumer is bound, the per-flow
+# unacked window is pinned near its ceiling, ingress outpaces egress, and the
+# spool keeps growing.
+
+F5_SETTLE_SECONDS=30
+
+wait_for_f5_settle() {
+    if [ -z "${F5_READY_EPOCH:-}" ]; then
+        log_warn "F5_READY_EPOCH unset; assuming F5 just started"
+        sleep "$F5_SETTLE_SECONDS"
+        return
+    fi
+    local now elapsed remaining
+    now=$(date +%s)
+    elapsed=$((now - F5_READY_EPOCH))
+    remaining=$((F5_SETTLE_SECONDS - elapsed))
+    if [ "$remaining" -gt 0 ]; then
+        log_info "Waiting ${remaining}s for F5 slow-consumer signals to develop ..."
+        sleep "$remaining"
+    fi
+}
+
+verify_slow_consumer_state() {
+    local label="$1"
+    local broker_url="$2"
+    local body
+    body=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/queues/$F5_QUEUE") || {
+        log_fail "F5 [$label]: GET queues/$F5_QUEUE failed"
+        return 1
+    }
+    local bind unacked rx tx spooled1
+    bind=$(echo "$body" | jq -r '.data.bindCount')
+    unacked=$(echo "$body" | jq -r '.data.txUnackedMsgCount')
+    rx=$(echo "$body" | jq -r '.data.rxMsgRate')
+    tx=$(echo "$body" | jq -r '.data.txMsgRate')
+    spooled1=$(echo "$body" | jq -r '.data.spooledMsgCount')
+    log_info "F5 [$label]: bindCount=$bind txUnackedMsgCount=$unacked (ceiling $F5_MAX_UNACKED) rxMsgRate=$rx txMsgRate=$tx spooledMsgCount=$spooled1"
+
+    # A consumer is bound.
+    assert_json_field "$body" ".data.bindCount > 0" "true" \
+        "F5 [$label]: bindCount must be > 0 (got $bind)" || return 1
+    # Unacked messages pin NEAR the per-flow ceiling — the slow-ACK signature.
+    # "Near", not "==": a slow-but-nonzero ACK rate makes the count oscillate by
+    # one (it dips just after each ACK, before the broker redelivers), so require
+    # ≥ 80% of the ceiling rather than the exact value.
+    local near_unacked=$(( F5_MAX_UNACKED * 8 / 10 ))
+    assert_json_field "$body" ".data.txUnackedMsgCount >= $near_unacked" "true" \
+        "F5 [$label]: txUnackedMsgCount must be near the $F5_MAX_UNACKED ceiling (≥ $near_unacked, got $unacked)" || return 1
+    # Ingress outpaces egress: publisher feeds faster than the throttled consumer drains.
+    assert_json_field "$body" ".data.rxMsgRate > .data.txMsgRate" "true" \
+        "F5 [$label]: rxMsgRate must exceed txMsgRate (got rx=$rx tx=$tx)" || return 1
+
+    # Spool is growing: re-sample after a short interval and require an increase.
+    sleep 3
+    local body2 spooled2
+    body2=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/queues/$F5_QUEUE") || {
+        log_fail "F5 [$label]: re-GET queues/$F5_QUEUE failed"
+        return 1
+    }
+    spooled2=$(echo "$body2" | jq -r '.data.spooledMsgCount')
+    log_info "F5 [$label]: spooledMsgCount $spooled1 -> $spooled2 (must be growing)"
+    assert_json_field "$body2" ".data.spooledMsgCount > $spooled1" "true" \
+        "F5 [$label]: spooledMsgCount must be growing (was $spooled1, now $spooled2)" || return 1
+}
+
+test_f5_slow_consumer_a() {
+    wait_for_f5_settle
+    verify_slow_consumer_state "broker-a" "$BROKER_A_URL"
+}
+test_f5_slow_consumer_b() {
+    # wait_for_f5_settle is a no-op the second time through.
+    wait_for_f5_settle
+    verify_slow_consumer_state "broker-b" "$BROKER_B_URL"
+}
+
 # ── AC 8 — F6-spool discards ─────────────────────────────────────────────────
 
 verify_discard_spool_state() {
@@ -197,6 +275,8 @@ run_test "AC 4 — F3 connected client (broker-a)" test_ac4_connected_client_sta
 run_test "AC 4 — F3 connected client (broker-b)" test_ac4_connected_client_state_b
 run_test "AC 5 — F4 sustained traffic (broker-a)" test_ac5_sustained_traffic_state_a
 run_test "AC 5 — F4 sustained traffic (broker-b)" test_ac5_sustained_traffic_state_b
+run_test "F5 — slow consumer queue signals (broker-a)" test_f5_slow_consumer_a
+run_test "F5 — slow consumer queue signals (broker-b)" test_f5_slow_consumer_b
 run_test "AC 8 — F6-spool discard count (broker-a)" test_ac8_discard_spool_a
 run_test "AC 8 — F6-spool discard count (broker-b)" test_ac8_discard_spool_b
 run_test "AC 9 — F6-ttl discard count (broker-a)" test_ac9_discard_ttl_a
