@@ -201,10 +201,11 @@ test_list_clients_pagination_b() { test_list_clients_pagination "broker-b"; }
 # with slowSubscriber=false.
 # Envelope: {"clientDetails":{"data":{...}}} — a single object.
 #
-# TODO(SOL-150025 / F5): add the slow-subscriber half (AC 8: F5 client →
-# slowSubscriber=true) once an F5 (slow subscriber) fixture exists. SOL-150024
-# does not currently ship one in helpers.sh (no F5_* constants / create_slow_*
-# helper), so there is no client to look up yet.
+# Note: there is deliberately no slowSubscriber=true case here. A slow
+# guaranteed-message consumer (slow to ACK) does NOT flip the per-client
+# slowSubscriber flag — that flag tracks TCP-egress stalls, mainly for direct
+# subscribers (SOL-150328/SOL-150344). The F5 slow-consumer signal is surfaced
+# by get-queue-metrics instead and is asserted in the Tool 10 section below.
 
 test_get_client_details_f3() {
     local broker="$1" client="$2"
@@ -334,6 +335,65 @@ test_list_rdps_b()            { test_list_rdps "broker-b"; }
 test_list_rdps_pagination_a() { test_list_rdps_pagination "broker-a"; }
 test_list_rdps_pagination_b() { test_list_rdps_pagination "broker-b"; }
 
+# ── Tool 10: get-queue-metrics (F5 slow guaranteed-message consumer) ──────────
+# Value check: get-queue-metrics surfaces the slow-consumer diagnostic that the
+# per-client slowSubscriber flag cannot (SOL-150328/SOL-150344). On the F5 queue
+# ($F5_QUEUE, maxDeliveredUnackedMsgsPerFlow=$F5_MAX_UNACKED) a bound consumer
+# ACKs slowly while a publisher floods the topic, so: a consumer is bound,
+# unacked messages pin near the per-flow ceiling, ingress outruns egress, and
+# the spool backs up over time. This mirrors verify-fixtures.sh's SEMP-direct
+# verify_slow_consumer_state, but exercises the same signal through the MCP tool
+# envelope. The orchestrator's verify-fixtures step waits out the F5 settle
+# window before this file runs, and the F5 driver keeps publishing throughout,
+# so the signals are live when read here. The basic-mcp suite already smoke-tests
+# get-queue-metrics' plumbing on an idle queue; this is the diagnostic half it
+# structurally cannot cover (no traffic fixture there).
+# Envelope: {"queueMetrics":{"data":{...}}} — a single object.
+
+test_get_queue_metrics_slow_consumer() {
+    local broker="$1"
+    local response content bind unacked rx tx spooled1 spooled2
+    local near_unacked=$(( F5_MAX_UNACKED * 8 / 10 ))
+
+    response=$(mcp_call_tool "get-queue-metrics" \
+        "$(jq -nc --arg b "$broker" --arg q "$F5_QUEUE" \
+            '{broker:$b,msgVpnName:"default",queueName:$q}')") || return 1
+    content=$(extract_content "$response")
+
+    bind=$(echo "$content" | jq -r '.queueMetrics.data.bindCount')
+    unacked=$(echo "$content" | jq -r '.queueMetrics.data.txUnackedMsgCount')
+    rx=$(echo "$content" | jq -r '.queueMetrics.data.rxMsgRate')
+    tx=$(echo "$content" | jq -r '.queueMetrics.data.txMsgRate')
+    spooled1=$(echo "$content" | jq -r '.queueMetrics.data.spooledMsgCount')
+    log_info "get-queue-metrics [$broker]: bindCount=$bind txUnackedMsgCount=$unacked (ceiling $F5_MAX_UNACKED) rxMsgRate=$rx txMsgRate=$tx spooledMsgCount=$spooled1"
+
+    # A consumer is bound to the slow-consumer queue.
+    assert_json_field "$content" '.queueMetrics.data.bindCount > 0' "true" \
+        "get-queue-metrics [$broker]: bindCount must be > 0 (got $bind)" || return 1
+    # Unacked messages pin NEAR the per-flow ceiling — the slow-ACK signature.
+    # "Near", not "==": a slow-but-nonzero ACK rate makes the count oscillate by
+    # one, so assert ≥ 80% of the ceiling rather than exact equality.
+    assert_json_field "$content" ".queueMetrics.data.txUnackedMsgCount >= $near_unacked" "true" \
+        "get-queue-metrics [$broker]: txUnackedMsgCount must be near the $F5_MAX_UNACKED ceiling (≥ $near_unacked, got $unacked)" || return 1
+    # Ingress outruns egress while the consumer lags.
+    assert_json_field "$content" '.queueMetrics.data.rxMsgRate > .queueMetrics.data.txMsgRate' "true" \
+        "get-queue-metrics [$broker]: rxMsgRate must exceed txMsgRate (got rx=$rx tx=$tx)" || return 1
+
+    # Spool backs up: a second sample taken a moment later is strictly larger.
+    sleep 2
+    response=$(mcp_call_tool "get-queue-metrics" \
+        "$(jq -nc --arg b "$broker" --arg q "$F5_QUEUE" \
+            '{broker:$b,msgVpnName:"default",queueName:$q}')") || return 1
+    content=$(extract_content "$response")
+    spooled2=$(echo "$content" | jq -r '.queueMetrics.data.spooledMsgCount')
+    log_info "get-queue-metrics [$broker]: spooledMsgCount $spooled1 -> $spooled2 (must be growing)"
+    assert_json_field "$content" ".queueMetrics.data.spooledMsgCount > $spooled1" "true" \
+        "get-queue-metrics [$broker]: spooledMsgCount must be growing (was $spooled1, now $spooled2)" || return 1
+}
+
+test_get_queue_metrics_slow_consumer_a() { test_get_queue_metrics_slow_consumer "broker-a"; }
+test_get_queue_metrics_slow_consumer_b() { test_get_queue_metrics_slow_consumer "broker-b"; }
+
 # ── Run ──────────────────────────────────────────────────────────────────────
 
 run_test "Tool 2 — list-vpns (broker-a)"               test_list_vpns_a
@@ -373,5 +433,8 @@ run_test "Tool 9 — list-rdps (broker-a)"               test_list_rdps_a
 run_test "Tool 9 — list-rdps (broker-b)"               test_list_rdps_b
 run_test "Tool 9 — list-rdps pagination (broker-a)"    test_list_rdps_pagination_a
 run_test "Tool 9 — list-rdps pagination (broker-b)"    test_list_rdps_pagination_b
+
+run_test "Tool 10 — get-queue-metrics slow consumer (broker-a)" test_get_queue_metrics_slow_consumer_a
+run_test "Tool 10 — get-queue-metrics slow consumer (broker-b)" test_get_queue_metrics_slow_consumer_b
 
 print_summary "MCP tool tests"
