@@ -25,11 +25,11 @@ import (
 	"solace.dev/go/messaging/pkg/solace/resource"
 )
 
-// runPublishBatch implements the F6 fixture role: a short-lived persistent
+// runPublishBatch implements the F7 fixture role: a short-lived persistent
 // publisher that sends exactly --count messages of --size bytes to --topic,
-// then exits. Used twice by helpers.sh — once for F6-spool (fills the queue's
+// then exits. Used twice by helpers.sh — once for F7-spool (fills the queue's
 // spool quota so the broker discards messages and increments
-// maxMsgSpoolUsageExceededDiscardedMsgCount) and once for F6-ttl (publishes
+// maxMsgSpoolUsageExceededDiscardedMsgCount) and once for F7-ttl (publishes
 // with --dmq-eligible=false so TTL-expired messages are truly discarded and
 // increment maxTtlExpiredDiscardedMsgCount rather than being moved to the DMQ).
 // No PID file is written because the process is short-lived and the bash
@@ -44,7 +44,7 @@ func runPublishBatch(args []string) int {
 	size := fs.Int("size", 256, "payload size in bytes")
 	msgType := stringFlag(fs, "message-type", "persistent", "publish QoS: 'persistent' (only supported value today)")
 	rate := fs.Int("rate", 0, "target messages per second (0 = as fast as possible)")
-	dmqEligible := fs.Bool("dmq-eligible", true, "mark messages as DMQ-eligible (set false for F6-ttl so expired messages hit maxTtlExpiredDiscardedMsgCount)")
+	dmqEligible := fs.Bool("dmq-eligible", true, "mark messages as DMQ-eligible (set false for F7-ttl so expired messages hit maxTtlExpiredDiscardedMsgCount)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -99,11 +99,11 @@ func runPublishBatch(args []string) int {
 	payload := bytes.Repeat([]byte{'x'}, *size)
 	dest := resource.TopicOf(*topic)
 
-	// Build the per-message publish function once. For F6-ttl (dmqEligible=false)
+	// Build the per-message publish function once. For F7-ttl (dmqEligible=false)
 	// we use the message builder to mark each message as not DMQ-eligible; when
 	// the broker TTL-expires such a message it increments
 	// maxTtlExpiredDiscardedMsgCount rather than attempting a DMQ move. For
-	// F6-spool (dmqEligible=true, the default) PublishBytes is sufficient.
+	// F7-spool (dmqEligible=true, the default) PublishBytes is sufficient.
 	var publishFn func() error
 	if *dmqEligible {
 		publishFn = func() error {

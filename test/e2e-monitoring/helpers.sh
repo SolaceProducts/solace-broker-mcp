@@ -14,7 +14,7 @@ BIN_DIR="$SCRIPT_DIR/bin"
 source "$SCRIPT_DIR/.env"
 
 # Exported so broker-driver (spawned as a child by create_connected_client_on
-# and the F4-F6 helpers to come) can resolve --broker=a|b to a SMF host:port
+# and the F4-F7 helpers to come) can resolve --broker=a|b to a SMF host:port
 # from the same single source of truth.
 export BROKER_A_SMF_PORT BROKER_B_SMF_PORT
 
@@ -260,7 +260,7 @@ stop_server() {
 # stop helper and any future code use the same convention.
 BROKER_DRIVER_PIDFILE_GLOB="$BIN_DIR/broker-driver-f*.pid"
 
-# Stop any long-lived broker-driver processes that fixtures F3-F6 spawn.
+# Stop any long-lived broker-driver processes that fixtures F3-F7 spawn.
 # Reads each PID file under bin/ and hands the PIDs to kill_gracefully, which
 # signals them concurrently (TERM, then KILL after a shared 5s grace window).
 # Safe to call when there are no PID files (no-op until F3 lands).
@@ -271,6 +271,14 @@ stop_broker_drivers() {
     local pids=() f
     for f in "${pidfiles[@]}"; do
         pids+=("$(<"$f")")
+    done
+    # Resume any SIGSTOP'd driver (the F6 slow-subscriber is deliberately
+    # stopped) so the SIGTERM kill_gracefully sends is actually delivered —
+    # a stopped process ignores SIGTERM and would otherwise burn the full 5s
+    # grace before SIGKILL. SIGCONT is a no-op on running drivers.
+    local pid
+    for pid in "${pids[@]}"; do
+        kill -CONT "$pid" 2>/dev/null || true
     done
     kill_gracefully "${pids[@]}"
 
@@ -669,12 +677,113 @@ cleanup_slow_consumer_on() {
     semp_delete "$semp_config" "msgVpns/$BROKER_VPN/queues/$F5_QUEUE"
 }
 
-# F6-spool constants.
-F6_SPOOL_QUEUE="test-queue-discards-spool"
-F6_SPOOL_TOPIC="e2e-monitoring/discards/spool"
-F6_SPOOL_COUNT=8000   # × 256 B ≈ 2 MB; overflows the 1 MB spool quota
-F6_SPOOL_SIZE=256
-F6_SPOOL_MAX_MB=1     # maxMsgSpoolUsage in MB
+# F6 slow-DIRECT-subscriber constants. Distinct from F5 (queue slow-consumer):
+# F6 flips the per-client `slowSubscriber` flag that list-slow-subscribers
+# filters on. The flag tracks TCP egress back-pressure, which a slow-ACK
+# guaranteed consumer never triggers (SOL-150328) — so we close the client's
+# receive window at the OS level by SIGSTOPping the subscriber process while a
+# separate publisher floods its subscribed topic with large payloads. Direct
+# messaging (no queue/spool) so the broker has nowhere to spool the overflow and
+# egress congestion is forced onto the stalled client.
+F6_SUB_CLIENT_NAME_A="e2e-monitoring-slow-subscriber-a"
+F6_SUB_CLIENT_NAME_B="e2e-monitoring-slow-subscriber-b"
+F6_TOPIC="e2e-monitoring/slow-subscriber/topic"
+F6_FLOOD_RATE=3000     # msg/s — high enough to keep the egress window pinned
+F6_FLOOD_SIZE=50000    # bytes — large payloads fill the window fast
+F6_FLAG_TIMEOUT=60     # max seconds to wait for slowSubscriber to flip true
+
+# Polls the broker until a client's slowSubscriber flag reads true, or fails
+# after F6_FLAG_TIMEOUT. The flag is computed over a rolling ~1 min window, so
+# a single read just after SIGSTOP flakes — poll until it settles true.
+#   $1 broker_url   $2 label   $3 client_name
+wait_for_slow_subscriber() {
+    local broker_url="$1"
+    local label="$2"
+    local client_name="$3"
+    local attempt=0 flag body
+    while [ $attempt -lt "$F6_FLAG_TIMEOUT" ]; do
+        body=$(semp_monitor_get "$broker_url" \
+            "msgVpns/$BROKER_VPN/clients/$client_name?select=slowSubscriber" 2>/dev/null) || true
+        # `|| flag=""` so a transient non-JSON body (jq exits non-zero) just
+        # retries on the next poll rather than aborting the run under `set -e`.
+        flag=$(echo "$body" | jq -r '.data.slowSubscriber // empty' 2>/dev/null) || flag=""
+        if [ "$flag" = "true" ]; then
+            log_info "  slowSubscriber=true for $client_name on $label (${attempt}s)"
+            return 0
+        fi
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+    log_fail "F6 [$label]: slowSubscriber did not flip true for $client_name within ${F6_FLAG_TIMEOUT}s"
+    return 1
+}
+
+# Provisions F6: a long-lived direct subscriber on F6_TOPIC plus a separate
+# flood publisher into that topic, then SIGSTOPs the subscriber so its TCP
+# receive window stalls and the broker flags it slowSubscriber=true. Two PIDs
+# (sub + pub) so SIGSTOP halts only the subscriber, never the flood. Both
+# pidfiles match the broker-driver-f*.pid glob and are reaped by
+# stop_broker_drivers (which SIGCONTs first). No queue — direct messaging only.
+create_slow_subscriber_on() {
+    local label="$1"
+    local broker_url="$2"
+    local broker_letter="$3"     # "a" or "b" — resolves SMF host:port in broker-driver
+    local client_name="$4"
+    local sub_pidfile="$BIN_DIR/broker-driver-f6-sub-$broker_letter.pid"
+    local sub_logfile="$BIN_DIR/broker-driver-f6-sub-$broker_letter.log"
+    local pub_pidfile="$BIN_DIR/broker-driver-f6-pub-$broker_letter.pid"
+    local pub_logfile="$BIN_DIR/broker-driver-f6-pub-$broker_letter.log"
+    log_info "Creating slow-subscriber fixture on $label (clientName=$client_name topic=$F6_TOPIC) ..."
+
+    # Direct subscriber (this is the process we SIGSTOP).
+    nohup ${_SESSION_WRAP:+$_SESSION_WRAP} "$BIN_DIR/broker-driver" slow-direct-subscriber \
+        --broker="$broker_letter" \
+        --vpn="$BROKER_VPN" \
+        --client-name="$client_name" \
+        --topic="$F6_TOPIC" \
+        --pidfile="$sub_pidfile" \
+        >"$sub_logfile" 2>&1 &
+    wait_for_pidfile "$sub_pidfile" "$label" "$sub_logfile" "broker-driver slow-direct-subscriber" || return 1
+
+    # Separate large-payload flood into the subscribed topic — must NOT be
+    # stopped, so it keeps egress pressure on the stalled subscriber.
+    nohup ${_SESSION_WRAP:+$_SESSION_WRAP} "$BIN_DIR/broker-driver" publisher \
+        --broker="$broker_letter" \
+        --vpn="$BROKER_VPN" \
+        --client-name="e2e-monitoring-slow-sub-flood-$broker_letter" \
+        --topic="$F6_TOPIC" \
+        --rate="$F6_FLOOD_RATE" \
+        --size="$F6_FLOOD_SIZE" \
+        --pidfile="$pub_pidfile" \
+        >"$pub_logfile" 2>&1 &
+    wait_for_pidfile "$pub_pidfile" "$label" "$pub_logfile" "broker-driver publisher (F6 flood)" || return 1
+
+    # Close the subscriber's TCP receive window at the OS level. A slow app
+    # callback is not enough (the client C lib drains the socket regardless);
+    # SIGSTOP halts the whole process so the window stays shut.
+    kill -STOP "$(<"$sub_pidfile")"
+    log_info "  SIGSTOP sent to slow-subscriber (PID=$(<"$sub_pidfile")) on $label"
+
+    # Wait for the broker to observe the stall and flip the flag.
+    wait_for_slow_subscriber "$broker_url" "$label" "$client_name" || return 1
+    log_info "Slow-subscriber fixture created on $label"
+}
+
+# Both F6 processes are reaped by stop_broker_drivers via the pidfile glob, and
+# it SIGCONTs the stopped subscriber before SIGTERM, so teardown needs nothing
+# here. No queue to delete (direct messaging). Kept as a label-only nop for
+# symmetry with the other create/cleanup pairs.
+cleanup_slow_subscriber_on() {
+    local label="$1"
+    log_info "Slow-subscriber cleanup on $label deferred to stop_broker_drivers"
+}
+
+# F7-spool constants.
+F7_SPOOL_QUEUE="test-queue-discards-spool"
+F7_SPOOL_TOPIC="e2e-monitoring/discards/spool"
+F7_SPOOL_COUNT=8000   # × 256 B ≈ 2 MB; overflows the 1 MB spool quota
+F7_SPOOL_SIZE=256
+F7_SPOOL_MAX_MB=1     # maxMsgSpoolUsage in MB
 
 # Provisions test-queue-discards-spool with a 1 MB spool cap and
 # egressEnabled=false, then runs a one-shot publish-batch that fills ~2 MB
@@ -686,74 +795,74 @@ create_discard_spool_on() {
     local label="$2"
     local broker_url="$3"
     local broker_letter="$4"
-    log_info "Creating discard-spool fixture on $label (queue=$F6_SPOOL_QUEUE maxSpool=${F6_SPOOL_MAX_MB}MB) ..."
+    log_info "Creating discard-spool fixture on $label (queue=$F7_SPOOL_QUEUE maxSpool=${F7_SPOOL_MAX_MB}MB) ..."
 
     semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues" \
-        "{\"queueName\":\"$F6_SPOOL_QUEUE\",\"accessType\":\"non-exclusive\",\"permission\":\"consume\",\"ingressEnabled\":true,\"egressEnabled\":false,\"maxMsgSpoolUsage\":$F6_SPOOL_MAX_MB}" >/dev/null
-    semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues/$F6_SPOOL_QUEUE/subscriptions" \
-        "{\"subscriptionTopic\":\"$F6_SPOOL_TOPIC\"}" >/dev/null
+        "{\"queueName\":\"$F7_SPOOL_QUEUE\",\"accessType\":\"non-exclusive\",\"permission\":\"consume\",\"ingressEnabled\":true,\"egressEnabled\":false,\"maxMsgSpoolUsage\":$F7_SPOOL_MAX_MB}" >/dev/null
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues/$F7_SPOOL_QUEUE/subscriptions" \
+        "{\"subscriptionTopic\":\"$F7_SPOOL_TOPIC\"}" >/dev/null
 
     "$BIN_DIR/broker-driver" publish-batch \
         --broker="$broker_letter" \
-        --topic="$F6_SPOOL_TOPIC" \
-        --count="$F6_SPOOL_COUNT" \
-        --size="$F6_SPOOL_SIZE" \
+        --topic="$F7_SPOOL_TOPIC" \
+        --count="$F7_SPOOL_COUNT" \
+        --size="$F7_SPOOL_SIZE" \
         --message-type=persistent
 
     log_info "Discard-spool fixture created on $label"
 }
 
-# Drops the F6-spool queue (cascades to its topic subscription).
+# Drops the F7-spool queue (cascades to its topic subscription).
 cleanup_discard_spool_on() {
     local semp_config="$1"
     local label="$2"
     log_info "Cleaning up discard-spool fixture on $label ..."
-    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/queues/$F6_SPOOL_QUEUE"
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/queues/$F7_SPOOL_QUEUE"
 }
 
-# F6-ttl constants.
-F6_TTL_QUEUE="test-queue-discards-ttl"
-F6_TTL_TOPIC="e2e-monitoring/discards/ttl"
-F6_TTL_COUNT=200     # small batch; messages expire by TTL, not spool
-F6_TTL_SIZE=256
-F6_TTL_MAX_TTL_S=1   # maxTtl in seconds
-F6_TTL_WAIT_S=2      # sleep after publish to let the 1 s TTL expire
+# F7-ttl constants.
+F7_TTL_QUEUE="test-queue-discards-ttl"
+F7_TTL_TOPIC="e2e-monitoring/discards/ttl"
+F7_TTL_COUNT=200     # small batch; messages expire by TTL, not spool
+F7_TTL_SIZE=256
+F7_TTL_MAX_TTL_S=1   # maxTtl in seconds
+F7_TTL_WAIT_S=2      # sleep after publish to let the 1 s TTL expire
 
 # Provisions test-queue-discards-ttl with a 1 s TTL and no consumer, publishes
 # a one-shot batch with --dmq-eligible=false so the broker increments
 # maxTtlExpiredDiscardedMsgCount rather than moving expired messages to the DMQ.
-# Sleeps F6_TTL_WAIT_S after publishing so the TTL window closes before
+# Sleeps F7_TTL_WAIT_S after publishing so the TTL window closes before
 # verify-fixtures.sh runs the AC 9 assertion.
 create_discard_ttl_on() {
     local semp_config="$1"
     local label="$2"
     local broker_letter="$3"
-    log_info "Creating discard-ttl fixture on $label (queue=$F6_TTL_QUEUE maxTtl=${F6_TTL_MAX_TTL_S}s) ..."
+    log_info "Creating discard-ttl fixture on $label (queue=$F7_TTL_QUEUE maxTtl=${F7_TTL_MAX_TTL_S}s) ..."
 
     semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues" \
-        "{\"queueName\":\"$F6_TTL_QUEUE\",\"accessType\":\"non-exclusive\",\"permission\":\"consume\",\"ingressEnabled\":true,\"egressEnabled\":true,\"maxTtl\":$F6_TTL_MAX_TTL_S,\"respectTtlEnabled\":true}" >/dev/null
-    semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues/$F6_TTL_QUEUE/subscriptions" \
-        "{\"subscriptionTopic\":\"$F6_TTL_TOPIC\"}" >/dev/null
+        "{\"queueName\":\"$F7_TTL_QUEUE\",\"accessType\":\"non-exclusive\",\"permission\":\"consume\",\"ingressEnabled\":true,\"egressEnabled\":true,\"maxTtl\":$F7_TTL_MAX_TTL_S,\"respectTtlEnabled\":true}" >/dev/null
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues/$F7_TTL_QUEUE/subscriptions" \
+        "{\"subscriptionTopic\":\"$F7_TTL_TOPIC\"}" >/dev/null
 
     "$BIN_DIR/broker-driver" publish-batch \
         --broker="$broker_letter" \
-        --topic="$F6_TTL_TOPIC" \
-        --count="$F6_TTL_COUNT" \
-        --size="$F6_TTL_SIZE" \
+        --topic="$F7_TTL_TOPIC" \
+        --count="$F7_TTL_COUNT" \
+        --size="$F7_TTL_SIZE" \
         --message-type=persistent \
         --dmq-eligible=false
 
-    log_info "Waiting ${F6_TTL_WAIT_S}s for TTL to expire ..."
-    sleep "$F6_TTL_WAIT_S"
+    log_info "Waiting ${F7_TTL_WAIT_S}s for TTL to expire ..."
+    sleep "$F7_TTL_WAIT_S"
     log_info "Discard-ttl fixture created on $label"
 }
 
-# Drops the F6-ttl queue (cascades to its topic subscription).
+# Drops the F7-ttl queue (cascades to its topic subscription).
 cleanup_discard_ttl_on() {
     local semp_config="$1"
     local label="$2"
     log_info "Cleaning up discard-ttl fixture on $label ..."
-    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/queues/$F6_TTL_QUEUE"
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/queues/$F7_TTL_QUEUE"
 }
 
 # Epoch (seconds since Unix) at which the last F4 publisher finished
@@ -793,8 +902,13 @@ create_fixtures() {
     create_slow_consumer_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL" b
     F5_READY_EPOCH=$(date +%s)
     export F5_READY_EPOCH
-    # F6 is independent of F3/F4 — run after them but the queues have no
-    # client dependency so order within F6 does not matter.
+    # F6 is independent of F5; it owns no queue (direct messaging). create_*
+    # blocks until the slowSubscriber flag has flipped, so no settle epoch is
+    # needed — the tool test can read the flag immediately afterwards.
+    create_slow_subscriber_on "broker-a" "$BROKER_A_URL" a "$F6_SUB_CLIENT_NAME_A"
+    create_slow_subscriber_on "broker-b" "$BROKER_B_URL" b "$F6_SUB_CLIENT_NAME_B"
+    # F7 is independent of F3/F4 — run after them but the queues have no
+    # client dependency so order within F7 does not matter.
     create_discard_spool_on "$BROKER_A_SEMP_CONFIG" "broker-a" "$BROKER_A_URL" a
     create_discard_spool_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL" b
     create_discard_ttl_on "$BROKER_A_SEMP_CONFIG" "broker-a" a
@@ -812,6 +926,8 @@ cleanup_fixtures() {
     cleanup_discard_spool_on "$BROKER_B_SEMP_CONFIG" "broker-b"
     cleanup_slow_consumer_on "$BROKER_A_SEMP_CONFIG" "broker-a"
     cleanup_slow_consumer_on "$BROKER_B_SEMP_CONFIG" "broker-b"
+    cleanup_slow_subscriber_on "broker-a"
+    cleanup_slow_subscriber_on "broker-b"
     cleanup_sustained_traffic_on "broker-a"
     cleanup_sustained_traffic_on "broker-b"
     cleanup_connected_client_on "broker-a"

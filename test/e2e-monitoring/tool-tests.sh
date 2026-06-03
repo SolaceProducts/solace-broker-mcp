@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# MCP tool-level functional tests for SOL-150025 (Block A: tools 1–9).
+# MCP tool-level functional tests for SOL-150025 (tools 1–12: Block A 1–9,
+# Block B 10–12 — list-slow-subscribers, list-queue-discards, get-discard-stats).
 # Invoked by test-monitoring-tools.sh after verify-fixtures.sh; assumes the MCP
-# server is running and the F1–F6 fixtures have been created.
+# server is running and the F1–F7 fixtures have been created.
 #
 # Where verify-fixtures.sh asserts broker *state* via SEMP-direct calls, this
 # file exercises each MVP monitoring *tool* through the MCP server (JSON-RPC
@@ -12,7 +13,7 @@
 set -euo pipefail
 source "$(dirname "$0")/helpers.sh"
 
-# ── Tool 2: list-vpns (F1 multi-VPN) ─────────────────────────────────────────
+# ── Tool 1: list-vpns (F1 multi-VPN) ─────────────────────────────────────────
 # Primary: the VPN collection includes the base `default` VPN and F1's
 # `test-vpn`. Pagination: maxResults=1 returns exactly one entry and flags the
 # result truncated, while the uncapped default call returns the full set.
@@ -57,7 +58,7 @@ test_list_vpns_b()            { test_list_vpns "broker-b"; }
 test_list_vpns_pagination_a() { test_list_vpns_pagination "broker-a"; }
 test_list_vpns_pagination_b() { test_list_vpns_pagination "broker-b"; }
 
-# ── Tool 3: get-vpn-health (F1 multi-VPN; VPN-scoped) ────────────────────────
+# ── Tool 2: get-vpn-health (F1 multi-VPN; VPN-scoped) ────────────────────────
 # Value check (AC 5): the base `default` VPN reports enabled=true with services
 # up; F1's `test-vpn` reports enabled=false / state=down. This is the case
 # FR-0's extract_content exists for — a substring match on the raw envelope
@@ -95,9 +96,9 @@ test_get_vpn_health_default_b() { test_get_vpn_health_default "broker-b"; }
 test_get_vpn_health_testvpn_a() { test_get_vpn_health_testvpn "broker-a"; }
 test_get_vpn_health_testvpn_b() { test_get_vpn_health_testvpn "broker-b"; }
 
-# ── Tool 4: list-queues (F2 multi-queue; VPN-scoped) ─────────────────────────
+# ── Tool 3: list-queues (F2 multi-queue; VPN-scoped) ─────────────────────────
 # Primary: the default-VPN queue collection includes F2's test-queue,
-# test-queue-2, test-queue-3 plus the F6 discard queues (AC 6). Pagination:
+# test-queue-2, test-queue-3 plus the F7 discard queues (AC 6). Pagination:
 # maxResults=1 caps to one entry and flags truncated. VPN scoping: every
 # returned queue belongs to the queried VPN, and the F1 test-vpn (which owns no
 # queues) surfaces none of the default VPN's queues.
@@ -109,7 +110,7 @@ test_list_queues() {
     response=$(mcp_call_tool "list-queues" \
         "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
     content=$(extract_content "$response")
-    for q in test-queue test-queue-2 test-queue-3 "$F6_SPOOL_QUEUE" "$F6_TTL_QUEUE"; do
+    for q in test-queue test-queue-2 test-queue-3 "$F7_SPOOL_QUEUE" "$F7_TTL_QUEUE"; do
         assert_json_field "$content" \
             "(.queues.data | map(.queueName) | index(\"$q\")) != null" "true" \
             "list-queues [$broker]: $q must be present in default VPN" || return 1
@@ -153,7 +154,7 @@ test_list_queues_pagination_b() { test_list_queues_pagination "broker-b"; }
 test_list_queues_vpn_scope_a()  { test_list_queues_vpn_scope "broker-a"; }
 test_list_queues_vpn_scope_b()  { test_list_queues_vpn_scope "broker-b"; }
 
-# ── Tool 5: list-clients (F3 connected client; VPN-scoped) ───────────────────
+# ── Tool 4: list-clients (F3 connected client; VPN-scoped) ───────────────────
 # Primary: the default-VPN client list includes this broker's deterministic F3
 # client. Cross-broker isolation (FR-8): the list must NOT include the *other*
 # broker's F3 client — this catches broker-routing bugs. VPN scoping: every
@@ -196,7 +197,7 @@ test_list_clients_b()            { test_list_clients "broker-b" "$F3_CLIENT_NAME
 test_list_clients_pagination_a() { test_list_clients_pagination "broker-a"; }
 test_list_clients_pagination_b() { test_list_clients_pagination "broker-b"; }
 
-# ── Tool 6: get-client-details (F3 connected client; named-object lookup) ─────
+# ── Tool 5: get-client-details (F3 connected client; named-object lookup) ─────
 # F3 case (AC 8): a named lookup of the F3 client returns that client's details
 # with slowSubscriber=false.
 # Envelope: {"clientDetails":{"data":{...}}} — a single object.
@@ -205,7 +206,7 @@ test_list_clients_pagination_b() { test_list_clients_pagination "broker-b"; }
 # guaranteed-message consumer (slow to ACK) does NOT flip the per-client
 # slowSubscriber flag — that flag tracks TCP-egress stalls, mainly for direct
 # subscribers (SOL-150328/SOL-150344). The F5 slow-consumer signal is surfaced
-# by get-queue-metrics instead and is asserted in the Tool 10 section below.
+# by get-queue-metrics instead and is asserted in the Tool 9 section below.
 
 test_get_client_details_f3() {
     local broker="$1" client="$2"
@@ -223,7 +224,7 @@ test_get_client_details_f3() {
 test_get_client_details_f3_a() { test_get_client_details_f3 "broker-a" "$F3_CLIENT_NAME_A"; }
 test_get_client_details_f3_b() { test_get_client_details_f3 "broker-b" "$F3_CLIENT_NAME_B"; }
 
-# ── Tool 7: list-client-subscriptions (F3 connected client) ──────────────────
+# ── Tool 6: list-client-subscriptions (F3 connected client) ──────────────────
 # Primary: the F3 client's subscriptions include every topic the fixture
 # configured ($F3_SUBSCRIPTIONS). The client also carries an auto-generated
 # #P2P/... inbox subscription, so assert the configured topics are *present*
@@ -271,7 +272,7 @@ test_list_client_subscriptions_b() { test_list_client_subscriptions "broker-b" "
 test_list_client_subscriptions_pagination_a() { test_list_client_subscriptions_pagination "broker-a" "$F3_CLIENT_NAME_A"; }
 test_list_client_subscriptions_pagination_b() { test_list_client_subscriptions_pagination "broker-b" "$F3_CLIENT_NAME_B"; }
 
-# ── Tool 8: get-message-rates (F4 sustained traffic; VPN-level) ──────────────
+# ── Tool 7: get-message-rates (F4 sustained traffic; VPN-level) ──────────────
 # Value check (AC 10): under F4's sustained ~100 msg/s load the default VPN
 # reports rxMsgRate ≥ 80 and txMsgRate ≥ 80. F4 is settled by the orchestrator's
 # verify-fixtures step (which waits ≥ 25 s on F4_READY_EPOCH) before this file
@@ -299,7 +300,7 @@ test_get_message_rates() {
 test_get_message_rates_a() { test_get_message_rates "broker-a"; }
 test_get_message_rates_b() { test_get_message_rates "broker-b"; }
 
-# ── Tool 9: list-rdps (base fixture) ─────────────────────────────────────────
+# ── Tool 8: list-rdps (base fixture) ─────────────────────────────────────────
 # Primary: the default-VPN RDP collection includes the base test-rdp.
 # Pagination: the base fixture provisions a single RDP, so maxResults=1 returns
 # that one entry untruncated. This confirms the cap is accepted and the full set
@@ -335,7 +336,7 @@ test_list_rdps_b()            { test_list_rdps "broker-b"; }
 test_list_rdps_pagination_a() { test_list_rdps_pagination "broker-a"; }
 test_list_rdps_pagination_b() { test_list_rdps_pagination "broker-b"; }
 
-# ── Tool 10: get-queue-metrics (F5 slow guaranteed-message consumer) ──────────
+# ── Tool 9: get-queue-metrics (F5 slow guaranteed-message consumer) ──────────
 # Value check: get-queue-metrics surfaces the slow-consumer diagnostic that the
 # per-client slowSubscriber flag cannot (SOL-150328/SOL-150344). On the F5 queue
 # ($F5_QUEUE, maxDeliveredUnackedMsgsPerFlow=$F5_MAX_UNACKED) a bound consumer
@@ -393,47 +394,213 @@ test_get_queue_metrics_slow_consumer() {
 test_get_queue_metrics_slow_consumer_a() { test_get_queue_metrics_slow_consumer "broker-a"; }
 test_get_queue_metrics_slow_consumer_b() { test_get_queue_metrics_slow_consumer "broker-b"; }
 
+# ── Tool 10: list-slow-subscribers (F6 slow direct subscriber) ──────────────
+# Value check (AC 12): the F6 fixture SIGSTOPs a direct subscriber under a
+# large-payload flood so its TCP egress window stalls and the broker flags it
+# slowSubscriber=true. The tool filters server-side on where=slowSubscriber==true,
+# so its data must include this broker's F6 client. This is the per-client flag
+# the slow-ACK F5 consumer can never trip (SOL-150328) — F6 exists to exercise it.
+# Cross-broker isolation (FR-8): the other broker's F6 client must be absent.
+# Filter validation: every returned client actually carries slowSubscriber=true.
+# Pagination: with a single qualifying client, maxResults=1 returns exactly one
+# entry — it confirms the cap is honored but, like list-rdps, cannot demonstrate
+# multi-page truncation (no second slow subscriber exists to drop).
+# Envelope: {"slowSubscribers":{"data":[...],"truncated":bool}}.
+
+test_list_slow_subscribers() {
+    local broker="$1" own="$2" other="$3"
+    local response content
+    response=$(mcp_call_tool "list-slow-subscribers" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" \
+        "(.slowSubscribers.data | map(.clientName) | index(\"$own\")) != null" "true" \
+        "list-slow-subscribers [$broker]: F6 client $own must be present" || return 1
+    # Cross-broker isolation (FR-8): the other broker's F6 client must be absent.
+    assert_json_field "$content" \
+        "(.slowSubscribers.data | map(.clientName) | index(\"$other\")) == null" "true" \
+        "list-slow-subscribers [$broker]: must NOT include other broker's client $other" || return 1
+    # Server-side where filter: every returned client really is a slow subscriber.
+    assert_json_field "$content" '.slowSubscribers.data | all(.slowSubscriber == true)' "true" \
+        "list-slow-subscribers [$broker]: every returned client must have slowSubscriber=true" || return 1
+}
+
+test_list_slow_subscribers_pagination() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "list-slow-subscribers" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",maxResults:1}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '.slowSubscribers.data | length' "1" \
+        "list-slow-subscribers [$broker]: maxResults=1 must return exactly 1 slow subscriber" || return 1
+}
+
+test_list_slow_subscribers_a() { test_list_slow_subscribers "broker-a" "$F6_SUB_CLIENT_NAME_A" "$F6_SUB_CLIENT_NAME_B"; }
+test_list_slow_subscribers_b() { test_list_slow_subscribers "broker-b" "$F6_SUB_CLIENT_NAME_B" "$F6_SUB_CLIENT_NAME_A"; }
+test_list_slow_subscribers_pagination_a() { test_list_slow_subscribers_pagination "broker-a"; }
+test_list_slow_subscribers_pagination_b() { test_list_slow_subscribers_pagination "broker-b"; }
+
+# ── Tool 11: list-queue-discards (F7 spool + TTL discards; per-queue) ─────────
+# Value check (AC 13): list-queue-discards returns each queue's per-category
+# discard counters. F7-spool's queue overflows its 1 MB spool quota
+# (maxMsgSpoolUsageExceededDiscardedMsgCount > 0) and F7-ttl's queue expires
+# messages by its 1 s TTL with no DMQ route (maxTtlExpiredDiscardedMsgCount > 0).
+# These are the exact per-queue fields AC 13 names; the broker-wide aggregates
+# are covered by get-discard-stats (Tool 12). VPN scoping: every returned queue
+# belongs to the queried VPN. Pagination: maxResults=1 caps to one entry and
+# flags truncated (the default VPN holds many queues).
+# Envelope: {"queueDiscards":{"data":[...],"truncated":bool}}.
+
+test_list_queue_discards() {
+    local broker="$1"
+    local response content spool ttl
+    response=$(mcp_call_tool "list-queue-discards" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
+    content=$(extract_content "$response")
+    spool=$(echo "$content" | jq -r \
+        "(.queueDiscards.data[] | select(.queueName==\"$F7_SPOOL_QUEUE\") | .maxMsgSpoolUsageExceededDiscardedMsgCount) // 0")
+    ttl=$(echo "$content" | jq -r \
+        "(.queueDiscards.data[] | select(.queueName==\"$F7_TTL_QUEUE\") | .maxTtlExpiredDiscardedMsgCount) // 0")
+    log_info "list-queue-discards [$broker]: $F7_SPOOL_QUEUE spool-exceeded=$spool $F7_TTL_QUEUE ttl-expired=$ttl"
+    assert_json_field "$content" \
+        "(.queueDiscards.data[] | select(.queueName==\"$F7_SPOOL_QUEUE\") | .maxMsgSpoolUsageExceededDiscardedMsgCount) > 0" "true" \
+        "list-queue-discards [$broker]: $F7_SPOOL_QUEUE maxMsgSpoolUsageExceededDiscardedMsgCount must be > 0 (got $spool)" || return 1
+    assert_json_field "$content" \
+        "(.queueDiscards.data[] | select(.queueName==\"$F7_TTL_QUEUE\") | .maxTtlExpiredDiscardedMsgCount) > 0" "true" \
+        "list-queue-discards [$broker]: $F7_TTL_QUEUE maxTtlExpiredDiscardedMsgCount must be > 0 (got $ttl)" || return 1
+    # VPN scoping: every returned queue belongs to the default VPN.
+    assert_json_field "$content" '.queueDiscards.data | all(.msgVpnName == "default")' "true" \
+        "list-queue-discards [$broker]: every queue must be scoped to the default VPN" || return 1
+}
+
+test_list_queue_discards_pagination() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "list-queue-discards" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",maxResults:1}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '.queueDiscards.data | length' "1" \
+        "list-queue-discards [$broker]: maxResults=1 must return exactly 1 queue" || return 1
+    assert_json_field "$content" '.queueDiscards.truncated' "true" \
+        "list-queue-discards [$broker]: maxResults=1 must flag truncated=true" || return 1
+}
+
+test_list_queue_discards_a()            { test_list_queue_discards "broker-a"; }
+test_list_queue_discards_b()            { test_list_queue_discards "broker-b"; }
+test_list_queue_discards_pagination_a() { test_list_queue_discards_pagination "broker-a"; }
+test_list_queue_discards_pagination_b() { test_list_queue_discards_pagination "broker-b"; }
+
+# ── Tool 12: get-discard-stats (F7 discards; broker-wide + per-VPN aggregates) ─
+# Value check (AC 13, aggregate half): get-discard-stats is a NATIVE SEMPv1 tool
+# returning pre-aggregated discard totals — not the per-queue breakdown (that's
+# Tool 11). Its envelope therefore has NO step-id wrapper and NO `.data`: the
+# tool payload is the StructuredContent object itself.
+#   • Broker-wide (omit vpnName): {clientDiscards, spoolDiscards}. The F7 fixtures
+#     drive the broker-wide spool aggregate up — totalTtlExpiredDiscardMessages
+#     maps directly to F7-ttl, and totalDiscardedMessages is the roll-up that any
+#     spool discard (TTL or quota) feeds.
+#   • Per-VPN (vpnName set): {vpnName, clientDiscards} — spoolDiscards is omitted
+#     because SEMPv1 exposes no per-VPN spool breakdown.
+# Note: the parameter is `vpnName`, NOT `msgVpnName`.
+
+test_get_discard_stats_broker_wide() {
+    local broker="$1"
+    local response content ttl total
+    response=$(mcp_call_tool "get-discard-stats" \
+        "$(jq -nc --arg b "$broker" '{broker:$b}')") || return 1
+    content=$(extract_content "$response")
+    ttl=$(echo "$content" | jq -r '.spoolDiscards.totalTtlExpiredDiscardMessages // 0')
+    total=$(echo "$content" | jq -r '.spoolDiscards.totalDiscardedMessages // 0')
+    log_info "get-discard-stats [$broker] broker-wide: spool totalTtlExpiredDiscardMessages=$ttl totalDiscardedMessages=$total"
+    # Broker-wide envelope carries both client- and spool-level aggregates.
+    assert_json_field "$content" '.clientDiscards | type' "object" \
+        "get-discard-stats [$broker]: broker-wide must include clientDiscards object" || return 1
+    assert_json_field "$content" '.spoolDiscards | type' "object" \
+        "get-discard-stats [$broker]: broker-wide must include spoolDiscards object" || return 1
+    # F7 discards surface in the spool aggregate: TTL-expired (F7-ttl, directly
+    # mapped) and the total roll-up (fed by both F7-ttl and F7-spool).
+    assert_json_field "$content" '.spoolDiscards.totalTtlExpiredDiscardMessages > 0' "true" \
+        "get-discard-stats [$broker]: spoolDiscards.totalTtlExpiredDiscardMessages must be > 0 (got $ttl)" || return 1
+    assert_json_field "$content" '.spoolDiscards.totalDiscardedMessages > 0' "true" \
+        "get-discard-stats [$broker]: spoolDiscards.totalDiscardedMessages must be > 0 (got $total)" || return 1
+}
+
+test_get_discard_stats_per_vpn() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "get-discard-stats" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,vpnName:"default"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '.vpnName' "default" \
+        "get-discard-stats [$broker]: per-VPN call must echo vpnName=default" || return 1
+    assert_json_field "$content" '.clientDiscards | type' "object" \
+        "get-discard-stats [$broker]: per-VPN must include clientDiscards object" || return 1
+    # SEMPv1 exposes no per-VPN spool breakdown, so spoolDiscards must be absent.
+    assert_json_field "$content" 'has("spoolDiscards")' "false" \
+        "get-discard-stats [$broker]: per-VPN must NOT include spoolDiscards" || return 1
+}
+
+test_get_discard_stats_broker_wide_a() { test_get_discard_stats_broker_wide "broker-a"; }
+test_get_discard_stats_broker_wide_b() { test_get_discard_stats_broker_wide "broker-b"; }
+test_get_discard_stats_per_vpn_a()     { test_get_discard_stats_per_vpn "broker-a"; }
+test_get_discard_stats_per_vpn_b()     { test_get_discard_stats_per_vpn "broker-b"; }
+
 # ── Run ──────────────────────────────────────────────────────────────────────
 
-run_test "Tool 2 — list-vpns (broker-a)"               test_list_vpns_a
-run_test "Tool 2 — list-vpns (broker-b)"               test_list_vpns_b
-run_test "Tool 2 — list-vpns pagination (broker-a)"    test_list_vpns_pagination_a
-run_test "Tool 2 — list-vpns pagination (broker-b)"    test_list_vpns_pagination_b
+run_test "Tool 1 — list-vpns (broker-a)"               test_list_vpns_a
+run_test "Tool 1 — list-vpns (broker-b)"               test_list_vpns_b
+run_test "Tool 1 — list-vpns pagination (broker-a)"    test_list_vpns_pagination_a
+run_test "Tool 1 — list-vpns pagination (broker-b)"    test_list_vpns_pagination_b
 
-run_test "Tool 3 — get-vpn-health default (broker-a)"  test_get_vpn_health_default_a
-run_test "Tool 3 — get-vpn-health default (broker-b)"  test_get_vpn_health_default_b
-run_test "Tool 3 — get-vpn-health test-vpn (broker-a)" test_get_vpn_health_testvpn_a
-run_test "Tool 3 — get-vpn-health test-vpn (broker-b)" test_get_vpn_health_testvpn_b
+run_test "Tool 2 — get-vpn-health default (broker-a)"  test_get_vpn_health_default_a
+run_test "Tool 2 — get-vpn-health default (broker-b)"  test_get_vpn_health_default_b
+run_test "Tool 2 — get-vpn-health test-vpn (broker-a)" test_get_vpn_health_testvpn_a
+run_test "Tool 2 — get-vpn-health test-vpn (broker-b)" test_get_vpn_health_testvpn_b
 
-run_test "Tool 4 — list-queues (broker-a)"             test_list_queues_a
-run_test "Tool 4 — list-queues (broker-b)"             test_list_queues_b
-run_test "Tool 4 — list-queues pagination (broker-a)"  test_list_queues_pagination_a
-run_test "Tool 4 — list-queues pagination (broker-b)"  test_list_queues_pagination_b
-run_test "Tool 4 — list-queues VPN scope (broker-a)"   test_list_queues_vpn_scope_a
-run_test "Tool 4 — list-queues VPN scope (broker-b)"   test_list_queues_vpn_scope_b
+run_test "Tool 3 — list-queues (broker-a)"             test_list_queues_a
+run_test "Tool 3 — list-queues (broker-b)"             test_list_queues_b
+run_test "Tool 3 — list-queues pagination (broker-a)"  test_list_queues_pagination_a
+run_test "Tool 3 — list-queues pagination (broker-b)"  test_list_queues_pagination_b
+run_test "Tool 3 — list-queues VPN scope (broker-a)"   test_list_queues_vpn_scope_a
+run_test "Tool 3 — list-queues VPN scope (broker-b)"   test_list_queues_vpn_scope_b
 
-run_test "Tool 5 — list-clients (broker-a)"            test_list_clients_a
-run_test "Tool 5 — list-clients (broker-b)"            test_list_clients_b
-run_test "Tool 5 — list-clients pagination (broker-a)" test_list_clients_pagination_a
-run_test "Tool 5 — list-clients pagination (broker-b)" test_list_clients_pagination_b
+run_test "Tool 4 — list-clients (broker-a)"            test_list_clients_a
+run_test "Tool 4 — list-clients (broker-b)"            test_list_clients_b
+run_test "Tool 4 — list-clients pagination (broker-a)" test_list_clients_pagination_a
+run_test "Tool 4 — list-clients pagination (broker-b)" test_list_clients_pagination_b
 
-run_test "Tool 6 — get-client-details F3 (broker-a)"   test_get_client_details_f3_a
-run_test "Tool 6 — get-client-details F3 (broker-b)"   test_get_client_details_f3_b
+run_test "Tool 5 — get-client-details F3 (broker-a)"   test_get_client_details_f3_a
+run_test "Tool 5 — get-client-details F3 (broker-b)"   test_get_client_details_f3_b
 
-run_test "Tool 7 — list-client-subscriptions (broker-a)"            test_list_client_subscriptions_a
-run_test "Tool 7 — list-client-subscriptions (broker-b)"            test_list_client_subscriptions_b
-run_test "Tool 7 — list-client-subscriptions pagination (broker-a)" test_list_client_subscriptions_pagination_a
-run_test "Tool 7 — list-client-subscriptions pagination (broker-b)" test_list_client_subscriptions_pagination_b
+run_test "Tool 6 — list-client-subscriptions (broker-a)"            test_list_client_subscriptions_a
+run_test "Tool 6 — list-client-subscriptions (broker-b)"            test_list_client_subscriptions_b
+run_test "Tool 6 — list-client-subscriptions pagination (broker-a)" test_list_client_subscriptions_pagination_a
+run_test "Tool 6 — list-client-subscriptions pagination (broker-b)" test_list_client_subscriptions_pagination_b
 
-run_test "Tool 8 — get-message-rates (broker-a)"       test_get_message_rates_a
-run_test "Tool 8 — get-message-rates (broker-b)"       test_get_message_rates_b
+run_test "Tool 7 — get-message-rates (broker-a)"       test_get_message_rates_a
+run_test "Tool 7 — get-message-rates (broker-b)"       test_get_message_rates_b
 
-run_test "Tool 9 — list-rdps (broker-a)"               test_list_rdps_a
-run_test "Tool 9 — list-rdps (broker-b)"               test_list_rdps_b
-run_test "Tool 9 — list-rdps pagination (broker-a)"    test_list_rdps_pagination_a
-run_test "Tool 9 — list-rdps pagination (broker-b)"    test_list_rdps_pagination_b
+run_test "Tool 8 — list-rdps (broker-a)"               test_list_rdps_a
+run_test "Tool 8 — list-rdps (broker-b)"               test_list_rdps_b
+run_test "Tool 8 — list-rdps pagination (broker-a)"    test_list_rdps_pagination_a
+run_test "Tool 8 — list-rdps pagination (broker-b)"    test_list_rdps_pagination_b
 
-run_test "Tool 10 — get-queue-metrics slow consumer (broker-a)" test_get_queue_metrics_slow_consumer_a
-run_test "Tool 10 — get-queue-metrics slow consumer (broker-b)" test_get_queue_metrics_slow_consumer_b
+run_test "Tool 9 — get-queue-metrics slow consumer (broker-a)" test_get_queue_metrics_slow_consumer_a
+run_test "Tool 9 — get-queue-metrics slow consumer (broker-b)" test_get_queue_metrics_slow_consumer_b
+
+run_test "Tool 10 — list-slow-subscribers (broker-a)"            test_list_slow_subscribers_a
+run_test "Tool 10 — list-slow-subscribers (broker-b)"            test_list_slow_subscribers_b
+run_test "Tool 10 — list-slow-subscribers pagination (broker-a)" test_list_slow_subscribers_pagination_a
+run_test "Tool 10 — list-slow-subscribers pagination (broker-b)" test_list_slow_subscribers_pagination_b
+
+run_test "Tool 11 — list-queue-discards (broker-a)"             test_list_queue_discards_a
+run_test "Tool 11 — list-queue-discards (broker-b)"             test_list_queue_discards_b
+run_test "Tool 11 — list-queue-discards pagination (broker-a)"  test_list_queue_discards_pagination_a
+run_test "Tool 11 — list-queue-discards pagination (broker-b)"  test_list_queue_discards_pagination_b
+
+run_test "Tool 12 — get-discard-stats broker-wide (broker-a)"   test_get_discard_stats_broker_wide_a
+run_test "Tool 12 — get-discard-stats broker-wide (broker-b)"   test_get_discard_stats_broker_wide_b
+run_test "Tool 12 — get-discard-stats per-VPN (broker-a)"       test_get_discard_stats_per_vpn_a
+run_test "Tool 12 — get-discard-stats per-VPN (broker-b)"       test_get_discard_stats_per_vpn_b
 
 print_summary "MCP tool tests"

@@ -227,41 +227,59 @@ test_f5_slow_consumer_b() {
     verify_slow_consumer_state "broker-b" "$BROKER_B_URL"
 }
 
-# ── AC 8 — F6-spool discards ─────────────────────────────────────────────────
+# ── F6 — slow DIRECT subscriber (per-client slowSubscriber flag) ────────────
+# The counterpart to F5: a SIGSTOP'd direct subscriber under a large-payload
+# flood whose TCP egress window stays shut, so the broker flags it
+# slowSubscriber=true. This is the per-client signal list-slow-subscribers
+# filters on — the queue-level F5 case never flips it (SOL-150328). create_*
+# already polled the flag true; re-poll here so a clean diagnostic fires if the
+# stall ever stops holding (the flag is over a rolling ~1 min window).
+
+verify_slow_subscriber_state() {
+    local label="$1"
+    local broker_url="$2"
+    local client_name="$3"
+    wait_for_slow_subscriber "$broker_url" "$label" "$client_name" || return 1
+}
+
+test_f6_slow_subscriber_a() { verify_slow_subscriber_state "broker-a" "$BROKER_A_URL" "$F6_SUB_CLIENT_NAME_A"; }
+test_f6_slow_subscriber_b() { verify_slow_subscriber_state "broker-b" "$BROKER_B_URL" "$F6_SUB_CLIENT_NAME_B"; }
+
+# ── AC 8 — F7-spool discards ─────────────────────────────────────────────────
 
 verify_discard_spool_state() {
     local label="$1"
     local broker_url="$2"
     local body
-    body=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/queues/$F6_SPOOL_QUEUE") || {
-        log_fail "F6-spool [$label]: GET queues/$F6_SPOOL_QUEUE failed"
+    body=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/queues/$F7_SPOOL_QUEUE") || {
+        log_fail "F7-spool [$label]: GET queues/$F7_SPOOL_QUEUE failed"
         return 1
     }
     local count
     count=$(echo "$body" | jq -r '.data.maxMsgSpoolUsageExceededDiscardedMsgCount')
     assert_json_field "$body" \
         ".data.maxMsgSpoolUsageExceededDiscardedMsgCount > 0" "true" \
-        "F6-spool [$label]: maxMsgSpoolUsageExceededDiscardedMsgCount must be > 0 (got $count)" || return 1
+        "F7-spool [$label]: maxMsgSpoolUsageExceededDiscardedMsgCount must be > 0 (got $count)" || return 1
 }
 
 test_ac8_discard_spool_a() { verify_discard_spool_state "broker-a" "$BROKER_A_URL"; }
 test_ac8_discard_spool_b() { verify_discard_spool_state "broker-b" "$BROKER_B_URL"; }
 
-# ── AC 9 — F6-ttl discards ───────────────────────────────────────────────────
+# ── AC 9 — F7-ttl discards ───────────────────────────────────────────────────
 
 verify_discard_ttl_state() {
     local label="$1"
     local broker_url="$2"
     local body
-    body=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/queues/$F6_TTL_QUEUE") || {
-        log_fail "F6-ttl [$label]: GET queues/$F6_TTL_QUEUE failed"
+    body=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/queues/$F7_TTL_QUEUE") || {
+        log_fail "F7-ttl [$label]: GET queues/$F7_TTL_QUEUE failed"
         return 1
     }
     local count
     count=$(echo "$body" | jq -r '.data.maxTtlExpiredDiscardedMsgCount')
     assert_json_field "$body" \
         ".data.maxTtlExpiredDiscardedMsgCount > 0" "true" \
-        "F6-ttl [$label]: maxTtlExpiredDiscardedMsgCount must be > 0 (got $count)" || return 1
+        "F7-ttl [$label]: maxTtlExpiredDiscardedMsgCount must be > 0 (got $count)" || return 1
 }
 
 test_ac9_discard_ttl_a() { verify_discard_ttl_state "broker-a" "$BROKER_A_URL"; }
@@ -279,9 +297,11 @@ run_test "AC 5 — F4 sustained traffic (broker-a)" test_ac5_sustained_traffic_s
 run_test "AC 5 — F4 sustained traffic (broker-b)" test_ac5_sustained_traffic_state_b
 run_test "F5 — slow consumer queue signals (broker-a)" test_f5_slow_consumer_a
 run_test "F5 — slow consumer queue signals (broker-b)" test_f5_slow_consumer_b
-run_test "AC 8 — F6-spool discard count (broker-a)" test_ac8_discard_spool_a
-run_test "AC 8 — F6-spool discard count (broker-b)" test_ac8_discard_spool_b
-run_test "AC 9 — F6-ttl discard count (broker-a)" test_ac9_discard_ttl_a
-run_test "AC 9 — F6-ttl discard count (broker-b)" test_ac9_discard_ttl_b
+run_test "F6 — slow subscriber flag (broker-a)" test_f6_slow_subscriber_a
+run_test "F6 — slow subscriber flag (broker-b)" test_f6_slow_subscriber_b
+run_test "AC 8 — F7-spool discard count (broker-a)" test_ac8_discard_spool_a
+run_test "AC 8 — F7-spool discard count (broker-b)" test_ac8_discard_spool_b
+run_test "AC 9 — F7-ttl discard count (broker-a)" test_ac9_discard_ttl_a
+run_test "AC 9 — F7-ttl discard count (broker-b)" test_ac9_discard_ttl_b
 
 print_summary "Fixture verification"

@@ -39,7 +39,7 @@ import (
 // draining on the way out; a short grace is strictly better than a long one.
 const terminateGrace = 1 * time.Second
 
-// batchFlushGrace is the publisher-flush window for the short-lived F6
+// batchFlushGrace is the publisher-flush window for the short-lived F7
 // publish-batch driver. Unlike the long-lived drivers it exits on its own and
 // is never SIGKILLed by teardown, so it gets a generous window to flush its
 // in-flight persistent publishes before disconnecting.

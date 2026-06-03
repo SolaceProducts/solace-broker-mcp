@@ -36,8 +36,8 @@ All fixtures apply to both brokers in parallel (`solace-e2e-mon-a`,
 tools run against the base fixture copied from `e2e-basic-mcp` — no new
 fixture needed.
 
-F1, F2, F3, F4, F5, and F6 are implemented today, driven by the
-`broker-driver` binary for the client-bearing fixtures (F3–F6).
+F1, F2, F3, F4, F5, F6, and F7 are implemented today, driven by the
+`broker-driver` binary for the client-bearing fixtures (F3–F7).
 
 | ID       | Status      | Fixture                  | Required broker state                                                                                                                                  | Lifecycle                          | MCP tools supported                                                                |
 | -------- | ----------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------- | ---------------------------------------------------------------------------------- |
@@ -46,13 +46,16 @@ F1, F2, F3, F4, F5, and F6 are implemented today, driven by the
 | F3       | Implemented | Connected client         | One long-lived persistent receiver per broker on default VPN with deterministic `clientName` and ≥1 named topic subscription. **Verification:** client appears in `list-clients` and reports the expected subscription. | background broker-driver | `list-clients`, `get-client-details`, `list-client-subscriptions`                  |
 | F4       | Implemented | Sustained traffic        | Publisher targets 100 msg/s, 256-byte payload, persistent; broker observes ~92 msg/s sustained after ~5 s settle. **Verification:** `rxMsgRate ≥ 80` and `txMsgRate ≥ 80` after 25 s of fixture runtime. | background broker-driver | `get-message-rates`                                                                |
 | F5       | Implemented | Slow guaranteed consumer | Queue `test-queue-slow-consumer` (`maxDeliveredUnackedMsgsPerFlow=10`) fed fast while a queue-bound receiver ACKs every 2 s, so unacked pins at the per-flow ceiling and the spool backs up. **Verification (queue-level signals, not client `slowSubscriber` — SOL-150328/SOL-150344):** `bindCount > 0`, `txUnackedMsgCount` near the `maxDeliveredUnackedMsgsPerFlow=10` ceiling (≥ 80%, i.e. ≥ 8 — a slow-but-nonzero ACK rate makes it oscillate by one), `rxMsgRate > txMsgRate`, and `spooledMsgCount` growing across two samples. | background broker-driver | `get-queue-metrics`, `list-queues` |
-| F6-spool | Implemented | Discards via spool quota | Queue `test-queue-discards-spool` with `maxMsgSpoolUsage=1 MB` + `egressEnabled=false`; one-shot publish ~2 MB. **Verification:** `maxMsgSpoolUsageExceededDiscardedMsgCount > 0` after one-shot publish. | one-shot SEMP + one-shot broker-driver publish | `get-discard-stats`              |
-| F6-ttl   | Implemented | Discards via TTL expiry  | Queue `test-queue-discards-ttl` with `maxTtl=1 s` + no consumer; one-shot publish + 2 s wait. **Verification:** `maxTtlExpiredDiscardedMsgCount > 0` after one-shot publish. | one-shot SEMP + one-shot broker-driver publish | `get-discard-stats`                         |
+| F6      | Implemented | Slow direct subscriber   | A direct topic subscriber on each broker is `SIGSTOP`ed while a separate publisher floods its topic (`rate=3000`, `size=50000`), closing its TCP egress window so the broker sets the per-client `slowSubscriber` flag. Distinct from F5: this is the per-client flag a slow-ACK guaranteed consumer never trips (SOL-150328). **Verification:** `clients/<name>.slowSubscriber == true` (polled — rolling ~1 min window). | background broker-driver (subscriber `SIGSTOP`ed + flood publisher) | `list-slow-subscribers` |
+| F7-spool | Implemented | Discards via spool quota | Queue `test-queue-discards-spool` with `maxMsgSpoolUsage=1 MB` + `egressEnabled=false`; one-shot publish ~2 MB. **Verification:** `maxMsgSpoolUsageExceededDiscardedMsgCount > 0` after one-shot publish. | one-shot SEMP + one-shot broker-driver publish | `list-queue-discards` (per-queue), `get-discard-stats` (broker-wide) |
+| F7-ttl   | Implemented | Discards via TTL expiry  | Queue `test-queue-discards-ttl` with `maxTtl=1 s` + no consumer; one-shot publish + 2 s wait. **Verification:** `maxTtlExpiredDiscardedMsgCount > 0` after one-shot publish. | one-shot SEMP + one-shot broker-driver publish | `list-queue-discards` (per-queue), `get-discard-stats` (broker-wide) |
 
 Activation order is deterministic: F1 and F2 (SEMP-only) before F3/F4
-(client-bearing). F5 and F6 follow F3/F4 — each owns a dedicated queue
+(client-bearing). F5, F6, and F7 follow F3/F4 — each owns dedicated resources
 independent of the others. F5's consumer binds to its queue, so teardown reaps
-the broker-driver before deleting the queue (see Cleanup order).
+the broker-driver before deleting the queue (see Cleanup order). F6 owns no
+queue (direct messaging); its `create_*` blocks until the `slowSubscriber` flag
+has flipped, so tool tests can read it immediately afterward.
 
 ## Build prerequisites
 
@@ -96,8 +99,8 @@ a single binary (named `agent/` there, predating this suite's split) speaks
 the MCP protocol against the running server and validates tool responses.
 
 SOL-150024 adds `broker-driver` — a binary that produces **runtime broker
-activity** for fixtures F3–F6 (connected client, sustained publisher,
-publish-batch, slow consumer). This is a deliberate departure from the
+activity** for fixtures F3–F7 (connected client, sustained publisher,
+publish-batch, slow consumer, slow direct subscriber). This is a deliberate departure from the
 basic-mcp pattern because SEMP `curl` alone cannot produce messaging-layer
 state — only a real SMF client can open a connection or publish at a target
 rate. The heavy CGO dependency stays scoped to `broker-driver`; the MCP-tool
@@ -115,8 +118,9 @@ broker-driver <subcommand> [flags]
 | ------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------- | ----------- | ---------------------------------------------------------------------------- |
 | `connected-client`  | F3 long-lived receiver               | `--broker {a\|b}`, `--vpn`, `--client-name`, `--queue`, `--subscriptions`                       | F3          | `list-clients`, `get-client-details`, `list-client-subscriptions`            |
 | `publisher`         | F4 sustained publisher               | `--broker`, `--vpn`, `--topic`, `--rate`, `--size`, `--message-type`, `--duration`              | F4          | `get-message-rates`                                                          |
-| `publish-batch`     | F6 one-shot publisher                | `--broker`, `--vpn`, `--topic`, `--count`, `--size`, `--rate`                                   | F6-spool, F6-ttl | `get-discard-stats`                                                     |
+| `publish-batch`     | F7 one-shot publisher                | `--broker`, `--vpn`, `--topic`, `--count`, `--size`, `--rate`                                   | F7-spool, F7-ttl | `list-queue-discards`, `get-discard-stats`                            |
 | `slow-consumer`     | F5 fast publisher + slow consumer    | `--broker`, `--vpn`, `--queue`, `--topic`, `--rate`, `--size`, `--ack-delay`                     | F5          | `get-queue-metrics`, `list-queues`                                          |
+| `slow-direct-subscriber` | F6 direct subscriber (`SIGSTOP`ed by harness to flip `slowSubscriber`) | `--broker`, `--vpn`, `--client-name`, `--topic`                              | F6         | `list-slow-subscribers`                                                     |
 
 ### Common conventions
 
@@ -172,14 +176,14 @@ wrapping script prefers a bounded process to one it has to signal):
 Omit `--duration` for long-running fixtures (the default); `helpers.sh` reaps
 the process via its pidfile during teardown.
 
-`broker-driver publish-batch` for F6-spool (publish ~2 MB to overflow 1 MB
+`broker-driver publish-batch` for F7-spool (publish ~2 MB to overflow 1 MB
 quota):
 
 ```bash
 ./bin/broker-driver publish-batch --broker=a --topic=t-discards-spool --count=8000 --size=256 --message-type=persistent
 ```
 
-`broker-driver publish-batch` for F6-ttl:
+`broker-driver publish-batch` for F7-ttl:
 
 ```bash
 ./bin/broker-driver publish-batch --broker=a --topic=t-discards-ttl --count=200 --size=256 --message-type=persistent
@@ -213,7 +217,7 @@ fixture sizes change.
 - Use the instantaneous fields: `rxMsgRate`, `txMsgRate`.
 - A 25 s assertion window gives ~20 s margin above the empirical stable point.
 
-### F6 — discard mechanics
+### F7 — discard mechanics
 
 - Spool-quota field on monitor API:
   `maxMsgSpoolUsageExceededDiscardedMsgCount`.
@@ -230,7 +234,8 @@ when it exits (for any reason — normal end, error, Ctrl-C, killed):
 2. **Stop the broker-driver processes** (`stop_broker_drivers` in
    `helpers.sh`). Each broker-driver fixture writes a PID file named
    `bin/broker-driver-f<N>-<broker>.pid` (e.g. `bin/broker-driver-f4-a.pid`)
-   when it starts. The stop helper finds all of them, sends a polite
+   when it starts. The stop helper finds all of them, first sends `SIGCONT`
+   (so the deliberately-`SIGSTOP`ed F6 subscriber can react), then a polite
    termination signal, waits up to 5 seconds, then force-kills anything
    still running.
 3. **Delete broker fixtures** (`cleanup_fixtures` in `helpers.sh`).
