@@ -214,28 +214,45 @@ start_server() {
     return 1
 }
 
+# Terminates one or more PIDs: sends SIGTERM to each that is still alive,
+# waits up to 5s for all of them to exit, then SIGKILLs any straggler. PIDs are
+# signalled concurrently so the grace window is shared across them, not paid
+# per-PID. Already-dead PIDs (and empty/garbage ones) are skipped. We poll with
+# `kill -0` rather than `wait` because these processes are not direct children
+# of this shell: the MCP server is a child of start-server.sh and the
+# broker-drivers run in their own sessions.
+kill_gracefully() {
+    local pids=() pid
+    for pid in "$@"; do
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -TERM "$pid" 2>/dev/null || true
+            pids+=("$pid")
+        fi
+    done
+    [ ${#pids[@]} -gt 0 ] || return 0
+
+    local elapsed=0
+    while [ ${#pids[@]} -gt 0 ] && [ "$elapsed" -lt 5 ]; do
+        sleep 1; elapsed=$((elapsed + 1))
+        local still=()
+        for pid in "${pids[@]}"; do
+            kill -0 "$pid" 2>/dev/null && still+=("$pid")
+        done
+        pids=( ${still[@]+"${still[@]}"} )
+    done
+
+    for pid in ${pids[@]+"${pids[@]}"}; do
+        log_warn "PID $pid did not exit within 5s; sending SIGKILL"
+        kill -KILL "$pid" 2>/dev/null || true
+    done
+}
+
 stop_server() {
-    # `wait` only works on direct children of the current shell. When this
-    # helper is sourced into test-monitoring-tools.sh and MCP_SERVER_PID was
-    # read from a pidfile (server is a child of start-server.sh, not us), we
-    # poll with `kill -0` instead. Escalate to SIGKILL if the server hasn't
-    # exited within the grace window — mirrors stop_broker_drivers.
     if [ -z "$MCP_SERVER_PID" ] || ! kill -0 "$MCP_SERVER_PID" 2>/dev/null; then
         return 0
     fi
     log_info "Stopping MCP server (PID=$MCP_SERVER_PID) ..."
-    kill -TERM "$MCP_SERVER_PID" 2>/dev/null || true
-
-    local elapsed=0
-    while kill -0 "$MCP_SERVER_PID" 2>/dev/null && [ "$elapsed" -lt 5 ]; do
-        sleep 1
-        elapsed=$((elapsed + 1))
-    done
-
-    if kill -0 "$MCP_SERVER_PID" 2>/dev/null; then
-        log_warn "MCP server did not exit within 5s; sending SIGKILL"
-        kill -KILL "$MCP_SERVER_PID" 2>/dev/null || true
-    fi
+    kill_gracefully "$MCP_SERVER_PID"
     MCP_SERVER_PID=""
 }
 
@@ -244,32 +261,19 @@ stop_server() {
 BROKER_DRIVER_PIDFILE_GLOB="$BIN_DIR/broker-driver-f*.pid"
 
 # Stop any long-lived broker-driver processes that fixtures F3-F6 spawn.
-# Reads each PID file under bin/, sends a polite termination signal (TERM),
-# waits up to 5 seconds for them to exit cleanly, then forces (KILL).
+# Reads each PID file under bin/ and hands the PIDs to kill_gracefully, which
+# signals them concurrently (TERM, then KILL after a shared 5s grace window).
 # Safe to call when there are no PID files (no-op until F3 lands).
 stop_broker_drivers() {
     local pidfiles=( $BROKER_DRIVER_PIDFILE_GLOB )
     [ -e "${pidfiles[0]}" ] || return 0
 
-    local pids=()
+    local pids=() f
     for f in "${pidfiles[@]}"; do
-        local pid; pid=$(<"$f")
-        if kill -0 "$pid" 2>/dev/null; then
-            kill -TERM "$pid"
-            pids+=("$pid")
-        fi
+        pids+=("$(<"$f")")
     done
+    kill_gracefully "${pids[@]}"
 
-    local elapsed=0
-    while [ ${#pids[@]} -gt 0 ] && [ "$elapsed" -lt 5 ]; do
-        sleep 1; elapsed=$((elapsed+1))
-        local still=(); for p in "${pids[@]}"; do
-            kill -0 "$p" 2>/dev/null && still+=("$p")
-        done
-        pids=( ${still[@]+"${still[@]}"} )
-    done
-
-    for p in ${pids[@]+"${pids[@]}"}; do kill -KILL "$p" 2>/dev/null; done
     rm -f $BROKER_DRIVER_PIDFILE_GLOB
     # Allow the broker to finish cleaning up stale SMF sessions before
     # subsequent SEMP config operations run. Only reached when broker-drivers
@@ -612,6 +616,11 @@ F5_PUBLISH_RATE=100   # msg/s into the queue's topic
 F5_PUBLISH_SIZE=256   # bytes per message
 F5_ACK_DELAY="2s"     # delay before ACKing each message (the throttle)
 F5_MAX_UNACKED=10     # maxDeliveredUnackedMsgsPerFlow on the F5 queue
+# txUnackedMsgCount oscillates by one as the slow consumer ACKs, so the
+# "pinned near the ceiling" assertion uses 80% of the per-flow cap rather than
+# exact equality. Shared by verify-fixtures.sh (SEMP-direct) and tool-tests.sh
+# (MCP-tool) so both layers assert against the same threshold.
+F5_NEAR_UNACKED=$(( F5_MAX_UNACKED * 8 / 10 ))
 
 # Provisions F5_QUEUE with a low per-flow unacked window and a subscription to
 # F5_TOPIC, then spawns a long-lived broker-driver slow-consumer that floods the

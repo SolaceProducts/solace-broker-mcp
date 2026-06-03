@@ -7,6 +7,33 @@
 set -euo pipefail
 source "$(dirname "$0")/helpers.sh"
 
+# Sleeps out the remainder of a fixture's settle window. Given the epoch the
+# fixture finished starting and the total window, sleeps only the time not
+# already elapsed — so a second caller after the window has passed is a no-op.
+# When the epoch is unset (fixture state unknown), sleeps the full window
+# defensively. Shared by the F4 and F5 settle waits.
+#   $1 ready_epoch     seconds-since-epoch the fixture became ready ("" if unknown)
+#   $2 settle_seconds  total settle window
+#   $3 label           human description for the log line
+wait_for_settle() {
+    local ready_epoch="$1"
+    local settle_seconds="$2"
+    local label="$3"
+    if [ -z "$ready_epoch" ]; then
+        log_warn "$label: ready-epoch unset; assuming it just started"
+        sleep "$settle_seconds"
+        return
+    fi
+    local now elapsed remaining
+    now=$(date +%s)
+    elapsed=$((now - ready_epoch))
+    remaining=$((settle_seconds - elapsed))
+    if [ "$remaining" -gt 0 ]; then
+        log_info "Waiting ${remaining}s for $label to settle ..."
+        sleep "$remaining"
+    fi
+}
+
 # ── AC 2 — F1 multi-VPN ─────────────────────────────────────────────────────
 # `test-vpn` exists on both brokers with enabled=false, state=down.
 
@@ -101,22 +128,6 @@ test_ac4_connected_client_state_b() {
 F4_SETTLE_SECONDS=25
 F4_RATE_THRESHOLD=80
 
-wait_for_f4_settle() {
-    if [ -z "${F4_READY_EPOCH:-}" ]; then
-        log_warn "F4_READY_EPOCH unset; assuming F4 just started"
-        sleep "$F4_SETTLE_SECONDS"
-        return
-    fi
-    local now elapsed remaining
-    now=$(date +%s)
-    elapsed=$((now - F4_READY_EPOCH))
-    remaining=$((F4_SETTLE_SECONDS - elapsed))
-    if [ "$remaining" -gt 0 ]; then
-        log_info "Waiting ${remaining}s for F4 rate to settle (target ≥ ${F4_RATE_THRESHOLD} msg/s) ..."
-        sleep "$remaining"
-    fi
-}
-
 verify_sustained_traffic_state() {
     local label="$1"
     local broker_url="$2"
@@ -137,13 +148,17 @@ verify_sustained_traffic_state() {
         "F4 [$label]: txMsgRate must be ≥ $F4_RATE_THRESHOLD (got $tx)" || return 1
 }
 
+f4_settle() {
+    wait_for_settle "${F4_READY_EPOCH:-}" "$F4_SETTLE_SECONDS" \
+        "F4 rate (target ≥ ${F4_RATE_THRESHOLD} msg/s)"
+}
 test_ac5_sustained_traffic_state_a() {
-    wait_for_f4_settle
+    f4_settle
     verify_sustained_traffic_state "broker-a" "$BROKER_A_URL"
 }
 test_ac5_sustained_traffic_state_b() {
-    # wait_for_f4_settle is a no-op the second time through.
-    wait_for_f4_settle
+    # f4_settle is a no-op the second time through (window already elapsed).
+    f4_settle
     verify_sustained_traffic_state "broker-b" "$BROKER_B_URL"
 }
 
@@ -155,22 +170,6 @@ test_ac5_sustained_traffic_state_b() {
 # spool keeps growing.
 
 F5_SETTLE_SECONDS=30
-
-wait_for_f5_settle() {
-    if [ -z "${F5_READY_EPOCH:-}" ]; then
-        log_warn "F5_READY_EPOCH unset; assuming F5 just started"
-        sleep "$F5_SETTLE_SECONDS"
-        return
-    fi
-    local now elapsed remaining
-    now=$(date +%s)
-    elapsed=$((now - F5_READY_EPOCH))
-    remaining=$((F5_SETTLE_SECONDS - elapsed))
-    if [ "$remaining" -gt 0 ]; then
-        log_info "Waiting ${remaining}s for F5 slow-consumer signals to develop ..."
-        sleep "$remaining"
-    fi
-}
 
 verify_slow_consumer_state() {
     local label="$1"
@@ -194,10 +193,9 @@ verify_slow_consumer_state() {
     # Unacked messages pin NEAR the per-flow ceiling — the slow-ACK signature.
     # "Near", not "==": a slow-but-nonzero ACK rate makes the count oscillate by
     # one (it dips just after each ACK, before the broker redelivers), so require
-    # ≥ 80% of the ceiling rather than the exact value.
-    local near_unacked=$(( F5_MAX_UNACKED * 8 / 10 ))
-    assert_json_field "$body" ".data.txUnackedMsgCount >= $near_unacked" "true" \
-        "F5 [$label]: txUnackedMsgCount must be near the $F5_MAX_UNACKED ceiling (≥ $near_unacked, got $unacked)" || return 1
+    # ≥ F5_NEAR_UNACKED (80% of the ceiling) rather than the exact value.
+    assert_json_field "$body" ".data.txUnackedMsgCount >= $F5_NEAR_UNACKED" "true" \
+        "F5 [$label]: txUnackedMsgCount must be near the $F5_MAX_UNACKED ceiling (≥ $F5_NEAR_UNACKED, got $unacked)" || return 1
     # Ingress outpaces egress: publisher feeds faster than the throttled consumer drains.
     assert_json_field "$body" ".data.rxMsgRate > .data.txMsgRate" "true" \
         "F5 [$label]: rxMsgRate must exceed txMsgRate (got rx=$rx tx=$tx)" || return 1
@@ -215,13 +213,17 @@ verify_slow_consumer_state() {
         "F5 [$label]: spooledMsgCount must be growing (was $spooled1, now $spooled2)" || return 1
 }
 
+f5_settle() {
+    wait_for_settle "${F5_READY_EPOCH:-}" "$F5_SETTLE_SECONDS" \
+        "F5 slow-consumer signals"
+}
 test_f5_slow_consumer_a() {
-    wait_for_f5_settle
+    f5_settle
     verify_slow_consumer_state "broker-a" "$BROKER_A_URL"
 }
 test_f5_slow_consumer_b() {
-    # wait_for_f5_settle is a no-op the second time through.
-    wait_for_f5_settle
+    # f5_settle is a no-op the second time through (window already elapsed).
+    f5_settle
     verify_slow_consumer_state "broker-b" "$BROKER_B_URL"
 }
 

@@ -353,7 +353,6 @@ test_list_rdps_pagination_b() { test_list_rdps_pagination "broker-b"; }
 test_get_queue_metrics_slow_consumer() {
     local broker="$1"
     local response content bind unacked rx tx spooled1 spooled2
-    local near_unacked=$(( F5_MAX_UNACKED * 8 / 10 ))
 
     response=$(mcp_call_tool "get-queue-metrics" \
         "$(jq -nc --arg b "$broker" --arg q "$F5_QUEUE" \
@@ -372,9 +371,9 @@ test_get_queue_metrics_slow_consumer() {
         "get-queue-metrics [$broker]: bindCount must be > 0 (got $bind)" || return 1
     # Unacked messages pin NEAR the per-flow ceiling — the slow-ACK signature.
     # "Near", not "==": a slow-but-nonzero ACK rate makes the count oscillate by
-    # one, so assert ≥ 80% of the ceiling rather than exact equality.
-    assert_json_field "$content" ".queueMetrics.data.txUnackedMsgCount >= $near_unacked" "true" \
-        "get-queue-metrics [$broker]: txUnackedMsgCount must be near the $F5_MAX_UNACKED ceiling (≥ $near_unacked, got $unacked)" || return 1
+    # one, so assert ≥ F5_NEAR_UNACKED (80% of the ceiling) rather than exact equality.
+    assert_json_field "$content" ".queueMetrics.data.txUnackedMsgCount >= $F5_NEAR_UNACKED" "true" \
+        "get-queue-metrics [$broker]: txUnackedMsgCount must be near the $F5_MAX_UNACKED ceiling (≥ $F5_NEAR_UNACKED, got $unacked)" || return 1
     # Ingress outruns egress while the consumer lags.
     assert_json_field "$content" '.queueMetrics.data.rxMsgRate > .queueMetrics.data.txMsgRate' "true" \
         "get-queue-metrics [$broker]: rxMsgRate must exceed txMsgRate (got rx=$rx tx=$tx)" || return 1
