@@ -1649,3 +1649,337 @@ func TestExecute_ListRDPs_TruncatesAtMaxResults(t *testing.T) {
 		t.Errorf("expected 1 SEMP call, got %d", len(client.calls))
 	}
 }
+
+// getReplicationStatusTool returns the get-replication-status tool definition for tests.
+func getReplicationStatusTool() CompositeTool {
+	return CompositeTool{
+		Name:        "get-replication-status",
+		Description: "Get replication state for a Message VPN",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+		},
+		Steps: []Step{
+			{
+				ID:        "replication",
+				Operation: "monitor/getMsgVpn",
+				Args: map[string]string{
+					"msgVpnName": "{{.Params.msgVpnName}}",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// listSlowSubscribersTool returns the list-slow-subscribers tool definition for tests.
+func listSlowSubscribersTool() CompositeTool {
+	return CompositeTool{
+		Name:        "list-slow-subscribers",
+		Description: "List clients flagged as slow subscribers",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "maxResults", Type: "integer", Required: false},
+		},
+		Steps: []Step{
+			{
+				ID:          "slowSubscribers",
+				Operation:   "monitor/getMsgVpnClients",
+				FollowPages: true,
+				Args: map[string]string{
+					"msgVpnName": "{{.Params.msgVpnName}}",
+					"count":      "100",
+					"where":      "slowSubscriber==true",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// listQueueDiscardsTool returns the list-queue-discards tool definition for tests.
+func listQueueDiscardsTool() CompositeTool {
+	return CompositeTool{
+		Name:        "list-queue-discards",
+		Description: "List per-queue message discard counts for a Message VPN",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "maxResults", Type: "integer", Required: false},
+		},
+		Steps: []Step{
+			{
+				ID:          "queueDiscards",
+				Operation:   "monitor/getMsgVpnQueues",
+				FollowPages: true,
+				Args: map[string]string{
+					"msgVpnName": "{{.Params.msgVpnName}}",
+					"count":      "100",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// makeSlowSubscriberItems builds a slice of n mock slow-subscriber client objects
+// for use in paginated responses (slowSubscriber forced true to mirror the SEMP
+// where filter that the tool applies).
+func makeSlowSubscriberItems(n int) []any {
+	items := make([]any, n)
+	for i := range items {
+		items[i] = map[string]any{
+			"clientName":          fmt.Sprintf("slow-client-%d", i),
+			"slowSubscriber":      true,
+			"txDiscardedMsgCount": float64(0),
+		}
+	}
+	return items
+}
+
+// makeQueueDiscardItems builds a slice of n mock queue objects with discard
+// counters for use in list-queue-discards paginated responses.
+func makeQueueDiscardItems(n int) []any {
+	items := make([]any, n)
+	for i := range items {
+		items[i] = map[string]any{
+			"queueName": fmt.Sprintf("queue-%d", i),
+			"maxTtlExceededDiscardedMsgCount":           float64(0),
+			"maxRedeliveryExceededDiscardedMsgCount":    float64(0),
+			"maxMsgSpoolUsageExceededDiscardedMsgCount": float64(0),
+		}
+	}
+	return items
+}
+
+func TestExecute_GetReplicationStatus_ReturnsData(t *testing.T) {
+	client := newMockClient()
+	client.responses["getMsgVpn"] = &sempv2.Result{
+		Data: map[string]any{
+			"msgVpnName":                                    "default",
+			"replicationEnabled":                            true,
+			"replicationRole":                               "active",
+			"replicationTransactionMode":                    "sync",
+			"replicationActiveAsyncQueuedMsgCount":          float64(0),
+			"replicationActiveSyncQueuedMsgCount":           float64(0),
+			"replicationActiveSyncIneligiblePeakTime":       float64(0),
+			"replicationBridgeUp":                           true,
+			"replicationRemoteBridgeUp":                     true,
+			"replicationSyncEligible":                       true,
+		},
+		StatusCode: 200,
+	}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), getReplicationStatusTool(), client, map[string]any{
+		"msgVpnName": "default",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	repl, ok := result["replication"].(map[string]any)
+	if !ok {
+		t.Fatal("expected replication key containing a map")
+	}
+	if repl["replicationEnabled"] != true {
+		t.Errorf("replicationEnabled = %v, want true", repl["replicationEnabled"])
+	}
+	if repl["replicationRole"] != "active" {
+		t.Errorf("replicationRole = %v, want active", repl["replicationRole"])
+	}
+	if repl["replicationSyncEligible"] != true {
+		t.Errorf("replicationSyncEligible = %v, want true", repl["replicationSyncEligible"])
+	}
+}
+
+func TestExecute_GetReplicationStatus_SEMPError(t *testing.T) {
+	client := newMockClient()
+	client.errors["getMsgVpn"] = &sempv2.SEMPError{
+		Operation:  "getMsgVpn",
+		StatusCode: 404,
+	}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	_, err := executor.Execute(context.Background(), getReplicationStatusTool(), client, map[string]any{
+		"msgVpnName": "nonexistent",
+	})
+	if err == nil {
+		t.Fatal("expected error when replication step fails, got nil")
+	}
+
+	var sempErr *sempv2.SEMPError
+	if !errors.As(err, &sempErr) {
+		t.Fatalf("expected SEMPError in error chain, got %T: %v", err, err)
+	}
+	if sempErr.StatusCode != 404 {
+		t.Errorf("StatusCode = %d, want 404", sempErr.StatusCode)
+	}
+	if sempErr.Operation != "getMsgVpn" {
+		t.Errorf("Operation = %q, want %q", sempErr.Operation, "getMsgVpn")
+	}
+}
+
+func TestExecute_ListSlowSubscribers_ReturnsFiltered(t *testing.T) {
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnClients", pageResult(makeSlowSubscriberItems(3), ""))
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listSlowSubscribersTool(), client, map[string]any{
+		"msgVpnName": "default",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	subs, ok := result["slowSubscribers"].(map[string]any)
+	if !ok {
+		t.Fatal("expected slowSubscribers key containing a map")
+	}
+	items, ok := subs["data"].([]any)
+	if !ok {
+		t.Fatal("expected slowSubscribers.data to be a slice")
+	}
+	if len(items) != 3 {
+		t.Errorf("len(items) = %d, want 3", len(items))
+	}
+	if subs["truncated"] != false {
+		t.Errorf("truncated = %v, want false", subs["truncated"])
+	}
+
+	// Verify the SEMP `where=slowSubscriber==true` predicate was passed through to
+	// the broker — server-side filtering is the entire point of this tool.
+	if len(client.calls) != 1 {
+		t.Fatalf("expected 1 SEMP call, got %d", len(client.calls))
+	}
+	if client.calls[0].args["where"] != "slowSubscriber==true" {
+		t.Errorf("where = %v, want slowSubscriber==true", client.calls[0].args["where"])
+	}
+}
+
+func TestExecute_ListSlowSubscribers_Empty(t *testing.T) {
+	// Empty is the steady-state return value: most VPNs don't have slow
+	// subscribers most of the time. Pins the len(items) == 0 → break path
+	// through the paginator.
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnClients", pageResult([]any{}, ""))
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listSlowSubscribersTool(), client, map[string]any{
+		"msgVpnName": "default",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	subs, ok := result["slowSubscribers"].(map[string]any)
+	if !ok {
+		t.Fatal("expected slowSubscribers key containing a map")
+	}
+	items, ok := subs["data"].([]any)
+	if !ok {
+		t.Fatal("expected slowSubscribers.data to be a slice")
+	}
+	if len(items) != 0 {
+		t.Errorf("len(items) = %d, want 0", len(items))
+	}
+	if subs["truncated"] != false {
+		t.Errorf("truncated = %v, want false", subs["truncated"])
+	}
+	if len(client.calls) != 1 {
+		t.Errorf("expected 1 SEMP call, got %d", len(client.calls))
+	}
+}
+
+func TestExecute_ListSlowSubscribers_TruncatesAtMaxResults(t *testing.T) {
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnClients", pageResult(makeSlowSubscriberItems(100), "cursor-next"))
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listSlowSubscribersTool(), client, map[string]any{
+		"msgVpnName": "default",
+		"maxResults": float64(40),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	subs := result["slowSubscribers"].(map[string]any)
+	items := subs["data"].([]any)
+
+	if len(items) != 40 {
+		t.Errorf("len(items) = %d, want 40", len(items))
+	}
+	if subs["truncated"] != true {
+		t.Errorf("truncated = %v, want true", subs["truncated"])
+	}
+	if len(client.calls) != 1 {
+		t.Errorf("expected 1 SEMP call, got %d", len(client.calls))
+	}
+}
+
+func TestExecute_ListQueueDiscards_SinglePage(t *testing.T) {
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnQueues", pageResult(makeQueueDiscardItems(5), ""))
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listQueueDiscardsTool(), client, map[string]any{
+		"msgVpnName": "default",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	stats, ok := result["queueDiscards"].(map[string]any)
+	if !ok {
+		t.Fatal("expected queueDiscards key containing a map")
+	}
+	items, ok := stats["data"].([]any)
+	if !ok {
+		t.Fatal("expected queueDiscards.data to be a slice")
+	}
+	if len(items) != 5 {
+		t.Errorf("len(items) = %d, want 5", len(items))
+	}
+	if stats["truncated"] != false {
+		t.Errorf("truncated = %v, want false", stats["truncated"])
+	}
+
+	// Spot-check that discard counter fields survived the round-trip.
+	first := items[0].(map[string]any)
+	if _, ok := first["maxTtlExceededDiscardedMsgCount"]; !ok {
+		t.Error("expected maxTtlExceededDiscardedMsgCount on per-queue result")
+	}
+}
+
+func TestExecute_ListQueueDiscards_TruncatesAtMaxResults(t *testing.T) {
+	client := newSeqMockClient()
+	client.addResponses("getMsgVpnQueues", pageResult(makeQueueDiscardItems(100), "cursor-next"))
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), listQueueDiscardsTool(), client, map[string]any{
+		"msgVpnName": "default",
+		"maxResults": float64(50),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	stats := result["queueDiscards"].(map[string]any)
+	items := stats["data"].([]any)
+
+	if len(items) != 50 {
+		t.Errorf("len(items) = %d, want 50", len(items))
+	}
+	if stats["truncated"] != true {
+		t.Errorf("truncated = %v, want true", stats["truncated"])
+	}
+	if len(client.calls) != 1 {
+		t.Errorf("expected 1 SEMP call, got %d", len(client.calls))
+	}
+}

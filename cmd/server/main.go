@@ -42,6 +42,7 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2/specs"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv1/brokerhealth"
+	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv1/discardstats"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv1/redundancy"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -289,6 +290,7 @@ func newBrokerReachabilityProbe(cfg *config.ServerConfig) func(context.Context, 
 func registerSEMPv1Tools(mgr *tools.ToolManager) {
 	mgr.Register(redundancy.NewHandler())
 	mgr.Register(brokerhealth.NewHandler())
+	mgr.Register(discardstats.NewHandler())
 }
 
 func main() {
