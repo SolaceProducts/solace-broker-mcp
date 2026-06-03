@@ -370,8 +370,8 @@ tools:
       List per-queue message discard counts for a Message VPN. Returns each
       queue with its TTL-expired, max-redelivery-exceeded, spool-quota-exceeded,
       and other discard category counters. Use this to diagnose why messages
-      are being dropped across queues. Aggregation across queues (sum totals)
-      is left to the caller — broker does not provide pre-aggregated discards.
+      are being dropped across queues. For broker-wide or per-VPN aggregate
+      totals, use get-discard-stats.
     annotations:
       readOnly: true
     parameters:

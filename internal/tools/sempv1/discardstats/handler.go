@@ -37,7 +37,6 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"html"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
@@ -71,14 +70,14 @@ const (
 	spoolStatsXML  = `<rpc><show><message-spool><stats/></message-spool></show></rpc>`
 )
 
-// vpnStatsXML returns the per-VPN client-stats RPC. vpnName is XML-escaped to
-// neutralize any embedded markup before interpolation — the broker's parser
-// would reject most adversarial inputs, but escaping at the boundary is the
-// right defensive posture.
+// vpnStatsXML returns the per-VPN client-stats RPC. vpnName is XML-escaped
+// via sempv1.Escape (the package-level helper mandated for all
+// externally-sourced values before concatenation into a SEMPv1 request)
+// to neutralize any embedded markup before interpolation.
 func vpnStatsXML(vpnName string) string {
 	return fmt.Sprintf(
 		`<rpc><show><message-vpn><vpn-name>%s</vpn-name><stats/></message-vpn></show></rpc>`,
-		html.EscapeString(vpnName),
+		sempv1.Escape(vpnName),
 	)
 }
 
