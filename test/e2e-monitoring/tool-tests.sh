@@ -31,6 +31,11 @@ test_list_vpns() {
     assert_json_field "$content" \
         '(.vpns.data | map(.msgVpnName) | index("test-vpn")) != null' "true" \
         "list-vpns [$broker]: F1 test-vpn must be present" || return 1
+    # No duplicates across the full (uncapped) set — guards against page-stitching
+    # bugs emitting the same VPN twice (PR goal: pagination has no gaps/duplicates).
+    assert_json_field "$content" \
+        '(.vpns.data | map(.msgVpnName)) as $n | ($n | length) == ($n | unique | length)' "true" \
+        "list-vpns [$broker]: VPN names must be unique (no pagination duplicates)" || return 1
 }
 
 test_list_vpns_pagination() {
@@ -115,6 +120,11 @@ test_list_queues() {
             "(.queues.data | map(.queueName) | index(\"$q\")) != null" "true" \
             "list-queues [$broker]: $q must be present in default VPN" || return 1
     done
+    # No duplicates across the full (uncapped) set — page stitching must not
+    # repeat a queue (PR goal: pagination has no gaps/duplicates).
+    assert_json_field "$content" \
+        '(.queues.data | map(.queueName)) as $n | ($n | length) == ($n | unique | length)' "true" \
+        "list-queues [$broker]: queue names must be unique (no pagination duplicates)" || return 1
 }
 
 test_list_queues_pagination() {
@@ -178,6 +188,11 @@ test_list_clients() {
         "list-clients [$broker]: must NOT include other broker's client $other" || return 1
     assert_json_field "$content" '.clients.data | all(.msgVpnName == "default")' "true" \
         "list-clients [$broker]: every client must be scoped to the default VPN" || return 1
+    # No duplicates across the full (uncapped) set — page stitching must not
+    # repeat a client (PR goal: pagination has no gaps/duplicates).
+    assert_json_field "$content" \
+        '(.clients.data | map(.clientName)) as $n | ($n | length) == ($n | unique | length)' "true" \
+        "list-clients [$broker]: client names must be unique (no pagination duplicates)" || return 1
 }
 
 test_list_clients_pagination() {
@@ -247,6 +262,11 @@ test_list_client_subscriptions() {
             "(.subscriptions.data | map(.subscriptionTopic) | index(\"$t\")) != null" "true" \
             "list-client-subscriptions [$broker]: $client must subscribe to $t" || return 1
     done < <(echo "$F3_SUBSCRIPTIONS" | tr ',' '\n')
+    # No duplicates across the full (uncapped) set — page stitching must not
+    # repeat a subscription (PR goal: pagination has no gaps/duplicates).
+    assert_json_field "$content" \
+        '(.subscriptions.data | map(.subscriptionTopic)) as $n | ($n | length) == ($n | unique | length)' "true" \
+        "list-client-subscriptions [$broker]: subscription topics must be unique (no pagination duplicates)" || return 1
 }
 
 test_list_client_subscriptions_pagination() {
@@ -317,6 +337,11 @@ test_list_rdps() {
     assert_json_field "$content" \
         '(.rdps.data | map(.restDeliveryPointName) | index("test-rdp")) != null' "true" \
         "list-rdps [$broker]: test-rdp must be present" || return 1
+    # No duplicates across the full (uncapped) set — page stitching must not
+    # repeat an RDP (PR goal: pagination has no gaps/duplicates).
+    assert_json_field "$content" \
+        '(.rdps.data | map(.restDeliveryPointName)) as $n | ($n | length) == ($n | unique | length)' "true" \
+        "list-rdps [$broker]: RDP names must be unique (no pagination duplicates)" || return 1
 }
 
 test_list_rdps_pagination() {
@@ -423,6 +448,11 @@ test_list_slow_subscribers() {
     # Server-side where filter: every returned client really is a slow subscriber.
     assert_json_field "$content" '.slowSubscribers.data | all(.slowSubscriber == true)' "true" \
         "list-slow-subscribers [$broker]: every returned client must have slowSubscriber=true" || return 1
+    # No duplicates across the full (uncapped) set — page stitching must not
+    # repeat a client (PR goal: pagination has no gaps/duplicates).
+    assert_json_field "$content" \
+        '(.slowSubscribers.data | map(.clientName)) as $n | ($n | length) == ($n | unique | length)' "true" \
+        "list-slow-subscribers [$broker]: client names must be unique (no pagination duplicates)" || return 1
 }
 
 test_list_slow_subscribers_pagination() {
@@ -471,6 +501,11 @@ test_list_queue_discards() {
     # VPN scoping: every returned queue belongs to the default VPN.
     assert_json_field "$content" '.queueDiscards.data | all(.msgVpnName == "default")' "true" \
         "list-queue-discards [$broker]: every queue must be scoped to the default VPN" || return 1
+    # No duplicates across the full (uncapped) set — page stitching must not
+    # repeat a queue (PR goal: pagination has no gaps/duplicates).
+    assert_json_field "$content" \
+        '(.queueDiscards.data | map(.queueName)) as $n | ($n | length) == ($n | unique | length)' "true" \
+        "list-queue-discards [$broker]: queue names must be unique (no pagination duplicates)" || return 1
 }
 
 test_list_queue_discards_pagination() {

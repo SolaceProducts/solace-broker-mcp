@@ -276,9 +276,12 @@ stop_broker_drivers() {
     # stopped) so the SIGTERM kill_gracefully sends is actually delivered —
     # a stopped process ignores SIGTERM and would otherwise burn the full 5s
     # grace before SIGKILL. SIGCONT is a no-op on running drivers.
+    # Guard with `kill -0` (as kill_gracefully does): a driver may have exited
+    # early and left a stale pidfile whose PID the OS has since recycled, so we
+    # only signal PIDs that are still alive and never disturb an unrelated one.
     local pid
     for pid in "${pids[@]}"; do
-        kill -CONT "$pid" 2>/dev/null || true
+        kill -0 "$pid" 2>/dev/null && kill -CONT "$pid" 2>/dev/null || true
     done
     kill_gracefully "${pids[@]}"
 
