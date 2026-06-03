@@ -92,7 +92,7 @@ func runPublisher(args []string) int {
 	if err := publisher.Start(); err != nil {
 		return fatalf("start persistent publisher: %v", err)
 	}
-	defer publisher.Terminate(shutdownGrace)
+	defer publisher.Terminate(terminateGrace)
 
 	if err := writePidfile(*pidfile); err != nil {
 		return fatalf("write pidfile %s: %v", *pidfile, err)
@@ -114,18 +114,25 @@ func runPublisher(args []string) int {
 		}()
 	}
 
-	publishLoop(publisher, *topic, *size, *rate, done)
-	fmt.Fprintln(os.Stderr, "broker-driver publisher: shutting down")
+	sent, failed := publishLoop(publisher, *topic, *size, *rate, done)
+	fmt.Fprintf(os.Stderr, "broker-driver publisher: shutting down sent=%d failed=%d\n", sent, failed)
+	// Mirror publish-batch: a non-zero failed count is a real fault (with
+	// OnBackPressureWait, PublishBytes blocks on backpressure rather than
+	// erroring), so don't let a publisher whose every send failed exit 0.
+	if failed > 0 {
+		return 1
+	}
 	return 0
 }
 
 // publishLoop fires once per tick at `rate` msg/s until the done channel
-// signals. PersistentMessagePublisher.PublishBytes blocks only when the
-// in-flight buffer is full (OnBackPressureWait); for the F4 target rate
-// against an idle broker the buffer never fills, so each tick publishes
-// promptly. The ~8% steady-state undershoot the spec acknowledges comes
-// from the Go scheduler + broker ack roundtrip, not from this loop.
-func publishLoop(publisher persistentBytesPublisher, topic string, size, rate int, done <-chan os.Signal) {
+// signals, returning the (sent, failed) publish counts. PersistentMessage
+// Publisher.PublishBytes blocks only when the in-flight buffer is full
+// (OnBackPressureWait); for the F4 target rate against an idle broker the
+// buffer never fills, so each tick publishes promptly. The ~8% steady-state
+// undershoot the spec acknowledges comes from the Go scheduler + broker ack
+// roundtrip, not from this loop.
+func publishLoop(publisher persistentBytesPublisher, topic string, size, rate int, done <-chan os.Signal) (int64, int64) {
 	payload := bytes.Repeat([]byte{'x'}, size)
 	dest := resource.TopicOf(topic)
 	interval := time.Second / time.Duration(rate)
@@ -136,8 +143,7 @@ func publishLoop(publisher persistentBytesPublisher, topic string, size, rate in
 	for {
 		select {
 		case <-done:
-			fmt.Fprintf(os.Stderr, "publisher loop: sent=%d failed=%d\n", sent, failed)
-			return
+			return sent, failed
 		case <-ticker.C:
 			if err := publisher.PublishBytes(payload, dest); err != nil {
 				failed++

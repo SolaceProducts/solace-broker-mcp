@@ -70,12 +70,6 @@ func runSlowConsumer(args []string) int {
 	if *ackDelay < 0 {
 		return fatalf("slow-consumer: --ack-delay must be >= 0 (got %s)", *ackDelay)
 	}
-	// An ack-delay >= the shutdown grace would park slowConsumeLoop in its
-	// Sleep past the grace window on SIGTERM, getting the process SIGKILLed
-	// rather than shut down cleanly. Reject it at startup instead.
-	if *ackDelay >= shutdownGrace {
-		return fatalf("slow-consumer: --ack-delay must be < shutdown grace %s (got %s)", shutdownGrace, *ackDelay)
-	}
 
 	host, ok := resolveBrokerHost(*broker)
 	if !ok {
@@ -105,7 +99,7 @@ func runSlowConsumer(args []string) int {
 	if err := publisher.Start(); err != nil {
 		return fatalf("start persistent publisher: %v", err)
 	}
-	defer publisher.Terminate(shutdownGrace)
+	defer publisher.Terminate(terminateGrace)
 
 	// Slow receiver: client-acknowledgement so unacked messages count against
 	// the queue's per-flow window until we explicitly Ack them.
@@ -118,7 +112,7 @@ func runSlowConsumer(args []string) int {
 	if err := receiver.Start(); err != nil {
 		return fatalf("start persistent receiver: %v", err)
 	}
-	defer receiver.Terminate(shutdownGrace)
+	defer receiver.Terminate(terminateGrace)
 
 	if err := writePidfile(*pidfile); err != nil {
 		return fatalf("write pidfile %s: %v", *pidfile, err)
@@ -158,16 +152,18 @@ func runSlowConsumer(args []string) int {
 }
 
 // slowConsumeLoop receives messages synchronously and ACKs each only after
-// ackDelay, throttling the consumer. It polls with receivePollTimeout so a
-// closed stop channel is observed promptly between messages; receive timeouts
-// are expected (the publisher may briefly fall behind) and are ignored.
+// ackDelay, throttling the consumer. Both the inter-message receive (bounded by
+// receivePollTimeout) and the ackDelay wait observe stop, so a closed stop
+// channel is honoured promptly — even mid-delay — rather than blocking shutdown
+// until the delay elapses. Receive timeouts are expected (the publisher may
+// briefly fall behind) and are ignored.
 func slowConsumeLoop(receiver persistentAckReceiver, ackDelay time.Duration, stop <-chan os.Signal) {
 	var acked int64
+consume:
 	for {
 		select {
 		case <-stop:
-			fmt.Fprintf(os.Stderr, "slow-consumer loop: acked=%d\n", acked)
-			return
+			break consume
 		default:
 		}
 
@@ -181,13 +177,24 @@ func slowConsumeLoop(receiver persistentAckReceiver, ackDelay time.Duration, sto
 			continue
 		}
 
-		time.Sleep(ackDelay)
+		// Throttle: wait ackDelay before ACKing, but abort promptly if stop
+		// fires mid-delay. The message is left unacked and redelivered when a
+		// receiver next binds — fine for a fixture that's shutting down.
+		timer := time.NewTimer(ackDelay)
+		select {
+		case <-stop:
+			timer.Stop()
+			break consume
+		case <-timer.C:
+		}
+
 		if err := receiver.Ack(msg); err != nil {
 			fmt.Fprintf(os.Stderr, "slow-consumer ack: %v\n", err)
 			continue
 		}
 		acked++
 	}
+	fmt.Fprintf(os.Stderr, "slow-consumer loop: acked=%d\n", acked)
 }
 
 // persistentAckReceiver narrows the Solace receiver surface the consume loop

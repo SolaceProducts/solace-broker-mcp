@@ -14,7 +14,7 @@
 
 // Package main is the broker-driver binary: it connects directly to the
 // Solace brokers via the messaging client and generates the live traffic
-// (publish, consume, sustain rates) that fixtures F3, F4, and F6 need so the
+// (publish, consume, sustain rates) that fixtures F3–F7 need so the
 // monitoring tools have something real to observe.
 package main
 
@@ -41,6 +41,8 @@ func main() {
 		os.Exit(runPublishBatch(args))
 	case "slow-consumer":
 		os.Exit(runSlowConsumer(args))
+	case "slow-direct-subscriber":
+		os.Exit(runSlowDirectSubscriber(args))
 	case "-h", "--help", "help":
 		usage()
 		os.Exit(0)
@@ -59,8 +61,9 @@ Usage: broker-driver <subcommand> [flags]
 Subcommands:
   connected-client    F3: persistent receiver + client subscriptions, idles until signal
   publisher           F4: persistent publisher at fixed rate, idles until signal
-  publish-batch       F6: one-shot persistent publisher, exits after --count messages sent
-  slow-consumer       F5: fast publisher + slow client-ack queue consumer, idles until signal`)
+  publish-batch       F7: one-shot persistent publisher, exits after --count messages sent
+  slow-consumer       F5: fast publisher + slow client-ack queue consumer, idles until signal
+  slow-direct-subscriber  F6: direct topic subscriber (SIGSTOP'd by the harness to flip slowSubscriber), idles until signal`)
 }
 
 // fatalf prints to stderr and exits non-zero. Used by subcommands to surface

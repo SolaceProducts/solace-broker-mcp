@@ -38,5 +38,7 @@ build_broker_driver
 create_fixtures
 
 # 4. SEMP-direct fixture-state verification (SOL-150024 acceptance criteria).
-#    Tool-level functional tests land in SOL-150025.
 bash "$SCRIPT_DIR/verify-fixtures.sh"
+
+# 5. Tool-level functional tests through the MCP server (SOL-150025).
+bash "$SCRIPT_DIR/tool-tests.sh"

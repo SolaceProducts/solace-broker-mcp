@@ -7,6 +7,33 @@
 set -euo pipefail
 source "$(dirname "$0")/helpers.sh"
 
+# Sleeps out the remainder of a fixture's settle window. Given the epoch the
+# fixture finished starting and the total window, sleeps only the time not
+# already elapsed — so a second caller after the window has passed is a no-op.
+# When the epoch is unset (fixture state unknown), sleeps the full window
+# defensively. Shared by the F4 and F5 settle waits.
+#   $1 ready_epoch     seconds-since-epoch the fixture became ready ("" if unknown)
+#   $2 settle_seconds  total settle window
+#   $3 label           human description for the log line
+wait_for_settle() {
+    local ready_epoch="$1"
+    local settle_seconds="$2"
+    local label="$3"
+    if [ -z "$ready_epoch" ]; then
+        log_warn "$label: ready-epoch unset; assuming it just started"
+        sleep "$settle_seconds"
+        return
+    fi
+    local now elapsed remaining
+    now=$(date +%s)
+    elapsed=$((now - ready_epoch))
+    remaining=$((settle_seconds - elapsed))
+    if [ "$remaining" -gt 0 ]; then
+        log_info "Waiting ${remaining}s for $label to settle ..."
+        sleep "$remaining"
+    fi
+}
+
 # ── AC 2 — F1 multi-VPN ─────────────────────────────────────────────────────
 # `test-vpn` exists on both brokers with enabled=false, state=down.
 
@@ -101,22 +128,6 @@ test_ac4_connected_client_state_b() {
 F4_SETTLE_SECONDS=25
 F4_RATE_THRESHOLD=80
 
-wait_for_f4_settle() {
-    if [ -z "${F4_READY_EPOCH:-}" ]; then
-        log_warn "F4_READY_EPOCH unset; assuming F4 just started"
-        sleep "$F4_SETTLE_SECONDS"
-        return
-    fi
-    local now elapsed remaining
-    now=$(date +%s)
-    elapsed=$((now - F4_READY_EPOCH))
-    remaining=$((F4_SETTLE_SECONDS - elapsed))
-    if [ "$remaining" -gt 0 ]; then
-        log_info "Waiting ${remaining}s for F4 rate to settle (target ≥ ${F4_RATE_THRESHOLD} msg/s) ..."
-        sleep "$remaining"
-    fi
-}
-
 verify_sustained_traffic_state() {
     local label="$1"
     local broker_url="$2"
@@ -137,13 +148,17 @@ verify_sustained_traffic_state() {
         "F4 [$label]: txMsgRate must be ≥ $F4_RATE_THRESHOLD (got $tx)" || return 1
 }
 
+f4_settle() {
+    wait_for_settle "${F4_READY_EPOCH:-}" "$F4_SETTLE_SECONDS" \
+        "F4 rate (target ≥ ${F4_RATE_THRESHOLD} msg/s)"
+}
 test_ac5_sustained_traffic_state_a() {
-    wait_for_f4_settle
+    f4_settle
     verify_sustained_traffic_state "broker-a" "$BROKER_A_URL"
 }
 test_ac5_sustained_traffic_state_b() {
-    # wait_for_f4_settle is a no-op the second time through.
-    wait_for_f4_settle
+    # f4_settle is a no-op the second time through (window already elapsed).
+    f4_settle
     verify_sustained_traffic_state "broker-b" "$BROKER_B_URL"
 }
 
@@ -155,22 +170,6 @@ test_ac5_sustained_traffic_state_b() {
 # spool keeps growing.
 
 F5_SETTLE_SECONDS=30
-
-wait_for_f5_settle() {
-    if [ -z "${F5_READY_EPOCH:-}" ]; then
-        log_warn "F5_READY_EPOCH unset; assuming F5 just started"
-        sleep "$F5_SETTLE_SECONDS"
-        return
-    fi
-    local now elapsed remaining
-    now=$(date +%s)
-    elapsed=$((now - F5_READY_EPOCH))
-    remaining=$((F5_SETTLE_SECONDS - elapsed))
-    if [ "$remaining" -gt 0 ]; then
-        log_info "Waiting ${remaining}s for F5 slow-consumer signals to develop ..."
-        sleep "$remaining"
-    fi
-}
 
 verify_slow_consumer_state() {
     local label="$1"
@@ -194,10 +193,9 @@ verify_slow_consumer_state() {
     # Unacked messages pin NEAR the per-flow ceiling — the slow-ACK signature.
     # "Near", not "==": a slow-but-nonzero ACK rate makes the count oscillate by
     # one (it dips just after each ACK, before the broker redelivers), so require
-    # ≥ 80% of the ceiling rather than the exact value.
-    local near_unacked=$(( F5_MAX_UNACKED * 8 / 10 ))
-    assert_json_field "$body" ".data.txUnackedMsgCount >= $near_unacked" "true" \
-        "F5 [$label]: txUnackedMsgCount must be near the $F5_MAX_UNACKED ceiling (≥ $near_unacked, got $unacked)" || return 1
+    # ≥ F5_NEAR_UNACKED (80% of the ceiling) rather than the exact value.
+    assert_json_field "$body" ".data.txUnackedMsgCount >= $F5_NEAR_UNACKED" "true" \
+        "F5 [$label]: txUnackedMsgCount must be near the $F5_MAX_UNACKED ceiling (≥ $F5_NEAR_UNACKED, got $unacked)" || return 1
     # Ingress outpaces egress: publisher feeds faster than the throttled consumer drains.
     assert_json_field "$body" ".data.rxMsgRate > .data.txMsgRate" "true" \
         "F5 [$label]: rxMsgRate must exceed txMsgRate (got rx=$rx tx=$tx)" || return 1
@@ -215,51 +213,73 @@ verify_slow_consumer_state() {
         "F5 [$label]: spooledMsgCount must be growing (was $spooled1, now $spooled2)" || return 1
 }
 
+f5_settle() {
+    wait_for_settle "${F5_READY_EPOCH:-}" "$F5_SETTLE_SECONDS" \
+        "F5 slow-consumer signals"
+}
 test_f5_slow_consumer_a() {
-    wait_for_f5_settle
+    f5_settle
     verify_slow_consumer_state "broker-a" "$BROKER_A_URL"
 }
 test_f5_slow_consumer_b() {
-    # wait_for_f5_settle is a no-op the second time through.
-    wait_for_f5_settle
+    # f5_settle is a no-op the second time through (window already elapsed).
+    f5_settle
     verify_slow_consumer_state "broker-b" "$BROKER_B_URL"
 }
 
-# ── AC 8 — F6-spool discards ─────────────────────────────────────────────────
+# ── F6 — slow DIRECT subscriber (per-client slowSubscriber flag) ────────────
+# The counterpart to F5: a SIGSTOP'd direct subscriber under a large-payload
+# flood whose TCP egress window stays shut, so the broker flags it
+# slowSubscriber=true. This is the per-client signal list-slow-subscribers
+# filters on — the queue-level F5 case never flips it (SOL-150328). create_*
+# already polled the flag true; re-poll here so a clean diagnostic fires if the
+# stall ever stops holding (the flag is over a rolling ~1 min window).
+
+verify_slow_subscriber_state() {
+    local label="$1"
+    local broker_url="$2"
+    local client_name="$3"
+    wait_for_slow_subscriber "$broker_url" "$label" "$client_name" || return 1
+}
+
+test_f6_slow_subscriber_a() { verify_slow_subscriber_state "broker-a" "$BROKER_A_URL" "$F6_SUB_CLIENT_NAME_A"; }
+test_f6_slow_subscriber_b() { verify_slow_subscriber_state "broker-b" "$BROKER_B_URL" "$F6_SUB_CLIENT_NAME_B"; }
+
+# ── AC 8 — F7-spool discards ─────────────────────────────────────────────────
 
 verify_discard_spool_state() {
     local label="$1"
     local broker_url="$2"
     local body
-    body=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/queues/$F6_SPOOL_QUEUE") || {
-        log_fail "F6-spool [$label]: GET queues/$F6_SPOOL_QUEUE failed"
+    body=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/queues/$F7_SPOOL_QUEUE") || {
+        log_fail "F7-spool [$label]: GET queues/$F7_SPOOL_QUEUE failed"
         return 1
     }
     local count
     count=$(echo "$body" | jq -r '.data.maxMsgSpoolUsageExceededDiscardedMsgCount')
     assert_json_field "$body" \
         ".data.maxMsgSpoolUsageExceededDiscardedMsgCount > 0" "true" \
-        "F6-spool [$label]: maxMsgSpoolUsageExceededDiscardedMsgCount must be > 0 (got $count)" || return 1
+        "F7-spool [$label]: maxMsgSpoolUsageExceededDiscardedMsgCount must be > 0 (got $count)" || return 1
 }
 
 test_ac8_discard_spool_a() { verify_discard_spool_state "broker-a" "$BROKER_A_URL"; }
 test_ac8_discard_spool_b() { verify_discard_spool_state "broker-b" "$BROKER_B_URL"; }
 
-# ── AC 9 — F6-ttl discards ───────────────────────────────────────────────────
+# ── AC 9 — F7-ttl discards ───────────────────────────────────────────────────
 
 verify_discard_ttl_state() {
     local label="$1"
     local broker_url="$2"
     local body
-    body=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/queues/$F6_TTL_QUEUE") || {
-        log_fail "F6-ttl [$label]: GET queues/$F6_TTL_QUEUE failed"
+    body=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/queues/$F7_TTL_QUEUE") || {
+        log_fail "F7-ttl [$label]: GET queues/$F7_TTL_QUEUE failed"
         return 1
     }
     local count
     count=$(echo "$body" | jq -r '.data.maxTtlExpiredDiscardedMsgCount')
     assert_json_field "$body" \
         ".data.maxTtlExpiredDiscardedMsgCount > 0" "true" \
-        "F6-ttl [$label]: maxTtlExpiredDiscardedMsgCount must be > 0 (got $count)" || return 1
+        "F7-ttl [$label]: maxTtlExpiredDiscardedMsgCount must be > 0 (got $count)" || return 1
 }
 
 test_ac9_discard_ttl_a() { verify_discard_ttl_state "broker-a" "$BROKER_A_URL"; }
@@ -277,9 +297,11 @@ run_test "AC 5 — F4 sustained traffic (broker-a)" test_ac5_sustained_traffic_s
 run_test "AC 5 — F4 sustained traffic (broker-b)" test_ac5_sustained_traffic_state_b
 run_test "F5 — slow consumer queue signals (broker-a)" test_f5_slow_consumer_a
 run_test "F5 — slow consumer queue signals (broker-b)" test_f5_slow_consumer_b
-run_test "AC 8 — F6-spool discard count (broker-a)" test_ac8_discard_spool_a
-run_test "AC 8 — F6-spool discard count (broker-b)" test_ac8_discard_spool_b
-run_test "AC 9 — F6-ttl discard count (broker-a)" test_ac9_discard_ttl_a
-run_test "AC 9 — F6-ttl discard count (broker-b)" test_ac9_discard_ttl_b
+run_test "F6 — slow subscriber flag (broker-a)" test_f6_slow_subscriber_a
+run_test "F6 — slow subscriber flag (broker-b)" test_f6_slow_subscriber_b
+run_test "AC 8 — F7-spool discard count (broker-a)" test_ac8_discard_spool_a
+run_test "AC 8 — F7-spool discard count (broker-b)" test_ac8_discard_spool_b
+run_test "AC 9 — F7-ttl discard count (broker-a)" test_ac9_discard_ttl_a
+run_test "AC 9 — F7-ttl discard count (broker-b)" test_ac9_discard_ttl_b
 
 print_summary "Fixture verification"
