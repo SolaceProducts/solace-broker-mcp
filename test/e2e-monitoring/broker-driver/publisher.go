@@ -92,7 +92,7 @@ func runPublisher(args []string) int {
 	if err := publisher.Start(); err != nil {
 		return fatalf("start persistent publisher: %v", err)
 	}
-	defer publisher.Terminate(shutdownGrace)
+	defer publisher.Terminate(terminateGrace)
 
 	if err := writePidfile(*pidfile); err != nil {
 		return fatalf("write pidfile %s: %v", *pidfile, err)

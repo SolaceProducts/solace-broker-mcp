@@ -30,10 +30,20 @@ import (
 	"solace.dev/go/messaging/pkg/solace/resource"
 )
 
-// shutdownGrace is the time receivers/service get to stop cleanly before
-// the process exits. Matches NFR-2 in SOL-150024 (5 s grace, then SIGKILL
-// is the bash-level escalation; the Go side just gives up cleanly).
-const shutdownGrace = 5 * time.Second
+// terminateGrace is how long each long-lived fixture driver (F3/F4/F5) gives
+// its receivers and publisher to stop cleanly on SIGTERM before the process
+// exits. Kept well under stop_broker_drivers' 5 s SIGKILL window (helpers.sh):
+// the full shutdown sequence — consume-loop unwind, then the back-to-back
+// receiver/publisher Terminate calls, then Disconnect — must finish before bash
+// escalates to SIGKILL. These fixtures are disposable, so there is nothing worth
+// draining on the way out; a short grace is strictly better than a long one.
+const terminateGrace = 1 * time.Second
+
+// batchFlushGrace is the publisher-flush window for the short-lived F6
+// publish-batch driver. Unlike the long-lived drivers it exits on its own and
+// is never SIGKILLed by teardown, so it gets a generous window to flush its
+// in-flight persistent publishes before disconnecting.
+const batchFlushGrace = 5 * time.Second
 
 // runConnectedClient implements the F3 fixture: a long-lived connection that
 // keeps a persistent-receiver bound to a queue AND a direct-receiver holding
@@ -89,7 +99,7 @@ func runConnectedClient(args []string) int {
 	if err := pReceiver.ReceiveAsync(noopMessageHandler); err != nil {
 		return fatalf("register persistent receiver callback: %v", err)
 	}
-	defer pReceiver.Terminate(shutdownGrace)
+	defer pReceiver.Terminate(terminateGrace)
 
 	// Direct receiver: holds the client-level subscriptions that show up under
 	// GET .../clients/<name>/subscriptions and are what list-client-subscriptions
@@ -106,7 +116,7 @@ func runConnectedClient(args []string) int {
 	if err := dReceiver.ReceiveAsync(noopMessageHandler); err != nil {
 		return fatalf("register direct receiver callback: %v", err)
 	}
-	defer dReceiver.Terminate(shutdownGrace)
+	defer dReceiver.Terminate(terminateGrace)
 
 	if err := writePidfile(*pidfile); err != nil {
 		return fatalf("write pidfile %s: %v", *pidfile, err)

@@ -94,7 +94,7 @@ func runPublishBatch(args []string) int {
 	if err := publisher.Start(); err != nil {
 		return fatalf("start persistent publisher: %v", err)
 	}
-	defer publisher.Terminate(shutdownGrace)
+	defer publisher.Terminate(batchFlushGrace)
 
 	payload := bytes.Repeat([]byte{'x'}, *size)
 	dest := resource.TopicOf(*topic)
