@@ -36,7 +36,7 @@ both brokers, runs both scenarios, and cleans up the fixtures and server on exit
 test/e2e-basic-mcp/
 ├── README.md            # This file
 ├── .env                 # Single source of truth: ports, credentials, dev token
-├── broker-config.yaml   # Reference MCP server config (for manual use)
+├── broker-config.example.yaml  # Reference MCP server config template (for manual use)
 ├── docker-compose.yml   # Two Solace PubSub+ broker containers
 ├── helpers.sh           # Shared bash: broker wait, server start, MCP + assertion helpers
 ├── setup-brokers.sh     # Bring brokers up and wait until ready (idempotent)
@@ -95,20 +95,6 @@ The `agent/` binary is a plain-Go MCP client — **no CGO/native dependency**
 2. **Delete broker fixtures** (`cleanup_fixtures`): bindings → consumers → RDPs → queues.
 3. **Remove the MCP server PID file** (`bin/mcp-server.pid`).
 
-## Design note — `agent/` role
-
-`agent/` is a Go MCP-SDK client: it speaks the MCP protocol against the running
-server and validates tool responses. It is this suite's only driver — MCP-tool
-testing is the whole job here.
-
-There is intentionally **no `broker-driver/` (or `mcp-tester/`) directory**. The
-`e2e-monitoring` suite adds a `broker-driver` binary to produce runtime
-messaging-layer broker state (connected clients, sustained publishers, slow
-consumers) that SEMP `curl` cannot create. This suite needs none of that — it only
-exercises the MCP protocol surface — so it carries no native-library dependency.
-See the matching
-["Why a dedicated binary?" note in the monitoring README](../e2e-monitoring/README.md#broker-driver-binary).
-
 ## Port allocation
 
 Distinct from `e2e-monitoring` so both suites can run concurrently:
@@ -122,12 +108,3 @@ Distinct from `e2e-monitoring` so both suites can run concurrently:
 
 The MCP server listens on `9090` (override with `MCP_PORT`). All broker ports are
 override-able via `.env` (`BROKER_A_SEMP_PORT`, `BROKER_B_SEMP_PORT`).
-
-## Code-reuse strategy
-
-This suite and `e2e-monitoring` intentionally keep separate copies of `helpers.sh`.
-Duplication is accepted for now; a separate refactor story will extract shared
-helpers into `test/lib/` once ≥3 e2e suites exist. Note that
-[`test/health/test-health.sh`](../health/test-health.sh) also sources this suite's
-`helpers.sh`. See the matching
-[Code-reuse strategy in the monitoring README](../e2e-monitoring/README.md#code-reuse-strategy).
