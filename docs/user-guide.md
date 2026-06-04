@@ -91,7 +91,7 @@ What are the current message rates for default VPN on my-broker?
 
 ## Tools Reference
 
-The server exposes 13 read-only tools. All broker-querying tools require a `broker` parameter to identify which configured event broker to query; `list-brokers` is the exception and returns the available event broker aliases.
+The server exposes 17 read-only tools. All broker-querying tools require a `broker` parameter to identify which configured event broker to query; `list-brokers` is the exception and returns the available event broker aliases.
 
 ### Discovery
 
@@ -105,6 +105,12 @@ The server exposes 13 read-only tools. All broker-querying tools require a `brok
 |---|---|
 | `get-broker-health` | Curated event broker health snapshot: version, uptime, restart reason, broker-tier scaling limits, system resources, subscription memory, and message-spool state with HA roles and disk utilization. |
 | `get-redundancy-status` | Event broker redundancy and high-availability status: config/operational status, active-standby role, mate router name, mate link state, and per-virtual-router activity. |
+
+### Replication
+
+| Tool | Description |
+|---|---|
+| `get-replication-status` | Replication state for a Message VPN: role, sync eligibility, bridge status, transaction mode, and queued-message counts. |
 
 ### Message VPN
 
@@ -128,6 +134,7 @@ The server exposes 13 read-only tools. All broker-querying tools require a `brok
 | `list-clients` | List active client connections in a VPN with connection details, uptime, and slow subscriber status. Default 100 results, max 500. |
 | `get-client-details` | Performance metrics for a specific connected client: message rates, slow subscriber status, and egress discard counts. Use to diagnose slow consumers. |
 | `list-client-subscriptions` | Topic subscriptions for a specific client. Default 100 results, max 500. |
+| `list-slow-subscribers` | Filtered list of clients in a VPN flagged with the broker's slow-subscriber field (server-side `where` filter). Narrow signal — catches direct-messaging or replication-bridge backpressure; does NOT flip for slow guaranteed-message consumers (slow to ACK). For those, use `list-queues` / `get-queue-metrics`. Default 100 results, max 500. |
 
 ### REST Delivery Points
 
@@ -135,6 +142,13 @@ The server exposes 13 read-only tools. All broker-querying tools require a `brok
 |---|---|
 | `list-rdps` | List all RDPs in a VPN with enabled state, up/down status, and last failure reason. Default 100 results, max 500. |
 | `get-rdp-status` | Detailed RDP status: enabled state, up/down status, client name, last failure reason, queue bindings, and REST consumer status. |
+
+### Discards
+
+| Tool | Description |
+|---|---|
+| `get-discard-stats` | Broker-wide or per-VPN discard aggregates: client-level ingress/egress discards plus broker-wide spool discards (native SEMPv1). Per-VPN scope returns client-level discards only — the broker exposes no per-VPN spool breakdown via SEMPv1. |
+| `list-queue-discards` | Per-queue discard counters for a VPN: TTL-expired, max-redelivery, spool-quota-exceeded, and other discard categories. Complements `get-discard-stats` with queue-level granularity. Default 100 results, max 500. |
 
 ## Recommended Environments
 
