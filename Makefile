@@ -67,7 +67,7 @@ e2e-up: ## Start Solace brokers for E2E tests (does not wait for health — use 
 
 .PHONY: e2e
 e2e: ## Run the E2E suite (requires brokers from `make e2e-up`)
-	bash $(E2E_DIR)/run_all.sh
+	bash $(E2E_DIR)/run-all.sh
 
 .PHONY: e2e-down
 e2e-down: ## Stop and remove E2E brokers
@@ -76,7 +76,7 @@ e2e-down: ## Stop and remove E2E brokers
 .PHONY: e2e-all
 e2e-all: ## Full E2E cycle: brokers up, wait for health, run suite, tear down (tears down even on failure)
 	$(COMPOSE_E2E) up -d
-	@. $(E2E_DIR)/helpers.sh && wait_for_all_brokers 120 && bash $(E2E_DIR)/run_all.sh; t=$$?; \
+	@. $(E2E_DIR)/helpers.sh && wait_for_all_brokers 120 && bash $(E2E_DIR)/run-all.sh; t=$$?; \
 	$(COMPOSE_E2E) down -v || echo "WARN: e2e-all teardown failed"; \
 	exit $$t
 

@@ -25,8 +25,8 @@ trap cleanup EXIT
 log_info "=== Solace Broker MCP — E2E Test Suite ==="
 echo ""
 
-# 1. Build and start MCP server via start_server.sh --bg
-bash "$SCRIPT_DIR/start_server.sh" --bg
+# 1. Build and start MCP server via start-server.sh --bg
+bash "$SCRIPT_DIR/start-server.sh" --bg
 
 # Read back the PID so our cleanup trap can stop it
 PIDFILE="$BIN_DIR/mcp-server.pid"
@@ -41,7 +41,7 @@ create_fixtures
 log_info ""
 log_info "=== Scenario 1: Standalone (curl) ==="
 log_info ""
-if bash "$SCRIPT_DIR/test_standalone.sh"; then
+if bash "$SCRIPT_DIR/test-standalone.sh"; then
     STANDALONE_EXIT=0
 else
     STANDALONE_EXIT=$?
@@ -51,7 +51,7 @@ fi
 log_info ""
 log_info "=== Scenario 2: Agent (Go MCP SDK) ==="
 log_info ""
-if bash "$SCRIPT_DIR/test_agent.sh"; then
+if bash "$SCRIPT_DIR/test-agent.sh"; then
     AGENT_EXIT=0
 else
     AGENT_EXIT=$?

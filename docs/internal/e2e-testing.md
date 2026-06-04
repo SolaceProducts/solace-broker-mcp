@@ -2,6 +2,8 @@
 
 This document describes the E2E testing strategy, structure, and how to run the tests locally and in CI.
 
+For a quickstart and the suite's port allocation, see [`test/e2e-basic-mcp/README.md`](../../test/e2e-basic-mcp/README.md). A separate monitoring-focused suite lives under [`test/e2e-monitoring/`](../../test/e2e-monitoring/README.md).
+
 ---
 
 ## Goals
@@ -24,15 +26,17 @@ Both scenarios run against **two independent brokers** (`broker-a`, `broker-b`) 
 ## Test Structure
 
 ```
-test/e2e/
+test/e2e-basic-mcp/
+├── README.md                # Suite overview, quickstart, port allocation
 ├── .env                     # Single source of truth: ports, credentials
 ├── broker-config.yaml       # Reference MCP server config (for manual use)
 ├── docker-compose.yml       # Two Solace PubSub+ broker containers
 ├── helpers.sh               # Shared bash functions (broker wait, server start, MCP helpers, assertions)
-├── run_all.sh               # Master test runner (orchestrates both scenarios, prints summary table)
-├── start_server.sh          # Build and start a fresh MCP server from latest source
-├── test_standalone.sh       # Scenario 1: raw curl MCP protocol tests
-├── test_agent.sh            # Scenario 2: builds and runs the Go agent
+├── setup-brokers.sh         # Bring brokers up and wait until ready (idempotent)
+├── run-all.sh               # Master test runner (orchestrates both scenarios, prints summary table)
+├── start-server.sh          # Build and start a fresh MCP server from latest source
+├── test-standalone.sh       # Scenario 1: raw curl MCP protocol tests
+├── test-agent.sh            # Scenario 2: builds and runs the Go agent
 ├── bin/                     # Built binaries (gitignored)
 │   ├── mcp-server
 │   ├── mcp-server.pid       # PID file when server is started with --bg
@@ -55,7 +59,7 @@ test/e2e/
 
 ## Configuration
 
-All test configuration lives in a single file: `test/e2e/.env`. This file is the source of truth for ports, credentials, and MCP server env vars. It is read by:
+All test configuration lives in a single file: `test/e2e-basic-mcp/.env`. This file is the source of truth for ports, credentials, and MCP server env vars. It is read by:
 
 - **docker-compose.yml** — broker port mappings and admin password
 - **helpers.sh** — broker URLs, SEMP auth, fixture management
@@ -82,7 +86,7 @@ To change ports or credentials, edit `.env` only — everything else derives fro
 A reference `broker-config.yaml` is provided for manual use (e.g. starting the server by hand):
 
 ```bash
-ENV_FILE=test/e2e/.env CONFIG_FILE=test/e2e/broker-config.yaml go run ./cmd/server
+ENV_FILE=test/e2e-basic-mcp/.env CONFIG_FILE=test/e2e-basic-mcp/broker-config.yaml go run ./cmd/server
 ```
 
 ---
@@ -91,17 +95,17 @@ ENV_FILE=test/e2e/.env CONFIG_FILE=test/e2e/broker-config.yaml go run ./cmd/serv
 
 ### Run everything (recommended)
 
-The simplest way to run the full E2E suite. `run_all.sh` builds the MCP server from source, starts it, creates broker fixtures on both brokers, runs both test scenarios, and prints a summary table.
+The simplest way to run the full E2E suite. `run-all.sh` builds the MCP server from source, starts it, creates broker fixtures on both brokers, runs both test scenarios, and prints a summary table.
 
 ```bash
 # 1. Start both Solace brokers
-docker compose -f test/e2e/docker-compose.yml up -d
+docker compose -f test/e2e-basic-mcp/docker-compose.yml up -d
 
 # 2. Run all E2E tests (waits for broker readiness automatically)
-bash test/e2e/run_all.sh
+bash test/e2e-basic-mcp/run-all.sh
 
 # 3. Stop and remove the brokers when done
-docker compose -f test/e2e/docker-compose.yml down -v
+docker compose -f test/e2e-basic-mcp/docker-compose.yml down -v
 ```
 
 ### Run scenarios individually
@@ -110,38 +114,38 @@ When iterating on a specific scenario, start the server once and run tests again
 
 ```bash
 # 1. Start the brokers (if not already running)
-docker compose -f test/e2e/docker-compose.yml up -d
+docker compose -f test/e2e-basic-mcp/docker-compose.yml up -d
 
 # 2. Build and start the MCP server in the background
-bash test/e2e/start_server.sh --bg
+bash test/e2e-basic-mcp/start-server.sh --bg
 
 # 3. Create broker test fixtures on both brokers
-source test/e2e/helpers.sh && create_fixtures
+source test/e2e-basic-mcp/helpers.sh && create_fixtures
 
 # 4. Run either or both scenarios
-bash test/e2e/test_standalone.sh   # Scenario 1: raw curl
-bash test/e2e/test_agent.sh        # Scenario 2: Go agent
+bash test/e2e-basic-mcp/test-standalone.sh   # Scenario 1: raw curl
+bash test/e2e-basic-mcp/test-agent.sh        # Scenario 2: Go agent
 
 # 5. Stop the server when done
-kill $(cat test/e2e/bin/mcp-server.pid)
+kill $(cat test/e2e-basic-mcp/bin/mcp-server.pid)
 ```
 
 ### Start the MCP server standalone
 
-`start_server.sh` compiles the MCP server from the latest source and starts it against the E2E brokers. Useful for manual testing or development.
+`start-server.sh` compiles the MCP server from the latest source and starts it against the E2E brokers. Useful for manual testing or development.
 
 ```bash
 # Foreground (Ctrl-C to stop)
-bash test/e2e/start_server.sh
+bash test/e2e-basic-mcp/start-server.sh
 
 # Background (writes PID file for later stop)
-bash test/e2e/start_server.sh --bg
-kill $(cat test/e2e/bin/mcp-server.pid)   # stop
+bash test/e2e-basic-mcp/start-server.sh --bg
+kill $(cat test/e2e-basic-mcp/bin/mcp-server.pid)   # stop
 ```
 
 The script:
 1. Waits for both Solace brokers to be fully ready (SEMP API + message spool)
-2. Builds `test/e2e/bin/mcp-server` from `./cmd/server`
+2. Builds `test/e2e-basic-mcp/bin/mcp-server` from `./cmd/server`
 3. Generates a broker config from `.env` values (ports, env prefixes)
 4. Starts the server on port `9090` with credentials from `.env`
 
@@ -214,7 +218,7 @@ Fixtures are cleaned up before creation (to handle leftover state) and after tes
 
 ## Scenario 1: Standalone (Raw curl)
 
-`test_standalone.sh` sends raw MCP JSON-RPC requests to `POST /mcp`. It exercises both brokers:
+`test-standalone.sh` sends raw MCP JSON-RPC requests to `POST /mcp`. It exercises both brokers:
 
 | Test | What it validates |
 |---|---|
@@ -246,7 +250,7 @@ POST /mcp  tools/list or tools/call    (Mcp-Session-Id: <id>)
 
 ## Scenario 2: Agent (Go MCP SDK Client)
 
-`test/e2e/agent/main.go` is a standalone Go program that uses the official MCP Go SDK client (`github.com/modelcontextprotocol/go-sdk`) to connect to the running MCP server.
+`test/e2e-basic-mcp/agent/main.go` is a standalone Go program that uses the official MCP Go SDK client (`github.com/modelcontextprotocol/go-sdk`) to connect to the running MCP server.
 
 Usage: `./bin/agent <server-url>`
 
@@ -258,7 +262,7 @@ It performs:
    - Call `get-rdp-status` with the test fixtures — verify 3-step structured response
    - Call `get-queue-metrics` with `test-queue` — verify queue data returned
 
-`test_agent.sh` builds the agent binary then runs it, checking exit code and output.
+`test-agent.sh` builds the agent binary then runs it, checking exit code and output.
 
 ### Future Extension: LLM Agent via LiteLLM
 
@@ -278,7 +282,7 @@ Because LiteLLM exposes an OpenAI-compatible API, a Go OpenAI client (e.g. `gith
 
 ## Test Output
 
-`run_all.sh` prints a summary table at the end:
+`run-all.sh` prints a summary table at the end:
 
 ```
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━┳━━━━━━━━━┓
@@ -305,6 +309,6 @@ lint ──┐
 The job:
 1. Starts both Solace brokers with `docker compose up -d`
 2. Waits for both brokers to be fully ready (SEMP API + message spool, up to 120s)
-3. Runs `bash test/e2e/run_all.sh`
+3. Runs `bash test/e2e-basic-mcp/run-all.sh`
 4. On failure: dumps last 100 lines of broker logs for debugging
 5. Always tears down the brokers with `docker compose down -v`

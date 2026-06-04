@@ -164,7 +164,7 @@ stop_server() {
         wait "$MCP_SERVER_PID" 2>/dev/null || true
         MCP_SERVER_PID=""
     fi
-    # Remove the temp config written by start_server.sh --bg, if any.
+    # Remove the temp config written by start-server.sh --bg, if any.
     local configfile_ref="$BIN_DIR/mcp-server.config"
     if [ -f "$configfile_ref" ]; then
         rm -f "$(cat "$configfile_ref")" "$configfile_ref"
@@ -426,7 +426,7 @@ print_summary() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
 
-    # Write results file if E2E_RESULTS_DIR is set (used by run_all.sh)
+    # Write results file if E2E_RESULTS_DIR is set (used by run-all.sh)
     if [ -n "${E2E_RESULTS_DIR:-}" ]; then
         echo "${label}|${TESTS_RUN}|${TESTS_PASSED}|${TESTS_FAILED}" >> "$E2E_RESULTS_DIR/results.txt"
     fi

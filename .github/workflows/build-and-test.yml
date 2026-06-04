@@ -103,7 +103,7 @@ jobs:
           wait_for_all_brokers 120
 
       - name: Run E2E tests
-        run: bash test/e2e-basic-mcp/run_all.sh
+        run: bash test/e2e-basic-mcp/run-all.sh
 
       - name: Broker logs (on failure)
         if: failure()
