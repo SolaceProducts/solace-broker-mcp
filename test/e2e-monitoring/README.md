@@ -254,13 +254,6 @@ when it exits (for any reason — normal end, error, Ctrl-C, killed):
 Step 2 must run before step 3 — the broker refuses to delete a queue with
 an attached client.
 
-## Code-reuse strategy
-
-This suite intentionally duplicates `helpers.sh` and related scripts from
-[test/e2e-basic-mcp](../e2e-basic-mcp). Duplication is accepted for SOL-150024
-to keep scope focused. A separate refactor story will extract shared helpers
-into `test/lib/common-helpers.sh` once ≥3 e2e suites exist.
-
 ## Port allocation
 
 Distinct from `e2e-basic-mcp` so both suites can run concurrently:
