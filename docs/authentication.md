@@ -176,7 +176,7 @@ Most IdPs organize clients and users into an isolated namespace — called a rea
 > ```
 > Then open the Admin Console at `http://localhost:8080/admin`, log in with `admin` / `admin`, click the realm dropdown in the top-left → **Create realm** → set a **Realm name** → **Create**. The built-in `master` realm can be used for quick local testing, but a dedicated realm is recommended.
 >
-> **Tip:** To automate steps 1.1–1.4, the project includes a setup script at `test/e2e/oauth/setup-keycloak.sh` that starts Keycloak, creates the realm, and configures the audience mapper, OAuth clients, DCR policies, and a test user — all via Terraform. Run it from the project root: `cd test/e2e/oauth && ./setup-keycloak.sh`.
+> **Tip:** To automate steps 1.1–1.4, the project includes a setup script at `test/oauth/setup-keycloak.sh` that starts Keycloak, creates the realm, and configures the audience mapper, OAuth clients, DCR policies, and a test user — all via Terraform. Run it from the project root: `cd test/oauth && ./setup-keycloak.sh`.
 
 #### 1.2 Configure an Audience Mapper
 
