@@ -36,7 +36,6 @@ both brokers, runs both scenarios, and cleans up the fixtures and server on exit
 test/e2e-basic-mcp/
 ├── README.md            # This file
 ├── .env                 # Single source of truth: ports, credentials, dev token
-├── broker-config.yaml   # Local server config for manual use (gitignored; copy from repo-root broker-config.example.yaml)
 ├── docker-compose.yml   # Two Solace PubSub+ broker containers
 ├── helpers.sh           # Shared bash: broker wait, server start, MCP + assertion helpers
 ├── setup-brokers.sh     # Bring brokers up and wait until ready (idempotent)

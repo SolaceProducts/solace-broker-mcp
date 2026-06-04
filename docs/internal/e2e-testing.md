@@ -29,7 +29,6 @@ Both scenarios run against **two independent brokers** (`broker-a`, `broker-b`) 
 test/e2e-basic-mcp/
 ├── README.md                # Suite overview, quickstart, port allocation
 ├── .env                     # Single source of truth: ports, credentials
-├── broker-config.yaml       # Local server config for manual use (gitignored; copy from repo-root broker-config.example.yaml)
 ├── docker-compose.yml       # Two Solace PubSub+ broker containers
 ├── helpers.sh               # Shared bash functions (broker wait, server start, MCP helpers, assertions)
 ├── setup-brokers.sh         # Bring brokers up and wait until ready (idempotent)
@@ -83,12 +82,8 @@ E2E_B_PASSWORD=admin
 
 To change ports or credentials, edit `.env` only — everything else derives from it.
 
-The harness generates `broker-config.yaml` dynamically while running the suite. For manual use (e.g. starting the server by hand), copy the repo-root template and adjust its broker entries/credentials to match this suite's `.env`:
-
-```bash
-cp broker-config.example.yaml test/e2e-basic-mcp/broker-config.yaml
-ENV_FILE=test/e2e-basic-mcp/.env CONFIG_FILE=test/e2e-basic-mcp/broker-config.yaml go run ./cmd/server
-```
+The harness generates the MCP server config dynamically from `.env` while running
+the suite, so no server config file needs to be created or maintained.
 
 ---
 
