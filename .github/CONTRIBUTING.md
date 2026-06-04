@@ -185,8 +185,8 @@ This project follows standard Go coding principles. Key guidelines:
    - Use real structs, mock only external APIs
 
 3. **E2E tests** — Test full workflows against real Solace brokers
-   - Location: `test/e2e/`
-   - Run via `bash test/e2e/run_all.sh`
+   - Location: `test/e2e-basic-mcp/`
+   - Run via `bash test/e2e-basic-mcp/run-all.sh`
    - Only add when testing new user-facing features
 
 ### Running Tests
@@ -202,7 +202,7 @@ go test -race ./internal/semp/...
 go test -v -race ./...
 
 # E2E tests (requires Docker)
-bash test/e2e/run_all.sh
+bash test/e2e-basic-mcp/run-all.sh
 ```
 
 ### Test Guidelines

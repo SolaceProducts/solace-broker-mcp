@@ -41,9 +41,8 @@ MCP_SERVER_LOG="$BIN_DIR/mcp-server.log"
 
 # Static dev token used to authenticate every e2e curl request to
 # the broker MCP server. Defined in .env (single source of truth); exported
-# here so child processes see it. write_config() and
-# broker-config.yaml reference it as ${MCP_DEV_TOKEN} so the server's env
-# substitution resolves it at config load.
+# here so child processes see it. write_config() references it as
+# ${MCP_DEV_TOKEN} so the server's env substitution resolves it at config load.
 export MCP_DEV_TOKEN
 
 # setsid is Linux-only; fall back to a plain exec on macOS where nohup alone

@@ -2,8 +2,8 @@
 # Build the MCP server from latest source and start it against the E2E broker.
 #
 # Usage:
-#   bash test/e2e-basic-mcp/start_server.sh           # foreground (Ctrl-C to stop)
-#   bash test/e2e-basic-mcp/start_server.sh --bg      # background (prints PID, writes pidfile)
+#   bash test/e2e-basic-mcp/start-server.sh           # foreground (Ctrl-C to stop)
+#   bash test/e2e-basic-mcp/start-server.sh --bg      # background (prints PID, writes pidfile)
 #
 # The server runs on port 9090 by default. Override with MCP_PORT env var.
 # Requires both Solace brokers to be running (ports 8080 and 8082).
