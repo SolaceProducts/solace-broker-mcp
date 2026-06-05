@@ -257,7 +257,7 @@ func buildSEMPv2Message(err *sempv2.SEMPError) string {
 	// leak internal detail. 503 is the exception: it carries a safe, useful
 	// reason (e.g. "VPN 'X' is busy reconciling", "Replication Is Standby"),
 	// so we let it through.
-	var msg = ""
+	var msg string
 	switch {
 	case err.StatusCode >= 500 && err.StatusCode != 503:
 		msg = genericInternalMessage
