@@ -483,6 +483,81 @@ func TestCallTool_SEMPErrorWrapped(t *testing.T) {
 	}
 }
 
+// TestCallTool_SanitizesResponseButPreservesLogDetail verifies the sanitization
+// boundary: the agent-facing result has internal detail (IP, filesystem path)
+// redacted, while the full unsanitized error is preserved server-side in the
+// "tool error detail" log line for debugging.
+func TestCallTool_SanitizesResponseButPreservesLogDetail(t *testing.T) {
+	var buf bytes.Buffer
+	old := slog.Default()
+	// buildErrorResult logs the detail at Info level, so capture Info and below.
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(logger)
+	defer slog.SetDefault(old)
+
+	mgr := NewToolManager(newTestPool(t))
+
+	// A 4xx error whose description carries both an IP and a filesystem path —
+	// the two things the sanitizer must strip from the agent-facing message.
+	handler := newStubHandler("test-tool")
+	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		return nil, &sempv2.SEMPError{
+			Operation:   "getMsgVpnQueue",
+			StatusCode:  400,
+			Description: "connect to 10.0.0.5 failed reading /opt/solace/config.json",
+			SEMPCode:    11,
+		}
+	}
+	mgr.Register(handler)
+
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+		"broker":     "dev",
+		"msgVpnName": "default",
+	}, Identity{})
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError to be true")
+	}
+
+	// Agent-facing content must be redacted: no raw IP or path, with placeholders.
+	text := result.Content[0].(*mcp.TextContent).Text
+	if strings.Contains(text, "10.0.0.5") {
+		t.Errorf("response leaked raw IP: %q", text)
+	}
+	if strings.Contains(text, "/opt/solace") {
+		t.Errorf("response leaked raw path: %q", text)
+	}
+	if !strings.Contains(text, "[ip]") || !strings.Contains(text, "[path]") {
+		t.Errorf("response = %q, want redaction placeholders [ip] and [path]", text)
+	}
+
+	// Server-side, the full unsanitized detail must survive in the "tool error
+	// detail" log line for debugging.
+	var found bool
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var fields map[string]any
+		if json.Unmarshal([]byte(line), &fields) != nil {
+			continue
+		}
+		if fields["msg"] != "tool error detail" {
+			continue
+		}
+		found = true
+		detail, _ := fields["detail"].(string)
+		if !strings.Contains(detail, "10.0.0.5") {
+			t.Errorf("log detail = %q, want it to preserve the raw IP", detail)
+		}
+		if !strings.Contains(detail, "/opt/solace/config.json") {
+			t.Errorf("log detail = %q, want it to preserve the raw path", detail)
+		}
+	}
+	if !found {
+		t.Fatalf("did not find a \"tool error detail\" log line; log:\n%s", buf.String())
+	}
+}
+
 // TestLogToolResult_V1ErrorEmitsStructuredFields verifies that when a handler
 // returns a *sempv1.Error, the manager's logToolResult emits the v1-specific
 // structured log fields (kind, http_status, reason_code) and does not emit the
@@ -657,11 +732,10 @@ func TestCallTool_RetriesExhausted_NetworkError(t *testing.T) {
 	}
 
 	text := result.Content[0].(*mcp.TextContent).Text
-	if !strings.Contains(text, "network error") {
-		t.Errorf("text = %q, want it to mention network error", text)
-	}
-	if !strings.Contains(text, "connection refused") {
-		t.Errorf("text = %q, want it to include underlying cause", text)
+	// The underlying network error (which can carry a host or IP) is never
+	// echoed; the agent sees only the generic retries-exhausted message.
+	if !strings.Contains(text, "Internal retries exhausted") {
+		t.Errorf("text = %q, want it to mention retries exhausted", text)
 	}
 }
 
@@ -691,8 +765,10 @@ func TestCallTool_PlainError_IsErrorResult(t *testing.T) {
 	}
 
 	text := result.Content[0].(*mcp.TextContent).Text
-	if !strings.Contains(text, "something unexpected happened") {
-		t.Errorf("text = %q, want it to contain original error message", text)
+	// A plain/unknown error must be replaced with the generic message — the
+	// raw error string is never echoed to the agent.
+	if !strings.Contains(text, genericInternalMessage) {
+		t.Errorf("text = %q, want the generic internal message", text)
 	}
 
 	// No protocol-specific fields for plain errors.
