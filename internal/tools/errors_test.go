@@ -75,7 +75,7 @@ func TestIsRetryable(t *testing.T) {
 		{"sempv2 503 with non-retryable code (status wins)", &sempv2.SEMPError{StatusCode: 503, SEMPCode: 6}, true},
 		{"sempv2 retryable code 229, non-503 status", &sempv2.SEMPError{StatusCode: 400, SEMPCode: 229}, true},
 		{"sempv2 500 internal", &sempv2.SEMPError{StatusCode: 500}, false},
-		{"sempv2 code not in table", &sempv2.SEMPError{StatusCode: 400, SEMPCode: 11}, false},
+		{"sempv2 code not in table", &sempv2.SEMPError{StatusCode: 400, SEMPCode: 999}, false},
 		{"sempv2 zero code (lookup miss safe)", &sempv2.SEMPError{StatusCode: 400, SEMPCode: 0}, false},
 
 		// SEMPv1: retryable on 503 or a retryable reasonCode (229).
