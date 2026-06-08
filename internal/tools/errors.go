@@ -17,7 +17,6 @@ package tools
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"regexp"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
@@ -65,7 +64,11 @@ var translatedErrorCodes = map[int]codeInfo{
 // sanitizer.
 var fsPrefixPattern = regexp.MustCompile(`(?i)(/opt/|/var/|/usr/|/etc/|[A-Za-z]:\\)\S*`)
 
-// ipv4Pattern matches dotted-quad IPv4 addresses.
+// ipv4Pattern matches dotted-quad IPv4 addresses. Known trade-off: a broker
+// version with four dot-separated numbers (e.g. "10.2.1.5") has the same shape
+// as a dotted-quad IPv4 address, so it is redacted to "[ip]" in the agent-facing
+// message. Over-redaction is safe (the raw version still survives in the server
+// log), so we accept the lost debugging signal rather than complicate the regex.
 var ipv4Pattern = regexp.MustCompile(`\b\d{1,3}(\.\d{1,3}){3}\b`)
 
 // ipv6Pattern matches the broker's bracket-wrapped IPv6 form (e.g. "[2001:db8::1]").
@@ -80,9 +83,10 @@ var ipv6Pattern = regexp.MustCompile(`\[[0-9a-fA-F:]*:[0-9a-fA-F:]*\]`)
 // (retryable, status, protocol-specific data, plus a suggestions array);
 // Content carries a human-readable text message.
 //
-// The full unsuppressed/unsanitized error is logged server-side here
-// and never returned to the agent.
-func (m *ToolManager) buildErrorResult(toolName string, err error) *mcp.CallToolResult {
+// The full unsuppressed/unsanitized error is never returned to the agent; it is
+// logged server-side by logToolResult as the "detail" field on the single
+// per-invocation error line, so the whole event stays in one record.
+func (m *ToolManager) buildErrorResult(err error) *mcp.CallToolResult {
 	msg, suggestions := buildErrorMessage(err)
 	retryable := isRetryable(err)
 
@@ -91,16 +95,12 @@ func (m *ToolManager) buildErrorResult(toolName string, err error) *mcp.CallTool
 		"retryable": retryable,
 	}
 
-	// status and code are also captured for the server-side log line below.
-	var status, code int
-
 	var sempv2Err *sempv2.SEMPError
 	var sempv1Err *sempv1.Error
 	var retriesErr *resilience.RetriesExhaustedError
 
 	switch {
 	case errors.As(err, &sempv2Err):
-		status, code = sempv2Err.StatusCode, sempv2Err.SEMPCode
 		structured["status"] = sempv2Err.StatusCode
 		structured["operation"] = sempv2Err.Operation
 		if sempv2Err.SEMPStatus != "" {
@@ -110,14 +110,12 @@ func (m *ToolManager) buildErrorResult(toolName string, err error) *mcp.CallTool
 			structured["sempCode"] = sempv2Err.SEMPCode
 		}
 	case errors.As(err, &sempv1Err):
-		status, code = sempv1Err.StatusCode, sempv1Err.ReasonCode
 		structured["status"] = sempv1Err.StatusCode
 		structured["kind"] = sempv1Err.Kind.String()
 		if sempv1Err.ReasonCode != 0 {
 			structured["reasonCode"] = sempv1Err.ReasonCode
 		}
 	case errors.As(err, &retriesErr):
-		status = retriesErr.StatusCode
 		if retriesErr.StatusCode != 0 {
 			structured["status"] = retriesErr.StatusCode
 		}
@@ -133,21 +131,6 @@ func (m *ToolManager) buildErrorResult(toolName string, err error) *mcp.CallTool
 			contentText += "\n" + s
 		}
 	}
-
-	// Log the full, unsanitized error server-side for debugging. The agent only
-	// ever sees the sanitized message above; this log line is the one place the
-	// raw detail is kept so operators can diagnose failures.
-	//
-	// Note: "detail" is a raw external error string, so ReplaceAttr (which keys
-	// off field names) cannot scrub it. This is acceptable because our SEMP/HTTP
-	// errors carry no credentials — auth is applied via headers, not URLs, and
-	// the error text is broker-generated. Keep credentials out of these error
-	// types so this stays safe.
-	slog.Info("tool error detail",
-		slog.String("tool", toolName),
-		slog.Int("http_status", status),
-		slog.Int("semp_code", code),
-		slog.String("detail", err.Error()))
 
 	return &mcp.CallToolResult{
 		StructuredContent: structured,

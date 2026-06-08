@@ -26,6 +26,7 @@ import (
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -180,7 +181,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	if err != nil {
 		errorType = "execution_error"
 		toolErr = fmt.Errorf("executing tool %q: %w", name, err)
-		return m.buildErrorResult(name, toolErr), nil
+		return m.buildErrorResult(toolErr), nil
 	}
 
 	// Guard against nil results from handler.
@@ -243,18 +244,8 @@ func (m *ToolManager) logToolResult(ctx context.Context, tool string, broker *st
 		return
 	}
 
-	attrs := []slog.Attr{
-		slog.String("tool", tool),
-		slog.String("status", "error"),
-		slog.String("error_type", *errorType),
-		slog.Duration("duration", time.Since(start)),
-		slog.Any("", id),
-	}
-	if *broker != "" {
-		attrs = append(attrs, slog.String("broker", *broker))
-	}
-
-	// Type-switch on the concrete error types instead of a shared interface.
+	// Match the concrete error type once, up front: it gates both the structured
+	// fields below and what we put in "detail".
 	//
 	// A common SempError interface was considered but rejected: see drift
 	// D7 in docs/semp/sempv1-client-design.md. The two protocols' error
@@ -266,15 +257,51 @@ func (m *ToolManager) logToolResult(ctx context.Context, tool string, broker *st
 	// independent.
 	var sempv1Err *sempv1.Error
 	var sempv2Err *sempv2.SEMPError
+	var retriesErr *resilience.RetriesExhaustedError
+	isV1 := errors.As(*toolErr, &sempv1Err)
+	isV2 := errors.As(*toolErr, &sempv2Err)
+	isRetries := errors.As(*toolErr, &retriesErr)
+
+	// "detail" carries the unsanitized error so operators can diagnose failures —
+	// it is the one place the raw text is kept (the agent only ever sees the
+	// sanitized message from buildErrorResult). Folding it onto this line, rather
+	// than a separate emit, keeps one tool error in one record at a single (ERROR)
+	// level.
+	//
+	// We log the raw err.Error() ONLY for the broker error types we've audited:
+	// their text is broker-generated and carries no credentials (auth is applied
+	// via headers, not URLs). For any other error — including the unknown/default
+	// case that buildErrorResult deliberately hides behind genericInternalMessage
+	// — we can't vouch for the contents, so we log only the Go type, never the
+	// message. ReplaceAttr can't help here (it keys off field names, and "detail"
+	// is a raw string), so this type gate is the actual safeguard.
+	detail := fmt.Sprintf("%T", *toolErr)
+	if isV1 || isV2 || isRetries {
+		detail = (*toolErr).Error()
+	}
+
+	attrs := []slog.Attr{
+		slog.String("tool", tool),
+		slog.String("status", "error"),
+		slog.String("error_type", *errorType),
+		slog.Duration("duration", time.Since(start)),
+		slog.String("detail", detail),
+		slog.Any("", id),
+	}
+	if *broker != "" {
+		attrs = append(attrs, slog.String("broker", *broker))
+	}
+
 	switch {
-	case errors.As(*toolErr, &sempv1Err):
+	case isV1:
 		attrs = append(attrs,
 			slog.String("kind", sempv1Err.Kind.String()),
 			slog.Int("http_status", sempv1Err.StatusCode),
 			slog.Int("reason_code", sempv1Err.ReasonCode))
-	case errors.As(*toolErr, &sempv2Err):
+	case isV2:
 		attrs = append(attrs,
 			slog.Int("http_status", sempv2Err.StatusCode),
+			slog.Int("semp_code", sempv2Err.SEMPCode),
 			slog.String("operation", sempv2Err.Operation))
 	}
 

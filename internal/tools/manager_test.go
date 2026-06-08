@@ -485,12 +485,12 @@ func TestCallTool_SEMPErrorWrapped(t *testing.T) {
 
 // TestCallTool_SanitizesResponseButPreservesLogDetail verifies the sanitization
 // boundary: the agent-facing result has internal detail (IP, filesystem path)
-// redacted, while the full unsanitized error is preserved server-side in the
-// "tool error detail" log line for debugging.
+// redacted, while the full unsanitized error is preserved server-side as the
+// "detail" field on the single "tool invoked" error log line for debugging.
 func TestCallTool_SanitizesResponseButPreservesLogDetail(t *testing.T) {
 	var buf bytes.Buffer
 	old := slog.Default()
-	// buildErrorResult logs the detail at Info level, so capture Info and below.
+	// The detail is logged on the error line at ERROR level.
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 	defer slog.SetDefault(old)
@@ -533,15 +533,15 @@ func TestCallTool_SanitizesResponseButPreservesLogDetail(t *testing.T) {
 		t.Errorf("response = %q, want redaction placeholders [ip] and [path]", text)
 	}
 
-	// Server-side, the full unsanitized detail must survive in the "tool error
-	// detail" log line for debugging.
+	// Server-side, the full unsanitized detail must survive as the "detail" field
+	// on the "tool invoked" error log line for debugging.
 	var found bool
 	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
 		var fields map[string]any
 		if json.Unmarshal([]byte(line), &fields) != nil {
 			continue
 		}
-		if fields["msg"] != "tool error detail" {
+		if fields["msg"] != "tool invoked" || fields["status"] != "error" {
 			continue
 		}
 		found = true
@@ -554,7 +554,54 @@ func TestCallTool_SanitizesResponseButPreservesLogDetail(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("did not find a \"tool error detail\" log line; log:\n%s", buf.String())
+		t.Fatalf("did not find a \"tool invoked\" error log line; log:\n%s", buf.String())
+	}
+}
+
+// TestLogToolResult_UnknownErrorLogsTypeNotMessage verifies the type gate on the
+// "detail" field: for an error that is none of the audited broker types, we log
+// only the Go type — never the raw message — since we can't vouch for its
+// contents (the agent-facing path already hides it behind genericInternalMessage).
+func TestLogToolResult_UnknownErrorLogsTypeNotMessage(t *testing.T) {
+	var buf bytes.Buffer
+	old := slog.Default()
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
+	slog.SetDefault(logger)
+	defer slog.SetDefault(old)
+
+	mgr := NewToolManager(newTestPool(t))
+
+	// An arbitrary, non-SEMP error whose text contains something we must not log.
+	handler := newStubHandler("test-tool")
+	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		return nil, fmt.Errorf("dial tcp admin:hunter2@10.0.0.9:943: connection refused")
+	}
+	mgr.Register(handler)
+
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+		"broker":     "dev",
+		"msgVpnName": "default",
+	}, Identity{})
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError to be true")
+	}
+
+	var logFields map[string]any
+	if jsonErr := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &logFields); jsonErr != nil {
+		t.Fatalf("failed to parse log output as JSON: %v\nlog: %s", jsonErr, buf.String())
+	}
+
+	detail, _ := logFields["detail"].(string)
+	// Safety: the raw message — credentials, host, port — must not reach the log.
+	if strings.Contains(detail, "hunter2") || strings.Contains(detail, "10.0.0.9") {
+		t.Errorf("detail leaked raw unknown-error content: %q", detail)
+	}
+	// But we must still log a breadcrumb (the Go type) — not nothing.
+	if detail == "" {
+		t.Error("detail is empty; expected the Go type of the unknown error")
 	}
 }
 
