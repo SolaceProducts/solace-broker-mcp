@@ -200,7 +200,6 @@ Common causes:
 - **401 / 403** — Event broker credentials lack permission for the requested operation. Verify the SEMP user has monitor-level access.
 - **429** — Rate limiting from a proxy, gateway, or load balancer in front of the broker. (The broker itself does not emit 429 over SEMP.) Retryable — the server retries automatically based on the configured retry policy.
 - **503** — The broker is overloaded or out of resources. Retryable — the server retries automatically based on the configured retry policy.
-- **529** — No SEMP session available — a Solace-specific status for exhausted management sessions. Retry shortly.
 
 ### "Session not found" errors
 

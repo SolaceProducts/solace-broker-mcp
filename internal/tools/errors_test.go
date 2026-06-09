@@ -37,9 +37,12 @@ func TestSanitizeBrokerText(t *testing.T) {
 		{"ipv6 full form replaced", "from 2001:db8:0:0:0:0:2:1 closed", "from [ip] closed"},
 		{"ipv6 with zone replaced", "bind fe80::1%eth0 failed", "bind [ip] failed"},
 		{"ipv6 v4-mapped replaced", "mapped ::ffff:1.2.3.4 seen", "mapped [ip] seen"},
-		// Must NOT trip on colon-hex that isn't an address: no "::", not eight groups.
+		// Must NOT trip on colon-hex that isn't an address: no "::", not eight groups,
+		// or a "::" separator with a non-hextet side (e.g. C++ scope resolution).
 		{"clock time preserved", "last seen at 12:34:56 UTC", "last seen at 12:34:56 UTC"},
 		{"mac address preserved", "device 12:34:56:78:9a:bc joined", "device 12:34:56:78:9a:bc joined"},
+		{"double-colon separator preserved", "namespace foo::bar referenced", "namespace foo::bar referenced"},
+		{"cpp scope resolution preserved", "use std::string here", "use std::string here"},
 		// A bracketed token with no colon is not an address and must be left alone.
 		{"bracketed non-address preserved", "queue [deadbeef] is full", "queue [deadbeef] is full"},
 		{"fs path replaced", "Error reading /opt/solace/config.json", "Error reading [path]"},
@@ -78,7 +81,8 @@ func TestIsRetryable(t *testing.T) {
 		{"retries exhausted, non-transient status still true", &resilience.RetriesExhaustedError{StatusCode: 500, Attempts: 3}, true},
 		{"wrapped retries exhausted (errors.As traversal)", fmt.Errorf("executing tool %q: %w", "list-queues", &resilience.RetriesExhaustedError{StatusCode: 503, Attempts: 3}), true},
 
-		// SEMPv2: retryable on 503 or a retryable comRc_t code (229).
+		// SEMPv2: retryable on 429/503 or a retryable comRc_t code (229).
+		{"sempv2 429 (live, e.g. fronting proxy)", &sempv2.SEMPError{StatusCode: 429}, true},
 		{"sempv2 503", &sempv2.SEMPError{StatusCode: 503}, true},
 		{"sempv2 503 with non-retryable code (status wins)", &sempv2.SEMPError{StatusCode: 503, SEMPCode: 6}, true},
 		{"sempv2 retryable code 229, non-503 status", &sempv2.SEMPError{StatusCode: 400, SEMPCode: 229}, true},
@@ -86,7 +90,8 @@ func TestIsRetryable(t *testing.T) {
 		{"sempv2 code not in table", &sempv2.SEMPError{StatusCode: 400, SEMPCode: 999}, false},
 		{"sempv2 zero code (lookup miss safe)", &sempv2.SEMPError{StatusCode: 400, SEMPCode: 0}, false},
 
-		// SEMPv1: retryable on 503 or a retryable reasonCode (229).
+		// SEMPv1: retryable on 429/503 or a retryable reasonCode (229).
+		{"sempv1 429 (HTTP kind)", &sempv1.Error{Kind: sempv1.ErrorKindHTTP, StatusCode: 429}, true},
 		{"sempv1 503 (HTTP kind)", &sempv1.Error{Kind: sempv1.ErrorKindHTTP, StatusCode: 503}, true},
 		{"sempv1 retryable reasonCode 229 (status 200 execute-fail)", &sempv1.Error{Kind: sempv1.ErrorKindExecuteFail, StatusCode: 200, ReasonCode: 229}, true},
 		{"sempv1 500", &sempv1.Error{Kind: sempv1.ErrorKindHTTP, StatusCode: 500}, false},

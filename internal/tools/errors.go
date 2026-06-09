@@ -72,28 +72,21 @@ var fsPrefixPattern = regexp.MustCompile(`(?i)(/opt/|/var/|/usr/|/etc/|/home/|/r
 // log), so we accept the lost debugging signal rather than complicate the regex.
 var ipv4Pattern = regexp.MustCompile(`\b\d{1,3}(\.\d{1,3}){3}\b`)
 
-// ipv6Pattern matches IPv6 addresses in both the broker's observed
-// bracket-wrapped form ("[2001:db8::1]") and bare forms ("2001:db8::1",).
-// The optional brackets ([...]) are consumed as part of the match so the
-// wrapped form is replaced as a whole.
-//
-// The broker is observed to bracket IPv6 peer addresses, but relying on that for
-// a security sanitizer is fragile, so bare forms are matched defensively too.
-// Every branch requires either "::" or a full eight-group form, which keeps it
-// from matching clock times (12:34:56) or MAC addresses (no "::", < 8 groups).
-// As with ipv4Pattern, over-redaction is acceptable: the raw text still survives
-// in the server log.
-//
-// Go's regexp prefers the first matching branch, not the longest, so the
-// IPv4-tailed branch goes first to match v4-mapped addresses whole.
+// ipv6Pattern matches IPv6 addresses, both the broker's bracket-wrapped form
+// ("[2001:db8::1]", brackets consumed) and bare forms matched defensively.
+// Requiring a hextet on both sides of "::" avoids redacting non-address tokens
+// like "foo::bar"; the cost is that bare "::1"/"::" (non-sensitive) are skipped.
+// Over-redaction is otherwise acceptable — the raw text survives in the server log.
+// The IPv4-tailed branch is first because Go's regexp prefers the first matching
+// branch, not the longest, so v4-mapped addresses match whole.
 var ipv6Pattern = regexp.MustCompile(`(?i)\[?(?:` +
-	// IPv6 with an embedded IPv4 tail (v4-mapped/translated), e.g. ::ffff:1.2.3.4
+	// "::" with an embedded IPv4 tail (v4-mapped), e.g. ::ffff:1.2.3.4
 	`(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?::(?:[0-9a-f]{1,4}:)*(?:\d{1,3}\.){3}\d{1,3}` +
 	`|` +
-	// Compressed IPv6 (contains "::"), e.g. 2001:db8::1, ::1, fe80::
-	`(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?` +
+	// Compressed "::", hextet required on both sides, e.g. 2001:db8::1
+	`(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)` +
 	`|` +
-	// Full eight-group IPv6, e.g. 2001:db8:0:0:0:0:2:1
+	// Full eight-group form, e.g. 2001:db8:0:0:0:0:2:1
 	`(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}` +
 	`)(?:%[0-9a-zA-Z._-]+)?\]?`)
 
@@ -276,7 +269,7 @@ func buildSEMPv2Message(err *sempv2.SEMPError) string {
 // isRetryable returns true for errors that represent transient conditions where
 // the same request might succeed later: exhausted internal retries (the
 // resilience layer only exhausts on genuinely transient HTTP statuses, e.g.
-// 429/503), a live HTTP 503, or a transient comRc_t code (229 TIME_OUT).
+// 429/503), a live HTTP 429 or 503, or a transient comRc_t code (229 TIME_OUT).
 // All other SEMP/envelope errors are deterministic and non-retryable.
 func isRetryable(err error) bool {
 	var retriesErr *resilience.RetriesExhaustedError
@@ -285,11 +278,11 @@ func isRetryable(err error) bool {
 	}
 	var sempv2Err *sempv2.SEMPError
 	if errors.As(err, &sempv2Err) {
-		return sempv2Err.StatusCode == 503 || translatedErrorCodes[sempv2Err.SEMPCode].retryable
+		return sempv2Err.StatusCode == 429 || sempv2Err.StatusCode == 503 || translatedErrorCodes[sempv2Err.SEMPCode].retryable
 	}
 	var sempv1Err *sempv1.Error
 	if errors.As(err, &sempv1Err) {
-		return sempv1Err.StatusCode == 503 || translatedErrorCodes[sempv1Err.ReasonCode].retryable
+		return sempv1Err.StatusCode == 429 || sempv1Err.StatusCode == 503 || translatedErrorCodes[sempv1Err.ReasonCode].retryable
 	}
 	return false
 }
