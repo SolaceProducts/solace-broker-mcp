@@ -33,12 +33,20 @@ func TestSanitizeBrokerText(t *testing.T) {
 	}{
 		{"plain text unchanged", "Queue 'myQueue' not found", "Queue 'myQueue' not found"},
 		{"ipv4 replaced", "Connected to 192.168.1.100 on port 8080", "Connected to [ip] on port 8080"},
-		// The broker formats IPv6 peer addresses bracket-wrapped.
-		{"ipv6 replaced", "SSL rejected from [2001:db8::1] port 55443", "SSL rejected from [ip] port 55443"},
-		{"ipv6 loopback replaced", "connect to [::1] failed", "connect to [ip] failed"},
+		{"ipv6 bracketed replaced", "SSL rejected from [2001:db8::1] port 55443", "SSL rejected from [ip] port 55443"},
+		{"ipv6 full form replaced", "from 2001:db8:0:0:0:0:2:1 closed", "from [ip] closed"},
+		{"ipv6 with zone replaced", "bind fe80::1%eth0 failed", "bind [ip] failed"},
+		{"ipv6 v4-mapped replaced", "mapped ::ffff:1.2.3.4 seen", "mapped [ip] seen"},
+		// Must NOT trip on colon-hex that isn't an address: no "::", not eight groups.
+		{"clock time preserved", "last seen at 12:34:56 UTC", "last seen at 12:34:56 UTC"},
+		{"mac address preserved", "device 12:34:56:78:9a:bc joined", "device 12:34:56:78:9a:bc joined"},
 		// A bracketed token with no colon is not an address and must be left alone.
 		{"bracketed non-address preserved", "queue [deadbeef] is full", "queue [deadbeef] is full"},
 		{"fs path replaced", "Error reading /opt/solace/config.json", "Error reading [path]"},
+		// Broadened FS prefixes: /home, /tmp, /root must redact too.
+		{"home path replaced", "dump written to /home/solace/core.123", "dump written to [path]"},
+		{"tmp path replaced", "spool at /tmp/sol/spool.db locked", "spool at [path] locked"},
+		{"root path replaced", "key at /root/.ssh/id_rsa missing", "key at [path] missing"},
 		// SEMP object paths (no FS prefix) must not be redacted.
 		{"semp path preserved", "Object /msgVpns/default/queues/myQueue not found", "Object /msgVpns/default/queues/myQueue not found"},
 		// The regex intentionally swallows the adjacent ':' — over-redaction is safe; the

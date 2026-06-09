@@ -182,17 +182,25 @@ The server supports open access, static token, and OAuth/OIDC authentication for
 
 Tool errors include structured fields to help diagnose the problem:
 
-| Field | Meaning |
-|---|---|
-| `error` | Human-readable error message. |
-| `retryable` | `true` if retrying may succeed (rate limits, transient failures). |
-| `status` | HTTP status code from the SEMP API. |
-| `operation` | The SEMP operation that failed (for example, `monitor/getMsgVpnQueues`). |
+| Field | Meaning | Present when |
+|---|---|---|
+| `error` | Human-readable error message. | Always |
+| `retryable` | `true` if retrying may succeed (rate limits, transient failures). | Always |
+| `status` | HTTP status code from the SEMP API. | SEMPv2, SEMPv1, or retries-exhausted (when non-zero) |
+| `operation` | The SEMP operation that failed (for example, `monitor/getMsgVpnQueues`). | SEMPv2 |
+| `sempStatus` | Broker error status string from `meta.error.status` (for example, `NOT_FOUND`). | SEMPv2, when non-empty |
+| `sempCode` | Broker error code from `meta.error.code` (for example, `6`). | SEMPv2, when non-zero |
+| `kind` | SEMPv1 error classification: `http`, `execute-fail`, `parse`, `permission`, `limit`, or `unknown`. | SEMPv1 |
+| `reasonCode` | SEMPv1 reason code from the broker response. | SEMPv1 `execute-fail` responses |
+| `attempts` | Number of attempts made before retries were exhausted. | Retries exhausted |
+| `suggestions` | Array of actionable hints for resolving the error. | Any source, when available |
 
 Common causes:
 - **404** — The specified VPN, queue, client, or RDP does not exist. Check the name for typos.
 - **401 / 403** — Event broker credentials lack permission for the requested operation. Verify the SEMP user has monitor-level access.
-- **429 / 503** — Rate limiting or event broker overload. These are retryable — the server retries automatically based on the configured retry policy.
+- **429** — Rate limiting from a proxy, gateway, or load balancer in front of the broker. (The broker itself does not emit 429 over SEMP.) Retryable — the server retries automatically based on the configured retry policy.
+- **503** — The broker is overloaded or out of resources. Retryable — the server retries automatically based on the configured retry policy.
+- **529** — No SEMP session available — a Solace-specific status for exhausted management sessions. Retry shortly.
 
 ### "Session not found" errors
 
