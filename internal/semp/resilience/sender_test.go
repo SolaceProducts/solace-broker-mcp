@@ -909,7 +909,10 @@ func TestSenderDo_SemaphoreWaitRespectsContextCancel(t *testing.T) {
 	}
 	errCh := make(chan error, 1)
 	go func() {
-		_, doErr := sender.Do(ctx, req)
+		resp, doErr := sender.Do(ctx, req)
+		if doErr == nil {
+			resp.Body.Close()
+		}
 		errCh <- doErr
 	}()
 	time.Sleep(50 * time.Millisecond) // let the second request reach the semaphore wait
