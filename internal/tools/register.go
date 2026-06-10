@@ -53,7 +53,7 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 	for _, reg := range regs {
 		mcpTool := toMCPTool(reg.meta, pool)
 
-		server.AddTool(mcpTool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		server.AddTool(mcpTool, withPanicRecovery(reg.name, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var params map[string]any
 			if err := json.Unmarshal(req.Params.Arguments, &params); err != nil {
 				return nil, fmt.Errorf("parsing tool arguments: %w", err)
@@ -68,7 +68,7 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 				info = req.Extra.TokenInfo
 			}
 			return mgr.CallTool(ctx, reg.name, params, NewIdentityFromTokenInfo(info))
-		})
+		}))
 	}
 }
 
@@ -121,7 +121,7 @@ func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool) {
 				ReadOnlyHint: true,
 			},
 		},
-		func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withPanicRecovery("list-brokers", func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			aliases := pool.Aliases()
 			result := map[string]any{"brokers": aliases}
 			resultJSON, err := json.MarshalIndent(result, "", "  ")
@@ -132,7 +132,7 @@ func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool) {
 				StructuredContent: result,
 				Content:           []mcp.Content{&mcp.TextContent{Text: string(resultJSON)}},
 			}, nil
-		},
+		}),
 	)
 }
 
