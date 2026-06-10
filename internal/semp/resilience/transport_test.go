@@ -104,4 +104,11 @@ func TestNewTunedTransport_MaxConnsPerHostEnforcesConcurrencyCap(t *testing.T) {
 	if tr.ForceAttemptHTTP2 {
 		t.Error("ForceAttemptHTTP2 = true would multiplex streams over one connection, breaking the MaxConnsPerHost concurrency bound")
 	}
+	// Go's http.Transport only auto-enables HTTP/2 when TLSClientConfig is
+	// nil; the HTTP/1.1 guarantee above therefore depends on the transport
+	// continuing to supply a custom TLSClientConfig, not just on
+	// ForceAttemptHTTP2 staying false.
+	if tr.TLSClientConfig == nil {
+		t.Error("TLSClientConfig = nil re-enables Go's automatic HTTP/2, breaking the MaxConnsPerHost concurrency bound")
+	}
 }
