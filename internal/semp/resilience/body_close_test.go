@@ -89,8 +89,15 @@ func TestSender_ErrorHandler_ClosesBody_OnHTTPExhaustion(t *testing.T) {
 	resp := newExhaustedResponse(t, body) //nolint:bodyclose // errorHandler closes the body; this test asserts exactly that
 
 	_, err := sender.errorHandler(resp, nil, 3) //nolint:bodyclose // errorHandler closes the body; this test asserts exactly that
-	if err == nil {
-		t.Fatal("expected RetriesExhaustedError")
+	var exhausted *RetriesExhaustedError
+	if !errors.As(err, &exhausted) {
+		t.Fatalf("expected *RetriesExhaustedError, got %T: %v", err, err)
+	}
+	if exhausted.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("StatusCode = %d, want %d", exhausted.StatusCode, http.StatusTooManyRequests)
+	}
+	if exhausted.Attempts != 3 {
+		t.Errorf("Attempts = %d, want 3", exhausted.Attempts)
 	}
 	if !body.closed {
 		t.Error("response body not closed — connection leaked until client timeout")
@@ -108,10 +115,17 @@ func TestSender_ErrorHandler_ClosesBody_OnErrorWithResponse(t *testing.T) {
 	resp := newExhaustedResponse(t, body) //nolint:bodyclose // errorHandler closes the body; this test asserts exactly that
 
 	_, err := sender.errorHandler(resp, context.Canceled, 1) //nolint:bodyclose // errorHandler closes the body; this test asserts exactly that
-	if err == nil {
-		t.Fatal("expected error")
+	var exhausted *RetriesExhaustedError
+	if !errors.As(err, &exhausted) {
+		t.Fatalf("expected *RetriesExhaustedError, got %T: %v", err, err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error does not wrap context.Canceled: %v", err)
 	}
 	if !body.closed {
 		t.Error("response body not closed on error branch")
+	}
+	if !body.drained {
+		t.Error("response body not drained on error branch — connection cannot be reused")
 	}
 }
