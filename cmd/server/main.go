@@ -216,6 +216,17 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 	}
 }
 
+// limitRequestBody bounds the inbound request body at
+// defaults.MaxMCPRequestBytes before the MCP SDK buffers it with io.ReadAll.
+// http.MaxBytesReader fails the downstream read once the limit is exceeded
+// and closes the connection, so an oversized body is never fully buffered.
+func limitRequestBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, defaults.MaxMCPRequestBytes)
+		next.ServeHTTP(w, r)
+	})
+}
+
 // startServer starts httpServer in a background goroutine and returns a channel
 // that receives any startup/runtime error (excluding http.ErrServerClosed, which
 // is the normal result of Shutdown). The channel is buffered so the goroutine
@@ -438,8 +449,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Register authenticated MCP endpoint
-	mux.Handle("/mcp", authedHandler)
+	// Register authenticated MCP endpoint. The body limit wraps the outside
+	// so it bounds the request before any layer can buffer it.
+	mux.Handle("/mcp", limitRequestBody(authedHandler))
 
 	// Register OAuth Protected Resource Metadata endpoint (RFC 9728)
 	// This enables MCP clients to discover the authorization server for OAuth flows.
