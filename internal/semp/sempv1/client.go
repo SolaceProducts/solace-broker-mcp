@@ -114,9 +114,18 @@ func isShowCommand(xml string) bool {
 		return false
 	}
 	rest := strings.TrimSpace(s[end+1:])
-	return strings.HasPrefix(rest, "<show>") ||
-		strings.HasPrefix(rest, "<show/>") ||
-		strings.HasPrefix(rest, "<show ")
+	if !strings.HasPrefix(rest, "<show") || len(rest) < 6 {
+		return false
+	}
+	// "<show" must be a complete tag name: next byte is '>', '/' (self-closing
+	// "<show/>"), or whitespace (attributes), not e.g. "<showcase". Same check
+	// as the "<rpc" guard above.
+	switch rest[5] {
+	case '>', '/', ' ', '\t', '\n', '\r':
+		return true
+	default:
+		return false
+	}
 }
 
 // Execute sends an XML request to the broker's /SEMP endpoint and returns the
