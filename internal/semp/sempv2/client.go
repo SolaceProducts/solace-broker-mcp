@@ -332,6 +332,8 @@ const truncationMarker = "... [truncated]"
 
 // truncateErrorText caps s at maxErrorTextLen bytes, backing up to a rune
 // boundary so the result stays valid UTF-8, and appends truncationMarker.
+// The cut path concatenates, which allocates a fresh string, so an oversized
+// input's backing array is never retained.
 func truncateErrorText(s string) string {
 	if len(s) <= maxErrorTextLen {
 		return s
@@ -343,6 +345,20 @@ func truncateErrorText(s string) string {
 	return s[:cut] + truncationMarker
 }
 
+// truncateErrorBytes is truncateErrorText for a []byte source. Truncating
+// before the string conversion avoids transiently copying an oversized body
+// (up to defaults.MaxSEMPResponseBytes) just to throw most of it away.
+func truncateErrorBytes(b []byte) string {
+	if len(b) <= maxErrorTextLen {
+		return string(b)
+	}
+	cut := maxErrorTextLen
+	for cut > 0 && !utf8.RuneStart(b[cut]) {
+		cut--
+	}
+	return string(b[:cut]) + truncationMarker
+}
+
 // parseSEMPError creates a SEMPError with best-effort extraction of the
 // broker's meta.error fields (code, status, description). If the body is not
 // valid JSON or the meta.error structure is absent, the structured fields stay
@@ -352,7 +368,7 @@ func parseSEMPError(op string, statusCode int, body []byte) *SEMPError {
 	e := &SEMPError{
 		Operation:  op,
 		StatusCode: statusCode,
-		Body:       truncateErrorText(string(body)),
+		Body:       truncateErrorBytes(body),
 	}
 
 	var envelope struct {

@@ -84,3 +84,19 @@ func TestTruncateErrorText_DoesNotSplitRune(t *testing.T) {
 		t.Errorf("expected truncation marker suffix")
 	}
 }
+
+func TestTruncateErrorBytes_DoesNotSplitRune(t *testing.T) {
+	// Fill so a 3-byte rune straddles the cut point.
+	b := []byte(strings.Repeat("a", maxErrorTextLen-1) + "世界")
+	got := truncateErrorBytes(b)
+
+	if !utf8.ValidString(got) {
+		t.Errorf("truncated text is not valid UTF-8")
+	}
+	if !strings.HasSuffix(got, truncationMarker) {
+		t.Errorf("expected truncation marker suffix")
+	}
+	if len(got) > maxErrorTextLen+len(truncationMarker) {
+		t.Errorf("length = %d, want <= %d", len(got), maxErrorTextLen+len(truncationMarker))
+	}
+}
