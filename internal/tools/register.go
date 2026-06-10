@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"runtime/debug"
 	"sort"
 	"strings"
 
@@ -25,6 +27,43 @@ import (
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// serverInternalErrorMessage is returned to the agent when a tool handler
+// panics. Mirrors genericInternalMessage but names the server, not the
+// broker, as the failing component; the panic detail stays server-side.
+const serverInternalErrorMessage = "The server encountered an internal error executing this tool. Please try again later or contact your administrator."
+
+// withRecovery wraps an SDK tool handler so a panic anywhere below the SDK
+// boundary becomes a sanitized error result instead of killing the process.
+// The SDK (go-sdk v1.5.0) invokes tool handlers on a goroutine of its own
+// with no recover() — net/http's per-connection recovery cannot catch a
+// panic on another goroutine — so without this wrapper a single panicking
+// handler takes down the whole server (SOL-150685).
+func withRecovery(toolName string, h mcp.ToolHandler) mcp.ToolHandler {
+	return func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				// %v of the panic value is logged server-side only; the agent
+				// sees the generic message below, matching the unknown-error
+				// branch of buildErrorMessage.
+				slog.Error("tool handler panicked",
+					slog.String("tool", toolName),
+					slog.String("panic", fmt.Sprintf("%v", r)),
+					slog.String("stack", string(debug.Stack())))
+				result = &mcp.CallToolResult{
+					StructuredContent: map[string]any{
+						"error":     serverInternalErrorMessage,
+						"retryable": false,
+					},
+					Content: []mcp.Content{&mcp.TextContent{Text: serverInternalErrorMessage}},
+					IsError: true,
+				}
+				err = nil
+			}
+		}()
+		return h(ctx, req)
+	}
+}
 
 // RegisterWithServer registers all tools from the ToolManager with the MCP
 // server. For each handler, it builds an mcp.Tool from the handler's Metadata
@@ -53,7 +92,7 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 	for _, reg := range regs {
 		mcpTool := toMCPTool(reg.meta, pool)
 
-		server.AddTool(mcpTool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		server.AddTool(mcpTool, withRecovery(reg.name, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var params map[string]any
 			if err := json.Unmarshal(req.Params.Arguments, &params); err != nil {
 				return nil, fmt.Errorf("parsing tool arguments: %w", err)
@@ -68,7 +107,7 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 				info = req.Extra.TokenInfo
 			}
 			return mgr.CallTool(ctx, reg.name, params, NewIdentityFromTokenInfo(info))
-		})
+		}))
 	}
 }
 
@@ -121,7 +160,7 @@ func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool) {
 				ReadOnlyHint: true,
 			},
 		},
-		func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withRecovery("list-brokers", func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			aliases := pool.Aliases()
 			result := map[string]any{"brokers": aliases}
 			resultJSON, err := json.MarshalIndent(result, "", "  ")
@@ -132,7 +171,7 @@ func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool) {
 				StructuredContent: result,
 				Content:           []mcp.Content{&mcp.TextContent{Text: string(resultJSON)}},
 			}, nil
-		},
+		}),
 	)
 }
 

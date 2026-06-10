@@ -15,6 +15,7 @@
 package tools
 
 import (
+	"context"
 	"testing"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
@@ -109,6 +110,67 @@ func TestRegisterWithServer(t *testing.T) {
 	// No panic = tools registered successfully. The MCP SDK doesn't expose
 	// a way to list registered tools directly, so we verify by checking
 	// that AddTool was called without error.
+}
+
+// TestRegisteredHandlerPanicReturnsErrorResult reproduces SOL-150685: the SDK
+// invokes tool handlers on its own goroutine with no recover(), so a panic in
+// any handler kills the whole server process. The test drives a panicking
+// handler through a real client session over the in-memory transport and
+// expects a sanitized IsError result back — and the server still answering a
+// follow-up call — instead of a crash.
+func TestRegisteredHandlerPanicReturnsErrorResult(t *testing.T) {
+	pool := newRegTestPool(t)
+	mgr := NewToolManager(pool)
+
+	panicking := newStubHandler("panic-tool")
+	panicking.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		panic("simulated handler bug")
+	}
+	mgr.Register(panicking)
+	mgr.Register(newStubHandler("ok-tool"))
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+	RegisterWithServer(mgr, server, pool)
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go func() {
+		// Run returns when the client session closes the transport.
+		_ = server.Run(ctx, serverTransport)
+	}()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1.0"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer session.Close()
+
+	args := map[string]any{"broker": "dev", "msgVpnName": "default"}
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "panic-tool", Arguments: args})
+	if err != nil {
+		t.Fatalf("CallTool on panicking handler returned protocol error: %v", err)
+	}
+	if res == nil || !res.IsError {
+		t.Fatal("expected IsError result from panicking handler")
+	}
+
+	// The panic must not leak internal detail to the agent.
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok && containsStr(tc.Text, "simulated handler bug") {
+			t.Errorf("panic detail leaked to agent-facing content: %q", tc.Text)
+		}
+	}
+
+	// The server must still be alive and serving other tools.
+	res, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "ok-tool", Arguments: args})
+	if err != nil {
+		t.Fatalf("CallTool after panic: server no longer serving: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("ok-tool returned IsError after prior panic; server state corrupted")
+	}
 }
 
 func TestRegisterListBrokers(t *testing.T) {
