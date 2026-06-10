@@ -14,7 +14,7 @@ One axis describes a release: its **version**. We use [SemVer 2.0.0](https://sem
 | `0.4.0-beta.N` | feature-complete, stabilizing | clears the Stable gate (soaked on beta, no new P0/P1) |
 | `0.4.0` | stable, supported | — |
 
-A new release line starts at `alpha`. Promotion drops or advances the pre-release identifier; the `MAJOR.MINOR.PATCH` core only changes when the change itself warrants it. Pre-1.0, breaking changes bump MINOR. Tags are immutable **[Implemented]** and signed **[Planned]**.
+A new release line starts at `alpha`. Promotion drops or advances the pre-release identifier; the `MAJOR.MINOR.PATCH` core only changes when the change itself warrants it. Pre-1.0, breaking changes bump MINOR. Tags are immutable by convention; CI enforcement is **[Planned]** — today nothing prevents retagging, and a force-updated tag would simply re-run the release workflow. Signed tags are **[Planned]**.
 
 ## Distribution pointers
 
@@ -23,7 +23,7 @@ Fixed tags name one exact build and never move:
 | Tag | Resolves to | Status |
 |-----|-------------|--------|
 | `{version}` | the exact version, e.g. `0.4.0` or `0.4.0-beta.1` | [Implemented] |
-| `:sha` | the commit the build came from | [Implemented] |
+| `sha-<short-sha>` | the commit the build came from, e.g. `sha-860c190` | [Implemented] |
 
 Moving pointers let consumers track a stream instead of a fixed version:
 
@@ -36,10 +36,10 @@ Moving pointers let consumers track a stream instead of a fixed version:
 
 ## Gates
 
-**Publish gate** — automated, runs on every change. Clearing it makes the build publishable as a pre-release:
+**Publish gate** — automated. Clearing it makes the build publishable as a pre-release:
 
-- CI green — lint, build, `go vet`, `go test -race`, three E2E suites (basic MCP, OAuth, monitoring) **[Implemented]**
-- Security scans clean — FOSSA SCA (dependencies, licenses) **[Implemented]**
+- CI green — lint, build, `go vet`, `go test -race`, three E2E suites (basic MCP, OAuth, monitoring); runs on every branch push **[Implemented]**
+- Security scans clean — FOSSA SCA (dependencies, licenses); runs on PRs, default-branch pushes, and release tags **[Implemented]**
 - No open P0/P1 bugs **[Planned]**
 - Eval harness passes **[Planned]**
 - Coverage threshold met **[Planned]**
@@ -51,7 +51,7 @@ Moving pointers let consumers track a stream instead of a fixed version:
 - Publish gate re-verified on the candidate **[Planned]**
 - No new P0/P1 found since the candidate **[Planned]**
 - Release notes finalized **[Planned]**
-- Immutable tag **[Implemented]**, signed **[Planned]**
+- Immutable tag **[Planned]** — convention today, not enforced — signed **[Planned]**
 
 Today a stable release clears the **Publish gate** only; the remaining Stable-gate criteria are **[Planned]**.
 
@@ -69,7 +69,7 @@ Pushing the tag runs `.github/workflows/release.yml`, which:
 1. Re-runs the full build-and-test suite.
 2. Runs the FOSSA scan against the tag.
 3. Builds binaries for `linux` and `darwin` × `amd64` and `arm64`.
-4. Builds and pushes a multi-arch image to `ghcr.io/solacedev/solace-broker-mcp` (`{version}`, `{major}.{minor}`, `latest`, `sha` tags).
+4. Builds and pushes a multi-arch image to `ghcr.io/solacedev/solace-broker-mcp` (`{version}`, `{major}.{minor}`, `latest`, `sha-<short-sha>` tags).
 5. Publishes a GitHub Release with auto-generated notes, the binary archives, and SHA-256 checksums.
 
 Anyone with permission to push tags can cut a release. The release succeeds only if every job passes; a failed gate blocks publication.
@@ -78,7 +78,7 @@ Pre-release tags (`v0.4.0-beta.1`) and the `:edge`/`:alpha`/`:beta` pointers fol
 
 ## Rollback **[Implemented]**
 
-Tags are immutable — we roll forward, not back.
+Tags are never reused — we roll forward, not back.
 
 - **Bad release:** fix on the default branch, then tag the next PATCH (e.g. `v0.4.1`). The fix follows the same gates, and the new tag moves the moving pointers forward to the good build.
 - **Steer users away:** mark the bad GitHub Release as a pre-release or delete it. The tag and artifacts remain for auditability; pin-by-version and pin-by-digest consumers are unaffected.
