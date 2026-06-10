@@ -59,7 +59,10 @@ func (c *HTTPClient) Close() {
 // sets up a per-broker HTTP transport with TLS settings and a cookie jar, and
 // delegates retry and rate limiting to a shared resilience.Sender. No network
 // I/O happens here — connection setup is lazy on the first Execute call.
-func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (*HTTPClient, error) {
+//
+// sem is the broker's shared in-flight semaphore (see semp.NewBrokerClient);
+// nil falls back to a client-private semaphore sized from sempCfg.
+func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, sem resilience.Semaphore) (*HTTPClient, error) {
 	transport := resilience.NewTunedTransport(brokerCfg, sempCfg)
 	jar, err := resilience.NewSafeCookieJar()
 	if err != nil {
@@ -79,7 +82,7 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (
 	baseURL := strings.TrimSuffix(brokerCfg.URL, "/")
 
 	return &HTTPClient{
-		sender:    resilience.New(httpClient, jar, sempCfg, brokerCfg.Auth, baseURL),
+		sender:    resilience.New(httpClient, jar, sempCfg, brokerCfg.Auth, baseURL, sem),
 		baseURL: baseURL,
 		authCfg: brokerCfg.Auth,
 	}, nil

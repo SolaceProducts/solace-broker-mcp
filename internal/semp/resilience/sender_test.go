@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -42,7 +43,7 @@ func newTestSender(t *testing.T, httpClient *http.Client, authMode string, retri
 	}
 	jar := mustNewSafeCookieJar(t)
 	httpClient.Jar = jar
-	return New(httpClient, jar, sempCfg, authCfg, "http://test-broker")
+	return New(httpClient, jar, sempCfg, authCfg, "http://test-broker", nil)
 }
 
 // newTestSenderWithServer creates a test server and a Sender pointed at it.
@@ -543,7 +544,7 @@ func TestSender_ErrorHandler_NetworkError_ProducesRetriesExhaustedError(t *testi
 	}
 	authCfg := config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"}
 	jar := mustNewSafeCookieJar(t)
-	sender := New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, serverURL)
+	sender := New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, serverURL, nil)
 
 	req := newGetRequest(t, serverURL)
 	resp, err := sender.Do(context.Background(), req)
@@ -689,7 +690,7 @@ func TestSender_NoRetry_POST_ConnectionError(t *testing.T) {
 	}
 	authCfg := config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"}
 	jar := mustNewSafeCookieJar(t)
-	sender := New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, serverURL)
+	sender := New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, serverURL, nil)
 
 	req := newMethodRequest(t, http.MethodPost, serverURL)
 	resp, err := sender.Do(context.Background(), req)
@@ -729,7 +730,7 @@ func TestSender_NoRetry_PATCH_ConnectionError(t *testing.T) {
 	}
 	authCfg := config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"}
 	jar := mustNewSafeCookieJar(t)
-	sender := New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, serverURL)
+	sender := New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, serverURL, nil)
 
 	req := newMethodRequest(t, http.MethodPatch, serverURL)
 	resp, err := sender.Do(context.Background(), req)
@@ -770,4 +771,159 @@ func TestSender_NoRetry_400(t *testing.T) {
 	if requestCount.Load() != 1 {
 		t.Errorf("expected 1 request (no retry for 400), got %d", requestCount.Load())
 	}
+}
+
+// newTestSenderWithSem creates a Sender pointed at serverURL that shares sem.
+// Rate limiting is disabled and retries are zero so tests exercise only the
+// in-flight semaphore.
+func newTestSenderWithSem(t *testing.T, httpClient *http.Client, serverURL string, sem Semaphore) *Sender {
+	t.Helper()
+	retries := 0
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		Retries:            &retries,
+		RequestMinInterval: &minInterval,
+		RetryMinInterval:   1 * time.Millisecond,
+		RetryMaxInterval:   10 * time.Millisecond,
+	}
+	authCfg := config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"}
+	jar := mustNewSafeCookieJar(t)
+	httpClient.Jar = jar
+	return New(httpClient, jar, sempCfg, authCfg, serverURL, sem)
+}
+
+// TestSenderDo_SharedSemaphoreEnforcesPerBrokerCap proves that two Senders
+// sharing one Semaphore — as the SEMPv1 and SEMPv2 clients of a single broker
+// do — never have more than the cap in flight against the broker combined.
+// Requests beyond the cap must queue until a slot frees.
+//
+// The handler blocks every request until released, so without enforcement all
+// twelve requests reach the server immediately and the cap is exceeded.
+func TestSenderDo_SharedSemaphoreEnforcesPerBrokerCap(t *testing.T) {
+	const maxInFlight = 3
+	const totalRequests = 12
+
+	arrived := make(chan struct{}, totalRequests)
+	release := make(chan struct{})
+	releaseAll := sync.OnceFunc(func() { close(release) })
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		arrived <- struct{}{}
+		<-release
+		jsonOK(w)
+	}))
+	defer server.Close()
+	// On a failure path, unblock the handlers before the deferred
+	// server.Close() — it waits for in-flight requests and would deadlock.
+	defer releaseAll()
+
+	sem := NewSemaphore(maxInFlight)
+	senderA := newTestSenderWithSem(t, server.Client(), server.URL, sem)
+	senderB := newTestSenderWithSem(t, server.Client(), server.URL, sem)
+	defer senderA.Close()
+	defer senderB.Close()
+
+	var wg sync.WaitGroup
+	errs := make(chan error, totalRequests)
+	for i := range totalRequests {
+		sender := senderA
+		if i%2 == 1 {
+			sender = senderB
+		}
+		req := newGetRequest(t, server.URL)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, err := sender.Do(context.Background(), req)
+			if err != nil {
+				errs <- err
+				return
+			}
+			resp.Body.Close()
+		}()
+	}
+
+	// Exactly maxInFlight requests reach the server while all slots are held...
+	for range maxInFlight {
+		select {
+		case <-arrived:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("expected %d requests to reach the server", maxInFlight)
+		}
+	}
+	// ...and no further request may arrive until a slot frees.
+	select {
+	case <-arrived:
+		t.Fatalf("in-flight requests exceeded the cap of %d", maxInFlight)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	releaseAll()
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("Do: %v", err)
+	}
+}
+
+// TestSenderDo_SemaphoreWaitRespectsContextCancel proves a request waiting for
+// an in-flight slot honors context cancellation instead of blocking until a
+// slot frees.
+func TestSenderDo_SemaphoreWaitRespectsContextCancel(t *testing.T) {
+	arrived := make(chan struct{}, 2)
+	release := make(chan struct{})
+	releaseAll := sync.OnceFunc(func() { close(release) })
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		arrived <- struct{}{}
+		<-release
+		jsonOK(w)
+	}))
+	defer server.Close()
+	// On a failure path, unblock the handlers before the deferred
+	// server.Close() — it waits for in-flight requests and would deadlock.
+	defer releaseAll()
+
+	sem := NewSemaphore(1)
+	sender := newTestSenderWithSem(t, server.Client(), server.URL, sem)
+	defer sender.Close()
+
+	// First request occupies the only slot and blocks in the handler.
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		resp, err := sender.Do(context.Background(), newGetRequest(t, server.URL))
+		if err == nil {
+			resp.Body.Close()
+		}
+	}()
+	select {
+	case <-arrived:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first request did not reach the server")
+	}
+
+	// Second request cannot get a slot; cancel it while it waits.
+	ctx, cancel := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/test", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		_, doErr := sender.Do(ctx, req)
+		errCh <- doErr
+	}()
+	time.Sleep(50 * time.Millisecond) // let the second request reach the semaphore wait
+	cancel()
+
+	select {
+	case doErr := <-errCh:
+		if !errors.Is(doErr, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", doErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled request did not return")
+	}
+
+	releaseAll()
+	<-firstDone
 }
