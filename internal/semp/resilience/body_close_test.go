@@ -86,9 +86,9 @@ func newExhaustedResponse(t *testing.T, body *trackingBody) *http.Response {
 func TestSender_ErrorHandler_ClosesBody_OnHTTPExhaustion(t *testing.T) {
 	sender := newErrorHandlerTestSender(t)
 	body := &trackingBody{reader: strings.NewReader("rate limited")}
-	resp := newExhaustedResponse(t, body)
+	resp := newExhaustedResponse(t, body) //nolint:bodyclose // errorHandler closes the body; this test asserts exactly that
 
-	_, err := sender.errorHandler(resp, nil, 3)
+	_, err := sender.errorHandler(resp, nil, 3) //nolint:bodyclose // errorHandler closes the body; this test asserts exactly that
 	if err == nil {
 		t.Fatal("expected RetriesExhaustedError")
 	}
@@ -105,9 +105,9 @@ func TestSender_ErrorHandler_ClosesBody_OnErrorWithResponse(t *testing.T) {
 	// response (and its body) is still open.
 	sender := newErrorHandlerTestSender(t)
 	body := &trackingBody{reader: strings.NewReader("broker down")}
-	resp := newExhaustedResponse(t, body)
+	resp := newExhaustedResponse(t, body) //nolint:bodyclose // errorHandler closes the body; this test asserts exactly that
 
-	_, err := sender.errorHandler(resp, context.Canceled, 1)
+	_, err := sender.errorHandler(resp, context.Canceled, 1) //nolint:bodyclose // errorHandler closes the body; this test asserts exactly that
 	if err == nil {
 		t.Fatal("expected error")
 	}
