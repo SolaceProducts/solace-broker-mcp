@@ -80,3 +80,28 @@ func TestResponseHeaderTimeout_TracksOperatorConfiguredRequestTimeout(t *testing
 		t.Errorf("ResponseHeaderTimeout = %s, want %s (half of operator-configured request timeout)", tr.ResponseHeaderTimeout, want)
 	}
 }
+
+// TestNewTunedTransport_MaxConnsPerHostEnforcesConcurrencyCap verifies the
+// per-broker in-flight bound is actually enforced at the transport. The
+// transport supplies a custom TLSClientConfig, which disables Go's automatic
+// HTTP/2, so SEMP traffic is HTTP/1.1 and one connection carries exactly one
+// in-flight request — MaxConnsPerHost is therefore a true concurrency cap.
+// Without it, a burst of tool calls against a slow broker opens unbounded
+// TCP+TLS connections to the management plane.
+func TestNewTunedTransport_MaxConnsPerHostEnforcesConcurrencyCap(t *testing.T) {
+	brokerCfg := &config.BrokerConfig{URL: "https://broker.example.com:1943"}
+	sempCfg := &config.SEMPConfig{
+		MaxConcurrentPerBroker: 7,
+		RequestTimeoutDuration: defaults.DefaultSEMPRequestTimeoutDuration,
+	}
+
+	tr := NewTunedTransport(brokerCfg, sempCfg)
+
+	if tr.MaxConnsPerHost != sempCfg.MaxConcurrentPerBroker {
+		t.Errorf("MaxConnsPerHost = %d, want %d (per-broker concurrency cap unenforced)",
+			tr.MaxConnsPerHost, sempCfg.MaxConcurrentPerBroker)
+	}
+	if tr.ForceAttemptHTTP2 {
+		t.Error("ForceAttemptHTTP2 = true would multiplex streams over one connection, breaking the MaxConnsPerHost concurrency bound")
+	}
+}
