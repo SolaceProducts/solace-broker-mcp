@@ -91,7 +91,7 @@ What are the current message rates for default VPN on my-broker?
 
 ## Tools Reference
 
-The server exposes 17 read-only tools. All broker-querying tools require a `broker` parameter to identify which configured event broker to query; `list-brokers` is the exception and returns the available event broker aliases.
+The server exposes 17 read-only tools plus 2 action tools (19 total). All broker-querying tools require a `broker` parameter to identify which configured event broker to query; `list-brokers` is the exception and returns the available event broker aliases. Action tools (`execute-queue-action`, `execute-client-action`) are marked destructive via the MCP `destructiveHint` annotation and their descriptions instruct the calling LLM to obtain explicit user confirmation before invocation.
 
 ### Discovery
 
@@ -149,6 +149,15 @@ The server exposes 17 read-only tools. All broker-querying tools require a `brok
 |---|---|
 | `get-discard-stats` | Broker-wide or per-VPN discard aggregates: client-level ingress/egress discards plus broker-wide spool discards (native SEMPv1). Per-VPN scope returns client-level discards only — the broker exposes no per-VPN spool breakdown via SEMPv1. |
 | `list-queue-discards` | Per-queue discard counters for a VPN: TTL-expired, max-redelivery, spool-quota-exceeded, and other discard categories. Complements `get-discard-stats` with queue-level granularity. Default 100 results, max 500. |
+
+### Actions
+
+These tools modify broker state via the SEMPv2 action API. They are marked destructive via the MCP `destructiveHint` annotation, and their descriptions instruct the calling LLM to obtain explicit user confirmation — restating the target (broker, VPN, queue or client) and the effect — before invocation. The tool manager also logs a WARNING line on every destructive invocation for audit.
+
+| Tool | Description |
+|---|---|
+| `execute-queue-action` | Execute an action on a queue: `deleteMsgs` (irreversible — permanently deletes all spooled messages) or `clearStats` (resets statistics counters; non-destructive). Use after operator-confirmed intent to drain a queue or reset stats during testing. |
+| `execute-client-action` | Execute an action on a connected client: `disconnect` (service-impacting — terminates the session; client must reconnect) or `clearStats` (resets per-connection statistics; non-destructive). Common use: disconnect a slow subscriber identified via `list-slow-subscribers` or `get-client-details`. |
 
 ## Recommended Environments
 

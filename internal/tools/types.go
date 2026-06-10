@@ -71,6 +71,13 @@ type Annotations struct {
 	// OpenWorld indicates the tool interacts with systems outside this server's
 	// closed world. Nil means unspecified.
 	OpenWorld *bool
+
+	// RequiresConfirmation is an internal advisory flag for tools whose
+	// invocation requires explicit user confirmation. The MCP SDK's standard
+	// annotations have no equivalent, so it does NOT propagate to the wire
+	// protocol — the operative confirmation control is the description-text
+	// instruction. Default false.
+	RequiresConfirmation bool
 }
 
 // Metadata describes a tool to the MCP layer: its identity, schemas, and

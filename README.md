@@ -72,7 +72,7 @@ The server implements the MCP HTTP transport specification and exposes event bro
 
 ## Tools
 
-The server exposes read-only tools grouped by what they inspect. Every tool except `list-brokers` takes a `broker` parameter naming a configured broker alias. See the [user guide](docs/user-guide.md#tools) for per-tool descriptions, parameters, and pagination defaults.
+The server exposes read-only tools grouped by what they inspect, plus a small set of action tools for operational workflows. Every tool except `list-brokers` takes a `broker` parameter naming a configured broker alias. See the [user guide](docs/user-guide.md#tools) for per-tool descriptions, parameters, and pagination defaults.
 
 | Category | Tools | Description |
 |---|---|---|
@@ -84,6 +84,7 @@ The server exposes read-only tools grouped by what they inspect. Every tool exce
 | Clients | `list-clients`, `get-client-details`, `list-client-subscriptions`, `list-slow-subscribers` | List connections, inspect per-client rates and discards, list subscriptions, filter for slow-subscriber-flagged clients |
 | REST Delivery Points | `list-rdps`, `get-rdp-status` | List RDPs; inspect bindings, REST consumers, and last failure reason |
 | Discards | `get-discard-stats`, `list-queue-discards` | Broker-wide and per-VPN discard aggregates; per-queue discard counters |
+| Actions | `execute-queue-action`, `execute-client-action` | Execute queue actions (`deleteMsgs`, `clearStats`) and client actions (`disconnect`, `clearStats`); destructive variants instruct the LLM to obtain user confirmation before invocation |
 
 ## Guides
 
