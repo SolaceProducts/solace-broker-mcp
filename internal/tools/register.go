@@ -43,12 +43,15 @@ func withRecovery(toolName string, h mcp.ToolHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
 		defer func() {
 			if r := recover(); r != nil {
-				// %v of the panic value is logged server-side only; the agent
-				// sees the generic message below, matching the unknown-error
-				// branch of buildErrorMessage.
+				// Log only the panic value's Go type, never its text: panic
+				// values are unaudited and can carry arbitrary strings (the
+				// same rule logToolResult applies to non-broker errors). The
+				// stack trace pinpoints the panic site without echoing the
+				// value, and the agent sees only the generic message below,
+				// matching the unknown-error branch of buildErrorMessage.
 				slog.Error("tool handler panicked",
 					slog.String("tool", toolName),
-					slog.String("panic", fmt.Sprintf("%v", r)),
+					slog.String("panic_type", fmt.Sprintf("%T", r)),
 					slog.String("stack", string(debug.Stack())))
 				result = &mcp.CallToolResult{
 					StructuredContent: map[string]any{

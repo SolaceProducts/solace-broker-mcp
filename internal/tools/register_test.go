@@ -15,7 +15,9 @@
 package tools
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"testing"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
@@ -119,6 +121,14 @@ func TestRegisterWithServer(t *testing.T) {
 // expects a sanitized IsError result back — and the server still answering a
 // follow-up call — instead of a crash.
 func TestRegisteredHandlerPanicReturnsErrorResult(t *testing.T) {
+	// Capture server-side logs: the panic log line must carry the tool name
+	// and panic type but never the raw panic value, which is unaudited text
+	// (same rule logToolResult applies to non-broker errors).
+	var logBuf bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+	defer slog.SetDefault(oldLogger)
+
 	pool := newRegTestPool(t)
 	mgr := NewToolManager(pool)
 
@@ -161,6 +171,23 @@ func TestRegisteredHandlerPanicReturnsErrorResult(t *testing.T) {
 		if tc, ok := c.(*mcp.TextContent); ok && containsStr(tc.Text, "simulated handler bug") {
 			t.Errorf("panic detail leaked to agent-facing content: %q", tc.Text)
 		}
+	}
+
+	// Server-side log: tool name and panic type for correlation, never the
+	// raw panic value. (Safe to read here: the recovery log is written before
+	// the response is sent, so CallTool returning orders it before this read.)
+	logOutput := logBuf.String()
+	if !containsStr(logOutput, "tool handler panicked") {
+		t.Errorf("expected panic recovery log line, got: %s", logOutput)
+	}
+	if !containsStr(logOutput, "panic-tool") {
+		t.Errorf("expected tool name in panic log for correlation, got: %s", logOutput)
+	}
+	if !containsStr(logOutput, "panic_type") {
+		t.Errorf("expected panic_type field in panic log, got: %s", logOutput)
+	}
+	if containsStr(logOutput, "simulated handler bug") {
+		t.Errorf("raw panic value leaked into server log: %s", logOutput)
 	}
 
 	// The server must still be alive and serving other tools.
