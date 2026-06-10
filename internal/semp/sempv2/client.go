@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
@@ -57,7 +58,7 @@ func (e *SEMPError) Error() string {
 //
 // Rate limiting and retry logic are delegated to the shared resilience.Sender.
 type HTTPClient struct {
-	sender    *resilience.Sender
+	sender  *resilience.Sender
 	baseURL string
 	authCfg config.AuthConfig
 }
@@ -103,7 +104,7 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (
 	baseURL := strings.TrimSuffix(brokerCfg.URL, "/")
 
 	return &HTTPClient{
-		sender:    resilience.New(httpClient, jar, sempCfg, brokerCfg.Auth, baseURL),
+		sender:  resilience.New(httpClient, jar, sempCfg, brokerCfg.Auth, baseURL),
 		baseURL: baseURL,
 		authCfg: brokerCfg.Auth,
 	}, nil
@@ -317,15 +318,41 @@ func encodeCSVQueryParam(name string, val any) string {
 	return url.QueryEscape(name) + "=" + strings.Join(encoded, ",")
 }
 
+// maxErrorTextLen bounds broker-controlled error text (Description and the
+// raw Body fallback) captured into a SEMPError. The body read is capped at
+// 16 MiB (defaults.MaxSEMPResponseBytes), so without this bound a misbehaving
+// broker or intermediary can push a multi-MiB string into every downstream
+// sink: SEMPError.Error(), the tool-result log's detail field, and the
+// agent-facing MCP error message. Truncating at capture bounds all of them
+// at once. 4 KiB comfortably holds any real SEMP error description.
+const maxErrorTextLen = 4096
+
+// truncationMarker is appended to error text cut at maxErrorTextLen.
+const truncationMarker = "... [truncated]"
+
+// truncateErrorText caps s at maxErrorTextLen bytes, backing up to a rune
+// boundary so the result stays valid UTF-8, and appends truncationMarker.
+func truncateErrorText(s string) string {
+	if len(s) <= maxErrorTextLen {
+		return s
+	}
+	cut := maxErrorTextLen
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + truncationMarker
+}
+
 // parseSEMPError creates a SEMPError with best-effort extraction of the
 // broker's meta.error fields (code, status, description). If the body is not
 // valid JSON or the meta.error structure is absent, the structured fields stay
-// zero-valued and Body carries the raw response.
+// zero-valued and Body carries the raw response. Description and Body are
+// broker-controlled and truncated at maxErrorTextLen.
 func parseSEMPError(op string, statusCode int, body []byte) *SEMPError {
 	e := &SEMPError{
 		Operation:  op,
 		StatusCode: statusCode,
-		Body:       string(body),
+		Body:       truncateErrorText(string(body)),
 	}
 
 	var envelope struct {
@@ -340,7 +367,7 @@ func parseSEMPError(op string, statusCode int, body []byte) *SEMPError {
 	if json.Unmarshal(body, &envelope) == nil {
 		e.SEMPCode = envelope.Meta.Error.Code
 		e.SEMPStatus = envelope.Meta.Error.Status
-		e.Description = envelope.Meta.Error.Description
+		e.Description = truncateErrorText(envelope.Meta.Error.Description)
 	}
 
 	return e
