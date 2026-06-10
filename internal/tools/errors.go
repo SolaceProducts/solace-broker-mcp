@@ -35,34 +35,35 @@ const serviceUnavailableMessage = "The broker is temporarily unavailable. Please
 
 // codeInfo struct is used to store a single row of the translatedErrorCodes table
 type codeInfo struct {
-	summary string // short label used when the broker gives no description
-	hint    string // generic actionable hint surfaced to the agent
+	hint string // generic actionable hint surfaced to the agent
 	// retryable marks transient codes where the same request might succeed on
 	// retry (HTTP 503 and exhausted internal retries are handled separately).
 	retryable bool
 }
 
-// translatedErrorCodes maps the comRc_t integer to a short summary and a generic hint.
+// translatedErrorCodes maps the comRc_t integer to a generic actionable hint.
 // Note that the comRc_t code corresponds to the SEMPv2 error.code / SEMPv1 reasonCode.
 var translatedErrorCodes = map[int]codeInfo{
-	6:   {summary: "Object not found", hint: "Verify the name is correct."},
-	10:  {summary: "Object already exists", hint: "Update the existing object or choose a new name."},
-	11:  {summary: "Invalid parameter", hint: "Check attribute values against the SEMP schema."},
-	14:  {summary: "Operation not supported", hint: "Not supported for this object or broker mode."},
-	27:  {summary: "Request parse error", hint: "Check the request/query syntax."},
-	72:  {summary: "Unauthorized", hint: "Credentials lack permission; check the management role/VPN scope."},
-	89:  {summary: "Operation not allowed", hint: "Not allowed in the object's current state."},
-	135: {summary: "Maximum exceeded", hint: "A configured maximum was reached."},
-	228: {summary: "Missing required parameter", hint: "Supply all required fields for this object."},
-	229: {summary: "Operation timed out", hint: "Retry shortly.", retryable: true},
-	256: {summary: "Object not empty", hint: "Drain or remove contained objects before deleting."},
+	6:   {hint: "Verify the name is correct."},
+	10:  {hint: "Update the existing object or choose a new name."},
+	11:  {hint: "Check attribute values against the SEMP schema."},
+	14:  {hint: "Not supported for this object or broker mode."},
+	27:  {hint: "Check the request/query syntax."},
+	72:  {hint: "Credentials lack permission; check the management role/VPN scope."},
+	89:  {hint: "Not allowed in the object's current state."},
+	135: {hint: "A configured maximum was reached."},
+	228: {hint: "Supply all required fields for this object."},
+	229: {hint: "Retry shortly.", retryable: true},
+	256: {hint: "Drain or remove contained objects before deleting."},
 }
 
 // fsPrefixPattern matches filesystem paths by their leading prefix only, so
 // SEMP object paths (e.g. /msgVpns/foo/queues/bar) — which have none of these
 // prefixes — are preserved. This is the load-bearing constraint of the
-// sanitizer.
-var fsPrefixPattern = regexp.MustCompile(`(?i)(/opt/|/var/|/usr/|/etc/|[A-Za-z]:\\)\S*`)
+// sanitizer: every prefix here must be a real OS root that can never collide
+// with a SEMP object collection name. The set covers the common Unix roots that
+// could leak host layout (including /home, /tmp, /root) plus a Windows drive.
+var fsPrefixPattern = regexp.MustCompile(`(?i)(/opt/|/var/|/usr/|/etc/|/home/|/root/|/tmp/|/mnt/|/srv/|[A-Za-z]:\\)\S*`)
 
 // ipv4Pattern matches dotted-quad IPv4 addresses. Known trade-off: a broker
 // version with four dot-separated numbers (e.g. "10.2.1.5") has the same shape
@@ -71,10 +72,23 @@ var fsPrefixPattern = regexp.MustCompile(`(?i)(/opt/|/var/|/usr/|/etc/|[A-Za-z]:
 // log), so we accept the lost debugging signal rather than complicate the regex.
 var ipv4Pattern = regexp.MustCompile(`\b\d{1,3}(\.\d{1,3}){3}\b`)
 
-// ipv6Pattern matches the broker's bracket-wrapped IPv6 form (e.g. "[2001:db8::1]").
-// The broker brackets IPv6 and leaves IPv4 bare, so only the bracketed shape is
-// needed here. The required ':' avoids matching plain bracketed hex tokens.
-var ipv6Pattern = regexp.MustCompile(`\[[0-9a-fA-F:]*:[0-9a-fA-F:]*\]`)
+// ipv6Pattern matches IPv6 addresses, both the broker's bracket-wrapped form
+// ("[2001:db8::1]", brackets consumed) and bare forms matched defensively.
+// Requiring a hextet on both sides of "::" avoids redacting non-address tokens
+// like "foo::bar"; the cost is that bare "::1"/"::" (non-sensitive) are skipped.
+// Over-redaction is otherwise acceptable — the raw text survives in the server log.
+// The IPv4-tailed branch is first because Go's regexp prefers the first matching
+// branch, not the longest, so v4-mapped addresses match whole.
+var ipv6Pattern = regexp.MustCompile(`(?i)\[?(?:` +
+	// "::" with an embedded IPv4 tail (v4-mapped), e.g. ::ffff:1.2.3.4
+	`(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?::(?:[0-9a-f]{1,4}:)*(?:\d{1,3}\.){3}\d{1,3}` +
+	`|` +
+	// Compressed "::", hextet required on both sides, e.g. 2001:db8::1
+	`(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)` +
+	`|` +
+	// Full eight-group form, e.g. 2001:db8:0:0:0:0:2:1
+	`(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}` +
+	`)(?:%[0-9a-zA-Z._-]+)?\]?`)
 
 // buildErrorResult converts a tool execution error into an MCP-compliant
 // CallToolResult with IsError: true. Per the MCP spec, tool execution errors
@@ -254,9 +268,9 @@ func buildSEMPv2Message(err *sempv2.SEMPError) string {
 
 // isRetryable returns true for errors that represent transient conditions where
 // the same request might succeed later: exhausted internal retries (the
-// resilience layer only exhausts on genuinely transient statuses), an HTTP 503
-// or a transient comRc_t code (229 TIME_OUT) from the broker. All other SEMP/envelope
-// errors are deterministic and non-retryable.
+// resilience layer only exhausts on genuinely transient HTTP statuses, e.g.
+// 429/503), a live HTTP 429 or 503, or a transient comRc_t code (229 TIME_OUT).
+// All other SEMP/envelope errors are deterministic and non-retryable.
 func isRetryable(err error) bool {
 	var retriesErr *resilience.RetriesExhaustedError
 	if errors.As(err, &retriesErr) {
@@ -264,11 +278,11 @@ func isRetryable(err error) bool {
 	}
 	var sempv2Err *sempv2.SEMPError
 	if errors.As(err, &sempv2Err) {
-		return sempv2Err.StatusCode == 503 || translatedErrorCodes[sempv2Err.SEMPCode].retryable
+		return sempv2Err.StatusCode == 429 || sempv2Err.StatusCode == 503 || translatedErrorCodes[sempv2Err.SEMPCode].retryable
 	}
 	var sempv1Err *sempv1.Error
 	if errors.As(err, &sempv1Err) {
-		return sempv1Err.StatusCode == 503 || translatedErrorCodes[sempv1Err.ReasonCode].retryable
+		return sempv1Err.StatusCode == 429 || sempv1Err.StatusCode == 503 || translatedErrorCodes[sempv1Err.ReasonCode].retryable
 	}
 	return false
 }
