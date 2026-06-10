@@ -3,6 +3,7 @@ package resilience
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -135,11 +136,26 @@ func (d *Sender) Close() {
 	}
 }
 
+// errorHandlerDrainLimit bounds how much of the final response body the
+// errorHandler reads before closing it. Matches retryablehttp's own
+// respReadLimit for the between-attempts drain. A fully drained body lets
+// the transport return the connection to the idle pool; past the limit,
+// closing (and tearing down the connection) is cheaper than the read.
+const errorHandlerDrainLimit = 4096
+
 // errorHandler is called by retryablehttp when retries are exhausted (RetryMax
-// reached while CheckRetry kept returning true). At this point the response
-// body has been drained/closed by retryablehttp's retry loop, so we construct
-// a RetriesExhaustedError from the status code and attempt count.
+// reached while CheckRetry kept returning true). retryablehttp drains the
+// response body only between attempts — on the final attempt it returns
+// through the custom ErrorHandler without touching the body, and the handler
+// owns closing it (go-retryablehttp client.go ErrorHandler contract). Drain
+// and close here, then construct a RetriesExhaustedError from the status code
+// and attempt count.
 func (d *Sender) errorHandler(resp *http.Response, err error, numTries int) (*http.Response, error) {
+	if resp != nil && resp.Body != nil {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, errorHandlerDrainLimit))
+		_ = resp.Body.Close()
+	}
+
 	if err != nil {
 		return nil, &RetriesExhaustedError{Attempts: numTries, Err: err}
 	}
