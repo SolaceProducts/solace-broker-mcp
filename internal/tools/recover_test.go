@@ -26,7 +26,7 @@ import (
 func TestWithPanicRecovery_PanicBecomesError(t *testing.T) {
 	handler := withPanicRecovery("get-broker-health", func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		var m map[string]int
-		m["boom"] = 1 // nil map write — representative latent handler bug
+		m["boom"] = 1 //nolint:staticcheck // SA5000: deliberate nil-map write — representative latent handler bug; the test needs the real runtime panic message
 		return nil, nil
 	})
 
