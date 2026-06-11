@@ -205,9 +205,13 @@ fixture sizes change.
 
 ### F4 — message rates
 
-- Instantaneous `rxMsgRate` stabilizes within **~5 s** at **~92 msg/s** against
-  a target of 100 (~8 % undershoot from publisher loop overhead). Asserted
-  against `≥ 80`.
+- The F4 publisher's own sustained rate stabilizes within **~5 s** at **~92
+  msg/s** against a target of 100 (~8 % undershoot from publisher loop
+  overhead). The assertion reads SEMP's VPN-level `rxMsgRate` — a *VPN-wide
+  aggregate* that may be higher than 92 msg/s while concurrent fixtures (e.g.
+  F6 flood publisher) are running — so it's a floor check (`≥ 80`), not an
+  exact-match. The 80 floor is grounded in the F4 publisher's ~92 msg/s
+  contribution alone, so it holds even when F4 is the only active publisher.
 - Instantaneous `txMsgRate` (delivery to the F3 receiver) is inherently lower
   and noisier than the publish rate — single-read samples on CI runners have
   been observed across **57–88 msg/s** (SOL-150715). Asserted against `≥ 40`

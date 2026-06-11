@@ -311,7 +311,7 @@ F4_SAMPLE_INTERVAL=1
 
 test_get_message_rates() {
     local broker="$1"
-    local response content rx tx peak_rx=0 peak_tx=0
+    local response content rx tx peak_rx=0 peak_tx=0 i
     local samples=()
     for ((i = 1; i <= F4_SAMPLE_COUNT; i++)); do
         response=$(mcp_call_tool "get-message-rates" \

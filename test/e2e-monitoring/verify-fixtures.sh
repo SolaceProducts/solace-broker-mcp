@@ -136,7 +136,7 @@ F4_SAMPLE_INTERVAL=1
 verify_sustained_traffic_state() {
     local label="$1"
     local broker_url="$2"
-    local body rx tx peak_rx=0 peak_tx=0
+    local body rx tx peak_rx=0 peak_tx=0 i
     local samples=()
     for ((i = 1; i <= F4_SAMPLE_COUNT; i++)); do
         body=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN") || {
