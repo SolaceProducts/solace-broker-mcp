@@ -22,6 +22,27 @@ type retryState struct {
 	auth401Retried  bool   // true after first 401 re-auth attempt (basic auth only)
 	other5xxRetried bool   // true after first non-429/503 5xx retry
 	method          string // HTTP method captured at Do() time for idempotency check
+	retrySafe       bool   // caller-declared semantic idempotency (see WithRetrySafe)
+}
+
+// retrySafeKey is the context key for the caller-declared retry-safe marker.
+type retrySafeKey struct{}
+
+// WithRetrySafe marks the request issued under this context as semantically
+// idempotent, enabling the full retry policy even over a non-idempotent HTTP
+// method. SEMPv1 is an RPC protocol where read-only <show> commands travel
+// over POST; without this marker the method-based guard would deny them all
+// retries (429/503 backoff, connection errors, 401 re-auth). Callers must
+// only set this for requests that are safe to repeat.
+func WithRetrySafe(ctx context.Context) context.Context {
+	return context.WithValue(ctx, retrySafeKey{}, true)
+}
+
+// isRetrySafe reports whether the caller marked the request retry-safe via
+// WithRetrySafe.
+func isRetrySafe(ctx context.Context) bool {
+	v, _ := ctx.Value(retrySafeKey{}).(bool)
+	return v
 }
 
 // OperationIDKey is the context key callers use to attach an operation
@@ -54,7 +75,9 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 		return false, ctx.Err()
 	}
 
-	// Non-idempotent methods are never retried. POST and PATCH can produce
+	// Non-idempotent methods are never retried unless the caller explicitly
+	// marked the request retry-safe (WithRetrySafe — e.g. SEMPv1 read-only
+	// <show> commands, which travel over POST). POST and PATCH can produce
 	// side effects (resource creation, partial config update) that are not safe
 	// to repeat even on transient errors — a double-write is worse than a
 	// visible failure. This check covers both HTTP errors and connection errors.
@@ -64,7 +87,7 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 	// SEMPv2 routes resource replacement through PUT; treating it as non-idempotent
 	// would defeat the retry policy for legitimately transient failures.
 	state := getRetryState(ctx)
-	if state.method == http.MethodPost || state.method == http.MethodPatch {
+	if (state.method == http.MethodPost || state.method == http.MethodPatch) && !state.retrySafe {
 		return false, nil
 	}
 
