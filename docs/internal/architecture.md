@@ -1,52 +1,34 @@
 # Architecture — Solace Broker MCP Server
 
-This document describes the architecture as implemented. For design rationale, future plans, and detailed scenarios, see [specs/001-architecture-diagrams.md](../specs/001-architecture-diagrams.md).
+This document describes the architecture as implemented.
 
 ---
 
-## Folder Structure
+## Package Structure
+
+One line per package; for current file-level detail, read the package itself.
 
 ```
-solace-broker-mcp/
-├── cmd/server/
-│   └── main.go                    # Entry point, MCP server startup
-│
-├── internal/
-│   ├── defaults/
-│   │   └── defaults.go            # All default values, assumption annotations
-│   │
-│   ├── config/
-│   │   └── config.go              # YAML config, env var substitution, validation
-│   │
-│   ├── semp/
-│   │   ├── broker.go              # BrokerClient — holds per-broker sempv2 client
-│   │   ├── pool.go                # BrokerPool — lazy creation, thread-safe (RWMutex)
-│   │   └── sempv2/
-│   │       ├── client.go          # Client interface + HTTPClient (HTTP calls, Basic Auth)
-│   │       ├── operation.go       # Operation type + OpenAPI spec parser
-│   │       └── specs/
-│   │           ├── embed.go       # //go:embed for spec files
-│   │           └── *.json         # Swagger 2.0 specs (monitor, config, action)
-│   │
-│   ├── composite/                 # YAML-driven composite tool engine
-│   │   ├── definition.go          # Tool/step/parameter structs
-│   │   ├── loader.go              # YAML loading + validation
-│   │   ├── executor.go            # Step orchestration, templates, result strategies
-│   │   └── definitions/
-│   │       └── tools.yaml         # Tool definitions (11 composite tools)
-│   │
-│   └── tools/                     # MCP tool registration, routing, native handlers
-│       ├── manager.go             # ToolManager — registers and routes tool calls
-│       ├── register.go            # Wires composite + native tools into MCP server
-│       ├── composite_handler.go   # Bridges composite executor to MCP SDK
-│       ├── validation.go          # Parameter validation helpers
-│       └── sempv1/                # Native SEMPv1 tool handlers
-│           ├── brokerhealth/      # get-broker-health
-│           └── redundancy/        # get-redundancy-status
-│
-├── docs/                          # This directory
-└── specs/                         # Design specs, task breakdowns, test plans
+cmd/server/            Entry point — config loading, auth middleware, MCP server startup
+internal/
+├── auth/              Client (inbound) auth: OAuth/OIDC JWT validation, static dev token, mode banner
+├── config/            YAML config, ${VAR} env substitution, validation, broker alias canonicalization
+├── defaults/          All default values, with assumption annotations
+├── semp/              BrokerPool + BrokerClient — lazy per-broker client creation, thread-safe (RWMutex)
+│   ├── auth/          Broker (outbound) auth
+│   ├── resilience/    Rate limiting, retries, cookie jar
+│   ├── sempv1/        SEMPv1 client — XML envelope protocol
+│   └── sempv2/        SEMPv2 client — HTTP + embedded OpenAPI specs (monitor, config, action)
+├── composite/         YAML-driven composite tool engine: loader, validator, step executor
+│   └── definitions/   tools.yaml — composite tool definitions (source of truth for the tool list)
+├── tools/             MCP registration, routing, param validation, identity extraction
+│   └── sempv1/        Native Go tool handlers, one package per tool
+└── version/           Build version stamping
 ```
+
+The full tool list is defined by `internal/composite/definitions/tools.yaml`
+(composite) plus the packages under `internal/tools/sempv1/` (native) — count
+them there, not here.
 
 ---
 
@@ -72,7 +54,7 @@ graph TB
 
         subgraph "sempv2"
             CLIENT["client.go<br/>sempv2.Client interface<br/>HTTPClient implementation<br/>Basic Auth"]
-            OPERATION["operation.go<br/>Operation type<br/>OpenAPI spec parser<br/>799 operations"]
+            OPERATION["operation.go<br/>Operation type<br/>OpenAPI spec parser"]
             SPECS["specs/<br/>Embedded Swagger JSON<br/>Monitor + Config + Action"]
         end
     end
