@@ -22,6 +22,7 @@ import (
 	"runtime/debug"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
@@ -163,15 +164,39 @@ func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool) {
 				ReadOnlyHint: true,
 			},
 		},
-		withRecovery("list-brokers", func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		withRecovery("list-brokers", func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+			// This handler does not flow through ToolManager.CallTool, so it
+			// emits the "tool invoked" audit line itself — every tool
+			// invocation must reach the audit surface (no broker attr: this
+			// tool resolves none). Same panic-detection contract as
+			// CallTool's defer: error returns set toolErr, the success
+			// return sets result, both nil means a panic is unwinding.
+			start := time.Now()
+			var brokerAlias, errorType string
+			var toolErr error
+			var info *sdkauth.TokenInfo
+			if req.Extra != nil {
+				info = req.Extra.TokenInfo
+			}
+			id := NewIdentityFromTokenInfo(info)
+			defer func() {
+				if toolErr == nil && result == nil {
+					errorType = "panic"
+					toolErr = panicError{}
+				}
+				logToolResult(ctx, "list-brokers", &brokerAlias, start, &errorType, &toolErr, id)
+			}()
+
 			aliases := pool.Aliases()
-			result := map[string]any{"brokers": aliases}
-			resultJSON, err := json.MarshalIndent(result, "", "  ")
-			if err != nil {
-				return nil, fmt.Errorf("marshalling broker list: %w", err)
+			structured := map[string]any{"brokers": aliases}
+			resultJSON, mErr := json.MarshalIndent(structured, "", "  ")
+			if mErr != nil {
+				errorType = "marshal_error"
+				toolErr = fmt.Errorf("marshalling broker list: %w", mErr)
+				return nil, toolErr
 			}
 			return &mcp.CallToolResult{
-				StructuredContent: result,
+				StructuredContent: structured,
 				Content:           []mcp.Content{&mcp.TextContent{Text: string(resultJSON)}},
 			}, nil
 		}),

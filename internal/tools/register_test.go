@@ -17,7 +17,9 @@ package tools
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
@@ -206,6 +208,138 @@ func TestRegisterListBrokers(t *testing.T) {
 
 	RegisterListBrokers(server, pool)
 	// No panic = registered successfully.
+}
+
+// auditLines decodes every JSON log line in buf with msg "tool invoked" for
+// the given tool name. Used to assert on the audit surface that feeds
+// dashboards and SLOs.
+func auditLines(t *testing.T, buf *bytes.Buffer, tool string) []map[string]any {
+	t.Helper()
+	var lines []map[string]any
+	for _, raw := range strings.Split(buf.String(), "\n") {
+		if raw == "" {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+			t.Fatalf("non-JSON log line %q: %v", raw, err)
+		}
+		if entry["msg"] == "tool invoked" && entry["tool"] == tool {
+			lines = append(lines, entry)
+		}
+	}
+	return lines
+}
+
+// TestPanicAuditedAsError covers the audit half of SOL-150685: CallTool's
+// deferred audit log runs during panic unwinding, before withRecovery's
+// recover fires. toolErr is still nil at that point, so without panic
+// detection the success branch emits "status": "success" at INFO for an
+// invocation that panicked — misclassifying panics on the surface that feeds
+// dashboards and SLOs. The audit line must instead report status=error with
+// error_type=panic, and no success line may appear.
+func TestPanicAuditedAsError(t *testing.T) {
+	var logBuf bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(oldLogger)
+
+	pool := newRegTestPool(t)
+	mgr := NewToolManager(pool)
+
+	panicking := newStubHandler("panic-tool")
+	panicking.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		panic("simulated handler bug")
+	}
+	mgr.Register(panicking)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+	RegisterWithServer(mgr, server, pool)
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go func() {
+		_ = server.Run(ctx, serverTransport)
+	}()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1.0"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer session.Close()
+
+	args := map[string]any{"broker": "dev", "msgVpnName": "default"}
+	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "panic-tool", Arguments: args}); err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+
+	audits := auditLines(t, &logBuf, "panic-tool")
+	if len(audits) != 1 {
+		t.Fatalf("expected exactly 1 audit line for panic-tool, got %d: %s", len(audits), logBuf.String())
+	}
+	if got := audits[0]["status"]; got != "error" {
+		t.Errorf("audit status = %v, want %q (a panic must never audit as success)", got, "error")
+	}
+	if got := audits[0]["error_type"]; got != "panic" {
+		t.Errorf("audit error_type = %v, want %q", got, "panic")
+	}
+	if got := audits[0]["level"]; got != "ERROR" {
+		t.Errorf("audit level = %v, want ERROR", got)
+	}
+	// The raw panic value is unaudited text and must not reach the audit line.
+	if containsStr(logBuf.String(), "simulated handler bug") {
+		t.Errorf("raw panic value leaked into logs: %s", logBuf.String())
+	}
+}
+
+// TestListBrokersEmitsAuditLog covers the audit gap on the standalone
+// list-brokers tool: its handler does not flow through CallTool, so before
+// the fix a successful invocation produced zero audit output. Every tool
+// invocation must emit exactly one "tool invoked" audit line.
+func TestListBrokersEmitsAuditLog(t *testing.T) {
+	var logBuf bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(oldLogger)
+
+	pool := newRegTestPool(t)
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+	RegisterListBrokers(server, pool)
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go func() {
+		_ = server.Run(ctx, serverTransport)
+	}()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1.0"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer session.Close()
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "list-brokers", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("list-brokers returned IsError: %v", res.Content)
+	}
+
+	audits := auditLines(t, &logBuf, "list-brokers")
+	if len(audits) != 1 {
+		t.Fatalf("expected exactly 1 audit line for list-brokers, got %d: %s", len(audits), logBuf.String())
+	}
+	if got := audits[0]["status"]; got != "success" {
+		t.Errorf("audit status = %v, want %q", got, "success")
+	}
+	// list-brokers resolves no broker; the audit line must omit the field
+	// rather than carry an empty value.
+	if _, present := audits[0]["broker"]; present {
+		t.Errorf("audit line carries broker field for brokerless tool: %v", audits[0])
+	}
 }
 
 // TestToMCPAnnotations exercises the translation boundary between our
