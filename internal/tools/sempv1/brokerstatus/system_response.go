@@ -15,8 +15,9 @@
 package brokerstatus
 
 // systemResponse decodes the curated subset of the <system> payload from
-// <rpc><show><system/></show></rpc>. See docs/semp/get-broker-status-curated-fields.md
-// for the rationale behind each kept field.
+// <rpc><show><system/></show></rpc>. See
+// docs/internal/semp/get-broker-status-curated-fields.md for the rationale
+// behind each kept field.
 //
 // Three groups are surfaced:
 //   - uptime/restart context (operator first-pass triage)

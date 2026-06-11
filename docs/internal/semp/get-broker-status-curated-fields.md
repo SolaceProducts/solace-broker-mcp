@@ -260,6 +260,6 @@ These appear in operator runbooks but were missing from Story 8's list:
 ## Next steps
 
 Once this curated list is signed off:
-- Update `docs/semp/get-broker-status-implementation-plan.md` to reflect the curated set instead of raw passthrough.
+- Update `docs/internal/semp/get-broker-status-implementation-plan.md` to reflect the curated set instead of raw passthrough.
 - Decide curation strategy (Option 1 / Option 2) — affects B3 and B4.
 - B5 round-trip tests assert presence of curated fields; cmp.py (B5b) uses this list as the expected output set.

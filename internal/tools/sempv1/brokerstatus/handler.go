@@ -9,8 +9,8 @@
 //	show message-spool detail          → "spool" key
 //
 // Field selection is operator-driven, not exhaustive — see
-// docs/semp/get-broker-status-curated-fields.md for the rationale, source
-// citations, and full curated list.
+// docs/internal/semp/get-broker-status-curated-fields.md for the rationale,
+// source citations, and full curated list.
 package brokerstatus
 
 import (
@@ -62,12 +62,12 @@ func (h *Handler) Metadata() tools.Metadata {
 			"broker's operational state - edition and version, uptime and restart " +
 			"reason, scaling limits and resource headroom (to flag under-scaling), " +
 			"memory and message-spool utilization. Reports raw state, not a " +
-			"pass/fail verdict - interpretation depends on deployment intent " +
-			"(e.g. message-spool disabled is expected for direct-messaging-only " +
-			"deployments, not a fault). Use whenever the user asks about a " +
-			"broker's status, whether it is slow, restarted, under-scaled, low " +
-			"on capacity, or before maintenance. Specify the target broker by " +
-			"its configured alias.",
+			"health verdict - whether the broker is \"healthy\" depends on " +
+			"deployment intent (e.g. message-spool disabled is expected for " +
+			"direct-messaging-only deployments, not a fault). Use whenever the " +
+			"user asks about a broker's status or health - whether it is " +
+			"healthy, slow, restarted, under-scaled, low on capacity, or before " +
+			"maintenance. Specify the target broker by its configured alias.",
 		InputSchema:  tools.EmptyObjectSchema(),
 		OutputSchema: tools.StepKeyedEnvelopeSchema(),
 		Annotations:  tools.ReadOnlyAnnotations(),

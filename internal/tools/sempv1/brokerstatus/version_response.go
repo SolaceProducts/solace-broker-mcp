@@ -16,8 +16,8 @@ package brokerstatus
 
 // versionResponse decodes the curated subset of the <version> payload from
 // <rpc><show><version/></show></rpc>. The full XSD-aligned shape was reviewed
-// during planning (see docs/semp/get-broker-status-curated-fields.md); only
-// the operator-cited status signals remain. Optional fields use pointer +
+// during planning (see docs/internal/semp/get-broker-status-curated-fields.md);
+// only the operator-cited status signals remain. Optional fields use pointer +
 // omitempty so older brokers that omit a field produce an absent JSON key
 // rather than a zero value.
 type versionResponse struct {

@@ -19,7 +19,8 @@ package brokerstatus
 // signals (Datadog alarms on these); raw memory pool sizes, IPC buffer
 // pools, slot infos, and event thresholds are decoded by other tools when
 // needed and are not surfaced for broker-status triage. See
-// docs/semp/get-broker-status-curated-fields.md for the full rationale.
+// docs/internal/semp/get-broker-status-curated-fields.md for the full
+// rationale.
 type memoryResponse struct {
 	PhysicalMemoryUsagePercent     *float64 `xml:"physical-memory-usage-percent" json:"physicalMemoryUsagePercent,omitempty"`
 	SubscriptionMemoryUsagePercent *float64 `xml:"subscription-memory-usage-percent" json:"subscriptionMemoryUsagePercent,omitempty"`
