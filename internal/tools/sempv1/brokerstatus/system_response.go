@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package brokerhealth
+package brokerstatus
 
 // systemResponse decodes the curated subset of the <system> payload from
-// <rpc><show><system/></show></rpc>. See docs/semp/get-broker-health-curated-fields.md
+// <rpc><show><system/></show></rpc>. See docs/semp/get-broker-status-curated-fields.md
 // for the rationale behind each kept field.
 //
 // Three groups are surfaced:

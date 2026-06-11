@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package brokerhealth
+package brokerstatus
 
 // messageSpoolResponse decodes the curated subset of the <message-spool>
 // payload from <rpc><show><message-spool><detail/></message-spool></show></rpc>.
@@ -24,7 +24,7 @@ package brokerhealth
 // VPN tools. This struct keeps only the operator-cited health signals
 // (HA state, utilization percentages, recent failures, fragmentation).
 //
-// See docs/semp/get-broker-health-curated-fields.md for the full rationale.
+// See docs/semp/get-broker-status-curated-fields.md for the full rationale.
 type messageSpoolResponse struct {
 	MessageSpoolInfo *messageSpoolInfoT `xml:"message-spool-info" json:"messageSpoolInfo,omitempty"`
 }

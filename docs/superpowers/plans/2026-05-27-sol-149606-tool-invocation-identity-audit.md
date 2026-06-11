@@ -369,22 +369,22 @@ they are reviewable in the plan, not discovered in the diff.
 
 Example (oauth mode, all claims present):
 ```json
-{"level":"INFO","msg":"tool invoked","tool":"get-broker-health","broker":"prod-east","status":"success","duration":"23.4ms","sub":"auth0|abc123","iss":"https://example.auth0.com/","client_id":"cursor-ide","jti":"a3f9..."}
+{"level":"INFO","msg":"tool invoked","tool":"get-broker-status","broker":"prod-east","status":"success","duration":"23.4ms","sub":"auth0|abc123","iss":"https://example.auth0.com/","client_id":"cursor-ide","jti":"a3f9..."}
 ```
 
 Example (oauth mode, IdP didn't issue `client_id` or `jti`):
 ```json
-{"level":"INFO","msg":"tool invoked","tool":"get-broker-health","broker":"prod-east","status":"success","duration":"23.4ms","sub":"auth0|abc123","iss":"https://example.auth0.com/","client_id":"<absent>","jti":"<absent>"}
+{"level":"INFO","msg":"tool invoked","tool":"get-broker-status","broker":"prod-east","status":"success","duration":"23.4ms","sub":"auth0|abc123","iss":"https://example.auth0.com/","client_id":"<absent>","jti":"<absent>"}
 ```
 
 Example (static mode):
 ```json
-{"level":"INFO","msg":"tool invoked","tool":"get-broker-health","broker":"prod-east","status":"success","duration":"23.4ms","sub":"dev-user","iss":"<absent>","client_id":"<absent>","jti":"<absent>"}
+{"level":"INFO","msg":"tool invoked","tool":"get-broker-status","broker":"prod-east","status":"success","duration":"23.4ms","sub":"dev-user","iss":"<absent>","client_id":"<absent>","jti":"<absent>"}
 ```
 
 Example (disabled mode — identity fields entirely absent):
 ```json
-{"level":"INFO","msg":"tool invoked","tool":"get-broker-health","broker":"prod-east","status":"success","duration":"23.4ms"}
+{"level":"INFO","msg":"tool invoked","tool":"get-broker-status","broker":"prod-east","status":"success","duration":"23.4ms"}
 ```
 
 ### 6.2 Tool-invocation error (existing line, with new fields)
