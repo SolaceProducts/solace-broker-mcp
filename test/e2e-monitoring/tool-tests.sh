@@ -305,7 +305,7 @@ test_list_client_subscriptions_pagination_b() { test_list_client_subscriptions_p
 # Envelope: {"rates":{"data":{...}}} — a single object.
 
 F4_RX_THRESHOLD=80
-F4_TX_THRESHOLD=40
+F4_TX_THRESHOLD=50
 F4_SAMPLE_COUNT=5
 F4_SAMPLE_INTERVAL=1
 
