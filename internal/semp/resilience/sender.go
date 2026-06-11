@@ -116,8 +116,12 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 
 	// Attach per-request retry state for checkRetry, including the HTTP method
 	// so the non-idempotent method guard can fire even on connection errors
-	// (where resp is nil and resp.Request.Method is unavailable).
-	ctx = context.WithValue(ctx, retryStateKey{}, &retryState{method: req.Method})
+	// (where resp is nil and resp.Request.Method is unavailable), and the
+	// caller's retry-safe marker (WithRetrySafe).
+	ctx = context.WithValue(ctx, retryStateKey{}, &retryState{
+		method:    req.Method,
+		retrySafe: isRetrySafe(ctx),
+	})
 	req = req.WithContext(ctx)
 
 	retryReq, err := retryablehttp.FromRequest(req)
