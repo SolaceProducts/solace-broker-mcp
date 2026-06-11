@@ -104,12 +104,22 @@ test_get_rdp_status_not_found() {
         }
     }')
 
-    if echo "$response" | grep -q '"error"'; then
-        return 0
-    fi
-    log_fail "Nonexistent RDP should return an error indication"
-    log_fail "  Response: $(echo "$response" | head -3)"
-    return 1
+    # The error must be translated end-to-end (SOL-148434), not just surfaced as a
+    # raw failure: flagged as an error, classified non-retryable, carrying a
+    # human-friendly message, an actionable suggestion, and the original SEMP code
+    # preserved for debugging.
+    assert_json_field "$response" ".result.isError" "true" \
+        "Nonexistent RDP should return an error result" || return 1
+    assert_json_field "$response" ".result.structuredContent.retryable" "false" \
+        "A not-found error is deterministic, so retryable should be false" || return 1
+    assert_json_field "$response" ".result.structuredContent.sempCode" "6" \
+        "Original SEMP NOT_FOUND code (6) should be preserved for debugging" || return 1
+    assert_json_field "$response" ".result.structuredContent.sempStatus" "NOT_FOUND" \
+        "Original SEMP status should be preserved" || return 1
+    assert_json_field "$response" '.result.structuredContent.suggestions[0]' "Verify the name is correct." \
+        "Error should include an actionable suggestion" || return 1
+    assert_contains "$response" "restDeliveryPoint nonexistent-rdp" \
+        "Translated message should name the object that was not found" || return 1
 }
 
 test_get_queue_metrics_broker_a() {

@@ -6,7 +6,7 @@
 *.dylib
 bin/
 mcp-server
-server
+/server
 
 # Test binary
 *.test

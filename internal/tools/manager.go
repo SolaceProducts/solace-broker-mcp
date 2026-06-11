@@ -181,7 +181,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	if err != nil {
 		errorType = "execution_error"
 		toolErr = fmt.Errorf("executing tool %q: %w", name, err)
-		return buildErrorResult(toolErr), nil
+		return m.buildErrorResult(toolErr), nil
 	}
 
 	// Guard against nil results from handler.
@@ -244,18 +244,8 @@ func (m *ToolManager) logToolResult(ctx context.Context, tool string, broker *st
 		return
 	}
 
-	attrs := []slog.Attr{
-		slog.String("tool", tool),
-		slog.String("status", "error"),
-		slog.String("error_type", *errorType),
-		slog.Duration("duration", time.Since(start)),
-		slog.Any("", id),
-	}
-	if *broker != "" {
-		attrs = append(attrs, slog.String("broker", *broker))
-	}
-
-	// Type-switch on the concrete error types instead of a shared interface.
+	// Match the concrete error type once, up front: it gates both the structured
+	// fields below and what we put in "detail".
 	//
 	// A common SempError interface was considered but rejected: see drift
 	// D7 in docs/semp/sempv1-client-design.md. The two protocols' error
@@ -267,15 +257,51 @@ func (m *ToolManager) logToolResult(ctx context.Context, tool string, broker *st
 	// independent.
 	var sempv1Err *sempv1.Error
 	var sempv2Err *sempv2.SEMPError
+	var retriesErr *resilience.RetriesExhaustedError
+	isV1 := errors.As(*toolErr, &sempv1Err)
+	isV2 := errors.As(*toolErr, &sempv2Err)
+	isRetries := errors.As(*toolErr, &retriesErr)
+
+	// "detail" carries the unsanitized error so operators can diagnose failures —
+	// it is the one place the raw text is kept (the agent only ever sees the
+	// sanitized message from buildErrorResult). Folding it onto this line, rather
+	// than a separate emit, keeps one tool error in one record at a single (ERROR)
+	// level.
+	//
+	// We log the raw err.Error() ONLY for the broker error types we've audited:
+	// their text is broker-generated and carries no credentials (auth is applied
+	// via headers, not URLs). For any other error — including the unknown/default
+	// case that buildErrorResult deliberately hides behind genericInternalMessage
+	// — we can't vouch for the contents, so we log only the Go type, never the
+	// message. ReplaceAttr can't help here (it keys off field names, and "detail"
+	// is a raw string), so this type gate is the actual safeguard.
+	detail := fmt.Sprintf("%T", *toolErr)
+	if isV1 || isV2 || isRetries {
+		detail = (*toolErr).Error()
+	}
+
+	attrs := []slog.Attr{
+		slog.String("tool", tool),
+		slog.String("status", "error"),
+		slog.String("error_type", *errorType),
+		slog.Duration("duration", time.Since(start)),
+		slog.String("detail", detail),
+		slog.Any("", id),
+	}
+	if *broker != "" {
+		attrs = append(attrs, slog.String("broker", *broker))
+	}
+
 	switch {
-	case errors.As(*toolErr, &sempv1Err):
+	case isV1:
 		attrs = append(attrs,
 			slog.String("kind", sempv1Err.Kind.String()),
 			slog.Int("http_status", sempv1Err.StatusCode),
 			slog.Int("reason_code", sempv1Err.ReasonCode))
-	case errors.As(*toolErr, &sempv2Err):
+	case isV2:
 		attrs = append(attrs,
 			slog.Int("http_status", sempv2Err.StatusCode),
+			slog.Int("semp_code", sempv2Err.SEMPCode),
 			slog.String("operation", sempv2Err.Operation))
 	}
 
@@ -304,106 +330,4 @@ func (m *ToolManager) classifyBrokerError(alias string, err error) (string, erro
 			alias, strings.Join(m.pool.Aliases(), ", "))
 	}
 	return "broker_init_error", fmt.Errorf("connecting to broker %q: %w", alias, err)
-}
-
-// buildErrorResult converts a tool execution error into an MCP-compliant
-// CallToolResult with IsError: true. Per the MCP spec, tool execution errors
-// should be returned as results (not protocol-level errors) so the LLM can see
-// them and self-correct. StructuredContent carries machine-readable fields
-// (retryable, status, protocol-specific data); Content carries a human-readable
-// text message.
-func buildErrorResult(err error) *mcp.CallToolResult {
-	msg := buildErrorMessage(err)
-	retryable := isRetryable(err)
-
-	structured := map[string]any{
-		"error":     msg,
-		"retryable": retryable,
-	}
-
-	var sempv2Err *sempv2.SEMPError
-	var sempv1Err *sempv1.Error
-	var retriesErr *resilience.RetriesExhaustedError
-
-	switch {
-	case errors.As(err, &sempv2Err):
-		structured["status"] = sempv2Err.StatusCode
-		structured["operation"] = sempv2Err.Operation
-		if sempv2Err.SEMPStatus != "" {
-			structured["sempStatus"] = sempv2Err.SEMPStatus
-		}
-		if sempv2Err.SEMPCode != 0 {
-			structured["sempCode"] = sempv2Err.SEMPCode
-		}
-	case errors.As(err, &sempv1Err):
-		structured["status"] = sempv1Err.StatusCode
-		structured["kind"] = sempv1Err.Kind.String()
-		if sempv1Err.ReasonCode != 0 {
-			structured["reasonCode"] = sempv1Err.ReasonCode
-		}
-	case errors.As(err, &retriesErr):
-		if retriesErr.StatusCode != 0 {
-			structured["status"] = retriesErr.StatusCode
-		}
-		structured["attempts"] = retriesErr.Attempts
-	}
-
-	return &mcp.CallToolResult{
-		StructuredContent: structured,
-		Content:           []mcp.Content{&mcp.TextContent{Text: msg}},
-		IsError:           true,
-	}
-}
-
-// isRetryable returns true for errors that represent transient conditions where
-// the same request might succeed later. Only RetriesExhaustedError qualifies —
-// the resilience layer's checkRetry already filters out non-retryable statuses,
-// so anything that exhausts retries was genuinely transient (429, 503, 5xx,
-// connection error). All SEMPError (4xx) and sempv1.Error (envelope errors) are
-// deterministic and non-retryable.
-func isRetryable(err error) bool {
-	var retriesErr *resilience.RetriesExhaustedError
-	return errors.As(err, &retriesErr)
-}
-
-// buildErrorMessage produces a human-readable error string for the Content text
-// block. It prefers the broker's own description when available.
-func buildErrorMessage(err error) string {
-	var retriesErr *resilience.RetriesExhaustedError
-	var sempv2Err *sempv2.SEMPError
-	var sempv1Err *sempv1.Error
-
-	switch {
-	case errors.As(err, &retriesErr):
-		if retriesErr.Err != nil {
-			return fmt.Sprintf(
-				"Request failed after %d attempts due to network error: %v. Internal retries exhausted.",
-				retriesErr.Attempts, retriesErr.Err)
-		}
-		return fmt.Sprintf(
-			"Request failed after %d attempts (HTTP %d). Internal retries exhausted.",
-			retriesErr.Attempts, retriesErr.StatusCode)
-
-	case errors.As(err, &sempv2Err):
-		if sempv2Err.Description != "" {
-			return sempv2Err.Description
-		}
-		return fmt.Sprintf("%s returned HTTP %d", sempv2Err.Operation, sempv2Err.StatusCode)
-
-	case errors.As(err, &sempv1Err):
-		if sempv1Err.Message != "" {
-			msg := fmt.Sprintf("SEMPv1 %s error: %s", sempv1Err.Kind, sempv1Err.Message)
-			if sempv1Err.Kind == sempv1.ErrorKindLimit {
-				msg += ". Reduce the scope of the request."
-			}
-			return msg
-		}
-		if sempv1Err.Kind == sempv1.ErrorKindHTTP {
-			return fmt.Sprintf("SEMPv1 HTTP %d error", sempv1Err.StatusCode)
-		}
-		return fmt.Sprintf("SEMPv1 %s error (status=%d)", sempv1Err.Kind, sempv1Err.StatusCode)
-
-	default:
-		return err.Error()
-	}
 }
