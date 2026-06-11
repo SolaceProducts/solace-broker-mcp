@@ -72,8 +72,9 @@ const MaxSEMPResponseBytes = 16 * 1024 * 1024
 // Reasoning: MCP tool-call payloads are JSON-RPC messages, typically a few
 // KB. 4 MiB is ~1000x headroom above any realistic tool call while bounding
 // the worst-case per-request allocation.
-// Trade-off: a legitimately larger request fails with a read error surfaced
-// by the SDK as a request-level failure. No known MCP client produces one.
+// Trade-off: a legitimately larger request is rejected — 413 when its
+// Content-Length declares the overage, otherwise a read error the SDK
+// surfaces as 400. No known MCP client produces one.
 const MaxMCPRequestBytes = 4 * 1024 * 1024
 
 // DefaultMaxConcurrentPerBroker is the maximum number of concurrent SEMP

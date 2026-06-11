@@ -216,13 +216,20 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 	}
 }
 
-// limitRequestBody bounds the inbound request body at
-// defaults.MaxMCPRequestBytes before the MCP SDK buffers it with io.ReadAll.
-// http.MaxBytesReader fails the downstream read once the limit is exceeded
-// and closes the connection, so an oversized body is never fully buffered.
-func limitRequestBody(next http.Handler) http.Handler {
+// limitRequestBody bounds the inbound request body at maxBytes before the
+// MCP SDK buffers it with io.ReadAll. A request that declares an oversized
+// Content-Length is rejected with 413 before the SDK runs. Bodies without a
+// declared length (or that lie) are caught by http.MaxBytesReader, which
+// fails the downstream read once the limit is exceeded and closes the
+// connection, so an oversized body is never fully buffered; the SDK surfaces
+// that read failure to the client as 400 "failed to read body".
+func limitRequestBody(next http.Handler, maxBytes int64) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, defaults.MaxMCPRequestBytes)
+		if r.ContentLength > maxBytes {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -451,7 +458,7 @@ func main() {
 
 	// Register authenticated MCP endpoint. The body limit wraps the outside
 	// so it bounds the request before any layer can buffer it.
-	mux.Handle("/mcp", limitRequestBody(authedHandler))
+	mux.Handle("/mcp", limitRequestBody(authedHandler, defaults.MaxMCPRequestBytes))
 
 	// Register OAuth Protected Resource Metadata endpoint (RFC 9728)
 	// This enables MCP clients to discover the authorization server for OAuth flows.
