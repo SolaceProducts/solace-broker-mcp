@@ -195,7 +195,7 @@ func (c ClientAuthConfig) LogValue() slog.Value {
 // applyDefaults runs, these fields are guaranteed non-nil so downstream code
 // can dereference safely.
 type SEMPConfig struct {
-	MaxConcurrentPerBroker int            `yaml:"max_concurrent_per_broker"` // semaphore size per broker
+	MaxConcurrentPerBroker int            `yaml:"max_concurrent_per_broker"` // transport MaxConnsPerHost per protocol client
 	RequestTimeoutDuration time.Duration  `yaml:"request_timeout_duration"`  // HTTP request timeout for SEMP calls (e.g., "30s")
 	RequestMinInterval     *time.Duration `yaml:"request_min_interval"`      // minimum spacing between SEMP requests; 0 = no throttle
 	Retries                *int           `yaml:"retries"`                   // max retry attempts for a failed SEMP call; 0 = no retries
