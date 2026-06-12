@@ -447,10 +447,18 @@ test_get_queue_metrics_slow_consumer_b() { test_get_queue_metrics_slow_consumer 
 # entry — it confirms the cap is honored but, like list-rdps, cannot demonstrate
 # multi-page truncation (no second slow subscriber exists to drop).
 # Envelope: {"slowSubscribers":{"data":[...],"truncated":bool}}.
+#
+# Precondition re-arm: slowSubscriber is computed over a rolling ~1 min window
+# (see wait_for_slow_subscriber) and can drop back to false between the
+# verify-fixtures F6 check and this test — observed verified-true then gone
+# 63 s later on a slow runner (2026-06-12, runs 27424785855 / 27425041949).
+# Each test re-polls the flag via the broker before asserting on the tool;
+# the poll returns immediately when the flag is already set.
 
 test_list_slow_subscribers() {
-    local broker="$1" own="$2" other="$3"
+    local broker="$1" broker_url="$2" own="$3" other="$4"
     local response content
+    wait_for_slow_subscriber "$broker_url" "$broker" "$own" || return 1
     response=$(mcp_call_tool "list-slow-subscribers" \
         "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
     content=$(extract_content "$response")
@@ -472,8 +480,10 @@ test_list_slow_subscribers() {
 }
 
 test_list_slow_subscribers_pagination() {
-    local broker="$1"
+    local broker="$1" broker_url="$2" client_name="$3"
     local response content
+    # Same rolling-window hazard as the presence test above — re-arm first.
+    wait_for_slow_subscriber "$broker_url" "$broker" "$client_name" || return 1
     response=$(mcp_call_tool "list-slow-subscribers" \
         "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",maxResults:1}')") || return 1
     content=$(extract_content "$response")
@@ -481,10 +491,10 @@ test_list_slow_subscribers_pagination() {
         "list-slow-subscribers [$broker]: maxResults=1 must return exactly 1 slow subscriber" || return 1
 }
 
-test_list_slow_subscribers_a() { test_list_slow_subscribers "broker-a" "$F6_SUB_CLIENT_NAME_A" "$F6_SUB_CLIENT_NAME_B"; }
-test_list_slow_subscribers_b() { test_list_slow_subscribers "broker-b" "$F6_SUB_CLIENT_NAME_B" "$F6_SUB_CLIENT_NAME_A"; }
-test_list_slow_subscribers_pagination_a() { test_list_slow_subscribers_pagination "broker-a"; }
-test_list_slow_subscribers_pagination_b() { test_list_slow_subscribers_pagination "broker-b"; }
+test_list_slow_subscribers_a() { test_list_slow_subscribers "broker-a" "$BROKER_A_URL" "$F6_SUB_CLIENT_NAME_A" "$F6_SUB_CLIENT_NAME_B"; }
+test_list_slow_subscribers_b() { test_list_slow_subscribers "broker-b" "$BROKER_B_URL" "$F6_SUB_CLIENT_NAME_B" "$F6_SUB_CLIENT_NAME_A"; }
+test_list_slow_subscribers_pagination_a() { test_list_slow_subscribers_pagination "broker-a" "$BROKER_A_URL" "$F6_SUB_CLIENT_NAME_A"; }
+test_list_slow_subscribers_pagination_b() { test_list_slow_subscribers_pagination "broker-b" "$BROKER_B_URL" "$F6_SUB_CLIENT_NAME_B"; }
 
 # ── Tool 11: list-queue-discards (F7 spool + TTL discards; per-queue) ─────────
 # Value check (AC 13): list-queue-discards returns each queue's per-category
