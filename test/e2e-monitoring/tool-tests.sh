@@ -606,6 +606,83 @@ test_get_discard_stats_broker_wide_b() { test_get_discard_stats_broker_wide "bro
 test_get_discard_stats_per_vpn_a()     { test_get_discard_stats_per_vpn "broker-a"; }
 test_get_discard_stats_per_vpn_b()     { test_get_discard_stats_per_vpn "broker-b"; }
 
+# ── Tool 13: get-broker-status (broker-wide; SOL-150724) ─────────────────────
+# Shape + value check on the curated point-in-time status snapshot. The tool
+# is broker-wide (no VPN/queue scope) and runs against the base Dockerized
+# broker — no dedicated fixture; the ambient F4 sustained traffic and the
+# default spool config are what make memory/spool readings non-trivial.
+# Envelope: {"version":{...},"system":{...},"memory":{...},"spool":{...}} —
+# four step keys, each carrying the curated camelCase fields documented in
+# docs/internal/semp/get-broker-status-curated-fields.md.
+
+test_get_broker_status() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "get-broker-status" \
+        "$(jq -nc --arg b "$broker" '{broker:$b}')") || return 1
+    content=$(extract_content "$response")
+
+    # Envelope shape: all four step keys present.
+    assert_json_field "$content" '.version | type' "object" \
+        "get-broker-status [$broker]: .version must be an object" || return 1
+    assert_json_field "$content" '.system | type' "object" \
+        "get-broker-status [$broker]: .system must be an object" || return 1
+    assert_json_field "$content" '.memory | type' "object" \
+        "get-broker-status [$broker]: .memory must be an object" || return 1
+    assert_json_field "$content" '.spool | type' "object" \
+        "get-broker-status [$broker]: .spool must be an object" || return 1
+
+    # version: description identifies a Solace broker; uptime is positive.
+    assert_json_field "$content" '(.version.description | type) == "string" and (.version.description | contains("Solace"))' "true" \
+        "get-broker-status [$broker]: .version.description must be a Solace string" || return 1
+    assert_json_field "$content" '.version.uptime.totalSecs > 0' "true" \
+        "get-broker-status [$broker]: .version.uptime.totalSecs must be > 0" || return 1
+
+    # system: uptime + restart context, scaling-tier limits, resource pair.
+    assert_json_field "$content" '.system.systemUptimeSeconds > 0' "true" \
+        "get-broker-status [$broker]: .system.systemUptimeSeconds must be > 0" || return 1
+    # lastRestartReason is an empty string on brokers that haven't been
+    # intentionally restarted (typical for the Dockerized fixtures), so only
+    # assert the shape — the field is present as a string.
+    assert_json_field "$content" '(.system.lastRestartReason | type) == "string"' "true" \
+        "get-broker-status [$broker]: .system.lastRestartReason must be a string" || return 1
+    assert_json_field "$content" '(.system.maxConnections | type) == "number"' "true" \
+        "get-broker-status [$broker]: .system.maxConnections must be numeric" || return 1
+    assert_json_field "$content" '(.system.maxQueueMessages | type) == "number"' "true" \
+        "get-broker-status [$broker]: .system.maxQueueMessages must be numeric" || return 1
+    assert_json_field "$content" '(.system.maxSubscriptions | type) == "number"' "true" \
+        "get-broker-status [$broker]: .system.maxSubscriptions must be numeric" || return 1
+    # cpuCores is the "available" half of the under-scaling pair. The
+    # "required" counterpart (cpuCoresRequired) is only emitted by appliance /
+    # cloud brokers — Dockerized PubSub+ Standard omits it — so we don't assert
+    # it here.
+    assert_json_field "$content" '(.system.cpuCores | type) == "number"' "true" \
+        "get-broker-status [$broker]: .system.cpuCores must be numeric" || return 1
+
+    # memory: utilization percentages bounded to [0, 100].
+    assert_json_field "$content" '.memory.physicalMemoryUsagePercent >= 0 and .memory.physicalMemoryUsagePercent <= 100' "true" \
+        "get-broker-status [$broker]: .memory.physicalMemoryUsagePercent must be in [0,100]" || return 1
+    assert_json_field "$content" '.memory.subscriptionMemoryUsagePercent >= 0 and .memory.subscriptionMemoryUsagePercent <= 100' "true" \
+        "get-broker-status [$broker]: .memory.subscriptionMemoryUsagePercent must be in [0,100]" || return 1
+
+    # spool: HA / datapath state plus disk-usage indicator. The envelope nests
+    # the curated fields under .spool.messageSpoolInfo (see spool_response.go).
+    # Dockerized brokers in this suite run with the spool enabled (see F5/F7
+    # fixtures), so configStatus and operationalStatus must be non-empty here.
+    # datapathUp and activeDiskPartitionUsage are strings as emitted by SEMPv1.
+    assert_json_field "$content" '(.spool.messageSpoolInfo.configStatus | type) == "string" and (.spool.messageSpoolInfo.configStatus | length) > 0' "true" \
+        "get-broker-status [$broker]: .spool.messageSpoolInfo.configStatus must be a non-empty string" || return 1
+    assert_json_field "$content" '(.spool.messageSpoolInfo.operationalStatus | type) == "string" and (.spool.messageSpoolInfo.operationalStatus | length) > 0' "true" \
+        "get-broker-status [$broker]: .spool.messageSpoolInfo.operationalStatus must be a non-empty string" || return 1
+    assert_json_field "$content" '(.spool.messageSpoolInfo.datapathUp | type) == "string"' "true" \
+        "get-broker-status [$broker]: .spool.messageSpoolInfo.datapathUp must be a string" || return 1
+    assert_json_field "$content" '(.spool.messageSpoolInfo.activeDiskPartitionUsage | type) == "string"' "true" \
+        "get-broker-status [$broker]: .spool.messageSpoolInfo.activeDiskPartitionUsage must be a string" || return 1
+}
+
+test_get_broker_status_a() { test_get_broker_status "broker-a"; }
+test_get_broker_status_b() { test_get_broker_status "broker-b"; }
+
 # ── Run ──────────────────────────────────────────────────────────────────────
 
 run_test "Tool 1 — list-vpns (broker-a)"               test_list_vpns_a
@@ -663,5 +740,8 @@ run_test "Tool 12 — get-discard-stats broker-wide (broker-a)"   test_get_disca
 run_test "Tool 12 — get-discard-stats broker-wide (broker-b)"   test_get_discard_stats_broker_wide_b
 run_test "Tool 12 — get-discard-stats per-VPN (broker-a)"       test_get_discard_stats_per_vpn_a
 run_test "Tool 12 — get-discard-stats per-VPN (broker-b)"       test_get_discard_stats_per_vpn_b
+
+run_test "Tool 13 — get-broker-status (broker-a)"               test_get_broker_status_a
+run_test "Tool 13 — get-broker-status (broker-b)"               test_get_broker_status_b
 
 print_summary "MCP tool tests"

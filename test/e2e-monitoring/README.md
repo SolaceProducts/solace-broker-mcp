@@ -32,15 +32,19 @@ aborted runs.
 ## Fixtures
 
 All fixtures apply to both brokers in parallel (`solace-e2e-mon-a`,
-`solace-e2e-mon-b`). `list-brokers`, `list-rdps`, and the existing RDP/queue
-tools run against the base fixture copied from `e2e-basic-mcp` — no new
-fixture needed.
+`solace-e2e-mon-b`). `list-brokers`, `list-rdps`, `get-broker-status`, and the
+existing RDP/queue tools run against the base fixture copied from
+`e2e-basic-mcp` — no new fixture needed. `get-broker-status` is broker-wide
+(version, scaling tier, system resources, memory and message-spool
+utilization), so the default Dockerized broker state already populates every
+curated field.
 
 F1–F7 are implemented today, driven by the `broker-driver` binary for the
 client-bearing fixtures (F3–F7).
 
 | ID       | Fixture                  | Required broker state                                                                                                                                  | Lifecycle                          | MCP tools supported                                                                |
 | -------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------- | ---------------------------------------------------------------------------------- |
+| Base     | None (default state)     | Default Dockerized broker state from `e2e-basic-mcp` — version, scaling tier, system resources, memory, and message-spool utilization are populated out of the box | none (built-in)                    | `list-brokers`, `list-rdps`, `get-broker-status`                                   |
 | F1       | Multi-VPN                | Additional non-default VPN `test-vpn` on each broker, created with `enabled=false`                                                                     | one-shot SEMP                      | `list-vpns`, `get-vpn-health` (enabled + disabled state coverage)                  |
 | F2       | Multi-queue              | `test-queue-2` (bound to a test RDP) and `test-queue-3` (unbound), both non-exclusive on default VPN                                                   | one-shot SEMP                      | `list-queues` (multi-entry + pagination), `get-queue-metrics` (named-object lookup) |
 | F3       | Connected client         | One long-lived persistent receiver per broker on default VPN with deterministic `clientName` and ≥1 named topic subscription. **Verification:** client appears in `list-clients` and reports the expected subscription. | background broker-driver           | `list-clients`, `get-client-details`, `list-client-subscriptions`                  |
@@ -214,7 +218,7 @@ fixture sizes change.
   contribution alone, so it holds even when F4 is the only active publisher.
 - Instantaneous `txMsgRate` (delivery to the F3 receiver) is inherently lower
   and noisier than the publish rate — single-read samples on CI runners have
-  been observed across **57–88 msg/s** (SOL-150715). Asserted against `≥ 40`
+  been observed across **57–88 msg/s** (SOL-150715). Asserted against `≥ 50`
   with **peak-of-5 polling** (~5 s window) to absorb that variance without
   lowering the bar further.
 - `averageRxMsgRate` requires **~3–5 min** to converge. **Do not assert against
