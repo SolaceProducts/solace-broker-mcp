@@ -57,7 +57,7 @@ lint: ## golangci-lint (CI pins v2.11.4)
 	golangci-lint run
 
 .PHONY: check
-check: build-all vet lint test-race ## Run build, vet, lint, and race-enabled tests (full CI parity)
+check: build-all vet lint test-race ## Run build, vet, lint, and race-enabled tests (matches CI build/lint/test jobs; E2E runs separately)
 
 # ── E2E ──────────────────────────────────────────────────────────────────────
 
