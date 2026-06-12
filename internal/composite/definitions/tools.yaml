@@ -7,7 +7,7 @@
 # - First sentence: State what the tool returns in plain language
 #   (e.g., "Returns CPU, memory, disk, and spool utilization for the broker")
 # - When to use: Briefly describe the use case or scenario
-#   (e.g., "Use this tool to assess overall broker health during incident triage")
+#   (e.g., "Use this tool to check broker status and resource pressure during incident triage")
 # - Key parameters: Mention required parameters and what they identify
 #   (e.g., "Requires vpnName to identify the target Message VPN")
 # - What it does NOT do: Clarify scope if confusion with another tool is likely

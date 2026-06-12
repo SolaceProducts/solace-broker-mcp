@@ -1,10 +1,10 @@
 # User Guide
 
-The Solace Event Broker MCP Server is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that connects AI assistants to Solace event brokers. It exposes broker management and monitoring capabilities as MCP tools, allowing AI agents like Claude to query broker health, inspect queues, diagnose client issues, and monitor message traffic through natural language.
+The Solace Event Broker MCP Server is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that connects AI assistants to Solace event brokers. It exposes broker management and monitoring capabilities as MCP tools, allowing AI agents like Claude to query broker status, inspect queues, diagnose client issues, and monitor message traffic through natural language.
 
 Application scenarios:
 
-- **Incident triage** — Query event broker health, queue backlogs, and slow consumers using natural language queries instead of direct SEMP API calls.
+- **Incident triage** — Query event broker status, queue backlogs, and slow consumers using natural language queries instead of direct SEMP API calls.
 - **Operational monitoring** — Monitor VPN health, client connections, and message rates across multiple brokers through a conversational interface.
 - **Multi-broker management** — Configure multiple event broker connections and address them by alias in queries.
 
@@ -69,9 +69,9 @@ For details on securing this connection with a static token or OAuth/OIDC, see [
 
 After connecting, try these example queries:
 
-**Check event broker health:**
+**Check event broker status:**
 ```
-Get the health status of my-broker
+Get the status of my-broker
 ```
 
 **List queues:**
@@ -99,11 +99,11 @@ The server exposes 17 read-only tools. All broker-querying tools require a `brok
 |---|---|
 | `list-brokers` | List all configured event broker aliases. Use the returned names as the `broker` parameter in other tools. |
 
-### Event Broker Health
+### Event Broker Status
 
 | Tool | Description |
 |---|---|
-| `get-broker-health` | Curated event broker health snapshot: version, uptime, restart reason, broker-tier scaling limits, system resources, subscription memory, and message-spool state with HA roles and disk utilization. |
+| `get-broker-status` | Curated point-in-time broker status snapshot: edition and version, uptime and restart reason, broker-tier scaling limits and resource headroom, memory utilization, and message-spool state with HA roles and disk utilization. Reports raw state, not a pass/fail verdict. |
 | `get-redundancy-status` | Event broker redundancy and high-availability status: config/operational status, active-standby role, mate router name, mate link state, and per-virtual-router activity. |
 
 ### Replication

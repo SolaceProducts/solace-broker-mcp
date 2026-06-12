@@ -27,7 +27,7 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
 )
 
-// fixtureClient routes XML requests to testdata files. Mirrors brokerhealth's
+// fixtureClient routes XML requests to testdata files. Mirrors brokerstatus's
 // fixtureClient pattern. errorFor and replaceXML let individual tests inject
 // failure modes for one specific RPC.
 type fixtureClient struct {
@@ -274,7 +274,7 @@ func TestHandle_EmptyVpnName_FallsBackToBrokerWide(t *testing.T) {
 
 // TestHandle_BrokerWide_ClientError_Passthrough verifies that errors from the
 // SEMPv1 client are returned unwrapped so the manager can extract structured
-// fields via errors.As(err, &*sempv1.Error). Same convention as brokerhealth.
+// fields via errors.As(err, &*sempv1.Error). Same convention as brokerstatus.
 func TestHandle_BrokerWide_ClientError_Passthrough(t *testing.T) {
 	sempErr := &sempv1.Error{
 		Kind:       sempv1.ErrorKindHTTP,
