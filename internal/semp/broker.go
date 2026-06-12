@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 )
@@ -23,13 +24,16 @@ type BrokerClient struct {
 
 // NewBrokerClient creates a BrokerClient for the given broker configuration.
 // It initializes the SEMPv1 and SEMPv2 HTTP clients with the broker's
-// connection settings.
+// connection settings. Both clients share one in-flight semaphore so
+// semp.max_concurrent_per_broker caps the broker as a whole, not each
+// protocol client separately.
 func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (*BrokerClient, error) {
-	sempV1Client, err := sempv1.NewHTTPClient(brokerCfg, sempCfg)
+	sem := resilience.NewSemaphore(sempCfg.MaxConcurrentPerBroker)
+	sempV1Client, err := sempv1.NewHTTPClient(brokerCfg, sempCfg, sem)
 	if err != nil {
 		return nil, fmt.Errorf("creating SEMPv1 client for broker %q: %w", alias, err)
 	}
-	sempV2Client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg)
+	sempV2Client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, sem)
 	if err != nil {
 		return nil, fmt.Errorf("creating SEMPv2 client for broker %q: %w", alias, err)
 	}

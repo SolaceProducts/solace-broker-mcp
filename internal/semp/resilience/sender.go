@@ -48,6 +48,7 @@ type Sender struct {
 	authCfg     config.AuthConfig // for 401 auth-mode check
 	rateLimiter <-chan time.Time
 	rateTicker  *time.Ticker // non-nil when rate limiting enabled; stopped by Close()
+	sem         Semaphore    // bounds in-flight requests; shared per-broker across SEMPv1+v2
 	brokerURL   string       // for logging context
 }
 
@@ -57,10 +58,23 @@ type Sender struct {
 // 401 re-auth (Clear) and the cookie attachment in http.Client.Do operate on
 // the same jar instance.
 // sempCfg.Retries and sempCfg.RequestMinInterval must be non-nil.
-func New(httpClient *http.Client, cookieJar *SafeCookieJar, sempCfg *config.SEMPConfig, authCfg config.AuthConfig, brokerURL string) *Sender {
+//
+// sem bounds in-flight requests and must be non-nil. It must be shared by
+// both protocol Senders of the same broker so the cap is per-broker, not per
+// protocol client (see semp.NewBrokerClient). New panics on a nil sem: a
+// Sender-private fallback would silently allow 2× the configured per-broker
+// cap, which is exactly the bug SOL-150116 fixes. The panic is a constructor
+// contract violation that any test exercising the path catches immediately;
+// the only production wiring goes through semp.NewBrokerClient, which always
+// supplies one.
+func New(httpClient *http.Client, cookieJar *SafeCookieJar, sempCfg *config.SEMPConfig, authCfg config.AuthConfig, brokerURL string, sem Semaphore) *Sender {
+	if sem == nil {
+		panic("resilience.New: sem must be non-nil; share one per broker via semp.NewBrokerClient")
+	}
 	d := &Sender{
 		cookieJar: cookieJar,
 		authCfg:   authCfg,
+		sem:       sem,
 		brokerURL: brokerURL,
 	}
 
@@ -113,6 +127,17 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+
+	// In-flight cap: acquire a per-broker semaphore slot for the duration of
+	// the request, including retryablehttp's internal retries (the request is
+	// still in flight against the broker while retrying). Acquired after the
+	// rate-limiter tick so a slot is held only while genuinely in flight.
+	select {
+	case d.sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-d.sem }()
 
 	// Attach per-request retry state for checkRetry, including the HTTP method
 	// so the non-idempotent method guard can fire even on connection errors
