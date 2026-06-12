@@ -83,7 +83,7 @@ func TestSpoolStatsResponse_RoundTrip(t *testing.T) {
 	}
 
 	// Throughput / capacity / transaction counters are out of scope — they
-	// belong in get-broker-health or future tools.
+	// belong in get-broker-status or future tools.
 	for _, dropped := range []string{
 		"vpnName", "ingressMessages", "egressMessages", "spooledToAdb",
 		"spooledToDisk", "retrieveFromAdb", "confirmedDelivered",

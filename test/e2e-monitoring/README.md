@@ -44,7 +44,7 @@ client-bearing fixtures (F3–F7).
 | F1       | Multi-VPN                | Additional non-default VPN `test-vpn` on each broker, created with `enabled=false`                                                                     | one-shot SEMP                      | `list-vpns`, `get-vpn-health` (enabled + disabled state coverage)                  |
 | F2       | Multi-queue              | `test-queue-2` (bound to a test RDP) and `test-queue-3` (unbound), both non-exclusive on default VPN                                                   | one-shot SEMP                      | `list-queues` (multi-entry + pagination), `get-queue-metrics` (named-object lookup) |
 | F3       | Connected client         | One long-lived persistent receiver per broker on default VPN with deterministic `clientName` and ≥1 named topic subscription. **Verification:** client appears in `list-clients` and reports the expected subscription. | background broker-driver           | `list-clients`, `get-client-details`, `list-client-subscriptions`                  |
-| F4       | Sustained traffic        | Publisher targets 100 msg/s, 256-byte payload, persistent; broker observes ~92 msg/s sustained after ~5 s settle. **Verification:** `rxMsgRate ≥ 80` and `txMsgRate ≥ 80` after 25 s of fixture runtime. | background broker-driver           | `get-message-rates`                                                                |
+| F4       | Sustained traffic        | Publisher targets 100 msg/s, 256-byte payload, persistent; broker observes ~92 msg/s sustained after ~5 s settle. **Verification:** after 25 s of fixture runtime, peak `rxMsgRate ≥ 80` and peak `txMsgRate ≥ 50` over 5 polls / ~5 s (tx is lower/noisier than rx). | background broker-driver           | `get-message-rates`                                                                |
 | F5       | Slow guaranteed consumer | Queue `test-queue-slow-consumer` (`maxDeliveredUnackedMsgsPerFlow=10`) fed fast while a queue-bound receiver ACKs every 2 s, so unacked pins at the per-flow ceiling and the spool backs up. **Verification:** queue-level signals (`bindCount`, `txUnackedMsgCount`, `rxMsgRate > txMsgRate`, growing `spooledMsgCount`) — see [F5 — slow-consumer signals](#f5--slow-consumer-signals). | background broker-driver           | `get-queue-metrics`, `list-queues`                                                 |
 | F6       | Slow direct subscriber   | A direct topic subscriber on each broker is `SIGSTOP`ed while a separate publisher floods its topic (`rate=3000`, `size=50000`), closing its TCP egress window so the broker sets the per-client `slowSubscriber` flag. Distinct from F5: this is the per-client flag a slow-ACK guaranteed consumer never trips (SOL-150328). **Verification:** `clients/<name>.slowSubscriber == true` (polled — rolling ~1 min window). | background broker-driver (subscriber `SIGSTOP`ed + flood publisher) | `list-slow-subscribers`                                                            |
 | F7-spool | Discards via spool quota | Queue `test-queue-discards-spool` with `maxMsgSpoolUsage=1 MB` + `egressEnabled=false`; one-shot publish ~2 MB. **Verification:** `maxMsgSpoolUsageExceededDiscardedMsgCount > 0` after one-shot publish. | one-shot SEMP + one-shot broker-driver publish | `list-queue-discards` (per-queue), `get-discard-stats` (broker-wide)               |
@@ -205,12 +205,23 @@ fixture sizes change.
 
 ### F4 — message rates
 
-- Instantaneous `rxMsgRate` stabilizes within **~5 s** at **~92 msg/s** against
-  a target of 100 (~8 % undershoot from publisher loop overhead).
+- The F4 publisher's own sustained rate stabilizes within **~5 s** at **~92
+  msg/s** against a target of 100 (~8 % undershoot from publisher loop
+  overhead). The assertion reads SEMP's VPN-level `rxMsgRate` — a *VPN-wide
+  aggregate* that may be higher than 92 msg/s while concurrent fixtures (e.g.
+  F6 flood publisher) are running — so it's a floor check (`≥ 80`), not an
+  exact-match. The 80 floor is grounded in the F4 publisher's ~92 msg/s
+  contribution alone, so it holds even when F4 is the only active publisher.
+- Instantaneous `txMsgRate` (delivery to the F3 receiver) is inherently lower
+  and noisier than the publish rate — single-read samples on CI runners have
+  been observed across **57–88 msg/s** (SOL-150715). Asserted against `≥ 40`
+  with **peak-of-5 polling** (~5 s window) to absorb that variance without
+  lowering the bar further.
 - `averageRxMsgRate` requires **~3–5 min** to converge. **Do not assert against
   it** — the F4 window is too short.
 - Use the instantaneous fields: `rxMsgRate`, `txMsgRate`.
-- A 25 s assertion window gives ~20 s margin above the empirical stable point.
+- A 25 s settle window gives ~20 s margin above the empirical stable point;
+  the assertion then polls 5× / ~5 s on top of that.
 
 ### F5 — slow-consumer signals
 

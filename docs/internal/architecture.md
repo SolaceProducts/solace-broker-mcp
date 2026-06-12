@@ -16,7 +16,7 @@ internal/
 ├── defaults/          All default values, with assumption annotations
 ├── semp/              BrokerPool + BrokerClient — lazy per-broker client creation, thread-safe (RWMutex)
 │   ├── auth/          Broker (outbound) auth
-│   ├── resilience/    Rate limiting, retries, cookie jar
+│   ├── resilience/    Rate limiting, retries, cookie jar, per-broker in-flight cap
 │   ├── sempv1/        SEMPv1 client — XML envelope protocol
 │   └── sempv2/        SEMPv2 client — HTTP + embedded OpenAPI spec (private monitor only)
 ├── composite/         YAML-driven composite tool engine: loader, validator, step executor

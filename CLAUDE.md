@@ -29,7 +29,7 @@ exception: registered separately, no `broker` parameter.
 
 ## Tool naming
 
-MCP tool names use **kebab-case** — e.g. `get-broker-health`, `list-queues`,
+MCP tool names use **kebab-case** — e.g. `get-broker-status`, `list-queues`,
 `get-redundancy-status`. This applies to every tool the server exposes,
 regardless of whether it's defined in YAML (composite) or implemented in
 Go (native SEMPv1/SEMPv2). Avoid `snake_case` and `camelCase`.

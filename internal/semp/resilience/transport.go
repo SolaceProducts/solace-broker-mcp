@@ -32,14 +32,15 @@ const expectContinueTimeout = 1 * time.Second
 // concurrency cap. Both SEMPv1 and SEMPv2 clients use it so the connection
 // pool behaviour stays consistent across protocol versions.
 //
-// MaxConnsPerHost = MaxConcurrentPerBroker is the enforcement point for the
-// per-broker in-flight bound: supplying a custom TLSClientConfig disables
-// Go's automatic HTTP/2, so SEMP traffic is HTTP/1.1, one connection carries
-// one in-flight request, and the Nth+1 concurrent request queues (context-
-// aware) until a connection frees up. Each protocol client (SEMPv1, SEMPv2)
-// has its own transport, so the worst-case bound per broker is 2× the
-// configured value. This is what protects the broker management plane from
-// request bursts — there is no separate semaphore.
+// The enforcing per-broker in-flight bound is the shared resilience.Semaphore
+// acquired in Sender.Do (one per broker, see semp.NewBrokerClient).
+// MaxConnsPerHost = MaxConcurrentPerBroker sizes the connection pool
+// consistently with that cap: supplying a custom TLSClientConfig disables
+// Go's automatic HTTP/2, so SEMP traffic is HTTP/1.1 and one connection
+// carries one in-flight request. With the semaphore admitting at most
+// MaxConcurrentPerBroker requests per broker across both protocol clients,
+// each client's pool can never be asked for more connections than this, so
+// the transport limit is sizing, not a second gate.
 //
 // Go's http.Transport defaults MaxIdleConnsPerHost to 2. With
 // MaxConcurrentPerBroker at 10+, every request beyond the 2nd opens a new

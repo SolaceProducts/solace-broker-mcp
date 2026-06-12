@@ -1,4 +1,4 @@
-// Package brokerhealth implements the get-broker-health MCP tool.
+// Package brokerstatus implements the get-broker-status MCP tool.
 //
 // The tool issues four SEMPv1 commands in parallel against the target broker
 // and returns a curated subset of the responses in a step-keyed envelope:
@@ -9,9 +9,9 @@
 //	show message-spool detail          → "spool" key
 //
 // Field selection is operator-driven, not exhaustive — see
-// docs/semp/get-broker-health-curated-fields.md for the rationale, source
-// citations, and full curated list.
-package brokerhealth
+// docs/internal/semp/get-broker-status-curated-fields.md for the rationale,
+// source citations, and full curated list.
+package brokerstatus
 
 import (
 	"context"
@@ -26,7 +26,7 @@ import (
 
 // toolName is the prefix used for tool-side error wrapping. Centralizing
 // it prevents typos and keeps the prefix in lockstep with Metadata().Name.
-const toolName = "get-broker-health"
+const toolName = "get-broker-status"
 
 // Static SEMPv1 request strings — declared here rather than inline in Handle
 // so the four-call shape is visible at a glance.
@@ -40,11 +40,11 @@ const (
 // Compile-time check that Handler satisfies tools.ToolHandler.
 var _ tools.ToolHandler = (*Handler)(nil)
 
-// Handler implements the get-broker-health MCP tool. The handler holds no
+// Handler implements the get-broker-status MCP tool. The handler holds no
 // state; one instance is sufficient per server.
 type Handler struct{}
 
-// NewHandler returns a broker-health tool handler ready to register with a
+// NewHandler returns a broker-status tool handler ready to register with a
 // ToolManager.
 func NewHandler() *Handler {
 	return &Handler{}
@@ -58,15 +58,16 @@ func NewHandler() *Handler {
 func (h *Handler) Metadata() tools.Metadata {
 	return tools.Metadata{
 		Name: toolName,
-		Description: "Returns a curated snapshot of a Solace broker's operational " +
-			"health: version and uptime, recent restart reason, broker-tier scaling " +
-			"limits, system resources (available vs required CPU/memory/storage to " +
-			"flag under-scaling), physical and subscription memory utilization, and " +
-			"message-spool state (HA roles, disk/quota utilization percentages, " +
-			"fragmentation, recent failures). Use whenever the user asks if the " +
-			"broker is healthy, slow, restarted, under-scaled, running out of " +
-			"capacity, or before maintenance. Specify the target broker by its " +
-			"configured alias.",
+		Description: "Returns a curated point-in-time status snapshot of a Solace " +
+			"broker's operational state - edition and version, uptime and restart " +
+			"reason, scaling limits and resource headroom (to flag under-scaling), " +
+			"memory and message-spool utilization. Reports raw state, not a " +
+			"health verdict - whether the broker is \"healthy\" depends on " +
+			"deployment intent (e.g. message-spool disabled is expected for " +
+			"direct-messaging-only deployments, not a fault). Use whenever the " +
+			"user asks about a broker's status or health - whether it is " +
+			"healthy, slow, restarted, under-scaled, low on capacity, or before " +
+			"maintenance. Specify the target broker by its configured alias.",
 		InputSchema:  tools.EmptyObjectSchema(),
 		OutputSchema: tools.StepKeyedEnvelopeSchema(),
 		Annotations:  tools.ReadOnlyAnnotations(),
@@ -84,7 +85,7 @@ func (h *Handler) Metadata() tools.Metadata {
 // tool-side processing failures.
 //
 // Partial-failure policy: if any one of the four calls fails, the whole tool
-// fails. The broker's health is a coherent picture; returning a partial
+// fails. The broker's status is a coherent picture; returning a partial
 // envelope could mislead downstream consumers (operators, LLMs, dashboards).
 // errgroup's first-error-cancels semantics give us this for free.
 func (h *Handler) Handle(
