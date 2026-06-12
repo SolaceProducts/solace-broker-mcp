@@ -60,7 +60,7 @@ func newErrorHandlerTestSender(t *testing.T) *Sender {
 	}
 	authCfg := config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"}
 	jar := mustNewSafeCookieJar(t)
-	return New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, "http://broker.example:8080", nil)
+	return New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, "http://broker.example:8080", NewSemaphore(10))
 }
 
 func newExhaustedResponse(t *testing.T, body *trackingBody) *http.Response {

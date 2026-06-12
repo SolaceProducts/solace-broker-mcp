@@ -59,14 +59,17 @@ type Sender struct {
 // the same jar instance.
 // sempCfg.Retries and sempCfg.RequestMinInterval must be non-nil.
 //
-// sem bounds in-flight requests and is expected to be shared by both protocol
-// Senders of the same broker so the cap is per-broker (see semp.NewBrokerClient).
-// A nil sem falls back to a Sender-private semaphore sized from
-// sempCfg.MaxConcurrentPerBroker — bounded, but per protocol client rather
-// than per broker.
+// sem bounds in-flight requests and must be non-nil. It must be shared by
+// both protocol Senders of the same broker so the cap is per-broker, not per
+// protocol client (see semp.NewBrokerClient). New panics on a nil sem: a
+// Sender-private fallback would silently allow 2× the configured per-broker
+// cap, which is exactly the bug SOL-150116 fixes. The panic is a constructor
+// contract violation that any test exercising the path catches immediately;
+// the only production wiring goes through semp.NewBrokerClient, which always
+// supplies one.
 func New(httpClient *http.Client, cookieJar *SafeCookieJar, sempCfg *config.SEMPConfig, authCfg config.AuthConfig, brokerURL string, sem Semaphore) *Sender {
 	if sem == nil {
-		sem = NewSemaphore(sempCfg.MaxConcurrentPerBroker)
+		panic("resilience.New: sem must be non-nil; share one per broker via semp.NewBrokerClient")
 	}
 	d := &Sender{
 		cookieJar: cookieJar,

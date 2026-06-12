@@ -43,7 +43,7 @@ func newTestSender(t *testing.T, httpClient *http.Client, authMode string, retri
 	}
 	jar := mustNewSafeCookieJar(t)
 	httpClient.Jar = jar
-	return New(httpClient, jar, sempCfg, authCfg, "http://test-broker", nil)
+	return New(httpClient, jar, sempCfg, authCfg, "http://test-broker", NewSemaphore(10))
 }
 
 // newTestSenderWithServer creates a test server and a Sender pointed at it.
@@ -544,7 +544,7 @@ func TestSender_ErrorHandler_NetworkError_ProducesRetriesExhaustedError(t *testi
 	}
 	authCfg := config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"}
 	jar := mustNewSafeCookieJar(t)
-	sender := New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, serverURL, nil)
+	sender := New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, serverURL, NewSemaphore(10))
 
 	req := newGetRequest(t, serverURL)
 	resp, err := sender.Do(context.Background(), req)
@@ -690,7 +690,7 @@ func TestSender_NoRetry_POST_ConnectionError(t *testing.T) {
 	}
 	authCfg := config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"}
 	jar := mustNewSafeCookieJar(t)
-	sender := New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, serverURL, nil)
+	sender := New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, serverURL, NewSemaphore(10))
 
 	req := newMethodRequest(t, http.MethodPost, serverURL)
 	resp, err := sender.Do(context.Background(), req)
@@ -730,7 +730,7 @@ func TestSender_NoRetry_PATCH_ConnectionError(t *testing.T) {
 	}
 	authCfg := config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"}
 	jar := mustNewSafeCookieJar(t)
-	sender := New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, serverURL, nil)
+	sender := New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, serverURL, NewSemaphore(10))
 
 	req := newMethodRequest(t, http.MethodPatch, serverURL)
 	resp, err := sender.Do(context.Background(), req)
@@ -929,4 +929,23 @@ func TestSenderDo_SemaphoreWaitRespectsContextCancel(t *testing.T) {
 
 	releaseAll()
 	<-firstDone
+}
+
+// TestNew_PanicsOnNilSemaphore pins the constructor contract: a nil sem would
+// silently recreate the per-Sender 2× cap that SOL-150116 removed, so New
+// refuses it outright.
+func TestNew_PanicsOnNilSemaphore(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("New() with nil sem did not panic")
+		}
+	}()
+	retries := 1
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		Retries:            &retries,
+		RequestMinInterval: &minInterval,
+	}
+	jar := mustNewSafeCookieJar(t)
+	New(&http.Client{Jar: jar}, jar, sempCfg, config.AuthConfig{}, "http://test-broker", nil)
 }

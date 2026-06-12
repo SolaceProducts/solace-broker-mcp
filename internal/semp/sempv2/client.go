@@ -83,8 +83,9 @@ func (c *HTTPClient) Close() {
 // tuning appropriate for concurrent SEMP calls, and delegates retry and rate
 // limiting to a shared resilience.Sender.
 //
-// sem is the broker's shared in-flight semaphore (see semp.NewBrokerClient);
-// nil falls back to a client-private semaphore sized from sempCfg.
+// sem is the broker's shared in-flight semaphore and must be non-nil
+// (resilience.New panics otherwise); see semp.NewBrokerClient, which shares
+// one semaphore across both protocol clients of a broker.
 func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, sem resilience.Semaphore) (*HTTPClient, error) {
 	transport := resilience.NewTunedTransport(brokerCfg, sempCfg)
 
