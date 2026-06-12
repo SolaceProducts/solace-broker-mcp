@@ -16,8 +16,8 @@ import (
 const idleConnTimeout = 90 * time.Second
 
 // tlsHandshakeTimeout bounds how long the transport waits for a TLS
-// handshake. Without it, a broker stuck in handshake holds a
-// MaxConcurrentPerBroker semaphore slot for the full request timeout
+// handshake. Without it, a broker stuck in handshake holds one of the
+// MaxConnsPerHost connection slots for the full request timeout
 // window. 10s tolerates network outliers while bounding the failure
 // window to a small fraction of the request timeout.
 const tlsHandshakeTimeout = 10 * time.Second
@@ -31,6 +31,15 @@ const expectContinueTimeout = 1 * time.Second
 // NewTunedTransport builds an *http.Transport sized for the per-broker
 // concurrency cap. Both SEMPv1 and SEMPv2 clients use it so the connection
 // pool behaviour stays consistent across protocol versions.
+//
+// MaxConnsPerHost = MaxConcurrentPerBroker is the enforcement point for the
+// per-broker in-flight bound: supplying a custom TLSClientConfig disables
+// Go's automatic HTTP/2, so SEMP traffic is HTTP/1.1, one connection carries
+// one in-flight request, and the Nth+1 concurrent request queues (context-
+// aware) until a connection frees up. Each protocol client (SEMPv1, SEMPv2)
+// has its own transport, so the worst-case bound per broker is 2× the
+// configured value. This is what protects the broker management plane from
+// request bursts — there is no separate semaphore.
 //
 // Go's http.Transport defaults MaxIdleConnsPerHost to 2. With
 // MaxConcurrentPerBroker at 10+, every request beyond the 2nd opens a new
@@ -49,12 +58,13 @@ const expectContinueTimeout = 1 * time.Second
 // rather than a hardcoded constant. The granular timeout must stay strictly
 // less than the outer client-level request timeout, otherwise the outer
 // timeout wins and the regression this transport tuning fixes (a stuck
-// broker holding a MaxConcurrentPerBroker semaphore slot for the full
+// broker holding a MaxConnsPerHost connection slot for the full
 // request window) silently returns when operators set an aggressive
 // request_timeout_duration in broker-config.yaml.
 func NewTunedTransport(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) *http.Transport {
 	return &http.Transport{
 		TLSClientConfig:       &tls.Config{InsecureSkipVerify: brokerCfg.InsecureSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
+		MaxConnsPerHost:       sempCfg.MaxConcurrentPerBroker,
 		MaxIdleConnsPerHost:   sempCfg.MaxConcurrentPerBroker,
 		MaxIdleConns:          sempCfg.MaxConcurrentPerBroker * 2,
 		IdleConnTimeout:       idleConnTimeout,
