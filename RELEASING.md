@@ -72,9 +72,39 @@ Pushing the tag runs `.github/workflows/release.yml`, which:
 4. Builds and pushes a multi-arch image to `ghcr.io/solacedev/solace-broker-mcp` (`{version}`, `{major}.{minor}`, `latest`, `sha-<short-sha>` tags).
 5. Publishes a GitHub Release with auto-generated notes, the binary archives, and SHA-256 checksums.
 
-Anyone with permission to push tags can cut a release. The release succeeds only if every job passes; a failed gate blocks publication.
+Anyone with permission to push tags can cut a release.
+
+The jobs are not fully serialized:
+
+```
+push v* tag
+  ├─> test (reuses build-and-test.yml)
+  │     ├─> build-binaries (matrix: 4 OS/arch) ──┐
+  │     └─> build-docker (pushes the image) ─────┼─> release (GitHub Release)
+  └─> fossa_scan ─────────────────────────────────┘
+```
+
+A failed job blocks the GitHub Release, binaries, and checksums. The container image is the exception: it is pushed as soon as build-and-test passes, in parallel with the FOSSA scan, so a FOSSA failure can leave the image and its moving pointers already published on `ghcr.io`. Gating the image push on every job is **[Planned]** — until then, if a release run fails partway, check `ghcr.io` and roll forward (see Rollback).
 
 Pre-release tags (`v0.4.0-beta.1`) and the `:edge`/`:alpha`/`:beta` pointers follow the same workflow once continuous pre-release publishing is wired up **[Planned]**.
+
+## Release runbook
+
+The manual steps around the automated workflow.
+
+Before tagging:
+
+1. Confirm `main` is green: `gh run list --branch main --limit 1`.
+2. Update `CHANGELOG.md` on `main`: move the `[Unreleased]` items into a new version section and update the comparison links at the bottom.
+
+After pushing the tag:
+
+1. Watch the run: `gh run list --workflow=release.yml --limit 1`; on failure, `gh run view <run-id> --log`.
+2. Verify the release: `gh release view <tag>` shows four binary archives, `checksums-sha256.txt`, and auto-generated notes; the image tags are present on `ghcr.io/solacedev/solace-broker-mcp`.
+3. Spot-check a binary: download the archive for your platform, verify it (`shasum -a 256 -c checksums-sha256.txt --ignore-missing`), and run `./solace-broker-mcp --version` — it prints the tag.
+4. Announce once verified: internal channels, and the [Solace Community](https://solace.community/) for releases worth a wider note.
+
+If a job fails for environmental reasons, re-run it: `gh run rerun <run-id>`. Never delete and re-push a tag to retry — tags are immutable (see Versioning). If the build itself is bad, fix on `main` and tag the next PATCH (see Rollback).
 
 ## Rollback **[Implemented]**
 

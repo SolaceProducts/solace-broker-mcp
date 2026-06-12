@@ -89,34 +89,11 @@ The `VERSION` build argument defaults to `dev` if not provided.
 
 ## Cutting a Release
 
-1. Merge all changes to `main`.
-2. Create an annotated tag:
-   ```bash
-   git tag -a v0.1.0 -m "Release v0.1.0"
-   ```
-3. Push the tag:
-   ```bash
-   git push origin v0.1.0
-   ```
-4. The release workflow (`.github/workflows/release.yml`) runs automatically:
-   - Runs the full test suite (lint, unit tests, e2e tests)
-   - Cross-compiles binaries for 4 platforms
-   - Packages each binary into a `.tar.gz` archive
-   - Builds and pushes multi-platform Docker images to ghcr.io
-   - Generates SHA256 checksums
-   - Creates a GitHub Release with all assets and auto-generated release notes
-
-No source files need to be edited to bump the version. The git tag is the
-single source of truth.
-
-### Release workflow pipeline
-
-```
-push v* tag
-  └─> test (reuses build-and-test.yml)
-        ├─> build-binaries (matrix: 4 OS/arch)  ──┐
-        └─> build-docker (buildx multi-platform) ─┴─> release (GitHub Release)
-```
+The release flow — versioning and maturity model, gates, tagging, what the
+workflow publishes, and rollback — lives in [`RELEASING.md`](../../RELEASING.md).
+In short: push a SemVer `v*` tag and `.github/workflows/release.yml` does the
+rest. No source files need to be edited to bump the version; the git tag is
+the single source of truth.
 
 ## Release Artifacts
 
@@ -134,12 +111,9 @@ Each tagged release produces the following artifacts:
 
 ### Docker image tags
 
-| Tag | Example | Description |
-|---|---|---|
-| semver | `0.1.0` | Full version (without `v` prefix) |
-| major.minor | `0.1` | Tracks latest patch for a minor version |
-| sha | `sha-abcdef1` | Immutable, tied to exact commit |
-| `latest` | `latest` | Most recent release |
+Image tags and moving pointers — including what `latest` does and does not
+promise — are defined in
+[`RELEASING.md` § Distribution pointers](../../RELEASING.md#distribution-pointers).
 
 ### Archive contents
 
