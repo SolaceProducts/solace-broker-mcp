@@ -23,7 +23,7 @@ All high-priority items are complete:
 - [x] **H2: Issue Templates** - Bug report and feature request templates
 - [x] **H3: PR Template** - Comprehensive pull request checklist
 - [x] **H4: CHANGELOG.md** - Keep a Changelog format with v0.1.0 history
-- [x] **H5: Release Process** - Documented in RELEASE_GUIDE.md (workflow already exists from PR #14)
+- [x] **H5: Release Process** - Documented in RELEASING.md (workflow already exists from PR #14)
 
 ### ⏳ MEDIUM Priority (Requires Admin Access)
 
@@ -59,7 +59,7 @@ These items are **documented** but require repository admin to configure:
 **Process Documentation:**
 - `CHANGELOG.md` - Version history following Keep a Changelog (5.8 KB)
 - `.github/ADMIN_SETUP.md` - Admin configuration guide (8.0 KB)
-- `.github/RELEASE_GUIDE.md` - Release process documentation (9.3 KB)
+- `.github/RELEASE_GUIDE.md` - Release process documentation (9.3 KB; since superseded by the root `RELEASING.md`)
 
 ### Modified Files
 
@@ -147,7 +147,7 @@ These settings must be configured by repository admin:
 
 1. **Merge PR #15** - Get approval from reviewers
 2. **Admin configures repository** - See ADMIN_SETUP.md (requires ~1 hour)
-3. **Create v0.1.0 release** - See RELEASE_GUIDE.md (requires ~30 minutes)
+3. **Create v0.1.0 release** - See RELEASING.md (requires ~30 minutes)
 4. **Make repository public** - Settings → Danger Zone → Change visibility
 
 ### Post-Publication
