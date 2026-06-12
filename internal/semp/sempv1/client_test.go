@@ -37,7 +37,7 @@ func newTestClientWith(t *testing.T, srv *httptest.Server, auth config.AuthConfi
 		RetryMaxInterval:       10 * time.Millisecond,
 	}
 
-	client, err := NewHTTPClient(brokerCfg, sempCfg)
+	client, err := NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10))
 	if err != nil {
 		t.Fatalf("NewHTTPClient failed: %v", err)
 	}
