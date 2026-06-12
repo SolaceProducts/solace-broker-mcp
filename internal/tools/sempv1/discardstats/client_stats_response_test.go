@@ -153,7 +153,7 @@ func TestClientStatsResponse_RoundTrip(t *testing.T) {
 	}
 
 	// Uncurated sibling fields from <stats><client><global><stats>... must
-	// not leak. These belong in get-broker-health / get-client-info / future
+	// not leak. These belong in get-broker-status / get-client-info / future
 	// tools — not in a discard-counter view.
 	for _, dropped := range []string{
 		"totalClients", "totalClientsConnected", "totalClientMessagesReceived",

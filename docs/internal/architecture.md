@@ -41,7 +41,7 @@ solace-broker-mcp/
 │       ├── composite_handler.go   # Bridges composite executor to MCP SDK
 │       ├── validation.go          # Parameter validation helpers
 │       └── sempv1/                # Native SEMPv1 tool handlers
-│           ├── brokerhealth/      # get-broker-health
+│           ├── brokerstatus/      # get-broker-status
 │           └── redundancy/        # get-redundancy-status
 │
 ├── docs/                          # This directory
