@@ -129,9 +129,10 @@ func (h *Handler) Metadata() tools.Metadata {
 }
 
 // Handle dispatches to the SEMPv2 action endpoint matching the requested
-// action. The schema's enum has already rejected unknown actions upstream;
-// the runtime check is defense in depth for direct Go callers that bypass
-// the manager's validation.
+// action. The schema's enum and minLength:1 already reject empty/unknown
+// values upstream; these runtime checks are defense in depth for direct Go
+// callers that bypass the manager's validation, so a malformed action
+// request is never sent to the broker.
 func (h *Handler) Handle(
 	ctx context.Context,
 	tc *tools.ToolContext,
@@ -141,6 +142,12 @@ func (h *Handler) Handle(
 	queueName, _ := params["queueName"].(string)
 	action, _ := params["action"].(string)
 
+	if msgVpnName == "" {
+		return nil, fmt.Errorf("%s: msgVpnName is required", toolName)
+	}
+	if queueName == "" {
+		return nil, fmt.Errorf("%s: queueName is required", toolName)
+	}
 	if action != actionDeleteMsgs && action != actionClearStats {
 		return nil, fmt.Errorf("%s: unsupported action %q (must be %q or %q)",
 			toolName, action, actionDeleteMsgs, actionClearStats)

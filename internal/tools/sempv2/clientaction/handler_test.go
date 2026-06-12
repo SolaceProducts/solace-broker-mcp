@@ -200,6 +200,54 @@ func TestHandle_ClearStats_Success(t *testing.T) {
 	}
 }
 
+// TestHandle_EmptyMsgVpnName_Rejected verifies the defense-in-depth check
+// for an empty msgVpnName. minLength:1 should reject upstream; if bypassed,
+// Handle must still refuse to issue a SEMP request with an empty path
+// segment.
+func TestHandle_EmptyMsgVpnName_Rejected(t *testing.T) {
+	stub := &fixtureClient{}
+	tc := &tools.ToolContext{SEMPv2Client: stub}
+	h := NewHandler()
+
+	_, err := h.Handle(context.Background(), tc, map[string]any{
+		"msgVpnName": "",
+		"clientName": "#client",
+		"action":     actionClearStats,
+	})
+	if err == nil {
+		t.Fatal("Handle should reject empty msgVpnName")
+	}
+	if !strings.Contains(err.Error(), "execute-client-action: msgVpnName is required") {
+		t.Errorf("error message %q should attribute the failure and name the missing field", err)
+	}
+	if stub.calls != 0 {
+		t.Errorf("SEMP client must not be called for an empty msgVpnName; got %d calls", stub.calls)
+	}
+}
+
+// TestHandle_EmptyClientName_Rejected verifies the parallel guard for an
+// empty clientName.
+func TestHandle_EmptyClientName_Rejected(t *testing.T) {
+	stub := &fixtureClient{}
+	tc := &tools.ToolContext{SEMPv2Client: stub}
+	h := NewHandler()
+
+	_, err := h.Handle(context.Background(), tc, map[string]any{
+		"msgVpnName": "default",
+		"clientName": "",
+		"action":     actionClearStats,
+	})
+	if err == nil {
+		t.Fatal("Handle should reject empty clientName")
+	}
+	if !strings.Contains(err.Error(), "execute-client-action: clientName is required") {
+		t.Errorf("error message %q should attribute the failure and name the missing field", err)
+	}
+	if stub.calls != 0 {
+		t.Errorf("SEMP client must not be called for an empty clientName; got %d calls", stub.calls)
+	}
+}
+
 // TestHandle_InvalidAction_Rejected is the defense-in-depth check.
 func TestHandle_InvalidAction_Rejected(t *testing.T) {
 	stub := &fixtureClient{}
