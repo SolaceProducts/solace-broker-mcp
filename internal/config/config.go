@@ -195,7 +195,7 @@ func (c ClientAuthConfig) LogValue() slog.Value {
 // applyDefaults runs, these fields are guaranteed non-nil so downstream code
 // can dereference safely.
 type SEMPConfig struct {
-	MaxConcurrentPerBroker int            `yaml:"max_concurrent_per_broker"` // semaphore size per broker
+	MaxConcurrentPerBroker int            `yaml:"max_concurrent_per_broker"` // transport MaxConnsPerHost per protocol client
 	RequestTimeoutDuration time.Duration  `yaml:"request_timeout_duration"`  // HTTP request timeout for SEMP calls (e.g., "30s")
 	RequestMinInterval     *time.Duration `yaml:"request_min_interval"`      // minimum spacing between SEMP requests; 0 = no throttle
 	Retries                *int           `yaml:"retries"`                   // max retry attempts for a failed SEMP call; 0 = no retries
@@ -261,6 +261,21 @@ func Load() (*ServerConfig, error) {
 	)
 }
 
+// yamlNodeValuePattern matches the backtick-quoted node values yaml.v3 embeds
+// in type-error messages, e.g. "cannot unmarshal !!int `123456` into string".
+var yamlNodeValuePattern = regexp.MustCompile("`[^`]*`")
+
+// sanitizeYAMLError strips raw node values from a YAML decode error before it
+// is wrapped and logged. yaml.v3 echoes the offending value when it lands in
+// a mismatched target type — most plausibly a credential pulled into a
+// non-string field by a wrong ${VAR} reference, since env substitution runs
+// before decode. The secret would ride inside the error string where the
+// slog ReplaceAttr redaction net cannot reach it. Line numbers and type
+// diagnostics are preserved.
+func sanitizeYAMLError(err error) error {
+	return errors.New(yamlNodeValuePattern.ReplaceAllString(err.Error(), "`[redacted]`"))
+}
+
 // LoadConfig reads a YAML configuration file from path, substitutes ${VAR_NAME}
 // env var references, parses YAML, applies defaults, validates, and returns a
 // ServerConfig ready for use.
@@ -290,7 +305,7 @@ func LoadConfig(path string) (*ServerConfig, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&raw); err != nil {
-		return nil, fmt.Errorf("parsing config YAML: %w", err)
+		return nil, fmt.Errorf("parsing config YAML: %w", sanitizeYAMLError(err))
 	}
 
 	if raw.DevelopmentMode != nil {
