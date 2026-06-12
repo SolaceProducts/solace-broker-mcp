@@ -18,7 +18,7 @@ internal/
 │   ├── auth/          Broker (outbound) auth
 │   ├── resilience/    Rate limiting, retries, cookie jar
 │   ├── sempv1/        SEMPv1 client — XML envelope protocol
-│   └── sempv2/        SEMPv2 client — HTTP + embedded OpenAPI specs (monitor, config, action)
+│   └── sempv2/        SEMPv2 client — HTTP + embedded OpenAPI spec (private monitor only)
 ├── composite/         YAML-driven composite tool engine: loader, validator, step executor
 │   └── definitions/   tools.yaml — composite tool definitions (source of truth for the tool list)
 ├── tools/             MCP registration, routing, param validation, identity extraction
@@ -56,7 +56,7 @@ graph TB
         subgraph "sempv2"
             CLIENT["client.go<br/>sempv2.Client interface<br/>HTTPClient implementation<br/>Basic Auth"]
             OPERATION["operation.go<br/>Operation type<br/>OpenAPI spec parser"]
-            SPECS["specs/<br/>Embedded Swagger JSON<br/>Monitor + Config + Action"]
+            SPECS["specs/<br/>Embedded Swagger JSON<br/>Private monitor spec only"]
         end
     end
 
@@ -109,7 +109,7 @@ sequenceDiagram
     participant HC as HTTPClient<br/>(prod-us)
     participant Broker as Solace Broker<br/>(prod-us)
 
-    User->>SDK: POST /mcp<br/>tool: queue-replay-recovery<br/>broker: "prod-us"
+    User->>SDK: POST /mcp<br/>tool: get-rdp-status<br/>broker: "prod-us"
     SDK->>Reg: Handle(ctx, params)
 
     Note over Reg: Extract broker="prod-us"<br/>Remove from params
@@ -119,23 +119,24 @@ sequenceDiagram
 
     Reg->>Exec: Execute(ctx, tool, client, params)
 
-    Note over Exec: Step 1: monitor/getMsgVpnQueue
+    Note over Exec: Step 1: monitor/getMsgVpnRestDeliveryPoint
     Exec->>HC: Execute(ctx, op, args)
-    HC->>Broker: GET /SEMP/v2/monitor/.../queues/{queue}<br/>Authorization: Basic ...
+    HC->>Broker: GET /SEMP/v2/__private_monitor__/.../restDeliveryPoints/{rdp}<br/>Authorization: Basic ...
     Broker-->>HC: 200 OK + JSON
     HC-->>Exec: Result
 
-    Note over Exec: Step 2: action/doMsgVpnQueueCancelReplay
-    Exec->>HC: Execute(ctx, op, args)
-    HC->>Broker: PUT /SEMP/v2/action/.../cancelReplay
-    Broker-->>HC: 200 OK
-    HC-->>Exec: Result
-
-    Note over Exec: Step 3: action/doMsgVpnQueueStartReplay
-    Exec->>HC: Execute(ctx, op, args)
-    HC->>Broker: PUT /SEMP/v2/action/.../startReplay
-    Broker-->>HC: 200 OK
-    HC-->>Exec: Result
+    Note over Exec: Steps 2 + 3: parallel batch (parallel: true)
+    par monitor/getMsgVpnRestDeliveryPointQueueBindings
+        Exec->>HC: Execute(ctx, op, args)
+        HC->>Broker: GET .../restDeliveryPoints/{rdp}/queueBindings
+        Broker-->>HC: 200 OK + JSON
+        HC-->>Exec: Result
+    and monitor/getMsgVpnRestDeliveryPointRestConsumers
+        Exec->>HC: Execute(ctx, op, args)
+        HC->>Broker: GET .../restDeliveryPoints/{rdp}/restConsumers
+        Broker-->>HC: 200 OK + JSON
+        HC-->>Exec: Result
+    end
 
     Note over Exec: Apply collect strategy
     Exec-->>Reg: Combined result (3 steps)
@@ -161,12 +162,12 @@ sequenceDiagram
         A->>Pool: GetSempV2("prod-us")
         Pool-->>A: sempv2.Client (shared)
         A->>HC: Execute(ctx, op, args)
-        HC->>Broker: GET /SEMP/v2/monitor/...
+        HC->>Broker: GET /SEMP/v2/__private_monitor__/...
     and User B tool call (concurrent)
         B->>Pool: GetSempV2("prod-us")
         Pool-->>B: sempv2.Client (same instance)
         B->>HC: Execute(ctx, op, args)
-        HC->>Broker: GET /SEMP/v2/monitor/...
+        HC->>Broker: GET /SEMP/v2/__private_monitor__/...
     end
 
     Broker-->>HC: Response to User A
@@ -217,7 +218,8 @@ Completely independent — load on prod-us does not affect prod-eu.
 |---|---|
 | **Lazy broker client creation** | With 500 configured brokers, only active ones allocate HTTP clients and TCP connections |
 | **sempv2.Client is an interface** | Enables mock testing of executor without HTTP; enables future OAuth wrapper without changing executor |
-| **Operation IDs prefixed with spec type** | `monitor/getMsgVpnQueue` vs `config/getMsgVpnQueue` — 150+ duplicate operationIds across specs are disambiguated |
+| **Only the private monitor spec is embedded** | Exposes extended fields (e.g. `bindCount`) absent from the public spec; the config and action specs were removed as unused (SOL-148431). `validSpecTypes` in `internal/semp/sempv2/operation.go` is the gate for re-adding one. |
+| **Operation IDs prefixed with spec type** | Keys like `monitor/getMsgVpnQueue` stay unambiguous — operationIds repeat across the SEMP monitor/config/action APIs, so re-embedding a spec later can't collide |
 | **$ref parameters resolved at parse time** | Shared query params (select, where, count, cursor) are available to all operations, not silently lost |
 | **Handler resolves broker, executor receives client** | Executor is pure orchestration — no knowledge of brokers, auth, or pools. Auth changes (OAuth) don't touch executor. |
 | **Broker param is always required** | No default broker concept. The LLM always specifies which broker to target. |
