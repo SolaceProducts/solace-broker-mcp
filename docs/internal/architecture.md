@@ -27,8 +27,9 @@ internal/
 ```
 
 The full tool list is defined by `internal/composite/definitions/tools.yaml`
-(composite) plus the packages under `internal/tools/sempv1/` (native) — count
-them there, not here.
+(composite), the packages under `internal/tools/sempv1/` (native), plus the
+built-in `list-brokers` (registered directly in `internal/tools/register.go`) —
+count them there, not here.
 
 ---
 
