@@ -19,7 +19,7 @@ the operational signal.
 
 This tool keeps only the fields that directly answer "where did messages
 go?" — every other class of stat belongs in a different tool
-(`get-broker-health` for capacity/uptime, `get-replication-status` for
+(`get-broker-status` for capacity/uptime, `get-replication-status` for
 replication, etc.).
 
 ## Decision — protocol
@@ -212,7 +212,7 @@ Operational semantics for each field match the broker-wide tables above.
 
 - **`show stats client` non-discard fields** — connection counts, byte
   rates, message totals, certificate revocation stats, control-plane
-  messages, subscription operations. These belong in `get-broker-health` /
+  messages, subscription operations. These belong in `get-broker-status` /
   `get-client-info` / future tools, not here.
 - **`show message-spool stats` non-discard fields** — `total-spooled-messages`,
   `egress-messages-redelivered`, `request-for-redelivery`, transaction

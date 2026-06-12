@@ -24,7 +24,7 @@ package discardstats
 // quota-exceeded, max-redelivery (with DMQ split), TTL-expired (with DMQ
 // split), low-priority congestion, replication-standby drops, and a small
 // set of structural-failure counters (spool-to-disk fail, sequence-number
-// errors). Throughput and capacity belong in get-broker-health.
+// errors). Throughput and capacity belong in get-broker-status.
 //
 // See docs/internal/semp/get-discard-stats-curated-fields.md for rationale.
 type spoolStatsResponse struct {
