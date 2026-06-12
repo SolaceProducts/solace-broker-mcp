@@ -78,7 +78,10 @@ const MaxSEMPResponseBytes = 16 * 1024 * 1024
 const MaxMCPRequestBytes = 4 * 1024 * 1024
 
 // DefaultMaxConcurrentPerBroker is the maximum number of concurrent SEMP
-// requests allowed per broker, enforced via a per-broker semaphore.
+// requests allowed per protocol client (SEMPv1, SEMPv2) to a broker,
+// enforced via the HTTP transport's MaxConnsPerHost (see
+// resilience.NewTunedTransport). Each broker has one transport per protocol
+// client, so the worst-case in-flight bound per broker is 2× this value.
 //
 // Assumption: 10 concurrent requests is a safe default per broker.
 // Reasoning: The KA document indicates 1-10 concurrent agent sessions as
@@ -88,8 +91,8 @@ const MaxMCPRequestBytes = 4 * 1024 * 1024
 const DefaultMaxConcurrentPerBroker = 10
 
 // MaxConcurrentPerBrokerCeiling caps the operator-configurable
-// semp.max_concurrent_per_broker. The value backs a per-broker semaphore plus
-// the HTTP transport's MaxIdleConnsPerHost / MaxIdleConns (×2), so it
+// semp.max_concurrent_per_broker. The value backs the HTTP transport's
+// MaxConnsPerHost / MaxIdleConnsPerHost / MaxIdleConns (×2), so it
 // allocates fixed-size structures proportional to itself × the broker count.
 // 1024 leaves ~100× headroom above the documented typical 1-10 range while
 // rejecting pathological configurations (e.g. a million) that would OOM the

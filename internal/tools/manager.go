@@ -106,12 +106,24 @@ func (m *ToolManager) Handlers() []ToolHandler {
 // The id parameter carries per-invocation audit identity (SOL-149606). Pass
 // Identity{} (zero value, present=false) from non-HTTP call sites — tests,
 // internal composite-tool steps — to mirror disabled-mode log shape.
-func (m *ToolManager) CallTool(ctx context.Context, name string, params map[string]any, id Identity) (*mcp.CallToolResult, error) {
+func (m *ToolManager) CallTool(ctx context.Context, name string, params map[string]any, id Identity) (result *mcp.CallToolResult, err error) {
 	start := time.Now()
 	var brokerAlias, errorType string
 	var toolErr error
 
-	defer m.logToolResult(ctx, name, &brokerAlias, start, &errorType, &toolErr, id)
+	defer func() {
+		// Panic detection: this defer runs during unwinding, before the
+		// recover in withRecovery fires. Every error return below sets
+		// toolErr and the success return sets result, so both still being
+		// nil means the handler panicked — audit it as an error, never as a
+		// success (SOL-150685). Invariant for new return paths: set toolErr,
+		// or return a non-nil result.
+		if toolErr == nil && result == nil {
+			errorType = "panic"
+			toolErr = panicError{}
+		}
+		logToolResult(ctx, name, &brokerAlias, start, &errorType, &toolErr, id)
+	}()
 
 	handler, err := m.Route(name)
 	if err != nil {
@@ -177,29 +189,29 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		SEMPv1Client: v1Client,
 		SEMPv2Client: v2Client,
 	}
-	result, err := handler.Handle(ctx, tc, handlerParams)
-	if err != nil {
+	toolResult, handleErr := handler.Handle(ctx, tc, handlerParams)
+	if handleErr != nil {
 		errorType = "execution_error"
-		toolErr = fmt.Errorf("executing tool %q: %w", name, err)
+		toolErr = fmt.Errorf("executing tool %q: %w", name, handleErr)
 		return m.buildErrorResult(toolErr), nil
 	}
 
 	// Guard against nil results from handler.
-	if result == nil || result.StructuredContent == nil {
+	if toolResult == nil || toolResult.StructuredContent == nil {
 		errorType = "nil_result"
 		toolErr = fmt.Errorf("tool %q returned nil result", name)
 		return nil, toolErr
 	}
 
 	// Validate output against schema.
-	if err := ValidateOutput(result.StructuredContent, meta.OutputSchema); err != nil {
+	if err := ValidateOutput(toolResult.StructuredContent, meta.OutputSchema); err != nil {
 		errorType = "output_validation_error"
 		toolErr = fmt.Errorf("tool %q output validation: %w", name, err)
 		return nil, toolErr
 	}
 
 	// Build MCP result with both StructuredContent and TextContent fallback.
-	resultJSON, err := json.MarshalIndent(result.StructuredContent, "", "  ")
+	resultJSON, err := json.MarshalIndent(toolResult.StructuredContent, "", "  ")
 	if err != nil {
 		errorType = "marshal_error"
 		toolErr = fmt.Errorf("marshalling result for %q: %w", name, err)
@@ -207,11 +219,19 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	}
 
 	return &mcp.CallToolResult{
-		StructuredContent: result.StructuredContent,
+		StructuredContent: toolResult.StructuredContent,
 		Content:           []mcp.Content{&mcp.TextContent{Text: string(resultJSON)}},
-		IsError:           result.IsError,
+		IsError:           toolResult.IsError,
 	}, nil
 }
+
+// panicError is the sentinel toolErr recorded when an invocation ends in a
+// recovered panic. logToolResult logs unaudited errors type-only, so the
+// audit line shows this type plus error_type=panic; the panic value itself
+// is never logged (withRecovery logs its Go type and the stack separately).
+type panicError struct{}
+
+func (panicError) Error() string { return "tool handler panicked" }
 
 // stripBrokerParam returns a copy of params without the broker key.
 func stripBrokerParam(params map[string]any) map[string]any {
@@ -228,19 +248,32 @@ func stripBrokerParam(params map[string]any) map[string]any {
 // (toolErr is nil) it logs at INFO. On failure it logs at ERROR with the
 // error type and, for SEMP errors, the HTTP status and operation.
 //
+// A free function rather than a ToolManager method so every tool emits the
+// same audit line, including standalone tools registered outside the manager
+// (list-brokers in register.go). The broker attr is omitted when *broker is
+// empty, which also covers brokerless tools.
+//
 // The id argument carries per-invocation audit identity (SOL-149606). It is
 // passed through slog.Any so Identity.LogValue is invoked once at emit time
 // — in disabled mode the LogValuer returns an empty group, so the JSON
 // handler emits no identity key at all (byte-identical to pre-SOL-149606
 // log lines).
-func (m *ToolManager) logToolResult(ctx context.Context, tool string, broker *string, start time.Time, errorType *string, toolErr *error, id Identity) {
+func logToolResult(ctx context.Context, tool string, broker *string, start time.Time, errorType *string, toolErr *error, id Identity) {
 	if *toolErr == nil {
-		slog.LogAttrs(ctx, slog.LevelInfo, "tool invoked",
-			slog.String("tool", tool),
-			slog.String("broker", *broker),
+		attrs := make([]slog.Attr, 0, 5)
+		attrs = append(attrs, slog.String("tool", tool))
+		// Omit the broker attr when empty (brokerless tools like
+		// list-brokers), mirroring the error branch below. CallTool
+		// successes always carry a resolved broker, keeping the existing
+		// line shape byte-identical.
+		if *broker != "" {
+			attrs = append(attrs, slog.String("broker", *broker))
+		}
+		attrs = append(attrs,
 			slog.String("status", "success"),
 			slog.Duration("duration", time.Since(start)),
 			slog.Any("", id))
+		slog.LogAttrs(ctx, slog.LevelInfo, "tool invoked", attrs...)
 		return
 	}
 
