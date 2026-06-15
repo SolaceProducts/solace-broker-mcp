@@ -447,10 +447,18 @@ test_get_queue_metrics_slow_consumer_b() { test_get_queue_metrics_slow_consumer 
 # entry — it confirms the cap is honored but, like list-rdps, cannot demonstrate
 # multi-page truncation (no second slow subscriber exists to drop).
 # Envelope: {"slowSubscribers":{"data":[...],"truncated":bool}}.
+#
+# Precondition re-arm: slowSubscriber is computed over a rolling ~1 min window
+# (see wait_for_slow_subscriber) and can drop back to false between the
+# verify-fixtures F6 check and this test — observed verified-true then gone
+# 63 s later on a slow runner (2026-06-12, runs 27424785855 / 27425041949).
+# Each test re-polls the flag via the broker before asserting on the tool;
+# the poll returns immediately when the flag is already set.
 
 test_list_slow_subscribers() {
-    local broker="$1" own="$2" other="$3"
+    local broker="$1" broker_url="$2" own="$3" other="$4"
     local response content
+    wait_for_slow_subscriber "$broker_url" "$broker" "$own" || return 1
     response=$(mcp_call_tool "list-slow-subscribers" \
         "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
     content=$(extract_content "$response")
@@ -472,8 +480,10 @@ test_list_slow_subscribers() {
 }
 
 test_list_slow_subscribers_pagination() {
-    local broker="$1"
+    local broker="$1" broker_url="$2" client_name="$3"
     local response content
+    # Same rolling-window hazard as the presence test above — re-arm first.
+    wait_for_slow_subscriber "$broker_url" "$broker" "$client_name" || return 1
     response=$(mcp_call_tool "list-slow-subscribers" \
         "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",maxResults:1}')") || return 1
     content=$(extract_content "$response")
@@ -481,10 +491,10 @@ test_list_slow_subscribers_pagination() {
         "list-slow-subscribers [$broker]: maxResults=1 must return exactly 1 slow subscriber" || return 1
 }
 
-test_list_slow_subscribers_a() { test_list_slow_subscribers "broker-a" "$F6_SUB_CLIENT_NAME_A" "$F6_SUB_CLIENT_NAME_B"; }
-test_list_slow_subscribers_b() { test_list_slow_subscribers "broker-b" "$F6_SUB_CLIENT_NAME_B" "$F6_SUB_CLIENT_NAME_A"; }
-test_list_slow_subscribers_pagination_a() { test_list_slow_subscribers_pagination "broker-a"; }
-test_list_slow_subscribers_pagination_b() { test_list_slow_subscribers_pagination "broker-b"; }
+test_list_slow_subscribers_a() { test_list_slow_subscribers "broker-a" "$BROKER_A_URL" "$F6_SUB_CLIENT_NAME_A" "$F6_SUB_CLIENT_NAME_B"; }
+test_list_slow_subscribers_b() { test_list_slow_subscribers "broker-b" "$BROKER_B_URL" "$F6_SUB_CLIENT_NAME_B" "$F6_SUB_CLIENT_NAME_A"; }
+test_list_slow_subscribers_pagination_a() { test_list_slow_subscribers_pagination "broker-a" "$BROKER_A_URL" "$F6_SUB_CLIENT_NAME_A"; }
+test_list_slow_subscribers_pagination_b() { test_list_slow_subscribers_pagination "broker-b" "$BROKER_B_URL" "$F6_SUB_CLIENT_NAME_B"; }
 
 # ── Tool 11: list-queue-discards (F7 spool + TTL discards; per-queue) ─────────
 # Value check (AC 13): list-queue-discards returns each queue's per-category
@@ -596,6 +606,83 @@ test_get_discard_stats_broker_wide_b() { test_get_discard_stats_broker_wide "bro
 test_get_discard_stats_per_vpn_a()     { test_get_discard_stats_per_vpn "broker-a"; }
 test_get_discard_stats_per_vpn_b()     { test_get_discard_stats_per_vpn "broker-b"; }
 
+# ── Tool 13: get-broker-status (broker-wide; SOL-150724) ─────────────────────
+# Shape + value check on the curated point-in-time status snapshot. The tool
+# is broker-wide (no VPN/queue scope) and runs against the base Dockerized
+# broker — no dedicated fixture; the ambient F4 sustained traffic and the
+# default spool config are what make memory/spool readings non-trivial.
+# Envelope: {"version":{...},"system":{...},"memory":{...},"spool":{...}} —
+# four step keys, each carrying the curated camelCase fields documented in
+# docs/internal/semp/get-broker-status-curated-fields.md.
+
+test_get_broker_status() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "get-broker-status" \
+        "$(jq -nc --arg b "$broker" '{broker:$b}')") || return 1
+    content=$(extract_content "$response")
+
+    # Envelope shape: all four step keys present.
+    assert_json_field "$content" '.version | type' "object" \
+        "get-broker-status [$broker]: .version must be an object" || return 1
+    assert_json_field "$content" '.system | type' "object" \
+        "get-broker-status [$broker]: .system must be an object" || return 1
+    assert_json_field "$content" '.memory | type' "object" \
+        "get-broker-status [$broker]: .memory must be an object" || return 1
+    assert_json_field "$content" '.spool | type' "object" \
+        "get-broker-status [$broker]: .spool must be an object" || return 1
+
+    # version: description identifies a Solace broker; uptime is positive.
+    assert_json_field "$content" '(.version.description | type) == "string" and (.version.description | contains("Solace"))' "true" \
+        "get-broker-status [$broker]: .version.description must be a Solace string" || return 1
+    assert_json_field "$content" '.version.uptime.totalSecs > 0' "true" \
+        "get-broker-status [$broker]: .version.uptime.totalSecs must be > 0" || return 1
+
+    # system: uptime + restart context, scaling-tier limits, resource pair.
+    assert_json_field "$content" '.system.systemUptimeSeconds > 0' "true" \
+        "get-broker-status [$broker]: .system.systemUptimeSeconds must be > 0" || return 1
+    # lastRestartReason is an empty string on brokers that haven't been
+    # intentionally restarted (typical for the Dockerized fixtures), so only
+    # assert the shape — the field is present as a string.
+    assert_json_field "$content" '(.system.lastRestartReason | type) == "string"' "true" \
+        "get-broker-status [$broker]: .system.lastRestartReason must be a string" || return 1
+    assert_json_field "$content" '(.system.maxConnections | type) == "number"' "true" \
+        "get-broker-status [$broker]: .system.maxConnections must be numeric" || return 1
+    assert_json_field "$content" '(.system.maxQueueMessages | type) == "number"' "true" \
+        "get-broker-status [$broker]: .system.maxQueueMessages must be numeric" || return 1
+    assert_json_field "$content" '(.system.maxSubscriptions | type) == "number"' "true" \
+        "get-broker-status [$broker]: .system.maxSubscriptions must be numeric" || return 1
+    # cpuCores is the "available" half of the under-scaling pair. The
+    # "required" counterpart (cpuCoresRequired) is only emitted by appliance /
+    # cloud brokers — Dockerized PubSub+ Standard omits it — so we don't assert
+    # it here.
+    assert_json_field "$content" '(.system.cpuCores | type) == "number"' "true" \
+        "get-broker-status [$broker]: .system.cpuCores must be numeric" || return 1
+
+    # memory: utilization percentages bounded to [0, 100].
+    assert_json_field "$content" '.memory.physicalMemoryUsagePercent >= 0 and .memory.physicalMemoryUsagePercent <= 100' "true" \
+        "get-broker-status [$broker]: .memory.physicalMemoryUsagePercent must be in [0,100]" || return 1
+    assert_json_field "$content" '.memory.subscriptionMemoryUsagePercent >= 0 and .memory.subscriptionMemoryUsagePercent <= 100' "true" \
+        "get-broker-status [$broker]: .memory.subscriptionMemoryUsagePercent must be in [0,100]" || return 1
+
+    # spool: HA / datapath state plus disk-usage indicator. The envelope nests
+    # the curated fields under .spool.messageSpoolInfo (see spool_response.go).
+    # Dockerized brokers in this suite run with the spool enabled (see F5/F7
+    # fixtures), so configStatus and operationalStatus must be non-empty here.
+    # datapathUp and activeDiskPartitionUsage are strings as emitted by SEMPv1.
+    assert_json_field "$content" '(.spool.messageSpoolInfo.configStatus | type) == "string" and (.spool.messageSpoolInfo.configStatus | length) > 0' "true" \
+        "get-broker-status [$broker]: .spool.messageSpoolInfo.configStatus must be a non-empty string" || return 1
+    assert_json_field "$content" '(.spool.messageSpoolInfo.operationalStatus | type) == "string" and (.spool.messageSpoolInfo.operationalStatus | length) > 0' "true" \
+        "get-broker-status [$broker]: .spool.messageSpoolInfo.operationalStatus must be a non-empty string" || return 1
+    assert_json_field "$content" '(.spool.messageSpoolInfo.datapathUp | type) == "string"' "true" \
+        "get-broker-status [$broker]: .spool.messageSpoolInfo.datapathUp must be a string" || return 1
+    assert_json_field "$content" '(.spool.messageSpoolInfo.activeDiskPartitionUsage | type) == "string"' "true" \
+        "get-broker-status [$broker]: .spool.messageSpoolInfo.activeDiskPartitionUsage must be a string" || return 1
+}
+
+test_get_broker_status_a() { test_get_broker_status "broker-a"; }
+test_get_broker_status_b() { test_get_broker_status "broker-b"; }
+
 # ── Run ──────────────────────────────────────────────────────────────────────
 
 run_test "Tool 1 — list-vpns (broker-a)"               test_list_vpns_a
@@ -653,5 +740,8 @@ run_test "Tool 12 — get-discard-stats broker-wide (broker-a)"   test_get_disca
 run_test "Tool 12 — get-discard-stats broker-wide (broker-b)"   test_get_discard_stats_broker_wide_b
 run_test "Tool 12 — get-discard-stats per-VPN (broker-a)"       test_get_discard_stats_per_vpn_a
 run_test "Tool 12 — get-discard-stats per-VPN (broker-b)"       test_get_discard_stats_per_vpn_b
+
+run_test "Tool 13 — get-broker-status (broker-a)"               test_get_broker_status_a
+run_test "Tool 13 — get-broker-status (broker-b)"               test_get_broker_status_b
 
 print_summary "MCP tool tests"

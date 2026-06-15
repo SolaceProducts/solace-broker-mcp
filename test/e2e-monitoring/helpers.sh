@@ -702,13 +702,29 @@ wait_for_slow_subscriber() {
     local broker_url="$1"
     local label="$2"
     local client_name="$3"
-    local attempt=0 flag body
+    local attempt=0 flag body http_status tx_rate tx_discards prev_observation=""
+    local url="$broker_url/SEMP/v2/__private_monitor__/msgVpns/$BROKER_VPN/clients/$client_name?select=slowSubscriber,txByteRate,txDiscardedMsgCount"
     while [ $attempt -lt "$F6_FLAG_TIMEOUT" ]; do
-        body=$(semp_monitor_get "$broker_url" \
-            "msgVpns/$BROKER_VPN/clients/$client_name?select=slowSubscriber" 2>/dev/null) || true
+        # DIAGNOSTIC: capture HTTP status + flag so 404 (client disconnected) is
+        # distinguishable from 200/flag=false (client present, flag decayed).
+        # txByteRate + txDiscardedMsgCount disambiguate flag=false further:
+        # rate=0 + stable discards = broker drained the egress (real decay);
+        # rate>0 or rising discards = broker still delivering/dropping
+        # (flag wrong, or just a momentary dip).
+        body=$(curl -s -o - -w '\n__HTTP_STATUS__%{http_code}' \
+            -u "$BROKER_USER:$BROKER_PASS" "$url" 2>/dev/null) || true
+        http_status="${body##*__HTTP_STATUS__}"
+        body="${body%__HTTP_STATUS__*}"
         # `|| flag=""` so a transient non-JSON body (jq exits non-zero) just
         # retries on the next poll rather than aborting the run under `set -e`.
         flag=$(echo "$body" | jq -r '.data.slowSubscriber // empty' 2>/dev/null) || flag=""
+        tx_rate=$(echo "$body" | jq -r '.data.txByteRate // empty' 2>/dev/null) || tx_rate=""
+        tx_discards=$(echo "$body" | jq -r '.data.txDiscardedMsgCount // empty' 2>/dev/null) || tx_discards=""
+        local observation="http=$http_status flag=${flag:-<empty>} txByteRate=${tx_rate:-<empty>} txDiscardedMsgCount=${tx_discards:-<empty>}"
+        if [ "$attempt" = "0" ] || [ "$observation" != "$prev_observation" ]; then
+            log_info "  poll [$label/$client_name] t=${attempt}s $observation"
+            prev_observation="$observation"
+        fi
         if [ "$flag" = "true" ]; then
             log_info "  slowSubscriber=true for $client_name on $label (${attempt}s)"
             return 0
@@ -716,7 +732,7 @@ wait_for_slow_subscriber() {
         sleep 1
         attempt=$((attempt + 1))
     done
-    log_fail "F6 [$label]: slowSubscriber did not flip true for $client_name within ${F6_FLAG_TIMEOUT}s"
+    log_fail "F6 [$label]: slowSubscriber did not flip true for $client_name within ${F6_FLAG_TIMEOUT}s (last observation: $prev_observation)"
     return 1
 }
 
