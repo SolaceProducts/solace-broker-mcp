@@ -405,6 +405,47 @@ func TestHandle_Appliance_HardwareStepFails(t *testing.T) {
 	}
 }
 
+// TestHandle_Appliance_HardwareStepParseError verifies failure isolation on
+// the second failure mode for the hardware step: the broker answers with
+// bytes that don't match the expected <show><hardware>...</hardware></show>
+// shape (truncated wire response, schema drift, or an unexpected payload),
+// so xml.Unmarshal inside executeAndDecode returns a parse error rather than
+// the SEMPv1 client surfacing a transport error.
+//
+// Same contract as TestHandle_Appliance_HardwareStepFails: the rest of the
+// envelope still returns successfully and hardwareDetails is omitted. The
+// two tests are siblings, not duplicates — they exercise different code
+// paths inside Handle's failure-isolation block. Without this test, a
+// future refactor that swallowed transport errors but stopped catching
+// parse errors would silently regress to "one bad slot field blanks the
+// whole tool" behavior.
+func TestHandle_Appliance_HardwareStepParseError(t *testing.T) {
+	stub := &fixtureClient{
+		versionPath: "testdata/show_version_appliance.xml",
+		replaceXML: map[string][]byte{
+			hardwareXML: []byte("<not-valid-xml<<>"),
+		},
+	}
+	h := NewHandler()
+	tc := &tools.ToolContext{SEMPv1Client: stub}
+
+	result, err := h.Handle(context.Background(), tc, map[string]any{})
+	if err != nil {
+		t.Fatalf("hardware-step parse error should be swallowed; got error: %v", err)
+	}
+	if result == nil || result.StructuredContent == nil {
+		t.Fatal("Handle returned nil result")
+	}
+	for _, key := range []string{"version", "system", "memory", "spool"} {
+		if _, ok := result.StructuredContent[key]; !ok {
+			t.Errorf("envelope still missing %q after hardware-step parse error", key)
+		}
+	}
+	if _, ok := result.StructuredContent["hardwareDetails"]; ok {
+		t.Error("hardwareDetails must be omitted when the hardware step fails to parse (best-effort)")
+	}
+}
+
 // TestHandle_MalformedVersionDescription_SkipsHardware verifies the defensive
 // default in isApplianceFromDescription: when the version response carries
 // an empty description, the tool treats the broker as non-appliance and

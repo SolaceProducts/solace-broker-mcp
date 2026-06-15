@@ -180,6 +180,12 @@ func (h *Handler) Handle(
 // http_status, and reason_code (the same fields manager.logToolResult emits
 // for tool-level failures, so log shape stays consistent across tools);
 // otherwise we surface only the Go error type, never the message.
+//
+// For the non-*sempv1.Error path we unwrap to the deepest cause before
+// recording the type. executeAndDecode wraps XML parse errors via
+// fmt.Errorf %w, so logging %T on the outer error would always read
+// "*fmt.wrapError" — useless for triage. Unwrapping surfaces the real
+// type (e.g. "*xml.SyntaxError") while still avoiding the message.
 func logHardwareStepFailure(ctx context.Context, err error) {
 	attrs := []slog.Attr{
 		slog.String("tool", toolName),
@@ -193,7 +199,15 @@ func logHardwareStepFailure(ctx context.Context, err error) {
 			slog.Int("http_status", v1Err.StatusCode),
 			slog.Int("reason_code", v1Err.ReasonCode))
 	} else {
-		attrs = append(attrs, slog.String("error_type", fmt.Sprintf("%T", err)))
+		root := err
+		for {
+			u := errors.Unwrap(root)
+			if u == nil {
+				break
+			}
+			root = u
+		}
+		attrs = append(attrs, slog.String("error_type", fmt.Sprintf("%T", root)))
 	}
 	slog.LogAttrs(ctx, slog.LevelWarn,
 		"hardware-details step failed; omitting hardwareDetails section", attrs...)

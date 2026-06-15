@@ -142,12 +142,16 @@ type slotCurated struct {
 }
 
 // Curated returns the small identity-only subset of the hardware response
-// suitable for inclusion in the get-broker-status envelope. The hardware
-// step is gated on isApplianceFromDescription upstream, so a software
-// broker can never reach this code — no defensive empty-payload sentinel
-// is needed here. On a malformed appliance reply the returned struct may
-// carry only the fields that decoded; omitempty on the top-level chassis
-// fields handles the partial case cleanly.
+// suitable for inclusion in the get-broker-status envelope, or nil when the
+// reply decoded successfully but yielded no curated fields (firmware quirk,
+// unexpected empty payload, or future schema drift). Returning nil lets the
+// envelope assembler omit the hardwareDetails key entirely, keeping the
+// contract simple: the key is present iff there is usable hardware data,
+// regardless of whether the broker is non-appliance (skipped), errored
+// (failure-isolated), or returned a decoded-but-empty payload (this nil).
+// Without the sentinel the envelope would carry `"hardwareDetails": {}` in
+// the empty-payload case, which violates the user-facing contract that
+// promises a populated section on hardware appliances.
 func (r hardwareResponse) Curated() *hardwareCurated {
 	c := &hardwareCurated{Platform: strings.TrimSpace(r.Platform)}
 
@@ -217,6 +221,15 @@ func (r hardwareResponse) Curated() *hardwareCurated {
 		}
 	}
 
+	// If the broker returned an empty/unsupported payload that still decoded,
+	// avoid emitting an empty hardwareDetails object. Predicate covers all
+	// nine curated fields — a partial decode (any single field populated)
+	// returns the struct so omitempty handles the gaps.
+	if c.Platform == "" && c.ChassisSerial == "" && c.BIOSVersion == "" &&
+		c.CPUCount == 0 && c.CPUModel == "" && c.SystemMemoryGiB == 0 &&
+		c.Power == nil && len(c.Disks) == 0 && len(c.Slots) == 0 {
+		return nil
+	}
 	return c
 }
 
