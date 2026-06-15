@@ -2,7 +2,7 @@
   <rpc>
     <show>
       <version>
-        <description>Solace PubSub+ Standard Version 10.25.0.217</description>
+        <description>Solace PubSub+ Software Enterprise Version 10.25.0.217</description>
         <executables>
           <executable>
             <name>CLI</name>

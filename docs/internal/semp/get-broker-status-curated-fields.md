@@ -36,7 +36,7 @@ Research across Solace public docs, internal Confluence runbooks, and the Solace
 
 | XML field | JSON key (camelCase) | Operational meaning |
 |---|---|---|
-| `description` | `description` | Broker version (e.g. `"Solace PubSub+ Standard Version 10.25.0.217"`) — support-lifecycle check, every operator runbook starts here |
+| `description` | `description` | Broker version (e.g. `"Solace PubSub+ Software Enterprise Version 10.25.0.217"`) — support-lifecycle check, every operator runbook starts here. The string is also inspected by the platform-detection helper that gates the appliance-only hardware step (see "show hardware details" below). |
 | `uptime/total-secs` | `uptime.totalSecs` | Broker uptime in seconds — surfaces unexpected reboots |
 
 ### `show system` → 17 fields
@@ -119,14 +119,43 @@ A separate SEMPv1 command (`<rpc><show><system><health/></system></show></rpc>`)
 
 **Decision pending:** include this 5th call, or ship without it and add later if the LLM needs CPU signal.
 
+### `show hardware details` *(appliance only)* → 9 curated keys
+
+Conditional, sequential 5th call: `<rpc><show><hardware><details/></hardware></show></rpc>` (CLI: `show hardware details`). Fires only when the `description` field from `show version` lacks the substring `" Software "` — the appliance/software discriminator. Failure is best-effort: a transport or parse error here logs and drops `hardwareDetails` from the response, but the rest of the envelope still returns.
+
+The full broker reply is wide (~30 elements per slot, plus dynamic telemetry: SFP Tx/Rx power, ADB charge level, FC port error counters, mate-link CRC). The curated set keeps only **identity** — chassis, compute, memory, power summary, disks, slot inventory. Telemetry belongs in a different tool.
+
+| XML path | JSON key | Operational meaning |
+|---|---|---|
+| `platform` | `platform` | Chassis model name (e.g. `"Solace Event Broker 3560"`) |
+| `mainboard/chassis-serial` | `chassisSerial` | Chassis serial number — primary support identifier |
+| `mainboard/bios-version` | `biosVersion` | Mainboard BIOS version |
+| derived from `mainboard/cpus/cpu` count | `cpuCount` | Number of populated CPU sockets |
+| `mainboard/cpus/cpu[0]` | `cpuModel` | First-socket CPU model string |
+| parsed from `mainboard/memory` | `systemMemoryGiB` | System memory in GiB (the broker emits a unit-qualified string like `"32.0 GiB"`; the value is parsed to a numeric and dropped if the unit isn't `GiB`) |
+| `power-redundancy/power-redundancy-config` | `power.redundancyConfiguration` | Power redundancy mode (e.g. `"1+1"`) |
+| `power-redundancy/operational-power-supplies` | `power.operationalCount` | Operational PSU count (parsed to int) |
+| `disks/disk[*]` | `disks[]` | One entry per populated disk: `{ id, deviceModel, serial }` |
+| `fabric[*]/slot[*]` | `slots[]` | One entry per populated blade slot: `{ slot, blade, productNumber, serial, operationalState }`. Empty slots and `"in use by slot N/M"` placeholders are filtered out — operators want the inventory, not gaps. `operationalState` maps the ADB-only `operational-state-up` boolean to `"up"`/`"down"`; absent on blades that don't emit it. |
+
+**Deliberately deferred** — *not* in the curated set, can be added later if requested without breaking compatibility:
+
+- *Extended chassis identity:* `chassis-product-number`, `mainboard/chassis-revision`, `mainboard/board-serial`, `mainboard/board-partnumber`, `system-type`, `supported-blade-configuration`
+- *Per-PSU detail:* `power-redundancy/power-modules/power-module[*]` (the per-supply status list)
+- *Multi-socket CPU array:* the `cpu1-version`/`cpu2-version` siblings (superseded by `cpus/cpu`) and a future `cpus[]` array
+- *Per-blade-type extensions:* `mac-addresses`, `sfps`, `fpga`, `fibre-channel` ports, `flash-card-state`, `power-module-state`, `mate-link-N-state`, `model`/`model-desc`/`driver`, `acl-topic-matching-mode`, `external-disk-lun`, `chips`
+- *Dynamic telemetry:* SFP `tx-power` / `rx-power`, ADB power-module `charge-level` / `time-fully-charged`, `errors` / `fatal-errors` counters, mate-link `crc-err-count-p1` / `crc-err-count-p2`, FC `invalid-crc-count` / `link-failure-count` / `loss-of-signal-count`. These belong in a future telemetry tool, not in a status snapshot.
+
+The MVP curated list is sourced from the SEMPv1 reply schema `semp-rpc-reply-soltr.xsd` (authoritative cross-generation reference) and confirmed against a live 3560 capture stored at `internal/tools/sempv1/brokerstatus/testdata/show_hardware_details_appliance.xml`. Coverage on other appliance generations is deferred — only required if the schema turns out to diverge in the field. The platform-detection heuristic is generation-agnostic (model number is never inspected), so a new SKU surfaces hardware data without a code change.
+
 ## Output envelope shape
 
-Step-keyed envelope, one top-level key per source command:
+Step-keyed envelope, one top-level key per source command. On software / cloud brokers the `hardwareDetails` key is absent entirely (the conditional step is skipped); on appliances it carries the curated MVP hardware fields.
 
 ```json
 {
   "version": {
-    "description": "Solace PubSub+ Standard Version 10.25.0.217",
+    "description": "Solace PubSub+ Software Enterprise Version 10.25.0.217",
     "uptime": { "totalSecs": 87143 }
   },
   "system": {
@@ -156,6 +185,35 @@ Step-keyed envelope, one top-level key per source command:
       "lastFailureReason": "N/A",
       "lastFailureTime": ""
     }
+  }
+}
+```
+
+On an appliance, the same envelope additionally carries:
+
+```json
+{
+  "hardwareDetails": {
+    "platform": "Solace Event Broker 3560",
+    "chassisSerial": "S009001344",
+    "biosVersion": "SE5C600.86B.02.05.0004.051120151007",
+    "cpuCount": 2,
+    "cpuModel": "Intel(R) Xeon(R) CPU E5-2630 v2 @ 2.60GHz",
+    "systemMemoryGiB": 32,
+    "power": {
+      "redundancyConfiguration": "1+1",
+      "operationalCount": 2
+    },
+    "disks": [
+      { "id": 1, "deviceModel": "INTEL SSDSC2BB120G4", "serial": "PHWL701000HH120LGN" },
+      { "id": 2, "deviceModel": "INTEL SSDSC2BB120G4", "serial": "PHWL70100090120LGN" }
+    ],
+    "slots": [
+      { "slot": "1/3", "blade": "Assured Delivery Blade", "productNumber": "ADB-04210M-01-A", "serial": "P004045330", "operationalState": "up" },
+      { "slot": "1/4", "blade": "Topic Routing Blade",     "productNumber": "TRB-000000-02-A", "serial": "P004048935" },
+      { "slot": "1/6", "blade": "Network Acceleration Blade", "productNumber": "NAB-0210EM-04-A", "serial": "P004047778" },
+      { "slot": "1/7", "blade": "Host Bus Adapter Blade",  "productNumber": "HBA-0208FC-02-A", "serial": "BFD1450B68835" }
+    ]
   }
 }
 ```

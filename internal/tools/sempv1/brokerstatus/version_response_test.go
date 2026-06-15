@@ -107,7 +107,7 @@ func TestVersionResponse_RoundTrip(t *testing.T) {
 	var resp versionResponse
 	out := decodeAndMarshal(t, inner, "version", &resp)
 
-	if got := out["description"]; got != "Solace PubSub+ Standard Version 10.25.0.217" {
+	if got := out["description"]; got != "Solace PubSub+ Software Enterprise Version 10.25.0.217" {
 		t.Errorf("description = %v, want fixture value", got)
 	}
 
