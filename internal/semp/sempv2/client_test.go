@@ -16,6 +16,7 @@ import (
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 )
@@ -24,12 +25,8 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*sempv2.HTTPClient, 
 	t.Helper()
 	server := httptest.NewServer(handler)
 	brokerCfg := &config.BrokerConfig{
-		URL: server.URL,
-		Auth: config.AuthConfig{
-			Mode:     "basic",
-			Username: "admin",
-			Password: "secret",
-		},
+		URL:  server.URL,
+		Auth: config.AuthConfig{Mode: "basic"}, // Mode still consumed by the Sender; credentials live on the Authenticator.
 	}
 	retries := 0
 	minInterval := time.Duration(0)
@@ -40,7 +37,7 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*sempv2.HTTPClient, 
 		RetryMinInterval:       1 * time.Millisecond,
 		RetryMaxInterval:       10 * time.Millisecond,
 	}
-	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10))
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret"))
 	if err != nil {
 		t.Fatalf("NewHTTPClient() error: %v", err)
 	}
@@ -755,11 +752,8 @@ func TestClient_Execute_BearerAuth(t *testing.T) {
 
 	// Create a bearer auth client pointing at the same test server.
 	brokerCfg := &config.BrokerConfig{
-		URL: server.URL,
-		Auth: config.AuthConfig{
-			Mode:  "bearer",
-			Token: "my-test-token",
-		},
+		URL:  server.URL,
+		Auth: config.AuthConfig{Mode: "bearer"},
 	}
 	retries := 0
 	minInterval := time.Duration(0)
@@ -770,7 +764,7 @@ func TestClient_Execute_BearerAuth(t *testing.T) {
 		RetryMinInterval:       1 * time.Millisecond,
 		RetryMaxInterval:       10 * time.Millisecond,
 	}
-	bearerClient, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10))
+	bearerClient, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBearerAuthenticator("my-test-token"))
 	if err != nil {
 		t.Fatalf("NewHTTPClient() error: %v", err)
 	}
@@ -903,12 +897,8 @@ func TestClient_Execute_Timeout(t *testing.T) {
 
 	// Create a client with a very short timeout.
 	brokerCfg := &config.BrokerConfig{
-		URL: server.URL,
-		Auth: config.AuthConfig{
-			Mode:     "basic",
-			Username: "admin",
-			Password: "secret",
-		},
+		URL:  server.URL,
+		Auth: config.AuthConfig{Mode: "basic"},
 	}
 	retries := 0
 	minInterval := time.Duration(0)
@@ -919,7 +909,7 @@ func TestClient_Execute_Timeout(t *testing.T) {
 		RetryMinInterval:       1 * time.Millisecond,
 		RetryMaxInterval:       10 * time.Millisecond,
 	}
-	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10))
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret"))
 	if err != nil {
 		t.Fatalf("NewHTTPClient() error: %v", err)
 	}
@@ -978,7 +968,7 @@ func TestClient_TransportPool_ReusesConnections(t *testing.T) {
 
 	brokerCfg := &config.BrokerConfig{
 		URL:  server.URL,
-		Auth: config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"},
+		Auth: config.AuthConfig{Mode: "basic"},
 	}
 	retries := 0
 	minInterval := time.Duration(0)
@@ -990,7 +980,7 @@ func TestClient_TransportPool_ReusesConnections(t *testing.T) {
 		RetryMaxInterval:       10 * time.Millisecond,
 		MaxConcurrentPerBroker: concurrency,
 	}
-	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10))
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret"))
 	if err != nil {
 		t.Fatalf("NewHTTPClient: %v", err)
 	}

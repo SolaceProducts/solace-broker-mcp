@@ -3,12 +3,22 @@ package auth
 import (
 	"context"
 	"encoding/base64"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 )
+
+func newReq(t *testing.T) *http.Request {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://example.test/SEMP", nil)
+	if err != nil {
+		t.Fatalf("building request: %v", err)
+	}
+	return req
+}
 
 func TestBasicAuthenticator_AddAuth(t *testing.T) {
 	const (

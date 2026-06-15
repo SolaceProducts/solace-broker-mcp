@@ -471,3 +471,4 @@ func TestBrokerPool_Aliases_PreservesDisplayCasing(t *testing.T) {
 		}
 	}
 }
+

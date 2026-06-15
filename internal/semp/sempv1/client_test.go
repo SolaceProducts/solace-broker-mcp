@@ -14,18 +14,22 @@ import (
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 )
 
 // newTestClientWith returns an HTTPClient pointed at srv using the supplied
-// AuthConfig. The caller is responsible for srv.Close().
-func newTestClientWith(t *testing.T, srv *httptest.Server, auth config.AuthConfig) *HTTPClient {
+// Authenticator. The caller is responsible for srv.Close().
+func newTestClientWith(t *testing.T, srv *httptest.Server, authn auth.Authenticator) *HTTPClient {
 	t.Helper()
 
+	// Auth has been hoisted up into authn — Mode is still required by config
+	// validation paths that touch BrokerConfig, but the protocol client no
+	// longer reads Auth fields itself.
 	brokerCfg := &config.BrokerConfig{
 		URL:  srv.URL,
-		Auth: auth,
+		Auth: config.AuthConfig{Mode: config.AuthModeBasic},
 	}
 	retries := 1
 	minInterval := time.Duration(0)
@@ -37,7 +41,7 @@ func newTestClientWith(t *testing.T, srv *httptest.Server, auth config.AuthConfi
 		RetryMaxInterval:       10 * time.Millisecond,
 	}
 
-	client, err := NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10))
+	client, err := NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), authn)
 	if err != nil {
 		t.Fatalf("NewHTTPClient failed: %v", err)
 	}
@@ -46,14 +50,10 @@ func newTestClientWith(t *testing.T, srv *httptest.Server, auth config.AuthConfi
 
 // newTestClient is a convenience wrapper that uses basic auth with canonical
 // "user"/"pass" credentials. Tests that care about auth should use
-// newTestClientWith directly and supply their own AuthConfig.
+// newTestClientWith directly and supply their own Authenticator.
 func newTestClient(t *testing.T, srv *httptest.Server) *HTTPClient {
 	t.Helper()
-	return newTestClientWith(t, srv, config.AuthConfig{
-		Mode:     config.AuthModeBasic,
-		Username: "user",
-		Password: "pass",
-	})
+	return newTestClientWith(t, srv, auth.NewBasicAuthenticator("user", "pass"))
 }
 
 const successEnvelope = `<rpc-reply><rpc><show><version/></show></rpc><execute-result code="ok"/></rpc-reply>`
@@ -101,11 +101,7 @@ func TestExecute_RequestConstruction(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		client := newTestClientWith(t, srv, config.AuthConfig{
-			Mode:     config.AuthModeBasic,
-			Username: "user",
-			Password: "pass",
-		})
+		client := newTestClientWith(t, srv, auth.NewBasicAuthenticator("user", "pass"))
 
 		_, err := client.Execute(context.Background(), `<rpc><show/></rpc>`)
 		if err != nil {
@@ -126,10 +122,7 @@ func TestExecute_RequestConstruction(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		client := newTestClientWith(t, srv, config.AuthConfig{
-			Mode:  config.AuthModeBearer,
-			Token: "abc123",
-		})
+		client := newTestClientWith(t, srv, auth.NewBearerAuthenticator("abc123"))
 
 		_, err := client.Execute(context.Background(), `<rpc><show/></rpc>`)
 		if err != nil {
@@ -446,20 +439,14 @@ func TestExecute_InputValidation(t *testing.T) {
 //   - none of the sensitive field values appear anywhere in the output
 func TestHTTPClient_LogValue_ExcludesCredentials(t *testing.T) {
 	const (
-		secretUser  = "SECRET_USERNAME_VAL"
-		secretPass  = "SECRET_PASSWORD_VAL"
-		secretToken = "SECRET_TOKEN_VAL"
+		secretUser = "SECRET_USERNAME_VAL"
+		secretPass = "SECRET_PASSWORD_VAL"
 	)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer srv.Close()
 
-	client := newTestClientWith(t, srv, config.AuthConfig{
-		Mode:     config.AuthModeBasic,
-		Username: secretUser,
-		Password: secretPass,
-		Token:    secretToken, // not used by basic mode, but set to prove it also doesn't leak
-	})
+	client := newTestClientWith(t, srv, auth.NewBasicAuthenticator(secretUser, secretPass))
 
 	var buf bytes.Buffer
 	old := slog.Default()
@@ -477,7 +464,7 @@ func TestHTTPClient_LogValue_ExcludesCredentials(t *testing.T) {
 		t.Errorf("expected base URL %q in log output, got: %s", srv.URL, out)
 	}
 
-	for _, secret := range []string{secretUser, secretPass, secretToken} {
+	for _, secret := range []string{secretUser, secretPass} {
 		if strings.Contains(out, secret) {
 			t.Errorf("credential %q leaked into log output:\n%s", secret, out)
 		}
