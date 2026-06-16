@@ -165,6 +165,60 @@ brokers:
 	}
 }
 
+func TestLoadConfig_DisabledAuth(t *testing.T) {
+	// client_auth.mode: disabled is a valid, dev-only profile: no client auth
+	// is enforced and no further client_auth fields are required. The broker's
+	// own auth block is still validated as usual.
+	yaml := `
+client_auth:
+  mode: disabled
+brokers:
+  dev:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error for disabled auth mode: %v", err)
+	}
+	if cfg.ClientAuth.Mode != AuthModeDisabled {
+		t.Errorf("expected client_auth.mode %q, got %q", AuthModeDisabled, cfg.ClientAuth.Mode)
+	}
+	// disabled is a dev profile, not production.
+	if cfg.IsProductionMode() {
+		t.Errorf("disabled mode should not be production mode")
+	}
+	// Broker auth block is still parsed and validated normally.
+	broker := cfg.brokers["dev"]
+	if broker == nil {
+		t.Fatal("expected broker 'dev' to be loaded")
+	}
+	if broker.Auth.Username != "admin" || broker.Auth.Password != "secret" {
+		t.Errorf("unexpected broker credentials: %q/%q", broker.Auth.Username, broker.Auth.Password)
+	}
+}
+
+func TestLoadConfig_DisabledAuth_AllowsHTTPBroker(t *testing.T) {
+	// disabled is a dev-only mode, so http:// broker URLs are permitted
+	yaml := `
+client_auth:
+  mode: disabled
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	if _, err := LoadConfig(writeTemp(t, yaml)); err != nil {
+		t.Fatalf("http:// broker URL should be allowed under mode: disabled, got: %v", err)
+	}
+}
+
 func TestLoadConfig_MalformedYAML(t *testing.T) {
 	_, err := LoadConfig(writeTemp(t, `{{{ not yaml`))
 	if err == nil {
