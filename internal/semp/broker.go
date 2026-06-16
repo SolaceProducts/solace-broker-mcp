@@ -23,10 +23,15 @@ import (
 // the broker's lifetime — see Decision 7 in
 // docs/oauth/token-exchange-SOL-150070/architecture-plan.md for the rationale.
 type BrokerClient struct {
-	sempV1Client  *sempv1.HTTPClient // SEMPv1 protocol client (concrete for Close)
-	sempV2Client  *sempv2.HTTPClient // SEMPv2 protocol client (concrete for Close)
-	authenticator auth.Authenticator // one per broker, shared by both protocol clients
-	alias         string             // broker alias (for error messages)
+	sempV1Client *sempv1.HTTPClient // SEMPv1 protocol client (concrete for Close)
+	sempV2Client *sempv2.HTTPClient // SEMPv2 protocol client (concrete for Close)
+	// authenticator is the single Authenticator built for a broker. Both
+	// protocol clients already hold this pointer directly; no method on
+	// BrokerClient reads it today. Retained as pre-staging for the Sender
+	// 401-handling migration, which needs per-broker Authenticator access via
+	// a BrokerClient accessor.
+	authenticator auth.Authenticator
+	alias         string // broker alias (for error messages)
 }
 
 // NewBrokerClient creates a BrokerClient for the given broker configuration.

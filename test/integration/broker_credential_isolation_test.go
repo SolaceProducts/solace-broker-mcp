@@ -123,9 +123,11 @@ func TestCredentialsAreIsolatedPerBroker(t *testing.T) {
 	}
 	wg.Wait()
 
+	// wg.Wait() above synchronizes with every handler goroutine, so fb.seen
+	// has no concurrent writers at this point. The assertion loop is the only
+	// goroutine touching it. No lock needed here — fb.mu is still load-bearing
+	// during the concurrent phase (inside the handler), but not here.
 	for _, fb := range brokers {
-		fb.mu.Lock()
-		defer fb.mu.Unlock()
 		// Visible under `go test -v` as evidence the assertion had data to
 		// assert on. Quiet by default so unrelated test runs aren't noisy.
 		t.Logf("%s saw: %v (expected %d × %q)", fb.alias, fb.seen, fb.wantRequests, fb.wantAuth)

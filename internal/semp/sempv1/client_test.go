@@ -438,35 +438,50 @@ func TestExecute_InputValidation(t *testing.T) {
 //   - base_url is present
 //   - none of the sensitive field values appear anywhere in the output
 func TestHTTPClient_LogValue_ExcludesCredentials(t *testing.T) {
-	const (
-		secretUser = "SECRET_USERNAME_VAL"
-		secretPass = "SECRET_PASSWORD_VAL"
-	)
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer srv.Close()
 
-	client := newTestClientWith(t, srv, auth.NewBasicAuthenticator(secretUser, secretPass))
-
-	var buf bytes.Buffer
-	old := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
-	defer slog.SetDefault(old)
-
-	slog.Info("broker", slog.Any("client", client))
-
-	out := buf.String()
-
-	if !strings.Contains(out, "base_url") {
-		t.Errorf("expected base_url in log output, got: %s", out)
+	cases := []struct {
+		name    string
+		authn   auth.Authenticator
+		secrets []string
+	}{
+		{
+			name:    "basic auth credentials are not logged",
+			authn:   auth.NewBasicAuthenticator("SECRET_USERNAME_VAL", "SECRET_PASSWORD_VAL"),
+			secrets: []string{"SECRET_USERNAME_VAL", "SECRET_PASSWORD_VAL"},
+		},
+		{
+			name:    "bearer token is not logged",
+			authn:   auth.NewBearerAuthenticator("SECRET_BEARER_TOKEN_VAL"),
+			secrets: []string{"SECRET_BEARER_TOKEN_VAL"},
+		},
 	}
-	if !strings.Contains(out, srv.URL) {
-		t.Errorf("expected base URL %q in log output, got: %s", srv.URL, out)
-	}
 
-	for _, secret := range []string{secretUser, secretPass} {
-		if strings.Contains(out, secret) {
-			t.Errorf("credential %q leaked into log output:\n%s", secret, out)
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newTestClientWith(t, srv, tc.authn)
+
+			var buf bytes.Buffer
+			old := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+			defer slog.SetDefault(old)
+
+			slog.Info("broker", slog.Any("client", client))
+
+			out := buf.String()
+
+			if !strings.Contains(out, "base_url") {
+				t.Errorf("expected base_url in log output, got: %s", out)
+			}
+			if !strings.Contains(out, srv.URL) {
+				t.Errorf("expected base URL %q in log output, got: %s", srv.URL, out)
+			}
+			for _, secret := range tc.secrets {
+				if strings.Contains(out, secret) {
+					t.Errorf("credential %q leaked into log output:\n%s", secret, out)
+				}
+			}
+		})
 	}
 }

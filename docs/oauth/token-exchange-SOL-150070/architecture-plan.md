@@ -381,7 +381,7 @@ Same lifecycle, same interface, different implementations. Adding `oauth` is a *
 
 **Decision:** Each broker gets exactly one Authenticator instance, constructed once when that broker's `BrokerClient` is constructed, attached as a field on the `BrokerClient`, reused for the life of the process.
 
-Construction happens lazily — at the moment a broker is first requested via `pool.getOrCreate(alias)`, inside the same double-checked write-lock section that builds the `BrokerClient`. The Authenticator is a sibling of the broker client: born together, attached, cached together. Same lifecycle story as everything else in §8 of the walkthrough — "long-lived service objects, short-lived request objects."
+Construction happens lazily — at the moment a broker is first requested via `pool.getOrCreate(alias)`, the pool calls `NewBrokerClient`, which builds the Authenticator alongside the protocol clients. The Authenticator is a sibling of the broker client: born together, attached, cached together. Same lifecycle story as everything else in §8 of the walkthrough — "long-lived service objects, short-lived request objects."
 
 **Why per-broker, not per-call:**
 
@@ -504,8 +504,9 @@ That is all. It is deliberately thin. Anything more belongs in the Exchanger (ex
 ```
 t0   Process starts. Exchanger constructed (singleton). Pool empty.
 t1   First request for broker-c arrives. pool.getOrCreate runs under write lock:
-       authn := buildAuthenticator(brokerCfg.Auth, exchanger)
-       client := NewBrokerClient(brokerCfg, authn)
+       client := NewBrokerClient(alias, brokerCfg, sempCfg)
+         // inside NewBrokerClient: authn := auth.NewAuthenticator(brokerCfg.Auth)
+         // (when T6 lands, NewAuthenticator also takes the *Exchanger)
        pool.clients["broker-c"] = client
 t2…  Every subsequent request for broker-c reuses the same client and the same
      authn. authn.AddAuth(ctx, req) is called concurrently from many G6's;
@@ -551,7 +552,7 @@ type BrokerClient struct {
 - **Discoverability** — reading `BrokerClient`'s definition immediately shows what auth scheme this broker uses, without having to drill into either protocol client.
 - **Single source of truth for "this broker's auth"** — there is no ambiguity about which copy is authoritative because there is no copy.
 - **Future protocol clients** — if a third SEMP variant (or a new protocol entirely) is added later, it borrows the same `authenticator` field. No reshape needed.
-- **Symmetry with construction** — the Authenticator is born in `pool.getOrCreate` alongside the BrokerClient. It belongs to the BrokerClient's lifecycle. Putting it as a field on the BrokerClient matches that lifecycle exactly.
+- **Symmetry with construction** — the Authenticator is born inside `NewBrokerClient` alongside the protocol clients, on the lazy path triggered by `pool.getOrCreate`. It belongs to the BrokerClient's lifecycle. Putting it as a field on the BrokerClient matches that lifecycle exactly.
 
 **Why protocol clients still hold a reference rather than reaching up to the parent:**
 
@@ -561,35 +562,37 @@ type BrokerClient struct {
 
 ### Construction site (where the Authenticator is born)
 
-The Authenticator is constructed in `internal/semp/pool.go`'s `getOrCreate`, alongside the BrokerClient, **inside the same write-lock section**:
+The Authenticator is constructed inside `internal/semp/broker.go`'s `NewBrokerClient`, alongside the per-broker semaphore and the protocol clients themselves. The pool's `getOrCreate` is the caller that triggers construction (lazily, on first touch of a broker alias), but `NewBrokerClient` is the **single builder** — no other code path calls `auth.NewAuthenticator`.
 
 ```go
-func (p *BrokerPool) getOrCreate(alias string) (*BrokerClient, error) {
-    // ... double-checked locking pattern ...
-    p.mu.Lock()
-    defer p.mu.Unlock()
-    if client, ok := p.clients[canonical]; ok {
-        return client, nil
-    }
-
-    cfg, ok := p.src.Broker(alias)
-    if !ok { return nil, fmt.Errorf("%w: %q", ErrUnknownBroker, alias) }
-
-    // NEW: build one Authenticator per broker, shared by both protocol clients.
-    authn, err := auth.NewAuthenticator(cfg.Auth, p.exchanger)
+// internal/semp/broker.go
+func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (*BrokerClient, error) {
+    // Single builder: one Authenticator per broker, shared by both protocol clients.
+    authn, err := auth.NewAuthenticator(brokerCfg.Auth)
     if err != nil {
         return nil, fmt.Errorf("creating authenticator for broker %q: %w", alias, err)
     }
 
-    client, err := NewBrokerClient(cfg.DisplayName(), cfg, p.sempCfg, authn)
+    sem := resilience.NewSemaphore(sempCfg.MaxConcurrentPerBroker)
+    sempV1Client, err := sempv1.NewHTTPClient(brokerCfg, sempCfg, sem, authn)
+    if err != nil { return nil, err }
+    sempV2Client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, sem, authn)
     if err != nil { return nil, err }
 
-    p.clients[canonical] = client
-    return client, nil
+    return &BrokerClient{
+        sempV1Client:  sempV1Client,
+        sempV2Client:  sempV2Client,
+        authenticator: authn, // pre-staged for the T7b Sender migration
+        alias:         alias,
+    }, nil
 }
 ```
 
-`NewBrokerClient` then passes the same `authn` pointer to both `sempv1.NewHTTPClient` and `sempv2.NewHTTPClient`. Both protocol clients store the pointer in their struct's `authenticator` field. The per-request hot path becomes:
+The pool's role is unchanged from before this refactor: it caches one BrokerClient per alias under a write lock, calling `NewBrokerClient` once on first touch. The pool does not know about Authenticators — it just hands `brokerCfg` to `NewBrokerClient` and stores the result.
+
+When T6 (OAuth) lands, `NewAuthenticator` will grow additional parameters (`*Exchanger`, per-broker cookie jar). The only production call site that changes is the one in `NewBrokerClient`; the pool stays clean.
+
+`NewBrokerClient` passes the same `authn` pointer to both `sempv1.NewHTTPClient` and `sempv2.NewHTTPClient`. Both protocol clients store the pointer in their struct's `authenticator` field. The per-request hot path becomes:
 
 ```go
 // in sempv1/client.go and sempv2/client.go, before sender.Do(...)
@@ -605,7 +608,7 @@ Symmetric, uniform, one object across both protocol layers.
 | Invariant | Why it matters |
 |---|---|
 | Exactly one `Authenticator` is constructed per broker | No duplication, no risk of one drifting from the other |
-| Construction happens in `pool.getOrCreate`, never anywhere else | Single source of "which auth scheme for this broker" |
+| Construction happens inside `NewBrokerClient`, never anywhere else | Single source of "which auth scheme for this broker" — pool and protocol clients never call `auth.NewAuthenticator` |
 | The `Authenticator` is owned by the `BrokerClient` (struct field) | Lifetime tied to the broker; dies with the BrokerClient |
 | Protocol clients (`sempv1`, `sempv2`) hold a borrowed reference (pointer) | Loose coupling, easy testing, future protocols compose cleanly |
 | The Authenticator's fields are never written after construction (Decision 7's safety invariant) | Goroutine-safety remains structural, not by mutex |
@@ -915,7 +918,7 @@ The validation function is called from `LoadConfig`'s existing `validate()` chai
 
 ### Where Authenticator construction stays lazy
 
-Because Levels 1–3 already happened at startup, `pool.getOrCreate` can trust the config is well-formed when it constructs the `OAuthAuthenticator` on first request. No re-validation needed at construction time. The first-request hot path stays fast.
+Because Levels 1–3 already happened at startup, `NewBrokerClient` (invoked lazily via `pool.getOrCreate`) can trust the config is well-formed when it constructs the `OAuthAuthenticator` on first request. No re-validation needed at construction time. The first-request hot path stays fast.
 
 **Slogan:** eager config validation, lazy object construction.
 
@@ -1004,7 +1007,7 @@ For every PR landing on the feature branch, the description must answer four que
 
 The `CHANGELOG.md` (project-level) gets one entry per substantive PR. The refactor commit's entry is **not** "added OAuth support" — that comes later. The refactor entry reads more like:
 
-> *refactor: replaced the package-level `auth.AddAuth(ctx, req, cfg)` dispatcher with an `Authenticator` interface and per-broker instances. Both SEMPv1 and SEMPv2 protocol clients now consume a borrowed `Authenticator` reference constructed once per broker in `pool.getOrCreate`. No behavior change for existing `basic` and `bearer` auth modes. Enables upcoming RFC 8693 token-exchange support (SOL-150070).*
+> *refactor: replaced the package-level `auth.AddAuth(ctx, req, cfg)` dispatcher with an `Authenticator` interface and per-broker instances. Both SEMPv1 and SEMPv2 protocol clients now consume a borrowed `Authenticator` reference constructed once per broker inside `NewBrokerClient` (invoked lazily via `pool.getOrCreate`). No behavior change for existing `basic` and `bearer` auth modes. Enables upcoming RFC 8693 token-exchange support (SOL-150070).*
 
 The OAuth-feature commit's entry comes later and says what the feature does.
 
