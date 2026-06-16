@@ -103,7 +103,7 @@ The server exposes 17 read-only tools. All broker-querying tools require a `brok
 
 | Tool | Description |
 |---|---|
-| `get-broker-status` | Curated point-in-time broker status snapshot: edition and version, uptime and restart reason, broker-tier scaling limits and resource headroom, memory utilization, and message-spool state with HA roles and disk utilization. Reports raw state, not a pass/fail verdict. |
+| `get-broker-status` | Curated point-in-time broker status snapshot: edition and version, uptime and restart reason, broker-tier scaling limits and resource headroom, memory utilization, and message-spool state with HA roles and disk utilization. On hardware appliances it additionally returns a `hardwareDetails` section with chassis identity, CPU, memory, power, disks, and blade inventory. Reports raw state, not a pass/fail verdict. |
 | `get-redundancy-status` | Event broker redundancy and high-availability status: config/operational status, active-standby role, mate router name, mate link state, and per-virtual-router activity. |
 
 ### Replication

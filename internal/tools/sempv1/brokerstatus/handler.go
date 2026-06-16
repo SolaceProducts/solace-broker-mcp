@@ -8,6 +8,16 @@
 //	show memory                        → "memory" key
 //	show message-spool detail          → "spool" key
 //
+// On appliance brokers a fifth, conditional, sequential call also runs:
+//
+//	show hardware details              → "hardwareDetails" key (appliance only)
+//
+// The hardware step fires only when the show-version description identifies
+// the broker as an appliance (see isApplianceFromDescription). The step is
+// failure-isolated — a transport or parse error there is logged and the
+// hardwareDetails section is omitted, but the rest of the envelope still
+// returns. Software / cloud brokers skip the call entirely.
+//
 // Field selection is operator-driven, not exhaustive — see
 // docs/internal/semp/get-broker-status-curated-fields.md for the rationale,
 // source citations, and full curated list.
@@ -17,7 +27,9 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
@@ -29,12 +41,14 @@ import (
 const toolName = "get-broker-status"
 
 // Static SEMPv1 request strings — declared here rather than inline in Handle
-// so the four-call shape is visible at a glance.
+// so the call shape is visible at a glance. The first four run in parallel
+// on every invocation; hardwareXML is conditional and sequential.
 const (
-	versionXML = `<rpc><show><version/></show></rpc>`
-	systemXML  = `<rpc><show><system/></show></rpc>`
-	memoryXML  = `<rpc><show><memory/></show></rpc>`
-	spoolXML   = `<rpc><show><message-spool><detail/></message-spool></show></rpc>`
+	versionXML  = `<rpc><show><version/></show></rpc>`
+	systemXML   = `<rpc><show><system/></show></rpc>`
+	memoryXML   = `<rpc><show><memory/></show></rpc>`
+	spoolXML    = `<rpc><show><message-spool><detail/></message-spool></show></rpc>`
+	hardwareXML = `<rpc><show><hardware><details/></hardware></show></rpc>`
 )
 
 // Compile-time check that Handler satisfies tools.ToolHandler.
@@ -61,12 +75,14 @@ func (h *Handler) Metadata() tools.Metadata {
 		Description: "Returns a curated point-in-time status snapshot of a Solace " +
 			"broker's operational state - edition and version, uptime and restart " +
 			"reason, scaling limits and resource headroom (to flag under-scaling), " +
-			"memory and message-spool utilization. Reports raw state, not a " +
-			"health verdict - whether the broker is \"healthy\" depends on " +
-			"deployment intent (e.g. message-spool disabled is expected for " +
-			"direct-messaging-only deployments, not a fault). Use whenever the " +
-			"user asks about a broker's status or health - whether it is " +
-			"healthy, slow, restarted, under-scaled, low on capacity, or before " +
+			"memory and message-spool utilization, and on hardware appliances " +
+			"the chassis identity and physical-component inventory (CPU, memory, " +
+			"power, disks, blades). Reports raw state, not a health verdict - " +
+			"whether the broker is \"healthy\" depends on deployment intent " +
+			"(e.g. message-spool disabled is expected for direct-messaging-only " +
+			"deployments, not a fault). Use whenever the user asks about a " +
+			"broker's status or health - whether it is healthy, slow, restarted, " +
+			"under-scaled, low on capacity, what hardware it runs on, or before " +
 			"maintenance. Specify the target broker by its configured alias.",
 		InputSchema:  tools.EmptyObjectSchema(),
 		OutputSchema: tools.StepKeyedEnvelopeSchema(),
@@ -74,9 +90,11 @@ func (h *Handler) Metadata() tools.Metadata {
 	}
 }
 
-// Handle issues the four SEMPv1 calls in parallel, decodes each response into
-// the curated typed struct, and assembles a step-keyed envelope under the
-// keys "version", "system", "memory", and "spool".
+// Handle issues the four core SEMPv1 calls in parallel, decodes each response
+// into the curated typed struct, and assembles a step-keyed envelope under
+// the keys "version", "system", "memory", and "spool". On appliance brokers
+// a conditional fifth call (show hardware details) runs sequentially after
+// the parallel fan-out and adds a "hardwareDetails" key.
 //
 // Errors from the SEMPv1 client are returned unwrapped so the manager's
 // errors.As path can extract *sempv1.Error for structured logging. Errors
@@ -84,10 +102,17 @@ func (h *Handler) Metadata() tools.Metadata {
 // tool-name prefix so log lines distinguish broker-side failures from
 // tool-side processing failures.
 //
-// Partial-failure policy: if any one of the four calls fails, the whole tool
-// fails. The broker's status is a coherent picture; returning a partial
-// envelope could mislead downstream consumers (operators, LLMs, dashboards).
-// errgroup's first-error-cancels semantics give us this for free.
+// Partial-failure policy:
+//
+//   - The four parallel calls are all-or-nothing: if any one fails, the whole
+//     tool fails. Broker status is a coherent picture and a partial envelope
+//     could mislead downstream consumers (operators, LLMs, dashboards).
+//     errgroup's first-error-cancels semantics give us this for free.
+//   - The conditional hardware step is best-effort and failure-isolated:
+//     a transport or parse error is logged with structured fields and the
+//     hardwareDetails section is omitted, but the rest of the envelope still
+//     returns. The other four sections are a complete answer for software
+//     brokers, so an appliance-only failure must not fail the whole tool.
 func (h *Handler) Handle(
 	ctx context.Context,
 	tc *tools.ToolContext,
@@ -120,12 +145,72 @@ func (h *Handler) Handle(
 		return nil, err
 	}
 
-	envelope, err := assembleEnvelope(versionResp, systemResp, memoryResp, spoolResp)
+	// Conditional fifth step — only fires on appliance brokers, runs
+	// sequentially after the parallel fan-out succeeds. The check is
+	// gated on the show-version description (already populated above) so
+	// software / cloud brokers cost zero extra round-trips.
+	//
+	// Failure isolation: an error here is logged and dropped. The other
+	// four sections are a complete answer for software brokers, so this
+	// step's failure must not fail the whole tool. Appliance operators
+	// will notice the missing hardwareDetails section in the response.
+	var hwCurated *hardwareCurated
+	if versionResp.Description != nil && isApplianceFromDescription(*versionResp.Description) {
+		var hwResp hardwareResponse
+		if err := executeAndDecode(ctx, tc.SEMPv1Client, hardwareXML, "hardware", &hwResp); err != nil {
+			logHardwareStepFailure(ctx, err)
+		} else {
+			hwCurated = hwResp.Curated()
+		}
+	}
+
+	envelope, err := assembleEnvelope(versionResp, systemResp, memoryResp, spoolResp, hwCurated)
 	if err != nil {
 		return nil, err
 	}
 
 	return &tools.ToolResult{StructuredContent: envelope}, nil
+}
+
+// logHardwareStepFailure emits a structured warn record for a failed
+// hardware-details step. The raw err.Error() is intentionally NOT logged —
+// per docs/internal/secure-logging-rules.md (Rule 5), errors from external
+// systems must be logged via structured fields, not as a free-form string.
+// When the underlying error is a *sempv1.Error we expose its kind,
+// http_status, and reason_code (the same fields manager.logToolResult emits
+// for tool-level failures, so log shape stays consistent across tools);
+// otherwise we surface only the Go error type, never the message.
+//
+// For the non-*sempv1.Error path we unwrap to the deepest cause before
+// recording the type. executeAndDecode wraps XML parse errors via
+// fmt.Errorf %w, so logging %T on the outer error would always read
+// "*fmt.wrapError" — useless for triage. Unwrapping surfaces the real
+// type (e.g. "*xml.SyntaxError") while still avoiding the message.
+func logHardwareStepFailure(ctx context.Context, err error) {
+	attrs := []slog.Attr{
+		slog.String("tool", toolName),
+		slog.String("step", "hardware"),
+	}
+	var v1Err *sempv1.Error
+	if errors.As(err, &v1Err) {
+		attrs = append(attrs,
+			slog.String("error_type", "*sempv1.Error"),
+			slog.String("kind", v1Err.Kind.String()),
+			slog.Int("http_status", v1Err.StatusCode),
+			slog.Int("reason_code", v1Err.ReasonCode))
+	} else {
+		root := err
+		for {
+			u := errors.Unwrap(root)
+			if u == nil {
+				break
+			}
+			root = u
+		}
+		attrs = append(attrs, slog.String("error_type", fmt.Sprintf("%T", root)))
+	}
+	slog.LogAttrs(ctx, slog.LevelWarn,
+		"hardware-details step failed; omitting hardwareDetails section", attrs...)
 }
 
 // executeAndDecode issues a single SEMPv1 RPC, then decodes the inner
@@ -182,6 +267,15 @@ func executeAndDecode(ctx context.Context, client sempv1.Client, xmlReq, innerTa
 			return fmt.Errorf("%s: parsing %s response: %w", toolName, innerTag, err)
 		}
 		*t = w.Inner
+	case *hardwareResponse:
+		var w struct {
+			XMLName xml.Name         `xml:"show"`
+			Inner   hardwareResponse `xml:"hardware"`
+		}
+		if err := xml.Unmarshal(result.InnerXML, &w); err != nil {
+			return fmt.Errorf("%s: parsing %s response: %w", toolName, innerTag, err)
+		}
+		*t = w.Inner
 	default:
 		return fmt.Errorf("%s: internal: unsupported response type %T", toolName, target)
 	}
@@ -190,14 +284,21 @@ func executeAndDecode(ctx context.Context, client sempv1.Client, xmlReq, innerTa
 }
 
 // assembleEnvelope marshals each typed response to JSON, then to map[string]any,
-// and stitches them into the four-key step envelope. The JSON round-trip
-// honors json: tags (camelCase + omitempty), so absent broker fields drop
-// out of the output naturally.
+// and stitches them into the step envelope. The JSON round-trip honors json:
+// tags (camelCase + omitempty), so absent broker fields drop out of the
+// output naturally.
+//
+// hw is optional — nil when the broker is non-appliance (skip path) or when
+// the conditional hardware step failed (best-effort drop). On nil the
+// hardwareDetails key is omitted entirely rather than emitted as an empty
+// object, so consumers can use simple key presence to distinguish "appliance
+// with data" from "no hardware data available".
 func assembleEnvelope(
 	v versionResponse,
 	s systemResponse,
 	m memoryResponse,
 	sp messageSpoolResponse,
+	hw *hardwareCurated,
 ) (map[string]any, error) {
 	versionMap, err := structToMap(v, "version")
 	if err != nil {
@@ -216,12 +317,22 @@ func assembleEnvelope(
 		return nil, err
 	}
 
-	return map[string]any{
+	envelope := map[string]any{
 		"version": versionMap,
 		"system":  systemMap,
 		"memory":  memoryMap,
 		"spool":   spoolMap,
-	}, nil
+	}
+
+	if hw != nil {
+		hwMap, err := structToMap(hw, "hardwareDetails")
+		if err != nil {
+			return nil, err
+		}
+		envelope["hardwareDetails"] = hwMap
+	}
+
+	return envelope, nil
 }
 
 // structToMap round-trips v through json.Marshal and json.Unmarshal so the

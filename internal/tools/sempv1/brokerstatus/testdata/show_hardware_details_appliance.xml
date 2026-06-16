@@ -1,0 +1,226 @@
+<rpc-reply semp-version="app/100.0main.0.7305">
+  <rpc>
+    <show>
+      <hardware>
+        <platform>Solace Event Broker 3560</platform>
+        <chassis-product-number>CHS-3560AC-01-A</chassis-product-number>
+        <mainboard>
+          <chassis-revision>1.10</chassis-revision>
+          <chassis-serial>S009001344</chassis-serial>
+          <board-serial>QSCP51300944</board-serial>
+          <board-partnumber>G50768-511</board-partnumber>
+          <board-version>Deprecated</board-version>
+          <bios-version>SE5C600.86B.02.05.0004.051120151007</bios-version>
+          <cpu1-version>Intel(R) Xeon(R) CPU E5-2630 v2 @ 2.60GHz</cpu1-version>
+          <cpu2-version>Intel(R) Xeon(R) CPU E5-2630 v2 @ 2.60GHz</cpu2-version>
+          <cpus>
+            <cpu>Intel(R) Xeon(R) CPU E5-2630 v2 @ 2.60GHz</cpu>
+            <cpu>Intel(R) Xeon(R) CPU E5-2630 v2 @ 2.60GHz</cpu>
+          </cpus>
+          <memory>32.0 GiB</memory>
+        </mainboard>
+        <power-redundancy>
+          <power-redundancy-config>1+1</power-redundancy-config>
+          <operational-power-supplies>2</operational-power-supplies>
+          <power-modules>
+            <power-module>
+              <power-module-number>1</power-module-number>
+              <power-module-status>OK</power-module-status>
+            </power-module>
+            <power-module>
+              <power-module-number>2</power-module-number>
+              <power-module-status>OK</power-module-status>
+            </power-module>
+          </power-modules>
+        </power-redundancy>
+        <system-type>topic-routing</system-type>
+        <supported-blade-configuration>true</supported-blade-configuration>
+        <disks>
+          <disk>
+            <disk-number>1</disk-number>
+            <device-model>INTEL SSDSC2BB120G4</device-model>
+            <serial>PHWL701000HH120LGN</serial>
+          </disk>
+          <disk>
+            <disk-number>2</disk-number>
+            <device-model>INTEL SSDSC2BB120G4</device-model>
+            <serial>PHWL70100090120LGN</serial>
+          </disk>
+        </disks>
+        <fabric>
+          <fabric-number>1</fabric-number>
+          <slot>
+            <slot-number>1/1</slot-number>
+            <card-type>empty</card-type>
+          </slot>
+          <slot>
+            <slot-number>1/2</slot-number>
+            <card-type>empty</card-type>
+          </slot>
+          <slot>
+            <slot-number>1/3</slot-number>
+            <card-type>Assured Delivery Blade</card-type>
+            <product>ADB-04210M-01-A</product>
+            <serial>P004045330</serial>
+            <assembly-rev></assembly-rev>
+            <operational-state-up>true</operational-state-up>
+            <flash-card-state>Ready</flash-card-state>
+            <power-module-state>Ok</power-module-state>
+            <mate-link-1-state>No SFP Module</mate-link-1-state>
+            <mate-link-2-state>No SFP Module</mate-link-2-state>
+            <errors>0</errors>
+            <fatal-errors>0</fatal-errors>
+            <sfps>
+              <sfp>
+                <port>1</port>
+                <media-type>N/A</media-type>
+                <vendor></vendor>
+                <part-number></part-number>
+                <serial></serial>
+                <tx-power></tx-power>
+                <rx-power></rx-power>
+              </sfp>
+              <sfp>
+                <port>2</port>
+                <media-type>N/A</media-type>
+                <vendor></vendor>
+                <part-number></part-number>
+                <serial></serial>
+                <tx-power></tx-power>
+                <rx-power></rx-power>
+              </sfp>
+            </sfps>
+            <fpga>
+              <banks>
+                <bank>
+                  <bank-number>1</bank-number>
+                  <build-id>08010799</build-id>
+                </bank>
+                <bank>
+                  <bank-number>2</bank-number>
+                  <build-id>080107cc</build-id>
+                </bank>
+              </banks>
+            </fpga>
+            <dual-flash>
+              <state>Ready</state>
+              <card>
+                <card-number>1</card-number>
+                <size>7168</size>
+                <manufacturer>Virtium TuffDrive - VTDCFAPC008G-107     Rev:20130426</manufacturer>
+                <serial>P1T11003216702260062</serial>
+              </card>
+              <card>
+                <card-number>2</card-number>
+                <size>7168</size>
+                <manufacturer>Virtium TuffDrive - VTDCFAPC008G-107     Rev:20130426</manufacturer>
+                <serial>P1T11003216702260013</serial>
+              </card>
+            </dual-flash>
+            <power-module>
+              <status>Ok</status>
+              <charge-level>100</charge-level>
+              <time-fully-charged>0</time-fully-charged>
+            </power-module>
+            <mate-link>
+              <crc-err-count-p1>0</crc-err-count-p1>
+              <crc-err-count-p2>0</crc-err-count-p2>
+            </mate-link>
+          </slot>
+          <slot>
+            <slot-number>1/4</slot-number>
+            <card-type>Topic Routing Blade</card-type>
+            <product>TRB-000000-02-A</product>
+            <serial>P004048935</serial>
+            <assembly-num></assembly-num>
+            <assembly-rev></assembly-rev>
+            <acl-topic-matching-mode>enforce-for-queues</acl-topic-matching-mode>
+          </slot>
+          <slot>
+            <slot-number>1/5</slot-number>
+            <card-type>in use by slot 1/6</card-type>
+          </slot>
+          <slot>
+            <slot-number>1/6</slot-number>
+            <card-type>Network Acceleration Blade</card-type>
+            <product>NAB-0210EM-04-A</product>
+            <serial>P004047778</serial>
+            <assembly-num></assembly-num>
+            <assembly-rev></assembly-rev>
+            <fw-ver>100.0main.0.7305</fw-ver>
+            <mac-addresses>
+              <mac-address>70:b3:d5:44:e1:ce</mac-address>
+              <mac-address>70:b3:d5:44:e1:cf</mac-address>
+            </mac-addresses>
+            <sfps>
+              <sfp>
+                <port>1/6/1</port>
+                <media-type>N/A</media-type>
+                <vendor></vendor>
+                <part-number></part-number>
+                <serial></serial>
+                <tx-power>N/A    </tx-power>
+                <rx-power>N/A    </rx-power>
+              </sfp>
+              <sfp>
+                <port>1/6/2</port>
+                <media-type>10G Base-SR</media-type>
+                <vendor>AVAGO           </vendor>
+                <part-number>AFBR-709SMZ     </part-number>
+                <serial>AD15303144Y     </serial>
+                <tx-power>-2.2643</tx-power>
+                <rx-power>-2.2541</rx-power>
+              </sfp>
+            </sfps>
+          </slot>
+          <slot>
+            <slot-number>1/7</slot-number>
+            <card-type>Host Bus Adapter Blade</card-type>
+            <product>HBA-0208FC-02-A</product>
+            <serial>BFD1450B68835</serial>
+            <model>QLE2562</model>
+            <model-desc>PCI-Express Dual Channel 8Gb Fibre Channel HBA</model-desc>
+            <driver>10.02.09.300-k</driver>
+            <fibre-channel>
+              <number>1</number>
+              <operational-state>Linkdown</operational-state>
+              <state>Link Down</state>
+              <speed>2 Gbit</speed>
+              <port-id>0x000000</port-id>
+              <port-name>0x21000024ff5e8360</port-name>
+              <port-type>Unknown</port-type>
+              <node-name>0x20000024ff5e8360</node-name>
+              <invalid-crc-count>0</invalid-crc-count>
+              <invalid-tx-words-count>0</invalid-tx-words-count>
+              <link-failure-count>0</link-failure-count>
+              <loss-of-signal-count>0</loss-of-signal-count>
+              <loss-of-sync-count>0</loss-of-sync-count>
+              <prim-seq-protocol-error-count>0</prim-seq-protocol-error-count>
+            </fibre-channel>
+            <fibre-channel>
+              <number>2</number>
+              <operational-state>Linkdown</operational-state>
+              <state>Link Down</state>
+              <speed>unknown</speed>
+              <port-id>0x000000</port-id>
+              <port-name>0x21000024ff5e8361</port-name>
+              <port-type>Unknown</port-type>
+              <node-name>0x20000024ff5e8361</node-name>
+              <invalid-crc-count>0</invalid-crc-count>
+              <invalid-tx-words-count>0</invalid-tx-words-count>
+              <link-failure-count>0</link-failure-count>
+              <loss-of-signal-count>0</loss-of-signal-count>
+              <loss-of-sync-count>0</loss-of-sync-count>
+              <prim-seq-protocol-error-count>0</prim-seq-protocol-error-count>
+            </fibre-channel>
+          </slot>
+          <slot>
+            <slot-number>1/8</slot-number>
+            <card-type>empty</card-type>
+          </slot>
+        </fabric>
+      </hardware>
+    </show>
+  </rpc>
+<execute-result code="ok"/>
+</rpc-reply>
