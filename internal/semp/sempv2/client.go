@@ -54,13 +54,15 @@ func (e *SEMPError) Error() string {
 
 // HTTPClient implements the Client interface by making real HTTP calls to a
 // Solace broker's SEMPv2 API. It is configured per-broker with the broker's
-// URL, TLS settings, and authentication credentials.
+// URL and TLS settings and authenticates outbound requests through the
+// supplied auth.Authenticator. One Authenticator instance is shared between
+// this client and the broker's SEMPv1 client; see semp.NewBrokerClient.
 //
 // Rate limiting and retry logic are delegated to the shared resilience.Sender.
 type HTTPClient struct {
-	sender  *resilience.Sender
-	baseURL string
-	authCfg config.AuthConfig
+	sender        *resilience.Sender
+	baseURL       string
+	authenticator auth.Authenticator
 }
 
 // LogValue implements slog.LogValuer for HTTPClient. It exposes only the base
@@ -83,10 +85,24 @@ func (c *HTTPClient) Close() {
 // tuning appropriate for concurrent SEMP calls, and delegates retry and rate
 // limiting to a shared resilience.Sender.
 //
+// authn is the per-broker Authenticator (built once by semp.NewBrokerClient
+// and shared with the SEMPv1 client by pointer). It must be non-nil.
+//
 // sem is the broker's shared in-flight semaphore and must be non-nil
 // (resilience.New panics otherwise); see semp.NewBrokerClient, which shares
 // one semaphore across both protocol clients of a broker.
-func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, sem resilience.Semaphore) (*HTTPClient, error) {
+func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, sem resilience.Semaphore, authn auth.Authenticator) (*HTTPClient, error) {
+	// Programmer-error precondition: there is no runtime path that yields a
+	// nil Authenticator here. semp.NewBrokerClient is the single production
+	// caller and constructs authn via auth.NewAuthenticator before this call.
+	// A nil at this point means someone ignored an error from NewAuthenticator
+	// or passed nil explicitly — both bugs in calling code, not recoverable
+	// runtime conditions. Panicking surfaces the bug at construction time
+	// instead of as a delayed nil-pointer panic deep inside AddAuth at request
+	// time.
+	if authn == nil {
+		panic("sempv2.NewHTTPClient: nil authenticator")
+	}
 	transport := resilience.NewTunedTransport(brokerCfg, sempCfg)
 
 	jar, err := resilience.NewSafeCookieJar()
@@ -108,9 +124,9 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, s
 	baseURL := strings.TrimSuffix(brokerCfg.URL, "/")
 
 	return &HTTPClient{
-		sender:  resilience.New(httpClient, jar, sempCfg, brokerCfg.Auth, baseURL, sem),
-		baseURL: baseURL,
-		authCfg: brokerCfg.Auth,
+		sender:        resilience.New(httpClient, jar, sempCfg, brokerCfg.Auth, baseURL, sem),
+		baseURL:       baseURL,
+		authenticator: authn,
 	}, nil
 }
 
@@ -133,7 +149,7 @@ func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string
 		return nil, fmt.Errorf("building request for %s: %w", op.ID, err)
 	}
 
-	if err := auth.AddAuth(ctx, req, c.authCfg); err != nil {
+	if err := c.authenticator.AddAuth(ctx, req); err != nil {
 		return nil, fmt.Errorf("applying auth for %s: %w", op.ID, err)
 	}
 
