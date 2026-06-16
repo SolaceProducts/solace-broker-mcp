@@ -1,0 +1,10 @@
+{
+  "_doc": "F4: sustained 100 msg/s on a known topic. In practice $BROKER's default VPN sees much more traffic because F5 publishes 100 msg/s and F6 floods at 3000 msg/s into the same VPN. Range widened accordingly — assertion is now 'the model reports a positive rate in a sensible operational range', not 'F4's contribution in isolation'. The narrower F4-only test belongs at the tool layer, not the LLM layer.",
+  "prompt": "How fast is $BROKER receiving messages right now?",
+  "expected_tool": "mcp__solace-broker__get-message-rates",
+  "numeric_match": {
+    "regex": "[0-9,]+(\\.[0-9]+)?\\s*(msg|message|/s|per second)",
+    "min": 50,
+    "max": 10000
+  }
+}

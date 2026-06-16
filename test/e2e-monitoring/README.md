@@ -5,6 +5,11 @@ listing, RDP discovery, client/subscriber state, message-rate and discard
 counters). Runs two Solace brokers in containers, provisions baseline + extended
 fixtures, and drives both SEMP-layer and messaging-layer broker state.
 
+An LLM-driven eval harness that exercises the same fixtures through
+natural-language prompts via the Claude Code CLI lives under
+[`llm/`](llm/README.md). It's non-gating and runs manually via the
+[`LLM E2E Eval`](../../.github/workflows/llm-eval.yml) workflow.
+
 ## Quickstart
 
 Three commands for a full test run:

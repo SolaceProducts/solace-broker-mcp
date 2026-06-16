@@ -32,7 +32,16 @@ SEMP_CONFIG="$BROKER_A_SEMP_CONFIG"
 
 # ── MCP server settings ─────────────────────────────────────────────────────
 MCP_PORT="${MCP_PORT:-9090}"
-MCP_URL="http://localhost:$MCP_PORT"
+# Honor a pre-exported MCP_URL so callers (e.g. test/e2e-monitoring/llm/
+# config.env) can target a non-default MCP server without losing the
+# value to this assignment. Internal callers that don't pre-set it still
+# get the local-docker default.
+MCP_URL="${MCP_URL:-http://localhost:$MCP_PORT}"
+# Normalize to a base URL: callers append path suffixes (`/mcp`, `/health`,
+# etc.), so strip a trailing slash and a trailing `/mcp` to keep
+# `MCP_URL=http://x:9090/mcp` overrides from yielding `…/mcp/mcp`.
+MCP_URL="${MCP_URL%/}"
+MCP_URL="${MCP_URL%/mcp}"
 MCP_SERVER_PID=""
 # Server stdout/stderr is captured here (under gitignored bin/) so a startup
 # or runtime failure is diagnosable — locally and in CI — instead of vanishing

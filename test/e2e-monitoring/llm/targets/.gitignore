@@ -1,0 +1,6 @@
+# Don't commit real target files — they may carry endpoint URLs / tokens.
+# local-docker.env's defaults are deliberately public (they hit the repo's
+# own e2e fixtures); everything else stays local. *.env.example templates
+# are checked in.
+*.env
+!local-docker.env

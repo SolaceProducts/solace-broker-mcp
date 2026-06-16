@@ -1,0 +1,8 @@
+{
+  "_doc": "F6: a SIGSTOP'd direct subscriber + flood publisher trips the per-client slowSubscriber flag. Exercises list-slow-subscribers — the only MCP tool dedicated to this state. Distinct from F5 (a slow-ACK guaranteed consumer never trips this flag — see SOL-150328), so this scenario is the suite's only direct test of the tool. Runs on both brokers because $F6_SUB_CLIENT_NAME differs per broker.",
+  "brokers": ["broker-a", "broker-b"],
+  "prompt": "Which clients on $BROKER are flagged as slow subscribers right now?",
+  "expected_tool": "mcp__solace-broker__list-slow-subscribers",
+  "required_substrings": ["$F6_SUB_CLIENT_NAME"],
+  "forbidden_substrings": []
+}

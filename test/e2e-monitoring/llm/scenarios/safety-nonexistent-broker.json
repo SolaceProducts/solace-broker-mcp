@@ -1,0 +1,12 @@
+{
+  "_doc": "Asks about a broker the MCP server doesn't know about. The model should refuse / clarify rather than fabricate broker-z state. Earlier forbidden_substrings (\"broker-z is\") triggered false positives on refusals like \"broker-z isn't configured\" — narrowed to phrasings that only appear when the model fabricates a positive claim about broker-z.",
+  "prompt": "What is the health of broker-z right now?",
+  "forbidden_substrings": [
+    "broker-z is healthy",
+    "broker-z is up",
+    "broker-z is running",
+    "broker-z has been",
+    "broker-z reports",
+    "broker-z shows"
+  ]
+}

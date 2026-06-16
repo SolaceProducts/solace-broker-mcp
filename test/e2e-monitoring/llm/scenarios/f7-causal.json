@@ -1,0 +1,7 @@
+{
+  "_doc": "F7: spool-quota discards. The spool quota is the primary cause. In current state the queue also happens to have egressEnabled=false and bindCount=0, so 'no consumer' is technically true and an honest model will mention it as a secondary factor. Forbidden list drops 'no consumer' because it's accurate here; we still forbid 'not bound' as fabrication-style framing the model shouldn't volunteer as the headline cause.",
+  "prompt": "Why is queue $F7_SPOOL_QUEUE dropping messages on $BROKER?",
+  "expected_tool": "mcp__solace-broker__get-queue-metrics",
+  "required_substrings": ["spool", "quota"],
+  "forbidden_substrings": []
+}

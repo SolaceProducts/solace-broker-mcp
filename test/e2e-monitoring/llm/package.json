@@ -1,0 +1,9 @@
+{
+  "name": "solace-broker-mcp-llm-eval",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Manifest declaring the Claude Code CLI version this LLM e2e suite runs against. Brings the dependency under the repo's existing FOSSA scan; the PINNED_CLAUDE_VERSION in config.env reads the version from this file so there is one source of truth that Renovate can bump.",
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.153"
+  }
+}

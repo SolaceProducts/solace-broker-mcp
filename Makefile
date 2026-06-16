@@ -13,6 +13,8 @@ IMAGE       ?= solace-broker-mcp
 IMAGE_TAG   ?= dev
 E2E_DIR     := test/e2e-basic-mcp
 COMPOSE_E2E := docker compose -f $(E2E_DIR)/docker-compose.yml
+E2E_MON_DIR := test/e2e-monitoring
+COMPOSE_E2E_MON := docker compose -f $(E2E_MON_DIR)/docker-compose.yml
 
 .DEFAULT_GOAL := help
 
@@ -78,6 +80,25 @@ e2e-all: ## Full E2E cycle: brokers up, wait for health, run suite, tear down (t
 	$(COMPOSE_E2E) up -d
 	@. $(E2E_DIR)/helpers.sh && wait_for_all_brokers 120 && bash $(E2E_DIR)/run-all.sh; t=$$?; \
 	$(COMPOSE_E2E) down -v || echo "WARN: e2e-all teardown failed"; \
+	exit $$t
+
+.PHONY: e2e-monitoring-up
+e2e-monitoring-up: ## Start brokers for the e2e-monitoring suite (use `e2e-monitoring-all` for the full cycle)
+	$(COMPOSE_E2E_MON) up -d
+
+.PHONY: e2e-monitoring
+e2e-monitoring: ## Run the e2e-monitoring suite (requires brokers from `make e2e-monitoring-up`)
+	bash $(E2E_MON_DIR)/test-monitoring-tools.sh
+
+.PHONY: e2e-monitoring-down
+e2e-monitoring-down: ## Stop and remove e2e-monitoring brokers
+	$(COMPOSE_E2E_MON) down -v
+
+.PHONY: e2e-monitoring-all
+e2e-monitoring-all: ## Full e2e-monitoring cycle: brokers up, wait for health, run suite, tear down (tears down even on failure)
+	$(COMPOSE_E2E_MON) up -d
+	@. $(E2E_MON_DIR)/helpers.sh && wait_for_all_brokers 120 && bash $(E2E_MON_DIR)/test-monitoring-tools.sh; t=$$?; \
+	$(COMPOSE_E2E_MON) down -v || echo "WARN: e2e-monitoring-all teardown failed"; \
 	exit $$t
 
 # ── Docker ───────────────────────────────────────────────────────────────────
