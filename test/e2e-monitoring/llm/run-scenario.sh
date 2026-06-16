@@ -238,7 +238,7 @@ CLAUDE_ARGS=(
 # assertions; the compact formatter below summarizes each event into one
 # short line for the user (raw stream-json is unreadable for 11 scenarios).
 JQ_PRETTY='
-def info(msg): "[0;36m[INFO][0m  " + msg;
+def info(msg): "\u001b[0;36m[INFO]\u001b[0m  " + msg;
 if .type == "assistant" then
   .message.content[] | (
     if .type == "tool_use" then

@@ -77,6 +77,14 @@ precheck() {
         echo -e "${YELLOW}[HINT]${NC}  run ./setup-fixtures.sh to bring up brokers + MCP server" >&2
         return 1
     fi
+    # Complete the MCP handshake before issuing tool calls. The spec requires
+    # `notifications/initialized` after `initialize`; this server tolerates
+    # skipping it today, but a stricter server (or a future tightening) would
+    # reject the tools/call below and surface as a confusing precheck fail.
+    curl -s --max-time 5 "${MCP_HEADERS[@]}" -H "Mcp-Session-Id: $sid" \
+        -X POST "$MCP_URL/mcp" \
+        -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+        >/dev/null 2>&1 || true
     local req_id=2
     for broker in $PRECHECK_BROKERS; do
         local ver raw

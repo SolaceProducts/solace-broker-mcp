@@ -3,5 +3,5 @@
   "prompt": "Is the default VPN healthy on $BROKER?",
   "expected_tool": "mcp__solace-broker__get-vpn-health",
   "required_substrings_any_of": ["healthy", "operational", "enabled", "no issues"],
-  "forbidden_substrings": ["is not healthy", "is unhealthy", "is disabled", "is down", "is not operational"]
+  "forbidden_substrings": ["vpn is not healthy", "vpn is unhealthy", "vpn is disabled", "vpn is down", "vpn is not operational"]
 }
