@@ -167,6 +167,7 @@ func allowedClientAuthMethods() []string {
 // OAuth grant-type strings sent to the IdP token endpoint (Hop 2). V1 supports
 // only RFC 8693 token exchange; Entra OBO (jwt-bearer) is tracked as follow-up.
 const (
+	// #nosec G101 -- public RFC 8693 grant-type URN, not a credential.
 	GrantTypeTokenExchange = "urn:ietf:params:oauth:grant-type:token-exchange" // RFC 8693
 )
 
