@@ -2250,12 +2250,14 @@ brokers:
 
 // TestLoadConfig_BrokerOAuth covers the validator surface for the new
 // broker_oauth block. The schema is forward-compatible: it accepts the
-// fields, validates their shape, and applies defaults to the discriminator
-// fields. The OAuth runtime is not wired in V1, so the validator additionally
-// rejects any broker with auth.mode: oauth at startup with an actionable
-// error. The rejection runs after schema validation, so per-broker oauth
-// fields can be field-tested by operators today even though the runtime is
-// not yet available.
+// fields and validates their shape. The client-auth method is chosen by the
+// populated sub-block under mcp_server_client_auth (discriminated union, no
+// separate discriminator field), and the V1 schema requires grant_type and
+// audience_parameter_name explicitly — no defaults. The OAuth runtime is not
+// wired in V1, so the validator additionally rejects any broker with
+// auth.mode: oauth at startup with an actionable error. The rejection runs
+// after schema validation, so per-broker oauth fields can be field-tested by
+// operators today even though the runtime is not yet available.
 //
 // See docs/superpowers/plans/2026-06-14-sol-150070-implementation-decisions.md
 // for the rationale (no feature flag, rejection removed when T6 lands).

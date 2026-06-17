@@ -491,9 +491,11 @@ mcp_client_auth:
 broker_oauth:
   idp_token_url: "https://idp.example.com/oauth/token"
   mcp_server_client_id: "mcp-server"
-  client_auth_method: client_secret_basic                       # optional, default
-  client_secret: "${MCP_CLIENT_SECRET}"
-  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange" # optional, default
+  mcp_server_client_auth:                                       # discriminated union: populate exactly one sub-block
+    client_secret_basic:
+      secret: "${MCP_CLIENT_SECRET}"
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange" # required, no default
+  audience_parameter_name: "audience"                           # required, no default — one of: audience | scope | resource
 
 brokers:
   prod-east:
@@ -514,9 +516,9 @@ brokers:
 |---|---|---|---|---|
 | `idp_token_url` | yes | — | non-empty, valid URL, `http`/`https` scheme | operator-supplied (Discovery deferred to a follow-up) |
 | `mcp_server_client_id` | yes | — | non-empty | operator-supplied (the MCP server's client_id registered at the IdP) |
-| `client_auth_method` | no | `client_secret_basic` | must be in `validClientAuthMethods` (`{client_secret_basic, client_secret_post}`); other registered methods rejected with "not yet supported in this version" | operator decides based on their IdP's requirements |
-| `client_secret` | yes (when method is `client_secret_*`) | — | non-empty after `${VAR}` substitution | operator-supplied (the MCP server's client_secret at the IdP) |
-| `grant_type` | no | `urn:ietf:params:oauth:grant-type:token-exchange` | must be the single supported value; other grant-types rejected with "not yet supported in this version" | operator-supplied or default; future expansion lets Entra/etc. work |
+| `mcp_server_client_auth` | yes | — | discriminated union: exactly one sub-block populated. V1 supports `client_secret_basic` and `client_secret_post`, both of which require a non-empty `secret:` (after `${VAR}` substitution). Other registered methods are rejected with "not yet supported in this version" | operator-supplied (method chosen per the IdP's requirements) |
+| `grant_type` | yes | — (no default) | must be in the V1 allowlist (`urn:ietf:params:oauth:grant-type:token-exchange`); other grant-types rejected with "not yet supported in this version" | operator-supplied; the allowlist expands as future grant-types (e.g. Entra OBO's `jwt-bearer`) gain runtime support |
+| `audience_parameter_name` | yes | — (no default) | must be one of `audience`, `scope`, `resource` | operator-supplied (the parameter name the IdP expects to carry the per-broker audience identifier in the token-exchange request) |
 
 #### Per-broker (`brokers.<alias>.auth`, when `mode: oauth`)
 
@@ -920,7 +922,7 @@ The validator's contract for `mcp_server_client_auth`:
 
 2. **The populated sub-block's required fields must be non-empty.** For V1, both `client_secret_basic` and `client_secret_post` require `secret:` non-empty (after `${VAR}` substitution). Each sub-block owns its own field validation in the validator; new sub-blocks added by follow-up tickets add their own field-validation rules.
 
-3. **The populated sub-block's name is the method.** Runtime code asks the config for the method via `cfg.BrokerOAuth.ClientAuth.Method()` (a Go-side helper) and dispatches on the returned string.
+3. **The populated sub-block's name is the method.** Inside the config package, the validator uses an internal `selectedMethod()` helper that returns the populated method name (along with any structural errors). Runtime code added by follow-up tickets dispatches on the populated sub-block directly — there is no public `Method()` accessor on the struct (see the "Follow-up cleanup: removing `Method()`" section later in this doc).
 
 ### Discriminator fields no longer have defaults
 

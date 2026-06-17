@@ -154,9 +154,9 @@ func (b BrokerClientAuth) selectedMethod() (string, []error) {
 	}
 }
 
-// allowedMethods returns every method name the schema knows about, in stable
-// order. Used in error messages to tell operators which sub-blocks the
-// schema accepts. The list grows when follow-up tickets add new methods.
+// allowedClientAuthMethods returns every method name the schema knows about,
+// in stable order. Used in error messages to tell operators which sub-blocks
+// the schema accepts. The list grows when follow-up tickets add new methods.
 func allowedClientAuthMethods() []string {
 	return []string{
 		ClientAuthMethodSecretBasic,
