@@ -109,7 +109,7 @@ All deployment methods use the same YAML config file and `.env` credentials file
 **1. Create a config file** (`broker-config.yaml`):
 
 ```yaml
-client_auth:
+mcp_client_auth:
   mode: disabled        # no client auth — local development only
 
 brokers:
@@ -121,7 +121,7 @@ brokers:
       password: "${BROKER_PASSWORD}"
 ```
 
-`client_auth.mode: disabled` skips client authentication entirely — only use this for local development. For production, set `client_auth.mode: oauth` and provide `issuer`, `audience`, and `resource_url`. A third mode, `static`, accepts a fixed bearer token for local development with realistic auth flow. See [Authentication](docs/authentication.md) for full setup instructions.
+`mcp_client_auth.mode: disabled` skips client authentication entirely — only use this for local development. For production, set `mcp_client_auth.mode: oauth` and provide `issuer`, `audience`, and `resource_url`. A third mode, `static`, accepts a fixed bearer token for local development with realistic auth flow. See [Authentication](docs/authentication.md) for full setup instructions.
 
 **Audit-log identity.** In `oauth` and `static` modes, every tool-invocation log line carries the caller's `sub`, `iss`, `client_id`, and `jti` claims (the latter three appear as `<absent>` when the IdP does not issue them). A separate sentinel `<verifier-bug>` is reserved for an internal coding error — it should never appear in production, and its presence indicates a bug in the server's claim-extraction code, not in the caller's token; alert on it. The request still completes and the audit line is still written. In `disabled` mode no client auth runs, so log lines carry no identity fields at all. **`disabled` and `static` modes are not real audit trails**: `disabled` lines have no attribution, and `static` lines attribute every invocation to the hardcoded `dev-user`. Use `oauth` mode for any deployment whose audit logs need to answer "who ran what tool against which broker?"
 
@@ -239,11 +239,11 @@ List queues in the default VPN on the dev broker
 
 ### Connect from Solace Agent Mesh (SAM)
 
-Once the MCP server is running, configure it to accept a static dev token (local development only). For production, use `client_auth.mode: oauth` — see [Authentication](docs/authentication.md).
+Once the MCP server is running, configure it to accept a static dev token (local development only). For production, use `mcp_client_auth.mode: oauth` — see [Authentication](docs/authentication.md).
 
 ```yaml
 # broker-config.yaml
-client_auth:
+mcp_client_auth:
   mode: static
   dev_token: "sam-mcp-dev-token-local-only"
 ```
@@ -307,7 +307,7 @@ To enable HTTPS, add both `tls_cert_file` and `tls_key_file` to the YAML config:
 
 ```yaml
 port: 9090
-client_auth:
+mcp_client_auth:
   mode: disabled
 tls_cert_file: "/etc/certs/server.pem"
 tls_key_file: "/etc/certs/server-key.pem"

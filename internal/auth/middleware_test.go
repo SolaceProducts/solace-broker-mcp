@@ -73,7 +73,7 @@ func TestMain(m *testing.M) {
 func Test_NewAuthMiddleware_Disabled(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Port: 9090,
-		ClientAuth: config.ClientAuthConfig{
+		MCPClientAuth: config.MCPClientAuthConfig{
 			Mode: config.AuthModeDisabled,
 		},
 	}
@@ -114,7 +114,7 @@ func Test_StaticDevToken(t *testing.T) {
 
 	cfg := &config.ServerConfig{
 		Port: 9090,
-		ClientAuth: config.ClientAuthConfig{
+		MCPClientAuth: config.MCPClientAuthConfig{
 			Mode:        config.AuthModeStatic,
 			DevToken:    validToken,
 			ResourceURL: "http://localhost:9090/mcp",
@@ -199,7 +199,7 @@ func Test_StaticDevToken(t *testing.T) {
 func Test_StaticMode_AllowsMissingIssuerAndAudience(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Port: 9090,
-		ClientAuth: config.ClientAuthConfig{
+		MCPClientAuth: config.MCPClientAuthConfig{
 			Mode:     config.AuthModeStatic,
 			DevToken: "dev-token",
 			Issuer:   "", // Missing but OK in dev mode
@@ -318,7 +318,7 @@ func Test_ValidJWTToken(t *testing.T) {
 
 	cfg := &config.ServerConfig{
 		Port: 9090,
-		ClientAuth: config.ClientAuthConfig{
+		MCPClientAuth: config.MCPClientAuthConfig{
 			Mode:     config.AuthModeOAuth,
 			Issuer:   mock.issuer,
 			Audience: mock.audience,
@@ -356,7 +356,7 @@ func Test_ExpiredJWTToken(t *testing.T) {
 
 	cfg := &config.ServerConfig{
 		Port: 9090,
-		ClientAuth: config.ClientAuthConfig{
+		MCPClientAuth: config.MCPClientAuthConfig{
 			Mode:     config.AuthModeOAuth,
 			Issuer:   mock.issuer,
 			Audience: mock.audience,
@@ -394,7 +394,7 @@ func Test_WrongJWTAudience(t *testing.T) {
 
 	cfg := &config.ServerConfig{
 		Port: 9090,
-		ClientAuth: config.ClientAuthConfig{
+		MCPClientAuth: config.MCPClientAuthConfig{
 			Mode:     config.AuthModeOAuth,
 			Issuer:   mock.issuer,
 			Audience: mock.audience,
@@ -432,7 +432,7 @@ func Test_WrongJWTIssuer(t *testing.T) {
 
 	cfg := &config.ServerConfig{
 		Port: 9090,
-		ClientAuth: config.ClientAuthConfig{
+		MCPClientAuth: config.MCPClientAuthConfig{
 			Mode:     config.AuthModeOAuth,
 			Issuer:   mock.issuer,
 			Audience: mock.audience,
@@ -470,7 +470,7 @@ func Test_InvalidJWTSignature(t *testing.T) {
 
 	cfg := &config.ServerConfig{
 		Port: 9090,
-		ClientAuth: config.ClientAuthConfig{
+		MCPClientAuth: config.MCPClientAuthConfig{
 			Mode:     config.AuthModeOAuth,
 			Issuer:   mock.issuer,
 			Audience: mock.audience,
@@ -509,7 +509,7 @@ func Test_NoJWTToken(t *testing.T) {
 
 	cfg := &config.ServerConfig{
 		Port: 9090,
-		ClientAuth: config.ClientAuthConfig{
+		MCPClientAuth: config.MCPClientAuthConfig{
 			Mode:        config.AuthModeOAuth,
 			Issuer:      mock.issuer,
 			Audience:    mock.audience,
@@ -542,7 +542,7 @@ func Test_NoJWTToken(t *testing.T) {
 // the OIDC provider is unreachable during initialization in production mode.
 func Test_OIDCProviderUnreachable(t *testing.T) {
 	cfg := &config.ServerConfig{
-		ClientAuth: config.ClientAuthConfig{
+		MCPClientAuth: config.MCPClientAuthConfig{
 			Mode:     config.AuthModeOAuth,
 			Issuer:   "https://nonexistent.example.com",
 			Audience: "test",
@@ -606,7 +606,7 @@ func Test_OIDCJWKSRefreshTimeout(t *testing.T) {
 	audience := "test-audience"
 	cfg := &config.ServerConfig{
 		Port: 9090,
-		ClientAuth: config.ClientAuthConfig{
+		MCPClientAuth: config.MCPClientAuthConfig{
 			Mode:     config.AuthModeOAuth,
 			Issuer:   issuer,
 			Audience: audience,
@@ -717,7 +717,7 @@ func Test_OIDCJWKSRefreshTimeout_SSLCertFile(t *testing.T) {
 	audience := "test-audience"
 	cfg := &config.ServerConfig{
 		Port: 9090,
-		ClientAuth: config.ClientAuthConfig{
+		MCPClientAuth: config.MCPClientAuthConfig{
 			Mode:     config.AuthModeOAuth,
 			Issuer:   issuer,
 			Audience: audience,
@@ -787,7 +787,7 @@ func Test_WWWAuthenticateHeaderFormat(t *testing.T) {
 			}
 			cfg := &config.ServerConfig{
 				Port: tt.port,
-				ClientAuth: config.ClientAuthConfig{
+				MCPClientAuth: config.MCPClientAuthConfig{
 					Mode:        tt.mode,
 					DevToken:    tt.devToken,
 					ResourceURL: fmt.Sprintf("%s://localhost:%d/mcp", scheme, tt.port),
@@ -800,8 +800,8 @@ func Test_WWWAuthenticateHeaderFormat(t *testing.T) {
 			if tt.mode == config.AuthModeOAuth {
 				mock := newMockOIDCServer(t)
 				defer mock.close()
-				cfg.ClientAuth.Issuer = mock.issuer
-				cfg.ClientAuth.Audience = mock.audience
+				cfg.MCPClientAuth.Issuer = mock.issuer
+				cfg.MCPClientAuth.Audience = mock.audience
 			}
 
 			middleware, err := NewAuthMiddleware(cfg, dummyHandler)
@@ -888,7 +888,7 @@ func Test_ProtectedResourceMetadata(t *testing.T) {
 			}
 			cfg := &config.ServerConfig{
 				Port: tt.port,
-				ClientAuth: config.ClientAuthConfig{
+				MCPClientAuth: config.MCPClientAuthConfig{
 					Mode:        tt.mode,
 					DevToken:    tt.devToken,
 					Issuer:      tt.issuer,
@@ -946,21 +946,21 @@ func Test_ProtectedResourceMetadata(t *testing.T) {
 }
 
 func Test_PRMHandler_Disabled(t *testing.T) {
-	cfg := &config.ServerConfig{ClientAuth: config.ClientAuthConfig{Mode: config.AuthModeDisabled}}
+	cfg := &config.ServerConfig{MCPClientAuth: config.MCPClientAuthConfig{Mode: config.AuthModeDisabled}}
 	if h := NewProtectedResourceMetadataHandler(cfg); h != nil {
 		t.Errorf("expected nil PRM handler for mode: disabled, got %T", h)
 	}
 }
 
 func Test_PRMHandler_Static(t *testing.T) {
-	cfg := &config.ServerConfig{ClientAuth: config.ClientAuthConfig{Mode: config.AuthModeStatic, DevToken: "x"}}
+	cfg := &config.ServerConfig{MCPClientAuth: config.MCPClientAuthConfig{Mode: config.AuthModeStatic, DevToken: "x"}}
 	if h := NewProtectedResourceMetadataHandler(cfg); h != nil {
 		t.Errorf("expected nil PRM handler for mode: static, got %T", h)
 	}
 }
 
 func Test_PRMHandler_OAuth(t *testing.T) {
-	cfg := &config.ServerConfig{ClientAuth: config.ClientAuthConfig{
+	cfg := &config.ServerConfig{MCPClientAuth: config.MCPClientAuthConfig{
 		Mode:        config.AuthModeOAuth,
 		Issuer:      "https://idp.example.com",
 		Audience:    "mcp",
@@ -981,7 +981,7 @@ func Test_OIDCVerifier_PopulatesTokenInfo_AllClaims(t *testing.T) {
 	defer mock.close()
 
 	cfg := &config.ServerConfig{
-		ClientAuth: config.ClientAuthConfig{
+		MCPClientAuth: config.MCPClientAuthConfig{
 			Mode:     config.AuthModeOAuth,
 			Issuer:   mock.issuer,
 			Audience: mock.audience,
@@ -1031,7 +1031,7 @@ func Test_OIDCVerifier_MissingOptionalClaims_LeftEmptyString(t *testing.T) {
 	defer mock.close()
 
 	cfg := &config.ServerConfig{
-		ClientAuth: config.ClientAuthConfig{
+		MCPClientAuth: config.MCPClientAuthConfig{
 			Mode:     config.AuthModeOAuth,
 			Issuer:   mock.issuer,
 			Audience: mock.audience,
@@ -1142,7 +1142,7 @@ func Test_oidcHTTPClient_SSLCertFile(t *testing.T) {
 
 	// Integration: prove the cert actually enables TLS to the self-signed server.
 	cfg := &config.ServerConfig{
-		ClientAuth: config.ClientAuthConfig{
+		MCPClientAuth: config.MCPClientAuthConfig{
 			Mode:     config.AuthModeOAuth,
 			Issuer:   tlsServer.URL,
 			Audience: "test",

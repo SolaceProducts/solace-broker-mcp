@@ -38,19 +38,19 @@ import (
 // Do not move this into middleware. See SOL-149989 design spec at
 // docs/superpowers/specs/2026-05-20-client-auth-mode-design.md.
 func LogStartupBanner(cfg *config.ServerConfig) {
-	switch cfg.ClientAuth.Mode {
+	switch cfg.MCPClientAuth.Mode {
 	case config.AuthModeDisabled:
 		slog.Warn(disabledBanner)
 	case config.AuthModeStatic:
 		slog.Warn(staticBanner)
 	case config.AuthModeOAuth:
-		slog.Info("client auth: OAuth/OIDC", slog.String("issuer", cfg.ClientAuth.Issuer))
+		slog.Info("MCP client auth: OAuth/OIDC", slog.String("issuer", cfg.MCPClientAuth.Issuer))
 	}
 }
 
 const disabledBanner = `
 ============================================================
-  INSECURE MODE: client_auth.mode = disabled
+  INSECURE MODE: mcp_client_auth.mode = disabled
   Client → MCP server auth is OFF. Broker auth is unaffected.
   Development mode — NOT FOR PRODUCTION USE.
   Tool-invocation logs from this run are NOT a valid audit trail.
@@ -58,7 +58,7 @@ const disabledBanner = `
 
 const staticBanner = `
 ============================================================
-  INSECURE MODE: client_auth.mode = static
+  INSECURE MODE: mcp_client_auth.mode = static
   Client → MCP server auth uses a static dev token. Broker auth is unaffected.
   Development mode — NOT FOR PRODUCTION USE.
   Tool-invocation logs from this run are NOT a valid audit trail.

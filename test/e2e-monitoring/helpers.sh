@@ -296,7 +296,7 @@ write_config() {
     # Generate broker config from .env-derived values so ports stay in sync.
     # Credentials use ${VAR_NAME} substitution — resolved by the server via ENV_FILE.
     cat > "$config_file" <<EOF
-client_auth:
+mcp_client_auth:
   mode: static
   dev_token: "\${MCP_DEV_TOKEN}"
 

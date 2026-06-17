@@ -27,7 +27,7 @@ The Solace Event Broker MCP Server supports three authentication modes for MCP c
 2. Set the following values:
 
 ```yaml
-client_auth:
+mcp_client_auth:
   mode: disabled
 ```
 
@@ -52,7 +52,7 @@ No authentication headers required.
 - A prominent banner appears in the logs at startup:
   ```
   ============================================================
-    INSECURE MODE: client_auth.mode = disabled
+    INSECURE MODE: mcp_client_auth.mode = disabled
     Client authentication is DISABLED.
     All MCP requests pass through without verification.
     This is development mode — NOT FOR PRODUCTION USE.
@@ -76,7 +76,7 @@ No authentication headers required.
 3. Set the following values:
 
 ```yaml
-client_auth:
+mcp_client_auth:
   mode: static
   dev_token: "my-secret-dev-token-123"
 ```
@@ -84,7 +84,7 @@ client_auth:
 **Note:** For better security, use an environment variable instead of hardcoding the token:
 
 ```yaml
-client_auth:
+mcp_client_auth:
   mode: static
   dev_token: "${DEV_TOKEN}"
 ```
@@ -132,7 +132,7 @@ Authorization: Bearer my-secret-dev-token-123
 - A prominent banner appears in the logs at startup:
   ```
   ============================================================
-    INSECURE MODE: client_auth.mode = static
+    INSECURE MODE: mcp_client_auth.mode = static
     Authentication uses a shared static dev token.
     This is development mode — NOT FOR PRODUCTION USE.
   ============================================================
@@ -220,7 +220,7 @@ Create user accounts in the IdP. These users log in via the browser window that 
 Open `broker-config.yaml` and set:
 
 ```yaml
-client_auth:
+mcp_client_auth:
   mode: oauth
   issuer: "https://your-idp.example.com/realms/your-realm"
   audience: "solace-mcp-server"
@@ -239,7 +239,7 @@ The `audience` value must exactly match the value configured in step 1.2. Set `r
 
 > **Keycloak:** The issuer URL follows the pattern `https://<host>:<port>/realms/<realm-name>`. For example, Keycloak running locally on port 8443 with TLS and a realm named `solace`:
 > ```yaml
-> client_auth:
+> mcp_client_auth:
 >   mode: oauth
 >   issuer: "https://localhost:8443/realms/solace"
 >   audience: "solace-mcp-server"
@@ -331,7 +331,7 @@ This is expected for `mode: disabled` and `mode: static`. The banner is the deli
 
 - Verify that your client is sending the `Authorization: Bearer <token>` header
 - Confirm the token value matches exactly what's in your configuration (no extra spaces or quotes)
-- Check that `client_auth.mode: static` and `client_auth.dev_token` are both set in your config
+- Check that `mcp_client_auth.mode: static` and `mcp_client_auth.dev_token` are both set in your config
 
 ### Token Does Not Load
 

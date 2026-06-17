@@ -12,7 +12,7 @@ This guide shows how to integrate this MCP server with SAM. For general MCP supp
 **1. Set a static token on the MCP server** — `broker-config.yaml`:
 
 ```yaml
-client_auth:
+mcp_client_auth:
   mode: static
   dev_token: "sam-mcp-dev-token-local-only"  # change for your environment
 ```

@@ -394,7 +394,7 @@ func TestReady_GET_OneBrokerUnreachable(t *testing.T) {
 func probeTestConfig(t *testing.T, brokers ...[2]string) *config.ServerConfig {
 	t.Helper()
 	var yamlContent string
-	yamlContent += "client_auth:\n  mode: disabled\nbrokers:\n"
+	yamlContent += "mcp_client_auth:\n  mode: disabled\nbrokers:\n"
 	for _, broker := range brokers {
 		alias, brokerURL := broker[0], broker[1]
 		yamlContent += fmt.Sprintf("  %s:\n    url: %s\n    auth:\n      mode: basic\n      username: admin\n      password: secret\n", alias, brokerURL)
