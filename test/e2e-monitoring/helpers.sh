@@ -783,26 +783,37 @@ respawn_slow_subscriber_on() {
     local sub_logfile="$BIN_DIR/broker-driver-f6-sub-$broker_letter.log"
     log_info "  client $client_name absent on $label (http=400) — broker reaped it; respawning subscriber"
     # The old subscriber is still alive locally (SIGSTOPped, just disconnected
-    # from the broker). SIGCONT then SIGTERM so it actually exits.
+    # from the broker). Reap it BEFORE reusing the pidfile path: the driver
+    # has `defer os.Remove(*pidfile)` (see broker-driver/slow_subscriber.go),
+    # so a late-exiting old process would otherwise delete the new pidfile we
+    # rename into the canonical path.
     if [ -f "$sub_pidfile" ]; then
         local old_pid
         old_pid=$(<"$sub_pidfile")
+        # Best-effort identity check before signalling: if the PID has been
+        # recycled to an unrelated process, /proc/$pid/exe won't resolve to
+        # our broker-driver binary. Readlink fails silently for processes we
+        # don't own; on mismatch we skip signalling rather than risk killing
+        # something else.
         if kill -0 "$old_pid" 2>/dev/null; then
-            kill -CONT "$old_pid" 2>/dev/null || true
-            kill -TERM "$old_pid" 2>/dev/null || true
+            local exe
+            exe=$(readlink "/proc/$old_pid/exe" 2>/dev/null || true)
+            if [ -z "$exe" ] || [ "$exe" = "$BIN_DIR/broker-driver" ]; then
+                # SIGCONT first so a SIGSTOPped process can actually receive
+                # the SIGTERM kill_gracefully sends; otherwise TERM is held
+                # pending until CONT and the 5s grace window burns to SIGKILL.
+                kill -CONT "$old_pid" 2>/dev/null || true
+                kill_gracefully "$old_pid"
+            else
+                log_warn "  PID $old_pid in $sub_pidfile is not broker-driver (exe=$exe); skipping signal"
+            fi
         fi
+        rm -f "$sub_pidfile"
     fi
-    # Spawn the replacement under a temp pidfile path that also matches the
-    # broker-driver-f*.pid glob (so stop_broker_drivers reaps it if the script
-    # dies mid-respawn), then atomically rename onto the canonical pidfile
-    # only after readiness. Leaving the old pidfile in place until then keeps
-    # the glob non-empty throughout — stop_broker_drivers' kill -0 check
-    # skips the dead old PID safely.
-    local new_sub_pidfile="${sub_pidfile%.pid}-new.pid"
-    rm -f "$new_sub_pidfile"
-    _spawn_slow_direct_subscriber "$broker_letter" "$client_name" "$new_sub_pidfile" "$sub_logfile" \
+    # Old process is fully exited and the canonical pidfile is gone, so the
+    # replacement can write directly onto it — no temp-path + rename dance.
+    _spawn_slow_direct_subscriber "$broker_letter" "$client_name" "$sub_pidfile" "$sub_logfile" \
         "$label" "broker-driver slow-direct-subscriber (respawn)" || return 1
-    mv -f "$new_sub_pidfile" "$sub_pidfile"
     kill -STOP "$(<"$sub_pidfile")"
     log_info "  SIGSTOP sent to respawned slow-subscriber (PID=$(<"$sub_pidfile")) on $label"
 }
