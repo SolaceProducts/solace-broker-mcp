@@ -701,9 +701,10 @@ F6_FLAG_TIMEOUT=60     # max seconds to wait for slowSubscriber to flip true
 # Self-healing: if the broker reports the client absent (HTTP 400 NOT_FOUND),
 # the SIGSTOPped subscriber was reaped by the broker (keepalive timeout or
 # egress threshold) — respawn it once and keep polling. The `recreated` flag
-# allows exactly one respawn per call so a second reap fails fast instead of
-# looping. Respawning resets `attempt` so the new subscriber gets its own
-# full F6_FLAG_TIMEOUT budget to flip the flag.
+# allows exactly one respawn per call to prevent an endless respawn loop; a
+# second reap falls back to normal once-per-second polling and ultimately
+# times out via the existing log_fail. Respawning resets `attempt` so the new
+# subscriber gets its own full F6_FLAG_TIMEOUT budget to flip the flag.
 #   $1 broker_url   $2 label   $3 client_name   $4 broker_letter ("a"|"b")
 wait_for_slow_subscriber() {
     local broker_url="$1"
@@ -786,7 +787,7 @@ respawn_slow_subscriber_on() {
     # from the broker). Reap it BEFORE reusing the pidfile path: the driver
     # has `defer os.Remove(*pidfile)` (see broker-driver/slow_subscriber.go),
     # so a late-exiting old process would otherwise delete the new pidfile we
-    # rename into the canonical path.
+    # write to the canonical path.
     if [ -f "$sub_pidfile" ]; then
         local old_pid
         old_pid=$(<"$sub_pidfile")
