@@ -252,11 +252,12 @@ verify_slow_subscriber_state() {
     local label="$1"
     local broker_url="$2"
     local client_name="$3"
-    wait_for_slow_subscriber "$broker_url" "$label" "$client_name" || return 1
+    local broker_letter="$4"
+    wait_for_slow_subscriber "$broker_url" "$label" "$client_name" "$broker_letter" || return 1
 }
 
-test_f6_slow_subscriber_a() { verify_slow_subscriber_state "broker-a" "$BROKER_A_URL" "$F6_SUB_CLIENT_NAME_A"; }
-test_f6_slow_subscriber_b() { verify_slow_subscriber_state "broker-b" "$BROKER_B_URL" "$F6_SUB_CLIENT_NAME_B"; }
+test_f6_slow_subscriber_a() { verify_slow_subscriber_state "broker-a" "$BROKER_A_URL" "$F6_SUB_CLIENT_NAME_A" "a"; }
+test_f6_slow_subscriber_b() { verify_slow_subscriber_state "broker-b" "$BROKER_B_URL" "$F6_SUB_CLIENT_NAME_B" "b"; }
 
 # ── AC 8 — F7-spool discards ─────────────────────────────────────────────────
 
