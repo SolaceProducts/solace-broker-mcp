@@ -308,6 +308,56 @@ brokers:
 	}
 }
 
+// TestLoadConfig_EnableWriteTools_DefaultOff pins the secure-by-default
+// behavior: omitting enable_write_tools from the YAML must leave it false
+// so destructive tools are not registered unless explicitly enabled.
+func TestLoadConfig_EnableWriteTools_DefaultOff(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  dev:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.EnableWriteTools {
+		t.Error("EnableWriteTools must default to false when omitted")
+	}
+}
+
+// TestLoadConfig_EnableWriteTools_ExplicitTrue verifies the flag reads
+// through from YAML when set.
+func TestLoadConfig_EnableWriteTools_ExplicitTrue(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+enable_write_tools: true
+brokers:
+  dev:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.EnableWriteTools {
+		t.Error("EnableWriteTools must be true when explicitly set in YAML")
+	}
+}
+
 func TestLoadConfig_InvalidAuthMethod(t *testing.T) {
 	// "kerberos" is not in validAuthModes (basic, bearer, oauth) — the
 	// validator must reject it with an "unsupported auth mode" error.

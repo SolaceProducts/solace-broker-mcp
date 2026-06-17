@@ -447,7 +447,9 @@ func main() {
 	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor)
 	registerSEMPv1Tools(mgr)
 	registerSEMPv2Tools(mgr)
-	tools.RegisterWithServer(mgr, server, pool)
+	tools.RegisterWithServer(mgr, server, pool, cfg.EnableWriteTools)
+	slog.Info("tool registration complete",
+		slog.Bool("enable_write_tools", cfg.EnableWriteTools))
 
 	// list-brokers is a discovery tool registered directly on the MCP
 	// server (it doesn't need broker resolution or the ToolManager pipeline).

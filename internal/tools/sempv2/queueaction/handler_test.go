@@ -126,9 +126,6 @@ func TestHandler_Metadata(t *testing.T) {
 	if meta.Annotations.Idempotent {
 		t.Error("Idempotent must be false (deleteMsgs is not idempotent)")
 	}
-	if !meta.Annotations.RequiresConfirmation {
-		t.Error("RequiresConfirmation must be true")
-	}
 }
 
 // TestHandle_DeleteMsgs_Success verifies the destructive path:

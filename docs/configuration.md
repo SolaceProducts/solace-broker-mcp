@@ -38,6 +38,7 @@ The server resolves variables at startup. The `.env` file loads automatically be
 | `tls_cert_file` | — | none | Path to TLS certificate (PEM). |
 | `tls_key_file` | — | none | Path to TLS private key (PEM). |
 | `log_level` | — | `info` | Log verbosity: `debug`, `info`, `warn`, `error`. |
+| `enable_write_tools` | — | `false` | When `true`, register destructive tools (those with `Annotations.Destructive = true`, e.g. `execute-queue-action`, `execute-client-action`). When `false`, those tools are skipped at registration and never appear in `tools/list`. Secure-by-default for trial / dev deployments. |
 
 **TLS:** Provide both `tls_cert_file` and `tls_key_file` together — providing only one is a startup error. When both are set, the server starts with HTTPS; when neither is set, plain HTTP.
 

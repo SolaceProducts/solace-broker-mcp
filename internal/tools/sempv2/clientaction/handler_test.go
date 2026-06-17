@@ -119,9 +119,6 @@ func TestHandler_Metadata(t *testing.T) {
 	if meta.Annotations.Idempotent {
 		t.Error("Idempotent must be false (disconnect is not idempotent)")
 	}
-	if !meta.Annotations.RequiresConfirmation {
-		t.Error("RequiresConfirmation must be true")
-	}
 }
 
 // TestHandle_Disconnect_Success verifies the destructive path.

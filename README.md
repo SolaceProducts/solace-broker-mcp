@@ -84,7 +84,7 @@ The server exposes read-only tools grouped by what they inspect, plus a small se
 | Clients | `list-clients`, `get-client-details`, `list-client-subscriptions`, `list-slow-subscribers` | List connections, inspect per-client rates and discards, list subscriptions, filter for slow-subscriber-flagged clients |
 | REST Delivery Points | `list-rdps`, `get-rdp-status` | List RDPs; inspect bindings, REST consumers, and last failure reason |
 | Discards | `get-discard-stats`, `list-queue-discards` | Broker-wide and per-VPN discard aggregates; per-queue discard counters |
-| Actions | `execute-queue-action`, `execute-client-action` | Execute queue actions (`deleteMsgs`, `clearStats`) and client actions (`disconnect`, `clearStats`); destructive variants instruct the LLM to obtain user confirmation before invocation |
+| Actions | `execute-queue-action`, `execute-client-action` | Execute queue actions (`deleteMsgs`, `clearStats`) and client actions (`disconnect`, `clearStats`); destructive variants instruct the LLM to obtain user confirmation before invocation. **Gated behind `enable_write_tools: true` in the config — default off; not registered in `tools/list` when disabled.** |
 
 ## Guides
 

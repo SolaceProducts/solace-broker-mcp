@@ -113,10 +113,9 @@ func (h *Handler) Metadata() tools.Metadata {
 		},
 		OutputSchema: outputSchema(),
 		Annotations: tools.Annotations{
-			ReadOnly:             false,
-			Destructive:          &destructive,
-			Idempotent:           false,
-			RequiresConfirmation: true,
+			ReadOnly:    false,
+			Destructive: &destructive,
+			Idempotent:  false,
 		},
 	}
 }

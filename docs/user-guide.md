@@ -154,6 +154,8 @@ The server exposes 17 read-only tools plus 2 action tools (19 total). All broker
 
 These tools modify broker state via the SEMPv2 action API. They are marked destructive via the MCP `destructiveHint` annotation, and their descriptions instruct the calling LLM to obtain explicit user confirmation — restating the target (broker, VPN, queue or client) and the effect — before invocation. The tool manager also logs a WARNING line on every destructive invocation for audit.
 
+**Disabled by default.** Action tools are gated behind the server-level `enable_write_tools` flag. With the default (`false`) they are not registered with the MCP server and do not appear in `tools/list` — clients see only the read-only tool set. Set `enable_write_tools: true` in the YAML config to expose them. This is independent of `client_auth.mode`: an authenticated client still cannot invoke these tools when the flag is off, because the server never registers them.
+
 | Tool | Description |
 |---|---|
 | `execute-queue-action` | Execute an action on a queue: `deleteMsgs` (irreversible — permanently deletes all spooled messages) or `clearStats` (resets statistics counters; non-destructive). Use after operator-confirmed intent to drain a queue or reset stats during testing. |
