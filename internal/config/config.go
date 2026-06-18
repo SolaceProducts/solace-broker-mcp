@@ -48,10 +48,182 @@ type ServerConfig struct {
 	SEMP          SEMPConfig          // SEMP client settings
 	Port          int                 // HTTP port the MCP server listens on
 	LogLevel      string              // slog level name: "debug", "info", "warn", "error"
-	MCPClientAuth MCPClientAuthConfig // authentication config for mcp client to server interactions
+	MCPClientAuth MCPClientAuthConfig // Hop 1: authentication config for mcp client to server interactions
+	BrokerOAuth   *BrokerOAuthConfig  // Hop 2: global OAuth IdP coordinates for broker token exchange (nil unless any broker uses auth.mode: oauth)
 	TLSCertFile   string              // path to TLS certificate file (optional, enables HTTPS)
 	TLSKeyFile    string              // path to TLS private key file (optional, requires TLSCertFile)
 }
+
+// BrokerOAuthConfig holds the global OAuth IdP coordinates the MCP server uses
+// to obtain broker tokens via RFC 8693 token exchange. One IdP per deployment.
+//
+// ClientAuth is a discriminated union: the populated sub-block names the
+// authentication method the MCP server uses with the IdP. See BrokerClientAuth
+// and its sub-blocks (ClientSecretAuth, future PrivateKeyJWTAuth, etc.). Exactly
+// one sub-block must be populated; the validator enforces this structurally.
+//
+// GrantType and AudienceParam are required string fields validated against
+// their respective allowlists (validGrantTypes, validAudienceParams). No
+// defaults — operators acknowledge each protocol choice explicitly.
+type BrokerOAuthConfig struct {
+	TokenURL      string           `yaml:"idp_token_endpoint"`      // IdP token endpoint (token-exchange POST target). YAML key uses "endpoint" to match the OAuth spec and OIDC Discovery JSON (`token_endpoint`); Go field keeps `URL` to match the language convention (golang.org/x/oauth2 also names its field TokenURL).
+	ClientID      string           `yaml:"mcp_server_client_id"`    // MCP server's client_id registered at the IdP
+	ClientAuth    BrokerClientAuth `yaml:"mcp_server_client_auth"`  // discriminated union; exactly one sub-block populated
+	GrantType     string           `yaml:"grant_type"`              // required; must be in validGrantTypes
+	AudienceParam string           `yaml:"audience_parameter_name"` // required; one of {audience, scope, resource}
+}
+
+// BrokerClientAuth is a discriminated union of OAuth client authentication
+// methods the MCP server uses with the IdP at the token endpoint. Exactly
+// one sub-block must be populated. The populated sub-block's name is the
+// method (matching the IANA "OAuth Token Endpoint Authentication Methods"
+// registry values). Each sub-block contains only the fields its method
+// needs — the schema structurally enforces the method/credential coupling.
+//
+// V1 ships ClientSecretBasic and ClientSecretPost. Future methods land as
+// new sibling sub-blocks added by follow-up tickets, purely additive:
+//
+//	PrivateKeyJWT *PrivateKeyJWTAuth `yaml:"private_key_jwt,omitempty"`
+//	TLSClientAuth *TLSClientAuthConfig `yaml:"tls_client_auth,omitempty"`
+//
+// Existing operator configs using ClientSecretBasic continue to parse
+// unchanged when new sub-blocks are added — additive evolution preserves
+// the V1 schema contract forever.
+type BrokerClientAuth struct {
+	ClientSecretBasic *ClientSecretAuth `yaml:"client_secret_basic,omitempty"` // RFC 6749 §2.3 — Basic header
+	ClientSecretPost  *ClientSecretAuth `yaml:"client_secret_post,omitempty"`  // RFC 6749 §2.3 — form body
+}
+
+// ClientSecretAuth holds the shared secret for the client_secret_basic and
+// client_secret_post methods. Both methods use the same configuration shape
+// (one secret string); they differ only on the wire (which OAuth parameter
+// carries the secret), which the runtime selects from the populated
+// sub-block's name.
+type ClientSecretAuth struct {
+	Secret string `yaml:"secret"` // MCP server's client_secret (use ${VAR_NAME} for env var)
+}
+
+// Client authentication method identifiers. These are the standard IANA "OAuth
+// Token Endpoint Authentication Methods" strings, used both as the YAML keys
+// for the BrokerClientAuth sub-blocks and as the return value of Method().
+const (
+	ClientAuthMethodSecretBasic = "client_secret_basic" // RFC 6749 §2.3 — Basic header
+	ClientAuthMethodSecretPost  = "client_secret_post"  // RFC 6749 §2.3 — form body
+)
+
+// selectedMethod inspects which client_auth sub-block is populated and
+// returns the method name when exactly one is set. If zero or multiple
+// sub-blocks are populated, it returns "" along with operator-facing
+// errors describing the structural violation.
+//
+// Used by:
+//   - validateBrokerClientAuth — propagates errors to the validator chain.
+//   - BrokerOAuthConfig.LogValue / BrokerClientAuth.LogValue — discards
+//     errors; logs "" when the union is in a non-canonical state (validation
+//     surfaces the real problem separately).
+//
+// Adding a new method requires three coordinated edits: a new field on
+// BrokerClientAuth, a new if-block here adding it to `populated`, and a
+// new entry in allowedClientAuthMethods.
+func (b BrokerClientAuth) selectedMethod() (string, []error) {
+	var populated []string
+	if b.ClientSecretBasic != nil {
+		populated = append(populated, ClientAuthMethodSecretBasic)
+	}
+	if b.ClientSecretPost != nil {
+		populated = append(populated, ClientAuthMethodSecretPost)
+	}
+	switch len(populated) {
+	case 0:
+		return "", []error{fmt.Errorf(
+			"broker_oauth.mcp_server_client_auth: at least one method sub-block is required (one of %v)",
+			allowedClientAuthMethods())}
+	case 1:
+		return populated[0], nil
+	default:
+		return "", []error{fmt.Errorf(
+			"broker_oauth.mcp_server_client_auth: only one method sub-block may be configured at a time; got %v",
+			populated)}
+	}
+}
+
+// allowedClientAuthMethods returns every method name the schema knows about,
+// in stable order. Used in error messages to tell operators which sub-blocks
+// the schema accepts. The list grows when follow-up tickets add new methods.
+func allowedClientAuthMethods() []string {
+	return []string{
+		ClientAuthMethodSecretBasic,
+		ClientAuthMethodSecretPost,
+	}
+}
+
+// OAuth grant-type strings sent to the IdP token endpoint (Hop 2). V1 supports
+// only RFC 8693 token exchange; Entra OBO (jwt-bearer) is tracked as follow-up.
+const (
+	// #nosec G101 -- public RFC 8693 grant-type URN, not a credential.
+	GrantTypeTokenExchange = "urn:ietf:params:oauth:grant-type:token-exchange" // RFC 8693
+)
+
+// validGrantTypes is the allowlist of grant types this version implements.
+// Add an entry here when runtime support for the new grant type lands.
+var validGrantTypes = []string{
+	GrantTypeTokenExchange,
+}
+
+// audience_param values: which OAuth request parameter carries the per-broker
+// audience value on the wire. The runtime uses this to drive its request-body
+// composition per IdP family (RFC 8693 / Entra OBO / RFC 8707). The schema
+// allowlist is open to all three even though V1 runtime support is limited;
+// see the decisions doc for why "schema-flexible, validator-strict" applies.
+const (
+	AudienceParamAudience = "audience" // RFC 8693 default
+	AudienceParamScope    = "scope"    // Entra OBO style (audience prefixed onto each scope)
+	AudienceParamResource = "resource" // RFC 8707 resource indicator style
+)
+
+// validAudienceParams is the allowlist of audience-carrying parameter names
+// accepted by the schema. Membership here does not imply V1 runtime support
+// for that wire format — see the decisions doc.
+var validAudienceParams = []string{
+	AudienceParamAudience,
+	AudienceParamScope,
+	AudienceParamResource,
+}
+
+// LogValue implements slog.LogValuer for BrokerOAuthConfig. It exposes the
+// non-secret fields and the resolved authentication method but deliberately
+// excludes the secret material in nested ClientAuth sub-blocks. See
+// docs/internal/secure-logging-rules.md Rule 2.
+//
+// LogValue is best-effort: any structural error from selectedMethod is
+// discarded here because the validator surfaces it separately. If the union
+// is in a non-canonical state at log time, the method field is logged as "".
+func (b BrokerOAuthConfig) LogValue() slog.Value {
+	method, _ := b.ClientAuth.selectedMethod()
+	return slog.GroupValue(
+		slog.String("idp_token_endpoint", sanitizeURLString(b.TokenURL)),
+		slog.String("mcp_server_client_id", b.ClientID),
+		slog.String("mcp_server_client_auth_method", method),
+		slog.String("grant_type", b.GrantType),
+		slog.String("audience_parameter_name", b.AudienceParam),
+	)
+}
+
+// LogValue for BrokerClientAuth — exposes only the resolved method name, never
+// the credential bytes inside the populated sub-block. Defense in depth.
+func (b BrokerClientAuth) LogValue() slog.Value {
+	method, _ := b.selectedMethod()
+	return slog.GroupValue(
+		slog.String("method", method),
+	)
+}
+
+// LogValue for ClientSecretAuth — the entire purpose of this type is to hold a
+// secret; expose nothing. Defense in depth.
+func (c ClientSecretAuth) LogValue() slog.Value {
+	return slog.GroupValue()
+}
+
 
 // Broker returns the broker config for alias (compared case-insensitively),
 // and a bool indicating whether the alias is known.
@@ -111,8 +283,7 @@ const (
 )
 
 // validAuthModes is the allowlist of supported auth modes for broker connections.
-// Add new modes (e.g., "oauth") here — validate() and error messages derive from this slice.
-var validAuthModes = []string{AuthModeBasic, AuthModeBearer}
+var validAuthModes = []string{AuthModeBasic, AuthModeBearer, AuthModeOAuth}
 
 // Client authentication modes (Hop 1: MCP client → MCP server). Choosing one
 // of these is mandatory; there is no default. Operational profile (https://
@@ -131,10 +302,17 @@ var validAuthClientModes = []string{AuthModeDisabled, AuthModeStatic, AuthModeOA
 
 // AuthConfig holds the authentication credentials for a broker connection.
 type AuthConfig struct {
-	Mode     string `yaml:"mode"`     // "basic" or "bearer"
+	Mode     string `yaml:"mode"`     // "basic", "bearer", or "oauth"
 	Username string `yaml:"username"` // basic auth username (use ${VAR_NAME} for env var)
 	Password string `yaml:"password"` // basic auth password (use ${VAR_NAME} for env var)
 	Token    string `yaml:"token"`    // bearer token (use ${VAR_NAME} for env var)
+
+	// OAuth-mode fields. Used when Mode == "oauth"; ignored otherwise. Both
+	// are optional in V1 — the broker's OAuth profile may have audience or
+	// scope validation disabled. The runtime omits the field from the
+	// token-exchange request when empty.
+	Audience string   `yaml:"audience,omitempty"`
+	Scopes   []string `yaml:"scopes,omitempty"`
 }
 
 // LogValue implements slog.LogValuer for AuthConfig. It exposes only the auth
@@ -212,6 +390,7 @@ type yamlConfig struct {
 	LogLevel        string                   `yaml:"log_level"`
 	DevelopmentMode *bool                    `yaml:"development_mode"` // *bool so we can detect presence-in-YAML (deprecation warning); the value is ignored
 	MCPClientAuth   MCPClientAuthConfig      `yaml:"mcp_client_auth"`
+	BrokerOAuth     *BrokerOAuthConfig       `yaml:"broker_oauth"`
 	TLSCertFile     string                   `yaml:"tls_cert_file"`
 	TLSKeyFile      string                   `yaml:"tls_key_file"`
 }
@@ -318,6 +497,7 @@ func LoadConfig(path string) (*ServerConfig, error) {
 		Port:          raw.Port,
 		LogLevel:      raw.LogLevel,
 		MCPClientAuth: raw.MCPClientAuth,
+		BrokerOAuth:   raw.BrokerOAuth,
 		TLSCertFile:   raw.TLSCertFile,
 		TLSKeyFile:    raw.TLSKeyFile,
 	}
@@ -605,9 +785,17 @@ func validate(cfg *ServerConfig) error {
 	errs = append(errs, aliasErrs...)
 	cfg.brokers = canonical
 
+	// oauthBrokerCount tracks how many brokers were configured with the not-
+	// yet-supported oauth mode. Used at end of validate() to emit the loud
+	// operator-facing banner separately from the joined error.
+	oauthBrokerCount := 0
+
 	for _, lower := range slices.Sorted(maps.Keys(cfg.brokers)) {
 		broker := cfg.brokers[lower]
 		errs = append(errs, validateBroker(broker, cfg.IsProductionMode())...)
+		if broker.Auth.Mode == AuthModeOAuth {
+			oauthBrokerCount++
+		}
 		// Surface insecure_skip_verify=true at startup so operators see it
 		// in triage logs without scraping per-request SEMP-client warns.
 		if cfg.IsProductionMode() && broker.InsecureSkipVerify {
@@ -696,7 +884,70 @@ func validate(cfg *ServerConfig) error {
 		errs = append(errs, fmt.Errorf("both tls_cert_file and tls_key_file must be provided together; got cert=%q, key=%q", cfg.TLSCertFile, cfg.TLSKeyFile))
 	}
 
+	// Hop 2 OAuth IdP block. Runs after per-broker validation so any oauth-mode
+	// broker has already been examined; this validator inspects the global
+	// block and its relationship with the brokers' auth modes.
+	errs = append(errs, validateBrokerOAuthConfig(cfg)...)
+
+	// If any broker tripped the V1 OAuth runtime guard, emit the standalone
+	// banner so the per-broker rejection error is not buried inside the joined
+	// errors blob. The per-broker errors stay in the joined error so operators
+	// still get the broker names; this banner is the loud headline.
+	if oauthBrokerCount > 0 {
+		logOAuthNotSupportedBanner(oauthBrokerCount)
+	}
+
 	return errors.Join(errs...)
+}
+
+// oauthNotSupportedBanner is the V1 not-yet-supported guard headline. It is
+// logged when any broker is configured with auth.mode: oauth, which the
+// schema accepts but the V1 runtime cannot use. %s is filled with "1 broker"
+// or "N brokers" (conditional plural).
+//
+// The banner is logged via slog.Error as a SEPARATE log line from the joined
+// validation error — operators see the headline first, then the comprehensive
+// error with broker names. Wording is operator-language: what we detected,
+// why it failed, what to do today, and that the feature is planned.
+//
+// LIFECYCLE — REMOVE WHEN THE OAUTH RUNTIME LANDS:
+// This banner, the validateBroker check that produces oauthBrokerCount, and
+// the logOAuthNotSupportedBanner call site in validate() are all part of the
+// same temporary guard. They exist only because V1 ships the broker_oauth
+// schema without the runtime that consumes it. When the runtime sub-ticket
+// (SOL-150070 follow-ups: token exchanger + oauth Authenticator + cookie
+// jar) lands and the per-broker oauth flow actually works, delete all three
+// together.
+const oauthNotSupportedBanner = `
+============================================================
+  This version of the MCP server does not yet support
+  authenticating to brokers using OAuth.
+
+  Your config has %s with auth.mode: oauth, which the server
+  recognizes but cannot use. The server will not start.
+
+  To proceed today, change those brokers to use auth.mode:
+  basic (username + password) or auth.mode: bearer (static
+  token). Both are fully supported in this version.
+
+  OAuth broker authentication is planned in a future release.
+============================================================`
+
+// logOAuthNotSupportedBanner emits the operator-facing headline when oauth
+// brokers are detected during validation. n is the count of affected brokers;
+// the function formats the count with the correct singular/plural form.
+//
+// This is a *headline* — it intentionally does not list broker names. The
+// joined validation error (returned by validate() and logged by main) carries
+// the per-broker rejection messages with the broker aliases, so operators
+// have the names there. Keeping the headline broker-name-free means the
+// banner scales: 1 affected broker or 47, the headline stays the same shape.
+func logOAuthNotSupportedBanner(n int) {
+	noun := "1 broker"
+	if n != 1 {
+		noun = fmt.Sprintf("%d brokers", n)
+	}
+	slog.Error(fmt.Sprintf(oauthNotSupportedBanner, noun))
 }
 
 // validateBroker returns all validation errors for a single broker. Credential
@@ -742,10 +993,186 @@ func validateBroker(broker *BrokerConfig, productionMode bool) []error {
 		if strings.TrimSpace(broker.Auth.Token) == "" {
 			errs = append(errs, fmt.Errorf("broker %q: token is required for bearer auth", alias))
 		}
+	case AuthModeOAuth:
+		// Per-broker OAuth params. The global broker_oauth block (IdP
+		// coordinates) is validated separately in validateBrokerOAuthConfig.
+		//
+		// Audience is optional in V1: the broker's OAuth profile may have
+		// audience validation disabled (resourceServerValidateAudienceEnabled
+		// is configurable per the SEMP v2 OauthProfile). The runtime omits the
+		// audience parameter from the token-exchange request when empty.
+		//
+		// Scopes is optional, but reject whitespace-only entries that would
+		// silently produce a malformed scope value in the token-exchange
+		// request.
+		for i, s := range broker.Auth.Scopes {
+			if strings.TrimSpace(s) == "" {
+				errs = append(errs, fmt.Errorf("broker %q: auth.scopes[%d] is empty or whitespace-only", alias, i))
+			}
+		}
+
+		// RUNTIME GUARD: schema accepts oauth mode (and the OAuth fields
+		// above) so configs that target the eventual OAuth runtime can be
+		// staged and validated structurally today. But the OAuth runtime
+		// (NewAuthenticator's oauth case, the token cache, the exchanger,
+		// the per-broker request composer) does not exist in this version.
+		// Reject at startup with an actionable message rather than letting
+		// the failure land on the first SEMP request. This block will be
+		// removed by the sub-ticket that wires the OAuth runtime (T6).
+		// See docs/superpowers/plans/oauth-token-exchange/SOL-150796-T2-config-schema.md
+		// for the rationale (no feature flag, removed when runtime lands).
+		errs = append(errs, fmt.Errorf(
+			"broker %q: auth.mode %q is recognized but not yet supported in this version; "+
+				"use basic or bearer for now",
+			alias, AuthModeOAuth))
 	}
 
 	return errs
 }
+
+// validateBrokerOAuthConfig validates the global broker_oauth block and its
+// relationship with per-broker auth modes. Levels 1–3 of the validation tiers
+// defined in architecture-plan.md Decision 9: structural (block presence vs.
+// usage), required-field (idp_token_endpoint/mcp_server_client_id/client_secret non-empty), and
+// semantic (idp_token_endpoint parses as URL, https enforced in production). No live
+// IdP probing — that is deliberately deferred per Decision 9.
+//
+// Three cross-block rules are enforced:
+//
+//  1. If any broker has auth.mode == AuthModeOAuth and no broker_oauth block
+//     is configured, return an error (the runtime path will need IdP
+//     coordinates to perform token exchange).
+//  2. If the broker_oauth block is configured but no broker uses oauth mode,
+//     log a WARN. This is operator-visible noise, not a fatal error — the
+//     block may be staged in advance of switching brokers to oauth mode.
+//  3. If the broker_oauth block is configured, every field is required and
+//     idp_token_endpoint must be a valid URL (https in production mode).
+//
+// Returns the accumulated errors as a slice for the caller (validate) to
+// errors.Join.
+func validateBrokerOAuthConfig(cfg *ServerConfig) []error {
+	var errs []error
+
+	anyBrokerUsesOAuth := false
+	for _, b := range cfg.brokers {
+		if b.Auth.Mode == AuthModeOAuth {
+			anyBrokerUsesOAuth = true
+			break
+		}
+	}
+
+	if cfg.BrokerOAuth == nil {
+		if anyBrokerUsesOAuth {
+			errs = append(errs, fmt.Errorf("broker_oauth block is required when any broker uses auth.mode: %q", AuthModeOAuth))
+		}
+		return errs
+	}
+
+	if !anyBrokerUsesOAuth {
+		slog.Warn("broker_oauth provided but no broker uses oauth mode",
+			slog.Int("broker_count", len(cfg.brokers)))
+	}
+
+	// Universal required fields — needed regardless of which mcp_server_client_auth
+	// method is configured.
+	if cfg.BrokerOAuth.TokenURL == "" {
+		errs = append(errs, fmt.Errorf("broker_oauth.idp_token_endpoint is required"))
+	} else if err := validateBrokerURL(cfg.BrokerOAuth.TokenURL, cfg.IsProductionMode()); err != nil {
+		errs = append(errs, fmt.Errorf("broker_oauth.idp_token_endpoint: %w", err))
+	}
+	if cfg.BrokerOAuth.ClientID == "" {
+		errs = append(errs, fmt.Errorf("broker_oauth.mcp_server_client_id is required"))
+	}
+
+	// grant_type and audience_param: required, no defaults. Operators must
+	// explicitly acknowledge each protocol choice — see the decisions doc for
+	// the rationale on removing defaults from these discriminator fields.
+	if cfg.BrokerOAuth.GrantType == "" {
+		errs = append(errs, fmt.Errorf("broker_oauth.grant_type is required (must be one of %v)", validGrantTypes))
+	} else if !slices.Contains(validGrantTypes, cfg.BrokerOAuth.GrantType) {
+		errs = append(errs, fmt.Errorf(
+			"broker_oauth.grant_type %q is not supported in this version (must be one of %v); "+
+				"other grant types (e.g. Entra OBO's jwt-bearer) are tracked as follow-up work",
+			cfg.BrokerOAuth.GrantType, validGrantTypes))
+	}
+
+	if cfg.BrokerOAuth.AudienceParam == "" {
+		errs = append(errs, fmt.Errorf("broker_oauth.audience_parameter_name is required (must be one of %v)", validAudienceParams))
+	} else if !slices.Contains(validAudienceParams, cfg.BrokerOAuth.AudienceParam) {
+		errs = append(errs, fmt.Errorf(
+			"broker_oauth.audience_parameter_name %q is invalid (must be one of %v)",
+			cfg.BrokerOAuth.AudienceParam, validAudienceParams))
+	}
+
+	// mcp_server_client_auth is a discriminated union: exactly one sub-block populated.
+	// The populated sub-block names the method (one of the IANA "OAuth Token
+	// Endpoint Authentication Methods" strings); the sub-block's required
+	// fields are checked below in the per-method validators.
+	errs = append(errs, validateBrokerClientAuth(cfg.BrokerOAuth.ClientAuth)...)
+
+	return errs
+}
+
+// validateBrokerClientAuth enforces the discriminated-union shape of the
+// mcp_server_client_auth block: exactly one sub-block populated, with that sub-block's
+// required fields non-empty.
+//
+// Adding a new client-auth method (e.g., private_key_jwt) to V1's supported
+// set MUST come with three coordinated edits in the same PR:
+//  1. A new field on BrokerClientAuth pointing at the new method's struct.
+//  2. An entry in selectedMethod's if-chain and in allowedClientAuthMethods
+//     so the "exactly one populated" rule and error messages recognize the
+//     new method.
+//  3. A per-method validation case below that enforces the new method's
+//     required fields. The default branch catches the case where the
+//     schema knows about the method but the validator does not.
+func validateBrokerClientAuth(cfg BrokerClientAuth) []error {
+	method, errs := cfg.selectedMethod()
+	if len(errs) > 0 {
+		return errs
+	}
+
+	// Per-method required-field validation. Each case enforces only its own
+	// method's fields. Methods that share a struct shape (client_secret_basic
+	// and client_secret_post both use ClientSecretAuth) share a case.
+	switch method {
+	case ClientAuthMethodSecretBasic:
+		return validateClientSecretAuth(ClientAuthMethodSecretBasic, cfg.ClientSecretBasic)
+	case ClientAuthMethodSecretPost:
+		return validateClientSecretAuth(ClientAuthMethodSecretPost, cfg.ClientSecretPost)
+	default:
+		// Reaches here only if a new method was added to BrokerClientAuth's
+		// fields (and to selectedMethod's if-chain) but the validator switch
+		// above was not extended with a matching case. The schema knows about
+		// the method; the validator does not.
+		return []error{fmt.Errorf(
+			"broker_oauth.mcp_server_client_auth: method %q is declared in the schema "+
+				"but has no validator implementation in this build",
+			method)}
+	}
+}
+
+// validateClientSecretAuth enforces the shared "secret must be non-empty" rule
+// for both client_secret_basic and client_secret_post. The method name is
+// passed so the error message names the operator's chosen sub-block.
+func validateClientSecretAuth(method string, cfg *ClientSecretAuth) []error {
+	var errs []error
+	// cfg is non-nil here because the caller (validateBrokerClientAuth) only
+	// dispatches to this validator when the populated-methods check confirms
+	// the sub-block was set. Belt-and-suspenders: handle nil cleanly anyway.
+	if cfg == nil {
+		errs = append(errs, fmt.Errorf("broker_oauth.mcp_server_client_auth.%s: sub-block is empty", method))
+		return errs
+	}
+	if cfg.Secret == "" {
+		errs = append(errs, fmt.Errorf(
+			"broker_oauth.mcp_server_client_auth.%s.secret is required (empty after ${VAR} substitution if used)",
+			method))
+	}
+	return errs
+}
+
+
 
 // ValidatePort checks that a port number is within the valid TCP range (1-65535).
 // Used by both validate() and applyEnvOverrides() to avoid duplicating the range check.

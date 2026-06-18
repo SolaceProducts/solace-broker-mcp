@@ -309,6 +309,8 @@ brokers:
 }
 
 func TestLoadConfig_InvalidAuthMethod(t *testing.T) {
+	// "kerberos" is not in validAuthModes (basic, bearer, oauth) — the
+	// validator must reject it with an "unsupported auth mode" error.
 	yaml := `
 mcp_client_auth:
   mode: static
@@ -317,7 +319,7 @@ brokers:
   dev:
     url: "https://broker.example.com:1943"
     auth:
-      mode: oauth
+      mode: kerberos
       username: admin
       password: secret
 `
@@ -1365,7 +1367,7 @@ brokers:
   broker2:
     url: "http://localhost:8080"
     auth:
-      mode: oauth
+      mode: kerberos
 `
 	_, err := LoadConfig(writeTemp(t, yaml))
 	if err == nil {
@@ -1378,7 +1380,7 @@ brokers:
 		`broker "broker1": url is required`,
 		`broker "broker1": username is required`,
 		`broker "broker1": password is required`,
-		`broker "broker2": unsupported auth mode "oauth"`,
+		`broker "broker2": unsupported auth mode "kerberos"`,
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(msg, want) {
@@ -2262,5 +2264,802 @@ brokers:
 	}
 	if !strings.Contains(err.Error(), "empty") {
 		t.Errorf("error should explain the entry is empty, got: %v", err)
+	}
+}
+func TestLoadConfig_NoBrokerOAuthBlock_BackwardsCompat(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  legacy:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+  legacy-bearer:
+    url: "http://broker2.example.com:8080"
+    auth:
+      mode: bearer
+      token: abc123
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("backwards-compat YAML must load cleanly, got error: %v", err)
+	}
+	if cfg.BrokerOAuth != nil {
+		t.Errorf("expected BrokerOAuth to be nil when block absent, got %+v", cfg.BrokerOAuth)
+	}
+}
+
+// TestLoadConfig_BrokerOAuth covers the validator surface for the new
+// broker_oauth block. The schema is forward-compatible: it accepts the
+// fields and validates their shape. The client-auth method is chosen by the
+// populated sub-block under mcp_server_client_auth (discriminated union, no
+// separate discriminator field), and the V1 schema requires grant_type and
+// audience_parameter_name explicitly — no defaults. The OAuth runtime is not
+// wired in V1, so the validator additionally rejects any broker with
+// auth.mode: oauth at startup with an actionable error. The rejection runs
+// after schema validation, so per-broker oauth fields can be field-tested by
+// operators today even though the runtime is not yet available.
+//
+// See docs/superpowers/plans/oauth-token-exchange/SOL-150796-T2-config-schema.md
+// for the rationale (no feature flag, rejection removed when T6 lands).
+func TestLoadConfig_BrokerOAuth(t *testing.T) {
+	// All cases run with mcp_client_auth.mode: static (so the deployment is in
+	// dev mode and http:// broker URLs are accepted). Production-mode
+	// behavior (https:// enforcement on token_url) is exercised in a
+	// separate test below.
+	const clientAuthBlock = `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+`
+	// A complete, validator-passing broker_oauth block. Cases that exercise a
+	// specific failure mode start from this canonical shape and remove or
+	// tweak the offending field, so it's clear what the case is testing.
+	const validBrokerOAuth = `
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+`
+	// The rejection error every oauth-mode-broker config surfaces in V1.
+	const notYetSupported = `auth.mode "oauth" is recognized but not yet supported in this version`
+
+	cases := []struct {
+		name             string
+		yaml             string
+		wantErr          bool
+		wantErrSubstring string
+	}{
+		{
+			// Schema is valid; the V1 runtime guard fires the rejection.
+			name: "schema-valid oauth broker config — rejected by V1 runtime guard",
+			yaml: clientAuthBlock + validBrokerOAuth + `
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: oauth
+      audience: solace-broker-prod
+      scopes:
+        - "semp:read"
+`,
+			wantErr:          true,
+			wantErrSubstring: notYetSupported,
+		},
+		{
+			// Schema validation fires before the runtime rejection — both
+			// errors surface via errors.Join, so the operator sees the
+			// configuration shape problem AND the V1 limit.
+			name: "broker uses oauth mode but no broker_oauth block — block-required error",
+			yaml: clientAuthBlock + `
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: oauth
+      audience: solace-broker-prod
+`,
+			wantErr:          true,
+			wantErrSubstring: "broker_oauth block is required when any broker uses auth.mode",
+		},
+		{
+			name: "broker_oauth.idp_token_endpoint missing",
+			yaml: clientAuthBlock + `
+broker_oauth:
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: oauth
+      audience: solace-broker-prod
+`,
+			wantErr:          true,
+			wantErrSubstring: "broker_oauth.idp_token_endpoint is required",
+		},
+		{
+			name: "broker_oauth.mcp_server_client_id missing",
+			yaml: clientAuthBlock + `
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: oauth
+      audience: solace-broker-prod
+`,
+			wantErr:          true,
+			wantErrSubstring: "broker_oauth.mcp_server_client_id is required",
+		},
+		{
+			// Discriminated union: no sub-block under client_auth at all.
+			name: "broker_oauth.mcp_server_client_auth empty (no sub-block)",
+			yaml: clientAuthBlock + `
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth: {}
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: oauth
+      audience: solace-broker-prod
+`,
+			wantErr:          true,
+			wantErrSubstring: "broker_oauth.mcp_server_client_auth: at least one method sub-block is required",
+		},
+		{
+			// Discriminated union: multiple sub-blocks populated.
+			name: "broker_oauth.mcp_server_client_auth has two methods populated",
+			yaml: clientAuthBlock + `
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+    client_secret_post:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: oauth
+      audience: solace-broker-prod
+`,
+			wantErr:          true,
+			wantErrSubstring: "broker_oauth.mcp_server_client_auth: only one method sub-block may be configured",
+		},
+		{
+			name: "client_secret_basic.secret missing",
+			yaml: clientAuthBlock + `
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic: {}
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: oauth
+      audience: solace-broker-prod
+`,
+			wantErr:          true,
+			wantErrSubstring: "broker_oauth.mcp_server_client_auth.client_secret_basic.secret is required",
+		},
+		{
+			name: "client_secret_post.secret missing",
+			yaml: clientAuthBlock + `
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_post: {}
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: oauth
+      audience: solace-broker-prod
+`,
+			wantErr:          true,
+			wantErrSubstring: "broker_oauth.mcp_server_client_auth.client_secret_post.secret is required",
+		},
+		{
+			name: "broker_oauth.idp_token_endpoint is not a valid URL",
+			yaml: clientAuthBlock + `
+broker_oauth:
+  idp_token_endpoint: ":::not-a-url"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: oauth
+      audience: solace-broker-prod
+`,
+			wantErr:          true,
+			wantErrSubstring: "broker_oauth.idp_token_endpoint",
+		},
+		{
+			// Audience is optional in V1 — the broker's OAuth profile may have
+			// audience validation disabled. The schema accepts the omission;
+			// the V1 runtime guard still fires.
+			name: "per-broker audience omitted when mode is oauth — accepted by schema, rejected by V1 guard",
+			yaml: clientAuthBlock + validBrokerOAuth + `
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: oauth
+`,
+			wantErr:          true,
+			wantErrSubstring: notYetSupported,
+		},
+		{
+			name: "per-broker scopes contains a whitespace-only entry",
+			yaml: clientAuthBlock + validBrokerOAuth + `
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: oauth
+      audience: solace-broker-prod
+      scopes:
+        - "semp:read"
+        - "   "
+`,
+			wantErr:          true,
+			wantErrSubstring: `broker "prod": auth.scopes[1] is empty or whitespace-only`,
+		},
+		{
+			name: "broker_oauth.grant_type missing",
+			yaml: clientAuthBlock + `
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  audience_parameter_name: audience
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: oauth
+      audience: solace-broker-prod
+`,
+			wantErr:          true,
+			wantErrSubstring: "broker_oauth.grant_type is required",
+		},
+		{
+			name: "broker_oauth.grant_type invalid value",
+			yaml: clientAuthBlock + `
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer"
+  audience_parameter_name: audience
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: oauth
+      audience: solace-broker-prod
+`,
+			wantErr:          true,
+			wantErrSubstring: "broker_oauth.grant_type",
+		},
+		{
+			name: "broker_oauth.audience_parameter_name missing",
+			yaml: clientAuthBlock + `
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: oauth
+      audience: solace-broker-prod
+`,
+			wantErr:          true,
+			wantErrSubstring: "broker_oauth.audience_parameter_name is required",
+		},
+		{
+			name: "broker_oauth.audience_parameter_name invalid value",
+			yaml: clientAuthBlock + `
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: gibberish
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: oauth
+      audience: solace-broker-prod
+`,
+			wantErr:          true,
+			wantErrSubstring: "broker_oauth.audience_parameter_name",
+		},
+		{
+			// Backwards-compatibility: a config without broker_oauth and no
+			// broker using oauth mode loads cleanly. This is the V1-V1 path
+			// every existing deployment is on today.
+			name: "backwards-compat — no broker_oauth, no oauth-mode broker — loads cleanly",
+			yaml: clientAuthBlock + `
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: shhh
+`,
+			wantErr: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := LoadConfig(writeTemp(t, tc.yaml))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tc.wantErrSubstring)
+				}
+				if !strings.Contains(err.Error(), tc.wantErrSubstring) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrSubstring)
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestLoadConfig_BrokerOAuth_MethodResolution verifies that a config with
+// exactly one client_auth sub-block populated parses correctly, with the
+// expected sub-block populated and the others nil. Uses a basic-mode broker
+// so the V1 oauth-runtime guard does not fire — this test is about the
+// discriminated-union parsing, not the runtime guard.
+func TestLoadConfig_BrokerOAuth_MethodResolution(t *testing.T) {
+	t.Run("client_secret_basic sub-block parses correctly", func(t *testing.T) {
+		yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: shhh
+`
+		// broker_oauth is set but no broker uses oauth mode. validateBrokerOAuth
+		// emits a WARN log; silence it so the test output is clean.
+		var buf bytes.Buffer
+		old := slog.Default()
+		slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
+		defer slog.SetDefault(old)
+
+		cfg, err := LoadConfig(writeTemp(t, yaml))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.BrokerOAuth == nil {
+			t.Fatal("BrokerOAuth is nil")
+		}
+		// Exactly the basic sub-block must be populated.
+		if cfg.BrokerOAuth.ClientAuth.ClientSecretBasic == nil {
+			t.Fatal("expected ClientSecretBasic sub-block to be populated")
+		}
+		if cfg.BrokerOAuth.ClientAuth.ClientSecretPost != nil {
+			t.Error("expected ClientSecretPost sub-block to be nil when basic is configured")
+		}
+		if got, want := cfg.BrokerOAuth.ClientAuth.ClientSecretBasic.Secret, "shhh"; got != want {
+			t.Errorf("ClientSecretBasic.Secret = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("client_secret_post sub-block parses correctly", func(t *testing.T) {
+		yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_post:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: scope
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: shhh
+`
+		var buf bytes.Buffer
+		old := slog.Default()
+		slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
+		defer slog.SetDefault(old)
+
+		cfg, err := LoadConfig(writeTemp(t, yaml))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// Exactly the post sub-block must be populated.
+		if cfg.BrokerOAuth.ClientAuth.ClientSecretPost == nil {
+			t.Fatal("expected ClientSecretPost sub-block to be populated")
+		}
+		if cfg.BrokerOAuth.ClientAuth.ClientSecretBasic != nil {
+			t.Error("expected ClientSecretBasic sub-block to be nil when post is configured")
+		}
+		if got, want := cfg.BrokerOAuth.AudienceParam, AudienceParamScope; got != want {
+			t.Errorf("AudienceParam = %q, want %q", got, want)
+		}
+	})
+}
+
+// TestLoadConfig_BrokerOAuth_ProductionMode_RequiresHTTPS verifies that when
+// the deployment is in production mode (mcp_client_auth.mode: oauth), the
+// broker_oauth.idp_token_endpoint must use https://. Uses a bearer-mode broker so the
+// V1 oauth-runtime guard does not fire — this test is about validating the
+// production-mode URL rule, not the runtime guard.
+func TestLoadConfig_BrokerOAuth_ProductionMode_RequiresHTTPS(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp-server"
+  resource_url: "https://mcp.example.com/mcp"
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+brokers:
+  prod:
+    url: "https://broker.example.com:943"
+    auth:
+      mode: bearer
+      token: shhh
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for http:// idp_token_endpoint in production mode")
+	}
+	if !strings.Contains(err.Error(), "broker_oauth.idp_token_endpoint") || !strings.Contains(err.Error(), "https") {
+		t.Errorf("expected https-required error on broker_oauth.idp_token_endpoint, got: %v", err)
+	}
+}
+
+// TestLoadConfig_BrokerOAuth_ClientSecretFromEnvVar verifies that ${VAR}
+// substitution works for the secret field nested inside the client_auth
+// sub-block (the risk flagged in the ticket). Uses a basic-mode broker so
+// the V1 oauth-runtime guard does not fire; this test is about env-var
+// substitution, not the runtime guard.
+func TestLoadConfig_BrokerOAuth_ClientSecretFromEnvVar(t *testing.T) {
+	t.Setenv("MCP_TEST_OAUTH_CLIENT_SECRET", "the-real-secret")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: "${MCP_TEST_OAUTH_CLIENT_SECRET}"
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: shhh
+`
+	// Silence the "broker_oauth provided but no broker uses oauth mode" WARN
+	// that fires when broker_oauth is set with no oauth broker.
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
+	defer slog.SetDefault(old)
+
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.BrokerOAuth == nil {
+		t.Fatal("BrokerOAuth is nil")
+	}
+	if cfg.BrokerOAuth.ClientAuth.ClientSecretBasic == nil {
+		t.Fatal("ClientSecretBasic sub-block is nil")
+	}
+	if got, want := cfg.BrokerOAuth.ClientAuth.ClientSecretBasic.Secret, "the-real-secret"; got != want {
+		t.Errorf("mcp_server_client_auth.client_secret_basic.secret = %q, want %q", got, want)
+	}
+}
+
+// TestLoadConfig_BrokerOAuth_ClientSecretEmptyAfterSubstitution verifies that
+// when ${VAR} substitution resolves to an empty value, the validator rejects
+// the result rather than silently accepting an empty secret.
+func TestLoadConfig_BrokerOAuth_ClientSecretEmptyAfterSubstitution(t *testing.T) {
+	t.Setenv("MCP_TEST_OAUTH_EMPTY_SECRET", "")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: "${MCP_TEST_OAUTH_EMPTY_SECRET}"
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: shhh
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for empty secret after substitution")
+	}
+	if !strings.Contains(err.Error(), "broker_oauth.mcp_server_client_auth.client_secret_basic.secret is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestLoadConfig_BrokerOAuth_WarnsWhenUnused verifies the WARN log fires when
+// broker_oauth is configured but no broker uses oauth mode. This is operator
+// noise, not a fatal error — the config is valid.
+func TestLoadConfig_BrokerOAuth_WarnsWhenUnused(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+brokers:
+  legacy:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(old)
+
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "broker_oauth provided but no broker uses oauth mode") {
+		t.Errorf("expected WARN about unused broker_oauth, got log output:\n%s", buf.String())
+	}
+}
+
+// TestLoadConfig_EmitsOAuthNotSupportedBanner verifies that when one or more
+// brokers are configured with auth.mode: oauth, the operator-facing banner
+// log line is emitted at ERROR level — separate from the joined config error.
+// The banner is the loud headline; the joined error carries broker names.
+func TestLoadConfig_EmitsOAuthNotSupportedBanner(t *testing.T) {
+	t.Run("single oauth broker — banner shows '1 broker'", func(t *testing.T) {
+		yaml := `
+mcp_client_auth:
+  mode: disabled
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+brokers:
+  staging:
+    url: "https://broker.example.com:943"
+    auth:
+      mode: oauth
+      audience: "solace-broker-staging"
+`
+		var buf bytes.Buffer
+		old := slog.Default()
+		slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
+		defer slog.SetDefault(old)
+
+		_, err := LoadConfig(writeTemp(t, yaml))
+		if err == nil {
+			t.Fatal("expected error from V1 oauth guard")
+		}
+		out := buf.String()
+		// Banner contents — the loud signal that this is the load-bearing problem.
+		if !strings.Contains(out, "does not yet support") {
+			t.Errorf("expected banner headline in log output, got:\n%s", out)
+		}
+		// Pluralization — exactly one broker should use the singular form.
+		if !strings.Contains(out, "1 broker with auth.mode: oauth") {
+			t.Errorf("expected '1 broker' (singular) in banner, got:\n%s", out)
+		}
+	})
+
+	t.Run("three oauth brokers — banner shows '3 brokers'", func(t *testing.T) {
+		yaml := `
+mcp_client_auth:
+  mode: disabled
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+brokers:
+  staging:
+    url: "https://broker.example.com:943"
+    auth: { mode: oauth, audience: "a" }
+  qa:
+    url: "https://qa.example.com:943"
+    auth: { mode: oauth, audience: "b" }
+  prod-east:
+    url: "https://prod.example.com:943"
+    auth: { mode: oauth, audience: "c" }
+`
+		var buf bytes.Buffer
+		old := slog.Default()
+		slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
+		defer slog.SetDefault(old)
+
+		_, err := LoadConfig(writeTemp(t, yaml))
+		if err == nil {
+			t.Fatal("expected error from V1 oauth guard")
+		}
+		out := buf.String()
+		if !strings.Contains(out, "3 brokers with auth.mode: oauth") {
+			t.Errorf("expected '3 brokers' (plural) in banner, got:\n%s", out)
+		}
+	})
+
+	t.Run("no oauth brokers — banner does NOT fire", func(t *testing.T) {
+		yaml := `
+mcp_client_auth:
+  mode: disabled
+brokers:
+  legacy:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: shhh
+`
+		var buf bytes.Buffer
+		old := slog.Default()
+		slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
+		defer slog.SetDefault(old)
+
+		_, err := LoadConfig(writeTemp(t, yaml))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if strings.Contains(buf.String(), "does not yet support") {
+			t.Errorf("banner should NOT fire when no broker uses oauth mode, got:\n%s", buf.String())
+		}
+	})
+}
+
+// TestValidateHop1Hop2Alignment_Direct exercises the alignment validator in
+// isolation, independent of the V1 not-yet-supported guard. This is the path
+// that becomes load-bearing when the V1 guard is removed and the OAuth runtime
+// ships — the test pins the invariant TODAY so the invariant is exercised in
+// every CI run, even though the V1 guard makes its banner unreachable in V1.
+func TestBrokerOAuthConfig_LogValue(t *testing.T) {
+	const (
+		secretClientID     = "mcp-client-id-VALUE"
+		secretClientSecret = "SECRET_CLIENT_SECRET_VAL"
+	)
+
+	cfg := BrokerOAuthConfig{
+		TokenURL: "https://idp.example.com/token",
+		ClientID: secretClientID,
+		ClientAuth: BrokerClientAuth{
+			ClientSecretBasic: &ClientSecretAuth{Secret: secretClientSecret},
+		},
+		GrantType:     GrantTypeTokenExchange,
+		AudienceParam: AudienceParamAudience,
+	}
+
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(old)
+
+	slog.Info("broker_oauth", slog.Any("cfg", cfg))
+
+	out := buf.String()
+	if strings.Contains(out, secretClientSecret) {
+		t.Errorf("client_secret leaked into log output: %s", out)
+	}
+	if !strings.Contains(out, "idp_token_endpoint") || !strings.Contains(out, secretClientID) {
+		t.Errorf("expected idp_token_endpoint and mcp_server_client_id in log output: %s", out)
 	}
 }
