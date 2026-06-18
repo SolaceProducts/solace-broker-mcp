@@ -50,7 +50,7 @@ type ServerConfig struct {
 	Port          int                 // HTTP port the MCP server listens on
 	LogLevel      string              // slog level name: "debug", "info", "warn", "error"
 	MCPClientAuth MCPClientAuthConfig // Hop 1: authentication config for mcp client to server interactions
-	BrokerOAuth   *BrokerOAuthConfig  // Hop 2: global OAuth IdP coordinates for broker token exchange (nil unless any broker uses auth.mode: oauth)
+	BrokerOAuth   *BrokerOAuthConfig  // Hop 2: global OAuth IdP coordinates for broker token exchange. Required when any broker uses auth.mode: oauth; otherwise optional (provided-but-unused configs log a WARN at startup so operators can stage broker_oauth ahead of switching brokers to oauth mode).
 	TLSCertFile   string              // path to TLS certificate file (optional, enables HTTPS)
 	TLSKeyFile    string              // path to TLS private key file (optional, requires TLSCertFile)
 }
