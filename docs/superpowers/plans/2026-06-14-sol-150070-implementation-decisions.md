@@ -246,71 +246,61 @@ This is captured as future-work in `test/integration/README.md`. A follow-up tic
 
 ---
 
-## T2 — Hop 2 OAuth config schema requires explicit `idp_token_url`; OIDC Discovery deferred
+## T2 — Hop 2 OAuth config requires explicit `idp_token_url`; future runtime can derive the endpoint from Hop 1's already-fetched Discovery doc
 
-**Date:** 2026-06-16
+**Date:** 2026-06-16 (rewritten 2026-06-17)
 **Sub-ticket:** [SOL-150796](https://sol-jira.atlassian.net/browse/SOL-150796)
-**Architecture plan refs:** Decision 1 (one IdP per deployment), Decision 9 (no live IdP probing at startup).
+**Architecture plan refs:** Decision 1 (one IdP per deployment), Decision 9 (no *additional* live IdP probing at startup).
 
-### The question
+### The starting point — what the MCP server already does today
 
-`BrokerOAuthConfig` has three universal fields: `idp_token_url`, `mcp_server_client_id`, `client_secret`. Should `idp_token_url` be required?
+Hop 1 (`mcp_client_auth.mode: oauth`) shipped in SOL-149989. At startup, the MCP server calls `oidc.NewProvider(ctx, cfg.MCPClientAuth.Issuer)` ([internal/auth/middleware.go:127](../../../internal/auth/middleware.go)). `go-oidc` reaches out to the IdP and fetches `<issuer>/.well-known/openid-configuration` — the OIDC Discovery document. From that document it learns the JWKS URL (needed to verify inbound agent tokens), the token endpoint, and other coordinates. **The MCP server already does live OIDC Discovery at startup today.** It is not a future capability.
 
-Two real operator personas pull in opposite directions:
+That changes the framing of every "should the Hop 2 schema have an issuer-URL field?" question. The Discovery doc — including `token_endpoint` — is already sitting in process memory after Hop 1 boots. Any future Hop 2 runtime can read it directly from there. No second Discovery fetch, no second HTTP round trip, no new field.
 
-- **Modern-IdP operator** — uses Keycloak / Okta / Auth0 / Entra. Their IdP exposes an OIDC Discovery endpoint at `<issuer>/.well-known/openid-configuration`. They'd prefer to configure `issuer_url` once and let the MCP server fetch `idp_token_url` (and any other endpoint coordinates) from discovery.
-- **Legacy / non-OIDC operator** — uses an older or custom OAuth server with no discovery endpoint. They must configure `idp_token_url` explicitly.
+### The question this section actually answers
 
-The natural "flexible" answer is: accept either `issuer_url` OR `idp_token_url`, with a validator rule that exactly one must be set. This is the same pattern as the `client_auth_method` discriminator we settled on earlier in T2.
+So: given that Hop 1's `mcp_client_auth.issuer` already pulls in `token_endpoint` via Discovery, **why is `idp_token_url` required in V1 instead of being optional from day one?**
 
 ### Decision
 
-**T2's schema requires `idp_token_url` explicitly.** `issuer_url` is not added in this ticket. OIDC Discovery support — and the accompanying `issuer_url` field — is deferred to its own follow-up ticket, post-T2.
+**`idp_token_url` is required in V1.** The schema does not yet support deriving the endpoint from Hop 1's Discovery doc, even though the doc is available in memory by the time Hop 2 would need it.
 
-### Why
+### Why required in V1
 
 Three reasons, in order of weight:
 
-1. **Discovery is runtime work, and T2 is schema-only.** The ticket scope is explicit: schema and validation, no runtime behavior change. Adding `issuer_url` to the schema without a runtime that supports it would mean either rejecting the field in the validator (operator-confusing — they see the field in the example YAML and can't use it) or accepting it and silently failing later. Neither is honest. Discovery belongs in the ticket where its runtime lands.
+1. **No Hop 2 runtime in V1.** T2 is schema-only. There is no Hop 2 code path consuming `idp_token_url` yet — every `auth.mode: oauth` broker is rejected at startup by the V1 not-yet-supported guard. Adding an "optional, falls back to Hop 1 Discovery" relaxation now would require committing to a fallback behavior the runtime has not been built or tested against. Better to take the URL explicitly in V1 and relax the requirement when the runtime ticket has actually exercised the fallback.
 
-2. **Discovery is non-trivial runtime work that conflicts with Decision 9.** Implementing OIDC Discovery means deciding: when to fetch (lazy vs. eager), whether to cache (and how to honor cache headers), how to handle the discovery endpoint being temporarily unavailable, what to do if the document is malformed, and how this interacts with the architecture plan's Decision 9 commitment of "no live IdP probing at startup." Lazy-fetch on first request is the most natural fit for Decision 9, but it adds a first-request latency tax and a new failure mode for the cold path. These are real design questions that deserve their own ticket and design conversation.
+2. **Explicit-config-first matches T2's principle.** The same principle that drove `idp_token_url` over a bare `token_url` and `mcp_server_client_id` over a bare `client_id` — explicit, qualified, operator-typed by default — applies to "where does the token endpoint come from?" Operators in V1 type the URL. When the future runtime adds a Discovery-derived fallback, that becomes an *optional* convenience, not the default. Operators who want their config to be self-contained (no hidden derivations) can keep typing the URL forever.
 
-3. **The deferral is non-breaking.** Adding `issuer_url` later does not require any operator who configured `idp_token_url` in V1 to migrate. The follow-up ticket extends the schema additively: `issuer_url` becomes an optional field; validator rule grows to "exactly one of `issuer_url` or `idp_token_url` must be set"; runtime grows discovery logic. Existing configs using `idp_token_url` keep working untouched.
-
-### What the validator does today
-
-- `idp_token_url` is required (non-empty, valid URL).
-- `broker_oauth` has no issuer-URL field yet. (The Hop 1 block `mcp_client_auth` does have an `issuer` field — added in SOL-149989 to feed OIDC token verification — but it identifies the IdP that signs *agent* tokens for verification, not the IdP endpoint the MCP server itself calls to perform Hop 2 token exchange. The follow-up ticket adds a separate field on `broker_oauth`. See "Why a new field instead of reusing `mcp_client_auth.issuer`" below.)
-
-### What the deferred follow-up ticket will add
-
-- A new optional issuer-URL field on `BrokerOAuthConfig` (name TBD in that ticket — likely `idp_issuer_url` to follow T2's explicit-naming principle and parallel the existing `idp_token_url`).
-- Validator rule: exactly one of the issuer-URL field or `idp_token_url` must be set; both is an error; neither is an error.
-- Runtime: OIDC Discovery client that fetches `<issuer_url>/.well-known/openid-configuration`, extracts `token_endpoint`, and uses it in place of `idp_token_url`. Caching, error handling, and fetch timing decided in that ticket.
-- Operators on modern IdPs gain the convenience of single-field IdP configuration. Operators on legacy IdPs are unaffected.
+3. **Token-exchange endpoints are not always the Discovery `token_endpoint`.** This is the case where Discovery-derivation would actually be wrong. Some IdPs route the RFC 8693 token-exchange flow to a separate endpoint from the Discovery doc's advertised `token_endpoint` (which typically points at the auth-code-flow endpoint). An explicit `idp_token_url` lets operators point at the right endpoint for their IdP's actual deployment. Even when the runtime can derive a default, leaving the explicit field available means we never lock out the operator who needs to override.
 
 ### What this means for the V1 schema commitment
 
-`idp_token_url` is part of the V1 schema and stays required forever. Operators who configure it in V1 will never be forced to migrate to the future issuer-URL field. The discovery-based path is an *additional* way to configure the same coordinate, not a replacement.
+`idp_token_url` is part of the V1 schema and stays available forever. The follow-up ticket relaxes it from required to optional and adds a runtime fallback that reads `token_endpoint` from Hop 1's already-cached Discovery doc. Existing configs that provide `idp_token_url` explicitly keep working untouched; new configs gain the option to omit it when Hop 1's Discovery doc already carries the right value.
 
-### Why a new field instead of reusing `mcp_client_auth.issuer`
+### What the future "Hop 2 runtime" ticket will actually do
 
-The Hop 1 block has an `issuer` field today. It would be tempting to reuse it as the Hop 2 IdP coordinate too — "one IdP, one issuer URL." We're choosing not to, for two reasons:
+It will NOT add a new issuer-URL field. The Hop 1 `mcp_client_auth.issuer` value, and the Discovery doc go-oidc has already fetched from it, are exactly the inputs Hop 2's runtime needs. The follow-up ticket will:
 
-1. **Same IdP is the common case, but not the invariant.** Hop 1 verifies *agent* tokens; Hop 2 obtains *broker* tokens. In most deployments these come from the same IdP and so the issuer URLs match. But there are real deployments where they don't: a federation where agents authenticate against an identity broker (Hop 1 issuer = identity broker) while the MCP server holds a service-account credential at a different IdP (Hop 2 issuer = that IdP). Conflating the two would mean those deployments can't express their config.
+1. Relax `idp_token_url` to optional in the schema.
+2. Add validator wording: `idp_token_url` may be omitted when `mcp_client_auth.mode: oauth`, in which case the runtime derives the token endpoint from Hop 1's Discovery doc.
+3. Add the runtime code that reads `token_endpoint` from the `oidcProvider` already in memory.
+4. Keep the explicit-`idp_token_url` path as the override for IdPs whose token-exchange endpoint differs from the Discovery-advertised `token_endpoint`.
 
-2. **Hop 1 `issuer` and Hop 2 issuer-URL serve different runtime purposes.** Hop 1 `issuer` is the value go-oidc uses to verify the `iss` claim on inbound agent tokens — it's identity-of-the-signer, not an endpoint to call. The Hop 2 issuer-URL feeds OIDC Discovery: the MCP server fetches `<issuer-url>/.well-known/openid-configuration` to learn the token endpoint, JWKS URL, etc. Same string shape, but one is a value to *match against* and the other is a URL to *retrieve from*. Mixing them into one field invites a future bug where the validator's URL-reachability check (added for the Discovery path) starts failing on Hop 1 issuers that were never intended to be fetched.
+### What about federation deployments where Hop 1 and Hop 2 IdPs differ?
 
-The cost of two fields is one extra line in the YAML for operators whose IdPs do match — a marginal annoyance compared to the structural correctness of letting the two configs vary when they need to.
+A small minority of deployments use one IdP for agent authentication (Hop 1) and a different IdP for the MCP server's service-account credentials (Hop 2). For those, operators provide `idp_token_url` explicitly — pointing at the Hop 2 IdP's token endpoint — and Hop 2's runtime uses the explicit value instead of deriving from Hop 1's Discovery doc. **The federation case is exactly what the explicit `idp_token_url` override is for.** No separate Hop 2 issuer-URL field is needed; the explicit token URL is the override knob.
 
-### Honest caveat
+### Decision 9 status — already paid, not avoided
 
-This is the third place in T2 where we've leaned on the "schema is forward-compatible, validator is strict about V1's implementation" pattern (the others being `client_auth_method` and `grant_type`). For T2's narrower scope of explicit-endpoint vs. Discovery-based IdP configuration, we made the opposite call — keep the schema narrow now, extend later — because:
+The architecture plan's Decision 9 commits to "no live IdP probing at startup *beyond what we already do*." It's worth being precise about what "no live IdP probing" means in light of Hop 1's existing Discovery fetch:
 
-- `client_auth_method` and `grant_type` are discriminators with a single field already present (the method/type string itself). The schema cost is one string field plus an allowlist. Cheap.
-- The issuer-URL vs. `idp_token_url` choice is a *capability*, not a discriminator. Adding the issuer-URL field to the schema today requires either (a) accepting it and silently failing at runtime, or (b) rejecting it in the validator with an "unsupported" error. Both are worse than not having the field.
+- **Hop 1 Discovery fetch (existing, kept):** when `mcp_client_auth.mode: oauth`, go-oidc fetches `<issuer>/.well-known/openid-configuration` at startup. This is on the boot critical path today. We accept the boot-coupling risk for it because we need the JWKS to verify inbound agent tokens — there is no usable alternative.
+- **What Decision 9 forbids:** adding a *second* startup network call specifically for Hop 2 (e.g., a separate Discovery fetch against a different issuer, a JWKS probe, a test token exchange). We do not pay the boot-coupling cost a second time for Hop 2.
 
-The line between "discriminator pattern (cheap, schema-flexible)" and "feature placeholder (confusing, schema-flexible)" is the runtime cost of supporting the alternative value. Discriminators where the runtime treats both values nearly identically (e.g., `client_secret_basic` vs. `client_secret_post` differ only in transport) are cheap to keep in schema. Discriminators that gate substantially different runtime paths (Discovery vs. explicit endpoint) are not.
+Reading `token_endpoint` from the existing in-memory `oidcProvider` is **not** a new IdP probe — it is a memory lookup against a doc that was fetched for Hop 1. That makes the future Hop 2 fallback fully compatible with Decision 9.
 
 ---
 
@@ -524,7 +514,7 @@ brokers:
 
 | Field | Required | Default | Validator rule | Source of truth |
 |---|---|---|---|---|
-| `idp_token_url` | yes | — | non-empty, valid URL, `http`/`https` scheme | operator-supplied (Discovery deferred to a follow-up) |
+| `idp_token_url` | yes | — | non-empty, valid URL, `http`/`https` scheme | operator-supplied. (A future runtime ticket relaxes this to optional and adds a fallback that reads `token_endpoint` from Hop 1's already-fetched OIDC Discovery doc; the explicit field stays available as an operator override.) |
 | `mcp_server_client_id` | yes | — | non-empty | operator-supplied (the MCP server's client_id registered at the IdP) |
 | `mcp_server_client_auth` | yes | — | discriminated union: exactly one sub-block populated. V1 supports `client_secret_basic` and `client_secret_post`, both of which require a non-empty `secret:` (after `${VAR}` substitution). Other registered methods are rejected with "not yet supported in this version" | operator-supplied (method chosen per the IdP's requirements) |
 | `grant_type` | yes | — (no default) | must be in the V1 allowlist (`urn:ietf:params:oauth:grant-type:token-exchange`); other grant-types rejected with "not yet supported in this version" | operator-supplied; the allowlist expands as future grant-types (e.g. Entra OBO's `jwt-bearer`) gain runtime support |
@@ -575,7 +565,7 @@ That's the minimum. There is no flat `client_secret:` alternative — the *only*
 
 A reader asking "why is field X not in the schema?" should find their answer here:
 
-- **`issuer_url` / OIDC Discovery** — deferred per the earlier T2 entry. Runtime work, not schema work.
+- **A new issuer-URL field on `broker_oauth`** — not added, and not planned. Hop 1's existing `mcp_client_auth.issuer` already triggers an OIDC Discovery fetch at startup (via go-oidc's `oidc.NewProvider`); the resulting `token_endpoint` is in process memory by the time Hop 2 needs it. The future Hop 2 runtime can read `token_endpoint` from the already-fetched doc — no second IdP fetch, no second field. See the earlier T2 entry on `idp_token_url` for the full reasoning.
 - **`private_key_file`, `client_cert_file`, `client_key_file`, `key_id`** — fields needed by `private_key_jwt` and `tls_client_auth`. Deferred to the `client_auth_method` follow-up ticket along with their runtime support.
 - **`requested_token_type`** — always access_token in our use case. Knob nobody turns.
 - **`resource`** (RFC 8693 §2.1 OPTIONAL parameter, similar to `audience`) — not added because Solace brokers use the `aud` claim for resource binding, not RFC 8707 resource indicators. If a customer uses an IdP that requires `resource` parameter, we add it then. So far, no demand.
@@ -583,7 +573,7 @@ A reader asking "why is field X not in the schema?" should find their answer her
 
 ### What is *not* committed to V1 by this schema
 
-- The Discovery / `issuer_url` path. Add later, additively.
+- The future "derive `idp_token_url` from Hop 1's Discovery doc" runtime fallback. Add later, additively (relax `idp_token_url` from required to optional; runtime reads `token_endpoint` from the in-memory `oidcProvider`). No new schema field needed.
 - The `private_key_jwt` / `tls_client_auth` methods and their fields. Add later, additively. The follow-up ticket has full design license on flat-vs-nested shape because no operator has written those fields yet.
 - Entra OBO support. Investigation ticket separate.
 
