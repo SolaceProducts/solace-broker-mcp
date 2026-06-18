@@ -728,14 +728,18 @@ func validateBroker(broker *BrokerConfig, productionMode bool) []error {
 	// Validate credentials are present based on auth mode.
 	switch broker.Auth.Mode {
 	case AuthModeBasic:
-		if broker.Auth.Username == "" {
+		// Trim before comparing: a credential resolved from ${VAR} to
+		// whitespace-only would otherwise pass startup validation and fail
+		// every request at runtime with a 401.
+		if strings.TrimSpace(broker.Auth.Username) == "" {
 			errs = append(errs, fmt.Errorf("broker %q: username is required for basic auth", alias))
 		}
-		if broker.Auth.Password == "" {
+		if strings.TrimSpace(broker.Auth.Password) == "" {
 			errs = append(errs, fmt.Errorf("broker %q: password is required for basic auth", alias))
 		}
 	case AuthModeBearer:
-		if broker.Auth.Token == "" {
+		// Trim before comparing — see basic-auth note above.
+		if strings.TrimSpace(broker.Auth.Token) == "" {
 			errs = append(errs, fmt.Errorf("broker %q: token is required for bearer auth", alias))
 		}
 	}

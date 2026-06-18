@@ -607,6 +607,73 @@ brokers:
 	}
 }
 
+// TestLoadConfig_CredentialsTrimmedBeforeEmptyCheck pins the invariant that
+// validateBroker rejects whitespace-only credentials at startup rather than
+// letting them through to fail every request at runtime. Matches the existing
+// whitespace-stripping check on oauth scopes.
+func TestLoadConfig_CredentialsTrimmedBeforeEmptyCheck(t *testing.T) {
+	const clientAuthBlock = `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+`
+	cases := []struct {
+		name             string
+		yaml             string
+		wantErrSubstring string
+	}{
+		{
+			name: "bearer token whitespace-only",
+			yaml: clientAuthBlock + `
+brokers:
+  prod:
+    url: "https://broker.example.com:8080"
+    auth:
+      mode: bearer
+      token: "   "
+`,
+			wantErrSubstring: "token is required for bearer auth",
+		},
+		{
+			name: "basic username whitespace-only",
+			yaml: clientAuthBlock + `
+brokers:
+  prod:
+    url: "https://broker.example.com:8080"
+    auth:
+      mode: basic
+      username: "   "
+      password: "real-password"
+`,
+			wantErrSubstring: "username is required for basic auth",
+		},
+		{
+			name: "basic password whitespace-only",
+			yaml: clientAuthBlock + `
+brokers:
+  prod:
+    url: "https://broker.example.com:8080"
+    auth:
+      mode: basic
+      username: "admin"
+      password: "   "
+`,
+			wantErrSubstring: "password is required for basic auth",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := LoadConfig(writeTemp(t, tc.yaml))
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantErrSubstring)
+			}
+			if !strings.Contains(err.Error(), tc.wantErrSubstring) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrSubstring)
+			}
+		})
+	}
+}
+
 func TestLoadConfig_MissingAuthMode(t *testing.T) {
 	yaml := `
 mcp_client_auth:
