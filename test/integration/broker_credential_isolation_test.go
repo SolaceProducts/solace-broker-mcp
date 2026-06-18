@@ -70,7 +70,7 @@ func TestCredentialsAreIsolatedPerBroker(t *testing.T) {
 	}
 
 	// Multi-broker config: matches each fake broker with its credentials.
-	cfgYAML := "client_auth:\n  mode: disabled\nbrokers:\n"
+	cfgYAML := "mcp_client_auth:\n  mode: disabled\nbrokers:\n"
 	cfgYAML += fmt.Sprintf("  broker-a:\n    url: %s\n    auth:\n      mode: basic\n      username: alice\n      password: passA\n", servers[0].URL)
 	cfgYAML += fmt.Sprintf("  broker-b:\n    url: %s\n    auth:\n      mode: basic\n      username: bob\n      password: passB\n", servers[1].URL)
 	cfgYAML += fmt.Sprintf("  broker-c:\n    url: %s\n    auth:\n      mode: bearer\n      token: token-C\n", servers[2].URL)

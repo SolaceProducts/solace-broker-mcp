@@ -44,13 +44,13 @@ type ServerConfig struct {
 	// Access from outside this package via Broker(alias) and BrokerAliases();
 	// within the package, prefer the accessors so canonicalization is not
 	// bypassed by accident.
-	brokers     map[string]*BrokerConfig
-	SEMP        SEMPConfig       // SEMP client settings
-	Port        int              // HTTP port the MCP server listens on
-	LogLevel    string           // slog level name: "debug", "info", "warn", "error"
-	ClientAuth  ClientAuthConfig // authentication config for mcp client to server interactions
-	TLSCertFile string           // path to TLS certificate file (optional, enables HTTPS)
-	TLSKeyFile  string           // path to TLS private key file (optional, requires TLSCertFile)
+	brokers       map[string]*BrokerConfig
+	SEMP          SEMPConfig          // SEMP client settings
+	Port          int                 // HTTP port the MCP server listens on
+	LogLevel      string              // slog level name: "debug", "info", "warn", "error"
+	MCPClientAuth MCPClientAuthConfig // authentication config for mcp client to server interactions
+	TLSCertFile   string              // path to TLS certificate file (optional, enables HTTPS)
+	TLSKeyFile    string              // path to TLS private key file (optional, requires TLSCertFile)
 }
 
 // Broker returns the broker config for alias (compared case-insensitively),
@@ -71,7 +71,7 @@ func (c *ServerConfig) BrokerAliases() []string {
 	return out
 }
 
-type ClientAuthConfig struct {
+type MCPClientAuthConfig struct {
 	Issuer      string `yaml:"issuer"`       // IdP issuer URL — required when mode == "oauth"
 	Audience    string `yaml:"audience"`     // Expected 'aud' claim value — required when mode == "oauth"
 	DevToken    string `yaml:"dev_token"`    // Static token for dev — required when mode == "static"
@@ -125,7 +125,7 @@ const (
 	AuthModeOAuth    = "oauth"    // OAuth/OIDC JWT validation (production)
 )
 
-// validAuthClientModes is the allowlist for client_auth.mode. The validator
+// validAuthClientModes is the allowlist for mcp_client_auth.mode. The validator
 // rejects any other value. Add new modes here and extend the validate() switch.
 var validAuthClientModes = []string{AuthModeDisabled, AuthModeStatic, AuthModeOAuth}
 
@@ -160,7 +160,7 @@ func (b BrokerConfig) LogValue() slog.Value {
 	)
 }
 
-// LogValue implements slog.LogValuer for ClientAuthConfig. It exposes the auth
+// LogValue implements slog.LogValuer for MCPClientAuthConfig. It exposes the auth
 // mode and OAuth configuration (issuer, audience, resource URL) but excludes
 // DevToken to prevent credential leaks in log output. Mode is listed first
 // because it is the most important operator-facing piece of information —
@@ -168,7 +168,7 @@ func (b BrokerConfig) LogValue() slog.Value {
 // Issuer and ResourceURL are routed through sanitizeURLString for the same
 // defense-in-depth reason as BrokerConfig.LogValue.
 // See docs/secure-logging-rules.md Rule 2.
-func (c ClientAuthConfig) LogValue() slog.Value {
+func (c MCPClientAuthConfig) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("mode", c.Mode),
 		slog.String("issuer", sanitizeURLString(c.Issuer)),
@@ -211,7 +211,7 @@ type yamlConfig struct {
 	Port            int                      `yaml:"port"`
 	LogLevel        string                   `yaml:"log_level"`
 	DevelopmentMode *bool                    `yaml:"development_mode"` // *bool so we can detect presence-in-YAML (deprecation warning); the value is ignored
-	ClientAuth      ClientAuthConfig         `yaml:"client_auth"`
+	MCPClientAuth   MCPClientAuthConfig      `yaml:"mcp_client_auth"`
 	TLSCertFile     string                   `yaml:"tls_cert_file"`
 	TLSKeyFile      string                   `yaml:"tls_key_file"`
 }
@@ -309,17 +309,17 @@ func LoadConfig(path string) (*ServerConfig, error) {
 	}
 
 	if raw.DevelopmentMode != nil {
-		slog.Warn("development_mode is deprecated and ignored; auth profile is now derived from client_auth.mode (one of disabled, static, oauth) — please remove development_mode from your config")
+		slog.Warn("development_mode is deprecated and ignored; auth profile is now derived from mcp_client_auth.mode (one of disabled, static, oauth) — please remove development_mode from your config")
 	}
 
 	cfg := &ServerConfig{
-		brokers:     raw.Brokers,
-		SEMP:        raw.SEMP,
-		Port:        raw.Port,
-		LogLevel:    raw.LogLevel,
-		ClientAuth:  raw.ClientAuth,
-		TLSCertFile: raw.TLSCertFile,
-		TLSKeyFile:  raw.TLSKeyFile,
+		brokers:       raw.Brokers,
+		SEMP:          raw.SEMP,
+		Port:          raw.Port,
+		LogLevel:      raw.LogLevel,
+		MCPClientAuth: raw.MCPClientAuth,
+		TLSCertFile:   raw.TLSCertFile,
+		TLSKeyFile:    raw.TLSKeyFile,
 	}
 
 	applyDefaults(cfg)
@@ -663,32 +663,32 @@ func validate(cfg *ServerConfig) error {
 	// Modes are tiered, not interleaved:
 	//   - disabled / static: dev-only, http:// broker URLs allowed
 	//   - oauth: production, https:// required everywhere
-	cfg.ClientAuth.Mode = strings.ToLower(cfg.ClientAuth.Mode)
-	switch cfg.ClientAuth.Mode {
+	cfg.MCPClientAuth.Mode = strings.ToLower(cfg.MCPClientAuth.Mode)
+	switch cfg.MCPClientAuth.Mode {
 	case "":
-		errs = append(errs, fmt.Errorf("client_auth.mode is required (must be one of %v)", validAuthClientModes))
+		errs = append(errs, fmt.Errorf("mcp_client_auth.mode is required (must be one of %v)", validAuthClientModes))
 	case AuthModeDisabled:
 		// no further required fields
 	case AuthModeStatic:
-		if cfg.ClientAuth.DevToken == "" {
-			errs = append(errs, fmt.Errorf("client_auth.dev_token is required when client_auth.mode is %q", AuthModeStatic))
+		if cfg.MCPClientAuth.DevToken == "" {
+			errs = append(errs, fmt.Errorf("mcp_client_auth.dev_token is required when mcp_client_auth.mode is %q", AuthModeStatic))
 		}
 	case AuthModeOAuth:
-		if cfg.ClientAuth.Issuer == "" {
-			errs = append(errs, fmt.Errorf("client_auth.issuer is required when client_auth.mode is %q", AuthModeOAuth))
-		} else if err := validateBrokerURL(cfg.ClientAuth.Issuer, cfg.IsProductionMode()); err != nil {
-			errs = append(errs, fmt.Errorf("client_auth.issuer: %w", err))
+		if cfg.MCPClientAuth.Issuer == "" {
+			errs = append(errs, fmt.Errorf("mcp_client_auth.issuer is required when mcp_client_auth.mode is %q", AuthModeOAuth))
+		} else if err := validateBrokerURL(cfg.MCPClientAuth.Issuer, cfg.IsProductionMode()); err != nil {
+			errs = append(errs, fmt.Errorf("mcp_client_auth.issuer: %w", err))
 		}
-		if cfg.ClientAuth.Audience == "" {
-			errs = append(errs, fmt.Errorf("client_auth.audience is required when client_auth.mode is %q", AuthModeOAuth))
+		if cfg.MCPClientAuth.Audience == "" {
+			errs = append(errs, fmt.Errorf("mcp_client_auth.audience is required when mcp_client_auth.mode is %q", AuthModeOAuth))
 		}
-		if cfg.ClientAuth.ResourceURL == "" {
-			errs = append(errs, fmt.Errorf("client_auth.resource_url is required when client_auth.mode is %q", AuthModeOAuth))
-		} else if err := validateBrokerURL(cfg.ClientAuth.ResourceURL, cfg.IsProductionMode()); err != nil {
-			errs = append(errs, fmt.Errorf("client_auth.resource_url: %w", err))
+		if cfg.MCPClientAuth.ResourceURL == "" {
+			errs = append(errs, fmt.Errorf("mcp_client_auth.resource_url is required when mcp_client_auth.mode is %q", AuthModeOAuth))
+		} else if err := validateBrokerURL(cfg.MCPClientAuth.ResourceURL, cfg.IsProductionMode()); err != nil {
+			errs = append(errs, fmt.Errorf("mcp_client_auth.resource_url: %w", err))
 		}
 	default:
-		errs = append(errs, fmt.Errorf("client_auth.mode %q is invalid (must be one of %v)", cfg.ClientAuth.Mode, validAuthClientModes))
+		errs = append(errs, fmt.Errorf("mcp_client_auth.mode %q is invalid (must be one of %v)", cfg.MCPClientAuth.Mode, validAuthClientModes))
 	}
 
 	// TLS: both cert and key must be provided together, or neither.
@@ -758,7 +758,7 @@ func ValidatePort(port int) error {
 // self-signed cert allowance, etc. Operational profile is mode-derived;
 // do not add a separate dev-mode toggle on ServerConfig.
 func (c *ServerConfig) IsProductionMode() bool {
-	return c.ClientAuth.Mode == AuthModeOAuth
+	return c.MCPClientAuth.Mode == AuthModeOAuth
 }
 
 // validateBrokerURL checks that s is a well-formed URL with an http or https
@@ -813,7 +813,7 @@ func sanitizeURL(u *url.URL) string {
 // Empty input passes through unchanged. Unparseable input is replaced with
 // "<unparseable url>" rather than echoed back: we cannot prove the original
 // string is credential-free, so the safe default is to drop it. Used by the
-// LogValuer implementations on BrokerConfig and ClientAuthConfig.
+// LogValuer implementations on BrokerConfig and MCPClientAuthConfig.
 func sanitizeURLString(s string) string {
 	if s == "" {
 		return ""

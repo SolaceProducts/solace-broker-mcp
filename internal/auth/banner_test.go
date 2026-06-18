@@ -37,13 +37,13 @@ func captureSlog(t *testing.T) (*bytes.Buffer, func()) {
 func Test_StartupBanner_Disabled(t *testing.T) {
 	buf, restore := captureSlog(t)
 	defer restore()
-	cfg := &config.ServerConfig{ClientAuth: config.ClientAuthConfig{Mode: config.AuthModeDisabled}}
+	cfg := &config.ServerConfig{MCPClientAuth: config.MCPClientAuthConfig{Mode: config.AuthModeDisabled}}
 	LogStartupBanner(cfg)
 	out := buf.String()
 	for _, want := range []string{
 		"level=WARN",
 		"INSECURE MODE",
-		"client_auth.mode = disabled",
+		"mcp_client_auth.mode = disabled",
 		"Client → MCP server auth is OFF",
 		"Broker auth is unaffected",
 		"NOT FOR PRODUCTION USE",
@@ -57,13 +57,13 @@ func Test_StartupBanner_Disabled(t *testing.T) {
 func Test_StartupBanner_Static(t *testing.T) {
 	buf, restore := captureSlog(t)
 	defer restore()
-	cfg := &config.ServerConfig{ClientAuth: config.ClientAuthConfig{Mode: config.AuthModeStatic, DevToken: "x"}}
+	cfg := &config.ServerConfig{MCPClientAuth: config.MCPClientAuthConfig{Mode: config.AuthModeStatic, DevToken: "x"}}
 	LogStartupBanner(cfg)
 	out := buf.String()
 	for _, want := range []string{
 		"level=WARN",
 		"INSECURE MODE",
-		"client_auth.mode = static",
+		"mcp_client_auth.mode = static",
 		"Client → MCP server auth uses a static dev token",
 		"Broker auth is unaffected",
 		"NOT FOR PRODUCTION USE",
@@ -77,7 +77,7 @@ func Test_StartupBanner_Static(t *testing.T) {
 func Test_StartupBanner_OAuth(t *testing.T) {
 	buf, restore := captureSlog(t)
 	defer restore()
-	cfg := &config.ServerConfig{ClientAuth: config.ClientAuthConfig{
+	cfg := &config.ServerConfig{MCPClientAuth: config.MCPClientAuthConfig{
 		Mode:   config.AuthModeOAuth,
 		Issuer: "https://idp.example.com",
 	}}

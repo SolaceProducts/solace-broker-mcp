@@ -172,7 +172,7 @@ The broker readiness check has two phases:
 The test harness builds the server binary from source and runs it as a subprocess. Configuration is generated dynamically from `.env` values:
 
 ```yaml
-client_auth:
+mcp_client_auth:
   mode: static
   dev_token: e2e-static-dev-token
 

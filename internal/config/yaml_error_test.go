@@ -38,7 +38,7 @@ func TestLoadConfig_YAMLTypeError_DoesNotEchoCredentialValue(t *testing.T) {
 	// referencing the wrong env var (e.g. port: ${BROKER_PASSWORD}), which
 	// substituteEnvVars expands before the YAML decode runs.
 	cfg := `port: hunter2secret
-client_auth:
+mcp_client_auth:
   mode: disabled
 brokers:
   prod:

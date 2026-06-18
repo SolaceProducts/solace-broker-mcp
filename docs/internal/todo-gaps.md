@@ -77,7 +77,7 @@ broker pool, tool registration) have no HTTP dependency. Adding stdio requires:
 - A flag or config option to select transport (`--transport stdio|http`)
 - Calling the SDK's stdio transport instead of `mcp.NewStreamableHTTPHandler`
 - Skipping auth middleware, health endpoint, TLS, and port binding in stdio mode
-- Allowing config without `client_auth` when not in HTTP mode
+- Allowing config without `mcp_client_auth` when not in HTTP mode
 
 **Estimated scope:** ~30 lines in `main()` or a small refactor extracting
 shared initialization into a reusable function.
@@ -91,7 +91,7 @@ shared initialization into a reusable function.
 - Templates: Deployment, Service, ConfigMap, Secret
 - Configurable values: broker URLs, OAuth config, rate limiting, replicas,
   resources
-- Default values secure (client_auth.mode required, no insecure default)
+- Default values secure (mcp_client_auth.mode required, no insecure default)
 
 **Reason deferred:** Example Kubernetes manifests are provided in
 `deploy/kubernetes/` for copy-paste-edit deployment. A full Helm chart adds
@@ -126,9 +126,9 @@ deployed" and "I can use it from my AI assistant." Cover:
 - **Claude Code**: configuring the server URL in MCP settings with the `/mcp`
   endpoint
 - **OAuth setup**: the `/mcp` endpoint is behind auth middleware; clients must
-  be configured with valid OAuth credentials when `client_auth.mode` is oauth
+  be configured with valid OAuth credentials when `mcp_client_auth.mode` is oauth
 - **Discovery endpoint**: the server exposes
   `/.well-known/oauth-protected-resource` (RFC 9728) for automatic
   authorization server discovery by MCP clients
-- **Development mode**: using `client_auth.mode: static` with a dev token
+- **Development mode**: using `mcp_client_auth.mode: static` with a dev token
   for local testing without a full OAuth setup
