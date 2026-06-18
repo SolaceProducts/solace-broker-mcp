@@ -3128,10 +3128,13 @@ brokers:
 }
 
 // TestValidateHop1Hop2Alignment_Direct exercises the alignment validator in
-// isolation, independent of the V1 not-yet-supported guard. This is the path
-// that becomes load-bearing when the V1 guard is removed and the OAuth runtime
-// ships — the test pins the invariant TODAY so the invariant is exercised in
-// every CI run, even though the V1 guard makes its banner unreachable in V1.
+// isolation, bypassing validate(). This is the test surface that keeps the
+// alignment logic from rotting while validate() does not surface it (the
+// alignment check is gated behind the OAuth-not-supported guard in
+// validate(); see config.go's validate() comment). When the OAuth-on-brokers
+// runtime ships and the guard is removed, validate() will start calling
+// the validator unconditionally — at which point the assertions here AND
+// the load-config integration tests both exercise the same code path.
 func TestValidateHop1Hop2Alignment_Direct(t *testing.T) {
 	hop2Broker := func() *BrokerConfig {
 		return &BrokerConfig{Auth: AuthConfig{Mode: AuthModeOAuth}}
@@ -3226,12 +3229,19 @@ func TestValidateHop1Hop2Alignment_Direct(t *testing.T) {
 	})
 }
 
-// TestLoadConfig_Hop1Hop2AlignmentError_AppearsInJoinedError verifies that,
-// even in V1 where the not-yet-supported guard fires for every oauth broker,
-// the alignment validation error still lands in the joined error blob. The
-// invariant is thereby enforced today; only the secondary banner is
-// suppressed.
-func TestLoadConfig_Hop1Hop2AlignmentError_AppearsInJoinedError(t *testing.T) {
+// TestLoadConfig_Hop1Hop2Alignment_SuppressedWhileNotSupportedGuardActive
+// verifies that, while the OAuth-not-supported guard is in effect, BOTH the
+// alignment validation error AND its banner are suppressed. Operators see a
+// single remediation path (the OAuth-not-supported guard) for the
+// misconfiguration; the alignment check is sleeping code that becomes
+// load-bearing only when the OAuth-on-brokers runtime ships and the guard
+// is removed.
+//
+// The alignment validator function itself is still exercised today by
+// TestValidateHop1Hop2Alignment_Direct, which calls it with crafted
+// configs that bypass validate(). That separation keeps the alignment
+// logic from rotting while it is not surfaced through validate().
+func TestLoadConfig_Hop1Hop2Alignment_SuppressedWhileNotSupportedGuardActive(t *testing.T) {
 	yaml := `
 mcp_client_auth:
   mode: static
@@ -3251,44 +3261,6 @@ brokers:
       mode: oauth
       audience: "solace-broker-staging"
 `
-	_, err := LoadConfig(writeTemp(t, yaml))
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	msg := err.Error()
-	// Both errors must be present in the joined blob — the V1 guard names
-	// "not yet supported", the alignment validator names the corrective
-	// action ("mcp_client_auth.mode must be oauth").
-	if !strings.Contains(msg, "not yet supported") {
-		t.Errorf("expected V1 not-yet-supported error in joined blob, got: %s", msg)
-	}
-	if !strings.Contains(msg, "mcp_client_auth.mode must be oauth") {
-		t.Errorf("expected Hop1/Hop2 alignment error in joined blob, got: %s", msg)
-	}
-}
-
-// TestLoadConfig_Hop1Hop2AlignmentBanner_SuppressedInV1 verifies that in V1,
-// when the V1 not-yet-supported guard fires, the Hop1/Hop2 alignment banner
-// does NOT also fire. Operators see one headline (the V1 guard), not two for
-// the same config attempt.
-func TestLoadConfig_Hop1Hop2AlignmentBanner_SuppressedInV1(t *testing.T) {
-	yaml := `
-mcp_client_auth:
-  mode: static
-  dev_token: t
-broker_oauth:
-  idp_token_endpoint: "http://idp.example.com/token"
-  mcp_server_client_id: mcp-server
-  mcp_server_client_auth:
-    client_secret_basic:
-      secret: shhh
-  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
-brokers:
-  staging:
-    url: "https://broker.example.com:943"
-    auth: { mode: oauth, audience: "x" }
-`
 	var buf bytes.Buffer
 	old := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
@@ -3298,14 +3270,30 @@ brokers:
 	if err == nil {
 		t.Fatal("expected error")
 	}
+	msg := err.Error()
 	out := buf.String()
-	// V1 banner SHOULD fire.
-	if !strings.Contains(out, "does not yet support") {
-		t.Errorf("expected V1 not-yet-supported banner to fire, got:\n%s", out)
+
+	// The OAuth-not-supported error MUST be the only oauth-related error
+	// the operator sees in the joined blob.
+	if !strings.Contains(msg, "not yet supported") {
+		t.Errorf("expected OAuth-not-supported error in joined blob, got: %s", msg)
 	}
-	// Alignment banner should NOT fire in V1.
+	// The alignment error must NOT appear in the joined blob — the
+	// not-yet-supported guard already explains the misconfiguration with
+	// one direction of remediation; surfacing the alignment error too
+	// would point at a second remediation path for a feature that does
+	// not yet run.
+	if strings.Contains(msg, "mcp_client_auth.mode must be oauth") {
+		t.Errorf("Hop1/Hop2 alignment error must be suppressed while the OAuth-not-supported guard is active, got: %s", msg)
+	}
+
+	// The OAuth-not-supported banner SHOULD fire.
+	if !strings.Contains(out, "does not yet support") {
+		t.Errorf("expected OAuth-not-supported banner to fire, got:\n%s", out)
+	}
+	// The alignment banner must NOT fire.
 	if strings.Contains(out, "OAuth broker authentication requires OAuth client") {
-		t.Errorf("Hop1/Hop2 alignment banner should be suppressed while V1 guard is active, got:\n%s", out)
+		t.Errorf("Hop1/Hop2 alignment banner must be suppressed while the OAuth-not-supported guard is active, got:\n%s", out)
 	}
 }
 

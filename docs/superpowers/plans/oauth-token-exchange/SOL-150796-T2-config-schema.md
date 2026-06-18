@@ -561,9 +561,20 @@ Code: `oauthNotSupportedBanner` const + `logOAuthNotSupportedBanner(n int)` help
 
 Test coverage: `TestLoadConfig_EmitsOAuthNotSupportedBanner` exercises three cases: a single oauth broker (singular wording), multiple oauth brokers (plural wording), and a config with no oauth brokers (banner must not fire).
 
----
+### Hop 1 / Hop 2 alignment check is gated alongside the not-yet-supported guard
 
-## T2 — `mcp_server_client_auth` is a discriminated union (named sub-blocks), not a flat method field with conditional siblings
+The validator also enforces a permanent structural invariant: when Hop 2 OAuth is in use, `mcp_client_auth.mode` must also be `oauth` so the MCP server has an agent token to exchange for a broker token. This is a permanent rule (a `validateHop1Hop2Alignment` helper) that becomes load-bearing the moment the OAuth runtime ships.
+
+**While the not-yet-supported guard is active, both the alignment error AND the alignment banner are suppressed.** The operator sees a single remediation path — "OAuth on brokers is not yet supported; use basic or bearer for now" — instead of two pieces of guidance that point in opposite directions:
+
+- "use basic or bearer" (from the not-yet-supported guard)
+- "set `mcp_client_auth.mode: oauth`" (from the alignment check)
+
+The second remediation is structurally correct but premature: it points at a future state for a feature that does not yet run. Layering it on top of the not-yet-supported error is noise. So `validate()` only calls the alignment validator inside the `else if oauthBrokerCount == 0` branch — while the guard is active, the alignment check never runs from `validate()`.
+
+The alignment logic is still exercised today via `TestValidateHop1Hop2Alignment_Direct`, which calls `validateHop1Hop2Alignment` directly with crafted configs that bypass `validate()`. The invariant therefore does not rot while it is sleeping in `validate()`.
+
+When the OAuth-on-brokers runtime ships and the `oauthBrokerCount > 0` arm is deleted from `validate()`, the `else if` collapses to an unconditional call and the alignment check becomes the load-bearing operator-facing surface. No additional code changes are needed at that point — the symmetric gating removes itself with the guard.
 
 **Date:** 2026-06-16
 **Sub-ticket:** [SOL-150796](https://sol-jira.atlassian.net/browse/SOL-150796)

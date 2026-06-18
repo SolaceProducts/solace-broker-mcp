@@ -895,50 +895,48 @@ func validate(cfg *ServerConfig) error {
 	// block and its relationship with the brokers' auth modes.
 	errs = append(errs, validateBrokerOAuthConfig(cfg)...)
 
-	// Hop 1 / Hop 2 alignment invariant: any broker with auth.mode: oauth
-	// requires mcp_client_auth.mode: oauth, because RFC 8693 token exchange
-	// consumes the agent's Hop 1 token as the subject_token. Without Hop 1
-	// OAuth there is no subject_token to exchange.
+	// OAuth-related operator-facing surface. Two invariants compete for the
+	// operator's attention when at least one broker uses auth.mode: oauth:
 	//
-	// The CHECK always runs and its error always lands in the joined error
-	// blob. The BANNER emission is gated below for V1 noise-suppression
-	// reasons (see banner.LogHop2WithoutHop1 doc-comment).
-	if err := validateHop1Hop2Alignment(cfg); err != nil {
-		errs = append(errs, err)
-	}
-
-	// Banner emission for the two oauth-related guards. Order matters:
+	//   1) The OAuth-not-supported guard (temporary): while the OAuth
+	//      runtime is not yet wired, every oauth-mode broker is rejected at
+	//      startup. This is the ONLY message operators should see for that
+	//      config shape — clear, one direction of remediation ("use basic
+	//      or bearer until OAuth-on-brokers ships").
 	//
-	//   1) V1 not-yet-supported guard fires whenever ANY broker uses
-	//      auth.mode: oauth — banner #1 is the loud headline.
+	//   2) The Hop 1 / Hop 2 alignment invariant (permanent): when Hop 2
+	//      OAuth is in use, mcp_client_auth.mode must also be oauth so the
+	//      MCP server has an agent token to exchange for a broker token.
 	//
-	//   2) Hop 1 / Hop 2 alignment banner fires ONLY when the V1 guard
-	//      did NOT trip — i.e., when the operator is staging an oauth-on-
-	//      broker config in a future runtime where the V1 guard has been
-	//      removed. In V1 today this branch is structurally unreachable
-	//      because every Hop 2 use trips the V1 guard. The validation
-	//      error itself (appended above) still lands in the joined error
-	//      blob in V1 so the invariant is enforced and tested today.
+	// Both error AND banner for the alignment invariant are gated behind
+	// "the OAuth-not-supported guard did NOT fire." While the guard is
+	// active, layering the alignment remediation on top would point
+	// operators at a second remediation path for a feature that does not
+	// yet run — noise. The validator function validateHop1Hop2Alignment
+	// stays callable and is exercised by TestValidateHop1Hop2Alignment_Direct
+	// so the invariant does not rot while it is sleeping in validate().
 	//
 	// LIFECYCLE: when the OAuth runtime ships (SOL-150070 follow-up sub-
-	// tickets), delete the whole `if oauthBrokerCount > 0` arm — banner
-	// #2 then becomes the load-bearing startup signal for Hop 1 / Hop 2
-	// mismatches. See banner.LogOAuthNotSupported doc-comment for the
-	// removal checklist.
+	// tickets), delete the whole `if oauthBrokerCount > 0` arm — the
+	// `else if` then runs unconditionally and the alignment check
+	// becomes the operator-facing surface for Hop 1 / Hop 2 mismatches.
+	// See banner.LogOAuthNotSupported doc-comment for the full removal
+	// checklist.
 	if oauthBrokerCount > 0 {
 		banner.LogOAuthNotSupported(oauthBrokerCount)
-	} else if n := countHop2Brokers(cfg); n > 0 && cfg.MCPClientAuth.Mode != AuthModeOAuth {
-		banner.LogHop2WithoutHop1(n, cfg.MCPClientAuth.Mode)
+	} else if err := validateHop1Hop2Alignment(cfg); err != nil {
+		errs = append(errs, err)
+		banner.LogHop2WithoutHop1(countHop2Brokers(cfg), cfg.MCPClientAuth.Mode)
 	}
 
 	return errors.Join(errs...)
 }
 
 // countHop2Brokers returns the number of brokers configured with
-// auth.mode: oauth. Identical in V1 to the oauthBrokerCount computed in
-// validate(); kept as a separate helper because the two counters diverge
-// when the V1 not-yet-supported guard is removed (oauthBrokerCount goes
-// away; the Hop 2 count remains).
+// auth.mode: oauth. Identical, while the OAuth-not-supported guard is
+// active, to the oauthBrokerCount computed in validate(); kept as a
+// separate helper because the two counters diverge once the guard is
+// removed (oauthBrokerCount goes away; the Hop 2 count remains).
 func countHop2Brokers(cfg *ServerConfig) int {
 	n := 0
 	for _, b := range cfg.brokers {
@@ -954,12 +952,15 @@ func countHop2Brokers(cfg *ServerConfig) int {
 // nil when the invariant holds (no Hop 2 brokers, or Hop 1 mode is oauth)
 // and an operator-facing error otherwise.
 //
-// This validator runs UNCONDITIONALLY in validate() — independent of the V1
-// not-yet-supported guard — so the invariant is enforced and testable today
-// even though the runtime that consumes it is not yet wired. The error it
-// returns lands in the joined error blob in every case where the invariant
-// is violated; the corresponding banner.LogHop2WithoutHop1 emission is what
-// gets gated for V1 noise suppression (see validate()).
+// This validator is a PURE function — it inspects the config and returns
+// an error or nil. Whether validate() actually calls it and surfaces the
+// error to operators is decided at the call site. While the
+// OAuth-not-supported guard is active, validate() does NOT call this
+// validator (the alignment branch is gated behind the guard so operators
+// get a single remediation path). The invariant is still exercised today
+// by TestValidateHop1Hop2Alignment_Direct, which calls this function
+// directly with crafted configs, so the alignment logic does not rot
+// while it is sleeping in validate().
 func validateHop1Hop2Alignment(cfg *ServerConfig) error {
 	if cfg.MCPClientAuth.Mode == AuthModeOAuth {
 		return nil
