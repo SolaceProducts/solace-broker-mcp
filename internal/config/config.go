@@ -1173,7 +1173,7 @@ func validateBroker(broker *BrokerConfig, productionMode bool) []error {
 		// Reject at startup with an actionable message rather than letting
 		// the failure land on the first SEMP request. This block will be
 		// removed by the sub-ticket that wires the OAuth runtime (T6).
-		// See docs/superpowers/plans/2026-06-14-sol-150070-implementation-decisions.md
+		// See docs/superpowers/plans/oauth-token-exchange/SOL-150796-T2-config-schema.md
 		// for the rationale (no feature flag, removed when runtime lands).
 		errs = append(errs, fmt.Errorf(
 			"broker %q: auth.mode %q is recognized but not yet supported in this version; "+

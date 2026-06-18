@@ -2259,7 +2259,7 @@ brokers:
 // after schema validation, so per-broker oauth fields can be field-tested by
 // operators today even though the runtime is not yet available.
 //
-// See docs/superpowers/plans/2026-06-14-sol-150070-implementation-decisions.md
+// See docs/superpowers/plans/oauth-token-exchange/SOL-150796-T2-config-schema.md
 // for the rationale (no feature flag, rejection removed when T6 lands).
 func TestLoadConfig_BrokerOAuth(t *testing.T) {
 	// All cases run with mcp_client_auth.mode: static (so the deployment is in
