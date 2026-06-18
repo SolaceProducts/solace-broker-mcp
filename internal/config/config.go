@@ -905,25 +905,65 @@ func validate(cfg *ServerConfig) error {
 	// block and its relationship with the brokers' auth modes.
 	errs = append(errs, validateBrokerOAuthConfig(cfg)...)
 
-	// If any broker tripped the V1 OAuth runtime guard, emit the standalone
-	// banner so the per-broker rejection error is not buried inside the joined
-	// errors blob. The per-broker errors stay in the joined error so operators
-	// still get the broker names; this banner is the loud headline.
+	// Hop 1 / Hop 2 alignment invariant: any broker with auth.mode: oauth
+	// requires mcp_client_auth.mode: oauth, because RFC 8693 token exchange
+	// consumes the agent's Hop 1 token as the subject_token. Without Hop 1
+	// OAuth there is no subject_token to exchange.
+	//
+	// The CHECK always runs and its error always lands in the joined error
+	// blob. The BANNER emission is gated below for V1 noise-suppression
+	// reasons (see logHop2WithoutHop1Banner doc-comment).
+	if err := validateHop1Hop2Alignment(cfg); err != nil {
+		errs = append(errs, err)
+	}
+
+	// Banner emission for the two oauth-related guards. Order matters:
+	//
+	//   1) V1 not-yet-supported guard fires whenever ANY broker uses
+	//      auth.mode: oauth — banner #1 is the loud headline.
+	//
+	//   2) Hop 1 / Hop 2 alignment banner fires ONLY when the V1 guard
+	//      did NOT trip — i.e., when the operator is staging an oauth-on-
+	//      broker config in a future runtime where the V1 guard has been
+	//      removed. In V1 today this branch is structurally unreachable
+	//      because every Hop 2 use trips the V1 guard. The validation
+	//      error itself (appended above) still lands in the joined error
+	//      blob in V1 so the invariant is enforced and tested today.
+	//
+	// LIFECYCLE: when the OAuth runtime ships (SOL-150070 follow-up sub-
+	// tickets), delete the whole `if oauthBrokerCount > 0` arm — banner
+	// #2 then becomes the load-bearing startup signal for Hop 1 / Hop 2
+	// mismatches. See oauthNotSupportedBanner doc-comment for the
+	// removal checklist.
 	if oauthBrokerCount > 0 {
 		logOAuthNotSupportedBanner(oauthBrokerCount)
+	} else if n := countHop2Brokers(cfg); n > 0 && cfg.MCPClientAuth.Mode != AuthModeOAuth {
+		logHop2WithoutHop1Banner(n, cfg.MCPClientAuth.Mode)
 	}
 
 	return errors.Join(errs...)
 }
 
-// oauthNotSupportedBanner is the operator-facing multi-line message logged at
-// startup when any broker is configured with the not-yet-supported oauth mode.
-// %s is filled with "1 broker" or "N brokers" (conditional plural).
+// oauthNotSupportedBanner is the V1 not-yet-supported guard headline. It is
+// logged when any broker is configured with auth.mode: oauth, which the
+// schema accepts but the V1 runtime cannot use. %s is filled with "1 broker"
+// or "N brokers" (conditional plural).
 //
 // The banner is logged via slog.Error as a SEPARATE log line from the joined
 // validation error — operators see the headline first, then the comprehensive
-// error with broker names. Wording is operator-language: what we detected, why
-// it failed, what to do today, and that the feature is planned.
+// error with broker names. Wording is operator-language: what we detected,
+// why it failed, what to do today, and that the feature is planned.
+//
+// LIFECYCLE — REMOVE WHEN THE OAUTH RUNTIME LANDS:
+// This banner, the validateBroker check that produces oauthBrokerCount, and
+// the logOAuthNotSupportedBanner call site in validate() are all part of the
+// same temporary guard. They exist only because V1 ships the broker_oauth
+// schema without the runtime that consumes it. When the runtime sub-ticket
+// (SOL-150070 follow-ups: token exchanger + oauth Authenticator + cookie
+// jar) lands and the per-broker oauth flow actually works, delete all three
+// together. At that point the Hop 1 / Hop 2 alignment banner below
+// (hop2WithoutHop1Banner) becomes the load-bearing startup check for
+// OAuth-on-broker configs.
 const oauthNotSupportedBanner = `
 ============================================================
   This version of the MCP server does not yet support
@@ -954,6 +994,113 @@ func logOAuthNotSupportedBanner(n int) {
 		noun = fmt.Sprintf("%d brokers", n)
 	}
 	slog.Error(fmt.Sprintf(oauthNotSupportedBanner, noun))
+}
+
+// hop2WithoutHop1Banner is the structural-mismatch headline for the Hop 1 /
+// Hop 2 alignment invariant: if any broker uses auth.mode: oauth (Hop 2 —
+// MCP server obtains a broker-bound token via RFC 8693 token exchange),
+// then mcp_client_auth.mode must also be oauth (Hop 1 — the MCP server
+// receives an agent token). The reason is mechanical: RFC 8693 token
+// exchange consumes the agent's Hop 1 token as the subject_token. Without
+// Hop 1 OAuth there is no subject_token to exchange, and Hop 2 has nothing
+// to do.
+//
+// The two %s placeholders are filled with the broker-count noun ("1 broker"
+// or "N brokers") and the current mcp_client_auth.mode value ("disabled" or
+// "static"), respectively.
+//
+// LIFECYCLE — KEEP. This banner is PERMANENT. Unlike oauthNotSupportedBanner
+// (the V1 not-yet-supported guard above), this check enforces an invariant
+// that holds for every release of the MCP server: Hop 2 OAuth structurally
+// requires Hop 1 OAuth. When the runtime ships and the V1 guard is removed,
+// this banner becomes the load-bearing startup check for operators who try
+// to enable Hop 2 without Hop 1.
+//
+// V1 GATING ORDER — emission is intentionally suppressed while the V1
+// not-yet-supported guard is in effect (the call site in validate() routes
+// to this banner only when oauthBrokerCount == 0). In V1 the operator's
+// misconfiguration is already fully explained by "OAuth on brokers is not
+// yet supported" — telling them additionally about a Hop 1 / Hop 2 mismatch
+// is noise for a runtime that does not yet exist. The validation error
+// itself (produced by validateHop1Hop2Alignment) always lands in the joined
+// error blob even in V1, so the invariant is enforced and tested today;
+// only the banner is gated. When the V1 guard goes away, the suppression
+// goes away with it (same if/else-if block in validate()), and this banner
+// fires whenever the invariant is violated.
+const hop2WithoutHop1Banner = `
+============================================================
+  OAuth broker authentication (Hop 2) requires OAuth client
+  authentication (Hop 1).
+
+  Your config has %s with auth.mode: oauth, but
+  mcp_client_auth.mode is %q. Hop 2 token exchange (RFC 8693)
+  consumes the agent's Hop 1 token as the subject_token —
+  without Hop 1 OAuth there is no token to exchange and Hop 2
+  cannot work. The server will not start.
+
+  To proceed, either:
+    - set mcp_client_auth.mode: oauth and configure issuer,
+      audience, and resource_url, OR
+    - change those brokers to use auth.mode: basic or bearer.
+============================================================`
+
+// logHop2WithoutHop1Banner emits the Hop 1 / Hop 2 alignment-mismatch
+// headline. n is the count of brokers configured with auth.mode: oauth;
+// hop1Mode is the current mcp_client_auth.mode value (one of "disabled" or
+// "static" — "oauth" is the only valid Hop 1 mode for Hop 2 to work, and
+// the empty case is already caught by the mcp_client_auth.mode-is-required
+// validator).
+//
+// Like logOAuthNotSupportedBanner this is a *headline* — it intentionally
+// does not list broker names. The joined validation error (returned by
+// validate() and logged by main) carries the per-broker context.
+func logHop2WithoutHop1Banner(n int, hop1Mode string) {
+	noun := "1 broker"
+	if n != 1 {
+		noun = fmt.Sprintf("%d brokers", n)
+	}
+	slog.Error(fmt.Sprintf(hop2WithoutHop1Banner, noun, hop1Mode))
+}
+
+// countHop2Brokers returns the number of brokers configured with
+// auth.mode: oauth. Identical in V1 to the oauthBrokerCount computed in
+// validate(); kept as a separate helper because the two counters diverge
+// when the V1 not-yet-supported guard is removed (oauthBrokerCount goes
+// away; the Hop 2 count remains).
+func countHop2Brokers(cfg *ServerConfig) int {
+	n := 0
+	for _, b := range cfg.brokers {
+		if b.Auth.Mode == AuthModeOAuth {
+			n++
+		}
+	}
+	return n
+}
+
+// validateHop1Hop2Alignment enforces the structural invariant that Hop 2
+// OAuth on any broker requires Hop 1 OAuth on the MCP client auth. Returns
+// nil when the invariant holds (no Hop 2 brokers, or Hop 1 mode is oauth)
+// and an operator-facing error otherwise.
+//
+// This validator runs UNCONDITIONALLY in validate() — independent of the V1
+// not-yet-supported guard — so the invariant is enforced and testable today
+// even though the runtime that consumes it is not yet wired. The error it
+// returns lands in the joined error blob in every case where the invariant
+// is violated; the corresponding hop2WithoutHop1Banner emission is what
+// gets gated for V1 noise suppression (see validate()).
+func validateHop1Hop2Alignment(cfg *ServerConfig) error {
+	if cfg.MCPClientAuth.Mode == AuthModeOAuth {
+		return nil
+	}
+	n := countHop2Brokers(cfg)
+	if n == 0 {
+		return nil
+	}
+	subject := "1 broker has"
+	if n != 1 {
+		subject = fmt.Sprintf("%d brokers have", n)
+	}
+	return fmt.Errorf("mcp_client_auth.mode is %q but %s auth.mode: oauth; Hop 2 token exchange (RFC 8693) consumes the agent's Hop 1 token as the subject_token, so Hop 2 requires mcp_client_auth.mode: oauth", cfg.MCPClientAuth.Mode, subject)
 }
 
 // validateBroker returns all validation errors for a single broker. Credential
