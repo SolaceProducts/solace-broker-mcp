@@ -280,25 +280,35 @@ Three reasons, in order of weight:
 ### What the validator does today
 
 - `idp_token_url` is required (non-empty, valid URL).
-- No `issuer_url` field exists in the schema yet.
+- `broker_oauth` has no issuer-URL field yet. (The Hop 1 block `mcp_client_auth` does have an `issuer` field — added in SOL-149989 to feed OIDC token verification — but it identifies the IdP that signs *agent* tokens for verification, not the IdP endpoint the MCP server itself calls to perform Hop 2 token exchange. The follow-up ticket adds a separate field on `broker_oauth`. See "Why a new field instead of reusing `mcp_client_auth.issuer`" below.)
 
 ### What the deferred follow-up ticket will add
 
-- A new optional `issuer_url` field on `BrokerOAuthConfig`.
-- Validator rule: exactly one of `issuer_url` or `idp_token_url` must be set; both is an error; neither is an error.
+- A new optional issuer-URL field on `BrokerOAuthConfig` (name TBD in that ticket — likely `idp_issuer_url` to follow T2's explicit-naming principle and parallel the existing `idp_token_url`).
+- Validator rule: exactly one of the issuer-URL field or `idp_token_url` must be set; both is an error; neither is an error.
 - Runtime: OIDC Discovery client that fetches `<issuer_url>/.well-known/openid-configuration`, extracts `token_endpoint`, and uses it in place of `idp_token_url`. Caching, error handling, and fetch timing decided in that ticket.
 - Operators on modern IdPs gain the convenience of single-field IdP configuration. Operators on legacy IdPs are unaffected.
 
 ### What this means for the V1 schema commitment
 
-`idp_token_url` is part of the V1 schema and stays required forever. Operators who configure it in V1 will never be forced to migrate to `issuer_url`. The discovery-based path is an *additional* way to configure the same coordinate, not a replacement.
+`idp_token_url` is part of the V1 schema and stays required forever. Operators who configure it in V1 will never be forced to migrate to the future issuer-URL field. The discovery-based path is an *additional* way to configure the same coordinate, not a replacement.
+
+### Why a new field instead of reusing `mcp_client_auth.issuer`
+
+The Hop 1 block has an `issuer` field today. It would be tempting to reuse it as the Hop 2 IdP coordinate too — "one IdP, one issuer URL." We're choosing not to, for two reasons:
+
+1. **Same IdP is the common case, but not the invariant.** Hop 1 verifies *agent* tokens; Hop 2 obtains *broker* tokens. In most deployments these come from the same IdP and so the issuer URLs match. But there are real deployments where they don't: a federation where agents authenticate against an identity broker (Hop 1 issuer = identity broker) while the MCP server holds a service-account credential at a different IdP (Hop 2 issuer = that IdP). Conflating the two would mean those deployments can't express their config.
+
+2. **Hop 1 `issuer` and Hop 2 issuer-URL serve different runtime purposes.** Hop 1 `issuer` is the value go-oidc uses to verify the `iss` claim on inbound agent tokens — it's identity-of-the-signer, not an endpoint to call. The Hop 2 issuer-URL feeds OIDC Discovery: the MCP server fetches `<issuer-url>/.well-known/openid-configuration` to learn the token endpoint, JWKS URL, etc. Same string shape, but one is a value to *match against* and the other is a URL to *retrieve from*. Mixing them into one field invites a future bug where the validator's URL-reachability check (added for the Discovery path) starts failing on Hop 1 issuers that were never intended to be fetched.
+
+The cost of two fields is one extra line in the YAML for operators whose IdPs do match — a marginal annoyance compared to the structural correctness of letting the two configs vary when they need to.
 
 ### Honest caveat
 
-This is the third place in T2 where we've leaned on the "schema is forward-compatible, validator is strict about V1's implementation" pattern (the others being `client_auth_method` and `grant_type`). For T2's narrower scope of `idp_token_url` vs. `issuer_url`, we made the opposite call — keep the schema narrow now, extend later — because:
+This is the third place in T2 where we've leaned on the "schema is forward-compatible, validator is strict about V1's implementation" pattern (the others being `client_auth_method` and `grant_type`). For T2's narrower scope of explicit-endpoint vs. Discovery-based IdP configuration, we made the opposite call — keep the schema narrow now, extend later — because:
 
 - `client_auth_method` and `grant_type` are discriminators with a single field already present (the method/type string itself). The schema cost is one string field plus an allowlist. Cheap.
-- `issuer_url` vs. `idp_token_url` is a *capability*, not a discriminator. Adding `issuer_url` to the schema requires either (a) accepting it and silently failing at runtime, or (b) rejecting it in the validator with an "unsupported" error. Both are worse than not having the field.
+- The issuer-URL vs. `idp_token_url` choice is a *capability*, not a discriminator. Adding the issuer-URL field to the schema today requires either (a) accepting it and silently failing at runtime, or (b) rejecting it in the validator with an "unsupported" error. Both are worse than not having the field.
 
 The line between "discriminator pattern (cheap, schema-flexible)" and "feature placeholder (confusing, schema-flexible)" is the runtime cost of supporting the alternative value. Discriminators where the runtime treats both values nearly identically (e.g., `client_secret_basic` vs. `client_secret_post` differ only in transport) are cheap to keep in schema. Discriminators that gate substantially different runtime paths (Discovery vs. explicit endpoint) are not.
 
@@ -539,13 +549,17 @@ brokers:
 
 ### The "what is the operator actually required to type?" answer
 
-A new operator deploying with all V1 defaults writes:
+A new operator deploying writes (with `client_secret_basic` chosen as the IdP's required token-endpoint auth method):
 
 ```yaml
 broker_oauth:
   idp_token_url: "..."
   mcp_server_client_id: "..."
-  client_secret: "${...}"
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: "${...}"
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: "audience"
 
 brokers:
   my-broker:
@@ -555,7 +569,7 @@ brokers:
       # audience and scopes only if your broker's profile validates them
 ```
 
-That's the minimum. Everything else (`client_auth_method`, `grant_type`, `audience`, `scopes`) is either defaulted or genuinely optional per the broker's profile.
+That's the minimum. There is no flat `client_secret:` alternative — the *only* way to provide a client secret is by populating exactly one sub-block under `mcp_server_client_auth:` (the discriminated union, see the per-method validation contract section below). Allowing a flat `client_secret:` in parallel would defeat the union's purpose: it would let operators express the same configuration in two structurally different ways and reintroduce the very misconfiguration shape the union is designed to prevent (e.g., a flat `client_secret` paired with a method that doesn't use one). `grant_type` and `audience_parameter_name` are required, no defaults — see the "Discriminator fields no longer have defaults" subsection later in this doc. The per-broker `audience` and `scopes` remain optional per the broker's profile.
 
 ### Reasoning thread for "why these fields and no others"
 
