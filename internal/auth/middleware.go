@@ -41,7 +41,7 @@ var oidcHTTPClientTimeout = defaults.DefaultOIDCHTTPTimeout
 
 func NewAuthMiddleware(cfg *config.ServerConfig, next http.Handler) (http.Handler, error) {
 	// Auth backend selection mirrors mcp_client_auth.mode. Insecure-mode signaling
-	// lives in cmd/server/main.go via auth.LogStartupBanner — DO NOT add WARN
+	// lives in cmd/server/main.go via banner.LogStartupAuthMode — DO NOT add WARN
 	// logs here. See docs/superpowers/specs/2026-05-20-client-auth-mode-design.md.
 	switch cfg.MCPClientAuth.Mode {
 	case config.AuthModeDisabled:

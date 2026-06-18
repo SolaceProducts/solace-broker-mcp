@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/banner"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"gopkg.in/yaml.v3"
 )
@@ -894,60 +895,10 @@ func validate(cfg *ServerConfig) error {
 	// errors blob. The per-broker errors stay in the joined error so operators
 	// still get the broker names; this banner is the loud headline.
 	if oauthBrokerCount > 0 {
-		logOAuthNotSupportedBanner(oauthBrokerCount)
+		banner.LogOAuthNotSupported(oauthBrokerCount)
 	}
 
 	return errors.Join(errs...)
-}
-
-// oauthNotSupportedBanner is the V1 not-yet-supported guard headline. It is
-// logged when any broker is configured with auth.mode: oauth, which the
-// schema accepts but the V1 runtime cannot use. %s is filled with "1 broker"
-// or "N brokers" (conditional plural).
-//
-// The banner is logged via slog.Error as a SEPARATE log line from the joined
-// validation error — operators see the headline first, then the comprehensive
-// error with broker names. Wording is operator-language: what we detected,
-// why it failed, what to do today, and that the feature is planned.
-//
-// LIFECYCLE — REMOVE WHEN THE OAUTH RUNTIME LANDS:
-// This banner, the validateBroker check that produces oauthBrokerCount, and
-// the logOAuthNotSupportedBanner call site in validate() are all part of the
-// same temporary guard. They exist only because V1 ships the broker_oauth
-// schema without the runtime that consumes it. When the runtime sub-ticket
-// (SOL-150070 follow-ups: token exchanger + oauth Authenticator + cookie
-// jar) lands and the per-broker oauth flow actually works, delete all three
-// together.
-const oauthNotSupportedBanner = `
-============================================================
-  This version of the MCP server does not yet support
-  authenticating to brokers using OAuth.
-
-  Your config has %s with auth.mode: oauth, which the server
-  recognizes but cannot use. The server will not start.
-
-  To proceed today, change those brokers to use auth.mode:
-  basic (username + password) or auth.mode: bearer (static
-  token). Both are fully supported in this version.
-
-  OAuth broker authentication is planned in a future release.
-============================================================`
-
-// logOAuthNotSupportedBanner emits the operator-facing headline when oauth
-// brokers are detected during validation. n is the count of affected brokers;
-// the function formats the count with the correct singular/plural form.
-//
-// This is a *headline* — it intentionally does not list broker names. The
-// joined validation error (returned by validate() and logged by main) carries
-// the per-broker rejection messages with the broker aliases, so operators
-// have the names there. Keeping the headline broker-name-free means the
-// banner scales: 1 affected broker or 47, the headline stays the same shape.
-func logOAuthNotSupportedBanner(n int) {
-	noun := "1 broker"
-	if n != 1 {
-		noun = fmt.Sprintf("%d brokers", n)
-	}
-	slog.Error(fmt.Sprintf(oauthNotSupportedBanner, noun))
 }
 
 // validateBroker returns all validation errors for a single broker. Credential

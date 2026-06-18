@@ -875,3 +875,35 @@ Explicit names are longer. Operators type more characters per config; reviewers 
 - All four `broker_oauth:` field renames stand: `idp_token_endpoint`, `mcp_server_client_id`, `mcp_server_client_auth`, `audience_parameter_name`.
 - The principle (explicit by default; generic names reserved) applies to every future schema decision. If a future field is genuinely ambiguous without a qualifier, the qualifier goes in the name.
 - A field name change inside V1's schema would be a breaking schema change. Therefore: when in doubt during design, lean explicit. Generic-to-explicit is hard later; explicit-to-generic is impossible.
+
+---
+
+## T2 — Banners consolidated into a dedicated `internal/banner` package
+
+**Date:** 2026-06-18
+**Sub-ticket:** [SOL-150796](https://sol-jira.atlassian.net/browse/SOL-150796)
+
+### The question
+
+T2 added a second operator-facing banner (the V1 OAuth-not-supported guard) next to the existing Hop 1 startup banner in `internal/auth/banner.go`. The V1 banner landed in `internal/config/config.go`. Two banners, two homes. The Hop 1 / Hop 2 alignment banner (next commit) would have made it three.
+
+### Decision
+
+A new `internal/banner` package is the single home for every operator-facing banner. Emitters take primitives (strings, ints), not `*config.ServerConfig`, so the package has no internal dependencies. Callers (config validators, `cmd/server/main`) import `banner` and pick the emitter they need.
+
+After the refactor:
+- `internal/banner/banner.go` — all consts + exported emitters (`LogStartupAuthMode`, `LogOAuthNotSupported`).
+- `internal/banner/banner_test.go` — moved from `internal/auth/`.
+- `internal/auth/banner.go` and its test — deleted.
+
+### Why a third package, not `auth` or `config`
+
+Import-cycle constraint. `internal/auth` already imports `internal/config`. If banners lived in `auth`, `config.validate()` couldn't call them without a cycle (`config → auth → config`). If banners lived in `config`, the existing `auth/banner.go` would still be a separate home. A neutral third package — depending on neither — is the only clean topology. Mirrors `internal/defaults`.
+
+### Why in this PR
+
+The V1 banner just landed in this PR's commit 3 in `config.go`. The alignment banner lands in the next commit. Doing the refactor now means both land in the right home from birth — no spread to clean up on main later, no follow-up ticket gathering dust. The change is ≈150 lines of relocation with no behavior change (verified end-to-end with byte-identical banner output before and after).
+
+### Signature change worth noting
+
+`LogStartupAuthMode(mode, issuer string)` takes primitives instead of `*config.ServerConfig` (the old `LogStartupBanner` signature). `cmd/server/main` unpacks the cfg at the call site. One extra line for the caller; the banner package stays cycle-free and the contract is explicit about what data is actually consumed.
