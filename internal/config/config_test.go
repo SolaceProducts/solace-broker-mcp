@@ -3032,6 +3032,183 @@ brokers:
 // that becomes load-bearing when the V1 guard is removed and the OAuth runtime
 // ships — the test pins the invariant TODAY so the invariant is exercised in
 // every CI run, even though the V1 guard makes its banner unreachable in V1.
+func TestValidateHop1Hop2Alignment_Direct(t *testing.T) {
+	hop2Broker := func() *BrokerConfig {
+		return &BrokerConfig{Auth: AuthConfig{Mode: AuthModeOAuth}}
+	}
+	basicBroker := func() *BrokerConfig {
+		return &BrokerConfig{Auth: AuthConfig{Mode: AuthModeBasic, Username: "u", Password: "p"}}
+	}
+
+	t.Run("hop1 oauth + hop2 oauth — valid (no error)", func(t *testing.T) {
+		cfg := &ServerConfig{
+			MCPClientAuth: MCPClientAuthConfig{Mode: AuthModeOAuth},
+			brokers:       map[string]*BrokerConfig{"a": hop2Broker()},
+		}
+		if err := validateHop1Hop2Alignment(cfg); err != nil {
+			t.Fatalf("expected nil, got: %v", err)
+		}
+	})
+
+	t.Run("hop1 oauth + no hop2 — valid (no error)", func(t *testing.T) {
+		cfg := &ServerConfig{
+			MCPClientAuth: MCPClientAuthConfig{Mode: AuthModeOAuth},
+			brokers:       map[string]*BrokerConfig{"a": basicBroker()},
+		}
+		if err := validateHop1Hop2Alignment(cfg); err != nil {
+			t.Fatalf("expected nil, got: %v", err)
+		}
+	})
+
+	t.Run("hop1 static + no hop2 — valid (no error)", func(t *testing.T) {
+		cfg := &ServerConfig{
+			MCPClientAuth: MCPClientAuthConfig{Mode: AuthModeStatic, DevToken: "t"},
+			brokers:       map[string]*BrokerConfig{"a": basicBroker()},
+		}
+		if err := validateHop1Hop2Alignment(cfg); err != nil {
+			t.Fatalf("expected nil, got: %v", err)
+		}
+	})
+
+	t.Run("hop1 static + hop2 oauth — invariant violated", func(t *testing.T) {
+		cfg := &ServerConfig{
+			MCPClientAuth: MCPClientAuthConfig{Mode: AuthModeStatic, DevToken: "t"},
+			brokers:       map[string]*BrokerConfig{"a": hop2Broker()},
+		}
+		err := validateHop1Hop2Alignment(cfg)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		msg := err.Error()
+		// Operator-facing error must name (a) the offending Hop 1 mode,
+		// (b) the broker count, and (c) the corrective action — without
+		// leaking internal vocabulary (Hop 1/2, RFC numbers, subject_token).
+		for _, want := range []string{`"static"`, "1 broker", "auth.mode: oauth", "mcp_client_auth.mode must be oauth"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("error missing %q in:\n%s", want, msg)
+			}
+		}
+		for _, unwanted := range []string{"Hop 1", "Hop 2", "RFC", "subject_token"} {
+			if strings.Contains(msg, unwanted) {
+				t.Errorf("error contains internal vocabulary %q in:\n%s", unwanted, msg)
+			}
+		}
+	})
+
+	t.Run("hop1 disabled + hop2 oauth — invariant violated", func(t *testing.T) {
+		cfg := &ServerConfig{
+			MCPClientAuth: MCPClientAuthConfig{Mode: AuthModeDisabled},
+			brokers:       map[string]*BrokerConfig{"a": hop2Broker()},
+		}
+		err := validateHop1Hop2Alignment(cfg)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), `"disabled"`) {
+			t.Errorf("expected error to name hop1 mode 'disabled', got: %v", err)
+		}
+	})
+
+	t.Run("hop1 static + 3 hop2 brokers — plural subject", func(t *testing.T) {
+		cfg := &ServerConfig{
+			MCPClientAuth: MCPClientAuthConfig{Mode: AuthModeStatic, DevToken: "t"},
+			brokers: map[string]*BrokerConfig{
+				"a": hop2Broker(), "b": hop2Broker(), "c": hop2Broker(),
+			},
+		}
+		err := validateHop1Hop2Alignment(cfg)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "3 brokers have auth.mode: oauth") {
+			t.Errorf("expected plural subject '3 brokers have' in error, got: %v", err)
+		}
+	})
+}
+
+// TestLoadConfig_Hop1Hop2AlignmentError_AppearsInJoinedError verifies that,
+// even in V1 where the not-yet-supported guard fires for every oauth broker,
+// the alignment validation error still lands in the joined error blob. The
+// invariant is thereby enforced today; only the secondary banner is
+// suppressed.
+func TestLoadConfig_Hop1Hop2AlignmentError_AppearsInJoinedError(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: t
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+brokers:
+  staging:
+    url: "https://broker.example.com:943"
+    auth:
+      mode: oauth
+      audience: "solace-broker-staging"
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	// Both errors must be present in the joined blob — the V1 guard names
+	// "not yet supported", the alignment validator names the corrective
+	// action ("mcp_client_auth.mode must be oauth").
+	if !strings.Contains(msg, "not yet supported") {
+		t.Errorf("expected V1 not-yet-supported error in joined blob, got: %s", msg)
+	}
+	if !strings.Contains(msg, "mcp_client_auth.mode must be oauth") {
+		t.Errorf("expected Hop1/Hop2 alignment error in joined blob, got: %s", msg)
+	}
+}
+
+// TestLoadConfig_Hop1Hop2AlignmentBanner_SuppressedInV1 verifies that in V1,
+// when the V1 not-yet-supported guard fires, the Hop1/Hop2 alignment banner
+// does NOT also fire. Operators see one headline (the V1 guard), not two for
+// the same config attempt.
+func TestLoadConfig_Hop1Hop2AlignmentBanner_SuppressedInV1(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: t
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+brokers:
+  staging:
+    url: "https://broker.example.com:943"
+    auth: { mode: oauth, audience: "x" }
+`
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
+	defer slog.SetDefault(old)
+
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	out := buf.String()
+	// V1 banner SHOULD fire.
+	if !strings.Contains(out, "does not yet support") {
+		t.Errorf("expected V1 not-yet-supported banner to fire, got:\n%s", out)
+	}
+	// Alignment banner should NOT fire in V1.
+	if strings.Contains(out, "OAuth broker authentication requires OAuth client") {
+		t.Errorf("Hop1/Hop2 alignment banner should be suppressed while V1 guard is active, got:\n%s", out)
+	}
+}
+
 func TestBrokerOAuthConfig_LogValue(t *testing.T) {
 	const (
 		secretClientID     = "mcp-client-id-VALUE"

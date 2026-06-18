@@ -890,15 +890,84 @@ func validate(cfg *ServerConfig) error {
 	// block and its relationship with the brokers' auth modes.
 	errs = append(errs, validateBrokerOAuthConfig(cfg)...)
 
-	// If any broker tripped the V1 OAuth runtime guard, emit the standalone
-	// banner so the per-broker rejection error is not buried inside the joined
-	// errors blob. The per-broker errors stay in the joined error so operators
-	// still get the broker names; this banner is the loud headline.
+	// Hop 1 / Hop 2 alignment invariant: any broker with auth.mode: oauth
+	// requires mcp_client_auth.mode: oauth, because RFC 8693 token exchange
+	// consumes the agent's Hop 1 token as the subject_token. Without Hop 1
+	// OAuth there is no subject_token to exchange.
+	//
+	// The CHECK always runs and its error always lands in the joined error
+	// blob. The BANNER emission is gated below for V1 noise-suppression
+	// reasons (see banner.LogHop2WithoutHop1 doc-comment).
+	if err := validateHop1Hop2Alignment(cfg); err != nil {
+		errs = append(errs, err)
+	}
+
+	// Banner emission for the two oauth-related guards. Order matters:
+	//
+	//   1) V1 not-yet-supported guard fires whenever ANY broker uses
+	//      auth.mode: oauth — banner #1 is the loud headline.
+	//
+	//   2) Hop 1 / Hop 2 alignment banner fires ONLY when the V1 guard
+	//      did NOT trip — i.e., when the operator is staging an oauth-on-
+	//      broker config in a future runtime where the V1 guard has been
+	//      removed. In V1 today this branch is structurally unreachable
+	//      because every Hop 2 use trips the V1 guard. The validation
+	//      error itself (appended above) still lands in the joined error
+	//      blob in V1 so the invariant is enforced and tested today.
+	//
+	// LIFECYCLE: when the OAuth runtime ships (SOL-150070 follow-up sub-
+	// tickets), delete the whole `if oauthBrokerCount > 0` arm — banner
+	// #2 then becomes the load-bearing startup signal for Hop 1 / Hop 2
+	// mismatches. See banner.LogOAuthNotSupported doc-comment for the
+	// removal checklist.
 	if oauthBrokerCount > 0 {
 		banner.LogOAuthNotSupported(oauthBrokerCount)
+	} else if n := countHop2Brokers(cfg); n > 0 && cfg.MCPClientAuth.Mode != AuthModeOAuth {
+		banner.LogHop2WithoutHop1(n, cfg.MCPClientAuth.Mode)
 	}
 
 	return errors.Join(errs...)
+}
+
+// countHop2Brokers returns the number of brokers configured with
+// auth.mode: oauth. Identical in V1 to the oauthBrokerCount computed in
+// validate(); kept as a separate helper because the two counters diverge
+// when the V1 not-yet-supported guard is removed (oauthBrokerCount goes
+// away; the Hop 2 count remains).
+func countHop2Brokers(cfg *ServerConfig) int {
+	n := 0
+	for _, b := range cfg.brokers {
+		if b.Auth.Mode == AuthModeOAuth {
+			n++
+		}
+	}
+	return n
+}
+
+// validateHop1Hop2Alignment enforces the structural invariant that Hop 2
+// OAuth on any broker requires Hop 1 OAuth on the MCP client auth. Returns
+// nil when the invariant holds (no Hop 2 brokers, or Hop 1 mode is oauth)
+// and an operator-facing error otherwise.
+//
+// This validator runs UNCONDITIONALLY in validate() — independent of the V1
+// not-yet-supported guard — so the invariant is enforced and testable today
+// even though the runtime that consumes it is not yet wired. The error it
+// returns lands in the joined error blob in every case where the invariant
+// is violated; the corresponding banner.LogHop2WithoutHop1 emission is what
+// gets gated for V1 noise suppression (see validate()).
+func validateHop1Hop2Alignment(cfg *ServerConfig) error {
+	if cfg.MCPClientAuth.Mode == AuthModeOAuth {
+		return nil
+	}
+	n := countHop2Brokers(cfg)
+	if n == 0 {
+		return nil
+	}
+	subject := "1 broker has"
+	if n != 1 {
+		subject = fmt.Sprintf("%d brokers have", n)
+	}
+	return fmt.Errorf("mcp_client_auth.mode is %q but %s auth.mode: oauth; the MCP server needs the agent's token (received via mcp_client_auth) to obtain a broker token, so mcp_client_auth.mode must be oauth", cfg.MCPClientAuth.Mode, subject)
 }
 
 // validateBroker returns all validation errors for a single broker. Credential

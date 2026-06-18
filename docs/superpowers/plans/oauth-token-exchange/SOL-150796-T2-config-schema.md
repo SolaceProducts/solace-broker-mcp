@@ -907,3 +907,72 @@ The V1 banner just landed in this PR's commit 3 in `config.go`. The alignment ba
 ### Signature change worth noting
 
 `LogStartupAuthMode(mode, issuer string)` takes primitives instead of `*config.ServerConfig` (the old `LogStartupBanner` signature). `cmd/server/main` unpacks the cfg at the call site. One extra line for the caller; the banner package stays cycle-free and the contract is explicit about what data is actually consumed.
+
+---
+
+## T2 — Enforce Hop 1 / Hop 2 OAuth alignment invariant
+
+**Date:** 2026-06-18
+**Sub-ticket:** [SOL-150796](https://sol-jira.atlassian.net/browse/SOL-150796)
+
+### The invariant
+
+If any broker has `auth.mode: oauth` (Hop 2 — the MCP server obtains a broker-bound token from the IdP via RFC 8693 token exchange), `mcp_client_auth.mode` MUST be `oauth` (Hop 1 — the MCP server receives an agent token). The reason is mechanical: RFC 8693 token exchange consumes the agent's Hop 1 token as the `subject_token`. Without Hop 1 OAuth there is no `subject_token` to exchange.
+
+Combinations:
+
+| Hop 1 mode (`mcp_client_auth.mode`) | Hop 2 (`broker.auth.mode`) | Valid? |
+|---|---|---|
+| `oauth` | any broker mode | ✓ |
+| `disabled` / `static` | no broker uses `oauth` | ✓ |
+| `disabled` / `static` | at least one broker uses `oauth` | ✗ — invariant violated |
+
+### Decision
+
+Ship the invariant as part of T2's schema, even though V1 cannot exercise its primary code path:
+
+- New validator `validateHop1Hop2Alignment` in `internal/config/config.go` runs unconditionally in `validate()`. Its error always lands in the joined error blob whenever the invariant is violated.
+- New banner `banner.LogHop2WithoutHop1(n, hop1Mode)` is the operator-facing headline. Lives in `internal/banner` alongside the V1 not-yet-supported banner (consolidated in the previous commit).
+- Helper `countHop2Brokers(cfg)` returns the number of brokers configured with `auth.mode: oauth`.
+
+### V1 gating order
+
+In V1, every broker with `auth.mode: oauth` trips the V1 not-yet-supported guard regardless of Hop 1 alignment. To avoid emitting two banners for the same misconfiguration, banner emission is ordered:
+
+```
+if oauthBrokerCount > 0 {
+    banner.LogOAuthNotSupported(oauthBrokerCount)
+} else if n := countHop2Brokers(cfg); n > 0 && hop1Mode != AuthModeOAuth {
+    banner.LogHop2WithoutHop1(n, hop1Mode)
+}
+```
+
+The validator's *error* is always appended to the joined error blob (so the invariant is enforced and tested today). Only the secondary *banner* is suppressed while the V1 guard is in effect. When the runtime ships and the V1 guard is removed, the `if`-arm disappears and `banner.LogHop2WithoutHop1` becomes the load-bearing startup signal.
+
+### Why ship the validator now if V1 makes its banner unreachable
+
+Three reasons:
+
+1. **Invariants belong in the schema layer.** The MCP server cannot start with an incoherent OAuth config. Catching the mismatch at validation time is consistent with how every other cross-block invariant in `config.go` is handled.
+
+2. **Tests pin the future behavior today.** `TestValidateHop1Hop2Alignment_Direct` calls the validator function directly with a synthetic config (bypassing the V1 guard via the broker map). This means when the V1 guard is removed in the runtime sub-ticket, no test regresses to "this code path was never actually exercised."
+
+3. **Operators staging configs ahead of the runtime get the right error today.** The joined error blob in V1 contains both `"auth.mode \"oauth\" is recognized but not yet supported"` AND `"mcp_client_auth.mode must be oauth"`. The operator sees both problems in one pass.
+
+### Operator-facing wording — what's IN and what's OUT
+
+Both the banner text and the validator error string deliberately avoid internal vocabulary:
+
+- **OUT**: "Hop 1", "Hop 2", "RFC 8693", "subject_token", "token exchange". These are project mental models; operators don't read our decisions docs before configuring YAML.
+- **IN**: the YAML keys operators actually wrote (`mcp_client_auth.mode`, `auth.mode: oauth`), the corrective action (either flip Hop 1 to `oauth` and set its required fields, OR change the broker to `basic`/`bearer`), and a one-sentence cause-and-effect ("the MCP server needs the agent's token to obtain a broker token").
+
+The internal vocabulary (Hop 1/Hop 2, RFC numbers) stays in code comments and this decisions doc — same audience split as every other implementation detail we hide from operator-facing strings.
+
+### Lifecycle markers
+
+Both banners carry explicit `LIFECYCLE` markers in their doc comments:
+
+- `LogOAuthNotSupported`: **REMOVE WHEN THE OAUTH RUNTIME LANDS** — this banner, the per-broker `oauthBrokerCount` tracking, and the `if oauthBrokerCount > 0` arm in `validate()` are all part of the same V1-only guard. They go away together.
+- `LogHop2WithoutHop1`: **KEEP** — permanent invariant. When the V1 guard is removed, this banner's gating goes away with it and it starts firing whenever the invariant is violated.
+
+Future readers don't have to guess which banner is temporary and which is structural.
