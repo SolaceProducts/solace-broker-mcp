@@ -66,9 +66,9 @@ func TestMain(m *testing.M) {
 }
 
 // Test_NewAuthMiddleware_Disabled tests that all requests pass through when
-// client_auth.mode is "disabled" — the explicit no-auth dev mode replacing
+// mcp_client_auth.mode is "disabled" — the explicit no-auth dev mode replacing
 // the old (pre-SOL-149989) silent dev-mode + empty dev-token bypass —
-// which is now structurally impossible: client_auth.mode is required and
+// which is now structurally impossible: mcp_client_auth.mode is required and
 // has no implicit "disabled if dev_token empty" fallback.
 func Test_NewAuthMiddleware_Disabled(t *testing.T) {
 	cfg := &config.ServerConfig{
@@ -195,7 +195,7 @@ func Test_StaticDevToken(t *testing.T) {
 
 // Test_StaticMode_AllowsMissingIssuerAndAudience verifies that static mode
 // constructs middleware successfully when OAuth-only fields (issuer, audience)
-// are absent — these fields are ignored off-mode per the client_auth.mode spec.
+// are absent — these fields are ignored off-mode per the mcp_client_auth.mode spec.
 func Test_StaticMode_AllowsMissingIssuerAndAudience(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Port: 9090,
@@ -209,7 +209,7 @@ func Test_StaticMode_AllowsMissingIssuerAndAudience(t *testing.T) {
 
 	_, err := NewAuthMiddleware(cfg, dummyHandler)
 	if err != nil {
-		t.Errorf("expected no error under client_auth.mode: static without issuer/audience, got: %v", err)
+		t.Errorf("expected no error under mcp_client_auth.mode: static without issuer/audience, got: %v", err)
 	}
 }
 

@@ -40,7 +40,7 @@ import (
 var oidcHTTPClientTimeout = defaults.DefaultOIDCHTTPTimeout
 
 func NewAuthMiddleware(cfg *config.ServerConfig, next http.Handler) (http.Handler, error) {
-	// Auth backend selection mirrors client_auth.mode. Insecure-mode signaling
+	// Auth backend selection mirrors mcp_client_auth.mode. Insecure-mode signaling
 	// lives in cmd/server/main.go via auth.LogStartupBanner — DO NOT add WARN
 	// logs here. See docs/superpowers/specs/2026-05-20-client-auth-mode-design.md.
 	switch cfg.MCPClientAuth.Mode {
@@ -219,7 +219,7 @@ func oidcHTTPClient() (*http.Client, error) {
 // OAuth 2.0 Protected Resource Metadata (RFC 9728) for the MCP server.
 // This endpoint enables MCP clients to discover the authorization server
 // and initiate browser-based OAuth flows (Authorization Code + PKCE).
-// Only served under client_auth.mode == "oauth"; returns nil otherwise.
+// Only served under mcp_client_auth.mode == "oauth"; returns nil otherwise.
 func NewProtectedResourceMetadataHandler(cfg *config.ServerConfig) http.Handler {
 	if cfg.MCPClientAuth.Mode != config.AuthModeOAuth {
 		return nil
