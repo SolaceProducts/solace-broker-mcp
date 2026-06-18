@@ -676,6 +676,106 @@ brokers:
 	}
 }
 
+// TestLoadConfig_WhitespaceTrimmedAcrossRequiredStrings pins the two
+// non-obvious whitespace-trim rules that PR #110 review caught as missed
+// from the original commit 1f34e6f hardening:
+//
+//   1. client_secret_basic / client_secret_post: the secret inside the
+//      discriminated-union sub-block must be trimmed before the empty
+//      check, matching the broker basic/bearer credential rule.
+//   2. per-broker auth.audience (oauth mode): the field is OPTIONAL, so
+//      the check uses a conditional "set-but-whitespace" pattern instead
+//      of bare "trim == empty" — a future refactor that collapses it to
+//      the simple form would incorrectly reject absent-audience configs.
+//
+// Other operator-supplied required strings (dev_token, issuer, broker.url,
+// idp_token_endpoint, etc.) also have the trim rule but are not separately
+// tested here — those checks reduce to "does strings.TrimSpace work on the
+// stdlib", which is not our logic to test. Adding sub-tests for them would
+// be regression coverage for code we don't own.
+func TestLoadConfig_WhitespaceTrimmedAcrossRequiredStrings(t *testing.T) {
+	const oauthHop1 = `
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: aud
+  resource_url: "https://mcp.example.com/mcp"
+`
+	const brokerOAuthHeader = `
+broker_oauth:
+  idp_token_endpoint: "https://idp.example.com/oauth/token"
+  mcp_server_client_id: id
+`
+	const grantAndAud = `
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+`
+
+	cases := []struct {
+		name             string
+		yaml             string
+		wantErrSubstring string
+	}{
+		{
+			name: "client_secret_basic.secret whitespace-only",
+			yaml: `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+` + brokerOAuthHeader + `  mcp_server_client_auth:
+    client_secret_basic:
+      secret: "   "
+` + grantAndAud + `brokers:
+  prod:
+    url: "https://broker.example.com:8080"
+    auth: { mode: basic, username: u, password: p }
+`,
+			wantErrSubstring: "broker_oauth.mcp_server_client_auth.client_secret_basic.secret is required",
+		},
+		{
+			name: "client_secret_post.secret whitespace-only",
+			yaml: `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+` + brokerOAuthHeader + `  mcp_server_client_auth:
+    client_secret_post:
+      secret: "   "
+` + grantAndAud + `brokers:
+  prod:
+    url: "https://broker.example.com:8080"
+    auth: { mode: basic, username: u, password: p }
+`,
+			wantErrSubstring: "broker_oauth.mcp_server_client_auth.client_secret_post.secret is required",
+		},
+		{
+			name: "per-broker auth.audience whitespace-only (optional-but-set semantics)",
+			yaml: oauthHop1 + brokerOAuthHeader + `  mcp_server_client_auth:
+    client_secret_basic:
+      secret: s
+` + grantAndAud + `brokers:
+  prod:
+    url: "https://broker.example.com:8080"
+    auth:
+      mode: oauth
+      audience: "   "
+`,
+			wantErrSubstring: `auth.audience is empty or whitespace-only`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := LoadConfig(writeTemp(t, tc.yaml))
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantErrSubstring)
+			}
+			if !strings.Contains(err.Error(), tc.wantErrSubstring) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantErrSubstring)
+			}
+		})
+	}
+}
+
 func TestLoadConfig_MissingAuthMode(t *testing.T) {
 	yaml := `
 mcp_client_auth:

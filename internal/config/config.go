@@ -859,19 +859,24 @@ func validate(cfg *ServerConfig) error {
 	case AuthModeDisabled:
 		// no further required fields
 	case AuthModeStatic:
-		if cfg.MCPClientAuth.DevToken == "" {
+		// Trim before comparing: a credential resolved from ${VAR} to
+		// whitespace-only would otherwise pass startup validation and fail
+		// every request at runtime with a 401. Apply this rule to every
+		// operator-supplied required string in this file — see also the
+		// basic/bearer credential checks in validateBroker.
+		if strings.TrimSpace(cfg.MCPClientAuth.DevToken) == "" {
 			errs = append(errs, fmt.Errorf("mcp_client_auth.dev_token is required when mcp_client_auth.mode is %q", AuthModeStatic))
 		}
 	case AuthModeOAuth:
-		if cfg.MCPClientAuth.Issuer == "" {
+		if strings.TrimSpace(cfg.MCPClientAuth.Issuer) == "" {
 			errs = append(errs, fmt.Errorf("mcp_client_auth.issuer is required when mcp_client_auth.mode is %q", AuthModeOAuth))
 		} else if err := validateBrokerURL(cfg.MCPClientAuth.Issuer, cfg.IsProductionMode()); err != nil {
 			errs = append(errs, fmt.Errorf("mcp_client_auth.issuer: %w", err))
 		}
-		if cfg.MCPClientAuth.Audience == "" {
+		if strings.TrimSpace(cfg.MCPClientAuth.Audience) == "" {
 			errs = append(errs, fmt.Errorf("mcp_client_auth.audience is required when mcp_client_auth.mode is %q", AuthModeOAuth))
 		}
-		if cfg.MCPClientAuth.ResourceURL == "" {
+		if strings.TrimSpace(cfg.MCPClientAuth.ResourceURL) == "" {
 			errs = append(errs, fmt.Errorf("mcp_client_auth.resource_url is required when mcp_client_auth.mode is %q", AuthModeOAuth))
 		} else if err := validateBrokerURL(cfg.MCPClientAuth.ResourceURL, cfg.IsProductionMode()); err != nil {
 			errs = append(errs, fmt.Errorf("mcp_client_auth.resource_url: %w", err))
@@ -977,7 +982,7 @@ func validateBroker(broker *BrokerConfig, productionMode bool) []error {
 	var errs []error
 	alias := broker.displayName
 
-	if broker.URL == "" {
+	if strings.TrimSpace(broker.URL) == "" {
 		errs = append(errs, fmt.Errorf("broker %q: url is required", alias))
 	} else if err := validateBrokerURL(broker.URL, productionMode); err != nil {
 		errs = append(errs, fmt.Errorf("broker %q: %w", alias, err))
@@ -1021,7 +1026,13 @@ func validateBroker(broker *BrokerConfig, productionMode bool) []error {
 		// audience validation disabled (resourceServerValidateAudienceEnabled
 		// is configurable per the SEMP v2 OauthProfile). The runtime omits the
 		// audience parameter from the token-exchange request when empty.
-		//
+		// When SET, reject whitespace-only — a ${VAR} resolving to "   "
+		// would silently land as the audience claim and break every
+		// token-exchange request.
+		if broker.Auth.Audience != "" && strings.TrimSpace(broker.Auth.Audience) == "" {
+			errs = append(errs, fmt.Errorf("broker %q: auth.audience is empty or whitespace-only", alias))
+		}
+
 		// Scopes is optional, but reject whitespace-only entries that would
 		// silently produce a malformed scope value in the token-exchange
 		// request.
@@ -1095,12 +1106,12 @@ func validateBrokerOAuthConfig(cfg *ServerConfig) []error {
 
 	// Universal required fields — needed regardless of which mcp_server_client_auth
 	// method is configured.
-	if cfg.BrokerOAuth.TokenURL == "" {
+	if strings.TrimSpace(cfg.BrokerOAuth.TokenURL) == "" {
 		errs = append(errs, fmt.Errorf("broker_oauth.idp_token_endpoint is required"))
 	} else if err := validateBrokerURL(cfg.BrokerOAuth.TokenURL, cfg.IsProductionMode()); err != nil {
 		errs = append(errs, fmt.Errorf("broker_oauth.idp_token_endpoint: %w", err))
 	}
-	if cfg.BrokerOAuth.ClientID == "" {
+	if strings.TrimSpace(cfg.BrokerOAuth.ClientID) == "" {
 		errs = append(errs, fmt.Errorf("broker_oauth.mcp_server_client_id is required"))
 	}
 
@@ -1184,9 +1195,12 @@ func validateClientSecretAuth(method string, cfg *ClientSecretAuth) []error {
 		errs = append(errs, fmt.Errorf("broker_oauth.mcp_server_client_auth.%s: sub-block is empty", method))
 		return errs
 	}
-	if cfg.Secret == "" {
+	// Trim before comparing so a ${VAR} resolving to whitespace fails at
+	// startup with a clear error rather than passing validation and then
+	// failing every token-exchange request at runtime with a 401.
+	if strings.TrimSpace(cfg.Secret) == "" {
 		errs = append(errs, fmt.Errorf(
-			"broker_oauth.mcp_server_client_auth.%s.secret is required (empty after ${VAR} substitution if used)",
+			"broker_oauth.mcp_server_client_auth.%s.secret is required (empty or whitespace-only after ${VAR} substitution if used)",
 			method))
 	}
 	return errs

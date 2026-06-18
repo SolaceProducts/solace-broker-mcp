@@ -67,10 +67,12 @@ Reading `token_endpoint` from the existing in-memory `oidcProvider` is **not** a
 
 ---
 
-## T2 — `client_auth_method` discriminator: schema-flexible, validator-strict
+## T2 — Per-method client-authentication: why a method discriminator at all
 
 **Date:** 2026-06-16
 **Sub-ticket:** [SOL-150796](https://sol-jira.atlassian.net/browse/SOL-150796)
+
+> **Note on the design pivot.** An earlier draft of this section proposed a flat `client_auth_method` *string* discriminator alongside a flat `client_secret:` field. T2 pivoted away from that shape mid-implementation to a **discriminated union of named sub-blocks** (`broker_oauth.mcp_server_client_auth: { client_secret_basic: { secret: ... } }`). The reasoning for the pivot — and the contract for adding new methods — lives in **"T2 — `mcp_server_client_auth` is a discriminated union (named sub-blocks), not a flat method field with conditional siblings"** later in this doc. The schema, validator, and tests in this PR ship the union; the flat shape never landed in code. This section retains only the *why-we-need-a-method-discriminator-at-all* reasoning that survived the pivot.
 
 ### The question
 
@@ -78,65 +80,25 @@ How does the MCP server authenticate itself to the IdP when calling the token en
 
 ### Decision
 
-Add a `client_auth_method` discriminator field. V1 supports two values: `client_secret_basic` (default) and `client_secret_post`. Other registered method strings are not implemented in V1 — the validator rejects them with a clear "not yet supported in this version" error. A separate follow-up ticket will add `private_key_jwt` and `tls_client_auth`.
+V1 supports two methods: `client_secret_basic` and `client_secret_post`. Other registered method strings are not implemented in V1 — the validator rejects them with a clear "not yet supported in this version" error. A separate follow-up ticket will add `private_key_jwt` and `tls_client_auth`.
 
-### Why
+The *shape* operators use to select the method is the discriminated union — see the later section in this doc. From an operator's perspective: populate exactly one of `mcp_server_client_auth.client_secret_basic:` or `mcp_server_client_auth.client_secret_post:` with a `secret:` field; the populated sub-block's name is the method.
+
+### Why support multiple methods at all (vs. lock V1 to `client_secret_basic` only)
 
 1. **Operators must be free to match their IdP's requirements.** Keycloak prefers `client_secret_basic`; some older Okta configs require `client_secret_post`. We do not pick for them and we do not restrict them — within the methods we support.
 
-2. **The discriminator is forward-compatible.** When the follow-up ticket lands, it expands `validClientAuthMethods` and adds the corresponding runtime; existing operator configs using `client_secret_basic` keep working untouched.
+2. **The schema is forward-compatible.** When follow-up tickets add `private_key_jwt` / `tls_client_auth`, they add new sibling sub-blocks. Existing operator configs using `client_secret_basic` keep working untouched.
 
-3. **The default is RFC 6749 §2.3.1's preferred method.** Operators who omit the field get the safer-on-the-wire transport (Basic header vs. form body). Operators who know their IdP override the default.
-
-### What the schema does today
-
-- `client_auth_method` is an optional string in `BrokerOAuthConfig`.
-- Empty → defaults to `client_secret_basic`.
-- Value in `validClientAuthMethods` (`{client_secret_basic, client_secret_post}`) → accepted.
-- Any other value → rejected at startup with a clear error.
+3. **No defaults; operators choose explicitly.** Unlike the earlier "flat field + default" draft, the discriminated union *requires* a populated sub-block. Operators don't get a silent default — the IdP integration is too important to leave to "whatever V1 happened to pick." See the discriminated-union section below for the full reasoning.
 
 ### What the deferred follow-up will add
 
-- Expand `validClientAuthMethods` to include `private_key_jwt`, `tls_client_auth`, and (likely) `self_signed_tls_client_auth`.
-- Add the per-method conditional fields needed by each (e.g., `private_key_file`, `key_id`, `client_cert_file`, `client_key_file`).
-- Add the runtime that builds the right token-exchange request body and parses the response per method.
-- Schema shape (flat vs. nested per-method sub-blocks) is the follow-up's design call; nothing is locked in by T2.
+- New sibling sub-blocks under `mcp_server_client_auth:` for `private_key_jwt`, `tls_client_auth`, and (likely) `self_signed_tls_client_auth`.
+- Per-method required-field validation for each new sub-block (e.g., `private_key_jwt` needs `private_key_file` + `key_id`).
+- The runtime that builds the right token-exchange request body and parses the response per method.
 
-### Per-method required-field validation (contract for follow-up tickets)
-
-The validator enforces required fields **per `client_auth_method`**, not unconditionally. The `client_secret` check is inside a `switch cfg.BrokerOAuth.ClientAuthMethod { ... }` whose `client_secret_basic` and `client_secret_post` case requires the secret. Other methods get other cases when they land.
-
-This structure is the contract for follow-up tickets adding new methods:
-
-> **Adding a method to `validClientAuthMethods` MUST come with a new case in the per-method switch in `validateBrokerOAuthConfig` that declares the new method's required fields.** Existing cases stay untouched. The switch is intentionally exhaustive in its dispatch to make this hard to forget — if a method is added to the allowlist without a corresponding case, the validator silently accepts configs that should fail.
-
-Why the per-method switch rather than per-field if-statements:
-
-- **Co-location**: each method's required-field rules live next to its name. A reader scrolling the switch sees "method X needs Y" in one place per method.
-- **Additive extension**: adding a new method is one new case, full stop. No edits to existing cases. No risk of accidentally tightening or loosening V1's rules.
-- **Hard to forget the gate**: an if-statement style ("if method == X or Y, check Z") scatters per-method rules across the function and makes "did I gate this check?" a real review burden every time someone adds a method. The switch makes the gating structural.
-
-The V1 case is currently:
-
-```go
-switch cfg.BrokerOAuth.ClientAuthMethod {
-case ClientAuthMethodSecretBasic, ClientAuthMethodSecretPost:
-    if cfg.BrokerOAuth.ClientSecret == "" { ... }
-}
-```
-
-Future follow-up cases will look like:
-
-```go
-case ClientAuthMethodPrivateKeyJWT:
-    if cfg.BrokerOAuth.PrivateKeyFile == "" { ... }
-    if cfg.BrokerOAuth.KeyID == "" { ... }
-case ClientAuthMethodTLSClientAuth:
-    if cfg.BrokerOAuth.ClientCertFile == "" { ... }
-    if cfg.BrokerOAuth.ClientKeyFile == "" { ... }
-```
-
-Universal required fields (`idp_token_endpoint`, `mcp_server_client_id`, and the three discriminator allowlist checks) stay outside the switch — they apply to every method.
+Existing operator configs that picked `client_secret_basic` or `client_secret_post` are not affected by the follow-up — the union's purely-additive evolution preserves the V1 schema contract forever.
 
 ---
 
