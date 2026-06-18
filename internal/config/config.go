@@ -73,7 +73,7 @@ type ServerConfig struct {
 // their respective allowlists (validGrantTypes, validAudienceParams). No
 // defaults — operators acknowledge each protocol choice explicitly.
 type BrokerOAuthConfig struct {
-	TokenURL      string           `yaml:"idp_token_url"`           // IdP token endpoint (token-exchange POST target)
+	TokenURL      string           `yaml:"idp_token_endpoint"`      // IdP token endpoint (token-exchange POST target). YAML key uses "endpoint" to match the OAuth spec and OIDC Discovery JSON (`token_endpoint`); Go field keeps `URL` to match the language convention (golang.org/x/oauth2 also names its field TokenURL).
 	ClientID      string           `yaml:"mcp_server_client_id"`    // MCP server's client_id registered at the IdP
 	ClientAuth    BrokerClientAuth `yaml:"mcp_server_client_auth"`  // discriminated union; exactly one sub-block populated
 	GrantType     string           `yaml:"grant_type"`              // required; must be in validGrantTypes
@@ -208,7 +208,7 @@ var validAudienceParams = []string{
 func (b BrokerOAuthConfig) LogValue() slog.Value {
 	method, _ := b.ClientAuth.selectedMethod()
 	return slog.GroupValue(
-		slog.String("idp_token_url", sanitizeURLString(b.TokenURL)),
+		slog.String("idp_token_endpoint", sanitizeURLString(b.TokenURL)),
 		slog.String("mcp_server_client_id", b.ClientID),
 		slog.String("mcp_server_client_auth_method", method),
 		slog.String("grant_type", b.GrantType),
@@ -1187,8 +1187,8 @@ func validateBroker(broker *BrokerConfig, productionMode bool) []error {
 // validateBrokerOAuthConfig validates the global broker_oauth block and its
 // relationship with per-broker auth modes. Levels 1–3 of the validation tiers
 // defined in architecture-plan.md Decision 9: structural (block presence vs.
-// usage), required-field (idp_token_url/mcp_server_client_id/client_secret non-empty), and
-// semantic (idp_token_url parses as URL, https enforced in production). No live
+// usage), required-field (idp_token_endpoint/mcp_server_client_id/client_secret non-empty), and
+// semantic (idp_token_endpoint parses as URL, https enforced in production). No live
 // IdP probing — that is deliberately deferred per Decision 9.
 //
 // Three cross-block rules are enforced:
@@ -1200,7 +1200,7 @@ func validateBroker(broker *BrokerConfig, productionMode bool) []error {
 //     log a WARN. This is operator-visible noise, not a fatal error — the
 //     block may be staged in advance of switching brokers to oauth mode.
 //  3. If the broker_oauth block is configured, every field is required and
-//     idp_token_url must be a valid URL (https in production mode).
+//     idp_token_endpoint must be a valid URL (https in production mode).
 //
 // Returns the accumulated errors as a slice for the caller (validate) to
 // errors.Join.
@@ -1230,9 +1230,9 @@ func validateBrokerOAuthConfig(cfg *ServerConfig) []error {
 	// Universal required fields — needed regardless of which mcp_server_client_auth
 	// method is configured.
 	if cfg.BrokerOAuth.TokenURL == "" {
-		errs = append(errs, fmt.Errorf("broker_oauth.idp_token_url is required"))
+		errs = append(errs, fmt.Errorf("broker_oauth.idp_token_endpoint is required"))
 	} else if err := validateBrokerURL(cfg.BrokerOAuth.TokenURL, cfg.IsProductionMode()); err != nil {
-		errs = append(errs, fmt.Errorf("broker_oauth.idp_token_url: %w", err))
+		errs = append(errs, fmt.Errorf("broker_oauth.idp_token_endpoint: %w", err))
 	}
 	if cfg.BrokerOAuth.ClientID == "" {
 		errs = append(errs, fmt.Errorf("broker_oauth.mcp_server_client_id is required"))

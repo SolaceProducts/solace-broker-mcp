@@ -12,7 +12,7 @@ This file records decisions made *during implementation* of T2. It complements �
 
 **Format:** one section per decision. Each section names the choice taken and the *reason* (not just the outcome). The reason is what makes the entry useful in three months.
 
-## T2 — Hop 2 OAuth config requires explicit `idp_token_url`; future runtime can derive the endpoint from Hop 1's already-fetched Discovery doc
+## T2 — Hop 2 OAuth config requires explicit `idp_token_endpoint`; future runtime can derive the endpoint from Hop 1's already-fetched Discovery doc
 
 **Date:** 2026-06-16 (rewritten 2026-06-17)
 **Sub-ticket:** [SOL-150796](https://sol-jira.atlassian.net/browse/SOL-150796)
@@ -26,38 +26,38 @@ That changes the framing of every "should the Hop 2 schema have an issuer-URL fi
 
 ### The question this section actually answers
 
-So: given that Hop 1's `mcp_client_auth.issuer` already pulls in `token_endpoint` via Discovery, **why is `idp_token_url` required in V1 instead of being optional from day one?**
+So: given that Hop 1's `mcp_client_auth.issuer` already pulls in `token_endpoint` via Discovery, **why is `idp_token_endpoint` required in V1 instead of being optional from day one?**
 
 ### Decision
 
-**`idp_token_url` is required in V1.** The schema does not yet support deriving the endpoint from Hop 1's Discovery doc, even though the doc is available in memory by the time Hop 2 would need it.
+**`idp_token_endpoint` is required in V1.** The schema does not yet support deriving the endpoint from Hop 1's Discovery doc, even though the doc is available in memory by the time Hop 2 would need it.
 
 ### Why required in V1
 
 Three reasons, in order of weight:
 
-1. **No Hop 2 runtime in V1.** T2 is schema-only. There is no Hop 2 code path consuming `idp_token_url` yet — every `auth.mode: oauth` broker is rejected at startup by the V1 not-yet-supported guard. Adding an "optional, falls back to Hop 1 Discovery" relaxation now would require committing to a fallback behavior the runtime has not been built or tested against. Better to take the URL explicitly in V1 and relax the requirement when the runtime ticket has actually exercised the fallback.
+1. **No Hop 2 runtime in V1.** T2 is schema-only. There is no Hop 2 code path consuming `idp_token_endpoint` yet — every `auth.mode: oauth` broker is rejected at startup by the V1 not-yet-supported guard. Adding an "optional, falls back to Hop 1 Discovery" relaxation now would require committing to a fallback behavior the runtime has not been built or tested against. Better to take the URL explicitly in V1 and relax the requirement when the runtime ticket has actually exercised the fallback.
 
-2. **Explicit-config-first matches T2's principle.** The same principle that drove `idp_token_url` over a bare `token_url` and `mcp_server_client_id` over a bare `client_id` — explicit, qualified, operator-typed by default — applies to "where does the token endpoint come from?" Operators in V1 type the URL. When the future runtime adds a Discovery-derived fallback, that becomes an *optional* convenience, not the default. Operators who want their config to be self-contained (no hidden derivations) can keep typing the URL forever.
+2. **Explicit-config-first matches T2's principle.** The same principle that drove `idp_token_endpoint` over a bare `token_url` and `mcp_server_client_id` over a bare `client_id` — explicit, qualified, operator-typed by default — applies to "where does the token endpoint come from?" Operators in V1 type the URL. When the future runtime adds a Discovery-derived fallback, that becomes an *optional* convenience, not the default. Operators who want their config to be self-contained (no hidden derivations) can keep typing the URL forever.
 
-3. **Token-exchange endpoints are not always the Discovery `token_endpoint`.** This is the case where Discovery-derivation would actually be wrong. Some IdPs route the RFC 8693 token-exchange flow to a separate endpoint from the Discovery doc's advertised `token_endpoint` (which typically points at the auth-code-flow endpoint). An explicit `idp_token_url` lets operators point at the right endpoint for their IdP's actual deployment. Even when the runtime can derive a default, leaving the explicit field available means we never lock out the operator who needs to override.
+3. **Token-exchange endpoints are not always the Discovery `token_endpoint`.** This is the case where Discovery-derivation would actually be wrong. Some IdPs route the RFC 8693 token-exchange flow to a separate endpoint from the Discovery doc's advertised `token_endpoint` (which typically points at the auth-code-flow endpoint). An explicit `idp_token_endpoint` lets operators point at the right endpoint for their IdP's actual deployment. Even when the runtime can derive a default, leaving the explicit field available means we never lock out the operator who needs to override.
 
 ### What this means for the V1 schema commitment
 
-`idp_token_url` is part of the V1 schema and stays available forever. The follow-up ticket relaxes it from required to optional and adds a runtime fallback that reads `token_endpoint` from Hop 1's already-cached Discovery doc. Existing configs that provide `idp_token_url` explicitly keep working untouched; new configs gain the option to omit it when Hop 1's Discovery doc already carries the right value.
+`idp_token_endpoint` is part of the V1 schema and stays available forever. The follow-up ticket relaxes it from required to optional and adds a runtime fallback that reads `token_endpoint` from Hop 1's already-cached Discovery doc. Existing configs that provide `idp_token_endpoint` explicitly keep working untouched; new configs gain the option to omit it when Hop 1's Discovery doc already carries the right value.
 
 ### What the future "Hop 2 runtime" ticket will actually do
 
 It will NOT add a new issuer-URL field. The Hop 1 `mcp_client_auth.issuer` value, and the Discovery doc go-oidc has already fetched from it, are exactly the inputs Hop 2's runtime needs. The follow-up ticket will:
 
-1. Relax `idp_token_url` to optional in the schema.
-2. Add validator wording: `idp_token_url` may be omitted when `mcp_client_auth.mode: oauth`, in which case the runtime derives the token endpoint from Hop 1's Discovery doc.
+1. Relax `idp_token_endpoint` to optional in the schema.
+2. Add validator wording: `idp_token_endpoint` may be omitted when `mcp_client_auth.mode: oauth`, in which case the runtime derives the token endpoint from Hop 1's Discovery doc.
 3. Add the runtime code that reads `token_endpoint` from the `oidcProvider` already in memory.
-4. Keep the explicit-`idp_token_url` path as the override for IdPs whose token-exchange endpoint differs from the Discovery-advertised `token_endpoint`.
+4. Keep the explicit-`idp_token_endpoint` path as the override for IdPs whose token-exchange endpoint differs from the Discovery-advertised `token_endpoint`.
 
 ### What about federation deployments where Hop 1 and Hop 2 IdPs differ?
 
-A small minority of deployments use one IdP for agent authentication (Hop 1) and a different IdP for the MCP server's service-account credentials (Hop 2). For those, operators provide `idp_token_url` explicitly — pointing at the Hop 2 IdP's token endpoint — and Hop 2's runtime uses the explicit value instead of deriving from Hop 1's Discovery doc. **The federation case is exactly what the explicit `idp_token_url` override is for.** No separate Hop 2 issuer-URL field is needed; the explicit token URL is the override knob.
+A small minority of deployments use one IdP for agent authentication (Hop 1) and a different IdP for the MCP server's service-account credentials (Hop 2). For those, operators provide `idp_token_endpoint` explicitly — pointing at the Hop 2 IdP's token endpoint — and Hop 2's runtime uses the explicit value instead of deriving from Hop 1's Discovery doc. **The federation case is exactly what the explicit `idp_token_endpoint` override is for.** No separate Hop 2 issuer-URL field is needed; the explicit token URL is the override knob.
 
 ### Decision 9 status — already paid, not avoided
 
@@ -139,7 +139,7 @@ case ClientAuthMethodTLSClientAuth:
     if cfg.BrokerOAuth.ClientKeyFile == "" { ... }
 ```
 
-Universal required fields (`idp_token_url`, `mcp_server_client_id`, and the three discriminator allowlist checks) stay outside the switch — they apply to every method.
+Universal required fields (`idp_token_endpoint`, `mcp_server_client_id`, and the three discriminator allowlist checks) stay outside the switch — they apply to every method.
 
 ---
 
@@ -255,7 +255,7 @@ mcp_client_auth:
 # Hop 2: the IdP coordinates the MCP server uses to obtain tokens for brokers.
 # Required when at least one broker has auth.mode: oauth.
 broker_oauth:
-  idp_token_url: "https://idp.example.com/oauth/token"
+  idp_token_endpoint: "https://idp.example.com/oauth/token"
   mcp_server_client_id: "mcp-server"
   mcp_server_client_auth:                                       # discriminated union: populate exactly one sub-block
     client_secret_basic:
@@ -280,7 +280,7 @@ brokers:
 
 | Field | Required | Default | Validator rule | Source of truth |
 |---|---|---|---|---|
-| `idp_token_url` | yes | — | non-empty, valid URL, `http`/`https` scheme | operator-supplied. (A future runtime ticket relaxes this to optional and adds a fallback that reads `token_endpoint` from Hop 1's already-fetched OIDC Discovery doc; the explicit field stays available as an operator override.) |
+| `idp_token_endpoint` | yes | — | non-empty, valid URL, `http`/`https` scheme | operator-supplied. (A future runtime ticket relaxes this to optional and adds a fallback that reads `token_endpoint` from Hop 1's already-fetched OIDC Discovery doc; the explicit field stays available as an operator override.) |
 | `mcp_server_client_id` | yes | — | non-empty | operator-supplied (the MCP server's client_id registered at the IdP) |
 | `mcp_server_client_auth` | yes | — | discriminated union: exactly one sub-block populated. V1 supports `client_secret_basic` and `client_secret_post`, both of which require a non-empty `secret:` (after `${VAR}` substitution). Other registered methods are rejected with "not yet supported in this version" | operator-supplied (method chosen per the IdP's requirements) |
 | `grant_type` | yes | — (no default) | must be in the V1 allowlist (`urn:ietf:params:oauth:grant-type:token-exchange`); other grant-types rejected with "not yet supported in this version" | operator-supplied; the allowlist expands as future grant-types (e.g. Entra OBO's `jwt-bearer`) gain runtime support |
@@ -309,7 +309,7 @@ A new operator deploying writes (with `client_secret_basic` chosen as the IdP's 
 
 ```yaml
 broker_oauth:
-  idp_token_url: "..."
+  idp_token_endpoint: "..."
   mcp_server_client_id: "..."
   mcp_server_client_auth:
     client_secret_basic:
@@ -331,7 +331,7 @@ That's the minimum. There is no flat `client_secret:` alternative — the *only*
 
 A reader asking "why is field X not in the schema?" should find their answer here:
 
-- **A new issuer-URL field on `broker_oauth`** — not added, and not planned. Hop 1's existing `mcp_client_auth.issuer` already triggers an OIDC Discovery fetch at startup (via go-oidc's `oidc.NewProvider`); the resulting `token_endpoint` is in process memory by the time Hop 2 needs it. The future Hop 2 runtime can read `token_endpoint` from the already-fetched doc — no second IdP fetch, no second field. See the earlier T2 entry on `idp_token_url` for the full reasoning.
+- **A new issuer-URL field on `broker_oauth`** — not added, and not planned. Hop 1's existing `mcp_client_auth.issuer` already triggers an OIDC Discovery fetch at startup (via go-oidc's `oidc.NewProvider`); the resulting `token_endpoint` is in process memory by the time Hop 2 needs it. The future Hop 2 runtime can read `token_endpoint` from the already-fetched doc — no second IdP fetch, no second field. See the earlier T2 entry on `idp_token_endpoint` for the full reasoning.
 - **`private_key_file`, `client_cert_file`, `client_key_file`, `key_id`** — fields needed by `private_key_jwt` and `tls_client_auth`. Deferred to the `client_auth_method` follow-up ticket along with their runtime support.
 - **`requested_token_type`** — always access_token in our use case. Knob nobody turns.
 - **`resource`** (RFC 8693 §2.1 OPTIONAL parameter, similar to `audience`) — not added because Solace brokers use the `aud` claim for resource binding, not RFC 8707 resource indicators. If a customer uses an IdP that requires `resource` parameter, we add it then. So far, no demand.
@@ -339,7 +339,7 @@ A reader asking "why is field X not in the schema?" should find their answer her
 
 ### What is *not* committed to V1 by this schema
 
-- The future "derive `idp_token_url` from Hop 1's Discovery doc" runtime fallback. Add later, additively (relax `idp_token_url` from required to optional; runtime reads `token_endpoint` from the in-memory `oidcProvider`). No new schema field needed.
+- The future "derive `idp_token_endpoint` from Hop 1's Discovery doc" runtime fallback. Add later, additively (relax `idp_token_endpoint` from required to optional; runtime reads `token_endpoint` from the in-memory `oidcProvider`). No new schema field needed.
 - The `private_key_jwt` / `tls_client_auth` methods and their fields. Add later, additively. The follow-up ticket has full design license on flat-vs-nested shape because no operator has written those fields yet.
 - Entra OBO support. Investigation ticket separate.
 
@@ -347,7 +347,7 @@ A reader asking "why is field X not in the schema?" should find their answer her
 
 These are the operator-facing field names. They do not change without a deprecation cycle:
 
-`idp_token_url`, `mcp_server_client_id`, `client_auth_method`, `client_secret`, `grant_type` (under `broker_oauth`).
+`idp_token_endpoint`, `mcp_server_client_id`, `client_auth_method`, `client_secret`, `grant_type` (under `broker_oauth`).
 `mode`, `audience`, `scopes` (under per-broker `auth`).
 
 Optional fields can be added; required fields cannot be added without breaking existing configs. Field renames are migrations and require a deprecation cycle. The schema is the contract.
@@ -471,7 +471,7 @@ Microsoft Entra ID does not implement RFC 8693. It uses its proprietary On-Behal
 
 ### Decision
 
-T2's schema (`idp_token_url`, `mcp_server_client_id`, `client_auth_method`, `client_secret`, `grant_type`, `audience_parameter_name` globally; `audience`, `scopes` per broker) is **intentionally designed to support Entra OBO as a future, additive runtime feature.** T2 does not implement Entra OBO. T2 does not commit to any runtime composition rules — neither for RFC 8693 IdPs nor for Entra. The runtime work for each IdP family lives in T6 or in IdP-family-specific follow-up tickets (e.g., a dedicated Entra OBO epic).
+T2's schema (`idp_token_endpoint`, `mcp_server_client_id`, `client_auth_method`, `client_secret`, `grant_type`, `audience_parameter_name` globally; `audience`, `scopes` per broker) is **intentionally designed to support Entra OBO as a future, additive runtime feature.** T2 does not implement Entra OBO. T2 does not commit to any runtime composition rules — neither for RFC 8693 IdPs nor for Entra. The runtime work for each IdP family lives in T6 or in IdP-family-specific follow-up tickets (e.g., a dedicated Entra OBO epic).
 
 ### Why T2 is explicitly *not* implementing the Entra composition rules
 
@@ -561,7 +561,7 @@ case AuthModeOAuth:
 
 For top-level `broker_oauth`:
 
-- If the block is set, validate its structural fields (`idp_token_url` is a valid URL, `client_secret` non-empty after env substitution, `client_auth_method` and `grant_type` and `audience_parameter_name` are in their respective allowlists).
+- If the block is set, validate its structural fields (`idp_token_endpoint` is a valid URL, `client_secret` non-empty after env substitution, `client_auth_method` and `grant_type` and `audience_parameter_name` are in their respective allowlists).
 - If validation passes, emit a startup `INFO` log noting the block is accepted in schema but not yet consumed by any runtime in this version.
 - Do not reject. An operator may legitimately be staging configuration ahead of the runtime support landing.
 
@@ -629,7 +629,7 @@ V1 ships two sub-blocks: `client_secret_basic` and `client_secret_post` (each co
 
 ```yaml
 broker_oauth:
-  idp_token_url: "https://idp.example.com/oauth/token"
+  idp_token_endpoint: "https://idp.example.com/oauth/token"
   mcp_server_client_id: "mcp-server"
   mcp_server_client_auth:
     client_secret_basic:
@@ -709,7 +709,7 @@ This makes the contract uniformly explicit: every protocol choice is operator-ac
 
 These names and shapes are the V1 user-facing contract:
 
-- Top-level `broker_oauth:` fields: `idp_token_url`, `mcp_server_client_id`, `mcp_server_client_auth`, `grant_type`, `audience_parameter_name`. All required.
+- Top-level `broker_oauth:` fields: `idp_token_endpoint`, `mcp_server_client_id`, `mcp_server_client_auth`, `grant_type`, `audience_parameter_name`. All required.
 - `mcp_server_client_auth:` sub-blocks: `client_secret_basic`, `client_secret_post`. Exactly one populated.
 - `client_secret_basic` / `client_secret_post` fields: `secret`. Required.
 
@@ -812,7 +812,7 @@ Historical decision-log documents (`docs/superpowers/specs/2026-05-20-client-aut
 
 T2 made a series of rename decisions for fields inside `broker_oauth:`:
 
-- `token_url` → `idp_token_url`
+- `token_url` → `idp_token_endpoint`
 - `client_id` → `mcp_server_client_id`
 - `client_auth` (nested discriminated-union block) → `mcp_server_client_auth`
 - `audience_param` → `audience_parameter_name`
@@ -844,9 +844,29 @@ This is the structural argument the case-by-case rule missed. Once we use `clien
 By taking the *qualified* name today (`mcp_server_client_id`), we **reserve the unqualified `client_id` for a future use case**. If a V2 feature introduces some other client_id-shaped concept, we can name it cleanly without colliding with V1. Generic names are scarce real estate; once spoken for, they're locked.
 
 Same applies to:
-- `token_url` (kept generic would lock it to the IdP token endpoint forever) → use `idp_token_url`, reserve `token_url`
+- `token_url` (kept generic would lock it to the IdP token endpoint forever) → use `idp_token_endpoint`, reserve `token_url`
 - `client_auth` (top-level Hop 1 and nested Hop 2 already collided this way once) → use `mcp_server_client_auth`, reserve `client_auth`
 - `audience_param` (was coined, also generic) → use `audience_parameter_name`, reserve any future `*_param` family
+
+### Why `_endpoint` and not `_url` on the token field
+
+The token field went through two renames during T2: first `token_url` → `idp_token_url` (qualification, per the principle above), then `idp_token_url` → `idp_token_endpoint` (suffix swap). The second rename deserves its own short note because the choice between `_url` and `_endpoint` is non-obvious — both are reasonable in isolation.
+
+We picked `_endpoint` because **that's the vocabulary the operator's surroundings use**:
+
+- RFC 6749 §3.2 (OAuth 2.0 core) calls it "the Token Endpoint."
+- RFC 8693 §2 (Token Exchange — what Hop 2 actually does) calls it "the token endpoint of the authorization server."
+- OIDC Discovery's JSON document publishes it under the field name `token_endpoint` — exactly what the IdP returns when go-oidc fetches the doc at Hop 1 startup.
+- Every modern IdP admin console (Keycloak, Okta, Auth0, Entra) labels this field as "Token Endpoint."
+
+So when an operator is configuring this — typically with the IdP admin UI open in another tab, or pasting Discovery JSON into a search — the dominant term in their surroundings is "token endpoint." Matching that beats internal-to-our-schema `_url` consistency.
+
+What we did **not** rename — and why the convention isn't blanket:
+
+- The Go struct field stays `TokenURL`. Inside Go, `URL` is the established convention (`net/url`, `golang.org/x/oauth2.Endpoint{TokenURL, AuthURL}`). The YAML tag is operator-facing; the Go field is developer-facing. Mixing idioms across the boundary is fine — each side gets the convention native to its readers.
+- `mcp_client_auth.resource_url` (Hop 1, already shipped in SOL-149989) is not an endpoint we *call* — it's an RFC 8707 resource identifier value that we assert into the token request. Different spec, different role. Keeping `_url` there reflects what the value actually is: a URL used as an identifier, not an endpoint to fetch from.
+
+The principle this adds to the naming discipline above: when an OAuth/OIDC-spec name exists for the field and is used unchanged across IdPs and SDKs, match it. The principle doesn't blanket-apply `_endpoint` to every URL-shaped field — it applies when the field's *role* is a callable endpoint and the spec/community vocabulary calls it one.
 
 ### What stays generic, and why
 
@@ -866,6 +886,6 @@ Explicit names are longer. Operators type more characters per config; reviewers 
 
 ### What this commits us to for V1 and beyond
 
-- All four `broker_oauth:` field renames stand: `idp_token_url`, `mcp_server_client_id`, `mcp_server_client_auth`, `audience_parameter_name`.
+- All four `broker_oauth:` field renames stand: `idp_token_endpoint`, `mcp_server_client_id`, `mcp_server_client_auth`, `audience_parameter_name`.
 - The principle (explicit by default; generic names reserved) applies to every future schema decision. If a future field is genuinely ambiguous without a qualifier, the qualifier goes in the name.
 - A field name change inside V1's schema would be a breaking schema change. Therefore: when in doubt during design, lean explicit. Generic-to-explicit is hard later; explicit-to-generic is impossible.

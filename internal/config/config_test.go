@@ -2276,7 +2276,7 @@ mcp_client_auth:
 	// tweak the offending field, so it's clear what the case is testing.
 	const validBrokerOAuth = `
 broker_oauth:
-  idp_token_url: "http://idp.example.com/token"
+  idp_token_endpoint: "http://idp.example.com/token"
   mcp_server_client_id: mcp-server
   mcp_server_client_auth:
     client_secret_basic:
@@ -2326,7 +2326,7 @@ brokers:
 			wantErrSubstring: "broker_oauth block is required when any broker uses auth.mode",
 		},
 		{
-			name: "broker_oauth.idp_token_url missing",
+			name: "broker_oauth.idp_token_endpoint missing",
 			yaml: clientAuthBlock + `
 broker_oauth:
   mcp_server_client_id: mcp-server
@@ -2343,13 +2343,13 @@ brokers:
       audience: solace-broker-prod
 `,
 			wantErr:          true,
-			wantErrSubstring: "broker_oauth.idp_token_url is required",
+			wantErrSubstring: "broker_oauth.idp_token_endpoint is required",
 		},
 		{
 			name: "broker_oauth.mcp_server_client_id missing",
 			yaml: clientAuthBlock + `
 broker_oauth:
-  idp_token_url: "http://idp.example.com/token"
+  idp_token_endpoint: "http://idp.example.com/token"
   mcp_server_client_auth:
     client_secret_basic:
       secret: shhh
@@ -2370,7 +2370,7 @@ brokers:
 			name: "broker_oauth.mcp_server_client_auth empty (no sub-block)",
 			yaml: clientAuthBlock + `
 broker_oauth:
-  idp_token_url: "http://idp.example.com/token"
+  idp_token_endpoint: "http://idp.example.com/token"
   mcp_server_client_id: mcp-server
   mcp_server_client_auth: {}
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
@@ -2390,7 +2390,7 @@ brokers:
 			name: "broker_oauth.mcp_server_client_auth has two methods populated",
 			yaml: clientAuthBlock + `
 broker_oauth:
-  idp_token_url: "http://idp.example.com/token"
+  idp_token_endpoint: "http://idp.example.com/token"
   mcp_server_client_id: mcp-server
   mcp_server_client_auth:
     client_secret_basic:
@@ -2413,7 +2413,7 @@ brokers:
 			name: "client_secret_basic.secret missing",
 			yaml: clientAuthBlock + `
 broker_oauth:
-  idp_token_url: "http://idp.example.com/token"
+  idp_token_endpoint: "http://idp.example.com/token"
   mcp_server_client_id: mcp-server
   mcp_server_client_auth:
     client_secret_basic: {}
@@ -2433,7 +2433,7 @@ brokers:
 			name: "client_secret_post.secret missing",
 			yaml: clientAuthBlock + `
 broker_oauth:
-  idp_token_url: "http://idp.example.com/token"
+  idp_token_endpoint: "http://idp.example.com/token"
   mcp_server_client_id: mcp-server
   mcp_server_client_auth:
     client_secret_post: {}
@@ -2450,10 +2450,10 @@ brokers:
 			wantErrSubstring: "broker_oauth.mcp_server_client_auth.client_secret_post.secret is required",
 		},
 		{
-			name: "broker_oauth.idp_token_url is not a valid URL",
+			name: "broker_oauth.idp_token_endpoint is not a valid URL",
 			yaml: clientAuthBlock + `
 broker_oauth:
-  idp_token_url: ":::not-a-url"
+  idp_token_endpoint: ":::not-a-url"
   mcp_server_client_id: mcp-server
   mcp_server_client_auth:
     client_secret_basic:
@@ -2468,7 +2468,7 @@ brokers:
       audience: solace-broker-prod
 `,
 			wantErr:          true,
-			wantErrSubstring: "broker_oauth.idp_token_url",
+			wantErrSubstring: "broker_oauth.idp_token_endpoint",
 		},
 		{
 			// Audience is optional in V1 — the broker's OAuth profile may have
@@ -2505,7 +2505,7 @@ brokers:
 			name: "broker_oauth.grant_type missing",
 			yaml: clientAuthBlock + `
 broker_oauth:
-  idp_token_url: "http://idp.example.com/token"
+  idp_token_endpoint: "http://idp.example.com/token"
   mcp_server_client_id: mcp-server
   mcp_server_client_auth:
     client_secret_basic:
@@ -2525,7 +2525,7 @@ brokers:
 			name: "broker_oauth.grant_type invalid value",
 			yaml: clientAuthBlock + `
 broker_oauth:
-  idp_token_url: "http://idp.example.com/token"
+  idp_token_endpoint: "http://idp.example.com/token"
   mcp_server_client_id: mcp-server
   mcp_server_client_auth:
     client_secret_basic:
@@ -2546,7 +2546,7 @@ brokers:
 			name: "broker_oauth.audience_parameter_name missing",
 			yaml: clientAuthBlock + `
 broker_oauth:
-  idp_token_url: "http://idp.example.com/token"
+  idp_token_endpoint: "http://idp.example.com/token"
   mcp_server_client_id: mcp-server
   mcp_server_client_auth:
     client_secret_basic:
@@ -2566,7 +2566,7 @@ brokers:
 			name: "broker_oauth.audience_parameter_name invalid value",
 			yaml: clientAuthBlock + `
 broker_oauth:
-  idp_token_url: "http://idp.example.com/token"
+  idp_token_endpoint: "http://idp.example.com/token"
   mcp_server_client_id: mcp-server
   mcp_server_client_auth:
     client_secret_basic:
@@ -2630,7 +2630,7 @@ mcp_client_auth:
   mode: static
   dev_token: test
 broker_oauth:
-  idp_token_url: "http://idp.example.com/token"
+  idp_token_endpoint: "http://idp.example.com/token"
   mcp_server_client_id: mcp-server
   mcp_server_client_auth:
     client_secret_basic:
@@ -2677,7 +2677,7 @@ mcp_client_auth:
   mode: static
   dev_token: test
 broker_oauth:
-  idp_token_url: "http://idp.example.com/token"
+  idp_token_endpoint: "http://idp.example.com/token"
   mcp_server_client_id: mcp-server
   mcp_server_client_auth:
     client_secret_post:
@@ -2716,7 +2716,7 @@ brokers:
 
 // TestLoadConfig_BrokerOAuth_ProductionMode_RequiresHTTPS verifies that when
 // the deployment is in production mode (mcp_client_auth.mode: oauth), the
-// broker_oauth.idp_token_url must use https://. Uses a bearer-mode broker so the
+// broker_oauth.idp_token_endpoint must use https://. Uses a bearer-mode broker so the
 // V1 oauth-runtime guard does not fire — this test is about validating the
 // production-mode URL rule, not the runtime guard.
 func TestLoadConfig_BrokerOAuth_ProductionMode_RequiresHTTPS(t *testing.T) {
@@ -2727,7 +2727,7 @@ mcp_client_auth:
   audience: "mcp-server"
   resource_url: "https://mcp.example.com/mcp"
 broker_oauth:
-  idp_token_url: "http://idp.example.com/token"
+  idp_token_endpoint: "http://idp.example.com/token"
   mcp_server_client_id: mcp-server
   mcp_server_client_auth:
     client_secret_basic:
@@ -2743,10 +2743,10 @@ brokers:
 `
 	_, err := LoadConfig(writeTemp(t, yaml))
 	if err == nil {
-		t.Fatal("expected error for http:// idp_token_url in production mode")
+		t.Fatal("expected error for http:// idp_token_endpoint in production mode")
 	}
-	if !strings.Contains(err.Error(), "broker_oauth.idp_token_url") || !strings.Contains(err.Error(), "https") {
-		t.Errorf("expected https-required error on broker_oauth.idp_token_url, got: %v", err)
+	if !strings.Contains(err.Error(), "broker_oauth.idp_token_endpoint") || !strings.Contains(err.Error(), "https") {
+		t.Errorf("expected https-required error on broker_oauth.idp_token_endpoint, got: %v", err)
 	}
 }
 
@@ -2763,7 +2763,7 @@ mcp_client_auth:
   mode: static
   dev_token: test
 broker_oauth:
-  idp_token_url: "http://idp.example.com/token"
+  idp_token_endpoint: "http://idp.example.com/token"
   mcp_server_client_id: mcp-server
   mcp_server_client_auth:
     client_secret_basic:
@@ -2811,7 +2811,7 @@ mcp_client_auth:
   mode: static
   dev_token: test
 broker_oauth:
-  idp_token_url: "http://idp.example.com/token"
+  idp_token_endpoint: "http://idp.example.com/token"
   mcp_server_client_id: mcp-server
   mcp_server_client_auth:
     client_secret_basic:
@@ -2844,7 +2844,7 @@ mcp_client_auth:
   mode: static
   dev_token: test
 broker_oauth:
-  idp_token_url: "http://idp.example.com/token"
+  idp_token_endpoint: "http://idp.example.com/token"
   mcp_server_client_id: mcp-server
   mcp_server_client_auth:
     client_secret_basic:
@@ -2883,7 +2883,7 @@ func TestLoadConfig_EmitsOAuthNotSupportedBanner(t *testing.T) {
 mcp_client_auth:
   mode: disabled
 broker_oauth:
-  idp_token_url: "http://idp.example.com/token"
+  idp_token_endpoint: "http://idp.example.com/token"
   mcp_server_client_id: mcp-server
   mcp_server_client_auth:
     client_secret_basic:
@@ -2922,7 +2922,7 @@ brokers:
 mcp_client_auth:
   mode: disabled
 broker_oauth:
-  idp_token_url: "http://idp.example.com/token"
+  idp_token_endpoint: "http://idp.example.com/token"
   mcp_server_client_id: mcp-server
   mcp_server_client_auth:
     client_secret_basic:
@@ -3085,7 +3085,7 @@ mcp_client_auth:
   mode: static
   dev_token: t
 broker_oauth:
-  idp_token_url: "http://idp.example.com/token"
+  idp_token_endpoint: "http://idp.example.com/token"
   mcp_server_client_id: mcp-server
   mcp_server_client_auth:
     client_secret_basic:
@@ -3124,7 +3124,7 @@ mcp_client_auth:
   mode: static
   dev_token: t
 broker_oauth:
-  idp_token_url: "http://idp.example.com/token"
+  idp_token_endpoint: "http://idp.example.com/token"
   mcp_server_client_id: mcp-server
   mcp_server_client_auth:
     client_secret_basic:
@@ -3186,7 +3186,7 @@ func TestBrokerOAuthConfig_LogValue(t *testing.T) {
 	if strings.Contains(out, secretClientSecret) {
 		t.Errorf("client_secret leaked into log output: %s", out)
 	}
-	if !strings.Contains(out, "idp_token_url") || !strings.Contains(out, secretClientID) {
-		t.Errorf("expected idp_token_url and mcp_server_client_id in log output: %s", out)
+	if !strings.Contains(out, "idp_token_endpoint") || !strings.Contains(out, secretClientID) {
+		t.Errorf("expected idp_token_endpoint and mcp_server_client_id in log output: %s", out)
 	}
 }
