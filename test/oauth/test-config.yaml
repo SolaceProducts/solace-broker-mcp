@@ -10,7 +10,7 @@
 # To use a different broker, modify the URL below:
 
 port: 9091
-client_auth:
+mcp_client_auth:
   mode: oauth
   issuer: "https://localhost:8443/realms/solace"
   audience: "solace-mcp-server"

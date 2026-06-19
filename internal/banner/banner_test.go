@@ -12,15 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package auth
+package banner
 
 import (
 	"bytes"
 	"log/slog"
 	"strings"
 	"testing"
-
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 )
 
 // captureSlog replaces slog.Default with a TextHandler writing to buf.
@@ -34,16 +32,15 @@ func captureSlog(t *testing.T) (*bytes.Buffer, func()) {
 	return buf, func() { slog.SetDefault(prev) }
 }
 
-func Test_StartupBanner_Disabled(t *testing.T) {
+func Test_StartupAuthMode_Disabled(t *testing.T) {
 	buf, restore := captureSlog(t)
 	defer restore()
-	cfg := &config.ServerConfig{ClientAuth: config.ClientAuthConfig{Mode: config.AuthModeDisabled}}
-	LogStartupBanner(cfg)
+	LogStartupAuthMode("disabled", "")
 	out := buf.String()
 	for _, want := range []string{
 		"level=WARN",
 		"INSECURE MODE",
-		"client_auth.mode = disabled",
+		"mcp_client_auth.mode = disabled",
 		"Client → MCP server auth is OFF",
 		"Broker auth is unaffected",
 		"NOT FOR PRODUCTION USE",
@@ -54,16 +51,15 @@ func Test_StartupBanner_Disabled(t *testing.T) {
 	}
 }
 
-func Test_StartupBanner_Static(t *testing.T) {
+func Test_StartupAuthMode_Static(t *testing.T) {
 	buf, restore := captureSlog(t)
 	defer restore()
-	cfg := &config.ServerConfig{ClientAuth: config.ClientAuthConfig{Mode: config.AuthModeStatic, DevToken: "x"}}
-	LogStartupBanner(cfg)
+	LogStartupAuthMode("static", "")
 	out := buf.String()
 	for _, want := range []string{
 		"level=WARN",
 		"INSECURE MODE",
-		"client_auth.mode = static",
+		"mcp_client_auth.mode = static",
 		"Client → MCP server auth uses a static dev token",
 		"Broker auth is unaffected",
 		"NOT FOR PRODUCTION USE",
@@ -74,14 +70,10 @@ func Test_StartupBanner_Static(t *testing.T) {
 	}
 }
 
-func Test_StartupBanner_OAuth(t *testing.T) {
+func Test_StartupAuthMode_OAuth(t *testing.T) {
 	buf, restore := captureSlog(t)
 	defer restore()
-	cfg := &config.ServerConfig{ClientAuth: config.ClientAuthConfig{
-		Mode:   config.AuthModeOAuth,
-		Issuer: "https://idp.example.com",
-	}}
-	LogStartupBanner(cfg)
+	LogStartupAuthMode("oauth", "https://idp.example.com")
 	out := buf.String()
 	if !strings.Contains(out, "level=INFO") {
 		t.Errorf("expected INFO log for oauth mode, got: %s", out)

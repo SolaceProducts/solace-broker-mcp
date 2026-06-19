@@ -40,16 +40,16 @@ import (
 var oidcHTTPClientTimeout = defaults.DefaultOIDCHTTPTimeout
 
 func NewAuthMiddleware(cfg *config.ServerConfig, next http.Handler) (http.Handler, error) {
-	// Auth backend selection mirrors client_auth.mode. Insecure-mode signaling
-	// lives in cmd/server/main.go via auth.LogStartupBanner — DO NOT add WARN
+	// Auth backend selection mirrors mcp_client_auth.mode. Insecure-mode signaling
+	// lives in cmd/server/main.go via banner.LogStartupAuthMode — DO NOT add WARN
 	// logs here. See docs/superpowers/specs/2026-05-20-client-auth-mode-design.md.
-	switch cfg.ClientAuth.Mode {
+	switch cfg.MCPClientAuth.Mode {
 	case config.AuthModeDisabled:
 		return next, nil
 	case config.AuthModeStatic, config.AuthModeOAuth:
 		// fall through to the verifier construction below
 	default:
-		return nil, fmt.Errorf("internal: NewAuthMiddleware called with unsupported client_auth.mode %q (validator should have rejected this)", cfg.ClientAuth.Mode)
+		return nil, fmt.Errorf("internal: NewAuthMiddleware called with unsupported mcp_client_auth.mode %q (validator should have rejected this)", cfg.MCPClientAuth.Mode)
 	}
 
 	verifier, err := NewTokenVerifier(cfg)
@@ -60,8 +60,8 @@ func NewAuthMiddleware(cfg *config.ServerConfig, next http.Handler) (http.Handle
 	// Construct the metadata URL at the server root.
 	// Config validation ensures ResourceURL is well-formed if set.
 	var metadataURL string
-	if cfg.ClientAuth.ResourceURL != "" {
-		parsedURL, _ := url.Parse(cfg.ClientAuth.ResourceURL)
+	if cfg.MCPClientAuth.ResourceURL != "" {
+		parsedURL, _ := url.Parse(cfg.MCPClientAuth.ResourceURL)
 		metadataURL = fmt.Sprintf("%s://%s/.well-known/oauth-protected-resource", parsedURL.Scheme, parsedURL.Host)
 	}
 
@@ -72,20 +72,20 @@ func NewAuthMiddleware(cfg *config.ServerConfig, next http.Handler) (http.Handle
 	return middleware(next), nil
 }
 
-// NewTokenVerifier creates a TokenVerifier based on cfg.ClientAuth.Mode.
-//   - AuthModeStatic → constant-time compare against cfg.ClientAuth.DevToken
+// NewTokenVerifier creates a TokenVerifier based on cfg.MCPClientAuth.Mode.
+//   - AuthModeStatic → constant-time compare against cfg.MCPClientAuth.DevToken
 //   - AuthModeOAuth  → OIDC/JWT verification with automatic key rotation
 //
 // cfg has already been validated via config.validate(); other modes are
 // programming errors.
 func NewTokenVerifier(cfg *config.ServerConfig) (sdkauth.TokenVerifier, error) {
-	switch cfg.ClientAuth.Mode {
+	switch cfg.MCPClientAuth.Mode {
 	case config.AuthModeStatic:
-		return createStaticTokenVerifier(cfg.ClientAuth.DevToken), nil
+		return createStaticTokenVerifier(cfg.MCPClientAuth.DevToken), nil
 	case config.AuthModeOAuth:
 		return createOIDCTokenVerifier(cfg)
 	default:
-		return nil, fmt.Errorf("internal: NewTokenVerifier called with unsupported client_auth.mode %q (validator should have rejected this)", cfg.ClientAuth.Mode)
+		return nil, fmt.Errorf("internal: NewTokenVerifier called with unsupported mcp_client_auth.mode %q (validator should have rejected this)", cfg.MCPClientAuth.Mode)
 	}
 }
 
@@ -124,14 +124,14 @@ func createOIDCTokenVerifier(cfg *config.ServerConfig) (sdkauth.TokenVerifier, e
 	ctx, cancel := context.WithTimeout(clientCtx, 30*time.Second)
 	defer cancel()
 
-	oidcProvider, err := oidc.NewProvider(ctx, cfg.ClientAuth.Issuer)
+	oidcProvider, err := oidc.NewProvider(ctx, cfg.MCPClientAuth.Issuer)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to identity provider at %s (is it reachable?): %w", cfg.ClientAuth.Issuer, err)
+		return nil, fmt.Errorf("failed to connect to identity provider at %s (is it reachable?): %w", cfg.MCPClientAuth.Issuer, err)
 	}
 
 	// Create verifier that validates issuer, audience, and signature
 	verifier := oidcProvider.Verifier(&oidc.Config{
-		ClientID: cfg.ClientAuth.Audience,
+		ClientID: cfg.MCPClientAuth.Audience,
 	})
 
 	return func(ctx context.Context, token string, req *http.Request) (*sdkauth.TokenInfo, error) {
@@ -219,15 +219,15 @@ func oidcHTTPClient() (*http.Client, error) {
 // OAuth 2.0 Protected Resource Metadata (RFC 9728) for the MCP server.
 // This endpoint enables MCP clients to discover the authorization server
 // and initiate browser-based OAuth flows (Authorization Code + PKCE).
-// Only served under client_auth.mode == "oauth"; returns nil otherwise.
+// Only served under mcp_client_auth.mode == "oauth"; returns nil otherwise.
 func NewProtectedResourceMetadataHandler(cfg *config.ServerConfig) http.Handler {
-	if cfg.ClientAuth.Mode != config.AuthModeOAuth {
+	if cfg.MCPClientAuth.Mode != config.AuthModeOAuth {
 		return nil
 	}
 
 	metadata := &oauthex.ProtectedResourceMetadata{
-		Resource:               cfg.ClientAuth.ResourceURL,
-		AuthorizationServers:   []string{cfg.ClientAuth.Issuer},
+		Resource:               cfg.MCPClientAuth.ResourceURL,
+		AuthorizationServers:   []string{cfg.MCPClientAuth.Issuer},
 		ScopesSupported:        []string{"openid"},
 		BearerMethodsSupported: []string{"header"},
 	}

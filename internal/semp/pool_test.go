@@ -24,7 +24,7 @@ import (
 func writeTestConfig(t *testing.T, brokers ...[2]string) *config.ServerConfig {
 	t.Helper()
 	var b []byte
-	b = append(b, []byte("client_auth:\n  mode: disabled\nbrokers:\n")...)
+	b = append(b, []byte("mcp_client_auth:\n  mode: disabled\nbrokers:\n")...)
 	for _, kv := range brokers {
 		b = append(b, []byte(fmt.Sprintf("  %s:\n    url: %s\n    auth:\n      mode: basic\n      username: admin\n      password: secret\n", kv[0], kv[1]))...)
 	}

@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/auth"
+	"github.com/SolaceDev/solace-broker-mcp/internal/banner"
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite"
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite/definitions"
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
@@ -373,8 +374,8 @@ func main() {
 	// MUST run before the slog handler gets reconfigured to the user log
 	// level — at this point the bootstrap handler is at INFO, so WARN
 	// banner entries are always visible regardless of cfg.LogLevel.
-	// DO NOT move this into middleware; see internal/auth/banner.go.
-	auth.LogStartupBanner(cfg)
+	// DO NOT move this into middleware; see internal/banner/banner.go.
+	banner.LogStartupAuthMode(cfg.MCPClientAuth.Mode, cfg.MCPClientAuth.Issuer)
 
 	// Reconfigure slog with the user-configured level. cfg.LogLevel is
 	// validated and normalized to one of debug/info/warn/error.
