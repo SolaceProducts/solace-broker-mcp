@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/auth"
+	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 )
@@ -122,4 +123,52 @@ func TestRawSubjectTokenCapture_AfterSDKValidation(t *testing.T) {
 		}
 		t.Logf("rejection short-circuit ok: SDK returned %d and probe was never invoked", rec.Code)
 	})
+}
+
+// TestRawSubjectTokenCapture_WiredByNewAuthMiddleware pins the production
+// wiring: calling auth.NewAuthMiddleware on a real *config.ServerConfig
+// installs auth.InjectRawSubjectToken into the chain. Without this test,
+// a refactor that drops `InjectRawSubjectToken(next)` from
+// internal/auth/middleware.go would not fail any existing test — the
+// chain-order test above builds the chain by hand and so does not
+// exercise NewAuthMiddleware.
+//
+// Static mode is used because it is the smallest production-supported
+// MCPClientAuth.Mode that activates the auth chain (the disabled mode
+// returns next directly without wrapping). The dev token doubles as a
+// readable test fixture; production OIDC mode would require an IdP and
+// would not change what is asserted here.
+func TestRawSubjectTokenCapture_WiredByNewAuthMiddleware(t *testing.T) {
+	t.Parallel()
+	const devToken = "static-mode-dev-token-fixture"
+
+	cfg := &config.ServerConfig{
+		MCPClientAuth: config.MCPClientAuthConfig{
+			Mode:     config.AuthModeStatic,
+			DevToken: devToken,
+		},
+	}
+
+	var downstreamSawToken string
+	var downstreamOK bool
+	downstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		downstreamSawToken, downstreamOK = auth.RawSubjectTokenFromContext(r.Context())
+	})
+
+	handler, err := auth.NewAuthMiddleware(cfg, downstream)
+	if err != nil {
+		t.Fatalf("NewAuthMiddleware returned error: %v", err)
+	}
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer "+devToken)
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	if !downstreamOK {
+		t.Fatal("downstream did not observe a raw token on ctx — NewAuthMiddleware is not wiring InjectRawSubjectToken into the chain")
+	}
+	if downstreamSawToken != devToken {
+		t.Errorf("downstream token %q != dev token %q", downstreamSawToken, devToken)
+	}
+	t.Logf("production wiring ok: NewAuthMiddleware in static mode passes the bearer token through to ctx")
 }
