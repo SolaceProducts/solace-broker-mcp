@@ -16,15 +16,11 @@ package auth
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
-
-	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 )
 
 // runMiddleware sends a request with the given Authorization header through
@@ -184,78 +180,10 @@ func TestInjectRawSubjectToken_RequestIsolation(t *testing.T) {
 	}
 }
 
-// TestInjectRawSubjectToken_PositionAfterSDK pins the wiring contract:
-// when chained behind the SDK's RequireBearerToken (as NewAuthMiddleware
-// does), InjectRawSubjectToken runs only after the SDK has approved the
-// request. A rejected request must never reach our middleware, and the
-// raw token observed by downstream must equal the token the SDK passed
-// to the verifier.
-func TestInjectRawSubjectToken_PositionAfterSDK(t *testing.T) {
-	t.Parallel()
-	const goodToken = "eyJhbGciOiJSUzI1NiJ9.good.sig"
-
-	t.Run("valid token reaches our middleware and downstream sees the raw token", func(t *testing.T) {
-		t.Parallel()
-		var verifierSawToken string
-		verifier := func(_ context.Context, token string, _ *http.Request) (*sdkauth.TokenInfo, error) {
-			verifierSawToken = token
-			return &sdkauth.TokenInfo{
-				UserID:     "test-user",
-				Expiration: time.Now().Add(time.Hour),
-			}, nil
-		}
-
-		var downstreamSawToken string
-		var downstreamOK bool
-		downstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			downstreamSawToken, downstreamOK = RawSubjectTokenFromContext(r.Context())
-		})
-		chain := sdkauth.RequireBearerToken(verifier, nil)(InjectRawSubjectToken(downstream))
-
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
-		req.Header.Set("Authorization", "Bearer "+goodToken)
-		chain.ServeHTTP(httptest.NewRecorder(), req)
-
-		if !downstreamOK {
-			t.Fatal("downstream did not see a raw token; InjectRawSubjectToken did not stash it")
-		}
-		if downstreamSawToken != verifierSawToken {
-			t.Errorf("downstream token %q != verifier token %q (must be the same bytes)", downstreamSawToken, verifierSawToken)
-		}
-		if downstreamSawToken != goodToken {
-			t.Errorf("downstream token %q != expected %q", downstreamSawToken, goodToken)
-		}
-	})
-
-	t.Run("invalid token is rejected by SDK; our middleware is never invoked", func(t *testing.T) {
-		t.Parallel()
-		verifier := func(_ context.Context, _ string, _ *http.Request) (*sdkauth.TokenInfo, error) {
-			return nil, errors.New("token rejected for test: " + sdkauth.ErrInvalidToken.Error())
-		}
-
-		var ourMiddlewareInvoked bool
-		ourMiddleware := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ourMiddlewareInvoked = true
-		})
-		// Wrap our handler with InjectRawSubjectToken; the SDK should
-		// short-circuit before InjectRawSubjectToken's inner func runs.
-		chain := sdkauth.RequireBearerToken(verifier, nil)(InjectRawSubjectToken(ourMiddleware))
-
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
-		req.Header.Set("Authorization", "Bearer bogus")
-		rec := httptest.NewRecorder()
-		chain.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusUnauthorized && rec.Code != http.StatusInternalServerError {
-			// We tolerate either 401 (errors.Is(err, ErrInvalidToken)) or
-			// 500 (any other error), depending on how the SDK unwraps.
-			t.Errorf("expected SDK to reject the request; got status %d", rec.Code)
-		}
-		if ourMiddlewareInvoked {
-			t.Fatal("downstream handler was invoked despite SDK rejection; chain order is broken")
-		}
-	})
-}
+// The chain-order integration test (SDK middleware + InjectRawSubjectToken
+// composed) lives at test/integration/raw_subject_token_capture_test.go.
+// It belongs there because the assertion only makes sense when both
+// middlewares are wired together; see test/integration/README.md.
 
 // TestRawSubjectTokenFromContext_AccessorContract covers the accessor's
 // edge cases: nil value, wrong type, empty string. The middleware never

@@ -56,6 +56,10 @@ marker; cheap-to-create new files are the structure.
 - `broker_credential_isolation_test.go` — credentials configured for one
   broker never reach another broker's wire, under concurrent load. Static
   modes only (basic, bearer).
+- `raw_subject_token_capture_test.go` — the SOL-150797 chain-order
+  invariant: `auth.InjectRawSubjectToken` wrapped inside the SDK's
+  `RequireBearerToken` makes the raw bearer token reachable on ctx
+  downstream of validation, and never reachable when validation failed.
 
 ### Anticipated future files (see SOL-150070 decomposition)
 
