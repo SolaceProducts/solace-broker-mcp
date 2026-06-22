@@ -55,8 +55,8 @@ type rawSubjectTokenKey struct{}
 //
 // On any malformed or non-Bearer Authorization header the middleware is a
 // no-op — it does not reject the request and does not modify the context.
-// The SDK middleware upstream is the authority on whether a request is
-// allowed through.
+// Rejection is the responsibility of whatever component sits in front of
+// this middleware in the chain; this middleware only captures.
 func InjectRawSubjectToken(next http.Handler) http.Handler {
 	// One-shot startup log per installation. Today this fires exactly
 	// once at server startup (single call site in NewAuthMiddleware);

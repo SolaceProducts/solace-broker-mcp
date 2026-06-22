@@ -77,6 +77,23 @@ The Hop 2 prototype carried a `BMS_DEMO_LOG_TOKENS` env-flag for demo logging. T
 - All per-request data lives on the stack of the request goroutine and on the request's ctx.
 - The unexported key type ensures no other package can collide with our slot.
 
+### 7. Rejection is the upstream component's responsibility, not ours
+
+When the Authorization header is missing or malformed, `InjectRawSubjectToken` does **not** reject the request. It calls `next.ServeHTTP(w, r)` unchanged — no error, no log, no 401, no `WWW-Authenticate` header.
+
+The principle is positional, not coupled to any specific upstream component:
+
+- **Capture is our responsibility.** If a valid Bearer header is present, copy the token onto ctx.
+- **Rejection is the responsibility of whatever component sits in front of us in the chain.** Today that is `sdkauth.RequireBearerToken`; tomorrow it could be a different validator (e.g. an opaque-token introspection middleware), a custom auth layer, or a hand-built chain in tests.
+
+Two consequences:
+
+1. **No duplication of upstream gating.** Reasonable upstream auth components already produce well-formed 401 responses with the right `WWW-Authenticate` headers, RFC 9728 metadata pointers, and so on. Reimplementing that here would risk subtle disagreement between layers.
+
+2. **Composable in any chain.** The middleware can be wired with or without an upstream validator without becoming an accidental auth gate. In production it sits behind a validator; in some tests it is exercised in isolation. Behaviour stays consistent.
+
+This design intentionally trades "fail fast at the HTTP boundary" for "single responsibility." In production, the upstream validator will reject missing/malformed headers before our middleware ever sees them, so the silent-pass branch is effectively unreachable in real traffic. It exists so the middleware composes safely in non-production paths (tests, future configurations) without quietly turning into an auth enforcer.
+
 ---
 
 ## Files touched
@@ -123,7 +140,7 @@ This section covers production-code work only. Test work is in the next section.
      - Field 1 must be `"Bearer"` matched case-insensitively (`strings.EqualFold`). This matches the SDK's `strings.ToLower(fields[0]) != "bearer"` check.
      - Field 2 must be non-empty.
      - When all three conditions hold: derive a new ctx with `context.WithValue(r.Context(), rawSubjectTokenKey{}, token)` and call `next.ServeHTTP(w, r.WithContext(ctx))`.
-     - When any condition fails: call `next.ServeHTTP(w, r)` unchanged. **No rejection, no error, no log.** The SDK middleware upstream already rejected this case if it was a security issue; we only run when the SDK approved.
+     - When any condition fails: call `next.ServeHTTP(w, r)` unchanged. **No rejection, no error, no log.** Rejection is the responsibility of whatever component sits in front of this middleware in the chain (in production today, that is `sdkauth.RequireBearerToken`). This middleware only captures — it does not duplicate the upstream component's gating role.
 
 4. **Accessor** `RawSubjectTokenFromContext(ctx context.Context) (string, bool)`:
    - `v := ctx.Value(rawSubjectTokenKey{})`.
