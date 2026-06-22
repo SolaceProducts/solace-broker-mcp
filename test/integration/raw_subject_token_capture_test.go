@@ -16,7 +16,7 @@ package integration_test
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -93,8 +93,13 @@ func TestRawSubjectTokenCapture_AfterSDKValidation(t *testing.T) {
 
 	t.Run("rejected token short-circuits at the SDK and never reaches our middleware", func(t *testing.T) {
 		t.Parallel()
+		// Wrap with %w so errors.Is(err, ErrInvalidToken) returns true
+		// inside the SDK. That makes the SDK take its 401 branch — the
+		// same code path production hits when go-oidc rejects a JWT.
+		// Returning a plain errors.New here would fall through to the
+		// SDK's 500 fallback, exercising the wrong production path.
 		verifier := func(_ context.Context, _ string, _ *http.Request) (*sdkauth.TokenInfo, error) {
-			return nil, errors.New("token rejected for test: " + sdkauth.ErrInvalidToken.Error())
+			return nil, fmt.Errorf("token rejected for test: %w", sdkauth.ErrInvalidToken)
 		}
 
 		// Probe handler under InjectRawSubjectToken. If control flow ever
@@ -112,11 +117,12 @@ func TestRawSubjectTokenCapture_AfterSDKValidation(t *testing.T) {
 		rec := httptest.NewRecorder()
 		chain.ServeHTTP(rec, req)
 
-		// We tolerate either 401 (errors.Is(err, ErrInvalidToken)) or
-		// 500 (the SDK's default for unrecognized errors), depending on
-		// how the SDK unwraps the verifier's return.
-		if rec.Code != http.StatusUnauthorized && rec.Code != http.StatusInternalServerError {
-			t.Errorf("expected SDK to reject the request with 401 or 500, got status %d", rec.Code)
+		// Verifier wraps ErrInvalidToken, so the SDK must take its 401
+		// branch — matching production where go-oidc rejects with the
+		// same wrapped error. A 500 here would indicate the verifier's
+		// error stopped unwrapping correctly.
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("expected SDK to reject the request with 401, got status %d", rec.Code)
 		}
 		if probeInvoked {
 			t.Fatal("downstream handler ran despite SDK rejection — chain-order invariant is broken; InjectRawSubjectToken is positioned outside the SDK")
