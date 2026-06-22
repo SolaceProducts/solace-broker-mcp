@@ -37,7 +37,7 @@ func runMiddleware(t *testing.T, authHeader string) (gotToken string, ok bool, n
 		nextInvoked = true
 		gotToken, ok = RawSubjectTokenFromContext(r.Context())
 	}))
-	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 	if authHeader != "" {
 		req.Header.Set("Authorization", authHeader)
 	}
@@ -129,7 +129,7 @@ func TestInjectRawSubjectToken_ConcurrentRequests(t *testing.T) {
 				// Build a unique token per request so any cross-talk
 				// would be immediately observable.
 				tok := "token-w" + itoa(workerID) + "-i" + itoa(i)
-				req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+				req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 				req.Header.Set("Authorization", "Bearer "+tok)
 				req.Header.Set("X-Expected-Token", tok)
 				rec := httptest.NewRecorder()
@@ -157,7 +157,7 @@ func TestInjectRawSubjectToken_RequestIsolation(t *testing.T) {
 	t.Parallel()
 	const jwt = "eyJhbGciOiJSUzI1NiJ9.payload.sig"
 
-	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	parentCtx := req.Context()
 
@@ -212,7 +212,7 @@ func TestInjectRawSubjectToken_PositionAfterSDK(t *testing.T) {
 		})
 		chain := sdkauth.RequireBearerToken(verifier, nil)(InjectRawSubjectToken(downstream))
 
-		req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 		req.Header.Set("Authorization", "Bearer "+goodToken)
 		chain.ServeHTTP(httptest.NewRecorder(), req)
 
@@ -241,7 +241,7 @@ func TestInjectRawSubjectToken_PositionAfterSDK(t *testing.T) {
 		// short-circuit before InjectRawSubjectToken's inner func runs.
 		chain := sdkauth.RequireBearerToken(verifier, nil)(InjectRawSubjectToken(ourMiddleware))
 
-		req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 		req.Header.Set("Authorization", "Bearer bogus")
 		rec := httptest.NewRecorder()
 		chain.ServeHTTP(rec, req)
