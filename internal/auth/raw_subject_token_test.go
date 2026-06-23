@@ -18,6 +18,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -124,7 +125,7 @@ func TestInjectRawSubjectToken_ConcurrentRequests(t *testing.T) {
 			for i := 0; i < iterationsPerGoroutine; i++ {
 				// Build a unique token per request so any cross-talk
 				// would be immediately observable.
-				tok := "token-w" + itoa(workerID) + "-i" + itoa(i)
+				tok := "token-w" + strconv.Itoa(workerID) + "-i" + strconv.Itoa(i)
 				req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 				req.Header.Set("Authorization", "Bearer "+tok)
 				req.Header.Set("X-Expected-Token", tok)
@@ -235,25 +236,3 @@ func TestRawSubjectTokenFromContext_AccessorContract(t *testing.T) {
 	})
 }
 
-// itoa avoids importing strconv in the concurrency test. Small, single-purpose.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
-}
