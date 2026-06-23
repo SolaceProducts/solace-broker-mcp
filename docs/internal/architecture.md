@@ -144,6 +144,11 @@ sequenceDiagram
     SDK-->>User: Tool response
 ```
 
+The executor supports two `result.strategy` values:
+
+- **`collect`** — returns the raw step-result map keyed by step ID.
+- **`postProcess`** — runs a Go handler registered in [`internal/composite/postprocess/`](../../internal/composite/postprocess/) over the step results and merges its summary map under a top-level `"summary"` key alongside the raw results. Handlers register from `init()`; `cmd/server/main.go` blank-imports the handlers package so registration happens before startup validation. At boot the server cross-checks each handler's `RequiredFields` against the union of its tool's step `select:` arrays and refuses to start on a mismatch (template: `tool %q: handler %q reads %q but it is not in select`). This catches SEMP field-name drift before any tool call.
+
 ---
 
 ## Concurrency — Multiple Users, Same Broker

@@ -2,8 +2,12 @@ package composite
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess"
+	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess/postprocesstest"
 )
 
 func TestLoadTools_Valid(t *testing.T) {
@@ -1086,4 +1090,152 @@ tools:
 	if tool.Parameters[1].Name != "maxResults" || tool.Parameters[1].Required {
 		t.Error("expected optional maxResults parameter")
 	}
+}
+
+// TestLoadTools_StrategyConfig covers the cross-field rules between
+// result.strategy and result.postProcess plus the reserved "summary" step ID
+// and the args.select / select coexistence guard.
+func TestLoadTools_StrategyConfig(t *testing.T) {
+	cases := []struct {
+		name    string
+		yaml    string
+		wantSub string
+	}{
+		{
+			name: "postProcess without name",
+			yaml: `
+tools:
+  - name: bad
+    description: missing handler name
+    steps:
+      - id: s1
+        operation: monitor/getVpn
+    result:
+      strategy: postProcess
+`,
+			wantSub: `postProcess is required when strategy is "postProcess"`,
+		},
+		{
+			name: "collect with postProcess set",
+			yaml: `
+tools:
+  - name: bad
+    description: postProcess on collect strategy
+    steps:
+      - id: s1
+        operation: monitor/getVpn
+    result:
+      strategy: collect
+      postProcess: someHandler
+`,
+			wantSub: `postProcess must be empty when strategy is "collect"`,
+		},
+		{
+			name: "summary step ID reserved under postProcess",
+			yaml: `
+tools:
+  - name: bad
+    description: reserved step ID
+    steps:
+      - id: summary
+        operation: monitor/getVpn
+    result:
+      strategy: postProcess
+      postProcess: someHandler
+`,
+			wantSub: `step ID "summary" is reserved`,
+		},
+		{
+			name: "both args.select and select set",
+			yaml: `
+tools:
+  - name: bad
+    description: select set twice
+    steps:
+      - id: s1
+        operation: monitor/getVpn
+        args:
+          select: "a, b"
+        select:
+          - a
+          - b
+    result:
+      strategy: collect
+`,
+			wantSub: "cannot set both args.select and select",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fsys := fstest.MapFS{"tools.yaml": &fstest.MapFile{Data: []byte(tc.yaml)}}
+			_, err := LoadTools(fsys, "tools.yaml")
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantSub)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("error %q does not contain %q", err, tc.wantSub)
+			}
+		})
+	}
+}
+
+// TestValidatePostProcess covers the boot-time cross-check between a
+// postProcess tool's handler RequiredFields and the union of its steps'
+// `select:` arrays. Builds CompositeTool values directly rather than going
+// through YAML so the test isolates the validation logic.
+func TestValidatePostProcess(t *testing.T) {
+	postprocesstest.Register(t, "__test_pp_handler", postprocess.Handler{
+		Fn:             func(map[string]map[string]any) (map[string]any, error) { return nil, nil },
+		RequiredFields: []string{"a", "b"},
+	})
+
+	t.Run("collect tool is ignored", func(t *testing.T) {
+		tools := []CompositeTool{{
+			Name:   "collect-tool",
+			Steps:  []Step{{ID: "s1", Operation: "x"}},
+			Result: ResultStrategy{Strategy: "collect"},
+		}}
+		if err := ValidatePostProcess(tools); err != nil {
+			t.Fatalf("collect tool should be skipped, got %v", err)
+		}
+	})
+
+	t.Run("happy path with required fields covered", func(t *testing.T) {
+		tools := []CompositeTool{{
+			Name: "ok-tool",
+			Steps: []Step{
+				{ID: "s1", Operation: "x", Select: []string{"a"}},
+				{ID: "s2", Operation: "y", Select: []string{"b", "c"}},
+			},
+			Result: ResultStrategy{Strategy: "postProcess", PostProcess: "__test_pp_handler"},
+		}}
+		if err := ValidatePostProcess(tools); err != nil {
+			t.Fatalf("expected ok, got %v", err)
+		}
+	})
+
+	t.Run("missing required field surfaces templated error", func(t *testing.T) {
+		tools := []CompositeTool{{
+			Name:   "bad-tool",
+			Steps:  []Step{{ID: "s1", Operation: "x", Select: []string{"a"}}}, // b missing
+			Result: ResultStrategy{Strategy: "postProcess", PostProcess: "__test_pp_handler"},
+		}}
+		err := ValidatePostProcess(tools)
+		want := `tool "bad-tool": postprocessor "__test_pp_handler" reads "b" but it is not in select`
+		if err == nil || err.Error() != want {
+			t.Fatalf("\nwant: %s\ngot:  %v", want, err)
+		}
+	})
+
+	t.Run("unregistered handler", func(t *testing.T) {
+		tools := []CompositeTool{{
+			Name:   "no-handler",
+			Steps:  []Step{{ID: "s1", Operation: "x"}},
+			Result: ResultStrategy{Strategy: "postProcess", PostProcess: "nope"},
+		}}
+		err := ValidatePostProcess(tools)
+		if err == nil || !strings.Contains(err.Error(), `postprocessor "nope" not registered`) {
+			t.Fatalf("got %v", err)
+		}
+	})
 }

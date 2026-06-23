@@ -36,6 +36,7 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/banner"
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite"
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite/definitions"
+	_ "github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess/handlers" // register handlers via init()
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
@@ -418,6 +419,16 @@ func main() {
 	}
 	slog.Info("loaded composite tool definitions",
 		slog.Int("tool_count", len(compositeTools)))
+
+	// Cross-check that every postProcess handler's RequiredFields are covered
+	// by its tool's step `select:` clauses. Catches SEMP field-name drift
+	// (e.g. bindSuccessCount vs bindCount) at boot rather than first call.
+	// The handlers package was registered via blank import above, so the
+	// postprocess registry is populated before this runs.
+	if err := composite.ValidatePostProcess(compositeTools); err != nil {
+		slog.Error("composite tool postProcess validation failed", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
 
 	// 5. Create composite executor
 	executor := composite.NewCompositeExecutor(operations)

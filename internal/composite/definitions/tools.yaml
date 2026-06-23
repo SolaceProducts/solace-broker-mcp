@@ -225,9 +225,23 @@ tools:
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           count: "100"
-          select: "accessType, bindCount, egressEnabled, ingressEnabled, lowPriorityMsgCongestionState, maxMsgSpoolUsage, msgSpoolUsage, msgVpnName, queueName, rxMsgRate, spooledMsgCount, txMsgRate, txUnackedMsgCount"
+        select:
+          - accessType
+          - bindCount
+          - egressEnabled
+          - ingressEnabled
+          - lowPriorityMsgCongestionState
+          - maxMsgSpoolUsage
+          - msgSpoolUsage
+          - msgVpnName
+          - queueName
+          - rxMsgRate
+          - spooledMsgCount
+          - txMsgRate
+          - txUnackedMsgCount
     result:
-      strategy: collect
+      strategy: postProcess
+      postProcess: listQueues
 
   - name: list-clients
     description: >

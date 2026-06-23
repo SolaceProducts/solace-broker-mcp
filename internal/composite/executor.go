@@ -20,10 +20,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"strings"
 	"text/template"
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 )
 
@@ -152,6 +154,7 @@ func (ce *CompositeExecutor) executeStep(ctx context.Context, step Step, client 
 	if err != nil {
 		return fmt.Errorf("tool step %s: failed to resolve args: %w", step.ID, err)
 	}
+	applySelect(args, step.Select)
 
 	op, ok := ce.operations[step.Operation]
 	if !ok {
@@ -165,6 +168,19 @@ func (ce *CompositeExecutor) executeStep(ctx context.Context, step Step, client 
 
 	execCtx.StepResults[step.ID] = result.Data
 	return nil
+}
+
+// applySelect joins step.Select (if non-empty) into the comma-separated
+// "select" arg the SEMP client sends as a query parameter. The ", " separator
+// is cosmetic — SEMPv2 accepts either "a,b" or "a, b". The structured form on
+// Step is what lets ValidatePostProcess cross-check handler RequiredFields
+// without re-parsing the joined string. validateTool in loader.go rejects the
+// case where args["select"] is also templated, so this overwrite is safe.
+func applySelect(args map[string]any, fields []string) {
+	if len(fields) == 0 {
+		return
+	}
+	args["select"] = strings.Join(fields, ", ")
 }
 
 // executePaginatedStep executes a step that returns paginated results. It
@@ -181,6 +197,7 @@ func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step
 	if err != nil {
 		return fmt.Errorf("tool step %s: failed to resolve args: %w", step.ID, err)
 	}
+	applySelect(baseArgs, step.Select)
 
 	op, ok := ce.operations[step.Operation]
 	if !ok {
@@ -444,20 +461,32 @@ func safeTemplateExecute(tmpl *template.Template, data any) (result string, err 
 
 // ApplyResultStrategy combines step results according to the tool's result
 // strategy configuration. "collect" returns all step results keyed by step ID.
+// "postProcess" runs a registered Go postprocessor over the step results and
+// merges its summary map under a top-level "summary" key alongside the raw
+// results.
 func ApplyResultStrategy(strategy ResultStrategy, stepResults map[string]map[string]any) (map[string]any, error) {
 	switch strategy.Strategy {
 	case "collect":
-		return collectStrategy(stepResults)
+		return collectSteps(stepResults, 0), nil
+	case "postProcess":
+		summary, err := postprocess.Apply(strategy.PostProcess, stepResults)
+		if err != nil {
+			return nil, err
+		}
+		out := collectSteps(stepResults, 1)
+		out["summary"] = summary
+		return out, nil
 	default:
-		return nil, fmt.Errorf("result strategy %q is not supported; supported values: collect", strategy.Strategy)
+		return nil, fmt.Errorf("result strategy %q is not supported; supported values: collect, postProcess", strategy.Strategy)
 	}
 }
 
-// collectStrategy returns all step results keyed by step ID.
-func collectStrategy(stepResults map[string]map[string]any) (map[string]any, error) {
-	result := make(map[string]any, len(stepResults))
+// collectSteps returns a new map keyed by step ID. extraCap reserves space
+// for keys the caller will add (e.g. "summary").
+func collectSteps(stepResults map[string]map[string]any, extraCap int) map[string]any {
+	out := make(map[string]any, len(stepResults)+extraCap)
 	for stepID, res := range stepResults {
-		result[stepID] = res
+		out[stepID] = res
 	}
-	return result, nil
+	return out
 }

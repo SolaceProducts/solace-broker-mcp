@@ -20,6 +20,8 @@ import (
 	"io/fs"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess"
 )
 
 // LoadTools reads a YAML file from the given filesystem, parses it into
@@ -48,10 +50,12 @@ func LoadTools(fsys fs.FS, filename string) ([]CompositeTool, error) {
 	return file.Tools, nil
 }
 
-// validateTool checks the structural correctness of a composite tool definition.
-// It verifies required fields, unique step IDs, and valid result strategy
-// configuration. It validates that a result strategy is specified and is a
-// supported value.
+// validateTool checks the structural correctness of a composite tool definition:
+// required fields, unique step IDs, mutually exclusive `select` forms, reserved
+// step IDs, and a supported result strategy. This is the first of two
+// validation passes — the second, ValidatePostProcess, runs after the
+// postprocess registry is populated and cross-checks each handler's
+// RequiredFields against the step `select:` clauses.
 func validateTool(tool *CompositeTool) error {
 	if tool.Name == "" {
 		return fmt.Errorf("tool name is required")
@@ -79,15 +83,68 @@ func validateTool(tool *CompositeTool) error {
 		if step.Operation == "" {
 			return fmt.Errorf("step operation is required for step %s", step.ID)
 		}
+
+		// The structured `select:` and a templated `args.select` would race at
+		// execute time (applySelect in executor.go overwrites args["select"]).
+		// Reject the ambiguity at load time.
+		if len(step.Select) > 0 {
+			if _, dup := step.Args["select"]; dup {
+				return fmt.Errorf("step %s: cannot set both args.select and select", step.ID)
+			}
+		}
 	}
 
 	if tool.Result.Strategy == "" {
-		return fmt.Errorf("result strategy is required; supported values: collect")
+		return fmt.Errorf("result strategy is required; supported values: collect, postProcess")
 	}
 
-	if tool.Result.Strategy != "collect" {
-		return fmt.Errorf("result strategy %q is not supported; supported values: collect", tool.Result.Strategy)
+	switch tool.Result.Strategy {
+	case "collect":
+		if tool.Result.PostProcess != "" {
+			return fmt.Errorf("postProcess must be empty when strategy is %q", tool.Result.Strategy)
+		}
+	case "postProcess":
+		if tool.Result.PostProcess == "" {
+			return fmt.Errorf("postProcess is required when strategy is %q", tool.Result.Strategy)
+		}
+		// "summary" is reserved at the top level of a postProcess result for the
+		// handler's output (see ApplyResultStrategy). A step named "summary"
+		// would silently shadow it.
+		if stepIDs["summary"] {
+			return fmt.Errorf(`step ID "summary" is reserved when strategy is "postProcess"`)
+		}
+	default:
+		return fmt.Errorf("result strategy %q is not supported; supported values: collect, postProcess", tool.Result.Strategy)
 	}
 
+	return nil
+}
+
+// ValidatePostProcess cross-checks every postProcess tool's postprocessor
+// against the union of its steps' `select:` clauses. It runs as a second pass
+// after LoadTools because handlers register from init() and the postprocess
+// registry must be populated before this check is meaningful. Errors use the
+// uniform template defined by postprocess.ValidateTool so a missing field
+// surfaces the same message regardless of which tool tripped it.
+//
+// TODO multi-step: RequiredFields is checked against the union across all
+// steps, so a postprocessor reading field X from step A passes validation
+// when only step B selects X. Today every postProcess tool has one step
+// (list-queues), so the union is precise. When a multi-step postProcess
+// tool lands, change Handler.RequiredFields to map[stepID][]string and
+// validate per step.
+func ValidatePostProcess(tools []CompositeTool) error {
+	for _, t := range tools {
+		if t.Result.Strategy != "postProcess" {
+			continue
+		}
+		var selectFields []string
+		for _, s := range t.Steps {
+			selectFields = append(selectFields, s.Select...)
+		}
+		if err := postprocess.ValidateTool(t.Name, t.Result.PostProcess, selectFields); err != nil {
+			return err
+		}
+	}
 	return nil
 }
