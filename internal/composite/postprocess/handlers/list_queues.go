@@ -30,9 +30,16 @@ import (
 // risk of taking SPOOL_OVER_QUOTA discards if their consumers don't catch up.
 const nearFullThreshold = 0.8
 
+// listQueuesStepID is the step ID this handler keys into. Declared as a const
+// so the init-time RequiredSteps registration and the runtime lookup cannot
+// drift out of sync — and so the boot-time check in ValidatePostProcess
+// catches a YAML rename of the step.
+const listQueuesStepID = "queues"
+
 func init() {
 	postprocess.Register("listQueues", postprocess.Handler{
-		Fn: ListQueues,
+		Fn:            ListQueues,
+		RequiredSteps: []string{listQueuesStepID},
 		RequiredFields: []string{
 			"bindCount",
 			"spooledMsgCount",
@@ -49,10 +56,16 @@ func init() {
 //   - backloggedCount: queues with spooledMsgCount > 0 (any backlog at all)
 //   - nearFullCount:   queues with msgSpoolUsage/maxMsgSpoolUsage >= 0.8
 //     (skips queues with maxMsgSpoolUsage == 0 — unbounded or unset)
+//
+// The counts are over what the paginator actually returned. Under truncation
+// (followPages stopped at maxResults / capMax / maxPages), the summary also
+// includes scanned (the count of items observed) and truncated: true so the
+// LLM sees the partial-scan reality next to the counts rather than only on
+// the raw data block.
 func ListQueues(stepResults map[string]map[string]any) (map[string]any, error) {
-	step, ok := stepResults["queues"]
+	step, ok := stepResults[listQueuesStepID]
 	if !ok {
-		return nil, fmt.Errorf("step %q not in results", "queues")
+		return nil, fmt.Errorf("step %q not in results", listQueuesStepID)
 	}
 	items, ok := step["data"].([]any)
 	if !ok {
@@ -97,12 +110,17 @@ func ListQueues(stepResults map[string]map[string]any) (map[string]any, error) {
 			nearFull++
 		}
 	}
-	return map[string]any{
+	out := map[string]any{
 		"noConsumerCount": noConsumer,
 		"congestedCount":  congested,
 		"backloggedCount": backlogged,
 		"nearFullCount":   nearFull,
-	}, nil
+		"scanned":         len(items),
+	}
+	if t, _ := step["truncated"].(bool); t {
+		out["truncated"] = true
+	}
+	return out, nil
 }
 
 // numField accepts any of the numeric shapes JSON decoders produce: float64

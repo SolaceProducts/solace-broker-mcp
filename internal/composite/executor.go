@@ -388,6 +388,7 @@ func (ce *CompositeExecutor) executeBatch(ctx context.Context, batch ExecutionBa
 			if err != nil {
 				return fmt.Errorf("tool step %s: failed to resolve args: %w", step.ID, err)
 			}
+			applySelect(args, step.Select)
 
 			op, ok := ce.operations[step.Operation]
 			if !ok {

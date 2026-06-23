@@ -121,11 +121,12 @@ func validateTool(tool *CompositeTool) error {
 }
 
 // ValidatePostProcess cross-checks every postProcess tool's postprocessor
-// against the union of its steps' `select:` clauses. It runs as a second pass
+// against the tool's step IDs (Handler.RequiredSteps) and the union of its
+// steps' `select:` clauses (Handler.RequiredFields). It runs as a second pass
 // after LoadTools because handlers register from init() and the postprocess
 // registry must be populated before this check is meaningful. Errors use the
-// uniform template defined by postprocess.ValidateTool so a missing field
-// surfaces the same message regardless of which tool tripped it.
+// uniform template defined by postprocess.ValidateTool so a missing step or
+// field surfaces the same message regardless of which tool tripped it.
 //
 // TODO multi-step: RequiredFields is checked against the union across all
 // steps, so a postprocessor reading field X from step A passes validation
@@ -138,11 +139,13 @@ func ValidatePostProcess(tools []CompositeTool) error {
 		if t.Result.Strategy != "postProcess" {
 			continue
 		}
+		stepIDs := make([]string, 0, len(t.Steps))
 		var selectFields []string
 		for _, s := range t.Steps {
+			stepIDs = append(stepIDs, s.ID)
 			selectFields = append(selectFields, s.Select...)
 		}
-		if err := postprocess.ValidateTool(t.Name, t.Result.PostProcess, selectFields); err != nil {
+		if err := postprocess.ValidateTool(t.Name, t.Result.PostProcess, stepIDs, selectFields); err != nil {
 			return err
 		}
 	}

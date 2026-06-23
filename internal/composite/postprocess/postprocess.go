@@ -28,22 +28,39 @@
 // package or its flag side effects.
 package postprocess
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 // Handler bundles a postprocessor function with the field names it expects
 // to read off each item. Fn receives the raw step results (keyed by step ID)
 // and returns the summary map the executor merges under "summary".
+//
+// RequiredSteps lists the step IDs Fn keys into. ValidateTool cross-checks
+// these against the tool's declared step IDs at startup so a YAML rename of a
+// step (without updating the handler) is caught at boot rather than at first
+// invocation.
+//
+// RequiredFields lists the field names Fn reads off each item. ValidateTool
+// cross-checks these against the union of the tool's step `select:` clauses.
 type Handler struct {
 	Fn             func(stepResults map[string]map[string]any) (map[string]any, error)
+	RequiredSteps  []string
 	RequiredFields []string
 }
 
-var registry = map[string]Handler{}
+var (
+	registryMu sync.RWMutex
+	registry   = map[string]Handler{}
+)
 
 // Register installs a handler under the given name. Panics on duplicate
 // registration since handlers register from init() and a duplicate would
 // indicate a programming error.
 func Register(name string, h Handler) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
 	if _, dup := registry[name]; dup {
 		panic("postprocess: postprocessor already registered: " + name)
 	}
@@ -52,21 +69,34 @@ func Register(name string, h Handler) {
 
 // Apply runs the named postprocessor against the given step results.
 func Apply(name string, stepResults map[string]map[string]any) (map[string]any, error) {
+	registryMu.RLock()
 	h, ok := registry[name]
+	registryMu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("postprocess: postprocessor %q not registered", name)
 	}
 	return h.Fn(stepResults)
 }
 
-// ValidateTool checks that postprocessorName is registered and that every
-// field in its RequiredFields appears in selectFields. Returns the
-// ticket-specified error template on a missing field so the message is
-// uniform across tools.
-func ValidateTool(toolName, postprocessorName string, selectFields []string) error {
+// ValidateTool checks that postprocessorName is registered, that every step
+// in its RequiredSteps appears in stepIDs, and that every field in its
+// RequiredFields appears in selectFields. Returns the ticket-specified error
+// template on a missing field/step so the message is uniform across tools.
+func ValidateTool(toolName, postprocessorName string, stepIDs, selectFields []string) error {
+	registryMu.RLock()
 	h, ok := registry[postprocessorName]
+	registryMu.RUnlock()
 	if !ok {
 		return fmt.Errorf("tool %q: postprocessor %q not registered", toolName, postprocessorName)
+	}
+	stepSet := make(map[string]struct{}, len(stepIDs))
+	for _, s := range stepIDs {
+		stepSet[s] = struct{}{}
+	}
+	for _, s := range h.RequiredSteps {
+		if _, ok := stepSet[s]; !ok {
+			return fmt.Errorf("tool %q: postprocessor %q reads step %q but no such step is defined", toolName, postprocessorName, s)
+		}
 	}
 	selectSet := make(map[string]struct{}, len(selectFields))
 	for _, f := range selectFields {
@@ -84,6 +114,8 @@ func ValidateTool(toolName, postprocessorName string, selectFields []string) err
 // Exported only to support the postprocesstest helper package; production
 // code has no reason to call this.
 func IsRegistered(name string) bool {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	_, ok := registry[name]
 	return ok
 }
@@ -93,10 +125,16 @@ func IsRegistered(name string) bool {
 // not call this — production handlers register once at init() and stay for
 // the process lifetime.
 func Unregister(name string) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
 	delete(registry, name)
 }
 
 // resetForTest clears the registry. Test-only helper used by tests in this
 // package; not exported because nothing outside should mutate the registry
 // after init().
-func resetForTest() { registry = map[string]Handler{} }
+func resetForTest() {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	registry = map[string]Handler{}
+}

@@ -57,6 +57,46 @@ func TestListQueues_Counts(t *testing.T) {
 	}
 }
 
+// TestListQueues_TruncationSurfaced asserts that when the paginator marks the
+// step result truncated, the summary exposes scanned (item count) and
+// truncated: true alongside the counts. Without this the LLM sees authoritative
+// looking counts and a truncation flag buried in a sibling object, and tends to
+// treat the counts as global rather than over the visible page.
+func TestListQueues_TruncationSurfaced(t *testing.T) {
+	items := []any{
+		queue(0, 0, 0, 100, "idle"),
+		queue(2, 10, 50, 100, "idle"),
+	}
+	t.Run("truncated", func(t *testing.T) {
+		got, err := ListQueues(map[string]map[string]any{
+			"queues": {"data": items, "truncated": true},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got["scanned"] != 2 {
+			t.Errorf("scanned: got %v, want 2", got["scanned"])
+		}
+		if got["truncated"] != true {
+			t.Errorf("truncated: got %v, want true", got["truncated"])
+		}
+	})
+	t.Run("not truncated omits flag", func(t *testing.T) {
+		got, err := ListQueues(map[string]map[string]any{
+			"queues": {"data": items, "truncated": false},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got["scanned"] != 2 {
+			t.Errorf("scanned: got %v, want 2", got["scanned"])
+		}
+		if _, present := got["truncated"]; present {
+			t.Errorf("truncated key should be omitted when false, got %v", got["truncated"])
+		}
+	})
+}
+
 func TestListQueues_Empty(t *testing.T) {
 	got, err := ListQueues(map[string]map[string]any{
 		"queues": {"data": []any{}},

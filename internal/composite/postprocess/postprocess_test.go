@@ -68,18 +68,30 @@ func TestValidateTool(t *testing.T) {
 
 	Register("h", Handler{
 		Fn:             func(map[string]map[string]any) (map[string]any, error) { return nil, nil },
+		RequiredSteps:  []string{"s1"},
 		RequiredFields: []string{"a", "b"},
 	})
 
 	t.Run("unknown handler", func(t *testing.T) {
-		err := ValidateTool("tool-x", "missing", []string{"a"})
+		err := ValidateTool("tool-x", "missing", []string{"s1"}, []string{"a"})
 		if err == nil || !strings.Contains(err.Error(), `postprocessor "missing" not registered`) {
 			t.Fatalf("got %v", err)
 		}
 	})
 
+	t.Run("missing required step", func(t *testing.T) {
+		err := ValidateTool("tool-x", "h", []string{"other"}, []string{"a", "b"})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		want := `tool "tool-x": postprocessor "h" reads step "s1" but no such step is defined`
+		if err.Error() != want {
+			t.Fatalf("\nwant: %s\ngot:  %s", want, err.Error())
+		}
+	})
+
 	t.Run("missing required field", func(t *testing.T) {
-		err := ValidateTool("tool-x", "h", []string{"a"}) // b is missing
+		err := ValidateTool("tool-x", "h", []string{"s1"}, []string{"a"}) // b is missing
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -90,7 +102,7 @@ func TestValidateTool(t *testing.T) {
 	})
 
 	t.Run("ok", func(t *testing.T) {
-		if err := ValidateTool("tool-x", "h", []string{"a", "b", "c"}); err != nil {
+		if err := ValidateTool("tool-x", "h", []string{"s1"}, []string{"a", "b", "c"}); err != nil {
 			t.Fatal(err)
 		}
 	})
