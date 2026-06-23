@@ -49,14 +49,13 @@ type rawSubjectTokenKey struct{}
 // InjectRawSubjectToken returns middleware that copies the bearer token
 // from the Authorization header onto the request context.
 //
-// The middleware is intended to run AFTER the MCP SDK's RequireBearerToken
-// in the chain, so the token it captures has already been validated by
-// the SDK. The position is established at wiring time in NewAuthMiddleware.
-//
 // On any malformed or non-Bearer Authorization header the middleware is a
 // no-op — it does not reject the request and does not modify the context.
 // Rejection is the responsibility of whatever component sits in front of
 // this middleware in the chain; this middleware only captures.
+//
+// See the package doc for the position invariant and why this middleware
+// exists.
 func InjectRawSubjectToken(next http.Handler) http.Handler {
 	// One-shot startup log per installation. Today this fires exactly
 	// once at server startup (single call site in NewAuthMiddleware);
@@ -87,18 +86,14 @@ func InjectRawSubjectToken(next http.Handler) http.Handler {
 // RawSubjectTokenFromContext returns the raw bearer token captured by
 // InjectRawSubjectToken, or ("", false) if none is present.
 //
-// The ok return is false when:
-//   - no value is stored under the key (InjectRawSubjectToken was not in
-//     the chain, or the request had no valid Bearer header);
-//   - the stored value is the empty string (defensive; the middleware
-//     never stores an empty token, but the accessor folds the check in
-//     so callers branch once);
-//   - the stored value is not a string (impossible in production; only
-//     this package writes the key).
+// The ok return is false when no value is stored, when the stored value
+// is the empty string, or when it is not a string (the latter two are
+// defensive; the middleware never stores either in production). Folding
+// these into ok=false lets callers branch once.
 //
-// A successful return implies the token has been validated by the SDK
-// middleware upstream of InjectRawSubjectToken (signature, issuer,
-// audience, expiry). The caller does not re-validate.
+// See the package doc for the validation invariant: a true return means
+// the token has already been validated upstream and the caller does not
+// re-validate.
 func RawSubjectTokenFromContext(ctx context.Context) (string, bool) {
 	v := ctx.Value(rawSubjectTokenKey{})
 	if v == nil {
