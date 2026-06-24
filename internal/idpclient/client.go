@@ -58,8 +58,20 @@ func WithTimeout(d time.Duration) Option {
 // default TLS verification delegates to the OS-native trust store and
 // ignores SSL_CERT_FILE; an explicit RootCAs pool bypasses that
 // delegation so the env var works consistently on every platform.
+//
+// http.DefaultTransport is declared as RoundTripper, not *http.Transport,
+// and is a public package var that tests, observability middleware, and
+// some libraries replace. We assert via the comma-ok form and surface a
+// clear error rather than panicking on a runtime.TypeAssertionError —
+// this package is the shared source of truth for IdP HTTP clients across
+// Hop 1 and (in follow-up work) Hop 2, so the failure mode warrants a
+// caller-readable message rather than a panic deep inside startup.
 func newBaseTransport() (*http.Transport, error) {
-	t := http.DefaultTransport.(*http.Transport).Clone()
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, fmt.Errorf("idpclient: http.DefaultTransport is not *http.Transport (got %T); cannot construct IdP HTTP client", http.DefaultTransport)
+	}
+	t := base.Clone()
 
 	certFile := os.Getenv("SSL_CERT_FILE")
 	if certFile == "" {

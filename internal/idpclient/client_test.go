@@ -16,14 +16,26 @@ package idpclient
 
 import (
 	"encoding/pem"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 )
+
+// defaultTransportMu serializes any test that mutates http.DefaultTransport.
+// Tests that need a custom transport (today: only the type-assertion
+// failure-path test below) must Lock before assigning and Unlock after
+// restore — see TestNewHTTPClient_DefaultTransportNotHTTPTransport for the
+// pattern. The default Go test runner runs in-package tests sequentially,
+// so the mutex is belt-and-suspenders against a future contributor adding
+// t.Parallel() to a sibling test that also touches the transport.
+var defaultTransportMu sync.Mutex
 
 // TestNewHTTPClient_SSLCertFile covers the five SSL_CERT_FILE branches
 // (unset, missing file, unreadable file, garbage contents, valid PEM) and
@@ -151,4 +163,50 @@ func TestNewHTTPClient_WithTimeout(t *testing.T) {
 			t.Error("expected nil client when constructor errors")
 		}
 	})
+}
+
+// fakeRoundTripper satisfies http.RoundTripper without being *http.Transport.
+// Used to drive the type-assertion failure path in newBaseTransport.
+type fakeRoundTripper struct{}
+
+func (fakeRoundTripper) RoundTrip(*http.Request) (*http.Response, error) { return nil, nil }
+
+// TestNewHTTPClient_DefaultTransportNotHTTPTransport pins the safe
+// type-assertion behavior of newBaseTransport. http.DefaultTransport is a
+// public package var declared as RoundTripper; tests, observability
+// auto-instrumentation, and some libraries (go-vcr, OpenTelemetry
+// middleware) replace it with their own concrete type. When that happens
+// NewHTTPClient must return a clear error rather than panicking with a
+// runtime.TypeAssertionError deep inside startup.
+//
+// defaultTransportMu serializes against any future test that also mutates
+// the package var; t.Cleanup restores the original before unlock so
+// observers always see either pre-swap or post-restore, never a torn
+// state. The mutex is overkill against today's package state (no test
+// calls t.Parallel) but cheap insurance against a future contributor
+// adding parallelism to a sibling test.
+func TestNewHTTPClient_DefaultTransportNotHTTPTransport(t *testing.T) {
+	defaultTransportMu.Lock()
+	orig := http.DefaultTransport
+	// Restore + unlock as a single deferred unit so the lock is never
+	// released while the fake transport is still in place. t.Cleanup
+	// runs after deferred functions, which would invert the ordering
+	// and open a parallel-test race window.
+	defer func() {
+		http.DefaultTransport = orig
+		defaultTransportMu.Unlock()
+	}()
+
+	http.DefaultTransport = fakeRoundTripper{}
+
+	c, err := NewHTTPClient()
+	if err == nil {
+		t.Fatal("expected error when DefaultTransport is not *http.Transport")
+	}
+	if c != nil {
+		t.Errorf("expected nil client on assertion failure, got %#v", c)
+	}
+	if !strings.Contains(err.Error(), "http.DefaultTransport") {
+		t.Errorf("error should mention http.DefaultTransport, got: %v", err)
+	}
 }
