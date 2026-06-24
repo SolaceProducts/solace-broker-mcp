@@ -23,7 +23,7 @@
 // sense with all three layers wired together, so per the test/integration/
 // README they belong in this tier rather than next to a single component's
 // unit tests.
-package integration
+package integration_test
 
 import (
 	"context"
