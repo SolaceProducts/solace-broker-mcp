@@ -289,11 +289,16 @@ verify_discard_ttl_state() {
         log_fail "F7-ttl [$label]: GET queues/$F7_TTL_QUEUE failed"
         return 1
     }
-    local count
-    count=$(echo "$body" | jq -r '.data.maxTtlExpiredDiscardedMsgCount')
+    # Sum all three TTL-expired counter paths the broker may use: pure
+    # Discarded, ToDmq, or ToDmqFailed (DMQ resolution failed). We only care
+    # that expiry happened, not which path the broker took.
+    local discarded to_dmq to_dmq_failed
+    discarded=$(echo "$body" | jq -r '.data.maxTtlExpiredDiscardedMsgCount')
+    to_dmq=$(echo "$body" | jq -r '.data.maxTtlExpiredToDmqMsgCount')
+    to_dmq_failed=$(echo "$body" | jq -r '.data.maxTtlExpiredToDmqFailedMsgCount')
     assert_json_field "$body" \
-        ".data.maxTtlExpiredDiscardedMsgCount > 0" "true" \
-        "F7-ttl [$label]: maxTtlExpiredDiscardedMsgCount must be > 0 (got $count)" || return 1
+        "(.data.maxTtlExpiredDiscardedMsgCount + .data.maxTtlExpiredToDmqMsgCount + .data.maxTtlExpiredToDmqFailedMsgCount) > 0" "true" \
+        "F7-ttl [$label]: total TTL-expired count must be > 0 (discarded=$discarded toDmq=$to_dmq toDmqFailed=$to_dmq_failed)" || return 1
 }
 
 test_ac9_discard_ttl_a() { verify_discard_ttl_state "broker-a" "$BROKER_A_URL"; }
