@@ -730,13 +730,13 @@ brokers:
 // non-obvious whitespace-trim rules that PR #110 review caught as missed
 // from the original commit 1f34e6f hardening:
 //
-//   1. client_secret_basic / client_secret_post: the secret inside the
-//      discriminated-union sub-block must be trimmed before the empty
-//      check, matching the broker basic/bearer credential rule.
-//   2. per-broker auth.audience (oauth mode): the field is OPTIONAL, so
-//      the check uses a conditional "set-but-whitespace" pattern instead
-//      of bare "trim == empty" — a future refactor that collapses it to
-//      the simple form would incorrectly reject absent-audience configs.
+//  1. client_secret_basic / client_secret_post: the secret inside the
+//     discriminated-union sub-block must be trimmed before the empty
+//     check, matching the broker basic/bearer credential rule.
+//  2. per-broker auth.audience (oauth mode): the field is OPTIONAL, so
+//     the check uses a conditional "set-but-whitespace" pattern instead
+//     of bare "trim == empty" — a future refactor that collapses it to
+//     the simple form would incorrectly reject absent-audience configs.
 //
 // Other operator-supplied required strings (dev_token, issuer, broker.url,
 // idp_token_endpoint, etc.) also have the trim rule but are not separately

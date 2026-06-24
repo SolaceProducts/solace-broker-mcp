@@ -14,7 +14,7 @@
 
 //go:build integration
 
-package clientaction
+package queueactions
 
 import (
 	"context"
@@ -24,18 +24,20 @@ import (
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
 )
 
-// TestIntegration_ClientClearStats runs the non-destructive `clearStats`
-// action against a real broker. `disconnect` is never run live to avoid
-// service interruption.
+// TestIntegration_ClearQueueStats runs the non-destructive clear-queue-stats
+// tool against a real broker. Only the non-destructive tool is tested live;
+// delete-queue-messages is never executed by automated tests to avoid data loss.
 //
 // Run with:
 //
-//	go test -tags=integration -count=1 -run TestIntegration_ClientClearStats \
-//	  ./internal/tools/sempv2/clientaction/
+//	go test -tags=integration -count=1 -run TestIntegration_ClearQueueStats \
+//	  ./internal/tools/sempv2/queueactions/
 //
 // Required env vars (all must be set or the test skips):
 //
@@ -43,15 +45,15 @@ import (
 //	MCP_INT_BROKER_USER   SEMP basic-auth username
 //	MCP_INT_BROKER_PASS   SEMP basic-auth password
 //	MCP_INT_VPN           Message VPN name (e.g., default)
-//	MCP_INT_CLIENT        Connected client name on the VPN (e.g., #client)
-func TestIntegration_ClientClearStats(t *testing.T) {
+//	MCP_INT_QUEUE         Existing queue on the VPN (e.g., awtest)
+func TestIntegration_ClearQueueStats(t *testing.T) {
 	url := os.Getenv("MCP_INT_BROKER_URL")
 	user := os.Getenv("MCP_INT_BROKER_USER")
 	pass := os.Getenv("MCP_INT_BROKER_PASS")
 	vpn := os.Getenv("MCP_INT_VPN")
-	clientName := os.Getenv("MCP_INT_CLIENT")
-	if url == "" || user == "" || pass == "" || vpn == "" || clientName == "" {
-		t.Skip("Set MCP_INT_BROKER_URL/USER/PASS/VPN/CLIENT to run this integration test.")
+	queue := os.Getenv("MCP_INT_QUEUE")
+	if url == "" || user == "" || pass == "" || vpn == "" || queue == "" {
+		t.Skip("Set MCP_INT_BROKER_URL/USER/PASS/VPN/QUEUE to run this integration test.")
 	}
 
 	retries := 0
@@ -65,40 +67,35 @@ func TestIntegration_ClientClearStats(t *testing.T) {
 		RetryMaxInterval:       defaults.DefaultRetryMaxInterval,
 	}
 	brokerCfg := &config.BrokerConfig{
-		URL: url,
-		Auth: config.AuthConfig{
-			Mode:     config.AuthModeBasic,
-			Username: user,
-			Password: pass,
-		},
+		URL:  url,
+		Auth: config.AuthConfig{Mode: config.AuthModeBasic}, // credentials live on the Authenticator
 	}
 
-	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg)
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg,
+		resilience.NewSemaphore(defaults.DefaultMaxConcurrentPerBroker),
+		auth.NewBasicAuthenticator(user, pass))
 	if err != nil {
 		t.Fatalf("NewHTTPClient: %v", err)
 	}
 	defer client.Close()
 
 	tc := &tools.ToolContext{SEMPv2Client: client}
-	h := NewHandler()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	result, err := h.Handle(ctx, tc, map[string]any{
+	result, err := NewClearStatsHandler().Handle(ctx, tc, map[string]any{
 		"msgVpnName": vpn,
-		"clientName": clientName,
-		"action":     actionClearStats,
+		"queueName":  queue,
 	})
 	if err != nil {
-		t.Fatalf("Handle clearStats: %v", err)
+		t.Fatalf("Handle clear-queue-stats: %v", err)
 	}
 
 	for k, want := range map[string]any{
 		"status":     "ok",
-		"action":     actionClearStats,
 		"msgVpnName": vpn,
-		"clientName": clientName,
+		"queueName":  queue,
 	} {
 		if got := result.StructuredContent[k]; got != want {
 			t.Errorf("StructuredContent[%q] = %v, want %v", k, got, want)

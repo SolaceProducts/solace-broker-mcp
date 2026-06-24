@@ -45,8 +45,8 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv1/brokerstatus"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv1/discardstats"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv1/redundancy"
-	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv2/clientaction"
-	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv2/queueaction"
+	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv2/clientactions"
+	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv2/queueactions"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"gopkg.in/yaml.v3"
@@ -315,13 +315,16 @@ func registerSEMPv1Tools(mgr *tools.ToolManager) {
 }
 
 // registerSEMPv2Tools attaches every Go-native SEMPv2 tool handler to mgr.
-// These are the write/action tools that issue PUT requests to the SEMPv2
+// These are the per-action write tools that issue PUT requests to the SEMPv2
 // action API. They share the same registration pipeline as the SEMPv1
-// handlers — the manager logs a WARNING for any tool whose Annotations
-// flag Destructive: true.
+// handlers; RegisterWithServer gates them behind enable_write_tools (they are
+// not read-only), and the manager logs a WARNING for the destructive ones
+// (delete-queue-messages, disconnect-client).
 func registerSEMPv2Tools(mgr *tools.ToolManager) {
-	mgr.Register(queueaction.NewHandler())
-	mgr.Register(clientaction.NewHandler())
+	mgr.Register(queueactions.NewDeleteMessagesHandler())
+	mgr.Register(queueactions.NewClearStatsHandler())
+	mgr.Register(clientactions.NewDisconnectHandler())
+	mgr.Register(clientactions.NewClearStatsHandler())
 }
 
 func main() {
