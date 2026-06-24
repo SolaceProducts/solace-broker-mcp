@@ -1,0 +1,130 @@
+// Copyright 2024-2026 Solace Corporation. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package idpclient
+
+import (
+	"encoding/pem"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+)
+
+// TestNewHTTPClient_SSLCertFile covers the five SSL_CERT_FILE branches
+// (unset, missing file, unreadable file, garbage contents, valid PEM) and
+// asserts the SOL-150219 invariant: every returned client carries the
+// default timeout when no Options are passed. The end-to-end propagation
+// of the bound through go-oidc's RemoteKeySet into lazy JWKS refresh is
+// covered by an integration test in test/integration/ that exercises the
+// auth middleware against a hung fake IdP.
+func TestNewHTTPClient_SSLCertFile(t *testing.T) {
+	// Spin up a throwaway TLS server purely to obtain a self-signed cert we
+	// can write to disk and feed into the "valid PEM" branch. We never make
+	// a request through this server here.
+	tlsServer := httptest.NewTLSServer(nil)
+	defer tlsServer.Close()
+
+	tmpDir := t.TempDir()
+	validCert := filepath.Join(tmpDir, "ca.crt")
+	if err := os.WriteFile(
+		validCert,
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: tlsServer.Certificate().Raw}),
+		0600,
+	); err != nil {
+		t.Fatalf("write valid cert: %v", err)
+	}
+
+	garbageFile := filepath.Join(tmpDir, "garbage.crt")
+	if err := os.WriteFile(garbageFile, []byte("not a certificate"), 0600); err != nil {
+		t.Fatalf("write garbage file: %v", err)
+	}
+
+	unreadableFile := filepath.Join(tmpDir, "unreadable.crt")
+	if err := os.WriteFile(unreadableFile, []byte("data"), 0000); err != nil {
+		t.Fatalf("write unreadable file: %v", err)
+	}
+
+	// NewHTTPClient always returns a bounded client on success, including
+	// when SSL_CERT_FILE is unset, so the JWKS-refresh timeout (SOL-150219)
+	// applies on every code path. It returns (nil, err) only on a
+	// cert-loading failure.
+	tests := []struct {
+		name      string
+		envValue  string
+		wantNil   bool
+		wantError bool
+	}{
+		{"env empty", "", false, false},
+		{"nonexistent file", "/no/such/file.crt", true, true},
+		{"unreadable file", unreadableFile, true, true},
+		{"non-PEM contents", garbageFile, true, true},
+		{"valid PEM", validCert, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("SSL_CERT_FILE", tt.envValue)
+			client, err := NewHTTPClient()
+			if tt.wantError && err == nil {
+				t.Error("expected error")
+			}
+			if !tt.wantError && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if tt.wantNil && client != nil {
+				t.Error("expected nil client")
+			}
+			if !tt.wantNil && client == nil {
+				t.Error("expected non-nil client")
+			}
+			// Invariant (SOL-150219): every client NewHTTPClient hands back
+			// must carry the default bound when no Options are passed. This
+			// is the cheap guard against anyone reintroducing an unbounded
+			// IdP client on either branch.
+			if client != nil && client.Timeout != defaults.DefaultOIDCHTTPTimeout {
+				t.Errorf("client.Timeout = %v, want %v (IdP client must carry default bound)",
+					client.Timeout, defaults.DefaultOIDCHTTPTimeout)
+			}
+		})
+	}
+}
+
+// TestNewHTTPClient_WithTimeout asserts that the WithTimeout Option
+// overrides the default, and that no Option leaves the default in place.
+// These are the call-shape contracts every integration test depending on
+// fast-feedback timeouts relies on.
+func TestNewHTTPClient_WithTimeout(t *testing.T) {
+	t.Run("default applies when no options", func(t *testing.T) {
+		c, err := NewHTTPClient()
+		if err != nil {
+			t.Fatalf("NewHTTPClient: %v", err)
+		}
+		if c.Timeout != defaults.DefaultOIDCHTTPTimeout {
+			t.Errorf("Timeout = %v, want default %v", c.Timeout, defaults.DefaultOIDCHTTPTimeout)
+		}
+	})
+
+	t.Run("WithTimeout overrides the default", func(t *testing.T) {
+		c, err := NewHTTPClient(WithTimeout(500 * time.Millisecond))
+		if err != nil {
+			t.Fatalf("NewHTTPClient: %v", err)
+		}
+		if c.Timeout != 500*time.Millisecond {
+			t.Errorf("Timeout = %v, want 500ms", c.Timeout)
+		}
+	})
+}
