@@ -289,10 +289,9 @@ verify_discard_ttl_state() {
         log_fail "F7-ttl [$label]: GET queues/$F7_TTL_QUEUE failed"
         return 1
     }
-    # Sum all three TTL-expired paths: a queue that inherits a default DMQ
-    # routes expired messages via ToDmq (or ToDmqFailed if the DMQ can't be
-    # resolved) instead of pure Discarded. We only care that expiry happened,
-    # not which path the broker took.
+    # Sum all three TTL-expired counter paths the broker may use: pure
+    # Discarded, ToDmq, or ToDmqFailed (DMQ resolution failed). We only care
+    # that expiry happened, not which path the broker took.
     local discarded to_dmq to_dmq_failed
     discarded=$(echo "$body" | jq -r '.data.maxTtlExpiredDiscardedMsgCount')
     to_dmq=$(echo "$body" | jq -r '.data.maxTtlExpiredToDmqMsgCount')

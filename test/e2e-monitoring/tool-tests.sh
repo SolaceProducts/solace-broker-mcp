@@ -523,9 +523,8 @@ test_list_queue_discards() {
     content=$(extract_content "$response")
     spool=$(echo "$content" | jq -r \
         "(.queueDiscards.data[] | select(.queueName==\"$F7_SPOOL_QUEUE\") | .maxMsgSpoolUsageExceededDiscardedMsgCount) // 0")
-    # Sum all three TTL-expired paths (Discarded + ToDmq + ToDmqFailed): a
-    # queue that inherits a default DMQ routes expired messages via ToDmq
-    # (or ToDmqFailed if the DMQ can't be resolved) instead of pure Discarded.
+    # Sum all three TTL-expired counter paths the broker may use:
+    # Discarded, ToDmq, or ToDmqFailed (DMQ resolution failed).
     ttl=$(echo "$content" | jq -r \
         "(.queueDiscards.data[] | select(.queueName==\"$F7_TTL_QUEUE\") | (.maxTtlExpiredDiscardedMsgCount + .maxTtlExpiredToDmqMsgCount + .maxTtlExpiredToDmqFailedMsgCount)) // 0")
     log_info "list-queue-discards [$broker]: $F7_SPOOL_QUEUE spool-exceeded=$spool $F7_TTL_QUEUE ttl-expired-total=$ttl"
@@ -581,9 +580,8 @@ test_get_discard_stats_broker_wide() {
     response=$(mcp_call_tool "get-discard-stats" \
         "$(jq -nc --arg b "$broker" '{broker:$b}')") || return 1
     content=$(extract_content "$response")
-    # Sum all three TTL-expired paths (Discarded + ToDmq + ToDmqFailures): a
-    # queue that inherits a default DMQ routes expired messages via ToDmq
-    # (or ToDmqFailures if the DMQ can't be resolved) instead of pure Discarded.
+    # Sum all three TTL-expired counter paths the broker may use:
+    # Discarded, ToDmq, or ToDmqFailures (DMQ resolution failed).
     ttl=$(echo "$content" | jq -r '((.spoolDiscards.totalTtlExpiredDiscardMessages // 0) + (.spoolDiscards.totalTtlExpiredToDmqMessages // 0) + (.spoolDiscards.totalTtlExpiredToDmqFailures // 0))')
     total=$(echo "$content" | jq -r '.spoolDiscards.totalDiscardedMessages // 0')
     log_info "get-discard-stats [$broker] broker-wide: spool totalTtlExpired(all-paths)=$ttl totalDiscardedMessages=$total"
