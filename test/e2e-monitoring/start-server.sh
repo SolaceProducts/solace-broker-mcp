@@ -17,6 +17,17 @@ if [ "${1:-}" = "--bg" ]; then
     MODE="background"
 fi
 
+# Install the cleanup trap before any state is created so a failure in
+# build_server or wait_for_all_brokers (or a Ctrl-C between mktemp and the
+# happy-path trap install) still removes the temp config. cleanup_on_exit
+# tolerates an empty CONFIG_FILE/MCP_SERVER_PID.
+CONFIG_FILE=""
+cleanup_on_exit() {
+    stop_server
+    [ -n "$CONFIG_FILE" ] && rm -f "$CONFIG_FILE"
+}
+trap cleanup_on_exit EXIT INT TERM HUP
+
 # 1. Warn early if native build deps are missing
 check_build_deps
 
@@ -30,18 +41,10 @@ build_server
 CONFIG_FILE=$(mktemp /tmp/e2e-config-XXXXXX.yaml)
 write_config "$CONFIG_FILE"
 
-cleanup_on_exit() {
-    stop_server
-    rm -f "$CONFIG_FILE"
-}
-
 if [ "$MODE" = "background" ]; then
-    # Same trap as foreground so an aborted launch (Ctrl-C, kill, HUP) still
-    # tears down the spawned server and temp config. On the happy path we
-    # detach by clearing MCP_SERVER_PID so the trap's stop_server is a no-op
-    # (it gates on that variable) and the server keeps running; the trap still
-    # cleans up the temp config.
-    trap cleanup_on_exit EXIT INT TERM HUP
+    # On the happy path we detach by clearing MCP_SERVER_PID so the trap's
+    # stop_server is a no-op (it gates on that variable) and the server keeps
+    # running; the trap still cleans up the temp config.
     start_server "$CONFIG_FILE"
     PIDFILE="$BIN_DIR/mcp-server.pid"
     echo "$MCP_SERVER_PID" > "$PIDFILE"
@@ -49,8 +52,7 @@ if [ "$MODE" = "background" ]; then
     log_info "Stop with: kill \$(cat $PIDFILE)"
     MCP_SERVER_PID=""
 else
-    # Foreground: start server, trap Ctrl-C for clean shutdown
-    trap cleanup_on_exit EXIT INT TERM HUP
+    # Foreground: start server; the trap installed above handles Ctrl-C.
     start_server "$CONFIG_FILE"
     log_info "Server running in foreground. Press Ctrl-C to stop."
     wait "$MCP_SERVER_PID" 2>/dev/null || true

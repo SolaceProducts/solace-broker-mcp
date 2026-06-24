@@ -305,7 +305,7 @@ write_config() {
     # Generate broker config from .env-derived values so ports stay in sync.
     # Credentials use ${VAR_NAME} substitution — resolved by the server via ENV_FILE.
     cat > "$config_file" <<EOF
-client_auth:
+mcp_client_auth:
   mode: static
   dev_token: "\${MCP_DEV_TOKEN}"
 
@@ -706,16 +706,26 @@ F6_FLAG_TIMEOUT=60     # max seconds to wait for slowSubscriber to flip true
 # Polls the broker until a client's slowSubscriber flag reads true, or fails
 # after F6_FLAG_TIMEOUT. The flag is computed over a rolling ~1 min window, so
 # a single read just after SIGSTOP flakes — poll until it settles true.
-#   $1 broker_url   $2 label   $3 client_name
+#
+# Self-healing: if the broker reports the client absent (HTTP 400 NOT_FOUND),
+# the SIGSTOPped subscriber was reaped by the broker (keepalive timeout or
+# egress threshold) — respawn it once and keep polling. The `recreated` flag
+# allows exactly one respawn per call to prevent an endless respawn loop; a
+# second reap falls back to normal once-per-second polling and ultimately
+# times out via the existing log_fail. Respawning resets `attempt` so the new
+# subscriber gets its own full F6_FLAG_TIMEOUT budget to flip the flag.
+#   $1 broker_url   $2 label   $3 client_name   $4 broker_letter ("a"|"b")
 wait_for_slow_subscriber() {
     local broker_url="$1"
     local label="$2"
     local client_name="$3"
-    local attempt=0 flag body http_status tx_rate tx_discards prev_observation=""
+    local broker_letter="$4"
+    local attempt=0 recreated=0 flag body http_status tx_rate tx_discards prev_observation=""
     local url="$broker_url/SEMP/v2/__private_monitor__/msgVpns/$BROKER_VPN/clients/$client_name?select=slowSubscriber,txByteRate,txDiscardedMsgCount"
     while [ $attempt -lt "$F6_FLAG_TIMEOUT" ]; do
-        # DIAGNOSTIC: capture HTTP status + flag so 404 (client disconnected) is
-        # distinguishable from 200/flag=false (client present, flag decayed).
+        # http_status drives the self-heal branch below: 400 NOT_FOUND means the
+        # broker reaped the client and we must respawn, vs 200/flag=false where
+        # the client is present and the flag just decayed.
         # txByteRate + txDiscardedMsgCount disambiguate flag=false further:
         # rate=0 + stable discards = broker drained the egress (real decay);
         # rate>0 or rising discards = broker still delivering/dropping
@@ -738,11 +748,84 @@ wait_for_slow_subscriber() {
             log_info "  slowSubscriber=true for $client_name on $label (${attempt}s)"
             return 0
         fi
+        # Broker returns 400 NOT_FOUND when the client is gone. The flood
+        # publisher is still running, so respawning the SIGSTOPped subscriber
+        # alone is enough to re-arm the fixture. Reset the attempt counter so
+        # the new subscriber gets its own full timeout budget to flip the flag.
+        if [ "$http_status" = "400" ] && [ "$recreated" = "0" ]; then
+            recreated=1
+            respawn_slow_subscriber_on "$label" "$broker_letter" "$client_name" || return 1
+            attempt=0
+            prev_observation=""
+            continue
+        fi
         sleep 1
         attempt=$((attempt + 1))
     done
     log_fail "F6 [$label]: slowSubscriber did not flip true for $client_name within ${F6_FLAG_TIMEOUT}s (last observation: $prev_observation)"
     return 1
+}
+
+# Spawns one F6 slow-direct-subscriber driver and waits for its pidfile.
+# Shared between the initial fixture create and the post-reap respawn.
+#   $1 broker_letter   $2 client_name   $3 pidfile   $4 logfile   $5 label   $6 desc
+_spawn_slow_direct_subscriber() {
+    local broker_letter="$1" client_name="$2" pidfile="$3" logfile="$4" label="$5" desc="$6"
+    nohup ${_SESSION_WRAP:+$_SESSION_WRAP} "$BIN_DIR/broker-driver" slow-direct-subscriber \
+        --broker="$broker_letter" \
+        --vpn="$BROKER_VPN" \
+        --client-name="$client_name" \
+        --topic="$F6_TOPIC" \
+        --pidfile="$pidfile" \
+        >"$logfile" 2>&1 &
+    wait_for_pidfile "$pidfile" "$label" "$logfile" "$desc"
+}
+
+# Respawns just the SIGSTOPped subscriber half of the F6 fixture after the
+# broker has reaped it. The flood publisher is unaffected, so we don't touch
+# it (a second publisher with the same client-name would let the broker evict
+# the live one, breaking egress pressure). Returns once the new subscriber is
+# spawned and SIGSTOPped; the caller (wait_for_slow_subscriber) keeps polling
+# for the flag to flip.
+respawn_slow_subscriber_on() {
+    local label="$1" broker_letter="$2" client_name="$3"
+    local sub_pidfile="$BIN_DIR/broker-driver-f6-sub-$broker_letter.pid"
+    local sub_logfile="$BIN_DIR/broker-driver-f6-sub-$broker_letter.log"
+    log_info "  client $client_name absent on $label (http=400) — broker reaped it; respawning subscriber"
+    # The old subscriber is still alive locally (SIGSTOPped, just disconnected
+    # from the broker). Reap it BEFORE reusing the pidfile path: the driver
+    # has `defer os.Remove(*pidfile)` (see broker-driver/slow_subscriber.go),
+    # so a late-exiting old process would otherwise delete the new pidfile we
+    # write to the canonical path.
+    if [ -f "$sub_pidfile" ]; then
+        local old_pid
+        old_pid=$(<"$sub_pidfile")
+        # Best-effort identity check before signalling: if the PID has been
+        # recycled to an unrelated process, /proc/$pid/exe won't resolve to
+        # our broker-driver binary. Readlink fails silently for processes we
+        # don't own; on mismatch we skip signalling rather than risk killing
+        # something else.
+        if kill -0 "$old_pid" 2>/dev/null; then
+            local exe
+            exe=$(readlink "/proc/$old_pid/exe" 2>/dev/null || true)
+            if [ -z "$exe" ] || [ "$exe" = "$BIN_DIR/broker-driver" ]; then
+                # SIGCONT first so a SIGSTOPped process can actually receive
+                # the SIGTERM kill_gracefully sends; otherwise TERM is held
+                # pending until CONT and the 5s grace window burns to SIGKILL.
+                kill -CONT "$old_pid" 2>/dev/null || true
+                kill_gracefully "$old_pid"
+            else
+                log_warn "  PID $old_pid in $sub_pidfile is not broker-driver (exe=$exe); skipping signal"
+            fi
+        fi
+        rm -f "$sub_pidfile"
+    fi
+    # Old process is fully exited and the canonical pidfile is gone, so the
+    # replacement can write directly onto it — no temp-path + rename dance.
+    _spawn_slow_direct_subscriber "$broker_letter" "$client_name" "$sub_pidfile" "$sub_logfile" \
+        "$label" "broker-driver slow-direct-subscriber (respawn)" || return 1
+    kill -STOP "$(<"$sub_pidfile")"
+    log_info "  SIGSTOP sent to respawned slow-subscriber (PID=$(<"$sub_pidfile")) on $label"
 }
 
 # Provisions F6: a long-lived direct subscriber on F6_TOPIC plus a separate
@@ -763,14 +846,8 @@ create_slow_subscriber_on() {
     log_info "Creating slow-subscriber fixture on $label (clientName=$client_name topic=$F6_TOPIC) ..."
 
     # Direct subscriber (this is the process we SIGSTOP).
-    nohup ${_SESSION_WRAP:+$_SESSION_WRAP} "$BIN_DIR/broker-driver" slow-direct-subscriber \
-        --broker="$broker_letter" \
-        --vpn="$BROKER_VPN" \
-        --client-name="$client_name" \
-        --topic="$F6_TOPIC" \
-        --pidfile="$sub_pidfile" \
-        >"$sub_logfile" 2>&1 &
-    wait_for_pidfile "$sub_pidfile" "$label" "$sub_logfile" "broker-driver slow-direct-subscriber" || return 1
+    _spawn_slow_direct_subscriber "$broker_letter" "$client_name" "$sub_pidfile" "$sub_logfile" \
+        "$label" "broker-driver slow-direct-subscriber" || return 1
 
     # Separate large-payload flood into the subscribed topic — must NOT be
     # stopped, so it keeps egress pressure on the stalled subscriber.
@@ -792,7 +869,7 @@ create_slow_subscriber_on() {
     log_info "  SIGSTOP sent to slow-subscriber (PID=$(<"$sub_pidfile")) on $label"
 
     # Wait for the broker to observe the stall and flip the flag.
-    wait_for_slow_subscriber "$broker_url" "$label" "$client_name" || return 1
+    wait_for_slow_subscriber "$broker_url" "$label" "$client_name" "$broker_letter" || return 1
     log_info "Slow-subscriber fixture created on $label"
 }
 

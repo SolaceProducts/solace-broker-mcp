@@ -13,6 +13,14 @@
 set -euo pipefail
 source "$(dirname "$0")/helpers.sh"
 
+# Reap fixture broker-drivers on any exit path (Ctrl-C, SIGHUP from a closed
+# terminal, set -e failure, normal completion). The F6 slow-direct-subscriber
+# runs under SIGSTOP, so without this trap a direct invocation that's
+# interrupted leaves an orphan that can't receive SIGTERM. Idempotent and
+# harmless when invoked from test-monitoring-tools.sh — its own EXIT trap
+# then sees no pidfiles and no-ops.
+trap stop_broker_drivers EXIT INT TERM HUP
+
 # ── Tool 1: list-vpns (F1 multi-VPN) ─────────────────────────────────────────
 # Primary: the VPN collection includes the base `default` VPN and F1's
 # `test-vpn`. Pagination: maxResults=1 returns exactly one entry and flags the
@@ -450,15 +458,15 @@ test_get_queue_metrics_slow_consumer_b() { test_get_queue_metrics_slow_consumer 
 #
 # Precondition re-arm: slowSubscriber is computed over a rolling ~1 min window
 # (see wait_for_slow_subscriber) and can drop back to false between the
-# verify-fixtures F6 check and this test — observed verified-true then gone
-# 63 s later on a slow runner (2026-06-12, runs 27424785855 / 27425041949).
-# Each test re-polls the flag via the broker before asserting on the tool;
-# the poll returns immediately when the flag is already set.
+# verify-fixtures F6 check and this test. Each test re-polls the flag via the
+# broker before asserting on the tool; the poll returns immediately when the
+# flag is already set, and respawns the subscriber if the broker has reaped
+# it (HTTP 400) — see respawn_slow_subscriber_on in helpers.sh.
 
 test_list_slow_subscribers() {
-    local broker="$1" broker_url="$2" own="$3" other="$4"
+    local broker="$1" broker_url="$2" own="$3" other="$4" broker_letter="$5"
     local response content
-    wait_for_slow_subscriber "$broker_url" "$broker" "$own" || return 1
+    wait_for_slow_subscriber "$broker_url" "$broker" "$own" "$broker_letter" || return 1
     response=$(mcp_call_tool "list-slow-subscribers" \
         "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
     content=$(extract_content "$response")
@@ -480,10 +488,10 @@ test_list_slow_subscribers() {
 }
 
 test_list_slow_subscribers_pagination() {
-    local broker="$1" broker_url="$2" client_name="$3"
+    local broker="$1" broker_url="$2" client_name="$3" broker_letter="$4"
     local response content
     # Same rolling-window hazard as the presence test above — re-arm first.
-    wait_for_slow_subscriber "$broker_url" "$broker" "$client_name" || return 1
+    wait_for_slow_subscriber "$broker_url" "$broker" "$client_name" "$broker_letter" || return 1
     response=$(mcp_call_tool "list-slow-subscribers" \
         "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",maxResults:1}')") || return 1
     content=$(extract_content "$response")
@@ -491,10 +499,10 @@ test_list_slow_subscribers_pagination() {
         "list-slow-subscribers [$broker]: maxResults=1 must return exactly 1 slow subscriber" || return 1
 }
 
-test_list_slow_subscribers_a() { test_list_slow_subscribers "broker-a" "$BROKER_A_URL" "$F6_SUB_CLIENT_NAME_A" "$F6_SUB_CLIENT_NAME_B"; }
-test_list_slow_subscribers_b() { test_list_slow_subscribers "broker-b" "$BROKER_B_URL" "$F6_SUB_CLIENT_NAME_B" "$F6_SUB_CLIENT_NAME_A"; }
-test_list_slow_subscribers_pagination_a() { test_list_slow_subscribers_pagination "broker-a" "$BROKER_A_URL" "$F6_SUB_CLIENT_NAME_A"; }
-test_list_slow_subscribers_pagination_b() { test_list_slow_subscribers_pagination "broker-b" "$BROKER_B_URL" "$F6_SUB_CLIENT_NAME_B"; }
+test_list_slow_subscribers_a() { test_list_slow_subscribers "broker-a" "$BROKER_A_URL" "$F6_SUB_CLIENT_NAME_A" "$F6_SUB_CLIENT_NAME_B" "a"; }
+test_list_slow_subscribers_b() { test_list_slow_subscribers "broker-b" "$BROKER_B_URL" "$F6_SUB_CLIENT_NAME_B" "$F6_SUB_CLIENT_NAME_A" "b"; }
+test_list_slow_subscribers_pagination_a() { test_list_slow_subscribers_pagination "broker-a" "$BROKER_A_URL" "$F6_SUB_CLIENT_NAME_A" "a"; }
+test_list_slow_subscribers_pagination_b() { test_list_slow_subscribers_pagination "broker-b" "$BROKER_B_URL" "$F6_SUB_CLIENT_NAME_B" "b"; }
 
 # ── Tool 11: list-queue-discards (F7 spool + TTL discards; per-queue) ─────────
 # Value check (AC 13): list-queue-discards returns each queue's per-category
@@ -515,15 +523,17 @@ test_list_queue_discards() {
     content=$(extract_content "$response")
     spool=$(echo "$content" | jq -r \
         "(.queueDiscards.data[] | select(.queueName==\"$F7_SPOOL_QUEUE\") | .maxMsgSpoolUsageExceededDiscardedMsgCount) // 0")
+    # Sum all three TTL-expired counter paths the broker may use:
+    # Discarded, ToDmq, or ToDmqFailed (DMQ resolution failed).
     ttl=$(echo "$content" | jq -r \
-        "(.queueDiscards.data[] | select(.queueName==\"$F7_TTL_QUEUE\") | .maxTtlExpiredDiscardedMsgCount) // 0")
-    log_info "list-queue-discards [$broker]: $F7_SPOOL_QUEUE spool-exceeded=$spool $F7_TTL_QUEUE ttl-expired=$ttl"
+        "(.queueDiscards.data[] | select(.queueName==\"$F7_TTL_QUEUE\") | (.maxTtlExpiredDiscardedMsgCount + .maxTtlExpiredToDmqMsgCount + .maxTtlExpiredToDmqFailedMsgCount)) // 0")
+    log_info "list-queue-discards [$broker]: $F7_SPOOL_QUEUE spool-exceeded=$spool $F7_TTL_QUEUE ttl-expired-total=$ttl"
     assert_json_field "$content" \
         "(.queueDiscards.data[] | select(.queueName==\"$F7_SPOOL_QUEUE\") | .maxMsgSpoolUsageExceededDiscardedMsgCount) > 0" "true" \
         "list-queue-discards [$broker]: $F7_SPOOL_QUEUE maxMsgSpoolUsageExceededDiscardedMsgCount must be > 0 (got $spool)" || return 1
     assert_json_field "$content" \
-        "(.queueDiscards.data[] | select(.queueName==\"$F7_TTL_QUEUE\") | .maxTtlExpiredDiscardedMsgCount) > 0" "true" \
-        "list-queue-discards [$broker]: $F7_TTL_QUEUE maxTtlExpiredDiscardedMsgCount must be > 0 (got $ttl)" || return 1
+        "(.queueDiscards.data[] | select(.queueName==\"$F7_TTL_QUEUE\") | (.maxTtlExpiredDiscardedMsgCount + .maxTtlExpiredToDmqMsgCount + .maxTtlExpiredToDmqFailedMsgCount)) > 0" "true" \
+        "list-queue-discards [$broker]: $F7_TTL_QUEUE total TTL-expired count must be > 0 (got $ttl)" || return 1
     # VPN scoping: every returned queue belongs to the default VPN.
     assert_json_field "$content" '.queueDiscards.data | all(.msgVpnName == "default")' "true" \
         "list-queue-discards [$broker]: every queue must be scoped to the default VPN" || return 1
@@ -570,9 +580,11 @@ test_get_discard_stats_broker_wide() {
     response=$(mcp_call_tool "get-discard-stats" \
         "$(jq -nc --arg b "$broker" '{broker:$b}')") || return 1
     content=$(extract_content "$response")
-    ttl=$(echo "$content" | jq -r '.spoolDiscards.totalTtlExpiredDiscardMessages // 0')
+    # Sum all three TTL-expired counter paths the broker may use:
+    # Discarded, ToDmq, or ToDmqFailures (DMQ resolution failed).
+    ttl=$(echo "$content" | jq -r '((.spoolDiscards.totalTtlExpiredDiscardMessages // 0) + (.spoolDiscards.totalTtlExpiredToDmqMessages // 0) + (.spoolDiscards.totalTtlExpiredToDmqFailures // 0))')
     total=$(echo "$content" | jq -r '.spoolDiscards.totalDiscardedMessages // 0')
-    log_info "get-discard-stats [$broker] broker-wide: spool totalTtlExpiredDiscardMessages=$ttl totalDiscardedMessages=$total"
+    log_info "get-discard-stats [$broker] broker-wide: spool totalTtlExpired(all-paths)=$ttl totalDiscardedMessages=$total"
     # Broker-wide envelope carries both client- and spool-level aggregates.
     assert_json_field "$content" '.clientDiscards | type' "object" \
         "get-discard-stats [$broker]: broker-wide must include clientDiscards object" || return 1
@@ -580,8 +592,8 @@ test_get_discard_stats_broker_wide() {
         "get-discard-stats [$broker]: broker-wide must include spoolDiscards object" || return 1
     # F7 discards surface in the spool aggregate: TTL-expired (F7-ttl, directly
     # mapped) and the total roll-up (fed by both F7-ttl and F7-spool).
-    assert_json_field "$content" '.spoolDiscards.totalTtlExpiredDiscardMessages > 0' "true" \
-        "get-discard-stats [$broker]: spoolDiscards.totalTtlExpiredDiscardMessages must be > 0 (got $ttl)" || return 1
+    assert_json_field "$content" '((.spoolDiscards.totalTtlExpiredDiscardMessages // 0) + (.spoolDiscards.totalTtlExpiredToDmqMessages // 0) + (.spoolDiscards.totalTtlExpiredToDmqFailures // 0)) > 0' "true" \
+        "get-discard-stats [$broker]: total TTL-expired count must be > 0 (got $ttl)" || return 1
     assert_json_field "$content" '.spoolDiscards.totalDiscardedMessages > 0' "true" \
         "get-discard-stats [$broker]: spoolDiscards.totalDiscardedMessages must be > 0 (got $total)" || return 1
 }

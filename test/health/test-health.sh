@@ -94,7 +94,7 @@ test_ready_both_reachable() {
 test_ready_unreachable_broker() {
     SECONDARY_CONFIG=$(mktemp /tmp/e2e-secondary-XXXXXX)
     cat > "$SECONDARY_CONFIG" <<EOF
-client_auth:
+mcp_client_auth:
   mode: disabled
 port: $SECONDARY_MCP_PORT
 brokers:

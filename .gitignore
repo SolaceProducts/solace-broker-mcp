@@ -41,13 +41,13 @@ Thumbs.db
 .env
 broker-config.yaml
 
+# E2E test config (not secrets — safe to track)
+!test/e2e-basic-mcp/.env
+!test/e2e-monitoring/.env
+
 # Working documents that must not be committed (see OPEN_SOURCE_STATUS.md)
 Mark2-report.md
 open-source.md
-
-# E2E test config (not secrets — safe to track)
-!test/e2e/.env
-!test/e2e/broker-config.yaml
 
 # Terraform
 .terraform/

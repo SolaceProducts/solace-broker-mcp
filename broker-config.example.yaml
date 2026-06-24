@@ -26,8 +26,8 @@ tls_key_file: ""
 #
 # Note: the previous `development_mode` flag is deprecated and ignored.
 # Operational profile (https:// requirement, etc.) is now derived from
-# client_auth.mode: oauth = production, disabled/static = development.
-client_auth:
+# mcp_client_auth.mode: oauth = production, disabled/static = development.
+mcp_client_auth:
   mode: oauth
   issuer: "https://idp.example.com"
   audience: "mcp-server"
@@ -35,10 +35,10 @@ client_auth:
 
 # Development examples (uncomment one and comment out the oauth block above):
 #
-# client_auth:
+# mcp_client_auth:
 #   mode: disabled
 #
-# client_auth:
+# mcp_client_auth:
 #   mode: static
 #   dev_token: "static-token"
 
