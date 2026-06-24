@@ -86,10 +86,18 @@ func newBaseTransport() (*http.Transport, error) {
 // client-auth methods. The returned client is always bounded by
 // defaults.DefaultOIDCHTTPTimeout (SOL-150219); pass WithTimeout to
 // override. Production callers pass no Options.
+//
+// Returns an error when the resolved timeout is non-positive — stdlib's
+// http.Client treats a zero Timeout as "no bound at all", which would
+// silently undo the SOL-150219 protection. A negative value triggers an
+// immediate-deadline failure on every request, also an obvious caller bug.
 func NewHTTPClient(opts ...Option) (*http.Client, error) {
 	cfg := &config{timeout: defaults.DefaultOIDCHTTPTimeout}
 	for _, opt := range opts {
 		opt(cfg)
+	}
+	if cfg.timeout <= 0 {
+		return nil, fmt.Errorf("idpclient: timeout must be positive, got %v", cfg.timeout)
 	}
 	transport, err := newBaseTransport()
 	if err != nil {

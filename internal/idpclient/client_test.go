@@ -127,4 +127,28 @@ func TestNewHTTPClient_WithTimeout(t *testing.T) {
 			t.Errorf("Timeout = %v, want 500ms", c.Timeout)
 		}
 	})
+
+	// Non-positive timeouts must fail loudly. Zero is the dangerous case:
+	// http.Client treats Timeout: 0 as "no bound at all" — silently
+	// undoing the SOL-150219 protection. Negative is an obvious caller
+	// bug (immediate-deadline on every request).
+	t.Run("WithTimeout(0) returns error", func(t *testing.T) {
+		c, err := NewHTTPClient(WithTimeout(0))
+		if err == nil {
+			t.Error("expected error for zero timeout")
+		}
+		if c != nil {
+			t.Error("expected nil client when constructor errors")
+		}
+	})
+
+	t.Run("WithTimeout(negative) returns error", func(t *testing.T) {
+		c, err := NewHTTPClient(WithTimeout(-1 * time.Second))
+		if err == nil {
+			t.Error("expected error for negative timeout")
+		}
+		if c != nil {
+			t.Error("expected nil client when constructor errors")
+		}
+	})
 }
