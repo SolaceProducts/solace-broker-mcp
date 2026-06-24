@@ -69,7 +69,14 @@ func NewAuthMiddleware(cfg *config.ServerConfig, next http.Handler) (http.Handle
 		ResourceMetadataURL: metadataURL,
 	})
 
-	return middleware(next), nil
+	// InjectRawSubjectToken is wrapped INSIDE the SDK middleware so it runs
+	// only after sdkauth.RequireBearerToken has validated the bearer token
+	// (signature, issuer, audience, expiry). A value reaching ctx under
+	// rawSubjectTokenKey{} therefore carries the SDK-validated invariant,
+	// which the future OAuth Authenticator relies on as the subject_token
+	// for RFC 8693 exchange. See SOL-150797 and
+	// docs/superpowers/plans/oauth-token-exchange/2026-06-21-SOL-150797-T3-raw-subject-token.md.
+	return middleware(InjectRawSubjectToken(next)), nil
 }
 
 // NewTokenVerifier creates a TokenVerifier based on cfg.MCPClientAuth.Mode.

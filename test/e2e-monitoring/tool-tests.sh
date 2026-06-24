@@ -523,15 +523,17 @@ test_list_queue_discards() {
     content=$(extract_content "$response")
     spool=$(echo "$content" | jq -r \
         "(.queueDiscards.data[] | select(.queueName==\"$F7_SPOOL_QUEUE\") | .maxMsgSpoolUsageExceededDiscardedMsgCount) // 0")
+    # Sum all three TTL-expired counter paths the broker may use:
+    # Discarded, ToDmq, or ToDmqFailed (DMQ resolution failed).
     ttl=$(echo "$content" | jq -r \
-        "(.queueDiscards.data[] | select(.queueName==\"$F7_TTL_QUEUE\") | .maxTtlExpiredDiscardedMsgCount) // 0")
-    log_info "list-queue-discards [$broker]: $F7_SPOOL_QUEUE spool-exceeded=$spool $F7_TTL_QUEUE ttl-expired=$ttl"
+        "(.queueDiscards.data[] | select(.queueName==\"$F7_TTL_QUEUE\") | (.maxTtlExpiredDiscardedMsgCount + .maxTtlExpiredToDmqMsgCount + .maxTtlExpiredToDmqFailedMsgCount)) // 0")
+    log_info "list-queue-discards [$broker]: $F7_SPOOL_QUEUE spool-exceeded=$spool $F7_TTL_QUEUE ttl-expired-total=$ttl"
     assert_json_field "$content" \
         "(.queueDiscards.data[] | select(.queueName==\"$F7_SPOOL_QUEUE\") | .maxMsgSpoolUsageExceededDiscardedMsgCount) > 0" "true" \
         "list-queue-discards [$broker]: $F7_SPOOL_QUEUE maxMsgSpoolUsageExceededDiscardedMsgCount must be > 0 (got $spool)" || return 1
     assert_json_field "$content" \
-        "(.queueDiscards.data[] | select(.queueName==\"$F7_TTL_QUEUE\") | .maxTtlExpiredDiscardedMsgCount) > 0" "true" \
-        "list-queue-discards [$broker]: $F7_TTL_QUEUE maxTtlExpiredDiscardedMsgCount must be > 0 (got $ttl)" || return 1
+        "(.queueDiscards.data[] | select(.queueName==\"$F7_TTL_QUEUE\") | (.maxTtlExpiredDiscardedMsgCount + .maxTtlExpiredToDmqMsgCount + .maxTtlExpiredToDmqFailedMsgCount)) > 0" "true" \
+        "list-queue-discards [$broker]: $F7_TTL_QUEUE total TTL-expired count must be > 0 (got $ttl)" || return 1
     # VPN scoping: every returned queue belongs to the default VPN.
     assert_json_field "$content" '.queueDiscards.data | all(.msgVpnName == "default")' "true" \
         "list-queue-discards [$broker]: every queue must be scoped to the default VPN" || return 1
@@ -578,9 +580,11 @@ test_get_discard_stats_broker_wide() {
     response=$(mcp_call_tool "get-discard-stats" \
         "$(jq -nc --arg b "$broker" '{broker:$b}')") || return 1
     content=$(extract_content "$response")
-    ttl=$(echo "$content" | jq -r '.spoolDiscards.totalTtlExpiredDiscardMessages // 0')
+    # Sum all three TTL-expired counter paths the broker may use:
+    # Discarded, ToDmq, or ToDmqFailures (DMQ resolution failed).
+    ttl=$(echo "$content" | jq -r '((.spoolDiscards.totalTtlExpiredDiscardMessages // 0) + (.spoolDiscards.totalTtlExpiredToDmqMessages // 0) + (.spoolDiscards.totalTtlExpiredToDmqFailures // 0))')
     total=$(echo "$content" | jq -r '.spoolDiscards.totalDiscardedMessages // 0')
-    log_info "get-discard-stats [$broker] broker-wide: spool totalTtlExpiredDiscardMessages=$ttl totalDiscardedMessages=$total"
+    log_info "get-discard-stats [$broker] broker-wide: spool totalTtlExpired(all-paths)=$ttl totalDiscardedMessages=$total"
     # Broker-wide envelope carries both client- and spool-level aggregates.
     assert_json_field "$content" '.clientDiscards | type' "object" \
         "get-discard-stats [$broker]: broker-wide must include clientDiscards object" || return 1
@@ -588,8 +592,8 @@ test_get_discard_stats_broker_wide() {
         "get-discard-stats [$broker]: broker-wide must include spoolDiscards object" || return 1
     # F7 discards surface in the spool aggregate: TTL-expired (F7-ttl, directly
     # mapped) and the total roll-up (fed by both F7-ttl and F7-spool).
-    assert_json_field "$content" '.spoolDiscards.totalTtlExpiredDiscardMessages > 0' "true" \
-        "get-discard-stats [$broker]: spoolDiscards.totalTtlExpiredDiscardMessages must be > 0 (got $ttl)" || return 1
+    assert_json_field "$content" '((.spoolDiscards.totalTtlExpiredDiscardMessages // 0) + (.spoolDiscards.totalTtlExpiredToDmqMessages // 0) + (.spoolDiscards.totalTtlExpiredToDmqFailures // 0)) > 0' "true" \
+        "get-discard-stats [$broker]: total TTL-expired count must be > 0 (got $ttl)" || return 1
     assert_json_field "$content" '.spoolDiscards.totalDiscardedMessages > 0' "true" \
         "get-discard-stats [$broker]: spoolDiscards.totalDiscardedMessages must be > 0 (got $total)" || return 1
 }
