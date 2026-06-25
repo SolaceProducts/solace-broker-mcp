@@ -62,6 +62,12 @@ func init() {
 // includes scanned (the count of items observed) and truncated: true so the
 // LLM sees the partial-scan reality next to the counts rather than only on
 // the raw data block.
+//
+// A queue whose required fields are missing or the wrong type is skipped from
+// every counter and tallied into skipped (surfaced when non-zero). One odd row
+// must not drop the raw list — that would be a robustness step down from the
+// collect strategy. Structural errors (step missing, data not a list, item not
+// an object) still hard-fail since the whole result is unusable.
 func ListQueues(stepResults map[string]map[string]any) (map[string]any, error) {
 	step, ok := stepResults[listQueuesStepID]
 	if !ok {
@@ -71,31 +77,20 @@ func ListQueues(stepResults map[string]map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, fmt.Errorf("queues.data: want []any, got %T", step["data"])
 	}
-	var noConsumer, congested, backlogged, nearFull int
+	var noConsumer, congested, backlogged, nearFull, skipped int
 	for i, raw := range items {
 		q, ok := raw.(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("queues.data[%d]: want object, got %T", i, raw)
 		}
-		bindCount, err := numField(q, "bindCount", i)
-		if err != nil {
-			return nil, err
-		}
-		state, err := stringField(q, "lowPriorityMsgCongestionState", i)
-		if err != nil {
-			return nil, err
-		}
-		spooled, err := numField(q, "spooledMsgCount", i)
-		if err != nil {
-			return nil, err
-		}
-		usage, err := numField(q, "msgSpoolUsage", i)
-		if err != nil {
-			return nil, err
-		}
-		maxUsage, err := numField(q, "maxMsgSpoolUsage", i)
-		if err != nil {
-			return nil, err
+		bindCount, ok1 := numField(q, "bindCount")
+		state, ok2 := stringField(q, "lowPriorityMsgCongestionState")
+		spooled, ok3 := numField(q, "spooledMsgCount")
+		usage, ok4 := numField(q, "msgSpoolUsage")
+		maxUsage, ok5 := numField(q, "maxMsgSpoolUsage")
+		if !(ok1 && ok2 && ok3 && ok4 && ok5) {
+			skipped++
+			continue
 		}
 		if bindCount == 0 {
 			noConsumer++
@@ -117,6 +112,9 @@ func ListQueues(stepResults map[string]map[string]any) (map[string]any, error) {
 		"nearFullCount":   nearFull,
 		"scanned":         len(items),
 	}
+	if skipped > 0 {
+		out["skipped"] = skipped
+	}
 	if t, _ := step["truncated"].(bool); t {
 		out["truncated"] = true
 	}
@@ -126,30 +124,28 @@ func ListQueues(stepResults map[string]map[string]any) (map[string]any, error) {
 // numField accepts any of the numeric shapes JSON decoders produce: float64
 // (encoding/json default for map[string]any), json.Number (decoder with
 // UseNumber), int / int64 (custom unmarshalers). Keeps the handler insulated
-// from future SEMP-client decode-mode changes.
-func numField(item map[string]any, name string, i int) (float64, error) {
+// from future SEMP-client decode-mode changes. Returns ok=false for missing,
+// nil, or unexpected types so the caller can skip the row rather than abort.
+func numField(item map[string]any, name string) (float64, bool) {
 	switch v := item[name].(type) {
 	case float64:
-		return v, nil
+		return v, true
 	case int:
-		return float64(v), nil
+		return float64(v), true
 	case int64:
-		return float64(v), nil
+		return float64(v), true
 	case json.Number:
 		f, err := v.Float64()
 		if err != nil {
-			return 0, fmt.Errorf("queues.data[%d].%s: parse json.Number: %w", i, name, err)
+			return 0, false
 		}
-		return f, nil
+		return f, true
 	default:
-		return 0, fmt.Errorf("queues.data[%d].%s: want number, got %T", i, name, item[name])
+		return 0, false
 	}
 }
 
-func stringField(item map[string]any, name string, i int) (string, error) {
+func stringField(item map[string]any, name string) (string, bool) {
 	v, ok := item[name].(string)
-	if !ok {
-		return "", fmt.Errorf("queues.data[%d].%s: want string, got %T", i, name, item[name])
-	}
-	return v, nil
+	return v, ok
 }

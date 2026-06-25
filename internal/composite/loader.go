@@ -113,6 +113,17 @@ func validateTool(tool *CompositeTool) error {
 		if stepIDs["summary"] {
 			return fmt.Errorf(`step ID "summary" is reserved when strategy is "postProcess"`)
 		}
+		// ValidatePostProcess cross-checks a handler's RequiredFields against the
+		// structured `select:` only — it has no view into a templated args.select.
+		// Allowing args.select here would pass the loader, then trip the postprocess
+		// cross-check with a "reads X but it is not in select" message that points
+		// at the field instead of the real cause. Reject up front so the requirement
+		// is visible at the source.
+		for _, step := range tool.Steps {
+			if _, has := step.Args["select"]; has {
+				return fmt.Errorf(`step %s: args.select is not allowed when strategy is "postProcess"; declare fields under select:`, step.ID)
+			}
+		}
 	default:
 		return fmt.Errorf("result strategy %q is not supported; supported values: collect, postProcess", tool.Result.Strategy)
 	}

@@ -1164,6 +1164,26 @@ tools:
 `,
 			wantSub: "cannot set both args.select and select",
 		},
+		{
+			// args.select under postProcess would silently bypass the
+			// RequiredFields cross-check (it only reads structured select),
+			// so the message must point at the real cause — not the field.
+			name: "args.select under postProcess is rejected",
+			yaml: `
+tools:
+  - name: bad
+    description: args.select under postProcess
+    steps:
+      - id: s1
+        operation: monitor/getVpn
+        args:
+          select: "a, b"
+    result:
+      strategy: postProcess
+      postProcess: someHandler
+`,
+			wantSub: `args.select is not allowed when strategy is "postProcess"`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -144,9 +144,10 @@ func TestListQueues_Errors(t *testing.T) {
 }
 
 // TestListQueues_MissingField asserts that omitting any one required field
-// produces an error naming that specific field. Table-driven over each field
-// rather than relying on the handler's read-order, so reordering the loop
-// doesn't break the test for the wrong reason.
+// skips that queue rather than aborting the call. Table-driven over each
+// field so reordering the handler's reads doesn't break the test for the
+// wrong reason. Hard-failing on one bad row would drop the raw list too —
+// a step down from the collect strategy.
 func TestListQueues_MissingField(t *testing.T) {
 	full := queue(0, 0, 0, 100, "idle")
 	// Sanity: full input must succeed, otherwise the omission cases prove nothing.
@@ -161,13 +162,60 @@ func TestListQueues_MissingField(t *testing.T) {
 					item[k] = v
 				}
 			}
-			_, err := ListQueues(map[string]map[string]any{"queues": {"data": []any{item}}})
-			if err == nil {
-				t.Fatalf("expected error when %q is missing, got nil", field)
+			// Pair the broken row with a healthy one so we can also assert the
+			// healthy row's signal still lands (the broken row in the baseline
+			// is a noConsumer, so use a row that ISN'T to disambiguate).
+			healthy := queue(2, 10, 99, 100, "active") // congested + backlogged + nearFull
+			got, err := ListQueues(map[string]map[string]any{"queues": {"data": []any{item, healthy}}})
+			if err != nil {
+				t.Fatalf("expected skip on missing %q, got error %v", field, err)
 			}
-			if !strings.Contains(err.Error(), field) {
-				t.Fatalf("error %q does not name the omitted field %q", err, field)
+			if got["skipped"] != 1 {
+				t.Errorf("skipped: got %v, want 1", got["skipped"])
+			}
+			if got["scanned"] != 2 {
+				t.Errorf("scanned: got %v, want 2", got["scanned"])
+			}
+			// Healthy row should still contribute.
+			for _, k := range []string{"congestedCount", "backloggedCount", "nearFullCount"} {
+				if got[k] != 1 {
+					t.Errorf("%s: got %v, want 1 (healthy row should still count)", k, got[k])
+				}
 			}
 		})
+	}
+}
+
+// TestListQueues_NilField asserts that an explicit nil (what SEMP returns for
+// an unset numeric field) is treated as a skip, not a hard fail. This is the
+// motivating case for the skip-don't-abort behavior: one queue with a nil
+// msgSpoolUsage shouldn't lose the raw list of every other queue.
+func TestListQueues_NilField(t *testing.T) {
+	bad := queue(0, 0, 0, 100, "idle")
+	bad["msgSpoolUsage"] = nil
+	healthy := queue(2, 10, 99, 100, "idle")
+	got, err := ListQueues(map[string]map[string]any{"queues": {"data": []any{bad, healthy}}})
+	if err != nil {
+		t.Fatalf("nil field should skip, got %v", err)
+	}
+	if got["skipped"] != 1 {
+		t.Errorf("skipped: got %v, want 1", got["skipped"])
+	}
+	if got["backloggedCount"] != 1 || got["nearFullCount"] != 1 {
+		t.Errorf("healthy row signals lost: %+v", got)
+	}
+}
+
+// TestListQueues_SkippedOmittedWhenZero keeps the summary key set minimal in
+// the common case — skipped is noise when nothing was skipped.
+func TestListQueues_SkippedOmittedWhenZero(t *testing.T) {
+	got, err := ListQueues(map[string]map[string]any{
+		"queues": {"data": []any{queue(0, 0, 0, 100, "idle")}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := got["skipped"]; present {
+		t.Errorf("skipped key should be omitted when 0, got %v", got["skipped"])
 	}
 }
