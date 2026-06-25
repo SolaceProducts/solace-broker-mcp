@@ -40,7 +40,13 @@ var defaultTransportMu sync.Mutex
 // TestNewHTTPClient_SSLCertFile covers the five SSL_CERT_FILE branches
 // (unset, missing file, unreadable file, garbage contents, valid PEM) and
 // asserts the SOL-150219 invariant: every returned client carries the
-// default timeout when no Options are passed. The end-to-end propagation
+// default timeout when no Options are passed.
+//
+// The "valid PEM" case points SSL_CERT_FILE at a test CA via t.Setenv,
+// which would otherwise leak that CA into the process-wide x509 root
+// cache via the SystemCertPool sync.Once. Test-binary-wide isolation is
+// set up by TestMain in main_test.go — see the doc comment there for
+// the full hazard description. The end-to-end propagation
 // of the bound through go-oidc's RemoteKeySet into lazy JWKS refresh is
 // covered by an integration test in test/integration/ that exercises the
 // auth middleware against a hung fake IdP.
