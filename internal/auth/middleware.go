@@ -17,29 +17,27 @@ package auth
 import (
 	"context"
 	"crypto/subtle"
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
-	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceDev/solace-broker-mcp/internal/idpclient"
 	"github.com/coreos/go-oidc/v3/oidc"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
 )
 
-// oidcHTTPClientTimeout bounds the HTTP client injected into go-oidc for both
-// startup discovery and lazy JWKS refresh. Package-private to allow tests to
-// override with a shorter value; production reads defaults.DefaultOIDCHTTPTimeout.
-var oidcHTTPClientTimeout = defaults.DefaultOIDCHTTPTimeout
-
-func NewAuthMiddleware(cfg *config.ServerConfig, next http.Handler) (http.Handler, error) {
+// NewAuthMiddleware wires the auth backend selected by mcp_client_auth.mode.
+// httpClient is the IdP-bound HTTP client used by the OAuth verifier path
+// (OIDC discovery + lazy JWKS refresh). Pass nil in production — the OAuth
+// path will build the default via idpclient.NewHTTPClient. Tests pass a
+// non-nil client (built via idpclient.NewHTTPClient(idpclient.WithTimeout))
+// for SOL-150219 regression coverage. Ignored on the disabled and static
+// paths; nil is fine.
+func NewAuthMiddleware(cfg *config.ServerConfig, httpClient *http.Client, next http.Handler) (http.Handler, error) {
 	// Auth backend selection mirrors mcp_client_auth.mode. Insecure-mode signaling
 	// lives in cmd/server/main.go via banner.LogStartupAuthMode — DO NOT add WARN
 	// logs here. See docs/superpowers/specs/2026-05-20-client-auth-mode-design.md.
@@ -52,7 +50,7 @@ func NewAuthMiddleware(cfg *config.ServerConfig, next http.Handler) (http.Handle
 		return nil, fmt.Errorf("internal: NewAuthMiddleware called with unsupported mcp_client_auth.mode %q (validator should have rejected this)", cfg.MCPClientAuth.Mode)
 	}
 
-	verifier, err := NewTokenVerifier(cfg)
+	verifier, err := NewTokenVerifier(cfg, httpClient)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create token verifier: %w", err)
 	}
@@ -83,14 +81,16 @@ func NewAuthMiddleware(cfg *config.ServerConfig, next http.Handler) (http.Handle
 //   - AuthModeStatic → constant-time compare against cfg.MCPClientAuth.DevToken
 //   - AuthModeOAuth  → OIDC/JWT verification with automatic key rotation
 //
+// httpClient follows the same nil-default contract as NewAuthMiddleware.
+//
 // cfg has already been validated via config.validate(); other modes are
 // programming errors.
-func NewTokenVerifier(cfg *config.ServerConfig) (sdkauth.TokenVerifier, error) {
+func NewTokenVerifier(cfg *config.ServerConfig, httpClient *http.Client) (sdkauth.TokenVerifier, error) {
 	switch cfg.MCPClientAuth.Mode {
 	case config.AuthModeStatic:
 		return createStaticTokenVerifier(cfg.MCPClientAuth.DevToken), nil
 	case config.AuthModeOAuth:
-		return createOIDCTokenVerifier(cfg)
+		return createOIDCTokenVerifier(cfg, httpClient)
 	default:
 		return nil, fmt.Errorf("internal: NewTokenVerifier called with unsupported mcp_client_auth.mode %q (validator should have rejected this)", cfg.MCPClientAuth.Mode)
 	}
@@ -113,19 +113,20 @@ func createStaticTokenVerifier(expectedToken string) sdkauth.TokenVerifier {
 	}
 }
 
-// createOIDCTokenVerifier creates a TokenVerifier that validates JWTs using OIDC.
-// It fetches public keys from the issuer's JWKS endpoint and handles automatic key rotation.
-func createOIDCTokenVerifier(cfg *config.ServerConfig) (sdkauth.TokenVerifier, error) {
-	// oidcHTTPClient always returns a client bounded by oidcHTTPClientTimeout,
-	// so attaching it here covers both startup discovery and the lazy JWKS
-	// refresh path (RemoteKeySet, triggered by an unknown kid). The discovery
-	// deadline below caps total discovery time; http.Client.Timeout caps each
-	// individual request and is the only bound that reaches lazy refresh
-	// (go-oidc's RemoteKeySet strips cancellation from the construction context
-	// via WithoutCancel).
-	httpClient, err := oidcHTTPClient()
-	if err != nil {
-		return nil, err
+// createOIDCTokenVerifier creates a TokenVerifier that validates JWTs using
+// OIDC, fetching public keys from the issuer's JWKS endpoint with automatic
+// rotation. httpClient may be nil (see NewAuthMiddleware's contract).
+// go-oidc's RemoteKeySet strips cancellation from the construction context
+// via WithoutCancel, so http.Client.Timeout is the only bound that reaches
+// lazy JWKS refresh — the discovery deadline below only caps the initial
+// discovery call.
+func createOIDCTokenVerifier(cfg *config.ServerConfig, httpClient *http.Client) (sdkauth.TokenVerifier, error) {
+	if httpClient == nil {
+		c, err := idpclient.NewHTTPClient()
+		if err != nil {
+			return nil, err
+		}
+		httpClient = c
 	}
 	clientCtx := oidc.ClientContext(context.Background(), httpClient)
 	ctx, cancel := context.WithTimeout(clientCtx, 30*time.Second)
@@ -186,41 +187,6 @@ func createOIDCTokenVerifier(cfg *config.ServerConfig) (sdkauth.TokenVerifier, e
 	}, nil
 }
 
-// oidcHTTPClient returns an HTTP client for OIDC discovery and JWKS refresh.
-// The client is always bounded by oidcHTTPClientTimeout so that neither
-// startup discovery nor lazy JWKS refresh can wedge on a slow or hung IdP
-// (SOL-150219). When SSL_CERT_FILE is set the client additionally trusts that
-// CA bundle: on macOS and Windows, Go's default TLS verification delegates to
-// the OS-native trust store and ignores SSL_CERT_FILE, so an explicit RootCAs
-// pool bypasses that delegation and makes the env var work consistently on
-// every platform.
-//
-// This is the single place the OIDC client's timeout is established; callers
-// must attach the returned client via oidc.ClientContext rather than building
-// their own, so the bound cannot be silently dropped.
-func oidcHTTPClient() (*http.Client, error) {
-	client := &http.Client{Timeout: oidcHTTPClientTimeout}
-
-	certFile := os.Getenv("SSL_CERT_FILE")
-	if certFile == "" {
-		return client, nil
-	}
-	certPEM, err := os.ReadFile(filepath.Clean(certFile))
-	if err != nil {
-		return nil, fmt.Errorf("SSL_CERT_FILE %q: %w", certFile, err)
-	}
-	pool, err := x509.SystemCertPool()
-	if err != nil {
-		pool = x509.NewCertPool()
-	}
-	if !pool.AppendCertsFromPEM(certPEM) {
-		return nil, fmt.Errorf("SSL_CERT_FILE %q contains no valid PEM certificates", certFile)
-	}
-	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.TLSClientConfig = &tls.Config{RootCAs: pool}
-	client.Transport = t
-	return client, nil
-}
 
 // NewProtectedResourceMetadataHandler creates an HTTP handler that serves
 // OAuth 2.0 Protected Resource Metadata (RFC 9728) for the MCP server.

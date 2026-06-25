@@ -176,7 +176,7 @@ func TestRawSubjectTokenCapture_WiredByNewAuthMiddleware(t *testing.T) {
 		downstreamSawToken, downstreamOK = auth.RawSubjectTokenFromContext(r.Context())
 	})
 
-	handler, err := auth.NewAuthMiddleware(cfg, downstream)
+	handler, err := auth.NewAuthMiddleware(cfg, nil, downstream)
 	if err != nil {
 		t.Fatalf("NewAuthMiddleware returned error: %v", err)
 	}
