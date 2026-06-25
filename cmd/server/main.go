@@ -462,7 +462,7 @@ func main() {
 	}, nil)
 
 	// Wrap MCP handler with auth middleware
-	authedHandler, err := auth.NewAuthMiddleware(cfg, mcpHandler)
+	authedHandler, err := auth.NewAuthMiddleware(cfg, nil, mcpHandler)
 	if err != nil {
 		slog.Error("failed to create auth middleware", slog.String("error", err.Error()))
 		os.Exit(1)
