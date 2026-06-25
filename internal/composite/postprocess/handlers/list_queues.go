@@ -88,7 +88,7 @@ func ListQueues(stepResults map[string]map[string]any) (map[string]any, error) {
 		spooled, ok3 := numField(q, "spooledMsgCount")
 		usage, ok4 := numField(q, "msgSpoolUsage")
 		maxUsage, ok5 := numField(q, "maxMsgSpoolUsage")
-		if !(ok1 && ok2 && ok3 && ok4 && ok5) {
+		if !ok1 || !ok2 || !ok3 || !ok4 || !ok5 {
 			skipped++
 			continue
 		}

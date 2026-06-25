@@ -121,7 +121,7 @@ func validateTool(tool *CompositeTool) error {
 		// is visible at the source.
 		for _, step := range tool.Steps {
 			if _, has := step.Args["select"]; has {
-				return fmt.Errorf(`step %s: args.select is not allowed when strategy is "postProcess"; declare fields under select:`, step.ID)
+				return fmt.Errorf(`step %s: args.select is not allowed when strategy is "postProcess"; declare fields under top-level select`, step.ID)
 			}
 		}
 	default:
