@@ -3,7 +3,7 @@
 # delete SEMP fixtures. Leaves the broker containers up so a follow-up
 # setup-fixtures.sh is fast.
 
-set -uo pipefail
+set -euo pipefail
 
 LLM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 E2E_DIR="$(cd "$LLM_DIR/.." && pwd)"

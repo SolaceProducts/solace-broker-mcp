@@ -93,10 +93,15 @@ jobs:
           LLM_SERVICE_ENDPOINT: ${{ vars.LLM_SERVICE_ENDPOINT }}
           LLM_SERVICE_MODEL_NAME: ${{ vars.LLM_SERVICE_MODEL_NAME }}
           LLM_SERVICE_API_KEY: ${{ secrets.LLM_SERVICE_API_KEY }}
+          # Bind dispatch input to env so the run body never interpolates
+          # ${{ inputs.scenario_filter }} directly — avoids the GitHub
+          # script-injection shape even though workflow_dispatch is
+          # write-access-only.
+          SCENARIO_FILTER: ${{ inputs.scenario_filter }}
         run: |
           ARGS=()
-          if [ -n "${{ inputs.scenario_filter }}" ]; then
-            ARGS+=(--filter "${{ inputs.scenario_filter }}")
+          if [ -n "$SCENARIO_FILTER" ]; then
+            ARGS+=(--filter "$SCENARIO_FILTER")
           fi
           bash test/e2e-monitoring/llm/run-all.sh "${ARGS[@]}"
 
