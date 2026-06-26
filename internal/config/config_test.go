@@ -308,6 +308,56 @@ brokers:
 	}
 }
 
+// TestLoadConfig_EnableWriteTools_DefaultOff pins the secure-by-default
+// behavior: omitting enable_write_tools from the YAML must leave it false
+// so destructive tools are not registered unless explicitly enabled.
+func TestLoadConfig_EnableWriteTools_DefaultOff(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  dev:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.EnableWriteTools {
+		t.Error("EnableWriteTools must default to false when omitted")
+	}
+}
+
+// TestLoadConfig_EnableWriteTools_ExplicitTrue verifies the flag reads
+// through from YAML when set.
+func TestLoadConfig_EnableWriteTools_ExplicitTrue(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+enable_write_tools: true
+brokers:
+  dev:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.EnableWriteTools {
+		t.Error("EnableWriteTools must be true when explicitly set in YAML")
+	}
+}
+
 func TestLoadConfig_InvalidAuthMethod(t *testing.T) {
 	// "kerberos" is not in validAuthModes (basic, bearer, oauth) — the
 	// validator must reject it with an "unsupported auth mode" error.
@@ -680,13 +730,13 @@ brokers:
 // non-obvious whitespace-trim rules that PR #110 review caught as missed
 // from the original commit 1f34e6f hardening:
 //
-//   1. client_secret_basic / client_secret_post: the secret inside the
-//      discriminated-union sub-block must be trimmed before the empty
-//      check, matching the broker basic/bearer credential rule.
-//   2. per-broker auth.audience (oauth mode): the field is OPTIONAL, so
-//      the check uses a conditional "set-but-whitespace" pattern instead
-//      of bare "trim == empty" — a future refactor that collapses it to
-//      the simple form would incorrectly reject absent-audience configs.
+//  1. client_secret_basic / client_secret_post: the secret inside the
+//     discriminated-union sub-block must be trimmed before the empty
+//     check, matching the broker basic/bearer credential rule.
+//  2. per-broker auth.audience (oauth mode): the field is OPTIONAL, so
+//     the check uses a conditional "set-but-whitespace" pattern instead
+//     of bare "trim == empty" — a future refactor that collapses it to
+//     the simple form would incorrectly reject absent-audience configs.
 //
 // Other operator-supplied required strings (dev_token, issuer, broker.url,
 // idp_token_endpoint, etc.) also have the trim rule but are not separately

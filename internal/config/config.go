@@ -53,6 +53,13 @@ type ServerConfig struct {
 	BrokerOAuth   *BrokerOAuthConfig  // Hop 2: global OAuth IdP coordinates for broker token exchange. Required when any broker uses auth.mode: oauth; otherwise optional (provided-but-unused configs log a WARN at startup so operators can stage broker_oauth ahead of switching brokers to oauth mode).
 	TLSCertFile   string              // path to TLS certificate file (optional, enables HTTPS)
 	TLSKeyFile    string              // path to TLS private key file (optional, requires TLSCertFile)
+
+	// EnableWriteTools gates registration of every write/action tool (any tool
+	// that is not read-only — e.g. delete-queue-messages, clear-queue-stats,
+	// disconnect-client, clear-client-stats). Default false — write tools do
+	// not appear in tools/list unless explicitly enabled. Secure-by-default for
+	// trial / dev deployments.
+	EnableWriteTools bool
 }
 
 // BrokerOAuthConfig holds the global OAuth IdP coordinates the MCP server uses
@@ -225,7 +232,6 @@ func (c ClientSecretAuth) LogValue() slog.Value {
 	return slog.GroupValue()
 }
 
-
 // Broker returns the broker config for alias (compared case-insensitively),
 // and a bool indicating whether the alias is known.
 func (c *ServerConfig) Broker(alias string) (*BrokerConfig, bool) {
@@ -385,15 +391,16 @@ type SEMPConfig struct {
 // yamlConfig is the intermediate representation used for YAML unmarshalling.
 // It mirrors the YAML file structure before being transformed into ServerConfig.
 type yamlConfig struct {
-	Brokers         map[string]*BrokerConfig `yaml:"brokers"`
-	SEMP            SEMPConfig               `yaml:"semp"`
-	Port            int                      `yaml:"port"`
-	LogLevel        string                   `yaml:"log_level"`
-	DevelopmentMode *bool                    `yaml:"development_mode"` // *bool so we can detect presence-in-YAML (deprecation warning); the value is ignored
-	MCPClientAuth   MCPClientAuthConfig      `yaml:"mcp_client_auth"`
-	BrokerOAuth     *BrokerOAuthConfig       `yaml:"broker_oauth"`
-	TLSCertFile     string                   `yaml:"tls_cert_file"`
-	TLSKeyFile      string                   `yaml:"tls_key_file"`
+	Brokers          map[string]*BrokerConfig `yaml:"brokers"`
+	SEMP             SEMPConfig               `yaml:"semp"`
+	Port             int                      `yaml:"port"`
+	LogLevel         string                   `yaml:"log_level"`
+	DevelopmentMode  *bool                    `yaml:"development_mode"` // *bool so we can detect presence-in-YAML (deprecation warning); the value is ignored
+	MCPClientAuth    MCPClientAuthConfig      `yaml:"mcp_client_auth"`
+	BrokerOAuth      *BrokerOAuthConfig       `yaml:"broker_oauth"`
+	TLSCertFile      string                   `yaml:"tls_cert_file"`
+	TLSKeyFile       string                   `yaml:"tls_key_file"`
+	EnableWriteTools bool                     `yaml:"enable_write_tools"` // default false; gates registration of write/action tools
 }
 
 // Load locates the server configuration file, loads it, and returns a ready
@@ -493,14 +500,15 @@ func LoadConfig(path string) (*ServerConfig, error) {
 	}
 
 	cfg := &ServerConfig{
-		brokers:       raw.Brokers,
-		SEMP:          raw.SEMP,
-		Port:          raw.Port,
-		LogLevel:      raw.LogLevel,
-		MCPClientAuth: raw.MCPClientAuth,
-		BrokerOAuth:   raw.BrokerOAuth,
-		TLSCertFile:   raw.TLSCertFile,
-		TLSKeyFile:    raw.TLSKeyFile,
+		brokers:          raw.Brokers,
+		SEMP:             raw.SEMP,
+		Port:             raw.Port,
+		LogLevel:         raw.LogLevel,
+		MCPClientAuth:    raw.MCPClientAuth,
+		BrokerOAuth:      raw.BrokerOAuth,
+		TLSCertFile:      raw.TLSCertFile,
+		TLSKeyFile:       raw.TLSKeyFile,
+		EnableWriteTools: raw.EnableWriteTools,
 	}
 
 	applyDefaults(cfg)
@@ -1206,8 +1214,6 @@ func validateClientSecretAuth(method string, cfg *ClientSecretAuth) []error {
 	}
 	return errs
 }
-
-
 
 // ValidatePort checks that a port number is within the valid TCP range (1-65535).
 // Used by both validate() and applyEnvOverrides() to avoid duplicating the range check.
