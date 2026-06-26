@@ -31,7 +31,38 @@
 // mirroring metrics.AuthFailureCounterEnabled.
 package health
 
-import "github.com/SolaceDev/solace-broker-mcp/internal/config"
+import (
+	"net/http"
+
+	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+)
+
+// livenessBody is the exact response body served by the liveness probe. It is a
+// process-alive signal only: a 200 means the HTTP server is accepting requests
+// and the handler ran. It deliberately reports nothing about broker
+// reachability — that is the readiness probe's job (/readyz).
+const livenessBody = `{"status":"alive"}`
+
+// LivezHandler returns the unconditional liveness handler. GET responds 200 with
+// livenessBody; any other method responds 405. The probe is UNCONDITIONAL by
+// design — there is no flag to disable it, so this constructor takes no config
+// and is never gated (see the package doc).
+//
+// /health registers this same handler as a backward-compatible alias, so
+// /health and /livez return byte-identical responses and identical 405 behavior.
+func LivezHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write([]byte(livenessBody)); err != nil {
+			http.Error(w, "failed to write response", http.StatusInternalServerError)
+		}
+	})
+}
 
 // SaturationEventsEnabled reports whether the opt-in saturation-event signal is
 // turned on, reading the OBS_SATURATION_EVENTS_ENABLED flag off the

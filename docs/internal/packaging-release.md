@@ -146,7 +146,7 @@ Verify the server is running:
 
 ```bash
 curl http://localhost:9090/health
-# {"status": "ok"}
+# {"status":"alive"}
 ```
 
 #### Docker Compose
@@ -274,13 +274,15 @@ path specified by `ENV_FILE`) and from the process environment.
 
 ## Health Checks
 
-The server exposes `GET /health` which returns:
+The server exposes a liveness probe at `GET /livez` which returns:
 
 ```json
-{"status": "ok"}
+{"status":"alive"}
 ```
 
-HTTP 200 on success, available on the configured port (default 9090).
+`GET /health` is retained as a backward-compatible alias of `/livez` and
+returns the identical body. HTTP 200 on success, available on the configured
+port (default 9090).
 
 The binary also supports a `--health` flag that performs an internal health
 check against the running server and exits with code 0 (healthy) or 1

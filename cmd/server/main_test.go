@@ -50,6 +50,46 @@ func testMux() *http.ServeMux {
 	return mux
 }
 
+// TestLivez_GET_ReturnsOK pins the canonical liveness endpoint: 200 with the
+// exact process-alive body and JSON content type.
+func TestLivez_GET_ReturnsOK(t *testing.T) {
+	mux := testMux()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/livez", nil)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("GET /livez status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if rec.Body.String() != `{"status":"alive"}` {
+		t.Errorf("GET /livez body = %q, want %q", rec.Body.String(), `{"status":"alive"}`)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("GET /livez Content-Type = %q, want %q", ct, "application/json")
+	}
+}
+
+func TestLivez_POST_ReturnsMethodNotAllowed(t *testing.T) {
+	mux := testMux()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/livez", nil)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST /livez status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+// TestHealth_GET_ReturnsOK pins that /health is now a body-identical alias of
+// /livez ({"status":"alive"}), NOT the old {"status": "healthy"}.
+//
+// The body changed, and some consumers DO read it: the shell e2e suites
+// (test/e2e-basic-mcp/test-standalone.sh and test/health/test-health.sh) assert
+// .status via jq and run in CI — they were updated to expect "alive". The
+// status-only consumers (the --health probe and the k8s httpGet liveness/
+// readiness probes) are unaffected because they key on HTTP 200, not the body.
 func TestHealth_GET_ReturnsOK(t *testing.T) {
 	mux := testMux()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", nil)
@@ -60,8 +100,8 @@ func TestHealth_GET_ReturnsOK(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("GET /health status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	if rec.Body.String() != `{"status": "healthy"}` {
-		t.Errorf("GET /health body = %q, want %q", rec.Body.String(), `{"status": "healthy"}`)
+	if rec.Body.String() != `{"status":"alive"}` {
+		t.Errorf("GET /health body = %q, want %q", rec.Body.String(), `{"status":"alive"}`)
 	}
 	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("GET /health Content-Type = %q, want %q", ct, "application/json")
@@ -77,6 +117,31 @@ func TestHealth_POST_ReturnsMethodNotAllowed(t *testing.T) {
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST /health status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+// TestHealthAliasesLivez proves /health is a true alias of /livez: same status,
+// same body, and same Content-Type for both GET and a non-GET (405) method.
+func TestHealthAliasesLivez(t *testing.T) {
+	mux := testMux()
+
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		livezRec := httptest.NewRecorder()
+		mux.ServeHTTP(livezRec, httptest.NewRequestWithContext(context.Background(), method, "/livez", nil))
+
+		healthRec := httptest.NewRecorder()
+		mux.ServeHTTP(healthRec, httptest.NewRequestWithContext(context.Background(), method, "/health", nil))
+
+		if livezRec.Code != healthRec.Code {
+			t.Errorf("%s: status /livez=%d /health=%d, want equal", method, livezRec.Code, healthRec.Code)
+		}
+		if livezRec.Body.String() != healthRec.Body.String() {
+			t.Errorf("%s: body /livez=%q /health=%q, want equal", method, livezRec.Body.String(), healthRec.Body.String())
+		}
+		if livezRec.Header().Get("Content-Type") != healthRec.Header().Get("Content-Type") {
+			t.Errorf("%s: Content-Type /livez=%q /health=%q, want equal",
+				method, livezRec.Header().Get("Content-Type"), healthRec.Header().Get("Content-Type"))
+		}
 	}
 }
 

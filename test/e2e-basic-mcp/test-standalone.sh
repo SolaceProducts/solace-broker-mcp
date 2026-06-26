@@ -10,7 +10,7 @@ source "$(dirname "$0")/helpers.sh"
 test_health_endpoint() {
     local response
     response=$(curl -sf "$MCP_URL/health")
-    assert_json_field "$response" ".status" "healthy" "Health endpoint should return status healthy"
+    assert_json_field "$response" ".status" "alive" "Health endpoint should return status alive (/health aliases /livez)"
 }
 
 test_initialize() {

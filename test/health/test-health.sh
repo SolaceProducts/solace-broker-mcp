@@ -77,10 +77,18 @@ start_server "$CONFIG_FILE"
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
+test_livez() {
+    local response
+    response=$(curl -sf "$MCP_URL/livez")
+    assert_json_field "$response" ".status" "alive" "/livez should return status=alive"
+}
+
 test_health() {
+    # /health is a backward-compatible alias of /livez, so it returns the same
+    # body (status=alive). It is no longer "healthy".
     local response
     response=$(curl -sf "$MCP_URL/health")
-    assert_json_field "$response" ".status" "healthy" "/health should return status=healthy"
+    assert_json_field "$response" ".status" "alive" "/health should return status=alive (aliases /livez)"
 }
 
 test_ready_both_reachable() {
@@ -151,7 +159,8 @@ EOF
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 
-run_test "Health endpoint"                     test_health
+run_test "Livez endpoint"                      test_livez
+run_test "Health endpoint (alias of livez)"    test_health
 run_test "Ready endpoint (brokers reachable)"  test_ready_both_reachable
 run_test "Ready endpoint (broker unreachable)" test_ready_unreachable_broker
 

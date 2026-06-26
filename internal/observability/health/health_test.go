@@ -15,10 +15,50 @@
 package health
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 )
+
+// TestLivezHandler_GET pins the liveness contract: GET returns 200 with the
+// exact process-alive body and a JSON content type. The body string is asserted
+// verbatim because /health aliases this handler and container/k8s tooling reads
+// the response.
+func TestLivezHandler_GET(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/livez", nil)
+
+	LivezHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got, want := rec.Body.String(), `{"status":"alive"}`; got != want {
+		t.Errorf("body = %q, want %q", got, want)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want %q", ct, "application/json")
+	}
+}
+
+// TestLivezHandler_NonGET pins that any non-GET method is rejected with 405.
+func TestLivezHandler_NonGET(t *testing.T) {
+	t.Parallel()
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodHead} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequestWithContext(context.Background(), method, "/livez", nil)
+
+		LivezHandler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s status = %d, want %d", method, rec.Code, http.StatusMethodNotAllowed)
+		}
+	}
+}
 
 // TestSaturationEventsEnabled pins that the accessor reflects the
 // SaturationEventsEnabled flag rather than a hardcoded constant — both

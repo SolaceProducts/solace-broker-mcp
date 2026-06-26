@@ -218,7 +218,7 @@ Fixtures are cleaned up before creation (to handle leftover state) and after tes
 
 | Test | What it validates |
 |---|---|
-| `test_health_endpoint` | `GET /health` returns `{"status": "ok"}` |
+| `test_health_endpoint` | `GET /health` returns `{"status":"alive"}` (`/health` is a backward-compatible alias of `/livez`) |
 | `test_initialize` | MCP handshake completes, server returns `Mcp-Session-Id` |
 | `test_list_tools` | `tools/list` returns all 17 tools (composite: `get-rdp-status`, `get-queue-metrics`, `get-client-details`, `list-client-subscriptions`, `get-vpn-health`, `list-vpns`, `list-queues`, `list-clients`, `get-message-rates`, `list-rdps`, `get-replication-status`, `list-slow-subscribers`, `list-queue-discards`; native: `list-brokers`, `get-broker-status`, `get-redundancy-status`, `get-discard-stats`) |
 | `test_list_brokers` | `list-brokers` response includes both `broker-a` and `broker-b` |
