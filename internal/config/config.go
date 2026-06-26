@@ -60,6 +60,13 @@ type ServerConfig struct {
 	// not appear in tools/list unless explicitly enabled. Secure-by-default for
 	// trial / dev deployments.
 	EnableWriteTools bool
+
+	// Observability holds the feature flags and tunables for the observability
+	// capabilities (correlation IDs, panic recovery, metrics, audit log,
+	// tracing, saturation events). Capability flags load from OBS_* env vars in
+	// applyEnvOverrides; numeric tunables parse from the YAML observability:
+	// block and are defaulted in applyDefaults. See ObservabilityConfig.
+	Observability ObservabilityConfig
 }
 
 // BrokerOAuthConfig holds the global OAuth IdP coordinates the MCP server uses
@@ -401,6 +408,7 @@ type yamlConfig struct {
 	TLSCertFile      string                   `yaml:"tls_cert_file"`
 	TLSKeyFile       string                   `yaml:"tls_key_file"`
 	EnableWriteTools bool                     `yaml:"enable_write_tools"` // default false; gates registration of write/action tools
+	Observability    ObservabilityConfig      `yaml:"observability"`      // numeric tunables parse here; capability flags come from OBS_* env vars (see ObservabilityConfig)
 }
 
 // Load locates the server configuration file, loads it, and returns a ready
@@ -509,6 +517,7 @@ func LoadConfig(path string) (*ServerConfig, error) {
 		TLSCertFile:      raw.TLSCertFile,
 		TLSKeyFile:       raw.TLSKeyFile,
 		EnableWriteTools: raw.EnableWriteTools,
+		Observability:    raw.Observability,
 	}
 
 	applyDefaults(cfg)
@@ -558,6 +567,10 @@ func applyDefaults(cfg *ServerConfig) {
 	}
 	// InsecureSkipVerify is not defaulted here — Go's zero value for bool
 	// (false) already matches the intended default (verify TLS certificates).
+
+	// Observability numeric tunables (saturation_threshold_ms, etc.). The
+	// capability flags are env-driven and applied in applyEnvOverrides instead.
+	applyObservabilityDefaults(cfg)
 }
 
 // loadEnvFile loads a .env file into the process environment. It checks two
@@ -1311,5 +1324,10 @@ func applyEnvOverrides(cfg *ServerConfig) error {
 		}
 		cfg.Port = port
 	}
+
+	// Observability capability flags are env-driven (OBS_*). Applied here so
+	// they load in the same phase as MCP_SERVER_PORT, before validate() runs.
+	applyObservabilityEnv(cfg)
+
 	return nil
 }
