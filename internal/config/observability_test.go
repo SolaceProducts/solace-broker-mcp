@@ -196,3 +196,31 @@ observability:
 		t.Errorf("OTelSelfStatsIntervalS = %d, want 120 (from ${OTEL_INTERVAL})", o.OTelSelfStatsIntervalS)
 	}
 }
+
+// TestObservability_NonPositiveNumericsAreReDefaulted proves a stray
+// non-positive value in YAML (e.g. -1) is treated as "omitted" and re-defaulted
+// rather than surviving as a nonsensical tunable. None of these fields has a
+// meaningful value <= 0.
+func TestObservability_NonPositiveNumericsAreReDefaulted(t *testing.T) {
+	yamlBody := obsYAML + `
+observability:
+  saturation_threshold_ms: -1
+  progress_signal_threshold_ms: 0
+  otel_self_stats_interval_s: -42
+`
+	cfg, err := LoadConfig(writeTemp(t, yamlBody))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	o := cfg.Observability
+	if o.SaturationThresholdMs != defaults.DefaultSaturationThresholdMs {
+		t.Errorf("SaturationThresholdMs = %d, want default %d (negative re-defaulted)", o.SaturationThresholdMs, defaults.DefaultSaturationThresholdMs)
+	}
+	if o.ProgressSignalThresholdMs != defaults.DefaultProgressSignalThresholdMs {
+		t.Errorf("ProgressSignalThresholdMs = %d, want default %d (zero re-defaulted)", o.ProgressSignalThresholdMs, defaults.DefaultProgressSignalThresholdMs)
+	}
+	if o.OTelSelfStatsIntervalS != defaults.DefaultOTelSelfStatsIntervalS {
+		t.Errorf("OTelSelfStatsIntervalS = %d, want default %d (negative re-defaulted)", o.OTelSelfStatsIntervalS, defaults.DefaultOTelSelfStatsIntervalS)
+	}
+}

@@ -22,9 +22,9 @@ These are the two stories with no upstream dependency on un-merged work, so they
 New packages, each with an `Enabled() bool` stub gated on its flag:
 `internal/observability/{correlation,recover,metrics,audit,tracing,health}/`, plus `internal/observability/schema/version.go` (`MetricsSchemaVersion`, `AuditSchemaVersion = "1.0"`).
 
-- `internal/auth/principal.go` — `PrincipalKey{}` context-key type, empty `Principal` struct, `PrincipalFrom(ctx) Principal` (population deferred to Story 20).
+- `internal/auth/principal.go` — an unexported `principalKey{}` context-key type (matching the `rawSubjectTokenKey` idiom), empty `Principal` struct, and `PrincipalFrom(ctx) Principal` (population deferred to Story 20).
 - `internal/config/observability.go` — `ObservabilityConfig`: env-driven `OBS_*_ENABLED` flags with door-closing v1 defaults (correlation + panic-recovery on; metrics, audit, tracing, saturation off; auth-failure-counter follows metrics; **no** `OBS_READYZ_STRICT_ENABLED`), and numeric thresholds (`saturation_threshold_ms`=10, `progress_signal_threshold_ms`=5000, `otel_self_stats_interval_s`=60) as `${VAR}`-substitutable YAML fields.
-- Wire into `internal/config/config.go`, add constants to `internal/defaults/defaults.go`, and log `observability: enabled=[...]` at INFO in `cmd/server/main.go` startup.
+- Wire into `internal/config/config.go`, add constants to `internal/defaults/defaults.go`, and emit one INFO startup line in `cmd/server/main.go` summarizing the enabled capabilities (`"observability config loaded"` with a bool attr per flag).
 - Unit tests: flag defaults, env overrides both directions, principal zero-value.
 
 Story 1 wires **no behavior** into the request path. Skeleton + flags only.

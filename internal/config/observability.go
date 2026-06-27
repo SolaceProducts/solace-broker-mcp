@@ -42,7 +42,8 @@ import (
 //     decode). Defaults are applied in applyDefaults alongside the rest.
 type ObservabilityConfig struct {
 	// Capability flags. Loaded from OBS_* env vars in applyObservabilityEnv,
-	// NOT from YAML — hence no yaml tags. See the type doc for why.
+	// not from YAML. The yaml:"-" tags are intentional: they exclude these
+	// fields from YAML decoding so env vars stay the single source for flags.
 	CorrelationIDEnabled    bool `yaml:"-"`
 	PanicRecoveryEnabled    bool `yaml:"-"`
 	MetricsEnabled          bool `yaml:"-"`
@@ -123,19 +124,21 @@ func applyObservabilityEnv(cfg *ServerConfig) {
 
 // applyObservabilityDefaults fills the numeric tunables that the operator left
 // at zero with their defaults. Called from applyDefaults so it sits beside the
-// SEMP/port/log-level defaulting. Zero means "omitted in YAML" for these
-// fields — none of the three has a meaningful zero value (a 0ms saturation
-// threshold or 0s self-stats interval would be nonsensical), so zero-as-omitted
-// is safe here.
+// SEMP/port/log-level defaulting. A non-positive value (zero, or a stray
+// negative coming from YAML) means "omitted" for these fields: none has a
+// meaningful value <= 0 (a 0ms or negative saturation threshold, or a 0s/
+// negative self-stats interval, is nonsensical). Re-defaulting rather than
+// letting such a value survive prevents propagating a nonsensical tunable to
+// the capabilities that will later consume it.
 func applyObservabilityDefaults(cfg *ServerConfig) {
 	o := &cfg.Observability
-	if o.SaturationThresholdMs == 0 {
+	if o.SaturationThresholdMs <= 0 {
 		o.SaturationThresholdMs = defaults.DefaultSaturationThresholdMs
 	}
-	if o.ProgressSignalThresholdMs == 0 {
+	if o.ProgressSignalThresholdMs <= 0 {
 		o.ProgressSignalThresholdMs = defaults.DefaultProgressSignalThresholdMs
 	}
-	if o.OTelSelfStatsIntervalS == 0 {
+	if o.OTelSelfStatsIntervalS <= 0 {
 		o.OTelSelfStatsIntervalS = defaults.DefaultOTelSelfStatsIntervalS
 	}
 }
