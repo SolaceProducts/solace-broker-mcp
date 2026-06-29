@@ -12,6 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package recovery provides panic recovery for the request path. It exposes
+// HTTPMiddleware, the whole-mux recover() wrapper that traps a panicking HTTP
+// handler and converts it to a clean 500 (SOL-151286). Recovery is always on:
+// it is a safety net with no production reason to disable, so there is no flag
+// to gate it. The tool-handler goroutine is recovered separately by
+// withRecovery in internal/tools (SOL-151287).
+//
+// It lives under internal/middleware because it changes request behaviour
+// (panic -> 500); it does not merely observe.
+//
+// The package is named recovery (not recover) so it does not shadow the Go
+// builtin recover(), which HTTPMiddleware uses.
 package recovery
 
 import (
@@ -47,9 +59,8 @@ const internalErrorBody = `{"error":"internal_error","error_description":"the se
 // arbitrary strings, the same secure-logging rule withRecovery applies in
 // internal/tools (see docs/internal/secure-logging-rules.md).
 //
-// Callers gate installation on Enabled (OBS_PANIC_RECOVERY_ENABLED). When the
-// capability is off the middleware is not wired and a panic propagates to
-// net/http's per-connection recovery (today's behaviour).
+// Recovery is unconditional: buildRootHandler always wraps the mux with this
+// middleware. There is no flag to disable it.
 //
 // Scope: recover() catches only panics on the request's own goroutine. A panic
 // on a goroutine that a handler SPAWNS (e.g. the per-broker probe goroutines in

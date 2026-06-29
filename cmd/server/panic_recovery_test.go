@@ -24,11 +24,11 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
 )
 
-// obsConfig builds an ObservabilityConfig with the two flags this story cares
-// about; all other observability flags default to their zero value.
-func obsConfig(panicRecovery, correlationID bool) config.ObservabilityConfig {
+// obsConfig builds an ObservabilityConfig with the correlation flag this story
+// cares about; all other observability flags default to their zero value.
+// Panic recovery is unconditional and no longer a config flag.
+func obsConfig(correlationID bool) config.ObservabilityConfig {
 	return config.ObservabilityConfig{
-		PanicRecoveryEnabled: panicRecovery,
 		CorrelationIDEnabled: correlationID,
 	}
 }
@@ -53,14 +53,14 @@ func muxWithPanicRoute() *http.ServeMux {
 	return mux
 }
 
-// TestBuildRootHandler_PanicRecoveryWrapsWholeMux pins AC #1/#2: with the flag
-// ON, the assembled root handler catches a panic from a route INSIDE the mux
-// and returns 500 — proving recovery is the outermost wrapper around the whole
-// mux — while the standalone probe routes still pass through to 200, and the
-// process keeps running.
+// TestBuildRootHandler_PanicRecoveryWrapsWholeMux pins AC #1/#2: recovery is
+// unconditional, so the assembled root handler catches a panic from a route
+// INSIDE the mux and returns 500 — proving recovery is the outermost wrapper
+// around the whole mux — while the standalone probe routes still pass through
+// to 200, and the process keeps running.
 func TestBuildRootHandler_PanicRecoveryWrapsWholeMux(t *testing.T) {
 	t.Parallel()
-	root := buildRootHandler(muxWithPanicRoute(), obsConfig(true, false))
+	root := buildRootHandler(muxWithPanicRoute())
 
 	// A panic in a mux route is caught -> 500.
 	if rec := get(root, "/panic"); rec.Code != http.StatusInternalServerError {
@@ -72,23 +72,6 @@ func TestBuildRootHandler_PanicRecoveryWrapsWholeMux(t *testing.T) {
 			t.Errorf("%s status = %d, want %d through the recovery wrapper", path, rec.Code, http.StatusOK)
 		}
 	}
-}
-
-// TestBuildRootHandler_FlagOffPanicPropagates pins AC #4: with the flag OFF the
-// recovery middleware is NOT wired, so a panic propagates out of the root
-// handler (today's behaviour) instead of becoming a 500. We catch the re-panic
-// here to assert it WAS re-raised.
-func TestBuildRootHandler_FlagOffPanicPropagates(t *testing.T) {
-	t.Parallel()
-	root := buildRootHandler(muxWithPanicRoute(), obsConfig(false, false))
-
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("panic did not propagate with recovery flag OFF; want it to escape the root handler")
-		}
-	}()
-	_ = get(root, "/panic") // must panic; the deferred recover() asserts it did.
-	t.Error("ServeHTTP returned without panicking; recovery flag OFF must let panics propagate")
 }
 
 // TestChainOrder_CorrelationInsideRecovery pins AC #5 against the REAL wiring:
@@ -112,7 +95,7 @@ func TestBuildRootHandler_FlagOffPanicPropagates(t *testing.T) {
 // relative to the SDK is fixed where authedHandler is constructed, not here.
 func TestChainOrder_CorrelationInsideRecovery(t *testing.T) {
 	t.Parallel()
-	cfg := obsConfig(true, true)
+	cfg := obsConfig(true)
 
 	var seenID string
 	// Stand-in for authedHandler (auth middleware → MCP SDK handler): records
@@ -130,7 +113,7 @@ func TestChainOrder_CorrelationInsideRecovery(t *testing.T) {
 		panic("boom")
 	})
 
-	root := buildRootHandler(mux, cfg)
+	root := buildRootHandler(mux)
 
 	// correlation ran INSIDE recovery: a non-empty ID reached the inner handler.
 	if rec := get(root, "/mcp"); rec.Code != http.StatusOK {
