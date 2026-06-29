@@ -534,6 +534,55 @@ func TestExecute_ParallelSteps(t *testing.T) {
 	}
 }
 
+// TestExecute_ParallelSteps_AppliesSelect pins applySelect inside executeBatch.
+// Regression test: an earlier revision of the parallel path skipped applySelect,
+// so structured Select fields on parallel steps never reached the SEMP wire as
+// args["select"] — silently dropping the field filter. Without this assertion
+// the next refactor of executeBatch can regress the same way.
+func TestExecute_ParallelSteps_AppliesSelect(t *testing.T) {
+	ops := map[string]*sempv2.Operation{
+		"monitor/getA": {ID: "getA", Method: "GET", Path: "/a"},
+		"monitor/getB": {ID: "getB", Method: "GET", Path: "/b"},
+	}
+
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	tool := CompositeTool{
+		Name:        "test",
+		Description: "test",
+		Steps: []Step{
+			{ID: "stepA", Operation: "monitor/getA", Args: map[string]string{}, Select: []string{"a1", "a2"}, Parallel: true},
+			{ID: "stepB", Operation: "monitor/getB", Args: map[string]string{}, Select: []string{"b1"}, Parallel: true},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+
+	_, err := NewCompositeExecutor(ops).Execute(context.Background(), tool, capture, map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	}
+	wantByOp := map[string]string{
+		"getA": "a1, a2",
+		"getB": "b1",
+	}
+	for _, call := range recorded {
+		got, ok := call.args["select"].(string)
+		if !ok {
+			t.Errorf("op %q: args[\"select\"] missing or not string: %v", call.opID, call.args["select"])
+			continue
+		}
+		if want := wantByOp[call.opID]; got != want {
+			t.Errorf("op %q: args[\"select\"] = %q, want %q", call.opID, got, want)
+		}
+	}
+}
+
 func TestExecute_ResultStrategy_Collect(t *testing.T) {
 	client := newMockClient()
 	client.responses["getMsgVpnQueue"] = &sempv2.Result{Data: map[string]any{"queue": "data"}, StatusCode: 200}
