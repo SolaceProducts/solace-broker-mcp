@@ -50,6 +50,12 @@ const internalErrorBody = `{"error":"internal_error","error_description":"the se
 // Callers gate installation on Enabled (OBS_PANIC_RECOVERY_ENABLED). When the
 // capability is off the middleware is not wired and a panic propagates to
 // net/http's per-connection recovery (today's behaviour).
+//
+// Scope: recover() catches only panics on the request's own goroutine. A panic
+// on a goroutine that a handler SPAWNS (e.g. the per-broker probe goroutines in
+// the /ready handler) is NOT caught here — that class must be recovered at the
+// point of goroutine creation. The SDK tool-handler goroutine is covered
+// separately by withRecovery in internal/tools/register.go.
 func HTTPMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
@@ -68,13 +74,20 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 				// flag-only skeleton), so this story implements the LOG only.
 
 				// Best-effort 500. If the downstream handler already committed a
-				// status and wrote body bytes before panicking, the response
-				// headers are already on the wire and CANNOT be un-sent: this
-				// WriteHeader is a no-op (net/http logs "superfluous WriteHeader")
-				// and the client receives the partial body the handler started.
-				// This is an unavoidable limitation of HTTP, not something the
-				// middleware can paper over; we do best-effort and keep the
-				// process alive, which is the contract that matters.
+				// status and wrote body bytes before panicking, the response is
+				// already on the wire and CANNOT be un-sent: WriteHeader becomes a
+				// no-op (net/http logs "superfluous WriteHeader") AND the Write
+				// below APPENDS internalErrorBody onto the partial bytes the
+				// handler already sent, producing a concatenated (malformed) body.
+				// We accept this best-effort behaviour for v1: (a) the in-tree
+				// handlers — the probes and the SDK /mcp handler — write their
+				// response atomically, so a panic after a partial write is not
+				// reached in practice; and (b) the alternative, wrapping w in a
+				// ResponseWriter that tracks commitment to suppress the append,
+				// would defeat the http.Flusher type-assertion the MCP streamable
+				// HTTP (SSE) path on /mcp depends on, breaking streaming. Keeping
+				// the process alive is the contract that matters; on the common
+				// path (panic before any write) the clean 500 below is correct.
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte(internalErrorBody))

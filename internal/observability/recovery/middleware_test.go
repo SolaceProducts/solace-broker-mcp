@@ -197,10 +197,16 @@ func TestHTTPMiddleware_PanicNil(t *testing.T) {
 	}
 }
 
-// TestHTTPMiddleware_PartialWriteThenPanic documents the partial-write
-// limitation: once a handler has committed a status (e.g. 200) and written
-// body bytes, the recovery layer cannot un-send them. The status stays at what
-// the handler committed; the middleware must NOT crash trying to rewrite it.
+// TestHTTPMiddleware_PartialWriteThenPanic PINS the partial-write behaviour,
+// including its known imperfection. Once a handler has committed a status (e.g.
+// 200) and written body bytes, the recovery layer cannot un-send them: the
+// status stays at what the handler committed, and the middleware's own
+// Write(internalErrorBody) APPENDS onto the partial bytes, yielding a
+// concatenated (malformed) body. We assert that EXACT body rather than just a
+// prefix so the imperfection is visible and pinned, not hidden — see the
+// middleware comment for why this best-effort behaviour is accepted for v1
+// (atomic in-tree handlers; wrapping w would break SSE on /mcp). The middleware
+// must NOT crash trying to rewrite the committed response.
 func TestHTTPMiddleware_PartialWriteThenPanic(t *testing.T) {
 	// Not parallel: mutates the process-global slog default.
 	buf := captureLogs(t)
@@ -216,8 +222,10 @@ func TestHTTPMiddleware_PartialWriteThenPanic(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d (committed status cannot be rewritten)", rec.Code, http.StatusOK)
 	}
-	if !strings.HasPrefix(rec.Body.String(), partial) {
-		t.Errorf("body = %q, want it to start with the partial write %q", rec.Body.String(), partial)
+	// Exact body: the handler's partial bytes followed by the appended error
+	// JSON. This documents the real (imperfect) wire output on this rare path.
+	if want := partial + internalErrorBody; rec.Body.String() != want {
+		t.Errorf("body = %q, want %q (partial bytes with the error body appended)", rec.Body.String(), want)
 	}
 	// The panic is still recovered (process keeps running) and logged.
 	if buf.Len() == 0 {
