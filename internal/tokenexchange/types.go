@@ -80,6 +80,17 @@ const (
 	GrantTypeTokenExchange GrantType = iota + 1
 )
 
+// RFC 8693 wire-format URNs. Used in both request construction and
+// response validation — defined once to prevent drift across files.
+const (
+	// URNGrantTypeTokenExchange is the grant_type value for RFC 8693.
+	URNGrantTypeTokenExchange = "urn:ietf:params:oauth:grant-type:token-exchange"
+
+	// URNTokenTypeAccessToken is the subject_token_type and
+	// issued_token_type value for access tokens (RFC 8693 §3).
+	URNTokenTypeAccessToken = "urn:ietf:params:oauth:token-type:access_token"
+)
+
 // Params are the construction-time inputs to New. Every field except
 // HTTPClient is sourced from validated config (broker_oauth.*) and is
 // trusted by the constructor — the config validator has already enforced
