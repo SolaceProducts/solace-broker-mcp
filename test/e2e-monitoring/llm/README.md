@@ -39,6 +39,12 @@ The pin tracks npm's `stable` dist-tag — deliberately lagged from
 ([`.github/renovate.json`](../../.github/renovate.json)) watches this
 package only and opens a weekly PR when `stable` moves; never auto-merges.
 
+Check what `stable` currently points to (and compare against `latest`):
+
+```sh
+npm view @anthropic-ai/claude-code dist-tags
+```
+
 Install however you like — local dev can use any of:
 
 ```sh
@@ -235,7 +241,7 @@ token from `config.env`. Three non-obvious knobs the runner always sets:
   fabricated lab broker aliases.
 - **`--tools ""`** — disables every built-in tool (Bash, Read, WebSearch,
   …). Without it, on the MCP-down test claude falls back to `Bash` and
-  `Read` to investigate why MCP didn't load (observed on 2.1.153).
+  `Read` to investigate why MCP didn't load (observed on 2.1.181).
 - **`--allowed-tools "mcp__solace-broker__*"`** — auto-approve list. In
   `--print` mode there's no human to approve tool calls, so anything not in
   this list gets *auto-denied* — "I need permission to run X, please
@@ -270,7 +276,7 @@ Sample run of two scenarios:
 ```
 [PRECHECK PASS] http://localhost:9090 reachable, broker-a get-broker-status returned Solace PubSub+ Standard Version 10.25.0.237
 [PRECHECK PASS] http://localhost:9090 reachable, broker-b get-broker-status returned Solace PubSub+ Standard Version 10.25.0.237
-[INFO]  Claude CLI Version: 2.1.153
+[INFO]  Claude CLI Version: 2.1.181
 [INFO]  Broker target: local-docker (http://localhost:9090)
 
 ════════ [1/2] f1-list-vpns [broker-a] ════════
@@ -317,7 +323,7 @@ no persistent transcripts. No retries: re-run the suite if a scenario flakes.
 - **MCP-down → refusal works** with `--strict-mcp-config` + `--tools ""`.
   `--allowed-tools` doesn't affect the refusal path (no tools to call when
   MCP is down) but is still needed for the happy path — see MCP wiring.
-  The `Bash`/`Read` fallback observed on 2.1.153 is what `--tools ""` blocks.
+  The `Bash`/`Read` fallback observed on 2.1.181 is what `--tools ""` blocks.
 - **`--mcp-config` is additive** — always pair with `--strict-mcp-config` in
   tests.
 - **Pin the CLI to npm's `stable` dist-tag**, not `latest`. `latest` is
