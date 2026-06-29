@@ -238,6 +238,26 @@ func limitRequestBody(next http.Handler, maxBytes int64) http.Handler {
 	})
 }
 
+// buildMCPEndpoint assembles the /mcp handler chain around authedHandler.
+//
+// The layer order, outermost first, is: limitRequestBody → correlation →
+// authedHandler. limitRequestBody is the OUTERMOST layer so an oversized
+// request is rejected with 413 before any work is done. A deliberate
+// consequence: a 413 is returned BEFORE the correlation middleware runs, so
+// 413 responses carry no correlation ID. This is intentional. Correlation sits
+// OUTSIDE auth (ADR-001) so a 401 still gets an ID, but the body limit sits
+// outside correlation by design.
+//
+// When correlationEnabled is false the correlation layer is omitted entirely
+// (correlation.From then returns "").
+func buildMCPEndpoint(authedHandler http.Handler, correlationEnabled bool) http.Handler {
+	endpoint := authedHandler
+	if correlationEnabled {
+		endpoint = correlation.Middleware(authedHandler)
+	}
+	return limitRequestBody(endpoint, defaults.MaxMCPRequestBytes)
+}
+
 // startServer starts httpServer in a background goroutine and returns a channel
 // that receives any startup/runtime error (excluding http.ErrServerClosed, which
 // is the normal result of Shutdown). The channel is buffered so the goroutine
@@ -503,16 +523,14 @@ func main() {
 	// unauthenticated request rejected with 401 still gets a correlation ID
 	// attached (ADR-001 ordering). Gated on OBS_CORRELATION_ID_ENABLED: when
 	// off, the middleware is not wired and correlation.From returns "".
-	mcpEndpoint := authedHandler
-	if correlation.Enabled(cfg.Observability) {
-		mcpEndpoint = correlation.Middleware(authedHandler)
-	}
+	correlationEnabled := correlation.Enabled(cfg.Observability)
 	slog.Info("correlation-ID middleware wiring",
-		slog.Bool("enabled", correlation.Enabled(cfg.Observability)))
+		slog.Bool("enabled", correlationEnabled))
 
-	// Register authenticated MCP endpoint. The body limit wraps the outside
-	// so it bounds the request before any layer can buffer it.
-	mux.Handle("/mcp", limitRequestBody(mcpEndpoint, defaults.MaxMCPRequestBytes))
+	// Register authenticated MCP endpoint. buildMCPEndpoint wraps the body
+	// limit on the outside so it bounds the request before any layer buffers
+	// it; see buildMCPEndpoint for the full layer order and 413 rationale.
+	mux.Handle("/mcp", buildMCPEndpoint(authedHandler, correlationEnabled))
 
 	// Register OAuth Protected Resource Metadata endpoint (RFC 9728)
 	// This enables MCP clients to discover the authorization server for OAuth flows.

@@ -268,7 +268,10 @@ func TestMiddleware_EndToEndPropagation(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer resp.Body.Close()
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if string(body) != validTraceID {
 			t.Errorf("downstream saw correlation ID %q, want %q", string(body), validTraceID)
 		}
@@ -284,7 +287,10 @@ func TestMiddleware_EndToEndPropagation(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer resp.Body.Close()
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if !isUUIDv7(string(body)) {
 			t.Errorf("downstream saw %q, want a generated UUIDv7", string(body))
 		}

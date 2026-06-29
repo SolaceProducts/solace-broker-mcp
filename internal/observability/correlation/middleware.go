@@ -41,22 +41,19 @@ const (
 // only ever bites an oversized X-Correlation-ID.
 const maxIDLen = 128
 
-// Key is the context-key type under which the correlation ID is stored. The
-// empty-struct, package-private *type* is exported but has no exported fields
-// or constructor parameters beyond the zero value Key{}, mirroring the
-// unexported-key idiom in internal/auth (rawSubjectTokenKey{}, principalKey{}):
-// only code holding this type can address the value, so no other package can
-// collide with it or read it except through From. It is exported here because
-// the v1 default is for correlation to be ON and dependent observability code
-// reads the ID via From, not by constructing the key.
-type Key struct{}
+// key is the unexported context-key type under which the correlation ID is
+// stored. Only this package can construct key{}, mirroring the unexported-key
+// idiom in internal/auth (rawSubjectTokenKey{}, principalKey{}): no other
+// package can collide with it or read the value directly. External code seeds
+// the ID via With and reads it via From, never by addressing the key.
+type key struct{}
 
 // With returns a copy of ctx carrying id as the correlation ID. It does not
 // validate id; the middleware is the sole production writer and only stores
 // values that already passed sanitize. Exported for tests and for any future
 // non-HTTP entry point that needs to seed a correlation ID.
 func With(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, Key{}, id)
+	return context.WithValue(ctx, key{}, id)
 }
 
 // From returns the correlation ID stored on ctx, or "" when none is present
@@ -65,7 +62,7 @@ func With(ctx context.Context, id string) context.Context {
 // correlation ID is indistinguishable from "absent" for logging purposes, so a
 // single return keeps call sites simple.
 func From(ctx context.Context) string {
-	if v, ok := ctx.Value(Key{}).(string); ok {
+	if v, ok := ctx.Value(key{}).(string); ok {
 		return v
 	}
 	return ""
@@ -201,10 +198,16 @@ func sanitize(v string) (string, bool) {
 // library to reuse.
 func Generate() string {
 	var b [16]byte
-	// crypto/rand.Read never returns an error in the stdlib implementation
-	// (it panics internally on a failing entropy source), so the error is
-	// safe to ignore here; a non-nil error is unreachable.
-	_, _ = rand.Read(b[:])
+	// Fail loudly rather than silently emit zeroed/predictable bytes, which
+	// would defeat the ID's purpose. On modern Go crypto/rand.Read does not
+	// return an error (a failing entropy source crashes internally), so this
+	// panic is defensive and unreachable in practice. A panic on the request
+	// goroutine is caught by net/http's per-connection recovery (and, once the
+	// HTTP panic-recovery middleware is stacked, by that), so it does not crash
+	// the process.
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("correlation: crypto/rand.Read failed: " + err.Error())
+	}
 
 	// Timestamp: 48-bit big-endian Unix milliseconds in the first 6 bytes.
 	ms := uint64(time.Now().UnixMilli())
