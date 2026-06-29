@@ -401,6 +401,11 @@ tools:
       Create a Message VPN. Requires msgVpnName to name the new VPN; any
       attribute omitted from msgVpnConfig is set to its broker default. Use this
       to provision a new VPN. Fails if a VPN with the same name already exists.
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN name) and that a new VPN will be created on the
+      broker. The confirmation MUST come as a separate user reply received AFTER
+      you state the target and effect — do not treat the user's original request
+      as a pre-confirmation, even if it implies intent.
     annotations:
       readOnly: false
       destructive: false
@@ -425,6 +430,11 @@ tools:
       provide only the attributes you want to change in msgVpnConfig. Omitted
       attributes are left unchanged. Use this to update VPN settings such as
       enabled state, connection limits, or spool quotas.
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN name) and the attributes that will change. The
+      confirmation MUST come as a separate user reply received AFTER you state
+      the target and effect — do not treat the user's original request as a
+      pre-confirmation, even if it implies intent.
     annotations:
       readOnly: false
       destructive: false
@@ -451,6 +461,11 @@ tools:
       This is a destructive operation that removes the VPN and all its
       configuration. The VPN must have no active client connections before
       deletion.
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN name) and that the VPN and all its configuration
+      will be permanently removed. The confirmation MUST come as a separate user
+      reply received AFTER you state the target and effect — do not treat the
+      user's original request as a pre-confirmation, even if it implies intent.
     annotations:
       readOnly: false
       destructive: true
@@ -473,6 +488,11 @@ tools:
       and queueName to name the new queue; any attribute omitted from queueConfig
       is set to its broker default. Use this to provision a new queue. Fails if a
       queue with the same name already exists in the VPN.
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, queue name) and that a new queue will be created.
+      The confirmation MUST come as a separate user reply received AFTER you
+      state the target and effect — do not treat the user's original request as
+      a pre-confirmation, even if it implies intent.
     annotations:
       readOnly: false
       destructive: false
@@ -506,6 +526,11 @@ tools:
       queue; provide only the attributes you want to change in queueConfig.
       Omitted attributes are left unchanged. Use this to update queue settings
       such as enabled state, access type, spool quota, or redelivery limits.
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, queue name) and the attributes that will change.
+      The confirmation MUST come as a separate user reply received AFTER you
+      state the target and effect — do not treat the user's original request as
+      a pre-confirmation, even if it implies intent.
     annotations:
       readOnly: false
       destructive: false
@@ -536,6 +561,12 @@ tools:
       Delete a queue from a Message VPN. Requires msgVpnName and queueName to
       identify the queue to delete. This is a destructive operation that removes
       the queue and discards any messages still spooled on it.
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, queue name) and that the queue and any spooled
+      messages will be permanently lost. The confirmation MUST come as a separate
+      user reply received AFTER you state the target and effect — do not treat
+      the user's original request as a pre-confirmation, even if it implies
+      intent.
     annotations:
       readOnly: false
       destructive: true
@@ -564,6 +595,11 @@ tools:
       omitted from topicEndpointConfig is set to its broker default. Use this to
       provision a new topic endpoint. Fails if a topic endpoint with the same
       name already exists in the VPN.
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, topic endpoint name) and that a new topic endpoint
+      will be created. The confirmation MUST come as a separate user reply
+      received AFTER you state the target and effect — do not treat the user's
+      original request as a pre-confirmation, even if it implies intent.
     annotations:
       readOnly: false
       destructive: false
@@ -599,6 +635,11 @@ tools:
       attributes you want to change in topicEndpointConfig. Omitted attributes are
       left unchanged. Use this to update topic endpoint settings such as enabled
       state, access type, or spool quota.
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, topic endpoint name) and the attributes that will
+      change. The confirmation MUST come as a separate user reply received AFTER
+      you state the target and effect — do not treat the user's original request
+      as a pre-confirmation, even if it implies intent.
     annotations:
       readOnly: false
       destructive: false
@@ -630,6 +671,12 @@ tools:
       topicEndpointName to identify the topic endpoint to delete. This is a
       destructive operation that removes the topic endpoint and discards any
       messages still spooled on it.
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, topic endpoint name) and that the topic endpoint
+      and any spooled messages will be permanently lost. The confirmation MUST
+      come as a separate user reply received AFTER you state the target and
+      effect — do not treat the user's original request as a pre-confirmation,
+      even if it implies intent.
     annotations:
       readOnly: false
       destructive: true
