@@ -112,12 +112,17 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	var toolErr error
 
 	defer func() {
-		// Panic detection: this defer runs during unwinding, before the
-		// recover in withRecovery fires. Every error return below sets
-		// toolErr and the success return sets result, so both still being
-		// nil means the handler panicked — audit it as an error, never as a
-		// success (SOL-150685). Invariant for new return paths: set toolErr,
-		// or return a non-nil result.
+		// Panic detection: this defer runs during unwinding, before any
+		// recover further up the stack. When panic recovery is enabled
+		// (OBS_PANIC_RECOVERY_ENABLED, the default) withRecovery's recover
+		// fires AFTER this defer and turns the panic into a sanitized result;
+		// when it is disabled withRecovery installs no recover and the panic
+		// keeps propagating past this point. Either way this defer runs first,
+		// during unwinding. Every error return below sets toolErr and the
+		// success return sets result, so both still being nil means the
+		// handler panicked — audit it as an error, never as a success
+		// (SOL-150685). Invariant for new return paths: set toolErr, or return
+		// a non-nil result.
 		if toolErr == nil && result == nil {
 			errorType = "panic"
 			toolErr = panicError{}
@@ -228,7 +233,9 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 // panicError is the sentinel toolErr recorded when an invocation ends in a
 // recovered panic. logToolResult logs unaudited errors type-only, so the
 // audit line shows this type plus error_type=panic; the panic value itself
-// is never logged (withRecovery logs its Go type and the stack separately).
+// is never logged (when panic recovery is enabled, withRecovery logs its Go
+// type and the stack separately; when disabled, withRecovery installs no
+// recover and the panic propagates uncaught after this audit line is emitted).
 type panicError struct{}
 
 func (panicError) Error() string { return "tool handler panicked" }

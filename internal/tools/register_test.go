@@ -110,7 +110,7 @@ func TestRegisterWithServer(t *testing.T) {
 	mgr.Register(newStubHandler("test-tool"))
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	RegisterWithServer(mgr, server, pool, true)
+	RegisterWithServer(mgr, server, pool, true, true)
 
 	// No panic = tools registered successfully. The MCP SDK doesn't expose
 	// a way to list registered tools directly, so we verify by checking
@@ -164,7 +164,7 @@ func TestRegisterWithServer_WriteGated(t *testing.T) {
 			mgr.Register(destructiveWrite)
 
 			server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-			RegisterWithServer(mgr, server, pool, enableWriteTools)
+			RegisterWithServer(mgr, server, pool, enableWriteTools, true)
 			// No panic; gate behavior verified at integration layer via tools/list.
 		})
 	}
@@ -174,8 +174,123 @@ func TestRegisterListBrokers(t *testing.T) {
 	pool := newRegTestPool(t)
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
 
-	RegisterListBrokers(server, pool)
+	RegisterListBrokers(server, pool, true)
 	// No panic = registered successfully.
+}
+
+// panicHandler returns an mcp.ToolHandler that always panics with the given
+// value. Used to drive both branches of the withRecovery gate.
+func panicHandler(v any) mcp.ToolHandler {
+	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		panic(v)
+	}
+}
+
+// TestWithRecovery_EnabledRecovers covers SOL-151287 Decision A with the
+// OBS_PANIC_RECOVERY_ENABLED gate ON (the default): withRecovery must trap the
+// panic and return a sanitized IsError result rather than letting it escape.
+// The input domain is swept across panic value types — string, int, struct,
+// error, and nil-pointer-deref-shaped — because the recover path formats the
+// value's Go type and must not assume a string.
+func TestWithRecovery_EnabledRecovers(t *testing.T) {
+	type customPanic struct{ Code int }
+	cases := []struct {
+		name  string
+		value any
+	}{
+		{"string value", "boom"},
+		{"int value", 42},
+		{"struct value", customPanic{Code: 7}},
+		{"error value", fmt.Errorf("wrapped boom")},
+		{"runtime error", nil}, // handled specially below: a genuine nil dereference
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var logBuf bytes.Buffer
+			oldLogger := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+			defer slog.SetDefault(oldLogger)
+
+			var h mcp.ToolHandler
+			if tc.name == "runtime error" {
+				h = func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+					var p *int
+					_ = *p // genuine nil dereference -> runtime.Error panic
+					return nil, nil
+				}
+			} else {
+				h = panicHandler(tc.value)
+			}
+
+			wrapped := withRecovery("panic-tool", true, h)
+
+			result, err := wrapped(context.Background(), &mcp.CallToolRequest{})
+			if err != nil {
+				t.Fatalf("withRecovery(enabled) returned err=%v, want nil (panic must become a result)", err)
+			}
+			if result == nil || !result.IsError {
+				t.Fatalf("withRecovery(enabled) result = %v, want non-nil IsError result", result)
+			}
+			if got := result.StructuredContent.(map[string]any)["error"]; got != serverInternalErrorMessage {
+				t.Errorf("sanitized error = %v, want %q", got, serverInternalErrorMessage)
+			}
+			// The panic was logged at ERROR with the value's Go type, never its text.
+			if !containsStr(logBuf.String(), "tool handler panicked") {
+				t.Errorf("expected panic log line; got: %s", logBuf.String())
+			}
+			if containsStr(logBuf.String(), "boom") || containsStr(logBuf.String(), "wrapped boom") {
+				t.Errorf("raw panic value leaked into logs: %s", logBuf.String())
+			}
+		})
+	}
+}
+
+// TestWithRecovery_DisabledPropagates covers Decision A with the gate OFF: the
+// wrapper must return the handler unchanged so a panic propagates, reintroducing
+// the pre-SOL-150685 crash. This is the documented dev/debug affordance for
+// obtaining the real crash stack. The deferred recover() here is the test's own
+// safety net asserting the panic escaped withRecovery.
+func TestWithRecovery_DisabledPropagates(t *testing.T) {
+	wrapped := withRecovery("panic-tool", false, panicHandler("boom"))
+
+	func() {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("withRecovery(disabled) swallowed the panic; want propagation")
+			}
+			if r != "boom" {
+				t.Errorf("recovered value = %v, want original panic value %q", r, "boom")
+			}
+		}()
+		_, _ = wrapped(context.Background(), &mcp.CallToolRequest{})
+		t.Fatal("handler returned normally; expected panic to propagate")
+	}()
+}
+
+// TestRegisterWithServer_PanicGateOff verifies the gate threads through
+// RegisterWithServer end-to-end: with panic recovery OFF, a panicking handler's
+// panic is NOT converted to a sanitized result by our wrapper. The SDK runs the
+// handler on its own goroutine, so we assert at the wrapper level (above) and
+// here only that registration with the flag OFF is wired without our recover.
+func TestRegisterWithServer_PanicGateOff(t *testing.T) {
+	pool := newRegTestPool(t)
+	mgr := NewToolManager(pool)
+	mgr.Register(newStubHandler("test-tool"))
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+	// No panic at registration with the gate OFF.
+	RegisterWithServer(mgr, server, pool, true, false)
+}
+
+// TestRegisterListBrokers_PanicGateOff verifies list-brokers registration
+// honors the gate OFF without panicking at wire time. list-brokers is wrapped
+// by withRecovery too, so it shares the single flag.
+func TestRegisterListBrokers_PanicGateOff(t *testing.T) {
+	pool := newRegTestPool(t)
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+	RegisterListBrokers(server, pool, false)
 }
 
 // auditLines decodes every JSON log line in buf with msg "tool invoked" for
@@ -222,7 +337,7 @@ func TestPanicAuditedAsError(t *testing.T) {
 	mgr.Register(panicking)
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	RegisterWithServer(mgr, server, pool, true)
+	RegisterWithServer(mgr, server, pool, true, true)
 
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -273,7 +388,7 @@ func TestListBrokersEmitsAuditLog(t *testing.T) {
 
 	pool := newRegTestPool(t)
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	RegisterListBrokers(server, pool)
+	RegisterListBrokers(server, pool, true)
 
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()

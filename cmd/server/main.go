@@ -516,13 +516,19 @@ func main() {
 	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor)
 	registerSEMPv1Tools(mgr)
 	registerSEMPv2Tools(mgr)
-	tools.RegisterWithServer(mgr, server, pool, cfg.EnableWriteTools)
+	// Compute the panic-recovery gate once and thread it into tool
+	// registration. The single OBS_PANIC_RECOVERY_ENABLED flag governs both the
+	// tool path (SOL-151287) and the HTTP middleware (Story 12); computing the
+	// bool here keeps internal/tools free of any dependency on the recovery
+	// package.
+	panicRecoveryEnabled := recovery.Enabled(cfg.Observability)
+	tools.RegisterWithServer(mgr, server, pool, cfg.EnableWriteTools, panicRecoveryEnabled)
 	slog.Info("tool registration complete",
 		slog.Bool("enable_write_tools", cfg.EnableWriteTools))
 
 	// list-brokers is a discovery tool registered directly on the MCP
 	// server (it doesn't need broker resolution or the ToolManager pipeline).
-	tools.RegisterListBrokers(server, pool)
+	tools.RegisterListBrokers(server, pool, panicRecoveryEnabled)
 
 	slog.Info("all tools registered")
 

@@ -40,10 +40,35 @@ const serverInternalErrorMessage = "The server encountered an internal error exe
 // with no recover() — net/http's per-connection recovery cannot catch a
 // panic on another goroutine — so without this wrapper a single panicking
 // handler takes down the whole server (SOL-150685).
-func withRecovery(toolName string, h mcp.ToolHandler) mcp.ToolHandler {
+//
+// The panicRecoveryEnabled gate is the OBS_PANIC_RECOVERY_ENABLED capability
+// (SOL-151287, Decision A). One flag governs BOTH this tool path and the HTTP
+// path's recovery.HTTPMiddleware (Story 12) — there are no per-tool
+// sub-switches.
+//   - Enabled (the v1 default): the wrapper installs recover() and a panic
+//     becomes the sanitized IsError result below. This preserves the
+//     SOL-150685 safety fix.
+//   - Disabled: the handler is returned unchanged — no recover() is installed,
+//     so a panic propagates and crashes the process, reintroducing the
+//     pre-SOL-150685 behaviour. This is the deliberate, documented dev/debug
+//     affordance for capturing the real crash stack; it is not how a
+//     production deployment should run.
+//
+// Scope: recover() catches only panics on its OWN goroutine. Any background
+// goroutine added later (e.g. the OTel batch-exporter wrapper or periodic
+// self-stats emitter in the future tracing stories) must install its own
+// goroutine-local recover — this wrapper does not and cannot cover them.
+func withRecovery(toolName string, panicRecoveryEnabled bool, h mcp.ToolHandler) mcp.ToolHandler {
+	if !panicRecoveryEnabled {
+		// Gate OFF: return the handler verbatim. A panic propagates uncaught
+		// (dev/debug only — see the doc comment above).
+		return h
+	}
 	return func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
 		defer func() {
 			if r := recover(); r != nil {
+				// TODO(Story 15 metrics): count recovered tool-path panics once
+				// the metrics registry lands. No counter infra exists today.
 				// Log only the panic value's Go type, never its text: panic
 				// values are unaudited and can carry arbitrary strings (the
 				// same rule logToolResult applies to non-broker errors). The
@@ -77,7 +102,11 @@ func withRecovery(toolName string, h mcp.ToolHandler) mcp.ToolHandler {
 // This function is the only translation boundary between our internal Metadata
 // type and the SDK's mcp.Tool. Handlers and the manager work in our own
 // vocabulary; this is where it crosses over to the SDK.
-func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerPool, enableWriteTools bool) {
+// panicRecoveryEnabled threads the OBS_PANIC_RECOVERY_ENABLED capability from
+// main() (computed there via recovery.Enabled, so this package takes no
+// dependency on internal/observability/recovery). It is passed to withRecovery
+// for every tool handler; see withRecovery for the ON/OFF semantics.
+func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerPool, enableWriteTools bool, panicRecoveryEnabled bool) {
 	type registration struct {
 		name    string
 		handler ToolHandler
@@ -110,7 +139,7 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 
 		mcpTool := toMCPTool(reg.meta, pool)
 
-		server.AddTool(mcpTool, withRecovery(reg.name, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		server.AddTool(mcpTool, withRecovery(reg.name, panicRecoveryEnabled, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var params map[string]any
 			if err := json.Unmarshal(req.Params.Arguments, &params); err != nil {
 				return nil, fmt.Errorf("parsing tool arguments: %w", err)
@@ -164,7 +193,10 @@ func toMCPAnnotations(a Annotations) *mcp.ToolAnnotations {
 // RegisterListBrokers registers a list-brokers discovery tool that returns all
 // configured broker aliases. This is a standalone tool, not a ToolHandler
 // implementation — it does not call SEMP or require broker resolution.
-func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool) {
+// The panicRecoveryEnabled gate shares the single OBS_PANIC_RECOVERY_ENABLED
+// flag with RegisterWithServer and the HTTP middleware; list-brokers is wrapped
+// by withRecovery too. See withRecovery for the ON/OFF semantics.
+func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool, panicRecoveryEnabled bool) {
 	server.AddTool(
 		&mcp.Tool{
 			Name:        "list-brokers",
@@ -187,7 +219,7 @@ func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool) {
 				ReadOnlyHint: true,
 			},
 		},
-		withRecovery("list-brokers", func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+		withRecovery("list-brokers", panicRecoveryEnabled, func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
 			// This handler does not flow through ToolManager.CallTool, so it
 			// emits the "tool invoked" audit line itself — every tool
 			// invocation must reach the audit surface (no broker attr: this
