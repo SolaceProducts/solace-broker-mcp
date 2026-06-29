@@ -12,20 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package recovery is the home for panic-recovery in the request path.
-// Skeleton (SOL-151278): only the capability gate exists today; the recovery
-// middleware that traps a panicking handler and converts it to a clean error
-// lands in a later story. The v1 default is ON (door-closing policy).
+// Package recovery provides panic recovery for the request path. It exposes
+// the Enabled capability gate (OBS_PANIC_RECOVERY_ENABLED) and HTTPMiddleware,
+// the whole-mux recover() wrapper that traps a panicking HTTP handler and
+// converts it to a clean 500 (SOL-151286). The v1 default is ON (door-closing
+// policy). The tool-handler goroutine is recovered separately by withRecovery
+// in internal/tools, gated by the same flag (SOL-151287).
 //
 // The package is named recovery (not recover) so it does not shadow the Go
-// builtin recover(), which the panic-recovery middleware will need.
+// builtin recover(), which HTTPMiddleware uses.
 package recovery
 
 import "github.com/SolaceDev/solace-broker-mcp/internal/config"
 
 // Enabled reports whether panic recovery is turned on, reading the
-// OBS_PANIC_RECOVERY_ENABLED flag off the observability config. Later wiring
-// consults this before installing the recovery middleware.
+// OBS_PANIC_RECOVERY_ENABLED flag off the observability config. main() consults
+// it before installing HTTPMiddleware and before gating the tool-path wrapper.
 func Enabled(cfg config.ObservabilityConfig) bool {
 	return cfg.PanicRecoveryEnabled
 }
