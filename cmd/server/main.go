@@ -39,6 +39,7 @@ import (
 	_ "github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess/handlers" // register handlers via init()
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
 	"github.com/SolaceDev/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
@@ -498,9 +499,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Stamp a correlation ID immediately OUTSIDE the auth middleware so that an
+	// unauthenticated request rejected with 401 still gets a correlation ID
+	// attached (ADR-001 ordering). Gated on OBS_CORRELATION_ID_ENABLED: when
+	// off, the middleware is not wired and correlation.From returns "".
+	mcpEndpoint := authedHandler
+	if correlation.Enabled(cfg.Observability) {
+		mcpEndpoint = correlation.Middleware(authedHandler)
+	}
+	slog.Info("correlation-ID middleware wiring",
+		slog.Bool("enabled", correlation.Enabled(cfg.Observability)))
+
 	// Register authenticated MCP endpoint. The body limit wraps the outside
 	// so it bounds the request before any layer can buffer it.
-	mux.Handle("/mcp", limitRequestBody(authedHandler, defaults.MaxMCPRequestBytes))
+	mux.Handle("/mcp", limitRequestBody(mcpEndpoint, defaults.MaxMCPRequestBytes))
 
 	// Register OAuth Protected Resource Metadata endpoint (RFC 9728)
 	// This enables MCP clients to discover the authorization server for OAuth flows.
