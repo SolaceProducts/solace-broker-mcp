@@ -236,9 +236,13 @@ claude mcp add solace-broker --transport http http://localhost:9090/mcp \
 The server exposes a health endpoint and a CLI flag:
 
 ```bash
-# HTTP health check
+# HTTP liveness check (/livez is the canonical liveness endpoint)
+curl http://localhost:9090/livez
+# Expected: {"status":"alive"}
+
+# /health is retained for backward compatibility (preserves its original body)
 curl http://localhost:9090/health
-# Expected: {"status": "ok"}
+# Expected: {"status":"healthy"}
 
 # Binary health check (useful for scripts and container probes)
 ./solace-broker-mcp --health

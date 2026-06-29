@@ -39,6 +39,7 @@ import (
 	_ "github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess/handlers" // register handlers via init()
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceDev/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2/specs"
@@ -90,18 +91,16 @@ func newSlogHandler(level slog.Level) slog.Handler {
 func buildMux(aliases func() []string, probeBroker func(ctx context.Context, broker string) error) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte(`{"status": "healthy"}`)); err != nil {
-			http.Error(w, "failed to write response", http.StatusInternalServerError)
-		}
-	})
+	// Liveness probe. /livez is the canonical liveness endpoint and returns
+	// {"status":"alive"}. /health is retained for backward compatibility and
+	// preserves its original {"status":"healthy"} body — it is a SEPARATE handler
+	// instance, NOT a body-identical alias, so external consumers that parse
+	// .status == "healthy" keep working. Both probes are unconditional (200 on
+	// GET, 405 otherwise) and never flag-gated.
+	mux.Handle("/livez", health.LivezHandler())
+	mux.Handle("/health", health.HealthHandler())
 
+	// TODO(SOL-151285/SOL-151284): /ready is still a large inline handler here; it will be superseded by the MCP-server-only /readyz and moved into the health package in the readiness story.
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

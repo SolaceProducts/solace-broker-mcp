@@ -177,8 +177,8 @@ If the config file is named `broker-config.yaml` in the current directory, the s
 Verify:
 
 ```bash
-curl http://localhost:9090/health
-# {"status": "ok"}
+curl http://localhost:9090/livez
+# {"status":"alive"}
 ```
 
 The binary is statically linked with no external dependencies. It handles `SIGTERM` and `SIGINT` for graceful shutdown.
@@ -204,8 +204,8 @@ The container reads config from `/etc/mcp-server/config.yaml` by default. Pass t
 Verify:
 
 ```bash
-curl http://localhost:9090/health
-# {"status": "ok"}
+curl http://localhost:9090/livez
+# {"status":"alive"}
 ```
 
 The image includes a built-in Docker health check using the binary's `--health` flag (no shell or curl needed in the container). Check status with `docker inspect --format '{{.State.Health.Status}}' solace-broker-mcp`.
@@ -278,7 +278,7 @@ Create `broker-config.yaml` and `.env` in the repo root (both are gitignored). S
 go run ./cmd/server
 ```
 
-The MCP server listens on port `9090` by default and serves the MCP endpoint at `/mcp`. A health check endpoint is available at `/health`.
+The MCP server listens on port `9090` by default and serves the MCP endpoint at `/mcp`. The canonical liveness endpoint is `/livez`, which returns `{"status":"alive"}`. `/health` is retained for backward compatibility and preserves its original `{"status":"healthy"}` body — it is not a body-identical alias of `/livez`.
 
 ### Configuration Options
 

@@ -77,10 +77,19 @@ start_server "$CONFIG_FILE"
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
+test_livez() {
+    local response
+    response=$(curl -sf "$MCP_URL/livez")
+    assert_json_field "$response" ".status" "alive" "/livez should return status=alive"
+}
+
 test_health() {
+    # /health is retained for backward compatibility and preserves its ORIGINAL
+    # body (status=healthy). It is NOT a body-identical alias of /livez; /livez
+    # is the canonical liveness endpoint and returns status=alive.
     local response
     response=$(curl -sf "$MCP_URL/health")
-    assert_json_field "$response" ".status" "healthy" "/health should return status=healthy"
+    assert_json_field "$response" ".status" "healthy" "/health should return status=healthy (legacy back-compat body)"
 }
 
 test_ready_both_reachable() {
@@ -151,7 +160,8 @@ EOF
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 
-run_test "Health endpoint"                     test_health
+run_test "Livez endpoint"                      test_livez
+run_test "Health endpoint (legacy back-compat body)"  test_health
 run_test "Ready endpoint (brokers reachable)"  test_ready_both_reachable
 run_test "Ready endpoint (broker unreachable)" test_ready_unreachable_broker
 

@@ -7,7 +7,7 @@ Part of the **Broker MCP Observability & Telemetry** epic ([SOL-150251](https://
 Implement the first two MUST-tier stories as test-backed, independently reviewed branches:
 
 - **[SOL-151278](https://sol-jira.atlassian.net/browse/SOL-151278) (Story 1)** — observability package skeleton + config/flag plumbing.
-- **[SOL-151283](https://sol-jira.atlassian.net/browse/SOL-151283) (Story 7)** — `/livez` endpoint (process-alive) with `/health` retained as an alias.
+- **[SOL-151283](https://sol-jira.atlassian.net/browse/SOL-151283) (Story 7)** — `/livez` endpoint (process-alive, canonical); `/health` retained for backward compatibility with its original `{"status":"healthy"}` body.
 
 These are the two stories with no upstream dependency on un-merged work, so they can be built without a reviewer present. Story 7 builds on the `internal/observability/health/` package that Story 1 creates, so it stacks on the Story 1 branch.
 
@@ -32,12 +32,12 @@ Story 1 wires **no behavior** into the request path. Skeleton + flags only.
 ## Story 7 — scope
 
 - `/livez` handler returning `{"status":"alive"}` (process alive; flag-independent), housed in the health package.
-- `/health` becomes an alias of `/livez` (same body); non-GET → 405.
+- `/health` is retained as a backward-compatible path that preserves its original `{"status":"healthy"}` body (NOT a body-identical alias — changing it would break external consumers parsing `.status`); `/livez` is the canonical liveness endpoint; non-GET → 405. (Revised per reviewer feedback on PR #116.)
 - Update the existing `TestHealth*` tests; verify the `--health` CLI flag, the Dockerfile `HEALTHCHECK`, and the K8s liveness probe depend only on the 200 status, not the body string.
 
 ## Risks / open
 
-- **Story 7 changes `/health`'s body** from `{"status":"healthy"}` to `{"status":"alive"}`. Reconcile any consumer that asserts the body.
+- **Story 7 adds `/livez` (`{"status":"alive"}`) and leaves `/health`'s shipped `{"status":"healthy"}` body unchanged** for backward compatibility. The canonical liveness path going forward is `/livez`.
 - **Observability flags are env-driven**, slightly different from the YAML-first config; fit into `LoadConfig` cleanly.
 - **Stacking:** if Story 1 changes in review, Story 7 rebases.
 
