@@ -91,37 +91,41 @@ func TestBuildRootHandler_FlagOffPanicPropagates(t *testing.T) {
 	t.Error("ServeHTTP returned without panicking; recovery flag OFF must let panics propagate")
 }
 
-// TestChainOrder_CorrelationInsideRecovery pins AC #5: it assembles the SAME
-// layering main() builds — recovery wrapping the whole mux, and the /mcp route
-// gated on correlation.Middleware INSIDE the mux — then proves both halves of
-// the order at once:
+// TestChainOrder_CorrelationInsideRecovery pins AC #5 against the REAL wiring:
+// it assembles the /mcp route through the production buildMCPEndpoint and wraps
+// the mux through the production buildRootHandler — the same two functions
+// main() calls — then proves both halves of the chain order at once:
 //
-//   - correlation ran INSIDE recovery: the inner /mcp handler observes a
-//     non-empty correlation ID (correlation.From != "").
+//   - correlation ran INSIDE recovery: the inner /mcp handler (standing in for
+//     auth→SDK) observes a non-empty correlation ID (correlation.From != "").
 //   - recovery is OUTSIDE correlation: a panic in a sibling mux route is still
 //     caught and turned into a 500.
 //
-// This test fails if a future PR reorders the chain (e.g. wraps recovery inside
-// correlation) or leaves the mux unwrapped. It mirrors how main() wires the
-// /mcp endpoint (see cmd/server/main.go) and will need updating if that wiring
-// changes.
+// Because the /mcp layering comes from buildMCPEndpoint (not a hand-rebuilt
+// copy), this test FAILS if a future PR drops correlation from /mcp, or if
+// buildRootHandler stops wrapping the mux. It pins correlation's PRESENCE
+// inside recovery (the AC #5 essential); it does NOT pin the body-limit-vs-
+// correlation relative order — both wrap the same handler and neither is
+// observable to a normal GET, so asserting 413-before-correlation would need a
+// separate oversized-body test. The stand-in inner handler substitutes for the
+// auth+SDK handler that main() passes as authedHandler; auth's position
+// relative to the SDK is fixed where authedHandler is constructed, not here.
 func TestChainOrder_CorrelationInsideRecovery(t *testing.T) {
 	t.Parallel()
 	cfg := obsConfig(true, true)
 
 	var seenID string
-	mux := buildMux(func() []string { return nil }, func(context.Context, string) error { return nil })
-
-	// Inner /mcp handler records the correlation ID it observes.
-	var mcpEndpoint http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Stand-in for authedHandler (auth middleware → MCP SDK handler): records
+	// the correlation ID it observes so we can prove correlation ran upstream.
+	authedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seenID = correlation.From(r.Context())
 		w.WriteHeader(http.StatusOK)
 	})
-	// Gate correlation onto /mcp exactly as main() does.
-	if correlation.Enabled(cfg) {
-		mcpEndpoint = correlation.Middleware(mcpEndpoint)
-	}
-	mux.Handle("/mcp", mcpEndpoint)
+
+	// Assemble /mcp through the SAME function main() uses, so a production
+	// reorder of the route-local chain breaks this test.
+	mux := buildMux(func() []string { return nil }, func(context.Context, string) error { return nil })
+	mux.Handle("/mcp", buildMCPEndpoint(authedHandler, cfg.CorrelationIDEnabled))
 	mux.HandleFunc("/panic", func(http.ResponseWriter, *http.Request) {
 		panic("boom")
 	})
