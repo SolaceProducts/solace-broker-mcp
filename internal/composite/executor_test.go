@@ -135,6 +135,62 @@ func testOperations() map[string]*sempv2.Operation {
 			Method: "DELETE",
 			Path:   "/SEMP/v2/__private_config__/msgVpns/{msgVpnName}",
 		},
+		"config/createMsgVpnQueue": {
+			ID:     "createMsgVpnQueue",
+			Method: "POST",
+			Path:   "/SEMP/v2/__private_config__/msgVpns/{msgVpnName}/queues",
+			Parameters: []sempv2.Parameter{
+				{Name: "msgVpnName", In: "path", Type: "string", Required: true},
+				{Name: "body", In: "body", Type: "object", Required: true},
+			},
+		},
+		"config/updateMsgVpnQueue": {
+			ID:     "updateMsgVpnQueue",
+			Method: "PATCH",
+			Path:   "/SEMP/v2/__private_config__/msgVpns/{msgVpnName}/queues/{queueName}",
+			Parameters: []sempv2.Parameter{
+				{Name: "msgVpnName", In: "path", Type: "string", Required: true},
+				{Name: "queueName", In: "path", Type: "string", Required: true},
+				{Name: "body", In: "body", Type: "object", Required: true},
+			},
+		},
+		"config/deleteMsgVpnQueue": {
+			ID:     "deleteMsgVpnQueue",
+			Method: "DELETE",
+			Path:   "/SEMP/v2/__private_config__/msgVpns/{msgVpnName}/queues/{queueName}",
+			Parameters: []sempv2.Parameter{
+				{Name: "msgVpnName", In: "path", Type: "string", Required: true},
+				{Name: "queueName", In: "path", Type: "string", Required: true},
+			},
+		},
+		"config/createMsgVpnTopicEndpoint": {
+			ID:     "createMsgVpnTopicEndpoint",
+			Method: "POST",
+			Path:   "/SEMP/v2/__private_config__/msgVpns/{msgVpnName}/topicEndpoints",
+			Parameters: []sempv2.Parameter{
+				{Name: "msgVpnName", In: "path", Type: "string", Required: true},
+				{Name: "body", In: "body", Type: "object", Required: true},
+			},
+		},
+		"config/updateMsgVpnTopicEndpoint": {
+			ID:     "updateMsgVpnTopicEndpoint",
+			Method: "PATCH",
+			Path:   "/SEMP/v2/__private_config__/msgVpns/{msgVpnName}/topicEndpoints/{topicEndpointName}",
+			Parameters: []sempv2.Parameter{
+				{Name: "msgVpnName", In: "path", Type: "string", Required: true},
+				{Name: "topicEndpointName", In: "path", Type: "string", Required: true},
+				{Name: "body", In: "body", Type: "object", Required: true},
+			},
+		},
+		"config/deleteMsgVpnTopicEndpoint": {
+			ID:     "deleteMsgVpnTopicEndpoint",
+			Method: "DELETE",
+			Path:   "/SEMP/v2/__private_config__/msgVpns/{msgVpnName}/topicEndpoints/{topicEndpointName}",
+			Parameters: []sempv2.Parameter{
+				{Name: "msgVpnName", In: "path", Type: "string", Required: true},
+				{Name: "topicEndpointName", In: "path", Type: "string", Required: true},
+			},
+		},
 	}
 }
 
@@ -2330,5 +2386,357 @@ func TestExecute_DeleteMessageVPN_SEMPError(t *testing.T) {
 		t.Errorf("expected SEMPError in error chain, got: %v", err)
 	} else if sempErr.SEMPCode != 6 {
 		t.Errorf("SEMPCode = %d, want 6 (not found)", sempErr.SEMPCode)
+	}
+}
+
+// createQueueTool returns the create-queue tool definition for tests. It mirrors
+// the YAML: createMsgVpnQueue takes msgVpnName from the path (passed as a step
+// arg), while queueName and queueConfig are assembled into the body by
+// constructRequestBody.
+func createQueueTool() CompositeTool {
+	return CompositeTool{
+		Name:        "create-queue",
+		Description: "Create a queue in a Message VPN",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "queueName", Type: "string", Required: true},
+			{Name: "queueConfig", Type: "object", Required: false},
+		},
+		Steps: []Step{
+			{
+				ID:        "createQueue",
+				Operation: "config/createMsgVpnQueue",
+				Args: map[string]string{
+					"msgVpnName": "{{.Params.msgVpnName}}",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// updateQueueTool returns the update-queue tool definition for tests. Both
+// msgVpnName and queueName are path params (passed as step args); only
+// queueConfig is spread into the PATCH body.
+func updateQueueTool() CompositeTool {
+	return CompositeTool{
+		Name:        "update-queue",
+		Description: "Update an existing queue",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "queueName", Type: "string", Required: true},
+			{Name: "queueConfig", Type: "object", Required: true},
+		},
+		Steps: []Step{
+			{
+				ID:        "updateQueue",
+				Operation: "config/updateMsgVpnQueue",
+				Args: map[string]string{
+					"msgVpnName": "{{.Params.msgVpnName}}",
+					"queueName":  "{{.Params.queueName}}",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// deleteQueueTool returns the delete-queue tool definition for tests. Both names
+// are path args and the operation carries no request body.
+func deleteQueueTool() CompositeTool {
+	return CompositeTool{
+		Name:        "delete-queue",
+		Description: "Delete a queue from a Message VPN",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "queueName", Type: "string", Required: true},
+		},
+		Steps: []Step{
+			{
+				ID:        "deleteQueue",
+				Operation: "config/deleteMsgVpnQueue",
+				Args: map[string]string{
+					"msgVpnName": "{{.Params.msgVpnName}}",
+					"queueName":  "{{.Params.queueName}}",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+func TestExecute_CreateQueue_ConstructsBody(t *testing.T) {
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), createQueueTool(), capture, map[string]any{
+		"msgVpnName": "vpn-a",
+		"queueName":  "orders",
+		"queueConfig": map[string]any{
+			"accessType":       "exclusive",
+			"maxMsgSpoolUsage": float64(2000),
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if recorded[0].opID != "createMsgVpnQueue" {
+		t.Errorf("opID = %q, want createMsgVpnQueue", recorded[0].opID)
+	}
+	// msgVpnName identifies the VPN via the URL path, so it stays in args.
+	if recorded[0].args["msgVpnName"] != "vpn-a" {
+		t.Errorf("args[msgVpnName] = %v, want vpn-a", recorded[0].args["msgVpnName"])
+	}
+
+	body, ok := recorded[0].args["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected body to be a map, got %T", recorded[0].args["body"])
+	}
+	// createMsgVpnQueue declares no queueName path param, so the queue name rides
+	// in the body as a scalar.
+	if body["queueName"] != "orders" {
+		t.Errorf("body[queueName] = %v, want orders", body["queueName"])
+	}
+	// queueConfig fields are spread into the body as siblings of queueName.
+	if body["accessType"] != "exclusive" {
+		t.Errorf("body[accessType] = %v, want exclusive", body["accessType"])
+	}
+	if body["maxMsgSpoolUsage"] != float64(2000) {
+		t.Errorf("body[maxMsgSpoolUsage] = %v, want 2000", body["maxMsgSpoolUsage"])
+	}
+	// msgVpnName is a path param and must not leak into the create body.
+	if _, leaked := body["msgVpnName"]; leaked {
+		t.Error("msgVpnName is a path param and must not appear in the create body")
+	}
+	if _, nested := body["queueConfig"]; nested {
+		t.Error("queueConfig should be spread into the body, not nested under queueConfig")
+	}
+
+	if result["createQueue"] == nil {
+		t.Error("expected createQueue result to be collected")
+	}
+}
+
+func TestExecute_CreateQueue_AlreadyExists(t *testing.T) {
+	client := newMockClient()
+	client.errors["createMsgVpnQueue"] = &sempv2.SEMPError{
+		Operation:   "createMsgVpnQueue",
+		StatusCode:  400,
+		SEMPCode:    10,
+		SEMPStatus:  "ALREADY_EXISTS",
+		Description: "Queue already exists",
+		Body:        `{"meta":{"error":{"code":10,"description":"Queue already exists","status":"ALREADY_EXISTS"}}}`,
+	}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	_, err := executor.Execute(context.Background(), createQueueTool(), client, map[string]any{
+		"msgVpnName": "vpn-a",
+		"queueName":  "orders",
+	})
+	if err == nil {
+		t.Fatal("expected error when queue already exists, got nil")
+	}
+
+	var sempErr *sempv2.SEMPError
+	if !errors.As(err, &sempErr) {
+		t.Errorf("expected SEMPError in error chain, got: %v", err)
+	} else if sempErr.SEMPCode != 10 {
+		t.Errorf("SEMPCode = %d, want 10 (already exists)", sempErr.SEMPCode)
+	}
+}
+
+func TestExecute_UpdateQueue_BodyExcludesPathParams(t *testing.T) {
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	_, err := executor.Execute(context.Background(), updateQueueTool(), capture, map[string]any{
+		"msgVpnName": "vpn-a",
+		"queueName":  "orders",
+		"queueConfig": map[string]any{
+			"egressEnabled":      false,
+			"maxRedeliveryCount": float64(3),
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if recorded[0].opID != "updateMsgVpnQueue" {
+		t.Errorf("opID = %q, want updateMsgVpnQueue", recorded[0].opID)
+	}
+	if recorded[0].args["msgVpnName"] != "vpn-a" {
+		t.Errorf("args[msgVpnName] = %v, want vpn-a", recorded[0].args["msgVpnName"])
+	}
+	if recorded[0].args["queueName"] != "orders" {
+		t.Errorf("args[queueName] = %v, want orders", recorded[0].args["queueName"])
+	}
+
+	body, ok := recorded[0].args["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected body to be a map, got %T", recorded[0].args["body"])
+	}
+	// Both names are path params; neither may be duplicated into the PATCH body.
+	if _, leaked := body["msgVpnName"]; leaked {
+		t.Error("msgVpnName is a path param and must not appear in the PATCH body")
+	}
+	if _, leaked := body["queueName"]; leaked {
+		t.Error("queueName is a path param and must not appear in the PATCH body")
+	}
+	if body["egressEnabled"] != false {
+		t.Errorf("body[egressEnabled] = %v, want false", body["egressEnabled"])
+	}
+	if body["maxRedeliveryCount"] != float64(3) {
+		t.Errorf("body[maxRedeliveryCount] = %v, want 3", body["maxRedeliveryCount"])
+	}
+}
+
+func TestExecute_DeleteQueue_NoBodyConstructed(t *testing.T) {
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), deleteQueueTool(), capture, map[string]any{
+		"msgVpnName": "vpn-a",
+		"queueName":  "orders",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if recorded[0].opID != "deleteMsgVpnQueue" {
+		t.Errorf("opID = %q, want deleteMsgVpnQueue", recorded[0].opID)
+	}
+	if recorded[0].args["queueName"] != "orders" {
+		t.Errorf("args[queueName] = %v, want orders", recorded[0].args["queueName"])
+	}
+	// deleteMsgVpnQueue declares no body parameter, so no body should be built.
+	if _, hasBody := recorded[0].args["body"]; hasBody {
+		t.Error("delete operation has no body param; no body should be constructed")
+	}
+
+	if result["deleteQueue"] == nil {
+		t.Error("expected deleteQueue result to be collected")
+	}
+}
+
+// createTopicEndpointTool returns the create-topic-endpoint tool definition for
+// tests. Like create-queue, msgVpnName is the only path param; topicEndpointName
+// and topicEndpointConfig are assembled into the body.
+func createTopicEndpointTool() CompositeTool {
+	return CompositeTool{
+		Name:        "create-topic-endpoint",
+		Description: "Create a topic endpoint in a Message VPN",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "topicEndpointName", Type: "string", Required: true},
+			{Name: "topicEndpointConfig", Type: "object", Required: false},
+		},
+		Steps: []Step{
+			{
+				ID:        "createTopicEndpoint",
+				Operation: "config/createMsgVpnTopicEndpoint",
+				Args: map[string]string{
+					"msgVpnName": "{{.Params.msgVpnName}}",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// deleteTopicEndpointTool returns the delete-topic-endpoint tool definition for
+// tests. Both names are path args and the operation carries no request body.
+func deleteTopicEndpointTool() CompositeTool {
+	return CompositeTool{
+		Name:        "delete-topic-endpoint",
+		Description: "Delete a topic endpoint from a Message VPN",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "topicEndpointName", Type: "string", Required: true},
+		},
+		Steps: []Step{
+			{
+				ID:        "deleteTopicEndpoint",
+				Operation: "config/deleteMsgVpnTopicEndpoint",
+				Args: map[string]string{
+					"msgVpnName":        "{{.Params.msgVpnName}}",
+					"topicEndpointName": "{{.Params.topicEndpointName}}",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+func TestExecute_CreateTopicEndpoint_ConstructsBody(t *testing.T) {
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	_, err := executor.Execute(context.Background(), createTopicEndpointTool(), capture, map[string]any{
+		"msgVpnName":        "vpn-a",
+		"topicEndpointName": "te-1",
+		"topicEndpointConfig": map[string]any{
+			"accessType": "exclusive",
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if recorded[0].opID != "createMsgVpnTopicEndpoint" {
+		t.Errorf("opID = %q, want createMsgVpnTopicEndpoint", recorded[0].opID)
+	}
+	if recorded[0].args["msgVpnName"] != "vpn-a" {
+		t.Errorf("args[msgVpnName] = %v, want vpn-a", recorded[0].args["msgVpnName"])
+	}
+
+	body, ok := recorded[0].args["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected body to be a map, got %T", recorded[0].args["body"])
+	}
+	if body["topicEndpointName"] != "te-1" {
+		t.Errorf("body[topicEndpointName] = %v, want te-1", body["topicEndpointName"])
+	}
+	if body["accessType"] != "exclusive" {
+		t.Errorf("body[accessType] = %v, want exclusive", body["accessType"])
+	}
+	if _, leaked := body["msgVpnName"]; leaked {
+		t.Error("msgVpnName is a path param and must not appear in the create body")
+	}
+}
+
+func TestExecute_DeleteTopicEndpoint_NoBodyConstructed(t *testing.T) {
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	_, err := executor.Execute(context.Background(), deleteTopicEndpointTool(), capture, map[string]any{
+		"msgVpnName":        "vpn-a",
+		"topicEndpointName": "te-1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if recorded[0].opID != "deleteMsgVpnTopicEndpoint" {
+		t.Errorf("opID = %q, want deleteMsgVpnTopicEndpoint", recorded[0].opID)
+	}
+	if _, hasBody := recorded[0].args["body"]; hasBody {
+		t.Error("delete operation has no body param; no body should be constructed")
 	}
 }
