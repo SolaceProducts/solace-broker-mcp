@@ -32,11 +32,21 @@ func TestPrincipalFrom_EmptyContext(t *testing.T) {
 	}
 }
 
-// TestPrincipalFrom_RoundTrip is defensive: only this package can construct
-// principalKey{}, so this guards against a future bug in this package that
-// stores a Principal and then fails to read it back. Today Principal is empty,
-// so the round-trip value equals the zero value, but the path (value present →
-// accessor returns it) is exercised.
+// TestPrincipalFrom_RoundTrip exercises the value-present branch: only this
+// package can construct principalKey{}, so it guards against a future bug here
+// that stores a Principal but fails to read it back.
+//
+// Known limitation (raised in PR review): Principal is currently an empty
+// struct, so the round-trip value is indistinguishable from the zero value.
+// This assertion cannot yet tell "read the stored value back" from "type
+// assertion failed and returned the zero value" — it documents the contract
+// and runs the success-branch path, but provides no failure signal until
+// Principal has fields.
+//
+// TODO(Story 20 – principal population): once Principal carries fields
+// (e.g. preferred_username, email), set distinct non-zero values here so the
+// assertion actually proves the stored value is read back, rather than a zero
+// value that coincidentally matches.
 func TestPrincipalFrom_RoundTrip(t *testing.T) {
 	t.Parallel()
 
