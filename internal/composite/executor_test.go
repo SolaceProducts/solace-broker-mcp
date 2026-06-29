@@ -113,6 +113,28 @@ func testOperations() map[string]*sempv2.Operation {
 			Method: "GET",
 			Path:   "/SEMP/v2/__private_monitor__/msgVpns/{msgVpnName}/restDeliveryPoints",
 		},
+		"config/createMsgVpn": {
+			ID:     "createMsgVpn",
+			Method: "POST",
+			Path:   "/SEMP/v2/__private_config__/msgVpns",
+			Parameters: []sempv2.Parameter{
+				{Name: "body", In: "body", Type: "object", Required: true},
+			},
+		},
+		"config/updateMsgVpn": {
+			ID:     "updateMsgVpn",
+			Method: "PATCH",
+			Path:   "/SEMP/v2/__private_config__/msgVpns/{msgVpnName}",
+			Parameters: []sempv2.Parameter{
+				{Name: "msgVpnName", In: "path", Type: "string", Required: true},
+				{Name: "body", In: "body", Type: "object", Required: true},
+			},
+		},
+		"config/deleteMsgVpn": {
+			ID:     "deleteMsgVpn",
+			Method: "DELETE",
+			Path:   "/SEMP/v2/__private_config__/msgVpns/{msgVpnName}",
+		},
 	}
 }
 
@@ -1558,14 +1580,14 @@ func TestExecute_GetMessageRates_ReturnsData(t *testing.T) {
 	client := newMockClient()
 	client.responses["getMsgVpn"] = &sempv2.Result{
 		Data: map[string]any{
-			"rxMsgRate":              float64(150),
-			"txMsgRate":              float64(200),
-			"rxByteRate":             float64(15000),
-			"txByteRate":             float64(20000),
-			"averageRxMsgRate":       float64(140),
-			"averageTxMsgRate":       float64(190),
-			"averageRxByteRate":      float64(14000),
-			"averageTxByteRate":      float64(19000),
+			"rxMsgRate":         float64(150),
+			"txMsgRate":         float64(200),
+			"rxByteRate":        float64(15000),
+			"txByteRate":        float64(20000),
+			"averageRxMsgRate":  float64(140),
+			"averageTxMsgRate":  float64(190),
+			"averageRxByteRate": float64(14000),
+			"averageTxByteRate": float64(19000),
 		},
 		StatusCode: 200,
 	}
@@ -1790,7 +1812,7 @@ func makeQueueDiscardItems(n int) []any {
 	items := make([]any, n)
 	for i := range items {
 		items[i] = map[string]any{
-			"queueName": fmt.Sprintf("queue-%d", i),
+			"queueName":                                 fmt.Sprintf("queue-%d", i),
 			"maxTtlExceededDiscardedMsgCount":           float64(0),
 			"maxRedeliveryExceededDiscardedMsgCount":    float64(0),
 			"maxMsgSpoolUsageExceededDiscardedMsgCount": float64(0),
@@ -1803,16 +1825,16 @@ func TestExecute_GetReplicationStatus_ReturnsData(t *testing.T) {
 	client := newMockClient()
 	client.responses["getMsgVpn"] = &sempv2.Result{
 		Data: map[string]any{
-			"msgVpnName":                                    "default",
-			"replicationEnabled":                            true,
-			"replicationRole":                               "active",
-			"replicationTransactionMode":                    "sync",
-			"replicationActiveAsyncQueuedMsgCount":          float64(0),
-			"replicationActiveSyncQueuedMsgCount":           float64(0),
-			"replicationActiveSyncIneligiblePeakTime":       float64(0),
-			"replicationBridgeUp":                           true,
-			"replicationRemoteBridgeUp":                     true,
-			"replicationSyncEligible":                       true,
+			"msgVpnName":                              "default",
+			"replicationEnabled":                      true,
+			"replicationRole":                         "active",
+			"replicationTransactionMode":              "sync",
+			"replicationActiveAsyncQueuedMsgCount":    float64(0),
+			"replicationActiveSyncQueuedMsgCount":     float64(0),
+			"replicationActiveSyncIneligiblePeakTime": float64(0),
+			"replicationBridgeUp":                     true,
+			"replicationRemoteBridgeUp":               true,
+			"replicationSyncEligible":                 true,
 		},
 		StatusCode: 200,
 	}
@@ -2030,5 +2052,283 @@ func TestExecute_ListQueueDiscards_TruncatesAtMaxResults(t *testing.T) {
 	}
 	if len(client.calls) != 1 {
 		t.Errorf("expected 1 SEMP call, got %d", len(client.calls))
+	}
+}
+
+// createMessageVPNTool returns the create-message-vpn tool definition for tests.
+// It mirrors the YAML: a single config/createMsgVpn step with no Args, so the
+// entire request body is assembled by constructRequestBody from the input params.
+func createMessageVPNTool() CompositeTool {
+	return CompositeTool{
+		Name:        "create-message-vpn",
+		Description: "Create a Message VPN",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "msgVpnConfig", Type: "object", Required: false},
+		},
+		Steps: []Step{
+			{
+				ID:        "createVpn",
+				Operation: "config/createMsgVpn",
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// updateMessageVPNTool returns the update-message-vpn tool definition for tests.
+// It mirrors the YAML: msgVpnName is passed as a step arg (it identifies the VPN
+// via the URL path), while msgVpnConfig is spread into the PATCH body by
+// constructRequestBody.
+func updateMessageVPNTool() CompositeTool {
+	return CompositeTool{
+		Name:        "update-message-vpn",
+		Description: "Update an existing Message VPN",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "msgVpnConfig", Type: "object", Required: true},
+		},
+		Steps: []Step{
+			{
+				ID:        "updateVpn",
+				Operation: "config/updateMsgVpn",
+				Args: map[string]string{
+					"msgVpnName": "{{.Params.msgVpnName}}",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// deleteMessageVPNTool returns the delete-message-vpn tool definition for tests.
+// It mirrors the YAML: a single config/deleteMsgVpn step that takes only the
+// msgVpnName path arg and carries no request body.
+func deleteMessageVPNTool() CompositeTool {
+	return CompositeTool{
+		Name:        "delete-message-vpn",
+		Description: "Delete a Message VPN",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+		},
+		Steps: []Step{
+			{
+				ID:        "deleteVpn",
+				Operation: "config/deleteMsgVpn",
+				Args: map[string]string{
+					"msgVpnName": "{{.Params.msgVpnName}}",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+func TestExecute_CreateMessageVPN_ConstructsBody(t *testing.T) {
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), createMessageVPNTool(), capture, map[string]any{
+		"msgVpnName": "new-vpn",
+		"msgVpnConfig": map[string]any{
+			"enabled":            true,
+			"maxConnectionCount": float64(100),
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(recorded))
+	}
+	if recorded[0].opID != "createMsgVpn" {
+		t.Errorf("opID = %q, want createMsgVpn", recorded[0].opID)
+	}
+
+	body, ok := recorded[0].args["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected body to be a map, got %T", recorded[0].args["body"])
+	}
+	// createMsgVpn declares no path param, so msgVpnName rides in the body as a scalar.
+	if body["msgVpnName"] != "new-vpn" {
+		t.Errorf("body[msgVpnName] = %v, want new-vpn", body["msgVpnName"])
+	}
+	// msgVpnConfig fields are spread into the body as siblings of msgVpnName.
+	if body["enabled"] != true {
+		t.Errorf("body[enabled] = %v, want true", body["enabled"])
+	}
+	if body["maxConnectionCount"] != float64(100) {
+		t.Errorf("body[maxConnectionCount] = %v, want 100", body["maxConnectionCount"])
+	}
+	// The object param must be spread, never nested back under its own key.
+	if _, nested := body["msgVpnConfig"]; nested {
+		t.Error("msgVpnConfig should be spread into the body, not nested under msgVpnConfig")
+	}
+
+	if result["createVpn"] == nil {
+		t.Error("expected createVpn result to be collected")
+	}
+}
+
+func TestExecute_CreateMessageVPN_AlreadyExists(t *testing.T) {
+	client := newMockClient()
+	client.errors["createMsgVpn"] = &sempv2.SEMPError{
+		Operation:   "createMsgVpn",
+		StatusCode:  400,
+		SEMPCode:    10,
+		SEMPStatus:  "ALREADY_EXISTS",
+		Description: "Message VPN already exists",
+		Body:        `{"meta":{"error":{"code":10,"description":"Message VPN already exists","status":"ALREADY_EXISTS"}}}`,
+	}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	_, err := executor.Execute(context.Background(), createMessageVPNTool(), client, map[string]any{
+		"msgVpnName": "existing-vpn",
+	})
+	if err == nil {
+		t.Fatal("expected error when VPN already exists, got nil")
+	}
+
+	var sempErr *sempv2.SEMPError
+	if !errors.As(err, &sempErr) {
+		t.Errorf("expected SEMPError in error chain, got: %v", err)
+	} else if sempErr.SEMPCode != 10 {
+		t.Errorf("SEMPCode = %d, want 10 (already exists)", sempErr.SEMPCode)
+	}
+}
+
+func TestExecute_UpdateMessageVPN_BodyExcludesPathParam(t *testing.T) {
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	_, err := executor.Execute(context.Background(), updateMessageVPNTool(), capture, map[string]any{
+		"msgVpnName": "edit-vpn",
+		"msgVpnConfig": map[string]any{
+			"enabled":          false,
+			"maxMsgSpoolUsage": float64(5000),
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if recorded[0].opID != "updateMsgVpn" {
+		t.Errorf("opID = %q, want updateMsgVpn", recorded[0].opID)
+	}
+	// msgVpnName identifies the VPN via the URL path, so it stays in args.
+	if recorded[0].args["msgVpnName"] != "edit-vpn" {
+		t.Errorf("args[msgVpnName] = %v, want edit-vpn", recorded[0].args["msgVpnName"])
+	}
+
+	body, ok := recorded[0].args["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected body to be a map, got %T", recorded[0].args["body"])
+	}
+	// The path param must not be duplicated into the PATCH body.
+	if _, leaked := body["msgVpnName"]; leaked {
+		t.Error("msgVpnName is a path param and must not appear in the PATCH body")
+	}
+	// Only the requested attribute changes ride in the body.
+	if body["enabled"] != false {
+		t.Errorf("body[enabled] = %v, want false", body["enabled"])
+	}
+	if body["maxMsgSpoolUsage"] != float64(5000) {
+		t.Errorf("body[maxMsgSpoolUsage] = %v, want 5000", body["maxMsgSpoolUsage"])
+	}
+}
+
+func TestExecute_UpdateMessageVPN_NotFound(t *testing.T) {
+	client := newMockClient()
+	client.errors["updateMsgVpn"] = &sempv2.SEMPError{
+		Operation:   "updateMsgVpn",
+		StatusCode:  400,
+		SEMPCode:    6,
+		SEMPStatus:  "NOT_FOUND",
+		Description: "Message VPN not found",
+		Body:        `{"meta":{"error":{"code":6,"description":"Message VPN not found","status":"NOT_FOUND"}}}`,
+	}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	_, err := executor.Execute(context.Background(), updateMessageVPNTool(), client, map[string]any{
+		"msgVpnName":   "ghost-vpn",
+		"msgVpnConfig": map[string]any{"enabled": true},
+	})
+	if err == nil {
+		t.Fatal("expected error when VPN not found, got nil")
+	}
+
+	var sempErr *sempv2.SEMPError
+	if !errors.As(err, &sempErr) {
+		t.Errorf("expected SEMPError in error chain, got: %v", err)
+	} else if sempErr.SEMPCode != 6 {
+		t.Errorf("SEMPCode = %d, want 6 (not found)", sempErr.SEMPCode)
+	}
+}
+
+func TestExecute_DeleteMessageVPN_NoBodyConstructed(t *testing.T) {
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), deleteMessageVPNTool(), capture, map[string]any{
+		"msgVpnName": "doomed-vpn",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if recorded[0].opID != "deleteMsgVpn" {
+		t.Errorf("opID = %q, want deleteMsgVpn", recorded[0].opID)
+	}
+	if recorded[0].args["msgVpnName"] != "doomed-vpn" {
+		t.Errorf("args[msgVpnName] = %v, want doomed-vpn", recorded[0].args["msgVpnName"])
+	}
+	// deleteMsgVpn declares no body parameter, so constructRequestBody must not
+	// synthesize a body key.
+	if _, hasBody := recorded[0].args["body"]; hasBody {
+		t.Error("delete operation has no body param; no body should be constructed")
+	}
+
+	if result["deleteVpn"] == nil {
+		t.Error("expected deleteVpn result to be collected")
+	}
+}
+
+func TestExecute_DeleteMessageVPN_SEMPError(t *testing.T) {
+	client := newMockClient()
+	client.errors["deleteMsgVpn"] = &sempv2.SEMPError{
+		Operation:   "deleteMsgVpn",
+		StatusCode:  400,
+		SEMPCode:    6,
+		SEMPStatus:  "NOT_FOUND",
+		Description: "Message VPN not found",
+		Body:        `{"meta":{"error":{"code":6,"description":"Message VPN not found","status":"NOT_FOUND"}}}`,
+	}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	_, err := executor.Execute(context.Background(), deleteMessageVPNTool(), client, map[string]any{
+		"msgVpnName": "ghost-vpn",
+	})
+	if err == nil {
+		t.Fatal("expected error when deleting nonexistent VPN, got nil")
+	}
+
+	var sempErr *sempv2.SEMPError
+	if !errors.As(err, &sempErr) {
+		t.Errorf("expected SEMPError in error chain, got: %v", err)
+	} else if sempErr.SEMPCode != 6 {
+		t.Errorf("SEMPCode = %d, want 6 (not found)", sempErr.SEMPCode)
 	}
 }

@@ -395,3 +395,74 @@ tools:
           select: "clientProfileDeniedDiscardedMsgCount, destinationGroupErrorDiscardedMsgCount, disabledDiscardedMsgCount, lowPriorityMsgCongestionDiscardedMsgCount, maxMsgSizeExceededDiscardedMsgCount, maxMsgSpoolUsageExceededDiscardedMsgCount, maxRedeliveryExceededDiscardedMsgCount, maxRedeliveryExceededToDmqMsgCount, maxTtlExceededDiscardedMsgCount, maxTtlExpiredDiscardedMsgCount, maxTtlExpiredToDmqMsgCount, maxTtlExpiredToDmqFailedMsgCount, msgVpnName, noLocalDeliveryDiscardedMsgCount, queueName, xaTransactionNotSupportedDiscardedMsgCount"
     result:
       strategy: collect
+      
+  - name: create-message-vpn
+    description: >
+      Create a Message VPN. Requires msgVpnName to name the new VPN; any
+      attribute omitted from msgVpnConfig is set to its broker default. Use this
+      to provision a new VPN. Fails if a VPN with the same name already exists.
+    annotations:
+      readOnly: false
+      destructive: false
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The name of the Message VPN to create"
+      - name: msgVpnConfig
+        type: object
+        required: false
+        description: "Optional MsgVpn attributes (enabled, maxConnectionCount, maxMsgSpoolUsage, etc.). Omitted attributes use broker defaults. Do not include msgVpnName here. See the SEMP MsgVpn schema for the full list."
+    steps:
+      - id: createVpn
+        operation: config/createMsgVpn
+    result:
+      strategy: collect
+
+  - name: update-message-vpn
+    description: >
+      Update an existing Message VPN. Requires msgVpnName to identify the VPN;
+      provide only the attributes you want to change in msgVpnConfig. Omitted
+      attributes are left unchanged. Use this to update VPN settings such as
+      enabled state, connection limits, or spool quotas.
+    annotations:
+      readOnly: false
+      destructive: false
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The name of the Message VPN to modify"
+      - name: msgVpnConfig
+        type: object
+        required: true
+        description: "MsgVpn attributes to update (enabled, maxConnectionCount, maxMsgSpoolUsage, etc.). Only provided attributes are changed. Do not include msgVpnName here. See the SEMP MsgVpn schema for the full list."
+    steps:
+      - id: updateVpn
+        operation: config/updateMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+    result:
+      strategy: collect
+
+  - name: delete-message-vpn
+    description: >
+      Delete a Message VPN. Requires msgVpnName to identify the VPN to delete.
+      This is a destructive operation that removes the VPN and all its
+      configuration. The VPN must have no active client connections before
+      deletion.
+    annotations:
+      readOnly: false
+      destructive: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The name of the Message VPN to delete"
+    steps:
+      - id: deleteVpn
+        operation: config/deleteMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+    result:
+      strategy: collect
