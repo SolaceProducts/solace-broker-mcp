@@ -1,0 +1,7 @@
+{
+  "_doc": "F2: model must reason over list-queues output, filtering by bindCount==0. test-queue-3 is unbound. test-queue-2 was originally intended as RDP-bound, but bindCount=0 in practice (the RDP isn't actively connected in this state), so the negative assertion was removed — assert only that the unambiguous unbound queue surfaces.",
+  "prompt": "Which queues on $BROKER have no consumers right now?",
+  "expected_tool": "mcp__solace-broker__list-queues",
+  "required_substrings": ["test-queue-3"],
+  "forbidden_substrings": []
+}
