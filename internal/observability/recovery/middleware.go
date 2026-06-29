@@ -30,7 +30,7 @@ import (
 // correlation.Middleware attaches the ID to a CHILD context via
 // next.ServeHTTP(w, r.WithContext(ctx)), so the ID lives only on the downstream
 // request's context — it is never visible at this outer frame. Emitting a
-// correlation_id here would mean inventing one or reading "" , so we omit the
+// correlation_id here would mean inventing one or reading "", so we omit the
 // field entirely (the filed acceptance criteria do not require it in the body).
 const internalErrorBody = `{"error":"internal_error","error_description":"the server encountered an unexpected condition"}`
 
@@ -56,10 +56,30 @@ const internalErrorBody = `{"error":"internal_error","error_description":"the se
 // the /ready handler) is NOT caught here — that class must be recovered at the
 // point of goroutine creation. The SDK tool-handler goroutine is covered
 // separately by withRecovery in internal/tools/register.go.
+//
+// http.ErrAbortHandler is exempt: net/http documents it as a sentinel meaning
+// "abort this request, do not log, do not send a response". We re-raise it
+// unchanged so net/http's serving goroutine applies that built-in suppression.
+// The MCP streamable/SSE path on /mcp may panic with it on client-disconnect or
+// shutdown.
 func HTTPMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// rw tracks whether the downstream handler committed the response (wrote
+		// a header or body bytes). It implements Unwrap() so http.ResponseController
+		// — which the MCP SDK's SSE path uses to flush (go-sdk mcp/streamable.go
+		// and mcp/event.go call http.NewResponseController(w).Flush()) — still
+		// reaches the underlying Flusher/Hijacker. Streaming on /mcp is preserved.
+		rw := &recoveryWriter{ResponseWriter: w}
 		defer func() {
 			if rec := recover(); rec != nil {
+				// http.ErrAbortHandler is net/http's sentinel: re-raise it before
+				// any logging or writing so net/http's serving goroutine handles
+				// it (abort the request, no log, no response). Logging or writing
+				// a 500 here would defeat the sentinel's contract.
+				if rec == http.ErrAbortHandler {
+					panic(rec)
+				}
+
 				// Log the type and stack, never the value's text (secure-logging
 				// rule). The stack pinpoints the panic site without echoing the
 				// value.
@@ -73,26 +93,48 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 				// infrastructure yet (internal/observability/metrics is a
 				// flag-only skeleton), so this story implements the LOG only.
 
-				// Best-effort 500. If the downstream handler already committed a
-				// status and wrote body bytes before panicking, the response is
-				// already on the wire and CANNOT be un-sent: WriteHeader becomes a
-				// no-op (net/http logs "superfluous WriteHeader") AND the Write
-				// below APPENDS internalErrorBody onto the partial bytes the
-				// handler already sent, producing a concatenated (malformed) body.
-				// We accept this best-effort behaviour for v1: (a) the in-tree
-				// handlers — the probes and the SDK /mcp handler — write their
-				// response atomically, so a panic after a partial write is not
-				// reached in practice; and (b) the alternative, wrapping w in a
-				// ResponseWriter that tracks commitment to suppress the append,
-				// would defeat the http.Flusher type-assertion the MCP streamable
-				// HTTP (SSE) path on /mcp depends on, breaking streaming. Keeping
-				// the process alive is the contract that matters; on the common
-				// path (panic before any write) the clean 500 below is correct.
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusInternalServerError)
-				_, _ = w.Write([]byte(internalErrorBody))
+				// Best-effort 500, but only when the response is NOT yet committed.
+				// Once a handler has committed a status and written body bytes the
+				// response is on the wire and CANNOT be un-sent: WriteHeader would
+				// be a no-op and writing internalErrorBody would APPEND it onto the
+				// partial bytes, corrupting the body into malformed JSON. So when
+				// rw.wroteHeader is set we deliberately write NOTHING and leave the
+				// partial response as-is — the process still survives. On the common
+				// path (panic before any write) we send the clean 500 below.
+				if !rw.wroteHeader {
+					rw.Header().Set("Content-Type", "application/json")
+					rw.WriteHeader(http.StatusInternalServerError)
+					_, _ = rw.Write([]byte(internalErrorBody))
+				}
 			}
 		}()
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(rw, r)
 	})
 }
+
+// recoveryWriter wraps an http.ResponseWriter to track whether the downstream
+// handler committed the response (wrote a status header or body bytes). The
+// recovery middleware uses wroteHeader to decide whether it can safely write a
+// 500 (uncommitted) or must leave a partial response untouched (committed).
+//
+// Unwrap() exposes the underlying writer so http.ResponseController can walk to
+// the real Flusher/Hijacker. The MCP SDK's SSE path flushes via
+// http.NewResponseController(w).Flush(), so wrapping does NOT break streaming on
+// /mcp. We intentionally do not implement Flush/Hijack explicitly — Unwrap is
+// the idiomatic, sufficient mechanism for ResponseController-based consumers.
+type recoveryWriter struct {
+	http.ResponseWriter
+	wroteHeader bool
+}
+
+func (w *recoveryWriter) WriteHeader(code int) {
+	w.wroteHeader = true
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *recoveryWriter) Write(b []byte) (int, error) {
+	w.wroteHeader = true
+	return w.ResponseWriter.Write(b)
+}
+
+func (w *recoveryWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
