@@ -82,14 +82,11 @@ func TestLivez_POST_ReturnsMethodNotAllowed(t *testing.T) {
 	}
 }
 
-// TestHealth_GET_ReturnsOK pins that /health is now a body-identical alias of
-// /livez ({"status":"alive"}), NOT the old {"status": "healthy"}.
-//
-// The body changed, and some consumers DO read it: the shell e2e suites
-// (test/e2e-basic-mcp/test-standalone.sh and test/health/test-health.sh) assert
-// .status via jq and run in CI — they were updated to expect "alive". The
-// status-only consumers (the --health probe and the k8s httpGet liveness/
-// readiness probes) are unaffected because they key on HTTP 200, not the body.
+// TestHealth_GET_ReturnsOK pins that /health preserves its ORIGINAL shipped body
+// {"status":"healthy"} — it is NOT a body-identical alias of /livez. /health is
+// retained for backward compatibility so external consumers that parse
+// .status == "healthy" keep working; /livez is the canonical liveness endpoint
+// and returns {"status":"alive"}.
 func TestHealth_GET_ReturnsOK(t *testing.T) {
 	mux := testMux()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", nil)
@@ -100,8 +97,8 @@ func TestHealth_GET_ReturnsOK(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("GET /health status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	if rec.Body.String() != `{"status":"alive"}` {
-		t.Errorf("GET /health body = %q, want %q", rec.Body.String(), `{"status":"alive"}`)
+	if rec.Body.String() != `{"status":"healthy"}` {
+		t.Errorf("GET /health body = %q, want %q", rec.Body.String(), `{"status":"healthy"}`)
 	}
 	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("GET /health Content-Type = %q, want %q", ct, "application/json")
@@ -120,9 +117,12 @@ func TestHealth_POST_ReturnsMethodNotAllowed(t *testing.T) {
 	}
 }
 
-// TestHealthAliasesLivez proves /health is a true alias of /livez: same status,
-// same body, and same Content-Type for both GET and a non-GET (405) method.
-func TestHealthAliasesLivez(t *testing.T) {
+// TestLivezAndHealthShareStatusButNotBody proves the back-compat contract:
+// /livez and /health share status (200 GET, 405 non-GET) and Content-Type, but
+// their bodies DIFFER deliberately — /livez returns {"status":"alive"} (canonical
+// liveness) and /health returns {"status":"healthy"} (original shipped body
+// retained for external consumers). They are NOT body-identical aliases.
+func TestLivezAndHealthShareStatusButNotBody(t *testing.T) {
 	mux := testMux()
 
 	for _, method := range []string{http.MethodGet, http.MethodPost} {
@@ -135,13 +135,27 @@ func TestHealthAliasesLivez(t *testing.T) {
 		if livezRec.Code != healthRec.Code {
 			t.Errorf("%s: status /livez=%d /health=%d, want equal", method, livezRec.Code, healthRec.Code)
 		}
-		if livezRec.Body.String() != healthRec.Body.String() {
-			t.Errorf("%s: body /livez=%q /health=%q, want equal", method, livezRec.Body.String(), healthRec.Body.String())
-		}
 		if livezRec.Header().Get("Content-Type") != healthRec.Header().Get("Content-Type") {
 			t.Errorf("%s: Content-Type /livez=%q /health=%q, want equal",
 				method, livezRec.Header().Get("Content-Type"), healthRec.Header().Get("Content-Type"))
 		}
+	}
+
+	// On GET the bodies must differ: /livez is the canonical alive signal,
+	// /health preserves its original healthy body for back-compat.
+	livezGet := httptest.NewRecorder()
+	mux.ServeHTTP(livezGet, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/livez", nil))
+	healthGet := httptest.NewRecorder()
+	mux.ServeHTTP(healthGet, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", nil))
+
+	if got, want := livezGet.Body.String(), `{"status":"alive"}`; got != want {
+		t.Errorf("GET /livez body = %q, want %q", got, want)
+	}
+	if got, want := healthGet.Body.String(), `{"status":"healthy"}`; got != want {
+		t.Errorf("GET /health body = %q, want %q", got, want)
+	}
+	if livezGet.Body.String() == healthGet.Body.String() {
+		t.Errorf("/livez and /health bodies must differ, both = %q", livezGet.Body.String())
 	}
 }
 

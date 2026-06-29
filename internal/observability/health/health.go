@@ -18,11 +18,14 @@
 //
 // Scope note: liveness (/livez) and readiness (/readyz) are UNCONDITIONAL by
 // design — there is no flag to disable them, and this package does NOT gate
-// them. (/health is retained as an alias for /livez for backward
-// compatibility; /livez and /readyz are the canonical names the next story
-// implements.) The single accessor here, SaturationEventsEnabled, gates only
-// the opt-in saturation-event signal layered on top of those probes. The v1
-// default for that signal is OFF (door-closing policy).
+// them. /livez is the canonical liveness endpoint and returns
+// {"status":"alive"}; /readyz is the canonical readiness name the next story
+// implements. /health is retained for backward compatibility and preserves its
+// original {"status":"healthy"} body — it is NOT a body-identical alias of
+// /livez and is served by its own handler (HealthHandler). The single accessor
+// here, SaturationEventsEnabled, gates only the opt-in saturation-event signal
+// layered on top of those probes. The v1 default for that signal is OFF
+// (door-closing policy).
 //
 // There is deliberately NO generic Enabled accessor: the probes are
 // unconditional, so a generic name would invite a future author to write
@@ -43,14 +46,41 @@ import (
 // reachability — that is the readiness probe's job (/readyz).
 const livenessBody = `{"status":"alive"}`
 
+// healthBody is the exact response body served by the legacy /health endpoint.
+// It preserves the originally shipped {"status":"healthy"} body so external
+// consumers (dashboards, scripts) that parse .status == "healthy" keep working.
+// /health is NOT a body-identical alias of /livez; the bodies differ
+// deliberately. New consumers should use /livez (the canonical liveness
+// endpoint, {"status":"alive"}).
+const healthBody = `{"status":"healthy"}`
+
 // LivezHandler returns the unconditional liveness handler. GET responds 200 with
-// livenessBody; any other method responds 405. The probe is UNCONDITIONAL by
-// design — there is no flag to disable it, so this constructor takes no config
-// and is never gated (see the package doc).
+// livenessBody ({"status":"alive"}); any other method responds 405. The probe is
+// UNCONDITIONAL by design — there is no flag to disable it, so this constructor
+// takes no config and is never gated (see the package doc).
 //
-// /health registers this same handler as a backward-compatible alias, so
-// /health and /livez return byte-identical responses and identical 405 behavior.
+// /livez is the canonical liveness endpoint. /health is a separate retained
+// back-compat endpoint served by HealthHandler with its own ({"status":"healthy"})
+// body — the two handlers are distinct instances and return different bodies.
 func LivezHandler() http.Handler {
+	return jsonProbeHandler(livenessBody)
+}
+
+// HealthHandler returns the legacy /health handler. GET responds 200 with
+// healthBody ({"status":"healthy"}); any other method responds 405. It is
+// retained for backward compatibility and preserves the original shipped body so
+// existing consumers that assert .status == "healthy" do not break. /livez is the
+// canonical liveness endpoint and returns {"status":"alive"} — HealthHandler is a
+// distinct handler instance from LivezHandler, not a body-identical alias.
+func HealthHandler() http.Handler {
+	return jsonProbeHandler(healthBody)
+}
+
+// jsonProbeHandler builds an unconditional probe handler that responds 200 with
+// the given JSON body on GET and 405 on any other method. Shared by LivezHandler
+// and HealthHandler so the two probes stay behaviorally identical apart from
+// their (deliberately different) bodies.
+func jsonProbeHandler(body string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -58,7 +88,7 @@ func LivezHandler() http.Handler {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte(livenessBody)); err != nil {
+		if _, err := w.Write([]byte(body)); err != nil {
 			http.Error(w, "failed to write response", http.StatusInternalServerError)
 		}
 	})

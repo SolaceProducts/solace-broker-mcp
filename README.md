@@ -278,7 +278,7 @@ Create `broker-config.yaml` and `.env` in the repo root (both are gitignored). S
 go run ./cmd/server
 ```
 
-The MCP server listens on port `9090` by default and serves the MCP endpoint at `/mcp`. A liveness endpoint is available at `/livez` (with `/health` retained as a backward-compatible alias).
+The MCP server listens on port `9090` by default and serves the MCP endpoint at `/mcp`. The canonical liveness endpoint is `/livez`, which returns `{"status":"alive"}`. `/health` is retained for backward compatibility and preserves its original `{"status":"healthy"}` body — it is not a body-identical alias of `/livez`.
 
 ### Configuration Options
 

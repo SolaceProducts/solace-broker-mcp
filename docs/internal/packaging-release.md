@@ -145,7 +145,7 @@ docker run -d \
 Verify the server is running:
 
 ```bash
-curl http://localhost:9090/health
+curl http://localhost:9090/livez
 # {"status":"alive"}
 ```
 
@@ -280,9 +280,10 @@ The server exposes a liveness probe at `GET /livez` which returns:
 {"status":"alive"}
 ```
 
-`GET /health` is retained as a backward-compatible alias of `/livez` and
-returns the identical body. HTTP 200 on success, available on the configured
-port (default 9090).
+`GET /health` is retained for backward compatibility and preserves its
+original `{"status":"healthy"}` body — it is NOT a body-identical alias of
+`/livez`, so external consumers that parse `.status == "healthy"` keep working.
+Both probes return HTTP 200 on success on the configured port (default 9090).
 
 The binary also supports a `--health` flag that performs an internal health
 check against the running server and exits with code 0 (healthy) or 1

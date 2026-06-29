@@ -84,11 +84,12 @@ test_livez() {
 }
 
 test_health() {
-    # /health is a backward-compatible alias of /livez, so it returns the same
-    # body (status=alive). It is no longer "healthy".
+    # /health is retained for backward compatibility and preserves its ORIGINAL
+    # body (status=healthy). It is NOT a body-identical alias of /livez; /livez
+    # is the canonical liveness endpoint and returns status=alive.
     local response
     response=$(curl -sf "$MCP_URL/health")
-    assert_json_field "$response" ".status" "alive" "/health should return status=alive (aliases /livez)"
+    assert_json_field "$response" ".status" "healthy" "/health should return status=healthy (legacy back-compat body)"
 }
 
 test_ready_both_reachable() {
@@ -160,7 +161,7 @@ EOF
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 run_test "Livez endpoint"                      test_livez
-run_test "Health endpoint (alias of livez)"    test_health
+run_test "Health endpoint (legacy back-compat body)"  test_health
 run_test "Ready endpoint (brokers reachable)"  test_ready_both_reachable
 run_test "Ready endpoint (broker unreachable)" test_ready_unreachable_broker
 
