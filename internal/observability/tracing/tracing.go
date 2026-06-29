@@ -21,8 +21,8 @@ package tracing
 import "github.com/SolaceDev/solace-broker-mcp/internal/config"
 
 // Enabled reports whether tracing is turned on, reading the OBS_TRACING_ENABLED
-// flag off the loaded config. Later wiring consults this before configuring the
-// tracer provider.
-func Enabled(cfg *config.ServerConfig) bool {
-	return cfg.Observability.TracingEnabled
+// flag off the observability config. Later wiring consults this before
+// configuring the tracer provider.
+func Enabled(cfg config.ObservabilityConfig) bool {
+	return cfg.TracingEnabled
 }

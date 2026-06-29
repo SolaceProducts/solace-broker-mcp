@@ -22,8 +22,8 @@ package audit
 import "github.com/SolaceDev/solace-broker-mcp/internal/config"
 
 // Enabled reports whether the audit log is turned on, reading the
-// OBS_AUDIT_LOG_ENABLED flag off the loaded config. Later wiring consults this
-// before emitting audit records.
-func Enabled(cfg *config.ServerConfig) bool {
-	return cfg.Observability.AuditLogEnabled
+// OBS_AUDIT_LOG_ENABLED flag off the observability config. Later wiring
+// consults this before emitting audit records.
+func Enabled(cfg config.ObservabilityConfig) bool {
+	return cfg.AuditLogEnabled
 }

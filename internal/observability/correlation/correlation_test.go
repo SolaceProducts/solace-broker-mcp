@@ -25,8 +25,7 @@ import (
 func TestEnabled(t *testing.T) {
 	t.Parallel()
 	for _, want := range []bool{true, false} {
-		cfg := &config.ServerConfig{}
-		cfg.Observability.CorrelationIDEnabled = want
+		cfg := config.ObservabilityConfig{CorrelationIDEnabled: want}
 		if got := Enabled(cfg); got != want {
 			t.Errorf("Enabled() = %v, want %v", got, want)
 		}

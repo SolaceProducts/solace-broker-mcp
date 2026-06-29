@@ -25,8 +25,7 @@ import (
 func TestEnabled(t *testing.T) {
 	t.Parallel()
 	for _, want := range []bool{true, false} {
-		cfg := &config.ServerConfig{}
-		cfg.Observability.MetricsEnabled = want
+		cfg := config.ObservabilityConfig{MetricsEnabled: want}
 		if got := Enabled(cfg); got != want {
 			t.Errorf("Enabled() = %v, want %v", got, want)
 		}
@@ -38,8 +37,7 @@ func TestEnabled(t *testing.T) {
 func TestAuthFailureCounterEnabled(t *testing.T) {
 	t.Parallel()
 	for _, want := range []bool{true, false} {
-		cfg := &config.ServerConfig{}
-		cfg.Observability.AuthFailureCounterEnabled = want
+		cfg := config.ObservabilityConfig{AuthFailureCounterEnabled: want}
 		if got := AuthFailureCounterEnabled(cfg); got != want {
 			t.Errorf("AuthFailureCounterEnabled() = %v, want %v", got, want)
 		}

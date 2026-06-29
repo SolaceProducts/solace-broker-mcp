@@ -15,6 +15,7 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"strconv"
 
@@ -78,9 +79,11 @@ const (
 )
 
 // envBool reads name from the environment and parses it as a boolean. When the
-// var is unset (or set to a value strconv.ParseBool rejects), it returns def.
-// This keeps an operator typo from silently flipping a capability — a bad value
-// falls back to the documented default rather than to Go's zero value.
+// var is unset, it silently returns def. When the var IS set but holds a value
+// strconv.ParseBool rejects, it logs a slog.Warn naming the var and the default
+// in effect, then returns def. We deliberately keep observability flags tolerant
+// (unlike MCP_SERVER_PORT, which fails hard on bad input) so a typo cannot abort
+// startup — but the warning ensures the fallback is not silent.
 func envBool(name string, def bool) bool {
 	v, ok := os.LookupEnv(name)
 	if !ok {
@@ -88,6 +91,8 @@ func envBool(name string, def bool) bool {
 	}
 	b, err := strconv.ParseBool(v)
 	if err != nil {
+		slog.Warn("ignoring unparseable observability flag; using default",
+			"var", name, "value", v, "default", def)
 		return def
 	}
 	return b

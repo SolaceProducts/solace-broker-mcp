@@ -27,8 +27,7 @@ import (
 func TestSaturationEventsEnabled(t *testing.T) {
 	t.Parallel()
 	for _, want := range []bool{true, false} {
-		cfg := &config.ServerConfig{}
-		cfg.Observability.SaturationEventsEnabled = want
+		cfg := config.ObservabilityConfig{SaturationEventsEnabled: want}
 		if got := SaturationEventsEnabled(cfg); got != want {
 			t.Errorf("SaturationEventsEnabled() = %v, want %v", got, want)
 		}

@@ -12,17 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package recover is the home for panic-recovery in the request path.
+// Package recovery is the home for panic-recovery in the request path.
 // Skeleton (SOL-151278): only the capability gate exists today; the recovery
 // middleware that traps a panicking handler and converts it to a clean error
 // lands in a later story. The v1 default is ON (door-closing policy).
-package recover
+//
+// The package is named recovery (not recover) so it does not shadow the Go
+// builtin recover(), which the panic-recovery middleware will need.
+package recovery
 
 import "github.com/SolaceDev/solace-broker-mcp/internal/config"
 
 // Enabled reports whether panic recovery is turned on, reading the
-// OBS_PANIC_RECOVERY_ENABLED flag off the loaded config. Later wiring consults
-// this before installing the recovery middleware.
-func Enabled(cfg *config.ServerConfig) bool {
-	return cfg.Observability.PanicRecoveryEnabled
+// OBS_PANIC_RECOVERY_ENABLED flag off the observability config. Later wiring
+// consults this before installing the recovery middleware.
+func Enabled(cfg config.ObservabilityConfig) bool {
+	return cfg.PanicRecoveryEnabled
 }

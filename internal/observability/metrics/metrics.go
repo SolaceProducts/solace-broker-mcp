@@ -22,16 +22,16 @@ package metrics
 import "github.com/SolaceDev/solace-broker-mcp/internal/config"
 
 // Enabled reports whether metrics emission is turned on, reading the
-// OBS_METRICS_ENABLED flag off the loaded config. Later wiring consults this
-// before registering metric instruments.
-func Enabled(cfg *config.ServerConfig) bool {
-	return cfg.Observability.MetricsEnabled
+// OBS_METRICS_ENABLED flag off the observability config. Later wiring consults
+// this before registering metric instruments.
+func Enabled(cfg config.ObservabilityConfig) bool {
+	return cfg.MetricsEnabled
 }
 
 // AuthFailureCounterEnabled reports whether the auth-failure counter is turned
 // on. It follows OBS_METRICS_ENABLED unless OBS_AUTH_FAILURE_COUNTER_ENABLED is
 // explicitly set; that resolution happens at config load, so this accessor just
 // reads the resolved flag.
-func AuthFailureCounterEnabled(cfg *config.ServerConfig) bool {
-	return cfg.Observability.AuthFailureCounterEnabled
+func AuthFailureCounterEnabled(cfg config.ObservabilityConfig) bool {
+	return cfg.AuthFailureCounterEnabled
 }

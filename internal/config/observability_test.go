@@ -15,10 +15,40 @@
 package config
 
 import (
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 )
+
+// clearObsEnv unsets every OBS_* capability flag for the duration of the test so
+// a runner with these vars exported in its environment cannot leak into a test
+// that asserts the door-closing DEFAULTS. Each var is restored on cleanup. Use
+// at the top of any test that asserts default flag values.
+//
+// Numeric tunables (saturation_threshold_ms, etc.) are NOT env-driven — they
+// load from YAML — so there are no numeric OBS_* override vars to clear here.
+func clearObsEnv(t *testing.T) {
+	t.Helper()
+	vars := []string{
+		envObsCorrelationIDEnabled,
+		envObsPanicRecoveryEnabled,
+		envObsMetricsEnabled,
+		envObsAuditLogEnabled,
+		envObsTracingEnabled,
+		envObsSaturationEventsEnabled,
+		envObsAuthFailureCounterEnabled,
+	}
+	for _, name := range vars {
+		if prev, ok := os.LookupEnv(name); ok {
+			if err := os.Unsetenv(name); err != nil {
+				t.Fatalf("os.Unsetenv(%q): %v", name, err)
+			}
+			t.Cleanup(func() { _ = os.Setenv(name, prev) })
+		}
+	}
+}
 
 // obsYAML is a minimal valid config used by the observability tests. It
 // configures one basic-auth broker and static client auth so LoadConfig
@@ -42,6 +72,8 @@ brokers:
 // other capability is OFF, with the auth-failure counter following metrics
 // (OFF).
 func TestObservability_FlagDefaults(t *testing.T) {
+	clearObsEnv(t)
+
 	cfg, err := LoadConfig(writeTemp(t, obsYAML))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -147,9 +179,44 @@ func TestObservability_AuthFailureCounter_ExplicitOverridesMetrics(t *testing.T)
 	})
 }
 
+// TestObservability_BadBoolFallsBackToDefaultAndWarns proves a set-but-
+// unparseable OBS_* value falls back to the documented default (not Go's zero
+// value) and is not silent: envBool emits a slog.Warn naming the var. We force a
+// garbage value on a default-true flag (panic recovery) and a default-false flag
+// (metrics); each must keep its default and produce a warning.
+func TestObservability_BadBoolFallsBackToDefaultAndWarns(t *testing.T) {
+	clearObsEnv(t)
+	t.Setenv(envObsPanicRecoveryEnabled, "yebbut") // default true
+	t.Setenv(envObsMetricsEnabled, "maybe")        // default false
+
+	buf := captureSlog(t)
+
+	cfg, err := LoadConfig(writeTemp(t, obsYAML))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !cfg.Observability.PanicRecoveryEnabled {
+		t.Error("unparseable OBS_PANIC_RECOVERY_ENABLED should fall back to default true")
+	}
+	if cfg.Observability.MetricsEnabled {
+		t.Error("unparseable OBS_METRICS_ENABLED should fall back to default false")
+	}
+
+	logged := buf.String()
+	if !strings.Contains(logged, envObsPanicRecoveryEnabled) {
+		t.Errorf("expected a warning naming %s; log was: %s", envObsPanicRecoveryEnabled, logged)
+	}
+	if !strings.Contains(logged, envObsMetricsEnabled) {
+		t.Errorf("expected a warning naming %s; log was: %s", envObsMetricsEnabled, logged)
+	}
+}
+
 // TestObservability_NumericDefaults pins the numeric tunable defaults applied
 // when the observability block is omitted from YAML.
 func TestObservability_NumericDefaults(t *testing.T) {
+	clearObsEnv(t)
+
 	cfg, err := LoadConfig(writeTemp(t, obsYAML))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

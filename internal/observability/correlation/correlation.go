@@ -21,8 +21,8 @@ package correlation
 import "github.com/SolaceDev/solace-broker-mcp/internal/config"
 
 // Enabled reports whether correlation-ID propagation is turned on, reading the
-// OBS_CORRELATION_ID_ENABLED flag off the loaded config. Later wiring consults
-// this before installing the correlation middleware.
-func Enabled(cfg *config.ServerConfig) bool {
-	return cfg.Observability.CorrelationIDEnabled
+// OBS_CORRELATION_ID_ENABLED flag off the observability config. Later wiring
+// consults this before installing the correlation middleware.
+func Enabled(cfg config.ObservabilityConfig) bool {
+	return cfg.CorrelationIDEnabled
 }

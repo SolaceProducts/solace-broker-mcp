@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package recover
+package recovery
 
 import (
 	"testing"
@@ -25,8 +25,7 @@ import (
 func TestEnabled(t *testing.T) {
 	t.Parallel()
 	for _, want := range []bool{true, false} {
-		cfg := &config.ServerConfig{}
-		cfg.Observability.PanicRecoveryEnabled = want
+		cfg := config.ObservabilityConfig{PanicRecoveryEnabled: want}
 		if got := Enabled(cfg); got != want {
 			t.Errorf("Enabled() = %v, want %v", got, want)
 		}

@@ -34,10 +34,10 @@ package health
 import "github.com/SolaceDev/solace-broker-mcp/internal/config"
 
 // SaturationEventsEnabled reports whether the opt-in saturation-event signal is
-// turned on, reading the OBS_SATURATION_EVENTS_ENABLED flag off the loaded
-// config. It does NOT gate the liveness (/livez) or readiness (/readyz) probes,
-// which are unconditional. Later wiring consults this before starting the
-// saturation detector.
-func SaturationEventsEnabled(cfg *config.ServerConfig) bool {
-	return cfg.Observability.SaturationEventsEnabled
+// turned on, reading the OBS_SATURATION_EVENTS_ENABLED flag off the
+// observability config. It does NOT gate the liveness (/livez) or readiness
+// (/readyz) probes, which are unconditional. Later wiring consults this before
+// starting the saturation detector.
+func SaturationEventsEnabled(cfg config.ObservabilityConfig) bool {
+	return cfg.SaturationEventsEnabled
 }
