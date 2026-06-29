@@ -51,6 +51,7 @@ DEFAULT_MCP_CONFIG="$RUNNER_DIR/mcp-config.json.tmpl"
 # transcripts.
 RUN_FILE=$(mktemp -t llm-scenario.XXXXXXXX.jsonl)
 RENDERED_MCP_CONFIG=""
+# shellcheck disable=SC2317  # invoked indirectly via trap
 cleanup() {
     rm -f "$RUN_FILE"
     [ -n "$RENDERED_MCP_CONFIG" ] && rm -f "$RENDERED_MCP_CONFIG"

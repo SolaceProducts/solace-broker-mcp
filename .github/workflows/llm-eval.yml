@@ -1,11 +1,17 @@
-name: LLM E2E Eval (Manual)
+name: LLM E2E Eval
 
-# Non-gating, manually-triggered run of the LLM e2e eval suite under
-# test/e2e-monitoring/llm/. Costs API credits per invocation — do not
-# add a per-PR or scheduled trigger here. Operating model (cadence,
-# ownership, pass thresholds) is out of scope for SOL-150789.
+# Non-gating run of the LLM e2e eval suite under test/e2e-monitoring/llm/.
+# Costs API credits per invocation — do not add a per-PR trigger.
+#
+# Triggers:
+#   - push to main: post-merge signal (operating model per SOL-151321).
+#     Single attempt per scenario, all-must-pass; failures surface in the
+#     Actions logs and are triaged into Jira per the SOL-151321 SLA.
+#   - workflow_dispatch: ad-hoc run against any branch / target / filter.
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       target_branch:
@@ -24,6 +30,13 @@ on:
         default: ''
         type: string
 
+# Back-to-back merges only run the latest. An intermediate commit's regression
+# can be masked if a later merge supersedes it before the run finishes — accepted
+# per SOL-151321 since this is a trend signal, not a per-commit gate.
+concurrency:
+  group: llm-eval-main
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -31,11 +44,16 @@ jobs:
   llm-eval:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # workflow_dispatch inputs are absent on push events — fall back to the
+    # post-merge defaults (checkout the pushed ref, local-docker target, no
+    # scenario filter) so a single job body serves both triggers.
+    env:
+      BROKER_TARGET: ${{ inputs.broker_target || 'local-docker' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.target_branch }}
+          ref: ${{ inputs.target_branch || github.ref }}
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -61,8 +79,6 @@ jobs:
       - name: Start local brokers + fixtures
         # No-op for non-local-docker targets — setup-fixtures.sh guards
         # on BROKER_TARGET. Lab targets are assumed already running.
-        env:
-          BROKER_TARGET: ${{ inputs.broker_target }}
         run: bash test/e2e-monitoring/llm/setup-fixtures.sh
 
       - name: Verify LLM service credentials present
@@ -89,7 +105,6 @@ jobs:
         # the endpoint IS set, the preceding step has already enforced
         # that the secret is present.
         env:
-          BROKER_TARGET: ${{ inputs.broker_target }}
           LLM_SERVICE_ENDPOINT: ${{ vars.LLM_SERVICE_ENDPOINT }}
           LLM_SERVICE_MODEL_NAME: ${{ vars.LLM_SERVICE_MODEL_NAME }}
           LLM_SERVICE_API_KEY: ${{ secrets.LLM_SERVICE_API_KEY }}
@@ -106,7 +121,7 @@ jobs:
           bash test/e2e-monitoring/llm/run-all.sh "${ARGS[@]}"
 
       - name: Broker logs (on failure)
-        if: failure() && inputs.broker_target == 'local-docker'
+        if: failure() && env.BROKER_TARGET == 'local-docker'
         run: |
           echo "=== solace-e2e-mon-a ==="
           docker logs solace-e2e-mon-a 2>&1 | tail -100 || true
@@ -114,9 +129,9 @@ jobs:
           docker logs solace-e2e-mon-b 2>&1 | tail -100 || true
 
       - name: MCP server log (on failure)
-        if: failure() && inputs.broker_target == 'local-docker'
+        if: failure() && env.BROKER_TARGET == 'local-docker'
         run: cat test/e2e-monitoring/bin/mcp-server.log 2>/dev/null || echo "(no server log)"
 
       - name: Tear down local brokers
-        if: always() && inputs.broker_target == 'local-docker'
+        if: always() && env.BROKER_TARGET == 'local-docker'
         run: docker compose -f test/e2e-monitoring/docker-compose.yml down -v

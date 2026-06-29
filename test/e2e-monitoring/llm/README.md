@@ -2,10 +2,10 @@
 
 LLM-driven e2e test harness for the broker MCP server, using the Claude Code
 CLI as the agent. Sends NL prompts, captures `stream-json` output, and asserts
-on tool choice, answer fidelity, and refusal behavior. Thirteen scenarios cover
-the e2e-monitoring fixtures F1–F7 plus two safety cases — three opt into
-running on both `broker-a` and `broker-b`, the rest run on `broker-a` only
-(see [Per-scenario broker selection](#per-scenario-broker-selection)).
+on tool choice, answer fidelity, and refusal behavior. Thirteen scenario files
+cover the e2e-monitoring fixtures F1–F7 plus two safety cases; three opt into
+running on both `broker-a` and `broker-b`, so `./run-all.sh` produces **16
+rows** total (see [Per-scenario broker selection](#per-scenario-broker-selection)).
 
 ## Quickstart
 

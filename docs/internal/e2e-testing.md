@@ -2,7 +2,7 @@
 
 This document describes the E2E testing strategy, structure, and how to run the tests locally and in CI.
 
-For a quickstart and the suite's port allocation, see [`test/e2e-basic-mcp/README.md`](../../test/e2e-basic-mcp/README.md). A separate monitoring-focused suite lives under [`test/e2e-monitoring/`](../../test/e2e-monitoring/README.md), and an LLM-driven eval harness that runs natural-language scenarios through the Claude Code CLI lives under [`test/e2e-monitoring/llm/`](../../test/e2e-monitoring/llm/README.md). The LLM suite is non-gating and only runs via manual `workflow_dispatch` ([`llm-eval.yml`](../../.github/workflows/llm-eval.yml)).
+For a quickstart and the suite's port allocation, see [`test/e2e-basic-mcp/README.md`](../../test/e2e-basic-mcp/README.md). A separate monitoring-focused suite lives under [`test/e2e-monitoring/`](../../test/e2e-monitoring/README.md), and an LLM-driven eval harness that runs natural-language scenarios through the Claude Code CLI lives under [`test/e2e-monitoring/llm/`](../../test/e2e-monitoring/llm/README.md). The LLM suite is non-gating; it runs automatically on every push to `main` as a post-merge signal (and via manual `workflow_dispatch` for ad-hoc runs) — see [`llm-eval.yml`](../../.github/workflows/llm-eval.yml). Pass rule: all 16 scenario rows must pass; any failure turns the run red and is triaged off the failed workflow run page.
 
 ---
 

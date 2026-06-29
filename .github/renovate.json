@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:base"],
+  "extends": ["config:recommended"],
   "description": "Tightly scoped: Renovate only watches the LLM e2e harness's pinned Claude Code CLI version. No other deps in this repo are managed here — Go modules and other manifests are explicitly ignored to prevent runaway PRs. Bumps follow npm's `stable` dist-tag (deliberately lagged from `latest`); see test/e2e-monitoring/llm/README.md for the bump procedure.",
   "enabledManagers": ["npm"],
   "ignorePaths": ["**/node_modules/**"],
