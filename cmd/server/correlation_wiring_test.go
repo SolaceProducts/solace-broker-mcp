@@ -20,6 +20,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
 )
 
@@ -79,6 +80,41 @@ func TestBuildMCPEndpoint_CorrelationWiringOrder(t *testing.T) {
 		// Middleware not wired, so From returns "".
 		if rec.gotID != "" {
 			t.Errorf("inner handler saw correlation ID %q, want \"\" (middleware not wired)", rec.gotID)
+		}
+	})
+
+	// An oversized request is rejected with 413 and the inner handler never
+	// runs — a regression guard that limitRequestBody is wired into
+	// buildMCPEndpoint and short-circuits oversized requests.
+	//
+	// NOTE on what this does NOT prove: it does not establish that
+	// limitRequestBody sits OUTSIDE correlation. On the ContentLength-413
+	// short-circuit, correlation has no externally observable effect — it only
+	// stamps a context value that the inner handler reads, and the inner
+	// handler never runs — so both "body-limit → correlation" and
+	// "correlation → body-limit" produce the identical result here (413, inner
+	// not invoked). The body-limit-outermost guarantee (a 413 deliberately
+	// carries NO correlation ID) only becomes observable once correlation emits
+	// a response header (Story 6); the ordering is asserted there. This subtest
+	// guards the body limit's presence and short-circuit, not its position
+	// relative to correlation.
+	t.Run("oversized request is rejected with 413 and never reaches the inner handler", func(t *testing.T) {
+		rec := &correlationRecorder{}
+		endpoint := buildMCPEndpoint(rec, true)
+
+		// limitRequestBody rejects on declared ContentLength alone, so a real
+		// oversized body is unnecessary; declaring one past the cap is enough.
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
+		req.ContentLength = defaults.MaxMCPRequestBytes + 1
+
+		resp := httptest.NewRecorder()
+		endpoint.ServeHTTP(resp, req)
+
+		if resp.Code != http.StatusRequestEntityTooLarge {
+			t.Errorf("response code = %d, want %d (body limit must reject the oversized request)", resp.Code, http.StatusRequestEntityTooLarge)
+		}
+		if rec.invoked {
+			t.Error("inner handler was invoked on an oversized request; the body limit must short-circuit it first")
 		}
 	})
 }
