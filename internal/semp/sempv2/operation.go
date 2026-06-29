@@ -34,6 +34,7 @@ type Parameter struct {
 // validSpecTypes are the recognized SEMP API types derived from basePath.
 var validSpecTypes = map[string]bool{
 	"__private_monitor__": true,
+	"__private_config__":  true,
 }
 
 // privateToPublicSpecType normalizes private basePath suffixes to their public key equivalents
@@ -41,6 +42,7 @@ var validSpecTypes = map[string]bool{
 // whether the embedded spec uses a private or public basePath.
 var privateToPublicSpecType = map[string]string{
 	"__private_monitor__": "monitor",
+	"__private_config__":  "config",
 }
 
 // ParseSpecs reads all embedded Swagger 2.0 JSON spec files from the given

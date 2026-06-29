@@ -144,7 +144,8 @@ func GroupStepsIntoBatches(steps []Step) []ExecutionBatch {
 }
 
 // executeStep executes a single step: resolves template args, looks up the
-// operation, calls the client, and stores the result in the execution context.
+// operation, constructs the request body if needed, calls the client, and
+// stores the result in the execution context.
 func (ce *CompositeExecutor) executeStep(ctx context.Context, step Step, client sempv2.Client, execCtx *ExecuteContext) error {
 	if step.FollowPages {
 		return ce.executePaginatedStep(ctx, step, client, execCtx)
@@ -160,6 +161,8 @@ func (ce *CompositeExecutor) executeStep(ctx context.Context, step Step, client 
 	if !ok {
 		return fmt.Errorf("tool step %s: operation %q not found in operation catalog", step.ID, step.Operation)
 	}
+
+	args = ce.constructRequestBody(op, args, execCtx.Params)
 
 	result, err := client.Execute(ctx, op, args)
 	if err != nil {
@@ -203,6 +206,8 @@ func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step
 	if !ok {
 		return fmt.Errorf("tool step %s: operation %q not found in operation catalog", step.ID, step.Operation)
 	}
+
+	baseArgs = ce.constructRequestBody(op, baseArgs, execCtx.Params)
 
 	maxResults := resolveMaxResults(execCtx.Params)
 	allItems := make([]any, 0)
@@ -395,6 +400,8 @@ func (ce *CompositeExecutor) executeBatch(ctx context.Context, batch ExecutionBa
 				return fmt.Errorf("tool step %s: operation %q not found in operation catalog", step.ID, step.Operation)
 			}
 
+			args = ce.constructRequestBody(op, args, execCtx.Params)
+
 			result, err := client.Execute(gCtx, op, args)
 			if err != nil {
 				return fmt.Errorf("tool step %s: %w", step.ID, err)
@@ -458,6 +465,46 @@ func safeTemplateExecute(tmpl *template.Template, data any) (result string, err 
 		return "", err
 	}
 	return buf.String(), nil
+}
+
+// constructRequestBody assembles the request body for a write operation from the
+// tool's input params. It only acts on operations that declare a body parameter;
+// for all others it returns args unchanged.
+//
+// Object params (like msgVpnConfig) are spread into the body as individual
+// fields; scalar params (like msgVpnName) are set directly. Params the operation
+// takes from the path or query are skipped — those reach the broker through args
+// instead. The body is added to args under the "body" key.
+func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, params map[string]any) map[string]any {
+	hasBody := false
+	nonBodyParams := make(map[string]bool) // params the op takes from path/query/header, not the body
+	for _, p := range op.Parameters {
+		if p.In == "body" {
+			hasBody = true
+		} else {
+			nonBodyParams[p.Name] = true
+		}
+	}
+	if !hasBody {
+		return args
+	}
+
+	body := make(map[string]any)
+	for name, val := range params {
+		if nonBodyParams[name] {
+			continue
+		}
+		if obj, isObj := val.(map[string]any); isObj {
+			for k, v := range obj {
+				body[k] = v
+			}
+		} else {
+			body[name] = val
+		}
+	}
+
+	args["body"] = body
+	return args
 }
 
 // ApplyResultStrategy combines step results according to the tool's result
