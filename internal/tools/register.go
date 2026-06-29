@@ -77,7 +77,7 @@ func withRecovery(toolName string, h mcp.ToolHandler) mcp.ToolHandler {
 // This function is the only translation boundary between our internal Metadata
 // type and the SDK's mcp.Tool. Handlers and the manager work in our own
 // vocabulary; this is where it crosses over to the SDK.
-func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerPool) {
+func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerPool, enableWriteTools bool) {
 	type registration struct {
 		name    string
 		handler ToolHandler
@@ -94,6 +94,20 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 	sort.Slice(regs, func(i, j int) bool { return regs[i].name < regs[j].name })
 
 	for _, reg := range regs {
+		// Gate write/action tools behind the server's enable_write_tools
+		// flag. Skipping at registration means the tool never appears in
+		// tools/list and can't be invoked, regardless of client_auth mode.
+		// Applies to any handler that is not read-only — native or composite —
+		// so this is the single chokepoint for write-tool registration. Note
+		// this gates ALL state-changing tools, including non-destructive ones
+		// like clear-queue-stats: they still mutate broker state, so trial /
+		// dev deployments expose only the read-only tool set by default.
+		if isWriteTool(reg.meta.Annotations) && !enableWriteTools {
+			slog.Info("write tool not registered (enable_write_tools is false)",
+				slog.String("tool", reg.name))
+			continue
+		}
+
 		mcpTool := toMCPTool(reg.meta, pool)
 
 		server.AddTool(mcpTool, withRecovery(reg.name, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -113,6 +127,15 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 			return mgr.CallTool(ctx, reg.name, params, NewIdentityFromTokenInfo(info))
 		}))
 	}
+}
+
+// isWriteTool reports whether the annotation marks a tool that changes state
+// (i.e. is not read-only). Every action tool — destructive (delete-queue-
+// messages, disconnect-client) and non-destructive (clear-queue-stats,
+// clear-client-stats) alike — mutates the broker, so all of them are gated
+// behind enable_write_tools. Read-only monitoring tools always register.
+func isWriteTool(a Annotations) bool {
+	return !a.ReadOnly
 }
 
 // toMCPTool converts our Metadata to the SDK's mcp.Tool, injecting the broker

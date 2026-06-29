@@ -42,6 +42,13 @@ mcp_client_auth:
 #   mode: static
 #   dev_token: "static-token"
 
+# Enable the write/action tools (delete-queue-messages, clear-queue-stats,
+# disconnect-client, clear-client-stats). Default false — these write tools do
+# not appear in tools/list unless this is explicitly true. Leave off for trial /
+# dev deployments; flip on only when an operator deliberately wants the action
+# tools available.
+# enable_write_tools: false
+
 # SEMP client settings — controls how the server talks to brokers.
 semp:
   max_concurrent_per_broker: 10
