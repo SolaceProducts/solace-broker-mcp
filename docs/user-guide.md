@@ -91,7 +91,7 @@ What are the current message rates for default VPN on my-broker?
 
 ## Tools Reference
 
-The server exposes 17 read-only tools. All broker-querying tools require a `broker` parameter to identify which configured event broker to query; `list-brokers` is the exception and returns the available event broker aliases.
+The server exposes 17 read-only tools plus 4 action tools (21 total when action tools are enabled). All broker-querying tools require a `broker` parameter to identify which configured event broker to query; `list-brokers` is the exception and returns the available event broker aliases. The action tools are write operations gated behind `enable_write_tools` (default off); the destructive ones (`delete-queue-messages`, `disconnect-client`) are marked via the MCP `destructiveHint` annotation and their descriptions instruct the calling LLM to obtain explicit user confirmation before invocation.
 
 ### Discovery
 
@@ -149,6 +149,21 @@ The server exposes 17 read-only tools. All broker-querying tools require a `brok
 |---|---|
 | `get-discard-stats` | Broker-wide or per-VPN discard aggregates: client-level ingress/egress discards plus broker-wide spool discards (native SEMPv1). Per-VPN scope returns client-level discards only — the broker exposes no per-VPN spool breakdown via SEMPv1. |
 | `list-queue-discards` | Per-queue discard counters for a VPN: TTL-expired, max-redelivery, spool-quota-exceeded, and other discard categories. Complements `get-discard-stats` with queue-level granularity. Default 100 results, max 500. |
+
+### Actions
+
+These tools modify broker state via the SEMPv2 action API. There is **one tool per action** so each tool's behavior is unambiguous: the destructive tools carry the MCP `destructiveHint` annotation and a description that instructs the calling LLM to obtain explicit user confirmation — restating the target (broker, VPN, queue or client) and the effect — before invocation; the non-destructive stats-reset tools do not. The tool manager logs a WARNING line on every destructive invocation for audit.
+
+**Naming convention.** Action-API tools use `<verb>-<resource>-<object>` (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`). This is distinct from the `manage-<resource>` family (`manage-queue`, `manage-vpn`) used for Config-API create/update/delete operations. The two families are separate on purpose: `manage-*` changes configuration, `<verb>-*` runs an operational action against a live object.
+
+**Disabled by default.** All four tools are write tools (they change broker state) and are gated behind the server-level `enable_write_tools` flag. With the default (`false`) they are not registered with the MCP server and do not appear in `tools/list` — clients see only the read-only tool set. Set `enable_write_tools: true` in the YAML config to expose them. This is independent of `mcp_client_auth.mode`: an authenticated client still cannot invoke these tools when the flag is off, because the server never registers them.
+
+| Tool | Destructive | Description |
+|---|---|---|
+| `delete-queue-messages` | **Yes** | Permanently delete all spooled messages from a queue. Irreversible — deleted messages cannot be recovered. Requires user confirmation before invocation. Use after confirmed intent to drain a queue (e.g. clearing a dead-letter backlog). |
+| `clear-queue-stats` | No | Reset a queue's statistics counters. Non-destructive: affects monitoring counters only, not spooled messages or delivery. |
+| `disconnect-client` | **Yes** | Forcibly disconnect a connected client. Service-impacting — terminates the session; the client must reconnect. Requires user confirmation before invocation. Common use: disconnect a slow subscriber identified via `list-slow-subscribers` or `get-client-details`. |
+| `clear-client-stats` | No | Reset a client's per-connection statistics counters. Non-destructive: affects monitoring counters only, does not disconnect the client. |
 
 ## Recommended Environments
 
