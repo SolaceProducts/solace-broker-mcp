@@ -57,7 +57,7 @@ step. The broker may omit any optional field, so the envelope schema does not
 enumerate inner fields — the authoritative field list per tool is the `select`
 set documented under each tool's **Returns**.
 
-Three tools depart from the generic envelope with a strict, field-level output
+Five tools depart from the generic envelope with a strict, field-level output
 schema: `get-discard-stats` and the four action tools (documented inline below).
 
 ### Errors

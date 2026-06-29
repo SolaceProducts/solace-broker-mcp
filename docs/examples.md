@@ -112,8 +112,9 @@ Read-only tools return their broker data in a step-keyed envelope — see
 
 ## Tool invocations by category
 
-Each block shows the `arguments` object of an MCP `tools/call` request. Replace
-`prod-broker` with one of your configured aliases (from `list-brokers`).
+Each block shows the `name` and `arguments` (the `params` of an MCP `tools/call`
+request). Replace `prod-broker` with one of your configured aliases (from
+`list-brokers`).
 
 **Discovery**
 

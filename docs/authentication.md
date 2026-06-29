@@ -315,34 +315,21 @@ A browser window opens on first use for user login. The IdP must support anonymo
 **Authentication flow (`mode: oauth`):**
 
 ```
- AI Agent              MCP Server                 OAuth IdP            Solace Broker
-(Claude Code)                                  (Keycloak etc.)
-    │                       │                         │                      │
-    │ 1. MCP request (no token)                       │                      │
-    │──────────────────────▶│                         │                      │
-    │ 2. 401 + resource metadata pointer              │                      │
-    │◀──────────────────────│                         │                      │
-    │ 3. GET /.well-known/oauth-protected-resource    │                      │
-    │──────────────────────▶│  (discovers issuer)     │                      │
-    │◀──────────────────────│                         │                      │
-    │ 4. Register client (DCR) or use pre-registered client                  │
-    │────────────────────────────────────────────────▶│                      │
-    │ 5. Browser login — Authorization Code + PKCE     │                      │
-    │◀───────────────────────────────────────────────▶│                      │
-    │ 6. Access token (JWT, aud = configured audience) │                      │
-    │◀─────────────────────────────────────────────────                      │
-    │ 7. MCP request + Bearer JWT                      │                      │
-    │──────────────────────▶│                         │                      │
-    │                       │ 8. Validate JWT:        │                      │
-    │                       │    signature (JWKS), iss, aud, exp              │
-    │                       │────────fetch JWKS──────▶│                      │
-    │                       │◀────────keys────────────│                      │
-    │                       │ 9. Tool call → SEMP request                    │
-    │                       │    (broker auth: basic or bearer, separate)     │
-    │                       │────────────────────────────────────────────────▶
-    │                       │◀───────────10. SEMP response───────────────────│
-    │ 11. Tool result       │                         │                      │
-    │◀──────────────────────│                         │                      │
+ Agent          MCP Server     IdP            Broker
+   │              │              │              │
+   │───── 1 ──────▶              │              │       1. MCP request (no token)
+   ◀───── 2 ──────│              │              │       2. 401 + resource-metadata pointer
+   │───── 3 ──────▶              │              │       3. GET /.well-known/oauth-protected-resource
+   │              │              │              │          (discovers authorization server)
+   │───────────── 4 ─────────────▶              │       4. Register (DCR) or use pre-registered client
+   ◀───────────── 5 ─────────────▶              │       5. Browser login: Authorization Code + PKCE
+   ◀───────────── 6 ─────────────│              │       6. Access token (JWT, aud = configured audience)
+   │───── 7 ──────▶              │              │       7. MCP request + Bearer JWT
+   │              │───── 8 ──────▶              │       8. Validate JWT — fetch JWKS (sig, iss, aud, exp)
+   │              │───────────── 9 ─────────────▶       9. Tool call → SEMP (broker auth: basic/bearer)
+   │              ◀──────────── 10 ─────────────│       10. SEMP response
+   ◀──── 11 ──────│              │              │       11. Tool result
+   │              │              │              │
 ```
 
 > **Two independent auth legs.** Client→server auth (steps 1–8, the JWT above) is
