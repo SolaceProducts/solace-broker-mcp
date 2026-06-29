@@ -404,6 +404,19 @@ func main() {
 		slog.Int("port", cfg.Port),
 		slog.String("log_level", cfg.LogLevel))
 
+	// One-line summary of which observability capabilities are enabled. No
+	// behavior is wired into the request path yet (SOL-151278 skeleton); this
+	// line lets operators confirm the door-closing defaults and any OBS_*
+	// overrides took effect at startup.
+	slog.Info("observability config loaded",
+		slog.Bool("correlation_id", cfg.Observability.CorrelationIDEnabled),
+		slog.Bool("panic_recovery", cfg.Observability.PanicRecoveryEnabled),
+		slog.Bool("metrics", cfg.Observability.MetricsEnabled),
+		slog.Bool("audit_log", cfg.Observability.AuditLogEnabled),
+		slog.Bool("tracing", cfg.Observability.TracingEnabled),
+		slog.Bool("saturation_events", cfg.Observability.SaturationEventsEnabled),
+		slog.Bool("auth_failure_counter", cfg.Observability.AuthFailureCounterEnabled))
+
 	// 2. Parse embedded OpenAPI specs
 	operations, err := sempv2.ParseSpecs(specs.FS)
 	if err != nil {

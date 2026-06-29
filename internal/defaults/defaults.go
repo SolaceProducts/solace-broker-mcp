@@ -193,3 +193,38 @@ const DefaultRetryMinInterval = 3 * time.Second
 // many attempts have been made. Must be >= DefaultRetryMinInterval. Matches
 // the story spec and Terraform default.
 const DefaultRetryMaxInterval = 30 * time.Second
+
+// DefaultSaturationThresholdMs is the latency above which a tool call is
+// considered slow enough to emit a saturation signal (a future observability
+// story consumes this). Expressed in milliseconds to match the YAML field
+// (observability.saturation_threshold_ms).
+//
+// Assumption: 10ms is a sensible default trip point.
+// Reasoning: SEMP management-plane calls that complete well under this are
+// healthy; sustained crossings indicate the broker or the server is saturating.
+// Validation needed: tune against real broker latencies once the saturation
+// emitter lands and we observe production percentiles.
+const DefaultSaturationThresholdMs = 10
+
+// DefaultProgressSignalThresholdMs is the elapsed time after which a long-
+// running tool call emits a progress signal so the agent and operator know
+// work is still in flight (a future observability story consumes this).
+// Expressed in milliseconds to match the YAML field
+// (observability.progress_signal_threshold_ms).
+//
+// Assumption: 5000ms (5s) balances chatter against perceived hangs.
+// Reasoning: most tool calls finish well under 5s; a call still running past
+// it is worth a "still working" signal rather than silence.
+// Validation needed: confirm against real tool-call duration distributions.
+const DefaultProgressSignalThresholdMs = 5000
+
+// DefaultOTelSelfStatsIntervalS is how often, in seconds, the server emits its
+// own OpenTelemetry self-statistics (a future observability story consumes
+// this). Expressed in seconds to match the YAML field
+// (observability.otel_self_stats_interval_s).
+//
+// Assumption: 60s is a reasonable self-stats cadence.
+// Reasoning: matches common metrics scrape intervals; frequent enough to spot
+// trends, infrequent enough to keep self-telemetry overhead negligible.
+// Validation needed: align with the deployment's metrics backend scrape period.
+const DefaultOTelSelfStatsIntervalS = 60
