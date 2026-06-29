@@ -197,16 +197,14 @@ func TestHTTPMiddleware_PanicNil(t *testing.T) {
 	}
 }
 
-// TestHTTPMiddleware_PartialWriteThenPanic PINS the partial-write behaviour,
-// including its known imperfection. Once a handler has committed a status (e.g.
-// 200) and written body bytes, the recovery layer cannot un-send them: the
-// status stays at what the handler committed, and the middleware's own
-// Write(internalErrorBody) APPENDS onto the partial bytes, yielding a
-// concatenated (malformed) body. We assert that EXACT body rather than just a
-// prefix so the imperfection is visible and pinned, not hidden — see the
-// middleware comment for why this best-effort behaviour is accepted for v1
-// (atomic in-tree handlers; wrapping w would break SSE on /mcp). The middleware
-// must NOT crash trying to rewrite the committed response.
+// TestHTTPMiddleware_PartialWriteThenPanic PINS the committed-response
+// behaviour. Once a handler has committed a status (e.g. 200) and written body
+// bytes, the recovery layer cannot un-send them. The middleware detects the
+// commitment (via the recoveryWriter wrapper) and deliberately writes NOTHING:
+// the status stays at what the handler committed and the body is EXACTLY the
+// partial bytes, never the error JSON appended onto them. Appending would
+// corrupt the response into malformed JSON, so we leave the partial response
+// untouched. The panic is still recovered and logged, so the process survives.
 func TestHTTPMiddleware_PartialWriteThenPanic(t *testing.T) {
 	// Not parallel: mutates the process-global slog default.
 	buf := captureLogs(t)
@@ -222,13 +220,89 @@ func TestHTTPMiddleware_PartialWriteThenPanic(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d (committed status cannot be rewritten)", rec.Code, http.StatusOK)
 	}
-	// Exact body: the handler's partial bytes followed by the appended error
-	// JSON. This documents the real (imperfect) wire output on this rare path.
-	if want := partial + internalErrorBody; rec.Body.String() != want {
-		t.Errorf("body = %q, want %q (partial bytes with the error body appended)", rec.Body.String(), want)
+	// Exact body: ONLY the handler's partial bytes. The middleware must NOT
+	// append internalErrorBody onto a committed response (that would corrupt it).
+	if rec.Body.String() != partial {
+		t.Errorf("body = %q, want %q (partial bytes only; error body must NOT be appended)", rec.Body.String(), partial)
 	}
 	// The panic is still recovered (process keeps running) and logged.
 	if buf.Len() == 0 {
 		t.Error("expected a panic_recovered log even after a partial write, got none")
+	}
+}
+
+// TestHTTPMiddleware_ErrAbortHandler PINS the http.ErrAbortHandler exemption: a
+// handler panicking with the sentinel is NOT logged and produces NO 500 body.
+// The middleware re-raises it so net/http's serving goroutine applies the
+// documented suppression (abort the request, no log, no response). We catch the
+// re-raise here with a deferred recover() and assert it is the same sentinel,
+// that nothing was logged, and that nothing was written.
+func TestHTTPMiddleware_ErrAbortHandler(t *testing.T) {
+	// Not parallel: mutates the process-global slog default.
+	buf := captureLogs(t)
+	handler := HTTPMiddleware(panicHandler(http.ErrAbortHandler))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
+
+	func() {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("expected ErrAbortHandler to propagate (re-raise) past the middleware, but no panic escaped")
+			}
+			if r != http.ErrAbortHandler {
+				t.Fatalf("re-raised panic = %v, want http.ErrAbortHandler", r)
+			}
+		}()
+		handler.ServeHTTP(rec, req)
+	}()
+
+	// The sentinel must NOT be logged as a recovered panic.
+	if strings.Contains(buf.String(), "panic_recovered") {
+		t.Errorf("ErrAbortHandler was logged as a recovered panic; net/http's sentinel must be suppressed. log=%s", buf.String())
+	}
+	if buf.Len() != 0 {
+		t.Errorf("expected no log output for ErrAbortHandler, got: %s", buf.String())
+	}
+	// The middleware must NOT write a 500 body for the sentinel.
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected no response body for ErrAbortHandler, got %q", rec.Body.String())
+	}
+}
+
+// TestHTTPMiddleware_PreservesResponseControllerFlush pins the SSE-preservation
+// guarantee: the recoveryWriter the middleware injects must expose Unwrap() so
+// http.NewResponseController(rw).Flush() reaches the underlying Flusher. The MCP
+// SDK's streamable/SSE path on /mcp flushes exactly this way
+// (http.NewResponseController(w).Flush()), so without Unwrap() streaming would
+// break. httptest.ResponseRecorder implements Flush, so a nil error proves the
+// controller walked the Unwrap chain to it.
+func TestHTTPMiddleware_PreservesResponseControllerFlush(t *testing.T) {
+	t.Parallel()
+	var flushErr error
+	handler := HTTPMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		flushErr = http.NewResponseController(w).Flush()
+	}))
+	_ = drive(handler)
+
+	if flushErr != nil {
+		t.Errorf("ResponseController.Flush() through recoveryWriter = %v, want nil (Unwrap must expose the underlying Flusher for SSE on /mcp)", flushErr)
+	}
+}
+
+// TestHTTPMiddleware_CleanPathWrites500 pins that when the handler panics
+// WITHOUT committing the response first, the middleware still writes the clean
+// 500 JSON body. This is the complement of the committed-response case and the
+// common path in practice.
+func TestHTTPMiddleware_CleanPathWrites500(t *testing.T) {
+	t.Parallel()
+	handler := HTTPMiddleware(panicHandler("boom-before-any-write"))
+	rec := drive(handler)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	if rec.Body.String() != internalErrorBody {
+		t.Errorf("body = %q, want %q (clean 500 on the uncommitted path)", rec.Body.String(), internalErrorBody)
 	}
 }
