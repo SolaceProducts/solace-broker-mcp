@@ -32,11 +32,11 @@ func queue(bindCount, spooled, usage, maxUsage float64, state string) map[string
 
 func TestListQueues_Counts(t *testing.T) {
 	items := []any{
-		queue(0, 0, 0, 100, "idle"),     // noConsumer
-		queue(0, 50, 80, 100, "active"), // noConsumer + congested + backlogged + nearFull (0.8)
-		queue(2, 10, 99, 100, "idle"),   // backlogged + nearFull (0.99)
-		queue(2, 0, 50, 100, "idle"),    // nothing
-		queue(1, 5, 0, 0, "idle"),       // backlogged only (unbounded — skip nearFull)
+		queue(0, 0, 0, 100, "not-congested"),     // noConsumer
+		queue(0, 50, 80, 100, "congested"), // noConsumer + congested + backlogged + nearFull (0.8)
+		queue(2, 10, 99, 100, "not-congested"),   // backlogged + nearFull (0.99)
+		queue(2, 0, 50, 100, "not-congested"),    // nothing
+		queue(1, 5, 0, 0, "not-congested"),       // backlogged only (unbounded — skip nearFull)
 	}
 	got, err := ListQueues(map[string]map[string]any{
 		"queues": {"data": items},
@@ -64,8 +64,8 @@ func TestListQueues_Counts(t *testing.T) {
 // treat the counts as global rather than over the visible page.
 func TestListQueues_TruncationSurfaced(t *testing.T) {
 	items := []any{
-		queue(0, 0, 0, 100, "idle"),
-		queue(2, 10, 50, 100, "idle"),
+		queue(0, 0, 0, 100, "not-congested"),
+		queue(2, 10, 50, 100, "not-congested"),
 	}
 	t.Run("truncated", func(t *testing.T) {
 		got, err := ListQueues(map[string]map[string]any{
@@ -149,7 +149,7 @@ func TestListQueues_Errors(t *testing.T) {
 // wrong reason. Hard-failing on one bad row would drop the raw list too —
 // a step down from the collect strategy.
 func TestListQueues_MissingField(t *testing.T) {
-	full := queue(0, 0, 0, 100, "idle")
+	full := queue(0, 0, 0, 100, "not-congested")
 	// Sanity: full input must succeed, otherwise the omission cases prove nothing.
 	if _, err := ListQueues(map[string]map[string]any{"queues": {"data": []any{full}}}); err != nil {
 		t.Fatalf("baseline full input should pass, got %v", err)
@@ -165,7 +165,7 @@ func TestListQueues_MissingField(t *testing.T) {
 			// Pair the broken row with a healthy one so we can also assert the
 			// healthy row's signal still lands (the broken row in the baseline
 			// is a noConsumer, so use a row that ISN'T to disambiguate).
-			healthy := queue(2, 10, 99, 100, "active") // congested + backlogged + nearFull
+			healthy := queue(2, 10, 99, 100, "congested") // congested + backlogged + nearFull
 			got, err := ListQueues(map[string]map[string]any{"queues": {"data": []any{item, healthy}}})
 			if err != nil {
 				t.Fatalf("expected skip on missing %q, got error %v", field, err)
@@ -191,9 +191,9 @@ func TestListQueues_MissingField(t *testing.T) {
 // motivating case for the skip-don't-abort behavior: one queue with a nil
 // msgSpoolUsage shouldn't lose the raw list of every other queue.
 func TestListQueues_NilField(t *testing.T) {
-	bad := queue(0, 0, 0, 100, "idle")
+	bad := queue(0, 0, 0, 100, "not-congested")
 	bad["msgSpoolUsage"] = nil
-	healthy := queue(2, 10, 99, 100, "idle")
+	healthy := queue(2, 10, 99, 100, "not-congested")
 	got, err := ListQueues(map[string]map[string]any{"queues": {"data": []any{bad, healthy}}})
 	if err != nil {
 		t.Fatalf("nil field should skip, got %v", err)
@@ -210,7 +210,7 @@ func TestListQueues_NilField(t *testing.T) {
 // the common case — skipped is noise when nothing was skipped.
 func TestListQueues_SkippedOmittedWhenZero(t *testing.T) {
 	got, err := ListQueues(map[string]map[string]any{
-		"queues": {"data": []any{queue(0, 0, 0, 100, "idle")}},
+		"queues": {"data": []any{queue(0, 0, 0, 100, "not-congested")}},
 	})
 	if err != nil {
 		t.Fatal(err)

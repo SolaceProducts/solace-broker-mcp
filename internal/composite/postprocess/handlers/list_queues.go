@@ -52,7 +52,7 @@ func init() {
 
 // ListQueues aggregates the queue list into four counts:
 //   - noConsumerCount: queues with bindCount == 0 (nothing reading)
-//   - congestedCount:  queues whose lowPriorityMsgCongestionState == "active"
+//   - congestedCount:  queues whose lowPriorityMsgCongestionState == "congested"
 //   - backloggedCount: queues with spooledMsgCount > 0 (any backlog at all)
 //   - nearFullCount:   queues with msgSpoolUsage/maxMsgSpoolUsage >= 0.8
 //     (skips queues with maxMsgSpoolUsage == 0 — unbounded or unset)
@@ -95,7 +95,7 @@ func ListQueues(stepResults map[string]map[string]any) (map[string]any, error) {
 		if bindCount == 0 {
 			noConsumer++
 		}
-		if state == "active" {
+		if state == "congested" {
 			congested++
 		}
 		if spooled > 0 {
