@@ -23,8 +23,8 @@ import (
 )
 
 // ObservabilityConfig holds the feature flags and tunables for the
-// observability capabilities (correlation IDs, panic recovery, metrics, audit
-// log, tracing, saturation events, auth-failure counter). It is a skeleton
+// observability capabilities (correlation IDs, metrics, audit log, tracing,
+// saturation events, auth-failure counter). It is a skeleton
 // (SOL-151278): the flags are loaded and surfaced, but no behavior is wired
 // into the request path yet — later stories consume these values.
 //
@@ -34,8 +34,7 @@ import (
 //     variables, applied in applyObservabilityEnv. Env vars (not YAML) keep
 //     the operator's on/off switches in one obvious place and let a deployment
 //     toggle a capability without editing the mounted config file. The v1
-//     "door-closing" defaults ship correlation + panic recovery ON and
-//     everything else OFF.
+//     "door-closing" defaults ship correlation ON and everything else OFF.
 //
 //   - Numeric tunables (the int fields, YAML-tagged) parse from the YAML
 //     config like every other field, so they inherit the existing ${VAR}
@@ -46,7 +45,6 @@ type ObservabilityConfig struct {
 	// not from YAML. The yaml:"-" tags are intentional: they exclude these
 	// fields from YAML decoding so env vars stay the single source for flags.
 	CorrelationIDEnabled    bool `yaml:"-"`
-	PanicRecoveryEnabled    bool `yaml:"-"`
 	MetricsEnabled          bool `yaml:"-"`
 	AuditLogEnabled         bool `yaml:"-"`
 	TracingEnabled          bool `yaml:"-"`
@@ -66,11 +64,10 @@ type ObservabilityConfig struct {
 }
 
 // Observability env var names. Capability on/off switches; the v1 defaults
-// follow the "door-closing" policy — correlation IDs and panic recovery on,
-// everything else off until an operator opts in.
+// follow the "door-closing" policy — correlation IDs on, everything else off
+// until an operator opts in.
 const (
 	envObsCorrelationIDEnabled      = "OBS_CORRELATION_ID_ENABLED"
-	envObsPanicRecoveryEnabled      = "OBS_PANIC_RECOVERY_ENABLED"
 	envObsMetricsEnabled            = "OBS_METRICS_ENABLED"
 	envObsAuditLogEnabled           = "OBS_AUDIT_LOG_ENABLED"
 	envObsTracingEnabled            = "OBS_TRACING_ENABLED"
@@ -107,7 +104,6 @@ func applyObservabilityEnv(cfg *ServerConfig) {
 	o := &cfg.Observability
 
 	o.CorrelationIDEnabled = envBool(envObsCorrelationIDEnabled, true)
-	o.PanicRecoveryEnabled = envBool(envObsPanicRecoveryEnabled, true)
 	o.MetricsEnabled = envBool(envObsMetricsEnabled, false)
 	o.AuditLogEnabled = envBool(envObsAuditLogEnabled, false)
 	o.TracingEnabled = envBool(envObsTracingEnabled, false)

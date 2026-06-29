@@ -39,9 +39,9 @@ import (
 	_ "github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess/handlers" // register handlers via init()
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceDev/solace-broker-mcp/internal/middleware/recovery"
 	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
 	"github.com/SolaceDev/solace-broker-mcp/internal/observability/health"
-	"github.com/SolaceDev/solace-broker-mcp/internal/observability/recovery"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2/specs"
@@ -165,9 +165,9 @@ func buildMux(aliases func() []string, probeBroker func(ctx context.Context, bro
 }
 
 // buildRootHandler returns the outermost HTTP handler for the server: the mux
-// wrapped with panic-recovery as the OUTERMOST layer (ADR-001 chain ordering),
-// gated on OBS_PANIC_RECOVERY_ENABLED. When the flag is off the mux is returned
-// unwrapped and panics propagate (today's behaviour).
+// always wrapped with panic-recovery as the OUTERMOST layer (ADR-001 chain
+// ordering). Recovery is unconditional — a safety net with no production reason
+// to disable.
 //
 // Recovery wraps the WHOLE mux, so it covers every route — the standalone
 // /livez, /health, /ready probes (and future /readyz, /metrics), the catch-all
@@ -178,11 +178,8 @@ func buildMux(aliases func() []string, probeBroker func(ctx context.Context, bro
 //
 // Extracted from main() so the composition test can assert the assembled chain
 // order against the real wiring rather than a hand-rebuilt copy.
-func buildRootHandler(mux *http.ServeMux, obs config.ObservabilityConfig) http.Handler {
-	if recovery.Enabled(obs) {
-		return recovery.HTTPMiddleware(mux)
-	}
-	return mux
+func buildRootHandler(mux *http.ServeMux) http.Handler {
+	return recovery.HTTPMiddleware(mux)
 }
 
 // healthConfig holds the minimal server settings needed by the --health probe.
@@ -452,7 +449,6 @@ func main() {
 	// overrides took effect at startup.
 	slog.Info("observability config loaded",
 		slog.Bool("correlation_id", cfg.Observability.CorrelationIDEnabled),
-		slog.Bool("panic_recovery", cfg.Observability.PanicRecoveryEnabled),
 		slog.Bool("metrics", cfg.Observability.MetricsEnabled),
 		slog.Bool("audit_log", cfg.Observability.AuditLogEnabled),
 		slog.Bool("tracing", cfg.Observability.TracingEnabled),
@@ -574,13 +570,11 @@ func main() {
 	}))
 
 	// 9. Wrap the whole mux with panic-recovery as the OUTERMOST handler
-	// (ADR-001), gated on OBS_PANIC_RECOVERY_ENABLED. A panic in ANY handler is
-	// caught, logged with a structured stack, and returned as a clean 500; the
-	// process keeps running. Recovery sits OUTSIDE the per-route correlation
-	// middleware wired on /mcp above — different layers, no conflict.
-	rootHandler := buildRootHandler(mux, cfg.Observability)
-	slog.Info("panic-recovery middleware wiring",
-		slog.Bool("enabled", recovery.Enabled(cfg.Observability)))
+	// (ADR-001). Recovery is unconditional. A panic in ANY handler is caught,
+	// logged with a structured stack, and returned as a clean 500; the process
+	// keeps running. Recovery sits OUTSIDE the per-route correlation middleware
+	// wired on /mcp above — different layers, no conflict.
+	rootHandler := buildRootHandler(mux)
 
 	// 10. Start server with graceful shutdown
 	addr := fmt.Sprintf(":%d", cfg.Port)
