@@ -19,6 +19,7 @@ An MCP (Model Context Protocol) server for Solace event brokers, built with Go u
 - [Quickstart](#quickstart)
   - [Configuration](#configuration)
   - [Binary Deployment](#binary-deployment)
+  - [Install with go install](#install-with-go-install)
   - [Docker Deployment](#docker-deployment)
   - [Connect from Claude Code](#connect-from-claude-code)
   - [Connect from Solace Agent Mesh (SAM)](#connect-from-solace-agent-mesh-sam)
@@ -39,6 +40,7 @@ MCP-compatible clients, for example Claude Code, invoke these tools using natura
 ## Features
 
 - **17 read-only monitoring tools** — Event broker status, message VPNs, queues, clients, and REST delivery points
+- **Optional action tools** — Disconnect clients, delete queued messages, and reset statistics; gated behind `enable_write_tools` (off by default)
 - **Client authentication** — Development mode (no auth), static bearer tokens, or OAuth 2.1/OIDC with JWT validation
 - **Multi-broker configuration** — Connect to multiple brokers and address them by configured alias
 - **Retry and rate limiting** — Configurable backoff intervals and concurrent request limits per broker
@@ -64,7 +66,7 @@ The server implements the MCP HTTP transport specification and exposes event bro
 │                  │                    │   Broker MCP Server      │                      │                  │
 │   AI Agent       │ ────────────────▶ │                          │  ──────────────────▶ │  Solace          │
 │  (Claude Code,   │   JSON-RPC         │  • Auth (OAuth / token)  │   HTTP(S) /SEMP      │  Event           │
-│  Claude Desktop) │   + Bearer JWT     │  • 13 read-only tools    │                      │  Broker(s)       │
+│  Claude Desktop) │   + Bearer JWT     │  • 17 read-only tools    │                      │  Broker(s)       │
 │                  │                    │  • Rate-limit + retry    │                      │                  │
 │                  │ ◀──────────────── │  • SEMP client pool      │ ◀──────────────────  │                  │
 └──────────────────┘                    └──────────────────────────┘   basic / bearer     └──────────────────┘
@@ -72,7 +74,7 @@ The server implements the MCP HTTP transport specification and exposes event bro
 
 ## Tools
 
-The server exposes read-only tools grouped by what they inspect, plus a small set of action tools for operational workflows. Every tool except `list-brokers` takes a `broker` parameter naming a configured broker alias. See the [user guide](docs/user-guide.md#tools) for per-tool descriptions, parameters, and pagination defaults.
+The server exposes read-only tools grouped by what they inspect, plus a small set of action tools for operational workflows. Every tool except `list-brokers` takes a `broker` parameter naming a configured broker alias. See the [Tools Reference](docs/tools-reference.md) for full per-tool parameters, output shape, and example invocations; the [user guide](docs/user-guide.md#tools-reference) has the narrative overview.
 
 | Category | Tools | Description |
 |---|---|---|
@@ -89,6 +91,8 @@ The server exposes read-only tools grouped by what they inspect, plus a small se
 ## Guides
 
 - [User Guide](docs/user-guide.md) — overview, tools reference, deployment, and troubleshooting
+- [Tools Reference](docs/tools-reference.md) — per-tool parameters, output schema, and example invocations for all 21 tools
+- [Examples](docs/examples.md) — Claude Desktop config, natural-language queries, and multi-broker setup
 - [Configuration](docs/configuration.md) — server settings, event broker config, client auth, and rate-limit/retry settings
 - [Authentication](docs/authentication.md) — OAuth/OIDC and static token setup for MCP clients
 - [SAM Integration](docs/sam-integration.md) — wire this MCP server into a Solace Agent Mesh project as an agent
@@ -146,6 +150,7 @@ The `.env` file is loaded automatically. Environment variables set directly (for
 
 Select a deployment method:
 - **[Binary](#binary-deployment)** - Single executable with no dependencies; suitable for local development and VM deployment
+- **[go install](#install-with-go-install)** - Build and install from source with the Go toolchain; suitable when you already have Go and want the latest tagged release on your `PATH`
 - **[Docker](#docker-deployment)** - Containerized deployment; suitable for production and Kubernetes environments
 
 For contributors running from source, see [Development Setup](#development-setup).
@@ -182,6 +187,31 @@ curl http://localhost:9090/livez
 ```
 
 The binary is statically linked with no external dependencies. It handles `SIGTERM` and `SIGINT` for graceful shutdown.
+
+### Install with go install
+
+If you have the Go toolchain installed ([Go 1.25+](https://go.dev/dl/)), install the server directly from source:
+
+```bash
+go install github.com/SolaceDev/solace-broker-mcp/cmd/server@latest
+```
+
+This builds the latest tagged release and places a `server` binary in `$(go env GOBIN)` (or `$(go env GOPATH)/bin`). Ensure that directory is on your `PATH`. Pin a specific version by replacing `@latest` with a tag, for example `@v1.2.0`.
+
+Run it the same way as the downloaded binary, pointing `CONFIG_FILE` at your config:
+
+```bash
+CONFIG_FILE=./broker-config.yaml server
+```
+
+> **Note:** The installed binary is named `server` (the command's package directory), not `solace-broker-mcp`. Rename it or create a symlink if you prefer the longer name. Unlike release archives, `go install` does not include the example config or license — copy `broker-config.example.yaml` from the repository.
+
+Verify:
+
+```bash
+curl http://localhost:9090/health
+# {"status": "ok"}
+```
 
 ### Docker Deployment
 
