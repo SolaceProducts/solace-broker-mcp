@@ -86,10 +86,12 @@ func (h *slogHandler) Enabled(ctx context.Context, level slog.Level) bool {
 // non-empty correlation ID AND the record does not already carry a
 // correlation_id attribute, then delegates to next.
 //
-// The no-overwrite rule (AC #3) is enforced by scanning the record's attributes
-// for an existing correlation_id key before adding one; an explicitly logged
-// correlation_id always wins and is never duplicated. When there is no ID to add
-// and no recorded goa steps, the record is passed through untouched, so
+// The no-overwrite rule (AC #3) is enforced by checking for an existing
+// root-level correlation_id before adding one: either on the record itself
+// (hasCorrelationID) or bound on the logger at root via .With(...) before any
+// group was opened (hasRootCorrelationID). In both cases the caller's explicit
+// correlation_id wins and is never duplicated at the root. When there is no ID
+// to add and no recorded goa steps, the record is passed through untouched, so
 // absent-ID output matches the unwrapped handler exactly.
 //
 // With recorded goa steps, the delivery handler is rebuilt from the ungrouped
@@ -98,7 +100,7 @@ func (h *slogHandler) Enabled(ctx context.Context, level slog.Level) bool {
 // their grouping while correlation_id stays at the top level.
 func (h *slogHandler) Handle(ctx context.Context, rec slog.Record) error {
 	id := From(ctx)
-	addID := id != "" && !h.hasCorrelationID(rec)
+	addID := id != "" && !h.hasCorrelationID(rec) && !h.hasRootCorrelationID()
 
 	if len(h.goas) == 0 {
 		if !addID {
@@ -142,6 +144,35 @@ func (h *slogHandler) hasCorrelationID(rec slog.Record) bool {
 		return true
 	})
 	return found
+}
+
+// hasRootCorrelationID reports whether a correlation_id was already bound on the
+// logger at the ROOT level via .With(...)/WithAttrs, recorded in goas. The
+// wrapper always injects its correlation_id at the root (bound on the ungrouped
+// next before any goa step is replayed), so a duplicate root key arises only
+// when a root-level correlation_id already exists. Returning true here suppresses
+// that injection so the caller's explicit value wins with no duplicate (AC #3).
+//
+// Only attrs bound BEFORE the first WithGroup land at the root; attrs bound after
+// a group nest under that group (a different key path) and must NOT suppress the
+// root injection. So the scan walks goas in order and stops at the first group
+// step: any correlation_id in an attr step seen before that is root-level; a
+// correlation_id only appearing in attrs after a group is nested and is ignored
+// here (still inject at root). With no goas (the common case) this returns false.
+func (h *slogHandler) hasRootCorrelationID() bool {
+	for _, g := range h.goas {
+		if g.group != "" {
+			// First group opened: subsequent attrs nest under it, so no further
+			// step can introduce a root-level correlation_id.
+			return false
+		}
+		for _, a := range g.attrs {
+			if a.Key == attrKey {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // WithAttrs returns a new slogHandler that records the attrs as a goa step. It

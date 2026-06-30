@@ -137,6 +137,53 @@ func TestSlogHandler_DoesNotOverwriteExisting(t *testing.T) {
 	}
 }
 
+// AC #3: a correlation_id bound on the LOGGER at the root via .With(...) (held in
+// goas, not on the record) must also win over the context ID — the wrapper must
+// not inject a second root correlation_id. Without the goas root-level check, the
+// context ID would be added at the root alongside the explicit one, producing a
+// duplicate root key.
+func TestSlogHandler_DoesNotDuplicateWithBoundRootCorrelationID(t *testing.T) {
+	var buf bytes.Buffer
+	logger := newJSONLogger(&buf).With(slog.String("correlation_id", "explicit"))
+
+	ctx := With(context.Background(), "from-ctx")
+	logger.InfoContext(ctx, "hello")
+
+	m := parseLine(t, &buf)
+	if got := m["correlation_id"]; got != "explicit" {
+		t.Errorf("correlation_id = %v, want %q (With-bound root value must win)", got, "explicit")
+	}
+	// Exactly one root correlation_id: the context ID must not be injected.
+	if n := strings.Count(buf.String(), `"correlation_id"`); n != 1 {
+		t.Errorf("expected exactly one correlation_id occurrence, got %d in: %s", n, buf.String())
+	}
+}
+
+// AC #3 boundary: a correlation_id bound via .With(...) AFTER a WithGroup nests
+// under that group (a different key path), so it does NOT collide with the root.
+// The wrapper must still inject the context ID at the root: the result has the
+// context ID at root AND the explicit value nested under the group, no duplicate
+// at any single level.
+func TestSlogHandler_InjectsRootWhenWithBoundCorrelationIDIsNested(t *testing.T) {
+	var buf bytes.Buffer
+	logger := newJSONLogger(&buf).WithGroup("g").With(slog.String("correlation_id", "nested"))
+
+	ctx := With(context.Background(), "from-ctx")
+	logger.InfoContext(ctx, "hello")
+
+	m := parseLine(t, &buf)
+	if got := m["correlation_id"]; got != "from-ctx" {
+		t.Errorf("root correlation_id = %v, want %q (context ID injected at root)", got, "from-ctx")
+	}
+	g, ok := m["g"].(map[string]any)
+	if !ok {
+		t.Fatalf("group g missing or not an object: %v", m)
+	}
+	if got := g["correlation_id"]; got != "nested" {
+		t.Errorf("g.correlation_id = %v, want %q (nested explicit value preserved)", got, "nested")
+	}
+}
+
 // AC #2: redaction is preserved because the wrapper delegates to the inner JSON
 // handler that owns ReplaceAttr. A password attr is redacted, and the
 // correlation_id added by the wrapper passes through ReplaceAttr intact (it is
@@ -226,15 +273,23 @@ func TestSlogHandler_MixedWithAndGroup(t *testing.T) {
 	ctx := With(context.Background(), "abc")
 	logger.InfoContext(ctx, "hi", slog.String("rec", "r"))
 
-	line := buf.String()
-	for _, want := range []string{`"correlation_id":"abc"`, `"base":"b"`, `"ingroup":"x"`, `"rec":"r"`} {
-		if !strings.Contains(line, want) {
-			t.Errorf("missing %s in: %s", want, line)
-		}
+	m := parseLine(t, &buf)
+	// correlation_id and base land at the root; ingroup and rec nest under g.
+	if got := m["correlation_id"]; got != "abc" {
+		t.Errorf("correlation_id = %v, want %q (root level)", got, "abc")
 	}
-	// ingroup and rec must be inside group g; base and correlation_id must not.
-	if !strings.Contains(line, `"g":{"ingroup":"x","rec":"r"}`) {
-		t.Errorf("grouped attrs not nested correctly: %s", line)
+	if got := m["base"]; got != "b" {
+		t.Errorf("base = %v, want %q (root level)", got, "b")
+	}
+	g, ok := m["g"].(map[string]any)
+	if !ok {
+		t.Fatalf("group g missing or not an object: %v", m)
+	}
+	if got := g["ingroup"]; got != "x" {
+		t.Errorf("g.ingroup = %v, want %q", got, "x")
+	}
+	if got := g["rec"]; got != "r" {
+		t.Errorf("g.rec = %v, want %q", got, "r")
 	}
 }
 
@@ -247,12 +302,20 @@ func TestSlogHandler_NestedGroups(t *testing.T) {
 	ctx := With(context.Background(), "abc")
 	logger.InfoContext(ctx, "hi", slog.String("rec", "r"))
 
-	line := buf.String()
-	if !strings.Contains(line, `"correlation_id":"abc"`) {
-		t.Errorf("correlation_id not at root: %s", line)
+	m := parseLine(t, &buf)
+	if got := m["correlation_id"]; got != "abc" {
+		t.Errorf("correlation_id = %v, want %q (root level)", got, "abc")
 	}
-	if !strings.Contains(line, `"a":{"b":{"rec":"r"}}`) {
-		t.Errorf("record attr not nested under a.b: %s", line)
+	a, ok := m["a"].(map[string]any)
+	if !ok {
+		t.Fatalf("group a missing or not an object: %v", m)
+	}
+	b, ok := a["b"].(map[string]any)
+	if !ok {
+		t.Fatalf("group a.b missing or not an object: %v", m)
+	}
+	if got := b["rec"]; got != "r" {
+		t.Errorf("a.b.rec = %v, want %q", got, "r")
 	}
 }
 
