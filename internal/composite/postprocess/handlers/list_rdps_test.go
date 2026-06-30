@@ -32,7 +32,7 @@ func TestListRdps_Counts(t *testing.T) {
 	items := []any{
 		rdp(true, true, ""),                    // healthy
 		rdp(false, true, "connection refused"), // down + downButEnabled + bucketed
-		rdp(false, false, "auth failed"),       // down + disabled (NOT downButEnabled — disabled-by-design); reason bucketed
+		rdp(false, false, "RDP Shutdown"),      // down + disabled — NOT downButEnabled, NOT bucketed (admin-disabled reasons are not unexpected failures)
 		rdp(true, false, ""),                   // disabled only
 		rdp(false, true, "connection refused"), // down + downButEnabled + same bucket
 	}
@@ -55,38 +55,45 @@ func TestListRdps_Counts(t *testing.T) {
 	if !ok {
 		t.Fatalf("byLastFailureReason: wrong type %T", got["byLastFailureReason"])
 	}
-	if byReason["connection refused"] != 2 || byReason["auth failed"] != 1 || len(byReason) != 2 {
-		t.Errorf("byLastFailureReason: got %v, want {connection refused:2, auth failed:1}", byReason)
+	if byReason["connection refused"] != 2 || len(byReason) != 1 {
+		t.Errorf("byLastFailureReason: got %v, want {connection refused:2}", byReason)
+	}
+	if _, present := byReason["RDP Shutdown"]; present {
+		t.Errorf("admin-disabled RDP's reason must not bucket, got %v", byReason)
 	}
 }
 
-// TestListRdps_ActiveOnlyFilter is the load-bearing test for the
-// byLastFailureReason design choice: the map reflects ACTIVE failures, not
-// historical scars. An RDP that has since recovered (up == true) with a stale
-// lastFailureReason MUST NOT appear in the bucket; an empty reason on a
-// currently-down RDP MUST NOT appear as the "" key.
-func TestListRdps_ActiveOnlyFilter(t *testing.T) {
+// TestListRdps_UnexpectedFailureFilter is the load-bearing test for the
+// byLastFailureReason design choice: the map reflects UNEXPECTED active
+// failures (down && enabled && non-empty reason). Three classes MUST NOT
+// appear in the bucket:
+//   - admin-disabled RDPs (broker populates "RDP Shutdown" but it's not a
+//     failure — the operator turned it off);
+//   - recovered RDPs whose lastFailureReason is a stale historical scar;
+//   - currently-down RDPs with no reason at all (would otherwise produce a
+//     noisy "" key).
+func TestListRdps_UnexpectedFailureFilter(t *testing.T) {
 	items := []any{
-		rdp(false, true, "boom"),    // down with reason → bucketed
-		rdp(true, true, "old boom"), // recovered with historical reason → MUST NOT bucket
-		rdp(false, true, ""),        // down with empty reason → counted in downCount, NOT bucketed
+		rdp(false, true, "boom"),          // down + enabled + reason → bucketed
+		rdp(false, false, "RDP Shutdown"), // admin-disabled → MUST NOT bucket
+		rdp(true, true, "old boom"),       // recovered with historical reason → MUST NOT bucket
+		rdp(false, true, ""),              // down with empty reason → counted in downCount, NOT bucketed
 	}
 	got, err := ListRdps(map[string]map[string]any{"rdps": {"data": items}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got["downCount"] != 2 {
-		t.Errorf("downCount: got %v, want 2", got["downCount"])
+	if got["downCount"] != 3 {
+		t.Errorf("downCount: got %v, want 3", got["downCount"])
 	}
 	byReason := got["byLastFailureReason"].(map[string]int)
 	if len(byReason) != 1 || byReason["boom"] != 1 {
 		t.Errorf("byLastFailureReason should contain only {boom:1}, got %v", byReason)
 	}
-	if _, present := byReason[""]; present {
-		t.Errorf("empty-string key must not appear in byLastFailureReason: %v", byReason)
-	}
-	if _, present := byReason["old boom"]; present {
-		t.Errorf("recovered RDP's historical reason leaked into bucket: %v", byReason)
+	for _, leaked := range []string{"", "old boom", "RDP Shutdown"} {
+		if _, present := byReason[leaked]; present {
+			t.Errorf("%q leaked into byLastFailureReason: %v", leaked, byReason)
+		}
 	}
 }
 
@@ -199,9 +206,10 @@ func TestListRdps_MissingField(t *testing.T) {
 					item[k] = v
 				}
 			}
-			// Healthy row that lands in every counter we assert (down + disabled +
-			// reason-bucket, NOT downButEnabled — so we can also check the AND-gate).
-			healthy := rdp(false, false, "other")
+			// Healthy row lands in every counter we assert: down + downButEnabled +
+			// bucketed (down && enabled && reason). The skipped row must not steal
+			// any of those signals.
+			healthy := rdp(false, true, "other")
 			got, err := ListRdps(map[string]map[string]any{"rdps": {"data": []any{item, healthy}}})
 			if err != nil {
 				t.Fatalf("expected skip on missing %q, got error %v", field, err)
@@ -212,7 +220,7 @@ func TestListRdps_MissingField(t *testing.T) {
 			if got["scanned"] != 2 {
 				t.Errorf("scanned: got %v, want 2", got["scanned"])
 			}
-			if got["downCount"] != 1 || got["disabledCount"] != 1 || got["downButEnabledCount"] != 0 {
+			if got["downCount"] != 1 || got["downButEnabledCount"] != 1 || got["disabledCount"] != 0 {
 				t.Errorf("healthy row signals lost or wrong: %+v", got)
 			}
 			byReason := got["byLastFailureReason"].(map[string]int)

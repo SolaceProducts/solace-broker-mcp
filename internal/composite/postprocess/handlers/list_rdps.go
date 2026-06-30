@@ -45,9 +45,11 @@ func init() {
 //     page-worthy count (admin-disabled RDPs are excluded, since they're down
 //     by design)
 //   - byLastFailureReason: count grouped by lastFailureReason, restricted to
-//     currently-down RDPs (up == false) so the map reflects ACTIVE failures,
-//     not historical scars on RDPs that have since recovered. The empty-string
-//     bucket is omitted to keep the map LLM-readable.
+//     currently-down RDPs that are NOT admin-disabled (up == false && enabled
+//     == true) so the map reflects UNEXPECTED active failures — not "RDP
+//     Shutdown" entries on intentionally-disabled RDPs, and not historical
+//     scars on RDPs that have since recovered. The empty-string bucket is
+//     omitted to keep the map LLM-readable.
 //
 // Robustness mirrors listQueues: a row missing or wrong-type on any required
 // field is tallied into skipped (surfaced when non-zero) rather than aborting
@@ -86,7 +88,7 @@ func ListRdps(stepResults map[string]map[string]any) (map[string]any, error) {
 		if !up && enabled {
 			downButEnabled++
 		}
-		if !up && reason != "" {
+		if !up && enabled && reason != "" {
 			byReason[reason]++
 		}
 	}

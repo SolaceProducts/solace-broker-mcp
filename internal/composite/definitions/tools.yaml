@@ -304,9 +304,10 @@ tools:
       exist and identify any that are down. The response includes a summary
       block with downCount, disabledCount, downButEnabledCount (RDPs that are
       down but not admin-disabled — the unexpectedly-down set), and
-      byLastFailureReason (counts of currently-down RDPs grouped by their
-      failure reason). For detailed RDP status including consumers and queue
-      bindings, use get-rdp-status.
+      byLastFailureReason (counts of unexpectedly-down RDPs — enabled but not
+      up — grouped by their failure reason; admin-disabled RDPs and recovered
+      RDPs with stale reasons are excluded). For detailed RDP status including
+      consumers and queue bindings, use get-rdp-status.
     annotations:
       readOnly: true
     parameters:
