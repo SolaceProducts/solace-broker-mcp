@@ -39,6 +39,7 @@ import (
 	_ "github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess/handlers" // register handlers via init()
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
 	"github.com/SolaceDev/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
@@ -235,6 +236,26 @@ func limitRequestBody(next http.Handler, maxBytes int64) http.Handler {
 		r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 		next.ServeHTTP(w, r)
 	})
+}
+
+// buildMCPEndpoint assembles the /mcp handler chain around authedHandler.
+//
+// The layer order, outermost first, is: limitRequestBody → correlation →
+// authedHandler. limitRequestBody is the OUTERMOST layer so an oversized
+// request is rejected with 413 before any work is done. A deliberate
+// consequence: a 413 is returned BEFORE the correlation middleware runs, so
+// 413 responses carry no correlation ID. This is intentional. Correlation sits
+// OUTSIDE auth (ADR-001) so a 401 still gets an ID, but the body limit sits
+// outside correlation by design.
+//
+// When correlationEnabled is false the correlation layer is omitted entirely
+// (correlation.From then returns "").
+func buildMCPEndpoint(authedHandler http.Handler, correlationEnabled bool) http.Handler {
+	endpoint := authedHandler
+	if correlationEnabled {
+		endpoint = correlation.Middleware(authedHandler)
+	}
+	return limitRequestBody(endpoint, defaults.MaxMCPRequestBytes)
 }
 
 // startServer starts httpServer in a background goroutine and returns a channel
@@ -498,9 +519,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Register authenticated MCP endpoint. The body limit wraps the outside
-	// so it bounds the request before any layer can buffer it.
-	mux.Handle("/mcp", limitRequestBody(authedHandler, defaults.MaxMCPRequestBytes))
+	// Stamp a correlation ID immediately OUTSIDE the auth middleware so that an
+	// unauthenticated request rejected with 401 still gets a correlation ID
+	// attached (ADR-001 ordering). Gated on OBS_CORRELATION_ID_ENABLED: when
+	// off, the middleware is not wired and correlation.From returns "".
+	correlationEnabled := correlation.Enabled(cfg.Observability)
+	slog.Info("correlation-ID middleware wiring",
+		slog.Bool("enabled", correlationEnabled))
+
+	// Register authenticated MCP endpoint. buildMCPEndpoint wraps the body
+	// limit on the outside so it bounds the request before any layer buffers
+	// it; see buildMCPEndpoint for the full layer order and 413 rationale.
+	mux.Handle("/mcp", buildMCPEndpoint(authedHandler, correlationEnabled))
 
 	// Register OAuth Protected Resource Metadata endpoint (RFC 9728)
 	// This enables MCP clients to discover the authorization server for OAuth flows.
