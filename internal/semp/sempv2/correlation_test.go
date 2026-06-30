@@ -48,9 +48,12 @@ func newTestClientRetries(t *testing.T, maxRetries int, handler http.HandlerFunc
 // traceparent, alongside the preserved auth header.
 func TestExecute_CorrelationHeaders_TraceID(t *testing.T) {
 	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
-	var captured http.Header
+	// captured is written by the httptest server goroutine and read by the test
+	// goroutine. A buffered channel hands the headers across with a clean
+	// happens-before edge (send before recv), so the read needs no extra lock.
+	captured := make(chan http.Header, 1)
 	client, srv := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		captured = r.Header.Clone()
+		captured <- r.Header.Clone()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(okJSON))
 	})
@@ -64,14 +67,15 @@ func TestExecute_CorrelationHeaders_TraceID(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	if got := captured.Get("X-Correlation-ID"); got != traceID {
+	hdr := <-captured
+	if got := hdr.Get("X-Correlation-ID"); got != traceID {
 		t.Errorf("X-Correlation-ID = %q, want %q", got, traceID)
 	}
-	tp := captured.Get("traceparent")
+	tp := hdr.Get("traceparent")
 	if !strings.HasPrefix(tp, "00-"+traceID+"-") || !strings.HasSuffix(tp, "-01") {
 		t.Errorf("traceparent = %q, want 00-%s-<span>-01", tp, traceID)
 	}
-	if captured.Get("Authorization") == "" {
+	if hdr.Get("Authorization") == "" {
 		t.Error("Authorization header missing; correlation headers must not displace auth")
 	}
 }
@@ -79,9 +83,11 @@ func TestExecute_CorrelationHeaders_TraceID(t *testing.T) {
 // TestExecute_CorrelationHeaders_Empty verifies that with no correlation ID,
 // neither correlation header is attached.
 func TestExecute_CorrelationHeaders_Empty(t *testing.T) {
-	var captured http.Header
+	// Buffered channel hands the captured headers from the server goroutine to
+	// the test goroutine with a happens-before edge, so the read is race-free.
+	captured := make(chan http.Header, 1)
 	client, srv := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		captured = r.Header.Clone()
+		captured <- r.Header.Clone()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(okJSON))
 	})
@@ -93,10 +99,11 @@ func TestExecute_CorrelationHeaders_Empty(t *testing.T) {
 	if _, err := client.Execute(context.Background(), op, args); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if got := captured.Get("X-Correlation-ID"); got != "" {
+	hdr := <-captured
+	if got := hdr.Get("X-Correlation-ID"); got != "" {
 		t.Errorf("X-Correlation-ID = %q, want absent", got)
 	}
-	if got := captured.Get("traceparent"); got != "" {
+	if got := hdr.Get("traceparent"); got != "" {
 		t.Errorf("traceparent = %q, want absent", got)
 	}
 }
@@ -105,9 +112,11 @@ func TestExecute_CorrelationHeaders_Empty(t *testing.T) {
 // X-Correlation-ID and never a traceparent.
 func TestExecute_CorrelationHeaders_NonTraceID(t *testing.T) {
 	const id = "order-12345-abc"
-	var captured http.Header
+	// Buffered channel hands the captured headers from the server goroutine to
+	// the test goroutine with a happens-before edge, so the read is race-free.
+	captured := make(chan http.Header, 1)
 	client, srv := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		captured = r.Header.Clone()
+		captured <- r.Header.Clone()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(okJSON))
 	})
@@ -120,10 +129,11 @@ func TestExecute_CorrelationHeaders_NonTraceID(t *testing.T) {
 	if _, err := client.Execute(ctx, op, args); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if got := captured.Get("X-Correlation-ID"); got != id {
+	hdr := <-captured
+	if got := hdr.Get("X-Correlation-ID"); got != id {
 		t.Errorf("X-Correlation-ID = %q, want %q", got, id)
 	}
-	if got := captured.Get("traceparent"); got != "" {
+	if got := hdr.Get("traceparent"); got != "" {
 		t.Errorf("traceparent = %q, want absent for non-trace-id", got)
 	}
 }

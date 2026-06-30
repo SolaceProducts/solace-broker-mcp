@@ -89,14 +89,31 @@ func isTraceID(id string) bool {
 }
 
 // newSpanID returns a fresh 16-hex-char W3C span-id sourced from crypto/rand,
-// and ok=false if the (unreachable on modern Go — a failing entropy source
-// crashes the runtime internally) read fails. On !ok the caller omits the
-// traceparent entirely rather than emit a span that looks real but isn't; the
-// X-Correlation-ID header still carries the correlation ID, so cross-system
-// correlation is preserved without a fabricated span.
+// and ok=false when no valid span-id can be produced. ok=false in two cases:
+//   - the read fails (unreachable on modern Go — a failing entropy source
+//     crashes the runtime internally), and
+//   - the read succeeds but yields all-zero bytes. The all-zero span-id is
+//     invalid per W3C Trace Context, so we reject it rather than emit
+//     "0000000000000000". This is astronomically rare (1 in 2^64) but a real
+//     possibility, so we fold it into the same omit-the-traceparent path.
+//
+// On !ok the caller omits the traceparent entirely rather than emit a span that
+// looks real but isn't; the X-Correlation-ID header still carries the
+// correlation ID, so cross-system correlation is preserved without a fabricated
+// span.
 func newSpanID() (string, bool) {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
+		return "", false
+	}
+	allZero := true
+	for _, v := range b {
+		if v != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
 		return "", false
 	}
 	return hex.EncodeToString(b[:]), true

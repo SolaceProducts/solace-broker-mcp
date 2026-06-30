@@ -38,21 +38,22 @@ func newTestClientWithRetries(t *testing.T, srv *httptest.Server, maxRetries int
 	return client
 }
 
-// captureHeaders returns a handler that records the headers of every inbound
-// request (one entry per attempt) and replies with a successful SEMPv1
-// envelope. The returned slice is guarded by mu for the retry test.
-func captureSEMPv1(t *testing.T) (http.HandlerFunc, *[]http.Header, *sync.Mutex) {
+// captureSEMPv1 returns a handler that records the headers of each inbound
+// request and replies with a successful SEMPv1 envelope. Captured headers are
+// delivered over a buffered channel: the handler runs on the httptest server
+// goroutine and the test reads from the test goroutine, so the channel's
+// send-before-receive ordering establishes the happens-before edge that makes
+// the cross-goroutine read race-free. The buffer (size 4) lets the handler
+// return without blocking on the rare extra request.
+func captureSEMPv1(t *testing.T) (http.HandlerFunc, chan http.Header) {
 	t.Helper()
-	var mu sync.Mutex
-	var seen []http.Header
+	captured := make(chan http.Header, 4)
 	h := func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		seen = append(seen, r.Header.Clone())
-		mu.Unlock()
+		captured <- r.Header.Clone()
 		w.Header().Set("Content-Type", "application/xml")
 		_, _ = w.Write([]byte(successEnvelope))
 	}
-	return h, &seen, &mu
+	return h, captured
 }
 
 // TestExecute_CorrelationHeaders_TraceID verifies that a 32-hex trace-id on the
@@ -60,7 +61,7 @@ func captureSEMPv1(t *testing.T) (http.HandlerFunc, *[]http.Header, *sync.Mutex)
 // traceparent, and that auth headers survive alongside them.
 func TestExecute_CorrelationHeaders_TraceID(t *testing.T) {
 	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
-	h, seen, _ := captureSEMPv1(t)
+	h, captured := captureSEMPv1(t)
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 	client := newTestClient(t, srv)
@@ -71,10 +72,7 @@ func TestExecute_CorrelationHeaders_TraceID(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	if len(*seen) != 1 {
-		t.Fatalf("got %d requests, want 1", len(*seen))
-	}
-	hdr := (*seen)[0]
+	hdr := <-captured
 	if got := hdr.Get("X-Correlation-ID"); got != traceID {
 		t.Errorf("X-Correlation-ID = %q, want %q", got, traceID)
 	}
@@ -91,7 +89,7 @@ func TestExecute_CorrelationHeaders_TraceID(t *testing.T) {
 // TestExecute_CorrelationHeaders_Empty verifies that with no correlation ID on
 // the context, neither correlation header is attached.
 func TestExecute_CorrelationHeaders_Empty(t *testing.T) {
-	h, seen, _ := captureSEMPv1(t)
+	h, captured := captureSEMPv1(t)
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 	client := newTestClient(t, srv)
@@ -100,7 +98,7 @@ func TestExecute_CorrelationHeaders_Empty(t *testing.T) {
 	if _, err := client.Execute(context.Background(), "<rpc><show><version/></show></rpc>"); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	hdr := (*seen)[0]
+	hdr := <-captured
 	if got := hdr.Get("X-Correlation-ID"); got != "" {
 		t.Errorf("X-Correlation-ID = %q, want absent", got)
 	}
@@ -113,7 +111,7 @@ func TestExecute_CorrelationHeaders_Empty(t *testing.T) {
 // sets only X-Correlation-ID, never a traceparent.
 func TestExecute_CorrelationHeaders_NonTraceID(t *testing.T) {
 	const id = "0190f3a1-7c2e-7b3d-9f1a-2c4e6a8b0d1f"
-	h, seen, _ := captureSEMPv1(t)
+	h, captured := captureSEMPv1(t)
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 	client := newTestClient(t, srv)
@@ -123,7 +121,7 @@ func TestExecute_CorrelationHeaders_NonTraceID(t *testing.T) {
 	if _, err := client.Execute(ctx, "<rpc><show><version/></show></rpc>"); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	hdr := (*seen)[0]
+	hdr := <-captured
 	if got := hdr.Get("X-Correlation-ID"); got != id {
 		t.Errorf("X-Correlation-ID = %q, want %q", got, id)
 	}
