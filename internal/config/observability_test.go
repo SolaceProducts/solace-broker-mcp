@@ -33,7 +33,6 @@ func clearObsEnv(t *testing.T) {
 	t.Helper()
 	vars := []string{
 		envObsCorrelationIDEnabled,
-		envObsPanicRecoveryEnabled,
 		envObsMetricsEnabled,
 		envObsAuditLogEnabled,
 		envObsTracingEnabled,
@@ -68,9 +67,8 @@ brokers:
 `
 
 // TestObservability_FlagDefaults pins the v1 "door-closing" defaults: when no
-// OBS_* env var is set, correlation IDs and panic recovery are ON and every
-// other capability is OFF, with the auth-failure counter following metrics
-// (OFF).
+// OBS_* env var is set, correlation IDs are ON and every other capability is
+// OFF, with the auth-failure counter following metrics (OFF).
 func TestObservability_FlagDefaults(t *testing.T) {
 	clearObsEnv(t)
 
@@ -86,7 +84,6 @@ func TestObservability_FlagDefaults(t *testing.T) {
 		want bool
 	}{
 		{"CorrelationIDEnabled", o.CorrelationIDEnabled, true},
-		{"PanicRecoveryEnabled", o.PanicRecoveryEnabled, true},
 		{"MetricsEnabled", o.MetricsEnabled, false},
 		{"AuditLogEnabled", o.AuditLogEnabled, false},
 		{"TracingEnabled", o.TracingEnabled, false},
@@ -182,11 +179,11 @@ func TestObservability_AuthFailureCounter_ExplicitOverridesMetrics(t *testing.T)
 // TestObservability_BadBoolFallsBackToDefaultAndWarns proves a set-but-
 // unparseable OBS_* value falls back to the documented default (not Go's zero
 // value) and is not silent: envBool emits a slog.Warn naming the var. We force a
-// garbage value on a default-true flag (panic recovery) and a default-false flag
+// garbage value on a default-true flag (correlation) and a default-false flag
 // (metrics); each must keep its default and produce a warning.
 func TestObservability_BadBoolFallsBackToDefaultAndWarns(t *testing.T) {
 	clearObsEnv(t)
-	t.Setenv(envObsPanicRecoveryEnabled, "yebbut") // default true
+	t.Setenv(envObsCorrelationIDEnabled, "yebbut") // default true
 	t.Setenv(envObsMetricsEnabled, "maybe")        // default false
 
 	buf := captureSlog(t)
@@ -196,16 +193,16 @@ func TestObservability_BadBoolFallsBackToDefaultAndWarns(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !cfg.Observability.PanicRecoveryEnabled {
-		t.Error("unparseable OBS_PANIC_RECOVERY_ENABLED should fall back to default true")
+	if !cfg.Observability.CorrelationIDEnabled {
+		t.Error("unparseable OBS_CORRELATION_ID_ENABLED should fall back to default true")
 	}
 	if cfg.Observability.MetricsEnabled {
 		t.Error("unparseable OBS_METRICS_ENABLED should fall back to default false")
 	}
 
 	logged := buf.String()
-	if !strings.Contains(logged, envObsPanicRecoveryEnabled) {
-		t.Errorf("expected a warning naming %s; log was: %s", envObsPanicRecoveryEnabled, logged)
+	if !strings.Contains(logged, envObsCorrelationIDEnabled) {
+		t.Errorf("expected a warning naming %s; log was: %s", envObsCorrelationIDEnabled, logged)
 	}
 	if !strings.Contains(logged, envObsMetricsEnabled) {
 		t.Errorf("expected a warning naming %s; log was: %s", envObsMetricsEnabled, logged)

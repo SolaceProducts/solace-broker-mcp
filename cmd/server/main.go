@@ -39,6 +39,7 @@ import (
 	_ "github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess/handlers" // register handlers via init()
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceDev/solace-broker-mcp/internal/middleware/recovery"
 	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
 	"github.com/SolaceDev/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
@@ -161,6 +162,24 @@ func buildMux(aliases func() []string, probeBroker func(ctx context.Context, bro
 	})
 
 	return mux
+}
+
+// buildRootHandler returns the outermost HTTP handler for the server: the mux
+// always wrapped with panic-recovery as the OUTERMOST layer (ADR-001 chain
+// ordering). Recovery is unconditional — a safety net with no production reason
+// to disable.
+//
+// Recovery wraps the WHOLE mux, so it covers every route — the standalone
+// /livez, /health, /ready probes (and future /readyz, /metrics), the catch-all
+// 404, and the authenticated /mcp chain — sitting OUTSIDE the per-route
+// correlation.Middleware that main() installs only on /mcp. The two are
+// different layers and never conflict: recovery wraps the mux; correlation
+// wraps a handler inside it.
+//
+// Extracted from main() so the composition test can assert the assembled chain
+// order against the real wiring rather than a hand-rebuilt copy.
+func buildRootHandler(mux *http.ServeMux) http.Handler {
+	return recovery.HTTPMiddleware(mux)
 }
 
 // healthConfig holds the minimal server settings needed by the --health probe.
@@ -430,7 +449,6 @@ func main() {
 	// overrides took effect at startup.
 	slog.Info("observability config loaded",
 		slog.Bool("correlation_id", cfg.Observability.CorrelationIDEnabled),
-		slog.Bool("panic_recovery", cfg.Observability.PanicRecoveryEnabled),
 		slog.Bool("metrics", cfg.Observability.MetricsEnabled),
 		slog.Bool("audit_log", cfg.Observability.AuditLogEnabled),
 		slog.Bool("tracing", cfg.Observability.TracingEnabled),
@@ -551,9 +569,16 @@ func main() {
 		slog.Debug("catch-all 404: no route matched", slog.String("method", r.Method), slog.String("path", r.URL.Path))
 	}))
 
-	// 9. Start server with graceful shutdown
+	// 9. Wrap the whole mux with panic-recovery as the OUTERMOST handler
+	// (ADR-001). Recovery is unconditional. A panic in ANY handler is caught,
+	// logged with a structured stack, and returned as a clean 500; the process
+	// keeps running. Recovery sits OUTSIDE the per-route correlation middleware
+	// wired on /mcp above — different layers, no conflict.
+	rootHandler := buildRootHandler(mux)
+
+	// 10. Start server with graceful shutdown
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	httpServer := newHTTPServer(addr, mux)
+	httpServer := newHTTPServer(addr, rootHandler)
 
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
