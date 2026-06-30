@@ -317,6 +317,51 @@ func startServer(srv *http.Server, tlsCertFile, tlsKeyFile string) <-chan error 
 	return errCh
 }
 
+// drainAndShutdown performs the SIGTERM graceful-drain sequence (SOL-151288).
+// In strict order it:
+//
+//  1. SetShuttingDown FIRST, so /readyz flips to 503 ("shutting_down")
+//     immediately — within AC #5's 1s budget, before any sleep — and the
+//     orchestrator stops routing new traffic to this pod.
+//  2. sleeps drainDelay (the propagation window) so K8s observes the not-ready
+//     state and deregisters the pod from its endpoint set. The distroless image
+//     has no shell, so there is no preStop hook; this delay runs IN-PROCESS.
+//  3. gracefully shuts the HTTP server down so in-flight requests drain.
+//
+// Step 1 happens before the sleep so readiness flips with no dependence on the
+// drain delay (verified by the zero-delay test). drainDelay <= 0 skips the
+// sleep but still flips readiness and shuts down. This is the signal-path only;
+// the startup-error path calls gracefulShutdown directly and does NOT drain
+// (a process that never began serving has nothing to drain and no reason to
+// advertise a propagation window).
+func drainAndShutdown(ctx context.Context, srv *http.Server, readiness *health.ReadinessState, drainDelay time.Duration) error {
+	readiness.SetShuttingDown()
+	slog.Info("draining before shutdown",
+		slog.String("reason", "signal"),
+		slog.Duration("drain_delay", drainDelay))
+	if drainDelay > 0 {
+		time.Sleep(drainDelay)
+	}
+	return gracefulShutdown(ctx, srv)
+}
+
+// gracefulShutdown shuts srv down within ctx's deadline, falling back to a
+// forced Close if the graceful shutdown times out (so the process is never
+// wedged by a connection that refuses to drain). It returns the Shutdown error
+// for the caller's exit-status decision; the forced-close fallback is handled
+// internally. This is the shared shutdown step for both the signal path (via
+// drainAndShutdown) and the startup-error path (called directly, no drain).
+func gracefulShutdown(ctx context.Context, srv *http.Server) error {
+	err := srv.Shutdown(ctx)
+	if err != nil {
+		slog.Error("shutdown timed out, forcing close", slog.String("error", err.Error()))
+		if closeErr := srv.Close(); closeErr != nil {
+			slog.Error("forced close failed", slog.String("error", closeErr.Error()))
+		}
+	}
+	return err
+}
+
 // newBrokerReachabilityProbe returns a probe function that checks whether a
 // broker's SEMP port is accepting TCP connections. The returned function
 // resolves the broker alias against cfg, parses the URL, defaults the port
@@ -610,28 +655,32 @@ func main() {
 	readiness.SetInitialized()
 
 	var startupErr error
+	var fromSignal bool
 	select {
 	case <-done:
-		// TODO(SOL-151288 / Story 31a): call readiness.SetShuttingDown() here on
-		// SIGTERM, before httpServer.Shutdown, so /readyz reports "shutting_down"
-		// during graceful drain. The mechanism exists on ReadinessState today;
-		// wiring it to the signal is Story 31a's scope.
+		// SIGTERM (or Ctrl-C): drain before shutting down. The drain (flip
+		// /readyz, sleep the propagation window, then graceful shutdown) is
+		// deferred to drainAndShutdown below so it runs after the shutdown-
+		// timeout context is built.
+		fromSignal = true
 		slog.Info("server shutting down", slog.String("reason", "signal"))
 	case startupErr = <-serverErr:
 		// Error already logged in startServer. Capture it so future telemetry
 		// hooks (e.g., metrics flush, error reporting) have access to the value,
-		// then run cleanup before exiting non-zero.
+		// then run cleanup before exiting non-zero. This path does NOT drain:
+		// the server never began serving traffic, so there is nothing to drain
+		// and no orchestrator routing to wait out.
 	}
 
 	shutdownTimeout := time.Duration(defaults.DefaultShutdownTimeoutSeconds) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
-	if err := httpServer.Shutdown(ctx); err != nil {
-		slog.Error("shutdown timed out, forcing close", slog.String("error", err.Error()))
-		if closeErr := httpServer.Close(); closeErr != nil {
-			slog.Error("forced close failed", slog.String("error", closeErr.Error()))
-		}
+	if fromSignal {
+		drainDelay := time.Duration(cfg.Observability.ShutdownDrainDelayS) * time.Second
+		_ = drainAndShutdown(ctx, httpServer, readiness, drainDelay)
+	} else {
+		_ = gracefulShutdown(ctx, httpServer)
 	}
 
 	slog.Info("server stopped")

@@ -63,6 +63,12 @@ type ObservabilityConfig struct {
 	SaturationThresholdMs     int `yaml:"saturation_threshold_ms"`
 	ProgressSignalThresholdMs int `yaml:"progress_signal_threshold_ms"`
 	OTelSelfStatsIntervalS    int `yaml:"otel_self_stats_interval_s"`
+	// ShutdownDrainDelayS is the propagation window, in seconds, the server
+	// waits after flipping /readyz to 503 on SIGTERM before it begins graceful
+	// HTTP shutdown. It gives the orchestrator time to deregister the pod from
+	// its endpoint set so no new traffic is routed to a draining pod (SOL-151288).
+	// Defaulted to DefaultShutdownDrainDelayS; a non-positive value re-defaults.
+	ShutdownDrainDelayS int `yaml:"shutdown_drain_delay_s"`
 }
 
 // Observability env var names. Capability on/off switches; the v1 defaults
@@ -143,5 +149,8 @@ func applyObservabilityDefaults(cfg *ServerConfig) {
 	}
 	if o.OTelSelfStatsIntervalS <= 0 {
 		o.OTelSelfStatsIntervalS = defaults.DefaultOTelSelfStatsIntervalS
+	}
+	if o.ShutdownDrainDelayS <= 0 {
+		o.ShutdownDrainDelayS = defaults.DefaultShutdownDrainDelayS
 	}
 }

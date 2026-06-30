@@ -24,6 +24,26 @@ const DefaultPort = 9090
 // the shutdown window. Accepted in favor of bounded, predictable shutdown.
 const DefaultShutdownTimeoutSeconds = 30
 
+// DefaultShutdownDrainDelayS is the propagation window, in seconds, the server
+// waits after flipping /readyz to 503 (shutting_down) on SIGTERM, BEFORE it
+// begins gracefully shutting down the HTTP server. The delay lets the
+// orchestrator observe the not-ready state and deregister the pod from its
+// endpoint set, so no NEW traffic is routed to the draining pod while in-flight
+// requests finish — avoiding 502s during a rolling update.
+//
+// Decided: 10 seconds.
+// Reasoning: covers a typical kube-proxy / endpoint-controller propagation lag
+// (a few hundred ms to a few seconds) with margin, while keeping total pod
+// termination bounded. The drain runs IN-PROCESS: the distroless image has no
+// shell, so there is no preStop hook to sleep for us (SOL-151288).
+// Trade-off: every shutdown takes at least this long even when no traffic is in
+// flight. Accepted as the cost of a 502-free rolling update.
+//
+// The pod's terminationGracePeriodSeconds must be at least
+// DefaultShutdownDrainDelayS + DefaultShutdownTimeoutSeconds plus a small buffer
+// so K8s does not SIGKILL the process mid-drain (see deploy/kubernetes/deployment.yaml).
+const DefaultShutdownDrainDelayS = 10
+
 // DefaultSEMPRequestTimeoutDuration is the per-request timeout for individual
 // SEMP API calls to a broker. Matches the story spec default and the Solace
 // Terraform provider convention.
