@@ -148,15 +148,14 @@ func TestHTTPMiddleware_NonStringPanicValues(t *testing.T) {
 	// Not parallel: mutates the process-global slog default.
 	type custom struct{ Field int }
 	cases := []struct {
-		name      string
-		value     any
-		wantType  string
-		wantPanic bool // whether next actually panics (nil panic does not)
+		name     string
+		value    any
+		wantType string
 	}{
-		{"int", 42, "int", true},
-		{"struct", custom{Field: 7}, "recovery.custom", true},
-		{"pointer", &custom{Field: 7}, "*recovery.custom", true},
-		{"error", io.EOF, "*errors.errorString", true},
+		{"int", 42, "int"},
+		{"struct", custom{Field: 7}, "recovery.custom"},
+		{"pointer", &custom{Field: 7}, "*recovery.custom"},
+		{"error", io.EOF, "*errors.errorString"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -99,8 +99,8 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 					slog.String("panic_type", fmt.Sprintf("%T", rec)),
 					slog.String("stack", string(debug.Stack())))
 
-				// TODO(SOL-151...metrics, Story 15): increment a recovered-panic
-				// counter once the metrics registry lands. There is no counter
+				// TODO: increment a recovered-panic counter once the metrics
+				// registry lands (the metrics story). There is no counter
 				// infrastructure yet (internal/observability/metrics is a
 				// flag-only skeleton), so this story implements the LOG only.
 

@@ -24,9 +24,11 @@ import (
 
 // ObservabilityConfig holds the feature flags and tunables for the
 // observability capabilities (correlation IDs, metrics, audit log, tracing,
-// saturation events, auth-failure counter). It is a skeleton
-// (SOL-151278): the flags are loaded and surfaced, but no behavior is wired
-// into the request path yet — later stories consume these values.
+// saturation events, auth-failure counter). The flags are loaded and surfaced
+// here; correlation IDs are now wired into the request path (SOL-151279), while
+// metrics, audit, tracing, and saturation remain surfaced-only until their
+// stories consume them. (Panic recovery is unconditional and is no longer a
+// flag on this struct.)
 //
 // Two distinct loading channels, deliberately split:
 //
