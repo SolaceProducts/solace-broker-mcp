@@ -39,6 +39,29 @@ wait_for_tcp() {
     return 1
 }
 
+# Wait until a /readyz-style endpoint returns HTTP 200 before asserting its body.
+# start_server() only waits for /health, which returns 200 as soon as the HTTP
+# server is up; /readyz (and its /ready alias) returns 503 {"status":"starting"}
+# until SetInitialized() runs at the end of startup. Polling here closes that
+# brief "starting" window so the readiness assertions don't flake.
+wait_for_ready() {
+    local url="$1" label="$2"
+    local max=20
+    local attempt=0
+    local http_code body
+    while [ $attempt -lt $max ]; do
+        http_code=$(curl -s -o /dev/null -w "%{http_code}" "$url")
+        if [ "$http_code" = "200" ]; then
+            return 0
+        fi
+        sleep 0.5
+        attempt=$((attempt + 1))
+    done
+    body=$(curl -s "$url")
+    log_fail "$label ($url) not ready after $((max / 2))s (last HTTP $http_code, body: $body)"
+    return 1
+}
+
 cleanup() {
     log_info "Running cleanup ..."
     stop_server
@@ -100,6 +123,7 @@ test_health() {
 test_readyz() {
     # /readyz reflects MCP-server readiness only. Once the server is up it is
     # ready (it makes no broker calls).
+    wait_for_ready "$MCP_URL/readyz" "/readyz" || return 1
     local response
     response=$(curl -sf "$MCP_URL/readyz")
     assert_json_field "$response" ".status" "ready" "/readyz should return status=ready"
@@ -107,6 +131,7 @@ test_readyz() {
 
 test_ready_aliases_readyz() {
     # /ready is a body-identical alias of /readyz: same status code and body.
+    wait_for_ready "$MCP_URL/readyz" "/readyz" || return 1
     local ready_body readyz_body ready_code readyz_code
     ready_body=$(curl -s "$MCP_URL/ready")
     readyz_body=$(curl -s "$MCP_URL/readyz")
@@ -164,6 +189,10 @@ EOF
 
     local result=0
     if [ "$ready" -eq 1 ]; then
+        # /health (polled above) is up before SetInitialized() runs, so wait for
+        # /ready to leave the "starting" window before asserting it is 200. The
+        # explicit assertion below remains the source of truth for pass/fail.
+        wait_for_ready "http://localhost:$SECONDARY_MCP_PORT/ready" "/ready (secondary)" || true
         local http_code
         http_code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$SECONDARY_MCP_PORT/ready")
         if [ "$http_code" = "200" ]; then
