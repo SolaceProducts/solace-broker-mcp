@@ -162,7 +162,10 @@ func (ce *CompositeExecutor) executeStep(ctx context.Context, step Step, client 
 		return fmt.Errorf("tool step %s: operation %q not found in operation catalog", step.ID, step.Operation)
 	}
 
-	args = ce.constructRequestBody(op, args, execCtx.Params)
+	args, err = ce.constructRequestBody(op, args, execCtx.Params)
+	if err != nil {
+		return fmt.Errorf("tool step %s: %w", step.ID, err)
+	}
 
 	result, err := client.Execute(ctx, op, args)
 	if err != nil {
@@ -207,7 +210,10 @@ func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step
 		return fmt.Errorf("tool step %s: operation %q not found in operation catalog", step.ID, step.Operation)
 	}
 
-	baseArgs = ce.constructRequestBody(op, baseArgs, execCtx.Params)
+	baseArgs, err = ce.constructRequestBody(op, baseArgs, execCtx.Params)
+	if err != nil {
+		return fmt.Errorf("tool step %s: %w", step.ID, err)
+	}
 
 	maxResults := resolveMaxResults(execCtx.Params)
 	allItems := make([]any, 0)
@@ -400,7 +406,10 @@ func (ce *CompositeExecutor) executeBatch(ctx context.Context, batch ExecutionBa
 				return fmt.Errorf("tool step %s: operation %q not found in operation catalog", step.ID, step.Operation)
 			}
 
-			args = ce.constructRequestBody(op, args, execCtx.Params)
+			args, err = ce.constructRequestBody(op, args, execCtx.Params)
+			if err != nil {
+				return fmt.Errorf("tool step %s: %w", step.ID, err)
+			}
 
 			result, err := client.Execute(gCtx, op, args)
 			if err != nil {
@@ -475,7 +484,13 @@ func safeTemplateExecute(tmpl *template.Template, data any) (result string, err 
 // fields; scalar params (like msgVpnName) are set directly. Params the operation
 // takes from the path or query are skipped — those reach the broker through args
 // instead. The body is added to args under the "body" key.
-func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, params map[string]any) map[string]any {
+//
+// If a body field would be set by more than one parameter — for example a
+// dedicated msgVpnName param and a msgVpnName key inside msgVpnConfig — the
+// collision is rejected rather than resolved. The two sources could disagree,
+// and with no defined precedence the winner would depend on Go's randomized map
+// iteration order, so we fail loudly instead of writing an ambiguous body.
+func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, params map[string]any) (map[string]any, error) {
 	hasBody := false
 	nonBodyParams := make(map[string]bool) // params the op takes from path/query/header, not the body
 	for _, p := range op.Parameters {
@@ -486,25 +501,36 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 		}
 	}
 	if !hasBody {
-		return args
+		return args, nil
 	}
 
 	body := make(map[string]any)
+	set := func(field string, val any) error {
+		if _, defined := body[field]; defined {
+			return fmt.Errorf("ambiguous request body: field %q is defined more than once; remove it from the config object", field)
+		}
+		body[field] = val
+		return nil
+	}
 	for name, val := range params {
 		if nonBodyParams[name] {
 			continue
 		}
 		if obj, isObj := val.(map[string]any); isObj {
 			for k, v := range obj {
-				body[k] = v
+				if err := set(k, v); err != nil {
+					return nil, err
+				}
 			}
 		} else {
-			body[name] = val
+			if err := set(name, val); err != nil {
+				return nil, err
+			}
 		}
 	}
 
 	args["body"] = body
-	return args
+	return args, nil
 }
 
 // ApplyResultStrategy combines step results according to the tool's result

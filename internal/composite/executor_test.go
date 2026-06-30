@@ -2230,6 +2230,35 @@ func TestExecute_CreateMessageVPN_ConstructsBody(t *testing.T) {
 	}
 }
 
+func TestExecute_CreateMessageVPN_RejectsFieldCollision(t *testing.T) {
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	// msgVpnName is supplied both as the dedicated param and inside msgVpnConfig.
+	// The two sources could disagree, and with no defined precedence the winner
+	// would depend on map-iteration order, so the request must be rejected.
+	_, err := executor.Execute(context.Background(), createMessageVPNTool(), capture, map[string]any{
+		"msgVpnName": "new-vpn",
+		"msgVpnConfig": map[string]any{
+			"msgVpnName": "other-vpn",
+			"enabled":    true,
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for duplicate body field, got nil")
+	}
+	if !strings.Contains(err.Error(), "msgVpnName") {
+		t.Errorf("error should name the colliding field, got: %v", err)
+	}
+	// The collision is caught while constructing the body, before any SEMP call.
+	if len(recorded) != 0 {
+		t.Errorf("expected no SEMP calls on rejected body, got %d", len(recorded))
+	}
+}
+
 func TestExecute_CreateMessageVPN_AlreadyExists(t *testing.T) {
 	client := newMockClient()
 	client.errors["createMsgVpn"] = &sempv2.SEMPError{
