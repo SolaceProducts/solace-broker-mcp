@@ -181,8 +181,8 @@ func buildMux(aliases func() []string, probeBroker func(ctx context.Context, bro
 // to disable.
 //
 // Recovery wraps the WHOLE mux, so it covers every route — the standalone
-// /livez, /health, /ready probes (and future /readyz, /metrics), the catch-all
-// 404, and the authenticated /mcp chain — sitting OUTSIDE the per-route
+// /livez, /health, /ready, /readyz probes (and the future /metrics), the
+// catch-all 404, and the authenticated /mcp chain — sitting OUTSIDE the per-route
 // correlation.Middleware that main() installs only on /mcp. The two are
 // different layers and never conflict: recovery wraps the mux; correlation
 // wraps a handler inside it.
@@ -601,8 +601,12 @@ func main() {
 
 	serverErr := startServer(httpServer, cfg.TLSCertFile, cfg.TLSKeyFile)
 
-	// Startup is complete and the server is listening: flip /readyz to ready.
-	// SetInitialized is idempotent.
+	// Startup is complete and the serving goroutine has been launched:
+	// SetInitialized flips /readyz to ready. startServer only starts the
+	// goroutine; it does not confirm the listener has bound, so there is a brief
+	// window where the socket may not yet be accepting. That is acceptable for
+	// MCP-only readiness, which reflects the server's own initialization rather
+	// than listener bind state. SetInitialized is idempotent.
 	readiness.SetInitialized()
 
 	var startupErr error

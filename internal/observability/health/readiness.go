@@ -17,6 +17,7 @@ package health
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -99,6 +100,12 @@ func (s *ReadinessState) IsShuttingDown() bool {
 // yet. The mechanism is built now so that story can register its probe without
 // re-plumbing readiness.
 func (s *ReadinessState) RegisterListener(name string, status func() error) {
+	// Fail safe on a nil probe: a nil status would panic when Evaluate calls it.
+	// Substitute a probe that always reports an error so /readyz surfaces the
+	// misconfiguration as "unready" (naming the listener) instead of crashing.
+	if status == nil {
+		status = func() error { return fmt.Errorf("listener %q has no status probe", name) }
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.listeners = append(s.listeners, listenerProbe{name: name, status: status})
@@ -121,9 +128,18 @@ func (s *ReadinessState) Evaluate() (status string, ready bool, reason string) {
 		return "starting", false, ""
 	}
 
+	// Snapshot the listener slice under the read lock, then release it before
+	// invoking any probe. Probe callbacks are arbitrary code that may call back
+	// into ReadinessState (e.g. RegisterListener, which takes the write lock);
+	// running them under the read lock could deadlock and needlessly blocks
+	// RegisterListener while probes run. The snapshot preserves registration
+	// order, so "first failing listener wins" is unchanged.
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, l := range s.listeners {
+	probes := make([]listenerProbe, len(s.listeners))
+	copy(probes, s.listeners)
+	s.mu.RUnlock()
+
+	for _, l := range probes {
 		if err := l.status(); err != nil {
 			return "unready", false, fmt.Sprintf("%s: %v", l.name, err)
 		}
@@ -182,10 +198,14 @@ func ReadyzHandler(state *ReadinessState) http.Handler {
 	})
 }
 
-// writeBody writes the response body and surfaces a write failure as a 500 the
-// same way jsonProbeHandler does, keeping the probes' error handling uniform.
+// writeBody writes the response body best-effort. The caller has already called
+// WriteHeader, so the status line and headers are committed: a write error here
+// cannot be turned into a different response. Attempting a second http.Error
+// would only append a stray body to an already-committed response. We therefore
+// log the failure at debug and return — the no-double-write convention for any
+// handler that has already committed its status.
 func writeBody(w http.ResponseWriter, body []byte) {
 	if _, err := w.Write(body); err != nil {
-		http.Error(w, "failed to write response", http.StatusInternalServerError)
+		slog.Debug("readyz: failed to write response body", slog.String("error", err.Error()))
 	}
 }

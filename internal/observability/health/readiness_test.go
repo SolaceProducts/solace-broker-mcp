@@ -176,19 +176,68 @@ func TestReadinessState_Concurrent(t *testing.T) {
 	wg.Wait()
 }
 
-// TestReadyzHandler_StatusMatrix pins the full /readyz status/body matrix:
-// starting (503), ready (200), shutting_down precedence (503), unready with
-// reason (503), and non-GET (405).
+// TestReadinessState_ProbeRunsOutsideLock proves Evaluate does not hold the
+// internal RWMutex while invoking a listener probe. The probe calls back into
+// the same ReadinessState (RegisterListener, which takes the write lock); if
+// Evaluate still held the read lock, that re-entrant call would deadlock. The
+// test therefore deadlocks (and the package test binary times out) on a
+// regression, and passes when probes run on a snapshot taken outside the lock.
+func TestReadinessState_ProbeRunsOutsideLock(t *testing.T) {
+	t.Parallel()
+	s := NewReadinessState()
+	s.SetInitialized()
+
+	probed := make(chan struct{}, 1)
+	s.RegisterListener("reentrant", func() error {
+		// Re-enter the state while the probe runs. This needs the write lock,
+		// which would block forever if Evaluate held the read lock here.
+		s.RegisterListener("added-during-probe", func() error { return nil })
+		probed <- struct{}{}
+		return nil
+	})
+
+	status, ready, _ := s.Evaluate()
+	if status != "ready" || !ready {
+		t.Errorf("Evaluate() = (%q, %v), want (\"ready\", true)", status, ready)
+	}
+	select {
+	case <-probed:
+	default:
+		t.Fatal("probe was not invoked")
+	}
+}
+
+// TestReadinessState_NilProbeFailsSafe proves RegisterListener with a nil status
+// probe does not panic in Evaluate and instead reports unready with a reason
+// that names the misconfigured listener, surfacing the misconfiguration on
+// /readyz rather than crashing the handler.
+func TestReadinessState_NilProbeFailsSafe(t *testing.T) {
+	t.Parallel()
+	s := NewReadinessState()
+	s.SetInitialized()
+	s.RegisterListener("metrics-listener", nil)
+
+	status, ready, reason := s.Evaluate() // must not panic
+	if status != "unready" || ready {
+		t.Errorf("Evaluate() = (%q, %v), want (\"unready\", false)", status, ready)
+	}
+	if !strings.Contains(reason, "metrics-listener") {
+		t.Errorf("reason = %q, want it to name the listener", reason)
+	}
+}
+
+// TestReadyzHandler_StatusMatrix pins the fixed-body /readyz cases — those whose
+// response body is a constant string: starting (503), ready (200), and
+// shutting_down precedence (503). The dynamic-reason unready case is covered by
+// TestReadyzHandler_UnreadyReasonSafeJSON and non-GET by TestReadyzHandler_NonGET.
 func TestReadyzHandler_StatusMatrix(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		setup      func(s *ReadinessState)
-		wantCode   int
-		wantBody   string // exact body for fixed-status cases; empty when checked structurally
-		wantStatus string // expected .status field when wantBody is empty
-		reasonHas  string // expected substring of .reason when set
+		name     string
+		setup    func(s *ReadinessState)
+		wantCode int
+		wantBody string // exact response body for these fixed-status cases
 	}{
 		{
 			name:     "before init returns 503 starting",
