@@ -3,7 +3,10 @@
 // and the broker's logs.
 //
 // It is a small leaf package imported by both the SEMPv1 and SEMPv2 clients so
-// that header spelling and formatting logic live in exactly one place. Placing
+// that the outbound-header formatting logic lives in exactly one place. The
+// header names and the W3C trace-id validation come from the correlation
+// package (the single definition shared with the inbound middleware), so an ID
+// received on one hop is forwarded under the same names on the next. Placing
 // the logic in the parent internal/semp package would create an import cycle
 // (internal/semp imports sempv1 and sempv2; those clients would then need to
 // import internal/semp), so the shared code lives here instead. This package
@@ -20,23 +23,10 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
 )
 
-// Header names attached to outbound SEMP requests. traceparent is the W3C Trace
-// Context header (https://www.w3.org/TR/trace-context/); X-Correlation-ID
-// carries the correlation identity for non-trace IDs and as a stable companion
-// to traceparent. These match the inbound header names the correlation
-// middleware reads, so an ID received on one hop is forwarded under the same
-// names on the next.
-const (
-	headerTraceparent   = "traceparent"
-	headerCorrelationID = "X-Correlation-ID"
-)
-
-// traceIDLen is the length, in characters, of a W3C trace-id (32 lowercase hex).
-const traceIDLen = 32
-
-// allZeroTraceID is the trace-id the W3C spec defines as invalid; we never emit
-// a traceparent built from it.
-const allZeroTraceID = "00000000000000000000000000000000"
+// randRead is the entropy source for span-ids. It is a package var (not a direct
+// crypto/rand.Read call) so a test can force the all-zero and error draws that
+// newSpanID must reject — draws otherwise unreachable (~1 in 2^64). Production never reassigns it.
+var randRead = rand.Read
 
 // Set attaches correlation headers to req based on the correlation ID stored on
 // ctx. It must be called AFTER the authenticator has run, so it cannot clobber
@@ -61,31 +51,13 @@ func Set(ctx context.Context, req *http.Request) {
 		return
 	}
 
-	req.Header.Set(headerCorrelationID, id)
+	req.Header.Set(correlation.HeaderCorrelationID, id)
 
-	if isTraceID(id) {
+	if correlation.ValidTraceID(id) {
 		if span, ok := newSpanID(); ok {
-			req.Header.Set(headerTraceparent, "00-"+id+"-"+span+"-01")
+			req.Header.Set(correlation.HeaderTraceparent, "00-"+id+"-"+span+"-01")
 		}
 	}
-}
-
-// isTraceID reports whether id is a valid W3C trace-id: exactly 32 lowercase
-// hex characters and not the all-zero value. This mirrors the validation the
-// correlation package applies to an inbound traceparent's trace-id segment; we
-// reimplement it here (rather than import an unexported helper) because that
-// package owns its internals and is being edited in parallel.
-func isTraceID(id string) bool {
-	if len(id) != traceIDLen || id == allZeroTraceID {
-		return false
-	}
-	for i := 0; i < len(id); i++ {
-		c := id[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
 }
 
 // newSpanID returns a fresh 16-hex-char W3C span-id sourced from crypto/rand,
@@ -103,7 +75,7 @@ func isTraceID(id string) bool {
 // span.
 func newSpanID() (string, bool) {
 	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	if _, err := randRead(b[:]); err != nil {
 		return "", false
 	}
 	allZero := true

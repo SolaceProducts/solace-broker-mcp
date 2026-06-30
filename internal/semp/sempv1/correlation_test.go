@@ -130,10 +130,15 @@ func TestExecute_CorrelationHeaders_NonTraceID(t *testing.T) {
 	}
 }
 
-// TestExecute_CorrelationHeaders_RetryReuse verifies that every retry attempt
-// carries the SAME X-Correlation-ID. The server fails the first attempts with
-// 503 (retryable for a read-only <show>) then succeeds.
-func TestExecute_CorrelationHeaders_RetryReuse(t *testing.T) {
+// TestExecute_CorrelationHeaders_PresentOnEveryRetryAttempt verifies the
+// forwarded X-Correlation-ID is present and identical on every attempt the
+// broker sees. The server fails the first attempt with 503 (retryable for a
+// read-only <show>) then succeeds, so the handler observes more than one
+// attempt. Cross-retry survival is provided by retryablehttp replaying the same
+// *http.Request object, not by per-attempt application logic; the basic
+// single-attempt forwarding contract is covered by the other
+// TestExecute_CorrelationHeaders_* tests.
+func TestExecute_CorrelationHeaders_PresentOnEveryRetryAttempt(t *testing.T) {
 	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
 	var mu sync.Mutex
 	var seen []http.Header

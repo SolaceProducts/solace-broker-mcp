@@ -100,43 +100,6 @@ func TestSet_FreshSpanPerCall(t *testing.T) {
 	}
 }
 
-// TestSet_SpanNeverAllZero pins that the minted span-id is always a valid,
-// non-all-zero W3C span-id. Set omits the traceparent on the (1-in-2^64,
-// astronomically rare) all-zero draw, so when a traceparent IS present its
-// span must be 16 lowercase-hex chars and never "0000000000000000". Many
-// iterations exercise distinct random draws so the assertion cannot pass by
-// luck of a single draw.
-func TestSet_SpanNeverAllZero(t *testing.T) {
-	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
-	ctx := correlation.With(context.Background(), traceID)
-
-	for i := 0; i < 1000; i++ {
-		req := newReq(t)
-		correlationhdr.Set(ctx, req)
-
-		// X-Correlation-ID is always emitted, independent of the span draw.
-		if got := req.Header.Get("X-Correlation-ID"); got != traceID {
-			t.Fatalf("iter %d: X-Correlation-ID = %q, want %q", i, got, traceID)
-		}
-
-		tp := req.Header.Get("traceparent")
-		if tp == "" {
-			// Only legitimate when the span draw was all-zero (omit path).
-			continue
-		}
-		parts := strings.Split(tp, "-")
-		if len(parts) != 4 {
-			t.Fatalf("iter %d: traceparent = %q, want 4 fields", i, tp)
-		}
-		if !isLowerHexLen(parts[2], 16) {
-			t.Fatalf("iter %d: span-id = %q, want 16 lowercase-hex chars", i, parts[2])
-		}
-		if parts[2] == "0000000000000000" {
-			t.Fatalf("iter %d: span-id is all-zero; W3C-invalid span must never be emitted", i)
-		}
-	}
-}
-
 // TestSet_NonTraceIDs_NoTraceparent pins that any ID that is not a 32-hex
 // trace-id sets only X-Correlation-ID and never emits a (malformed) traceparent.
 func TestSet_NonTraceIDs_NoTraceparent(t *testing.T) {
