@@ -90,7 +90,10 @@ func newSlogHandler(level slog.Level) slog.Handler {
 //
 // aliases returns the list of broker names to check.
 // probeBroker tests connectivity to a single broker; it returns nil on success.
-func buildMux(aliases func() []string, probeBroker func(ctx context.Context, broker string) error) *http.ServeMux {
+// readiness backs the /readyz endpoint, which reflects the MCP server's OWN
+// readiness and is decoupled from the broker (it consults neither aliases nor
+// probeBroker).
+func buildMux(aliases func() []string, probeBroker func(ctx context.Context, broker string) error, readiness *health.ReadinessState) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// Liveness probe. /livez is the canonical liveness endpoint and returns
@@ -102,7 +105,15 @@ func buildMux(aliases func() []string, probeBroker func(ctx context.Context, bro
 	mux.Handle("/livez", health.LivezHandler())
 	mux.Handle("/health", health.HealthHandler())
 
-	// TODO(SOL-151285/SOL-151284): /ready is still a large inline handler here; it will be superseded by the MCP-server-only /readyz and moved into the health package in the readiness story.
+	// Readiness probe. /readyz reflects the MCP server's OWN readiness only
+	// (initialized, not draining, required listeners bound) and is decoupled
+	// from broker reachability (ADR-004 / ISSUE-026) — it makes no broker calls.
+	// Like /livez it is unconditional (no flag).
+	mux.Handle("/readyz", health.ReadyzHandler(readiness))
+
+	// TODO(SOL-151285 / Story 11): /readyz now exists (MCP-server-only readiness).
+	// /ready below is still the legacy broker-coupled inline handler; Story 11
+	// will alias /ready to /readyz and drop the broker dial.
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -170,8 +181,8 @@ func buildMux(aliases func() []string, probeBroker func(ctx context.Context, bro
 // to disable.
 //
 // Recovery wraps the WHOLE mux, so it covers every route — the standalone
-// /livez, /health, /ready probes (and future /readyz, /metrics), the catch-all
-// 404, and the authenticated /mcp chain — sitting OUTSIDE the per-route
+// /livez, /health, /ready, /readyz probes (and the future /metrics), the
+// catch-all 404, and the authenticated /mcp chain — sitting OUTSIDE the per-route
 // correlation.Middleware that main() installs only on /mcp. The two are
 // different layers and never conflict: recovery wraps the mux; correlation
 // wraps a handler inside it.
@@ -523,7 +534,12 @@ func main() {
 	slog.Info("all tools registered")
 
 	// 8. Set up HTTP routes
-	mux := buildMux(pool.Aliases, newBrokerReachabilityProbe(cfg))
+	//
+	// readiness backs /readyz. It starts in the "starting" state; we mark it
+	// initialized once the server begins listening (below). It is decoupled from
+	// the broker and is NOT flag-gated.
+	readiness := health.NewReadinessState()
+	mux := buildMux(pool.Aliases, newBrokerReachabilityProbe(cfg), readiness)
 
 	// Create MCP handler
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
@@ -585,9 +601,21 @@ func main() {
 
 	serverErr := startServer(httpServer, cfg.TLSCertFile, cfg.TLSKeyFile)
 
+	// Startup is complete and the serving goroutine has been launched:
+	// SetInitialized flips /readyz to ready. startServer only starts the
+	// goroutine; it does not confirm the listener has bound, so there is a brief
+	// window where the socket may not yet be accepting. That is acceptable for
+	// MCP-only readiness, which reflects the server's own initialization rather
+	// than listener bind state. SetInitialized is idempotent.
+	readiness.SetInitialized()
+
 	var startupErr error
 	select {
 	case <-done:
+		// TODO(SOL-151288 / Story 31a): call readiness.SetShuttingDown() here on
+		// SIGTERM, before httpServer.Shutdown, so /readyz reports "shutting_down"
+		// during graceful drain. The mechanism exists on ReadinessState today;
+		// wiring it to the signal is Story 31a's scope.
 		slog.Info("server shutting down", slog.String("reason", "signal"))
 	case startupErr = <-serverErr:
 		// Error already logged in startServer. Capture it so future telemetry
