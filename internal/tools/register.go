@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -34,12 +35,29 @@ import (
 // broker, as the failing component; the panic detail stays server-side.
 const serverInternalErrorMessage = "The server encountered an internal error executing this tool. Please try again later or contact your administrator."
 
+// metaKeyCorrelationID is the CallToolResult.Meta key under which the request's
+// correlation ID is surfaced back to the caller (SOL-151282), mirroring the
+// X-Correlation-ID response header set by correlation.Middleware. The MCP
+// protocol reserves the _meta object for exactly this kind of out-of-band
+// metadata, so the value rides alongside the result without polluting the
+// tool's structured output schema.
+const metaKeyCorrelationID = "correlation_id"
+
 // withRecovery wraps an SDK tool handler so a panic anywhere below the SDK
 // boundary becomes a sanitized error result instead of killing the process.
 // The SDK (go-sdk v1.5.0) invokes tool handlers on a goroutine of its own
 // with no recover() — net/http's per-connection recovery cannot catch a
 // panic on another goroutine — so without this wrapper a single panicking
 // handler takes down the whole server (SOL-150685).
+//
+// This wrapper is the single chokepoint through which EVERY tool result flows
+// back to the SDK — success, tool error, and panic-recovered alike — so it is
+// also where the correlation ID is stamped onto CallToolResult.Meta. Stamping
+// here (rather than across CallTool's many return paths) guarantees all three
+// result kinds carry it. The HTTP request context that correlation.Middleware
+// seeded reaches this handler's ctx (verified end-to-end through the
+// StreamableHTTPHandler), so correlation.From(ctx) yields the request's ID;
+// when the capability is off it returns "" and no Meta key is added.
 func withRecovery(toolName string, h mcp.ToolHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
 		defer func() {
@@ -64,9 +82,35 @@ func withRecovery(toolName string, h mcp.ToolHandler) mcp.ToolHandler {
 				}
 				err = nil
 			}
+			// Stamp the correlation ID onto the result on the way out. This
+			// runs after both the normal return AND the panic-recovery branch
+			// above, so success, error, and panic-recovered results are all
+			// covered. A protocol-level error (err != nil, result nil) carries
+			// no result body to annotate, so it is left untouched.
+			stampCorrelationID(ctx, result)
 		}()
 		return h(ctx, req)
 	}
+}
+
+// stampCorrelationID adds the request's correlation ID to result.Meta under
+// metaKeyCorrelationID when both are present. It is a no-op when the capability
+// is off (correlation.From returns "") or there is no result to annotate
+// (protocol-level error). Meta is initialized only when needed, and existing
+// Meta entries are preserved — the SDK never sets a correlation_id key, so
+// there is nothing to clobber, but the merge is non-destructive regardless.
+func stampCorrelationID(ctx context.Context, result *mcp.CallToolResult) {
+	if result == nil {
+		return
+	}
+	id := correlation.From(ctx)
+	if id == "" {
+		return
+	}
+	if result.Meta == nil {
+		result.Meta = mcp.Meta{}
+	}
+	result.Meta[metaKeyCorrelationID] = id
 }
 
 // RegisterWithServer registers all tools from the ToolManager with the MCP

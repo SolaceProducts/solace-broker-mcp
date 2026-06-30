@@ -297,6 +297,67 @@ func TestMiddleware_EndToEndPropagation(t *testing.T) {
 	})
 }
 
+// TestMiddleware_SetsResponseHeader pins that Middleware echoes the resolved
+// correlation ID back to the caller in the X-Correlation-ID response header,
+// and that the header value is exactly the ID the downstream handler observes
+// on its context (SOL-151282). It covers all three resolution sources:
+// traceparent, a client-supplied X-Correlation-ID, and a generated UUIDv7.
+func TestMiddleware_SetsResponseHeader(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		headers map[string]string
+	}{
+		{"from traceparent", map[string]string{headerTraceparent: validTraceparent}},
+		{"from X-Correlation-ID", map[string]string{headerCorrelationID: "client-supplied-id"}},
+		{"generated", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var seenID string
+			handler := Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				seenID = From(r.Context())
+			}))
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
+			for k, v := range tc.headers {
+				req.Header.Set(k, v)
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			gotHeader := rec.Header().Get(headerCorrelationID)
+			if gotHeader == "" {
+				t.Fatalf("response %s header is empty, want the resolved correlation ID", headerCorrelationID)
+			}
+			if gotHeader != seenID {
+				t.Errorf("response %s header = %q, want it to equal the ID the handler saw %q",
+					headerCorrelationID, gotHeader, seenID)
+			}
+		})
+	}
+}
+
+// TestMiddleware_ResponseHeaderSetBeforeHandlerWrites pins that the response
+// header is set before next writes the body. A header set after the handler
+// has already flushed status/body is silently dropped by net/http, so this
+// guards the ordering: even when the inner handler writes a body, the header
+// survives.
+func TestMiddleware_ResponseHeaderSetBeforeHandlerWrites(t *testing.T) {
+	t.Parallel()
+	handler := Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "body")
+	}))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/mcp", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get(headerCorrelationID); got == "" {
+		t.Errorf("response %s header is empty after the handler wrote a body; it must be set before next.ServeHTTP", headerCorrelationID)
+	}
+}
+
 // isUUIDv7 reports whether s is a canonical lowercase UUID with version nibble
 // 7 and RFC 4122/9562 variant bits (10xx). It is a test-only structural check.
 func isUUIDv7(s string) bool {
