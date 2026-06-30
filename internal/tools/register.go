@@ -96,9 +96,9 @@ func withRecovery(toolName string, h mcp.ToolHandler) mcp.ToolHandler {
 // stampCorrelationID adds the request's correlation ID to result.Meta under
 // metaKeyCorrelationID when both are present. It is a no-op when the capability
 // is off (correlation.From returns "") or there is no result to annotate
-// (protocol-level error). Meta is initialized only when needed, and existing
-// Meta entries are preserved — the SDK never sets a correlation_id key, so
-// there is nothing to clobber, but the merge is non-destructive regardless.
+// (protocol-level error). We own the correlation_id key and derive it fresh per
+// request, so overwriting any prior value for that one key is intentional; Meta
+// is initialized only when nil, so all other existing entries are preserved.
 func stampCorrelationID(ctx context.Context, result *mcp.CallToolResult) {
 	if result == nil {
 		return

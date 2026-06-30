@@ -56,8 +56,6 @@ func metaTestServer(t *testing.T, h ToolHandler, withCorrelation bool) *mcp.Clie
 	return session
 }
 
-const metaKey = "correlation_id"
-
 // TestCallToolResultMeta_CorrelationIDPresent pins SOL-151282: when the
 // correlation capability is on, every CallToolResult flowing back through the
 // register.go chokepoint carries Meta["correlation_id"] equal to the request's
@@ -83,12 +81,12 @@ func TestCallToolResultMeta_CorrelationIDPresent(t *testing.T) {
 		if seenCtxID == "" {
 			t.Fatal("handler saw no correlation ID on its context; the request ctx must reach the handler")
 		}
-		got, ok := res.Meta[metaKey].(string)
+		got, ok := res.Meta[metaKeyCorrelationID].(string)
 		if !ok {
-			t.Fatalf("result.Meta[%q] missing or not a string: %#v", metaKey, res.Meta)
+			t.Fatalf("result.Meta[%q] missing or not a string: %#v", metaKeyCorrelationID, res.Meta)
 		}
 		if got != seenCtxID {
-			t.Errorf("result.Meta[%q] = %q, want it to equal the request correlation ID %q", metaKey, got, seenCtxID)
+			t.Errorf("result.Meta[%q] = %q, want it to equal the request correlation ID %q", metaKeyCorrelationID, got, seenCtxID)
 		}
 	})
 
@@ -109,9 +107,9 @@ func TestCallToolResultMeta_CorrelationIDPresent(t *testing.T) {
 		if !res.IsError {
 			t.Fatalf("expected an error result, got IsError=false: %#v", res)
 		}
-		got, ok := res.Meta[metaKey].(string)
+		got, ok := res.Meta[metaKeyCorrelationID].(string)
 		if !ok || got == "" {
-			t.Errorf("error result.Meta[%q] missing/empty: %#v (error paths must carry it too)", metaKey, res.Meta)
+			t.Errorf("error result.Meta[%q] missing/empty: %#v (error paths must carry it too)", metaKeyCorrelationID, res.Meta)
 		}
 	})
 }
@@ -135,8 +133,8 @@ func TestStampCorrelationID_Unit(t *testing.T) {
 	t.Run("nil Meta is initialized and stamped", func(t *testing.T) {
 		res := &mcp.CallToolResult{}
 		stampCorrelationID(correlation.With(context.Background(), "the-id"), res)
-		if got := res.Meta[metaKey]; got != "the-id" {
-			t.Errorf("Meta[%q] = %v, want %q", metaKey, got, "the-id")
+		if got := res.Meta[metaKeyCorrelationID]; got != "the-id" {
+			t.Errorf("Meta[%q] = %v, want %q", metaKeyCorrelationID, got, "the-id")
 		}
 	})
 
@@ -146,8 +144,8 @@ func TestStampCorrelationID_Unit(t *testing.T) {
 		if got := res.Meta["keep"]; got != "value" {
 			t.Errorf("pre-existing Meta[\"keep\"] = %v, want it preserved as %q", got, "value")
 		}
-		if got := res.Meta[metaKey]; got != "the-id" {
-			t.Errorf("Meta[%q] = %v, want %q", metaKey, got, "the-id")
+		if got := res.Meta[metaKeyCorrelationID]; got != "the-id" {
+			t.Errorf("Meta[%q] = %v, want %q", metaKeyCorrelationID, got, "the-id")
 		}
 	})
 }
@@ -166,7 +164,7 @@ func TestCallToolResultMeta_CorrelationIDAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
 	}
-	if v, present := res.Meta[metaKey]; present {
-		t.Errorf("result.Meta[%q] = %v present with correlation off, want absent", metaKey, v)
+	if v, present := res.Meta[metaKeyCorrelationID]; present {
+		t.Errorf("result.Meta[%q] = %v present with correlation off, want absent", metaKeyCorrelationID, v)
 	}
 }
