@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -39,7 +40,9 @@ func testMux() *http.ServeMux {
 		Name:    "solace-broker-mcp",
 		Version: version.Version(),
 	}, nil)
-	mux := buildMux(func() []string { return nil }, func(_ context.Context, _ string) error { return nil })
+	readiness := health.NewReadinessState()
+	readiness.SetInitialized()
+	mux := buildMux(func() []string { return nil }, func(_ context.Context, _ string) error { return nil }, readiness)
 
 	// Register /mcp endpoint for testing (without auth middleware)
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
@@ -379,7 +382,7 @@ func TestHealthConfigFromFile_PartialTLSIsHTTP(t *testing.T) {
 }
 
 func TestReady_POST_ReturnsMethodNotAllowed(t *testing.T) {
-	mux := buildMux(func() []string { return nil }, func(_ context.Context, _ string) error { return nil })
+	mux := buildMux(func() []string { return nil }, func(_ context.Context, _ string) error { return nil }, health.NewReadinessState())
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/ready", nil)
 	rec := httptest.NewRecorder()
 
@@ -395,6 +398,7 @@ func TestReady_GET_AllBrokersReachable(t *testing.T) {
 	mux := buildMux(
 		func() []string { return brokers },
 		func(_ context.Context, _ string) error { return nil },
+		health.NewReadinessState(),
 	)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ready", nil)
 	rec := httptest.NewRecorder()
@@ -437,6 +441,7 @@ func TestReady_GET_OneBrokerUnreachable(t *testing.T) {
 			}
 			return nil
 		},
+		health.NewReadinessState(),
 	)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ready", nil)
 	rec := httptest.NewRecorder()
@@ -462,6 +467,76 @@ func TestReady_GET_OneBrokerUnreachable(t *testing.T) {
 	want := "prod-2: unreachable"
 	if body.Errors[0] != want {
 		t.Errorf("errors[0] = %q, want %q", body.Errors[0], want)
+	}
+}
+
+// TestReadyz_BeforeInit_Returns503 pins that /readyz wired through the real
+// buildMux returns 503 {"status":"starting"} before SetInitialized.
+func TestReadyz_BeforeInit_Returns503(t *testing.T) {
+	readiness := health.NewReadinessState() // not initialized
+	mux := buildMux(func() []string { return nil }, func(_ context.Context, _ string) error { return nil }, readiness)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("GET /readyz status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	if rec.Body.String() != `{"status":"starting"}` {
+		t.Errorf("GET /readyz body = %q, want %q", rec.Body.String(), `{"status":"starting"}`)
+	}
+}
+
+// TestReadyz_AfterInit_Returns200 pins that /readyz wired through the real
+// buildMux returns 200 {"status":"ready"} once SetInitialized has been called.
+func TestReadyz_AfterInit_Returns200(t *testing.T) {
+	readiness := health.NewReadinessState()
+	readiness.SetInitialized()
+	mux := buildMux(func() []string { return nil }, func(_ context.Context, _ string) error { return nil }, readiness)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("GET /readyz status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if rec.Body.String() != `{"status":"ready"}` {
+		t.Errorf("GET /readyz body = %q, want %q", rec.Body.String(), `{"status":"ready"}`)
+	}
+}
+
+// TestReadyz_BrokerUnreachable_StillReady proves AC #4 through the real mux:
+// even when the broker probe always errors (every broker unreachable), /readyz
+// returns 200 once initialized and not draining, because readiness is decoupled
+// from broker reachability. The same mux's /ready endpoint returns 503 for the
+// same unreachable broker, demonstrating the two endpoints are independent.
+func TestReadyz_BrokerUnreachable_StillReady(t *testing.T) {
+	readiness := health.NewReadinessState()
+	readiness.SetInitialized()
+	alwaysFail := func(_ context.Context, broker string) error {
+		return errors.New("connection refused")
+	}
+	mux := buildMux(func() []string { return []string{"prod-1"} }, alwaysFail, readiness)
+
+	// /readyz ignores the broker entirely → 200 ready.
+	readyzReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/readyz", nil)
+	readyzRec := httptest.NewRecorder()
+	mux.ServeHTTP(readyzRec, readyzReq)
+	if readyzRec.Code != http.StatusOK {
+		t.Errorf("GET /readyz status = %d, want %d (readiness must not depend on broker reachability)", readyzRec.Code, http.StatusOK)
+	}
+	if readyzRec.Body.String() != `{"status":"ready"}` {
+		t.Errorf("GET /readyz body = %q, want %q", readyzRec.Body.String(), `{"status":"ready"}`)
+	}
+
+	// /ready (legacy, broker-coupled) reflects the unreachable broker → 503.
+	readyReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ready", nil)
+	readyRec := httptest.NewRecorder()
+	mux.ServeHTTP(readyRec, readyReq)
+	if readyRec.Code != http.StatusServiceUnavailable {
+		t.Errorf("GET /ready status = %d, want %d (legacy probe is broker-coupled)", readyRec.Code, http.StatusServiceUnavailable)
 	}
 }
 
