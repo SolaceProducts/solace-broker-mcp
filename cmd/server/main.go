@@ -334,7 +334,14 @@ func startServer(srv *http.Server, tlsCertFile, tlsKeyFile string) <-chan error 
 // the startup-error path calls gracefulShutdown directly and does NOT drain
 // (a process that never began serving has nothing to drain and no reason to
 // advertise a propagation window).
-func drainAndShutdown(ctx context.Context, srv *http.Server, readiness *health.ReadinessState, drainDelay time.Duration) error {
+//
+// The shutdownTimeout budget is passed through to gracefulShutdown, which
+// builds its own timeout context AFTER this function's drain sleep returns. The
+// drain delay therefore does NOT eat into the shutdown budget: Shutdown gets
+// the full shutdownTimeout to drain in-flight requests, exactly as the K8s
+// terminationGracePeriodSeconds calculation in deploy/kubernetes/deployment.yaml
+// assumes (grace = drainDelay + shutdownTimeout + buffer).
+func drainAndShutdown(srv shutdowner, readiness *health.ReadinessState, drainDelay, shutdownTimeout time.Duration) error {
 	readiness.SetShuttingDown()
 	slog.Info("draining before shutdown",
 		slog.String("reason", "signal"),
@@ -342,16 +349,36 @@ func drainAndShutdown(ctx context.Context, srv *http.Server, readiness *health.R
 	if drainDelay > 0 {
 		time.Sleep(drainDelay)
 	}
-	return gracefulShutdown(ctx, srv)
+	return gracefulShutdown(srv, shutdownTimeout)
 }
 
-// gracefulShutdown shuts srv down within ctx's deadline, falling back to a
-// forced Close if the graceful shutdown times out (so the process is never
-// wedged by a connection that refuses to drain). It returns the Shutdown error
-// for the caller's exit-status decision; the forced-close fallback is handled
-// internally. This is the shared shutdown step for both the signal path (via
-// drainAndShutdown) and the startup-error path (called directly, no drain).
-func gracefulShutdown(ctx context.Context, srv *http.Server) error {
+// shutdowner is the subset of *http.Server that gracefulShutdown drives. It
+// exists so a test can substitute a fake that captures the deadline of the
+// context handed to Shutdown — proving the full timeout budget is granted at
+// the moment Shutdown is called, after the drain sleep
+// (TestDrainAndShutdown_ShutdownGetsFullBudgetAfterDrain). *http.Server
+// satisfies it; production always passes the real server.
+type shutdowner interface {
+	Shutdown(ctx context.Context) error
+	Close() error
+}
+
+// gracefulShutdown shuts srv down within a fresh timeout-bounded context,
+// falling back to a forced Close if the graceful shutdown times out (so the
+// process is never wedged by a connection that refuses to drain). It returns
+// the Shutdown error for the caller's exit-status decision; the forced-close
+// fallback is handled internally. This is the shared shutdown step for both the
+// signal path (via drainAndShutdown) and the startup-error path (called
+// directly, no drain).
+//
+// gracefulShutdown OWNS the timeout context: it creates it here, immediately
+// before srv.Shutdown, so the deadline always covers the FULL timeout from the
+// moment Shutdown begins. On the signal path this happens AFTER drainAndShutdown
+// has already slept the drain delay, so the drain delay never consumes any of
+// the shutdown budget.
+func gracefulShutdown(srv shutdowner, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	err := srv.Shutdown(ctx)
 	if err != nil {
 		slog.Error("shutdown timed out, forcing close", slog.String("error", err.Error()))
@@ -659,9 +686,10 @@ func main() {
 	select {
 	case <-done:
 		// SIGTERM (or Ctrl-C): drain before shutting down. The drain (flip
-		// /readyz, sleep the propagation window, then graceful shutdown) is
-		// deferred to drainAndShutdown below so it runs after the shutdown-
-		// timeout context is built.
+		// /readyz, sleep the propagation window, then graceful shutdown) runs in
+		// drainAndShutdown below. The shutdown-timeout context is NOT built here;
+		// gracefulShutdown builds it after the drain sleep so Shutdown gets the
+		// full budget (see drainAndShutdown / gracefulShutdown).
 		fromSignal = true
 		slog.Info("server shutting down", slog.String("reason", "signal"))
 	case startupErr = <-serverErr:
@@ -672,15 +700,18 @@ func main() {
 		// and no orchestrator routing to wait out.
 	}
 
+	// The shutdown-timeout budget is a DURATION, not a pre-built context: the
+	// shutdown helpers create their own timeout context immediately before
+	// srv.Shutdown so the deadline always covers the full budget. On the signal
+	// path that context is built AFTER the drain sleep, so the drain delay does
+	// not eat into the budget Shutdown gets to drain in-flight requests.
 	shutdownTimeout := time.Duration(defaults.DefaultShutdownTimeoutSeconds) * time.Second
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
 
 	if fromSignal {
 		drainDelay := time.Duration(cfg.Observability.ShutdownDrainDelayS) * time.Second
-		_ = drainAndShutdown(ctx, httpServer, readiness, drainDelay)
+		_ = drainAndShutdown(httpServer, readiness, drainDelay, shutdownTimeout)
 	} else {
-		_ = gracefulShutdown(ctx, httpServer)
+		_ = gracefulShutdown(httpServer, shutdownTimeout)
 	}
 
 	slog.Info("server stopped")

@@ -60,9 +60,7 @@ func TestDrainAndShutdown_FlipsReadyzBeforeDelay(t *testing.T) {
 	}()
 
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := drainAndShutdown(ctx, srv, readiness, drainDelay); err != nil {
+	if err := drainAndShutdown(srv, readiness, drainDelay, 5*time.Second); err != nil {
 		t.Fatalf("drainAndShutdown returned error: %v", err)
 	}
 	elapsed := time.Since(start)
@@ -93,13 +91,115 @@ func TestDrainAndShutdown_SetsShuttingDownEvenWithZeroDelay(t *testing.T) {
 	readiness := health.NewReadinessState()
 	readiness.SetInitialized()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := drainAndShutdown(ctx, srv, readiness, 0); err != nil {
+	if err := drainAndShutdown(srv, readiness, 0, 5*time.Second); err != nil {
 		t.Fatalf("drainAndShutdown returned error: %v", err)
 	}
 	if !readiness.IsShuttingDown() {
 		t.Error("IsShuttingDown is false after drainAndShutdown with zero delay")
+	}
+}
+
+// captureShutdowner is a test seam standing in for *http.Server. It records the
+// remaining time on the context handed to Shutdown, measured at the instant
+// Shutdown is called, so a test can assert how much of the timeout budget is
+// actually available then.
+type captureShutdowner struct {
+	shutdownCalledAt time.Time
+	deadline         time.Time
+	hadDeadline      bool
+	shutdownErr      error // returned from Shutdown to exercise the fallback when set
+	closeCalled      bool
+}
+
+func (c *captureShutdowner) Shutdown(ctx context.Context) error {
+	c.shutdownCalledAt = time.Now()
+	c.deadline, c.hadDeadline = ctx.Deadline()
+	return c.shutdownErr
+}
+
+func (c *captureShutdowner) Close() error {
+	c.closeCalled = true
+	return nil
+}
+
+// remainingBudgetAtShutdown returns how much time was left on the Shutdown
+// context at the moment Shutdown was invoked.
+func (c *captureShutdowner) remainingBudgetAtShutdown() time.Duration {
+	return c.deadline.Sub(c.shutdownCalledAt)
+}
+
+// TestDrainAndShutdown_ShutdownGetsFullBudgetAfterDrain proves the fix for the
+// Copilot finding (SOL-151288): the shutdown-timeout budget is created AFTER the
+// drain sleep, so the drain delay does NOT eat into the time Shutdown gets to
+// drain in-flight requests.
+//
+// Under the old code the timeout context was built before the drain sleep, so
+// at the moment Shutdown was called only (shutdownTimeout - drainDelay) of the
+// budget remained. Using a deadline-capturing seam we assert the budget present
+// AT THE SHUTDOWN CALL is the FULL shutdownTimeout (not shutdownTimeout minus
+// the drain), with a wide lower bound that tolerates context-creation overhead.
+// ms-scale drain delay; no multi-second sleeps.
+func TestDrainAndShutdown_ShutdownGetsFullBudgetAfterDrain(t *testing.T) {
+	const (
+		drainDelay      = 40 * time.Millisecond
+		shutdownTimeout = 30 * time.Second // the production default
+	)
+
+	cs := &captureShutdowner{}
+	readiness := health.NewReadinessState()
+	readiness.SetInitialized()
+
+	start := time.Now()
+	if err := drainAndShutdown(cs, readiness, drainDelay, shutdownTimeout); err != nil {
+		t.Fatalf("drainAndShutdown returned error: %v", err)
+	}
+
+	// Readiness still flips, and Shutdown ran only after the drain delay.
+	if !readiness.IsShuttingDown() {
+		t.Error("IsShuttingDown is false after drainAndShutdown")
+	}
+	if cs.shutdownCalledAt.Sub(start) < drainDelay {
+		t.Errorf("Shutdown was called %v after start, before the %v drain delay elapsed",
+			cs.shutdownCalledAt.Sub(start), drainDelay)
+	}
+	if !cs.hadDeadline {
+		t.Fatal("Shutdown context had no deadline; the timeout budget was not applied")
+	}
+
+	// The core assertion: the budget available when Shutdown is called is the
+	// FULL shutdownTimeout, NOT shutdownTimeout - drainDelay. The old bug would
+	// leave at most (shutdownTimeout - drainDelay). We require the remaining
+	// budget to exceed that buggy ceiling by a wide margin, while staying just
+	// under the full timeout (only context-creation overhead is lost).
+	remaining := cs.remainingBudgetAtShutdown()
+	buggyCeiling := shutdownTimeout - drainDelay
+	if remaining <= buggyCeiling {
+		t.Errorf("Shutdown got only %v of budget (<= %v), so the %v drain consumed the budget; "+
+			"the timeout context must be created AFTER the drain sleep", remaining, buggyCeiling, drainDelay)
+	}
+	// Sanity upper bound: never more than the full timeout.
+	if remaining > shutdownTimeout {
+		t.Errorf("Shutdown budget %v exceeds the full timeout %v", remaining, shutdownTimeout)
+	}
+	// And it should be within a small slack of the full timeout.
+	if shutdownTimeout-remaining > time.Second {
+		t.Errorf("Shutdown budget %v is more than 1s short of the full %v timeout", remaining, shutdownTimeout)
+	}
+}
+
+// TestGracefulShutdown_ForcedCloseFallback proves the Shutdown→Close fallback is
+// preserved: when Shutdown returns an error, gracefulShutdown forces Close and
+// propagates the original error.
+func TestGracefulShutdown_ForcedCloseFallback(t *testing.T) {
+	wantErr := context.DeadlineExceeded
+	cs := &captureShutdowner{shutdownErr: wantErr}
+
+	err := gracefulShutdown(cs, 50*time.Millisecond)
+	if err != wantErr {
+		t.Errorf("gracefulShutdown returned %v, want the original Shutdown error %v", err, wantErr)
+	}
+	if !cs.closeCalled {
+		t.Error("forced Close was not called after Shutdown failed; the fallback is missing")
 	}
 }
 
