@@ -206,7 +206,10 @@ tools:
       guaranteed-message consumers: queues with spooledMsgCount growing,
       txUnackedMsgCount high, rxMsgRate > txMsgRate, and bindCount > 0 indicate
       consumer-side slowness even when slowSubscriber is false on the bound
-      client.
+      client. The response includes a summary block with noConsumerCount
+      (bindCount == 0), congestedCount (low-priority congestion state),
+      backloggedCount (any spooled messages), and nearFullCount (spool usage at
+      or above 80% of maxMsgSpoolUsage).
     annotations:
       readOnly: true
     parameters:
@@ -298,8 +301,12 @@ tools:
     description: >
       List all REST Delivery Points in a Message VPN with their enabled state,
       up/down status, and last failure reason. Use this to discover which RDPs
-      exist and identify any that are down. For detailed RDP status including
-      consumers and queue bindings, use get-rdp-status.
+      exist and identify any that are down. The response includes a summary
+      block with downCount, disabledCount, downButEnabledCount (RDPs that are
+      down but not admin-disabled — the unexpectedly-down set), and
+      byLastFailureReason (counts of currently-down RDPs grouped by their
+      failure reason). For detailed RDP status including consumers and queue
+      bindings, use get-rdp-status.
     annotations:
       readOnly: true
     parameters:
@@ -318,9 +325,17 @@ tools:
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           count: "100"
-          select: "clientName, enabled, lastFailureReason, lastFailureTime, msgVpnName, restDeliveryPointName, up"
+        select:
+          - clientName
+          - enabled
+          - lastFailureReason
+          - lastFailureTime
+          - msgVpnName
+          - restDeliveryPointName
+          - up
     result:
-      strategy: collect
+      strategy: postProcess
+      postProcess: listRdps
 
   - name: get-replication-status
     description: >
