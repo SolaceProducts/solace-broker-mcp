@@ -74,8 +74,7 @@ The server implements the MCP HTTP transport specification and exposes event bro
 
 ## Tools
 
-The server exposes read-only tools grouped by what they inspect, plus a small set of action tools for operational workflows. Every tool except `list-brokers` takes a `broker` parameter naming a configured broker alias. See the [Tools Reference](docs/tools-reference.md) for full per-tool parameters, output shape, and example invocations; the [user guide](docs/user-guide.md#tools-reference) has the narrative overview.
-
+The server exposes read-only tools grouped by what they inspect, plus write tools for operational actions and configuration management. Every tool except `list-brokers` takes a `broker` parameter naming a configured broker alias. See the [Tools Reference](docs/tools-reference.md) for full per-tool parameters, output shape, and example invocations; the [user guide](docs/user-guide.md#tools-reference) has the narrative overview.
 | Category | Tools | Description |
 |---|---|---|
 | Discovery | `list-brokers` | List configured broker aliases for use as the `broker` parameter |
@@ -86,7 +85,10 @@ The server exposes read-only tools grouped by what they inspect, plus a small se
 | Clients | `list-clients`, `get-client-details`, `list-client-subscriptions`, `list-slow-subscribers` | List connections, inspect per-client rates and discards, list subscriptions, filter for slow-subscriber-flagged clients |
 | REST Delivery Points | `list-rdps`, `get-rdp-status` | List RDPs; inspect bindings, REST consumers, and last failure reason |
 | Discards | `get-discard-stats`, `list-queue-discards` | Broker-wide and per-VPN discard aggregates; per-queue discard counters |
-| Actions | `delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats` | One tool per action. Destructive tools (`delete-queue-messages`, `disconnect-client`) are annotated `destructiveHint` and instruct the LLM to obtain user confirmation before invocation; the `clear-*-stats` tools are non-destructive. **All four are write tools gated behind `enable_write_tools: true` in the config — default off; not registered in `tools/list` when disabled.** |
+| Actions | `delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats` | One tool per operational action. Destructive tools (`delete-queue-messages`, `disconnect-client`) are annotated `destructiveHint` and instruct the LLM to obtain user confirmation before invocation; the `clear-*-stats` tools are non-destructive. |
+| Management | `create-message-vpn`, `update-message-vpn`, `delete-message-vpn`, `create-queue`, `update-queue`, `delete-queue`, `create-topic-endpoint`, `update-topic-endpoint`, `delete-topic-endpoint` | Create, update, and delete Config-API objects (Message VPNs, queues, topic endpoints). `delete-*` are annotated `destructiveHint` and instruct the LLM to obtain user confirmation before invocation. |
+
+**The action and management tools are write tools, gated behind `enable_write_tools: true` in the config — default off; not registered in `tools/list` when disabled.** That's 13 write tools in total, on top of the 17 read-only tools.
 
 ## Guides
 
