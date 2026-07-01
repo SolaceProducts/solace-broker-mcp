@@ -7,7 +7,8 @@ import (
 
 // BearerAuthenticator attaches a static Bearer token captured at
 // construction. Fields are never written after construction, so AddAuth
-// is safe to call concurrently from any number of goroutines.
+// and HandleAuthFailure are safe to call concurrently from any number
+// of goroutines.
 type BearerAuthenticator struct {
 	token string
 }
@@ -24,4 +25,10 @@ func NewBearerAuthenticator(token string) *BearerAuthenticator {
 func (a *BearerAuthenticator) AddAuth(_ context.Context, req *http.Request) error {
 	req.Header.Set("Authorization", "Bearer "+a.token)
 	return nil
+}
+
+// HandleAuthFailure returns false unconditionally — a static bearer
+// token cannot be refreshed, so retrying after 401 is pointless.
+func (a *BearerAuthenticator) HandleAuthFailure(_ context.Context, _ *http.Response) bool {
+	return false
 }

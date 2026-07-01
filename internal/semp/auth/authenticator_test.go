@@ -25,7 +25,7 @@ func TestBasicAuthenticator_AddAuth(t *testing.T) {
 		user = "admin"
 		pass = "s3cret"
 	)
-	a := NewBasicAuthenticator(user, pass)
+	a := NewBasicAuthenticator(user, pass, nil)
 	req := newReq(t)
 
 	if err := a.AddAuth(context.Background(), req); err != nil {
@@ -76,7 +76,7 @@ func TestNewAuthenticator_DispatchesByMode(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a, err := NewAuthenticator(tt.cfg)
+			a, err := NewAuthenticator(tt.cfg, nil, nil)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -95,7 +95,7 @@ func TestNewAuthenticator_DispatchesByMode(t *testing.T) {
 }
 
 func TestNewAuthenticator_UnsupportedMode(t *testing.T) {
-	a, err := NewAuthenticator(config.AuthConfig{Mode: "invented-mode"})
+	a, err := NewAuthenticator(config.AuthConfig{Mode: "invented-mode"}, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for unsupported mode, got nil")
 	}
@@ -118,7 +118,7 @@ func TestAuthenticator_ConcurrentAddAuth_NoFieldMutation(t *testing.T) {
 	const goroutines = 16
 
 	t.Run("basic", func(t *testing.T) {
-		a := NewBasicAuthenticator("admin", "s3cret")
+		a := NewBasicAuthenticator("admin", "s3cret", nil)
 		wantUser, wantPass := a.username, a.password
 		wantCreds := wantUser + ":" + wantPass
 
@@ -182,9 +182,62 @@ func TestAuthenticator_ConcurrentAddAuth_NoFieldMutation(t *testing.T) {
 	})
 }
 
-// Compile-time assertions that both types satisfy the Authenticator
+type fakeJar struct {
+	mu      sync.Mutex
+	cleared bool
+}
+
+func (j *fakeJar) Clear() error {
+	j.mu.Lock()
+	j.cleared = true
+	j.mu.Unlock()
+	return nil
+}
+
+func TestBasicAuthenticator_HandleAuthFailure_ClearsJar(t *testing.T) {
+	jar := &fakeJar{}
+	a := NewBasicAuthenticator("admin", "secret", jar)
+
+	retry := a.HandleAuthFailure(context.Background(), nil)
+	if !retry {
+		t.Error("HandleAuthFailure should return true after clearing jar")
+	}
+	jar.mu.Lock()
+	defer jar.mu.Unlock()
+	if !jar.cleared {
+		t.Error("expected jar.Clear() to be called")
+	}
+}
+
+func TestBasicAuthenticator_HandleAuthFailure_NilJar(t *testing.T) {
+	a := NewBasicAuthenticator("admin", "secret", nil)
+	if got := a.HandleAuthFailure(context.Background(), nil); got {
+		t.Error("HandleAuthFailure should return false when jar is nil")
+	}
+}
+
+func TestBearerAuthenticator_HandleAuthFailure(t *testing.T) {
+	a := NewBearerAuthenticator("token123")
+	if got := a.HandleAuthFailure(context.Background(), nil); got {
+		t.Error("HandleAuthFailure should return false for bearer (static token)")
+	}
+}
+
+func TestNewAuthenticator_DispatchesOAuth(t *testing.T) {
+	cfg := config.AuthConfig{Mode: config.AuthModeOAuth, Audience: "aud", Scopes: []string{"s1"}}
+	a, err := NewAuthenticator(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := a.(*OAuthAuthenticator); !ok {
+		t.Errorf("got %T, want *OAuthAuthenticator", a)
+	}
+}
+
+// Compile-time assertions that all types satisfy the Authenticator
 // interface — protects against an accidental signature drift.
 var (
 	_ Authenticator = (*BasicAuthenticator)(nil)
 	_ Authenticator = (*BearerAuthenticator)(nil)
+	_ Authenticator = (*OAuthAuthenticator)(nil)
 )

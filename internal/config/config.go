@@ -807,17 +807,9 @@ func validate(cfg *ServerConfig) error {
 	errs = append(errs, aliasErrs...)
 	cfg.brokers = canonical
 
-	// oauthBrokerCount tracks how many brokers were configured with the not-
-	// yet-supported oauth mode. Used at end of validate() to emit the loud
-	// operator-facing banner separately from the joined error.
-	oauthBrokerCount := 0
-
 	for _, lower := range slices.Sorted(maps.Keys(cfg.brokers)) {
 		broker := cfg.brokers[lower]
 		errs = append(errs, validateBroker(broker, cfg.IsProductionMode())...)
-		if broker.Auth.Mode == AuthModeOAuth {
-			oauthBrokerCount++
-		}
 		// Surface insecure_skip_verify=true at startup so operators see it
 		// in triage logs without scraping per-request SEMP-client warns.
 		if cfg.IsProductionMode() && broker.InsecureSkipVerify {
@@ -937,15 +929,7 @@ func validate(cfg *ServerConfig) error {
 	// stays callable and is exercised by TestValidateHop1Hop2Alignment_Direct
 	// so the invariant does not rot while it is sleeping in validate().
 	//
-	// LIFECYCLE: when the OAuth runtime ships (SOL-150070 follow-up sub-
-	// tickets), delete the whole `if oauthBrokerCount > 0` arm — the
-	// `else if` then runs unconditionally and the alignment check
-	// becomes the operator-facing surface for Hop 1 / Hop 2 mismatches.
-	// See banner.LogOAuthNotSupported doc-comment for the full removal
-	// checklist.
-	if oauthBrokerCount > 0 {
-		banner.LogOAuthNotSupported(oauthBrokerCount)
-	} else if err := validateHop1Hop2Alignment(cfg); err != nil {
+	if err := validateHop1Hop2Alignment(cfg); err != nil {
 		errs = append(errs, err)
 		banner.LogHop2WithoutHop1(countHop2Brokers(cfg), cfg.MCPClientAuth.Mode)
 	}
@@ -954,10 +938,8 @@ func validate(cfg *ServerConfig) error {
 }
 
 // countHop2Brokers returns the number of brokers configured with
-// auth.mode: oauth. Identical, while the OAuth-not-supported guard is
-// active, to the oauthBrokerCount computed in validate(); kept as a
-// separate helper because the two counters diverge once the guard is
-// removed (oauthBrokerCount goes away; the Hop 2 count remains).
+// auth.mode: oauth. Used by validate() to format the Hop 1 / Hop 2
+// alignment banner with the correct broker count.
 func countHop2Brokers(cfg *ServerConfig) int {
 	n := 0
 	for _, b := range cfg.brokers {
@@ -972,16 +954,6 @@ func countHop2Brokers(cfg *ServerConfig) int {
 // OAuth on any broker requires Hop 1 OAuth on the MCP client auth. Returns
 // nil when the invariant holds (no Hop 2 brokers, or Hop 1 mode is oauth)
 // and an operator-facing error otherwise.
-//
-// This validator is a PURE function — it inspects the config and returns
-// an error or nil. Whether validate() actually calls it and surfaces the
-// error to operators is decided at the call site. While the
-// OAuth-not-supported guard is active, validate() does NOT call this
-// validator (the alignment branch is gated behind the guard so operators
-// get a single remediation path). The invariant is still exercised today
-// by TestValidateHop1Hop2Alignment_Direct, which calls this function
-// directly with crafted configs, so the alignment logic does not rot
-// while it is sleeping in validate().
 func validateHop1Hop2Alignment(cfg *ServerConfig) error {
 	if cfg.MCPClientAuth.Mode == AuthModeOAuth {
 		return nil
@@ -1064,20 +1036,6 @@ func validateBroker(broker *BrokerConfig, productionMode bool) []error {
 			}
 		}
 
-		// RUNTIME GUARD: schema accepts oauth mode (and the OAuth fields
-		// above) so configs that target the eventual OAuth runtime can be
-		// staged and validated structurally today. But the OAuth runtime
-		// (NewAuthenticator's oauth case, the token cache, the exchanger,
-		// the per-broker request composer) does not exist in this version.
-		// Reject at startup with an actionable message rather than letting
-		// the failure land on the first SEMP request. This block will be
-		// removed by the sub-ticket that wires the OAuth runtime (T6).
-		// See docs/superpowers/plans/oauth-token-exchange/SOL-150796-T2-config-schema.md
-		// for the rationale (no feature flag, removed when runtime lands).
-		errs = append(errs, fmt.Errorf(
-			"broker %q: auth.mode %q is recognized but not yet supported in this version; "+
-				"use basic or bearer for now",
-			alias, AuthModeOAuth))
 	}
 
 	return errs

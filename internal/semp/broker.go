@@ -44,8 +44,13 @@ type BrokerClient struct {
 // constructs exactly one Authenticator from brokerCfg.Auth and passes the
 // same pointer to both protocol clients. Layers below this one never call
 // auth.NewAuthenticator.
+//
+// exchanger and jar are nil placeholders until the Sender wiring
+// refactor passes real values (exchanger from T7a, jar from broker-level
+// construction). BasicAuth.HandleAuthFailure is nil-jar-safe; OAuth's
+// exchanger is wired through main.go in T7a.
 func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (*BrokerClient, error) {
-	authn, err := auth.NewAuthenticator(brokerCfg.Auth)
+	authn, err := auth.NewAuthenticator(brokerCfg.Auth, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating authenticator for broker %q: %w", alias, err)
 	}

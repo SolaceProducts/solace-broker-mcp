@@ -36,7 +36,7 @@ func newTestClientRetries(t *testing.T, maxRetries int, handler http.HandlerFunc
 		RetryMinInterval:       1 * time.Millisecond,
 		RetryMaxInterval:       5 * time.Millisecond,
 	}
-	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret"))
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret", nil))
 	if err != nil {
 		t.Fatalf("NewHTTPClient: %v", err)
 	}

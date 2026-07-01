@@ -2479,9 +2479,6 @@ broker_oauth:
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
   audience_parameter_name: audience
 `
-	// The rejection error every oauth-mode-broker config surfaces in V1.
-	const notYetSupported = `auth.mode "oauth" is recognized but not yet supported in this version`
-
 	cases := []struct {
 		name             string
 		yaml             string
@@ -2489,8 +2486,9 @@ broker_oauth:
 		wantErrSubstring string
 	}{
 		{
-			// Schema is valid; the V1 runtime guard fires the rejection.
-			name: "schema-valid oauth broker config — rejected by V1 runtime guard",
+			// Schema is valid; the Hop1/Hop2 alignment check fires because
+			// mcp_client_auth.mode is static, not oauth.
+			name: "schema-valid oauth broker config — rejected by Hop1/Hop2 alignment",
 			yaml: clientAuthBlock + validBrokerOAuth + `
 brokers:
   prod:
@@ -2502,7 +2500,7 @@ brokers:
         - "semp:read"
 `,
 			wantErr:          true,
-			wantErrSubstring: notYetSupported,
+			wantErrSubstring: "mcp_client_auth.mode must be oauth",
 		},
 		{
 			// Schema validation fires before the runtime rejection — both
@@ -2669,7 +2667,7 @@ brokers:
 			// Audience is optional in V1 — the broker's OAuth profile may have
 			// audience validation disabled. The schema accepts the omission;
 			// the V1 runtime guard still fires.
-			name: "per-broker audience omitted when mode is oauth — accepted by schema, rejected by V1 guard",
+			name: "per-broker audience omitted when mode is oauth — accepted by schema",
 			yaml: clientAuthBlock + validBrokerOAuth + `
 brokers:
   prod:
@@ -2678,7 +2676,7 @@ brokers:
       mode: oauth
 `,
 			wantErr:          true,
-			wantErrSubstring: notYetSupported,
+			wantErrSubstring: "mcp_client_auth.mode must be oauth",
 		},
 		{
 			name: "per-broker scopes contains a whitespace-only entry",
@@ -3068,11 +3066,11 @@ brokers:
 	}
 }
 
-// TestLoadConfig_EmitsOAuthNotSupportedBanner verifies that when one or more
-// brokers are configured with auth.mode: oauth, the operator-facing banner
-// log line is emitted at ERROR level — separate from the joined config error.
-// The banner is the loud headline; the joined error carries broker names.
-func TestLoadConfig_EmitsOAuthNotSupportedBanner(t *testing.T) {
+// TestLoadConfig_Hop1Hop2AlignmentBanner verifies that the alignment
+// banner fires with correct singular/plural when Hop 2 oauth is
+// configured without Hop 1 oauth, and does not fire when no oauth
+// brokers exist.
+func TestLoadConfig_Hop1Hop2AlignmentBanner(t *testing.T) {
 	t.Run("single oauth broker — banner shows '1 broker'", func(t *testing.T) {
 		yaml := `
 mcp_client_auth:
@@ -3099,16 +3097,14 @@ brokers:
 
 		_, err := LoadConfig(writeTemp(t, yaml))
 		if err == nil {
-			t.Fatal("expected error from V1 oauth guard")
+			t.Fatal("expected error for Hop1/Hop2 misalignment")
 		}
 		out := buf.String()
-		// Banner contents — the loud signal that this is the load-bearing problem.
-		if !strings.Contains(out, "does not yet support") {
-			t.Errorf("expected banner headline in log output, got:\n%s", out)
-		}
-		// Pluralization — exactly one broker should use the singular form.
 		if !strings.Contains(out, "1 broker with auth.mode: oauth") {
-			t.Errorf("expected '1 broker' (singular) in banner, got:\n%s", out)
+			t.Errorf("expected '1 broker' (singular) in alignment banner, got:\n%s", out)
+		}
+		if strings.Contains(out, "does not yet support") {
+			t.Errorf("OAuth-not-supported guard should be removed, got:\n%s", out)
 		}
 	})
 
@@ -3142,11 +3138,11 @@ brokers:
 
 		_, err := LoadConfig(writeTemp(t, yaml))
 		if err == nil {
-			t.Fatal("expected error from V1 oauth guard")
+			t.Fatal("expected error for Hop1/Hop2 misalignment")
 		}
 		out := buf.String()
 		if !strings.Contains(out, "3 brokers with auth.mode: oauth") {
-			t.Errorf("expected '3 brokers' (plural) in banner, got:\n%s", out)
+			t.Errorf("expected '3 brokers' (plural) in alignment banner, got:\n%s", out)
 		}
 	})
 
@@ -3171,20 +3167,17 @@ brokers:
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if strings.Contains(buf.String(), "does not yet support") {
-			t.Errorf("banner should NOT fire when no broker uses oauth mode, got:\n%s", buf.String())
+		if strings.Contains(buf.String(), "OAuth broker authentication requires") {
+			t.Errorf("alignment banner should NOT fire when no broker uses oauth mode, got:\n%s", buf.String())
 		}
 	})
 }
 
-// TestValidateHop1Hop2Alignment_Direct exercises the alignment validator in
-// isolation, bypassing validate(). This is the test surface that keeps the
-// alignment logic from rotting while validate() does not surface it (the
-// alignment check is gated behind the OAuth-not-supported guard in
-// validate(); see config.go's validate() comment). When the OAuth-on-brokers
-// runtime ships and the guard is removed, validate() will start calling
-// the validator unconditionally — at which point the assertions here AND
-// the load-config integration tests both exercise the same code path.
+// TestValidateHop1Hop2Alignment_Direct exercises the alignment validator
+// in isolation with crafted configs. Complements the LoadConfig-level
+// integration tests (TestLoadConfig_Hop1Hop2Alignment,
+// TestLoadConfig_Hop1Hop2AlignmentBanner) which exercise the same logic
+// through validate().
 func TestValidateHop1Hop2Alignment_Direct(t *testing.T) {
 	hop2Broker := func() *BrokerConfig {
 		return &BrokerConfig{Auth: AuthConfig{Mode: AuthModeOAuth}}
@@ -3279,19 +3272,11 @@ func TestValidateHop1Hop2Alignment_Direct(t *testing.T) {
 	})
 }
 
-// TestLoadConfig_Hop1Hop2Alignment_SuppressedWhileNotSupportedGuardActive
-// verifies that, while the OAuth-not-supported guard is in effect, BOTH the
-// alignment validation error AND its banner are suppressed. Operators see a
-// single remediation path (the OAuth-not-supported guard) for the
-// misconfiguration; the alignment check is sleeping code that becomes
-// load-bearing only when the OAuth-on-brokers runtime ships and the guard
-// is removed.
-//
-// The alignment validator function itself is still exercised today by
-// TestValidateHop1Hop2Alignment_Direct, which calls it with crafted
-// configs that bypass validate(). That separation keeps the alignment
-// logic from rotting while it is not surfaced through validate().
-func TestLoadConfig_Hop1Hop2Alignment_SuppressedWhileNotSupportedGuardActive(t *testing.T) {
+// TestLoadConfig_Hop1Hop2Alignment verifies that the Hop 1 / Hop 2
+// alignment check fires through LoadConfig: if any broker uses
+// auth.mode: oauth but mcp_client_auth.mode is not oauth, the config
+// is rejected with the alignment error and the operator-facing banner.
+func TestLoadConfig_Hop1Hop2Alignment(t *testing.T) {
 	yaml := `
 mcp_client_auth:
   mode: static
@@ -3318,32 +3303,20 @@ brokers:
 
 	_, err := LoadConfig(writeTemp(t, yaml))
 	if err == nil {
-		t.Fatal("expected error")
+		t.Fatal("expected error for Hop1/Hop2 misalignment")
 	}
 	msg := err.Error()
 	out := buf.String()
 
-	// The OAuth-not-supported error MUST be the only oauth-related error
-	// the operator sees in the joined blob.
-	if !strings.Contains(msg, "not yet supported") {
-		t.Errorf("expected OAuth-not-supported error in joined blob, got: %s", msg)
+	if !strings.Contains(msg, "mcp_client_auth.mode must be oauth") {
+		t.Errorf("expected Hop1/Hop2 alignment error, got: %s", msg)
 	}
-	// The alignment error must NOT appear in the joined blob — the
-	// not-yet-supported guard already explains the misconfiguration with
-	// one direction of remediation; surfacing the alignment error too
-	// would point at a second remediation path for a feature that does
-	// not yet run.
-	if strings.Contains(msg, "mcp_client_auth.mode must be oauth") {
-		t.Errorf("Hop1/Hop2 alignment error must be suppressed while the OAuth-not-supported guard is active, got: %s", msg)
+	if strings.Contains(msg, "not yet supported") {
+		t.Errorf("OAuth-not-supported guard should be removed, but error still present: %s", msg)
 	}
 
-	// The OAuth-not-supported banner SHOULD fire.
-	if !strings.Contains(out, "does not yet support") {
-		t.Errorf("expected OAuth-not-supported banner to fire, got:\n%s", out)
-	}
-	// The alignment banner must NOT fire.
-	if strings.Contains(out, "OAuth broker authentication requires OAuth client") {
-		t.Errorf("Hop1/Hop2 alignment banner must be suppressed while the OAuth-not-supported guard is active, got:\n%s", out)
+	if !strings.Contains(out, "OAuth broker authentication requires") {
+		t.Errorf("expected Hop1/Hop2 alignment banner, got:\n%s", out)
 	}
 }
 

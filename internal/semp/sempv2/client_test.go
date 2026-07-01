@@ -37,7 +37,7 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*sempv2.HTTPClient, 
 		RetryMinInterval:       1 * time.Millisecond,
 		RetryMaxInterval:       10 * time.Millisecond,
 	}
-	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret"))
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret", nil))
 	if err != nil {
 		t.Fatalf("NewHTTPClient() error: %v", err)
 	}
@@ -909,7 +909,7 @@ func TestClient_Execute_Timeout(t *testing.T) {
 		RetryMinInterval:       1 * time.Millisecond,
 		RetryMaxInterval:       10 * time.Millisecond,
 	}
-	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret"))
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret", nil))
 	if err != nil {
 		t.Fatalf("NewHTTPClient() error: %v", err)
 	}
@@ -980,7 +980,7 @@ func TestClient_TransportPool_ReusesConnections(t *testing.T) {
 		RetryMaxInterval:       10 * time.Millisecond,
 		MaxConcurrentPerBroker: concurrency,
 	}
-	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret"))
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret", nil))
 	if err != nil {
 		t.Fatalf("NewHTTPClient: %v", err)
 	}

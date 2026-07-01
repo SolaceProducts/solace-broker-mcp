@@ -1,0 +1,168 @@
+package auth
+
+import (
+	"context"
+	"net/http"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	internalauth "github.com/SolaceDev/solace-broker-mcp/internal/auth"
+	"github.com/SolaceDev/solace-broker-mcp/internal/tokenexchange"
+)
+
+type fakeExchanger struct {
+	returnToken *tokenexchange.Token
+	returnErr   error
+	mu          sync.Mutex
+	calls       []tokenexchange.ExchangeInput
+}
+
+func (f *fakeExchanger) Exchange(_ context.Context, input tokenexchange.ExchangeInput) (*tokenexchange.Token, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, input)
+	f.mu.Unlock()
+	return f.returnToken, f.returnErr
+}
+
+func ctxWithSubjectToken(t *testing.T, token string) context.Context {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, "http://example.test", nil)
+	if err != nil {
+		t.Fatalf("building request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	handler := internalauth.InjectRawSubjectToken(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+	var captured context.Context
+	wrapped := internalauth.InjectRawSubjectToken(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		captured = r.Context()
+	}))
+	_ = handler
+	wrapped.ServeHTTP(nil, req)
+	return captured
+}
+
+func TestOAuthAuthenticator_AddAuth(t *testing.T) {
+	exchg := &fakeExchanger{
+		returnToken: &tokenexchange.Token{
+			Value:     "exchanged-token-123",
+			ExpiresAt: time.Now().Add(5 * time.Minute),
+		},
+	}
+	a := NewOAuthAuthenticator(exchg, "broker-audience", []string{"scope1", "scope2"})
+
+	ctx := ctxWithSubjectToken(t, "agent-jwt-token")
+	req := newReq(t)
+
+	if err := a.AddAuth(ctx, req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := req.Header.Get("Authorization")
+	if got != "Bearer exchanged-token-123" {
+		t.Errorf("Authorization header = %q, want %q", got, "Bearer exchanged-token-123")
+	}
+
+	exchg.mu.Lock()
+	defer exchg.mu.Unlock()
+	if len(exchg.calls) != 1 {
+		t.Fatalf("expected 1 Exchange call, got %d", len(exchg.calls))
+	}
+	call := exchg.calls[0]
+	if call.SubjectToken != "agent-jwt-token" {
+		t.Errorf("SubjectToken = %q, want %q", call.SubjectToken, "agent-jwt-token")
+	}
+	if call.Audience != "broker-audience" {
+		t.Errorf("Audience = %q, want %q", call.Audience, "broker-audience")
+	}
+	if len(call.Scopes) != 2 || call.Scopes[0] != "scope1" || call.Scopes[1] != "scope2" {
+		t.Errorf("Scopes = %v, want [scope1 scope2]", call.Scopes)
+	}
+}
+
+func TestOAuthAuthenticator_AddAuth_NoSubjectToken(t *testing.T) {
+	exchg := &fakeExchanger{
+		returnToken: &tokenexchange.Token{Value: "should-not-reach"},
+	}
+	a := NewOAuthAuthenticator(exchg, "aud", nil)
+
+	req := newReq(t)
+	err := a.AddAuth(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error when no subject token on context")
+	}
+	if !strings.Contains(err.Error(), "no subject token") {
+		t.Errorf("error = %v, want mention of 'no subject token'", err)
+	}
+
+	exchg.mu.Lock()
+	defer exchg.mu.Unlock()
+	if len(exchg.calls) != 0 {
+		t.Errorf("Exchange should not be called when no subject token, got %d calls", len(exchg.calls))
+	}
+}
+
+func TestOAuthAuthenticator_AddAuth_ExchangeError(t *testing.T) {
+	exchg := &fakeExchanger{
+		returnErr: tokenexchange.ErrExchangeRejected,
+	}
+	a := NewOAuthAuthenticator(exchg, "aud", nil)
+
+	ctx := ctxWithSubjectToken(t, "agent-token")
+	req := newReq(t)
+	err := a.AddAuth(ctx, req)
+	if err == nil {
+		t.Fatal("expected error when exchange fails")
+	}
+	if !strings.Contains(err.Error(), "token exchange failed") {
+		t.Errorf("error = %v, want mention of 'token exchange failed'", err)
+	}
+}
+
+func TestOAuthAuthenticator_HandleAuthFailure(t *testing.T) {
+	a := NewOAuthAuthenticator(&fakeExchanger{}, "aud", nil)
+	if got := a.HandleAuthFailure(context.Background(), nil); got {
+		t.Error("HandleAuthFailure should return false for OAuth (stateless, no retry)")
+	}
+}
+
+// TestOAuthAuthenticator_ConcurrentAddAuth exercises Decision 13 Test 5:
+// 100 concurrent AddAuth calls with distinct contexts. The
+// OAuthAuthenticator must produce correct headers on every call without
+// mutating its own fields. Run with -race.
+func TestOAuthAuthenticator_ConcurrentAddAuth(t *testing.T) {
+	const goroutines = 100
+
+	exchg := &fakeExchanger{
+		returnToken: &tokenexchange.Token{
+			Value:     "concurrent-token",
+			ExpiresAt: time.Now().Add(5 * time.Minute),
+		},
+	}
+	a := NewOAuthAuthenticator(exchg, "broker-aud", []string{"s1"})
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			ctx := ctxWithSubjectToken(t, "agent-token")
+			req := newReq(t)
+			if err := a.AddAuth(ctx, req); err != nil {
+				t.Errorf("AddAuth: %v", err)
+				return
+			}
+			if got := req.Header.Get("Authorization"); got != "Bearer concurrent-token" {
+				t.Errorf("Authorization = %q, want %q", got, "Bearer concurrent-token")
+			}
+		}()
+	}
+	wg.Wait()
+
+	exchg.mu.Lock()
+	defer exchg.mu.Unlock()
+	if len(exchg.calls) != goroutines {
+		t.Errorf("expected %d Exchange calls, got %d", goroutines, len(exchg.calls))
+	}
+}

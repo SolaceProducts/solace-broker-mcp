@@ -96,57 +96,6 @@ const staticBanner = `
   Tool-invocation logs from this run are NOT a valid audit trail.
 ============================================================`
 
-// LogOAuthNotSupported is the OAuth-not-supported guard headline. It is
-// logged when any broker is configured with auth.mode: oauth, which the
-// schema accepts but no current runtime can use (the OAuth-on-brokers
-// runtime ships in a follow-up sub-ticket). The n argument is the count
-// of affected brokers; the function formats it with the correct
-// singular/plural form ("1 broker" vs "N brokers").
-//
-// The banner is logged via slog.Error as a SEPARATE log line from the joined
-// validation error — operators see the headline first, then the comprehensive
-// error with broker names. Wording is operator-language: what we detected,
-// why it failed, what to do today, and that the feature is planned.
-//
-// This is a *headline* — it intentionally does not list broker names. The
-// joined validation error (returned by config.validate() and logged by main)
-// carries the per-broker rejection messages with the broker aliases, so
-// operators have the names there. Keeping the headline broker-name-free
-// means the banner scales: 1 affected broker or 47, the headline stays the
-// same shape.
-//
-// LIFECYCLE — REMOVE WHEN THE OAUTH RUNTIME LANDS:
-// This banner, the validateBroker check inside internal/config that produces
-// oauthBrokerCount, and the call site in config.validate() are all part of
-// the same temporary guard. They exist only because the schema ships
-// ahead of the runtime that consumes it. When the
-// runtime sub-ticket (SOL-150070 follow-ups: token exchanger + oauth
-// Authenticator + cookie jar) lands and the per-broker oauth flow actually
-// works, delete all three together. At that point LogHop2WithoutHop1 below
-// becomes the load-bearing startup check for OAuth-on-broker configs.
-func LogOAuthNotSupported(n int) {
-	noun := "1 broker"
-	if n != 1 {
-		noun = fmt.Sprintf("%d brokers", n)
-	}
-	slog.Error(fmt.Sprintf(oauthNotSupportedBanner, noun))
-}
-
-const oauthNotSupportedBanner = `
-============================================================
-  This version of the MCP server does not yet support
-  authenticating to brokers using OAuth.
-
-  Your config has %s with auth.mode: oauth, which the server
-  recognizes but cannot use. The server will not start.
-
-  To proceed today, change those brokers to use auth.mode:
-  basic (username + password) or auth.mode: bearer (static
-  token). Both are fully supported in this version.
-
-  OAuth broker authentication is planned in a future release.
-============================================================`
-
 // LogHop2WithoutHop1 is the structural-mismatch headline for the Hop 1 /
 // Hop 2 OAuth alignment invariant: if any broker uses auth.mode: oauth
 // (Hop 2 — MCP server obtains a broker-bound token via RFC 8693 token
