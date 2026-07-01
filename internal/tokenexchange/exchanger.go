@@ -17,15 +17,18 @@ package tokenexchange
 import (
 	"errors"
 	"net/http"
+	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // Exchanger executes RFC 8693 token exchange against a single IdP. One
-// instance per process: every field is written once at construction and
-// never mutated, so concurrent calls from many goroutines are safe by
-// virtue of effectively-immutable state plus the goroutine-safety of
-// *http.Client and (when wired) the singleflight group. Per-broker
-// values (audience, scopes) and per-user values (subject token) flow
-// through Exchange's ExchangeInput, never onto the struct.
+// instance per process, shared by all per-request goroutines.
+//
+// INVARIANT: every field is written once in New() and never mutated
+// afterward. Do not assign to any field from any method. Concurrency
+// safety depends on this — fields are read from hundreds of goroutines
+// without synchronization. The race detector enforces this at test time.
 type Exchanger struct {
 	tokenURL         string
 	clientID         string
@@ -34,6 +37,8 @@ type Exchanger struct {
 	grantType        GrantType
 	audienceParam    AudienceFormat
 	httpClient       *http.Client
+	group            singleflight.Group
+	nowFunc          func() time.Time
 }
 
 // New constructs an Exchanger from Params. The config validator
@@ -58,5 +63,6 @@ func New(p Params) (*Exchanger, error) {
 		grantType:        p.GrantType,
 		audienceParam:    p.AudienceParam,
 		httpClient:       p.HTTPClient,
+		nowFunc:          time.Now,
 	}, nil
 }
