@@ -84,11 +84,11 @@ const (
 // response validation — defined once to prevent drift across files.
 const (
 	// URNGrantTypeTokenExchange is the grant_type value for RFC 8693.
-	URNGrantTypeTokenExchange = "urn:ietf:params:oauth:grant-type:token-exchange"
+	URNGrantTypeTokenExchange = "urn:ietf:params:oauth:grant-type:token-exchange" // #nosec G101 -- public RFC 8693 grant-type URN, not a credential.
 
 	// URNTokenTypeAccessToken is the subject_token_type and
 	// issued_token_type value for access tokens (RFC 8693 §3).
-	URNTokenTypeAccessToken = "urn:ietf:params:oauth:token-type:access_token"
+	URNTokenTypeAccessToken = "urn:ietf:params:oauth:token-type:access_token" // #nosec G101 -- public RFC 8693 token-type URN, not a credential.
 )
 
 // Params are the construction-time inputs to New. Every field except
