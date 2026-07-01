@@ -154,13 +154,20 @@ func TestExchange_DifferentKeysRunConcurrently(t *testing.T) {
 	t.Parallel()
 
 	var callCount atomic.Int32
+	var receivedTokensMu sync.Mutex
+	receivedTokens := map[string]bool{}
 	gate := make(chan struct{})
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount.Add(1)
+		r.ParseForm()
+		subj := r.PostFormValue("subject_token")
+		receivedTokensMu.Lock()
+		receivedTokens[subj] = true
+		receivedTokensMu.Unlock()
 		<-gate
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, successJSON("tok", 3600))
+		fmt.Fprint(w, successJSON("exchanged-for-"+subj, 3600))
 	}))
 	defer srv.Close()
 
@@ -170,17 +177,279 @@ func TestExchange_DifferentKeysRunConcurrently(t *testing.T) {
 	input1 := ExchangeInput{SubjectToken: "tok-A", BrokerAlias: "broker-A", Audience: "aud"}
 	input2 := ExchangeInput{SubjectToken: "tok-B", BrokerAlias: "broker-B", Audience: "aud"}
 
+	tokens := make([]*Token, 2)
+	errs := make([]error, 2)
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); e.Exchange(context.Background(), input1) }()
-	go func() { defer wg.Done(); e.Exchange(context.Background(), input2) }()
+	go func() { defer wg.Done(); tokens[0], errs[0] = e.Exchange(context.Background(), input1) }()
+	go func() { defer wg.Done(); tokens[1], errs[1] = e.Exchange(context.Background(), input2) }()
 
 	time.Sleep(50 * time.Millisecond)
 	close(gate)
 	wg.Wait()
 
+	for i := 0; i < 2; i++ {
+		if errs[i] != nil {
+			t.Errorf("caller %d: unexpected error = %v", i, errs[i])
+		}
+	}
+
+	if tokens[0] == nil || tokens[0].Value != "exchanged-for-tok-A" {
+		t.Errorf("caller 0: token = %v, want Value=%q", tokens[0], "exchanged-for-tok-A")
+	}
+	if tokens[1] == nil || tokens[1].Value != "exchanged-for-tok-B" {
+		t.Errorf("caller 1: token = %v, want Value=%q", tokens[1], "exchanged-for-tok-B")
+	}
+
 	if got := callCount.Load(); got != 2 {
 		t.Errorf("IdP called %d times, want 2 (different keys should not be deduplicated)", got)
+	}
+
+	if !receivedTokens["tok-A"] || !receivedTokens["tok-B"] {
+		t.Errorf("IdP received subject_tokens = %v, want both tok-A and tok-B", receivedTokens)
+	}
+}
+
+func TestExchange_SameTokenDifferentBrokersRunConcurrently(t *testing.T) {
+	t.Parallel()
+
+	var callCount atomic.Int32
+	var receivedTokensMu sync.Mutex
+	receivedTokens := map[string]bool{}
+	gate := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount.Add(1)
+		r.ParseForm()
+		subj := r.PostFormValue("subject_token")
+		receivedTokensMu.Lock()
+		receivedTokens[subj] = true
+		receivedTokensMu.Unlock()
+		<-gate
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("exchanged-for-"+subj, 3600))
+	}))
+	defer srv.Close()
+
+	e := newTestExchanger(t, srv.URL)
+	e.nowFunc = func() time.Time { return pinnedNow() }
+
+	input1 := ExchangeInput{SubjectToken: "same-token", BrokerAlias: "broker-A", Audience: "aud"}
+	input2 := ExchangeInput{SubjectToken: "same-token", BrokerAlias: "broker-B", Audience: "aud"}
+
+	tokens := make([]*Token, 2)
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); tokens[0], errs[0] = e.Exchange(context.Background(), input1) }()
+	go func() { defer wg.Done(); tokens[1], errs[1] = e.Exchange(context.Background(), input2) }()
+
+	time.Sleep(50 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+
+	for i := 0; i < 2; i++ {
+		if errs[i] != nil {
+			t.Errorf("caller %d: unexpected error = %v", i, errs[i])
+		}
+		if tokens[i] == nil || tokens[i].Value != "exchanged-for-same-token" {
+			t.Errorf("caller %d: token = %v, want Value=%q", i, tokens[i], "exchanged-for-same-token")
+		}
+	}
+
+	if got := callCount.Load(); got != 2 {
+		t.Errorf("IdP called %d times, want 2 (same token + different brokers must not be deduplicated)", got)
+	}
+
+	if !receivedTokens["same-token"] {
+		t.Errorf("IdP received subject_tokens = %v, want same-token", receivedTokens)
+	}
+}
+
+// ---------- B04: context cancellation does not affect other callers ----------
+
+// Simulates the real production scenario: three concurrent groups of
+// requests that prove cancellation is scoped to the exact (user, broker)
+// pair and does not leak across singleflight keys.
+//
+//   Group 1: User A + Broker X — cancelled → all fail
+//   Group 2: User A + Broker Y — not cancelled → all succeed (same user, different broker)
+//   Group 3: User C + Broker X — not cancelled → all succeed (different user, same broker)
+func TestExchange_CancellationScopedToKeyBoundary(t *testing.T) {
+	t.Parallel()
+
+	var callCount atomic.Int32
+	var receivedTokensMu sync.Mutex
+	receivedTokens := map[string]bool{}
+	gate := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount.Add(1)
+		r.ParseForm()
+		subj := r.PostFormValue("subject_token")
+		receivedTokensMu.Lock()
+		receivedTokens[subj] = true
+		receivedTokensMu.Unlock()
+		<-gate
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("exchanged-for-"+subj, 3600))
+	}))
+	defer srv.Close()
+
+	e := newTestExchanger(t, srv.URL)
+	e.nowFunc = func() time.Time { return pinnedNow() }
+
+	userA_brokerX := ExchangeInput{SubjectToken: "user-a-jwt", BrokerAlias: "broker-x", Audience: "aud"}
+	userA_brokerY := ExchangeInput{SubjectToken: "user-a-jwt", BrokerAlias: "broker-y", Audience: "aud"}
+	userC_brokerX := ExchangeInput{SubjectToken: "user-c-jwt", BrokerAlias: "broker-x", Audience: "aud"}
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+
+	var wg sync.WaitGroup
+
+	// Group 1: User A + Broker X — 3 requests, will be cancelled.
+	g1Errs := make([]error, 3)
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			_, g1Errs[idx] = e.Exchange(cancelCtx, userA_brokerX)
+		}(i)
+	}
+
+	// Group 2: User A + Broker Y — 2 requests, should succeed.
+	g2Tokens := make([]*Token, 2)
+	g2Errs := make([]error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			g2Tokens[idx], g2Errs[idx] = e.Exchange(context.Background(), userA_brokerY)
+		}(i)
+	}
+
+	// Group 3: User C + Broker X — 2 requests, should succeed.
+	g3Tokens := make([]*Token, 2)
+	g3Errs := make([]error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			g3Tokens[idx], g3Errs[idx] = e.Exchange(context.Background(), userC_brokerX)
+		}(i)
+	}
+
+	// Let all goroutines queue up in singleflight.
+	time.Sleep(50 * time.Millisecond)
+	// Cancel User A + Broker X group.
+	cancel()
+	// Release IdP responses.
+	time.Sleep(10 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+
+	// Group 1: all cancelled — every request belongs to the disconnected user+broker.
+	for i, err := range g1Errs {
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("group1[%d]: want context.Canceled, got %v", i, err)
+		}
+	}
+
+	// Group 2: all succeed — same user, different broker = different key.
+	// Singleflight collapses the 2 requests into 1 IdP call.
+	for i := 0; i < 2; i++ {
+		if g2Errs[i] != nil {
+			t.Errorf("group2[%d]: unexpected error = %v", i, g2Errs[i])
+		}
+		if g2Tokens[i] == nil || g2Tokens[i].Value != "exchanged-for-user-a-jwt" {
+			t.Errorf("group2[%d]: token = %v, want Value=%q", i, g2Tokens[i], "exchanged-for-user-a-jwt")
+		}
+	}
+
+	// Group 3: all succeed — different user, same broker = different key.
+	// Singleflight collapses the 2 requests into 1 IdP call.
+	for i := 0; i < 2; i++ {
+		if g3Errs[i] != nil {
+			t.Errorf("group3[%d]: unexpected error = %v", i, g3Errs[i])
+		}
+		if g3Tokens[i] == nil || g3Tokens[i].Value != "exchanged-for-user-c-jwt" {
+			t.Errorf("group3[%d]: token = %v, want Value=%q", i, g3Tokens[i], "exchanged-for-user-c-jwt")
+		}
+	}
+
+	// Group 1 cancelled before the IdP responded, groups 2 and 3 each have
+	// their own key. Expect 2-3 IdP calls depending on timing (group 1 may
+	// or may not reach the server before cancellation).
+	if got := callCount.Load(); got < 2 || got > 3 {
+		t.Errorf("IdP called %d times, want 2-3", got)
+	}
+
+	// Groups 2 and 3 must have reached the IdP with their respective subject tokens.
+	if !receivedTokens["user-a-jwt"] {
+		t.Errorf("IdP never received subject_token=user-a-jwt (group 2)")
+	}
+	if !receivedTokens["user-c-jwt"] {
+		t.Errorf("IdP never received subject_token=user-c-jwt (group 3)")
+	}
+}
+
+func TestExchange_DifferentTokensSameBrokerRunConcurrently(t *testing.T) {
+	t.Parallel()
+
+	var callCount atomic.Int32
+	var receivedTokensMu sync.Mutex
+	receivedTokens := map[string]bool{}
+	gate := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount.Add(1)
+		r.ParseForm()
+		subj := r.PostFormValue("subject_token")
+		receivedTokensMu.Lock()
+		receivedTokens[subj] = true
+		receivedTokensMu.Unlock()
+		<-gate
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("exchanged-for-"+subj, 3600))
+	}))
+	defer srv.Close()
+
+	e := newTestExchanger(t, srv.URL)
+	e.nowFunc = func() time.Time { return pinnedNow() }
+
+	input1 := ExchangeInput{SubjectToken: "user-a-jwt", BrokerAlias: "broker-x", Audience: "aud"}
+	input2 := ExchangeInput{SubjectToken: "user-c-jwt", BrokerAlias: "broker-x", Audience: "aud"}
+
+	tokens := make([]*Token, 2)
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); tokens[0], errs[0] = e.Exchange(context.Background(), input1) }()
+	go func() { defer wg.Done(); tokens[1], errs[1] = e.Exchange(context.Background(), input2) }()
+
+	time.Sleep(50 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+
+	for i := 0; i < 2; i++ {
+		if errs[i] != nil {
+			t.Errorf("caller %d: unexpected error = %v", i, errs[i])
+		}
+	}
+
+	if tokens[0] == nil || tokens[0].Value != "exchanged-for-user-a-jwt" {
+		t.Errorf("caller 0: token = %v, want Value=%q", tokens[0], "exchanged-for-user-a-jwt")
+	}
+	if tokens[1] == nil || tokens[1].Value != "exchanged-for-user-c-jwt" {
+		t.Errorf("caller 1: token = %v, want Value=%q", tokens[1], "exchanged-for-user-c-jwt")
+	}
+
+	if got := callCount.Load(); got != 2 {
+		t.Errorf("IdP called %d times, want 2 (different tokens + same broker must not be deduplicated)", got)
+	}
+
+	if !receivedTokens["user-a-jwt"] || !receivedTokens["user-c-jwt"] {
+		t.Errorf("IdP received subject_tokens = %v, want both user-a-jwt and user-c-jwt", receivedTokens)
 	}
 }
 
