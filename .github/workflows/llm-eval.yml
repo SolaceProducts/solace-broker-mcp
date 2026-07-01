@@ -1,0 +1,122 @@
+name: LLM E2E Eval (Manual)
+
+# Non-gating, manually-triggered run of the LLM e2e eval suite under
+# test/e2e-monitoring/llm/. Costs API credits per invocation — do not
+# add a per-PR or scheduled trigger here. Operating model (cadence,
+# ownership, pass thresholds) is out of scope for SOL-150789.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: 'Branch / ref to check out and evaluate'
+        required: false
+        default: 'main'
+        type: string
+      broker_target:
+        description: 'Broker target (matches a file in test/e2e-monitoring/llm/targets/)'
+        required: false
+        default: 'local-docker'
+        type: string
+      scenario_filter:
+        description: 'Optional substring filter passed to run-all.sh --filter (empty = run every scenario)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  llm-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_branch }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Setup Node (for Claude CLI install)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pinned Claude Code CLI
+        # npm ci installs exactly what package-lock.json pins (FOSSA
+        # scans the same lockfile), then we prepend node_modules/.bin
+        # so `claude` resolves on PATH. Single source of truth for the
+        # version: package.json — config.env reads from there.
+        working-directory: test/e2e-monitoring/llm
+        run: |
+          npm ci
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+          ./node_modules/.bin/claude --version
+
+      - name: Start local brokers + fixtures
+        # No-op for non-local-docker targets — setup-fixtures.sh guards
+        # on BROKER_TARGET. Lab targets are assumed already running.
+        env:
+          BROKER_TARGET: ${{ inputs.broker_target }}
+        run: bash test/e2e-monitoring/llm/setup-fixtures.sh
+
+      - name: Verify LLM service credentials present
+        # Fail fast and loud rather than silently falling into the
+        # ambient ~/.claude path on a hosted runner (which then errors
+        # with a less-pointed CLI message). Only enforced when an
+        # endpoint is configured — local-dev paths without an endpoint
+        # still rely on the runner's ambient login.
+        if: vars.LLM_SERVICE_ENDPOINT != ''
+        env:
+          LLM_SERVICE_API_KEY: ${{ secrets.LLM_SERVICE_API_KEY }}
+        run: |
+          if [ -z "${LLM_SERVICE_API_KEY}" ]; then
+            echo "::error::LLM_SERVICE_API_KEY secret is not set but LLM_SERVICE_ENDPOINT is configured"
+            exit 1
+          fi
+
+      - name: Run LLM eval suite
+        # LLM_SERVICE_API_KEY is a GitHub Actions secret for now — once
+        # the Solace secret-storage decision lands we'll swap this for a
+        # Vault retrieval step (see SOL-150789 follow-up notes). When
+        # LLM_SERVICE_ENDPOINT is unset the runner falls back to the
+        # CLI's ambient ~/.claude login (local-dev convenience). When
+        # the endpoint IS set, the preceding step has already enforced
+        # that the secret is present.
+        env:
+          BROKER_TARGET: ${{ inputs.broker_target }}
+          LLM_SERVICE_ENDPOINT: ${{ vars.LLM_SERVICE_ENDPOINT }}
+          LLM_SERVICE_MODEL_NAME: ${{ vars.LLM_SERVICE_MODEL_NAME }}
+          LLM_SERVICE_API_KEY: ${{ secrets.LLM_SERVICE_API_KEY }}
+          # Bind dispatch input to env so the run body never interpolates
+          # ${{ inputs.scenario_filter }} directly — avoids the GitHub
+          # script-injection shape even though workflow_dispatch is
+          # write-access-only.
+          SCENARIO_FILTER: ${{ inputs.scenario_filter }}
+        run: |
+          ARGS=()
+          if [ -n "$SCENARIO_FILTER" ]; then
+            ARGS+=(--filter "$SCENARIO_FILTER")
+          fi
+          bash test/e2e-monitoring/llm/run-all.sh "${ARGS[@]}"
+
+      - name: Broker logs (on failure)
+        if: failure() && inputs.broker_target == 'local-docker'
+        run: |
+          echo "=== solace-e2e-mon-a ==="
+          docker logs solace-e2e-mon-a 2>&1 | tail -100 || true
+          echo "=== solace-e2e-mon-b ==="
+          docker logs solace-e2e-mon-b 2>&1 | tail -100 || true
+
+      - name: MCP server log (on failure)
+        if: failure() && inputs.broker_target == 'local-docker'
+        run: cat test/e2e-monitoring/bin/mcp-server.log 2>/dev/null || echo "(no server log)"
+
+      - name: Tear down local brokers
+        if: always() && inputs.broker_target == 'local-docker'
+        run: docker compose -f test/e2e-monitoring/docker-compose.yml down -v

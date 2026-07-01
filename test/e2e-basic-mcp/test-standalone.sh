@@ -8,9 +8,11 @@ source "$(dirname "$0")/helpers.sh"
 # ── Tests ────────────────────────────────────────────────────────────────────
 
 test_health_endpoint() {
+    # /health preserves its original back-compat body (status=healthy); /livez is
+    # the canonical liveness endpoint (status=alive).
     local response
     response=$(curl -sf "$MCP_URL/health")
-    assert_json_field "$response" ".status" "healthy" "Health endpoint should return status healthy"
+    assert_json_field "$response" ".status" "healthy" "/health should return status healthy (legacy back-compat body)"
 }
 
 test_initialize() {

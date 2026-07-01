@@ -72,7 +72,7 @@ The server implements the MCP HTTP transport specification and exposes event bro
 
 ## Tools
 
-The server exposes read-only tools grouped by what they inspect. Every tool except `list-brokers` takes a `broker` parameter naming a configured broker alias. See the [user guide](docs/user-guide.md#tools) for per-tool descriptions, parameters, and pagination defaults.
+The server exposes read-only tools grouped by what they inspect, plus a small set of action tools for operational workflows. Every tool except `list-brokers` takes a `broker` parameter naming a configured broker alias. See the [user guide](docs/user-guide.md#tools) for per-tool descriptions, parameters, and pagination defaults.
 
 | Category | Tools | Description |
 |---|---|---|
@@ -84,6 +84,7 @@ The server exposes read-only tools grouped by what they inspect. Every tool exce
 | Clients | `list-clients`, `get-client-details`, `list-client-subscriptions`, `list-slow-subscribers` | List connections, inspect per-client rates and discards, list subscriptions, filter for slow-subscriber-flagged clients |
 | REST Delivery Points | `list-rdps`, `get-rdp-status` | List RDPs; inspect bindings, REST consumers, and last failure reason |
 | Discards | `get-discard-stats`, `list-queue-discards` | Broker-wide and per-VPN discard aggregates; per-queue discard counters |
+| Actions | `delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats` | One tool per action. Destructive tools (`delete-queue-messages`, `disconnect-client`) are annotated `destructiveHint` and instruct the LLM to obtain user confirmation before invocation; the `clear-*-stats` tools are non-destructive. **All four are write tools gated behind `enable_write_tools: true` in the config — default off; not registered in `tools/list` when disabled.** |
 
 ## Guides
 
@@ -176,8 +177,8 @@ If the config file is named `broker-config.yaml` in the current directory, the s
 Verify:
 
 ```bash
-curl http://localhost:9090/health
-# {"status": "ok"}
+curl http://localhost:9090/livez
+# {"status":"alive"}
 ```
 
 The binary is statically linked with no external dependencies. It handles `SIGTERM` and `SIGINT` for graceful shutdown.
@@ -203,8 +204,8 @@ The container reads config from `/etc/mcp-server/config.yaml` by default. Pass t
 Verify:
 
 ```bash
-curl http://localhost:9090/health
-# {"status": "ok"}
+curl http://localhost:9090/livez
+# {"status":"alive"}
 ```
 
 The image includes a built-in Docker health check using the binary's `--health` flag (no shell or curl needed in the container). Check status with `docker inspect --format '{{.State.Health.Status}}' solace-broker-mcp`.
@@ -277,7 +278,7 @@ Create `broker-config.yaml` and `.env` in the repo root (both are gitignored). S
 go run ./cmd/server
 ```
 
-The MCP server listens on port `9090` by default and serves the MCP endpoint at `/mcp`. A health check endpoint is available at `/health`.
+The MCP server listens on port `9090` by default and serves the MCP endpoint at `/mcp`. The canonical liveness endpoint is `/livez`, which returns `{"status":"alive"}`. `/health` is retained for backward compatibility and preserves its original `{"status":"healthy"}` body — it is not a body-identical alias of `/livez`.
 
 ### Configuration Options
 

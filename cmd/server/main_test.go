@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -39,7 +40,9 @@ func testMux() *http.ServeMux {
 		Name:    "solace-broker-mcp",
 		Version: version.Version(),
 	}, nil)
-	mux := buildMux(func() []string { return nil }, func(_ context.Context, _ string) error { return nil })
+	readiness := health.NewReadinessState()
+	readiness.SetInitialized()
+	mux := buildMux(func() []string { return nil }, func(_ context.Context, _ string) error { return nil }, readiness)
 
 	// Register /mcp endpoint for testing (without auth middleware)
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
@@ -50,6 +53,43 @@ func testMux() *http.ServeMux {
 	return mux
 }
 
+// TestLivez_GET_ReturnsOK pins the canonical liveness endpoint: 200 with the
+// exact process-alive body and JSON content type.
+func TestLivez_GET_ReturnsOK(t *testing.T) {
+	mux := testMux()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/livez", nil)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("GET /livez status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if rec.Body.String() != `{"status":"alive"}` {
+		t.Errorf("GET /livez body = %q, want %q", rec.Body.String(), `{"status":"alive"}`)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("GET /livez Content-Type = %q, want %q", ct, "application/json")
+	}
+}
+
+func TestLivez_POST_ReturnsMethodNotAllowed(t *testing.T) {
+	mux := testMux()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/livez", nil)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST /livez status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+// TestHealth_GET_ReturnsOK pins that /health preserves its ORIGINAL shipped body
+// {"status":"healthy"} — it is NOT a body-identical alias of /livez. /health is
+// retained for backward compatibility so external consumers that parse
+// .status == "healthy" keep working; /livez is the canonical liveness endpoint
+// and returns {"status":"alive"}.
 func TestHealth_GET_ReturnsOK(t *testing.T) {
 	mux := testMux()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", nil)
@@ -60,8 +100,8 @@ func TestHealth_GET_ReturnsOK(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("GET /health status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	if rec.Body.String() != `{"status": "healthy"}` {
-		t.Errorf("GET /health body = %q, want %q", rec.Body.String(), `{"status": "healthy"}`)
+	if rec.Body.String() != `{"status":"healthy"}` {
+		t.Errorf("GET /health body = %q, want %q", rec.Body.String(), `{"status":"healthy"}`)
 	}
 	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("GET /health Content-Type = %q, want %q", ct, "application/json")
@@ -77,6 +117,48 @@ func TestHealth_POST_ReturnsMethodNotAllowed(t *testing.T) {
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST /health status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+// TestLivezAndHealthShareStatusButNotBody proves the back-compat contract:
+// /livez and /health share status (200 GET, 405 non-GET) and Content-Type, but
+// their bodies DIFFER deliberately — /livez returns {"status":"alive"} (canonical
+// liveness) and /health returns {"status":"healthy"} (original shipped body
+// retained for external consumers). They are NOT body-identical aliases.
+func TestLivezAndHealthShareStatusButNotBody(t *testing.T) {
+	mux := testMux()
+
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		livezRec := httptest.NewRecorder()
+		mux.ServeHTTP(livezRec, httptest.NewRequestWithContext(context.Background(), method, "/livez", nil))
+
+		healthRec := httptest.NewRecorder()
+		mux.ServeHTTP(healthRec, httptest.NewRequestWithContext(context.Background(), method, "/health", nil))
+
+		if livezRec.Code != healthRec.Code {
+			t.Errorf("%s: status /livez=%d /health=%d, want equal", method, livezRec.Code, healthRec.Code)
+		}
+		if livezRec.Header().Get("Content-Type") != healthRec.Header().Get("Content-Type") {
+			t.Errorf("%s: Content-Type /livez=%q /health=%q, want equal",
+				method, livezRec.Header().Get("Content-Type"), healthRec.Header().Get("Content-Type"))
+		}
+	}
+
+	// On GET the bodies must differ: /livez is the canonical alive signal,
+	// /health preserves its original healthy body for back-compat.
+	livezGet := httptest.NewRecorder()
+	mux.ServeHTTP(livezGet, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/livez", nil))
+	healthGet := httptest.NewRecorder()
+	mux.ServeHTTP(healthGet, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health", nil))
+
+	if got, want := livezGet.Body.String(), `{"status":"alive"}`; got != want {
+		t.Errorf("GET /livez body = %q, want %q", got, want)
+	}
+	if got, want := healthGet.Body.String(), `{"status":"healthy"}`; got != want {
+		t.Errorf("GET /health body = %q, want %q", got, want)
+	}
+	if livezGet.Body.String() == healthGet.Body.String() {
+		t.Errorf("/livez and /health bodies must differ, both = %q", livezGet.Body.String())
 	}
 }
 
@@ -300,7 +382,7 @@ func TestHealthConfigFromFile_PartialTLSIsHTTP(t *testing.T) {
 }
 
 func TestReady_POST_ReturnsMethodNotAllowed(t *testing.T) {
-	mux := buildMux(func() []string { return nil }, func(_ context.Context, _ string) error { return nil })
+	mux := buildMux(func() []string { return nil }, func(_ context.Context, _ string) error { return nil }, health.NewReadinessState())
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/ready", nil)
 	rec := httptest.NewRecorder()
 
@@ -316,6 +398,7 @@ func TestReady_GET_AllBrokersReachable(t *testing.T) {
 	mux := buildMux(
 		func() []string { return brokers },
 		func(_ context.Context, _ string) error { return nil },
+		health.NewReadinessState(),
 	)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ready", nil)
 	rec := httptest.NewRecorder()
@@ -358,6 +441,7 @@ func TestReady_GET_OneBrokerUnreachable(t *testing.T) {
 			}
 			return nil
 		},
+		health.NewReadinessState(),
 	)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ready", nil)
 	rec := httptest.NewRecorder()
@@ -383,6 +467,76 @@ func TestReady_GET_OneBrokerUnreachable(t *testing.T) {
 	want := "prod-2: unreachable"
 	if body.Errors[0] != want {
 		t.Errorf("errors[0] = %q, want %q", body.Errors[0], want)
+	}
+}
+
+// TestReadyz_BeforeInit_Returns503 pins that /readyz wired through the real
+// buildMux returns 503 {"status":"starting"} before SetInitialized.
+func TestReadyz_BeforeInit_Returns503(t *testing.T) {
+	readiness := health.NewReadinessState() // not initialized
+	mux := buildMux(func() []string { return nil }, func(_ context.Context, _ string) error { return nil }, readiness)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("GET /readyz status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	if rec.Body.String() != `{"status":"starting"}` {
+		t.Errorf("GET /readyz body = %q, want %q", rec.Body.String(), `{"status":"starting"}`)
+	}
+}
+
+// TestReadyz_AfterInit_Returns200 pins that /readyz wired through the real
+// buildMux returns 200 {"status":"ready"} once SetInitialized has been called.
+func TestReadyz_AfterInit_Returns200(t *testing.T) {
+	readiness := health.NewReadinessState()
+	readiness.SetInitialized()
+	mux := buildMux(func() []string { return nil }, func(_ context.Context, _ string) error { return nil }, readiness)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("GET /readyz status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if rec.Body.String() != `{"status":"ready"}` {
+		t.Errorf("GET /readyz body = %q, want %q", rec.Body.String(), `{"status":"ready"}`)
+	}
+}
+
+// TestReadyz_BrokerUnreachable_StillReady proves AC #4 through the real mux:
+// even when the broker probe always errors (every broker unreachable), /readyz
+// returns 200 once initialized and not draining, because readiness is decoupled
+// from broker reachability. The same mux's /ready endpoint returns 503 for the
+// same unreachable broker, demonstrating the two endpoints are independent.
+func TestReadyz_BrokerUnreachable_StillReady(t *testing.T) {
+	readiness := health.NewReadinessState()
+	readiness.SetInitialized()
+	alwaysFail := func(_ context.Context, broker string) error {
+		return errors.New("connection refused")
+	}
+	mux := buildMux(func() []string { return []string{"prod-1"} }, alwaysFail, readiness)
+
+	// /readyz ignores the broker entirely → 200 ready.
+	readyzReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/readyz", nil)
+	readyzRec := httptest.NewRecorder()
+	mux.ServeHTTP(readyzRec, readyzReq)
+	if readyzRec.Code != http.StatusOK {
+		t.Errorf("GET /readyz status = %d, want %d (readiness must not depend on broker reachability)", readyzRec.Code, http.StatusOK)
+	}
+	if readyzRec.Body.String() != `{"status":"ready"}` {
+		t.Errorf("GET /readyz body = %q, want %q", readyzRec.Body.String(), `{"status":"ready"}`)
+	}
+
+	// /ready (legacy, broker-coupled) reflects the unreachable broker → 503.
+	readyReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ready", nil)
+	readyRec := httptest.NewRecorder()
+	mux.ServeHTTP(readyRec, readyReq)
+	if readyRec.Code != http.StatusServiceUnavailable {
+		t.Errorf("GET /ready status = %d, want %d (legacy probe is broker-coupled)", readyRec.Code, http.StatusServiceUnavailable)
 	}
 }
 

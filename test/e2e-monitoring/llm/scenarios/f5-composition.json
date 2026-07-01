@@ -1,0 +1,14 @@
+{
+  "_doc": "F5 composition: diagnose why the slow-consumer queue is backed up. Originally required BOTH get-queue-metrics and get-client-details, but the F5 fixture is queue-level (slowSubscriber flag does NOT flip — see SOL-150328) and get-queue-metrics alone exposes the full diagnosis (bindCount=1, txUnackedMsgCount at maxDeliveredUnackedMsgsPerFlow ceiling, rxMsgRate > txMsgRate, growing spool). A 'complete with one tool' answer is correct here, so any_of replaces all_of. required_substrings_any_of targets diagnostic terminology (unacked / ceiling / spool) rather than 'slow' — the queue name itself contains 'slow', so a substring match on 'slow' would PASS on a refusal that just echoes the queue name. forbidden_substrings catches refusals from missing fixtures.",
+  "prompt": "Why is queue $F5_QUEUE backed up on $BROKER? Give a concrete diagnosis grounded in current broker state.",
+  "expected_tool_any_of": [
+    "mcp__solace-broker__get-queue-metrics",
+    "mcp__solace-broker__get-client-details"
+  ],
+  "required_substrings_any_of": ["unacked", "ceiling", "spool", "rxMsgRate", "txMsgRate"],
+  "forbidden_substrings": [
+    "doesn't exist", "does not exist", "isn't there", "is not there",
+    "could not find", "couldn't find", "no queues", "zero queues",
+    "premise doesn't hold", "premise does not hold"
+  ]
+}

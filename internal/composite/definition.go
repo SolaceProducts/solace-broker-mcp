@@ -16,7 +16,7 @@
 // Broker MCP Server. It loads multi-step tool definitions from embedded YAML,
 // executes steps against a broker via the sempv2.Client interface, resolves Go
 // template expressions in step arguments, and combines results using configurable
-// strategies (collect, merge, unwrap).
+// strategies (collect, postProcess).
 package composite
 
 // CompositeToolsFile is the top-level structure of the embedded YAML file.
@@ -54,17 +54,19 @@ type Step struct {
 	ID          string            `yaml:"id"`
 	Operation   string            `yaml:"operation"`   // prefixed operationId (e.g., "monitor/getMsgVpnQueue")
 	Args        map[string]string `yaml:"args"`        // values are Go text/template expressions
+	Select      []string          `yaml:"select"`      // SEMP select fields; joined with ", " into args["select"] at execute time
 	Parallel    bool              `yaml:"parallel"`    // group with adjacent parallel:true steps
 	FollowPages bool              `yaml:"followPages"` // follow SEMP nextPageUri links and aggregate all pages
 }
 
 // ResultStrategy defines how step results are combined into the tool's final
-// output. Currently only "collect" is supported, which returns all step results
-// keyed by step ID. Additional strategies (merge, unwrap) are deferred pending
-// design discussion around SEMP response envelope overlap and per-step data
-// transformation needs.
+// output. "collect" returns all step results keyed by step ID. "postProcess"
+// runs a registered Go postprocessor (see internal/composite/postprocess) on
+// the collected step results and merges its output under a top-level "summary"
+// key alongside the raw step results.
 type ResultStrategy struct {
-	Strategy string `yaml:"strategy"` // only "collect" is currently supported
+	Strategy    string `yaml:"strategy"`    // "collect" or "postProcess"
+	PostProcess string `yaml:"postProcess"` // registry name of the handler when strategy="postProcess"
 }
 
 // ToolAnnotations holds behavior hints for a composite tool, matching the MCP

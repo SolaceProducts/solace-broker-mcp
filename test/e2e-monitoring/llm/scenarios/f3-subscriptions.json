@@ -1,0 +1,12 @@
+{
+  "_doc": "F3: forces list-client-subscriptions with multi-arg parameterization (vpn + client name) pulled out of the prompt. The F3 client subscribes to two e2e-monitoring/connected/tN topics. Runs on both brokers because $F3_CLIENT_NAME differs per broker — proves the agent uses the name from the prompt.",
+  "brokers": ["broker-a", "broker-b"],
+  "prompt": "What topics is client $F3_CLIENT_NAME subscribed to on $BROKER?",
+  "expected_tool": "mcp__solace-broker__list-client-subscriptions",
+  "ground_truth": {
+    "jq": ".subscriptions.data[] | select(.subscriptionTopic | startswith(\"#\") | not) | .subscriptionTopic",
+    "answer_regex": "e2e-monitoring/connected/t[0-9]+"
+  },
+  "required_substrings": ["e2e-monitoring/connected"],
+  "forbidden_substrings": []
+}

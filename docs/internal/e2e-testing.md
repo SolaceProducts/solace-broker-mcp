@@ -2,7 +2,7 @@
 
 This document describes the E2E testing strategy, structure, and how to run the tests locally and in CI.
 
-For a quickstart and the suite's port allocation, see [`test/e2e-basic-mcp/README.md`](../../test/e2e-basic-mcp/README.md). A separate monitoring-focused suite lives under [`test/e2e-monitoring/`](../../test/e2e-monitoring/README.md).
+For a quickstart and the suite's port allocation, see [`test/e2e-basic-mcp/README.md`](../../test/e2e-basic-mcp/README.md). A separate monitoring-focused suite lives under [`test/e2e-monitoring/`](../../test/e2e-monitoring/README.md), and an LLM-driven eval harness that runs natural-language scenarios through the Claude Code CLI lives under [`test/e2e-monitoring/llm/`](../../test/e2e-monitoring/llm/README.md). The LLM suite is non-gating and only runs via manual `workflow_dispatch` ([`llm-eval.yml`](../../.github/workflows/llm-eval.yml)).
 
 ---
 
@@ -218,7 +218,7 @@ Fixtures are cleaned up before creation (to handle leftover state) and after tes
 
 | Test | What it validates |
 |---|---|
-| `test_health_endpoint` | `GET /health` returns `{"status": "ok"}` |
+| `test_health_endpoint` | `GET /health` returns `{"status":"healthy"}` (legacy back-compat body; `/livez` is the canonical liveness endpoint and returns `{"status":"alive"}`) |
 | `test_initialize` | MCP handshake completes, server returns `Mcp-Session-Id` |
 | `test_list_tools` | `tools/list` returns all 17 tools (composite: `get-rdp-status`, `get-queue-metrics`, `get-client-details`, `list-client-subscriptions`, `get-vpn-health`, `list-vpns`, `list-queues`, `list-clients`, `get-message-rates`, `list-rdps`, `get-replication-status`, `list-slow-subscribers`, `list-queue-discards`; native: `list-brokers`, `get-broker-status`, `get-redundancy-status`, `get-discard-stats`) |
 | `test_list_brokers` | `list-brokers` response includes both `broker-a` and `broker-b` |

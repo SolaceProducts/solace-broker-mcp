@@ -1,0 +1,11 @@
+{
+  "_doc": "F3 negative: in baseline state the F3 client is fine. Tests false-positive resistance. Forbidden list is narrow — catches the model fabricating problems but not 'rxDiscardedMsgCount: 0' / 'slowSubscriber: false' phrasings. Also forbids refusal phrasings ('not connected', 'no client by that name') because those mean the F3 fixture isn't running, which is a fixture-setup failure the scenario must surface as FAIL rather than silently PASS. Runs on both brokers because $F3_CLIENT_NAME differs per broker.",
+  "brokers": ["broker-a", "broker-b"],
+  "prompt": "Is anything wrong with client $F3_CLIENT_NAME on $BROKER right now?",
+  "expected_tool": "mcp__solace-broker__get-client-details",
+  "forbidden_substrings": [
+    "is a slow subscriber", "is stuck", "is backpressured", "is dropping messages",
+    "not currently connected", "not connected", "no client by that name",
+    "fixture", "is not running", "isn't running", "isn't up", "does not exist", "doesn't exist"
+  ]
+}

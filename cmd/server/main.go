@@ -36,8 +36,12 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/banner"
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite"
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite/definitions"
+	_ "github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess/handlers" // register handlers via init()
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceDev/solace-broker-mcp/internal/middleware/recovery"
+	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
+	"github.com/SolaceDev/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2/specs"
@@ -45,6 +49,8 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv1/brokerstatus"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv1/discardstats"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv1/redundancy"
+	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv2/clientactions"
+	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv2/queueactions"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"gopkg.in/yaml.v3"
@@ -84,21 +90,30 @@ func newSlogHandler(level slog.Level) slog.Handler {
 //
 // aliases returns the list of broker names to check.
 // probeBroker tests connectivity to a single broker; it returns nil on success.
-func buildMux(aliases func() []string, probeBroker func(ctx context.Context, broker string) error) *http.ServeMux {
+// readiness backs the /readyz endpoint, which reflects the MCP server's OWN
+// readiness and is decoupled from the broker (it consults neither aliases nor
+// probeBroker).
+func buildMux(aliases func() []string, probeBroker func(ctx context.Context, broker string) error, readiness *health.ReadinessState) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte(`{"status": "healthy"}`)); err != nil {
-			http.Error(w, "failed to write response", http.StatusInternalServerError)
-		}
-	})
+	// Liveness probe. /livez is the canonical liveness endpoint and returns
+	// {"status":"alive"}. /health is retained for backward compatibility and
+	// preserves its original {"status":"healthy"} body — it is a SEPARATE handler
+	// instance, NOT a body-identical alias, so external consumers that parse
+	// .status == "healthy" keep working. Both probes are unconditional (200 on
+	// GET, 405 otherwise) and never flag-gated.
+	mux.Handle("/livez", health.LivezHandler())
+	mux.Handle("/health", health.HealthHandler())
 
+	// Readiness probe. /readyz reflects the MCP server's OWN readiness only
+	// (initialized, not draining, required listeners bound) and is decoupled
+	// from broker reachability (ADR-004 / ISSUE-026) — it makes no broker calls.
+	// Like /livez it is unconditional (no flag).
+	mux.Handle("/readyz", health.ReadyzHandler(readiness))
+
+	// TODO(SOL-151285 / Story 11): /readyz now exists (MCP-server-only readiness).
+	// /ready below is still the legacy broker-coupled inline handler; Story 11
+	// will alias /ready to /readyz and drop the broker dial.
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -158,6 +173,24 @@ func buildMux(aliases func() []string, probeBroker func(ctx context.Context, bro
 	})
 
 	return mux
+}
+
+// buildRootHandler returns the outermost HTTP handler for the server: the mux
+// always wrapped with panic-recovery as the OUTERMOST layer (ADR-001 chain
+// ordering). Recovery is unconditional — a safety net with no production reason
+// to disable.
+//
+// Recovery wraps the WHOLE mux, so it covers every route — the standalone
+// /livez, /health, /ready, /readyz probes (and the future /metrics), the
+// catch-all 404, and the authenticated /mcp chain — sitting OUTSIDE the per-route
+// correlation.Middleware that main() installs only on /mcp. The two are
+// different layers and never conflict: recovery wraps the mux; correlation
+// wraps a handler inside it.
+//
+// Extracted from main() so the composition test can assert the assembled chain
+// order against the real wiring rather than a hand-rebuilt copy.
+func buildRootHandler(mux *http.ServeMux) http.Handler {
+	return recovery.HTTPMiddleware(mux)
 }
 
 // healthConfig holds the minimal server settings needed by the --health probe.
@@ -233,6 +266,26 @@ func limitRequestBody(next http.Handler, maxBytes int64) http.Handler {
 		r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 		next.ServeHTTP(w, r)
 	})
+}
+
+// buildMCPEndpoint assembles the /mcp handler chain around authedHandler.
+//
+// The layer order, outermost first, is: limitRequestBody → correlation →
+// authedHandler. limitRequestBody is the OUTERMOST layer so an oversized
+// request is rejected with 413 before any work is done. A deliberate
+// consequence: a 413 is returned BEFORE the correlation middleware runs, so
+// 413 responses carry no correlation ID. This is intentional. Correlation sits
+// OUTSIDE auth (ADR-001) so a 401 still gets an ID, but the body limit sits
+// outside correlation by design.
+//
+// When correlationEnabled is false the correlation layer is omitted entirely
+// (correlation.From then returns "").
+func buildMCPEndpoint(authedHandler http.Handler, correlationEnabled bool) http.Handler {
+	endpoint := authedHandler
+	if correlationEnabled {
+		endpoint = correlation.Middleware(authedHandler)
+	}
+	return limitRequestBody(endpoint, defaults.MaxMCPRequestBytes)
 }
 
 // startServer starts httpServer in a background goroutine and returns a channel
@@ -312,6 +365,19 @@ func registerSEMPv1Tools(mgr *tools.ToolManager) {
 	mgr.Register(discardstats.NewHandler())
 }
 
+// registerSEMPv2Tools attaches every Go-native SEMPv2 tool handler to mgr.
+// These are the per-action write tools that issue PUT requests to the SEMPv2
+// action API. They share the same registration pipeline as the SEMPv1
+// handlers; RegisterWithServer gates them behind enable_write_tools (they are
+// not read-only), and the manager logs a WARNING for the destructive ones
+// (delete-queue-messages, disconnect-client).
+func registerSEMPv2Tools(mgr *tools.ToolManager) {
+	mgr.Register(queueactions.NewDeleteMessagesHandler())
+	mgr.Register(queueactions.NewClearStatsHandler())
+	mgr.Register(clientactions.NewDisconnectHandler())
+	mgr.Register(clientactions.NewClearStatsHandler())
+}
+
 func main() {
 	if len(os.Args) == 2 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
 		fmt.Println(version.Version())
@@ -388,6 +454,18 @@ func main() {
 		slog.Int("port", cfg.Port),
 		slog.String("log_level", cfg.LogLevel))
 
+	// One-line summary of which observability capabilities are enabled. No
+	// behavior is wired into the request path yet (SOL-151278 skeleton); this
+	// line lets operators confirm the door-closing defaults and any OBS_*
+	// overrides took effect at startup.
+	slog.Info("observability config loaded",
+		slog.Bool("correlation_id", cfg.Observability.CorrelationIDEnabled),
+		slog.Bool("metrics", cfg.Observability.MetricsEnabled),
+		slog.Bool("audit_log", cfg.Observability.AuditLogEnabled),
+		slog.Bool("tracing", cfg.Observability.TracingEnabled),
+		slog.Bool("saturation_events", cfg.Observability.SaturationEventsEnabled),
+		slog.Bool("auth_failure_counter", cfg.Observability.AuthFailureCounterEnabled))
+
 	// 2. Parse embedded OpenAPI specs
 	operations, err := sempv2.ParseSpecs(specs.FS)
 	if err != nil {
@@ -419,6 +497,16 @@ func main() {
 	slog.Info("loaded composite tool definitions",
 		slog.Int("tool_count", len(compositeTools)))
 
+	// Cross-check that every postProcess handler's RequiredFields are covered
+	// by its tool's step `select:` clauses. Catches SEMP field-name drift
+	// (e.g. bindSuccessCount vs bindCount) at boot rather than first call.
+	// The handlers package was registered via blank import above, so the
+	// postprocess registry is populated before this runs.
+	if err := composite.ValidatePostProcess(compositeTools); err != nil {
+		slog.Error("composite tool postProcess validation failed", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
 	// 5. Create composite executor
 	executor := composite.NewCompositeExecutor(operations)
 
@@ -434,7 +522,10 @@ func main() {
 	// after it sees a fully-loaded server.
 	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor)
 	registerSEMPv1Tools(mgr)
-	tools.RegisterWithServer(mgr, server, pool)
+	registerSEMPv2Tools(mgr)
+	tools.RegisterWithServer(mgr, server, pool, cfg.EnableWriteTools)
+	slog.Info("tool registration complete",
+		slog.Bool("enable_write_tools", cfg.EnableWriteTools))
 
 	// list-brokers is a discovery tool registered directly on the MCP
 	// server (it doesn't need broker resolution or the ToolManager pipeline).
@@ -443,7 +534,12 @@ func main() {
 	slog.Info("all tools registered")
 
 	// 8. Set up HTTP routes
-	mux := buildMux(pool.Aliases, newBrokerReachabilityProbe(cfg))
+	//
+	// readiness backs /readyz. It starts in the "starting" state; we mark it
+	// initialized once the server begins listening (below). It is decoupled from
+	// the broker and is NOT flag-gated.
+	readiness := health.NewReadinessState()
+	mux := buildMux(pool.Aliases, newBrokerReachabilityProbe(cfg), readiness)
 
 	// Create MCP handler
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
@@ -457,9 +553,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Register authenticated MCP endpoint. The body limit wraps the outside
-	// so it bounds the request before any layer can buffer it.
-	mux.Handle("/mcp", limitRequestBody(authedHandler, defaults.MaxMCPRequestBytes))
+	// Stamp a correlation ID immediately OUTSIDE the auth middleware so that an
+	// unauthenticated request rejected with 401 still gets a correlation ID
+	// attached (ADR-001 ordering). Gated on OBS_CORRELATION_ID_ENABLED: when
+	// off, the middleware is not wired and correlation.From returns "".
+	correlationEnabled := correlation.Enabled(cfg.Observability)
+	slog.Info("correlation-ID middleware wiring",
+		slog.Bool("enabled", correlationEnabled))
+
+	// Register authenticated MCP endpoint. buildMCPEndpoint wraps the body
+	// limit on the outside so it bounds the request before any layer buffers
+	// it; see buildMCPEndpoint for the full layer order and 413 rationale.
+	mux.Handle("/mcp", buildMCPEndpoint(authedHandler, correlationEnabled))
 
 	// Register OAuth Protected Resource Metadata endpoint (RFC 9728)
 	// This enables MCP clients to discover the authorization server for OAuth flows.
@@ -480,18 +585,37 @@ func main() {
 		slog.Debug("catch-all 404: no route matched", slog.String("method", r.Method), slog.String("path", r.URL.Path))
 	}))
 
-	// 9. Start server with graceful shutdown
+	// 9. Wrap the whole mux with panic-recovery as the OUTERMOST handler
+	// (ADR-001). Recovery is unconditional. A panic in ANY handler is caught,
+	// logged with a structured stack, and returned as a clean 500; the process
+	// keeps running. Recovery sits OUTSIDE the per-route correlation middleware
+	// wired on /mcp above — different layers, no conflict.
+	rootHandler := buildRootHandler(mux)
+
+	// 10. Start server with graceful shutdown
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	httpServer := newHTTPServer(addr, mux)
+	httpServer := newHTTPServer(addr, rootHandler)
 
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
 
 	serverErr := startServer(httpServer, cfg.TLSCertFile, cfg.TLSKeyFile)
 
+	// Startup is complete and the serving goroutine has been launched:
+	// SetInitialized flips /readyz to ready. startServer only starts the
+	// goroutine; it does not confirm the listener has bound, so there is a brief
+	// window where the socket may not yet be accepting. That is acceptable for
+	// MCP-only readiness, which reflects the server's own initialization rather
+	// than listener bind state. SetInitialized is idempotent.
+	readiness.SetInitialized()
+
 	var startupErr error
 	select {
 	case <-done:
+		// TODO(SOL-151288 / Story 31a): call readiness.SetShuttingDown() here on
+		// SIGTERM, before httpServer.Shutdown, so /readyz reports "shutting_down"
+		// during graceful drain. The mechanism exists on ReadinessState today;
+		// wiring it to the signal is Story 31a's scope.
 		slog.Info("server shutting down", slog.String("reason", "signal"))
 	case startupErr = <-serverErr:
 		// Error already logged in startServer. Capture it so future telemetry

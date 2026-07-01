@@ -1,0 +1,11 @@
+{
+  "_doc": "F1 baseline: list all VPNs on $BROKER. Proves entity-set fidelity — the answer's VPN names match exactly what list-vpns returned.",
+  "prompt": "What VPNs are configured on $BROKER?",
+  "expected_tool": "mcp__solace-broker__list-vpns",
+  "ground_truth": {
+    "jq": ".vpns.data[].msgVpnName",
+    "answer_regex": "\\b([a-zA-Z][a-zA-Z0-9_-]*-vpn|default)\\b"
+  },
+  "required_substrings": ["test-vpn"],
+  "forbidden_substrings": []
+}
