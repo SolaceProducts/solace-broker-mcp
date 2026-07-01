@@ -24,12 +24,13 @@ import (
 	"time"
 )
 
-// Header names for inbound correlation. traceparent is the W3C Trace Context
-// header (https://www.w3.org/TR/trace-context/); X-Correlation-ID is the
-// fallback when no W3C trace is present.
+// Header names for inbound correlation, aliasing the exported header contract in
+// w3ctraceid.go so the literals live in exactly one place. traceparent is the
+// W3C Trace Context header (https://www.w3.org/TR/trace-context/);
+// X-Correlation-ID is the fallback when no W3C trace is present.
 const (
-	headerTraceparent   = "traceparent"
-	headerCorrelationID = "X-Correlation-ID"
+	headerTraceparent   = HeaderTraceparent
+	headerCorrelationID = HeaderCorrelationID
 )
 
 // maxIDLen caps the length of an accepted correlation ID. The value flows into
@@ -125,7 +126,7 @@ func traceIDFromTraceparent(h string) (string, bool) {
 		return "", false
 	}
 	version, traceID, spanID, flags := parts[0], parts[1], parts[2], parts[3]
-	if len(version) != 2 || len(traceID) != 32 || len(spanID) != 16 || len(flags) != 2 {
+	if len(version) != 2 || len(spanID) != 16 || len(flags) != 2 {
 		return "", false
 	}
 	// Version ff is reserved/invalid per the spec.
@@ -138,11 +139,12 @@ func traceIDFromTraceparent(h string) (string, bool) {
 	if version == "00" && len(parts) != 4 {
 		return "", false
 	}
-	if !isLowerHex(version) || !isLowerHex(traceID) || !isLowerHex(spanID) || !isLowerHex(flags) {
+	if !isLowerHex(version) || !isLowerHex(spanID) || !isLowerHex(flags) {
 		return "", false
 	}
-	// All-zero trace-id is invalid per the spec.
-	if traceID == "00000000000000000000000000000000" {
+	// The trace-id must be a valid W3C trace-id (32 lowercase hex, non-all-zero);
+	// the shared check enforces length, hex, and the all-zero rule in one place.
+	if !ValidTraceID(traceID) {
 		return "", false
 	}
 	return traceID, true
