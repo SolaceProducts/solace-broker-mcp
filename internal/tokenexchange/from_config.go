@@ -94,9 +94,9 @@ func resolveAudienceParam(ap string) (AudienceFormat, error) {
 	case config.AudienceParamAudience:
 		return AudienceParamAudience, nil
 	case config.AudienceParamScope:
-		return 0, fmt.Errorf("tokenexchange: audience_parameter_name %q is schema-accepted but not yet implemented; see docs/oauth/keycloak-requirements.md", ap)
+		return 0, fmt.Errorf("tokenexchange: audience_parameter_name %q is schema-accepted but not yet implemented", ap)
 	case config.AudienceParamResource:
-		return 0, fmt.Errorf("tokenexchange: audience_parameter_name %q is schema-accepted but not yet implemented; see docs/oauth/keycloak-requirements.md", ap)
+		return 0, fmt.Errorf("tokenexchange: audience_parameter_name %q is schema-accepted but not yet implemented", ap)
 	default:
 		return 0, fmt.Errorf("tokenexchange: unsupported audience_parameter_name %q", ap)
 	}

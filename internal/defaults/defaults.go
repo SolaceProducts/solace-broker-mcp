@@ -203,9 +203,10 @@ const DefaultRetryMaxInterval = 30 * time.Second
 // Reasoning: a broker-bound SEMP request takes well under 1 second in
 // the common case; 30s gives ~30× headroom for slow networks or
 // queued requests while wasting at most 30s of a token's lifetime.
-// Trade-off: a token with expires_in ≤ 30 is treated as already
-// expired, forcing a fresh exchange. Accepted — such short-lived
-// tokens are an IdP misconfiguration for machine-to-machine flows.
+// Trade-off: a token with expires_in ≤ 30 is returned with an
+// ExpiresAt in the past, so callers (and the future cache) will
+// consider it immediately stale. Accepted — such short-lived tokens
+// are an IdP misconfiguration for machine-to-machine flows.
 const DefaultTokenExpirySkew = 30 * time.Second
 
 // DefaultSaturationThresholdMs is the latency above which a tool call is
