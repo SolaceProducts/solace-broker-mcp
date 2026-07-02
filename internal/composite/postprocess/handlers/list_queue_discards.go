@@ -32,16 +32,19 @@ const listQueueDiscardsStepID = "queueDiscards"
 // proves wrong in practice (per ticket SOL-151316 scoping notes).
 const topOffenderLimit = 10
 
-// discardFields is the closed set of per-queue discard-family counters this
-// handler sums into totalDiscards and scans for dominantCategory. The set is
-// derived from the list-queue-discards `select:` in tools.yaml; the
-// ValidatePostProcess boot check enforces the superset relationship.
+// discardFields is the closed set of per-queue counters this handler sums
+// into totalDiscards and scans for dominantCategory. Every entry represents a
+// message that was truly lost — never delivered and not routed to a DMQ. The
+// set is a subset of the list-queue-discards `select:` in tools.yaml; the
+// ValidatePostProcess boot check enforces RequiredFields ⊆ select.
 //
-// The *ToDmqMsgCount / *ToDmqFailedMsgCount counters are included because
-// operationally they are treated as "message left the queue for a reason
-// other than delivery" — the same class of signal the LLM is asked to
-// pinpoint. Excluding successful DMQ moves would understate the true rate at
-// which a queue is failing its primary delivery contract.
+// Deliberately EXCLUDED: maxRedeliveryExceededToDmqMsgCount and
+// maxTtlExpiredToDmqMsgCount. Both are successful DMQ moves — the message
+// left the queue but was delivered to the Dead Message Queue as configured,
+// which is expected behavior, not a discard. Counting them would inflate the
+// offender score of queues doing exactly what they were designed to do.
+// maxTtlExpiredToDmqFailedMsgCount IS included because DMQ resolution failed
+// there, so the message actually was lost.
 var discardFields = []string{
 	"clientProfileDeniedDiscardedMsgCount",
 	"destinationGroupErrorDiscardedMsgCount",
@@ -50,11 +53,9 @@ var discardFields = []string{
 	"maxMsgSizeExceededDiscardedMsgCount",
 	"maxMsgSpoolUsageExceededDiscardedMsgCount",
 	"maxRedeliveryExceededDiscardedMsgCount",
-	"maxRedeliveryExceededToDmqMsgCount",
 	"maxTtlExceededDiscardedMsgCount",
 	"maxTtlExpiredDiscardedMsgCount",
 	"maxTtlExpiredToDmqFailedMsgCount",
-	"maxTtlExpiredToDmqMsgCount",
 	"noLocalDeliveryDiscardedMsgCount",
 	"xaTransactionNotSupportedDiscardedMsgCount",
 }

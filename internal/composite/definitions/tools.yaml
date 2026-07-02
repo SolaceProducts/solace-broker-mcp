@@ -404,7 +404,23 @@ tools:
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           count: "100"
-          select: "clientProfileDeniedDiscardedMsgCount, destinationGroupErrorDiscardedMsgCount, disabledDiscardedMsgCount, lowPriorityMsgCongestionDiscardedMsgCount, maxMsgSizeExceededDiscardedMsgCount, maxMsgSpoolUsageExceededDiscardedMsgCount, maxRedeliveryExceededDiscardedMsgCount, maxRedeliveryExceededToDmqMsgCount, maxTtlExceededDiscardedMsgCount, maxTtlExpiredDiscardedMsgCount, maxTtlExpiredToDmqMsgCount, maxTtlExpiredToDmqFailedMsgCount, msgVpnName, noLocalDeliveryDiscardedMsgCount, queueName, xaTransactionNotSupportedDiscardedMsgCount"
+        select:
+          - clientProfileDeniedDiscardedMsgCount
+          - destinationGroupErrorDiscardedMsgCount
+          - disabledDiscardedMsgCount
+          - lowPriorityMsgCongestionDiscardedMsgCount
+          - maxMsgSizeExceededDiscardedMsgCount
+          - maxMsgSpoolUsageExceededDiscardedMsgCount
+          - maxRedeliveryExceededDiscardedMsgCount
+          - maxRedeliveryExceededToDmqMsgCount
+          - maxTtlExceededDiscardedMsgCount
+          - maxTtlExpiredDiscardedMsgCount
+          - maxTtlExpiredToDmqFailedMsgCount
+          - maxTtlExpiredToDmqMsgCount
+          - msgVpnName
+          - noLocalDeliveryDiscardedMsgCount
+          - queueName
+          - xaTransactionNotSupportedDiscardedMsgCount
     result:
       strategy: postProcess
       postProcess: listQueueDiscards
