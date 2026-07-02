@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -358,6 +359,138 @@ func TestSender_Retry_401_Bearer_FailsImmediately(t *testing.T) {
 	}
 	if resp.StatusCode != 401 {
 		t.Errorf("expected status 401, got %d", resp.StatusCode)
+	}
+}
+
+// newConcurrentTestSender constructs a Sender wired for a concurrency test:
+// same jar shared between BasicAuthenticator and http.Client (production
+// shape), but with a semaphore sized to the caller-specified concurrency so
+// goroutines are not serialized into batches of 10 (which the default helper
+// does and which would mask cross-request state leaks by shrinking the race
+// window inside checkRetry).
+func newConcurrentTestSender(t *testing.T, handler http.HandlerFunc, concurrency int) (*Sender, *httptest.Server) {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	httpClient := server.Client()
+	jar := mustNewSafeCookieJar(t)
+	httpClient.Jar = jar
+
+	retries := 3
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		Retries:            &retries,
+		RequestMinInterval: &minInterval,
+		RetryMinInterval:   1 * time.Millisecond,
+		RetryMaxInterval:   10 * time.Millisecond,
+	}
+	sender := New(httpClient, sempCfg, basicAuth(t, jar), server.URL, NewSemaphore(concurrency))
+	return sender, server
+}
+
+// TestSender_ConcurrentDo_RetryStateIsolated verifies each Do() call owns its
+// own retryState. Fires N concurrent requests against a Sender whose broker
+// 401s the first hit per caller and 200s the retry. If retryState were
+// accidentally shared across concurrent Do() calls (e.g. hoisted to a Sender
+// field), only one caller's 401 retry would fire — the first goroutine to
+// reach checkRetry would flip auth401Retried and deny every other goroutine
+// its retry. Under the correct per-request design, every caller independently
+// exercises its one-shot 401 retry budget and recovers to 200.
+//
+// The test server emits no Set-Cookie header. This keeps the shared
+// SafeCookieJar empty throughout the run so the only cross-goroutine state
+// left in play is retryState itself — the invariant this test is designed to
+// observe. Jar-under-concurrent-clear behavior is separately covered by
+// TestSafeCookieJar_ConcurrentSetClear.
+//
+// Run under -race (make check enables it); the invariant is anchored to
+// behavior (retry counts) and, independently, to the race detector — two
+// paths to detect accidental sharing.
+func TestSender_ConcurrentDo_RetryStateIsolated(t *testing.T) {
+	const goroutines = 50
+	const goroutineIDHeader = "X-Test-Goroutine-ID"
+
+	// Server tracks first-hit-per-caller under a mutex. sync.Map is not used
+	// because we need atomic check-and-set semantics: "have I seen this ID
+	// before? if not, record it AND return 401" must be one indivisible step,
+	// otherwise two concurrent retries for the same caller could both be
+	// treated as first hits.
+	var mu sync.Mutex
+	seen := make(map[string]bool)
+	var totalHits atomic.Int32
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		totalHits.Add(1)
+		id := r.Header.Get(goroutineIDHeader)
+
+		mu.Lock()
+		firstHit := !seen[id]
+		seen[id] = true
+		mu.Unlock()
+
+		if firstHit {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`unauthorized`))
+			return
+		}
+		jsonOK(w)
+	}
+
+	sender, server := newConcurrentTestSender(t, handler, goroutines)
+	defer server.Close()
+
+	// Starting gate: all goroutines block on start, then race into Do()
+	// simultaneously — maximizing the chance they overlap inside checkRetry.
+	var start sync.WaitGroup
+	var done sync.WaitGroup
+	start.Add(1)
+
+	statuses := make([]int, goroutines)
+	errs := make([]error, goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		done.Add(1)
+		go func(idx int) {
+			defer done.Done()
+			id := fmt.Sprintf("g-%d", idx)
+			req := newGetRequest(t, server.URL)
+			req.Header.Set(goroutineIDHeader, id)
+
+			start.Wait()
+
+			resp, err := sender.Do(context.Background(), req)
+			if err != nil {
+				errs[idx] = err
+				return
+			}
+			statuses[idx] = resp.StatusCode
+			resp.Body.Close()
+		}(i)
+	}
+
+	start.Done() // release the gate
+	done.Wait()
+
+	// Every goroutine must have recovered to 200 via its own retry budget.
+	// A shared retryState would leave most goroutines stuck at 401.
+	var failed int
+	for i := 0; i < goroutines; i++ {
+		if errs[i] != nil {
+			t.Errorf("goroutine %d: unexpected error: %v", i, errs[i])
+			failed++
+			continue
+		}
+		if statuses[i] != http.StatusOK {
+			t.Errorf("goroutine %d: status = %d, want 200 (retry budget likely denied by shared retryState)", i, statuses[i])
+			failed++
+		}
+	}
+
+	// Total server hits must be exactly 2×N: one 401 + one 200 per caller.
+	// A shared retryState typically produces N+1 hits (all N first hits plus
+	// exactly one retry). This assertion is the aggregate check that
+	// corroborates the per-goroutine status assertions above.
+	if got, want := totalHits.Load(), int32(2*goroutines); got != want {
+		t.Errorf("total server hits = %d, want %d (2 per goroutine); observed %d/%d goroutines failing suggests retry-state leak", got, want, failed, goroutines)
 	}
 }
 
