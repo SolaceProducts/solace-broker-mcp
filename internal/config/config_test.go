@@ -3531,3 +3531,32 @@ func TestServerConfig_BindAddress(t *testing.T) {
 		}
 	}
 }
+
+func TestServerConfig_StaticTokenExposedCleartext(t *testing.T) {
+	cases := []struct {
+		name string
+		mode string
+		addr string
+		cert string
+		want bool
+	}{
+		{"static non-loopback no TLS -> exposed", AuthModeStatic, "0.0.0.0", "", true},
+		{"static non-loopback with TLS -> safe", AuthModeStatic, "0.0.0.0", "/tmp/cert.pem", false},
+		{"static loopback -> safe", AuthModeStatic, "127.0.0.1", "", false},
+		{"static localhost -> safe", AuthModeStatic, "localhost", "", false},
+		{"disabled non-loopback -> not static, no warning", AuthModeDisabled, "0.0.0.0", "", false},
+		{"oauth non-loopback -> not static, no warning", AuthModeOAuth, "0.0.0.0", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &ServerConfig{
+				ListenAddress: tc.addr,
+				TLSCertFile:   tc.cert,
+				MCPClientAuth: MCPClientAuthConfig{Mode: tc.mode},
+			}
+			if got := cfg.StaticTokenExposedCleartext(); got != tc.want {
+				t.Errorf("StaticTokenExposedCleartext() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

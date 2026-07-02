@@ -443,6 +443,13 @@ func main() {
 	// DO NOT move this into middleware; see internal/banner/banner.go.
 	banner.LogStartupAuthMode(cfg.MCPClientAuth.Mode, cfg.MCPClientAuth.Issuer, cfg.BindAddress())
 
+	// static mode allows a non-loopback bind without an override, but that only
+	// keeps the token safe if the transport is encrypted. Warn loudly when the
+	// shared dev token would travel plaintext on a routable interface.
+	if cfg.StaticTokenExposedCleartext() {
+		banner.LogStaticCleartextExposure(cfg.BindAddress())
+	}
+
 	// Reconfigure slog with the user-configured level. cfg.LogLevel is
 	// validated and normalized to one of debug/info/warn/error.
 	var level slog.Level

@@ -131,6 +131,7 @@ Authorization: Bearer my-secret-dev-token-123
 - If the token is missing or incorrect, the request is rejected with an authentication error
 - Tokens are fixed and do not expire until the user changes them
 - The server binds `127.0.0.1` only by default. Set `listen_address` explicitly to expose it on another interface (no override is required for `static`, since requests still need the token). See [Configuration](configuration.md#server-settings).
+- **Cleartext caveat:** the dev token is a long-lived shared bearer token. On a non-loopback bind **without TLS** it travels in plaintext and can be sniffed and replayed for the same broker-admin-backed access — enable TLS (`tls_cert_file`/`tls_key_file`) whenever `static` is network-reachable. The server emits a startup WARN in this case.
 - A prominent banner appears in the logs at startup:
   ```
   ============================================================
@@ -331,7 +332,7 @@ This is expected for `mode: disabled` and `mode: static`. The banner is the deli
 
 ### Cannot reach the server from another host (Modes 1 and 2)
 
-Under `mode: disabled` and `mode: static` the server binds `127.0.0.1` only by default, so it is reachable from the local host but not the network. Check the startup log line for the effective `listen_address`. To bind another interface, set `listen_address` in the config (for `mode: disabled` this also requires `allow_remote_unauthenticated: true`). See [Configuration](configuration.md#server-settings).
+Under `mode: disabled` and `mode: static` the server binds `127.0.0.1` only by default, so it is reachable from the local host but not the network. Check the startup log line (the `bind_address` field) for the effective host:port. To bind another interface, set `listen_address` in the config (for `mode: disabled` this also requires `allow_remote_unauthenticated: true`). See [Configuration](configuration.md#server-settings).
 
 ### "401 Unauthorized" errors in Mode 2
 

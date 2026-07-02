@@ -44,7 +44,7 @@ func Test_StartupAuthMode_Disabled(t *testing.T) {
 		"Client → MCP server auth is OFF",
 		"Broker auth is unaffected",
 		"NOT FOR PRODUCTION USE",
-		"listen_address=127.0.0.1:9090",
+		"bind_address=127.0.0.1:9090",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("banner output missing %q\nfull output:\n%s", want, out)
@@ -64,7 +64,7 @@ func Test_StartupAuthMode_Static(t *testing.T) {
 		"Client → MCP server auth uses a static dev token",
 		"Broker auth is unaffected",
 		"NOT FOR PRODUCTION USE",
-		"listen_address=127.0.0.1:9090",
+		"bind_address=127.0.0.1:9090",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("banner output missing %q\nfull output:\n%s", want, out)
@@ -86,7 +86,24 @@ func Test_StartupAuthMode_OAuth(t *testing.T) {
 	if !strings.Contains(out, "https://idp.example.com") {
 		t.Errorf("oauth log should name the issuer, got: %s", out)
 	}
-	if !strings.Contains(out, "listen_address=:9090") {
+	if !strings.Contains(out, "bind_address=:9090") {
 		t.Errorf("startup should log the effective bind address, got: %s", out)
+	}
+}
+
+func Test_StaticCleartextExposure(t *testing.T) {
+	buf, restore := captureSlog(t)
+	defer restore()
+	LogStaticCleartextExposure("0.0.0.0:9090")
+	out := buf.String()
+	for _, want := range []string{
+		"level=WARN",
+		"static dev token on a plaintext network bind",
+		"captured and replayed",
+		"bind_address=0.0.0.0:9090",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("cleartext-exposure banner missing %q\nfull output:\n%s", want, out)
+		}
 	}
 }

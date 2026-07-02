@@ -1303,6 +1303,22 @@ func (c *ServerConfig) BindAddress() string {
 	return net.JoinHostPort(c.ListenAddress, strconv.Itoa(c.Port))
 }
 
+// StaticTokenExposedCleartext reports whether mode: static will put its shared
+// dev token on the wire in cleartext: static auth, a non-loopback bind, and no
+// server-side TLS. The static guard in validate() intentionally allows a
+// network bind without an override because every request is token-checked — but
+// that only protects the token if the transport is encrypted. Without TLS the
+// long-lived bearer token travels plaintext on a routable interface, so a
+// sniffer gains the same broker-admin-backed access the disabled guard prevents.
+// This is a startup WARN (see banner.LogStaticCleartextExposure), not a hard
+// error: static is a dev mode and the network bind was a deliberate choice.
+// TLS is both-or-neither (validated), so an empty cert file means TLS is off.
+func (c *ServerConfig) StaticTokenExposedCleartext() bool {
+	return c.MCPClientAuth.Mode == AuthModeStatic &&
+		!isLoopbackHost(c.ListenAddress) &&
+		c.TLSCertFile == ""
+}
+
 // isLoopbackHost reports whether host binds the loopback interface only.
 // "localhost" and any loopback IP (127.0.0.0/8, ::1) qualify; an empty host
 // means all interfaces and is NOT loopback. Used to keep the unauthenticated
