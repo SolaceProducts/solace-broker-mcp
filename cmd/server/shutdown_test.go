@@ -18,12 +18,53 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"os"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/observability/health"
 )
+
+// TestDrainDelayForSignal proves the SIGINT-vs-SIGTERM drain policy (reviewer
+// non-blocking comment #1, SOL-151288): SIGTERM (orchestrator-initiated) honors
+// the configured drain window so K8s can deregister the pod; SIGINT (a local
+// Ctrl-C) skips the drain entirely because there is no orchestrator to wait for.
+func TestDrainDelayForSignal(t *testing.T) {
+	tests := []struct {
+		name       string
+		sig        os.Signal
+		configured time.Duration
+		want       time.Duration
+	}{
+		{
+			name:       "SIGINT skips the drain regardless of configured delay",
+			sig:        os.Interrupt,
+			configured: 10 * time.Second,
+			want:       0,
+		},
+		{
+			name:       "SIGTERM honors the configured drain window",
+			sig:        syscall.SIGTERM,
+			configured: 10 * time.Second,
+			want:       10 * time.Second,
+		},
+		{
+			name:       "SIGTERM with a zero configured delay stays zero",
+			sig:        syscall.SIGTERM,
+			configured: 0,
+			want:       0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := drainDelayForSignal(tt.sig, tt.configured); got != tt.want {
+				t.Errorf("drainDelayForSignal(%v, %v) = %v, want %v", tt.sig, tt.configured, got, tt.want)
+			}
+		})
+	}
+}
 
 // TestDrainAndShutdown_FlipsReadyzBeforeDelay proves the SIGTERM drain order
 // required by SOL-151288 AC #2 and AC #5: SetShuttingDown happens FIRST (so

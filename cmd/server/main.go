@@ -352,6 +352,18 @@ func drainAndShutdown(srv shutdowner, readiness *health.ReadinessState, drainDel
 	return gracefulShutdown(srv, shutdownTimeout)
 }
 
+// drainDelayForSignal returns the drain delay to apply for the received
+// shutdown signal. SIGTERM (orchestrator-initiated, e.g. Kubernetes) gets the
+// configured drain window so the orchestrator can deregister the pod before we
+// stop accepting. SIGINT (os.Interrupt, a local Ctrl-C) skips the drain
+// entirely — there is no orchestrator to wait for — so it returns 0.
+func drainDelayForSignal(sig os.Signal, configured time.Duration) time.Duration {
+	if sig == os.Interrupt { // syscall.SIGINT
+		return 0
+	}
+	return configured
+}
+
 // shutdowner is the subset of *http.Server that gracefulShutdown drives. It
 // exists so a test can substitute a fake that captures the deadline of the
 // context handed to Shutdown — proving the full timeout budget is granted at
@@ -683,15 +695,22 @@ func main() {
 
 	var startupErr error
 	var fromSignal bool
+	var receivedSignal os.Signal
 	select {
-	case <-done:
-		// SIGTERM (or Ctrl-C): drain before shutting down. The drain (flip
+	case sig := <-done:
+		// Shutdown signal received: drain before shutting down. The drain (flip
 		// /readyz, sleep the propagation window, then graceful shutdown) runs in
-		// drainAndShutdown below. The shutdown-timeout context is NOT built here;
-		// gracefulShutdown builds it after the drain sleep so Shutdown gets the
-		// full budget (see drainAndShutdown / gracefulShutdown).
+		// drainAndShutdown below. SIGTERM (orchestrator-initiated) honors the
+		// configured drain window; SIGINT (a local Ctrl-C) skips it via
+		// drainDelayForSignal — there is no orchestrator to wait for. The
+		// shutdown-timeout context is NOT built here; gracefulShutdown builds it
+		// after the drain sleep so Shutdown gets the full budget (see
+		// drainAndShutdown / gracefulShutdown).
 		fromSignal = true
-		slog.Info("server shutting down", slog.String("reason", "signal"))
+		receivedSignal = sig
+		slog.Info("server shutting down",
+			slog.String("reason", "signal"),
+			slog.String("signal", sig.String()))
 	case startupErr = <-serverErr:
 		// Error already logged in startServer. Capture it so future telemetry
 		// hooks (e.g., metrics flush, error reporting) have access to the value,
@@ -708,7 +727,7 @@ func main() {
 	shutdownTimeout := time.Duration(defaults.DefaultShutdownTimeoutSeconds) * time.Second
 
 	if fromSignal {
-		drainDelay := time.Duration(cfg.Observability.ShutdownDrainDelayS) * time.Second
+		drainDelay := drainDelayForSignal(receivedSignal, time.Duration(cfg.Observability.ShutdownDrainDelayS)*time.Second)
 		_ = drainAndShutdown(httpServer, readiness, drainDelay, shutdownTimeout)
 	} else {
 		_ = gracefulShutdown(httpServer, shutdownTimeout)
