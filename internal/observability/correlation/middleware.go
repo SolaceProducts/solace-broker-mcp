@@ -81,11 +81,23 @@ func From(ctx context.Context) string {
 // The middleware always attaches a non-empty ID, so downstream code can rely on
 // From returning a value once Middleware is in the chain.
 //
+// It also echoes the resolved ID back to the caller in the X-Correlation-ID
+// response header (SOL-151282), so a client can correlate its request with the
+// server's logs without parsing the body. The header is set before next runs,
+// because net/http silently drops headers set after the handler writes the
+// status line; setting it here guarantees it survives regardless of how the
+// downstream handler responds. The value is always non-empty inside Middleware
+// (resolveID generates one when no usable inbound header exists). Echoing back
+// onto the same header name the inbound path reads from is intentional: it is
+// request/response symmetric and the value is already sanitized.
+//
 // Callers gate installation on Enabled (OBS_CORRELATION_ID_ENABLED). When the
-// capability is off the middleware is not wired and From returns "".
+// capability is off the middleware is not wired, From returns "", and no
+// response header is set.
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := resolveID(r)
+		w.Header().Set(headerCorrelationID, id)
 		ctx := With(r.Context(), id)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
