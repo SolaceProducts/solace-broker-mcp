@@ -106,7 +106,7 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 			state.auth401Retried = true
 			retry := d.authenticator.HandleAuthFailure(ctx, resp)
 			if retry {
-				slog.Warn("retrying: 401 received, auth handler cleared state",
+				slog.Warn("retrying: 401 received, auth handler recovered",
 					slog.String("broker", d.brokerURL))
 			}
 			return retry, nil
