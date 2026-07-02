@@ -10,6 +10,7 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/correlationhdr"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 )
@@ -177,6 +178,11 @@ func (c *HTTPClient) Execute(ctx context.Context, xml string) (*Result, error) {
 	if err := c.authenticator.AddAuth(ctx, req); err != nil {
 		return nil, fmt.Errorf("applying SEMPv1 auth: %w", err)
 	}
+
+	// Forward the request-correlation ID (if any) as outbound headers, strictly
+	// after auth so it cannot clobber or be clobbered by auth headers. No-op
+	// when correlation is off (From(ctx) == "").
+	correlationhdr.Set(ctx, req)
 
 	// Attach operation ID for the Sender's logging context.
 	ctx = context.WithValue(ctx, resilience.OperationIDKey{}, "SEMPv1")

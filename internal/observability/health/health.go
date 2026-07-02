@@ -19,11 +19,15 @@
 // Scope note: liveness (/livez) and readiness (/readyz) are UNCONDITIONAL by
 // design — there is no flag to disable them, and this package does NOT gate
 // them. /livez is the canonical liveness endpoint and returns
-// {"status":"alive"}; /readyz is the canonical readiness name the next story
-// implements. /health is retained for backward compatibility and preserves its
-// original {"status":"healthy"} body — it is NOT a body-identical alias of
-// /livez and is served by its own handler (HealthHandler). The single accessor
-// here, SaturationEventsEnabled, gates only the opt-in saturation-event signal
+// {"status":"alive"}. /readyz is the canonical readiness endpoint and reflects
+// the MCP server's OWN readiness only: it is built from ReadinessState
+// (initialized flag, shutting-down flag, required-listener probes) via
+// ReadyzHandler and is decoupled from broker reachability (ADR-004 /
+// ISSUE-026) — it makes no broker calls and reads no broker state. /health is
+// retained for backward compatibility and preserves its original
+// {"status":"healthy"} body — it is NOT a body-identical alias of /livez and is
+// served by its own handler (HealthHandler). The single accessor here,
+// SaturationEventsEnabled, gates only the opt-in saturation-event signal
 // layered on top of those probes. The v1 default for that signal is OFF
 // (door-closing policy).
 //
