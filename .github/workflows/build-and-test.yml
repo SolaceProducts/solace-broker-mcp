@@ -45,20 +45,6 @@ jobs:
         with:
           version: v2.11.4
 
-  shellcheck-llm-harness:
-    # Gates the LLM eval harness scripts against drift. The harness itself
-    # runs only on manual dispatch / post-merge (llm-eval.yml) and is gated
-    # on LLM_SERVICE_API_KEY, so without this job the scripts go unchecked
-    # in CI. shellcheck is cheap and independent of that secret — runs on
-    # every push. -x follows sourced files (config.env, helpers.sh).
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: shellcheck
-        run: shellcheck -x test/e2e-monitoring/llm/*.sh
-
   build:
     runs-on: ubuntu-latest
     steps:
