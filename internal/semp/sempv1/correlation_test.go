@@ -31,7 +31,11 @@ func newTestClientWithRetries(t *testing.T, srv *httptest.Server, maxRetries int
 		RetryMinInterval:       1 * time.Millisecond,
 		RetryMaxInterval:       5 * time.Millisecond,
 	}
-	client, err := NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("user", "pass"))
+	jar, jarErr := resilience.NewSafeCookieJar()
+	if jarErr != nil {
+		t.Fatalf("NewSafeCookieJar: %v", jarErr)
+	}
+	client, err := NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("user", "pass", nil), jar)
 	if err != nil {
 		t.Fatalf("NewHTTPClient: %v", err)
 	}

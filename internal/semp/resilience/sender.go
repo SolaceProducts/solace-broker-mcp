@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
 	"github.com/hashicorp/go-retryablehttp"
 )
 
@@ -35,29 +36,24 @@ func (e *RetriesExhaustedError) Unwrap() error { return e.Err }
 // policy, and 401 re-auth. Both SEMPv1 and SEMPv2 clients compose this to get
 // shared HTTP resilience without duplication.
 //
-// Sender is safe for concurrent use from multiple goroutines. The cookie jar
-// is wrapped in a *SafeCookieJar so the 401 re-auth path can clear session
-// state via an atomic swap without racing concurrent http.Client.Do reads
-// of the Jar field.
-//
-// NOTE: if per-user broker sessions are introduced, jar replacement will
-// need to be scoped per user.
+// Sender is safe for concurrent use from multiple goroutines. The 401 re-auth
+// path delegates to the broker's Authenticator, which owns the recovery
+// strategy for its auth mode.
 type Sender struct {
-	retryClient *retryablehttp.Client
-	cookieJar   *SafeCookieJar    // for 401 re-auth: Clear() swaps in a fresh inner jar atomically
-	authCfg     config.AuthConfig // for 401 auth-mode check
-	rateLimiter <-chan time.Time
-	rateTicker  *time.Ticker // non-nil when rate limiting enabled; stopped by Close()
-	sem         Semaphore    // bounds in-flight requests; shared per-broker across SEMPv1+v2
-	brokerURL   string       // for logging context
+	retryClient   *retryablehttp.Client
+	authenticator auth.Authenticator // for 401 re-auth: delegates recovery to the auth mode
+	rateLimiter   <-chan time.Time
+	rateTicker    *time.Ticker // non-nil when rate limiting enabled; stopped by Close()
+	sem           Semaphore    // bounds in-flight requests; shared per-broker across SEMPv1+v2
+	brokerURL     string       // for logging context
 }
 
 // New creates a Sender configured for a specific broker. It sets up retryablehttp
-// with the retry policy from SEMPConfig and a per-broker rate limiter. The
-// caller is expected to have set httpClient.Jar to the same *SafeCookieJar so
-// 401 re-auth (Clear) and the cookie attachment in http.Client.Do operate on
-// the same jar instance.
+// with the retry policy from SEMPConfig and a per-broker rate limiter.
 // sempCfg.Retries and sempCfg.RequestMinInterval must be non-nil.
+//
+// authn is the broker's Authenticator, used to delegate 401 recovery via
+// HandleAuthFailure. It must be non-nil.
 //
 // sem bounds in-flight requests and must be non-nil. It must be shared by
 // both protocol Senders of the same broker so the cap is per-broker, not per
@@ -67,15 +63,14 @@ type Sender struct {
 // contract violation that any test exercising the path catches immediately;
 // the only production wiring goes through semp.NewBrokerClient, which always
 // supplies one.
-func New(httpClient *http.Client, cookieJar *SafeCookieJar, sempCfg *config.SEMPConfig, authCfg config.AuthConfig, brokerURL string, sem Semaphore) *Sender {
+func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authenticator, brokerURL string, sem Semaphore) *Sender {
 	if sem == nil {
 		panic("resilience.New: sem must be non-nil; share one per broker via semp.NewBrokerClient")
 	}
 	d := &Sender{
-		cookieJar: cookieJar,
-		authCfg:   authCfg,
-		sem:       sem,
-		brokerURL: brokerURL,
+		authenticator: authn,
+		sem:           sem,
+		brokerURL:     brokerURL,
 	}
 
 	// Configure retryablehttp client with the underlying http.Client.

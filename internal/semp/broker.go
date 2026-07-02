@@ -45,16 +45,20 @@ type BrokerClient struct {
 // same pointer to both protocol clients. Layers below this one never call
 // auth.NewAuthenticator.
 func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (*BrokerClient, error) {
-	authn, err := auth.NewAuthenticator(brokerCfg.Auth)
+	jar, err := resilience.NewSafeCookieJar()
+	if err != nil {
+		return nil, fmt.Errorf("creating cookie jar for broker %q: %w", alias, err)
+	}
+	authn, err := auth.NewAuthenticator(brokerCfg.Auth, jar)
 	if err != nil {
 		return nil, fmt.Errorf("creating authenticator for broker %q: %w", alias, err)
 	}
 	sem := resilience.NewSemaphore(sempCfg.MaxConcurrentPerBroker)
-	sempV1Client, err := sempv1.NewHTTPClient(brokerCfg, sempCfg, sem, authn)
+	sempV1Client, err := sempv1.NewHTTPClient(brokerCfg, sempCfg, sem, authn, jar)
 	if err != nil {
 		return nil, fmt.Errorf("creating SEMPv1 client for broker %q: %w", alias, err)
 	}
-	sempV2Client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, sem, authn)
+	sempV2Client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, sem, authn, jar)
 	if err != nil {
 		return nil, fmt.Errorf("creating SEMPv2 client for broker %q: %w", alias, err)
 	}

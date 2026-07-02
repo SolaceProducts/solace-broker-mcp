@@ -24,9 +24,6 @@ import (
 func newTestClientWith(t *testing.T, srv *httptest.Server, authn auth.Authenticator) *HTTPClient {
 	t.Helper()
 
-	// Auth has been hoisted up into authn — Mode is still required by config
-	// validation paths that touch BrokerConfig, but the protocol client no
-	// longer reads Auth fields itself.
 	brokerCfg := &config.BrokerConfig{
 		URL:  srv.URL,
 		Auth: config.AuthConfig{Mode: config.AuthModeBasic},
@@ -41,7 +38,11 @@ func newTestClientWith(t *testing.T, srv *httptest.Server, authn auth.Authentica
 		RetryMaxInterval:       10 * time.Millisecond,
 	}
 
-	client, err := NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), authn)
+	jar, err := resilience.NewSafeCookieJar()
+	if err != nil {
+		t.Fatalf("NewSafeCookieJar: %v", err)
+	}
+	client, err := NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), authn, jar)
 	if err != nil {
 		t.Fatalf("NewHTTPClient failed: %v", err)
 	}
@@ -53,7 +54,7 @@ func newTestClientWith(t *testing.T, srv *httptest.Server, authn auth.Authentica
 // newTestClientWith directly and supply their own Authenticator.
 func newTestClient(t *testing.T, srv *httptest.Server) *HTTPClient {
 	t.Helper()
-	return newTestClientWith(t, srv, auth.NewBasicAuthenticator("user", "pass"))
+	return newTestClientWith(t, srv, auth.NewBasicAuthenticator("user", "pass", nil))
 }
 
 const successEnvelope = `<rpc-reply><rpc><show><version/></show></rpc><execute-result code="ok"/></rpc-reply>`
@@ -101,7 +102,7 @@ func TestExecute_RequestConstruction(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		client := newTestClientWith(t, srv, auth.NewBasicAuthenticator("user", "pass"))
+		client := newTestClientWith(t, srv, auth.NewBasicAuthenticator("user", "pass", nil))
 
 		_, err := client.Execute(context.Background(), `<rpc><show/></rpc>`)
 		if err != nil {
@@ -448,7 +449,7 @@ func TestHTTPClient_LogValue_ExcludesCredentials(t *testing.T) {
 	}{
 		{
 			name:    "basic auth credentials are not logged",
-			authn:   auth.NewBasicAuthenticator("SECRET_USERNAME_VAL", "SECRET_PASSWORD_VAL"),
+			authn:   auth.NewBasicAuthenticator("SECRET_USERNAME_VAL", "SECRET_PASSWORD_VAL", nil),
 			secrets: []string{"SECRET_USERNAME_VAL", "SECRET_PASSWORD_VAL"},
 		},
 		{

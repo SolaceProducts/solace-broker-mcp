@@ -25,7 +25,7 @@ func TestBasicAuthenticator_AddAuth(t *testing.T) {
 		user = "admin"
 		pass = "s3cret"
 	)
-	a := NewBasicAuthenticator(user, pass)
+	a := NewBasicAuthenticator(user, pass, nil)
 	req := newReq(t)
 
 	if err := a.AddAuth(context.Background(), req); err != nil {
@@ -76,7 +76,7 @@ func TestNewAuthenticator_DispatchesByMode(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a, err := NewAuthenticator(tt.cfg)
+			a, err := NewAuthenticator(tt.cfg, nil)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -95,7 +95,7 @@ func TestNewAuthenticator_DispatchesByMode(t *testing.T) {
 }
 
 func TestNewAuthenticator_UnsupportedMode(t *testing.T) {
-	a, err := NewAuthenticator(config.AuthConfig{Mode: "invented-mode"})
+	a, err := NewAuthenticator(config.AuthConfig{Mode: "invented-mode"}, nil)
 	if err == nil {
 		t.Fatal("expected error for unsupported mode, got nil")
 	}
@@ -118,7 +118,7 @@ func TestAuthenticator_ConcurrentAddAuth_NoFieldMutation(t *testing.T) {
 	const goroutines = 16
 
 	t.Run("basic", func(t *testing.T) {
-		a := NewBasicAuthenticator("admin", "s3cret")
+		a := NewBasicAuthenticator("admin", "s3cret", nil)
 		wantUser, wantPass := a.username, a.password
 		wantCreds := wantUser + ":" + wantPass
 

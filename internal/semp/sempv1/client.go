@@ -69,23 +69,14 @@ func (c *HTTPClient) Close() {
 // sem is the broker's shared in-flight semaphore and must be non-nil
 // (resilience.New panics otherwise); see semp.NewBrokerClient, which shares
 // one semaphore across both protocol clients of a broker.
-func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, sem resilience.Semaphore, authn auth.Authenticator) (*HTTPClient, error) {
-	// Programmer-error precondition: there is no runtime path that yields a
-	// nil Authenticator here. semp.NewBrokerClient is the single production
-	// caller and constructs authn via auth.NewAuthenticator before this call.
-	// A nil at this point means someone ignored an error from NewAuthenticator
-	// or passed nil explicitly — both bugs in calling code, not recoverable
-	// runtime conditions. Panicking surfaces the bug at construction time
-	// instead of as a delayed nil-pointer panic deep inside AddAuth at request
-	// time.
+func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, sem resilience.Semaphore, authn auth.Authenticator, jar *resilience.SafeCookieJar) (*HTTPClient, error) {
 	if authn == nil {
 		panic("sempv1.NewHTTPClient: nil authenticator")
 	}
-	transport := resilience.NewTunedTransport(brokerCfg, sempCfg)
-	jar, err := resilience.NewSafeCookieJar()
-	if err != nil {
-		return nil, fmt.Errorf("creating cookie jar: %w", err)
+	if jar == nil {
+		panic("sempv1.NewHTTPClient: nil cookie jar")
 	}
+	transport := resilience.NewTunedTransport(brokerCfg, sempCfg)
 	if brokerCfg.InsecureSkipVerify {
 		slog.Warn("INSECURE: TLS verification disabled for broker",
 			slog.String("broker", brokerCfg.DisplayName()))
@@ -100,7 +91,7 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, s
 	baseURL := strings.TrimSuffix(brokerCfg.URL, "/")
 
 	return &HTTPClient{
-		sender:        resilience.New(httpClient, jar, sempCfg, brokerCfg.Auth, baseURL, sem),
+		sender:        resilience.New(httpClient, sempCfg, authn, baseURL, sem),
 		baseURL:       baseURL,
 		authenticator: authn,
 	}, nil
