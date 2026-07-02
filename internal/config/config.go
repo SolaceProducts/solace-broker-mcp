@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -49,6 +50,7 @@ type ServerConfig struct {
 	SEMP          SEMPConfig          // SEMP client settings
 	Port          int                 // HTTP port the MCP server listens on
 	LogLevel      string              // slog level name: "debug", "info", "warn", "error"
+	ListenAddress string              // host the HTTP server binds to. Empty => all interfaces. Defaulted to 127.0.0.1 unless mcp_client_auth.mode is oauth (see applyDefaults).
 	MCPClientAuth MCPClientAuthConfig // Hop 1: authentication config for mcp client to server interactions
 	BrokerOAuth   *BrokerOAuthConfig  // Hop 2: global OAuth IdP coordinates for broker token exchange. Required when any broker uses auth.mode: oauth; otherwise optional (provided-but-unused configs log a WARN at startup so operators can stage broker_oauth ahead of switching brokers to oauth mode).
 	TLSCertFile   string              // path to TLS certificate file (optional, enables HTTPS)
@@ -67,6 +69,12 @@ type ServerConfig struct {
 	// applyEnvOverrides; numeric tunables parse from the YAML observability:
 	// block and are defaulted in applyDefaults. See ObservabilityConfig.
 	Observability ObservabilityConfig
+
+	// AllowRemoteUnauthenticated opts in to binding a non-loopback address while
+	// mcp_client_auth.mode is disabled. disabled mode enforces no client auth, so
+	// a routable bind exposes unauthenticated MCP access backed by the broker
+	// admin credential — validate() refuses it unless this is explicitly true.
+	AllowRemoteUnauthenticated bool
 }
 
 // BrokerOAuthConfig holds the global OAuth IdP coordinates the MCP server uses
@@ -401,6 +409,7 @@ type yamlConfig struct {
 	Brokers          map[string]*BrokerConfig `yaml:"brokers"`
 	SEMP             SEMPConfig               `yaml:"semp"`
 	Port             int                      `yaml:"port"`
+	ListenAddress    string                   `yaml:"listen_address"`
 	LogLevel         string                   `yaml:"log_level"`
 	DevelopmentMode  *bool                    `yaml:"development_mode"` // *bool so we can detect presence-in-YAML (deprecation warning); the value is ignored
 	MCPClientAuth    MCPClientAuthConfig      `yaml:"mcp_client_auth"`
@@ -409,6 +418,8 @@ type yamlConfig struct {
 	TLSKeyFile       string                   `yaml:"tls_key_file"`
 	EnableWriteTools bool                     `yaml:"enable_write_tools"` // default false; gates registration of write/action tools
 	Observability    ObservabilityConfig      `yaml:"observability"`      // numeric tunables parse here; capability flags come from OBS_* env vars (see ObservabilityConfig)
+
+	AllowRemoteUnauthenticated bool `yaml:"allow_remote_unauthenticated"` // opt-in to a non-loopback bind under mcp_client_auth.mode: disabled
 }
 
 // Load locates the server configuration file, loads it, and returns a ready
@@ -511,6 +522,7 @@ func LoadConfig(path string) (*ServerConfig, error) {
 		brokers:          raw.Brokers,
 		SEMP:             raw.SEMP,
 		Port:             raw.Port,
+		ListenAddress:    raw.ListenAddress,
 		LogLevel:         raw.LogLevel,
 		MCPClientAuth:    raw.MCPClientAuth,
 		BrokerOAuth:      raw.BrokerOAuth,
@@ -518,6 +530,8 @@ func LoadConfig(path string) (*ServerConfig, error) {
 		TLSKeyFile:       raw.TLSKeyFile,
 		EnableWriteTools: raw.EnableWriteTools,
 		Observability:    raw.Observability,
+
+		AllowRemoteUnauthenticated: raw.AllowRemoteUnauthenticated,
 	}
 
 	applyDefaults(cfg)
@@ -540,6 +554,19 @@ func applyDefaults(cfg *ServerConfig) {
 	}
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = defaults.DefaultLogLevel
+	}
+	// Trim before the empty-check so a whitespace-only value resolves to the
+	// secure default rather than an unbindable address — matches the file-wide
+	// rule applied to operator-supplied strings (see the dev_token note in
+	// validate()).
+	cfg.ListenAddress = strings.TrimSpace(cfg.ListenAddress)
+	// Bind loopback-only by default unless the operator is running production
+	// OAuth, which is the only mode meant to be network-reachable out of the
+	// box. The dev modes (disabled, static) must opt in to a routable bind by
+	// setting listen_address explicitly. Mode is not normalized until validate(),
+	// so compare case-insensitively here.
+	if cfg.ListenAddress == "" && strings.ToLower(cfg.MCPClientAuth.Mode) != AuthModeOAuth {
+		cfg.ListenAddress = defaults.DefaultLoopbackListenAddress
 	}
 	if cfg.SEMP.MaxConcurrentPerBroker == 0 {
 		cfg.SEMP.MaxConcurrentPerBroker = defaults.DefaultMaxConcurrentPerBroker
@@ -906,6 +933,26 @@ func validate(cfg *ServerConfig) error {
 		errs = append(errs, fmt.Errorf("mcp_client_auth.mode %q is invalid (must be one of %v)", cfg.MCPClientAuth.Mode, validAuthClientModes))
 	}
 
+	// listen_address: validate form, then guard the disabled-mode exposure.
+	// An explicit value must be an IP or "localhost" so an unbindable host fails
+	// at startup rather than deep inside ListenAndServe. Empty is allowed (it
+	// means all interfaces) but only ever reaches here under oauth, since
+	// applyDefaults fills loopback for the dev modes.
+	if cfg.ListenAddress != "" && !isLoopbackHost(cfg.ListenAddress) && net.ParseIP(cfg.ListenAddress) == nil {
+		errs = append(errs, fmt.Errorf("listen_address %q is invalid (must be an IP address or %q)", cfg.ListenAddress, "localhost"))
+	} else if cfg.MCPClientAuth.Mode == AuthModeDisabled && !isLoopbackHost(cfg.ListenAddress) && !cfg.AllowRemoteUnauthenticated {
+		// Only disabled is guarded here. static can bind a non-loopback address
+		// without the override BY DESIGN: it still authenticates every request
+		// against the shared dev token, so a routable bind is a deliberate
+		// (token-gated) choice rather than wide-open exposure. disabled has no
+		// such gate — a non-loopback bind would expose unauthenticated MCP access,
+		// backed by the broker admin credential the server holds, to the network.
+		// Refuse unless the operator explicitly accepts the risk.
+		errs = append(errs, fmt.Errorf(
+			"listen_address %q binds a non-loopback interface while mcp_client_auth.mode is %q (no client authentication): this exposes unauthenticated MCP access backed by the broker admin credential to the network. Bind 127.0.0.1, switch to mcp_client_auth.mode: oauth, or set allow_remote_unauthenticated: true to accept the risk",
+			cfg.ListenAddress, AuthModeDisabled))
+	}
+
 	// TLS: both cert and key must be provided together, or neither.
 	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
 		errs = append(errs, fmt.Errorf("both tls_cert_file and tls_key_file must be provided together; got cert=%q, key=%q", cfg.TLSCertFile, cfg.TLSKeyFile))
@@ -1244,6 +1291,28 @@ func ValidatePort(port int) error {
 // do not add a separate dev-mode toggle on ServerConfig.
 func (c *ServerConfig) IsProductionMode() bool {
 	return c.MCPClientAuth.Mode == AuthModeOAuth
+}
+
+// BindAddress returns the host:port the HTTP server listens on. An empty
+// ListenAddress yields ":port", i.e. all interfaces — preserved for oauth mode.
+// The dev modes are defaulted to a loopback host in applyDefaults, so this
+// renders e.g. "127.0.0.1:9090" for them. net.JoinHostPort (not a bare
+// "%s:%d") so an IPv6 host such as "::1" is bracketed to "[::1]:9090", which is
+// what net.Listen requires — validate() accepts IPv6 loopback addresses.
+func (c *ServerConfig) BindAddress() string {
+	return net.JoinHostPort(c.ListenAddress, strconv.Itoa(c.Port))
+}
+
+// isLoopbackHost reports whether host binds the loopback interface only.
+// "localhost" and any loopback IP (127.0.0.0/8, ::1) qualify; an empty host
+// means all interfaces and is NOT loopback. Used to keep the unauthenticated
+// dev modes off the network by default.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // validateBrokerURL checks that s is a well-formed URL with an http or https

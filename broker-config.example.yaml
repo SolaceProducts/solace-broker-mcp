@@ -14,6 +14,14 @@
 port: 9090
 log_level: info   # debug, info, warn, error
 
+# Host the server binds to. Leave unset for the secure default:
+#   - mcp_client_auth.mode: oauth      -> all interfaces (production listener)
+#   - mcp_client_auth.mode: disabled/static -> 127.0.0.1 only (dev modes stay
+#     off the network unless you opt in)
+# Set explicitly (e.g. "0.0.0.0") to override. Binding a non-loopback address
+# under mode: disabled additionally requires allow_remote_unauthenticated: true.
+# listen_address: "127.0.0.1"
+
 # TLS — set both to enable HTTPS, or terminate TLS at a load balancer.
 tls_cert_file: ""
 tls_key_file: ""
@@ -37,6 +45,10 @@ mcp_client_auth:
 #
 # mcp_client_auth:
 #   mode: disabled
+#   # Both dev modes default to binding 127.0.0.1 only. To expose mode: disabled
+#   # (no client auth) on a routable interface, you must acknowledge the risk:
+#   # listen_address: "0.0.0.0"
+#   # allow_remote_unauthenticated: true
 #
 # mcp_client_auth:
 #   mode: static

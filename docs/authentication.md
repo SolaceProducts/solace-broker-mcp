@@ -49,6 +49,7 @@ No authentication headers required.
 
 - All client requests are accepted automatically
 - No tokens or credentials are needed
+- The server binds `127.0.0.1` only by default, so the unauthenticated listener is not reachable from the network. To expose it on another interface you must set `listen_address` **and** `allow_remote_unauthenticated: true` — without the override, a non-loopback `listen_address` is refused at startup. See [Configuration](configuration.md#server-settings).
 - A prominent banner appears in the logs at startup:
   ```
   ============================================================
@@ -129,6 +130,7 @@ Authorization: Bearer my-secret-dev-token-123
 - If the token matches, the request is accepted
 - If the token is missing or incorrect, the request is rejected with an authentication error
 - Tokens are fixed and do not expire until the user changes them
+- The server binds `127.0.0.1` only by default. Set `listen_address` explicitly to expose it on another interface (no override is required for `static`, since requests still need the token). See [Configuration](configuration.md#server-settings).
 - A prominent banner appears in the logs at startup:
   ```
   ============================================================
@@ -326,6 +328,10 @@ On success, the server logs: `"using JWT token for authentication — production
 ### Banner appears at startup ("INSECURE MODE")
 
 This is expected for `mode: disabled` and `mode: static`. The banner is the deliberate signal that the server is running without production-grade auth. If production mode was intended, switch to `mode: oauth`.
+
+### Cannot reach the server from another host (Modes 1 and 2)
+
+Under `mode: disabled` and `mode: static` the server binds `127.0.0.1` only by default, so it is reachable from the local host but not the network. Check the startup log line for the effective `listen_address`. To bind another interface, set `listen_address` in the config (for `mode: disabled` this also requires `allow_remote_unauthenticated: true`). See [Configuration](configuration.md#server-settings).
 
 ### "401 Unauthorized" errors in Mode 2
 

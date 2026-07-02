@@ -3378,3 +3378,156 @@ func TestBrokerOAuthConfig_LogValue(t *testing.T) {
 		t.Errorf("expected idp_token_endpoint and mcp_server_client_id in log output: %s", out)
 	}
 }
+
+// listenAddressYAML assembles a config exercising listen_address against a given
+// client-auth mode. oauth (production) requires https everywhere, so the broker
+// URL is https for every case to keep the focus on listen_address behavior.
+func listenAddressYAML(mode, listenLine, overrideLine string) string {
+	var authBlock string
+	switch mode {
+	case "static":
+		authBlock = "mcp_client_auth:\n  mode: static\n  dev_token: test\n"
+	case "oauth":
+		authBlock = "mcp_client_auth:\n  mode: oauth\n  issuer: \"https://idp.example.com\"\n  audience: \"mcp\"\n  resource_url: \"https://mcp.example.com/mcp\"\n"
+	default:
+		authBlock = "mcp_client_auth:\n  mode: " + mode + "\n"
+	}
+	return authBlock + listenLine + overrideLine + `brokers:
+  dev:
+    url: "https://broker.example.com:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+}
+
+func TestLoadConfig_ListenAddress_DefaultResolution(t *testing.T) {
+	cases := []struct {
+		name       string
+		mode       string
+		listenLine string
+		wantAddr   string
+	}{
+		{"disabled defaults loopback", "disabled", "", "127.0.0.1"},
+		{"static defaults loopback", "static", "", "127.0.0.1"},
+		{"oauth defaults all interfaces", "oauth", "", ""},
+		{"explicit value preserved under disabled", "disabled", "listen_address: \"127.0.0.1\"\n", "127.0.0.1"},
+		{"explicit value preserved under oauth", "oauth", "listen_address: \"0.0.0.0\"\n", "0.0.0.0"},
+		{"mixed-case mode still defaults loopback", "Disabled", "", "127.0.0.1"},
+		{"surrounding whitespace is trimmed", "oauth", "listen_address: \" 0.0.0.0 \"\n", "0.0.0.0"},
+		{"whitespace-only resolves to loopback default", "disabled", "listen_address: \"   \"\n", "127.0.0.1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := LoadConfig(writeTemp(t, listenAddressYAML(tc.mode, tc.listenLine, "")))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.ListenAddress != tc.wantAddr {
+				t.Errorf("ListenAddress = %q, want %q", cfg.ListenAddress, tc.wantAddr)
+			}
+		})
+	}
+}
+
+func TestLoadConfig_ListenAddress_Validation(t *testing.T) {
+	cases := []struct {
+		name         string
+		mode         string
+		listenLine   string
+		overrideLine string
+		wantErr      string // substring; "" means expect success
+	}{
+		{
+			name:       "disabled non-loopback without override is refused",
+			mode:       "disabled",
+			listenLine: "listen_address: \"0.0.0.0\"\n",
+			wantErr:    "allow_remote_unauthenticated",
+		},
+		{
+			name:         "disabled non-loopback with override is allowed",
+			mode:         "disabled",
+			listenLine:   "listen_address: \"0.0.0.0\"\n",
+			overrideLine: "allow_remote_unauthenticated: true\n",
+		},
+		{
+			name:       "disabled explicit loopback is allowed",
+			mode:       "disabled",
+			listenLine: "listen_address: \"127.0.0.1\"\n",
+		},
+		{
+			name:       "disabled localhost is allowed",
+			mode:       "disabled",
+			listenLine: "listen_address: \"localhost\"\n",
+		},
+		{
+			name:       "disabled IPv6 loopback is allowed",
+			mode:       "disabled",
+			listenLine: "listen_address: \"::1\"\n",
+		},
+		{
+			name:       "disabled uppercase LOCALHOST is allowed (case-insensitive)",
+			mode:       "disabled",
+			listenLine: "listen_address: \"LOCALHOST\"\n",
+		},
+		{
+			name:       "disabled IPv6 unspecified without override is refused",
+			mode:       "disabled",
+			listenLine: "listen_address: \"::\"\n",
+			wantErr:    "allow_remote_unauthenticated",
+		},
+		{
+			name:       "static non-loopback is allowed without override",
+			mode:       "static",
+			listenLine: "listen_address: \"0.0.0.0\"\n",
+		},
+		{
+			name:       "oauth non-loopback is allowed",
+			mode:       "oauth",
+			listenLine: "listen_address: \"0.0.0.0\"\n",
+		},
+		{
+			name:       "malformed listen_address is rejected",
+			mode:       "oauth",
+			listenLine: "listen_address: \"not an ip\"\n",
+			wantErr:    "must be an IP address",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := LoadConfig(writeTemp(t, listenAddressYAML(tc.mode, tc.listenLine, tc.overrideLine)))
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestServerConfig_BindAddress(t *testing.T) {
+	cases := []struct {
+		addr string
+		port int
+		want string
+	}{
+		{"127.0.0.1", 9090, "127.0.0.1:9090"},
+		{"", 9090, ":9090"},
+		{"0.0.0.0", 8080, "0.0.0.0:8080"},
+		{"::1", 9090, "[::1]:9090"}, // IPv6 host must be bracketed for net.Listen
+	}
+	for _, tc := range cases {
+		cfg := &ServerConfig{ListenAddress: tc.addr, Port: tc.port}
+		if got := cfg.BindAddress(); got != tc.want {
+			t.Errorf("BindAddress() with addr=%q port=%d = %q, want %q", tc.addr, tc.port, got, tc.want)
+		}
+	}
+}

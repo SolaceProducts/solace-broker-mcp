@@ -390,7 +390,7 @@ func main() {
 	// level — at this point the bootstrap handler is at INFO, so WARN
 	// banner entries are always visible regardless of cfg.LogLevel.
 	// DO NOT move this into middleware; see internal/banner/banner.go.
-	banner.LogStartupAuthMode(cfg.MCPClientAuth.Mode, cfg.MCPClientAuth.Issuer)
+	banner.LogStartupAuthMode(cfg.MCPClientAuth.Mode, cfg.MCPClientAuth.Issuer, cfg.BindAddress())
 
 	// Reconfigure slog with the user-configured level. cfg.LogLevel is
 	// validated and normalized to one of debug/info/warn/error.
@@ -522,7 +522,7 @@ func main() {
 	}))
 
 	// 9. Start server with graceful shutdown
-	addr := fmt.Sprintf(":%d", cfg.Port)
+	addr := cfg.BindAddress()
 	httpServer := newHTTPServer(addr, mux)
 
 	done := make(chan os.Signal, 1)

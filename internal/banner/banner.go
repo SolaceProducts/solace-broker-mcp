@@ -69,7 +69,12 @@ import (
 // ServerConfig pointer so this package stays free of internal/config
 // dependencies. See SOL-149989 design spec at
 // docs/superpowers/specs/2026-05-20-client-auth-mode-design.md.
-func LogStartupAuthMode(mode, issuer string) {
+//
+// bindAddr is the effective host:port the server listens on. It is always
+// logged so operators can confirm at a glance whether the (auth-mode-dependent)
+// listener is loopback-only or network-reachable — the load-bearing fact for
+// the disabled/static dev modes, which default to loopback.
+func LogStartupAuthMode(mode, issuer, bindAddr string) {
 	switch mode {
 	case "disabled":
 		slog.Warn(disabledBanner)
@@ -78,6 +83,7 @@ func LogStartupAuthMode(mode, issuer string) {
 	case "oauth":
 		slog.Info("MCP client auth: OAuth/OIDC", slog.String("issuer", issuer))
 	}
+	slog.Info("MCP server bind address", slog.String("listen_address", bindAddr))
 }
 
 const disabledBanner = `
