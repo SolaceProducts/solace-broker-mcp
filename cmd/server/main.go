@@ -525,7 +525,14 @@ func main() {
 	// level — at this point the bootstrap handler is at INFO, so WARN
 	// banner entries are always visible regardless of cfg.LogLevel.
 	// DO NOT move this into middleware; see internal/banner/banner.go.
-	banner.LogStartupAuthMode(cfg.MCPClientAuth.Mode, cfg.MCPClientAuth.Issuer)
+	banner.LogStartupAuthMode(cfg.MCPClientAuth.Mode, cfg.MCPClientAuth.Issuer, cfg.BindAddress())
+
+	// static mode allows a non-loopback bind without an override, but that only
+	// keeps the token safe if the transport is encrypted. Warn loudly when the
+	// shared dev token would travel plaintext on a routable interface.
+	if cfg.StaticTokenExposedCleartext() {
+		banner.LogStaticCleartextExposure(cfg.BindAddress())
+	}
 
 	// Reconfigure slog with the user-configured level. cfg.LogLevel is
 	// validated and normalized to one of debug/info/warn/error.
@@ -677,7 +684,7 @@ func main() {
 	rootHandler := buildRootHandler(mux)
 
 	// 10. Start server with graceful shutdown
-	addr := fmt.Sprintf(":%d", cfg.Port)
+	addr := cfg.BindAddress()
 	httpServer := newHTTPServer(addr, rootHandler)
 
 	done := make(chan os.Signal, 1)

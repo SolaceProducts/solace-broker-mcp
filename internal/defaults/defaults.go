@@ -12,6 +12,12 @@ import "time"
 // conflict with the Solace broker's SEMP management port (default 8080).
 const DefaultPort = 9090
 
+// DefaultLoopbackListenAddress is the host the MCP server binds to when
+// listen_address is unset and mcp_client_auth.mode is not oauth. Loopback-only
+// by default keeps the dev auth modes (disabled, static) unreachable from the
+// network without an explicit operator decision (see config.applyDefaults).
+const DefaultLoopbackListenAddress = "127.0.0.1"
+
 // DefaultShutdownTimeoutSeconds is the maximum time in seconds the MCP server
 // waits for in-flight requests to complete during graceful shutdown before
 // forcibly closing remaining connections.

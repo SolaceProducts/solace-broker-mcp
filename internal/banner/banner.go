@@ -69,7 +69,12 @@ import (
 // ServerConfig pointer so this package stays free of internal/config
 // dependencies. See SOL-149989 design spec at
 // docs/superpowers/specs/2026-05-20-client-auth-mode-design.md.
-func LogStartupAuthMode(mode, issuer string) {
+//
+// bindAddr is the effective host:port the server listens on. It is always
+// logged so operators can confirm at a glance whether the (auth-mode-dependent)
+// listener is loopback-only or network-reachable — the load-bearing fact for
+// the disabled/static dev modes, which default to loopback.
+func LogStartupAuthMode(mode, issuer, bindAddr string) {
 	switch mode {
 	case "disabled":
 		slog.Warn(disabledBanner)
@@ -78,6 +83,7 @@ func LogStartupAuthMode(mode, issuer string) {
 	case "oauth":
 		slog.Info("MCP client auth: OAuth/OIDC", slog.String("issuer", issuer))
 	}
+	slog.Info("MCP server bind address", slog.String("bind_address", bindAddr))
 }
 
 const disabledBanner = `
@@ -94,6 +100,27 @@ const staticBanner = `
   Client → MCP server auth uses a static dev token. Broker auth is unaffected.
   Development mode — NOT FOR PRODUCTION USE.
   Tool-invocation logs from this run are NOT a valid audit trail.
+============================================================`
+
+// LogStaticCleartextExposure warns that mode: static is serving its shared dev
+// token over plaintext HTTP on a non-loopback interface — the caller decides
+// when to emit it (see config.StaticTokenExposedCleartext). The token is
+// long-lived and grants broker-admin-backed access, so on a routable, unencrypted
+// listener a single packet capture is enough to replay it. This is a WARN, not a
+// hard error: static is a dev mode and the network bind was deliberate. The fix
+// is TLS (tls_cert_file/tls_key_file) or binding loopback. bindAddr is logged so
+// operators can see exactly which interface is exposed.
+func LogStaticCleartextExposure(bindAddr string) {
+	slog.Warn(staticCleartextBanner, slog.String("bind_address", bindAddr))
+}
+
+const staticCleartextBanner = `
+============================================================
+  INSECURE MODE: static dev token on a plaintext network bind
+  The shared dev token is sent unencrypted on a non-loopback
+  interface and can be captured and replayed for broker-admin-
+  backed access. Enable TLS (tls_cert_file/tls_key_file) or bind
+  a loopback address.
 ============================================================`
 
 // LogOAuthNotSupported is the OAuth-not-supported guard headline. It is
