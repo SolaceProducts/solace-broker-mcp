@@ -44,10 +44,28 @@ const attrKey = "correlation_id"
 // instead of at the root, defeating a top-level grep. To keep correlation_id at
 // the root regardless of grouping, the wrapper does NOT delegate WithAttrs and
 // WithGroup to next immediately. It records each call as a "group or attrs" (goa)
-// step in order. In Handle it adds correlation_id to the UNGROUPED root handler
-// first, then replays the recorded goa steps onto next, so the user's own attrs
-// land in their groups while correlation_id stays at the root. With no goa steps
-// (the common case) this collapses to a single delegated Add.
+// step in order. When it must inject correlation_id under groups, Handle adds
+// correlation_id to the UNGROUPED root handler first, then replays the recorded
+// goa steps onto next, so the user's own attrs land in their groups while
+// correlation_id stays at the root. With no goa steps (the common case) this
+// collapses to a single delegated Add.
+//
+// Caching. Two things are fixed for a given handler (they depend only on next
+// and goas, which never change after construction) and are computed once when
+// the handler is derived, not on every Handle:
+//   - built is next with all goas applied — the static delivery chain WITHOUT
+//     correlation_id. For the root handler (no goas) built is just next. It
+//     serves every log line that does NOT need a per-record ID injected,
+//     avoiding a per-call rebuild of the WithGroup/WithAttrs chain.
+//   - rootHasID is whether a correlation_id is already bound at the root via
+//     .With(...) before any group (the hasRootCorrelationID walk over goas),
+//     used to suppress a duplicate root injection (AC #3).
+//
+// Only the inject-under-groups path (per-record ID present, groups open) still
+// builds per record: the ID comes from THIS record's context and must be bound
+// at the root before the caller's groups are reopened, and slog handlers are
+// immutable, so that root attr cannot be pre-applied onto the cached chain
+// without nesting under a group. See Handle for that path.
 type slogHandler struct {
 	next slog.Handler
 	// goas records WithGroup/WithAttrs calls in the order they were made, so
@@ -55,6 +73,16 @@ type slogHandler struct {
 	// empty in the common case (no .With/.WithGroup on the default logger), which
 	// makes Handle take the cheap delegated path.
 	goas []goa
+	// built is next with all goas already applied: the static delivery chain
+	// WITHOUT correlation_id, computed once at construction. It is exactly next
+	// for the root handler (no goas). Handle uses it to deliver any record that
+	// does not need a per-record correlation_id injected, so the group/attr chain
+	// is not rebuilt on every call.
+	built slog.Handler
+	// rootHasID caches hasRootCorrelationID(goas): true when a correlation_id is
+	// bound at the root before any group. Computed once at construction; used to
+	// suppress a duplicate root injection.
+	rootHasID bool
 }
 
 // goa is one recorded "group or attrs" operation: exactly one of group (a
@@ -72,7 +100,30 @@ type goa struct {
 // middleware is not wired (capability off) or for startup/non-request logs, so
 // in those cases no correlation_id attribute is emitted and output is unchanged.
 func NewSlogHandler(next slog.Handler) slog.Handler {
-	return &slogHandler{next: next}
+	return newSlogHandler(next, nil)
+}
+
+// newSlogHandler constructs a slogHandler and computes the cached fields (built,
+// rootHasID) once from next and goas. Every derived handler (WithAttrs,
+// WithGroup) routes through here so the cache is always consistent with goas and
+// no cache computation happens in Handle.
+func newSlogHandler(next slog.Handler, goas []goa) *slogHandler {
+	// built is the static delivery chain WITHOUT correlation_id: next with every
+	// goa applied. For the root handler (no goas) it is exactly next.
+	built := next
+	for _, g := range goas {
+		if g.group != "" {
+			built = built.WithGroup(g.group)
+		} else {
+			built = built.WithAttrs(g.attrs)
+		}
+	}
+	return &slogHandler{
+		next:      next,
+		goas:      goas,
+		built:     built,
+		rootHasID: hasRootCorrelationID(goas),
+	}
 }
 
 // Enabled delegates to next; the wrapper does not change level filtering. Groups
@@ -91,33 +142,48 @@ func (h *slogHandler) Enabled(ctx context.Context, level slog.Level) bool {
 // (hasCorrelationID) or bound on the logger at root via .With(...) before any
 // group was opened (hasRootCorrelationID). In both cases the caller's explicit
 // correlation_id wins and is never duplicated at the root. When there is no ID
-// to add and no recorded goa steps, the record is passed through untouched, so
-// absent-ID output matches the unwrapped handler exactly.
+// to add, the record is delivered through the cached built chain untouched; with
+// no recorded goa steps built is exactly next, so absent-ID output matches the
+// unwrapped handler exactly.
 //
-// With recorded goa steps, the delivery handler is rebuilt from the ungrouped
-// root: correlation_id is bound at the root first, then the goa steps are
-// replayed (groups reopened, attrs rebound) so the record's own attributes keep
-// their grouping while correlation_id stays at the top level.
+// When correlation_id must be injected under recorded goa steps, the delivery
+// handler is rebuilt per record from the ungrouped root: correlation_id is bound
+// at the root first, then the goa steps are replayed (groups reopened, attrs
+// rebound) so the record's own attributes keep their grouping while
+// correlation_id stays at the top level. Every other case is served by the
+// cached delivery chain, which is not rebuilt per call.
 func (h *slogHandler) Handle(ctx context.Context, rec slog.Record) error {
 	id := From(ctx)
-	addID := id != "" && !h.hasCorrelationID(rec) && !h.hasRootCorrelationID()
+	// rootHasID is cached (fixed for this handler); only hasCorrelationID depends
+	// on the record and is checked per call.
+	addID := id != "" && !hasCorrelationID(rec) && !h.rootHasID
+
+	if !addID {
+		// No per-record ID to inject: deliver through the cached chain. For the
+		// root handler (no goas) built is exactly next, preserving the byte-for-byte
+		// unwrapped output for absent-ID / no-goas logs. For a grouped/attrs handler
+		// built already has all goas applied, so no chain is rebuilt here.
+		return h.built.Handle(ctx, rec)
+	}
 
 	if len(h.goas) == 0 {
-		if !addID {
-			return h.next.Handle(ctx, rec)
-		}
-		// Clone before mutating: slog may pass the same Record to more than one
-		// handler, and rec.Add appends to the Record's own attribute slice, so
-		// cloning keeps our added correlation_id local to this delivery.
+		// Fast path: no groups, so correlation_id is naturally at the root. Clone
+		// before mutating: slog may pass the same Record to more than one handler,
+		// and rec.Add appends to the Record's own attribute slice, so cloning keeps
+		// our added correlation_id local to this delivery.
 		rec = rec.Clone()
 		rec.Add(slog.String(attrKey, id))
 		return h.next.Handle(ctx, rec)
 	}
 
-	delivery := h.next
-	if addID {
-		delivery = delivery.WithAttrs([]slog.Attr{slog.String(attrKey, id)})
-	}
+	// Inject-under-groups path: this is the ONLY path that must build per record,
+	// and it cannot be precomputed. The ID comes from THIS record's context, and
+	// it must be bound at the ROOT before the caller's groups are reopened. slog
+	// handlers are immutable, so we cannot pre-apply a per-record root attr onto
+	// the cached (already-grouped) built chain without the attr nesting under a
+	// group. So bind correlation_id on the ungrouped next first, then replay the
+	// goa steps.
+	delivery := h.next.WithAttrs([]slog.Attr{slog.String(attrKey, id)})
 	for _, g := range h.goas {
 		if g.group != "" {
 			delivery = delivery.WithGroup(g.group)
@@ -133,8 +199,9 @@ func (h *slogHandler) Handle(ctx context.Context, rec slog.Record) error {
 // the record's own attributes are scanned; attributes bound earlier via
 // WithAttrs are held in goas and are not part of the per-record set, which is
 // the correct scope: a correlation_id attached to the record itself is the one a
-// caller explicitly chose to set for that line.
-func (h *slogHandler) hasCorrelationID(rec slog.Record) bool {
+// caller explicitly chose to set for that line. It takes no handler state, so it
+// is a package function called per record.
+func hasCorrelationID(rec slog.Record) bool {
 	found := false
 	rec.Attrs(func(a slog.Attr) bool {
 		if a.Key == attrKey {
@@ -159,8 +226,11 @@ func (h *slogHandler) hasCorrelationID(rec slog.Record) bool {
 // step: any correlation_id in an attr step seen before that is root-level; a
 // correlation_id only appearing in attrs after a group is nested and is ignored
 // here (still inject at root). With no goas (the common case) this returns false.
-func (h *slogHandler) hasRootCorrelationID() bool {
-	for _, g := range h.goas {
+//
+// It depends only on goas (fixed for a handler), so it is computed once at
+// construction and cached in slogHandler.rootHasID rather than run per Handle.
+func hasRootCorrelationID(goas []goa) bool {
+	for _, g := range goas {
 		if g.group != "" {
 			// First group opened: subsequent attrs nest under it, so no further
 			// step can introduce a root-level correlation_id.
@@ -185,7 +255,7 @@ func (h *slogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if len(attrs) == 0 {
 		return h
 	}
-	return &slogHandler{next: h.next, goas: appendGoa(h.goas, goa{attrs: attrs})}
+	return newSlogHandler(h.next, appendGoa(h.goas, goa{attrs: attrs}))
 }
 
 // WithGroup returns a new slogHandler that records the opened group as a goa
@@ -197,7 +267,7 @@ func (h *slogHandler) WithGroup(name string) slog.Handler {
 	if name == "" {
 		return h
 	}
-	return &slogHandler{next: h.next, goas: appendGoa(h.goas, goa{group: name})}
+	return newSlogHandler(h.next, appendGoa(h.goas, goa{group: name}))
 }
 
 // appendGoa returns a new slice with g appended, copying the existing steps so

@@ -187,7 +187,8 @@ func TestSlogHandler_InjectsRootWhenWithBoundCorrelationIDIsNested(t *testing.T)
 // AC #2: redaction is preserved because the wrapper delegates to the inner JSON
 // handler that owns ReplaceAttr. A password attr is redacted, and the
 // correlation_id added by the wrapper passes through ReplaceAttr intact (it is
-// not a credential key).
+// not a credential key). This proves correlation_id is NOT accidentally caught
+// by a realistic credential filter while credentials ARE still redacted.
 func TestSlogHandler_PreservesRedaction(t *testing.T) {
 	var buf bytes.Buffer
 	logger := newRedactingLogger(&buf)
@@ -201,6 +202,68 @@ func TestSlogHandler_PreservesRedaction(t *testing.T) {
 	}
 	if got := m["correlation_id"]; got != "abc" {
 		t.Errorf("correlation_id = %v, want %q", got, "abc")
+	}
+}
+
+// AC #2 (real coverage): the wrapper-injected correlation_id MUST flow through
+// next's ReplaceAttr. This uses a base handler whose ReplaceAttr rewrites the
+// correlation_id value to a sentinel. If the wrapper ever bypassed next for the
+// attr it injects (e.g. formatted it itself), the sentinel would not appear and
+// this fails. Unlike TestSlogHandler_PreservesRedaction — where correlation_id
+// is deliberately NOT a redacted key, so its presence proves nothing about the
+// ReplaceAttr path — this asserts the injected attr is actually transformed by
+// next's ReplaceAttr.
+func TestSlogHandler_InjectedCorrelationIDFlowsThroughReplaceAttr(t *testing.T) {
+	var buf bytes.Buffer
+	json := slog.NewJSONHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+			if a.Key == attrKey {
+				a.Value = slog.StringValue("[CID_REDACTED]")
+			}
+			return a
+		},
+	})
+	logger := slog.New(NewSlogHandler(json))
+
+	ctx := With(context.Background(), "abc")
+	logger.InfoContext(ctx, "hello")
+
+	// The raw line proves the injected attr passed through next's ReplaceAttr:
+	// the "abc" value was rewritten to the sentinel by the base handler.
+	if line := buf.String(); !strings.Contains(line, `"correlation_id":"[CID_REDACTED]"`) {
+		t.Errorf("injected correlation_id did not flow through next's ReplaceAttr: %s", line)
+	}
+}
+
+// Comment 2 regression guard for the cached no-add delivery path. A grouped
+// logger (goas present) with a correlation_id already bound at the root must be
+// delivered via the cached static chain (built) WITHOUT the wrapper injecting a
+// second root ID. This exercises addID==false with goas!=nil: if the optimized
+// path mis-cached the chain or lost the rootHasID suppression, the root ID would
+// be wrong, duplicated, or the grouped attrs misplaced.
+func TestSlogHandler_CachedDeliveryWithBoundRootIDUnderGroup(t *testing.T) {
+	var buf bytes.Buffer
+	logger := newJSONLogger(&buf).
+		With(slog.String("correlation_id", "explicit")).
+		WithGroup("g")
+
+	ctx := With(context.Background(), "from-ctx")
+	logger.InfoContext(ctx, "hello", slog.String("k", "v"))
+
+	m := parseLine(t, &buf)
+	if got := m["correlation_id"]; got != "explicit" {
+		t.Errorf("root correlation_id = %v, want %q (bound root value wins, no injection)", got, "explicit")
+	}
+	if n := strings.Count(buf.String(), `"correlation_id"`); n != 1 {
+		t.Errorf("expected exactly one correlation_id occurrence, got %d in: %s", n, buf.String())
+	}
+	g, ok := m["g"].(map[string]any)
+	if !ok {
+		t.Fatalf("group g missing or not an object: %v", m)
+	}
+	if got := g["k"]; got != "v" {
+		t.Errorf("g.k = %v, want %q (record attr nested under group via cached chain)", got, "v")
 	}
 }
 
