@@ -48,8 +48,9 @@ type CookieJarClearer interface {
 // with which mode — callers receive the interface and never branch on
 // auth mode themselves.
 //
-// jar is passed to BasicAuthenticator for 401 cookie-jar clearing;
-// nil is safe (HandleAuthFailure returns retry=false when jar is nil).
+// jar is passed to BasicAuthenticator for 401 cookie-jar clearing.
+// Must be non-nil for basic auth (returns an error otherwise); ignored
+// for other modes.
 //
 // Returns an error if cfg.Mode is not a recognized auth mode. Required
 // per-mode fields (e.g. username/password for basic) are not validated
@@ -57,6 +58,9 @@ type CookieJarClearer interface {
 func NewAuthenticator(cfg config.AuthConfig, jar CookieJarClearer) (Authenticator, error) {
 	switch cfg.Mode {
 	case config.AuthModeBasic:
+		if jar == nil {
+			return nil, fmt.Errorf("auth: basic auth requires a cookie jar for session management")
+		}
 		return NewBasicAuthenticator(cfg.Username, cfg.Password, jar), nil
 	case config.AuthModeBearer:
 		return NewBearerAuthenticator(cfg.Token), nil

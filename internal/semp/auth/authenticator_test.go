@@ -11,6 +11,12 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 )
 
+// stubJar satisfies CookieJarClearer for tests that need a non-nil jar
+// but never exercise clearing.
+type stubJar struct{}
+
+func (stubJar) Clear() error { return nil }
+
 func newReq(t *testing.T) *http.Request {
 	t.Helper()
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://example.test/SEMP", nil)
@@ -61,11 +67,13 @@ func TestNewAuthenticator_DispatchesByMode(t *testing.T) {
 	tests := []struct {
 		name string
 		cfg  config.AuthConfig
+		jar  CookieJarClearer
 		want any
 	}{
 		{
 			name: "basic",
 			cfg:  config.AuthConfig{Mode: config.AuthModeBasic, Username: "u", Password: "p"},
+			jar:  &stubJar{},
 			want: (*BasicAuthenticator)(nil),
 		},
 		{
@@ -76,7 +84,7 @@ func TestNewAuthenticator_DispatchesByMode(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a, err := NewAuthenticator(tt.cfg, nil)
+			a, err := NewAuthenticator(tt.cfg, tt.jar)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -91,6 +99,20 @@ func TestNewAuthenticator_DispatchesByMode(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestNewAuthenticator_BasicAuth_RequiresJar(t *testing.T) {
+	cfg := config.AuthConfig{Mode: config.AuthModeBasic, Username: "u", Password: "p"}
+	a, err := NewAuthenticator(cfg, nil)
+	if err == nil {
+		t.Fatal("expected error for basic auth with nil jar, got nil")
+	}
+	if a != nil {
+		t.Errorf("expected nil authenticator on error, got %T", a)
+	}
+	if !strings.Contains(err.Error(), "cookie jar") {
+		t.Errorf("error = %v, want it to mention 'cookie jar'", err)
 	}
 }
 
