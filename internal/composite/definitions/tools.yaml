@@ -406,4 +406,5 @@ tools:
           count: "100"
           select: "clientProfileDeniedDiscardedMsgCount, destinationGroupErrorDiscardedMsgCount, disabledDiscardedMsgCount, lowPriorityMsgCongestionDiscardedMsgCount, maxMsgSizeExceededDiscardedMsgCount, maxMsgSpoolUsageExceededDiscardedMsgCount, maxRedeliveryExceededDiscardedMsgCount, maxRedeliveryExceededToDmqMsgCount, maxTtlExceededDiscardedMsgCount, maxTtlExpiredDiscardedMsgCount, maxTtlExpiredToDmqMsgCount, maxTtlExpiredToDmqFailedMsgCount, msgVpnName, noLocalDeliveryDiscardedMsgCount, queueName, xaTransactionNotSupportedDiscardedMsgCount"
     result:
-      strategy: collect
+      strategy: postProcess
+      postProcess: listQueueDiscards
