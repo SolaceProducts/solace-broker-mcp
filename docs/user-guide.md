@@ -4,7 +4,7 @@ The Solace Event Broker MCP Server is an [MCP (Model Context Protocol)](https://
 
 Application scenarios:
 
-- **Incident triage** — Query event broker status, queue backlogs, and slow consumers using natural language queries instead of direct SEMP API calls.
+- **Incident triage** — Query event broker status, queue activity, and slow consumers using natural language queries instead of direct SEMP API calls.
 - **Operational monitoring** — Monitor VPN health, client connections, and message rates across multiple brokers through a conversational interface.
 - **Multi-broker management** — Configure multiple event broker connections and address them by alias in queries.
 
@@ -124,8 +124,8 @@ The server exposes 17 read-only tools plus 4 action tools (21 total when action 
 
 | Tool | Description |
 |---|---|
-| `list-queues` | List queues in a VPN with depth, bind count, and throughput rates. Default 100 results, max 500. |
-| `get-queue-metrics` | Detailed metrics for a specific queue: message depth, throughput rates, spool usage, and configuration. Use to diagnose backlogs. |
+| `list-queues` | List queues in a VPN with cumulative spooled count (`spooledMsgCount`, lifetime — not live depth), bind count, and throughput rates. Default 100 results, max 500. |
+| `get-queue-metrics` | Detailed metrics for a specific queue: cumulative spooled count (`spooledMsgCount`, lifetime — not live depth), throughput rates, spool usage, and configuration. SEMPv2 does not expose live queue depth as a scalar. |
 
 ### Clients
 
