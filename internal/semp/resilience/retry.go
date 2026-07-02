@@ -63,7 +63,7 @@ func getRetryState(ctx context.Context) *retryState {
 
 // checkRetry is the custom retry policy for retryablehttp. It implements:
 //   - POST and PATCH: never retried (non-idempotent — see guard below)
-//   - 401: delegate to AuthFailureHandler (the Authenticator) — retry once if it says so
+//   - 401: delegate to Authenticator.HandleAuthFailure — retry once if it recovers
 //   - 429, 503: full retries with exponential backoff
 //   - Other 5xx: retry once only (likely a bug, not transient)
 //   - Connection errors: delegate to retryablehttp's default policy

@@ -26,10 +26,8 @@ type BrokerClient struct {
 	sempV1Client *sempv1.HTTPClient // SEMPv1 protocol client (concrete for Close)
 	sempV2Client *sempv2.HTTPClient // SEMPv2 protocol client (concrete for Close)
 	// authenticator is the single Authenticator built for a broker. Both
-	// protocol clients already hold this pointer directly; no method on
-	// BrokerClient reads it today. Retained as pre-staging for the Sender
-	// 401-handling migration, which needs per-broker Authenticator access via
-	// a BrokerClient accessor.
+	// protocol clients already hold this pointer via their Sender. Retained
+	// here for future accessors (e.g. health checks, token introspection).
 	authenticator auth.Authenticator
 	alias         string // broker alias (for error messages)
 }
