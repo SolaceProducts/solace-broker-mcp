@@ -229,6 +229,9 @@ func TestObservability_NumericDefaults(t *testing.T) {
 	if o.OTelSelfStatsIntervalS != defaults.DefaultOTelSelfStatsIntervalS {
 		t.Errorf("OTelSelfStatsIntervalS = %d, want %d", o.OTelSelfStatsIntervalS, defaults.DefaultOTelSelfStatsIntervalS)
 	}
+	if o.ShutdownDrainDelayS != defaults.DefaultShutdownDrainDelayS {
+		t.Errorf("ShutdownDrainDelayS = %d, want %d", o.ShutdownDrainDelayS, defaults.DefaultShutdownDrainDelayS)
+	}
 }
 
 // TestObservability_NumericFromYAML proves the numeric tunables parse from the
@@ -243,6 +246,7 @@ observability:
   saturation_threshold_ms: 25
   progress_signal_threshold_ms: 8000
   otel_self_stats_interval_s: ${OTEL_INTERVAL}
+  shutdown_drain_delay_s: 7
 `
 	cfg, err := LoadConfig(writeTemp(t, yamlBody))
 	if err != nil {
@@ -259,6 +263,9 @@ observability:
 	if o.OTelSelfStatsIntervalS != 120 {
 		t.Errorf("OTelSelfStatsIntervalS = %d, want 120 (from ${OTEL_INTERVAL})", o.OTelSelfStatsIntervalS)
 	}
+	if o.ShutdownDrainDelayS != 7 {
+		t.Errorf("ShutdownDrainDelayS = %d, want 7", o.ShutdownDrainDelayS)
+	}
 }
 
 // TestObservability_NonPositiveNumericsAreReDefaulted proves a stray
@@ -271,6 +278,7 @@ observability:
   saturation_threshold_ms: -1
   progress_signal_threshold_ms: 0
   otel_self_stats_interval_s: -42
+  shutdown_drain_delay_s: -3
 `
 	cfg, err := LoadConfig(writeTemp(t, yamlBody))
 	if err != nil {
@@ -286,5 +294,8 @@ observability:
 	}
 	if o.OTelSelfStatsIntervalS != defaults.DefaultOTelSelfStatsIntervalS {
 		t.Errorf("OTelSelfStatsIntervalS = %d, want default %d (negative re-defaulted)", o.OTelSelfStatsIntervalS, defaults.DefaultOTelSelfStatsIntervalS)
+	}
+	if o.ShutdownDrainDelayS != defaults.DefaultShutdownDrainDelayS {
+		t.Errorf("ShutdownDrainDelayS = %d, want default %d (negative re-defaulted)", o.ShutdownDrainDelayS, defaults.DefaultShutdownDrainDelayS)
 	}
 }
