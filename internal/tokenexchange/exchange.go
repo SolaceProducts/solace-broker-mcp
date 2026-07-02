@@ -37,10 +37,10 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	})
 	elapsed := e.nowFunc().Sub(start)
 
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
 		e.logExchangeError(err, input, elapsed)
 		return nil, err
 	}
