@@ -375,9 +375,21 @@ tools:
           msgVpnName: "{{.Params.msgVpnName}}"
           count: "100"
           where: "slowSubscriber==true"
-          select: "clientAddress, clientName, clientUsername, msgVpnName, platform, rxMsgRate, slowSubscriber, txDiscardedMsgCount, txMsgRate, uptime"
+        select:
+          - clientAddress
+          - clientName
+          - clientProfileName
+          - clientUsername
+          - msgVpnName
+          - platform
+          - rxMsgRate
+          - slowSubscriber
+          - txDiscardedMsgCount
+          - txMsgRate
+          - uptime
     result:
-      strategy: collect
+      strategy: postProcess
+      postProcess: listSlowSubscribers
 
   - name: list-queue-discards
     description: >
