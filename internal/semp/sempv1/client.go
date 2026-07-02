@@ -59,12 +59,15 @@ func (c *HTTPClient) Close() {
 }
 
 // NewHTTPClient creates an HTTPClient configured for a specific broker. It
-// sets up a per-broker HTTP transport with TLS settings and a cookie jar, and
-// delegates retry and rate limiting to a shared resilience.Sender. No network
-// I/O happens here — connection setup is lazy on the first Execute call.
+// sets up a per-broker HTTP transport with TLS settings and delegates retry
+// and rate limiting to a shared resilience.Sender. No network I/O happens
+// here — connection setup is lazy on the first Execute call.
 //
 // authn is the per-broker Authenticator (built once by semp.NewBrokerClient
 // and shared with the SEMPv2 client by pointer). It must be non-nil.
+//
+// jar is the per-broker cookie jar for session cookie management. Pass nil
+// for auth modes that don't use session cookies (bearer, OAuth).
 //
 // sem is the broker's shared in-flight semaphore and must be non-nil
 // (resilience.New panics otherwise); see semp.NewBrokerClient, which shares
@@ -73,9 +76,6 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, s
 	if authn == nil {
 		panic("sempv1.NewHTTPClient: nil authenticator")
 	}
-	if jar == nil {
-		panic("sempv1.NewHTTPClient: nil cookie jar")
-	}
 	transport := resilience.NewTunedTransport(brokerCfg, sempCfg)
 	if brokerCfg.InsecureSkipVerify {
 		slog.Warn("INSECURE: TLS verification disabled for broker",
@@ -83,9 +83,11 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, s
 	}
 
 	httpClient := &http.Client{
-		Jar:       jar,
 		Timeout:   sempCfg.RequestTimeoutDuration,
 		Transport: transport,
+	}
+	if jar != nil {
+		httpClient.Jar = jar
 	}
 
 	baseURL := strings.TrimSuffix(brokerCfg.URL, "/")

@@ -43,9 +43,15 @@ type BrokerClient struct {
 // same pointer to both protocol clients. Layers below this one never call
 // auth.NewAuthenticator.
 func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (*BrokerClient, error) {
-	jar, err := resilience.NewSafeCookieJar()
-	if err != nil {
-		return nil, fmt.Errorf("creating cookie jar for broker %q: %w", alias, err)
+	// Only basic auth uses session cookies; other modes send credentials
+	// on every request and the broker never sets Set-Cookie headers.
+	var jar *resilience.SafeCookieJar
+	if brokerCfg.Auth.Mode == config.AuthModeBasic {
+		var err error
+		jar, err = resilience.NewSafeCookieJar()
+		if err != nil {
+			return nil, fmt.Errorf("creating cookie jar for broker %q: %w", alias, err)
+		}
 	}
 	authn, err := auth.NewAuthenticator(brokerCfg.Auth, jar)
 	if err != nil {

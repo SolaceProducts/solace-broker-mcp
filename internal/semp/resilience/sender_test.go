@@ -39,8 +39,9 @@ func bearerAuth(t *testing.T) auth.Authenticator {
 	return auth.NewBearerAuthenticator("static-token")
 }
 
-// newTestSender creates a Sender configured for testing with the given Authenticator and retry count.
-// The jar is set on httpClient.Jar so cookies flow through http.Client.Do.
+// newTestSender creates a Sender configured for testing with the given
+// Authenticator and retry count. No cookie jar is set — use newTestSenderBasic
+// for tests that need jar-sharing between auth and HTTP client.
 func newTestSender(t *testing.T, httpClient *http.Client, authn auth.Authenticator, retries int) *Sender {
 	t.Helper()
 	minInterval := time.Duration(0)
@@ -50,8 +51,6 @@ func newTestSender(t *testing.T, httpClient *http.Client, authn auth.Authenticat
 		RetryMinInterval:   1 * time.Millisecond,
 		RetryMaxInterval:   10 * time.Millisecond,
 	}
-	jar := mustNewSafeCookieJar(t)
-	httpClient.Jar = jar
 	return New(httpClient, sempCfg, authn, "http://test-broker", NewSemaphore(10))
 }
 

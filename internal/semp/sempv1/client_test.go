@@ -20,8 +20,9 @@ import (
 )
 
 // newTestClientWith returns an HTTPClient pointed at srv using the supplied
-// Authenticator. The caller is responsible for srv.Close().
-func newTestClientWith(t *testing.T, srv *httptest.Server, authn auth.Authenticator) *HTTPClient {
+// Authenticator and optional cookie jar. Pass nil for jar when the auth mode
+// doesn't use session cookies (bearer, OAuth).
+func newTestClientWith(t *testing.T, srv *httptest.Server, authn auth.Authenticator, jar *resilience.SafeCookieJar) *HTTPClient {
 	t.Helper()
 
 	brokerCfg := &config.BrokerConfig{
@@ -38,10 +39,6 @@ func newTestClientWith(t *testing.T, srv *httptest.Server, authn auth.Authentica
 		RetryMaxInterval:       10 * time.Millisecond,
 	}
 
-	jar, err := resilience.NewSafeCookieJar()
-	if err != nil {
-		t.Fatalf("NewSafeCookieJar: %v", err)
-	}
 	client, err := NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), authn, jar)
 	if err != nil {
 		t.Fatalf("NewHTTPClient failed: %v", err)
@@ -49,12 +46,15 @@ func newTestClientWith(t *testing.T, srv *httptest.Server, authn auth.Authentica
 	return client
 }
 
-// newTestClient is a convenience wrapper that uses basic auth with canonical
-// "user"/"pass" credentials. Tests that care about auth should use
-// newTestClientWith directly and supply their own Authenticator.
+// newTestClient is a convenience wrapper that uses basic auth with a shared
+// cookie jar, matching production wiring.
 func newTestClient(t *testing.T, srv *httptest.Server) *HTTPClient {
 	t.Helper()
-	return newTestClientWith(t, srv, auth.NewBasicAuthenticator("user", "pass", nil))
+	jar, err := resilience.NewSafeCookieJar()
+	if err != nil {
+		t.Fatalf("NewSafeCookieJar: %v", err)
+	}
+	return newTestClientWith(t, srv, auth.NewBasicAuthenticator("user", "pass", jar), jar)
 }
 
 const successEnvelope = `<rpc-reply><rpc><show><version/></show></rpc><execute-result code="ok"/></rpc-reply>`
@@ -102,7 +102,11 @@ func TestExecute_RequestConstruction(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		client := newTestClientWith(t, srv, auth.NewBasicAuthenticator("user", "pass", nil))
+		jar, jarErr := resilience.NewSafeCookieJar()
+		if jarErr != nil {
+			t.Fatalf("NewSafeCookieJar: %v", jarErr)
+		}
+		client := newTestClientWith(t, srv, auth.NewBasicAuthenticator("user", "pass", jar), jar)
 
 		_, err := client.Execute(context.Background(), `<rpc><show/></rpc>`)
 		if err != nil {
@@ -123,7 +127,7 @@ func TestExecute_RequestConstruction(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		client := newTestClientWith(t, srv, auth.NewBearerAuthenticator("abc123"))
+		client := newTestClientWith(t, srv, auth.NewBearerAuthenticator("abc123"), nil)
 
 		_, err := client.Execute(context.Background(), `<rpc><show/></rpc>`)
 		if err != nil {
@@ -445,6 +449,7 @@ func TestHTTPClient_LogValue_ExcludesCredentials(t *testing.T) {
 	cases := []struct {
 		name    string
 		authn   auth.Authenticator
+		jar     *resilience.SafeCookieJar
 		secrets []string
 	}{
 		{
@@ -461,7 +466,7 @@ func TestHTTPClient_LogValue_ExcludesCredentials(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			client := newTestClientWith(t, srv, tc.authn)
+			client := newTestClientWith(t, srv, tc.authn, tc.jar)
 
 			var buf bytes.Buffer
 			old := slog.Default()

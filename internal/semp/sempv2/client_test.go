@@ -768,11 +768,7 @@ func TestClient_Execute_BearerAuth(t *testing.T) {
 		RetryMinInterval:       1 * time.Millisecond,
 		RetryMaxInterval:       10 * time.Millisecond,
 	}
-	jar, jarErr := resilience.NewSafeCookieJar()
-	if jarErr != nil {
-		t.Fatalf("NewSafeCookieJar: %v", jarErr)
-	}
-	bearerClient, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBearerAuthenticator("my-test-token"), jar)
+	bearerClient, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBearerAuthenticator("my-test-token"), nil)
 	if err != nil {
 		t.Fatalf("NewHTTPClient() error: %v", err)
 	}

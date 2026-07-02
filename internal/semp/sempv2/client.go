@@ -89,15 +89,15 @@ func (c *HTTPClient) Close() {
 // authn is the per-broker Authenticator (built once by semp.NewBrokerClient
 // and shared with the SEMPv1 client by pointer). It must be non-nil.
 //
+// jar is the per-broker cookie jar for session cookie management. Pass nil
+// for auth modes that don't use session cookies (bearer, OAuth).
+//
 // sem is the broker's shared in-flight semaphore and must be non-nil
 // (resilience.New panics otherwise); see semp.NewBrokerClient, which shares
 // one semaphore across both protocol clients of a broker.
 func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, sem resilience.Semaphore, authn auth.Authenticator, jar *resilience.SafeCookieJar) (*HTTPClient, error) {
 	if authn == nil {
 		panic("sempv2.NewHTTPClient: nil authenticator")
-	}
-	if jar == nil {
-		panic("sempv2.NewHTTPClient: nil cookie jar")
 	}
 	transport := resilience.NewTunedTransport(brokerCfg, sempCfg)
 
@@ -107,9 +107,11 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, s
 	}
 
 	httpClient := &http.Client{
-		Jar:       jar,
 		Timeout:   sempCfg.RequestTimeoutDuration,
 		Transport: transport,
+	}
+	if jar != nil {
+		httpClient.Jar = jar
 	}
 
 	baseURL := strings.TrimSuffix(brokerCfg.URL, "/")
