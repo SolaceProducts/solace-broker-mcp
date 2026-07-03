@@ -85,10 +85,12 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 | Clients | `list-clients`, `get-client-details`, `list-client-subscriptions`, `list-slow-subscribers` | List connections, inspect per-client rates and discards, list subscriptions, filter for slow-subscriber-flagged clients |
 | REST Delivery Points | `list-rdps`, `get-rdp-status` | List RDPs; inspect bindings, REST consumers, and last failure reason |
 | Discards | `get-discard-stats`, `list-queue-discards` | Broker-wide and per-VPN discard aggregates; per-queue discard counters |
-| Actions | `delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats` | One tool per operational action. Destructive tools (`delete-queue-messages`, `disconnect-client`) are annotated `destructiveHint` and instruct the LLM to obtain user confirmation before invocation; the `clear-*-stats` tools are non-destructive. |
-| Management | `create-message-vpn`, `update-message-vpn`, `delete-message-vpn`, `create-queue`, `update-queue`, `delete-queue`, `create-topic-endpoint`, `update-topic-endpoint`, `delete-topic-endpoint` | Create, update, and delete Config-API objects (Message VPNs, queues, topic endpoints). `delete-*` and the service-affecting `update-*` tools are annotated `destructiveHint` and instruct the LLM to obtain user confirmation before invocation; `create-*` is additive and not annotated. |
+| Actions | `delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats` | One tool per operational action. Destructive tools (`delete-queue-messages`, `disconnect-client`) are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; the `clear-*-stats` tools are non-destructive. |
+| Management | `create-message-vpn`, `update-message-vpn`, `delete-message-vpn`, `create-queue`, `update-queue`, `delete-queue`, `create-topic-endpoint`, `update-topic-endpoint`, `delete-topic-endpoint` | Create, update, and delete Config-API objects (Message VPNs, queues, topic endpoints). `delete-*` and the service-affecting `update-*` tools are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; `create-*` is additive and not annotated. |
 
 **The action and management tools are write tools, gated behind `enable_write_tools: true` in the config — default off; not registered in `tools/list` when disabled.** That's 13 write tools in total, on top of the 17 read-only tools.
+
+> **Confirmation is not enforced.** `enable_write_tools` is the only enforced control. `destructiveHint` and the confirmation text in tool descriptions are hints, not enforced by the MCP protocol — whether the user is actually prompted depends on the client and the model.
 
 ## Guides
 

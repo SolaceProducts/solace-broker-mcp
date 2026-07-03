@@ -158,6 +158,8 @@ These tools modify broker state via the SEMPv2 action API. There is **one tool p
 
 **Disabled by default.** These four action tools — together with the nine Config-API management tools below — are write tools (they change broker state) and are gated behind the server-level `enable_write_tools` flag. With the default (`false`) they are not registered with the MCP server and do not appear in `tools/list` — clients see only the read-only tool set. Set `enable_write_tools: true` in the YAML config to expose them. This is independent of `mcp_client_auth.mode`: an authenticated client still cannot invoke these tools when the flag is off, because the server never registers them.
 
+`enable_write_tools` is the only enforced control. `destructiveHint` and the confirmation text in tool descriptions are hints, not enforced by the MCP protocol — whether the user is actually prompted depends on the client and the model.
+
 | Tool | Destructive | Description |
 |---|---|---|
 | `delete-queue-messages` | **Yes** | Permanently delete all spooled messages from a queue. Irreversible — deleted messages cannot be recovered. Requires user confirmation before invocation. Use after confirmed intent to drain a queue (e.g. clearing a dead-letter backlog). |
