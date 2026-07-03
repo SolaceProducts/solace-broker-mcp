@@ -26,10 +26,8 @@ type BrokerClient struct {
 	sempV1Client *sempv1.HTTPClient // SEMPv1 protocol client (concrete for Close)
 	sempV2Client *sempv2.HTTPClient // SEMPv2 protocol client (concrete for Close)
 	// authenticator is the single Authenticator built for a broker. Both
-	// protocol clients already hold this pointer directly; no method on
-	// BrokerClient reads it today. Retained as pre-staging for the Sender
-	// 401-handling migration, which needs per-broker Authenticator access via
-	// a BrokerClient accessor.
+	// protocol clients already hold this pointer via their Sender. Retained
+	// here for future accessors (e.g. health checks, token introspection).
 	authenticator auth.Authenticator
 	alias         string // broker alias (for error messages)
 }
@@ -45,16 +43,26 @@ type BrokerClient struct {
 // same pointer to both protocol clients. Layers below this one never call
 // auth.NewAuthenticator.
 func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (*BrokerClient, error) {
-	authn, err := auth.NewAuthenticator(brokerCfg.Auth)
+	// Only basic auth uses session cookies; other modes send credentials
+	// on every request and the broker never sets Set-Cookie headers.
+	var jar *resilience.SafeCookieJar
+	if brokerCfg.Auth.Mode == config.AuthModeBasic {
+		var err error
+		jar, err = resilience.NewSafeCookieJar()
+		if err != nil {
+			return nil, fmt.Errorf("creating cookie jar for broker %q: %w", alias, err)
+		}
+	}
+	authn, err := auth.NewAuthenticator(brokerCfg.Auth, jar)
 	if err != nil {
 		return nil, fmt.Errorf("creating authenticator for broker %q: %w", alias, err)
 	}
 	sem := resilience.NewSemaphore(sempCfg.MaxConcurrentPerBroker)
-	sempV1Client, err := sempv1.NewHTTPClient(brokerCfg, sempCfg, sem, authn)
+	sempV1Client, err := sempv1.NewHTTPClient(brokerCfg, sempCfg, sem, authn, jar)
 	if err != nil {
 		return nil, fmt.Errorf("creating SEMPv1 client for broker %q: %w", alias, err)
 	}
-	sempV2Client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, sem, authn)
+	sempV2Client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, sem, authn, jar)
 	if err != nil {
 		return nil, fmt.Errorf("creating SEMPv2 client for broker %q: %w", alias, err)
 	}
