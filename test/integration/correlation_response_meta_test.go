@@ -52,7 +52,7 @@ func metaTestPool(t *testing.T) *semp.BrokerPool {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	pool := semp.NewBrokerPool(cfg)
+	pool := semp.NewBrokerPool(cfg, nil)
 	t.Cleanup(pool.Close)
 	return pool
 }

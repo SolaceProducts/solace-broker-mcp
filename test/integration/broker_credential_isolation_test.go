@@ -83,7 +83,7 @@ func TestCredentialsAreIsolatedPerBroker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	pool := semp.NewBrokerPool(cfg)
+	pool := semp.NewBrokerPool(cfg, nil)
 	defer pool.Close()
 
 	// Schedule wantRequests calls per broker, then interleave so brokers are
