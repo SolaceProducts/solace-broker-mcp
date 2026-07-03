@@ -540,6 +540,19 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 		}
 	}
 
+	// Reject any field the operation's body schema doesn't declare. This catches
+	// a tool-only param (e.g. a dryRun flag) that would otherwise be spread into
+	// the body and rejected by the broker with an opaque "unknown attribute" 400.
+	// op.BodyFields is nil when the schema couldn't be introspected, in which
+	// case we skip the check and defer to the broker as before.
+	if op.BodyFields != nil {
+		for field := range body {
+			if !op.BodyFields[field] {
+				return nil, fmt.Errorf("request body field %q is not a known attribute of operation %q; tool-only params must be declared as path/query/header params, not spread into the body", field, op.ID)
+			}
+		}
+	}
+
 	args["body"] = body
 	return args, nil
 }

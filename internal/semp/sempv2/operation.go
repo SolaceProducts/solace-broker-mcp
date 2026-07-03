@@ -15,11 +15,13 @@ import (
 // It holds the HTTP method, path template with parameter placeholders, and the
 // parameter definitions needed to construct a valid request.
 type Operation struct {
-	ID          string      // operationId from OpenAPI spec (e.g., "getMsgVpnQueue")
-	Method      string      // HTTP method (GET, POST, PUT, PATCH, DELETE)
-	Path        string      // path template including basePath (e.g., "/SEMP/v2/monitor/msgVpns/{msgVpnName}/queues/{queueName}")
-	Parameters  []Parameter // path, query, and body parameters
-	Description string      // human-readable description from the spec
+	ID          string         // operationId from OpenAPI spec (e.g., "getMsgVpnQueue")
+	Method      string         // HTTP method (GET, POST, PUT, PATCH, DELETE)
+	Path        string         // path template including basePath (e.g., "/SEMP/v2/monitor/msgVpns/{msgVpnName}/queues/{queueName}")
+	Parameters  []Parameter    // path, query, and body parameters
+	Description string         // human-readable description from the spec
+	BodyFields map[string]bool // BodyFields is the set of attribute names the operation's request body accepts, resolved from the body parameter's
+	                           // schema. It is nil when the operation has no body or its schema couldn't be resolved to a concrete property set.
 }
 
 // Parameter describes a single parameter for a SEMPv2 operation.
@@ -110,6 +112,7 @@ func ParseSpecs(fsys fs.FS) (map[string]*Operation, error) {
 					Path:        spec.BasePath + path,
 					Parameters:  params,
 					Description: description,
+					BodyFields:  extractBodyFields(opDef, spec.Parameters, spec.Definitions),
 				}
 			}
 		}
@@ -175,4 +178,50 @@ func extractParameters(opDef *openapi2.Operation, sharedParams map[string]*opena
 	}
 
 	return params
+}
+
+// extractBodyFields returns the set of attribute names an operation's request
+// body accepts, resolved from its body parameter's schema. It returns nil when
+// the operation has no body parameter or the schema can't be resolved to a
+// concrete property set; callers treat nil as "unknown" and skip body
+// validation, so an operation we can't introspect keeps working rather than
+// having every field rejected. SEMP config definitions are flat objects (no
+// allOf composition), so the schema's top-level properties are the full set.
+func extractBodyFields(opDef *openapi2.Operation, sharedParams map[string]*openapi2.Parameter, definitions map[string]*openapi2.SchemaRef) map[string]bool {
+	// Find the body parameter's schema, resolving a shared-parameter $ref first.
+	var bodySchema *openapi2.SchemaRef
+	for _, param := range opDef.Parameters {
+		if param.Ref != "" && param.Name == "" {
+			shared, ok := sharedParams[strings.TrimPrefix(param.Ref, "#/parameters/")]
+			if !ok {
+				continue
+			}
+			param = shared
+		}
+		if param.In == "body" {
+			bodySchema = param.Schema
+			break
+		}
+	}
+	if bodySchema == nil {
+		return nil
+	}
+
+	// The schema is a local $ref to a definition (e.g. "#/definitions/MsgVpn").
+	if bodySchema.Ref != "" {
+		def, ok := definitions[strings.TrimPrefix(bodySchema.Ref, "#/definitions/")]
+		if !ok {
+			return nil
+		}
+		bodySchema = def
+	}
+	if bodySchema.Value == nil || len(bodySchema.Value.Properties) == 0 {
+		return nil
+	}
+
+	fields := make(map[string]bool, len(bodySchema.Value.Properties))
+	for name := range bodySchema.Value.Properties {
+		fields[name] = true
+	}
+	return fields
 }

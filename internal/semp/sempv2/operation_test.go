@@ -66,6 +66,36 @@ func TestParseSpecs_OperationFields(t *testing.T) {
 	}
 }
 
+func TestParseSpecs_BodyFields(t *testing.T) {
+	ops, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatalf("ParseSpecs() error: %v", err)
+	}
+
+	// A config write op resolves its body schema to a concrete field set.
+	create, ok := ops["config/createMsgVpn"]
+	if !ok {
+		t.Fatal("expected operation config/createMsgVpn not found")
+	}
+	if create.BodyFields == nil {
+		t.Fatal("config/createMsgVpn.BodyFields should be populated from the MsgVpn schema")
+	}
+	for _, field := range []string{"msgVpnName", "enabled", "maxConnectionCount"} {
+		if !create.BodyFields[field] {
+			t.Errorf("config/createMsgVpn.BodyFields missing expected field %q", field)
+		}
+	}
+
+	// A GET op has no request body, so BodyFields is nil (validation skipped).
+	get, ok := ops["monitor/getMsgVpnQueue"]
+	if !ok {
+		t.Fatal("expected operation monitor/getMsgVpnQueue not found")
+	}
+	if get.BodyFields != nil {
+		t.Errorf("monitor/getMsgVpnQueue.BodyFields = %v, want nil for a bodyless op", get.BodyFields)
+	}
+}
+
 func TestParseSpecs_RefParametersResolved(t *testing.T) {
 	ops, err := sempv2.ParseSpecs(specs.FS)
 	if err != nil {

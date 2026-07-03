@@ -2287,6 +2287,46 @@ func TestExecute_UpdateMessageVPN_RejectsPathParamInConfig(t *testing.T) {
 	}
 }
 
+func TestExecute_UpdateMessageVPN_RejectsUnknownBodyField(t *testing.T) {
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	// updateMsgVpn whose body schema declares only these attributes. A field the
+	// schema doesn't know about must be rejected here rather than sent on and bounced
+	// by the broker as an unknown attribute.
+	ops := map[string]*sempv2.Operation{
+		"config/updateMsgVpn": {
+			ID:     "updateMsgVpn",
+			Method: "PATCH",
+			Path:   "/SEMP/v2/__private_config__/msgVpns/{msgVpnName}",
+			Parameters: []sempv2.Parameter{
+				{Name: "msgVpnName", In: "path", Type: "string", Required: true},
+				{Name: "body", In: "body", Type: "object", Required: true},
+			},
+			BodyFields: map[string]bool{"msgVpnName": true, "enabled": true},
+		},
+	}
+	executor := NewCompositeExecutor(ops)
+
+	_, err := executor.Execute(context.Background(), updateMessageVPNTool(), capture, map[string]any{
+		"msgVpnName": "prod-vpn",
+		"msgVpnConfig": map[string]any{
+			"enabled": false,
+			"dryRun":  true,
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown body field, got nil")
+	}
+	if !strings.Contains(err.Error(), "dryRun") {
+		t.Errorf("error should name the unknown field, got: %v", err)
+	}
+	if len(recorded) != 0 {
+		t.Errorf("expected no SEMP calls on rejected body, got %d", len(recorded))
+	}
+}
+
 func TestExecute_CreateMessageVPN_AlreadyExists(t *testing.T) {
 	client := newMockClient()
 	client.errors["createMsgVpn"] = &sempv2.SEMPError{
