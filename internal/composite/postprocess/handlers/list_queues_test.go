@@ -19,24 +19,26 @@ import (
 	"testing"
 )
 
-// queue is a tiny helper to build a queue item with the five required fields.
-func queue(bindCount, spooled, usage, maxUsage float64, state string) map[string]any {
+// queue is a tiny helper to build a queue item with the four required fields.
+// usageBytes is msgSpoolUsage in bytes; maxUsageMB is maxMsgSpoolUsage in
+// megabytes — the same unit split the broker uses, so tests exercise the
+// MB→bytes conversion in the near-full computation rather than papering over it.
+func queue(bindCount, usageBytes, maxUsageMB float64, state string) map[string]any {
 	return map[string]any{
 		"bindCount":                     bindCount,
-		"spooledMsgCount":               spooled,
-		"msgSpoolUsage":                 usage,
-		"maxMsgSpoolUsage":              maxUsage,
+		"msgSpoolUsage":                 usageBytes,
+		"maxMsgSpoolUsage":              maxUsageMB,
 		"lowPriorityMsgCongestionState": state,
 	}
 }
 
 func TestListQueues_Counts(t *testing.T) {
 	items := []any{
-		queue(0, 0, 0, 100, "not-congested"),     // noConsumer
-		queue(0, 50, 80, 100, "congested"), // noConsumer + congested + backlogged + nearFull (0.8)
-		queue(2, 10, 99, 100, "not-congested"),   // backlogged + nearFull (0.99)
-		queue(2, 0, 50, 100, "not-congested"),    // nothing
-		queue(1, 5, 0, 0, "not-congested"),       // backlogged only (unbounded — skip nearFull)
+		queue(0, 0, 100, "not-congested"),             // noConsumer
+		queue(0, 90*bytesPerMB, 100, "congested"),     // noConsumer + congested + nearFull (0.90)
+		queue(2, 99*bytesPerMB, 100, "not-congested"), // nearFull (0.99)
+		queue(2, 50*bytesPerMB, 100, "not-congested"), // nothing (0.50)
+		queue(1, 0, 0, "not-congested"),               // unbounded — skip nearFull
 	}
 	got, err := ListQueues(map[string]map[string]any{
 		"queues": {"data": items},
@@ -47,13 +49,35 @@ func TestListQueues_Counts(t *testing.T) {
 	checks := map[string]int{
 		"noConsumerCount": 2,
 		"congestedCount":  1,
-		"backloggedCount": 3,
 		"nearFullCount":   2,
 	}
 	for k, want := range checks {
 		if got[k] != want {
 			t.Errorf("%s: got %v, want %d", k, got[k], want)
 		}
+	}
+	// backloggedCount was removed (it counted queues with cumulative
+	// spooledMsgCount > 0, which is not a live backlog — SOL-150260).
+	if _, present := got["backloggedCount"]; present {
+		t.Errorf("backloggedCount should no longer be emitted, got %v", got["backloggedCount"])
+	}
+}
+
+// TestListQueues_NearFullUnits is the regression guard for the bytes-vs-MB unit
+// bug (SOL-150260). msgSpoolUsage is bytes; maxMsgSpoolUsage is MB. A queue
+// using 0.8 MB (838860 bytes) of a 100 MB quota is at 0.8% — NOT near full. The
+// pre-fix code compared 838860 / 100 = 8388 >= 0.8 and wrongly counted it.
+func TestListQueues_NearFullUnits(t *testing.T) {
+	items := []any{
+		queue(1, 0.8*bytesPerMB, 100, "not-congested"), // 0.8% full — not near full
+		queue(1, 80*bytesPerMB, 100, "not-congested"),  // 80% full — near full
+	}
+	got, err := ListQueues(map[string]map[string]any{"queues": {"data": items}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["nearFullCount"] != 1 {
+		t.Errorf("nearFullCount: got %v, want 1 (only the 80%% queue is near full)", got["nearFullCount"])
 	}
 }
 
@@ -64,8 +88,8 @@ func TestListQueues_Counts(t *testing.T) {
 // treat the counts as global rather than over the visible page.
 func TestListQueues_TruncationSurfaced(t *testing.T) {
 	items := []any{
-		queue(0, 0, 0, 100, "not-congested"),
-		queue(2, 10, 50, 100, "not-congested"),
+		queue(0, 0, 100, "not-congested"),
+		queue(2, 50*bytesPerMB, 100, "not-congested"),
 	}
 	t.Run("truncated", func(t *testing.T) {
 		got, err := ListQueues(map[string]map[string]any{
@@ -104,7 +128,7 @@ func TestListQueues_Empty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{"noConsumerCount", "congestedCount", "backloggedCount", "nearFullCount"} {
+	for _, k := range []string{"noConsumerCount", "congestedCount", "nearFullCount"} {
 		if got[k] != 0 {
 			t.Errorf("%s: got %v, want 0", k, got[k])
 		}
@@ -149,7 +173,7 @@ func TestListQueues_Errors(t *testing.T) {
 // wrong reason. Hard-failing on one bad row would drop the raw list too —
 // a step down from the collect strategy.
 func TestListQueues_MissingField(t *testing.T) {
-	full := queue(0, 0, 0, 100, "not-congested")
+	full := queue(0, 0, 100, "not-congested")
 	// Sanity: full input must succeed, otherwise the omission cases prove nothing.
 	if _, err := ListQueues(map[string]map[string]any{"queues": {"data": []any{full}}}); err != nil {
 		t.Fatalf("baseline full input should pass, got %v", err)
@@ -165,7 +189,7 @@ func TestListQueues_MissingField(t *testing.T) {
 			// Pair the broken row with a healthy one so we can also assert the
 			// healthy row's signal still lands (the broken row in the baseline
 			// is a noConsumer, so use a row that ISN'T to disambiguate).
-			healthy := queue(2, 10, 99, 100, "congested") // congested + backlogged + nearFull
+			healthy := queue(2, 90*bytesPerMB, 100, "congested") // congested + nearFull
 			got, err := ListQueues(map[string]map[string]any{"queues": {"data": []any{item, healthy}}})
 			if err != nil {
 				t.Fatalf("expected skip on missing %q, got error %v", field, err)
@@ -177,7 +201,7 @@ func TestListQueues_MissingField(t *testing.T) {
 				t.Errorf("scanned: got %v, want 2", got["scanned"])
 			}
 			// Healthy row should still contribute.
-			for _, k := range []string{"congestedCount", "backloggedCount", "nearFullCount"} {
+			for _, k := range []string{"congestedCount", "nearFullCount"} {
 				if got[k] != 1 {
 					t.Errorf("%s: got %v, want 1 (healthy row should still count)", k, got[k])
 				}
@@ -191,9 +215,9 @@ func TestListQueues_MissingField(t *testing.T) {
 // motivating case for the skip-don't-abort behavior: one queue with a nil
 // msgSpoolUsage shouldn't lose the raw list of every other queue.
 func TestListQueues_NilField(t *testing.T) {
-	bad := queue(0, 0, 0, 100, "not-congested")
+	bad := queue(0, 0, 100, "not-congested")
 	bad["msgSpoolUsage"] = nil
-	healthy := queue(2, 10, 99, 100, "not-congested")
+	healthy := queue(2, 90*bytesPerMB, 100, "not-congested")
 	got, err := ListQueues(map[string]map[string]any{"queues": {"data": []any{bad, healthy}}})
 	if err != nil {
 		t.Fatalf("nil field should skip, got %v", err)
@@ -201,7 +225,7 @@ func TestListQueues_NilField(t *testing.T) {
 	if got["skipped"] != 1 {
 		t.Errorf("skipped: got %v, want 1", got["skipped"])
 	}
-	if got["backloggedCount"] != 1 || got["nearFullCount"] != 1 {
+	if got["nearFullCount"] != 1 {
 		t.Errorf("healthy row signals lost: %+v", got)
 	}
 }
@@ -210,7 +234,7 @@ func TestListQueues_NilField(t *testing.T) {
 // the common case — skipped is noise when nothing was skipped.
 func TestListQueues_SkippedOmittedWhenZero(t *testing.T) {
 	got, err := ListQueues(map[string]map[string]any{
-		"queues": {"data": []any{queue(0, 0, 0, 100, "not-congested")}},
+		"queues": {"data": []any{queue(0, 0, 100, "not-congested")}},
 	})
 	if err != nil {
 		t.Fatal(err)

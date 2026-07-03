@@ -24,11 +24,17 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess"
 )
 
-// nearFullThreshold is the msgSpoolUsage / maxMsgSpoolUsage ratio at or above
-// which a queue is counted as "near full". 0.8 is the conventional warning
-// threshold for guaranteed-message storage; queues at this fill level are at
-// risk of taking SPOOL_OVER_QUOTA discards if their consumers don't catch up.
+// nearFullThreshold is the spool-usage fill ratio at or above which a queue is
+// counted as "near full". 0.8 is the conventional warning threshold for
+// guaranteed-message storage; queues at this fill level are at risk of taking
+// SPOOL_OVER_QUOTA discards if their consumers don't catch up.
 const nearFullThreshold = 0.8
+
+// bytesPerMB converts maxMsgSpoolUsage (megabytes, per the SEMPv2 monitor spec)
+// to bytes so it can be compared against msgSpoolUsage (bytes). Without this
+// conversion the fill ratio is off by a factor of ~1e6 and flags essentially
+// every non-empty queue as near full (SOL-150260).
+const bytesPerMB = 1024 * 1024
 
 // listQueuesStepID is the step ID this handler keys into. Declared as a const
 // so the init-time RequiredSteps registration and the runtime lookup cannot
@@ -42,7 +48,6 @@ func init() {
 		RequiredSteps: []string{listQueuesStepID},
 		RequiredFields: []string{
 			"bindCount",
-			"spooledMsgCount",
 			"lowPriorityMsgCongestionState",
 			"msgSpoolUsage",
 			"maxMsgSpoolUsage",
@@ -50,12 +55,21 @@ func init() {
 	})
 }
 
-// ListQueues aggregates the queue list into four counts:
+// ListQueues aggregates the queue list into three counts:
 //   - noConsumerCount: queues with bindCount == 0 (nothing reading)
 //   - congestedCount:  queues whose lowPriorityMsgCongestionState == "congested"
-//   - backloggedCount: queues with spooledMsgCount > 0 (any backlog at all)
-//   - nearFullCount:   queues with msgSpoolUsage/maxMsgSpoolUsage >= 0.8
+//   - nearFullCount:   queues whose spool usage is >= 80% of their quota, i.e.
+//     msgSpoolUsage (bytes) / (maxMsgSpoolUsage MB * bytesPerMB) >= 0.8
 //     (skips queues with maxMsgSpoolUsage == 0 — unbounded or unset)
+//
+// Note there is intentionally no "backlog"/"depth" count here: spooledMsgCount
+// is a cumulative lifetime counter (messages ever spooled), not the current
+// number of messages in a queue, so counting queues with spooledMsgCount > 0
+// would report every queue that has ever received a message — not queues with a
+// live backlog (SOL-150260). A current-depth-based count requires either
+// deriving currentMsgCount = spooledMsgCount - deletedMsgCount or an
+// authoritative SEMPv1 num-messages-spooled read; both are deferred to the
+// follow-up capability work.
 //
 // The counts are over what the paginator actually returned. Under truncation
 // (followPages stopped at maxResults / capMax / maxPages), the summary also
@@ -77,7 +91,7 @@ func ListQueues(stepResults map[string]map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, fmt.Errorf("queues.data: want []any, got %T", step["data"])
 	}
-	var noConsumer, congested, backlogged, nearFull, skipped int
+	var noConsumer, congested, nearFull, skipped int
 	for i, raw := range items {
 		q, ok := raw.(map[string]any)
 		if !ok {
@@ -85,10 +99,9 @@ func ListQueues(stepResults map[string]map[string]any) (map[string]any, error) {
 		}
 		bindCount, ok1 := numField(q, "bindCount")
 		state, ok2 := stringField(q, "lowPriorityMsgCongestionState")
-		spooled, ok3 := numField(q, "spooledMsgCount")
-		usage, ok4 := numField(q, "msgSpoolUsage")
-		maxUsage, ok5 := numField(q, "maxMsgSpoolUsage")
-		if !ok1 || !ok2 || !ok3 || !ok4 || !ok5 {
+		usage, ok3 := numField(q, "msgSpoolUsage")
+		maxUsage, ok4 := numField(q, "maxMsgSpoolUsage")
+		if !ok1 || !ok2 || !ok3 || !ok4 {
 			skipped++
 			continue
 		}
@@ -98,17 +111,13 @@ func ListQueues(stepResults map[string]map[string]any) (map[string]any, error) {
 		if state == "congested" {
 			congested++
 		}
-		if spooled > 0 {
-			backlogged++
-		}
-		if maxUsage > 0 && usage/maxUsage >= nearFullThreshold {
+		if maxUsage > 0 && usage/(maxUsage*bytesPerMB) >= nearFullThreshold {
 			nearFull++
 		}
 	}
 	out := map[string]any{
 		"noConsumerCount": noConsumer,
 		"congestedCount":  congested,
-		"backloggedCount": backlogged,
 		"nearFullCount":   nearFull,
 		"scanned":         len(items),
 	}
