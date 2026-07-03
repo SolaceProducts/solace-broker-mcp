@@ -30,6 +30,6 @@ func (a *BearerAuthenticator) AddAuth(_ context.Context, req *http.Request) erro
 // HandleAuthFailure returns false unconditionally. A static bearer token
 // cannot be refreshed — if the broker rejects it, retrying with the same
 // token is pointless.
-func (a *BearerAuthenticator) HandleAuthFailure(_ context.Context, _ *http.Response) bool {
+func (a *BearerAuthenticator) HandleAuthFailure(_ context.Context, _ http.Header) bool {
 	return false
 }

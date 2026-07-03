@@ -104,13 +104,18 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 	case resp.StatusCode == http.StatusUnauthorized: // 401
 		if !state.auth401Retried {
 			state.auth401Retried = true
-			retry := d.authenticator.HandleAuthFailure(ctx, resp)
+			retry := d.authenticator.HandleAuthFailure(ctx, resp.Header)
 			if retry {
 				slog.Warn("retrying: 401 received, auth handler recovered",
+					slog.String("broker", d.brokerURL))
+			} else {
+				slog.Warn("auth failure: 401 received, auth handler cannot recover",
 					slog.String("broker", d.brokerURL))
 			}
 			return retry, nil
 		}
+		slog.Warn("auth failure: 401 persisted after recovery attempt",
+			slog.String("broker", d.brokerURL))
 		return false, nil
 
 	case resp.StatusCode == http.StatusTooManyRequests, // 429

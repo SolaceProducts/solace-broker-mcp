@@ -36,7 +36,7 @@ func (a *BasicAuthenticator) AddAuth(_ context.Context, req *http.Request) error
 // re-sends raw Basic credentials. Returns retry=true on success so the
 // Sender retries the request. Returns retry=false when no jar is
 // available or the clear fails.
-func (a *BasicAuthenticator) HandleAuthFailure(_ context.Context, _ *http.Response) bool {
+func (a *BasicAuthenticator) HandleAuthFailure(_ context.Context, _ http.Header) bool {
 	if a.jar == nil {
 		return false
 	}

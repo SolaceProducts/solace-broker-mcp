@@ -26,13 +26,13 @@ import (
 //
 // Implementations must be safe for concurrent use: many goroutines may
 // call AddAuth and HandleAuthFailure simultaneously with their own ctx.
-// This is achieved structurally — implementations hold only fields set
-// at construction and never written again, so concurrent reads of struct
-// state are safe by Go's memory model. Per-request data flows through
-// ctx and req; no per-request state lives on the Authenticator.
+// Current implementations (basic, bearer) achieve this structurally —
+// they hold only fields set at construction and never written again.
+// Implementations that mutate state after construction (e.g. OAuth
+// token refresh) must provide their own synchronization.
 type Authenticator interface {
 	AddAuth(ctx context.Context, req *http.Request) error
-	HandleAuthFailure(ctx context.Context, resp *http.Response) (retry bool)
+	HandleAuthFailure(ctx context.Context, respHeader http.Header) (retry bool)
 }
 
 // CookieJarClearer is accepted by BasicAuthenticator to clear stale
