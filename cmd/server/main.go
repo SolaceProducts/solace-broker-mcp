@@ -46,6 +46,7 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2/specs"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
+	"github.com/SolaceDev/solace-broker-mcp/internal/tools/queuemetrics"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv1/brokerstatus"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv1/discardstats"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv1/redundancy"
@@ -69,7 +70,7 @@ import (
 func newSlogHandler(level slog.Level) slog.Handler {
 	redactedKeys := []string{"password", "token", "secret", "authorization", "credential", "api_key", "private_key"}
 
-	return slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+	jsonHandler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 		Level: level,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 			key := strings.ToLower(a.Key)
@@ -82,6 +83,17 @@ func newSlogHandler(level slog.Level) slog.Handler {
 			return a
 		},
 	})
+
+	// Wrap the JSON handler so every request-scoped log line carries a
+	// correlation_id attribute (SOL-151280). The wrapper is installed
+	// unconditionally; gating is transitive: correlation.From(ctx) returns "" when
+	// the correlation middleware is not wired (OBS_CORRELATION_ID_ENABLED off) or
+	// for startup/non-request logs, so no correlation_id is emitted and output
+	// matches today exactly. This also covers the pre-config bootstrap handler,
+	// which is built before cfg is available and so cannot consult Enabled(cfg).
+	// Redaction is preserved: the wrapper delegates Handle to jsonHandler, which
+	// still owns and runs the ReplaceAttr filter above.
+	return correlation.NewSlogHandler(jsonHandler)
 }
 
 // buildMux creates the HTTP route multiplexer with basic routes.
@@ -462,6 +474,14 @@ func registerSEMPv2Tools(mgr *tools.ToolManager) {
 	mgr.Register(clientactions.NewClearStatsHandler())
 }
 
+// registerMixedTools attaches native Go tool handlers that use BOTH the SEMPv2
+// and SEMPv1 clients in one call. get-queue-metrics merges the SEMPv2 monitor
+// snapshot with the authoritative SEMPv1 live-depth block; it is read-only and
+// registers regardless of enable_write_tools.
+func registerMixedTools(mgr *tools.ToolManager) {
+	mgr.Register(queuemetrics.NewHandler())
+}
+
 func main() {
 	if len(os.Args) == 2 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
 		fmt.Println(version.Version())
@@ -614,6 +634,7 @@ func main() {
 	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor)
 	registerSEMPv1Tools(mgr)
 	registerSEMPv2Tools(mgr)
+	registerMixedTools(mgr)
 	tools.RegisterWithServer(mgr, server, pool, cfg.EnableWriteTools)
 	slog.Info("tool registration complete",
 		slog.Bool("enable_write_tools", cfg.EnableWriteTools))

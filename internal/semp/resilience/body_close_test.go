@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
 )
 
 // trackingBody records whether the response body was fully read (drained)
@@ -58,9 +59,9 @@ func newErrorHandlerTestSender(t *testing.T) *Sender {
 		RetryMinInterval:   1 * time.Millisecond,
 		RetryMaxInterval:   10 * time.Millisecond,
 	}
-	authCfg := config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"}
 	jar := mustNewSafeCookieJar(t)
-	return New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, "http://broker.example:8080", NewSemaphore(10))
+	authn := auth.NewBasicAuthenticator("admin", "secret", jar)
+	return New(&http.Client{Jar: jar}, sempCfg, authn, "http://broker.example:8080", NewSemaphore(10))
 }
 
 func newExhaustedResponse(t *testing.T, body *trackingBody) *http.Response {

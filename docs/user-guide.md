@@ -4,7 +4,7 @@ The Solace Event Broker MCP Server is an [MCP (Model Context Protocol)](https://
 
 Application scenarios:
 
-- **Incident triage** — Query event broker status, queue backlogs, and slow consumers using natural language queries instead of direct SEMP API calls.
+- **Incident triage** — Query event broker status, queue activity, and slow consumers using natural language queries instead of direct SEMP API calls.
 - **Operational monitoring** — Monitor VPN health, client connections, and message rates across multiple brokers through a conversational interface.
 - **Multi-broker management** — Configure multiple event broker connections and address them by alias in queries.
 
@@ -91,7 +91,7 @@ What are the current message rates for default VPN on my-broker?
 
 ## Tools Reference
 
-The server exposes 17 read-only tools plus 4 action tools (21 total when action tools are enabled). All broker-querying tools require a `broker` parameter to identify which configured event broker to query; `list-brokers` is the exception and returns the available event broker aliases. The action tools are write operations gated behind `enable_write_tools` (default off); the destructive ones (`delete-queue-messages`, `disconnect-client`) are marked via the MCP `destructiveHint` annotation and their descriptions instruct the calling LLM to obtain explicit user confirmation before invocation.
+The server exposes 17 read-only tools plus 4 action tools (21 total when action tools are enabled). For full per-tool parameters, output shape, and example invocations, see the [Tools Reference](tools-reference.md); this section is the narrative overview. All broker-querying tools require a `broker` parameter to identify which configured event broker to query; `list-brokers` is the exception and returns the available event broker aliases. The action tools are write operations gated behind `enable_write_tools` (default off); the destructive ones (`delete-queue-messages`, `disconnect-client`) are marked via the MCP `destructiveHint` annotation and their descriptions instruct the calling LLM to obtain explicit user confirmation before invocation.
 
 ### Discovery
 
@@ -124,8 +124,8 @@ The server exposes 17 read-only tools plus 4 action tools (21 total when action 
 
 | Tool | Description |
 |---|---|
-| `list-queues` | List queues in a VPN with depth, bind count, and throughput rates. Default 100 results, max 500. |
-| `get-queue-metrics` | Detailed metrics for a specific queue: message depth, throughput rates, spool usage, and configuration. Use to diagnose backlogs. |
+| `list-queues` | List queues in a VPN with cumulative spooled count (`spooledMsgCount`, lifetime — not live depth), bind count, and throughput rates. Default 100 results, max 500. |
+| `get-queue-metrics` | Detailed metrics for a specific queue. Returns `liveDepth.currentMsgCount` — the **authoritative current queue depth** (messages in the queue right now, decreases as they are consumed; sourced from SEMPv1) — plus a `queueMetrics` block with throughput rates, spool usage, configuration, and cumulative counters. Note `queueMetrics.spooledMsgCount` is a lifetime counter (messages ever spooled), not the current depth. |
 
 ### Clients
 
