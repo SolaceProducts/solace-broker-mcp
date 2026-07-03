@@ -109,7 +109,7 @@ func newCookieJar(alias string, mode string) (*resilience.SafeCookieJar, error) 
 // auth config. Each mode has its own constructor with mode-specific deps;
 // this switch is the single dispatch point so NewBrokerClient stays
 // focused on wiring clients.
-func newAuthenticator(alias string, brokerCfg *config.BrokerConfig, jar auth.CookieJarClearer, exchanger *tokenexchange.Exchanger) (auth.Authenticator, error) {
+func newAuthenticator(alias string, brokerCfg *config.BrokerConfig, jar *resilience.SafeCookieJar, exchanger *tokenexchange.Exchanger) (auth.Authenticator, error) {
 	cfg := brokerCfg.Auth
 	switch cfg.Mode {
 	case config.AuthModeBasic:
