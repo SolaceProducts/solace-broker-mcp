@@ -18,8 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
-	"time"
 )
 
 // Exchange performs an RFC 8693 token exchange against the configured IdP.
@@ -41,7 +39,15 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 		return nil, ctxErr
 	}
 	if err != nil {
-		e.logExchangeError(err, input, elapsed)
+		var exchErr *ExchangeError
+		if errors.As(err, &exchErr) {
+			enriched := *exchErr
+			enriched.BrokerAlias = input.BrokerAlias
+			enriched.Audience = input.Audience
+			enriched.TokenEndpoint = e.tokenURL
+			enriched.Elapsed = elapsed
+			return nil, &enriched
+		}
 		return nil, err
 	}
 
@@ -51,7 +57,10 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token, error) {
 	req, err := e.buildIdPRequest(ctx, input)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrExchangeTransport, err)
+		return nil, &ExchangeError{
+			Sentinel: ErrExchangeTransport,
+			Message:  fmt.Sprintf("token exchange transport failure: %v", err),
+		}
 	}
 
 	resp, err := e.httpClient.Do(req)
@@ -59,29 +68,11 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, fmt.Errorf("%w: IdP request failed: %v", ErrExchangeTransport, err)
+		return nil, &ExchangeError{
+			Sentinel: ErrExchangeTransport,
+			Message:  fmt.Sprintf("token exchange transport failure: IdP request failed: %v", err),
+		}
 	}
 
 	return e.parseIdPResponse(resp, e.nowFunc())
-}
-
-func (e *Exchanger) logExchangeError(err error, input ExchangeInput, elapsed time.Duration) {
-	attrs := []slog.Attr{
-		slog.String("broker_alias", input.BrokerAlias),
-		slog.String("audience", input.Audience),
-		slog.String("token_endpoint", e.tokenURL),
-		slog.Duration("elapsed", elapsed),
-		slog.String("error", err.Error()),
-	}
-
-	switch {
-	case errors.Is(err, ErrExchangeRejected):
-		slog.LogAttrs(context.Background(), slog.LevelWarn, "token exchange: rejected by IdP", attrs...)
-	case errors.Is(err, ErrExchangeTransport):
-		slog.LogAttrs(context.Background(), slog.LevelError, "token exchange: transport failure", attrs...)
-	case errors.Is(err, ErrInvalidResponse):
-		slog.LogAttrs(context.Background(), slog.LevelError, "token exchange: invalid IdP response", attrs...)
-	default:
-		slog.LogAttrs(context.Background(), slog.LevelError, "token exchange: unexpected error", attrs...)
-	}
 }
