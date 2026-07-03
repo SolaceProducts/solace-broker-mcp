@@ -125,7 +125,7 @@ The server exposes 17 read-only tools plus 4 action tools (21 total when action 
 | Tool | Description |
 |---|---|
 | `list-queues` | List queues in a VPN with cumulative spooled count (`spooledMsgCount`, lifetime — not live depth), bind count, and throughput rates. Default 100 results, max 500. |
-| `get-queue-metrics` | Detailed metrics for a specific queue: cumulative spooled count (`spooledMsgCount`, lifetime — not live depth), throughput rates, spool usage, and configuration. SEMPv2 does not expose live queue depth as a scalar. |
+| `get-queue-metrics` | Detailed metrics for a specific queue. Returns `liveDepth.currentMsgCount` — the **authoritative current queue depth** (messages in the queue right now, decreases as they are consumed; sourced from SEMPv1) — plus a `queueMetrics` block with throughput rates, spool usage, configuration, and cumulative counters. Note `queueMetrics.spooledMsgCount` is a lifetime counter (messages ever spooled), not the current depth. |
 
 ### Clients
 

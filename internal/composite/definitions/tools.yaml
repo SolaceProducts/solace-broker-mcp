@@ -66,43 +66,10 @@ tools:
     result:
       strategy: collect
 
-  - name: get-queue-metrics
-    description: >
-      Get detailed metrics for a queue: spooledMsgCount, txUnackedMsgCount,
-      bindCount, rxMsgRate, txMsgRate, redelivery counts, congestion state, and
-      spool usage. IMPORTANT: spooledMsgCount is the cumulative lifetime count
-      of messages ever spooled to the queue (a counter that only increases since
-      queue creation / last stats clear) — it is NOT the current number of
-      messages in the queue and does NOT decrease as messages are consumed.
-      Current/live queue depth is not exposed as a scalar via SEMPv2; do not
-      report spooledMsgCount as the current backlog. Primary signal for
-      detecting a slow guaranteed-message consumer: spooledMsgCount rising
-      across successive calls AND bindCount > 0 AND rxMsgRate > txMsgRate AND
-      txUnackedMsgCount near the per-flow unacked limit. Note that msgSpoolUsage
-      is in bytes while maxMsgSpoolUsage is in megabytes — convert before
-      computing a utilization percentage. The per-client slowSubscriber field
-      does not flip for slow ACKs, so this tool — not get-client-details — is
-      the right starting point.
-    annotations:
-      readOnly: true
-    parameters:
-      - name: msgVpnName
-        type: string
-        required: true
-        description: "The Message VPN containing the queue"
-      - name: queueName
-        type: string
-        required: true
-        description: "The name of the queue"
-    steps:
-      - id: queueMetrics
-        operation: monitor/getMsgVpnQueue
-        args:
-          msgVpnName: "{{.Params.msgVpnName}}"
-          queueName: "{{.Params.queueName}}"
-          select: "accessType, averageRxMsgRate, averageTxMsgRate, bindCount, durable, egressEnabled, ingressEnabled, lowPriorityMsgCongestionState, maxBindCount, maxDeliveredUnackedMsgsPerFlow, maxMsgSize, maxMsgSpoolUsage, maxMsgSpoolUsageExceededDiscardedMsgCount, maxRedeliveryCount, maxRedeliveryExceededDiscardedMsgCount, maxTtl, maxTtlExceededDiscardedMsgCount, msgSpoolUsage, msgVpnName, noLocalDeliveryDiscardedMsgCount, owner, queueName, redeliveredMsgCount, rxByteRate, rxMsgRate, spooledMsgCount, txByteRate, txMsgRate, txUnackedMsgCount"
-    result:
-      strategy: collect
+  # get-queue-metrics is implemented as a native mixed-protocol Go handler
+  # (internal/tools/queuemetrics) rather than a composite tool: it merges the
+  # SEMPv2 monitor snapshot with an authoritative SEMPv1 "show queue detail"
+  # live-depth block, which the SEMPv2-only composite engine cannot express.
 
   - name: get-client-details
     description: >
