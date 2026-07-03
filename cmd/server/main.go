@@ -514,8 +514,8 @@ func main() {
 	// 3. Build token exchanger (if any broker uses OAuth)
 	exchanger, err := newTokenExchanger(cfg.BrokerOAuth)
 	if err != nil {
-		slog.Error("failed to create token exchanger", slog.String("error", err.Error()))
-		os.Exit(1)
+		slog.Warn("token exchanger unavailable, OAuth brokers will fail at request time",
+			slog.String("error", err.Error()))
 	}
 
 	// 4. Create broker pool
