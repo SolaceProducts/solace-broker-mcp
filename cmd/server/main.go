@@ -35,12 +35,14 @@ import (
 	_ "github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess/handlers" // register handlers via init()
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceDev/solace-broker-mcp/internal/idpclient"
 	"github.com/SolaceDev/solace-broker-mcp/internal/middleware/recovery"
 	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
 	"github.com/SolaceDev/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2/specs"
+	"github.com/SolaceDev/solace-broker-mcp/internal/tokenexchange"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools/queuemetrics"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools/sempv1/brokerstatus"
@@ -490,8 +492,24 @@ func main() {
 	slog.Info("parsed OpenAPI specs",
 		slog.Int("operation_count", len(operations)))
 
-	// 3. Create broker pool
-	pool := semp.NewBrokerPool(cfg)
+	// 3. Build token exchanger (if any broker uses OAuth)
+	var exchanger *tokenexchange.Exchanger
+	if cfg.BrokerOAuth != nil {
+		idpHTTPClient, idpErr := idpclient.NewHTTPClient()
+		if idpErr != nil {
+			slog.Error("failed to create IdP HTTP client", slog.String("error", idpErr.Error()))
+			os.Exit(1)
+		}
+		exchanger, idpErr = tokenexchange.FromConfig(cfg.BrokerOAuth, idpHTTPClient)
+		if idpErr != nil {
+			slog.Error("failed to create token exchanger", slog.String("error", idpErr.Error()))
+			os.Exit(1)
+		}
+		slog.Info("token exchanger created for broker OAuth")
+	}
+
+	// 4. Create broker pool
+	pool := semp.NewBrokerPool(cfg, exchanger)
 	// Release per-broker rate-limiter tickers (and any other client-held
 	// resources) on the normal shutdown path. The defer fires after main()
 	// returns — i.e. after httpServer.Shutdown completes — so no in-flight
@@ -503,7 +521,7 @@ func main() {
 	slog.Info("created broker pool",
 		slog.Any("broker_aliases", pool.Aliases()))
 
-	// 4. Load embedded composite tool definitions
+	// 5. Load embedded composite tool definitions
 	compositeTools, err := composite.LoadTools(definitions.FS, "tools.yaml")
 	if err != nil {
 		slog.Error("failed to load composite tools", slog.String("error", err.Error()))
@@ -522,16 +540,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 5. Create composite executor
+	// 6. Create composite executor
 	executor := composite.NewCompositeExecutor(operations)
 
-	// 6. Create MCP server
+	// 7. Create MCP server
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "solace-broker-mcp",
 		Version: version.Version(),
 	}, nil)
 
-	// 7. Create the tool manager and register every tool the server exposes.
+	// 8. Create the tool manager and register every tool the server exposes.
 	// All registrations happen in one block so the log line below is a
 	// reliable phase boundary — anything before it is registered, anything
 	// after it sees a fully-loaded server.
@@ -549,7 +567,7 @@ func main() {
 
 	slog.Info("all tools registered")
 
-	// 8. Set up HTTP routes
+	// 9. Set up HTTP routes
 	//
 	// readiness backs /readyz. It starts in the "starting" state; we mark it
 	// initialized once the server begins listening (below). It is decoupled from
@@ -601,14 +619,14 @@ func main() {
 		slog.Debug("catch-all 404: no route matched", slog.String("method", r.Method), slog.String("path", r.URL.Path))
 	}))
 
-	// 9. Wrap the whole mux with panic-recovery as the OUTERMOST handler
+	// 10. Wrap the whole mux with panic-recovery as the OUTERMOST handler
 	// (ADR-001). Recovery is unconditional. A panic in ANY handler is caught,
 	// logged with a structured stack, and returned as a clean 500; the process
 	// keeps running. Recovery sits OUTSIDE the per-route correlation middleware
 	// wired on /mcp above — different layers, no conflict.
 	rootHandler := buildRootHandler(mux)
 
-	// 10. Start server with graceful shutdown
+	// 11. Start server with graceful shutdown
 	addr := cfg.BindAddress()
 	httpServer := newHTTPServer(addr, rootHandler)
 

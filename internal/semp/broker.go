@@ -12,6 +12,7 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceDev/solace-broker-mcp/internal/tokenexchange"
 )
 
 // BrokerClient holds protocol-specific clients for a single broker. Created
@@ -41,12 +42,16 @@ type BrokerClient struct {
 // NewBrokerClient is the single builder of per-broker Authenticators. It
 // delegates to newAuthenticator to construct exactly one Authenticator
 // from brokerCfg.Auth and passes the same pointer to both protocol clients.
-func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (*BrokerClient, error) {
+//
+// exchanger is the process-wide token exchanger for OAuth brokers. Pass
+// nil when no broker uses OAuth; newAuthenticator returns an error if an
+// OAuth broker is configured without an exchanger.
+func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, exchanger *tokenexchange.Exchanger) (*BrokerClient, error) {
 	jar, err := newCookieJar(alias, brokerCfg.Auth.Mode)
 	if err != nil {
 		return nil, err
 	}
-	authn, err := newAuthenticator(alias, brokerCfg, jar)
+	authn, err := newAuthenticator(alias, brokerCfg, jar, exchanger)
 	if err != nil {
 		return nil, fmt.Errorf("creating authenticator for broker %q: %w", alias, err)
 	}
@@ -104,7 +109,7 @@ func newCookieJar(alias string, mode string) (*resilience.SafeCookieJar, error) 
 // auth config. Each mode has its own constructor with mode-specific deps;
 // this switch is the single dispatch point so NewBrokerClient stays
 // focused on wiring clients.
-func newAuthenticator(alias string, brokerCfg *config.BrokerConfig, jar auth.CookieJarClearer) (auth.Authenticator, error) {
+func newAuthenticator(alias string, brokerCfg *config.BrokerConfig, jar auth.CookieJarClearer, exchanger *tokenexchange.Exchanger) (auth.Authenticator, error) {
 	cfg := brokerCfg.Auth
 	switch cfg.Mode {
 	case config.AuthModeBasic:
@@ -115,7 +120,10 @@ func newAuthenticator(alias string, brokerCfg *config.BrokerConfig, jar auth.Coo
 	case config.AuthModeBearer:
 		return auth.NewBearerAuthenticator(cfg.Token), nil
 	case config.AuthModeOAuth:
-		return nil, fmt.Errorf("oauth authenticator not yet wired for broker %q", alias)
+		if exchanger == nil {
+			return nil, fmt.Errorf("oauth auth requires a token exchanger for broker %q", alias)
+		}
+		return auth.NewOAuthAuthenticator(exchanger, cfg.Audience, cfg.Scopes, alias), nil
 	default:
 		return nil, fmt.Errorf("unsupported auth mode %q for broker %q", cfg.Mode, alias)
 	}
