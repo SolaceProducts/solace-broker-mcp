@@ -388,6 +388,25 @@ func registerMixedTools(mgr *tools.ToolManager) {
 	mgr.Register(queuemetrics.NewHandler())
 }
 
+// newTokenExchanger builds the process-wide Exchanger from the global
+// broker_oauth config block. Returns (nil, nil) when oauthCfg is nil,
+// meaning no broker uses OAuth and no exchanger is needed.
+func newTokenExchanger(oauthCfg *config.BrokerOAuthConfig) (*tokenexchange.Exchanger, error) {
+	if oauthCfg == nil {
+		return nil, nil
+	}
+	httpClient, err := idpclient.NewHTTPClient()
+	if err != nil {
+		return nil, fmt.Errorf("creating IdP HTTP client: %w", err)
+	}
+	exchanger, err := tokenexchange.FromConfig(oauthCfg, httpClient)
+	if err != nil {
+		return nil, fmt.Errorf("creating token exchanger: %w", err)
+	}
+	slog.Info("token exchanger created for broker OAuth")
+	return exchanger, nil
+}
+
 func main() {
 	if len(os.Args) == 2 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
 		fmt.Println(version.Version())
@@ -493,19 +512,10 @@ func main() {
 		slog.Int("operation_count", len(operations)))
 
 	// 3. Build token exchanger (if any broker uses OAuth)
-	var exchanger *tokenexchange.Exchanger
-	if cfg.BrokerOAuth != nil {
-		idpHTTPClient, idpErr := idpclient.NewHTTPClient()
-		if idpErr != nil {
-			slog.Error("failed to create IdP HTTP client", slog.String("error", idpErr.Error()))
-			os.Exit(1)
-		}
-		exchanger, idpErr = tokenexchange.FromConfig(cfg.BrokerOAuth, idpHTTPClient)
-		if idpErr != nil {
-			slog.Error("failed to create token exchanger", slog.String("error", idpErr.Error()))
-			os.Exit(1)
-		}
-		slog.Info("token exchanger created for broker OAuth")
+	exchanger, err := newTokenExchanger(cfg.BrokerOAuth)
+	if err != nil {
+		slog.Error("failed to create token exchanger", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 
 	// 4. Create broker pool

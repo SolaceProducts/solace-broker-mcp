@@ -66,6 +66,6 @@ func (a *OAuthAuthenticator) AddAuth(ctx context.Context, req *http.Request) err
 // HandleAuthFailure returns false unconditionally — the Exchanger is
 // stateless (no cache to evict), so retrying after a broker 401 with
 // the same exchanged token is pointless.
-func (a *OAuthAuthenticator) HandleAuthFailure(_ context.Context, _ *http.Response) bool {
+func (a *OAuthAuthenticator) HandleAuthFailure(_ context.Context, _ http.Header) bool {
 	return false
 }
