@@ -907,8 +907,14 @@ This is acceptable because:
 A separate ticket could later introduce a **background readiness probe** that:
 
 - Fetches the IdP's discovery doc on a timer (e.g., every 30s).
-- Affects `/ready` (so traffic isn't routed until the IdP is reachable) but **not** `/health` (so the pod isn't killed by k8s).
 - Logs WARN on first failure, ERROR on sustained failure.
+
+> Note (SOL-151285): `/ready` is now a body-identical alias of `/readyz` and
+> reflects the MCP server's OWN readiness only — it is decoupled from broker and
+> IdP reachability and makes no outbound calls. A future IdP-reachability probe
+> would need its own dedicated endpoint or a registered readiness listener
+> (`ReadinessState.RegisterListener`), not the old broker-style coupling on
+> `/ready`.
 
 This gives operators a clear signal without coupling boot. It's not in SOL-150070's scope. Recording the future option here so it's discoverable when the time comes.
 
