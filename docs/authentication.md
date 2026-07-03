@@ -49,6 +49,7 @@ No authentication headers required.
 
 - All client requests are accepted automatically
 - No tokens or credentials are needed
+- The server binds `127.0.0.1` only by default, so the unauthenticated listener is not reachable from the network. To expose it on another interface you must set `listen_address` **and** `allow_remote_unauthenticated: true` — without the override, a non-loopback `listen_address` is refused at startup. See [Configuration](configuration.md#server-settings).
 - A prominent banner appears in the logs at startup:
   ```
   ============================================================
@@ -129,6 +130,8 @@ Authorization: Bearer my-secret-dev-token-123
 - If the token matches, the request is accepted
 - If the token is missing or incorrect, the request is rejected with an authentication error
 - Tokens are fixed and do not expire until the user changes them
+- The server binds `127.0.0.1` only by default. Set `listen_address` explicitly to expose it on another interface (no override is required for `static`, since requests still need the token). See [Configuration](configuration.md#server-settings).
+- **Cleartext caveat:** the dev token is a long-lived shared bearer token. On a non-loopback bind **without TLS** it travels in plaintext and can be sniffed and replayed for the same broker-admin-backed access — enable TLS (`tls_cert_file`/`tls_key_file`) whenever `static` is network-reachable. The server emits a startup WARN in this case.
 - A prominent banner appears in the logs at startup:
   ```
   ============================================================
@@ -309,6 +312,34 @@ A browser window opens on first use for user login. The IdP must support anonymo
 
 ### How It Works
 
+**Authentication flow (`mode: oauth`):**
+
+```
+ Agent          MCP Server     IdP            Broker
+   │              │              │              │
+   │───── 1 ──────▶              │              │       1. MCP request (no token)
+   ◀───── 2 ──────│              │              │       2. 401 + resource-metadata pointer
+   │───── 3 ──────▶              │              │       3. GET /.well-known/oauth-protected-resource
+   │              │              │              │          (discovers authorization server)
+   │───────────── 4 ─────────────▶              │       4. Register (DCR) or use pre-registered client
+   ◀───────────── 5 ─────────────▶              │       5. Browser login: Authorization Code + PKCE
+   ◀───────────── 6 ─────────────│              │       6. Access token (JWT, aud = configured audience)
+   │───── 7 ──────▶              │              │       7. MCP request + Bearer JWT
+   │              │───── 8 ──────▶              │       8. Validate JWT — fetch JWKS (sig, iss, aud, exp)
+   │              │───────────── 9 ─────────────▶       9. Tool call → SEMP (broker auth: basic/bearer)
+   │              ◀──────────── 10 ─────────────│       10. SEMP response
+   ◀──── 11 ──────│              │              │       11. Tool result
+   │              │              │              │
+```
+
+> **Two independent auth legs.** Client→server auth (steps 1–8, the JWT above) is
+> distinct from server→broker auth (step 9), which uses each broker's configured
+> `auth.mode` (`basic` or `bearer`). Broker-bound OAuth via RFC 8693 token exchange
+> (the `broker_oauth:` config block) is **schema-only** in the current release and
+> not yet wired — see the [CHANGELOG](../CHANGELOG.md).
+
+The numbered steps in detail:
+
 1. Claude Code connects to the MCP server and receives a `401 Unauthorized` response
 2. Claude Code fetches the OAuth Protected Resource Metadata from `/.well-known/oauth-protected-resource` to discover the authorization server
 3. **Option A:** Claude Code uses the pre-registered client credentials and skips DCR
@@ -326,6 +357,10 @@ On success, the server logs: `"using JWT token for authentication — production
 ### Banner appears at startup ("INSECURE MODE")
 
 This is expected for `mode: disabled` and `mode: static`. The banner is the deliberate signal that the server is running without production-grade auth. If production mode was intended, switch to `mode: oauth`.
+
+### Cannot reach the server from another host (Modes 1 and 2)
+
+Under `mode: disabled` and `mode: static` the server binds `127.0.0.1` only by default, so it is reachable from the local host but not the network. Check the startup log line (the `bind_address` field) for the effective host:port. To bind another interface, set `listen_address` in the config (for `mode: disabled` this also requires `allow_remote_unauthenticated: true`). See [Configuration](configuration.md#server-settings).
 
 ### "401 Unauthorized" errors in Mode 2
 

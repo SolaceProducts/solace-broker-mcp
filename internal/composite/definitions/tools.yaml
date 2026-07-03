@@ -14,6 +14,12 @@
 #   (e.g., "For per-queue metrics, use get-queue-metrics instead")
 # - Keep it concise: Aim for 2-4 sentences
 # - Avoid jargon where possible: Prefer "message backlog" over "spool utilization"
+#   BUT never label a cumulative lifetime counter as "depth" or "backlog".
+#   spooledMsgCount (MsgVpnQueue) is the total messages ever spooled since queue
+#   creation / last stats clear — it only increases and is NOT the current number
+#   of messages in the queue. SEMPv2 does not expose live queue depth as a
+#   scalar; say so rather than implying spooledMsgCount is it. Also note
+#   msgSpoolUsage is in bytes but maxMsgSpoolUsage is in megabytes.
 # - Pagination limits: For list tools with maxResults, state the default and cap
 #   in the description (e.g., "Returns up to 100 by default (max 500 via maxResults)").
 #   These values are defined as constants in executor.go (defaultMax, capMax) —
@@ -60,36 +66,10 @@ tools:
     result:
       strategy: collect
 
-  - name: get-queue-metrics
-    description: >
-      Get detailed metrics for a queue: spooledMsgCount, txUnackedMsgCount,
-      bindCount, rxMsgRate, txMsgRate, redelivery counts, congestion state, and
-      spool usage. Use this to diagnose queue backlogs. Primary signal for
-      detecting a slow guaranteed-message consumer: spooledMsgCount growing AND
-      bindCount > 0 AND rxMsgRate > txMsgRate AND txUnackedMsgCount near the
-      per-flow unacked limit. The per-client slowSubscriber field does not flip
-      for slow ACKs, so this tool — not get-client-details — is the right
-      starting point.
-    annotations:
-      readOnly: true
-    parameters:
-      - name: msgVpnName
-        type: string
-        required: true
-        description: "The Message VPN containing the queue"
-      - name: queueName
-        type: string
-        required: true
-        description: "The name of the queue"
-    steps:
-      - id: queueMetrics
-        operation: monitor/getMsgVpnQueue
-        args:
-          msgVpnName: "{{.Params.msgVpnName}}"
-          queueName: "{{.Params.queueName}}"
-          select: "accessType, averageRxMsgRate, averageTxMsgRate, bindCount, durable, egressEnabled, ingressEnabled, lowPriorityMsgCongestionState, maxBindCount, maxDeliveredUnackedMsgsPerFlow, maxMsgSize, maxMsgSpoolUsage, maxMsgSpoolUsageExceededDiscardedMsgCount, maxRedeliveryCount, maxRedeliveryExceededDiscardedMsgCount, maxTtl, maxTtlExceededDiscardedMsgCount, msgSpoolUsage, msgVpnName, noLocalDeliveryDiscardedMsgCount, owner, queueName, redeliveredMsgCount, rxByteRate, rxMsgRate, spooledMsgCount, txByteRate, txMsgRate, txUnackedMsgCount"
-    result:
-      strategy: collect
+  # get-queue-metrics is implemented as a native mixed-protocol Go handler
+  # (internal/tools/queuemetrics) rather than a composite tool: it merges the
+  # SEMPv2 monitor snapshot with an authoritative SEMPv1 "show queue detail"
+  # live-depth block, which the SEMPv2-only composite engine cannot express.
 
   - name: get-client-details
     description: >
@@ -222,13 +202,21 @@ tools:
 
   - name: list-queues
     description: >
-      List queues in a VPN with depth (spooledMsgCount), unacked count
+      List queues in a VPN with spooledMsgCount, unacked count
       (txUnackedMsgCount), bindCount, congestion state, and rates. Returns up to
-      100 by default (max 500 via maxResults). Primary VPN-wide scan for slow
-      guaranteed-message consumers: queues with spooledMsgCount growing,
-      txUnackedMsgCount high, rxMsgRate > txMsgRate, and bindCount > 0 indicate
-      consumer-side slowness even when slowSubscriber is false on the bound
-      client.
+      100 by default (max 500 via maxResults). IMPORTANT: spooledMsgCount is the
+      cumulative lifetime count of messages ever spooled to each queue (it only
+      increases since queue creation / last stats clear) — it is NOT the current
+      number of messages in the queue and does NOT decrease as messages are
+      consumed. SEMPv2 does not expose live queue depth as a scalar; do not
+      report spooledMsgCount as the current backlog. The response summary counts
+      queues with no consumers, congestion, and near-full spool (>=80% of
+      quota); it deliberately omits a live-backlog count because that is not
+      derivable from these fields. Primary VPN-wide scan for slow
+      guaranteed-message consumers: queues with spooledMsgCount rising across
+      successive calls, txUnackedMsgCount high, rxMsgRate > txMsgRate, and
+      bindCount > 0 indicate consumer-side slowness even when slowSubscriber is
+      false on the bound client.
     annotations:
       readOnly: true
     parameters:

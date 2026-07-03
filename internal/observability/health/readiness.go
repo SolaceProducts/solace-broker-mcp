@@ -48,7 +48,7 @@ type listenerProbe struct {
 //
 //  1. initialized   — startup completed (SetInitialized).
 //  2. shuttingDown  — graceful drain has begun (SetShuttingDown). The mechanism
-//     lives here; wiring it to SIGTERM is Story 31a (SOL-151288).
+//     lives here; cmd/server wires it to SIGTERM in drainAndShutdown (SOL-151288).
 //  3. listeners      — required-listener probes (RegisterListener) that report
 //     whether each listener is bound.
 //
@@ -79,8 +79,8 @@ func (s *ReadinessState) SetInitialized() {
 // SetShuttingDown marks that graceful drain has begun. Once set, Evaluate
 // reports "shutting_down" regardless of initialization or listener state, so an
 // orchestrator stops routing new traffic to this instance. This is the
-// mechanism only; it is intentionally NOT wired to SIGTERM here (see Story 31a
-// / SOL-151288).
+// mechanism; cmd/server calls it from the SIGTERM handler (drainAndShutdown,
+// SOL-151288) before sleeping the drain window and shutting down.
 func (s *ReadinessState) SetShuttingDown() {
 	s.shuttingDown.Store(true)
 }

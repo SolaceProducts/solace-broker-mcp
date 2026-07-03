@@ -17,20 +17,30 @@ import (
 )
 
 // Authenticator attaches the right Authorization header to an outbound
-// SEMP request for a single broker. One implementation exists per auth
-// mode (basic, bearer, and — added later — oauth). The SEMP transport
-// layer holds an Authenticator behind this interface and never branches
-// on auth mode; adding a new mode is one new implementation plus one
-// new case in NewAuthenticator.
+// SEMP request for a single broker and declares how to recover when
+// authentication fails. One implementation exists per auth mode (basic,
+// bearer, and — added later — oauth). The SEMP transport layer holds an
+// Authenticator behind this interface and never branches on auth mode;
+// adding a new mode is one new implementation plus one new case in
+// NewAuthenticator.
 //
 // Implementations must be safe for concurrent use: many goroutines may
-// call AddAuth simultaneously with their own ctx and req. This is
-// achieved structurally — implementations hold only fields set at
-// construction and never written again, so concurrent reads of struct
-// state are safe by Go's memory model. Per-request data flows through
-// ctx and req; no per-request state lives on the Authenticator.
+// call AddAuth and HandleAuthFailure simultaneously with their own ctx.
+// Current implementations (basic, bearer) achieve this structurally —
+// they hold only fields set at construction and never written again.
+// Implementations that mutate state after construction (e.g. OAuth
+// token refresh) must provide their own synchronization.
 type Authenticator interface {
 	AddAuth(ctx context.Context, req *http.Request) error
+	HandleAuthFailure(ctx context.Context, respHeader http.Header) (retry bool)
+}
+
+// CookieJarClearer is accepted by BasicAuthenticator to clear stale
+// session cookies on auth failure. Defined here (consumer side) rather
+// than in the resilience package (provider side) to avoid an import
+// cycle. resilience.SafeCookieJar satisfies this implicitly.
+type CookieJarClearer interface {
+	Clear() error
 }
 
 // NewAuthenticator returns the Authenticator implementation matching
@@ -38,13 +48,20 @@ type Authenticator interface {
 // with which mode — callers receive the interface and never branch on
 // auth mode themselves.
 //
+// jar is passed to BasicAuthenticator for 401 cookie-jar clearing.
+// Must be non-nil for basic auth (returns an error otherwise); ignored
+// for other modes.
+//
 // Returns an error if cfg.Mode is not a recognized auth mode. Required
 // per-mode fields (e.g. username/password for basic) are not validated
 // here; config.validate() enforces those at startup.
-func NewAuthenticator(cfg config.AuthConfig) (Authenticator, error) {
+func NewAuthenticator(cfg config.AuthConfig, jar CookieJarClearer) (Authenticator, error) {
 	switch cfg.Mode {
 	case config.AuthModeBasic:
-		return NewBasicAuthenticator(cfg.Username, cfg.Password), nil
+		if jar == nil {
+			return nil, fmt.Errorf("auth: basic auth requires a cookie jar for session management")
+		}
+		return NewBasicAuthenticator(cfg.Username, cfg.Password, jar), nil
 	case config.AuthModeBearer:
 		return NewBearerAuthenticator(cfg.Token), nil
 	default:

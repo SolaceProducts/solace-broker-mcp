@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
 )
 
 // mustNewSafeCookieJar creates an empty SafeCookieJar for tests; fails the
@@ -25,8 +26,23 @@ func mustNewSafeCookieJar(t *testing.T) *SafeCookieJar {
 	return jar
 }
 
-// newTestSender creates a Sender configured for testing with the given auth mode and retry count.
-func newTestSender(t *testing.T, httpClient *http.Client, authMode string, retries int) *Sender {
+// basicAuth creates a BasicAuthenticator wired to the given jar so 401
+// cookie-clearing works end-to-end in tests.
+func basicAuth(t *testing.T, jar *SafeCookieJar) auth.Authenticator {
+	t.Helper()
+	return auth.NewBasicAuthenticator("admin", "secret", jar)
+}
+
+// bearerAuth creates a BearerAuthenticator (static token, no jar needed).
+func bearerAuth(t *testing.T) auth.Authenticator {
+	t.Helper()
+	return auth.NewBearerAuthenticator("static-token")
+}
+
+// newTestSender creates a Sender configured for testing with the given
+// Authenticator and retry count. No cookie jar is set — use newTestSenderBasic
+// for tests that need jar-sharing between auth and HTTP client.
+func newTestSender(t *testing.T, httpClient *http.Client, authn auth.Authenticator, retries int) *Sender {
 	t.Helper()
 	minInterval := time.Duration(0)
 	sempCfg := &config.SEMPConfig{
@@ -35,23 +51,38 @@ func newTestSender(t *testing.T, httpClient *http.Client, authMode string, retri
 		RetryMinInterval:   1 * time.Millisecond,
 		RetryMaxInterval:   10 * time.Millisecond,
 	}
-	authCfg := config.AuthConfig{
-		Mode:     authMode,
-		Username: "admin",
-		Password: "secret",
-		Token:    "static-token",
+	return New(httpClient, sempCfg, authn, "http://test-broker", NewSemaphore(10))
+}
+
+// newTestSenderBasic creates a Sender with a BasicAuthenticator sharing the
+// same SafeCookieJar as the HTTP client, so 401 jar-clearing works end-to-end.
+func newTestSenderBasic(t *testing.T, httpClient *http.Client, retries int) *Sender {
+	t.Helper()
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		Retries:            &retries,
+		RequestMinInterval: &minInterval,
+		RetryMinInterval:   1 * time.Millisecond,
+		RetryMaxInterval:   10 * time.Millisecond,
 	}
 	jar := mustNewSafeCookieJar(t)
 	httpClient.Jar = jar
-	return New(httpClient, jar, sempCfg, authCfg, "http://test-broker", NewSemaphore(10))
+	return New(httpClient, sempCfg, basicAuth(t, jar), "http://test-broker", NewSemaphore(10))
 }
 
 // newTestSenderWithServer creates a test server and a Sender pointed at it.
+// authMode "basic" shares the jar between Authenticator and HTTP client;
+// "bearer" uses a static-token Authenticator.
 func newTestSenderWithServer(t *testing.T, handler http.HandlerFunc, authMode string, retries int) (*Sender, *httptest.Server) {
 	t.Helper()
 	server := httptest.NewServer(handler)
 	httpClient := server.Client()
-	d := newTestSender(t, httpClient, authMode, retries)
+	var d *Sender
+	if authMode == "bearer" {
+		d = newTestSender(t, httpClient, bearerAuth(t), retries)
+	} else {
+		d = newTestSenderBasic(t, httpClient, retries)
+	}
 	d.brokerURL = server.URL
 	return d, server
 }
@@ -163,9 +194,9 @@ func TestSender_RateLimiter_PerBrokerIndependence(t *testing.T) {
 	}))
 	defer serverB.Close()
 
-	senderA := newTestSender(t, serverA.Client(), "basic", 0)
+	senderA := newTestSender(t, serverA.Client(), auth.NewBasicAuthenticator("admin", "secret", nil), 0)
 	senderA.brokerURL = serverA.URL
-	senderB := newTestSender(t, serverB.Client(), "basic", 0)
+	senderB := newTestSender(t, serverB.Client(), auth.NewBasicAuthenticator("admin", "secret", nil), 0)
 	senderB.brokerURL = serverB.URL
 
 	// Block sender A's rate limiter.
@@ -542,9 +573,8 @@ func TestSender_ErrorHandler_NetworkError_ProducesRetriesExhaustedError(t *testi
 		RetryMinInterval:   1 * time.Millisecond,
 		RetryMaxInterval:   10 * time.Millisecond,
 	}
-	authCfg := config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"}
 	jar := mustNewSafeCookieJar(t)
-	sender := New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, serverURL, NewSemaphore(10))
+	sender := New(&http.Client{Jar: jar}, sempCfg, basicAuth(t, jar), serverURL, NewSemaphore(10))
 
 	req := newGetRequest(t, serverURL)
 	resp, err := sender.Do(context.Background(), req)
@@ -688,9 +718,8 @@ func TestSender_NoRetry_POST_ConnectionError(t *testing.T) {
 		RetryMinInterval:   1 * time.Millisecond,
 		RetryMaxInterval:   10 * time.Millisecond,
 	}
-	authCfg := config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"}
 	jar := mustNewSafeCookieJar(t)
-	sender := New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, serverURL, NewSemaphore(10))
+	sender := New(&http.Client{Jar: jar}, sempCfg, basicAuth(t, jar), serverURL, NewSemaphore(10))
 
 	req := newMethodRequest(t, http.MethodPost, serverURL)
 	resp, err := sender.Do(context.Background(), req)
@@ -728,9 +757,8 @@ func TestSender_NoRetry_PATCH_ConnectionError(t *testing.T) {
 		RetryMinInterval:   1 * time.Millisecond,
 		RetryMaxInterval:   10 * time.Millisecond,
 	}
-	authCfg := config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"}
 	jar := mustNewSafeCookieJar(t)
-	sender := New(&http.Client{Jar: jar}, jar, sempCfg, authCfg, serverURL, NewSemaphore(10))
+	sender := New(&http.Client{Jar: jar}, sempCfg, basicAuth(t, jar), serverURL, NewSemaphore(10))
 
 	req := newMethodRequest(t, http.MethodPatch, serverURL)
 	resp, err := sender.Do(context.Background(), req)
@@ -786,10 +814,9 @@ func newTestSenderWithSem(t *testing.T, httpClient *http.Client, serverURL strin
 		RetryMinInterval:   1 * time.Millisecond,
 		RetryMaxInterval:   10 * time.Millisecond,
 	}
-	authCfg := config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"}
 	jar := mustNewSafeCookieJar(t)
 	httpClient.Jar = jar
-	return New(httpClient, jar, sempCfg, authCfg, serverURL, sem)
+	return New(httpClient, sempCfg, basicAuth(t, jar), serverURL, sem)
 }
 
 // TestSenderDo_SharedSemaphoreEnforcesPerBrokerCap proves that two Senders
@@ -947,5 +974,5 @@ func TestNew_PanicsOnNilSemaphore(t *testing.T) {
 		RequestMinInterval: &minInterval,
 	}
 	jar := mustNewSafeCookieJar(t)
-	New(&http.Client{Jar: jar}, jar, sempCfg, config.AuthConfig{}, "http://test-broker", nil)
+	New(&http.Client{Jar: jar}, sempCfg, basicAuth(t, jar), "http://test-broker", nil)
 }

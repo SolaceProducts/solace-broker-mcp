@@ -402,7 +402,7 @@ test_list_rdps_pagination_b() { test_list_rdps_pagination "broker-b"; }
 
 test_get_queue_metrics_slow_consumer() {
     local broker="$1"
-    local response content bind unacked rx tx spooled1 spooled2
+    local response content bind unacked rx tx spooled1 spooled2 live
 
     response=$(mcp_call_tool "get-queue-metrics" \
         "$(jq -nc --arg b "$broker" --arg q "$F5_QUEUE" \
@@ -415,6 +415,18 @@ test_get_queue_metrics_slow_consumer() {
     tx=$(echo "$content" | jq -r '.queueMetrics.data.txMsgRate')
     spooled1=$(echo "$content" | jq -r '.queueMetrics.data.spooledMsgCount')
     log_info "get-queue-metrics [$broker]: bindCount=$bind txUnackedMsgCount=$unacked (ceiling $F5_MAX_UNACKED) rxMsgRate=$rx txMsgRate=$tx spooledMsgCount=$spooled1"
+
+    # SOL-150260: liveDepth.currentMsgCount (SEMPv1 num-messages-spooled) is the
+    # AUTHORITATIVE current depth. On the backlogged slow-consumer queue it must
+    # be > 0 (messages are sitting there now), and it must be <= the cumulative
+    # spooledMsgCount — the two are different quantities (live vs lifetime), which
+    # is the whole point of this ticket.
+    live=$(echo "$content" | jq -r '.liveDepth.currentMsgCount')
+    log_info "get-queue-metrics [$broker]: liveDepth.currentMsgCount=$live (authoritative current) vs spooledMsgCount=$spooled1 (cumulative)"
+    assert_json_field "$content" '.liveDepth.currentMsgCount > 0' "true" \
+        "get-queue-metrics [$broker]: liveDepth.currentMsgCount must be > 0 on a backlogged queue (got $live)" || return 1
+    assert_json_field "$content" '.liveDepth.currentMsgCount <= .queueMetrics.data.spooledMsgCount' "true" \
+        "get-queue-metrics [$broker]: currentMsgCount ($live) must be <= cumulative spooledMsgCount ($spooled1)" || return 1
 
     # A consumer is bound to the slow-consumer queue.
     assert_json_field "$content" '.queueMetrics.data.bindCount > 0' "true" \

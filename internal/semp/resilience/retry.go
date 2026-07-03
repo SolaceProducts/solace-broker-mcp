@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/hashicorp/go-retryablehttp"
 )
 
@@ -19,7 +18,7 @@ type retryStateKey struct{}
 // Each Do() call creates its own instance via context, so concurrent requests
 // to the same Sender are safe.
 type retryState struct {
-	auth401Retried  bool   // true after first 401 re-auth attempt (basic auth only)
+	auth401Retried  bool   // true after first 401 re-auth attempt
 	other5xxRetried bool   // true after first non-429/503 5xx retry
 	method          string // HTTP method captured at Do() time for idempotency check
 	retrySafe       bool   // caller-declared semantic idempotency (see WithRetrySafe)
@@ -64,7 +63,7 @@ func getRetryState(ctx context.Context) *retryState {
 
 // checkRetry is the custom retry policy for retryablehttp. It implements:
 //   - POST and PATCH: never retried (non-idempotent — see guard below)
-//   - 401: basic auth → clear cookie jar + retry once; bearer → fail immediately
+//   - 401: delegate to Authenticator.HandleAuthFailure — retry once if it recovers
 //   - 429, 503: full retries with exponential backoff
 //   - Other 5xx: retry once only (likely a bug, not transient)
 //   - Connection errors: delegate to retryablehttp's default policy
@@ -103,25 +102,20 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized: // 401
-		if d.authCfg.Mode == config.AuthModeBasic && !state.auth401Retried {
+		if !state.auth401Retried {
 			state.auth401Retried = true
-			// Stale session cookie is the most likely cause. Clear the jar so
-			// the retried request re-sends Basic Auth credentials from scratch.
-			// SafeCookieJar.Clear performs an atomic swap of the inner jar,
-			// so concurrent http.Client.Do reads see either the old jar or
-			// the new one — never a torn read.
-			if err := d.cookieJar.Clear(); err != nil {
-				slog.Warn("retrying: 401 received but failed to clear cookie jar",
-					slog.String("broker", d.brokerURL),
-					slog.String("error", err.Error()))
-				return false, nil
+			retry := d.authenticator.HandleAuthFailure(ctx, resp.Header)
+			if retry {
+				slog.Warn("retrying: 401 received, auth handler recovered",
+					slog.String("broker", d.brokerURL))
+			} else {
+				slog.Warn("auth failure: 401 received, auth handler cannot recover",
+					slog.String("broker", d.brokerURL))
 			}
-			slog.Warn("retrying: 401 received, clearing session cookies",
-				slog.String("broker", d.brokerURL),
-				slog.String("auth_mode", d.authCfg.Mode))
-			return true, nil
+			return retry, nil
 		}
-		// Bearer token (static, can't refresh) or already retried basic auth.
+		slog.Warn("auth failure: 401 persisted after recovery attempt",
+			slog.String("broker", d.brokerURL))
 		return false, nil
 
 	case resp.StatusCode == http.StatusTooManyRequests, // 429
