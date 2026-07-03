@@ -32,12 +32,12 @@ func vpn(enabled bool, state string, conns float64) map[string]any {
 
 func TestListVpns_Counts(t *testing.T) {
 	items := []any{
-		vpn(true, "up", 5),       // healthy
-		vpn(true, "up", 0),       // zeroConn
-		vpn(true, "down", 0),     // down
-		vpn(true, "standby", 0),  // standby (NOT zeroConn — standby excluded)
-		vpn(false, "up", 0),      // disabled (NOT zeroConn — disabled excluded)
-		vpn(false, "down", 0),    // disabled + down
+		vpn(true, "up", 5),      // healthy
+		vpn(true, "up", 0),      // zeroConn
+		vpn(true, "down", 0),    // down
+		vpn(true, "standby", 0), // standby (NOT zeroConn — standby excluded)
+		vpn(false, "up", 0),     // disabled (NOT zeroConn — disabled excluded)
+		vpn(false, "down", 0),   // disabled only (NOT down — down excludes disabled)
 	}
 	got, err := ListVpns(map[string]map[string]any{
 		"vpns": {"data": items},
@@ -47,7 +47,7 @@ func TestListVpns_Counts(t *testing.T) {
 	}
 	checks := map[string]int{
 		"disabledCount":       2,
-		"downCount":           2,
+		"downCount":           1,
 		"standbyCount":        1,
 		"zeroConnectionCount": 1,
 	}
@@ -101,6 +101,31 @@ func TestListVpns_ZeroConnectionExclusions(t *testing.T) {
 				t.Errorf("zeroConnectionCount: got %v, want %d", got["zeroConnectionCount"], tc.want)
 			}
 		})
+	}
+}
+
+// TestListVpns_DisabledExcludedFromStateCounts asserts down/standby/zeroConn
+// are all gated on enabled==true, so a disabled VPN (SEMP typically reports
+// state=="down" for these) lands in disabledCount only. This keeps the four
+// counts independently readable — the LLM shouldn't have to subtract overlaps
+// to answer "how many VPNs are actually broken?".
+func TestListVpns_DisabledExcludedFromStateCounts(t *testing.T) {
+	items := []any{
+		vpn(false, "down", 0),
+		vpn(false, "standby", 0),
+		vpn(false, "up", 0),
+	}
+	got, err := ListVpns(map[string]map[string]any{"vpns": {"data": items}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["disabledCount"] != 3 {
+		t.Errorf("disabledCount: got %v, want 3", got["disabledCount"])
+	}
+	for _, k := range []string{"downCount", "standbyCount", "zeroConnectionCount"} {
+		if got[k] != 0 {
+			t.Errorf("%s: got %v, want 0 (disabled must not contribute)", k, got[k])
+		}
 	}
 }
 

@@ -38,15 +38,18 @@ func init() {
 	})
 }
 
-// ListVpns aggregates the VPN list into four counts:
+// ListVpns aggregates the VPN list into four mutually-exclusive-per-lens counts:
 //   - disabledCount:        VPNs with enabled == false
-//   - downCount:            VPNs whose state == "down" (primary operational alarm)
-//   - standbyCount:         VPNs whose state == "standby" (informational; HA mode,
-//     not a problem)
+//   - downCount:            enabled VPNs whose state == "down" (primary
+//     operational alarm — "should be serving but isn't")
+//   - standbyCount:         enabled VPNs whose state == "standby" (informational;
+//     HA mode, not a problem)
 //   - zeroConnectionCount:  VPNs with enabled == true && state == "up" &&
 //     msgVpnConnections == 0 (configured to serve but nobody's connecting).
-//     Standby and disabled VPNs are excluded so HA standby brokers don't
-//     false-alarm.
+//
+// down/standby/zeroConnection are all gated on enabled==true so a disabled VPN
+// (which typically reports state=="down") lands in disabledCount only, and the
+// LLM can read each count as an independent signal without subtracting overlaps.
 //
 // The counts are over what the paginator actually returned. Under truncation
 // (followPages stopped at maxResults / capMax / maxPages), the summary also
@@ -82,15 +85,17 @@ func ListVpns(stepResults map[string]map[string]any) (map[string]any, error) {
 		}
 		if !enabled {
 			disabled++
+			continue
 		}
 		switch state {
 		case "down":
 			down++
 		case "standby":
 			standby++
-		}
-		if enabled && state == "up" && conns == 0 {
-			zeroConn++
+		case "up":
+			if conns == 0 {
+				zeroConn++
+			}
 		}
 	}
 	out := map[string]any{
