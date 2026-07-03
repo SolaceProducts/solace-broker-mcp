@@ -14,6 +14,24 @@ spec:
       labels:
         app.kubernetes.io/name: solace-broker-mcp
     spec:
+      # Graceful-shutdown budget (SOL-151288). On SIGTERM the server flips
+      # /readyz to 503, sleeps obs.shutdown_drain_delay_s (default 10s) so K8s
+      # deregisters the pod, then gracefully drains in-flight requests for up to
+      # DefaultShutdownTimeoutSeconds (30s). This drain runs IN-PROCESS: the
+      # distroless image has no shell, so there is NO preStop hook. The grace
+      # period must cover both phases plus a small buffer, or K8s SIGKILLs
+      # mid-drain and causes the 502s this design prevents:
+      #   terminationGracePeriodSeconds = shutdown_drain_delay_s (10)
+      #                                 + DefaultShutdownTimeoutSeconds (30)
+      #                                 + 5s buffer = 45
+      # If you raise obs.shutdown_drain_delay_s, raise this value to match.
+      #
+      # Note: the readinessProbe below still targets /health (always 200);
+      # rewiring it to /readyz so SetShuttingDown is probe-visible is Story 11
+      # (SOL-151285). Until then this in-process drain + grace period prevent
+      # 502s on their own — kube-proxy deregisters the pod on Terminating, and
+      # the sleep gives it time before in-flight requests are drained.
+      terminationGracePeriodSeconds: 45
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532  # distroless nonroot UID (gcr.io/distroless/static-debian12:nonroot)

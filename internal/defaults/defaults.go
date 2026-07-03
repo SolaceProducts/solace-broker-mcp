@@ -12,6 +12,12 @@ import "time"
 // conflict with the Solace broker's SEMP management port (default 8080).
 const DefaultPort = 9090
 
+// DefaultLoopbackListenAddress is the host the MCP server binds to when
+// listen_address is unset and mcp_client_auth.mode is not oauth. Loopback-only
+// by default keeps the dev auth modes (disabled, static) unreachable from the
+// network without an explicit operator decision (see config.applyDefaults).
+const DefaultLoopbackListenAddress = "127.0.0.1"
+
 // DefaultShutdownTimeoutSeconds is the maximum time in seconds the MCP server
 // waits for in-flight requests to complete during graceful shutdown before
 // forcibly closing remaining connections.
@@ -23,6 +29,26 @@ const DefaultPort = 9090
 // in-flight SEMP call may be aborted by httpServer.Close() at the end of
 // the shutdown window. Accepted in favor of bounded, predictable shutdown.
 const DefaultShutdownTimeoutSeconds = 30
+
+// DefaultShutdownDrainDelayS is the propagation window, in seconds, the server
+// waits after flipping /readyz to 503 (shutting_down) on SIGTERM, BEFORE it
+// begins gracefully shutting down the HTTP server. The delay lets the
+// orchestrator observe the not-ready state and deregister the pod from its
+// endpoint set, so no NEW traffic is routed to the draining pod while in-flight
+// requests finish — avoiding 502s during a rolling update.
+//
+// Decided: 10 seconds.
+// Reasoning: covers a typical kube-proxy / endpoint-controller propagation lag
+// (a few hundred ms to a few seconds) with margin, while keeping total pod
+// termination bounded. The drain runs IN-PROCESS: the distroless image has no
+// shell, so there is no preStop hook to sleep for us (SOL-151288).
+// Trade-off: every shutdown takes at least this long even when no traffic is in
+// flight. Accepted as the cost of a 502-free rolling update.
+//
+// The pod's terminationGracePeriodSeconds must be at least
+// DefaultShutdownDrainDelayS + DefaultShutdownTimeoutSeconds plus a small buffer
+// so K8s does not SIGKILL the process mid-drain (see deploy/kubernetes/deployment.yaml).
+const DefaultShutdownDrainDelayS = 10
 
 // DefaultSEMPRequestTimeoutDuration is the per-request timeout for individual
 // SEMP API calls to a broker. Matches the story spec default and the Solace
@@ -193,6 +219,21 @@ const DefaultRetryMinInterval = 3 * time.Second
 // many attempts have been made. Must be >= DefaultRetryMinInterval. Matches
 // the story spec and Terraform default.
 const DefaultRetryMaxInterval = 30 * time.Second
+
+// DefaultTokenExpirySkew is subtracted from the IdP-reported expires_in
+// when computing a token's ExpiresAt. The result is a conservative
+// "use-by" instant — callers (and the future cache) never present a
+// token that might expire mid-flight to the broker.
+//
+// Decided: 30 seconds.
+// Reasoning: a broker-bound SEMP request takes well under 1 second in
+// the common case; 30s gives ~30× headroom for slow networks or
+// queued requests while wasting at most 30s of a token's lifetime.
+// Trade-off: a token with expires_in ≤ 30 is returned with an
+// ExpiresAt in the past, so callers (and the future cache) will
+// consider it immediately stale. Accepted — such short-lived tokens
+// are an IdP misconfiguration for machine-to-machine flows.
+const DefaultTokenExpirySkew = 30 * time.Second
 
 // DefaultSaturationThresholdMs is the latency above which a tool call is
 // considered slow enough to emit a saturation signal (a future observability

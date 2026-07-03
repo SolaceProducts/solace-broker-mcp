@@ -10,6 +10,7 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/correlationhdr"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 )
@@ -58,48 +59,41 @@ func (c *HTTPClient) Close() {
 }
 
 // NewHTTPClient creates an HTTPClient configured for a specific broker. It
-// sets up a per-broker HTTP transport with TLS settings and a cookie jar, and
-// delegates retry and rate limiting to a shared resilience.Sender. No network
-// I/O happens here — connection setup is lazy on the first Execute call.
+// sets up a per-broker HTTP transport with TLS settings and delegates retry
+// and rate limiting to a shared resilience.Sender. No network I/O happens
+// here — connection setup is lazy on the first Execute call.
 //
 // authn is the per-broker Authenticator (built once by semp.NewBrokerClient
 // and shared with the SEMPv2 client by pointer). It must be non-nil.
 //
+// jar is the per-broker cookie jar for session cookie management. Pass nil
+// for auth modes that don't use session cookies (bearer, OAuth).
+//
 // sem is the broker's shared in-flight semaphore and must be non-nil
 // (resilience.New panics otherwise); see semp.NewBrokerClient, which shares
 // one semaphore across both protocol clients of a broker.
-func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, sem resilience.Semaphore, authn auth.Authenticator) (*HTTPClient, error) {
-	// Programmer-error precondition: there is no runtime path that yields a
-	// nil Authenticator here. semp.NewBrokerClient is the single production
-	// caller and constructs authn via auth.NewAuthenticator before this call.
-	// A nil at this point means someone ignored an error from NewAuthenticator
-	// or passed nil explicitly — both bugs in calling code, not recoverable
-	// runtime conditions. Panicking surfaces the bug at construction time
-	// instead of as a delayed nil-pointer panic deep inside AddAuth at request
-	// time.
+func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, sem resilience.Semaphore, authn auth.Authenticator, jar *resilience.SafeCookieJar) (*HTTPClient, error) {
 	if authn == nil {
 		panic("sempv1.NewHTTPClient: nil authenticator")
 	}
 	transport := resilience.NewTunedTransport(brokerCfg, sempCfg)
-	jar, err := resilience.NewSafeCookieJar()
-	if err != nil {
-		return nil, fmt.Errorf("creating cookie jar: %w", err)
-	}
 	if brokerCfg.InsecureSkipVerify {
 		slog.Warn("INSECURE: TLS verification disabled for broker",
 			slog.String("broker", brokerCfg.DisplayName()))
 	}
 
 	httpClient := &http.Client{
-		Jar:       jar,
 		Timeout:   sempCfg.RequestTimeoutDuration,
 		Transport: transport,
+	}
+	if jar != nil {
+		httpClient.Jar = jar
 	}
 
 	baseURL := strings.TrimSuffix(brokerCfg.URL, "/")
 
 	return &HTTPClient{
-		sender:        resilience.New(httpClient, jar, sempCfg, brokerCfg.Auth, baseURL, sem),
+		sender:        resilience.New(httpClient, sempCfg, authn, baseURL, sem),
 		baseURL:       baseURL,
 		authenticator: authn,
 	}, nil
@@ -177,6 +171,11 @@ func (c *HTTPClient) Execute(ctx context.Context, xml string) (*Result, error) {
 	if err := c.authenticator.AddAuth(ctx, req); err != nil {
 		return nil, fmt.Errorf("applying SEMPv1 auth: %w", err)
 	}
+
+	// Forward the request-correlation ID (if any) as outbound headers, strictly
+	// after auth so it cannot clobber or be clobbered by auth headers. No-op
+	// when correlation is off (From(ctx) == "").
+	correlationhdr.Set(ctx, req)
 
 	// Attach operation ID for the Sender's logging context.
 	ctx = context.WithValue(ctx, resilience.OperationIDKey{}, "SEMPv1")

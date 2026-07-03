@@ -1,0 +1,24 @@
+<show>
+  <queue>
+    <queues>
+      <queue>
+        <name>sol150260-test</name>
+        <info>
+          <message-vpn>vpn_1</message-vpn>
+          <durable>true</durable>
+          <access-type>exclusive</access-type>
+          <num-messages-spooled>10</num-messages-spooled>
+          <current-spool-usage-in-mb>0</current-spool-usage-in-mb>
+          <current-spool-usage-in-bytes>340</current-spool-usage-in-bytes>
+          <high-water-mark-in-mb>0</high-water-mark-in-mb>
+          <high-water-mark-in-bytes>340</high-water-mark-in-bytes>
+          <total-delivered-unacked-msgs>0</total-delivered-unacked-msgs>
+          <oldest-msg-id>12794319</oldest-msg-id>
+          <newest-msg-id>12794328</newest-msg-id>
+          <bind-count>0</bind-count>
+          <topic-subscription-count>1</topic-subscription-count>
+        </info>
+      </queue>
+    </queues>
+  </queue>
+</show>

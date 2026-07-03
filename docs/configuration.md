@@ -35,6 +35,8 @@ The server resolves variables at startup. The `.env` file loads automatically be
 | YAML field | Env var | Default | Description |
 |---|---|---|---|
 | `port` | `MCP_SERVER_PORT` | `9090` | Port the MCP server listens on. |
+| `listen_address` | — | see below | Host the server binds to. Empty binds all interfaces; the default depends on the client auth mode. |
+| `allow_remote_unauthenticated` | — | `false` | Opt-in to a non-loopback `listen_address` while `mcp_client_auth.mode: disabled`. Acknowledges that the listener has no client authentication. |
 | `tls_cert_file` | — | none | Path to TLS certificate (PEM). |
 | `tls_key_file` | — | none | Path to TLS private key (PEM). |
 | `log_level` | — | `info` | Log verbosity: `debug`, `info`, `warn`, `error`. |
@@ -47,6 +49,15 @@ port: 9090
 tls_cert_file: "/etc/certs/server.pem"
 tls_key_file: "/etc/certs/server-key.pem"
 ```
+
+**Bind address:** When `listen_address` is unset, the effective bind depends on `mcp_client_auth.mode` so the dev modes are safe by default — they are not reachable from the network unless an operator opts in:
+
+| `mcp_client_auth.mode` | `listen_address` unset | `listen_address` set |
+|---|---|---|
+| `oauth` | all interfaces (`:port`) | used verbatim |
+| `disabled` / `static` | `127.0.0.1` only | used verbatim |
+
+An explicit `listen_address` must be an IP address or `localhost`. Under `mode: disabled` (no client authentication), binding a non-loopback address is **refused at startup** — it would expose unauthenticated MCP access backed by the broker admin credential to the network. To proceed, bind `127.0.0.1`, switch to `mode: oauth`, or set `allow_remote_unauthenticated: true` to accept the risk. The effective bind address is logged at startup.
 
 **Logging:** The server writes structured JSON logs to stderr. The server automatically redacts credentials in all log output. Every tool invocation is logged with the tool name, target broker, status, and duration.
 
