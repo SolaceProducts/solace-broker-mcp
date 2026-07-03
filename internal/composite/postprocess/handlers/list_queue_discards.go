@@ -189,6 +189,11 @@ func ListQueueDiscards(stepResults map[string]map[string]any) (map[string]any, e
 // or the wrong type so the caller can skip the row rather than emit a
 // half-counted offender. Ties on the dominant category are broken
 // alphabetically on the field name for determinism.
+//
+// All-or-nothing per row is intentional. A successful SEMPv2 select returns
+// every requested field, so ok=false shouldn't fire in practice — if it does,
+// something structural is wrong with the response and a partially-summed
+// offender score would be worse than an omission surfaced via `skipped`.
 func sumDiscards(q map[string]any) (total float64, dominant string, ok bool) {
 	var max float64
 	for _, f := range discardFields {
