@@ -209,8 +209,8 @@ CONFIG_FILE=./broker-config.yaml server
 Verify:
 
 ```bash
-curl http://localhost:9090/health
-# {"status": "ok"}
+curl http://localhost:9090/livez
+# {"status":"alive"}
 ```
 
 ### Docker Deployment
