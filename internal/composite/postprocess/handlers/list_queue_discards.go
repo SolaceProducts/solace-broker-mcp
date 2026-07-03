@@ -43,8 +43,8 @@ const topOffenderLimit = 10
 // left the queue but was delivered to the Dead Message Queue as configured,
 // which is expected behavior, not a discard. Counting them would inflate the
 // offender score of queues doing exactly what they were designed to do.
-// maxTtlExpiredToDmqFailedMsgCount IS included because DMQ resolution failed
-// there, so the message actually was lost.
+// The *ToDmqFailedMsgCount counters ARE included because DMQ resolution
+// failed there, so the message actually was lost.
 var discardFields = []string{
 	"clientProfileDeniedDiscardedMsgCount",
 	"destinationGroupErrorDiscardedMsgCount",
@@ -53,6 +53,7 @@ var discardFields = []string{
 	"maxMsgSizeExceededDiscardedMsgCount",
 	"maxMsgSpoolUsageExceededDiscardedMsgCount",
 	"maxRedeliveryExceededDiscardedMsgCount",
+	"maxRedeliveryExceededToDmqFailedMsgCount",
 	"maxTtlExceededDiscardedMsgCount",
 	"maxTtlExpiredDiscardedMsgCount",
 	"maxTtlExpiredToDmqFailedMsgCount",

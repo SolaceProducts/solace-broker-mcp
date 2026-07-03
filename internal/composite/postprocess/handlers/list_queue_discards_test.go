@@ -403,6 +403,7 @@ func TestListQueueDiscards_ValidatorCrossCheck(t *testing.T) {
 		"maxMsgSizeExceededDiscardedMsgCount",
 		"maxMsgSpoolUsageExceededDiscardedMsgCount",
 		"maxRedeliveryExceededDiscardedMsgCount",
+		"maxRedeliveryExceededToDmqFailedMsgCount",
 		"maxRedeliveryExceededToDmqMsgCount",
 		"maxTtlExceededDiscardedMsgCount",
 		"maxTtlExpiredDiscardedMsgCount",

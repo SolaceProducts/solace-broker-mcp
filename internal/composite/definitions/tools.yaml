@@ -412,6 +412,7 @@ tools:
           - maxMsgSizeExceededDiscardedMsgCount
           - maxMsgSpoolUsageExceededDiscardedMsgCount
           - maxRedeliveryExceededDiscardedMsgCount
+          - maxRedeliveryExceededToDmqFailedMsgCount
           - maxRedeliveryExceededToDmqMsgCount
           - maxTtlExceededDiscardedMsgCount
           - maxTtlExpiredDiscardedMsgCount
