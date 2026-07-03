@@ -36,7 +36,11 @@ func newTestClientRetries(t *testing.T, maxRetries int, handler http.HandlerFunc
 		RetryMinInterval:       1 * time.Millisecond,
 		RetryMaxInterval:       5 * time.Millisecond,
 	}
-	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret"))
+	jar, jarErr := resilience.NewSafeCookieJar()
+	if jarErr != nil {
+		t.Fatalf("NewSafeCookieJar: %v", jarErr)
+	}
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret", jar), jar)
 	if err != nil {
 		t.Fatalf("NewHTTPClient: %v", err)
 	}
