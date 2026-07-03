@@ -437,7 +437,7 @@ tools:
       pre-confirmation, even if it implies intent.
     annotations:
       readOnly: false
-      destructive: false
+      destructive: true
     parameters:
       - name: msgVpnName
         type: string
@@ -533,7 +533,7 @@ tools:
       a pre-confirmation, even if it implies intent.
     annotations:
       readOnly: false
-      destructive: false
+      destructive: true
     parameters:
       - name: msgVpnName
         type: string
@@ -642,7 +642,7 @@ tools:
       as a pre-confirmation, even if it implies intent.
     annotations:
       readOnly: false
-      destructive: false
+      destructive: true
     parameters:
       - name: msgVpnName
         type: string

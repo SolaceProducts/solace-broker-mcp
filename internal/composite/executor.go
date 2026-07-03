@@ -482,14 +482,22 @@ func safeTemplateExecute(tmpl *template.Template, data any) (result string, err 
 //
 // Object params (like msgVpnConfig) are spread into the body as individual
 // fields; scalar params (like msgVpnName) are set directly. Params the operation
-// takes from the path or query are skipped — those reach the broker through args
-// instead. The body is added to args under the "body" key.
+// takes from the path or query are not part of the body — they reach the broker
+// through args instead. The assembled body is added to args under the "body" key.
 //
-// If a body field would be set by more than one parameter — for example a
-// dedicated msgVpnName param and a msgVpnName key inside msgVpnConfig — the
-// collision is rejected rather than resolved. The two sources could disagree,
-// and with no defined precedence the winner would depend on Go's randomized map
-// iteration order, so we fail loudly instead of writing an ambiguous body.
+// Two input mistakes are rejected rather than passed to the broker:
+//
+//   - A body field set by more than one source. On create, msgVpnName is a body
+//     field, so a dedicated msgVpnName param and a msgVpnName key inside
+//     msgVpnConfig both target it. With no defined precedence the winner would
+//     depend on Go's randomized map iteration order, so we fail loudly instead
+//     of writing an ambiguous body.
+//
+//   - A path/query param name placed inside the config object. On update,
+//     msgVpnName is a path param, so a msgVpnName key inside msgVpnConfig would
+//     otherwise leak into the body. Its value must come from the dedicated param
+//     (it identifies the object in the URL), so we reject it here — giving the
+//     same clear, client-side error as the create case above.
 func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, params map[string]any) (map[string]any, error) {
 	hasBody := false
 	nonBodyParams := make(map[string]bool) // params the op takes from path/query/header, not the body
@@ -518,6 +526,9 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 		}
 		if obj, isObj := val.(map[string]any); isObj {
 			for k, v := range obj {
+				if nonBodyParams[k] {
+					return nil, fmt.Errorf("invalid request body: %q is taken from the path or query and must not appear in the %q config object; supply it via the dedicated parameter instead", k, name)
+				}
 				if err := set(k, v); err != nil {
 					return nil, err
 				}

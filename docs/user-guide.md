@@ -91,7 +91,7 @@ What are the current message rates for default VPN on my-broker?
 
 ## Tools Reference
 
-The server exposes 17 read-only tools plus 13 write tools (30 total when write tools are enabled).  For full per-tool parameters, output shape, and example invocations, see the [Tools Reference](tools-reference.md); this section is the narrative overview. All broker-querying tools require a `broker` parameter to identify which configured event broker to query; `list-brokers` is the exception and returns the available event broker aliases. The write tools split into four action-API tools (operational actions against live objects) and nine Config-API management tools (create/update/delete for Message VPNs, queues, and topic endpoints); all are gated behind `enable_write_tools` (default off). The destructive ones (`delete-queue-messages`, `disconnect-client`, `delete-message-vpn`, `delete-queue`, `delete-topic-endpoint`) are marked via the MCP `destructiveHint` annotation and their descriptions instruct the calling LLM to obtain explicit user confirmation before invocation.
+The server exposes 17 read-only tools plus 13 write tools (30 total when write tools are enabled). For full per-tool parameters, output shape, and example invocations, see the [Tools Reference](tools-reference.md); this section is the narrative overview. All broker-querying tools require a `broker` parameter to identify which configured event broker to query; `list-brokers` is the exception and returns the available event broker aliases. The write tools split into four action-API tools (operational actions against live objects) and nine Config-API management tools (create/update/delete for Message VPNs, queues, and topic endpoints); all are gated behind `enable_write_tools` (default off). The destructive ones (`delete-queue-messages`, `disconnect-client`, `delete-message-vpn`, `delete-queue`, `delete-topic-endpoint`) are marked via the MCP `destructiveHint` annotation and their descriptions instruct the calling LLM to obtain explicit user confirmation before invocation.
 
 ### Discovery
 
@@ -167,18 +167,18 @@ These tools modify broker state via the SEMPv2 action API. There is **one tool p
 
 ### Management (Config API)
 
-These tools create, update, and delete broker configuration objects via the SEMPv2 config API, and are gated behind `enable_write_tools` alongside the action tools above. `create-*` is additive; `update-*` applies a partial (PATCH) update, changing only the fields supplied; `delete-*` removes the object and carries the `destructiveHint` annotation. `update-*` and `delete-*` can be service-affecting (for example, disabling a VPN drops its client connections), and every tool's description instructs the calling LLM to obtain explicit user confirmation — restating the target and effect — before invocation. Create and update tools accept a config object (`msgVpnConfig`, `queueConfig`, `topicEndpointConfig`); any attribute omitted takes the broker default.
+These tools create, update, and delete broker configuration objects via the SEMPv2 config API, and are gated behind `enable_write_tools` alongside the action tools above. `create-*` is additive; `update-*` applies a partial (PATCH) update, changing only the fields supplied; `delete-*` removes the object. `update-*` and `delete-*` can be service-affecting (for example, disabling a VPN drops its client connections) and both carry the `destructiveHint` annotation; `create-*` does not. Every tool's description instructs the calling LLM to obtain explicit user confirmation — restating the target and effect — before invocation. Create and update tools accept a config object (`msgVpnConfig`, `queueConfig`, `topicEndpointConfig`); any attribute omitted takes the broker default.
 
 | Tool | Destructive | Description |
 |---|---|---|
 | `create-message-vpn` | No | Create a Message VPN. |
-| `update-message-vpn` | No | Partially update a Message VPN's attributes (for example, `enabled`, connection limits, spool quota). |
+| `update-message-vpn` | **Yes** | Partially update a Message VPN's attributes (for example, `enabled`, connection limits, spool quota). Service-affecting: disabling a VPN drops its client connections. |
 | `delete-message-vpn` | **Yes** | Delete a Message VPN. Fails if it still has active client connections or child endpoints. |
 | `create-queue` | No | Create a queue in a VPN. |
-| `update-queue` | No | Partially update a queue's attributes (for example, `egressEnabled`, spool quota, redelivery limit). |
+| `update-queue` | **Yes** | Partially update a queue's attributes (for example, `egressEnabled`, spool quota, redelivery limit). Service-affecting: disabling egress halts delivery; lowering a spool quota can evict messages. |
 | `delete-queue` | **Yes** | Delete a queue and discard any messages still spooled on it. |
 | `create-topic-endpoint` | No | Create a topic endpoint in a VPN. |
-| `update-topic-endpoint` | No | Partially update a topic endpoint's attributes. |
+| `update-topic-endpoint` | **Yes** | Partially update a topic endpoint's attributes. Service-affecting: disabling egress halts delivery; lowering a spool quota can evict messages. |
 | `delete-topic-endpoint` | **Yes** | Delete a topic endpoint and discard any messages still spooled on it. |
 
 ## Recommended Environments

@@ -2259,6 +2259,34 @@ func TestExecute_CreateMessageVPN_RejectsFieldCollision(t *testing.T) {
 	}
 }
 
+func TestExecute_UpdateMessageVPN_RejectsPathParamInConfig(t *testing.T) {
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	// msgVpnName is a path param of updateMsgVpn, so its scalar form is taken from
+	// the URL. Placing it inside msgVpnConfig would otherwise leak it into the
+	// PATCH body; it must be rejected before any SEMP call.
+	_, err := executor.Execute(context.Background(), updateMessageVPNTool(), capture, map[string]any{
+		"msgVpnName": "prod-vpn",
+		"msgVpnConfig": map[string]any{
+			"msgVpnName": "prod-vpn",
+			"enabled":    false,
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for path param inside config object, got nil")
+	}
+	if !strings.Contains(err.Error(), "msgVpnName") {
+		t.Errorf("error should name the offending field, got: %v", err)
+	}
+	if len(recorded) != 0 {
+		t.Errorf("expected no SEMP calls on rejected body, got %d", len(recorded))
+	}
+}
+
 func TestExecute_CreateMessageVPN_AlreadyExists(t *testing.T) {
 	client := newMockClient()
 	client.errors["createMsgVpn"] = &sempv2.SEMPError{

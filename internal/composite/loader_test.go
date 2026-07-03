@@ -1345,7 +1345,7 @@ tools:
     description: Update an existing Message VPN.
     annotations:
       readOnly: false
-      destructive: false
+      destructive: true
     parameters:
       - name: msgVpnName
         type: string
@@ -1384,8 +1384,8 @@ tools:
 	if tool.Annotations.ReadOnly == nil || *tool.Annotations.ReadOnly {
 		t.Error("expected ReadOnly = false")
 	}
-	if tool.Annotations.Destructive == nil || *tool.Annotations.Destructive {
-		t.Error("expected Destructive = false")
+	if tool.Annotations.Destructive == nil || !*tool.Annotations.Destructive {
+		t.Error("expected Destructive = true")
 	}
 
 	if len(tool.Parameters) != 2 {
@@ -1584,7 +1584,7 @@ tools:
     description: Update an existing queue.
     annotations:
       readOnly: false
-      destructive: false
+      destructive: true
     parameters:
       - name: msgVpnName
         type: string
@@ -1628,8 +1628,8 @@ tools:
 	if tool.Annotations.ReadOnly == nil || *tool.Annotations.ReadOnly {
 		t.Error("expected ReadOnly = false")
 	}
-	if tool.Annotations.Destructive == nil || *tool.Annotations.Destructive {
-		t.Error("expected Destructive = false")
+	if tool.Annotations.Destructive == nil || !*tool.Annotations.Destructive {
+		t.Error("expected Destructive = true")
 	}
 
 	if len(tool.Parameters) != 3 {
@@ -1820,7 +1820,7 @@ tools:
     description: Update an existing topic endpoint.
     annotations:
       readOnly: false
-      destructive: false
+      destructive: true
     parameters:
       - name: msgVpnName
         type: string
@@ -1864,8 +1864,8 @@ tools:
 	if tool.Annotations.ReadOnly == nil || *tool.Annotations.ReadOnly {
 		t.Error("expected ReadOnly = false")
 	}
-	if tool.Annotations.Destructive == nil || *tool.Annotations.Destructive {
-		t.Error("expected Destructive = false")
+	if tool.Annotations.Destructive == nil || !*tool.Annotations.Destructive {
+		t.Error("expected Destructive = true")
 	}
 
 	if len(tool.Parameters) != 3 {
