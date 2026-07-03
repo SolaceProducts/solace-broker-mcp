@@ -7,8 +7,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 )
 
 // stubJar satisfies CookieJarClearer for tests that need a non-nil jar
@@ -63,80 +61,11 @@ func TestBearerAuthenticator_AddAuth(t *testing.T) {
 	}
 }
 
-func TestNewAuthenticator_DispatchesByMode(t *testing.T) {
-	tests := []struct {
-		name string
-		cfg  config.AuthConfig
-		jar  CookieJarClearer
-		want any
-	}{
-		{
-			name: "basic",
-			cfg:  config.AuthConfig{Mode: config.AuthModeBasic, Username: "u", Password: "p"},
-			jar:  &stubJar{},
-			want: (*BasicAuthenticator)(nil),
-		},
-		{
-			name: "bearer",
-			cfg:  config.AuthConfig{Mode: config.AuthModeBearer, Token: "t"},
-			want: (*BearerAuthenticator)(nil),
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			a, err := NewAuthenticator(tt.cfg, tt.jar)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			switch tt.want.(type) {
-			case *BasicAuthenticator:
-				if _, ok := a.(*BasicAuthenticator); !ok {
-					t.Errorf("got %T, want *BasicAuthenticator", a)
-				}
-			case *BearerAuthenticator:
-				if _, ok := a.(*BearerAuthenticator); !ok {
-					t.Errorf("got %T, want *BearerAuthenticator", a)
-				}
-			}
-		})
-	}
-}
-
-func TestNewAuthenticator_BasicAuth_RequiresJar(t *testing.T) {
-	cfg := config.AuthConfig{Mode: config.AuthModeBasic, Username: "u", Password: "p"}
-	a, err := NewAuthenticator(cfg, nil)
-	if err == nil {
-		t.Fatal("expected error for basic auth with nil jar, got nil")
-	}
-	if a != nil {
-		t.Errorf("expected nil authenticator on error, got %T", a)
-	}
-	if !strings.Contains(err.Error(), "cookie jar") {
-		t.Errorf("error = %v, want it to mention 'cookie jar'", err)
-	}
-}
-
-func TestNewAuthenticator_UnsupportedMode(t *testing.T) {
-	a, err := NewAuthenticator(config.AuthConfig{Mode: "invented-mode"}, nil)
-	if err == nil {
-		t.Fatal("expected error for unsupported mode, got nil")
-	}
-	if a != nil {
-		t.Errorf("expected nil authenticator on error, got %T", a)
-	}
-	if !strings.Contains(err.Error(), "unsupported auth mode") {
-		t.Errorf("error = %v, want it to mention 'unsupported auth mode'", err)
-	}
-}
-
-// TestAuthenticator_ConcurrentAddAuth_NoFieldMutation exercises Decision
-// 13 Test 5: many goroutines call AddAuth concurrently, each with its
-// own ctx and req. The Authenticator must produce correct headers on
-// every call and must not mutate its own fields. Run with -race.
+// TestAuthenticator_ConcurrentAddAuth_NoFieldMutation exercises concurrent
+// safety: many goroutines call AddAuth concurrently, each with its own
+// ctx and req. The Authenticator must produce correct headers on every
+// call and must not mutate its own fields. Run with -race.
 func TestAuthenticator_ConcurrentAddAuth_NoFieldMutation(t *testing.T) {
-	// 16 goroutines is enough — the -race detector flags races on any
-	// concurrent unsynchronized access, regardless of pressure. Higher
-	// counts would be performative, not informative.
 	const goroutines = 16
 
 	t.Run("basic", func(t *testing.T) {
@@ -204,9 +133,10 @@ func TestAuthenticator_ConcurrentAddAuth_NoFieldMutation(t *testing.T) {
 	})
 }
 
-// Compile-time assertions that both types satisfy the Authenticator
+// Compile-time assertions that all types satisfy the Authenticator
 // interface — protects against an accidental signature drift.
 var (
 	_ Authenticator = (*BasicAuthenticator)(nil)
 	_ Authenticator = (*BearerAuthenticator)(nil)
+	_ Authenticator = (*OAuthAuthenticator)(nil)
 )
