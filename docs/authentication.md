@@ -312,6 +312,34 @@ A browser window opens on first use for user login. The IdP must support anonymo
 
 ### How It Works
 
+**Authentication flow (`mode: oauth`):**
+
+```
+ Agent          MCP Server     IdP            Broker
+   │              │              │              │
+   │───── 1 ──────▶              │              │       1. MCP request (no token)
+   ◀───── 2 ──────│              │              │       2. 401 + resource-metadata pointer
+   │───── 3 ──────▶              │              │       3. GET /.well-known/oauth-protected-resource
+   │              │              │              │          (discovers authorization server)
+   │───────────── 4 ─────────────▶              │       4. Register (DCR) or use pre-registered client
+   ◀───────────── 5 ─────────────▶              │       5. Browser login: Authorization Code + PKCE
+   ◀───────────── 6 ─────────────│              │       6. Access token (JWT, aud = configured audience)
+   │───── 7 ──────▶              │              │       7. MCP request + Bearer JWT
+   │              │───── 8 ──────▶              │       8. Validate JWT — fetch JWKS (sig, iss, aud, exp)
+   │              │───────────── 9 ─────────────▶       9. Tool call → SEMP (broker auth: basic/bearer)
+   │              ◀──────────── 10 ─────────────│       10. SEMP response
+   ◀──── 11 ──────│              │              │       11. Tool result
+   │              │              │              │
+```
+
+> **Two independent auth legs.** Client→server auth (steps 1–8, the JWT above) is
+> distinct from server→broker auth (step 9), which uses each broker's configured
+> `auth.mode` (`basic` or `bearer`). Broker-bound OAuth via RFC 8693 token exchange
+> (the `broker_oauth:` config block) is **schema-only** in the current release and
+> not yet wired — see the [CHANGELOG](../CHANGELOG.md).
+
+The numbered steps in detail:
+
 1. Claude Code connects to the MCP server and receives a `401 Unauthorized` response
 2. Claude Code fetches the OAuth Protected Resource Metadata from `/.well-known/oauth-protected-resource` to discover the authorization server
 3. **Option A:** Claude Code uses the pre-registered client credentials and skips DCR
