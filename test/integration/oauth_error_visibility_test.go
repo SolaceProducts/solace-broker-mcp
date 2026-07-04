@@ -247,7 +247,7 @@ func oauthInjectSubjectToken(t *testing.T, token string) context.Context {
 		ctx = r.Context()
 		mu.Unlock()
 	}))
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	middleware.ServeHTTP(httptest.NewRecorder(), req)
 	mu.Lock()

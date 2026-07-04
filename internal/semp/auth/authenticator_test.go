@@ -9,12 +9,6 @@ import (
 	"testing"
 )
 
-// stubJar satisfies CookieJarClearer for tests that need a non-nil jar
-// but never exercise clearing.
-type stubJar struct{}
-
-func (stubJar) Clear() error { return nil }
-
 func newReq(t *testing.T) *http.Request {
 	t.Helper()
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://example.test/SEMP", nil)

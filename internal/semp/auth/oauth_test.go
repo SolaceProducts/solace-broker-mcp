@@ -30,7 +30,7 @@ func (f *fakeExchanger) Exchange(_ context.Context, input tokenexchange.Exchange
 // a bearer token on a context, exactly as the production middleware does.
 func ctxWithSubjectToken(t *testing.T, token string) context.Context {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodGet, "http://example.test", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.test", nil)
 	if err != nil {
 		t.Fatalf("building request: %v", err)
 	}
