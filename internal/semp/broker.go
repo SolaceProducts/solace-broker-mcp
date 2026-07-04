@@ -120,9 +120,6 @@ func newAuthenticator(alias string, brokerCfg *config.BrokerConfig, jar *resilie
 	case config.AuthModeBearer:
 		return auth.NewBearerAuthenticator(cfg.Token), nil
 	case config.AuthModeOAuth:
-		if exchanger == nil {
-			return nil, fmt.Errorf("oauth auth requires a token exchanger for broker %q", alias)
-		}
 		return auth.NewOAuthAuthenticator(exchanger, cfg.Audience, cfg.Scopes, alias), nil
 	default:
 		return nil, fmt.Errorf("unsupported auth mode %q for broker %q", cfg.Mode, alias)
