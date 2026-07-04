@@ -7,6 +7,8 @@ package cache
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -16,6 +18,18 @@ import (
 type CachedCredential struct {
 	Value     string
 	ExpiresAt time.Time
+}
+
+func (c CachedCredential) String() string {
+	return fmt.Sprintf("CachedCredential{ExpiresAt: %v}", c.ExpiresAt)
+}
+
+func (c CachedCredential) LogValue() slog.Value {
+	return slog.GroupValue(slog.Time("expires_at", c.ExpiresAt))
+}
+
+func (c CachedCredential) GoString() string {
+	return c.String()
 }
 
 // TokenCache is the boundary between the Exchanger and whatever storage

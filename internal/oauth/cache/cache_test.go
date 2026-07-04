@@ -342,17 +342,13 @@ func TestPut_OverwritesExistingKey(t *testing.T) {
 	}
 }
 
-// T12: MaxSize=0 panics at construction.
-// otter.MustBuilder panics on invalid MaxSize (panic-on-misuse contract).
-func TestNewTokenCache_PanicsOnMaxSizeZero(t *testing.T) {
+// T12: MaxSize=0 returns an error at construction.
+func TestNewTokenCache_ErrorOnMaxSizeZero(t *testing.T) {
 	t.Parallel()
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected panic for MaxSize=0, got none")
-		}
-	}()
-	//nolint:errcheck // return value unreachable — panic fires inside MustBuilder.
-	_, _ = NewTokenCache(CacheConfig{MaxSize: 0, ClockSkew: 0, MaxTTL: time.Hour})
+	_, err := NewTokenCache(CacheConfig{MaxSize: 0, ClockSkew: 0, MaxTTL: time.Hour})
+	if err == nil {
+		t.Fatal("expected error for MaxSize=0, got nil")
+	}
 }
 
 // T14: All Put/Get/Delete calls return nil error, including edge cases.
