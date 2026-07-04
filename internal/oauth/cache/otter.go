@@ -32,35 +32,31 @@ func newOtterTokenCache(cfg CacheConfig) (*otterTokenCache, error) {
 	}, nil
 }
 
-// Get returns a token only if it is stored and still fresh. Belt-and-suspenders
-// check against token.ExpiresAt guards against any Otter sweeper lag.
-func (o *otterTokenCache) Get(_ context.Context, key string) (CachedCredential, bool, error) {
+func (o *otterTokenCache) Get(_ context.Context, key string) (GetResult, error) {
 	entry, ok := o.cache.Get(key)
 	if !ok {
-		return CachedCredential{}, false, nil
+		return GetResult{Status: GetMissAbsent}, nil
 	}
-	// Belt-and-suspenders: Otter's TTL should have evicted this, but check anyway.
 	if !time.Now().Before(entry.ExpiresAt) {
-		return CachedCredential{}, false, nil
+		return GetResult{Status: GetMissExpired}, nil
 	}
-	return entry, true, nil
+	return GetResult{Entry: entry, Status: GetHit}, nil
 }
 
-// Put stores the token with a TTL derived from ExpiresAt minus ClockSkew,
-// capped at MaxTTL. Does not store if the computed TTL is zero or negative.
-func (o *otterTokenCache) Put(_ context.Context, key string, entry CachedCredential) error {
+func (o *otterTokenCache) Put(_ context.Context, key string, entry CachedCredential) (PutResult, error) {
 	rawTTL := time.Until(entry.ExpiresAt)
 	safeTTL := rawTTL - o.clockSkew
 	ttl := min(safeTTL, o.maxTTL)
 	if ttl <= 0 {
-		return nil
+		return PutResult{Status: PutDroppedTTL}, nil
 	}
-	o.cache.Set(key, entry, ttl)
-	return nil
+	if !o.cache.Set(key, entry, ttl) {
+		return PutResult{Status: PutDroppedFull}, nil
+	}
+	return PutResult{Status: PutStored}, nil
 }
 
-// Delete removes the key from the cache immediately. Idempotent.
-func (o *otterTokenCache) Delete(_ context.Context, key string) error {
+func (o *otterTokenCache) Delete(_ context.Context, key string) (DeleteResult, error) {
 	o.cache.Delete(key)
-	return nil
+	return DeleteResult{}, nil
 }
