@@ -32,27 +32,49 @@ func (c CachedCredential) GoString() string {
 	return c.String()
 }
 
+// GetStatus describes the outcome of a Get call.
+type GetStatus int
+
+const (
+	GetHit         GetStatus = iota // Entry found and fresh.
+	GetMissAbsent                   // No entry for this key.
+	GetMissExpired                  // Entry exists but failed the freshness check.
+)
+
+// GetResult is returned by Get. Callers inspect Status to distinguish
+// hit, clean miss, and expired miss — each has different diagnostic meaning.
+type GetResult struct {
+	Entry  CachedCredential
+	Status GetStatus
+}
+
+// PutStatus describes the outcome of a Put call.
+type PutStatus int
+
+const (
+	PutStored     PutStatus = iota // Entry accepted and stored.
+	PutDroppedTTL                  // TTL was zero or negative after clock-skew; not stored.
+	PutDroppedFull                 // Otter's admission policy rejected the entry (cache full).
+)
+
+// PutResult is returned by Put.
+type PutResult struct {
+	Status PutStatus
+}
+
+// DeleteResult is returned by Delete. Empty today; exists so a future backend
+// (e.g. Redis DEL returning a count) can surface info without changing the
+// interface signature.
+type DeleteResult struct{}
+
 // TokenCache is the boundary between the Exchanger and whatever storage
 // implementation backs the cache. The Exchanger depends on this interface only.
-//
-// Freshness contract: Get returns found=false for both "never stored" and
-// "stored but expired" — callers cannot distinguish the two cases, by design.
-// This keeps all freshness policy inside the cache implementation.
 //
 // Error contract: errors are for backend failures only (e.g., Redis down in a
 // future implementation). In-memory implementations should never return
 // non-nil errors.
 type TokenCache interface {
-	// Get returns a credential only if one is stored AND still fresh by the
-	// cache's policy. found=false means "no usable entry here".
-	Get(ctx context.Context, key string) (entry CachedCredential, found bool, err error)
-
-	// Put stores a credential. The cache uses entry.ExpiresAt to determine TTL.
-	// If the computed TTL is zero or negative (already expired or within the
-	// clock-skew window), the entry is not stored.
-	Put(ctx context.Context, key string, entry CachedCredential) error
-
-	// Delete forcibly evicts a key. Idempotent — deleting a non-existent key
-	// returns nil. Used for known-bad token paths (e.g., broker 401).
-	Delete(ctx context.Context, key string) error
+	Get(ctx context.Context, key string) (GetResult, error)
+	Put(ctx context.Context, key string, entry CachedCredential) (PutResult, error)
+	Delete(ctx context.Context, key string) (DeleteResult, error)
 }
