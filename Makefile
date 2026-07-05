@@ -148,3 +148,50 @@ e2e-action-all: ## Full e2e-action cycle: brokers up, wait for health, run suite
 .PHONY: docker
 docker: ## Build the Docker image (override with IMAGE=, IMAGE_TAG=, VERSION=)
 	docker build --build-arg VERSION="$(VERSION)" -t "$(IMAGE):$(IMAGE_TAG)" .
+
+# ── Local OAuth dev environment ─────────────────────────────────────────────
+# Wires up a Keycloak container with TLS + realm import so the MCP server's
+# OAuth path (JWT validation, RFC 8693 token exchange) can be exercised end
+# to end on localhost.  Every target below is idempotent — safe to re-run.
+
+OAUTH_COMPOSE_DIR := docker/oauth-dev
+OAUTH_COMPOSE     := podman compose -f $(OAUTH_COMPOSE_DIR)/docker-compose.yaml
+OAUTH_CERT_ROOT   := $(CURDIR)/.local/certs
+
+.PHONY: certs
+certs: ## Generate self-signed dev certs under .local/certs/ (idempotent)
+	@./scripts/gen-dev-certs.sh $(OAUTH_CERT_ROOT)
+
+.PHONY: certs-clean
+certs-clean: ## Delete generated dev certs
+	rm -rf $(OAUTH_CERT_ROOT)
+
+.PHONY: oauth-up
+oauth-up: certs ## Start the Keycloak dev container (health-gated by oauth-init)
+	$(OAUTH_COMPOSE) up -d
+
+.PHONY: oauth-init
+oauth-init: oauth-up ## Apply post-startup Keycloak init (disable HSTS, reset user passwords)
+	@./scripts/keycloak-init.sh
+
+.PHONY: oauth-down
+oauth-down: ## Stop and remove the Keycloak dev container
+	-$(OAUTH_COMPOSE) down
+
+.PHONY: oauth-reset
+oauth-reset: oauth-down oauth-init ## Full reset: tear down Keycloak, restart, re-init
+
+.PHONY: dev-up
+dev-up: oauth-init ## Bring the whole OAuth dev environment up (certs + Keycloak + init)
+	@echo ""
+	@echo "▶ Ready. Launch the MCP server:"
+	@echo "    make run-oauth"
+	@echo "▶ Launch Claude Code with the CA bundle:"
+	@echo "    NODE_EXTRA_CA_CERTS=$(OAUTH_CERT_ROOT)/combined-ca-bundle.crt claude"
+
+.PHONY: run-oauth
+run-oauth: oauth-init ## Run the MCP server against the local OAuth dev environment
+	ENABLE_UNRELEASED_BROKER_OAUTH=true \
+	SSL_CERT_FILE=$(OAUTH_CERT_ROOT)/keycloak/keycloak.crt \
+	CONFIG_FILE=broker-config.oauth-test.yaml \
+	go run $(PKG)

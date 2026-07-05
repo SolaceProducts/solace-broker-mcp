@@ -57,3 +57,6 @@ open-source.md
 *.tfstate
 *.tfstate.backup
 .nfs*
+
+# Local dev state (certs, generated configs, etc.)
+/.local/
