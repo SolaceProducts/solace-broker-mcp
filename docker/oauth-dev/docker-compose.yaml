@@ -1,0 +1,34 @@
+# Local OAuth dev stack: a single Keycloak container with TLS and realm import.
+#
+# All paths are relative to this file's directory (docker/oauth-dev/).
+# The Makefile's `keycloak-up` target is the intended entry point:
+#     make keycloak-up
+#
+# Certs must exist before this stack starts — the Makefile depends on `certs`.
+
+name: solace-broker-mcp-oauth-dev
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.2.5
+    container_name: solace-broker-mcp-keycloak-oauth-dev
+    ports:
+      - "18443:8443"    # HTTPS (used by Claude Code + MCP server) — host 18443 → container 8443
+      - "18180:8080"    # HTTP admin (used by keycloak-init.sh for HSTS/password ops)
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HTTPS_CERTIFICATE_FILE: /opt/keycloak/conf/certs/keycloak.crt
+      KC_HTTPS_CERTIFICATE_KEY_FILE: /opt/keycloak/conf/certs/keycloak.key
+    volumes:
+      - ../../.local/certs/keycloak/keycloak.crt:/opt/keycloak/conf/certs/keycloak.crt:ro
+      - ../../.local/certs/keycloak/keycloak.key:/opt/keycloak/conf/certs/keycloak.key:ro
+      - ./realm-export.json:/opt/keycloak/data/import/mcp-test-realm-realm.json:ro
+    command: start-dev --import-realm
+    healthcheck:
+      # HTTPS listener accepting connections = ready for OIDC discovery.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8443 && echo OK >&3"]
+      interval: 5s
+      timeout: 3s
+      retries: 24        # ~2 min budget for cold start
+      start_period: 15s
