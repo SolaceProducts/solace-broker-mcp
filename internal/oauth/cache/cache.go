@@ -41,6 +41,28 @@ const (
 	GetMissExpired                  // Entry exists but failed the freshness check.
 )
 
+func (s GetStatus) String() string {
+	switch s {
+	case GetHit:
+		return "hit"
+	case GetMissAbsent:
+		return "miss_absent"
+	case GetMissExpired:
+		return "miss_expired"
+	default:
+		return fmt.Sprintf("GetStatus(%d)", int(s))
+	}
+}
+
+func (s GetStatus) Level() slog.Level {
+	switch s {
+	case GetMissExpired:
+		return slog.LevelWarn
+	default:
+		return slog.LevelDebug
+	}
+}
+
 // GetResult is returned by Get. Callers inspect Status to distinguish
 // hit, clean miss, and expired miss — each has different diagnostic meaning.
 type GetResult struct {
@@ -56,6 +78,28 @@ const (
 	PutDroppedTTL                  // TTL was zero or negative after clock-skew; not stored.
 	PutDroppedFull                 // Otter's admission policy rejected the entry (cache full).
 )
+
+func (s PutStatus) String() string {
+	switch s {
+	case PutStored:
+		return "stored"
+	case PutDroppedTTL:
+		return "dropped_ttl"
+	case PutDroppedFull:
+		return "dropped_full"
+	default:
+		return fmt.Sprintf("PutStatus(%d)", int(s))
+	}
+}
+
+func (s PutStatus) Level() slog.Level {
+	switch s {
+	case PutDroppedTTL, PutDroppedFull:
+		return slog.LevelWarn
+	default:
+		return slog.LevelDebug
+	}
+}
 
 // PutResult is returned by Put.
 type PutResult struct {
