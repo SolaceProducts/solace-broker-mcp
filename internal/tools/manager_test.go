@@ -62,7 +62,7 @@ func newTestPool(t *testing.T) *semp.BrokerPool {
 		[2]string{"dev", "http://localhost:8081"},
 		[2]string{"prod", "http://localhost:8082"},
 	)
-	return semp.NewBrokerPool(cfg)
+	return semp.NewBrokerPool(cfg, nil)
 }
 
 // stubHandler implements ToolHandler for unit testing the manager.

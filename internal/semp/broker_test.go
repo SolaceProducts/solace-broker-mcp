@@ -31,7 +31,7 @@ func TestBrokerClient_V2_ReturnsClient(t *testing.T) {
 	}
 	sempCfg := testSEMPConfig()
 
-	bc, err := semp.NewBrokerClient("test-broker", brokerCfg, sempCfg)
+	bc, err := semp.NewBrokerClient("test-broker", brokerCfg, sempCfg, nil)
 	if err != nil {
 		t.Fatalf("NewBrokerClient() error: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestBrokerClient_V2_ExecutePassesThrough(t *testing.T) {
 	}
 	sempCfg := testSEMPConfig()
 
-	bc, err := semp.NewBrokerClient("test-broker", brokerCfg, sempCfg)
+	bc, err := semp.NewBrokerClient("test-broker", brokerCfg, sempCfg, nil)
 	if err != nil {
 		t.Fatalf("NewBrokerClient() error: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestBrokerClient_V1_ReturnsClient(t *testing.T) {
 	}
 	sempCfg := testSEMPConfig()
 
-	bc, err := semp.NewBrokerClient("test-broker", brokerCfg, sempCfg)
+	bc, err := semp.NewBrokerClient("test-broker", brokerCfg, sempCfg, nil)
 	if err != nil {
 		t.Fatalf("NewBrokerClient() error: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestBrokerClient_V1_ExecutePassesThrough(t *testing.T) {
 	}
 	sempCfg := testSEMPConfig()
 
-	bc, err := semp.NewBrokerClient("test-broker", brokerCfg, sempCfg)
+	bc, err := semp.NewBrokerClient("test-broker", brokerCfg, sempCfg, nil)
 	if err != nil {
 		t.Fatalf("NewBrokerClient() error: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestBrokerClient_SharedJar_401ClearVisibleAcrossProtocols(t *testing.T) {
 		Auth: config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"},
 	}
 
-	bc, err := semp.NewBrokerClient("shared-jar-test", brokerCfg, sempCfg)
+	bc, err := semp.NewBrokerClient("shared-jar-test", brokerCfg, sempCfg, nil)
 	if err != nil {
 		t.Fatalf("NewBrokerClient: %v", err)
 	}

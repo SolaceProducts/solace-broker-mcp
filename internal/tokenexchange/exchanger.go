@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -37,6 +38,7 @@ type Exchanger struct {
 	grantType        GrantType
 	audienceParam    AudienceFormat
 	httpClient       *http.Client
+	exchangeTimeout  time.Duration
 	group            singleflight.Group
 	nowFunc          func() time.Time
 }
@@ -63,6 +65,7 @@ func New(p Params) (*Exchanger, error) {
 		grantType:        p.GrantType,
 		audienceParam:    p.AudienceParam,
 		httpClient:       p.HTTPClient,
+		exchangeTimeout:  defaults.DefaultOIDCHTTPTimeout,
 		nowFunc:          time.Now,
 	}, nil
 }
