@@ -56,12 +56,19 @@ func (e *Exchanger) parseIdPResponse(resp *http.Response, now time.Time) (*Token
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
 	if err != nil {
-		return nil, fmt.Errorf("%w: reading IdP response body: %v", ErrExchangeTransport, err)
+		return nil, &ExchangeError{
+			Sentinel: ErrExchangeTransport,
+			Message:  fmt.Sprintf("token exchange transport failure: reading IdP response body: %v", err),
+		}
 	}
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		if ct := responseMediaType(resp); ct != "" && ct != "application/json" {
-			return nil, fmt.Errorf("%w: IdP returned HTTP %d with Content-Type %q (expected application/json — possible SSO/proxy interception)", ErrInvalidResponse, resp.StatusCode, ct)
+			return nil, &ExchangeError{
+				Sentinel:   ErrInvalidResponse,
+				Message:    fmt.Sprintf("token exchange invalid response: IdP returned HTTP %d with Content-Type %q (expected application/json — possible SSO/proxy interception)", resp.StatusCode, ct),
+				HTTPStatus: resp.StatusCode,
+			}
 		}
 		return e.parseSuccessBody(body, now)
 	}
@@ -70,35 +77,57 @@ func (e *Exchanger) parseIdPResponse(resp *http.Response, now time.Time) (*Token
 		return nil, classifyClientError(body, resp.StatusCode)
 	}
 
-	return nil, fmt.Errorf("%w: IdP returned HTTP %d", ErrExchangeTransport, resp.StatusCode)
+	return nil, &ExchangeError{
+		Sentinel:   ErrExchangeTransport,
+		Message:    fmt.Sprintf("token exchange transport failure: IdP returned HTTP %d", resp.StatusCode),
+		HTTPStatus: resp.StatusCode,
+	}
 }
 
 func (e *Exchanger) parseSuccessBody(body []byte, now time.Time) (*Token, error) {
 	var sr successResponse
 	if err := json.Unmarshal(body, &sr); err != nil {
-		return nil, fmt.Errorf("%w: unparseable IdP success response: %v", ErrInvalidResponse, err)
+		return nil, &ExchangeError{
+			Sentinel: ErrInvalidResponse,
+			Message:  fmt.Sprintf("token exchange invalid response: unparseable IdP success response: %v", err),
+		}
 	}
 
 	if sr.AccessToken == "" {
-		return nil, fmt.Errorf("%w: IdP success response missing access_token", ErrInvalidResponse)
+		return nil, &ExchangeError{
+			Sentinel: ErrInvalidResponse,
+			Message:  "token exchange invalid response: IdP success response missing access_token",
+		}
 	}
 
 	if !strings.EqualFold(sr.TokenType, "Bearer") {
-		return nil, fmt.Errorf("%w: IdP returned token_type %q, expected \"Bearer\" — the MCP server only supports Bearer tokens", ErrInvalidResponse, sr.TokenType)
+		return nil, &ExchangeError{
+			Sentinel: ErrInvalidResponse,
+			Message:  fmt.Sprintf("token exchange invalid response: IdP returned token_type %q, expected \"Bearer\" — the MCP server only supports Bearer tokens", sr.TokenType),
+		}
 	}
 
 	// issued_token_type is RFC 8693-specific; RFC 7523 responses don't include it.
 	if e.grantType == GrantTypeTokenExchange && sr.IssuedTokenType != URNTokenTypeAccessToken {
-		return nil, fmt.Errorf("%w: IdP returned issued_token_type %q, expected %q — the IdP may be misconfigured to issue a different token type", ErrInvalidResponse, sr.IssuedTokenType, URNTokenTypeAccessToken)
+		return nil, &ExchangeError{
+			Sentinel: ErrInvalidResponse,
+			Message:  fmt.Sprintf("token exchange invalid response: IdP returned issued_token_type %q, expected %q — the IdP may be misconfigured to issue a different token type", sr.IssuedTokenType, URNTokenTypeAccessToken),
+		}
 	}
 
 	if sr.ExpiresIn <= 0 {
-		return nil, fmt.Errorf("%w: IdP success response missing or non-positive expires_in — the IdP must return expires_in in token-exchange responses (configure token lifetimes on the IdP client)", ErrInvalidResponse)
+		return nil, &ExchangeError{
+			Sentinel: ErrInvalidResponse,
+			Message:  "token exchange invalid response: IdP success response missing or non-positive expires_in — the IdP must return expires_in in token-exchange responses (configure token lifetimes on the IdP client)",
+		}
 	}
 
 	// Prevents time.Duration overflow (int64 nanoseconds, max ~292 years).
 	if sr.ExpiresIn > maxExpiresInSeconds {
-		return nil, fmt.Errorf("%w: IdP returned expires_in %d which exceeds the safe arithmetic limit — likely a misbehaving IdP or intercepted response", ErrInvalidResponse, sr.ExpiresIn)
+		return nil, &ExchangeError{
+			Sentinel: ErrInvalidResponse,
+			Message:  fmt.Sprintf("token exchange invalid response: IdP returned expires_in %d which exceeds the safe arithmetic limit — likely a misbehaving IdP or intercepted response", sr.ExpiresIn),
+		}
 	}
 
 	// TODO(Commit C): log WARN when sr.ExpiresIn <= int64(defaults.DefaultTokenExpirySkew.Seconds())
@@ -139,10 +168,22 @@ func classifyClientError(body []byte, statusCode int) error {
 	var er errorResponse
 	if err := json.Unmarshal(body, &er); err == nil && er.Error != "" {
 		if len(er.Error) > maxErrorCodeLen {
-			return fmt.Errorf("%w: IdP returned HTTP %d with oversized error code (%d bytes) — not a standard OAuth error", ErrExchangeTransport, statusCode, len(er.Error))
+			return &ExchangeError{
+				Sentinel:   ErrExchangeTransport,
+				Message:    fmt.Sprintf("token exchange transport failure: IdP returned HTTP %d with oversized error code (%d bytes) — not a standard OAuth error", statusCode, len(er.Error)),
+				HTTPStatus: statusCode,
+			}
 		}
-		return fmt.Errorf("%w: IdP error %q (HTTP %d)", ErrExchangeRejected, er.Error, statusCode)
+		return &ExchangeError{
+			Sentinel:   ErrExchangeRejected,
+			Message:    fmt.Sprintf("token exchange rejected by IdP: IdP error %q (HTTP %d)", er.Error, statusCode),
+			HTTPStatus: statusCode,
+		}
 	}
 
-	return fmt.Errorf("%w: IdP returned HTTP %d with non-OAuth error body (possible proxy or WAF interception)", ErrExchangeTransport, statusCode)
+	return &ExchangeError{
+		Sentinel:   ErrExchangeTransport,
+		Message:    fmt.Sprintf("token exchange transport failure: IdP returned HTTP %d with non-OAuth error body (possible proxy or WAF interception)", statusCode),
+		HTTPStatus: statusCode,
+	}
 }

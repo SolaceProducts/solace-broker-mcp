@@ -29,6 +29,7 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceDev/solace-broker-mcp/internal/tokenexchange"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -291,9 +292,11 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 	var sempv1Err *sempv1.Error
 	var sempv2Err *sempv2.SEMPError
 	var retriesErr *resilience.RetriesExhaustedError
+	var exchErr *tokenexchange.ExchangeError
 	isV1 := errors.As(*toolErr, &sempv1Err)
 	isV2 := errors.As(*toolErr, &sempv2Err)
 	isRetries := errors.As(*toolErr, &retriesErr)
+	isExchange := errors.As(*toolErr, &exchErr)
 
 	// "detail" carries the unsanitized error so operators can diagnose failures —
 	// it is the one place the raw text is kept (the agent only ever sees the
@@ -309,7 +312,7 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 	// message. ReplaceAttr can't help here (it keys off field names, and "detail"
 	// is a raw string), so this type gate is the actual safeguard.
 	detail := fmt.Sprintf("%T", *toolErr)
-	if isV1 || isV2 || isRetries {
+	if isV1 || isV2 || isRetries || isExchange {
 		detail = (*toolErr).Error()
 	}
 
@@ -336,6 +339,8 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 			slog.Int("http_status", sempv2Err.StatusCode),
 			slog.Int("semp_code", sempv2Err.SEMPCode),
 			slog.String("operation", sempv2Err.Operation))
+	case isExchange:
+		attrs = append(attrs, exchErr.LogAttrs()...)
 	}
 
 	slog.LogAttrs(ctx, slog.LevelError, "tool invoked", attrs...)
