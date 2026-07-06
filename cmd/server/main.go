@@ -17,18 +17,14 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -100,12 +96,10 @@ func newSlogHandler(level slog.Level) slog.Handler {
 // The /mcp route is registered separately in main() with auth middleware.
 // Both main() and tests use this function to avoid route drift.
 //
-// aliases returns the list of broker names to check.
-// probeBroker tests connectivity to a single broker; it returns nil on success.
-// readiness backs the /readyz endpoint, which reflects the MCP server's OWN
-// readiness and is decoupled from the broker (it consults neither aliases nor
-// probeBroker).
-func buildMux(aliases func() []string, probeBroker func(ctx context.Context, broker string) error, readiness *health.ReadinessState) *http.ServeMux {
+// readiness backs the /readyz endpoint (and its /ready alias), which reflects
+// the MCP server's OWN readiness and is decoupled from the broker — it makes no
+// broker calls.
+func buildMux(readiness *health.ReadinessState) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// Liveness probe. /livez is the canonical liveness endpoint and returns
@@ -121,68 +115,14 @@ func buildMux(aliases func() []string, probeBroker func(ctx context.Context, bro
 	// (initialized, not draining, required listeners bound) and is decoupled
 	// from broker reachability (ADR-004 / ISSUE-026) — it makes no broker calls.
 	// Like /livez it is unconditional (no flag).
-	mux.Handle("/readyz", health.ReadyzHandler(readiness))
+	readyz := health.ReadyzHandler(readiness)
+	mux.Handle("/readyz", readyz)
 
-	// TODO(SOL-151285 / Story 11): /readyz now exists (MCP-server-only readiness).
-	// /ready below is still the legacy broker-coupled inline handler; Story 11
-	// will alias /ready to /readyz and drop the broker dial.
-	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-
-		// Config validation ensures there is at least one broker configured, so aliases()
-		// is never empty in production.
-		brokers := aliases()
-		type brokerResult struct {
-			broker string
-			err    error
-		}
-		results := make(chan brokerResult, len(brokers))
-
-		var wg sync.WaitGroup
-		wg.Add(len(brokers))
-
-		// Probe each broker concurrently, then collect in configured order.
-		for _, broker := range brokers {
-			go func(broker string) {
-				defer wg.Done()
-				timeout := time.Duration(defaults.DefaultReadinessProbeTimeoutSeconds) * time.Second
-				reqCtx, cancel := context.WithTimeout(r.Context(), timeout)
-				defer cancel()
-				results <- brokerResult{broker: broker, err: probeBroker(reqCtx, broker)}
-			}(broker)
-		}
-
-		wg.Wait()
-		close(results)
-
-		resultsByBroker := make(map[string]error, len(brokers))
-		for res := range results {
-			resultsByBroker[res.broker] = res.err
-		}
-		readyBrokers := []string{}
-		errs := []string{}
-		for _, broker := range brokers {
-			if err := resultsByBroker[broker]; err != nil {
-				errs = append(errs, fmt.Sprintf("%s: unreachable", broker))
-			} else {
-				readyBrokers = append(readyBrokers, broker)
-			}
-		}
-
-		if len(errs) > 0 {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			resp, _ := json.Marshal(map[string]any{"ready": false, "errors": errs})
-			_, _ = w.Write(resp)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		resp, _ := json.Marshal(map[string]any{"ready": true, "brokers": readyBrokers})
-		_, _ = w.Write(resp)
-	})
+	// /ready is a body-identical alias of /readyz (SOL-151285 / Story 11). It
+	// shares the SAME handler instance, so GET /ready and GET /readyz return
+	// identical status and body. The legacy broker-dialing /ready handler was
+	// removed: readiness is the MCP server's own state, not broker reachability.
+	mux.Handle("/ready", readyz)
 
 	return mux
 }
@@ -413,42 +353,6 @@ func gracefulShutdown(srv shutdowner, timeout time.Duration) error {
 	return err
 }
 
-// newBrokerReachabilityProbe returns a probe function that checks whether a
-// broker's SEMP port is accepting TCP connections. The returned function
-// resolves the broker alias against cfg, parses the URL, defaults the port
-// (443 for HTTPS, 80 otherwise), and performs a TCP dial. It is the
-// production implementation of buildMux's probeBroker parameter.
-func newBrokerReachabilityProbe(cfg *config.ServerConfig) func(context.Context, string) error {
-	return func(ctx context.Context, broker string) error {
-		brokerCfg, ok := cfg.Broker(broker)
-		if !ok {
-			return fmt.Errorf("unknown broker %q", broker)
-		}
-		u, err := url.Parse(brokerCfg.URL)
-		if err != nil {
-			return fmt.Errorf("broker %q: invalid URL: %w", broker, err)
-		}
-		host := u.Hostname()
-		port := u.Port()
-		if port == "" {
-			if u.Scheme == "https" {
-				port = "443"
-			} else {
-				port = "80"
-			}
-		}
-		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort(host, port))
-		if err != nil {
-			slog.Warn("broker TCP connectivity check failed",
-				slog.String("broker", broker),
-				slog.String("error", err.Error()))
-			return err
-		}
-		_ = conn.Close()
-		return nil
-	}
-}
-
 // registerSEMPv1Tools attaches every Go-native SEMPv1 tool handler to mgr.
 // New SEMPv1 tools should be added here as they land — this is the single
 // source of truth for which v1 tools the server exposes. The handlers flow
@@ -651,7 +555,7 @@ func main() {
 	// initialized once the server begins listening (below). It is decoupled from
 	// the broker and is NOT flag-gated.
 	readiness := health.NewReadinessState()
-	mux := buildMux(pool.Aliases, newBrokerReachabilityProbe(cfg), readiness)
+	mux := buildMux(readiness)
 
 	// Create MCP handler
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {

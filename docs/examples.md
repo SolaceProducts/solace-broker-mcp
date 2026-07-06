@@ -106,6 +106,7 @@ parameters. Representative queries and the shape they return:
 | "Why is orders.q backing up?" | `get-queue-metrics` | envelope `{ "queueMetrics": { "spooledMsgCount": ..., "txUnackedMsgCount": ..., "bindCount": ... } }` |
 | "Are there slow subscribers on the default VPN?" | `list-slow-subscribers` | envelope `{ "slowSubscribers": [ ... ] }` (empty array if none) |
 | "Are we dropping messages anywhere?" | `get-discard-stats` | `{ "clientDiscards": {...}, "spoolDiscards": {...} }` |
+| "Create a queue orders.q in the default VPN" | `create-queue` | envelope `{ "createQueue": { ... } }` (agent confirms first; write tool) |
 
 Read-only tools return their broker data in a step-keyed envelope — see
 [Tools Reference → Output](tools-reference.md#output-the-step-keyed-envelope).
@@ -176,6 +177,23 @@ prompt for confirmation through the agent):
 { "name": "delete-queue-messages", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "queueName": "dead-letter.q" } }
 { "name": "clear-client-stats", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" } }
 { "name": "disconnect-client", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" } }
+```
+
+**Management tools** (Config API; only available when `enable_write_tools: true`;
+`update-*`/`delete-*` prompt for confirmation through the agent). Create and
+update a config object; omitted attributes take broker defaults on create
+or are left unchanged on update:
+
+```json
+{ "name": "create-message-vpn", "arguments": { "broker": "prod-broker", "msgVpnName": "orders-vpn", "msgVpnConfig": { "enabled": true, "maxConnectionCount": 100 } } }
+{ "name": "update-message-vpn", "arguments": { "broker": "prod-broker", "msgVpnName": "orders-vpn", "msgVpnConfig": { "enabled": false } } }
+{ "name": "delete-message-vpn", "arguments": { "broker": "prod-broker", "msgVpnName": "orders-vpn" } }
+{ "name": "create-queue", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "queueConfig": { "ingressEnabled": true, "egressEnabled": true } } }
+{ "name": "update-queue", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "queueConfig": { "egressEnabled": false } } }
+{ "name": "delete-queue", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q" } }
+{ "name": "create-topic-endpoint", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te", "topicEndpointConfig": { "ingressEnabled": true, "egressEnabled": true } } }
+{ "name": "update-topic-endpoint", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te", "topicEndpointConfig": { "egressEnabled": false } } }
+{ "name": "delete-topic-endpoint", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te" } }
 ```
 
 ## Multi-broker configuration

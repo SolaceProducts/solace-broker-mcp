@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# Standalone e2e tests for /health and /ready endpoints.
+# Standalone e2e tests for /livez, /health, /ready and /readyz endpoints.
 # Manages its own docker containers and MCP server — can be run independently
 # of the full e2e suite.
+#
+# Readiness model (SOL-151285): /ready is a body-identical alias of /readyz and
+# reflects the MCP server's OWN readiness only — it makes no broker calls. An
+# unreachable broker therefore does NOT make /ready (or /readyz) return 503.
 
 set -euo pipefail
 source "$(dirname "$0")/../e2e-basic-mcp/helpers.sh"
@@ -13,7 +17,8 @@ SECONDARY_CONFIG=""
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-# Wait for a TCP port to accept connections — mirrors exactly what /ready uses internally.
+# Wait for a TCP port to accept connections. Used to confirm the brokers are up
+# before the MCP server starts; /ready no longer dials brokers itself.
 wait_for_tcp() {
     local host="$1" port="$2" label="$3"
     local max=30
@@ -31,6 +36,29 @@ wait_for_tcp() {
         attempt=$((attempt + 1))
     done
     log_fail "TCP $label not ready after ${max}s"
+    return 1
+}
+
+# Wait until a /readyz-style endpoint returns HTTP 200 before asserting its body.
+# start_server() only waits for /health, which returns 200 as soon as the HTTP
+# server is up; /readyz (and its /ready alias) returns 503 {"status":"starting"}
+# until SetInitialized() runs at the end of startup. Polling here closes that
+# brief "starting" window so the readiness assertions don't flake.
+wait_for_ready() {
+    local url="$1" label="$2"
+    local max=20
+    local attempt=0
+    local http_code body
+    while [ $attempt -lt $max ]; do
+        http_code=$(curl -s -o /dev/null -w "%{http_code}" "$url")
+        if [ "$http_code" = "200" ]; then
+            return 0
+        fi
+        sleep 0.5
+        attempt=$((attempt + 1))
+    done
+    body=$(curl -s "$url")
+    log_fail "$label ($url) not ready after $((max / 2))s (last HTTP $http_code, body: $body)"
     return 1
 }
 
@@ -92,15 +120,39 @@ test_health() {
     assert_json_field "$response" ".status" "healthy" "/health should return status=healthy (legacy back-compat body)"
 }
 
-test_ready_both_reachable() {
+test_readyz() {
+    # /readyz reflects MCP-server readiness only. Once the server is up it is
+    # ready (it makes no broker calls).
+    wait_for_ready "$MCP_URL/readyz" "/readyz" || return 1
     local response
-    response=$(curl -sf "$MCP_URL/ready")
-    assert_json_field "$response" ".ready" "true" "/ready should return ready=true" || return 1
-    assert_contains "$response" "broker-a" "/ready should list broker-a" || return 1
-    assert_contains "$response" "broker-b" "/ready should list broker-b" || return 1
+    response=$(curl -sf "$MCP_URL/readyz")
+    assert_json_field "$response" ".status" "ready" "/readyz should return status=ready"
 }
 
-test_ready_unreachable_broker() {
+test_ready_aliases_readyz() {
+    # /ready is a body-identical alias of /readyz: same status code and body.
+    wait_for_ready "$MCP_URL/readyz" "/readyz" || return 1
+    local ready_body readyz_body ready_code readyz_code
+    ready_body=$(curl -s "$MCP_URL/ready")
+    readyz_body=$(curl -s "$MCP_URL/readyz")
+    ready_code=$(curl -s -o /dev/null -w "%{http_code}" "$MCP_URL/ready")
+    readyz_code=$(curl -s -o /dev/null -w "%{http_code}" "$MCP_URL/readyz")
+
+    assert_json_field "$ready_body" ".status" "ready" "/ready should return status=ready" || return 1
+    if [ "$ready_body" != "$readyz_body" ]; then
+        log_fail "/ready body ($ready_body) != /readyz body ($readyz_body)"
+        return 1
+    fi
+    if [ "$ready_code" != "$readyz_code" ]; then
+        log_fail "/ready HTTP $ready_code != /readyz HTTP $readyz_code"
+        return 1
+    fi
+    log_info "  /ready and /readyz returned identical body and status ($ready_code)"
+}
+
+test_ready_decoupled_from_broker() {
+    # An unreachable broker MUST NOT make /ready return 503 — readiness is the
+    # MCP server's own state, decoupled from broker reachability (SOL-151285).
     SECONDARY_CONFIG=$(mktemp /tmp/e2e-secondary-XXXXXX)
     cat > "$SECONDARY_CONFIG" <<EOF
 mcp_client_auth:
@@ -137,12 +189,16 @@ EOF
 
     local result=0
     if [ "$ready" -eq 1 ]; then
+        # /health (polled above) is up before SetInitialized() runs, so wait for
+        # /ready to leave the "starting" window before asserting it is 200. The
+        # explicit assertion below remains the source of truth for pass/fail.
+        wait_for_ready "http://localhost:$SECONDARY_MCP_PORT/ready" "/ready (secondary)" || true
         local http_code
         http_code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$SECONDARY_MCP_PORT/ready")
-        if [ "$http_code" = "503" ]; then
-            log_info "  /ready correctly returned 503 — TCP dial to localhost:19999 failed as expected"
+        if [ "$http_code" = "200" ]; then
+            log_info "  /ready correctly returned 200 despite unreachable broker — readiness is broker-decoupled"
         else
-            log_fail "/ready returned HTTP $http_code, want 503 for unreachable broker"
+            log_fail "/ready returned HTTP $http_code, want 200 (readiness must not depend on broker reachability)"
             result=1
         fi
     else
@@ -162,7 +218,8 @@ EOF
 
 run_test "Livez endpoint"                      test_livez
 run_test "Health endpoint (legacy back-compat body)"  test_health
-run_test "Ready endpoint (brokers reachable)"  test_ready_both_reachable
-run_test "Ready endpoint (broker unreachable)" test_ready_unreachable_broker
+run_test "Readyz endpoint (MCP-server readiness)"     test_readyz
+run_test "Ready aliases readyz (identical body)"      test_ready_aliases_readyz
+run_test "Ready decoupled from broker reachability"   test_ready_decoupled_from_broker
 
 print_summary "Health/Readiness"
