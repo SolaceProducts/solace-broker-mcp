@@ -170,6 +170,52 @@ func TestSender_Do_BoundsOverallRetryChainDeadline(t *testing.T) {
 	}
 }
 
+// TestSender_Do_NoOverallDeadlineWhenPerAttemptTimeoutUnset proves the overall
+// retry-chain deadline is disabled (retryBudget == 0) when RequestTimeoutDuration
+// is unset, even with RetryMaxInterval set. The budget is anchored on the
+// per-attempt timeout; a backoff-only budget would allot no time to the attempts
+// themselves and fire spuriously. This guards against the earlier math that
+// computed retryMax*RetryMaxInterval regardless of the per-attempt timeout.
+func TestSender_Do_NoOverallDeadlineWhenPerAttemptTimeoutUnset(t *testing.T) {
+	// Server responds only after 100ms — longer than the (hypothetical)
+	// backoff-only budget of retryMax*RetryMaxInterval = 3*10ms = 30ms. If that
+	// budget were applied, the call would be cut with DeadlineExceeded.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(100 * time.Millisecond):
+			jsonOK(w)
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+
+	retries := 3
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RequestTimeoutDuration: 0, // unset per-attempt timeout: overall deadline disabled
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
+	}
+	httpClient := &http.Client{Transport: server.Client().Transport}
+	d := New(httpClient, sempCfg, bearerAuth(t), server.URL, NewSemaphore(1))
+
+	// Directly falsify the finding: no per-attempt timeout means no budget. The
+	// earlier math produced retryMax*RetryMaxInterval (30ms) here.
+	if d.retryBudget != 0 {
+		t.Fatalf("retryBudget = %s, want 0 when RequestTimeoutDuration is unset", d.retryBudget)
+	}
+
+	// Behavioral confirmation: Do applies no context.WithTimeout, so the slow
+	// request completes normally rather than being cut by an overall deadline.
+	resp, err := d.Do(context.Background(), newGetRequest(t, server.URL))
+	if err != nil {
+		t.Fatalf("Do returned error, expected success with no overall deadline: %v", err)
+	}
+	resp.Body.Close()
+}
+
 func TestSender_RateLimiter_BlocksUntilChannelReady(t *testing.T) {
 	var requestCount atomic.Int32
 	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, r *http.Request) {
