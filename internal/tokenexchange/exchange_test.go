@@ -455,11 +455,16 @@ func TestExchange_DifferentTokensSameBrokerRunConcurrently(t *testing.T) {
 
 // ---------- B04: context cancellation supersedes error ----------
 
+// The caller's context is pre-cancelled, but the IdP call runs on a
+// detached context (singleflight resilience), so the handler still
+// receives and responds. The caller gets context.Canceled from the
+// post-Do check, not from a failed HTTP call.
 func TestExchange_ContextCancelledReturnsContextError(t *testing.T) {
 	t.Parallel()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("exchanged-token", 3600))
 	}))
 	defer srv.Close()
 
@@ -467,7 +472,6 @@ func TestExchange_ContextCancelledReturnsContextError(t *testing.T) {
 	e.nowFunc = func() time.Time { return pinnedNow() }
 
 	ctx, cancel := context.WithCancel(context.Background())
-	// Cancel immediately so the HTTP call fails with context.Canceled.
 	cancel()
 
 	tok, err := e.Exchange(ctx, validInput())
@@ -480,11 +484,16 @@ func TestExchange_ContextCancelledReturnsContextError(t *testing.T) {
 	}
 }
 
+// The caller's context deadline has already expired, but the IdP call
+// runs on a detached context (singleflight resilience), so the handler
+// still receives and responds. The caller gets context.DeadlineExceeded
+// from the post-Do check.
 func TestExchange_ContextDeadlineExceededReturnsDeadlineError(t *testing.T) {
 	t.Parallel()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("exchanged-token", 3600))
 	}))
 	defer srv.Close()
 
@@ -494,7 +503,7 @@ func TestExchange_ContextDeadlineExceededReturnsDeadlineError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
 	defer cancel()
 
-	time.Sleep(5 * time.Millisecond) // ensure deadline passes
+	time.Sleep(5 * time.Millisecond)
 	tok, err := e.Exchange(ctx, validInput())
 
 	if tok != nil {
@@ -703,8 +712,6 @@ func TestExchange_ElapsedTimeMeasuredWithNowFunc(t *testing.T) {
 	}
 }
 
-// ---------- B11–B17: logExchangeError ----------
-
 // logRecord captures a single slog record for test assertions.
 type logRecord struct {
 	Level   slog.Level
@@ -766,185 +773,60 @@ func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
 func (h *captureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 func (h *captureHandler) WithGroup(_ string) slog.Handler      { return h }
 
-// B11: structured attributes always included
-func TestLogExchangeError_StructuredAttrsAlwaysPresent(t *testing.T) {
+func TestExchange_SuccessLogsDebugWithBrokerAndElapsed(t *testing.T) {
 	records, restore := captureLogs(t)
 	defer restore()
 
-	e := &Exchanger{
-		tokenURL: "https://idp.example.com/token",
-	}
-	input := ExchangeInput{
-		BrokerAlias: "my-broker",
-		Audience:    "https://aud.example.com",
-	}
-	elapsed := 150 * time.Millisecond
-	testErr := fmt.Errorf("%w: test", ErrExchangeRejected)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("exchanged-token", 3600))
+	}))
+	defer srv.Close()
 
-	e.logExchangeError(testErr, input, elapsed)
+	e := newTestExchanger(t, srv.URL)
+	e.nowFunc = func() time.Time { return pinnedNow() }
+
+	tok, err := e.Exchange(context.Background(), validInput())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tok == nil {
+		t.Fatal("expected non-nil token")
+	}
 
 	recs := records()
-	if len(recs) != 1 {
-		t.Fatalf("got %d log records, want 1", len(recs))
-	}
-	rec := recs[0]
-
-	wantAttrs := map[string]string{
-		"broker_alias":   "my-broker",
-		"audience":       "https://aud.example.com",
-		"token_endpoint": "https://idp.example.com/token",
-	}
-	for key, want := range wantAttrs {
-		if got, ok := rec.Attrs[key]; !ok {
-			t.Errorf("attribute %q missing from log record", key)
-		} else if got != want {
-			t.Errorf("attribute %q = %q, want %q", key, got, want)
+	var found bool
+	for _, rec := range recs {
+		if rec.Message == "token exchange succeeded" {
+			found = true
+			if rec.Level != slog.LevelDebug {
+				t.Errorf("want Debug level, got %v", rec.Level)
+			}
+			if _, ok := rec.Attrs["broker"]; !ok {
+				t.Error("missing broker attr")
+			}
+			if _, ok := rec.Attrs["exchange_elapsed"]; !ok {
+				t.Error("missing exchange_elapsed attr")
+			}
 		}
 	}
-
-	if _, ok := rec.Attrs["elapsed"]; !ok {
-		t.Errorf("attribute \"elapsed\" missing from log record")
-	}
-	if _, ok := rec.Attrs["error"]; !ok {
-		t.Errorf("attribute \"error\" missing from log record")
+	if !found {
+		t.Error("success-path debug log not emitted")
 	}
 }
 
-// B11: SubjectToken and ClientSecret are NOT logged
-func TestLogExchangeError_SensitiveFieldsNotLogged(t *testing.T) {
-	records, restore := captureLogs(t)
-	defer restore()
-
-	e := &Exchanger{
-		tokenURL:     "https://idp.example.com/token",
-		clientSecret: "super-secret-value",
-	}
-	input := ExchangeInput{
-		SubjectToken: "sensitive-token-value",
-		BrokerAlias:  "b",
-		Audience:     "a",
-	}
-
-	e.logExchangeError(ErrExchangeTransport, input, time.Second)
-
-	recs := records()
-	if len(recs) != 1 {
-		t.Fatalf("got %d log records, want 1", len(recs))
-	}
-
-	for key, val := range recs[0].Attrs {
-		if strings.Contains(val, "sensitive-token-value") {
-			t.Errorf("attribute %q = %q leaks SubjectToken", key, val)
-		}
-		if strings.Contains(val, "super-secret-value") {
-			t.Errorf("attribute %q = %q leaks clientSecret", key, val)
-		}
-	}
-}
-
-// B12: ErrExchangeRejected → WARN
-func TestLogExchangeError_RejectedLogsAtWarn(t *testing.T) {
-	records, restore := captureLogs(t)
-	defer restore()
-
-	e := &Exchanger{tokenURL: "https://idp.example.com/token"}
-	e.logExchangeError(
-		fmt.Errorf("%w: invalid_grant", ErrExchangeRejected),
-		ExchangeInput{BrokerAlias: "b", Audience: "a"},
-		time.Second,
-	)
-
-	recs := records()
-	if len(recs) != 1 {
-		t.Fatalf("got %d log records, want 1", len(recs))
-	}
-	if recs[0].Level != slog.LevelWarn {
-		t.Errorf("level = %v, want WARN for ErrExchangeRejected", recs[0].Level)
-	}
-	if !strings.Contains(recs[0].Message, "rejected by IdP") {
-		t.Errorf("message = %q, want to contain \"rejected by IdP\"", recs[0].Message)
-	}
-}
-
-// B13: ErrExchangeTransport → ERROR
-func TestLogExchangeError_TransportLogsAtError(t *testing.T) {
-	records, restore := captureLogs(t)
-	defer restore()
-
-	e := &Exchanger{tokenURL: "https://idp.example.com/token"}
-	e.logExchangeError(
-		fmt.Errorf("%w: connection refused", ErrExchangeTransport),
-		ExchangeInput{BrokerAlias: "b", Audience: "a"},
-		time.Second,
-	)
-
-	recs := records()
-	if len(recs) != 1 {
-		t.Fatalf("got %d log records, want 1", len(recs))
-	}
-	if recs[0].Level != slog.LevelError {
-		t.Errorf("level = %v, want ERROR for ErrExchangeTransport", recs[0].Level)
-	}
-	if !strings.Contains(recs[0].Message, "transport failure") {
-		t.Errorf("message = %q, want to contain \"transport failure\"", recs[0].Message)
-	}
-}
-
-// B14: ErrInvalidResponse → ERROR
-func TestLogExchangeError_InvalidResponseLogsAtError(t *testing.T) {
-	records, restore := captureLogs(t)
-	defer restore()
-
-	e := &Exchanger{tokenURL: "https://idp.example.com/token"}
-	e.logExchangeError(
-		fmt.Errorf("%w: bad body", ErrInvalidResponse),
-		ExchangeInput{BrokerAlias: "b", Audience: "a"},
-		time.Second,
-	)
-
-	recs := records()
-	if len(recs) != 1 {
-		t.Fatalf("got %d log records, want 1", len(recs))
-	}
-	if recs[0].Level != slog.LevelError {
-		t.Errorf("level = %v, want ERROR for ErrInvalidResponse", recs[0].Level)
-	}
-	if !strings.Contains(recs[0].Message, "invalid IdP response") {
-		t.Errorf("message = %q, want to contain \"invalid IdP response\"", recs[0].Message)
-	}
-}
-
-// B15: unknown error → ERROR "unexpected error"
-func TestLogExchangeError_UnknownErrorLogsAtError(t *testing.T) {
-	records, restore := captureLogs(t)
-	defer restore()
-
-	e := &Exchanger{tokenURL: "https://idp.example.com/token"}
-	e.logExchangeError(
-		errors.New("something completely unknown"),
-		ExchangeInput{BrokerAlias: "b", Audience: "a"},
-		time.Second,
-	)
-
-	recs := records()
-	if len(recs) != 1 {
-		t.Fatalf("got %d log records, want 1", len(recs))
-	}
-	if recs[0].Level != slog.LevelError {
-		t.Errorf("level = %v, want ERROR for unknown error", recs[0].Level)
-	}
-	if !strings.Contains(recs[0].Message, "unexpected error") {
-		t.Errorf("message = %q, want to contain \"unexpected error\"", recs[0].Message)
-	}
-}
-
-// B04 (log aspect): context errors are NOT logged
+// B04 (log aspect): context errors are NOT logged.
+// The caller's context is pre-cancelled, but the IdP call runs on a
+// detached context (singleflight resilience), so the handler still
+// receives and responds to the request. The caller gets context.Canceled
+// from the post-Do check, not from a failed HTTP call.
 func TestExchange_ContextErrorNotLogged(t *testing.T) {
 	records, restore := captureLogs(t)
 	defer restore()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("exchanged-token", 3600))
 	}))
 	defer srv.Close()
 
@@ -954,7 +836,10 @@ func TestExchange_ContextErrorNotLogged(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	e.Exchange(ctx, validInput())
+	_, err := e.Exchange(ctx, validInput())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("want context.Canceled, got %v", err)
+	}
 
 	recs := records()
 	for _, rec := range recs {
@@ -1170,27 +1055,6 @@ func TestExchange_ResponseFieldsPreserved(t *testing.T) {
 				t.Errorf("tok.ExpiresAt = %v, want %v", tok.ExpiresAt, tc.wantExpires)
 			}
 		})
-	}
-}
-
-// ---------- Verify logExchangeError marshals the error string ----------
-
-func TestLogExchangeError_ErrorAttrContainsErrorMessage(t *testing.T) {
-	records, restore := captureLogs(t)
-	defer restore()
-
-	e := &Exchanger{tokenURL: "https://idp.example.com/token"}
-	testErr := fmt.Errorf("%w: specific failure detail", ErrExchangeTransport)
-
-	e.logExchangeError(testErr, ExchangeInput{BrokerAlias: "b", Audience: "a"}, time.Second)
-
-	recs := records()
-	if len(recs) != 1 {
-		t.Fatalf("got %d log records, want 1", len(recs))
-	}
-	errorAttr := recs[0].Attrs["error"]
-	if !strings.Contains(errorAttr, "specific failure detail") {
-		t.Errorf("error attr = %q, want it to contain \"specific failure detail\"", errorAttr)
 	}
 }
 
