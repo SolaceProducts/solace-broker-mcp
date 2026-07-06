@@ -174,9 +174,31 @@ tools:
         followPages: true
         args:
           count: "100"
-          select: "discardedRxMsgCount, discardedTxMsgCount, dmrEnabled, enabled, msgSpoolMsgCount, msgSpoolUsage, msgVpnConnections, msgVpnConnectionsServiceMqtt, msgVpnConnectionsServiceRestIncoming, msgVpnConnectionsServiceSmf, msgVpnConnectionsServiceWeb, msgVpnName, msgVpnTotalUniqueSubscriptions, replicationEnabled, serviceMqttPlainTextFailureReason, serviceMqttPlainTextUp, serviceRestIncomingPlainTextFailureReason, serviceRestIncomingPlainTextUp, serviceSmfPlainTextFailureReason, serviceSmfPlainTextUp, state"
+        select:
+          - discardedRxMsgCount
+          - discardedTxMsgCount
+          - dmrEnabled
+          - enabled
+          - msgSpoolMsgCount
+          - msgSpoolUsage
+          - msgVpnConnections
+          - msgVpnConnectionsServiceMqtt
+          - msgVpnConnectionsServiceRestIncoming
+          - msgVpnConnectionsServiceSmf
+          - msgVpnConnectionsServiceWeb
+          - msgVpnName
+          - msgVpnTotalUniqueSubscriptions
+          - replicationEnabled
+          - serviceMqttPlainTextFailureReason
+          - serviceMqttPlainTextUp
+          - serviceRestIncomingPlainTextFailureReason
+          - serviceRestIncomingPlainTextUp
+          - serviceSmfPlainTextFailureReason
+          - serviceSmfPlainTextUp
+          - state
     result:
-      strategy: collect
+      strategy: postProcess
+      postProcess: listVpns
 
   - name: list-queues
     description: >
@@ -404,10 +426,28 @@ tools:
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           count: "100"
-          select: "clientProfileDeniedDiscardedMsgCount, destinationGroupErrorDiscardedMsgCount, disabledDiscardedMsgCount, lowPriorityMsgCongestionDiscardedMsgCount, maxMsgSizeExceededDiscardedMsgCount, maxMsgSpoolUsageExceededDiscardedMsgCount, maxRedeliveryExceededDiscardedMsgCount, maxRedeliveryExceededToDmqMsgCount, maxTtlExceededDiscardedMsgCount, maxTtlExpiredDiscardedMsgCount, maxTtlExpiredToDmqMsgCount, maxTtlExpiredToDmqFailedMsgCount, msgVpnName, noLocalDeliveryDiscardedMsgCount, queueName, xaTransactionNotSupportedDiscardedMsgCount"
+        select:
+          - clientProfileDeniedDiscardedMsgCount
+          - destinationGroupErrorDiscardedMsgCount
+          - disabledDiscardedMsgCount
+          - lowPriorityMsgCongestionDiscardedMsgCount
+          - maxMsgSizeExceededDiscardedMsgCount
+          - maxMsgSpoolUsageExceededDiscardedMsgCount
+          - maxRedeliveryExceededDiscardedMsgCount
+          - maxRedeliveryExceededToDmqFailedMsgCount
+          - maxRedeliveryExceededToDmqMsgCount
+          - maxTtlExceededDiscardedMsgCount
+          - maxTtlExpiredDiscardedMsgCount
+          - maxTtlExpiredToDmqFailedMsgCount
+          - maxTtlExpiredToDmqMsgCount
+          - msgVpnName
+          - noLocalDeliveryDiscardedMsgCount
+          - queueName
+          - xaTransactionNotSupportedDiscardedMsgCount
     result:
-      strategy: collect
-      
+      strategy: postProcess
+      postProcess: listQueueDiscards
+
   - name: create-message-vpn
     description: >
       Create a Message VPN. Requires msgVpnName to name the new VPN; any
