@@ -63,10 +63,11 @@ const internalErrorBody = `{"error":"internal_error","error_description":"the se
 // middleware. There is no flag to disable it.
 //
 // Scope: recover() catches only panics on the request's own goroutine. A panic
-// on a goroutine that a handler SPAWNS (e.g. the per-broker probe goroutines in
-// the /ready handler) is NOT caught here — that class must be recovered at the
-// point of goroutine creation. The SDK tool-handler goroutine is covered
-// separately by withRecovery in internal/tools/register.go.
+// on a goroutine that a handler SPAWNS is NOT caught here — that class must be
+// recovered at the point of goroutine creation. No probe handler spawns
+// goroutines today (the /ready and /readyz handlers are synchronous), and the
+// SDK tool-handler goroutine is covered separately by withRecovery in
+// internal/tools/register.go.
 //
 // http.ErrAbortHandler is exempt: net/http documents it as a sentinel meaning
 // "abort this request, do not log, do not send a response". We re-raise it

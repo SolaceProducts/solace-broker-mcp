@@ -66,6 +66,36 @@ func TestParseSpecs_OperationFields(t *testing.T) {
 	}
 }
 
+func TestParseSpecs_BodyFields(t *testing.T) {
+	ops, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatalf("ParseSpecs() error: %v", err)
+	}
+
+	// A config write op resolves its body schema to a concrete field set.
+	create, ok := ops["config/createMsgVpn"]
+	if !ok {
+		t.Fatal("expected operation config/createMsgVpn not found")
+	}
+	if create.BodyFields == nil {
+		t.Fatal("config/createMsgVpn.BodyFields should be populated from the MsgVpn schema")
+	}
+	for _, field := range []string{"msgVpnName", "enabled", "maxConnectionCount"} {
+		if !create.BodyFields[field] {
+			t.Errorf("config/createMsgVpn.BodyFields missing expected field %q", field)
+		}
+	}
+
+	// A GET op has no request body, so BodyFields is nil (validation skipped).
+	get, ok := ops["monitor/getMsgVpnQueue"]
+	if !ok {
+		t.Fatal("expected operation monitor/getMsgVpnQueue not found")
+	}
+	if get.BodyFields != nil {
+		t.Errorf("monitor/getMsgVpnQueue.BodyFields = %v, want nil for a bodyless op", get.BodyFields)
+	}
+}
+
 func TestParseSpecs_RefParametersResolved(t *testing.T) {
 	ops, err := sempv2.ParseSpecs(specs.FS)
 	if err != nil {
@@ -147,7 +177,8 @@ func TestParseSpecs_NoDuplicateKeys(t *testing.T) {
 		t.Fatalf("ParseSpecs() error: %v", err)
 	}
 
-	// Only the private monitor spec is embedded — all keys must use the monitor/ prefix.
+	// Currently two specs are embedded: the private monitor spec contributes monitor/ keys
+	// and the private config spec contributes config/ keys.
 	monitorOp := ops["monitor/getMsgVpnQueue"]
 	if monitorOp == nil {
 		t.Error("monitor/getMsgVpnQueue not found")
@@ -163,10 +194,24 @@ func TestParseSpecs_SpecTypeDerivation(t *testing.T) {
 		t.Fatalf("ParseSpecs() error: %v", err)
 	}
 
-	// Every key must start with monitor/ (private monitor normalized).
+	// Every key must use a known normalized spec-type prefix: monitor/(private
+	// monitor) or config/(private config).
 	for key := range ops {
-		if !strings.HasPrefix(key, "monitor/") {
+		if !strings.HasPrefix(key, "monitor/") && !strings.HasPrefix(key, "config/") {
 			t.Errorf("operation key %q does not have a valid spec type prefix", key)
 		}
+	}
+
+	// The private config spec must contribute at least one config/ operation,
+	// proving __private_config__ is wired into the spec-type maps.
+	foundConfig := false
+	for key := range ops {
+		if strings.HasPrefix(key, "config/") {
+			foundConfig = true
+			break
+		}
+	}
+	if !foundConfig {
+		t.Error("no config/ operations parsed; private config spec not loaded")
 	}
 }

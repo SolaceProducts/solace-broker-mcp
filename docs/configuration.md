@@ -40,7 +40,7 @@ The server resolves variables at startup. The `.env` file loads automatically be
 | `tls_cert_file` | — | none | Path to TLS certificate (PEM). |
 | `tls_key_file` | — | none | Path to TLS private key (PEM). |
 | `log_level` | — | `info` | Log verbosity: `debug`, `info`, `warn`, `error`. |
-| `enable_write_tools` | — | `false` | When `true`, register the write/action tools — every tool that is not read-only: `delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats` (including the non-destructive stats-reset tools, which still mutate broker state). When `false`, those tools are skipped at registration and never appear in `tools/list`. Secure-by-default for trial / dev deployments. |
+| `enable_write_tools` | — | `false` | When `true`, register every tool that is not read-only (13 in total): the four action-API tools (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`) plus the nine Config-API management tools (`create`/`update`/`delete` for `message-vpn`, `queue`, and `topic-endpoint`). This includes the non-destructive stats-reset tools (which still mutate broker state) and provisioning tools such as `delete-message-vpn`. When `false`, those tools are skipped at registration and never appear in `tools/list`. Secure-by-default for trial / dev deployments. |
 
 **TLS:** Provide both `tls_cert_file` and `tls_key_file` together — providing only one is a startup error. When both are set, the server starts with HTTPS; when neither is set, plain HTTP.
 

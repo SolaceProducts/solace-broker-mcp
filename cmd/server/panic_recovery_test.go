@@ -47,7 +47,7 @@ func get(handler http.Handler, path string) *httptest.ResponseRecorder {
 // shared buildMux keeps the probe routes identical to production, so the test
 // proves they still resolve through the recovery wrapper.
 func muxWithPanicRoute() *http.ServeMux {
-	mux := buildMux(func() []string { return nil }, func(context.Context, string) error { return nil }, health.NewReadinessState())
+	mux := buildMux(health.NewReadinessState())
 	mux.HandleFunc("/panic", func(http.ResponseWriter, *http.Request) {
 		panic("boom from a route inside the mux")
 	})
@@ -108,7 +108,7 @@ func TestChainOrder_CorrelationInsideRecovery(t *testing.T) {
 
 	// Assemble /mcp through the SAME function main() uses, so a production
 	// reorder of the route-local chain breaks this test.
-	mux := buildMux(func() []string { return nil }, func(context.Context, string) error { return nil }, health.NewReadinessState())
+	mux := buildMux(health.NewReadinessState())
 	mux.Handle("/mcp", buildMCPEndpoint(authedHandler, cfg.CorrelationIDEnabled))
 	mux.HandleFunc("/panic", func(http.ResponseWriter, *http.Request) {
 		panic("boom")
