@@ -16,9 +16,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -27,7 +24,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceDev/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -42,7 +38,7 @@ func testMux() *http.ServeMux {
 	}, nil)
 	readiness := health.NewReadinessState()
 	readiness.SetInitialized()
-	mux := buildMux(func() []string { return nil }, func(_ context.Context, _ string) error { return nil }, readiness)
+	mux := buildMux(readiness)
 
 	// Register /mcp endpoint for testing (without auth middleware)
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
@@ -382,7 +378,7 @@ func TestHealthConfigFromFile_PartialTLSIsHTTP(t *testing.T) {
 }
 
 func TestReady_POST_ReturnsMethodNotAllowed(t *testing.T) {
-	mux := buildMux(func() []string { return nil }, func(_ context.Context, _ string) error { return nil }, health.NewReadinessState())
+	mux := buildMux(health.NewReadinessState())
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/ready", nil)
 	rec := httptest.NewRecorder()
 
@@ -393,80 +389,84 @@ func TestReady_POST_ReturnsMethodNotAllowed(t *testing.T) {
 	}
 }
 
-func TestReady_GET_AllBrokersReachable(t *testing.T) {
-	brokers := []string{"prod-1", "prod-2"}
-	mux := buildMux(
-		func() []string { return brokers },
-		func(_ context.Context, _ string) error { return nil },
-		health.NewReadinessState(),
-	)
+// TestReady_BeforeInit_Returns503Starting pins that /ready is now a
+// body-identical alias of /readyz: before SetInitialized it returns
+// 503 {"status":"starting"}. The legacy broker-coupled behaviour (ready=true /
+// per-broker errors array) is gone — /ready no longer dials any broker.
+func TestReady_BeforeInit_Returns503Starting(t *testing.T) {
+	readiness := health.NewReadinessState() // not initialized
+	mux := buildMux(readiness)
+
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ready", nil)
 	rec := httptest.NewRecorder()
-
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("GET /ready status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	if contentType := rec.Header().Get("Content-Type"); contentType != "application/json" {
-		t.Errorf("GET /ready Content-Type = %q, want %q", contentType, "application/json")
-	}
-	var body struct {
-		Ready   bool     `json:"ready"`
-		Brokers []string `json:"brokers"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("response is not valid JSON: %v", err)
-	}
-	if !body.Ready {
-		t.Errorf("ready = %v, want true", body.Ready)
-	}
-	if len(body.Brokers) != len(brokers) {
-		t.Errorf("brokers len = %d, want %d", len(body.Brokers), len(brokers))
-	}
-	for i, expectedBroker := range brokers {
-		if body.Brokers[i] != expectedBroker {
-			t.Errorf("brokers[%d] = %q, want %q", i, body.Brokers[i], expectedBroker)
-		}
-	}
-}
-
-func TestReady_GET_OneBrokerUnreachable(t *testing.T) {
-	brokers := []string{"prod-1", "prod-2"}
-	mux := buildMux(
-		func() []string { return brokers },
-		func(_ context.Context, broker string) error {
-			if broker == "prod-2" {
-				return errors.New("connection refused")
-			}
-			return nil
-		},
-		health.NewReadinessState(),
-	)
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ready", nil)
-	rec := httptest.NewRecorder()
-
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("GET /ready status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
-	var body struct {
-		Ready  bool     `json:"ready"`
-		Errors []string `json:"errors"`
+	if rec.Body.String() != `{"status":"starting"}` {
+		t.Errorf("GET /ready body = %q, want %q", rec.Body.String(), `{"status":"starting"}`)
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("response is not valid JSON: %v", err)
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("GET /ready Content-Type = %q, want %q", ct, "application/json")
 	}
-	if body.Ready {
-		t.Errorf("ready = %v, want false", body.Ready)
+}
+
+// TestReady_AfterInit_Returns200Ready pins that once SetInitialized has been
+// called, /ready returns 200 {"status":"ready"} — the same MCP-server-only
+// readiness signal as /readyz.
+func TestReady_AfterInit_Returns200Ready(t *testing.T) {
+	readiness := health.NewReadinessState()
+	readiness.SetInitialized()
+	mux := buildMux(readiness)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ready", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("GET /ready status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	if len(body.Errors) == 0 {
-		t.Fatal("errors array is empty, want at least one entry")
+	if rec.Body.String() != `{"status":"ready"}` {
+		t.Errorf("GET /ready body = %q, want %q", rec.Body.String(), `{"status":"ready"}`)
 	}
-	want := "prod-2: unreachable"
-	if body.Errors[0] != want {
-		t.Errorf("errors[0] = %q, want %q", body.Errors[0], want)
+}
+
+// TestReadyAndReadyzBodiesIdentical proves the alias contract: /ready and
+// /readyz return byte-identical status and body for both the pre-init and the
+// post-init states. They are the SAME handler, so a future change to readiness
+// semantics applies to both endpoints automatically.
+func TestReadyAndReadyzBodiesIdentical(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		initialized bool
+	}{
+		{"before init", false},
+		{"after init", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			readiness := health.NewReadinessState()
+			if tc.initialized {
+				readiness.SetInitialized()
+			}
+			mux := buildMux(readiness)
+
+			readyRec := httptest.NewRecorder()
+			mux.ServeHTTP(readyRec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ready", nil))
+			readyzRec := httptest.NewRecorder()
+			mux.ServeHTTP(readyzRec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/readyz", nil))
+
+			if readyRec.Code != readyzRec.Code {
+				t.Errorf("status /ready=%d /readyz=%d, want equal", readyRec.Code, readyzRec.Code)
+			}
+			if readyRec.Body.String() != readyzRec.Body.String() {
+				t.Errorf("body /ready=%q /readyz=%q, want identical", readyRec.Body.String(), readyzRec.Body.String())
+			}
+			if readyRec.Header().Get("Content-Type") != readyzRec.Header().Get("Content-Type") {
+				t.Errorf("Content-Type /ready=%q /readyz=%q, want equal",
+					readyRec.Header().Get("Content-Type"), readyzRec.Header().Get("Content-Type"))
+			}
+		})
 	}
 }
 
@@ -474,7 +474,7 @@ func TestReady_GET_OneBrokerUnreachable(t *testing.T) {
 // buildMux returns 503 {"status":"starting"} before SetInitialized.
 func TestReadyz_BeforeInit_Returns503(t *testing.T) {
 	readiness := health.NewReadinessState() // not initialized
-	mux := buildMux(func() []string { return nil }, func(_ context.Context, _ string) error { return nil }, readiness)
+	mux := buildMux(readiness)
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/readyz", nil)
 	rec := httptest.NewRecorder()
@@ -493,7 +493,7 @@ func TestReadyz_BeforeInit_Returns503(t *testing.T) {
 func TestReadyz_AfterInit_Returns200(t *testing.T) {
 	readiness := health.NewReadinessState()
 	readiness.SetInitialized()
-	mux := buildMux(func() []string { return nil }, func(_ context.Context, _ string) error { return nil }, readiness)
+	mux := buildMux(readiness)
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/readyz", nil)
 	rec := httptest.NewRecorder()
@@ -504,116 +504,5 @@ func TestReadyz_AfterInit_Returns200(t *testing.T) {
 	}
 	if rec.Body.String() != `{"status":"ready"}` {
 		t.Errorf("GET /readyz body = %q, want %q", rec.Body.String(), `{"status":"ready"}`)
-	}
-}
-
-// TestReadyz_BrokerUnreachable_StillReady proves AC #4 through the real mux:
-// even when the broker probe always errors (every broker unreachable), /readyz
-// returns 200 once initialized and not draining, because readiness is decoupled
-// from broker reachability. The same mux's /ready endpoint returns 503 for the
-// same unreachable broker, demonstrating the two endpoints are independent.
-func TestReadyz_BrokerUnreachable_StillReady(t *testing.T) {
-	readiness := health.NewReadinessState()
-	readiness.SetInitialized()
-	alwaysFail := func(_ context.Context, broker string) error {
-		return errors.New("connection refused")
-	}
-	mux := buildMux(func() []string { return []string{"prod-1"} }, alwaysFail, readiness)
-
-	// /readyz ignores the broker entirely → 200 ready.
-	readyzReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/readyz", nil)
-	readyzRec := httptest.NewRecorder()
-	mux.ServeHTTP(readyzRec, readyzReq)
-	if readyzRec.Code != http.StatusOK {
-		t.Errorf("GET /readyz status = %d, want %d (readiness must not depend on broker reachability)", readyzRec.Code, http.StatusOK)
-	}
-	if readyzRec.Body.String() != `{"status":"ready"}` {
-		t.Errorf("GET /readyz body = %q, want %q", readyzRec.Body.String(), `{"status":"ready"}`)
-	}
-
-	// /ready (legacy, broker-coupled) reflects the unreachable broker → 503.
-	readyReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ready", nil)
-	readyRec := httptest.NewRecorder()
-	mux.ServeHTTP(readyRec, readyReq)
-	if readyRec.Code != http.StatusServiceUnavailable {
-		t.Errorf("GET /ready status = %d, want %d (legacy probe is broker-coupled)", readyRec.Code, http.StatusServiceUnavailable)
-	}
-}
-
-// probeTestConfig writes a minimal YAML config with the given brokers and
-// returns the loaded *config.ServerConfig. Each broker entry is an
-// (alias, url) pair.
-// probeTestConfig writes a minimal YAML config with the given brokers and
-// returns the loaded *config.ServerConfig. Each entry is an [alias, url] pair.
-func probeTestConfig(t *testing.T, brokers ...[2]string) *config.ServerConfig {
-	t.Helper()
-	var yamlContent string
-	yamlContent += "mcp_client_auth:\n  mode: disabled\nbrokers:\n"
-	for _, broker := range brokers {
-		alias, brokerURL := broker[0], broker[1]
-		yamlContent += fmt.Sprintf("  %s:\n    url: %s\n    auth:\n      mode: basic\n      username: admin\n      password: secret\n", alias, brokerURL)
-	}
-	path := filepath.Join(t.TempDir(), "broker-config.yaml")
-	if err := os.WriteFile(path, []byte(yamlContent), os.FileMode(0o600)); err != nil {
-		t.Fatalf("writing test config: %v", err)
-	}
-	cfg, err := config.LoadConfig(path)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	return cfg
-}
-
-func TestNewBrokerReachabilityProbe_UnknownBroker(t *testing.T) {
-	cfg := probeTestConfig(t, [2]string{"existing", "http://127.0.0.1:8080"})
-	probe := newBrokerReachabilityProbe(cfg)
-
-	err := probe(context.Background(), "no-such-broker")
-	if err == nil {
-		t.Fatal("expected error for unknown broker, got nil")
-	}
-	if want := `unknown broker "no-such-broker"`; err.Error() != want {
-		t.Errorf("error = %q, want %q", err.Error(), want)
-	}
-}
-
-func TestNewBrokerReachabilityProbe_ExplicitPort(t *testing.T) {
-	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-
-	addr := l.Addr().String()
-	_, port, _ := net.SplitHostPort(addr)
-	cfg := probeTestConfig(t, [2]string{"broker-a", "http://127.0.0.1:" + port})
-	probe := newBrokerReachabilityProbe(cfg)
-
-	if err := probe(context.Background(), "broker-a"); err != nil {
-		t.Errorf("expected success for reachable broker, got: %v", err)
-	}
-}
-
-func TestNewBrokerReachabilityProbe_HTTPSDefaultsTo443(t *testing.T) {
-	cfg := probeTestConfig(t, [2]string{"broker-a", "https://192.0.2.1"})
-	probe := newBrokerReachabilityProbe(cfg)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	err := probe(ctx, "broker-a")
-	if err == nil {
-		t.Fatal("expected dial error to 192.0.2.1:443, got nil")
-	}
-}
-
-func TestNewBrokerReachabilityProbe_HTTPDefaultsTo80(t *testing.T) {
-	cfg := probeTestConfig(t, [2]string{"broker-a", "http://192.0.2.1"})
-	probe := newBrokerReachabilityProbe(cfg)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	err := probe(ctx, "broker-a")
-	if err == nil {
-		t.Fatal("expected dial error to 192.0.2.1:80, got nil")
 	}
 }

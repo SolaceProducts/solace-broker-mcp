@@ -144,7 +144,8 @@ func GroupStepsIntoBatches(steps []Step) []ExecutionBatch {
 }
 
 // executeStep executes a single step: resolves template args, looks up the
-// operation, calls the client, and stores the result in the execution context.
+// operation, constructs the request body if needed, calls the client, and
+// stores the result in the execution context.
 func (ce *CompositeExecutor) executeStep(ctx context.Context, step Step, client sempv2.Client, execCtx *ExecuteContext) error {
 	if step.FollowPages {
 		return ce.executePaginatedStep(ctx, step, client, execCtx)
@@ -159,6 +160,11 @@ func (ce *CompositeExecutor) executeStep(ctx context.Context, step Step, client 
 	op, ok := ce.operations[step.Operation]
 	if !ok {
 		return fmt.Errorf("tool step %s: operation %q not found in operation catalog", step.ID, step.Operation)
+	}
+
+	args, err = ce.constructRequestBody(op, args, execCtx.Params)
+	if err != nil {
+		return fmt.Errorf("tool step %s: %w", step.ID, err)
 	}
 
 	result, err := client.Execute(ctx, op, args)
@@ -202,6 +208,11 @@ func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step
 	op, ok := ce.operations[step.Operation]
 	if !ok {
 		return fmt.Errorf("tool step %s: operation %q not found in operation catalog", step.ID, step.Operation)
+	}
+
+	baseArgs, err = ce.constructRequestBody(op, baseArgs, execCtx.Params)
+	if err != nil {
+		return fmt.Errorf("tool step %s: %w", step.ID, err)
 	}
 
 	maxResults := resolveMaxResults(execCtx.Params)
@@ -395,6 +406,11 @@ func (ce *CompositeExecutor) executeBatch(ctx context.Context, batch ExecutionBa
 				return fmt.Errorf("tool step %s: operation %q not found in operation catalog", step.ID, step.Operation)
 			}
 
+			args, err = ce.constructRequestBody(op, args, execCtx.Params)
+			if err != nil {
+				return fmt.Errorf("tool step %s: %w", step.ID, err)
+			}
+
 			result, err := client.Execute(gCtx, op, args)
 			if err != nil {
 				return fmt.Errorf("tool step %s: %w", step.ID, err)
@@ -458,6 +474,87 @@ func safeTemplateExecute(tmpl *template.Template, data any) (result string, err 
 		return "", err
 	}
 	return buf.String(), nil
+}
+
+// constructRequestBody assembles the request body for a write operation from the
+// tool's input params. It only acts on operations that declare a body parameter;
+// for all others it returns args unchanged.
+//
+// Object params (like msgVpnConfig) are spread into the body as individual
+// fields; scalar params (like msgVpnName) are set directly. Params the operation
+// takes from the path or query are not part of the body — they reach the broker
+// through args instead. The assembled body is added to args under the "body" key.
+//
+// Two input mistakes are rejected rather than passed to the broker:
+//
+//   - A body field set by more than one source. On create, msgVpnName is a body
+//     field, so a dedicated msgVpnName param and a msgVpnName key inside
+//     msgVpnConfig both target it. With no defined precedence the winner would
+//     depend on Go's randomized map iteration order, so we fail loudly instead
+//     of writing an ambiguous body.
+//
+//   - A path/query param name placed inside the config object. On update,
+//     msgVpnName is a path param, so a msgVpnName key inside msgVpnConfig would
+//     otherwise leak into the body. Its value must come from the dedicated param
+//     (it identifies the object in the URL), so we reject it here — giving the
+//     same clear, client-side error as the create case above.
+func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, params map[string]any) (map[string]any, error) {
+	hasBody := false
+	nonBodyParams := make(map[string]bool) // params the op takes from path/query/header, not the body
+	for _, p := range op.Parameters {
+		if p.In == "body" {
+			hasBody = true
+		} else {
+			nonBodyParams[p.Name] = true
+		}
+	}
+	if !hasBody {
+		return args, nil
+	}
+
+	body := make(map[string]any)
+	set := func(field string, val any) error {
+		if _, defined := body[field]; defined {
+			return fmt.Errorf("ambiguous request body: field %q is defined more than once; remove it from the config object", field)
+		}
+		body[field] = val
+		return nil
+	}
+	for name, val := range params {
+		if nonBodyParams[name] {
+			continue
+		}
+		if obj, isObj := val.(map[string]any); isObj {
+			for k, v := range obj {
+				if nonBodyParams[k] {
+					return nil, fmt.Errorf("invalid request body: %q is taken from the path or query and must not appear in the %q config object; supply it via the dedicated parameter instead", k, name)
+				}
+				if err := set(k, v); err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			if err := set(name, val); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// Reject any field the operation's body schema doesn't declare. This catches
+	// a tool-only param (e.g. a dryRun flag) that would otherwise be spread into
+	// the body and rejected by the broker with an opaque "unknown attribute" 400.
+	// op.BodyFields is nil when the schema couldn't be introspected, in which
+	// case we skip the check and defer to the broker as before.
+	if op.BodyFields != nil {
+		for field := range body {
+			if !op.BodyFields[field] {
+				return nil, fmt.Errorf("request body field %q is not a known attribute of operation %q; tool-only params must be declared as path/query/header params, not spread into the body", field, op.ID)
+			}
+		}
+	}
+
+	args["body"] = body
+	return args, nil
 }
 
 // ApplyResultStrategy combines step results according to the tool's result

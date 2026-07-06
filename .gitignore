@@ -54,3 +54,4 @@ open-source.md
 .terraform.lock.hcl
 *.tfstate
 *.tfstate.backup
+.nfs*

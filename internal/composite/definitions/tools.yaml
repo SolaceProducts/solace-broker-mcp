@@ -174,9 +174,31 @@ tools:
         followPages: true
         args:
           count: "100"
-          select: "discardedRxMsgCount, discardedTxMsgCount, dmrEnabled, enabled, msgSpoolMsgCount, msgSpoolUsage, msgVpnConnections, msgVpnConnectionsServiceMqtt, msgVpnConnectionsServiceRestIncoming, msgVpnConnectionsServiceSmf, msgVpnConnectionsServiceWeb, msgVpnName, msgVpnTotalUniqueSubscriptions, replicationEnabled, serviceMqttPlainTextFailureReason, serviceMqttPlainTextUp, serviceRestIncomingPlainTextFailureReason, serviceRestIncomingPlainTextUp, serviceSmfPlainTextFailureReason, serviceSmfPlainTextUp, state"
+        select:
+          - discardedRxMsgCount
+          - discardedTxMsgCount
+          - dmrEnabled
+          - enabled
+          - msgSpoolMsgCount
+          - msgSpoolUsage
+          - msgVpnConnections
+          - msgVpnConnectionsServiceMqtt
+          - msgVpnConnectionsServiceRestIncoming
+          - msgVpnConnectionsServiceSmf
+          - msgVpnConnectionsServiceWeb
+          - msgVpnName
+          - msgVpnTotalUniqueSubscriptions
+          - replicationEnabled
+          - serviceMqttPlainTextFailureReason
+          - serviceMqttPlainTextUp
+          - serviceRestIncomingPlainTextFailureReason
+          - serviceRestIncomingPlainTextUp
+          - serviceSmfPlainTextFailureReason
+          - serviceSmfPlainTextUp
+          - state
     result:
-      strategy: collect
+      strategy: postProcess
+      postProcess: listVpns
 
   - name: list-queues
     description: >
@@ -376,9 +398,21 @@ tools:
           msgVpnName: "{{.Params.msgVpnName}}"
           count: "100"
           where: "slowSubscriber==true"
-          select: "clientAddress, clientName, clientUsername, msgVpnName, platform, rxMsgRate, slowSubscriber, txDiscardedMsgCount, txMsgRate, uptime"
+        select:
+          - clientAddress
+          - clientName
+          - clientProfileName
+          - clientUsername
+          - msgVpnName
+          - platform
+          - rxMsgRate
+          - slowSubscriber
+          - txDiscardedMsgCount
+          - txMsgRate
+          - uptime
     result:
-      strategy: collect
+      strategy: postProcess
+      postProcess: listSlowSubscribers
 
   - name: list-queue-discards
     description: >
@@ -405,6 +439,326 @@ tools:
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           count: "100"
-          select: "clientProfileDeniedDiscardedMsgCount, destinationGroupErrorDiscardedMsgCount, disabledDiscardedMsgCount, lowPriorityMsgCongestionDiscardedMsgCount, maxMsgSizeExceededDiscardedMsgCount, maxMsgSpoolUsageExceededDiscardedMsgCount, maxRedeliveryExceededDiscardedMsgCount, maxRedeliveryExceededToDmqMsgCount, maxTtlExceededDiscardedMsgCount, maxTtlExpiredDiscardedMsgCount, maxTtlExpiredToDmqMsgCount, maxTtlExpiredToDmqFailedMsgCount, msgVpnName, noLocalDeliveryDiscardedMsgCount, queueName, xaTransactionNotSupportedDiscardedMsgCount"
+        select:
+          - clientProfileDeniedDiscardedMsgCount
+          - destinationGroupErrorDiscardedMsgCount
+          - disabledDiscardedMsgCount
+          - lowPriorityMsgCongestionDiscardedMsgCount
+          - maxMsgSizeExceededDiscardedMsgCount
+          - maxMsgSpoolUsageExceededDiscardedMsgCount
+          - maxRedeliveryExceededDiscardedMsgCount
+          - maxRedeliveryExceededToDmqFailedMsgCount
+          - maxRedeliveryExceededToDmqMsgCount
+          - maxTtlExceededDiscardedMsgCount
+          - maxTtlExpiredDiscardedMsgCount
+          - maxTtlExpiredToDmqFailedMsgCount
+          - maxTtlExpiredToDmqMsgCount
+          - msgVpnName
+          - noLocalDeliveryDiscardedMsgCount
+          - queueName
+          - xaTransactionNotSupportedDiscardedMsgCount
+    result:
+      strategy: postProcess
+      postProcess: listQueueDiscards
+
+  - name: create-message-vpn
+    description: >
+      Create a Message VPN. Requires msgVpnName to name the new VPN; any
+      attribute omitted from msgVpnConfig is set to its broker default. Use this
+      to provision a new VPN. Fails if a VPN with the same name already exists.
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN name) and that a new VPN will be created on the
+      broker. The confirmation MUST come as a separate user reply received AFTER
+      you state the target and effect — do not treat the user's original request
+      as a pre-confirmation, even if it implies intent.
+    annotations:
+      readOnly: false
+      destructive: false
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The name of the Message VPN to create"
+      - name: msgVpnConfig
+        type: object
+        required: false
+        description: "Optional MsgVpn attributes (enabled, maxConnectionCount, maxMsgSpoolUsage, etc.). Omitted attributes use broker defaults. Do not include msgVpnName here. See the SEMP MsgVpn schema for the full list."
+    steps:
+      - id: createVpn
+        operation: config/createMsgVpn
+    result:
+      strategy: collect
+
+  - name: update-message-vpn
+    description: >
+      Update an existing Message VPN. Requires msgVpnName to identify the VPN;
+      provide only the attributes you want to change in msgVpnConfig. Omitted
+      attributes are left unchanged. Use this to update VPN settings such as
+      enabled state, connection limits, or spool quotas.
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN name) and the attributes that will change. The
+      confirmation MUST come as a separate user reply received AFTER you state
+      the target and effect — do not treat the user's original request as a
+      pre-confirmation, even if it implies intent.
+    annotations:
+      readOnly: false
+      destructive: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The name of the Message VPN to modify"
+      - name: msgVpnConfig
+        type: object
+        required: true
+        description: "MsgVpn attributes to update (enabled, maxConnectionCount, maxMsgSpoolUsage, etc.). Only provided attributes are changed. Do not include msgVpnName here. See the SEMP MsgVpn schema for the full list."
+    steps:
+      - id: updateVpn
+        operation: config/updateMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+    result:
+      strategy: collect
+
+  - name: delete-message-vpn
+    description: >
+      Delete a Message VPN. Requires msgVpnName to identify the VPN to delete.
+      This is a destructive operation that removes the VPN and all its
+      configuration. The VPN must have no active client connections before
+      deletion.
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN name) and that the VPN and all its configuration
+      will be permanently removed. The confirmation MUST come as a separate user
+      reply received AFTER you state the target and effect — do not treat the
+      user's original request as a pre-confirmation, even if it implies intent.
+    annotations:
+      readOnly: false
+      destructive: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The name of the Message VPN to delete"
+    steps:
+      - id: deleteVpn
+        operation: config/deleteMsgVpn
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+    result:
+      strategy: collect
+
+  - name: create-queue
+    description: >
+      Create a queue in a Message VPN. Requires msgVpnName to identify the VPN
+      and queueName to name the new queue; any attribute omitted from queueConfig
+      is set to its broker default. Use this to provision a new queue. Fails if a
+      queue with the same name already exists in the VPN.
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, queue name) and that a new queue will be created.
+      The confirmation MUST come as a separate user reply received AFTER you
+      state the target and effect — do not treat the user's original request as
+      a pre-confirmation, even if it implies intent.
+    annotations:
+      readOnly: false
+      destructive: false
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN to create the queue in"
+      - name: queueName
+        type: string
+        required: true
+        description: "The name of the queue to create"
+      - name: queueConfig
+        type: object
+        required: false
+        description: "Optional Queue attributes (accessType, egressEnabled, ingressEnabled, maxMsgSpoolUsage, permission, etc.). Omitted attributes use broker defaults. Do not include msgVpnName or queueName here. See the SEMP Queue schema for the full list."
+    steps:
+      - id: createQueue
+        operation: config/createMsgVpnQueue
+        # Only msgVpnName is a path param of POST .../queues. queueName is
+        # deliberately omitted from args so constructRequestBody spreads it into
+        # the request body, where SEMP expects it for create.
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+    result:
+      strategy: collect
+
+  - name: update-queue
+    description: >
+      Update an existing queue. Requires msgVpnName and queueName to identify the
+      queue; provide only the attributes you want to change in queueConfig.
+      Omitted attributes are left unchanged. Use this to update queue settings
+      such as enabled state, access type, spool quota, or redelivery limits.
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, queue name) and the attributes that will change.
+      The confirmation MUST come as a separate user reply received AFTER you
+      state the target and effect — do not treat the user's original request as
+      a pre-confirmation, even if it implies intent.
+    annotations:
+      readOnly: false
+      destructive: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the queue"
+      - name: queueName
+        type: string
+        required: true
+        description: "The name of the queue to modify"
+      - name: queueConfig
+        type: object
+        required: true
+        description: "Queue attributes to update (egressEnabled, ingressEnabled, maxMsgSpoolUsage, maxRedeliveryCount, permission, etc.). Only provided attributes are changed. Do not include msgVpnName or queueName here. See the SEMP Queue schema for the full list."
+    steps:
+      - id: updateQueue
+        operation: config/updateMsgVpnQueue
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          queueName: "{{.Params.queueName}}"
+    result:
+      strategy: collect
+
+  - name: delete-queue
+    description: >
+      Delete a queue from a Message VPN. Requires msgVpnName and queueName to
+      identify the queue to delete. This is a destructive operation that removes
+      the queue and discards any messages still spooled on it.
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, queue name) and that the queue and any spooled
+      messages will be permanently lost. The confirmation MUST come as a separate
+      user reply received AFTER you state the target and effect — do not treat
+      the user's original request as a pre-confirmation, even if it implies
+      intent.
+    annotations:
+      readOnly: false
+      destructive: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the queue"
+      - name: queueName
+        type: string
+        required: true
+        description: "The name of the queue to delete"
+    steps:
+      - id: deleteQueue
+        operation: config/deleteMsgVpnQueue
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          queueName: "{{.Params.queueName}}"
+    result:
+      strategy: collect
+
+  - name: create-topic-endpoint
+    description: >
+      Create a topic endpoint in a Message VPN. Requires msgVpnName to identify
+      the VPN and topicEndpointName to name the new topic endpoint; any attribute
+      omitted from topicEndpointConfig is set to its broker default. Use this to
+      provision a new topic endpoint. Fails if a topic endpoint with the same
+      name already exists in the VPN.
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, topic endpoint name) and that a new topic endpoint
+      will be created. The confirmation MUST come as a separate user reply
+      received AFTER you state the target and effect — do not treat the user's
+      original request as a pre-confirmation, even if it implies intent.
+    annotations:
+      readOnly: false
+      destructive: false
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN to create the topic endpoint in"
+      - name: topicEndpointName
+        type: string
+        required: true
+        description: "The name of the topic endpoint to create"
+      - name: topicEndpointConfig
+        type: object
+        required: false
+        description: "Optional TopicEndpoint attributes (accessType, egressEnabled, ingressEnabled, maxMsgSpoolUsage, permission, etc.). Omitted attributes use broker defaults. Do not include msgVpnName or topicEndpointName here. See the SEMP TopicEndpoint schema for the full list."
+    steps:
+      - id: createTopicEndpoint
+        operation: config/createMsgVpnTopicEndpoint
+        # Only msgVpnName is a path param of POST .../topicEndpoints.
+        # topicEndpointName is deliberately omitted from args so
+        # constructRequestBody spreads it into the request body, where SEMP
+        # expects it for create.
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+    result:
+      strategy: collect
+
+  - name: update-topic-endpoint
+    description: >
+      Update an existing topic endpoint. Requires msgVpnName and
+      topicEndpointName to identify the topic endpoint; provide only the
+      attributes you want to change in topicEndpointConfig. Omitted attributes are
+      left unchanged. Use this to update topic endpoint settings such as enabled
+      state, access type, or spool quota.
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, topic endpoint name) and the attributes that will
+      change. The confirmation MUST come as a separate user reply received AFTER
+      you state the target and effect — do not treat the user's original request
+      as a pre-confirmation, even if it implies intent.
+    annotations:
+      readOnly: false
+      destructive: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the topic endpoint"
+      - name: topicEndpointName
+        type: string
+        required: true
+        description: "The name of the topic endpoint to modify"
+      - name: topicEndpointConfig
+        type: object
+        required: true
+        description: "TopicEndpoint attributes to update (egressEnabled, ingressEnabled, maxMsgSpoolUsage, maxRedeliveryCount, permission, etc.). Only provided attributes are changed. Do not include msgVpnName or topicEndpointName here. See the SEMP TopicEndpoint schema for the full list."
+    steps:
+      - id: updateTopicEndpoint
+        operation: config/updateMsgVpnTopicEndpoint
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          topicEndpointName: "{{.Params.topicEndpointName}}"
+    result:
+      strategy: collect
+
+  - name: delete-topic-endpoint
+    description: >
+      Delete a topic endpoint from a Message VPN. Requires msgVpnName and
+      topicEndpointName to identify the topic endpoint to delete. This is a
+      destructive operation that removes the topic endpoint and discards any
+      messages still spooled on it.
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, topic endpoint name) and that the topic endpoint
+      and any spooled messages will be permanently lost. The confirmation MUST
+      come as a separate user reply received AFTER you state the target and
+      effect — do not treat the user's original request as a pre-confirmation,
+      even if it implies intent.
+    annotations:
+      readOnly: false
+      destructive: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the topic endpoint"
+      - name: topicEndpointName
+        type: string
+        required: true
+        description: "The name of the topic endpoint to delete"
+    steps:
+      - id: deleteTopicEndpoint
+        operation: config/deleteMsgVpnTopicEndpoint
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          topicEndpointName: "{{.Params.topicEndpointName}}"
     result:
       strategy: collect
