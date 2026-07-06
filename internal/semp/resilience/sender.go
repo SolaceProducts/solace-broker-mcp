@@ -97,8 +97,19 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 	// the retry policy's own configured worst case — every attempt at its full
 	// timeout plus every backoff at its cap — so the slot is released once that
 	// budget is spent even if a per-attempt guard is missing or misbehaves. It
-	// never cuts a chain that stays within its configured budget. Zero when
-	// RequestTimeoutDuration is unset (e.g. some tests); Do then skips it.
+	// never cuts a chain that stays within its configured budget.
+	//
+	// The RetryMax+1 term counts the successful attempt too, so after up to
+	// RetryMax failed attempts (each ≤ RequestTimeoutDuration) plus their
+	// backoffs (each ≤ RetryMaxInterval) at least one full RequestTimeoutDuration
+	// of budget always remains for the final attempt — including its response
+	// body read, which the deadline also covers. That matches the per-attempt
+	// http.Client.Timeout, so the read is never bounded more tightly than before.
+	//
+	// Production always sets RequestTimeoutDuration > 0 (validate() enforces it),
+	// so the budget is applied. It is only zero — and Do skips the deadline — when
+	// a config is built with RequestTimeoutDuration == 0 AND either no retries or
+	// RetryMaxInterval == 0 (some direct-construction tests).
 	retryMax := *sempCfg.Retries
 	d.retryBudget = time.Duration(retryMax+1)*sempCfg.RequestTimeoutDuration +
 		time.Duration(retryMax)*sempCfg.RetryMaxInterval

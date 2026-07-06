@@ -120,8 +120,13 @@ func jsonOK(w http.ResponseWriter) {
 // the deadline fires and the slot is released.
 func TestSender_Do_BoundsOverallRetryChainDeadline(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(3 * time.Second)
-		jsonOK(w)
+		// Observe cancellation so the handler returns as soon as the client's
+		// deadline fires; otherwise server.Close() blocks on the full sleep.
+		select {
+		case <-time.After(3 * time.Second):
+			jsonOK(w)
+		case <-r.Context().Done():
+		}
 	}))
 	defer server.Close()
 
