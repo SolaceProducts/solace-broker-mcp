@@ -14,6 +14,7 @@ import (
 // implements it in production; the interface exists for test fakes.
 type tokenExchanger interface {
 	Exchange(ctx context.Context, input tokenexchange.ExchangeInput) (*tokenexchange.Token, error)
+	Invalidate(ctx context.Context, input tokenexchange.DeduplicationKeyInput)
 }
 
 // OAuthAuthenticator obtains a broker-bound access token by exchanging
@@ -71,9 +72,17 @@ func (a *OAuthAuthenticator) AddAuth(ctx context.Context, req *http.Request) err
 	return nil
 }
 
-// HandleAuthFailure returns false unconditionally — the Exchanger is
-// stateless (no cache to evict), so retrying after a broker 401 with
-// the same exchanged token is pointless.
-func (a *OAuthAuthenticator) HandleAuthFailure(_ context.Context, _ http.Header) bool {
-	return false
+// HandleAuthFailure evicts the cached token for this broker and subject
+// token, then returns true so the retry layer re-calls AddAuth — which
+// will miss the cache and fetch a fresh token from the IdP.
+func (a *OAuthAuthenticator) HandleAuthFailure(ctx context.Context, _ http.Header) bool {
+	subjectToken, ok := internalauth.RawSubjectTokenFromContext(ctx)
+	if !ok {
+		return false
+	}
+	a.exchanger.Invalidate(ctx, tokenexchange.DeduplicationKeyInput{
+		SubjectToken: subjectToken,
+		BrokerAlias:  a.brokerAlias,
+	})
+	return true
 }

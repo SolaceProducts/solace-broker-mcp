@@ -573,6 +573,7 @@ func TestDoExchange_BuildRequestFailureWrapsAsTransport(t *testing.T) {
 		grantType:        GrantTypeTokenExchange,
 		audienceParam:    AudienceParamAudience,
 		httpClient:       &http.Client{},
+		cache:            mustTestCache(),
 		nowFunc:          func() time.Time { return pinnedNow() },
 	}
 
@@ -941,6 +942,7 @@ func TestExchange_UnknownGrantTypeReturnsTransportError(t *testing.T) {
 		grantType:        GrantType(99),
 		audienceParam:    AudienceParamAudience,
 		httpClient:       &http.Client{},
+		cache:            mustTestCache(),
 		nowFunc:          func() time.Time { return pinnedNow() },
 	}
 

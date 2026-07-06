@@ -19,6 +19,7 @@ import (
 	"net/http"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
 )
 
 // FromConfig constructs an Exchanger from the validated broker_oauth
@@ -32,7 +33,7 @@ import (
 // in their respective allowlists. FromConfig translates the validated
 // YAML-level types (strings, discriminated unions) into the typed Params
 // enums the Exchanger expects.
-func FromConfig(cfg *config.BrokerOAuthConfig, httpClient *http.Client) (*Exchanger, error) {
+func FromConfig(cfg *config.BrokerOAuthConfig, httpClient *http.Client, tokenCache cache.TokenCache) (*Exchanger, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("tokenexchange: broker_oauth config is nil")
 	}
@@ -60,6 +61,7 @@ func FromConfig(cfg *config.BrokerOAuthConfig, httpClient *http.Client) (*Exchan
 		GrantType:        grantType,
 		AudienceParam:    audienceParam,
 		HTTPClient:       httpClient,
+		Cache:            tokenCache,
 	})
 }
 

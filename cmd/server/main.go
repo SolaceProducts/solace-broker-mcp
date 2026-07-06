@@ -35,6 +35,7 @@ import (
 	_ "github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess/handlers" // register handlers via init()
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
 	"github.com/SolaceDev/solace-broker-mcp/internal/idpclient"
 	"github.com/SolaceDev/solace-broker-mcp/internal/middleware/recovery"
 	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
@@ -459,7 +460,15 @@ func newTokenExchanger(oauthCfg *config.BrokerOAuthConfig) (*tokenexchange.Excha
 	if err != nil {
 		return nil, fmt.Errorf("creating IdP HTTP client: %w", err)
 	}
-	exchanger, err := tokenexchange.FromConfig(oauthCfg, httpClient)
+	tokenCache, err := cache.NewTokenCache(cache.CacheConfig{
+		MaxSize:   defaults.DefaultOAuthCacheMaxSize,
+		ClockSkew: defaults.DefaultTokenExpirySkew,
+		MaxTTL:    defaults.DefaultMaxOAuthTokenTTL,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("creating token cache: %w", err)
+	}
+	exchanger, err := tokenexchange.FromConfig(oauthCfg, httpClient, tokenCache)
 	if err != nil {
 		return nil, fmt.Errorf("creating token exchanger: %w", err)
 	}
