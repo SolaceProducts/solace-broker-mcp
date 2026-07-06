@@ -3355,7 +3355,7 @@ brokers:
 // operator's exported value in the test-runner shell does not silently
 // disable this regression.
 func TestLoadConfig_UnreleasedBrokerOAuth_BypassOff_DefaultGuardBehavior(t *testing.T) {
-	t.Setenv("ENABLE_UNRELEASED_BROKER_OAUTH", "")
+	t.Setenv("ENABLE_UNRELEASED_BROKER_OAUTH", "false")
 
 	yaml := `
 mcp_client_auth:

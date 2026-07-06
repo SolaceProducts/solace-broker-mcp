@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -40,7 +41,7 @@ func ctxWithSubjectToken(t *testing.T, token string) context.Context {
 	handler := internalauth.InjectRawSubjectToken(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		captured = r.Context()
 	}))
-	handler.ServeHTTP(nil, req)
+	handler.ServeHTTP(httptest.NewRecorder(), req)
 	return captured
 }
 

@@ -264,10 +264,9 @@ func oauthCallToolAndCaptureDetail(t *testing.T, mgr *tools.ToolManager, ctx con
 	var logBuf bytes.Buffer
 	old := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(old)
 
 	_, _ = mgr.CallTool(ctx, "test-oauth-tool", map[string]any{"broker": "oauth-broker"}, tools.Identity{})
-
-	slog.SetDefault(old)
 
 	var detail string
 	for _, line := range bytes.Split(logBuf.Bytes(), []byte("\n")) {

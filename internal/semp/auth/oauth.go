@@ -9,7 +9,7 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/tokenexchange"
 )
 
-// TokenExchanger is the capability OAuthAuthenticator needs from the token
+// tokenExchanger is the capability OAuthAuthenticator needs from the token
 // exchange layer. Unexported because only *tokenexchange.Exchanger
 // implements it in production; the interface exists for test fakes.
 type tokenExchanger interface {
