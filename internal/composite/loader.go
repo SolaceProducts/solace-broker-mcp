@@ -132,30 +132,28 @@ func validateTool(tool *CompositeTool) error {
 }
 
 // ValidatePostProcess cross-checks every postProcess tool's postprocessor
-// against the tool's step IDs (Handler.RequiredSteps) and the union of its
-// steps' `select:` clauses (Handler.RequiredFields). It runs as a second pass
-// after LoadTools because handlers register from init() and the postprocess
-// registry must be populated before this check is meaningful. Errors use the
-// uniform template defined by postprocess.ValidateTool so a missing step or
-// field surfaces the same message regardless of which tool tripped it.
+// against the tool's step IDs (Handler.RequiredSteps) and each step's own
+// `select:` clause. It runs as a second pass after LoadTools because handlers
+// register from init() and the postprocess registry must be populated before
+// this check is meaningful. Errors use the uniform template defined by
+// postprocess.ValidateTool so a missing step or field surfaces the same
+// message regardless of which tool tripped it.
 //
-// TODO multi-step: RequiredFields is checked against the union across all
-// steps, so a postprocessor reading field X from step A passes validation
-// when only step B selects X. Today every postProcess tool is single-step,
-// so the union is precise. When a multi-step postProcess tool lands, change
-// Handler.RequiredFields to map[stepID][]string and validate per step.
+// Handlers declaring RequiredFieldsPerStep are validated per step; handlers
+// still on the flat RequiredFields form are validated against the union of
+// all steps' selects (same behaviour as before the multi-step extension).
 func ValidatePostProcess(tools []CompositeTool) error {
 	for _, t := range tools {
 		if t.Result.Strategy != "postProcess" {
 			continue
 		}
 		stepIDs := make([]string, 0, len(t.Steps))
-		var selectFields []string
+		selectFieldsByStep := make(map[string][]string, len(t.Steps))
 		for _, s := range t.Steps {
 			stepIDs = append(stepIDs, s.ID)
-			selectFields = append(selectFields, s.Select...)
+			selectFieldsByStep[s.ID] = s.Select
 		}
-		if err := postprocess.ValidateTool(t.Name, t.Result.PostProcess, stepIDs, selectFields); err != nil {
+		if err := postprocess.ValidateTool(t.Name, t.Result.PostProcess, stepIDs, selectFieldsByStep); err != nil {
 			return err
 		}
 	}

@@ -73,14 +73,14 @@ func TestValidateTool(t *testing.T) {
 	})
 
 	t.Run("unknown handler", func(t *testing.T) {
-		err := ValidateTool("tool-x", "missing", []string{"s1"}, []string{"a"})
+		err := ValidateTool("tool-x", "missing", []string{"s1"}, map[string][]string{"s1": {"a"}})
 		if err == nil || !strings.Contains(err.Error(), `postprocessor "missing" not registered`) {
 			t.Fatalf("got %v", err)
 		}
 	})
 
 	t.Run("missing required step", func(t *testing.T) {
-		err := ValidateTool("tool-x", "h", []string{"other"}, []string{"a", "b"})
+		err := ValidateTool("tool-x", "h", []string{"other"}, map[string][]string{"other": {"a", "b"}})
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -91,7 +91,7 @@ func TestValidateTool(t *testing.T) {
 	})
 
 	t.Run("missing required field", func(t *testing.T) {
-		err := ValidateTool("tool-x", "h", []string{"s1"}, []string{"a"}) // b is missing
+		err := ValidateTool("tool-x", "h", []string{"s1"}, map[string][]string{"s1": {"a"}}) // b is missing
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -102,8 +102,49 @@ func TestValidateTool(t *testing.T) {
 	})
 
 	t.Run("ok", func(t *testing.T) {
-		if err := ValidateTool("tool-x", "h", []string{"s1"}, []string{"a", "b", "c"}); err != nil {
+		if err := ValidateTool("tool-x", "h", []string{"s1"}, map[string][]string{"s1": {"a", "b", "c"}}); err != nil {
 			t.Fatal(err)
+		}
+	})
+}
+
+// TestValidateTool_PerStep pins the multi-step contract: a handler declaring
+// RequiredFieldsPerStep is checked against each step's OWN select, not the
+// union — a field that only appears in a sibling step's select must still fail
+// validation for the step that reads it.
+func TestValidateTool_PerStep(t *testing.T) {
+	resetForTest()
+	t.Cleanup(resetForTest)
+
+	Register("multi", Handler{
+		Fn:            func(map[string]map[string]any) (map[string]any, error) { return nil, nil },
+		RequiredSteps: []string{"a", "b"},
+		RequiredFieldsPerStep: map[string][]string{
+			"a": {"x"},
+			"b": {"y"},
+		},
+	})
+
+	t.Run("ok", func(t *testing.T) {
+		if err := ValidateTool("tool-m", "multi",
+			[]string{"a", "b"},
+			map[string][]string{"a": {"x"}, "b": {"y"}}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("field only in sibling select is rejected", func(t *testing.T) {
+		// x is selected on b, not on a — the union check would pass but the
+		// per-step check must reject this.
+		err := ValidateTool("tool-m", "multi",
+			[]string{"a", "b"},
+			map[string][]string{"a": {}, "b": {"x", "y"}})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		want := `tool "tool-m": postprocessor "multi" reads "x" on step "a" but it is not in that step's select`
+		if err.Error() != want {
+			t.Fatalf("\nwant: %s\ngot:  %s", want, err.Error())
 		}
 	})
 }
