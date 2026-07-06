@@ -37,6 +37,7 @@ The server resolves variables at startup. The `.env` file loads automatically be
 | `port` | `MCP_SERVER_PORT` | `9090` | Port the MCP server listens on. |
 | `listen_address` | — | see below | Host the server binds to. Empty binds all interfaces; the default depends on the client auth mode. |
 | `allow_remote_unauthenticated` | — | `false` | Opt-in to a non-loopback `listen_address` while `mcp_client_auth.mode: disabled`. Acknowledges that the listener has no client authentication. |
+| `allow_insecure_broker_tls` | — | `false` | Opt-in to a broker with `insecure_skip_verify: true` while `mcp_client_auth.mode: oauth`. Acknowledges that disabling broker certificate verification exposes the broker admin credential to a man-in-the-middle. |
 | `tls_cert_file` | — | none | Path to TLS certificate (PEM). |
 | `tls_key_file` | — | none | Path to TLS private key (PEM). |
 | `log_level` | — | `info` | Log verbosity: `debug`, `info`, `warn`, `error`. |

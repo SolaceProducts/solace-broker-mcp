@@ -75,6 +75,14 @@ type ServerConfig struct {
 	// a routable bind exposes unauthenticated MCP access backed by the broker
 	// admin credential — validate() refuses it unless this is explicitly true.
 	AllowRemoteUnauthenticated bool
+
+	// AllowInsecureBrokerTLS opts in to a broker with insecure_skip_verify: true
+	// while in production (oauth) mode. Disabling certificate verification lets a
+	// MITM present any cert and capture the broker admin credential the server
+	// attaches to every SEMP request — validate() refuses it in production unless
+	// this is explicitly true. Ignored in dev modes, where self-signed brokers
+	// are expected.
+	AllowInsecureBrokerTLS bool
 }
 
 // BrokerOAuthConfig holds the global OAuth IdP coordinates the MCP server uses
@@ -420,6 +428,7 @@ type yamlConfig struct {
 	Observability    ObservabilityConfig      `yaml:"observability"`      // numeric tunables parse here; capability flags come from OBS_* env vars (see ObservabilityConfig)
 
 	AllowRemoteUnauthenticated bool `yaml:"allow_remote_unauthenticated"` // opt-in to a non-loopback bind under mcp_client_auth.mode: disabled
+	AllowInsecureBrokerTLS     bool `yaml:"allow_insecure_broker_tls"`    // opt-in to a broker insecure_skip_verify: true under mcp_client_auth.mode: oauth
 }
 
 // Load locates the server configuration file, loads it, and returns a ready
@@ -532,6 +541,7 @@ func LoadConfig(path string) (*ServerConfig, error) {
 		Observability:    raw.Observability,
 
 		AllowRemoteUnauthenticated: raw.AllowRemoteUnauthenticated,
+		AllowInsecureBrokerTLS:     raw.AllowInsecureBrokerTLS,
 	}
 
 	applyDefaults(cfg)
@@ -845,11 +855,20 @@ func validate(cfg *ServerConfig) error {
 		if broker.Auth.Mode == AuthModeOAuth {
 			oauthBrokerCount++
 		}
-		// Surface insecure_skip_verify=true at startup so operators see it
-		// in triage logs without scraping per-request SEMP-client warns.
+		// In production (oauth) mode, https:// is enforced but a disabled cert
+		// check still exposes the broker admin credential to a MITM. Refuse it
+		// unless the operator explicitly accepts the risk (mirrors the
+		// allow_remote_unauthenticated guard). When accepted, keep the startup
+		// WARN so the insecure setting stays visible in triage logs.
 		if cfg.IsProductionMode() && broker.InsecureSkipVerify {
-			slog.Warn("INSECURE: TLS verification disabled for broker",
-				slog.String("broker", broker.DisplayName()))
+			if !cfg.AllowInsecureBrokerTLS {
+				errs = append(errs, fmt.Errorf(
+					"broker %q sets insecure_skip_verify: true while mcp_client_auth.mode is %q: TLS is enforced but certificate verification is disabled, exposing the broker admin credential to a man-in-the-middle. Use a trusted certificate, or set allow_insecure_broker_tls: true to accept the risk",
+					broker.DisplayName(), AuthModeOAuth))
+			} else {
+				slog.Warn("INSECURE: TLS verification disabled for broker",
+					slog.String("broker", broker.DisplayName()))
+			}
 		}
 	}
 

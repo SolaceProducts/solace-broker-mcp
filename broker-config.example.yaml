@@ -77,6 +77,9 @@ semp:
 brokers:
   my-broker:
     url: "https://broker.example.com:943"
+    # Disables TLS certificate verification for this broker. Under
+    # mcp_client_auth.mode: oauth (production) this is refused at startup unless
+    # you also set allow_insecure_broker_tls: true (top level) to accept the risk.
     insecure_skip_verify: false
     auth:
       mode: basic           # basic or bearer
