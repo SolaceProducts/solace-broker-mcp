@@ -107,11 +107,3 @@ func ListRdps(stepResults map[string]map[string]any) (map[string]any, error) {
 	}
 	return out, nil
 }
-
-// boolField returns the bool at name and ok=true if present and bool-typed.
-// Missing, nil, or any other type returns ok=false so the caller can skip the
-// row rather than abort. Mirrors numField / stringField in list_queues.go.
-func boolField(item map[string]any, name string) (bool, bool) {
-	v, ok := item[name].(bool)
-	return v, ok
-}
