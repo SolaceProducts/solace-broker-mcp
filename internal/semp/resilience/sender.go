@@ -106,13 +106,17 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 	// body read, which the deadline also covers. That matches the per-attempt
 	// http.Client.Timeout, so the read is never bounded more tightly than before.
 	//
-	// Production always sets RequestTimeoutDuration > 0 (validate() enforces it),
-	// so the budget is applied. It is only zero — and Do skips the deadline — when
-	// a config is built with RequestTimeoutDuration == 0 AND either no retries or
-	// RetryMaxInterval == 0 (some direct-construction tests).
-	retryMax := *sempCfg.Retries
-	d.retryBudget = time.Duration(retryMax+1)*sempCfg.RequestTimeoutDuration +
-		time.Duration(retryMax)*sempCfg.RetryMaxInterval
+	// The budget is anchored on the per-attempt timeout, so it is only computed
+	// when RequestTimeoutDuration > 0. Production always sets it (validate()
+	// enforces it), so the deadline is always applied there. When it is unset
+	// (a direct-construction test), retryBudget stays 0 and Do skips the
+	// deadline — a backoff-only budget would allot no time to the attempts
+	// themselves and fire spuriously under load.
+	if sempCfg.RequestTimeoutDuration > 0 {
+		retryMax := *sempCfg.Retries
+		d.retryBudget = time.Duration(retryMax+1)*sempCfg.RequestTimeoutDuration +
+			time.Duration(retryMax)*sempCfg.RetryMaxInterval
+	}
 
 	// Per-broker rate limiter: ticker-based interval enforcement.
 	// When interval > 0, each Do() blocks until the ticker fires.
