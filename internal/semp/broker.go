@@ -42,10 +42,8 @@ type BrokerClient struct {
 // NewBrokerClient is the single builder of per-broker Authenticators. It
 // delegates to newAuthenticator to construct exactly one Authenticator
 // from brokerCfg.Auth and passes the same pointer to both protocol clients.
-//
-// exchanger is the process-wide token exchanger for OAuth brokers. Pass
-// nil when no broker uses OAuth; newAuthenticator returns an error if an
-// OAuth broker is configured without an exchanger.
+// newAuthenticator is a pure dispatcher; each Authenticator constructor
+// owns its own precondition checks.
 func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, exchanger *tokenexchange.Exchanger) (*BrokerClient, error) {
 	jar, err := newCookieJar(alias, brokerCfg.Auth.Mode)
 	if err != nil {
