@@ -31,7 +31,12 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 
 	start := e.nowFunc()
 	v, err, _ := e.group.Do(key, func() (interface{}, error) {
-		return e.doExchange(ctx, input)
+		// Detach from the caller's context so one caller's cancellation
+		// does not abort the shared IdP call for all singleflight waiters.
+		// The explicit timeout bounds the detached call independently.
+		exchCtx, cancel := context.WithTimeout(context.Background(), e.exchangeTimeout)
+		defer cancel()
+		return e.doExchange(exchCtx, input)
 	})
 	elapsed := e.nowFunc().Sub(start)
 

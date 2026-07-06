@@ -455,11 +455,16 @@ func TestExchange_DifferentTokensSameBrokerRunConcurrently(t *testing.T) {
 
 // ---------- B04: context cancellation supersedes error ----------
 
+// The caller's context is pre-cancelled, but the IdP call runs on a
+// detached context (singleflight resilience), so the handler still
+// receives and responds. The caller gets context.Canceled from the
+// post-Do check, not from a failed HTTP call.
 func TestExchange_ContextCancelledReturnsContextError(t *testing.T) {
 	t.Parallel()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("exchanged-token", 3600))
 	}))
 	defer srv.Close()
 
@@ -467,7 +472,6 @@ func TestExchange_ContextCancelledReturnsContextError(t *testing.T) {
 	e.nowFunc = func() time.Time { return pinnedNow() }
 
 	ctx, cancel := context.WithCancel(context.Background())
-	// Cancel immediately so the HTTP call fails with context.Canceled.
 	cancel()
 
 	tok, err := e.Exchange(ctx, validInput())
@@ -480,11 +484,16 @@ func TestExchange_ContextCancelledReturnsContextError(t *testing.T) {
 	}
 }
 
+// The caller's context deadline has already expired, but the IdP call
+// runs on a detached context (singleflight resilience), so the handler
+// still receives and responds. The caller gets context.DeadlineExceeded
+// from the post-Do check.
 func TestExchange_ContextDeadlineExceededReturnsDeadlineError(t *testing.T) {
 	t.Parallel()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("exchanged-token", 3600))
 	}))
 	defer srv.Close()
 
@@ -494,7 +503,7 @@ func TestExchange_ContextDeadlineExceededReturnsDeadlineError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
 	defer cancel()
 
-	time.Sleep(5 * time.Millisecond) // ensure deadline passes
+	time.Sleep(5 * time.Millisecond)
 	tok, err := e.Exchange(ctx, validInput())
 
 	if tok != nil {
@@ -764,13 +773,18 @@ func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
 func (h *captureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 func (h *captureHandler) WithGroup(_ string) slog.Handler      { return h }
 
-// B04 (log aspect): context errors are NOT logged
+// B04 (log aspect): context errors are NOT logged.
+// The caller's context is pre-cancelled, but the IdP call runs on a
+// detached context (singleflight resilience), so the handler still
+// receives and responds to the request. The caller gets context.Canceled
+// from the post-Do check, not from a failed HTTP call.
 func TestExchange_ContextErrorNotLogged(t *testing.T) {
 	records, restore := captureLogs(t)
 	defer restore()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("exchanged-token", 3600))
 	}))
 	defer srv.Close()
 
@@ -780,7 +794,10 @@ func TestExchange_ContextErrorNotLogged(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	e.Exchange(ctx, validInput())
+	_, err := e.Exchange(ctx, validInput())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("want context.Canceled, got %v", err)
+	}
 
 	recs := records()
 	for _, rec := range recs {
