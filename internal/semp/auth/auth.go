@@ -5,7 +5,9 @@
 // on auth mode.
 //
 // Distinct from internal/auth, which handles Hop 1 (MCP Client → MCP
-// Server) and is unrelated to SEMP traffic.
+// Server). The OAuth authenticator reads the Hop 1 subject token from
+// internal/auth's context key — the Hop 1 token is the RFC 8693 subject
+// for the Hop 2 exchange, so this coupling is inherent to the design.
 package auth
 
 import (
