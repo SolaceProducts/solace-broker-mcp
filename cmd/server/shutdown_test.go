@@ -16,9 +16,12 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -101,7 +104,7 @@ func TestDrainAndShutdown_FlipsReadyzBeforeDelay(t *testing.T) {
 	}()
 
 	start := time.Now()
-	if err := drainAndShutdown(srv, readiness, drainDelay, 5*time.Second); err != nil {
+	if err := drainAndShutdown(srv, readiness, drainDelay, 5*time.Second, nil); err != nil {
 		t.Fatalf("drainAndShutdown returned error: %v", err)
 	}
 	elapsed := time.Since(start)
@@ -132,7 +135,7 @@ func TestDrainAndShutdown_SetsShuttingDownEvenWithZeroDelay(t *testing.T) {
 	readiness := health.NewReadinessState()
 	readiness.SetInitialized()
 
-	if err := drainAndShutdown(srv, readiness, 0, 5*time.Second); err != nil {
+	if err := drainAndShutdown(srv, readiness, 0, 5*time.Second, nil); err != nil {
 		t.Fatalf("drainAndShutdown returned error: %v", err)
 	}
 	if !readiness.IsShuttingDown() {
@@ -191,7 +194,7 @@ func TestDrainAndShutdown_ShutdownGetsFullBudgetAfterDrain(t *testing.T) {
 	readiness.SetInitialized()
 
 	start := time.Now()
-	if err := drainAndShutdown(cs, readiness, drainDelay, shutdownTimeout); err != nil {
+	if err := drainAndShutdown(cs, readiness, drainDelay, shutdownTimeout, nil); err != nil {
 		t.Fatalf("drainAndShutdown returned error: %v", err)
 	}
 
@@ -235,12 +238,195 @@ func TestGracefulShutdown_ForcedCloseFallback(t *testing.T) {
 	wantErr := context.DeadlineExceeded
 	cs := &captureShutdowner{shutdownErr: wantErr}
 
-	err := gracefulShutdown(cs, 50*time.Millisecond)
+	err := gracefulShutdown(cs, 50*time.Millisecond, nil)
 	if err != wantErr {
 		t.Errorf("gracefulShutdown returned %v, want the original Shutdown error %v", err, wantErr)
 	}
 	if !cs.closeCalled {
 		t.Error("forced Close was not called after Shutdown failed; the fallback is missing")
+	}
+}
+
+// blockingShutdowner is a shutdowner whose Shutdown blocks until Close is
+// called (SOL-151437), so the "second signal forces close" paths can be driven
+// deterministically without any real drain or shutdown sleeps. Shutdown also
+// returns if its context is cancelled, so a broken force path fails the test via
+// the timeout budget rather than hanging forever.
+//
+//   - closeCount records EVERY Close call (not just the first), so a test can
+//     assert Close ran exactly once and would catch a production double-close —
+//     a sync.Once guard would instead silently swallow the second call. The
+//     channel close itself is still guarded by closeOnce so the fake cannot
+//     panic on a double close while we measure it.
+//   - shutdownReturned is closed when Shutdown actually returns, letting a test
+//     prove the Shutdown goroutine unblocked and exited after a forced Close
+//     (AC #5, "no goroutine leak") rather than trusting a comment.
+type blockingShutdowner struct {
+	closed           chan struct{}
+	shutdownReturned chan struct{}
+	closeOnce        sync.Once
+	closeCount       atomic.Int64
+}
+
+func newBlockingShutdowner() *blockingShutdowner {
+	return &blockingShutdowner{
+		closed:           make(chan struct{}),
+		shutdownReturned: make(chan struct{}),
+	}
+}
+
+func (b *blockingShutdowner) Shutdown(ctx context.Context) error {
+	defer close(b.shutdownReturned)
+	select {
+	case <-b.closed:
+		return http.ErrServerClosed
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (b *blockingShutdowner) Close() error {
+	b.closeCount.Add(1)
+	b.closeOnce.Do(func() { close(b.closed) })
+	return nil
+}
+
+// TestDrainAndShutdown_SecondSignalDuringDrainForcesClose proves AC #1
+// (SOL-151437): a second signal arriving while the drain window is sleeping
+// short-circuits it — forced Close, and the graceful step is skipped — instead
+// of waiting the window out. We use a long drain window the test must NOT wait
+// out; the second signal is pre-armed so the drain select picks it immediately.
+func TestDrainAndShutdown_SecondSignalDuringDrainForcesClose(t *testing.T) {
+	srv := newBlockingShutdowner()
+	readiness := health.NewReadinessState()
+	readiness.SetInitialized()
+
+	// A drain window far longer than this test should ever run. If the second
+	// signal is honored we return in microseconds; if it is dropped we would
+	// block here for 30s and the -timeout guard would fail the run.
+	const drainDelay = 30 * time.Second
+	forceSig := make(chan os.Signal, 1)
+	forceSig <- syscall.SIGTERM
+
+	start := time.Now()
+	if err := drainAndShutdown(srv, readiness, drainDelay, 30*time.Second, forceSig); err != nil {
+		t.Fatalf("drainAndShutdown returned error on forced close: %v", err)
+	}
+	elapsed := time.Since(start)
+
+	if got := srv.closeCount.Load(); got != 1 {
+		t.Errorf("forced Close called %d times for a second signal during the drain window, want exactly 1", got)
+	}
+	if elapsed >= drainDelay {
+		t.Errorf("drainAndShutdown waited out the %v drain window (took %v); the second signal must short-circuit it", drainDelay, elapsed)
+	}
+	// Readiness must still have flipped before the forced exit (AC #5 / #2).
+	if !readiness.IsShuttingDown() {
+		t.Error("readiness did not flip to shutting-down before the forced exit")
+	}
+}
+
+// TestDrainAndShutdown_SecondSignalDuringGracefulForcesClose proves AC #2
+// (SOL-151437) through the real production call path: with a zero drain delay
+// (the SIGINT case) drainAndShutdown goes straight to the graceful wait, and a
+// second signal there forces an immediate Close that unblocks the in-flight
+// Shutdown. blockingShutdowner.Shutdown blocks until Close, so the graceful wait
+// is genuinely in progress when the signal arrives.
+func TestDrainAndShutdown_SecondSignalDuringGracefulForcesClose(t *testing.T) {
+	srv := newBlockingShutdowner()
+	readiness := health.NewReadinessState()
+	readiness.SetInitialized()
+
+	forceSig := make(chan os.Signal, 1)
+	forceSig <- syscall.SIGINT
+
+	done := make(chan error, 1)
+	go func() {
+		done <- drainAndShutdown(srv, readiness, 0, 30*time.Second, forceSig)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("drainAndShutdown returned %v on forced close, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("drainAndShutdown did not return after a second signal during the graceful wait; force path is broken")
+	}
+	if got := srv.closeCount.Load(); got != 1 {
+		t.Errorf("forced Close called %d times for a second signal during the graceful wait, want exactly 1", got)
+	}
+	// AC #5 (no goroutine leak): the Shutdown goroutine spawned by
+	// gracefulShutdown must actually unblock and exit after the forced Close,
+	// not linger. Close (and the deferred context cancel) should release it.
+	select {
+	case <-srv.shutdownReturned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Shutdown goroutine did not return after forced Close; goroutine leak on the force path")
+	}
+}
+
+// recordingHandler is a minimal slog.Handler that captures every record so a
+// test can assert exactly what was logged. It records all levels; the test
+// filters. Guarded by a mutex because slog handlers must be safe for concurrent
+// Handle calls, though these tests log from a single goroutine.
+type recordingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordingHandler) WithGroup(string) slog.Handler      { return h }
+
+// TestForceClose_LogsSingleWarnNamingSignal proves AC #4 (SOL-151437): a forced
+// exit emits exactly ONE WARN line, it describes the forced shutdown, and it
+// names the triggering signal. forceClose is the shared reaction for both the
+// drain-window and graceful-wait force paths, so testing it once covers both.
+// It swaps the process-global slog default, so it must not run in parallel with
+// other tests in this package (none here call t.Parallel).
+func TestForceClose_LogsSingleWarnNamingSignal(t *testing.T) {
+	rec := &recordingHandler{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(rec))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	srv := newBlockingShutdowner()
+	forceClose(srv, syscall.SIGTERM)
+
+	var warns []slog.Record
+	for _, r := range rec.records {
+		if r.Level == slog.LevelWarn {
+			warns = append(warns, r)
+		}
+	}
+	if len(warns) != 1 {
+		t.Fatalf("forceClose emitted %d WARN lines, want exactly 1", len(warns))
+	}
+	w := warns[0]
+	if !strings.Contains(w.Message, "forcing immediate shutdown") {
+		t.Errorf("WARN message %q does not describe the forced shutdown", w.Message)
+	}
+	var sigAttr string
+	w.Attrs(func(a slog.Attr) bool {
+		if a.Key == "signal" {
+			sigAttr = a.Value.String()
+		}
+		return true
+	})
+	if sigAttr != syscall.SIGTERM.String() {
+		t.Errorf("WARN signal attr = %q, want the triggering signal %q", sigAttr, syscall.SIGTERM.String())
+	}
+	if got := srv.closeCount.Load(); got != 1 {
+		t.Errorf("forceClose invoked Close %d times, want exactly 1", got)
 	}
 }
 
