@@ -141,10 +141,9 @@ func validateTool(tool *CompositeTool) error {
 //
 // TODO multi-step: RequiredFields is checked against the union across all
 // steps, so a postprocessor reading field X from step A passes validation
-// when only step B selects X. Today every postProcess tool has one step
-// (list-queues), so the union is precise. When a multi-step postProcess
-// tool lands, change Handler.RequiredFields to map[stepID][]string and
-// validate per step.
+// when only step B selects X. Today every postProcess tool is single-step,
+// so the union is precise. When a multi-step postProcess tool lands, change
+// Handler.RequiredFields to map[stepID][]string and validate per step.
 func ValidatePostProcess(tools []CompositeTool) error {
 	for _, t := range tools {
 		if t.Result.Strategy != "postProcess" {
