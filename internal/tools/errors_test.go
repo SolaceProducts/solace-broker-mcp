@@ -105,6 +105,7 @@ func TestIsRetryable(t *testing.T) {
 		{"exchange transport", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeTransport, Message: "connect timeout"}, true},
 		{"exchange rejected", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeRejected, Message: "invalid_grant"}, false},
 		{"exchange invalid response", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrInvalidResponse, Message: "bad json"}, false},
+		{"exchange missing subject", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeMissingSubject, Message: "no subject token"}, false},
 		{"wrapped exchange transport", fmt.Errorf("oauth auth: %w", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeTransport, Message: "timeout"}), true},
 
 		// Fall-through / non-SEMP errors are never retryable.
@@ -237,6 +238,12 @@ func TestBuildErrorMessage(t *testing.T) {
 			"Authentication failed: the identity provider returned an unexpected response. Contact your administrator.",
 			nil,
 		},
+		{
+			"exchange missing subject",
+			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeMissingSubject, Message: "no subject token on context"},
+			"Authentication failed: no identity token was found for the current session. Contact your administrator.",
+			nil,
+		},
 
 		// Unknown/internal errors never echo raw detail and carry no hint.
 		{
@@ -294,6 +301,20 @@ func TestBuildErrorResult_ExchangeError_StructuredFields(t *testing.T) {
 	if got := transportStructured["retryable"]; got != true {
 		t.Errorf("transport retryable = %v, want true", got)
 	}
+
+	missingSubjectErr := &tokenexchange.ExchangeError{
+		Sentinel:    tokenexchange.ErrExchangeMissingSubject,
+		Message:     "no subject token on context",
+		BrokerAlias: "my-broker",
+	}
+	missingResult := m.buildErrorResult(missingSubjectErr)
+	missingStructured := missingResult.StructuredContent.(map[string]any)
+	if got := missingStructured["error_source"]; got != "token_exchange" {
+		t.Errorf("missing subject error_source = %v, want %q", got, "token_exchange")
+	}
+	if got := missingStructured["retryable"]; got != false {
+		t.Errorf("missing subject retryable = %v, want false", got)
+	}
 }
 
 func TestBuildExchangeErrorMessage(t *testing.T) {
@@ -316,6 +337,11 @@ func TestBuildExchangeErrorMessage(t *testing.T) {
 			"invalid response",
 			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrInvalidResponse, Message: "bad content-type"},
 			"Authentication failed: the identity provider returned an unexpected response. Contact your administrator.",
+		},
+		{
+			"missing subject",
+			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeMissingSubject, Message: "no subject token"},
+			"Authentication failed: no identity token was found for the current session. Contact your administrator.",
 		},
 		{
 			"unknown sentinel falls to default",

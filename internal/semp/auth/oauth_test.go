@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -99,6 +100,9 @@ func TestOAuthAuthenticator_AddAuth_NoSubjectToken(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no subject token") {
 		t.Errorf("error = %v, want mention of 'no subject token'", err)
+	}
+	if !errors.Is(err, tokenexchange.ErrExchangeMissingSubject) {
+		t.Errorf("error should wrap ErrExchangeMissingSubject, got %v", err)
 	}
 
 	exchg.mu.Lock()

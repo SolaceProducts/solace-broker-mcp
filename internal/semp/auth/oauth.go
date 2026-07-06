@@ -50,7 +50,11 @@ func NewOAuthAuthenticator(exchanger tokenExchanger, audience string, scopes []s
 func (a *OAuthAuthenticator) AddAuth(ctx context.Context, req *http.Request) error {
 	subjectToken, ok := internalauth.RawSubjectTokenFromContext(ctx)
 	if !ok {
-		return fmt.Errorf("oauth auth: no subject token on context")
+		return &tokenexchange.ExchangeError{
+			Sentinel:    tokenexchange.ErrExchangeMissingSubject,
+			Message:     "oauth auth: no subject token on context — Hop 1 middleware may not have run",
+			BrokerAlias: a.brokerAlias,
+		}
 	}
 
 	tok, err := a.exchanger.Exchange(ctx, tokenexchange.ExchangeInput{
