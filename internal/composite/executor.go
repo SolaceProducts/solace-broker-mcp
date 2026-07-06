@@ -26,6 +26,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess"
+	"github.com/SolaceDev/solace-broker-mcp/internal/safego"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 )
 
@@ -394,7 +395,7 @@ func (ce *CompositeExecutor) executeBatch(ctx context.Context, batch ExecutionBa
 
 	for _, step := range batch.Steps {
 		step := step // capture loop variable
-		g.Go(func() error {
+		safego.Go(g, func() error {
 			args, err := ResolveArgs(step.Args, execCtx)
 			if err != nil {
 				return fmt.Errorf("tool step %s: failed to resolve args: %w", step.ID, err)
