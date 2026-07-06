@@ -951,6 +951,40 @@ mcp_client_auth:
 	}
 }
 
+func TestLoadConfig_RejectsInsecureSkipVerifyInProductionModeWithMixedCaseMode(t *testing.T) {
+	// Regression: mcp_client_auth.mode is normalized to lowercase inside
+	// validate(). The insecure-broker-TLS refusal keys off IsProductionMode(),
+	// which compares against the lowercase "oauth" constant. If normalization
+	// ran AFTER the broker loop, a non-lowercase "OAuth" would not register as
+	// production and would silently bypass the refusal — a security regression.
+	// This asserts a mixed-case mode is treated exactly like lowercase "oauth".
+	yaml := `
+brokers:
+  prod-us:
+    url: "https://broker.example.com:8080"
+    insecure_skip_verify: true
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+mcp_client_auth:
+  mode: OAuth
+  issuer: "https://idp.example.com"
+  audience: "solace-mcp"
+  resource_url: "https://mcp.example.com"
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for insecure_skip_verify=true with mixed-case mode: OAuth and no opt-in")
+	}
+	if !strings.Contains(err.Error(), "allow_insecure_broker_tls") {
+		t.Errorf("error should name the allow_insecure_broker_tls opt-in, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "prod-us") {
+		t.Errorf("error should identify the offending broker, got: %v", err)
+	}
+}
+
 func TestLoadConfig_AllowsInsecureSkipVerifyInProductionModeWithOptIn(t *testing.T) {
 	// With the explicit opt-in the operator has accepted the risk; validation
 	// passes but the startup WARN still fires so the insecure setting stays

@@ -836,6 +836,16 @@ func splitYAMLComment(line []byte) (active, comment []byte) {
 func validate(cfg *ServerConfig) error {
 	var errs []error
 
+	// Normalize mcp_client_auth.mode up front, before ANY consumer runs. mode
+	// is the single source of truth for the production-vs-dev profile via
+	// IsProductionMode(), which compares against the lowercase constants. The
+	// broker-TLS refusal below (and other IsProductionMode() checks) must see
+	// the normalized value; otherwise a config with "OAuth"/"OAUTH" would not
+	// register as production and would silently bypass the insecure-TLS refusal.
+	// Keep this ahead of the broker loop — the mode-specific required-field
+	// switch further down relies on it too.
+	cfg.MCPClientAuth.Mode = strings.ToLower(cfg.MCPClientAuth.Mode)
+
 	if len(cfg.brokers) == 0 {
 		errs = append(errs, fmt.Errorf("at least one broker must be configured"))
 	}
@@ -919,7 +929,8 @@ func validate(cfg *ServerConfig) error {
 	// Modes are tiered, not interleaved:
 	//   - disabled / static: dev-only, http:// broker URLs allowed
 	//   - oauth: production, https:// required everywhere
-	cfg.MCPClientAuth.Mode = strings.ToLower(cfg.MCPClientAuth.Mode)
+	// mode was normalized to lowercase at the top of validate() so every check
+	// above (broker TLS, IsProductionMode) and the switch below agree on it.
 	switch cfg.MCPClientAuth.Mode {
 	case "":
 		errs = append(errs, fmt.Errorf("mcp_client_auth.mode is required (must be one of %v)", validAuthClientModes))
