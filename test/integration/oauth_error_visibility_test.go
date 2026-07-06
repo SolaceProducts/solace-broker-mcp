@@ -153,8 +153,8 @@ func runOAuthVisibilityTestNoSubjectToken(t *testing.T) {
 
 	detail := oauthCallToolAndCaptureDetail(t, mgr, context.Background())
 
-	if !strings.HasPrefix(detail, "*") {
-		t.Errorf("[NoSubjectToken] expected Go type only (unreachable in production), got %q", detail)
+	if !strings.Contains(detail, "no subject token") {
+		t.Errorf("[NoSubjectToken] expected 'no subject token' in detail, got %q", detail)
 	}
 }
 
