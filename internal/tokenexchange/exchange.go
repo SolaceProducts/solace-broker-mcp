@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 )
 
 // Exchange performs an RFC 8693 token exchange against the configured IdP.
@@ -56,6 +57,9 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 		return nil, err
 	}
 
+	slog.Debug("token exchange succeeded",
+		slog.String("broker", input.BrokerAlias),
+		slog.Duration("exchange_elapsed", elapsed))
 	return v.(*Token), nil
 }
 

@@ -773,6 +773,48 @@ func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
 func (h *captureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
 func (h *captureHandler) WithGroup(_ string) slog.Handler      { return h }
 
+func TestExchange_SuccessLogsDebugWithBrokerAndElapsed(t *testing.T) {
+	records, restore := captureLogs(t)
+	defer restore()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("exchanged-token", 3600))
+	}))
+	defer srv.Close()
+
+	e := newTestExchanger(t, srv.URL)
+	e.nowFunc = func() time.Time { return pinnedNow() }
+
+	tok, err := e.Exchange(context.Background(), validInput())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tok == nil {
+		t.Fatal("expected non-nil token")
+	}
+
+	recs := records()
+	var found bool
+	for _, rec := range recs {
+		if rec.Message == "token exchange succeeded" {
+			found = true
+			if rec.Level != slog.LevelDebug {
+				t.Errorf("want Debug level, got %v", rec.Level)
+			}
+			if _, ok := rec.Attrs["broker"]; !ok {
+				t.Error("missing broker attr")
+			}
+			if _, ok := rec.Attrs["exchange_elapsed"]; !ok {
+				t.Error("missing exchange_elapsed attr")
+			}
+		}
+	}
+	if !found {
+		t.Error("success-path debug log not emitted")
+	}
+}
+
 // B04 (log aspect): context errors are NOT logged.
 // The caller's context is pre-cancelled, but the IdP call runs on a
 // detached context (singleflight resilience), so the handler still
