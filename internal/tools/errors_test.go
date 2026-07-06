@@ -18,11 +18,14 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceDev/solace-broker-mcp/internal/tokenexchange"
 )
 
 func TestSanitizeBrokerText(t *testing.T) {
@@ -97,6 +100,12 @@ func TestIsRetryable(t *testing.T) {
 		{"sempv1 500", &sempv1.Error{Kind: sempv1.ErrorKindHTTP, StatusCode: 500}, false},
 		{"sempv1 permission, non-retryable reason", &sempv1.Error{Kind: sempv1.ErrorKindPermission, StatusCode: 200, ReasonCode: 72}, false},
 		{"sempv1 zero reasonCode (lookup miss safe)", &sempv1.Error{Kind: sempv1.ErrorKindExecuteFail, StatusCode: 200, ReasonCode: 0}, false},
+
+		// Token exchange: only transport errors are retryable.
+		{"exchange transport", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeTransport, Message: "connect timeout"}, true},
+		{"exchange rejected", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeRejected, Message: "invalid_grant"}, false},
+		{"exchange invalid response", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrInvalidResponse, Message: "bad json"}, false},
+		{"wrapped exchange transport", fmt.Errorf("oauth auth: %w", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeTransport, Message: "timeout"}), true},
 
 		// Fall-through / non-SEMP errors are never retryable.
 		{"plain error", errors.New("boom"), false},
@@ -209,6 +218,26 @@ func TestBuildErrorMessage(t *testing.T) {
 			genericInternalMessage,
 			nil,
 		},
+		// Exchange errors route through buildExchangeErrorMessage.
+		{
+			"exchange rejected",
+			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeRejected, Message: "invalid_grant"},
+			"Authentication failed: the identity provider rejected the token exchange. Contact your administrator.",
+			nil,
+		},
+		{
+			"exchange transport",
+			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeTransport, Message: "connect timeout"},
+			"Authentication failed: unable to reach the identity provider. Try again shortly.",
+			nil,
+		},
+		{
+			"exchange invalid response",
+			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrInvalidResponse, Message: "unexpected content-type"},
+			"Authentication failed: the identity provider returned an unexpected response. Contact your administrator.",
+			nil,
+		},
+
 		// Unknown/internal errors never echo raw detail and carry no hint.
 		{
 			"unknown error",
@@ -228,5 +257,113 @@ func TestBuildErrorMessage(t *testing.T) {
 				t.Errorf("%s: suggestions = %v, want %v", tt.name, suggestions, tt.wantSuggestions)
 			}
 		})
+	}
+}
+
+func TestBuildErrorResult_ExchangeError_StructuredFields(t *testing.T) {
+	m := &ToolManager{}
+	err := fmt.Errorf("oauth auth: %w", &tokenexchange.ExchangeError{
+		Sentinel: tokenexchange.ErrExchangeRejected,
+		Message:  "invalid_grant",
+	})
+
+	result := m.buildErrorResult(err)
+
+	if !result.IsError {
+		t.Fatal("expected IsError=true")
+	}
+
+	structured, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("StructuredContent type = %T, want map[string]any", result.StructuredContent)
+	}
+
+	if got := structured["error_source"]; got != "token_exchange" {
+		t.Errorf("error_source = %v, want %q", got, "token_exchange")
+	}
+	if got := structured["retryable"]; got != false {
+		t.Errorf("retryable = %v, want false (rejected is not retryable)", got)
+	}
+
+	transportErr := fmt.Errorf("oauth auth: %w", &tokenexchange.ExchangeError{
+		Sentinel: tokenexchange.ErrExchangeTransport,
+		Message:  "dial timeout",
+	})
+	transportResult := m.buildErrorResult(transportErr)
+	transportStructured := transportResult.StructuredContent.(map[string]any)
+	if got := transportStructured["retryable"]; got != true {
+		t.Errorf("transport retryable = %v, want true", got)
+	}
+}
+
+func TestBuildExchangeErrorMessage(t *testing.T) {
+	tests := []struct {
+		name string
+		err  *tokenexchange.ExchangeError
+		want string
+	}{
+		{
+			"rejected",
+			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeRejected, Message: "invalid_grant"},
+			"Authentication failed: the identity provider rejected the token exchange. Contact your administrator.",
+		},
+		{
+			"transport",
+			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeTransport, Message: "dial timeout"},
+			"Authentication failed: unable to reach the identity provider. Try again shortly.",
+		},
+		{
+			"invalid response",
+			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrInvalidResponse, Message: "bad content-type"},
+			"Authentication failed: the identity provider returned an unexpected response. Contact your administrator.",
+		},
+		{
+			"unknown sentinel falls to default",
+			&tokenexchange.ExchangeError{Sentinel: errors.New("something else"), Message: "weird"},
+			"Authentication failed: an unexpected error occurred during token exchange. Contact your administrator.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := buildExchangeErrorMessage(tt.err); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExchangeError_NeverContainsSecrets(t *testing.T) {
+	secrets := []string{"subject-token-value", "access-token-value", "client-secret-value"}
+
+	err := &tokenexchange.ExchangeError{
+		Sentinel:      tokenexchange.ErrExchangeRejected,
+		Message:       "IdP rejected the grant",
+		TokenEndpoint: "https://idp.example.com/token",
+		BrokerAlias:   "my-broker",
+		Audience:      "https://broker.example.com",
+		HTTPStatus:    400,
+		Elapsed:       150 * time.Millisecond,
+	}
+
+	agentMsg := buildExchangeErrorMessage(err)
+	errorStr := err.Error()
+
+	for _, secret := range secrets {
+		if strings.Contains(agentMsg, secret) {
+			t.Errorf("agent message contains secret %q: %s", secret, agentMsg)
+		}
+		if strings.Contains(errorStr, secret) {
+			t.Errorf("Error() contains secret %q: %s", secret, errorStr)
+		}
+	}
+
+	for _, attr := range err.LogAttrs() {
+		val := attr.Value.String()
+		for _, secret := range secrets {
+			if strings.Contains(val, secret) {
+				t.Errorf("LogAttrs() attr %q contains secret %q: %s", attr.Key, secret, val)
+			}
+		}
 	}
 }
