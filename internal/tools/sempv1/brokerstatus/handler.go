@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/safego"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
 	"golang.org/x/sync/errgroup"
@@ -128,16 +129,16 @@ func (h *Handler) Handle(
 
 	g, gCtx := errgroup.WithContext(ctx)
 
-	g.Go(func() error {
+	safego.Go(g, func() error {
 		return executeAndDecode(gCtx, tc.SEMPv1Client, versionXML, "version", &versionResp)
 	})
-	g.Go(func() error {
+	safego.Go(g, func() error {
 		return executeAndDecode(gCtx, tc.SEMPv1Client, systemXML, "system", &systemResp)
 	})
-	g.Go(func() error {
+	safego.Go(g, func() error {
 		return executeAndDecode(gCtx, tc.SEMPv1Client, memoryXML, "memory", &memoryResp)
 	})
-	g.Go(func() error {
+	safego.Go(g, func() error {
 		return executeAndDecode(gCtx, tc.SEMPv1Client, spoolXML, "message-spool", &spoolResp)
 	})
 
