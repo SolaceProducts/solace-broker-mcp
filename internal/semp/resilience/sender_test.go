@@ -46,10 +46,11 @@ func newTestSender(t *testing.T, httpClient *http.Client, authn auth.Authenticat
 	t.Helper()
 	minInterval := time.Duration(0)
 	sempCfg := &config.SEMPConfig{
-		Retries:            &retries,
-		RequestMinInterval: &minInterval,
-		RetryMinInterval:   1 * time.Millisecond,
-		RetryMaxInterval:   10 * time.Millisecond,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RequestTimeoutDuration: 30 * time.Second, // generous per-attempt + overall budget for tests
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
 	}
 	return New(httpClient, sempCfg, authn, "http://test-broker", NewSemaphore(10))
 }
@@ -60,10 +61,11 @@ func newTestSenderBasic(t *testing.T, httpClient *http.Client, retries int) *Sen
 	t.Helper()
 	minInterval := time.Duration(0)
 	sempCfg := &config.SEMPConfig{
-		Retries:            &retries,
-		RequestMinInterval: &minInterval,
-		RetryMinInterval:   1 * time.Millisecond,
-		RetryMaxInterval:   10 * time.Millisecond,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RequestTimeoutDuration: 30 * time.Second, // generous per-attempt + overall budget for tests
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
 	}
 	jar := mustNewSafeCookieJar(t)
 	httpClient.Jar = jar
@@ -111,6 +113,57 @@ func jsonOK(w http.ResponseWriter) {
 }
 
 // --- Rate Limiter Tests ---
+
+// TestSender_Do_BoundsOverallRetryChainDeadline proves the overall retry-chain
+// deadline bounds a call even when the per-attempt httpClient.Timeout is absent
+// (0). A slow broker must not pin the semaphore slot for the full server delay:
+// the deadline fires and the slot is released.
+func TestSender_Do_BoundsOverallRetryChainDeadline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(3 * time.Second)
+		jsonOK(w)
+	}))
+	defer server.Close()
+
+	retries := 0
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RequestTimeoutDuration: 100 * time.Millisecond, // retryBudget = 1*100ms = 100ms
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
+	}
+	// No per-attempt Timeout, so only the overall retry-chain deadline can bound
+	// the call.
+	httpClient := &http.Client{Transport: server.Client().Transport}
+	d := New(httpClient, sempCfg, bearerAuth(t), server.URL, NewSemaphore(1))
+
+	start := time.Now()
+	resp, err := d.Do(context.Background(), newGetRequest(t, server.URL))
+	elapsed := time.Since(start)
+	if resp != nil {
+		resp.Body.Close()
+	}
+
+	if err == nil {
+		t.Fatal("expected an error from the overall retry-chain deadline, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expected context.DeadlineExceeded in the chain, got %v", err)
+	}
+	if elapsed > 1*time.Second {
+		t.Errorf("Do did not honor the overall deadline: took %s (budget ~100ms)", elapsed)
+	}
+	// The semaphore slot must be released: a fresh acquire on the size-1
+	// semaphore must succeed immediately rather than block.
+	select {
+	case d.sem <- struct{}{}:
+		<-d.sem
+	default:
+		t.Error("semaphore slot was not released after the deadline fired")
+	}
+}
 
 func TestSender_RateLimiter_BlocksUntilChannelReady(t *testing.T) {
 	var requestCount atomic.Int32
@@ -568,10 +621,11 @@ func TestSender_ErrorHandler_NetworkError_ProducesRetriesExhaustedError(t *testi
 	retries := 2
 	minInterval := time.Duration(0)
 	sempCfg := &config.SEMPConfig{
-		Retries:            &retries,
-		RequestMinInterval: &minInterval,
-		RetryMinInterval:   1 * time.Millisecond,
-		RetryMaxInterval:   10 * time.Millisecond,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RequestTimeoutDuration: 30 * time.Second, // generous per-attempt + overall budget for tests
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
 	}
 	jar := mustNewSafeCookieJar(t)
 	sender := New(&http.Client{Jar: jar}, sempCfg, basicAuth(t, jar), serverURL, NewSemaphore(10))
@@ -713,10 +767,11 @@ func TestSender_NoRetry_POST_ConnectionError(t *testing.T) {
 	retries := 5
 	minInterval := time.Duration(0)
 	sempCfg := &config.SEMPConfig{
-		Retries:            &retries,
-		RequestMinInterval: &minInterval,
-		RetryMinInterval:   1 * time.Millisecond,
-		RetryMaxInterval:   10 * time.Millisecond,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RequestTimeoutDuration: 30 * time.Second, // generous per-attempt + overall budget for tests
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
 	}
 	jar := mustNewSafeCookieJar(t)
 	sender := New(&http.Client{Jar: jar}, sempCfg, basicAuth(t, jar), serverURL, NewSemaphore(10))
@@ -752,10 +807,11 @@ func TestSender_NoRetry_PATCH_ConnectionError(t *testing.T) {
 	retries := 5
 	minInterval := time.Duration(0)
 	sempCfg := &config.SEMPConfig{
-		Retries:            &retries,
-		RequestMinInterval: &minInterval,
-		RetryMinInterval:   1 * time.Millisecond,
-		RetryMaxInterval:   10 * time.Millisecond,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RequestTimeoutDuration: 30 * time.Second, // generous per-attempt + overall budget for tests
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
 	}
 	jar := mustNewSafeCookieJar(t)
 	sender := New(&http.Client{Jar: jar}, sempCfg, basicAuth(t, jar), serverURL, NewSemaphore(10))
@@ -809,10 +865,11 @@ func newTestSenderWithSem(t *testing.T, httpClient *http.Client, serverURL strin
 	retries := 0
 	minInterval := time.Duration(0)
 	sempCfg := &config.SEMPConfig{
-		Retries:            &retries,
-		RequestMinInterval: &minInterval,
-		RetryMinInterval:   1 * time.Millisecond,
-		RetryMaxInterval:   10 * time.Millisecond,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RequestTimeoutDuration: 30 * time.Second, // generous per-attempt + overall budget for tests
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
 	}
 	jar := mustNewSafeCookieJar(t)
 	httpClient.Jar = jar
