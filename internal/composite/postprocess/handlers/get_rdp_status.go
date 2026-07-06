@@ -56,7 +56,7 @@ func init() {
 //     items, so unfiltered counts would fold historical scars in with real
 //     current failures (same rationale as listRdps' byLastFailureReason).
 //     The empty-string bucket is omitted to keep the map LLM-readable.
-//   - <array>Scanned:                        items observed, so callers can
+//   - <array>ScannedCount:                   items observed, so callers can
 //     distinguish "0 down" (nothing broken) from "0 total" (nothing configured).
 //   - <array>Truncated / <array>Skipped:     surfaced only when non-zero.
 //
@@ -80,14 +80,14 @@ func GetRdpStatus(stepResults map[string]map[string]any) (map[string]any, error)
 	}
 
 	out := map[string]any{
-		"bindingUpCount":             bindings.up,
-		"bindingDownCount":           bindings.down,
-		"byBindingLastFailureReason": bindings.byReason,
-		"bindingScanned":             bindings.scanned,
-		"consumerUpCount":            consumers.up,
-		"consumerDownCount":          consumers.down,
+		"bindingUpCount":              bindings.up,
+		"bindingDownCount":            bindings.down,
+		"bindingScannedCount":         bindings.scanned,
+		"byBindingLastFailureReason":  bindings.byReason,
+		"consumerUpCount":             consumers.up,
+		"consumerDownCount":           consumers.down,
+		"consumerScannedCount":        consumers.scanned,
 		"byConsumerLastFailureReason": consumers.byReason,
-		"consumerScanned":            consumers.scanned,
 	}
 	if bindings.skipped > 0 {
 		out["bindingSkipped"] = bindings.skipped

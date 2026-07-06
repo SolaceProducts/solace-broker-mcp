@@ -148,3 +148,64 @@ func TestValidateTool_PerStep(t *testing.T) {
 		}
 	})
 }
+
+// TestValidateTool_PerStepTakesPrecedence pins the documented contract: when a
+// handler declares both RequiredFields and RequiredFieldsPerStep, the per-step
+// form wins and the flat form is ignored. Guards against a future edit that
+// swaps the branch order or accidentally unions the two.
+func TestValidateTool_PerStepTakesPrecedence(t *testing.T) {
+	resetForTest()
+	t.Cleanup(resetForTest)
+
+	Register("both", Handler{
+		Fn:            func(map[string]map[string]any) (map[string]any, error) { return nil, nil },
+		RequiredSteps: []string{"s1"},
+		// Flat form asks for "flat-only" — if it were consulted, the ok
+		// subtest below would fail because no step selects "flat-only".
+		RequiredFields:        []string{"flat-only"},
+		RequiredFieldsPerStep: map[string][]string{"s1": {"x"}},
+	})
+
+	t.Run("ok when per-step select covers per-step fields, flat ignored", func(t *testing.T) {
+		if err := ValidateTool("tool-b", "both",
+			[]string{"s1"},
+			map[string][]string{"s1": {"x"}}); err != nil {
+			t.Fatalf("per-step should win; flat requirement %q must be ignored: %v", "flat-only", err)
+		}
+	})
+
+	t.Run("per-step failure surfaces even when flat would pass", func(t *testing.T) {
+		// Select covers the flat "flat-only" field but not the per-step "x".
+		// If the union fallback ran, this would pass; per-step must reject.
+		err := ValidateTool("tool-b", "both",
+			[]string{"s1"},
+			map[string][]string{"s1": {"flat-only"}})
+		if err == nil || !strings.Contains(err.Error(), `"x" on step "s1"`) {
+			t.Fatalf("per-step check must run when RequiredFieldsPerStep is set, got %v", err)
+		}
+	})
+}
+
+// TestRegister_InconsistentPerStepStep_Panics pins the init-time consistency
+// check: a handler that declares RequiredFieldsPerStep for a step not in its
+// own RequiredSteps is a programming error and must panic at Register().
+func TestRegister_InconsistentPerStepStep_Panics(t *testing.T) {
+	resetForTest()
+	t.Cleanup(resetForTest)
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic when RequiredFieldsPerStep references a step not in RequiredSteps")
+		}
+		msg, ok := r.(string)
+		if !ok || !strings.Contains(msg, "stray") || !strings.Contains(msg, "RequiredSteps") {
+			t.Fatalf("unexpected panic message: %v", r)
+		}
+	}()
+	Register("bad", Handler{
+		Fn:                    func(map[string]map[string]any) (map[string]any, error) { return nil, nil },
+		RequiredSteps:         []string{"a"},
+		RequiredFieldsPerStep: map[string][]string{"stray": {"x"}},
+	})
+}

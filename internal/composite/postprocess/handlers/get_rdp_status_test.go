@@ -45,8 +45,8 @@ func TestGetRdpStatus_Empty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{"bindingUpCount", "bindingDownCount", "bindingScanned",
-		"consumerUpCount", "consumerDownCount", "consumerScanned"} {
+	for _, k := range []string{"bindingUpCount", "bindingDownCount", "bindingScannedCount",
+		"consumerUpCount", "consumerDownCount", "consumerScannedCount"} {
 		if got[k] != 0 {
 			t.Errorf("%s: got %v, want 0", k, got[k])
 		}
@@ -126,10 +126,10 @@ func TestGetRdpStatus_Mixed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got["bindingUpCount"] != 2 || got["bindingDownCount"] != 2 || got["bindingScanned"] != 4 {
+	if got["bindingUpCount"] != 2 || got["bindingDownCount"] != 2 || got["bindingScannedCount"] != 4 {
 		t.Errorf("binding counts wrong: %+v", got)
 	}
-	if got["consumerUpCount"] != 1 || got["consumerDownCount"] != 1 || got["consumerScanned"] != 2 {
+	if got["consumerUpCount"] != 1 || got["consumerDownCount"] != 1 || got["consumerScannedCount"] != 2 {
 		t.Errorf("consumer counts wrong: %+v", got)
 	}
 	bindReason := got["byBindingLastFailureReason"].(map[string]int)
@@ -200,8 +200,8 @@ func TestGetRdpStatus_MissingField(t *testing.T) {
 			if got["bindingSkipped"] != 1 {
 				t.Errorf("bindingSkipped: got %v, want 1", got["bindingSkipped"])
 			}
-			if got["bindingScanned"] != 2 {
-				t.Errorf("bindingScanned: got %v, want 2", got["bindingScanned"])
+			if got["bindingScannedCount"] != 2 {
+				t.Errorf("bindingScannedCount: got %v, want 2", got["bindingScannedCount"])
 			}
 			// Healthy row's signals must survive the skip.
 			if got["bindingDownCount"] != 1 {

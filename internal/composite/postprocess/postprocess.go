@@ -51,9 +51,11 @@ import (
 // item, keyed by step ID. ValidateTool cross-checks each step's fields against
 // that step's own `select:` clause — a per-step check that catches the case a
 // union check would miss (e.g. handler reads X from step A but only step B
-// selects X). At most one of RequiredFields / RequiredFieldsPerStep should be
-// set; if both are populated the per-step form takes precedence and the flat
-// form is ignored.
+// selects X). Every key must also appear in RequiredSteps; Register panics
+// otherwise so the handler cannot ship with a stray per-step entry that would
+// silently skip validation. At most one of RequiredFields /
+// RequiredFieldsPerStep should be set; if both are populated the per-step form
+// takes precedence and the flat form is ignored.
 type Handler struct {
 	Fn                    func(stepResults map[string]map[string]any) (map[string]any, error)
 	RequiredSteps         []string
@@ -67,9 +69,18 @@ var (
 )
 
 // Register installs a handler under the given name. Panics on duplicate
-// registration since handlers register from init() and a duplicate would
-// indicate a programming error.
+// registration or on a handler that declares a step in RequiredFieldsPerStep
+// that isn't in RequiredSteps — both indicate a programming error at init().
 func Register(name string, h Handler) {
+	requiredSet := make(map[string]struct{}, len(h.RequiredSteps))
+	for _, s := range h.RequiredSteps {
+		requiredSet[s] = struct{}{}
+	}
+	for stepID := range h.RequiredFieldsPerStep {
+		if _, ok := requiredSet[stepID]; !ok {
+			panic("postprocess: handler " + name + " declares RequiredFieldsPerStep for step " + stepID + " but that step is not in RequiredSteps")
+		}
+	}
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	if _, dup := registry[name]; dup {
