@@ -49,7 +49,7 @@ func parseReply(body []byte) ([]byte, *Error) {
 		return nil, &Error{
 			Kind:       ErrorKindParse,
 			StatusCode: 200,
-			Message:    *r.ParseError,
+			Message:    truncateErrorText(*r.ParseError),
 			Body:       body,
 		}
 	}
@@ -57,7 +57,7 @@ func parseReply(body []byte) ([]byte, *Error) {
 		return nil, &Error{
 			Kind:       ErrorKindPermission,
 			StatusCode: 200,
-			Message:    *r.PermissionError,
+			Message:    truncateErrorText(*r.PermissionError),
 			Body:       body,
 		}
 	}
@@ -65,7 +65,7 @@ func parseReply(body []byte) ([]byte, *Error) {
 		return nil, &Error{
 			Kind:       ErrorKindLimit,
 			StatusCode: 200,
-			Message:    *r.LimitError,
+			Message:    truncateErrorText(*r.LimitError),
 			Body:       body,
 		}
 	}
@@ -75,7 +75,7 @@ func parseReply(body []byte) ([]byte, *Error) {
 		return nil, &Error{
 			Kind:       ErrorKindExecuteFail,
 			StatusCode: 200,
-			Message:    r.ExecuteResult.Reason,
+			Message:    truncateErrorText(r.ExecuteResult.Reason),
 			ReasonCode: r.ExecuteResult.ReasonCode,
 			Body:       body,
 		}

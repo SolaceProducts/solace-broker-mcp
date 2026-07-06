@@ -6,7 +6,40 @@
 // sempv2.SEMPError.
 package sempv1
 
-import "fmt"
+import (
+	"fmt"
+	"unicode/utf8"
+)
+
+// maxErrorTextLen bounds broker-controlled error text (Error.Message) captured
+// from an <rpc-reply>. The response body is capped at 16 MiB
+// (defaults.MaxSEMPResponseBytes), so without this bound a misbehaving broker
+// or intermediary can push a multi-MiB string into every sink that renders the
+// message: Error.Error() (logged as the tool-result "detail" field) and the
+// agent-facing message built by the tools layer (which also runs it through
+// regex sanitization). Truncating at capture bounds all of them at once. This
+// mirrors sempv2's maxErrorTextLen; 4 KiB comfortably holds any real SEMP error
+// text. (Error.Body is deliberately not truncated here — it is a debug-only
+// field that no sink renders.)
+const maxErrorTextLen = 4096
+
+// truncationMarker is appended to error text cut at maxErrorTextLen.
+const truncationMarker = "... [truncated]"
+
+// truncateErrorText caps s at maxErrorTextLen bytes, backing up to a rune
+// boundary so the result stays valid UTF-8, and appends truncationMarker. The
+// cut path concatenates, which allocates a fresh string, so an oversized
+// input's backing array is never retained.
+func truncateErrorText(s string) string {
+	if len(s) <= maxErrorTextLen {
+		return s
+	}
+	cut := maxErrorTextLen
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + truncationMarker
+}
 
 // ErrorKind classifies a SEMPv1 failure so callers can branch without parsing
 // the raw response body. A zero-valued Kind (ErrorKindUnknown) indicates a
