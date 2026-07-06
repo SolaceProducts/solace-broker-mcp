@@ -174,9 +174,31 @@ tools:
         followPages: true
         args:
           count: "100"
-          select: "discardedRxMsgCount, discardedTxMsgCount, dmrEnabled, enabled, msgSpoolMsgCount, msgSpoolUsage, msgVpnConnections, msgVpnConnectionsServiceMqtt, msgVpnConnectionsServiceRestIncoming, msgVpnConnectionsServiceSmf, msgVpnConnectionsServiceWeb, msgVpnName, msgVpnTotalUniqueSubscriptions, replicationEnabled, serviceMqttPlainTextFailureReason, serviceMqttPlainTextUp, serviceRestIncomingPlainTextFailureReason, serviceRestIncomingPlainTextUp, serviceSmfPlainTextFailureReason, serviceSmfPlainTextUp, state"
+        select:
+          - discardedRxMsgCount
+          - discardedTxMsgCount
+          - dmrEnabled
+          - enabled
+          - msgSpoolMsgCount
+          - msgSpoolUsage
+          - msgVpnConnections
+          - msgVpnConnectionsServiceMqtt
+          - msgVpnConnectionsServiceRestIncoming
+          - msgVpnConnectionsServiceSmf
+          - msgVpnConnectionsServiceWeb
+          - msgVpnName
+          - msgVpnTotalUniqueSubscriptions
+          - replicationEnabled
+          - serviceMqttPlainTextFailureReason
+          - serviceMqttPlainTextUp
+          - serviceRestIncomingPlainTextFailureReason
+          - serviceRestIncomingPlainTextUp
+          - serviceSmfPlainTextFailureReason
+          - serviceSmfPlainTextUp
+          - state
     result:
-      strategy: collect
+      strategy: postProcess
+      postProcess: listVpns
 
   - name: list-queues
     description: >
