@@ -18,7 +18,25 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
 )
+
+// newTestCache builds a small TokenCache for tests. The caller must call
+// Close on the returned closer when done. Use via validParamsWithCache.
+func newTestCache(t *testing.T) cache.TokenCache {
+	t.Helper()
+	tc, err := cache.NewTokenCache(cache.CacheConfig{
+		MaxSize:   100,
+		ClockSkew: 0,
+		MaxTTL:    time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("NewTokenCache: %v", err)
+	}
+	return tc
+}
 
 // validParams returns a Params struct with every field set to a value
 // that would survive every layer of validation. Tests start from this
@@ -32,7 +50,20 @@ func validParams() Params {
 		GrantType:        GrantTypeTokenExchange,
 		AudienceParam:    AudienceParamAudience,
 		HTTPClient:       &http.Client{},
+		Cache:            mustTestCache(),
 	}
+}
+
+func mustTestCache() cache.TokenCache {
+	tc, err := cache.NewTokenCache(cache.CacheConfig{
+		MaxSize:   100,
+		ClockSkew: 0,
+		MaxTTL:    time.Hour,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return tc
 }
 
 // TestNew_HTTPClientNilRejected pins the only runtime check New performs.
@@ -53,6 +84,23 @@ func TestNew_HTTPClientNilRejected(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "HTTPClient") {
 		t.Errorf("error message should mention HTTPClient, got: %v", err)
+	}
+}
+
+// TestNew_CacheNilRejected pins the runtime check that Cache must be non-nil.
+func TestNew_CacheNilRejected(t *testing.T) {
+	p := validParams()
+	p.Cache = nil
+
+	ex, err := New(p)
+	if err == nil {
+		t.Fatal("expected error for nil Cache")
+	}
+	if ex != nil {
+		t.Errorf("expected nil Exchanger on error, got %#v", ex)
+	}
+	if !strings.Contains(err.Error(), "Cache") {
+		t.Errorf("error message should mention Cache, got: %v", err)
 	}
 }
 

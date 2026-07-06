@@ -15,10 +15,11 @@ import (
 )
 
 type fakeExchanger struct {
-	returnToken *tokenexchange.Token
-	returnErr   error
-	mu          sync.Mutex
-	calls       []tokenexchange.ExchangeInput
+	returnToken    *tokenexchange.Token
+	returnErr      error
+	mu             sync.Mutex
+	calls          []tokenexchange.ExchangeInput
+	invalidateCalls []tokenexchange.DeduplicationKeyInput
 }
 
 func (f *fakeExchanger) Exchange(_ context.Context, input tokenexchange.ExchangeInput) (*tokenexchange.Token, error) {
@@ -26,6 +27,12 @@ func (f *fakeExchanger) Exchange(_ context.Context, input tokenexchange.Exchange
 	f.calls = append(f.calls, input)
 	f.mu.Unlock()
 	return f.returnToken, f.returnErr
+}
+
+func (f *fakeExchanger) Invalidate(_ context.Context, input tokenexchange.DeduplicationKeyInput) {
+	f.mu.Lock()
+	f.invalidateCalls = append(f.invalidateCalls, input)
+	f.mu.Unlock()
 }
 
 // ctxWithSubjectToken runs the InjectRawSubjectToken middleware to place
