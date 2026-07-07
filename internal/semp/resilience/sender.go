@@ -43,9 +43,10 @@ type Sender struct {
 	retryClient   *retryablehttp.Client
 	authenticator auth.Authenticator // for 401 re-auth: delegates recovery to the auth mode
 	rateLimiter   <-chan time.Time
-	rateTicker    *time.Ticker // non-nil when rate limiting enabled; stopped by Close()
-	sem           Semaphore    // bounds in-flight requests; shared per-broker across SEMPv1+v2
-	brokerURL     string       // for logging context
+	rateTicker    *time.Ticker  // non-nil when rate limiting enabled; stopped by Close()
+	sem           Semaphore     // bounds in-flight requests; shared per-broker across SEMPv1+v2
+	brokerURL     string        // for logging context
+	retryBudget   time.Duration // overall deadline for the whole retry chain; 0 disables
 }
 
 // New creates a Sender configured for a specific broker. It sets up retryablehttp
@@ -87,6 +88,43 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 	retryClient.ErrorHandler = d.errorHandler
 	retryClient.Logger = nil // manual logging in checkRetry
 	d.retryClient = retryClient
+
+	// Overall retry-chain deadline. httpClient.Timeout bounds a single attempt,
+	// but retryablehttp issues up to RetryMax+1 attempts with backoff between
+	// them, and the per-broker semaphore slot (see Do) is held for that entire
+	// span. Without an overall deadline a slow or degraded broker keeps a slot
+	// for the full chain, stalling every other call to that broker. Bound it at
+	// the retry policy's own configured worst case — every attempt at its full
+	// timeout plus every backoff at its cap — so the slot is released once that
+	// budget is spent even if a per-attempt guard is missing or misbehaves. It
+	// never cuts a chain whose backoffs stay within RetryMaxInterval.
+	//
+	// Exception: RateLimitLinearJitterBackoff (below) honors a broker's
+	// Retry-After header verbatim, uncapped by RetryMaxInterval. A broker that
+	// returns a long Retry-After can make this deadline fire mid-chain, cutting
+	// the retry short. That is intentional, not a bug: without this deadline, a
+	// degraded broker returning e.g. Retry-After: 300 would park the slot (and
+	// every other call to that broker) for the full 300s per attempt regardless
+	// of the configured budget. This deadline is what caps that exposure.
+	//
+	// The RetryMax+1 term counts the successful attempt too, so after up to
+	// RetryMax failed attempts (each ≤ RequestTimeoutDuration) plus their
+	// backoffs (each ≤ RetryMaxInterval) at least one full RequestTimeoutDuration
+	// of budget always remains for the final attempt — including its response
+	// body read, which the deadline also covers. That matches the per-attempt
+	// http.Client.Timeout, so the read is never bounded more tightly than before.
+	//
+	// The budget is anchored on the per-attempt timeout, so it is only computed
+	// when RequestTimeoutDuration > 0. Production always sets it (validate()
+	// enforces it), so the deadline is always applied there. When it is unset
+	// (a direct-construction test), retryBudget stays 0 and Do skips the
+	// deadline — a backoff-only budget would allot no time to the attempts
+	// themselves and fire spuriously under load.
+	if sempCfg.RequestTimeoutDuration > 0 {
+		retryMax := *sempCfg.Retries
+		d.retryBudget = time.Duration(retryMax+1)*sempCfg.RequestTimeoutDuration +
+			time.Duration(retryMax)*sempCfg.RetryMaxInterval
+	}
 
 	// Per-broker rate limiter: ticker-based interval enforcement.
 	// When interval > 0, each Do() blocks until the ticker fires.
@@ -137,6 +175,19 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	}
 	defer func() { <-d.sem }()
 
+	// Bound the whole retry chain (all attempts + backoffs), not just each
+	// attempt, so a slow or degraded broker cannot pin resources for its full
+	// chain. WithTimeout composes with any earlier caller deadline (it takes the
+	// sooner of the two), and retryablehttp honors ctx cancellation during
+	// backoff. cancel must not run while the caller is still reading the
+	// response body, so on success it is transferred to Body.Close (below)
+	// rather than deferred here — a premature cancel would abort the connection
+	// instead of returning it to the idle pool and could truncate the body.
+	var cancel context.CancelFunc
+	if d.retryBudget > 0 {
+		ctx, cancel = context.WithTimeout(ctx, d.retryBudget)
+	}
+
 	// Attach per-request retry state for checkRetry, including the HTTP method
 	// so the non-idempotent method guard can fire even on connection errors
 	// (where resp is nil and resp.Request.Method is unavailable), and the
@@ -149,10 +200,42 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 
 	retryReq, err := retryablehttp.FromRequest(req)
 	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, fmt.Errorf("wrapping request: %w", err)
 	}
 
-	return d.retryClient.Do(retryReq)
+	resp, err := d.retryClient.Do(retryReq)
+	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
+		return nil, err
+	}
+
+	// Success: the body is returned open for the caller to read. Release the
+	// deadline's timer when the caller closes the body, so the deadline still
+	// bounds the read but the connection is pooled normally.
+	if cancel != nil {
+		resp.Body = &cancelOnCloseReadCloser{ReadCloser: resp.Body, cancel: cancel}
+	}
+	return resp, nil
+}
+
+// cancelOnCloseReadCloser wraps a response body so closing it also cancels the
+// retry-chain deadline's context. This defers the cancel from Do's return (when
+// the body is still open for the caller to read) to Body.Close, so the deadline
+// covers the read without a premature cancel aborting the pooled connection.
+type cancelOnCloseReadCloser struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *cancelOnCloseReadCloser) Close() error {
+	err := b.ReadCloser.Close()
+	b.cancel()
+	return err
 }
 
 // Close releases resources held by the Sender. Stops the rate limiter ticker

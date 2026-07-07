@@ -1260,6 +1260,56 @@ func TestValidatePostProcess(t *testing.T) {
 	})
 }
 
+// TestValidatePostProcess_MultiStep covers the multi-step form: a handler
+// declaring RequiredFieldsPerStep must be validated against each step's own
+// `select:`, not the union across steps. This guards the property that added
+// with the first multi-step handler (getRdpStatus) — the old union check
+// would silently accept a config where step A reads field X but only step B
+// selects it.
+func TestValidatePostProcess_MultiStep(t *testing.T) {
+	postprocesstest.Register(t, "__test_pp_multi", postprocess.Handler{
+		Fn:            func(map[string]map[string]any) (map[string]any, error) { return nil, nil },
+		RequiredSteps: []string{"a", "b"},
+		RequiredFieldsPerStep: map[string][]string{
+			"a": {"x"},
+			"b": {"y"},
+		},
+	})
+
+	t.Run("each step covers its own required fields", func(t *testing.T) {
+		tools := []CompositeTool{{
+			Name: "ok-multi",
+			Steps: []Step{
+				{ID: "a", Operation: "op-a", Select: []string{"x"}},
+				{ID: "b", Operation: "op-b", Select: []string{"y"}},
+			},
+			Result: ResultStrategy{Strategy: "postProcess", PostProcess: "__test_pp_multi"},
+		}}
+		if err := ValidatePostProcess(tools); err != nil {
+			t.Fatalf("expected ok, got %v", err)
+		}
+	})
+
+	t.Run("field only in sibling select is rejected", func(t *testing.T) {
+		// The union across steps includes both x and y, so the old
+		// (pre-multi-step) check would have passed. The per-step check must
+		// fail because step "a" reads x but step "a"'s select does not.
+		tools := []CompositeTool{{
+			Name: "bad-multi",
+			Steps: []Step{
+				{ID: "a", Operation: "op-a", Select: []string{"y"}},
+				{ID: "b", Operation: "op-b", Select: []string{"x", "y"}},
+			},
+			Result: ResultStrategy{Strategy: "postProcess", PostProcess: "__test_pp_multi"},
+		}}
+		err := ValidatePostProcess(tools)
+		want := `tool "bad-multi": postprocessor "__test_pp_multi" reads "x" on step "a" but it is not in that step's select`
+		if err == nil || err.Error() != want {
+			t.Fatalf("\nwant: %s\ngot:  %v", want, err)
+		}
+	})
+}
+
 func TestLoadTools_CreateMessageVPN(t *testing.T) {
 	yaml := `
 tools:
@@ -1958,6 +2008,240 @@ tools:
 	}
 	if tool.Steps[0].Args["topicEndpointName"] != "{{.Params.topicEndpointName}}" {
 		t.Errorf("expected topicEndpointName path arg, got %q", tool.Steps[0].Args["topicEndpointName"])
+	}
+	if tool.Result.Strategy != "collect" {
+		t.Errorf("expected strategy %q, got %q", "collect", tool.Result.Strategy)
+	}
+}
+
+func TestLoadTools_CreateRDP(t *testing.T) {
+	yaml := `
+tools:
+  - name: create-rdp
+    description: Create a REST Delivery Point in a Message VPN.
+    annotations:
+      readOnly: false
+      destructive: false
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN to create the RDP in"
+      - name: restDeliveryPointName
+        type: string
+        required: true
+        description: "The name of the REST Delivery Point to create"
+      - name: rdpConfig
+        type: object
+        required: false
+        description: "Optional RestDeliveryPoint attributes"
+    steps:
+      - id: createRdp
+        operation: config/createMsgVpnRestDeliveryPoint
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+    result:
+      strategy: collect
+`
+	fsys := fstest.MapFS{
+		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
+	}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	tool := tools[0]
+	if tool.Name != "create-rdp" {
+		t.Errorf("expected name %q, got %q", "create-rdp", tool.Name)
+	}
+
+	if tool.Annotations.ReadOnly == nil || *tool.Annotations.ReadOnly {
+		t.Error("expected ReadOnly = false")
+	}
+	if tool.Annotations.Destructive == nil || *tool.Annotations.Destructive {
+		t.Error("expected Destructive = false")
+	}
+
+	if len(tool.Parameters) != 3 {
+		t.Fatalf("expected 3 parameters, got %d", len(tool.Parameters))
+	}
+	if tool.Parameters[1].Name != "restDeliveryPointName" || tool.Parameters[1].Type != "string" || !tool.Parameters[1].Required {
+		t.Errorf("expected required string restDeliveryPointName parameter, got %+v", tool.Parameters[1])
+	}
+	if tool.Parameters[2].Name != "rdpConfig" || tool.Parameters[2].Type != "object" || tool.Parameters[2].Required {
+		t.Errorf("expected optional object rdpConfig parameter, got %+v", tool.Parameters[2])
+	}
+
+	if len(tool.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(tool.Steps))
+	}
+	if tool.Steps[0].Operation != "config/createMsgVpnRestDeliveryPoint" {
+		t.Errorf("expected operation %q, got %q", "config/createMsgVpnRestDeliveryPoint", tool.Steps[0].Operation)
+	}
+	// Only msgVpnName is a path arg; restDeliveryPointName belongs in the body.
+	if tool.Steps[0].Args["msgVpnName"] != "{{.Params.msgVpnName}}" {
+		t.Errorf("expected msgVpnName path arg, got %q", tool.Steps[0].Args["msgVpnName"])
+	}
+	if _, ok := tool.Steps[0].Args["restDeliveryPointName"]; ok {
+		t.Error("restDeliveryPointName must not be a step arg on create — it belongs in the body")
+	}
+	if tool.Result.Strategy != "collect" {
+		t.Errorf("expected strategy %q, got %q", "collect", tool.Result.Strategy)
+	}
+}
+
+func TestLoadTools_UpdateRDP(t *testing.T) {
+	yaml := `
+tools:
+  - name: update-rdp
+    description: Update an existing REST Delivery Point.
+    annotations:
+      readOnly: false
+      destructive: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the RDP"
+      - name: restDeliveryPointName
+        type: string
+        required: true
+        description: "The name of the REST Delivery Point to modify"
+      - name: rdpConfig
+        type: object
+        required: true
+        description: "RestDeliveryPoint attributes to update"
+    steps:
+      - id: updateRdp
+        operation: config/updateMsgVpnRestDeliveryPoint
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          restDeliveryPointName: "{{.Params.restDeliveryPointName}}"
+    result:
+      strategy: collect
+`
+	fsys := fstest.MapFS{
+		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
+	}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	tool := tools[0]
+	if tool.Name != "update-rdp" {
+		t.Errorf("expected name %q, got %q", "update-rdp", tool.Name)
+	}
+
+	if tool.Annotations.ReadOnly == nil || *tool.Annotations.ReadOnly {
+		t.Error("expected ReadOnly = false")
+	}
+	if tool.Annotations.Destructive == nil || !*tool.Annotations.Destructive {
+		t.Error("expected Destructive = true")
+	}
+
+	if len(tool.Parameters) != 3 {
+		t.Fatalf("expected 3 parameters, got %d", len(tool.Parameters))
+	}
+	if tool.Parameters[2].Name != "rdpConfig" || tool.Parameters[2].Type != "object" || !tool.Parameters[2].Required {
+		t.Errorf("expected required object rdpConfig parameter, got %+v", tool.Parameters[2])
+	}
+
+	if len(tool.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(tool.Steps))
+	}
+	if tool.Steps[0].Operation != "config/updateMsgVpnRestDeliveryPoint" {
+		t.Errorf("expected operation %q, got %q", "config/updateMsgVpnRestDeliveryPoint", tool.Steps[0].Operation)
+	}
+	// Both names are path params, so both are wired as step args.
+	if tool.Steps[0].Args["msgVpnName"] != "{{.Params.msgVpnName}}" {
+		t.Errorf("expected msgVpnName path arg, got %q", tool.Steps[0].Args["msgVpnName"])
+	}
+	if tool.Steps[0].Args["restDeliveryPointName"] != "{{.Params.restDeliveryPointName}}" {
+		t.Errorf("expected restDeliveryPointName path arg, got %q", tool.Steps[0].Args["restDeliveryPointName"])
+	}
+	if tool.Result.Strategy != "collect" {
+		t.Errorf("expected strategy %q, got %q", "collect", tool.Result.Strategy)
+	}
+}
+
+func TestLoadTools_DeleteRDP(t *testing.T) {
+	yaml := `
+tools:
+  - name: delete-rdp
+    description: Delete a REST Delivery Point from a Message VPN.
+    annotations:
+      readOnly: false
+      destructive: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the RDP"
+      - name: restDeliveryPointName
+        type: string
+        required: true
+        description: "The name of the REST Delivery Point to delete"
+    steps:
+      - id: deleteRdp
+        operation: config/deleteMsgVpnRestDeliveryPoint
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          restDeliveryPointName: "{{.Params.restDeliveryPointName}}"
+    result:
+      strategy: collect
+`
+	fsys := fstest.MapFS{
+		"tools.yaml": &fstest.MapFile{Data: []byte(yaml)},
+	}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	tool := tools[0]
+	if tool.Name != "delete-rdp" {
+		t.Errorf("expected name %q, got %q", "delete-rdp", tool.Name)
+	}
+
+	if tool.Annotations.ReadOnly == nil || *tool.Annotations.ReadOnly {
+		t.Error("expected ReadOnly = false")
+	}
+	if tool.Annotations.Destructive == nil || !*tool.Annotations.Destructive {
+		t.Error("expected Destructive = true")
+	}
+
+	if len(tool.Parameters) != 2 {
+		t.Fatalf("expected 2 parameters, got %d", len(tool.Parameters))
+	}
+
+	if len(tool.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(tool.Steps))
+	}
+	if tool.Steps[0].Operation != "config/deleteMsgVpnRestDeliveryPoint" {
+		t.Errorf("expected operation %q, got %q", "config/deleteMsgVpnRestDeliveryPoint", tool.Steps[0].Operation)
+	}
+	if tool.Steps[0].Args["msgVpnName"] != "{{.Params.msgVpnName}}" {
+		t.Errorf("expected msgVpnName path arg, got %q", tool.Steps[0].Args["msgVpnName"])
+	}
+	if tool.Steps[0].Args["restDeliveryPointName"] != "{{.Params.restDeliveryPointName}}" {
+		t.Errorf("expected restDeliveryPointName path arg, got %q", tool.Steps[0].Args["restDeliveryPointName"])
 	}
 	if tool.Result.Strategy != "collect" {
 		t.Errorf("expected strategy %q, got %q", "collect", tool.Result.Strategy)

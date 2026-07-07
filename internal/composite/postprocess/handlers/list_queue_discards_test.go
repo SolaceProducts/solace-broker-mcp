@@ -415,7 +415,8 @@ func TestListQueueDiscards_ValidatorCrossCheck(t *testing.T) {
 		"xaTransactionNotSupportedDiscardedMsgCount",
 	}
 	if err := postprocess.ValidateTool("list-queue-discards", "listQueueDiscards",
-		[]string{listQueueDiscardsStepID}, selectFields); err != nil {
+		[]string{listQueueDiscardsStepID},
+		map[string][]string{listQueueDiscardsStepID: selectFields}); err != nil {
 		t.Errorf("ValidateTool should accept the tools.yaml select list, got %v", err)
 	}
 	// Dropping any single required field must be caught.
@@ -428,7 +429,8 @@ func TestListQueueDiscards_ValidatorCrossCheck(t *testing.T) {
 				}
 			}
 			err := postprocess.ValidateTool("list-queue-discards", "listQueueDiscards",
-				[]string{listQueueDiscardsStepID}, pruned)
+				[]string{listQueueDiscardsStepID},
+				map[string][]string{listQueueDiscardsStepID: pruned})
 			if err == nil {
 				t.Errorf("ValidateTool must fail when %q is missing from select:", drop)
 			}

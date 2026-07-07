@@ -75,6 +75,14 @@ type ServerConfig struct {
 	// a routable bind exposes unauthenticated MCP access backed by the broker
 	// admin credential — validate() refuses it unless this is explicitly true.
 	AllowRemoteUnauthenticated bool
+
+	// AllowInsecureBrokerTLS opts in to a broker with insecure_skip_verify: true
+	// while in production (oauth) mode. Disabling certificate verification lets a
+	// MITM present any cert and capture the broker admin credential the server
+	// attaches to every SEMP request — validate() refuses it in production unless
+	// this is explicitly true. Ignored in dev modes, where self-signed brokers
+	// are expected.
+	AllowInsecureBrokerTLS bool
 }
 
 // BrokerOAuthConfig holds the global OAuth IdP coordinates the MCP server uses
@@ -456,6 +464,7 @@ type yamlConfig struct {
 	Observability    ObservabilityConfig      `yaml:"observability"`      // numeric tunables parse here; capability flags come from OBS_* env vars (see ObservabilityConfig)
 
 	AllowRemoteUnauthenticated bool `yaml:"allow_remote_unauthenticated"` // opt-in to a non-loopback bind under mcp_client_auth.mode: disabled
+	AllowInsecureBrokerTLS     bool `yaml:"allow_insecure_broker_tls"`    // opt-in to a broker insecure_skip_verify: true under mcp_client_auth.mode: oauth
 }
 
 // Load locates the server configuration file, loads it, and returns a ready
@@ -568,6 +577,7 @@ func LoadConfig(path string) (*ServerConfig, error) {
 		Observability:    raw.Observability,
 
 		AllowRemoteUnauthenticated: raw.AllowRemoteUnauthenticated,
+		AllowInsecureBrokerTLS:     raw.AllowInsecureBrokerTLS,
 	}
 
 	applyDefaults(cfg)
@@ -862,6 +872,16 @@ func splitYAMLComment(line []byte) (active, comment []byte) {
 func validate(cfg *ServerConfig) error {
 	var errs []error
 
+	// Normalize mcp_client_auth.mode up front, before ANY consumer runs. mode
+	// is the single source of truth for the production-vs-dev profile via
+	// IsProductionMode(), which compares against the lowercase constants. The
+	// broker-TLS refusal below (and other IsProductionMode() checks) must see
+	// the normalized value; otherwise a config with "OAuth"/"OAUTH" would not
+	// register as production and would silently bypass the insecure-TLS refusal.
+	// Keep this ahead of the broker loop — the mode-specific required-field
+	// switch further down relies on it too.
+	cfg.MCPClientAuth.Mode = strings.ToLower(cfg.MCPClientAuth.Mode)
+
 	if len(cfg.brokers) == 0 {
 		errs = append(errs, fmt.Errorf("at least one broker must be configured"))
 	}
@@ -881,11 +901,20 @@ func validate(cfg *ServerConfig) error {
 		if broker.Auth.Mode == AuthModeOAuth {
 			oauthBrokerCount++
 		}
-		// Surface insecure_skip_verify=true at startup so operators see it
-		// in triage logs without scraping per-request SEMP-client warns.
+		// In production (oauth) mode, https:// is enforced but a disabled cert
+		// check still exposes the broker admin credential to a MITM. Refuse it
+		// unless the operator explicitly accepts the risk (mirrors the
+		// allow_remote_unauthenticated guard). When accepted, keep the startup
+		// WARN so the insecure setting stays visible in triage logs.
 		if cfg.IsProductionMode() && broker.InsecureSkipVerify {
-			slog.Warn("INSECURE: TLS verification disabled for broker",
-				slog.String("broker", broker.DisplayName()))
+			if !cfg.AllowInsecureBrokerTLS {
+				errs = append(errs, fmt.Errorf(
+					"broker %q sets insecure_skip_verify: true while mcp_client_auth.mode is %q: TLS is enforced but certificate verification is disabled, exposing the broker admin credential to a man-in-the-middle. Use a trusted certificate, or set allow_insecure_broker_tls: true to accept the risk",
+					broker.DisplayName(), AuthModeOAuth))
+			} else {
+				slog.Warn("INSECURE: TLS verification disabled for broker",
+					slog.String("broker", broker.DisplayName()))
+			}
 		}
 	}
 
@@ -936,7 +965,8 @@ func validate(cfg *ServerConfig) error {
 	// Modes are tiered, not interleaved:
 	//   - disabled / static: dev-only, http:// broker URLs allowed
 	//   - oauth: production, https:// required everywhere
-	cfg.MCPClientAuth.Mode = strings.ToLower(cfg.MCPClientAuth.Mode)
+	// mode was normalized to lowercase at the top of validate() so every check
+	// above (broker TLS, IsProductionMode) and the switch below agree on it.
 	switch cfg.MCPClientAuth.Mode {
 	case "":
 		errs = append(errs, fmt.Errorf("mcp_client_auth.mode is required (must be one of %v)", validAuthClientModes))

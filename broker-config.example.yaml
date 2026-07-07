@@ -26,6 +26,11 @@ log_level: info   # debug, info, warn, error
 tls_cert_file: ""
 tls_key_file: ""
 
+# Under mcp_client_auth.mode: oauth (production), a broker with
+# insecure_skip_verify: true is refused at startup. Uncomment to accept the risk
+# that disabling broker cert verification exposes the broker admin credential to MITM.
+# allow_insecure_broker_tls: true
+
 # Client authentication for the MCP server (Hop 1: MCP client → MCP server).
 # mode is required. Choose one of:
 #   - oauth    — JWT validation via OIDC (production)
@@ -77,6 +82,9 @@ semp:
 brokers:
   my-broker:
     url: "https://broker.example.com:943"
+    # Disables TLS certificate verification for this broker. Under
+    # mcp_client_auth.mode: oauth (production) this is refused at startup unless
+    # you also set allow_insecure_broker_tls: true (top level) to accept the risk.
     insecure_skip_verify: false
     auth:
       mode: basic           # basic or bearer

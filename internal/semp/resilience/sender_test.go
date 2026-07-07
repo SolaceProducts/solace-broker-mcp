@@ -46,10 +46,11 @@ func newTestSender(t *testing.T, httpClient *http.Client, authn auth.Authenticat
 	t.Helper()
 	minInterval := time.Duration(0)
 	sempCfg := &config.SEMPConfig{
-		Retries:            &retries,
-		RequestMinInterval: &minInterval,
-		RetryMinInterval:   1 * time.Millisecond,
-		RetryMaxInterval:   10 * time.Millisecond,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RequestTimeoutDuration: 30 * time.Second, // generous per-attempt + overall budget for tests
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
 	}
 	return New(httpClient, sempCfg, authn, "http://test-broker", NewSemaphore(10))
 }
@@ -60,10 +61,11 @@ func newTestSenderBasic(t *testing.T, httpClient *http.Client, retries int) *Sen
 	t.Helper()
 	minInterval := time.Duration(0)
 	sempCfg := &config.SEMPConfig{
-		Retries:            &retries,
-		RequestMinInterval: &minInterval,
-		RetryMinInterval:   1 * time.Millisecond,
-		RetryMaxInterval:   10 * time.Millisecond,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RequestTimeoutDuration: 30 * time.Second, // generous per-attempt + overall budget for tests
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
 	}
 	jar := mustNewSafeCookieJar(t)
 	httpClient.Jar = jar
@@ -111,6 +113,176 @@ func jsonOK(w http.ResponseWriter) {
 }
 
 // --- Rate Limiter Tests ---
+
+// TestSender_Do_BoundsOverallRetryChainDeadline proves the overall retry-chain
+// deadline bounds a call even when the per-attempt httpClient.Timeout is absent
+// (0). A slow broker must not pin the semaphore slot for the full server delay:
+// the deadline fires and the slot is released.
+func TestSender_Do_BoundsOverallRetryChainDeadline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Observe cancellation so the handler returns as soon as the client's
+		// deadline fires; otherwise server.Close() blocks on the full sleep.
+		select {
+		case <-time.After(3 * time.Second):
+			jsonOK(w)
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+
+	retries := 0
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RequestTimeoutDuration: 100 * time.Millisecond, // retryBudget = 1*100ms = 100ms
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
+	}
+	// No per-attempt Timeout, so only the overall retry-chain deadline can bound
+	// the call.
+	httpClient := &http.Client{Transport: server.Client().Transport}
+	d := New(httpClient, sempCfg, bearerAuth(t), server.URL, NewSemaphore(1))
+
+	start := time.Now()
+	resp, err := d.Do(context.Background(), newGetRequest(t, server.URL))
+	elapsed := time.Since(start)
+	if resp != nil {
+		resp.Body.Close()
+	}
+
+	if err == nil {
+		t.Fatal("expected an error from the overall retry-chain deadline, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expected context.DeadlineExceeded in the chain, got %v", err)
+	}
+	if elapsed > 1*time.Second {
+		t.Errorf("Do did not honor the overall deadline: took %s (budget ~100ms)", elapsed)
+	}
+	// The semaphore slot must be released: a fresh acquire on the size-1
+	// semaphore must succeed immediately rather than block.
+	select {
+	case d.sem <- struct{}{}:
+		<-d.sem
+	default:
+		t.Error("semaphore slot was not released after the deadline fired")
+	}
+}
+
+// TestSender_Do_RetryBudgetBoundsMultiAttemptChain proves the retryBudget
+// formula holds across a genuine multi-attempt chain, not just the single
+// attempt / zero backoff case above. httpClient.Timeout is set to
+// RequestTimeoutDuration (mirroring production wiring in sempv2/client.go and
+// sempv1/client.go), so a hung broker times out and is retried on every
+// attempt rather than being cut once by the overall deadline. With RetryMax=2
+// the chain runs 3 attempts with backoff between them; elapsed must clear the
+// deterministic 3-attempt floor (proving the chain actually ran to
+// completion, not a short-circuit) and stay within the computed budget plus
+// scheduling slack (proving the deadline is still the ceiling).
+func TestSender_Do_RetryBudgetBoundsMultiAttemptChain(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Never respond inside the per-attempt timeout; observe cancellation so
+		// the handler returns as soon as httpClient.Timeout fires instead of
+		// leaking a goroutine per attempt.
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	retries := 2
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RequestTimeoutDuration: 40 * time.Millisecond,
+		RetryMinInterval:       5 * time.Millisecond,
+		RetryMaxInterval:       15 * time.Millisecond,
+	}
+	httpClient := &http.Client{
+		Timeout:   sempCfg.RequestTimeoutDuration,
+		Transport: server.Client().Transport,
+	}
+	d := New(httpClient, sempCfg, bearerAuth(t), server.URL, NewSemaphore(1))
+
+	wantBudget := time.Duration(retries+1)*sempCfg.RequestTimeoutDuration + time.Duration(retries)*sempCfg.RetryMaxInterval
+	attemptFloor := time.Duration(retries+1) * sempCfg.RequestTimeoutDuration
+
+	start := time.Now()
+	resp, err := d.Do(context.Background(), newGetRequest(t, server.URL))
+	elapsed := time.Since(start)
+	if resp != nil {
+		resp.Body.Close()
+	}
+
+	if err == nil {
+		t.Fatal("expected an error: every attempt times out and the broker never recovers")
+	}
+	if elapsed < attemptFloor {
+		t.Errorf("elapsed %s is under the %d-attempt floor %s; the chain was short-circuited instead of retrying", elapsed, retries+1, attemptFloor)
+	}
+	if elapsed > wantBudget+100*time.Millisecond {
+		t.Errorf("elapsed %s exceeded the retry budget %s by more than scheduling slack", elapsed, wantBudget)
+	}
+	var exhausted *RetriesExhaustedError
+	if errors.As(err, &exhausted) && exhausted.Attempts != retries+1 {
+		t.Errorf("expected %d attempts (RetryMax+1) on natural exhaustion, got %d", retries+1, exhausted.Attempts)
+	}
+
+	// The semaphore slot must be released once the chain ends, whether it ended
+	// via natural exhaustion or the overall deadline.
+	select {
+	case d.sem <- struct{}{}:
+		<-d.sem
+	default:
+		t.Error("semaphore slot was not released after the chain ended")
+	}
+}
+
+// TestSender_Do_NoOverallDeadlineWhenPerAttemptTimeoutUnset proves the overall
+// retry-chain deadline is disabled (retryBudget == 0) when RequestTimeoutDuration
+// is unset, even with RetryMaxInterval set. The budget is anchored on the
+// per-attempt timeout; a backoff-only budget would allot no time to the attempts
+// themselves and fire spuriously. This guards against the earlier math that
+// computed retryMax*RetryMaxInterval regardless of the per-attempt timeout.
+func TestSender_Do_NoOverallDeadlineWhenPerAttemptTimeoutUnset(t *testing.T) {
+	// Server responds only after 100ms — longer than the (hypothetical)
+	// backoff-only budget of retryMax*RetryMaxInterval = 3*10ms = 30ms. If that
+	// budget were applied, the call would be cut with DeadlineExceeded.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(100 * time.Millisecond):
+			jsonOK(w)
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+
+	retries := 3
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RequestTimeoutDuration: 0, // unset per-attempt timeout: overall deadline disabled
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
+	}
+	httpClient := &http.Client{Transport: server.Client().Transport}
+	d := New(httpClient, sempCfg, bearerAuth(t), server.URL, NewSemaphore(1))
+
+	// Directly falsify the finding: no per-attempt timeout means no budget. The
+	// earlier math produced retryMax*RetryMaxInterval (30ms) here.
+	if d.retryBudget != 0 {
+		t.Fatalf("retryBudget = %s, want 0 when RequestTimeoutDuration is unset", d.retryBudget)
+	}
+
+	// Behavioral confirmation: Do applies no context.WithTimeout, so the slow
+	// request completes normally rather than being cut by an overall deadline.
+	resp, err := d.Do(context.Background(), newGetRequest(t, server.URL))
+	if err != nil {
+		t.Fatalf("Do returned error, expected success with no overall deadline: %v", err)
+	}
+	resp.Body.Close()
+}
 
 func TestSender_RateLimiter_BlocksUntilChannelReady(t *testing.T) {
 	var requestCount atomic.Int32
@@ -568,10 +740,11 @@ func TestSender_ErrorHandler_NetworkError_ProducesRetriesExhaustedError(t *testi
 	retries := 2
 	minInterval := time.Duration(0)
 	sempCfg := &config.SEMPConfig{
-		Retries:            &retries,
-		RequestMinInterval: &minInterval,
-		RetryMinInterval:   1 * time.Millisecond,
-		RetryMaxInterval:   10 * time.Millisecond,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RequestTimeoutDuration: 30 * time.Second, // generous per-attempt + overall budget for tests
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
 	}
 	jar := mustNewSafeCookieJar(t)
 	sender := New(&http.Client{Jar: jar}, sempCfg, basicAuth(t, jar), serverURL, NewSemaphore(10))
@@ -713,10 +886,11 @@ func TestSender_NoRetry_POST_ConnectionError(t *testing.T) {
 	retries := 5
 	minInterval := time.Duration(0)
 	sempCfg := &config.SEMPConfig{
-		Retries:            &retries,
-		RequestMinInterval: &minInterval,
-		RetryMinInterval:   1 * time.Millisecond,
-		RetryMaxInterval:   10 * time.Millisecond,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RequestTimeoutDuration: 30 * time.Second, // generous per-attempt + overall budget for tests
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
 	}
 	jar := mustNewSafeCookieJar(t)
 	sender := New(&http.Client{Jar: jar}, sempCfg, basicAuth(t, jar), serverURL, NewSemaphore(10))
@@ -752,10 +926,11 @@ func TestSender_NoRetry_PATCH_ConnectionError(t *testing.T) {
 	retries := 5
 	minInterval := time.Duration(0)
 	sempCfg := &config.SEMPConfig{
-		Retries:            &retries,
-		RequestMinInterval: &minInterval,
-		RetryMinInterval:   1 * time.Millisecond,
-		RetryMaxInterval:   10 * time.Millisecond,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RequestTimeoutDuration: 30 * time.Second, // generous per-attempt + overall budget for tests
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
 	}
 	jar := mustNewSafeCookieJar(t)
 	sender := New(&http.Client{Jar: jar}, sempCfg, basicAuth(t, jar), serverURL, NewSemaphore(10))
@@ -809,10 +984,11 @@ func newTestSenderWithSem(t *testing.T, httpClient *http.Client, serverURL strin
 	retries := 0
 	minInterval := time.Duration(0)
 	sempCfg := &config.SEMPConfig{
-		Retries:            &retries,
-		RequestMinInterval: &minInterval,
-		RetryMinInterval:   1 * time.Millisecond,
-		RetryMaxInterval:   10 * time.Millisecond,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RequestTimeoutDuration: 30 * time.Second, // generous per-attempt + overall budget for tests
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
 	}
 	jar := mustNewSafeCookieJar(t)
 	httpClient.Jar = jar

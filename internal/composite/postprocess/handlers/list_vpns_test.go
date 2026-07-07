@@ -314,7 +314,7 @@ func TestListVpns_ValidateTool(t *testing.T) {
 	t.Run("select covers required fields", func(t *testing.T) {
 		err := postprocess.ValidateTool("list-vpns", "listVpns",
 			[]string{"vpns"},
-			[]string{"enabled", "state", "msgVpnConnections", "msgVpnName"})
+			map[string][]string{"vpns": {"enabled", "state", "msgVpnConnections", "msgVpnName"}})
 		if err != nil {
 			t.Fatalf("expected success, got %v", err)
 		}
@@ -322,7 +322,7 @@ func TestListVpns_ValidateTool(t *testing.T) {
 	t.Run("select missing state", func(t *testing.T) {
 		err := postprocess.ValidateTool("list-vpns", "listVpns",
 			[]string{"vpns"},
-			[]string{"enabled", "msgVpnConnections"})
+			map[string][]string{"vpns": {"enabled", "msgVpnConnections"}})
 		if err == nil || !strings.Contains(err.Error(), `"state"`) {
 			t.Fatalf("expected error mentioning state, got %v", err)
 		}
@@ -330,7 +330,7 @@ func TestListVpns_ValidateTool(t *testing.T) {
 	t.Run("step id renamed", func(t *testing.T) {
 		err := postprocess.ValidateTool("list-vpns", "listVpns",
 			[]string{"messageVpns"},
-			[]string{"enabled", "state", "msgVpnConnections"})
+			map[string][]string{"messageVpns": {"enabled", "state", "msgVpnConnections"}})
 		if err == nil || !strings.Contains(err.Error(), `"vpns"`) {
 			t.Fatalf("expected error mentioning vpns step, got %v", err)
 		}

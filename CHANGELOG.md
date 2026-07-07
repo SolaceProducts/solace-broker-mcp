@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING**: A broker configured with `insecure_skip_verify: true` is now refused at startup under `mcp_client_auth.mode: oauth` (production), unless a new top-level `allow_insecure_broker_tls: true` opt-in is also set. Previously this combination started successfully with only a `slog.Warn`, leaving TLS certificate verification disabled while the server still sent the broker admin credential over the connection on every SEMP request — an exploitable man-in-the-middle path. Mirrors the existing `allow_remote_unauthenticated` guard. `allow_insecure_broker_tls` is server-wide, not per-broker: it lifts the check for every broker in the config, not just the one being onboarded. Dev/static modes are unchanged and continue to allow self-signed brokers without the opt-in. Migration: add `allow_insecure_broker_tls: true` to accept the risk, or install a trusted certificate on the broker. Tracked under SOL-151517.
+
 - `ToolManager.CallTool` now takes a trailing `Identity` argument carrying per-invocation audit identity. This is an internal Go API (the package is `internal/tools`); on-the-wire MCP tool schemas and operator-visible config are unchanged. Tracked under SOL-149606.
 
 - **BREAKING**: Client auth config consolidated into single required `client_auth.mode` enum (`disabled` | `static` | `oauth`). The legacy `development_mode` flag is deprecated and ignored — its presence in YAML logs a deprecation warning at startup. The previous "development_mode + empty dev_token = silent no-auth" path (SOL-149921) is replaced by the explicit `mode: disabled`. Migration:
