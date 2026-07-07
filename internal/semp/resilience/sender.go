@@ -97,7 +97,15 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 	// the retry policy's own configured worst case — every attempt at its full
 	// timeout plus every backoff at its cap — so the slot is released once that
 	// budget is spent even if a per-attempt guard is missing or misbehaves. It
-	// never cuts a chain that stays within its configured budget.
+	// never cuts a chain whose backoffs stay within RetryMaxInterval.
+	//
+	// Exception: RateLimitLinearJitterBackoff (below) honors a broker's
+	// Retry-After header verbatim, uncapped by RetryMaxInterval. A broker that
+	// returns a long Retry-After can make this deadline fire mid-chain, cutting
+	// the retry short. That is intentional, not a bug: without this deadline, a
+	// degraded broker returning e.g. Retry-After: 300 would park the slot (and
+	// every other call to that broker) for the full 300s per attempt regardless
+	// of the configured budget. This deadline is what caps that exposure.
 	//
 	// The RetryMax+1 term counts the successful attempt too, so after up to
 	// RetryMax failed attempts (each ≤ RequestTimeoutDuration) plus their
