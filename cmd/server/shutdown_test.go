@@ -302,9 +302,10 @@ func TestDrainAndShutdown_SecondSignalDuringDrainForcesClose(t *testing.T) {
 	readiness.SetInitialized()
 
 	// A drain window far longer than this test should ever run. If the second
-	// signal is honored we return in microseconds; if it is dropped we would
-	// block here for 30s and the -timeout guard would fail the run.
-	const drainDelay = 30 * time.Second
+	// signal is honored we return in microseconds; if it is dropped we fail
+	// fast on the elapsed-time assertion below rather than waiting out the
+	// full window and relying on the -timeout guard to catch the regression.
+	const drainDelay = 3 * time.Second
 	forceSig := make(chan os.Signal, 1)
 	forceSig <- syscall.SIGTERM
 
