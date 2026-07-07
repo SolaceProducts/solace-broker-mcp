@@ -196,3 +196,37 @@ jobs:
       - name: Tear down brokers
         if: always()
         run: docker compose -f test/e2e-monitoring/docker-compose.yml down -v
+
+  e2e-management:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Start Solace brokers
+        run: bash test/e2e-management/setup-brokers.sh
+
+      - name: Run E2E tests
+        run: bash test/e2e-management/run-all.sh
+
+      - name: Broker logs (on failure)
+        if: failure()
+        run: |
+          echo "=== solace-e2e-mgmt-a ==="
+          docker logs solace-e2e-mgmt-a 2>&1 | tail -100
+          echo "=== solace-e2e-mgmt-b ==="
+          docker logs solace-e2e-mgmt-b 2>&1 | tail -100
+
+      - name: MCP server log (on failure)
+        if: failure()
+        run: cat test/e2e-management/bin/mcp-server.log 2>/dev/null || echo "No server log found"
+
+      - name: Tear down brokers
+        if: always()
+        run: docker compose -f test/e2e-management/docker-compose.yml down -v

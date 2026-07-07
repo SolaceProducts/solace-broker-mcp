@@ -2,7 +2,18 @@
 
 This document describes the E2E testing strategy, structure, and how to run the tests locally and in CI.
 
-For a quickstart and the suite's port allocation, see [`test/e2e-basic-mcp/README.md`](../../test/e2e-basic-mcp/README.md). A separate monitoring-focused suite lives under [`test/e2e-monitoring/`](../../test/e2e-monitoring/README.md), and an LLM-driven eval harness that runs natural-language scenarios through the Claude Code CLI lives under [`test/e2e-monitoring/llm/`](../../test/e2e-monitoring/llm/README.md). The LLM suite is non-gating and only runs via manual `workflow_dispatch` ([`llm-eval.yml`](../../.github/workflows/llm-eval.yml)).
+For a quickstart and the suite's port allocation, see [`test/e2e-basic-mcp/README.md`](../../test/e2e-basic-mcp/README.md). A separate monitoring-focused suite lives under [`test/e2e-monitoring/`](../../test/e2e-monitoring/README.md), and a management/config-tool suite lives under [`test/e2e-management/`](../../test/e2e-management/README.md). An LLM-driven eval harness that runs natural-language scenarios through the Claude Code CLI lives under [`test/e2e-monitoring/llm/`](../../test/e2e-monitoring/llm/README.md). The LLM suite is non-gating and only runs via manual `workflow_dispatch` ([`llm-eval.yml`](../../.github/workflows/llm-eval.yml)).
+
+## Shared scaffold — `test/e2e-common/lib.sh`
+
+The generic scaffold shared by the tool-testing suites — broker readiness, MCP server build/start/stop, config generation (`write_config`, with an `enable_write_tools` toggle), SEMP operations, the MCP JSON-RPC wire helpers, assertions, and the test runner — lives in [`test/e2e-common/lib.sh`](../../test/e2e-common/lib.sh). Each suite keeps only its own fixtures and sources the lib.
+
+Location-independence contract: a suite sets `SUITE_DIR` (its own directory) before sourcing the lib, which derives `BIN_DIR`/`ENV_FILE`/`REPO_ROOT` from it and sources the suite's `.env`. This lets one lib serve `e2e-monitoring` (read-only server), `e2e-management` (write-enabled server), and future write suites, each with its own `bin/`, `.env`, ports, and containers.
+
+| Suite | Server | Fixtures | Focus |
+|---|---|---|---|
+| `e2e-monitoring` | read-only (`enable_write_tools` off) | F1–F7, created up front + broker-driver traffic | monitoring tools |
+| `e2e-management` | write-enabled (`enable_write_tools` on) | per-test `e2e-config-*`, created/torn down inside each test | config tools (create/update/delete VPN, queue, topic-endpoint) |
 
 ---
 
