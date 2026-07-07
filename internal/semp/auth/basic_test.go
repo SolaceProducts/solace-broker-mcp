@@ -22,11 +22,20 @@ func (r *recordingJar) Clear() error {
 // a nil jar is a wiring bug and must fail fast at construction, not later
 // at first 401 recovery attempt. Same rationale as
 // NewOAuthAuthenticator's nil-exchanger panic.
+//
+// The panic message is part of the assertion so a future refactor that
+// panics for a different reason (bad username, etc.) can't quietly pass
+// this test while dropping the nil-jar guard.
 func TestNewBasicAuthenticator_PanicsOnNilJar(t *testing.T) {
+	const wantMsg = "NewBasicAuthenticator: jar must be non-nil"
 	defer func() {
 		r := recover()
 		if r == nil {
 			t.Fatal("NewBasicAuthenticator(_, _, nil) did not panic")
+		}
+		got, ok := r.(string)
+		if !ok || got != wantMsg {
+			t.Fatalf("panic value = %#v, want string %q", r, wantMsg)
 		}
 	}()
 	NewBasicAuthenticator("admin", "s3cret", nil)
