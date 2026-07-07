@@ -1,0 +1,261 @@
+#!/usr/bin/env bash
+# Config-tool (management) functional tests, driven over the MCP JSON-RPC wire
+# (Mode 1, no LLM). Each tool family (VPN, queue, topic-endpoint) is exercised
+# through a full create → verify → update → verify → delete → verify-absent
+# round-trip on both brokers, plus cross-broker isolation, annotation, and
+# error-translation checks.
+#
+# Fixture model: per-test ownership. Each test creates its own e2e-config-*
+# object, acts on it, asserts, and deletes it. A suite-level sweep runs on entry
+# (pre-clean) and on exit (safety net) so a mid-run failure never leaks state.
+#
+# Verification mixes two layers, per the tool under test:
+#   - presence/absence → monitoring tools (list-vpns / list-queues); this is the
+#     read-after-write / cache-invalidation assertion (reads hit the broker live).
+#   - updated attribute → SEMP-direct monitor GET (the monitoring tools don't
+#     surface arbitrary config attributes).
+#   - topic-endpoints have no monitoring tool, so all of their verification is
+#     SEMP-direct.
+
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/helpers.sh"
+
+# Sweep on exit (standalone runs / mid-run failure) and pre-clean on entry.
+trap sweep_config_fixtures EXIT
+sweep_config_fixtures
+
+# ── Per-test helpers ─────────────────────────────────────────────────────────
+
+broker_url_for() {
+    case "$1" in
+        broker-a) echo "$BROKER_A_URL" ;;
+        broker-b) echo "$BROKER_B_URL" ;;
+    esac
+}
+
+# Call a config tool and assert it succeeded: no JSON-RPC error and the tool
+# result is not flagged isError. On failure, logs the broker's message.
+#   $1 tool   $2 args_json   $3 description
+call_tool_ok() {
+    local tool="$1" args="$2" desc="$3" resp jrpc_err is_err
+    resp=$(mcp_call_tool "$tool" "$args") || { log_fail "$desc: MCP transport failure"; return 1; }
+    jrpc_err=$(jq -r '.error.message // empty' <<<"$resp")
+    if [ -n "$jrpc_err" ]; then
+        log_fail "$desc: JSON-RPC error: $jrpc_err"
+        return 1
+    fi
+    is_err=$(jq -r '.result.isError // false' <<<"$resp")
+    if [ "$is_err" = "true" ]; then
+        log_fail "$desc: tool returned isError=true: $(jq -r '.result.content[0].text // ""' <<<"$resp")"
+        return 1
+    fi
+    return 0
+}
+
+# Assert a VPN/queue name is (or is not) present in a list tool's output.
+#   $1 broker   $2 list_tool (list-vpns|list-queues)   $3 name   $4 present(true|false)
+assert_listed() {
+    local broker="$1" list_tool="$2" name="$3" present="$4"
+    local args resp content data_path expr
+    if [ "$list_tool" = "list-vpns" ]; then
+        args=$(jq -nc --arg b "$broker" '{broker:$b,maxResults:500}')
+        data_path=".vpns.data"
+    else
+        args=$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",maxResults:500}')
+        data_path=".queues.data | map(select(.msgVpnName==\"default\"))"
+    fi
+    resp=$(mcp_call_tool "$list_tool" "$args") || return 1
+    content=$(extract_content "$resp")
+    local key
+    [ "$list_tool" = "list-vpns" ] && key="msgVpnName" || key="queueName"
+    if [ "$present" = "true" ]; then
+        expr="($data_path | map(.$key) | index(\"$name\")) != null"
+    else
+        expr="($data_path | map(.$key) | index(\"$name\")) == null"
+    fi
+    assert_json_field "$content" "$expr" "true" \
+        "$list_tool [$broker]: $name present=$present"
+}
+
+# ── VPN round-trip ───────────────────────────────────────────────────────────
+
+test_vpn_roundtrip() {
+    local broker="$1"
+    local name="e2e-config-vpn-$broker"
+    local burl mon
+    burl=$(broker_url_for "$broker")
+
+    call_tool_ok "create-message-vpn" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:$n,msgVpnConfig:{enabled:false}}')" \
+        "create-message-vpn [$broker]" || return 1
+    assert_listed "$broker" "list-vpns" "$name" "true" || return 1
+
+    call_tool_ok "update-message-vpn" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:$n,msgVpnConfig:{maxConnectionCount:50}}')" \
+        "update-message-vpn [$broker]" || return 1
+    mon=$(semp_monitor_get "$burl" "msgVpns/$name") || { log_fail "update-message-vpn [$broker]: monitor GET failed"; return 1; }
+    assert_json_field "$mon" ".data.maxConnectionCount" "50" \
+        "update-message-vpn [$broker]: maxConnectionCount reflected" || return 1
+
+    call_tool_ok "delete-message-vpn" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:$n}')" \
+        "delete-message-vpn [$broker]" || return 1
+    assert_listed "$broker" "list-vpns" "$name" "false" || return 1
+}
+
+# ── Queue round-trip ─────────────────────────────────────────────────────────
+
+test_queue_roundtrip() {
+    local broker="$1"
+    local name="e2e-config-queue-$broker"
+    local burl mon
+    burl=$(broker_url_for "$broker")
+
+    call_tool_ok "create-queue" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,queueConfig:{accessType:"non-exclusive"}}')" \
+        "create-queue [$broker]" || return 1
+    assert_listed "$broker" "list-queues" "$name" "true" || return 1
+
+    call_tool_ok "update-queue" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,queueConfig:{maxMsgSpoolUsage:10}}')" \
+        "update-queue [$broker]" || return 1
+    mon=$(semp_monitor_get "$burl" "msgVpns/$BROKER_VPN/queues/$name") || { log_fail "update-queue [$broker]: monitor GET failed"; return 1; }
+    assert_json_field "$mon" ".data.maxMsgSpoolUsage" "10" \
+        "update-queue [$broker]: maxMsgSpoolUsage reflected" || return 1
+
+    call_tool_ok "delete-queue" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n}')" \
+        "delete-queue [$broker]" || return 1
+    assert_listed "$broker" "list-queues" "$name" "false" || return 1
+}
+
+# ── Topic-endpoint round-trip (SEMP-direct verify: no monitoring tool) ────────
+
+test_te_roundtrip() {
+    local broker="$1"
+    local name="e2e-config-te-$broker"
+    local burl mon
+    burl=$(broker_url_for "$broker")
+
+    call_tool_ok "create-topic-endpoint" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",topicEndpointName:$n,topicEndpointConfig:{accessType:"non-exclusive"}}')" \
+        "create-topic-endpoint [$broker]" || return 1
+    if ! semp_monitor_get "$burl" "msgVpns/$BROKER_VPN/topicEndpoints/$name" >/dev/null 2>&1; then
+        log_fail "create-topic-endpoint [$broker]: $name not visible via monitor GET"
+        return 1
+    fi
+
+    # Topic endpoints use maxSpoolUsage (queues use maxMsgSpoolUsage).
+    call_tool_ok "update-topic-endpoint" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",topicEndpointName:$n,topicEndpointConfig:{maxSpoolUsage:10}}')" \
+        "update-topic-endpoint [$broker]" || return 1
+    mon=$(semp_monitor_get "$burl" "msgVpns/$BROKER_VPN/topicEndpoints/$name") || { log_fail "update-topic-endpoint [$broker]: monitor GET failed"; return 1; }
+    assert_json_field "$mon" ".data.maxSpoolUsage" "10" \
+        "update-topic-endpoint [$broker]: maxSpoolUsage reflected" || return 1
+
+    call_tool_ok "delete-topic-endpoint" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",topicEndpointName:$n}')" \
+        "delete-topic-endpoint [$broker]" || return 1
+    if semp_monitor_get "$burl" "msgVpns/$BROKER_VPN/topicEndpoints/$name" >/dev/null 2>&1; then
+        log_fail "delete-topic-endpoint [$broker]: $name still visible after delete"
+        return 1
+    fi
+}
+
+# ── Cross-cutting ────────────────────────────────────────────────────────────
+
+# A create/delete on broker-a's fixture must leave broker-b untouched. Uses one
+# shared queue name created only on broker-a.
+test_cross_broker_isolation() {
+    local name="e2e-config-iso"
+    call_tool_ok "create-queue" \
+        "$(jq -nc --arg n "$name" '{broker:"broker-a",msgVpnName:"default",queueName:$n,queueConfig:{accessType:"non-exclusive"}}')" \
+        "isolation: create-queue [broker-a]" || return 1
+    assert_listed "broker-a" "list-queues" "$name" "true" || return 1
+    assert_listed "broker-b" "list-queues" "$name" "false" || return 1
+    call_tool_ok "delete-queue" \
+        "$(jq -nc --arg n "$name" '{broker:"broker-a",msgVpnName:"default",queueName:$n}')" \
+        "isolation: delete-queue [broker-a]" || return 1
+}
+
+# tools/list advertises every config tool with its declared annotations. All are
+# write tools (readOnlyHint=false); create-* are non-destructive, update-*/
+# delete-* are destructive. readOnlyHint/destructiveHint are omitempty on the
+# wire, so `// false` normalizes an absent hint to false.
+test_annotations() {
+    local sid resp t
+    sid=$(mcp_initialize) || return 1
+    resp=$(mcp_request "$sid" '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}') || return 1
+
+    for t in create-message-vpn create-queue create-topic-endpoint \
+             update-message-vpn delete-message-vpn update-queue delete-queue \
+             update-topic-endpoint delete-topic-endpoint; do
+        assert_json_field "$resp" "([.result.tools[].name] | index(\"$t\")) != null" "true" \
+            "annotations: $t advertised in tools/list" || return 1
+        assert_json_field "$resp" "(.result.tools[] | select(.name==\"$t\") | .annotations.readOnlyHint) // false" "false" \
+            "annotations: $t readOnlyHint=false" || return 1
+    done
+
+    for t in create-message-vpn create-queue create-topic-endpoint; do
+        assert_json_field "$resp" "(.result.tools[] | select(.name==\"$t\") | .annotations.destructiveHint) // false" "false" \
+            "annotations: $t destructiveHint=false" || return 1
+    done
+    for t in update-message-vpn delete-message-vpn update-queue delete-queue \
+             update-topic-endpoint delete-topic-endpoint; do
+        assert_json_field "$resp" "(.result.tools[] | select(.name==\"$t\") | .annotations.destructiveHint) // false" "true" \
+            "annotations: $t destructiveHint=true" || return 1
+    done
+}
+
+# Creating an object that already exists surfaces the broker's translated error
+# through the wire: isError=true with the parsed SEMP HTTP status, not a raw
+# transport failure.
+test_error_translation() {
+    local broker="broker-a"
+    local name="e2e-config-vpn-$broker"
+    local resp text
+
+    call_tool_ok "create-message-vpn" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:$n,msgVpnConfig:{enabled:false}}')" \
+        "error-xlate: initial create [$broker]" || return 1
+
+    resp=$(mcp_call_tool "create-message-vpn" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:$n,msgVpnConfig:{enabled:false}}')") \
+        || { log_fail "error-xlate: transport failure on duplicate create"; return 1; }
+    assert_json_field "$resp" ".result.isError" "true" \
+        "error-xlate: duplicate create returns isError=true" || return 1
+    assert_json_field "$resp" ".result.structuredContent.status" "400" \
+        "error-xlate: duplicate create surfaces HTTP 400" || return 1
+    text=$(jq -r '.result.content[0].text // ""' <<<"$resp" | tr '[:upper:]' '[:lower:]')
+    assert_contains "$text" "exist" \
+        "error-xlate: message reports the object already exists" || return 1
+
+    call_tool_ok "delete-message-vpn" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:$n}')" \
+        "error-xlate: cleanup delete [$broker]" || return 1
+}
+
+# ── Per-broker wrappers (run_test calls no-arg functions) ─────────────────────
+test_vpn_roundtrip_a()   { test_vpn_roundtrip broker-a; }
+test_vpn_roundtrip_b()   { test_vpn_roundtrip broker-b; }
+test_queue_roundtrip_a() { test_queue_roundtrip broker-a; }
+test_queue_roundtrip_b() { test_queue_roundtrip broker-b; }
+test_te_roundtrip_a()    { test_te_roundtrip broker-a; }
+test_te_roundtrip_b()    { test_te_roundtrip broker-b; }
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+log_info "=== Config-tool (management) E2E tests ==="
+
+run_test "VPN round-trip (broker-a)"            test_vpn_roundtrip_a
+run_test "VPN round-trip (broker-b)"            test_vpn_roundtrip_b
+run_test "Queue round-trip (broker-a)"          test_queue_roundtrip_a
+run_test "Queue round-trip (broker-b)"          test_queue_roundtrip_b
+run_test "Topic-endpoint round-trip (broker-a)" test_te_roundtrip_a
+run_test "Topic-endpoint round-trip (broker-b)" test_te_roundtrip_b
+run_test "Cross-broker isolation"               test_cross_broker_isolation
+run_test "Annotations (tools/list)"             test_annotations
+run_test "Error translation (duplicate create)" test_error_translation
+
+print_summary "Config-tool tests"
