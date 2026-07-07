@@ -661,6 +661,99 @@ func TestExecute_ParallelSteps_AppliesSelect(t *testing.T) {
 	}
 }
 
+// TestExecute_ParallelSteps_FollowsPages pins the invariant that a step with
+// followPages: true actually follows pages even when it also runs in a parallel
+// batch. Regression test: an earlier revision routed parallel steps through
+// executeBatch which never inspected step.FollowPages, so multi-page results
+// were silently truncated to page 1 and no truncated flag was set — an RDP
+// with more than one page of bindings could ship a confident but wrong
+// health summary.
+func TestExecute_ParallelSteps_FollowsPages(t *testing.T) {
+	ops := map[string]*sempv2.Operation{
+		"monitor/getA": {ID: "getA", Method: "GET", Path: "/a"},
+		"monitor/getB": {ID: "getB", Method: "GET", Path: "/b"},
+	}
+
+	client := newSeqMockClient()
+	// Step A: two pages (100 + 30). Step B: one page (5).
+	client.addResponses("getA",
+		pageResult(makeSubscriptionItems(100), "cursor-a2"),
+		pageResult(makeSubscriptionItems(30), ""),
+	)
+	client.addResponses("getB", pageResult(makeSubscriptionItems(5), ""))
+
+	tool := CompositeTool{
+		Name:        "test",
+		Description: "test",
+		Steps: []Step{
+			{ID: "stepA", Operation: "monitor/getA", Args: map[string]string{}, Parallel: true, FollowPages: true},
+			{ID: "stepB", Operation: "monitor/getB", Args: map[string]string{}, Parallel: true, FollowPages: true},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+
+	result, err := NewCompositeExecutor(ops).Execute(context.Background(), tool, client, map[string]any{
+		"maxResults": float64(200),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	stepA := result["stepA"].(map[string]any)
+	if items := stepA["data"].([]any); len(items) != 130 {
+		t.Errorf("stepA len(items) = %d, want 130 (paginator did not follow nextPageUri on parallel step)", len(items))
+	}
+	if stepA["truncated"] != false {
+		t.Errorf("stepA truncated = %v, want false", stepA["truncated"])
+	}
+
+	stepB := result["stepB"].(map[string]any)
+	if items := stepB["data"].([]any); len(items) != 5 {
+		t.Errorf("stepB len(items) = %d, want 5", len(items))
+	}
+}
+
+// TestExecute_ParallelSteps_FollowsPages_Truncates pins that the truncated
+// flag fires on a parallel + followPages step when maxResults is reached.
+// Regression: the earlier executeBatch path never produced a truncated key
+// at all, so the caller could not distinguish complete from incomplete
+// results.
+func TestExecute_ParallelSteps_FollowsPages_Truncates(t *testing.T) {
+	ops := map[string]*sempv2.Operation{
+		"monitor/getA": {ID: "getA", Method: "GET", Path: "/a"},
+		"monitor/getB": {ID: "getB", Method: "GET", Path: "/b"},
+	}
+
+	client := newSeqMockClient()
+	client.addResponses("getA", pageResult(makeSubscriptionItems(100), "cursor-a2"))
+	client.addResponses("getB", pageResult(makeSubscriptionItems(1), ""))
+
+	tool := CompositeTool{
+		Name:        "test",
+		Description: "test",
+		Steps: []Step{
+			{ID: "stepA", Operation: "monitor/getA", Args: map[string]string{}, Parallel: true, FollowPages: true},
+			{ID: "stepB", Operation: "monitor/getB", Args: map[string]string{}, Parallel: true, FollowPages: true},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+
+	result, err := NewCompositeExecutor(ops).Execute(context.Background(), tool, client, map[string]any{
+		"maxResults": float64(50),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	stepA := result["stepA"].(map[string]any)
+	if stepA["truncated"] != true {
+		t.Errorf("stepA truncated = %v, want true", stepA["truncated"])
+	}
+	if items := stepA["data"].([]any); len(items) != 50 {
+		t.Errorf("stepA len(items) = %d, want 50", len(items))
+	}
+}
+
 func TestExecute_ResultStrategy_Collect(t *testing.T) {
 	client := newMockClient()
 	client.responses["getMsgVpnQueue"] = &sempv2.Result{Data: map[string]any{"queue": "data"}, StatusCode: 200}
