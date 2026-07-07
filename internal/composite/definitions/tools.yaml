@@ -347,11 +347,11 @@ tools:
       List all REST Delivery Points in a Message VPN with their enabled state,
       up/down status, and last failure reason. Use this to discover which RDPs
       exist and identify any that are down. The response includes a summary
-      block with downCount, disabledCount, downButEnabledCount (RDPs that are
-      down but not admin-disabled — the unexpectedly-down set), and
-      byLastFailureReason (counts of unexpectedly-down RDPs — enabled but not
-      up — grouped by their failure reason; admin-disabled RDPs and recovered
-      RDPs with stale reasons are excluded). For detailed RDP status including
+      block with downCount (enabled RDPs that are not up — the
+      unexpectedly-down set, matching the shape of list-vpns.downCount),
+      disabledCount, and byLastFailureReason (counts of unexpectedly-down RDPs
+      grouped by their failure reason; admin-disabled RDPs and recovered RDPs
+      with stale reasons are excluded). For detailed RDP status including
       consumers and queue bindings, use get-rdp-status.
     annotations:
       readOnly: true

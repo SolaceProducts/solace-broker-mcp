@@ -40,14 +40,10 @@ func TestListRdps_Counts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// downCount and downButEnabledCount are aliases (both enabled && !up) — the
-	// alias exists only to keep the "unexpected active failure" signal
-	// discoverable under either name.
 	checks := map[string]int{
-		"downCount":           2,
-		"disabledCount":       2,
-		"downButEnabledCount": 2,
-		"scanned":             5,
+		"downCount":     2,
+		"disabledCount": 2,
+		"scanned":       5,
 	}
 	for k, want := range checks {
 		if got[k] != want {
@@ -103,9 +99,9 @@ func TestListRdps_UnexpectedFailureFilter(t *testing.T) {
 }
 
 // TestListRdps_DownCountUnifiedWithVpns pins the semantics agreed in
-// SOL-151552: downCount is enabled && !up (matching list-vpns), and
-// downButEnabledCount is an alias with the same value. If either rule drifts,
-// cross-tool reasoning breaks silently — hence a dedicated test.
+// SOL-151552: downCount is enabled && !up, matching list-vpns.downCount's
+// enabled-and-in-the-down-state shape. If the rule drifts, cross-tool
+// reasoning breaks silently — hence a dedicated test.
 func TestListRdps_DownCountUnifiedWithVpns(t *testing.T) {
 	items := []any{
 		rdp(false, false, "RDP Shutdown"), // admin-disabled — MUST NOT count as down
@@ -118,10 +114,6 @@ func TestListRdps_DownCountUnifiedWithVpns(t *testing.T) {
 	}
 	if got["downCount"] != 1 {
 		t.Errorf("downCount (enabled && !up): got %v, want 1", got["downCount"])
-	}
-	if got["downButEnabledCount"] != got["downCount"] {
-		t.Errorf("downButEnabledCount must alias downCount, got %v vs %v",
-			got["downButEnabledCount"], got["downCount"])
 	}
 }
 
@@ -162,7 +154,7 @@ func TestListRdps_Empty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{"downCount", "disabledCount", "downButEnabledCount"} {
+	for _, k := range []string{"downCount", "disabledCount"} {
 		if got[k] != 0 {
 			t.Errorf("%s: got %v, want 0", k, got[k])
 		}
@@ -234,9 +226,9 @@ func TestListRdps_MissingField(t *testing.T) {
 					item[k] = v
 				}
 			}
-			// Healthy row lands in every counter we assert: down + downButEnabled +
-			// bucketed (down && enabled && reason). The skipped row must not steal
-			// any of those signals.
+			// Healthy row lands in every counter we assert: down (enabled && !up)
+			// + bucketed (down && enabled && reason). The skipped row must not
+			// steal any of those signals.
 			healthy := rdp(false, true, "other")
 			got, err := ListRdps(map[string]map[string]any{"rdps": {"data": []any{item, healthy}}})
 			if err != nil {
@@ -248,7 +240,7 @@ func TestListRdps_MissingField(t *testing.T) {
 			if got["scanned"] != 2 {
 				t.Errorf("scanned: got %v, want 2", got["scanned"])
 			}
-			if got["downCount"] != 1 || got["downButEnabledCount"] != 1 || got["disabledCount"] != 0 {
+			if got["downCount"] != 1 || got["disabledCount"] != 0 {
 				t.Errorf("healthy row signals lost or wrong: %+v", got)
 			}
 			byReason := got["byLastFailureReason"].(map[string]int)
@@ -272,7 +264,7 @@ func TestListRdps_NilField(t *testing.T) {
 	if got["skipped"] != 1 {
 		t.Errorf("skipped: got %v, want 1", got["skipped"])
 	}
-	if got["downCount"] != 1 || got["downButEnabledCount"] != 1 {
+	if got["downCount"] != 1 {
 		t.Errorf("healthy row signals lost: %+v", got)
 	}
 }

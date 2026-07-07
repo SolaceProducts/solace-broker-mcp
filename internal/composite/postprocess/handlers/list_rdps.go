@@ -38,15 +38,13 @@ func init() {
 	})
 }
 
-// ListRdps aggregates the RDP list into three counts plus a failure-reason map:
+// ListRdps aggregates the RDP list into two counts plus a failure-reason map:
 //   - downCount:           enabled && !up — the "unexpectedly down" /
 //     page-worthy count (admin-disabled RDPs are excluded, since they're down
-//     by design). Same rule as list-vpns.downCount so cross-tool reasoning is
-//     safe.
+//     by design). Same shape as list-vpns.downCount: enabled resource in the
+//     down state (`state=="down"` for VPNs, `!up` for RDPs), so an LLM can
+//     read the field the same way across both tools.
 //   - disabledCount:       RDPs with enabled == false
-//   - downButEnabledCount: explicit alias of downCount — kept so the
-//     "unexpected active failure" signal stays discoverable under either name
-//     an LLM may template against.
 //   - byLastFailureReason: count grouped by lastFailureReason, restricted to
 //     currently-down RDPs that are NOT admin-disabled (up == false && enabled
 //     == true) so the map reflects UNEXPECTED active failures — not "RDP
@@ -95,7 +93,6 @@ func ListRdps(stepResults map[string]map[string]any) (map[string]any, error) {
 	out := map[string]any{
 		"downCount":           down,
 		"disabledCount":       disabled,
-		"downButEnabledCount": down,
 		"byLastFailureReason": byReason,
 		"scanned":             len(items),
 	}
