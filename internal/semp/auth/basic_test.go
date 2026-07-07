@@ -41,6 +41,29 @@ func TestNewBasicAuthenticator_PanicsOnNilJar(t *testing.T) {
 	NewBasicAuthenticator("admin", "s3cret", nil)
 }
 
+// TestNewBasicAuthenticator_TypedNilJar_DoesNotPanic pins the accepted
+// limit of the nil-jar guard: a typed-nil implementation (Go's classic
+// "nil interface vs. nil concrete" gotcha — see
+// https://go.dev/doc/faq#nil_error) produces a non-nil interface value
+// and slips past the == nil check.
+//
+// This is intentional and matches the ecosystem convention: defend at
+// the producer, not the consumer. Production wiring (newCookieJar →
+// newAuthenticator) never emits a typed-nil, so the case is unreachable
+// in production. If we ever adopt reflect-based detection or a linter
+// that upgrades this to a compile-time error, this test will fail — and
+// that failure is the intended signal that we're deliberately changing
+// the contract.
+func TestNewBasicAuthenticator_TypedNilJar_DoesNotPanic(t *testing.T) {
+	var typedNil *recordingJar // nil pointer, but wrapping it in the interface produces a non-nil header
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("NewBasicAuthenticator with typed-nil jar panicked unexpectedly: %v", r)
+		}
+	}()
+	_ = NewBasicAuthenticator("admin", "s3cret", typedNil)
+}
+
 // TestBasicAuthenticator_HandleAuthFailure_ClearsJarAndReturnsTrue pins
 // the happy-path contract: on a 401, HandleAuthFailure calls jar.Clear()
 // exactly once and returns retry=true so the Sender re-sends with fresh
