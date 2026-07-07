@@ -199,7 +199,7 @@ func TestRegister_InconsistentPerStepStep_Panics(t *testing.T) {
 			t.Fatal("expected panic when RequiredFieldsPerStep references a step not in RequiredSteps")
 		}
 		msg, ok := r.(string)
-		if !ok || !strings.Contains(msg, "stray") || !strings.Contains(msg, "RequiredSteps") {
+		if !ok || !strings.Contains(msg, "is not in RequiredSteps") {
 			t.Fatalf("unexpected panic message: %v", r)
 		}
 	}()
