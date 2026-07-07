@@ -136,10 +136,29 @@ func TestOAuthAuthenticator_AddAuth_ExchangeError(t *testing.T) {
 	}
 }
 
-func TestOAuthAuthenticator_HandleAuthFailure(t *testing.T) {
+func TestOAuthAuthenticator_HandleAuthFailure_NoSubjectToken(t *testing.T) {
 	a := NewOAuthAuthenticator(&fakeExchanger{}, "aud", nil, "b")
-	if got := a.HandleAuthFailure(context.Background(), nil); got {
-		t.Error("HandleAuthFailure should return false for OAuth (stateless, no retry)")
+	if a.HandleAuthFailure(context.Background(), nil) {
+		t.Error("expected false when no subject token on context")
+	}
+}
+
+func TestOAuthAuthenticator_HandleAuthFailure_WithSubjectToken(t *testing.T) {
+	exchg := &fakeExchanger{}
+	a := NewOAuthAuthenticator(exchg, "aud", nil, "my-broker")
+
+	ctx := ctxWithSubjectToken(t, "agent-jwt")
+	if !a.HandleAuthFailure(ctx, nil) {
+		t.Error("expected true when subject token present")
+	}
+
+	exchg.mu.Lock()
+	defer exchg.mu.Unlock()
+	if len(exchg.invalidateCalls) != 1 {
+		t.Fatalf("expected 1 Invalidate call, got %d", len(exchg.invalidateCalls))
+	}
+	if exchg.invalidateCalls[0].BrokerAlias != "my-broker" {
+		t.Errorf("broker alias = %q, want %q", exchg.invalidateCalls[0].BrokerAlias, "my-broker")
 	}
 }
 
