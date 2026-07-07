@@ -1020,18 +1020,11 @@ func validate(cfg *ServerConfig) error {
 	// stays callable and is exercised by TestValidateHop1Hop2Alignment_Direct
 	// so the invariant does not rot while it is sleeping in validate().
 	//
-	// FLAG CONTRACT — validation vs. runtime:
-	// Config validation described in this file (this validate() function and
-	// everything it calls) ALWAYS runs regardless of
-	// ENABLE_UNRELEASED_BROKER_OAUTH. The flag only decides whether Hop-2
-	// OAuth runtime resources (IdP HTTP client, token exchanger, in-memory
-	// client secret) are constructed by cmd/server/main.go. That means an
-	// operator who stages `broker_oauth:` or `auth.mode: oauth` in YAML
-	// without the flag will still see the SAME validation errors and WARN
-	// messages they would see with the flag — because the schema is
-	// evaluated the same way — but no runtime resources will be built for a
-	// feature that cannot execute. Setting the flag switches the runtime
-	// on; it does not loosen or tighten validation.
+	// FLAG CONTRACT: ENABLE_UNRELEASED_BROKER_OAUTH does not change
+	// schema/shape validation — malformed OAuth YAML is rejected either
+	// way. It only gates the temporary not-yet-supported guard and the
+	// banner branch below (see the if/else on unreleasedBrokerOAuthEnabled).
+	// Runtime construction is a separate concern; see ServerConfig.Hop2OAuthActive.
 	//
 	// LIFECYCLE: when the OAuth runtime ships (SOL-150070 follow-up sub-
 	// tickets), delete the whole `if oauthBrokerCount > 0` arm — the
@@ -1039,12 +1032,6 @@ func validate(cfg *ServerConfig) error {
 	// becomes the operator-facing surface for Hop 1 / Hop 2 mismatches.
 	// See banner.LogOAuthNotSupported doc-comment for the full removal
 	// checklist.
-	//
-	// Bypass: when ENABLE_UNRELEASED_BROKER_OAUTH=true, behave as if the
-	// guard were already removed — skip the "not supported" banner and let
-	// the alignment check run so operators still see the Hop 1 / Hop 2
-	// mismatch remediation. This mirrors what post-removal behavior looks
-	// like, so E2E tests exercise the real operator-facing surface.
 	if oauthBrokerCount > 0 && !unreleasedBrokerOAuthEnabled() {
 		banner.LogOAuthNotSupported(oauthBrokerCount)
 	} else if err := validateHop1Hop2Alignment(cfg); err != nil {

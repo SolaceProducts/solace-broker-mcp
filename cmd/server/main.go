@@ -393,22 +393,26 @@ func registerMixedTools(mgr *tools.ToolManager) {
 // whether to invoke it.
 //
 // PRECONDITION: the caller has already verified that the Hop-2 OAuth
-// runtime should run in this process, i.e. cfg.Hop2OAuthActive() is
-// true. Calling this function when the runtime is not active will
-// construct resources for a path that has no consumer, which is exactly
-// what the top-level gate in main() is there to prevent.
+// runtime should run in this process, i.e. ServerConfig.Hop2OAuthActive()
+// returned true and oauthCfg is the (non-nil) global broker_oauth block.
+// Calling this function when the runtime is not active will construct
+// resources for a path that has no consumer, which is exactly what the
+// top-level gate in main() is there to prevent.
 //
 // Constructing this exchanger allocates: an *http.Client for the IdP,
 // a *tokenexchange.Exchanger holding the client secret in memory, and
-// a singleflight.Group for request deduplication. None of these do I/O
-// at construction time; the first outbound request happens when a
-// request-path goroutine calls Exchanger.Exchange().
-func newTokenExchanger(cfg *config.ServerConfig) (*tokenexchange.Exchanger, error) {
+// a singleflight.Group for request deduplication. None of these make an
+// outbound network call at construction time; the first IdP request
+// happens when a request-path goroutine calls Exchanger.Exchange().
+// (idpclient.NewHTTPClient does read local trust-store material —
+// SSL_CERT_FILE and the system cert pool — which is filesystem/OS I/O,
+// but not network.)
+func newTokenExchanger(oauthCfg *config.BrokerOAuthConfig) (*tokenexchange.Exchanger, error) {
 	httpClient, err := idpclient.NewHTTPClient()
 	if err != nil {
 		return nil, fmt.Errorf("creating IdP HTTP client: %w", err)
 	}
-	exchanger, err := tokenexchange.FromConfig(cfg.BrokerOAuth, httpClient)
+	exchanger, err := tokenexchange.FromConfig(oauthCfg, httpClient)
 	if err != nil {
 		return nil, fmt.Errorf("creating token exchanger: %w", err)
 	}
@@ -530,7 +534,7 @@ func main() {
 	//    lifecycle notes for ship time.
 	var exchanger *tokenexchange.Exchanger
 	if cfg.Hop2OAuthActive() {
-		exchanger, err = newTokenExchanger(cfg)
+		exchanger, err = newTokenExchanger(cfg.BrokerOAuth)
 		if err != nil {
 			slog.Error("token exchanger construction failed",
 				slog.String("error", err.Error()))
