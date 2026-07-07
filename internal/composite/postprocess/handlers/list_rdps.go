@@ -39,11 +39,14 @@ func init() {
 }
 
 // ListRdps aggregates the RDP list into three counts plus a failure-reason map:
-//   - downCount:           RDPs with up == false
-//   - disabledCount:       RDPs with enabled == false
-//   - downButEnabledCount: enabled && !up — the "unexpectedly down" /
+//   - downCount:           enabled && !up — the "unexpectedly down" /
 //     page-worthy count (admin-disabled RDPs are excluded, since they're down
-//     by design)
+//     by design). Same rule as list-vpns.downCount so cross-tool reasoning is
+//     safe.
+//   - disabledCount:       RDPs with enabled == false
+//   - downButEnabledCount: explicit alias of downCount — kept so the
+//     "unexpected active failure" signal stays discoverable under either name
+//     an LLM may template against.
 //   - byLastFailureReason: count grouped by lastFailureReason, restricted to
 //     currently-down RDPs that are NOT admin-disabled (up == false && enabled
 //     == true) so the map reflects UNEXPECTED active failures — not "RDP
@@ -65,7 +68,7 @@ func ListRdps(stepResults map[string]map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, fmt.Errorf("rdps.data: want []any, got %T", step["data"])
 	}
-	var down, disabled, downButEnabled, skipped int
+	var down, disabled, skipped int
 	byReason := map[string]int{}
 	for i, raw := range items {
 		r, ok := raw.(map[string]any)
@@ -79,14 +82,11 @@ func ListRdps(stepResults map[string]map[string]any) (map[string]any, error) {
 			skipped++
 			continue
 		}
-		if !up {
-			down++
-		}
 		if !enabled {
 			disabled++
 		}
 		if !up && enabled {
-			downButEnabled++
+			down++
 		}
 		if !up && enabled && reason != "" {
 			byReason[reason]++
@@ -95,7 +95,7 @@ func ListRdps(stepResults map[string]map[string]any) (map[string]any, error) {
 	out := map[string]any{
 		"downCount":           down,
 		"disabledCount":       disabled,
-		"downButEnabledCount": downButEnabled,
+		"downButEnabledCount": down,
 		"byLastFailureReason": byReason,
 		"scanned":             len(items),
 	}

@@ -31,17 +31,20 @@ func rdp(up, enabled bool, reason string) map[string]any {
 func TestListRdps_Counts(t *testing.T) {
 	items := []any{
 		rdp(true, true, ""),                    // healthy
-		rdp(false, true, "connection refused"), // down + downButEnabled + bucketed
-		rdp(false, false, "RDP Shutdown"),      // down + disabled — NOT downButEnabled, NOT bucketed (admin-disabled reasons are not unexpected failures)
+		rdp(false, true, "connection refused"), // down (enabled && !up) + bucketed
+		rdp(false, false, "RDP Shutdown"),      // disabled only — NOT down (admin-disabled excluded), NOT bucketed
 		rdp(true, false, ""),                   // disabled only
-		rdp(false, true, "connection refused"), // down + downButEnabled + same bucket
+		rdp(false, true, "connection refused"), // down (enabled && !up) + same bucket
 	}
 	got, err := ListRdps(map[string]map[string]any{"rdps": {"data": items}})
 	if err != nil {
 		t.Fatal(err)
 	}
+	// downCount and downButEnabledCount are aliases (both enabled && !up) — the
+	// alias exists only to keep the "unexpected active failure" signal
+	// discoverable under either name.
 	checks := map[string]int{
-		"downCount":           3,
+		"downCount":           2,
 		"disabledCount":       2,
 		"downButEnabledCount": 2,
 		"scanned":             5,
@@ -77,14 +80,16 @@ func TestListRdps_UnexpectedFailureFilter(t *testing.T) {
 		rdp(false, true, "boom"),          // down + enabled + reason → bucketed
 		rdp(false, false, "RDP Shutdown"), // admin-disabled → MUST NOT bucket
 		rdp(true, true, "old boom"),       // recovered with historical reason → MUST NOT bucket
-		rdp(false, true, ""),              // down with empty reason → counted in downCount, NOT bucketed
+		rdp(false, true, ""),              // enabled && !up with empty reason → counted in downCount, NOT bucketed
 	}
 	got, err := ListRdps(map[string]map[string]any{"rdps": {"data": items}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got["downCount"] != 3 {
-		t.Errorf("downCount: got %v, want 3", got["downCount"])
+	// enabled && !up: items 0 and 3. Admin-disabled row (item 1) is excluded
+	// from downCount under the unified rule shared with list-vpns.
+	if got["downCount"] != 2 {
+		t.Errorf("downCount: got %v, want 2", got["downCount"])
 	}
 	byReason := got["byLastFailureReason"].(map[string]int)
 	if len(byReason) != 1 || byReason["boom"] != 1 {
@@ -94,6 +99,29 @@ func TestListRdps_UnexpectedFailureFilter(t *testing.T) {
 		if _, present := byReason[leaked]; present {
 			t.Errorf("%q leaked into byLastFailureReason: %v", leaked, byReason)
 		}
+	}
+}
+
+// TestListRdps_DownCountUnifiedWithVpns pins the semantics agreed in
+// SOL-151552: downCount is enabled && !up (matching list-vpns), and
+// downButEnabledCount is an alias with the same value. If either rule drifts,
+// cross-tool reasoning breaks silently — hence a dedicated test.
+func TestListRdps_DownCountUnifiedWithVpns(t *testing.T) {
+	items := []any{
+		rdp(false, false, "RDP Shutdown"), // admin-disabled — MUST NOT count as down
+		rdp(false, true, "boom"),          // unexpected failure — counts
+		rdp(true, true, ""),               // healthy — does not count
+	}
+	got, err := ListRdps(map[string]map[string]any{"rdps": {"data": items}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["downCount"] != 1 {
+		t.Errorf("downCount (enabled && !up): got %v, want 1", got["downCount"])
+	}
+	if got["downButEnabledCount"] != got["downCount"] {
+		t.Errorf("downButEnabledCount must alias downCount, got %v vs %v",
+			got["downButEnabledCount"], got["downCount"])
 	}
 }
 
