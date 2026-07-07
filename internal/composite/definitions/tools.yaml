@@ -61,9 +61,11 @@ tools:
       - id: queueBindings
         operation: monitor/getMsgVpnRestDeliveryPointQueueBindings
         parallel: true
+        followPages: true
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           restDeliveryPointName: "{{.Params.restDeliveryPointName}}"
+          count: "100"
         select:
           - lastFailureReason
           - lastFailureTime
@@ -75,9 +77,11 @@ tools:
       - id: restConsumers
         operation: monitor/getMsgVpnRestDeliveryPointRestConsumers
         parallel: true
+        followPages: true
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           restDeliveryPointName: "{{.Params.restDeliveryPointName}}"
+          count: "100"
         select:
           - authenticationScheme
           - enabled
