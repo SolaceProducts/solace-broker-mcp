@@ -41,6 +41,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/safego"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
 )
@@ -173,7 +174,7 @@ func (h *Handler) Handle(ctx context.Context, tc *tools.ToolContext, params map[
 
 	g, gCtx := errgroup.WithContext(ctx)
 
-	g.Go(func() error {
+	safego.Go(g, func() error {
 		op := buildSEMPv2Operation()
 		args := map[string]any{
 			"msgVpnName": msgVpnName,
@@ -188,7 +189,7 @@ func (h *Handler) Handle(ctx context.Context, tc *tools.ToolContext, params map[
 		return nil
 	})
 
-	g.Go(func() error {
+	safego.Go(g, func() error {
 		reqXML, err := sempv1DetailXML(msgVpnName, queueName)
 		if err != nil {
 			return fmt.Errorf("%s: building SEMPv1 request: %w", toolName, err)
