@@ -191,6 +191,34 @@ func testOperations() map[string]*sempv2.Operation {
 				{Name: "topicEndpointName", In: "path", Type: "string", Required: true},
 			},
 		},
+		"config/createMsgVpnRestDeliveryPoint": {
+			ID:     "createMsgVpnRestDeliveryPoint",
+			Method: "POST",
+			Path:   "/SEMP/v2/__private_config__/msgVpns/{msgVpnName}/restDeliveryPoints",
+			Parameters: []sempv2.Parameter{
+				{Name: "msgVpnName", In: "path", Type: "string", Required: true},
+				{Name: "body", In: "body", Type: "object", Required: true},
+			},
+		},
+		"config/updateMsgVpnRestDeliveryPoint": {
+			ID:     "updateMsgVpnRestDeliveryPoint",
+			Method: "PATCH",
+			Path:   "/SEMP/v2/__private_config__/msgVpns/{msgVpnName}/restDeliveryPoints/{restDeliveryPointName}",
+			Parameters: []sempv2.Parameter{
+				{Name: "msgVpnName", In: "path", Type: "string", Required: true},
+				{Name: "restDeliveryPointName", In: "path", Type: "string", Required: true},
+				{Name: "body", In: "body", Type: "object", Required: true},
+			},
+		},
+		"config/deleteMsgVpnRestDeliveryPoint": {
+			ID:     "deleteMsgVpnRestDeliveryPoint",
+			Method: "DELETE",
+			Path:   "/SEMP/v2/__private_config__/msgVpns/{msgVpnName}/restDeliveryPoints/{restDeliveryPointName}",
+			Parameters: []sempv2.Parameter{
+				{Name: "msgVpnName", In: "path", Type: "string", Required: true},
+				{Name: "restDeliveryPointName", In: "path", Type: "string", Required: true},
+			},
+		},
 	}
 }
 
@@ -2928,5 +2956,240 @@ func TestExecute_DeleteTopicEndpoint_NoBodyConstructed(t *testing.T) {
 	}
 	if _, hasBody := recorded[0].args["body"]; hasBody {
 		t.Error("delete operation has no body param; no body should be constructed")
+	}
+}
+
+// createRDPTool returns the create-rdp tool definition for tests. Like
+// create-queue, msgVpnName is the only path param; restDeliveryPointName and
+// rdpConfig are assembled into the body by constructRequestBody.
+func createRDPTool() CompositeTool {
+	return CompositeTool{
+		Name:        "create-rdp",
+		Description: "Create a REST Delivery Point in a Message VPN",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "restDeliveryPointName", Type: "string", Required: true},
+			{Name: "rdpConfig", Type: "object", Required: false},
+		},
+		Steps: []Step{
+			{
+				ID:        "createRdp",
+				Operation: "config/createMsgVpnRestDeliveryPoint",
+				Args: map[string]string{
+					"msgVpnName": "{{.Params.msgVpnName}}",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// updateRDPTool returns the update-rdp tool definition for tests. Both
+// msgVpnName and restDeliveryPointName are path params (passed as step args);
+// only rdpConfig is spread into the PATCH body.
+func updateRDPTool() CompositeTool {
+	return CompositeTool{
+		Name:        "update-rdp",
+		Description: "Update an existing REST Delivery Point",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "restDeliveryPointName", Type: "string", Required: true},
+			{Name: "rdpConfig", Type: "object", Required: true},
+		},
+		Steps: []Step{
+			{
+				ID:        "updateRdp",
+				Operation: "config/updateMsgVpnRestDeliveryPoint",
+				Args: map[string]string{
+					"msgVpnName":            "{{.Params.msgVpnName}}",
+					"restDeliveryPointName": "{{.Params.restDeliveryPointName}}",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// deleteRDPTool returns the delete-rdp tool definition for tests. Both names are
+// path args and the operation carries no request body.
+func deleteRDPTool() CompositeTool {
+	return CompositeTool{
+		Name:        "delete-rdp",
+		Description: "Delete a REST Delivery Point from a Message VPN",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "restDeliveryPointName", Type: "string", Required: true},
+		},
+		Steps: []Step{
+			{
+				ID:        "deleteRdp",
+				Operation: "config/deleteMsgVpnRestDeliveryPoint",
+				Args: map[string]string{
+					"msgVpnName":            "{{.Params.msgVpnName}}",
+					"restDeliveryPointName": "{{.Params.restDeliveryPointName}}",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+func TestExecute_CreateRDP_ConstructsBody(t *testing.T) {
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), createRDPTool(), capture, map[string]any{
+		"msgVpnName":            "vpn-a",
+		"restDeliveryPointName": "rdp-1",
+		"rdpConfig": map[string]any{
+			"enabled":           true,
+			"clientProfileName": "default",
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if recorded[0].opID != "createMsgVpnRestDeliveryPoint" {
+		t.Errorf("opID = %q, want createMsgVpnRestDeliveryPoint", recorded[0].opID)
+	}
+	// msgVpnName identifies the VPN via the URL path, so it stays in args.
+	if recorded[0].args["msgVpnName"] != "vpn-a" {
+		t.Errorf("args[msgVpnName] = %v, want vpn-a", recorded[0].args["msgVpnName"])
+	}
+
+	body, ok := recorded[0].args["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected body to be a map, got %T", recorded[0].args["body"])
+	}
+	// createMsgVpnRestDeliveryPoint declares no restDeliveryPointName path param,
+	// so the RDP name rides in the body as a scalar.
+	if body["restDeliveryPointName"] != "rdp-1" {
+		t.Errorf("body[restDeliveryPointName] = %v, want rdp-1", body["restDeliveryPointName"])
+	}
+	// rdpConfig fields are spread into the body as siblings of restDeliveryPointName.
+	if body["enabled"] != true {
+		t.Errorf("body[enabled] = %v, want true", body["enabled"])
+	}
+	if body["clientProfileName"] != "default" {
+		t.Errorf("body[clientProfileName] = %v, want default", body["clientProfileName"])
+	}
+	// msgVpnName is a path param and must not leak into the create body.
+	if _, leaked := body["msgVpnName"]; leaked {
+		t.Error("msgVpnName is a path param and must not appear in the create body")
+	}
+	if _, nested := body["rdpConfig"]; nested {
+		t.Error("rdpConfig should be spread into the body, not nested under rdpConfig")
+	}
+
+	if result["createRdp"] == nil {
+		t.Error("expected createRdp result to be collected")
+	}
+}
+
+func TestExecute_CreateRDP_AlreadyExists(t *testing.T) {
+	client := newMockClient()
+	client.errors["createMsgVpnRestDeliveryPoint"] = &sempv2.SEMPError{
+		Operation:   "createMsgVpnRestDeliveryPoint",
+		StatusCode:  400,
+		SEMPCode:    10,
+		SEMPStatus:  "ALREADY_EXISTS",
+		Description: "REST Delivery Point already exists",
+		Body:        `{"meta":{"error":{"code":10,"description":"REST Delivery Point already exists","status":"ALREADY_EXISTS"}}}`,
+	}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	_, err := executor.Execute(context.Background(), createRDPTool(), client, map[string]any{
+		"msgVpnName":            "vpn-a",
+		"restDeliveryPointName": "rdp-1",
+	})
+	if err == nil {
+		t.Fatal("expected error when RDP already exists, got nil")
+	}
+
+	var sempErr *sempv2.SEMPError
+	if !errors.As(err, &sempErr) {
+		t.Errorf("expected SEMPError in error chain, got: %v", err)
+	} else if sempErr.SEMPCode != 10 {
+		t.Errorf("SEMPCode = %d, want 10 (already exists)", sempErr.SEMPCode)
+	}
+}
+
+func TestExecute_UpdateRDP_BodyExcludesPathParams(t *testing.T) {
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	_, err := executor.Execute(context.Background(), updateRDPTool(), capture, map[string]any{
+		"msgVpnName":            "vpn-a",
+		"restDeliveryPointName": "rdp-1",
+		"rdpConfig": map[string]any{
+			"enabled": false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if recorded[0].opID != "updateMsgVpnRestDeliveryPoint" {
+		t.Errorf("opID = %q, want updateMsgVpnRestDeliveryPoint", recorded[0].opID)
+	}
+	if recorded[0].args["msgVpnName"] != "vpn-a" {
+		t.Errorf("args[msgVpnName] = %v, want vpn-a", recorded[0].args["msgVpnName"])
+	}
+	if recorded[0].args["restDeliveryPointName"] != "rdp-1" {
+		t.Errorf("args[restDeliveryPointName] = %v, want rdp-1", recorded[0].args["restDeliveryPointName"])
+	}
+
+	body, ok := recorded[0].args["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected body to be a map, got %T", recorded[0].args["body"])
+	}
+	// Both names are path params; neither may be duplicated into the PATCH body.
+	if _, leaked := body["msgVpnName"]; leaked {
+		t.Error("msgVpnName is a path param and must not appear in the PATCH body")
+	}
+	if _, leaked := body["restDeliveryPointName"]; leaked {
+		t.Error("restDeliveryPointName is a path param and must not appear in the PATCH body")
+	}
+	if body["enabled"] != false {
+		t.Errorf("body[enabled] = %v, want false", body["enabled"])
+	}
+}
+
+func TestExecute_DeleteRDP_NoBodyConstructed(t *testing.T) {
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), deleteRDPTool(), capture, map[string]any{
+		"msgVpnName":            "vpn-a",
+		"restDeliveryPointName": "rdp-1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if recorded[0].opID != "deleteMsgVpnRestDeliveryPoint" {
+		t.Errorf("opID = %q, want deleteMsgVpnRestDeliveryPoint", recorded[0].opID)
+	}
+	if recorded[0].args["restDeliveryPointName"] != "rdp-1" {
+		t.Errorf("args[restDeliveryPointName] = %v, want rdp-1", recorded[0].args["restDeliveryPointName"])
+	}
+	// deleteMsgVpnRestDeliveryPoint declares no body parameter, so no body should be built.
+	if _, hasBody := recorded[0].args["body"]; hasBody {
+		t.Error("delete operation has no body param; no body should be constructed")
+	}
+
+	if result["deleteRdp"] == nil {
+		t.Error("expected deleteRdp result to be collected")
 	}
 }
