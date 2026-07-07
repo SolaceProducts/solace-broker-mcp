@@ -10,6 +10,7 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceDev/solace-broker-mcp/internal/tokenexchange"
 )
 
 // ErrUnknownBroker is returned by GetSEMPv1, GetSEMPv2, and the underlying
@@ -48,9 +49,10 @@ type BrokerPool struct {
 	// Index with strings.ToLower(alias) — mixed-case input would silently
 	// miss without it. Access must hold p.mu (RLock for read-only,
 	// Lock for read+write); bare map access faults under -race.
-	clients map[string]*BrokerClient
-	src     BrokerSource       // broker resolution surface (see BrokerSource doc)
-	sempCfg *config.SEMPConfig // shared SEMP settings
+	clients   map[string]*BrokerClient
+	src       BrokerSource              // broker resolution surface (see BrokerSource doc)
+	sempCfg   *config.SEMPConfig        // shared SEMP settings
+	exchanger *tokenexchange.Exchanger  // process-wide token exchanger; nil when no broker uses OAuth
 }
 
 // NewBrokerPool creates a BrokerPool from the server configuration. No
@@ -59,11 +61,15 @@ type BrokerPool struct {
 // The pool's broker-resolution dependency is narrowed to the BrokerSource
 // interface; SEMP knobs are taken separately because they are a distinct
 // concern (network behavior, not broker identity).
-func NewBrokerPool(cfg *config.ServerConfig) *BrokerPool {
+//
+// exchanger is the process-wide token exchanger for OAuth brokers. Pass
+// nil when no broker uses OAuth.
+func NewBrokerPool(cfg *config.ServerConfig, exchanger *tokenexchange.Exchanger) *BrokerPool {
 	return &BrokerPool{
-		clients: make(map[string]*BrokerClient),
-		src:     cfg,
-		sempCfg: &cfg.SEMP,
+		clients:   make(map[string]*BrokerClient),
+		src:       cfg,
+		sempCfg:   &cfg.SEMP,
+		exchanger: exchanger,
 	}
 }
 
@@ -101,7 +107,7 @@ func (p *BrokerPool) getOrCreate(alias string) (*BrokerClient, error) {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownBroker, alias)
 	}
 
-	client, err := NewBrokerClient(cfg.DisplayName(), cfg, p.sempCfg)
+	client, err := NewBrokerClient(cfg.DisplayName(), cfg, p.sempCfg, p.exchanger)
 	if err != nil {
 		return nil, err
 	}

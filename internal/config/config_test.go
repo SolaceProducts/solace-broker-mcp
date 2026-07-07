@@ -3347,6 +3347,127 @@ brokers:
 	}
 }
 
+// TestLoadConfig_UnreleasedBrokerOAuth_BypassOff_DefaultGuardBehavior is a
+// paired regression guard for the ENABLE_UNRELEASED_BROKER_OAUTH bypass. It
+// confirms that when the bypass env var is unset (production default), the
+// guard, its banner, and the alignment suppression behave exactly as they
+// did before the bypass was introduced. Explicitly unsets the env var so an
+// operator's exported value in the test-runner shell does not silently
+// disable this regression.
+func TestLoadConfig_UnreleasedBrokerOAuth_BypassOff_DefaultGuardBehavior(t *testing.T) {
+	t.Setenv("ENABLE_UNRELEASED_BROKER_OAUTH", "false")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: t
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+brokers:
+  staging:
+    url: "https://broker.example.com:943"
+    auth:
+      mode: oauth
+      audience: "solace-broker-staging"
+`
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(old)
+
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error (guard should fire when bypass is off)")
+	}
+	msg := err.Error()
+	out := buf.String()
+
+	if !strings.Contains(msg, "not yet supported") {
+		t.Errorf("expected OAuth-not-supported error, got: %s", msg)
+	}
+	if !strings.Contains(out, "does not yet support") {
+		t.Errorf("expected OAuth-not-supported banner to fire, got:\n%s", out)
+	}
+	if strings.Contains(out, "UNRELEASED FEATURE ENABLED") {
+		t.Errorf("bypass WARN must NOT fire when bypass is off, got:\n%s", out)
+	}
+}
+
+// TestLoadConfig_UnreleasedBrokerOAuth_BypassOn_GuardSkipped verifies the
+// bypass path: ENABLE_UNRELEASED_BROKER_OAUTH=true skips the guard, suppresses
+// the OAuth-not-supported banner, and lets the Hop 1 / Hop 2 alignment check
+// surface the real misconfiguration (Hop 1 is static, Hop 2 broker uses
+// oauth). This is the shape operators will see when the guard is removed for
+// real — the bypass is a preview of post-removal behavior.
+//
+// Also confirms the loud startup WARN fires so nobody accidentally leaves
+// this on in production.
+//
+// LIFECYCLE: delete this test alongside the guard, the bypass helper, and
+// the WARN when broker OAuth ships.
+func TestLoadConfig_UnreleasedBrokerOAuth_BypassOn_GuardSkipped(t *testing.T) {
+	t.Setenv("ENABLE_UNRELEASED_BROKER_OAUTH", "true")
+
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: t
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
+brokers:
+  staging:
+    url: "https://broker.example.com:943"
+    auth:
+      mode: oauth
+      audience: "solace-broker-staging"
+`
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(old)
+
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error (Hop1/Hop2 alignment mismatch: static Hop1 with oauth broker)")
+	}
+	msg := err.Error()
+	out := buf.String()
+
+	// The "not yet supported" guard error must NOT appear — the bypass skips
+	// it. Its presence would mean the bypass silently failed to take effect.
+	if strings.Contains(msg, "not yet supported") {
+		t.Errorf("guard error must NOT fire when bypass is on (bypass silently failed to take effect), got: %s", msg)
+	}
+	// The OAuth-not-supported banner must NOT fire — mirrors the guard being
+	// skipped. Its presence would confuse operators about whether the runtime
+	// is actually reachable.
+	if strings.Contains(out, "does not yet support") {
+		t.Errorf("OAuth-not-supported banner must NOT fire when bypass is on, got:\n%s", out)
+	}
+	// The alignment error MUST surface — this is what operators would see
+	// post-guard-removal, and the bypass previews that shape.
+	if !strings.Contains(msg, "mcp_client_auth.mode must be oauth") {
+		t.Errorf("expected Hop1/Hop2 alignment error to surface when bypass is on, got: %s", msg)
+	}
+	// The loud WARN MUST fire — it's the honest counter-signal that stops
+	// this from silently living in production.
+	if !strings.Contains(out, "UNRELEASED FEATURE ENABLED") {
+		t.Errorf("expected UNRELEASED FEATURE ENABLED warning to fire when bypass is on, got:\n%s", out)
+	}
+}
+
 func TestBrokerOAuthConfig_LogValue(t *testing.T) {
 	const (
 		secretClientID     = "mcp-client-id-VALUE"

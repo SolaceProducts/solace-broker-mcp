@@ -166,4 +166,10 @@ var (
 	// is misconfigured or the response shape has drifted; manual
 	// investigation required. Mapped to broker-side 502.
 	ErrInvalidResponse = errors.New("token exchange invalid response")
+
+	// ErrExchangeMissingSubject — the caller's context did not carry
+	// a subject token (Hop 1 token). The exchange cannot proceed
+	// without an RFC 8693 subject_token. This indicates a middleware
+	// ordering bug; retrying will not help.
+	ErrExchangeMissingSubject = errors.New("token exchange missing subject token")
 )

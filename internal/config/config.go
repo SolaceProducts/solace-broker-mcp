@@ -990,7 +990,13 @@ func validate(cfg *ServerConfig) error {
 	// becomes the operator-facing surface for Hop 1 / Hop 2 mismatches.
 	// See banner.LogOAuthNotSupported doc-comment for the full removal
 	// checklist.
-	if oauthBrokerCount > 0 {
+	//
+	// Bypass: when ENABLE_UNRELEASED_BROKER_OAUTH=true, behave as if the
+	// guard were already removed — skip the "not supported" banner and let
+	// the alignment check run so operators still see the Hop 1 / Hop 2
+	// mismatch remediation. This mirrors what post-removal behavior looks
+	// like, so E2E tests exercise the real operator-facing surface.
+	if oauthBrokerCount > 0 && !unreleasedBrokerOAuthEnabled() {
 		banner.LogOAuthNotSupported(oauthBrokerCount)
 	} else if err := validateHop1Hop2Alignment(cfg); err != nil {
 		errs = append(errs, err)
@@ -1113,18 +1119,24 @@ func validateBroker(broker *BrokerConfig, productionMode bool) []error {
 
 		// RUNTIME GUARD: schema accepts oauth mode (and the OAuth fields
 		// above) so configs that target the eventual OAuth runtime can be
-		// staged and validated structurally today. But the OAuth runtime
-		// (NewAuthenticator's oauth case, the token cache, the exchanger,
-		// the per-broker request composer) does not exist in this version.
+		// staged and validated structurally today. The runtime itself is
+		// implemented (OAuthAuthenticator + Exchanger + broker wiring) but
+		// kept gated until end-to-end validation against real IdPs is done.
 		// Reject at startup with an actionable message rather than letting
 		// the failure land on the first SEMP request. This block will be
-		// removed by the sub-ticket that wires the OAuth runtime (T6).
+		// removed by the sub-ticket that ships broker OAuth for real.
 		// See docs/superpowers/plans/oauth-token-exchange/SOL-150796-T2-config-schema.md
 		// for the rationale (no feature flag, removed when runtime lands).
-		errs = append(errs, fmt.Errorf(
-			"broker %q: auth.mode %q is recognized but not yet supported in this version; "+
-				"use basic or bearer for now",
-			alias, AuthModeOAuth))
+		//
+		// Bypass for manual E2E testing: ENABLE_UNRELEASED_BROKER_OAUTH=true
+		// skips this error. See unreleasedBrokerOAuthEnabled — the WARN it
+		// triggers at startup is the honest counter-signal.
+		if !unreleasedBrokerOAuthEnabled() {
+			errs = append(errs, fmt.Errorf(
+				"broker %q: auth.mode %q is recognized but not yet supported in this version; "+
+					"use basic or bearer for now",
+				alias, AuthModeOAuth))
+		}
 	}
 
 	return errs
@@ -1414,5 +1426,35 @@ func applyEnvOverrides(cfg *ServerConfig) error {
 	// they load in the same phase as MCP_SERVER_PORT, before validate() runs.
 	applyObservabilityEnv(cfg)
 
+	// Unreleased broker-OAuth runtime opt-in — for manual end-to-end testing
+	// only. Emit a loud WARN so operators cannot accidentally leave this on
+	// in production; the WARN fires once at startup regardless of how many
+	// brokers use oauth mode. See unreleasedBrokerOAuthEnabled and the guard
+	// site in validateBroker for the full picture.
+	if unreleasedBrokerOAuthEnabled() {
+		slog.Warn("UNRELEASED FEATURE ENABLED: broker OAuth is bypassed for manual E2E testing; not for production use",
+			slog.String("env_var", envEnableUnreleasedBrokerOAuth))
+	}
+
 	return nil
+}
+
+// envEnableUnreleasedBrokerOAuth is the env var that opts into the unreleased
+// broker-OAuth runtime. Undocumented in operator-facing docs (broker-config.example.yaml,
+// docs/authentication.md, docs/configuration.md, CHANGELOG.md) by design —
+// this is a testing hatch, not a feature toggle. Remove alongside the guard
+// in validateBroker when broker OAuth ships.
+const envEnableUnreleasedBrokerOAuth = "ENABLE_UNRELEASED_BROKER_OAUTH"
+
+// unreleasedBrokerOAuthEnabled reports whether ENABLE_UNRELEASED_BROKER_OAUTH
+// is set truthy. Uses the same tolerant-parse behavior as the observability
+// flags (unparseable value → WARN + default of false) so a typo cannot
+// silently open the door.
+//
+// LIFECYCLE: this function, its constant, the WARN in applyEnvOverrides, and
+// the two call sites (validateBroker guard, LogOAuthNotSupported banner branch)
+// are one linked lifecycle. Delete all five together when broker OAuth ships
+// and the guard is removed for real.
+func unreleasedBrokerOAuthEnabled() bool {
+	return envBool(envEnableUnreleasedBrokerOAuth, false)
 }

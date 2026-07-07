@@ -22,6 +22,7 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceDev/solace-broker-mcp/internal/tokenexchange"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -112,6 +113,7 @@ func (m *ToolManager) buildErrorResult(err error) *mcp.CallToolResult {
 	var sempv2Err *sempv2.SEMPError
 	var sempv1Err *sempv1.Error
 	var retriesErr *resilience.RetriesExhaustedError
+	var exchErr *tokenexchange.ExchangeError
 
 	switch {
 	case errors.As(err, &sempv2Err):
@@ -134,6 +136,8 @@ func (m *ToolManager) buildErrorResult(err error) *mcp.CallToolResult {
 			structured["status"] = retriesErr.StatusCode
 		}
 		structured["attempts"] = retriesErr.Attempts
+	case errors.As(err, &exchErr):
+		structured["error_source"] = "token_exchange"
 	}
 
 	// Content text mirrors the agent-facing message, with any suggestions
@@ -165,6 +169,7 @@ func buildErrorMessage(err error) (string, []string) {
 	var retriesErr *resilience.RetriesExhaustedError
 	var sempv2Err *sempv2.SEMPError
 	var sempv1Err *sempv1.Error
+	var exchErr *tokenexchange.ExchangeError
 
 	var message string
 	var status, code int // broker HTTP status and comRc_t code, for suggestions
@@ -177,6 +182,9 @@ func buildErrorMessage(err error) (string, []string) {
 		return fmt.Sprintf(
 			"Request failed after %d attempts (HTTP %d). Internal retries exhausted; try again later.",
 			retriesErr.Attempts, retriesErr.StatusCode), nil
+
+	case errors.As(err, &exchErr):
+		return buildExchangeErrorMessage(exchErr), nil
 
 	case errors.As(err, &sempv2Err):
 		status, code = sempv2Err.StatusCode, sempv2Err.SEMPCode
@@ -266,12 +274,30 @@ func buildSEMPv2Message(err *sempv2.SEMPError) string {
 	return msg
 }
 
+func buildExchangeErrorMessage(err *tokenexchange.ExchangeError) string {
+	switch {
+	case errors.Is(err, tokenexchange.ErrExchangeRejected):
+		return "Authentication failed: the identity provider rejected the token exchange. Contact your administrator."
+	case errors.Is(err, tokenexchange.ErrExchangeTransport):
+		return "Authentication failed: unable to reach the identity provider. Try again shortly."
+	case errors.Is(err, tokenexchange.ErrInvalidResponse):
+		return "Authentication failed: the identity provider returned an unexpected response. Contact your administrator."
+	case errors.Is(err, tokenexchange.ErrExchangeMissingSubject):
+		return "Authentication failed: no identity token was found for the current session. Contact your administrator."
+	default:
+		return "Authentication failed: an unexpected error occurred during token exchange. Contact your administrator."
+	}
+}
+
 // isRetryable returns true for errors that represent transient conditions where
 // the same request might succeed later: exhausted internal retries (the
 // resilience layer only exhausts on genuinely transient HTTP statuses, e.g.
 // 429/503), a live HTTP 429 or 503, or a transient comRc_t code (229 TIME_OUT).
 // All other SEMP/envelope errors are deterministic and non-retryable.
 func isRetryable(err error) bool {
+	if errors.Is(err, tokenexchange.ErrExchangeTransport) {
+		return true
+	}
 	var retriesErr *resilience.RetriesExhaustedError
 	if errors.As(err, &retriesErr) {
 		return true

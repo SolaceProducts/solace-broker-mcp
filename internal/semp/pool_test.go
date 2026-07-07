@@ -66,7 +66,7 @@ func TestBrokerPool_GetSEMPv2_ValidAlias(t *testing.T) {
 	}))
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL), nil)
 
 	client, err := pool.GetSEMPv2("prod-us")
 	if err != nil {
@@ -81,7 +81,7 @@ func TestBrokerPool_GetSEMPv2_UnknownAlias(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL), nil)
 
 	_, err := pool.GetSEMPv2("nonexistent")
 	if err == nil {
@@ -98,7 +98,7 @@ func TestBrokerPool_LazyCreation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL), nil)
 
 	// No requests should have been made yet — clients are lazy.
 	if requestCount.Load() != 0 {
@@ -125,7 +125,7 @@ func TestBrokerPool_SharedInstance(t *testing.T) {
 	}))
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL), nil)
 
 	client1, err := pool.GetSEMPv2("prod-us")
 	if err != nil {
@@ -151,7 +151,7 @@ func TestBrokerPool_ConcurrentFirstAccess(t *testing.T) {
 	}))
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL), nil)
 
 	const goroutines = 50
 	clients := make([]interface{}, goroutines)
@@ -185,7 +185,7 @@ func TestBrokerPool_Aliases(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL), nil)
 
 	aliases := pool.Aliases()
 	if len(aliases) != 2 {
@@ -213,7 +213,7 @@ func TestBrokerPool_GetSEMPv1_ValidAlias(t *testing.T) {
 	server := newV1TestServer()
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL), nil)
 
 	client, err := pool.GetSEMPv1("prod-us")
 	if err != nil {
@@ -230,7 +230,7 @@ func TestBrokerPool_GetSEMPv1_UnknownAlias(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL), nil)
 
 	_, err := pool.GetSEMPv1("nonexistent")
 	if err == nil {
@@ -251,7 +251,7 @@ func TestBrokerPool_GetSEMPv1_LazyCreation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL), nil)
 
 	// No requests should have been made yet — clients are lazy.
 	if requestCount.Load() != 0 {
@@ -278,7 +278,7 @@ func TestBrokerPool_GetSEMPv1_SharedInstance(t *testing.T) {
 	server := newV1TestServer()
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL), nil)
 
 	client1, err := pool.GetSEMPv1("prod-us")
 	if err != nil {
@@ -304,7 +304,7 @@ func TestBrokerPool_GetSEMPv1_ConcurrentFirstAccess(t *testing.T) {
 	server := newV1TestServer()
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL), nil)
 
 	const goroutines = 50
 	clients := make([]interface{}, goroutines)
@@ -341,7 +341,7 @@ func TestBrokerPool_Close_BeforeAnyAccess(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL), nil)
 	pool.Close() // must not panic
 }
 
@@ -357,7 +357,7 @@ func TestBrokerPool_Close_AfterLazyCreation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL), nil)
 
 	// Force one client into existence (lazy creation path).
 	if _, err := pool.GetSEMPv2("prod-us"); err != nil {
@@ -390,7 +390,7 @@ func TestBrokerPool_SharedBrokerClientAcrossProtocols(t *testing.T) {
 	server := newV1TestServer()
 	defer server.Close()
 
-	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL))
+	pool := semp.NewBrokerPool(newTestServerConfig(t, server.URL), nil)
 
 	v1First, err := pool.GetSEMPv1("prod-us")
 	if err != nil {
@@ -430,7 +430,7 @@ func TestBrokerPool_GetSEMPv2_CaseInsensitive(t *testing.T) {
 	defer server.Close()
 
 	cfg := writeTestConfig(t, [2]string{"ProdEast", server.URL})
-	pool := semp.NewBrokerPool(cfg)
+	pool := semp.NewBrokerPool(cfg, nil)
 
 	first, err := pool.GetSEMPv2("ProdEast")
 	if err != nil {
@@ -458,7 +458,7 @@ func TestBrokerPool_Aliases_PreservesDisplayCasing(t *testing.T) {
 		[2]string{"ProdEast", server.URL},
 		[2]string{"DevWest", server.URL},
 	)
-	pool := semp.NewBrokerPool(cfg)
+	pool := semp.NewBrokerPool(cfg, nil)
 
 	got := pool.Aliases()
 	want := []string{"DevWest", "ProdEast"}

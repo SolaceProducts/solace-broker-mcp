@@ -308,7 +308,12 @@ tools:
     description: >
       List all REST Delivery Points in a Message VPN with their enabled state,
       up/down status, and last failure reason. Use this to discover which RDPs
-      exist and identify any that are down. For detailed RDP status including
+      exist and identify any that are down. The response includes a summary
+      block with downCount, disabledCount, downButEnabledCount (RDPs that are
+      down but not admin-disabled — the unexpectedly-down set), and
+      byLastFailureReason (counts of unexpectedly-down RDPs — enabled but not
+      up — grouped by their failure reason; admin-disabled RDPs and recovered
+      RDPs with stale reasons are excluded). For detailed RDP status including
       consumers and queue bindings, use get-rdp-status.
     annotations:
       readOnly: true
@@ -328,9 +333,17 @@ tools:
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           count: "100"
-          select: "clientName, enabled, lastFailureReason, lastFailureTime, msgVpnName, restDeliveryPointName, up"
+        select:
+          - clientName
+          - enabled
+          - lastFailureReason
+          - lastFailureTime
+          - msgVpnName
+          - restDeliveryPointName
+          - up
     result:
-      strategy: collect
+      strategy: postProcess
+      postProcess: listRdps
 
   - name: get-replication-status
     description: >

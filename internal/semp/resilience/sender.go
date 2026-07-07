@@ -65,7 +65,7 @@ type Sender struct {
 // supplies one.
 func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authenticator, brokerURL string, sem Semaphore) *Sender {
 	if authn == nil {
-		panic("resilience.New: authn must be non-nil; construct via auth.NewAuthenticator in semp.NewBrokerClient")
+		panic("resilience.New: authn must be non-nil; construct via semp.newAuthenticator in semp.NewBrokerClient")
 	}
 	if sem == nil {
 		panic("resilience.New: sem must be non-nil; share one per broker via semp.NewBrokerClient")

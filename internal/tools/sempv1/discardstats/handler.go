@@ -38,6 +38,7 @@ import (
 	"encoding/xml"
 	"fmt"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/safego"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
 	"golang.org/x/sync/errgroup"
@@ -160,10 +161,10 @@ func (h *Handler) handleBrokerWide(ctx context.Context, client sempv1.Client) (*
 	)
 
 	g, gCtx := errgroup.WithContext(ctx)
-	g.Go(func() error {
+	safego.Go(g, func() error {
 		return executeAndDecode(gCtx, client, statsClientXML, "client", &clientResp)
 	})
-	g.Go(func() error {
+	safego.Go(g, func() error {
 		return executeAndDecode(gCtx, client, spoolStatsXML, "spool", &spoolResp)
 	})
 	if err := g.Wait(); err != nil {

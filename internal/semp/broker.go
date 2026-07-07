@@ -12,6 +12,7 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceDev/solace-broker-mcp/internal/tokenexchange"
 )
 
 // BrokerClient holds protocol-specific clients for a single broker. Created
@@ -39,21 +40,16 @@ type BrokerClient struct {
 // protocol client separately.
 //
 // NewBrokerClient is the single builder of per-broker Authenticators. It
-// constructs exactly one Authenticator from brokerCfg.Auth and passes the
-// same pointer to both protocol clients. Layers below this one never call
-// auth.NewAuthenticator.
-func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) (*BrokerClient, error) {
-	// Only basic auth uses session cookies; other modes send credentials
-	// on every request and the broker never sets Set-Cookie headers.
-	var jar *resilience.SafeCookieJar
-	if brokerCfg.Auth.Mode == config.AuthModeBasic {
-		var err error
-		jar, err = resilience.NewSafeCookieJar()
-		if err != nil {
-			return nil, fmt.Errorf("creating cookie jar for broker %q: %w", alias, err)
-		}
+// delegates to newAuthenticator to construct exactly one Authenticator
+// from brokerCfg.Auth and passes the same pointer to both protocol clients.
+// newAuthenticator is a pure dispatcher; each Authenticator constructor
+// owns its own precondition checks.
+func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, exchanger *tokenexchange.Exchanger) (*BrokerClient, error) {
+	jar, err := newCookieJar(alias, brokerCfg.Auth.Mode)
+	if err != nil {
+		return nil, err
 	}
-	authn, err := auth.NewAuthenticator(brokerCfg.Auth, jar)
+	authn, err := newAuthenticator(alias, brokerCfg, jar, exchanger)
 	if err != nil {
 		return nil, fmt.Errorf("creating authenticator for broker %q: %w", alias, err)
 	}
@@ -90,4 +86,40 @@ func (b *BrokerClient) SEMPv2() sempv2.Client {
 func (b *BrokerClient) Close() {
 	b.sempV1Client.Close()
 	b.sempV2Client.Close()
+}
+
+// newCookieJar returns a SafeCookieJar for basic auth brokers, nil for
+// all other modes. Only basic auth uses session cookies; other modes
+// send credentials on every request and the broker never sets
+// Set-Cookie headers.
+func newCookieJar(alias string, mode string) (*resilience.SafeCookieJar, error) {
+	if mode != config.AuthModeBasic {
+		return nil, nil
+	}
+	jar, err := resilience.NewSafeCookieJar()
+	if err != nil {
+		return nil, fmt.Errorf("creating cookie jar for broker %q: %w", alias, err)
+	}
+	return jar, nil
+}
+
+// newAuthenticator builds the per-broker Authenticator from the broker's
+// auth config. Each mode has its own constructor with mode-specific deps;
+// this switch is the single dispatch point so NewBrokerClient stays
+// focused on wiring clients.
+func newAuthenticator(alias string, brokerCfg *config.BrokerConfig, jar *resilience.SafeCookieJar, exchanger *tokenexchange.Exchanger) (auth.Authenticator, error) {
+	cfg := brokerCfg.Auth
+	switch cfg.Mode {
+	case config.AuthModeBasic:
+		if jar == nil {
+			return nil, fmt.Errorf("basic auth requires a cookie jar for broker %q", alias)
+		}
+		return auth.NewBasicAuthenticator(cfg.Username, cfg.Password, jar), nil
+	case config.AuthModeBearer:
+		return auth.NewBearerAuthenticator(cfg.Token), nil
+	case config.AuthModeOAuth:
+		return auth.NewOAuthAuthenticator(exchanger, cfg.Audience, cfg.Scopes, alias), nil
+	default:
+		return nil, fmt.Errorf("unsupported auth mode %q for broker %q", cfg.Mode, alias)
+	}
 }
