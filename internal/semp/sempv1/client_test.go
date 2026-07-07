@@ -446,6 +446,10 @@ func TestHTTPClient_LogValue_ExcludesCredentials(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer srv.Close()
 
+	basicJar, err := resilience.NewSafeCookieJar()
+	if err != nil {
+		t.Fatalf("NewSafeCookieJar: %v", err)
+	}
 	cases := []struct {
 		name    string
 		authn   auth.Authenticator
@@ -454,7 +458,8 @@ func TestHTTPClient_LogValue_ExcludesCredentials(t *testing.T) {
 	}{
 		{
 			name:    "basic auth credentials are not logged",
-			authn:   auth.NewBasicAuthenticator("SECRET_USERNAME_VAL", "SECRET_PASSWORD_VAL", nil),
+			authn:   auth.NewBasicAuthenticator("SECRET_USERNAME_VAL", "SECRET_PASSWORD_VAL", basicJar),
+			jar:     basicJar,
 			secrets: []string{"SECRET_USERNAME_VAL", "SECRET_PASSWORD_VAL"},
 		},
 		{

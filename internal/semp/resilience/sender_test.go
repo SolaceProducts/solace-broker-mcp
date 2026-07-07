@@ -366,9 +366,9 @@ func TestSender_RateLimiter_PerBrokerIndependence(t *testing.T) {
 	}))
 	defer serverB.Close()
 
-	senderA := newTestSender(t, serverA.Client(), auth.NewBasicAuthenticator("admin", "secret", nil), 0)
+	senderA := newTestSender(t, serverA.Client(), auth.NewBasicAuthenticator("admin", "secret", mustNewSafeCookieJar(t)), 0)
 	senderA.brokerURL = serverA.URL
-	senderB := newTestSender(t, serverB.Client(), auth.NewBasicAuthenticator("admin", "secret", nil), 0)
+	senderB := newTestSender(t, serverB.Client(), auth.NewBasicAuthenticator("admin", "secret", mustNewSafeCookieJar(t)), 0)
 	senderB.brokerURL = serverB.URL
 
 	// Block sender A's rate limiter.
