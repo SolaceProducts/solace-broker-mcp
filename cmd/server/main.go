@@ -388,13 +388,26 @@ func registerMixedTools(mgr *tools.ToolManager) {
 	mgr.Register(queuemetrics.NewHandler())
 }
 
-// newTokenExchanger builds the process-wide Exchanger from the global
-// broker_oauth config block. Returns (nil, nil) when oauthCfg is nil,
-// meaning no broker uses OAuth and no exchanger is needed.
+// newTokenExchanger builds the process-wide Exchanger and the IdP HTTP
+// client it uses. It does no gating of its own — the caller decides
+// whether to invoke it.
+//
+// PRECONDITION: the caller has already verified that the Hop-2 OAuth
+// runtime should run in this process, i.e. ServerConfig.Hop2OAuthActive()
+// returned true and oauthCfg is the (non-nil) global broker_oauth block.
+// Calling this function when the runtime is not active will construct
+// resources for a path that has no consumer, which is exactly what the
+// top-level gate in main() is there to prevent.
+//
+// Constructing this exchanger allocates: an *http.Client for the IdP,
+// a *tokenexchange.Exchanger holding the client secret in memory, and
+// a singleflight.Group for request deduplication. None of these make an
+// outbound network call at construction time; the first IdP request
+// happens when a request-path goroutine calls Exchanger.Exchange().
+// (idpclient.NewHTTPClient does read local trust-store material —
+// SSL_CERT_FILE and the system cert pool — which is filesystem/OS I/O,
+// but not network.)
 func newTokenExchanger(oauthCfg *config.BrokerOAuthConfig) (*tokenexchange.Exchanger, error) {
-	if oauthCfg == nil {
-		return nil, nil
-	}
 	httpClient, err := idpclient.NewHTTPClient()
 	if err != nil {
 		return nil, fmt.Errorf("creating IdP HTTP client: %w", err)
@@ -511,12 +524,22 @@ func main() {
 	slog.Info("parsed OpenAPI specs",
 		slog.Int("operation_count", len(operations)))
 
-	// 3. Build token exchanger (if any broker uses OAuth)
-	exchanger, err := newTokenExchanger(cfg.BrokerOAuth)
-	if err != nil {
-		slog.Error("token exchanger construction failed",
-			slog.String("error", err.Error()))
-		os.Exit(1)
+	// 3. Build token exchanger only when the Hop-2 OAuth runtime is fully
+	//    active — three preconditions must all hold: the unreleased-feature
+	//    flag is set, broker_oauth: is populated, AND at least one broker
+	//    uses auth.mode: oauth. When any is missing, exchanger stays nil;
+	//    the broker pool constructs basic/bearer authenticators only, and
+	//    no Hop-2 OAuth resources exist in this process. See
+	//    ServerConfig.Hop2OAuthActive for the full contract, including
+	//    lifecycle notes for ship time.
+	var exchanger *tokenexchange.Exchanger
+	if cfg.Hop2OAuthActive() {
+		exchanger, err = newTokenExchanger(cfg.BrokerOAuth)
+		if err != nil {
+			slog.Error("token exchanger construction failed",
+				slog.String("error", err.Error()))
+			os.Exit(1)
+		}
 	}
 
 	// 4. Create broker pool

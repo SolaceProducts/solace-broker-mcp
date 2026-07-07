@@ -273,6 +273,42 @@ func (c *ServerConfig) BrokerAliases() []string {
 	return out
 }
 
+// Hop2OAuthActive reports whether the Hop-2 (MCP server ↔ broker) OAuth
+// runtime should be constructed for this process. It is true only when
+// ALL THREE preconditions hold:
+//
+//  1. ENABLE_UNRELEASED_BROKER_OAUTH is set truthy (the operator has
+//     explicitly opted into the unreleased runtime for testing).
+//  2. The global broker_oauth: block is populated (IdP coordinates
+//     exist for token exchange).
+//  3. At least one broker has auth.mode: oauth (there is actually
+//     something for the runtime to do).
+//
+// If any of the three is missing, cmd/server/main.go builds no Hop-2
+// resources — no IdP HTTP client, no token exchanger, no in-memory copy
+// of the client secret. This is what turns the flag's meaning from "the
+// runtime is compiled in" into "the runtime is live in this process."
+//
+// LIFECYCLE: at ship time, delete only the first precondition (the flag
+// check). The other two remain — they are the correct final gate for the
+// post-ship runtime, since building an exchanger for a config that
+// declares broker_oauth: but does not consume it would be wasteful even
+// then. See the LIFECYCLE comment on unreleasedBrokerOAuthEnabled.
+func (c *ServerConfig) Hop2OAuthActive() bool {
+	if !unreleasedBrokerOAuthEnabled() {
+		return false
+	}
+	if c.BrokerOAuth == nil {
+		return false
+	}
+	for _, b := range c.brokers {
+		if b.Auth.Mode == AuthModeOAuth {
+			return true
+		}
+	}
+	return false
+}
+
 type MCPClientAuthConfig struct {
 	Issuer      string `yaml:"issuer"`       // IdP issuer URL — required when mode == "oauth"
 	Audience    string `yaml:"audience"`     // Expected 'aud' claim value — required when mode == "oauth"
@@ -1014,18 +1050,18 @@ func validate(cfg *ServerConfig) error {
 	// stays callable and is exercised by TestValidateHop1Hop2Alignment_Direct
 	// so the invariant does not rot while it is sleeping in validate().
 	//
+	// FLAG CONTRACT: ENABLE_UNRELEASED_BROKER_OAUTH does not change
+	// schema/shape validation — malformed OAuth YAML is rejected either
+	// way. It only gates the temporary not-yet-supported guard and the
+	// banner branch below (see the if/else on unreleasedBrokerOAuthEnabled).
+	// Runtime construction is a separate concern; see ServerConfig.Hop2OAuthActive.
+	//
 	// LIFECYCLE: when the OAuth runtime ships (SOL-150070 follow-up sub-
 	// tickets), delete the whole `if oauthBrokerCount > 0` arm — the
 	// `else if` then runs unconditionally and the alignment check
 	// becomes the operator-facing surface for Hop 1 / Hop 2 mismatches.
 	// See banner.LogOAuthNotSupported doc-comment for the full removal
 	// checklist.
-	//
-	// Bypass: when ENABLE_UNRELEASED_BROKER_OAUTH=true, behave as if the
-	// guard were already removed — skip the "not supported" banner and let
-	// the alignment check run so operators still see the Hop 1 / Hop 2
-	// mismatch remediation. This mirrors what post-removal behavior looks
-	// like, so E2E tests exercise the real operator-facing surface.
 	if oauthBrokerCount > 0 && !unreleasedBrokerOAuthEnabled() {
 		banner.LogOAuthNotSupported(oauthBrokerCount)
 	} else if err := validateHop1Hop2Alignment(cfg); err != nil {
@@ -1481,10 +1517,16 @@ const envEnableUnreleasedBrokerOAuth = "ENABLE_UNRELEASED_BROKER_OAUTH"
 // flags (unparseable value → WARN + default of false) so a typo cannot
 // silently open the door.
 //
-// LIFECYCLE: this function, its constant, the WARN in applyEnvOverrides, and
-// the two call sites (validateBroker guard, LogOAuthNotSupported banner branch)
-// are one linked lifecycle. Delete all five together when broker OAuth ships
-// and the guard is removed for real.
+// External callers (cmd/server/main.go) do not consult this directly — they
+// call ServerConfig.Hop2OAuthActive, which combines this flag with the
+// structural preconditions for the runtime.
+//
+// LIFECYCLE: this function, its constant, the WARN in applyEnvOverrides,
+// and the three call sites (validateBroker guard, LogOAuthNotSupported
+// banner branch, Hop2OAuthActive method) are one linked lifecycle. When
+// broker OAuth ships, delete the flag check from Hop2OAuthActive (the
+// structural preconditions remain), delete the validateBroker guard and
+// the banner branch, and then delete this function and its constant.
 func unreleasedBrokerOAuthEnabled() bool {
 	return envBool(envEnableUnreleasedBrokerOAuth, false)
 }

@@ -3536,6 +3536,82 @@ brokers:
 	}
 }
 
+// TestServerConfig_Hop2OAuthActive pins the four cases that define the
+// method's contract: all three preconditions true → returns true; and each
+// precondition individually flipped false → returns false. Together these
+// four assertions prove each precondition is load-bearing — a future
+// refactor that silently drops one will fail its corresponding case.
+//
+// This test is deliberately behavioral, not exhaustive: covering all
+// 2×2×2 = 8 truth-table cells would add redundancy without adding signal
+// (once each precondition is shown to be load-bearing, the interaction
+// terms follow from AND semantics).
+//
+// LIFECYCLE: at ship time, when the flag portion of Hop2OAuthActive is
+// removed, the "flag off" subtest will need to be deleted along with the
+// flag check itself. The other three subtests remain valid — the two
+// structural preconditions survive the flag removal.
+func TestServerConfig_Hop2OAuthActive(t *testing.T) {
+	// Minimal valid broker_oauth block. Not validated here — Hop2OAuthActive
+	// only checks for non-nil, so field contents are irrelevant.
+	validBrokerOAuth := func() *BrokerOAuthConfig {
+		return &BrokerOAuthConfig{
+			TokenURL: "https://idp.example.com/token",
+			ClientID: "mcp-server",
+		}
+	}
+	oauthBroker := func() *BrokerConfig {
+		return &BrokerConfig{Auth: AuthConfig{Mode: AuthModeOAuth}}
+	}
+	basicBroker := func() *BrokerConfig {
+		return &BrokerConfig{Auth: AuthConfig{Mode: AuthModeBasic, Username: "u", Password: "p"}}
+	}
+
+	t.Run("all three preconditions true → active", func(t *testing.T) {
+		t.Setenv("ENABLE_UNRELEASED_BROKER_OAUTH", "true")
+		cfg := &ServerConfig{
+			BrokerOAuth: validBrokerOAuth(),
+			brokers:     map[string]*BrokerConfig{"a": oauthBroker()},
+		}
+		if !cfg.Hop2OAuthActive() {
+			t.Fatal("expected Hop2OAuthActive to return true when flag is on, broker_oauth is set, and at least one broker uses oauth mode")
+		}
+	})
+
+	t.Run("flag off → inactive (even with other preconditions met)", func(t *testing.T) {
+		t.Setenv("ENABLE_UNRELEASED_BROKER_OAUTH", "false")
+		cfg := &ServerConfig{
+			BrokerOAuth: validBrokerOAuth(),
+			brokers:     map[string]*BrokerConfig{"a": oauthBroker()},
+		}
+		if cfg.Hop2OAuthActive() {
+			t.Fatal("expected Hop2OAuthActive to return false when flag is off — flag must be load-bearing")
+		}
+	})
+
+	t.Run("broker_oauth: nil → inactive (even with flag on and oauth broker)", func(t *testing.T) {
+		t.Setenv("ENABLE_UNRELEASED_BROKER_OAUTH", "true")
+		cfg := &ServerConfig{
+			BrokerOAuth: nil,
+			brokers:     map[string]*BrokerConfig{"a": oauthBroker()},
+		}
+		if cfg.Hop2OAuthActive() {
+			t.Fatal("expected Hop2OAuthActive to return false when broker_oauth: is nil — the global block must be load-bearing")
+		}
+	})
+
+	t.Run("no broker uses oauth mode → inactive (even with flag on and broker_oauth set)", func(t *testing.T) {
+		t.Setenv("ENABLE_UNRELEASED_BROKER_OAUTH", "true")
+		cfg := &ServerConfig{
+			BrokerOAuth: validBrokerOAuth(),
+			brokers:     map[string]*BrokerConfig{"a": basicBroker()},
+		}
+		if cfg.Hop2OAuthActive() {
+			t.Fatal("expected Hop2OAuthActive to return false when no broker uses auth.mode: oauth — at-least-one-broker precondition must be load-bearing")
+		}
+	})
+}
+
 func TestBrokerOAuthConfig_LogValue(t *testing.T) {
 	const (
 		secretClientID     = "mcp-client-id-VALUE"
