@@ -5,7 +5,8 @@
 # This script: starts the MCP server, creates fixtures, runs cleanup on exit.
 
 set -euo pipefail
-source "$(dirname "$0")/helpers.sh"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/helpers.sh"
 
 # ── Cleanup on exit ─────────────────────────────────────────────────────────
 # cleanup_fixtures handles ordering internally: it calls stop_broker_drivers
