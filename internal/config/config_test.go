@@ -951,7 +951,7 @@ mcp_client_auth:
 	}
 }
 
-func TestLoadConfig_RejectsInsecureSkipVerifyInProductionModeWithMixedCaseMode(t *testing.T) {
+func TestLoadConfig_NormalizesModeBeforeBrokerChecks(t *testing.T) {
 	// Regression: mcp_client_auth.mode is normalized to lowercase inside
 	// validate(). The insecure-broker-TLS refusal keys off IsProductionMode(),
 	// which compares against the lowercase "oauth" constant. If normalization
