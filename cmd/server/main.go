@@ -296,15 +296,44 @@ func startServer(srv *http.Server, tlsCertFile, tlsKeyFile string) <-chan error 
 // the full shutdownTimeout to drain in-flight requests, exactly as the K8s
 // terminationGracePeriodSeconds calculation in deploy/kubernetes/deployment.yaml
 // assumes (grace = drainDelay + shutdownTimeout + buffer).
-func drainAndShutdown(srv shutdowner, readiness *health.ReadinessState, drainDelay, shutdownTimeout time.Duration) error {
+//
+// forceSig carries a SECOND shutdown signal (SOL-151437). A second SIGINT/SIGTERM
+// arriving while the drain window is sleeping short-circuits the rest of the
+// sequence: forceClose drops in-flight connections and we return immediately,
+// skipping the graceful wait. Readiness has already flipped to 503 above, so a
+// forced exit still leaves /readyz correct. A nil forceSig (the startup-error
+// path, which never drains) simply never fires that select case.
+func drainAndShutdown(srv shutdowner, readiness *health.ReadinessState, drainDelay, shutdownTimeout time.Duration, forceSig <-chan os.Signal) error {
 	readiness.SetShuttingDown()
 	slog.Info("draining before shutdown",
 		slog.String("reason", "signal"),
 		slog.Duration("drain_delay", drainDelay))
 	if drainDelay > 0 {
-		time.Sleep(drainDelay)
+		timer := time.NewTimer(drainDelay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			// Drain window elapsed normally; fall through to the graceful wait.
+		case sig := <-forceSig:
+			forceClose(srv, sig)
+			return nil
+		}
 	}
-	return gracefulShutdown(srv, shutdownTimeout)
+	return gracefulShutdown(srv, shutdownTimeout, forceSig)
+}
+
+// forceClose is the shared "second signal" reaction (SOL-151437): a single WARN
+// line naming the triggering signal, then srv.Close() to drop in-flight
+// connections immediately. Close is the only way to actually drop connections —
+// cancelling Shutdown's context would merely stop the wait and leave them open.
+// http.Server.Close is safe to call even if Shutdown is concurrently running or
+// has already returned, so this never double-closes.
+func forceClose(srv shutdowner, sig os.Signal) {
+	slog.Warn("second signal received, forcing immediate shutdown; in-flight connections dropped without draining",
+		slog.String("signal", sig.String()))
+	if err := srv.Close(); err != nil {
+		slog.Error("forced close failed", slog.String("error", err.Error()))
+	}
 }
 
 // drainDelayForSignal returns the drain delay to apply for the received
@@ -343,17 +372,35 @@ type shutdowner interface {
 // moment Shutdown begins. On the signal path this happens AFTER drainAndShutdown
 // has already slept the drain delay, so the drain delay never consumes any of
 // the shutdown budget.
-func gracefulShutdown(srv shutdowner, timeout time.Duration) error {
+//
+// forceSig carries a SECOND shutdown signal (SOL-151437). Shutdown runs in a
+// goroutine so we can select between it completing and a second signal arriving:
+// on a second signal forceClose drops in-flight connections (which also unblocks
+// the in-flight Shutdown) and we return immediately. The result channel is
+// buffered so that goroutine can always send and exit even after we have
+// returned via the force path — no goroutine leak. A nil forceSig (the
+// startup-error path) never fires that case, so that path keeps its exact
+// prior behavior, including the Shutdown-timed-out forced-close fallback.
+func gracefulShutdown(srv shutdowner, timeout time.Duration, forceSig <-chan os.Signal) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	err := srv.Shutdown(ctx)
-	if err != nil {
-		slog.Error("shutdown timed out, forcing close", slog.String("error", err.Error()))
-		if closeErr := srv.Close(); closeErr != nil {
-			slog.Error("forced close failed", slog.String("error", closeErr.Error()))
+
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- srv.Shutdown(ctx) }()
+
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			slog.Error("shutdown timed out, forcing close", slog.String("error", err.Error()))
+			if closeErr := srv.Close(); closeErr != nil {
+				slog.Error("forced close failed", slog.String("error", closeErr.Error()))
+			}
 		}
+		return err
+	case sig := <-forceSig:
+		forceClose(srv, sig)
+		return nil
 	}
-	return err
 }
 
 // registerSEMPv1Tools attaches every Go-native SEMPv1 tool handler to mgr.
@@ -673,7 +720,12 @@ func main() {
 	addr := cfg.BindAddress()
 	httpServer := newHTTPServer(addr, rootHandler)
 
-	done := make(chan os.Signal, 1)
+	// Buffered at 2 (SOL-151437) so a rapidly delivered SECOND signal is not
+	// dropped in the window between main()'s first receive and the shutdown
+	// path arming its own select on this channel. signal.Notify does a
+	// non-blocking send, so a full buffer would silently discard the "I mean
+	// it, exit now" signal.
+	done := make(chan os.Signal, 2)
 	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
 
 	serverErr := startServer(httpServer, cfg.TLSCertFile, cfg.TLSKeyFile)
@@ -721,9 +773,13 @@ func main() {
 
 	if fromSignal {
 		drainDelay := drainDelayForSignal(receivedSignal, time.Duration(cfg.Observability.ShutdownDrainDelayS)*time.Second)
-		_ = drainAndShutdown(httpServer, readiness, drainDelay, shutdownTimeout)
+		// Pass the still-registered signal channel so a second SIGINT/SIGTERM
+		// during the drain or graceful wait forces an immediate close (SOL-151437).
+		_ = drainAndShutdown(httpServer, readiness, drainDelay, shutdownTimeout, done)
 	} else {
-		_ = gracefulShutdown(httpServer, shutdownTimeout)
+		// Startup-error path never began serving, so there is nothing to drain
+		// and no second-signal semantics: pass a nil force channel.
+		_ = gracefulShutdown(httpServer, shutdownTimeout, nil)
 	}
 
 	slog.Info("server stopped")
