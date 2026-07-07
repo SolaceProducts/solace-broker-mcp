@@ -31,20 +31,19 @@ func rdp(up, enabled bool, reason string) map[string]any {
 func TestListRdps_Counts(t *testing.T) {
 	items := []any{
 		rdp(true, true, ""),                    // healthy
-		rdp(false, true, "connection refused"), // down + downButEnabled + bucketed
-		rdp(false, false, "RDP Shutdown"),      // down + disabled — NOT downButEnabled, NOT bucketed (admin-disabled reasons are not unexpected failures)
+		rdp(false, true, "connection refused"), // down (enabled && !up) + bucketed
+		rdp(false, false, "RDP Shutdown"),      // disabled only — NOT down (admin-disabled excluded), NOT bucketed
 		rdp(true, false, ""),                   // disabled only
-		rdp(false, true, "connection refused"), // down + downButEnabled + same bucket
+		rdp(false, true, "connection refused"), // down (enabled && !up) + same bucket
 	}
 	got, err := ListRdps(map[string]map[string]any{"rdps": {"data": items}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	checks := map[string]int{
-		"downCount":           3,
-		"disabledCount":       2,
-		"downButEnabledCount": 2,
-		"scanned":             5,
+		"downCount":     2,
+		"disabledCount": 2,
+		"scanned":       5,
 	}
 	for k, want := range checks {
 		if got[k] != want {
@@ -77,14 +76,16 @@ func TestListRdps_UnexpectedFailureFilter(t *testing.T) {
 		rdp(false, true, "boom"),          // down + enabled + reason → bucketed
 		rdp(false, false, "RDP Shutdown"), // admin-disabled → MUST NOT bucket
 		rdp(true, true, "old boom"),       // recovered with historical reason → MUST NOT bucket
-		rdp(false, true, ""),              // down with empty reason → counted in downCount, NOT bucketed
+		rdp(false, true, ""),              // enabled && !up with empty reason → counted in downCount, NOT bucketed
 	}
 	got, err := ListRdps(map[string]map[string]any{"rdps": {"data": items}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got["downCount"] != 3 {
-		t.Errorf("downCount: got %v, want 3", got["downCount"])
+	// enabled && !up: items 0 and 3. Admin-disabled row (item 1) is excluded
+	// from downCount under the unified rule shared with list-vpns.
+	if got["downCount"] != 2 {
+		t.Errorf("downCount: got %v, want 2", got["downCount"])
 	}
 	byReason := got["byLastFailureReason"].(map[string]int)
 	if len(byReason) != 1 || byReason["boom"] != 1 {
@@ -94,6 +95,25 @@ func TestListRdps_UnexpectedFailureFilter(t *testing.T) {
 		if _, present := byReason[leaked]; present {
 			t.Errorf("%q leaked into byLastFailureReason: %v", leaked, byReason)
 		}
+	}
+}
+
+// TestListRdps_DownCountUnifiedWithVpns pins the semantics agreed in
+// SOL-151552: downCount is enabled && !up, matching list-vpns.downCount's
+// enabled-and-in-the-down-state shape. If the rule drifts, cross-tool
+// reasoning breaks silently — hence a dedicated test.
+func TestListRdps_DownCountUnifiedWithVpns(t *testing.T) {
+	items := []any{
+		rdp(false, false, "RDP Shutdown"), // admin-disabled — MUST NOT count as down
+		rdp(false, true, "boom"),          // unexpected failure — counts
+		rdp(true, true, ""),               // healthy — does not count
+	}
+	got, err := ListRdps(map[string]map[string]any{"rdps": {"data": items}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["downCount"] != 1 {
+		t.Errorf("downCount (enabled && !up): got %v, want 1", got["downCount"])
 	}
 }
 
@@ -134,7 +154,7 @@ func TestListRdps_Empty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{"downCount", "disabledCount", "downButEnabledCount"} {
+	for _, k := range []string{"downCount", "disabledCount"} {
 		if got[k] != 0 {
 			t.Errorf("%s: got %v, want 0", k, got[k])
 		}
@@ -206,9 +226,9 @@ func TestListRdps_MissingField(t *testing.T) {
 					item[k] = v
 				}
 			}
-			// Healthy row lands in every counter we assert: down + downButEnabled +
-			// bucketed (down && enabled && reason). The skipped row must not steal
-			// any of those signals.
+			// Healthy row lands in every counter we assert: down (enabled && !up)
+			// + bucketed (down && enabled && reason). The skipped row must not
+			// steal any of those signals.
 			healthy := rdp(false, true, "other")
 			got, err := ListRdps(map[string]map[string]any{"rdps": {"data": []any{item, healthy}}})
 			if err != nil {
@@ -220,7 +240,7 @@ func TestListRdps_MissingField(t *testing.T) {
 			if got["scanned"] != 2 {
 				t.Errorf("scanned: got %v, want 2", got["scanned"])
 			}
-			if got["downCount"] != 1 || got["downButEnabledCount"] != 1 || got["disabledCount"] != 0 {
+			if got["downCount"] != 1 || got["disabledCount"] != 0 {
 				t.Errorf("healthy row signals lost or wrong: %+v", got)
 			}
 			byReason := got["byLastFailureReason"].(map[string]int)
@@ -244,7 +264,7 @@ func TestListRdps_NilField(t *testing.T) {
 	if got["skipped"] != 1 {
 		t.Errorf("skipped: got %v, want 1", got["skipped"])
 	}
-	if got["downCount"] != 1 || got["downButEnabledCount"] != 1 {
+	if got["downCount"] != 1 {
 		t.Errorf("healthy row signals lost: %+v", got)
 	}
 }
