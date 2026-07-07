@@ -752,10 +752,11 @@ tools:
 
   - name: create-rdp
     description: >
-      CONFIRMATION REQUIRED: before calling this tool you MUST first state the
-      target (broker, VPN, RDP name) and that a new RDP will be created, then wait
-      for the user to confirm in a separate reply. Do not treat the user's original
-      request as pre-confirmation, even if it implies intent.
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating the
+      target (broker, VPN, RDP name) and that a new RDP will be created. The
+      confirmation MUST come as a separate user reply received AFTER you state the
+      target and effect — do not treat the user's original request as a
+      pre-confirmation, even if it implies intent.
       Create a REST Delivery Point (RDP) in a Message VPN. Requires msgVpnName to
       identify the VPN and restDeliveryPointName to name the new RDP; any attribute
       omitted from rdpConfig is set to its broker default. Creates only the RDP
@@ -792,10 +793,11 @@ tools:
 
   - name: update-rdp
     description: >
-      CONFIRMATION REQUIRED: before calling this tool you MUST first state the
-      target (broker, VPN, RDP name) and the attributes that will change, then wait
-      for the user to confirm in a separate reply. Do not treat the user's original
-      request as pre-confirmation, even if it implies intent.
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating the
+      target (broker, VPN, RDP name) and the attributes that will change. The
+      confirmation MUST come as a separate user reply received AFTER you state the
+      target and effect — do not treat the user's original request as a
+      pre-confirmation, even if it implies intent.
       Update an existing REST Delivery Point. Requires msgVpnName and
       restDeliveryPointName to identify the RDP; provide only the attributes you
       want to change in rdpConfig. Omitted attributes are left unchanged. Use this
@@ -828,11 +830,12 @@ tools:
 
   - name: delete-rdp
     description: >
-      CONFIRMATION REQUIRED: before calling this tool you MUST first state the
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating the
       target (broker, VPN, RDP name) and that the RDP and its REST consumers and
-      queue bindings will be permanently removed, then wait for the user to confirm
-      in a separate reply. Do not treat the user's original request as
-      pre-confirmation, even if it implies intent.
+      queue bindings will be permanently removed. The confirmation MUST come as a
+      separate user reply received AFTER you state the target and effect — do not
+      treat the user's original request as a pre-confirmation, even if it implies
+      intent.
       Delete a REST Delivery Point from a Message VPN. Requires msgVpnName and
       restDeliveryPointName to identify the RDP to delete. This is a destructive
       operation that permanently removes the RDP along with its REST consumers and
