@@ -42,12 +42,25 @@ import (
 // step (without updating the handler) is caught at boot rather than at first
 // invocation.
 //
-// RequiredFields lists the field names Fn reads off each item. ValidateTool
-// cross-checks these against the union of the tool's step `select:` clauses.
+// RequiredFields is the single-step form: field names Fn reads off each item
+// of its one input list. ValidateTool cross-checks these against the union of
+// the tool's step `select:` clauses. Use this when the handler reads from
+// exactly one step's list; otherwise use RequiredFieldsPerStep.
+//
+// RequiredFieldsPerStep is the multi-step form: field names Fn reads off each
+// item, keyed by step ID. ValidateTool cross-checks each step's fields against
+// that step's own `select:` clause — a per-step check that catches the case a
+// union check would miss (e.g. handler reads X from step A but only step B
+// selects X). Every key must also appear in RequiredSteps; Register panics
+// otherwise so the handler cannot ship with a stray per-step entry that would
+// silently skip validation. At most one of RequiredFields /
+// RequiredFieldsPerStep should be set; if both are populated the per-step form
+// takes precedence and the flat form is ignored.
 type Handler struct {
-	Fn             func(stepResults map[string]map[string]any) (map[string]any, error)
-	RequiredSteps  []string
-	RequiredFields []string
+	Fn                    func(stepResults map[string]map[string]any) (map[string]any, error)
+	RequiredSteps         []string
+	RequiredFields        []string
+	RequiredFieldsPerStep map[string][]string
 }
 
 var (
@@ -56,9 +69,18 @@ var (
 )
 
 // Register installs a handler under the given name. Panics on duplicate
-// registration since handlers register from init() and a duplicate would
-// indicate a programming error.
+// registration or on a handler that declares a step in RequiredFieldsPerStep
+// that isn't in RequiredSteps — both indicate a programming error at init().
 func Register(name string, h Handler) {
+	requiredSet := make(map[string]struct{}, len(h.RequiredSteps))
+	for _, s := range h.RequiredSteps {
+		requiredSet[s] = struct{}{}
+	}
+	for stepID := range h.RequiredFieldsPerStep {
+		if _, ok := requiredSet[stepID]; !ok {
+			panic("postprocess: handler " + name + " declares RequiredFieldsPerStep for step " + stepID + " but that step is not in RequiredSteps")
+		}
+	}
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	if _, dup := registry[name]; dup {
@@ -79,10 +101,18 @@ func Apply(name string, stepResults map[string]map[string]any) (map[string]any, 
 }
 
 // ValidateTool checks that postprocessorName is registered, that every step
-// in its RequiredSteps appears in stepIDs, and that every field in its
-// RequiredFields appears in selectFields. Returns the ticket-specified error
-// template on a missing field/step so the message is uniform across tools.
-func ValidateTool(toolName, postprocessorName string, stepIDs, selectFields []string) error {
+// in its RequiredSteps appears in stepIDs, and that every field the handler
+// reads is covered by the appropriate `select:` clause.
+//
+// selectFieldsByStep carries the per-step select clauses (keyed by step ID) so
+// a multi-step handler declaring RequiredFieldsPerStep can be checked against
+// the correct step's select — not the union across steps. When the handler
+// uses the flat RequiredFields form, the check falls back to the union of all
+// selectFieldsByStep values, preserving single-step behaviour.
+//
+// Returns the ticket-specified error template on a missing field/step so the
+// message is uniform across tools.
+func ValidateTool(toolName, postprocessorName string, stepIDs []string, selectFieldsByStep map[string][]string) error {
 	registryMu.RLock()
 	h, ok := registry[postprocessorName]
 	registryMu.RUnlock()
@@ -98,9 +128,29 @@ func ValidateTool(toolName, postprocessorName string, stepIDs, selectFields []st
 			return fmt.Errorf("tool %q: postprocessor %q reads step %q but no such step is defined", toolName, postprocessorName, s)
 		}
 	}
-	selectSet := make(map[string]struct{}, len(selectFields))
-	for _, f := range selectFields {
-		selectSet[f] = struct{}{}
+	if len(h.RequiredFieldsPerStep) > 0 {
+		for stepID, fields := range h.RequiredFieldsPerStep {
+			if _, ok := stepSet[stepID]; !ok {
+				return fmt.Errorf("tool %q: postprocessor %q reads step %q but no such step is defined", toolName, postprocessorName, stepID)
+			}
+			stepSelects := selectFieldsByStep[stepID]
+			selectSet := make(map[string]struct{}, len(stepSelects))
+			for _, f := range stepSelects {
+				selectSet[f] = struct{}{}
+			}
+			for _, f := range fields {
+				if _, ok := selectSet[f]; !ok {
+					return fmt.Errorf("tool %q: postprocessor %q reads %q on step %q but it is not in that step's select", toolName, postprocessorName, f, stepID)
+				}
+			}
+		}
+		return nil
+	}
+	selectSet := map[string]struct{}{}
+	for _, fields := range selectFieldsByStep {
+		for _, f := range fields {
+			selectSet[f] = struct{}{}
+		}
 	}
 	for _, f := range h.RequiredFields {
 		if _, ok := selectSet[f]; !ok {

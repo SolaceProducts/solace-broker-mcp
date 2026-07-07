@@ -48,23 +48,61 @@ tools:
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           restDeliveryPointName: "{{.Params.restDeliveryPointName}}"
-          select: "clientName, clientProfileName, enabled, lastFailureReason, lastFailureTime, msgVpnName, restDeliveryPointName, timeConnectionsBlocked, up"
+        select:
+          - clientName
+          - clientProfileName
+          - enabled
+          - lastFailureReason
+          - lastFailureTime
+          - msgVpnName
+          - restDeliveryPointName
+          - timeConnectionsBlocked
+          - up
       - id: queueBindings
         operation: monitor/getMsgVpnRestDeliveryPointQueueBindings
         parallel: true
+        followPages: true
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           restDeliveryPointName: "{{.Params.restDeliveryPointName}}"
-          select: "lastFailureReason, lastFailureTime, postRequestTarget, queueBindingName, restDeliveryPointName, up, uptime"
+          count: "100"
+        select:
+          - lastFailureReason
+          - lastFailureTime
+          - postRequestTarget
+          - queueBindingName
+          - restDeliveryPointName
+          - up
+          - uptime
       - id: restConsumers
         operation: monitor/getMsgVpnRestDeliveryPointRestConsumers
         parallel: true
+        followPages: true
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           restDeliveryPointName: "{{.Params.restDeliveryPointName}}"
-          select: "authenticationScheme, enabled, httpRequestOutstandingTxMsgCount, httpRequestTimedOutTxMsgCount, httpRequestTxMsgCount, httpResponseErrorRxMsgCount, httpResponseSuccessRxMsgCount, lastConnectionFailureReason, lastConnectionFailureTime, lastFailureReason, lastFailureTime, outgoingConnectionCount, remoteHost, remotePort, restConsumerName, restDeliveryPointName, up"
+          count: "100"
+        select:
+          - authenticationScheme
+          - enabled
+          - httpRequestOutstandingTxMsgCount
+          - httpRequestTimedOutTxMsgCount
+          - httpRequestTxMsgCount
+          - httpResponseErrorRxMsgCount
+          - httpResponseSuccessRxMsgCount
+          - lastConnectionFailureReason
+          - lastConnectionFailureTime
+          - lastFailureReason
+          - lastFailureTime
+          - outgoingConnectionCount
+          - remoteHost
+          - remotePort
+          - restConsumerName
+          - restDeliveryPointName
+          - up
     result:
-      strategy: collect
+      strategy: postProcess
+      postProcess: getRdpStatus
 
   # get-queue-metrics is implemented as a native mixed-protocol Go handler
   # (internal/tools/queuemetrics) rather than a composite tool: it merges the

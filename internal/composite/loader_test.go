@@ -1260,6 +1260,56 @@ func TestValidatePostProcess(t *testing.T) {
 	})
 }
 
+// TestValidatePostProcess_MultiStep covers the multi-step form: a handler
+// declaring RequiredFieldsPerStep must be validated against each step's own
+// `select:`, not the union across steps. This guards the property that added
+// with the first multi-step handler (getRdpStatus) — the old union check
+// would silently accept a config where step A reads field X but only step B
+// selects it.
+func TestValidatePostProcess_MultiStep(t *testing.T) {
+	postprocesstest.Register(t, "__test_pp_multi", postprocess.Handler{
+		Fn:            func(map[string]map[string]any) (map[string]any, error) { return nil, nil },
+		RequiredSteps: []string{"a", "b"},
+		RequiredFieldsPerStep: map[string][]string{
+			"a": {"x"},
+			"b": {"y"},
+		},
+	})
+
+	t.Run("each step covers its own required fields", func(t *testing.T) {
+		tools := []CompositeTool{{
+			Name: "ok-multi",
+			Steps: []Step{
+				{ID: "a", Operation: "op-a", Select: []string{"x"}},
+				{ID: "b", Operation: "op-b", Select: []string{"y"}},
+			},
+			Result: ResultStrategy{Strategy: "postProcess", PostProcess: "__test_pp_multi"},
+		}}
+		if err := ValidatePostProcess(tools); err != nil {
+			t.Fatalf("expected ok, got %v", err)
+		}
+	})
+
+	t.Run("field only in sibling select is rejected", func(t *testing.T) {
+		// The union across steps includes both x and y, so the old
+		// (pre-multi-step) check would have passed. The per-step check must
+		// fail because step "a" reads x but step "a"'s select does not.
+		tools := []CompositeTool{{
+			Name: "bad-multi",
+			Steps: []Step{
+				{ID: "a", Operation: "op-a", Select: []string{"y"}},
+				{ID: "b", Operation: "op-b", Select: []string{"x", "y"}},
+			},
+			Result: ResultStrategy{Strategy: "postProcess", PostProcess: "__test_pp_multi"},
+		}}
+		err := ValidatePostProcess(tools)
+		want := `tool "bad-multi": postprocessor "__test_pp_multi" reads "x" on step "a" but it is not in that step's select`
+		if err == nil || err.Error() != want {
+			t.Fatalf("\nwant: %s\ngot:  %v", want, err)
+		}
+	})
+}
+
 func TestLoadTools_CreateMessageVPN(t *testing.T) {
 	yaml := `
 tools:

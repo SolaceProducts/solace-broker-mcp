@@ -148,33 +148,44 @@ func GroupStepsIntoBatches(steps []Step) []ExecutionBatch {
 // operation, constructs the request body if needed, calls the client, and
 // stores the result in the execution context.
 func (ce *CompositeExecutor) executeStep(ctx context.Context, step Step, client sempv2.Client, execCtx *ExecuteContext) error {
+	data, err := ce.runStep(ctx, step, client, execCtx)
+	if err != nil {
+		return err
+	}
+	execCtx.StepResults[step.ID] = data
+	return nil
+}
+
+// runStep dispatches a step to the paginated or single-call fetch and returns
+// the resulting data map. It does not write to execCtx.StepResults so that
+// parallel callers can collect results without a shared-map race.
+func (ce *CompositeExecutor) runStep(ctx context.Context, step Step, client sempv2.Client, execCtx *ExecuteContext) (map[string]any, error) {
 	if step.FollowPages {
-		return ce.executePaginatedStep(ctx, step, client, execCtx)
+		return ce.fetchPaginated(ctx, step, client, execCtx)
 	}
 
 	args, err := ResolveArgs(step.Args, execCtx)
 	if err != nil {
-		return fmt.Errorf("tool step %s: failed to resolve args: %w", step.ID, err)
+		return nil, fmt.Errorf("tool step %s: failed to resolve args: %w", step.ID, err)
 	}
 	applySelect(args, step.Select)
 
 	op, ok := ce.operations[step.Operation]
 	if !ok {
-		return fmt.Errorf("tool step %s: operation %q not found in operation catalog", step.ID, step.Operation)
+		return nil, fmt.Errorf("tool step %s: operation %q not found in operation catalog", step.ID, step.Operation)
 	}
 
 	args, err = ce.constructRequestBody(op, args, execCtx.Params)
 	if err != nil {
-		return fmt.Errorf("tool step %s: %w", step.ID, err)
+		return nil, fmt.Errorf("tool step %s: %w", step.ID, err)
 	}
 
 	result, err := client.Execute(ctx, op, args)
 	if err != nil {
-		return fmt.Errorf("tool step %s: %w", step.ID, err)
+		return nil, fmt.Errorf("tool step %s: %w", step.ID, err)
 	}
 
-	execCtx.StepResults[step.ID] = result.Data
-	return nil
+	return result.Data, nil
 }
 
 // applySelect joins step.Select (if non-empty) into the comma-separated
@@ -190,30 +201,30 @@ func applySelect(args map[string]any, fields []string) {
 	args["select"] = strings.Join(fields, ", ")
 }
 
-// executePaginatedStep executes a step that returns paginated results. It
-// follows SEMP's nextPageUri links until one of three termination conditions
-// fires: (1) the merged item count reaches maxResults, (2) the broker stops
-// returning a nextPageUri or an empty page, or (3) the loop has run for
+// fetchPaginated executes a step that returns paginated results. It follows
+// SEMP's nextPageUri links until one of three termination conditions fires:
+// (1) the merged item count reaches maxResults, (2) the broker stops returning
+// a nextPageUri or an empty page, or (3) the loop has run for
 // CompositeExecutor.maxPages iterations (a defense-in-depth backstop against
 // a perpetual nextPageUri).
-// The merged data array is stored in execCtx.StepResults keyed by step ID,
-// alongside a truncated flag indicating whether more results exist beyond
-// what was returned.
-func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step, client sempv2.Client, execCtx *ExecuteContext) error {
+// It returns a map containing the merged data array under "data" plus a
+// truncated flag indicating whether more results exist beyond what was
+// returned. The caller is responsible for storing the result in execCtx.
+func (ce *CompositeExecutor) fetchPaginated(ctx context.Context, step Step, client sempv2.Client, execCtx *ExecuteContext) (map[string]any, error) {
 	baseArgs, err := ResolveArgs(step.Args, execCtx)
 	if err != nil {
-		return fmt.Errorf("tool step %s: failed to resolve args: %w", step.ID, err)
+		return nil, fmt.Errorf("tool step %s: failed to resolve args: %w", step.ID, err)
 	}
 	applySelect(baseArgs, step.Select)
 
 	op, ok := ce.operations[step.Operation]
 	if !ok {
-		return fmt.Errorf("tool step %s: operation %q not found in operation catalog", step.ID, step.Operation)
+		return nil, fmt.Errorf("tool step %s: operation %q not found in operation catalog", step.ID, step.Operation)
 	}
 
 	baseArgs, err = ce.constructRequestBody(op, baseArgs, execCtx.Params)
 	if err != nil {
-		return fmt.Errorf("tool step %s: %w", step.ID, err)
+		return nil, fmt.Errorf("tool step %s: %w", step.ID, err)
 	}
 
 	maxResults := resolveMaxResults(execCtx.Params)
@@ -238,7 +249,7 @@ func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step
 
 		result, err := client.Execute(ctx, op, args)
 		if err != nil {
-			return fmt.Errorf("tool step %s: %w", step.ID, err)
+			return nil, fmt.Errorf("tool step %s: %w", step.ID, err)
 		}
 
 		items := extractDataItems(result.Data)
@@ -263,10 +274,10 @@ func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step
 
 		cursor, parseErr := parseCursorFromURI(nextURI)
 		if parseErr != nil {
-			return fmt.Errorf("tool step %s: failed to parse pagination cursor from nextPageUri %q: %w", step.ID, nextURI, parseErr)
+			return nil, fmt.Errorf("tool step %s: failed to parse pagination cursor from nextPageUri %q: %w", step.ID, nextURI, parseErr)
 		}
 		if cursor == "" {
-			return fmt.Errorf("tool step %s: empty pagination cursor extracted from nextPageUri %q", step.ID, nextURI)
+			return nil, fmt.Errorf("tool step %s: empty pagination cursor extracted from nextPageUri %q", step.ID, nextURI)
 		}
 
 		args = appendCursor(baseArgs, cursor)
@@ -292,8 +303,7 @@ func (ce *CompositeExecutor) executePaginatedStep(ctx context.Context, step Step
 				maxResults, capMax)
 		}
 	}
-	execCtx.StepResults[step.ID] = result
-	return nil
+	return result, nil
 }
 
 // Item-count limits used by resolveMaxResults and truncation messages. The
@@ -394,30 +404,12 @@ func (ce *CompositeExecutor) executeBatch(ctx context.Context, batch ExecutionBa
 	resultsChan := make(chan stepResult, len(batch.Steps))
 
 	for _, step := range batch.Steps {
-		step := step // capture loop variable
 		safego.Go(g, func() error {
-			args, err := ResolveArgs(step.Args, execCtx)
+			data, err := ce.runStep(gCtx, step, client, execCtx)
 			if err != nil {
-				return fmt.Errorf("tool step %s: failed to resolve args: %w", step.ID, err)
+				return err
 			}
-			applySelect(args, step.Select)
-
-			op, ok := ce.operations[step.Operation]
-			if !ok {
-				return fmt.Errorf("tool step %s: operation %q not found in operation catalog", step.ID, step.Operation)
-			}
-
-			args, err = ce.constructRequestBody(op, args, execCtx.Params)
-			if err != nil {
-				return fmt.Errorf("tool step %s: %w", step.ID, err)
-			}
-
-			result, err := client.Execute(gCtx, op, args)
-			if err != nil {
-				return fmt.Errorf("tool step %s: %w", step.ID, err)
-			}
-
-			resultsChan <- stepResult{id: step.ID, data: result.Data}
+			resultsChan <- stepResult{id: step.ID, data: data}
 			return nil
 		})
 	}
