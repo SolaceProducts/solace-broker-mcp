@@ -209,7 +209,7 @@ The server supports open access, static token, and OAuth/OIDC authentication for
 
 - **SEMP not enabled** — Verify the broker's SEMP management interface is accessible at the configured URL (for example, `http://broker:8080/SEMP`).
 - **Authentication failure** — Check that credentials in the `.env` file are correct. For basic auth, verify both `username` and `password`. For bearer mode, verify the `token`.
-- **TLS certificate errors** — If the event broker uses a self-signed certificate, enable `insecure_skip_verify` in the broker config. See [Configuration](configuration.md) for details.
+- **TLS certificate errors** — If the event broker uses a self-signed certificate, enable `insecure_skip_verify` in the broker config. In production (`mcp_client_auth.mode: oauth`) this is refused at startup unless you also set `allow_insecure_broker_tls: true` to acknowledge the risk. See [Configuration](configuration.md) for details.
 
 ### Tool Returns an Error
 

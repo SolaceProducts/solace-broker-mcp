@@ -37,6 +37,7 @@ The server resolves variables at startup. The `.env` file loads automatically be
 | `port` | `MCP_SERVER_PORT` | `9090` | Port the MCP server listens on. |
 | `listen_address` | — | see below | Host the server binds to. Empty binds all interfaces; the default depends on the client auth mode. |
 | `allow_remote_unauthenticated` | — | `false` | Opt-in to a non-loopback `listen_address` while `mcp_client_auth.mode: disabled`. Acknowledges that the listener has no client authentication. |
+| `allow_insecure_broker_tls` | — | `false` | Opt-in to a broker with `insecure_skip_verify: true` while `mcp_client_auth.mode: oauth`. Acknowledges that disabling broker certificate verification exposes the broker admin credential to a man-in-the-middle. |
 | `tls_cert_file` | — | none | Path to TLS certificate (PEM). |
 | `tls_key_file` | — | none | Path to TLS private key (PEM). |
 | `log_level` | — | `info` | Log verbosity: `debug`, `info`, `warn`, `error`. |
@@ -59,6 +60,8 @@ tls_key_file: "/etc/certs/server-key.pem"
 
 An explicit `listen_address` must be an IP address or `localhost`. Under `mode: disabled` (no client authentication), binding a non-loopback address is **refused at startup** — it would expose unauthenticated MCP access backed by the broker admin credential to the network. To proceed, bind `127.0.0.1`, switch to `mode: oauth`, or set `allow_remote_unauthenticated: true` to accept the risk. The effective bind address is logged at startup.
 
+**Broker TLS in production:** Under `mode: oauth`, a broker with `insecure_skip_verify: true` is **refused at startup** — disabling certificate verification would expose the broker admin credential the server sends on every SEMP request to a man-in-the-middle. To proceed, use a trusted certificate, or set `allow_insecure_broker_tls: true` to accept the risk. `allow_insecure_broker_tls` is a single server-wide opt-in, not per-broker: setting it to onboard one self-signed broker also lifts the check for every other broker in the config, including ones added later. Dev modes (`static`/`disabled`) allow self-signed brokers without the opt-in.
+
 **Logging:** The server writes structured JSON logs to stderr. The server automatically redacts credentials in all log output. Every tool invocation is logged with the tool name, target broker, status, and duration.
 
 ## Event Broker Settings
@@ -74,7 +77,7 @@ Aliases must be 1–63 characters, contain only letters, digits, and hyphens, an
 | `auth.username` | — | Basic auth username. |
 | `auth.password` | — | Basic auth password. |
 | `auth.token` | — | Bearer token (used when `auth.mode: bearer`). |
-| `insecure_skip_verify` | `false` | Skip TLS certificate verification. Development only — do not use in production. |
+| `insecure_skip_verify` | `false` | Skip TLS certificate verification. Development only. Under `mcp_client_auth.mode: oauth` (production) it is **refused at startup** unless `allow_insecure_broker_tls: true` is also set (see below). |
 
 Solace recommends using `https://` event broker URLs in production environments.
 

@@ -918,11 +918,12 @@ mcp_client_auth:
 	}
 }
 
-func TestLoadConfig_WarnsOnInsecureSkipVerifyInProductionMode(t *testing.T) {
-	// Per PR #52 review (bczoma): production mode allows insecure_skip_verify
-	// for parity with other tooling, but emits a startup WARN naming the
-	// broker so operators see it in triage logs.
-	buf := captureSlog(t)
+func TestLoadConfig_RejectsInsecureSkipVerifyInProductionModeWithoutOptIn(t *testing.T) {
+	// Production (oauth) mode enforces https:// but must not silently accept a
+	// disabled certificate check: that exposes the broker admin credential to a
+	// MITM. Without the explicit allow_insecure_broker_tls opt-in, validation
+	// fails and names both the broker and the opt-in (mirrors the
+	// allow_remote_unauthenticated guard).
 	yaml := `
 brokers:
   prod-us:
@@ -938,12 +939,79 @@ mcp_client_auth:
   audience: "solace-mcp"
   resource_url: "https://mcp.example.com"
 `
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for insecure_skip_verify=true in production mode without opt-in")
+	}
+	if !strings.Contains(err.Error(), "allow_insecure_broker_tls") {
+		t.Errorf("error should name the allow_insecure_broker_tls opt-in, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "prod-us") {
+		t.Errorf("error should identify the offending broker, got: %v", err)
+	}
+}
+
+func TestLoadConfig_NormalizesModeBeforeBrokerChecks(t *testing.T) {
+	// Regression: mcp_client_auth.mode is normalized to lowercase inside
+	// validate(). The insecure-broker-TLS refusal keys off IsProductionMode(),
+	// which compares against the lowercase "oauth" constant. If normalization
+	// ran AFTER the broker loop, a non-lowercase "OAuth" would not register as
+	// production and would silently bypass the refusal — a security regression.
+	// This asserts a mixed-case mode is treated exactly like lowercase "oauth".
+	yaml := `
+brokers:
+  prod-us:
+    url: "https://broker.example.com:8080"
+    insecure_skip_verify: true
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+mcp_client_auth:
+  mode: OAuth
+  issuer: "https://idp.example.com"
+  audience: "solace-mcp"
+  resource_url: "https://mcp.example.com"
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for insecure_skip_verify=true with mixed-case mode: OAuth and no opt-in")
+	}
+	if !strings.Contains(err.Error(), "allow_insecure_broker_tls") {
+		t.Errorf("error should name the allow_insecure_broker_tls opt-in, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "prod-us") {
+		t.Errorf("error should identify the offending broker, got: %v", err)
+	}
+}
+
+func TestLoadConfig_AllowsInsecureSkipVerifyInProductionModeWithOptIn(t *testing.T) {
+	// With the explicit opt-in the operator has accepted the risk; validation
+	// passes but the startup WARN still fires so the insecure setting stays
+	// visible in triage logs.
+	buf := captureSlog(t)
+	yaml := `
+brokers:
+  prod-us:
+    url: "https://broker.example.com:8080"
+    insecure_skip_verify: true
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "solace-mcp"
+  resource_url: "https://mcp.example.com"
+allow_insecure_broker_tls: true
+`
 	if _, err := LoadConfig(writeTemp(t, yaml)); err != nil {
-		t.Fatalf("insecure_skip_verify=true should not fail validation: %v", err)
+		t.Fatalf("insecure_skip_verify with allow_insecure_broker_tls should pass: %v", err)
 	}
 	out := buf.String()
 	if !strings.Contains(out, "INSECURE: TLS verification disabled for broker") {
-		t.Errorf("expected aligned INSECURE TLS WARN, got: %s", out)
+		t.Errorf("expected INSECURE TLS WARN when opt-in accepted, got: %s", out)
 	}
 	if !strings.Contains(out, "broker=prod-us") {
 		t.Errorf("expected WARN to identify broker via broker=<alias>, got: %s", out)
