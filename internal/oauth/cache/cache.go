@@ -12,6 +12,13 @@ import (
 	"time"
 )
 
+// CacheConfig holds the parameters for constructing a TokenCache.
+type CacheConfig struct {
+	MaxSize   int
+	ClockSkew time.Duration
+	MaxTTL    time.Duration
+}
+
 // CachedCredential is a cached OAuth access token with its expiry time as
 // reported by the identity provider. The Value field must never appear in
 // error messages, log lines, or metrics labels — it is a credential.
