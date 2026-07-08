@@ -33,7 +33,7 @@ config tools are SEMP-only.
 | Container | `solace-e2e-mgmt-a` | `solace-e2e-mgmt-b` |
 | SEMP port | `8094` | `8096` |
 
-MCP server: `9091`.
+MCP server: `9090` (same default as the other suites).
 
 ## Fixture model
 

@@ -165,10 +165,10 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: Start Solace brokers
-        run: bash test/e2e-monitoring/setup-brokers.sh
+        run: SUITE_DIR=test/e2e-monitoring bash test/e2e-common/setup-brokers.sh
 
       - name: Run E2E tests
-        run: bash test/e2e-monitoring/test-monitoring-tools.sh
+        run: bash test/e2e-monitoring/run-all.sh
 
       - name: Broker logs (on failure)
         if: failure()
@@ -199,7 +199,7 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: Start Solace brokers
-        run: bash test/e2e-management/setup-brokers.sh
+        run: SUITE_DIR=test/e2e-management bash test/e2e-common/setup-brokers.sh
 
       - name: Run E2E tests
         run: bash test/e2e-management/run-all.sh
