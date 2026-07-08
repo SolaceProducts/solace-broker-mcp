@@ -23,20 +23,6 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
 )
 
-// newTestCache builds a small TokenCache for tests. The caller must call
-// Close on the returned closer when done. Use via validParamsWithCache.
-func newTestCache(t *testing.T) cache.TokenCache {
-	t.Helper()
-	tc, err := cache.NewTokenCache(cache.CacheConfig{
-		MaxSize:   100,
-		ClockSkew: 0,
-		MaxTTL:    time.Hour,
-	})
-	if err != nil {
-		t.Fatalf("NewTokenCache: %v", err)
-	}
-	return tc
-}
 
 // validParams returns a Params struct with every field set to a value
 // that would survive every layer of validation. Tests start from this
