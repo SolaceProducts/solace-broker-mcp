@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # E2E test runner for the management (config API) tools.
 # Assumes the Solace brokers are already running — start them with
-# bash test/e2e-management/setup-brokers.sh before running this script.
+# SUITE_DIR=test/e2e-management bash test/e2e-common/setup-brokers.sh before running this script.
 # This script: starts a write-enabled MCP server, runs the config-tool tests,
 # and sweeps any leftover config fixtures on exit.
 
@@ -24,8 +24,8 @@ trap cleanup EXIT INT TERM HUP
 
 log_info "=== Solace Broker MCP — E2E Management (Config) Test Suite ==="
 
-# 1. Build and start a write-enabled MCP server in the background.
-bash "$SCRIPT_DIR/start-server.sh" --bg
+# 1. Build and start MCP server in the background.
+bash "$SCRIPT_DIR/../e2e-common/start-server.sh" --bg
 
 # Read back the PID so the cleanup trap can stop it.
 PIDFILE="$BIN_DIR/mcp-server.pid"
@@ -34,4 +34,4 @@ if [ -f "$PIDFILE" ]; then
 fi
 
 # 2. Config-tool round-trip + cross-cutting tests through the MCP server.
-bash "$SCRIPT_DIR/config-tool-tests.sh"
+bash "$SCRIPT_DIR/test-management-tools.sh"

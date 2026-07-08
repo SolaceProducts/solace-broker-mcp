@@ -90,7 +90,7 @@ e2e-monitoring-up: ## Start brokers for the e2e-monitoring suite (use `e2e-monit
 
 .PHONY: e2e-monitoring
 e2e-monitoring: ## Run the e2e-monitoring suite (requires brokers from `make e2e-monitoring-up`)
-	bash $(E2E_MON_DIR)/test-monitoring-tools.sh
+	bash $(E2E_MON_DIR)/run-all.sh
 
 .PHONY: e2e-monitoring-down
 e2e-monitoring-down: ## Stop and remove e2e-monitoring brokers
@@ -99,7 +99,7 @@ e2e-monitoring-down: ## Stop and remove e2e-monitoring brokers
 .PHONY: e2e-monitoring-all
 e2e-monitoring-all: ## Full e2e-monitoring cycle: brokers up, wait for health, run suite, tear down (tears down even on failure)
 	$(COMPOSE_E2E_MON) up -d
-	@. $(E2E_MON_DIR)/helpers.sh && wait_for_all_brokers 120 && bash $(E2E_MON_DIR)/test-monitoring-tools.sh; t=$$?; \
+	@. $(E2E_MON_DIR)/helpers.sh && wait_for_all_brokers 120 && bash $(E2E_MON_DIR)/run-all.sh; t=$$?; \
 	$(COMPOSE_E2E_MON) down -v || echo "WARN: e2e-monitoring-all teardown failed"; \
 	exit $$t
 

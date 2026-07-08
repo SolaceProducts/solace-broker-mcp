@@ -6,10 +6,10 @@
 # assertions/test-runner. Suite-specific fixtures live in each suite's own
 # helpers.
 #
-# Location-independence contract: this lib does NOT locate itself from its own
-# path. The sourcing suite sets SUITE_DIR (its own directory) first; the lib
-# derives BIN_DIR / ENV_FILE / REPO_ROOT from it and sources the suite's .env.
-# Each suite therefore gets its own bin/, .env, ports, and containers off one
+# Note that this lib does NOT locate itself from its own path. The sourcing
+# suite sets SUITE_DIR (its own directory) first; the lib derives BIN_DIR /
+# ENV_FILE / REPO_ROOT from it and sources the suite's .env. Each suite
+# therefore gets its own bin/, .env, ports, and containers off one
 # shared library.
 #
 #   SUITE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,6 +19,7 @@ set -euo pipefail
 
 # ── Paths (SUITE_DIR contract) ───────────────────────────────────────────────
 : "${SUITE_DIR:?SUITE_DIR must be set before sourcing e2e-common/lib.sh}"
+export SUITE_DIR
 REPO_ROOT="${REPO_ROOT:-$(cd "$SUITE_DIR/../.." && pwd)}"
 BIN_DIR="$SUITE_DIR/bin"
 ENV_FILE="${ENV_FILE:-$SUITE_DIR/.env}"
@@ -269,12 +270,11 @@ stop_server() {
 
 # Generate the MCP server config from .env-derived values so ports stay in sync.
 # Credentials use ${VAR_NAME} substitution — resolved by the server via ENV_FILE.
-#   $1 config_file          path to write the generated YAML to
-#   $2 enable_write_tools   "true" to register write/action/config tools;
-#                           defaults to "false" (read-only monitoring server).
+# enable_write_tools is on for every suite: all suites exercise one server with
+# both read and write tools registered.
+#   $1 config_file   path to write the generated YAML to
 write_config() {
     local config_file="$1"
-    local enable_write_tools="${2:-false}"
     cat > "$config_file" <<EOF
 port: ${MCP_PORT}
 
@@ -282,7 +282,7 @@ mcp_client_auth:
   mode: static
   dev_token: "\${MCP_DEV_TOKEN}"
 
-enable_write_tools: ${enable_write_tools}
+enable_write_tools: true
 
 brokers:
   broker-a:
@@ -298,7 +298,7 @@ brokers:
       username: "\${E2E_B_USERNAME}"
       password: "\${E2E_B_PASSWORD}"
 EOF
-    log_info "Config written to $config_file (broker-a=$BROKER_A_URL, broker-b=$BROKER_B_URL, enable_write_tools=$enable_write_tools)"
+    log_info "Config written to $config_file (broker-a=$BROKER_A_URL, broker-b=$BROKER_B_URL)"
 }
 
 # ── SEMP Operations ──────────────────────────────────────────────────────────
