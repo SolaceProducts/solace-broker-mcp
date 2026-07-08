@@ -32,10 +32,11 @@ tools:
       enabled state, up/down status, client name, client profile, last
       failure reason, queue bindings, and REST consumer status.
       The response includes a summary block with bindingDownCount / consumerDownCount
-      (bindings or REST consumers with up == false, regardless of
-      enabled state — both the disabled-and-down and the unexpectedly-down
-      sets are counted), and byBindingLastFailureReason / byConsumerLastFailureReason
-      (active failures only; recovered entries with stale reasons are excluded).
+      (bindings or REST consumers with up == false; these objects have no
+      admin-disable axis, so this is simply the not-up count — unlike
+      list-rdps.downCount, which is enabled && !up), and
+      byBindingLastFailureReason / byConsumerLastFailureReason (active
+      failures only; recovered entries with stale reasons are excluded).
     annotations:
       readOnly: true
     parameters:
