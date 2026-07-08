@@ -18,7 +18,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess"
@@ -128,33 +127,4 @@ func ListQueues(stepResults map[string]map[string]any) (map[string]any, error) {
 		out["truncated"] = true
 	}
 	return out, nil
-}
-
-// numField accepts any of the numeric shapes JSON decoders produce: float64
-// (encoding/json default for map[string]any), json.Number (decoder with
-// UseNumber), int / int64 (custom unmarshalers). Keeps the handler insulated
-// from future SEMP-client decode-mode changes. Returns ok=false for missing,
-// nil, or unexpected types so the caller can skip the row rather than abort.
-func numField(item map[string]any, name string) (float64, bool) {
-	switch v := item[name].(type) {
-	case float64:
-		return v, true
-	case int:
-		return float64(v), true
-	case int64:
-		return float64(v), true
-	case json.Number:
-		f, err := v.Float64()
-		if err != nil {
-			return 0, false
-		}
-		return f, true
-	default:
-		return 0, false
-	}
-}
-
-func stringField(item map[string]any, name string) (string, bool) {
-	v, ok := item[name].(string)
-	return v, ok
 }
