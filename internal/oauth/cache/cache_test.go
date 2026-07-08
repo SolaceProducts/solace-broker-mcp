@@ -8,8 +8,14 @@ import (
 	"time"
 )
 
-// newTestCache constructs a TokenCache from cfg and registers t.Cleanup to call
-// Close() on the underlying otter cache, preventing goroutine leaks between tests.
+// newTestCache constructs a TokenCache from cfg and registers t.Cleanup to
+// call Close() on the interface, preventing goroutine leaks (Otter's sweeper)
+// and unpinning the cache from the GC between tests.
+//
+// External packages should not duplicate this helper — use
+// internal/oauth/cache/cachetest.Default(t) instead. This local copy exists
+// because the cache package's own tests cannot import cachetest without
+// creating an import cycle.
 func newTestCache(t *testing.T, cfg CacheConfig) TokenCache {
 	t.Helper()
 	c, err := NewTokenCache(cfg)
@@ -17,7 +23,9 @@ func newTestCache(t *testing.T, cfg CacheConfig) TokenCache {
 		t.Fatalf("NewTokenCache: %v", err)
 	}
 	t.Cleanup(func() {
-		c.(*otterTokenCache).cache.Close()
+		if err := c.Close(); err != nil {
+			t.Logf("cache.Close: %v", err)
+		}
 	})
 	return c
 }
