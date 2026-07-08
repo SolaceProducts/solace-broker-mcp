@@ -31,9 +31,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	internalauth "github.com/SolaceDev/solace-broker-mcp/internal/auth"
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tokenexchange"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
@@ -95,6 +97,7 @@ func runOAuthVisibilityTest(t *testing.T, label string, idpHandler http.HandlerF
 	}))
 	defer fakeBroker.Close()
 
+	tc := newIntegrationTestCache(t)
 	exchanger, err := tokenexchange.New(tokenexchange.Params{
 		TokenURL:         fakeIdP.URL,
 		ClientID:         "mcp-server",
@@ -103,6 +106,7 @@ func runOAuthVisibilityTest(t *testing.T, label string, idpHandler http.HandlerF
 		GrantType:        tokenexchange.GrantTypeTokenExchange,
 		AudienceParam:    tokenexchange.AudienceParamAudience,
 		HTTPClient:       fakeIdP.Client(),
+		Cache:            tc,
 	})
 	if err != nil {
 		t.Fatalf("tokenexchange.New: %v", err)
@@ -135,6 +139,7 @@ func runOAuthVisibilityTestNoSubjectToken(t *testing.T) {
 	}))
 	defer fakeBroker.Close()
 
+	tc := newIntegrationTestCache(t)
 	exchanger, err := tokenexchange.New(tokenexchange.Params{
 		TokenURL:         fakeIdP.URL,
 		ClientID:         "mcp-server",
@@ -143,6 +148,7 @@ func runOAuthVisibilityTestNoSubjectToken(t *testing.T) {
 		GrantType:        tokenexchange.GrantTypeTokenExchange,
 		AudienceParam:    tokenexchange.AudienceParamAudience,
 		HTTPClient:       fakeIdP.Client(),
+		Cache:            tc,
 	})
 	if err != nil {
 		t.Fatalf("tokenexchange.New: %v", err)
@@ -287,4 +293,18 @@ func oauthCallToolAndCaptureDetail(t *testing.T, mgr *tools.ToolManager, ctx con
 	}
 
 	return detail
+}
+
+func newIntegrationTestCache(t *testing.T) cache.TokenCache {
+	t.Helper()
+	tc, err := cache.NewTokenCache(cache.CacheConfig{
+		MaxSize:   100,
+		ClockSkew: 0,
+		MaxTTL:    time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("NewTokenCache: %v", err)
+	}
+	t.Cleanup(func() { tc.Close() })
+	return tc
 }
