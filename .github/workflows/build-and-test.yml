@@ -44,6 +44,17 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.11.4
+          # Disable the analysis cache. Its key is
+          # os + cwd + interval + go.mod hash, so it does not invalidate on
+          # source or .golangci.yml changes and can restore stale staticcheck
+          # facts that produce phantom diagnostics against current sources
+          # (seen as flaky SA5011 on PR #150). Trading ~30s per run for
+          # honest, reproducible lint results.
+          skip-cache: true
+          # --verbose surfaces per-linter timing, active-linter list, and
+          # package-load stats so a "0 issues" result can be verified as
+          # full analysis rather than a silent skip.
+          args: --verbose
 
   build:
     runs-on: ubuntu-latest
