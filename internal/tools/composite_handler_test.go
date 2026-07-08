@@ -107,9 +107,11 @@ func TestCompositeToolHandler_Handle(t *testing.T) {
 	}
 	if result == nil {
 		t.Fatal("expected non-nil result")
+		return
 	}
 	if result.StructuredContent == nil {
 		t.Fatal("expected non-nil StructuredContent")
+		return
 	}
 
 	// Collect strategy: result keyed by step ID.

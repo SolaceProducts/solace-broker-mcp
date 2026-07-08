@@ -80,6 +80,7 @@ func TestParseReply_Errors(t *testing.T) {
 			}
 			if err == nil {
 				t.Fatalf("expected an error, got nil")
+				return
 			}
 			if err.Kind != tc.wantKind {
 				t.Errorf("error kind mismatch got: %v want: %v", err.Kind, tc.wantKind)

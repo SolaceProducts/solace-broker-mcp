@@ -65,6 +65,7 @@ func TestParseReply_TruncatesOversizedMessage(t *testing.T) {
 	_, err := parseReply([]byte(body))
 	if err == nil {
 		t.Fatal("expected an error, got nil")
+		return
 	}
 	if err.Kind != ErrorKindParse {
 		t.Fatalf("kind mismatch: got %v want %v", err.Kind, ErrorKindParse)
