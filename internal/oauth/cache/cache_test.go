@@ -1,8 +1,11 @@
 package cache
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -449,5 +452,54 @@ func TestPutResult_ReportsStored(t *testing.T) {
 	}
 	if pr.Status != PutStored {
 		t.Errorf("expected PutStored, got %v", pr.Status)
+	}
+}
+
+// TestGetResult_LogValueDoesNotLeakToken pins the log-safety contract for
+// GetResult. Without a LogValue method on the result type, slog.Any falls
+// back to reflection and walks straight into Entry.Value — leaking the
+// raw broker-bound credential to any log line that passes the result in
+// verbatim. CachedCredential's own LogValue is bypassed because slog only
+// consults it if the enclosing type does not itself implement LogValuer.
+// This is exactly the landmine docs/internal/secure-logging-rules.md warns
+// about.
+func TestGetResult_LogValueDoesNotLeakToken(t *testing.T) {
+	t.Parallel()
+
+	const secret = "SUPER-SECRET-BEARER-TOKEN-VALUE"
+	var buf bytes.Buffer
+	l := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	gr := GetResult{
+		Entry:  CachedCredential{Value: secret, ExpiresAt: time.Now().Add(time.Hour)},
+		Status: GetHit,
+	}
+	l.LogAttrs(context.Background(), slog.LevelInfo, "test", slog.Any("cache_result", gr))
+
+	out := buf.String()
+	if strings.Contains(out, secret) {
+		t.Fatalf("GetResult leaks Entry.Value through slog.Any (regression of the LogValue guard). Emitted line: %s", out)
+	}
+	if !strings.Contains(out, `"status":"hit"`) {
+		t.Errorf("GetResult log should surface status=hit; got: %s", out)
+	}
+}
+
+// TestPutResult_LogValueEmitsStatusOnly pins the symmetric guard for
+// PutResult. Today PutResult only carries Status so no token can leak,
+// but pinning the shape now catches a regression if a future backend
+// grows the type with fields that should not be blanket-reflected.
+func TestPutResult_LogValueEmitsStatusOnly(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	l := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	pr := PutResult{Status: PutDroppedFull}
+	l.LogAttrs(context.Background(), slog.LevelInfo, "test", slog.Any("cache_result", pr))
+
+	out := buf.String()
+	if !strings.Contains(out, `"status":"dropped_full"`) {
+		t.Errorf("PutResult log should surface status=dropped_full; got: %s", out)
 	}
 }

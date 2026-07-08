@@ -77,6 +77,14 @@ type GetResult struct {
 	Status GetStatus
 }
 
+// LogValue keeps GetResult log-safe when passed to slog.Any. Without it,
+// slog reflects into the struct and would emit Entry.Value (the raw
+// credential) verbatim, bypassing CachedCredential's own LogValue guard.
+// Only Status is exposed here; Entry stays out of every log record.
+func (r GetResult) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("status", r.Status.String()))
+}
+
 // PutStatus describes the outcome of a Put call.
 type PutStatus int
 
@@ -111,6 +119,14 @@ func (s PutStatus) Level() slog.Level {
 // PutResult is returned by Put.
 type PutResult struct {
 	Status PutStatus
+}
+
+// LogValue is symmetric with GetResult.LogValue. PutResult carries no
+// credential material today, but future backends may surface additional
+// metadata (bytes written, admission decisions) that should not be
+// blanket-reflected into log records. Pin the shape now.
+func (r PutResult) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("status", r.Status.String()))
 }
 
 // DeleteResult is returned by Delete. Empty today; exists so a future backend
