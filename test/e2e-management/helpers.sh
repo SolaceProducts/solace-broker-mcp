@@ -22,6 +22,7 @@ source "$SUITE_DIR/../e2e-common/lib.sh"
 CONFIG_VPN_NAMES=("e2e-config-vpn-broker-a" "e2e-config-vpn-broker-b")
 CONFIG_QUEUE_NAMES=("e2e-config-queue-broker-a" "e2e-config-queue-broker-b" "e2e-config-iso")
 CONFIG_TE_NAMES=("e2e-config-te-broker-a" "e2e-config-te-broker-b")
+CONFIG_RDP_NAMES=("e2e-config-rdp-broker-a" "e2e-config-rdp-broker-b" "e2e-config-rdp-iso")
 
 # Delete every config fixture on both brokers via the SEMP config API, ignoring
 # 404s. Idempotent: safe to call before a run (pre-clean leftover state) and from
@@ -35,6 +36,9 @@ sweep_config_fixtures() {
         done
         for name in "${CONFIG_TE_NAMES[@]}"; do
             semp_delete "$semp_config" "msgVpns/$BROKER_VPN/topicEndpoints/$name"
+        done
+        for name in "${CONFIG_RDP_NAMES[@]}"; do
+            semp_delete "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/$name"
         done
         for name in "${CONFIG_VPN_NAMES[@]}"; do
             semp_delete "$semp_config" "msgVpns/$name"
