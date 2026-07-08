@@ -40,6 +40,8 @@ func numField(item map[string]any, name string) (float64, bool) {
 	}
 }
 
+// stringField returns the named string from item. Returns ok=false for missing,
+// nil, or unexpected types so the caller can skip the row rather than abort.
 func stringField(item map[string]any, name string) (string, bool) {
 	v, ok := item[name].(string)
 	return v, ok
