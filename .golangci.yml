@@ -1,5 +1,13 @@
 version: "2"
 
+# Report every issue found. golangci-lint defaults to max-issues-per-linter=50
+# and max-same-issues=3, silently truncating the rest — which produces false
+# confidence ("I fixed the 3 things it reported") when more instances of the
+# same problem exist elsewhere. Uncap so CI output reflects the full picture.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
 linters:
   enable:
     - errcheck      # unchecked error return values
