@@ -30,13 +30,14 @@ import (
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
+	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache/cachetest"
 )
 
 // newTestExchanger builds an Exchanger pointing at the given httptest server
 // with a pinned clock. The returned nowFunc can be swapped to advance time.
 func newTestExchanger(t *testing.T, serverURL string) *Exchanger {
 	t.Helper()
-	p := validParams()
+	p := validParams(t)
 	p.TokenURL = serverURL
 	e, err := New(p)
 	if err != nil {
@@ -574,7 +575,7 @@ func TestDoExchange_BuildRequestFailureWrapsAsTransport(t *testing.T) {
 		grantType:        GrantTypeTokenExchange,
 		audienceParam:    AudienceParamAudience,
 		httpClient:       &http.Client{},
-		cache:            mustTestCache(),
+		cache:            cachetest.Default(t),
 		nowFunc:          func() time.Time { return pinnedNow() },
 	}
 
@@ -943,7 +944,7 @@ func TestExchange_UnknownGrantTypeReturnsTransportError(t *testing.T) {
 		grantType:        GrantType(99),
 		audienceParam:    AudienceParamAudience,
 		httpClient:       &http.Client{},
-		cache:            mustTestCache(),
+		cache:            cachetest.Default(t),
 		nowFunc:          func() time.Time { return pinnedNow() },
 	}
 

@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache/cachetest"
 )
 
 func validBrokerOAuthConfig() *config.BrokerOAuthConfig {
@@ -38,7 +39,7 @@ func TestFromConfig_ClientSecretPostResolvesCorrectly(t *testing.T) {
 	t.Parallel()
 
 	cfg := validBrokerOAuthConfig()
-	e, err := FromConfig(cfg, &http.Client{}, mustTestCache())
+	e, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
 	if err != nil {
 		t.Fatalf("FromConfig: %v", err)
 	}
@@ -65,7 +66,7 @@ func TestFromConfig_ClientSecretBasicResolvesCorrectly(t *testing.T) {
 		ClientSecretBasic: &config.ClientSecretAuth{Secret: "basic-secret"},
 	}
 
-	e, err := FromConfig(cfg, &http.Client{}, mustTestCache())
+	e, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
 	if err != nil {
 		t.Fatalf("FromConfig: %v", err)
 	}
@@ -81,7 +82,7 @@ func TestFromConfig_ClientSecretBasicResolvesCorrectly(t *testing.T) {
 func TestFromConfig_NilConfigReturnsError(t *testing.T) {
 	t.Parallel()
 
-	_, err := FromConfig(nil, &http.Client{}, mustTestCache())
+	_, err := FromConfig(nil, &http.Client{}, cachetest.Default(t))
 	if err == nil {
 		t.Fatal("FromConfig(nil) = nil error, want error")
 	}
@@ -93,7 +94,7 @@ func TestFromConfig_NilConfigReturnsError(t *testing.T) {
 func TestFromConfig_NilHTTPClientReturnsError(t *testing.T) {
 	t.Parallel()
 
-	_, err := FromConfig(validBrokerOAuthConfig(), nil, mustTestCache())
+	_, err := FromConfig(validBrokerOAuthConfig(), nil, cachetest.Default(t))
 	if err == nil {
 		t.Fatal("FromConfig with nil HTTPClient = nil error, want error")
 	}
@@ -108,7 +109,7 @@ func TestFromConfig_NoClientAuthMethodReturnsError(t *testing.T) {
 	cfg := validBrokerOAuthConfig()
 	cfg.ClientAuth = config.BrokerClientAuth{}
 
-	_, err := FromConfig(cfg, &http.Client{}, mustTestCache())
+	_, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
 	if err == nil {
 		t.Fatal("FromConfig with no client auth = nil error, want error")
 	}
@@ -126,7 +127,7 @@ func TestFromConfig_BothClientAuthMethodsReturnsError(t *testing.T) {
 		ClientSecretPost:  &config.ClientSecretAuth{Secret: "b"},
 	}
 
-	_, err := FromConfig(cfg, &http.Client{}, mustTestCache())
+	_, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
 	if err == nil {
 		t.Fatal("FromConfig with both client auth methods = nil error, want error")
 	}
@@ -141,7 +142,7 @@ func TestFromConfig_UnknownGrantTypeReturnsError(t *testing.T) {
 	cfg := validBrokerOAuthConfig()
 	cfg.GrantType = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 
-	_, err := FromConfig(cfg, &http.Client{}, mustTestCache())
+	_, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
 	if err == nil {
 		t.Fatal("FromConfig with unknown grant type = nil error, want error")
 	}
@@ -156,7 +157,7 @@ func TestFromConfig_AudienceParamScopeNotYetImplemented(t *testing.T) {
 	cfg := validBrokerOAuthConfig()
 	cfg.AudienceParam = config.AudienceParamScope
 
-	_, err := FromConfig(cfg, &http.Client{}, mustTestCache())
+	_, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
 	if err == nil {
 		t.Fatal("FromConfig with audience_parameter_name=scope = nil error, want error")
 	}
@@ -171,7 +172,7 @@ func TestFromConfig_AudienceParamResourceNotYetImplemented(t *testing.T) {
 	cfg := validBrokerOAuthConfig()
 	cfg.AudienceParam = config.AudienceParamResource
 
-	_, err := FromConfig(cfg, &http.Client{}, mustTestCache())
+	_, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
 	if err == nil {
 		t.Fatal("FromConfig with audience_parameter_name=resource = nil error, want error")
 	}
@@ -186,7 +187,7 @@ func TestFromConfig_UnknownAudienceParamReturnsError(t *testing.T) {
 	cfg := validBrokerOAuthConfig()
 	cfg.AudienceParam = "custom_param"
 
-	_, err := FromConfig(cfg, &http.Client{}, mustTestCache())
+	_, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
 	if err == nil {
 		t.Fatal("FromConfig with unknown audience param = nil error, want error")
 	}
@@ -199,7 +200,7 @@ func TestFromConfig_GrantTypeAndAudienceParamMapToCorrectEnums(t *testing.T) {
 	t.Parallel()
 
 	cfg := validBrokerOAuthConfig()
-	e, err := FromConfig(cfg, &http.Client{}, mustTestCache())
+	e, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
 	if err != nil {
 		t.Fatalf("FromConfig: %v", err)
 	}
@@ -216,7 +217,7 @@ func TestFromConfig_NowFuncIsSet(t *testing.T) {
 	t.Parallel()
 
 	cfg := validBrokerOAuthConfig()
-	e, err := FromConfig(cfg, &http.Client{}, mustTestCache())
+	e, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
 	if err != nil {
 		t.Fatalf("FromConfig: %v", err)
 	}

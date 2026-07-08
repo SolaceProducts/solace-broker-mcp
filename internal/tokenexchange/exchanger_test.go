@@ -18,16 +18,20 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
+	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache/cachetest"
 )
-
 
 // validParams returns a Params struct with every field set to a value
 // that would survive every layer of validation. Tests start from this
 // and mutate one field at a time to exercise specific cases.
-func validParams() Params {
+//
+// Takes *testing.T so the cache built into Cache is closed via t.Cleanup
+// when the test finishes — leaving that off (as the earlier mustTestCache
+// helper did) leaked Otter's sweeper goroutine per test and pinned the
+// cache's heap for the whole `go test` run.
+func validParams(t *testing.T) Params {
+	t.Helper()
 	return Params{
 		TokenURL:         "https://idp.example.com/token",
 		ClientID:         "solace-mcp-server",
@@ -36,20 +40,8 @@ func validParams() Params {
 		GrantType:        GrantTypeTokenExchange,
 		AudienceParam:    AudienceParamAudience,
 		HTTPClient:       &http.Client{},
-		Cache:            mustTestCache(),
+		Cache:            cachetest.Default(t),
 	}
-}
-
-func mustTestCache() cache.TokenCache {
-	tc, err := cache.NewTokenCache(cache.CacheConfig{
-		MaxSize:   100,
-		ClockSkew: 0,
-		MaxTTL:    time.Hour,
-	})
-	if err != nil {
-		panic(err)
-	}
-	return tc
 }
 
 // TestNew_HTTPClientNilRejected pins the only runtime check New performs.
@@ -58,7 +50,7 @@ func mustTestCache() cache.TokenCache {
 // non-nil for the Exchanger to function. A nil here is a programming
 // error in main's wiring — fail fast, do not ship a half-built Exchanger.
 func TestNew_HTTPClientNilRejected(t *testing.T) {
-	p := validParams()
+	p := validParams(t)
 	p.HTTPClient = nil
 
 	ex, err := New(p)
@@ -75,7 +67,7 @@ func TestNew_HTTPClientNilRejected(t *testing.T) {
 
 // TestNew_CacheNilRejected pins the runtime check that Cache must be non-nil.
 func TestNew_CacheNilRejected(t *testing.T) {
-	p := validParams()
+	p := validParams(t)
 	p.Cache = nil
 
 	ex, err := New(p)
@@ -93,7 +85,7 @@ func TestNew_CacheNilRejected(t *testing.T) {
 // TestNew_HappyPath verifies that a fully-populated Params yields a
 // non-nil Exchanger with no error.
 func TestNew_HappyPath(t *testing.T) {
-	ex, err := New(validParams())
+	ex, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -107,7 +99,7 @@ func TestNew_HappyPath(t *testing.T) {
 // not affect the constructed Exchanger. Effectively-immutable state is
 // the foundation of the concurrency safety story (Decision 8).
 func TestNew_FieldsAreCopied(t *testing.T) {
-	p := validParams()
+	p := validParams(t)
 	ex, err := New(p)
 	if err != nil {
 		t.Fatalf("New: %v", err)

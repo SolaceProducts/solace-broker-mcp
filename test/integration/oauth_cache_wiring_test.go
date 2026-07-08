@@ -37,6 +37,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache/cachetest"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tokenexchange"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
 )
@@ -86,7 +87,7 @@ func TestOAuthCache_TwoRequestsSameBearerHitIdPOnce(t *testing.T) {
 	}))
 	defer fakeBroker.Close()
 
-	tc := newIntegrationTestCache(t)
+	tc := cachetest.Default(t)
 	exchanger, err := tokenexchange.New(tokenexchange.Params{
 		TokenURL:         fakeIdP.URL,
 		ClientID:         "mcp-server",
