@@ -1,9 +1,11 @@
-# E2E Monitoring Suite (SOL-150024)
+# E2E Monitoring Suite
 
-End-to-end coverage for the broker MCP server's monitoring-oriented tools (queue
-listing, RDP discovery, client/subscriber state, message-rate and discard
-counters). Runs two Solace brokers in containers, provisions baseline + extended
-fixtures, and drives both SEMP-layer and messaging-layer broker state.
+End-to-end tests for the monitoring tools — `list-vpns`, `list-queues`, `list-clients`,
+`get-message-rates`, `list-slow-subscribers`, `list-queue-discards`, `get-discard-stats`,
+`get-broker-status`, and others. Runs two Solace brokers, provisions baseline + extended
+fixtures (F1–F7), and drives both SEMP-layer and messaging-layer broker state.
+
+Builds on the shared scaffold in [`../e2e-common/`](../e2e-common/README.md).
 
 An LLM-driven eval harness that exercises the same fixtures through
 natural-language prompts via the Claude Code CLI lives under
@@ -12,27 +14,23 @@ natural-language prompts via the Claude Code CLI lives under
 
 ## Quickstart
 
-Three commands for a full test run:
-
 ```bash
-# 1. Bring brokers up. Safe to re-run; does nothing if already up.
-bash test/e2e-monitoring/setup-brokers.sh
+# Full cycle (recommended)
+make e2e-monitoring-all
 
-# 2. Run the monitoring-tools test suite. Safe to re-run many times.
-bash test/e2e-monitoring/test-monitoring-tools.sh
-
-# 3. Tear brokers down when you're done.
+# Or step by step
+SUITE_DIR=test/e2e-monitoring bash test/e2e-common/setup-brokers.sh
+bash test/e2e-monitoring/run-all.sh
 docker compose -f test/e2e-monitoring/docker-compose.yml down -v
 ```
 
-During development you can repeat step 2 as many times as you need without
-restarting brokers. `test-monitoring-tools.sh` builds the MCP server, applies
-all fixtures to both brokers (`solace-e2e-mon-a`, `solace-e2e-mon-b`), then
-cleans up fixtures and stops the MCP server on exit. Cleanup runs on every
-exit path including `Ctrl-C`, `SIGTERM`, and terminal close (`SIGHUP`);
-re-running after a forced kill (`SIGKILL` of the parent) succeeds — the
-cleanup-first pattern in `helpers.sh` handles stale fixtures from prior
-aborted runs.
+During development you can repeat `run-all.sh` as many times as you need without
+restarting brokers. The orchestrator builds the MCP server, applies all fixtures
+to both brokers (`solace-e2e-mon-a`, `solace-e2e-mon-b`), then cleans up fixtures
+and stops the MCP server on exit. Cleanup runs on every exit path including
+`Ctrl-C`, `SIGTERM`, and terminal close (`SIGHUP`); re-running after a forced
+kill (`SIGKILL` of the parent) succeeds — the cleanup-first pattern in
+`helpers.sh` handles stale fixtures from prior aborted runs.
 
 ## Fixtures
 
