@@ -48,9 +48,6 @@ jobs:
           # test whether stale cached facts are the source of the SA5011
           # errors on PR #150. Revert before merging.
           skip-cache: true
-          # TEMPORARY: --verbose so we can confirm every package/linter runs
-          # and read per-analyzer timing. Remove with the skip-cache line.
-          args: --verbose
 
   build:
     runs-on: ubuntu-latest
