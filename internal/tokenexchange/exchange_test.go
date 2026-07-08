@@ -87,6 +87,7 @@ func TestExchange_HappyPath(t *testing.T) {
 	}
 	if tok == nil {
 		t.Fatal("tok = nil, want non-nil")
+		return
 	}
 	if tok.Value != "exchanged-tok" {
 		t.Errorf("tok.Value = %q, want %q", tok.Value, "exchanged-tok")

@@ -578,6 +578,7 @@ func TestParseSuccessBody_TokenConstructionAndExpiresAt(t *testing.T) {
 	}
 	if tok == nil {
 		t.Fatal("tok = nil, want non-nil")
+		return
 	}
 	if tok.Value != "my-token" {
 		t.Errorf("tok.Value = %q, want %q", tok.Value, "my-token")
@@ -784,6 +785,7 @@ func TestParseIdPResponse_HappyPath(t *testing.T) {
 	}
 	if tok == nil {
 		t.Fatal("tok = nil, want non-nil")
+		return
 	}
 	if tok.Value != "exchanged-token" {
 		t.Errorf("tok.Value = %q, want %q", tok.Value, "exchanged-token")
@@ -829,6 +831,7 @@ func TestParseSuccessBody_ShortLivedTokenReturnsNonErrorTokenWithPastExpiresAt(t
 			}
 			if tok == nil {
 				t.Fatal("tok = nil, want non-nil")
+				return
 			}
 
 			wantExpiresAt := now.Add(time.Duration(tc.expiresIn)*time.Second - 30*time.Second)
@@ -962,6 +965,7 @@ func TestParseSuccessBody_UnknownFieldsSilentlyIgnored(t *testing.T) {
 	}
 	if tok == nil {
 		t.Fatal("tok = nil, want non-nil")
+		return
 	}
 	if tok.Value != "tok" {
 		t.Errorf("tok.Value = %q, want %q", tok.Value, "tok")

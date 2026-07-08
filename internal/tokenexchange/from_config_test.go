@@ -85,6 +85,7 @@ func TestFromConfig_NilConfigReturnsError(t *testing.T) {
 	_, err := FromConfig(nil, &http.Client{}, cachetest.Default(t))
 	if err == nil {
 		t.Fatal("FromConfig(nil) = nil error, want error")
+		return
 	}
 	if !strings.Contains(err.Error(), "nil") {
 		t.Errorf("error = %q, want it to mention nil", err.Error())
@@ -97,6 +98,7 @@ func TestFromConfig_NilHTTPClientReturnsError(t *testing.T) {
 	_, err := FromConfig(validBrokerOAuthConfig(), nil, cachetest.Default(t))
 	if err == nil {
 		t.Fatal("FromConfig with nil HTTPClient = nil error, want error")
+		return
 	}
 	if !strings.Contains(err.Error(), "HTTPClient") {
 		t.Errorf("error = %q, want it to mention HTTPClient", err.Error())
@@ -112,6 +114,7 @@ func TestFromConfig_NoClientAuthMethodReturnsError(t *testing.T) {
 	_, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
 	if err == nil {
 		t.Fatal("FromConfig with no client auth = nil error, want error")
+		return
 	}
 	if !strings.Contains(err.Error(), "no client auth") {
 		t.Errorf("error = %q, want it to mention no client auth method", err.Error())
@@ -130,6 +133,7 @@ func TestFromConfig_BothClientAuthMethodsReturnsError(t *testing.T) {
 	_, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
 	if err == nil {
 		t.Fatal("FromConfig with both client auth methods = nil error, want error")
+		return
 	}
 	if !strings.Contains(err.Error(), "both") {
 		t.Errorf("error = %q, want it to mention both methods", err.Error())
@@ -145,6 +149,7 @@ func TestFromConfig_UnknownGrantTypeReturnsError(t *testing.T) {
 	_, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
 	if err == nil {
 		t.Fatal("FromConfig with unknown grant type = nil error, want error")
+		return
 	}
 	if !strings.Contains(err.Error(), "jwt-bearer") {
 		t.Errorf("error = %q, want it to mention the unsupported grant type", err.Error())
@@ -160,6 +165,7 @@ func TestFromConfig_AudienceParamScopeNotYetImplemented(t *testing.T) {
 	_, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
 	if err == nil {
 		t.Fatal("FromConfig with audience_parameter_name=scope = nil error, want error")
+		return
 	}
 	if !strings.Contains(err.Error(), "not yet implemented") {
 		t.Errorf("error = %q, want it to mention not yet implemented", err.Error())
@@ -175,6 +181,7 @@ func TestFromConfig_AudienceParamResourceNotYetImplemented(t *testing.T) {
 	_, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
 	if err == nil {
 		t.Fatal("FromConfig with audience_parameter_name=resource = nil error, want error")
+		return
 	}
 	if !strings.Contains(err.Error(), "not yet implemented") {
 		t.Errorf("error = %q, want it to mention not yet implemented", err.Error())
@@ -190,6 +197,7 @@ func TestFromConfig_UnknownAudienceParamReturnsError(t *testing.T) {
 	_, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
 	if err == nil {
 		t.Fatal("FromConfig with unknown audience param = nil error, want error")
+		return
 	}
 	if !strings.Contains(err.Error(), "custom_param") {
 		t.Errorf("error = %q, want it to mention the unsupported param name", err.Error())

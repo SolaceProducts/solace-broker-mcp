@@ -56,6 +56,7 @@ func TestNew_HTTPClientNilRejected(t *testing.T) {
 	ex, err := New(p)
 	if err == nil {
 		t.Fatal("expected error for nil HTTPClient")
+		return
 	}
 	if ex != nil {
 		t.Errorf("expected nil Exchanger on error, got %#v", ex)
@@ -73,6 +74,7 @@ func TestNew_CacheNilRejected(t *testing.T) {
 	ex, err := New(p)
 	if err == nil {
 		t.Fatal("expected error for nil Cache")
+		return
 	}
 	if ex != nil {
 		t.Errorf("expected nil Exchanger on error, got %#v", ex)

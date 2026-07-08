@@ -240,6 +240,7 @@ func TestBuildIdPRequest_UnknownGrantType(t *testing.T) {
 
 			if err == nil {
 				t.Fatal("expected error for unknown GrantType, got nil")
+				return
 			}
 			if req != nil {
 				t.Errorf("expected nil request on error, got non-nil")
@@ -287,6 +288,7 @@ func TestBuildIdPRequest_UnknownClientAuthMethod(t *testing.T) {
 
 			if err == nil {
 				t.Fatal("expected error for unknown ClientAuthMethod, got nil")
+				return
 			}
 			if req != nil {
 				t.Errorf("expected nil request on error, got non-nil")
@@ -335,6 +337,7 @@ func TestBuildIdPRequest_UnknownAudienceFormat(t *testing.T) {
 
 			if err == nil {
 				t.Fatal("expected error for unknown AudienceFormat, got nil")
+				return
 			}
 			if req != nil {
 				t.Errorf("expected nil request on error, got non-nil")
@@ -526,6 +529,7 @@ func TestBuildIdPRequest_MalformedTokenURL(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("expected error for malformed tokenURL, got nil")
+		return
 	}
 	if req != nil {
 		t.Errorf("expected nil request on error, got non-nil")
