@@ -44,6 +44,10 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.11.4
+          # TEMPORARY (debug/lint-sa5011-cache): bypass the analysis cache to
+          # test whether stale cached facts are the source of the SA5011
+          # errors on PR #150. Revert before merging.
+          skip-cache: true
 
   build:
     runs-on: ubuntu-latest

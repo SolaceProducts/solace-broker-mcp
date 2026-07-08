@@ -1,5 +1,12 @@
 version: "2"
 
+# TEMPORARY (debug/lint-sa5011-cache): remove issue caps so CI reports every
+# SA5011 hit instead of the default 3-per-text / 50-per-linter truncation.
+# Revert before merging back to main.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
 linters:
   enable:
     - errcheck      # unchecked error return values
