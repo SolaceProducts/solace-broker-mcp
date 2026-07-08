@@ -73,8 +73,18 @@ func (a *OAuthAuthenticator) AddAuth(ctx context.Context, req *http.Request) err
 }
 
 // HandleAuthFailure evicts the cached token for this broker and subject
-// token, then returns true so the retry layer re-calls AddAuth — which
-// will miss the cache and fetch a fresh token from the IdP.
+// token, then returns true to signal the retry layer to retry.
+//
+// Known limitation (SOL-151624): the retry layer does not yet re-invoke
+// AddAuth between attempts (resilience/sender.go has no PrepareRetry
+// hook), so retryablehttp replays the same *http.Request with the stale
+// Authorization header, and the in-flight retry fails against the same
+// 401. Eviction still helps the *next* request through this broker: it
+// will miss the cache and fetch a fresh token.
+//
+// Basic/Bearer are unaffected — their AddAuth sets a static header, so
+// replaying the request on retry carries the same (still-correct) value.
+// Only OAuth needs the PrepareRetry hook to make in-flight recovery work.
 func (a *OAuthAuthenticator) HandleAuthFailure(ctx context.Context, _ http.Header) bool {
 	subjectToken, ok := internalauth.RawSubjectTokenFromContext(ctx)
 	if !ok {
