@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # MCP tool-level functional tests for SOL-150025 (tools 1–12: Block A 1–9,
 # Block B 10–12 — list-slow-subscribers, list-queue-discards, get-discard-stats).
-# Invoked by test-monitoring-tools.sh after verify-fixtures.sh; assumes the MCP
+# Invoked by run-all.sh after verify-fixtures.sh; assumes the MCP
 # server is running and the F1–F7 fixtures have been created.
 #
 # Where verify-fixtures.sh asserts broker *state* via SEMP-direct calls, this
@@ -17,7 +17,7 @@ source "$(dirname "$0")/helpers.sh"
 # terminal, set -e failure, normal completion). The F6 slow-direct-subscriber
 # runs under SIGSTOP, so without this trap a direct invocation that's
 # interrupted leaves an orphan that can't receive SIGTERM. Idempotent and
-# harmless when invoked from test-monitoring-tools.sh — its own EXIT trap
+# harmless when invoked from run-all.sh — its own EXIT trap
 # then sees no pidfiles and no-ops.
 trap stop_broker_drivers EXIT INT TERM HUP
 

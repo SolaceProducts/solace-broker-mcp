@@ -2,9 +2,10 @@
 # Shared helper library for the E2E test suites (monitoring, management, …).
 #
 # This is the generic half of the scaffold: broker readiness, MCP server
-# lifecycle, config generation, SEMP operations, the MCP JSON-RPC wire, and
-# assertions/test-runner. Suite-specific fixtures live in each suite's own
-# helpers.
+# lifecycle, config generation, SEMP operations, the shared base broker
+# fixtures, the MCP JSON-RPC wire, and assertions/test-runner. Suite-specific
+# fixtures (monitoring's F1–F7, management's per-test config objects) live in
+# each suite's own helpers.
 #
 # Note that this lib does NOT locate itself from its own path. The sourcing
 # suite sets SUITE_DIR (its own directory) first; the lib derives BIN_DIR /
@@ -378,6 +379,62 @@ verify_monitor_object() {
     return 1
 }
 
+# ── Base broker fixtures ─────────────────────────────────────────────────────
+# The starter set both the basic-mcp and monitoring suites provision on the
+# default VPN of each broker: a queue, a REST delivery point with one consumer,
+# and a queue binding tying them together. The monitoring suite layers its
+# F1–F7 fixtures on top of this set; the management suite provisions nothing here.
+
+create_fixtures_on() {
+    local semp_config="$1"
+    local label="$2"
+    local broker_url="$3"
+    log_info "Creating fixtures on $label ..."
+
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues" \
+        '{"queueName":"test-queue","accessType":"non-exclusive","permission":"consume","ingressEnabled":true,"egressEnabled":true}' >/dev/null
+
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints" \
+        '{"restDeliveryPointName":"test-rdp","enabled":false}' >/dev/null
+
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp/restConsumers" \
+        '{"restConsumerName":"test-consumer","remoteHost":"localhost","remotePort":8888,"tlsEnabled":false,"enabled":false}' >/dev/null
+
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp/queueBindings" \
+        '{"queueBindingName":"test-queue","postRequestTarget":"/test"}' >/dev/null
+
+    # The private monitor endpoint can lag the config API, so confirm the
+    # objects are visible before dependent fixtures/tests run.
+    verify_fixtures "$broker_url" "$label"
+
+    log_info "Fixtures created on $label"
+}
+
+# Best-effort visibility check for the base queue and RDP. verify_monitor_object
+# warns and returns non-zero on timeout rather than aborting, so the run
+# proceeds even if the monitor endpoint is still catching up.
+verify_fixtures() {
+    local broker_url="$1"
+    local label="$2"
+    log_info "Verifying base fixtures visible on $label ..."
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/queues/test-queue" || true
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp" || true
+}
+
+# Deletes the base fixtures in reverse dependency order (binding → consumer →
+# RDP → queue), ignoring 404s. Idempotent: safe to call before a run and from a
+# cleanup trap.
+cleanup_fixtures_on() {
+    local semp_config="$1"
+    local label="$2"
+    log_info "Cleaning up fixtures on $label ..."
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp/queueBindings/test-queue"
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp/restConsumers/test-consumer"
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp"
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/queues/test-queue"
+    log_info "Fixtures cleaned up on $label"
+}
+
 # ── MCP Protocol Helpers ─────────────────────────────────────────────────────
 
 # Performs the MCP initialize handshake. Returns the Mcp-Session-Id.
@@ -545,6 +602,13 @@ print_summary() {
     echo -e "  ${label}: ${TESTS_RUN} run, ${GREEN}${TESTS_PASSED} passed${NC}, ${RED}${TESTS_FAILED} failed${NC}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
+
+    # Append a machine-readable row when E2E_RESULTS_DIR is set, so a multi-scenario
+    # runner (e2e-basic-mcp/run-all.sh) can build an aggregate summary table. No-op
+    # for suites that don't set it.
+    if [ -n "${E2E_RESULTS_DIR:-}" ]; then
+        echo "${label}|${TESTS_RUN}|${TESTS_PASSED}|${TESTS_FAILED}" >> "$E2E_RESULTS_DIR/results.txt"
+    fi
 
     [ "$TESTS_FAILED" -eq 0 ]
 }

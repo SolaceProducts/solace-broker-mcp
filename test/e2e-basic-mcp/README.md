@@ -16,7 +16,7 @@ Three commands for a full run:
 
 ```bash
 # 1. Bring brokers up. Safe to re-run; does nothing if already up.
-bash test/e2e-basic-mcp/setup-brokers.sh
+SUITE_DIR=test/e2e-basic-mcp bash test/e2e-common/setup-brokers.sh
 
 # 2. Build the server, create fixtures, run both scenarios, print a summary.
 bash test/e2e-basic-mcp/run-all.sh
@@ -27,8 +27,8 @@ docker compose -f test/e2e-basic-mcp/docker-compose.yml down -v
 
 `run-all.sh` builds the MCP server and the Go agent, applies the base fixtures to
 both brokers, runs both scenarios, and cleans up the fixtures and server on exit
-(via an `EXIT` trap). It assumes the brokers are already up — run
-`setup-brokers.sh` first.
+(via an `EXIT` trap). It assumes the brokers are already up — run the
+`setup-brokers.sh` step above first.
 
 ## Layout
 
@@ -37,10 +37,8 @@ test/e2e-basic-mcp/
 ├── README.md            # This file
 ├── .env                 # Single source of truth: ports, credentials, dev token
 ├── docker-compose.yml   # Two Solace PubSub+ broker containers
-├── helpers.sh           # Shared bash: broker wait, server start, MCP + assertion helpers
-├── setup-brokers.sh     # Bring brokers up and wait until ready (idempotent)
+├── helpers.sh           # Suite fixtures (queue/RDP/consumer/binding); sources ../e2e-common/lib.sh
 ├── run-all.sh           # Master runner: orchestrates both scenarios, prints summary table
-├── start-server.sh      # Build and start a fresh MCP server (foreground, or --bg)
 ├── test-standalone.sh   # Scenario 1: raw curl MCP protocol tests
 ├── test-agent.sh        # Scenario 2: builds and runs the Go MCP-SDK agent
 ├── agent/               # Go MCP-SDK client program (own go.mod)

@@ -95,12 +95,7 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: Start Solace brokers
-        run: docker compose -f test/e2e-basic-mcp/docker-compose.yml up -d
-
-      - name: Wait for brokers
-        run: |
-          source test/e2e-basic-mcp/helpers.sh
-          wait_for_all_brokers 120
+        run: SUITE_DIR=test/e2e-basic-mcp bash test/e2e-common/setup-brokers.sh
 
       - name: Run E2E tests
         run: bash test/e2e-basic-mcp/run-all.sh

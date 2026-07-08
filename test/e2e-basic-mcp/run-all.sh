@@ -4,7 +4,8 @@
 # This script: builds and starts the MCP server, creates fixtures, runs both test scenarios, cleans up.
 
 set -euo pipefail
-source "$(dirname "$0")/helpers.sh"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/helpers.sh"
 
 # ── Results collection ──────────────────────────────────────────────────────
 export E2E_RESULTS_DIR
@@ -26,7 +27,7 @@ log_info "=== Solace Broker MCP — E2E Test Suite ==="
 echo ""
 
 # 1. Build and start MCP server via start-server.sh --bg
-bash "$SCRIPT_DIR/start-server.sh" --bg
+bash "$SCRIPT_DIR/../e2e-common/start-server.sh" --bg
 
 # Read back the PID so our cleanup trap can stop it
 PIDFILE="$BIN_DIR/mcp-server.pid"
