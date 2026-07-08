@@ -60,3 +60,8 @@ func (o *otterTokenCache) Delete(_ context.Context, key string) (DeleteResult, e
 	o.cache.Delete(key)
 	return DeleteResult{}, nil
 }
+
+func (o *otterTokenCache) Close() error {
+	o.cache.Close()
+	return nil
+}

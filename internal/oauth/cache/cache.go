@@ -128,4 +128,5 @@ type TokenCache interface {
 	Get(ctx context.Context, key string) (GetResult, error)
 	Put(ctx context.Context, key string, entry CachedCredential) (PutResult, error)
 	Delete(ctx context.Context, key string) (DeleteResult, error)
+	Close() error
 }
