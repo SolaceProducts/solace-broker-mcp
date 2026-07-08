@@ -3,7 +3,8 @@
 # Requires: MCP server running on $MCP_URL, broker fixtures created on both brokers.
 
 set -euo pipefail
-source "$(dirname "$0")/helpers.sh"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/helpers.sh"
 
 # ── Build agent ──────────────────────────────────────────────────────────────
 

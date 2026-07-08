@@ -124,7 +124,7 @@ When iterating on a specific scenario, start the server once and run tests again
 docker compose -f test/e2e-basic-mcp/docker-compose.yml up -d
 
 # 2. Build and start the MCP server in the background
-bash test/e2e-basic-mcp/start-server.sh --bg
+SUITE_DIR=test/e2e-basic-mcp bash test/e2e-common/start-server.sh --bg
 
 # 3. Create broker test fixtures on both brokers
 source test/e2e-basic-mcp/helpers.sh && create_fixtures
@@ -139,14 +139,14 @@ kill $(cat test/e2e-basic-mcp/bin/mcp-server.pid)
 
 ### Start the MCP server standalone
 
-`start-server.sh` compiles the MCP server from the latest source and starts it against the E2E brokers. Useful for manual testing or development.
+The shared `e2e-common/start-server.sh` compiles the MCP server from the latest source and starts it against a suite's E2E brokers. Useful for manual testing or development.
 
 ```bash
 # Foreground (Ctrl-C to stop)
-bash test/e2e-basic-mcp/start-server.sh
+SUITE_DIR=test/e2e-basic-mcp bash test/e2e-common/start-server.sh
 
 # Background (writes PID file for later stop)
-bash test/e2e-basic-mcp/start-server.sh --bg
+SUITE_DIR=test/e2e-basic-mcp bash test/e2e-common/start-server.sh --bg
 kill $(cat test/e2e-basic-mcp/bin/mcp-server.pid)   # stop
 ```
 

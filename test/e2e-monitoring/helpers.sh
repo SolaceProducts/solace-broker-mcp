@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Monitoring-suite helpers. The generic scaffold (broker readiness, MCP server
-# lifecycle, config generation, SEMP ops, MCP wire, assertions, test runner)
-# lives in the shared library; this file adds only the monitoring-specific
-# fixtures (F1–F7) and broker-driver orchestration.
+# lifecycle, config generation, SEMP ops, base broker fixtures, MCP wire,
+# assertions, test runner) lives in the shared library; this file adds only the
+# monitoring-specific fixtures (F1–F7) and broker-driver orchestration.
 # Source from test scripts: source "$(dirname "$0")/helpers.sh"
 
 set -euo pipefail
@@ -63,40 +63,7 @@ stop_broker_drivers() {
     sleep 3
 }
 
-# ── Broker Fixtures ──────────────────────────────────────────────────────────
-
-create_fixtures_on() {
-    local semp_config="$1"
-    local label="$2"
-    local broker_url="$3"
-    log_info "Creating fixtures on $label ..."
-
-    semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues" \
-        '{"queueName":"test-queue","accessType":"non-exclusive","permission":"consume","ingressEnabled":true,"egressEnabled":true}' >/dev/null
-
-    semp_post "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints" \
-        '{"restDeliveryPointName":"test-rdp","enabled":false}' >/dev/null
-
-    semp_post "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp/restConsumers" \
-        '{"restConsumerName":"test-consumer","remoteHost":"localhost","remotePort":8888,"tlsEnabled":false,"enabled":false}' >/dev/null
-
-    semp_post "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp/queueBindings" \
-        '{"queueBindingName":"test-queue","postRequestTarget":"/test"}' >/dev/null
-
-    # Verify fixtures are visible via the monitor API before proceeding.
-    # The private monitor endpoint can lag behind the config API.
-    verify_fixtures "$broker_url" "$label"
-
-    log_info "Fixtures created on $label"
-}
-
-verify_fixtures() {
-    local broker_url="$1"
-    local label="$2"
-    log_info "Verifying base fixtures visible on $label ..."
-    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/queues/test-queue" || true
-    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp" || true
-}
+# ── Broker fixtures (F1–F7, layered on the shared base set in lib.sh) ─────────
 
 verify_multi_vpn_on() {
     local broker_url="$1"
@@ -111,17 +78,6 @@ verify_multi_queue_on() {
     log_info "Verifying multi-queue fixtures visible on $label ..."
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/queues/test-queue-2" || true
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/queues/test-queue-3" || true
-}
-
-cleanup_fixtures_on() {
-    local semp_config="$1"
-    local label="$2"
-    log_info "Cleaning up fixtures on $label ..."
-    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp/queueBindings/test-queue"
-    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp/restConsumers/test-consumer"
-    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp"
-    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/queues/test-queue"
-    log_info "Fixtures cleaned up on $label"
 }
 
 # Provisions a second, non-default VPN ("test-vpn") on a broker with enabled=false.
@@ -299,8 +255,8 @@ F5_ACK_DELAY="2s"     # delay before ACKing each message (the throttle)
 F5_MAX_UNACKED=10     # maxDeliveredUnackedMsgsPerFlow on the F5 queue
 # txUnackedMsgCount oscillates by one as the slow consumer ACKs, so the
 # "pinned near the ceiling" assertion uses 80% of the per-flow cap rather than
-# exact equality. Shared by verify-fixtures.sh (SEMP-direct) and tool-tests.sh
-# (MCP-tool) so both layers assert against the same threshold.
+# exact equality. Shared by verify-fixtures.sh (SEMP-direct) and
+# test-monitoring-tools.sh (MCP-tool) so both layers assert against the same threshold.
 F5_NEAR_UNACKED=$(( F5_MAX_UNACKED * 8 / 10 ))
 
 # Provisions F5_QUEUE with a low per-flow unacked window and a subscription to
