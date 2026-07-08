@@ -47,7 +47,16 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 		}
 	}
 
-	// In-flight dedup: collapse concurrent misses into one IdP call.
+	// In-flight dedup: collapse concurrent misses into one IdP call. The
+	// cache Put runs INSIDE the singleflight func so it executes exactly
+	// once per burst (only the winner runs the func; all waiters share its
+	// return value). Doing Put outside would run it N times for N concurrent
+	// callers, producing N redundant writes and log lines.
+	//
+	// The success log stays OUTSIDE the func because it's per-caller
+	// observability: a caller that cancelled mid-exchange should not
+	// see "exchange succeeded" attributed to their request. The Put log
+	// is per-exchange and stays inside with the Put.
 	start := e.nowFunc()
 	v, err, _ := e.group.Do(key, func() (interface{}, error) {
 		// Detach from the caller's context so one caller's cancellation
@@ -55,7 +64,23 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 		// The explicit timeout bounds the detached call independently.
 		exchCtx, cancel := context.WithTimeout(context.Background(), e.exchangeTimeout)
 		defer cancel()
-		return e.doExchange(exchCtx, input)
+
+		tok, err := e.doExchange(exchCtx, input)
+		if err != nil {
+			return nil, err
+		}
+
+		pr, putErr := e.cache.Put(exchCtx, key, cache.CachedCredential{
+			Value:     tok.Value,
+			ExpiresAt: tok.ExpiresAt,
+		})
+		if putErr != nil {
+			slog.WarnContext(exchCtx, "token cache put failed", "broker", input.BrokerAlias, "error", putErr)
+		} else {
+			slog.Log(exchCtx, pr.Status.Level(), "token cache put", "broker", input.BrokerAlias, "status", pr.Status)
+		}
+
+		return tok, nil
 	})
 	elapsed := e.nowFunc().Sub(start)
 
@@ -80,17 +105,6 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	slog.DebugContext(ctx, "token exchange succeeded",
 		slog.String("broker", input.BrokerAlias),
 		slog.Duration("exchange_elapsed", elapsed))
-
-	// Store the exchanged token for future requests.
-	pr, putErr := e.cache.Put(ctx, key, cache.CachedCredential{
-		Value:     tok.Value,
-		ExpiresAt: tok.ExpiresAt,
-	})
-	if putErr != nil {
-		slog.WarnContext(ctx, "token cache put failed", "broker", input.BrokerAlias, "error", putErr)
-	} else {
-		slog.Log(ctx, pr.Status.Level(), "token cache put", "broker", input.BrokerAlias, "status", pr.Status)
-	}
 
 	return tok, nil
 }

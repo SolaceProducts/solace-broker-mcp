@@ -1295,3 +1295,70 @@ func TestExchange_ConcurrentMissesCollapse(t *testing.T) {
 		t.Errorf("cache status after burst = %v, want GetHit (singleflight winner should have stored the token)", gr.Status)
 	}
 }
+
+// countingCache wraps a real TokenCache and counts Put calls. Used to prove
+// that the singleflight-winner gating actually collapses N concurrent Put
+// attempts into 1, not just N Puts that Otter happens to deduplicate.
+type countingCache struct {
+	inner cache.TokenCache
+	puts  atomic.Int32
+}
+
+func (c *countingCache) Get(ctx context.Context, key string) (cache.GetResult, error) {
+	return c.inner.Get(ctx, key)
+}
+func (c *countingCache) Put(ctx context.Context, key string, entry cache.CachedCredential) (cache.PutResult, error) {
+	c.puts.Add(1)
+	return c.inner.Put(ctx, key, entry)
+}
+func (c *countingCache) Delete(ctx context.Context, key string) (cache.DeleteResult, error) {
+	return c.inner.Delete(ctx, key)
+}
+func (c *countingCache) Close() error {
+	return c.inner.Close()
+}
+
+// TestExchange_SingleflightWinnerOnlyWritesCache pins the C1/C2 contract:
+// when N goroutines burst-miss the same key, only the singleflight winner
+// runs cache.Put. Waiters that received a shared result must NOT re-Put
+// (that would produce N redundant writes and N log lines per burst).
+func TestExchange_SingleflightWinnerOnlyWritesCache(t *testing.T) {
+	t.Parallel()
+
+	var callCount atomic.Int32
+	gate := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount.Add(1)
+		<-gate
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("winner-tok", 3600))
+	}))
+	defer srv.Close()
+
+	e := newTestExchanger(t, srv.URL)
+	// Wrap the real cache with a counter so we can observe the number of
+	// Put calls the exchanger actually makes.
+	counter := &countingCache{inner: e.cache}
+	e.cache = counter
+
+	input := validInput()
+	const n = 100
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = e.Exchange(context.Background(), input)
+		}()
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+
+	if got := callCount.Load(); got != 1 {
+		t.Errorf("IdP called %d times, want 1 (singleflight collapses concurrent misses)", got)
+	}
+	if got := counter.puts.Load(); got != 1 {
+		t.Errorf("cache.Put called %d times, want 1 (only the singleflight winner should Put)", got)
+	}
+}
