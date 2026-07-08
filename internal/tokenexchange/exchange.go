@@ -36,7 +36,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	// Cross-time dedup: serve from cache if a fresh token exists.
 	gr, getErr := e.cache.Get(ctx, key)
 	if getErr != nil {
-		slog.Warn("token cache get failed", "broker", input.BrokerAlias, "error", getErr)
+		slog.WarnContext(ctx, "token cache get failed", "broker", input.BrokerAlias, "error", getErr)
 	} else {
 		slog.Log(ctx, gr.Status.Level(), "token cache get", "broker", input.BrokerAlias, "status", gr.Status)
 		if gr.Status == cache.GetHit {
@@ -77,7 +77,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 
 	tok := v.(*Token)
 
-	slog.Debug("token exchange succeeded",
+	slog.DebugContext(ctx, "token exchange succeeded",
 		slog.String("broker", input.BrokerAlias),
 		slog.Duration("exchange_elapsed", elapsed))
 
@@ -87,7 +87,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 		ExpiresAt: tok.ExpiresAt,
 	})
 	if putErr != nil {
-		slog.Warn("token cache put failed", "broker", input.BrokerAlias, "error", putErr)
+		slog.WarnContext(ctx, "token cache put failed", "broker", input.BrokerAlias, "error", putErr)
 	} else {
 		slog.Log(ctx, pr.Status.Level(), "token cache put", "broker", input.BrokerAlias, "status", pr.Status)
 	}
@@ -103,9 +103,9 @@ func (e *Exchanger) Invalidate(ctx context.Context, input DeduplicationKeyInput)
 	key := computeDeduplicationKey(input)
 	_, err := e.cache.Delete(ctx, key)
 	if err != nil {
-		slog.Warn("token cache delete failed", "broker", input.BrokerAlias, "error", err)
+		slog.WarnContext(ctx, "token cache delete failed", "broker", input.BrokerAlias, "error", err)
 	} else {
-		slog.Debug("token cache invalidated", "broker", input.BrokerAlias)
+		slog.DebugContext(ctx, "token cache invalidated", "broker", input.BrokerAlias)
 	}
 }
 
