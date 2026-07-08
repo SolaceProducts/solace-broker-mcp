@@ -24,8 +24,12 @@
 // Not covered here: 401-retry-refresh. resilience/sender.go calls
 // authenticator.AddAuth exactly once before entering retryablehttp's retry
 // loop, so on 401 the retry re-sends the stale token even though
-// Exchanger.Invalidate has evicted the cache entry. Requires a PrepareRetry
-// hook to re-invoke AddAuth on retry; tracked separately as followup.
+// Exchanger.Invalidate has evicted the cache entry. HandleAuthFailure
+// therefore returns false today — the eviction still benefits the *next*
+// request, but the in-flight retry is deferred. SOL-151624 wires the
+// PrepareRetry hook that re-invokes AddAuth on retry, at which point
+// HandleAuthFailure flips back to return true and this test file grows
+// a companion 401-refresh test.
 package integration_test
 
 import (

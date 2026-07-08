@@ -143,13 +143,20 @@ func TestOAuthAuthenticator_HandleAuthFailure_NoSubjectToken(t *testing.T) {
 	}
 }
 
+// TestOAuthAuthenticator_HandleAuthFailure_WithSubjectToken pins the
+// current contract: eviction happens (Invalidate is called with the
+// right key so the *next* request pulls a fresh token), but the return
+// is false so the resilience layer does not retry in-flight. Retrying
+// in-flight would replay the same *http.Request with the stale
+// Authorization header — see the docstring on HandleAuthFailure and
+// SOL-151624 for the PrepareRetry follow-up that flips this to true.
 func TestOAuthAuthenticator_HandleAuthFailure_WithSubjectToken(t *testing.T) {
 	exchg := &fakeExchanger{}
 	a := NewOAuthAuthenticator(exchg, "aud", nil, "my-broker")
 
 	ctx := ctxWithSubjectToken(t, "agent-jwt")
-	if !a.HandleAuthFailure(ctx, nil) {
-		t.Error("expected true when subject token present")
+	if a.HandleAuthFailure(ctx, nil) {
+		t.Error("expected false — in-flight retry is deferred to SOL-151624")
 	}
 
 	exchg.mu.Lock()
@@ -159,6 +166,9 @@ func TestOAuthAuthenticator_HandleAuthFailure_WithSubjectToken(t *testing.T) {
 	}
 	if exchg.invalidateCalls[0].BrokerAlias != "my-broker" {
 		t.Errorf("broker alias = %q, want %q", exchg.invalidateCalls[0].BrokerAlias, "my-broker")
+	}
+	if exchg.invalidateCalls[0].SubjectToken != "agent-jwt" {
+		t.Errorf("subject token = %q, want %q", exchg.invalidateCalls[0].SubjectToken, "agent-jwt")
 	}
 }
 
