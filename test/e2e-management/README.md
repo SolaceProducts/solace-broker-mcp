@@ -1,25 +1,22 @@
-# E2E Management (Config-Tool) Suite
+# E2E Management Suite
 
-Mode-1 (direct MCP JSON-RPC wire, no LLM) functional tests for the config/management
-tools — `create/update/delete-message-vpn`, `create/update/delete-queue`, and
-`create/update/delete-topic-endpoint`. Each tool family is exercised through a full
-create → verify → update → verify → delete → verify-absent round-trip on both brokers,
-plus cross-broker isolation, annotation, and error-translation checks.
+End-to-end tests for the config/management tools — `create/update/delete-message-vpn`,
+`create/update/delete-queue`, and `create/update/delete-topic-endpoint`. Runs two Solace
+brokers and exercises each tool family through a full create → verify → update → verify →
+delete → verify-absent round-trip, plus cross-broker isolation, annotation, and
+error-translation checks.
 
-The suite builds on the shared scaffold in [`../e2e-common/lib.sh`](../e2e-common/lib.sh)
-(broker readiness, MCP server lifecycle, SEMP ops, MCP wire, assertions) and adds only the
-config-fixture naming and sweep. The server is started with `enable_write_tools: true` so the
-config tools register.
+Builds on the shared scaffold in [`../e2e-common/`](../e2e-common/README.md).
 
 ## Quickstart
 
 ```bash
-# Full cycle: brokers up → wait → run → tear down (from repo root)
+# Full cycle (recommended)
 make e2e-management-all
 
 # Or step by step
-bash test/e2e-management/setup-brokers.sh     # start + wait for brokers
-bash test/e2e-management/run-all.sh           # start write-enabled server, run tests
+SUITE_DIR=test/e2e-management bash test/e2e-common/setup-brokers.sh
+bash test/e2e-management/run-all.sh
 docker compose -f test/e2e-management/docker-compose.yml down -v
 ```
 
