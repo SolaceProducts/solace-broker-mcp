@@ -29,13 +29,15 @@ import (
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
+	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache/cachetest"
 )
 
 // newTestExchanger builds an Exchanger pointing at the given httptest server
 // with a pinned clock. The returned nowFunc can be swapped to advance time.
 func newTestExchanger(t *testing.T, serverURL string) *Exchanger {
 	t.Helper()
-	p := validParams()
+	p := validParams(t)
 	p.TokenURL = serverURL
 	e, err := New(p)
 	if err != nil {
@@ -85,6 +87,7 @@ func TestExchange_HappyPath(t *testing.T) {
 	}
 	if tok == nil {
 		t.Fatal("tok = nil, want non-nil")
+		return
 	}
 	if tok.Value != "exchanged-tok" {
 		t.Errorf("tok.Value = %q, want %q", tok.Value, "exchanged-tok")
@@ -573,6 +576,7 @@ func TestDoExchange_BuildRequestFailureWrapsAsTransport(t *testing.T) {
 		grantType:        GrantTypeTokenExchange,
 		audienceParam:    AudienceParamAudience,
 		httpClient:       &http.Client{},
+		cache:            cachetest.Default(t),
 		nowFunc:          func() time.Time { return pinnedNow() },
 	}
 
@@ -941,6 +945,7 @@ func TestExchange_UnknownGrantTypeReturnsTransportError(t *testing.T) {
 		grantType:        GrantType(99),
 		audienceParam:    AudienceParamAudience,
 		httpClient:       &http.Client{},
+		cache:            cachetest.Default(t),
 		nowFunc:          func() time.Time { return pinnedNow() },
 	}
 
@@ -1101,3 +1106,261 @@ func TestExchange_FourxxWithOAuthError(t *testing.T) {
 	}
 }
 
+// ---------- cache integration: Exchanger-cache contract ----------
+
+// countingIdP returns an httptest server that increments callCount on each
+// request and hands out a distinct access token per call ("tok-1", "tok-2", …).
+// Distinct tokens per call make it trivial to prove which response a caller
+// received without threading assertions through the handler.
+func countingIdP(callCount *atomic.Int32) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON(fmt.Sprintf("tok-%d", n), 3600))
+	}))
+}
+
+// TestExchange_CacheHitShortCircuitsIdP pins the core cache-hit contract:
+// once a token has been exchanged for a given (subjectToken, brokerAlias),
+// the next call with the same key returns from cache without touching the IdP.
+// Silent regression here means every request hits the IdP — cache is a no-op.
+func TestExchange_CacheHitShortCircuitsIdP(t *testing.T) {
+	t.Parallel()
+
+	var callCount atomic.Int32
+	srv := countingIdP(&callCount)
+	defer srv.Close()
+
+	// Use the real clock: Otter compares CachedCredential.ExpiresAt against
+	// time.Now(), not e.nowFunc. Pinning nowFunc to a past instant would make
+	// every Put appear expired and be silently dropped as PutDroppedTTL.
+	e := newTestExchanger(t, srv.URL)
+
+	first, err := e.Exchange(context.Background(), validInput())
+	if err != nil {
+		t.Fatalf("first Exchange: %v", err)
+	}
+	second, err := e.Exchange(context.Background(), validInput())
+	if err != nil {
+		t.Fatalf("second Exchange: %v", err)
+	}
+
+	if got := callCount.Load(); got != 1 {
+		t.Errorf("IdP called %d times, want 1 (second call must be served from cache)", got)
+	}
+	if first.Value != second.Value {
+		t.Errorf("token values differ: first=%q second=%q; cache hit must return the stored token", first.Value, second.Value)
+	}
+	if !first.ExpiresAt.Equal(second.ExpiresAt) {
+		t.Errorf("ExpiresAt differs: first=%v second=%v", first.ExpiresAt, second.ExpiresAt)
+	}
+}
+
+// TestExchange_CacheMissStoresResult verifies the write half of the cache
+// contract: a successful IdP exchange lands in the cache under the same key
+// the next Get will use. If Put breaks silently, the cache is a no-op and
+// every request re-hits the IdP.
+func TestExchange_CacheMissStoresResult(t *testing.T) {
+	t.Parallel()
+
+	var callCount atomic.Int32
+	srv := countingIdP(&callCount)
+	defer srv.Close()
+
+	e := newTestExchanger(t, srv.URL)
+
+	input := validInput()
+	tok, err := e.Exchange(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+
+	key := computeDeduplicationKey(DeduplicationKeyInput{
+		SubjectToken: input.SubjectToken,
+		BrokerAlias:  input.BrokerAlias,
+	})
+	gr, err := e.cache.Get(context.Background(), key)
+	if err != nil {
+		t.Fatalf("cache.Get: %v", err)
+	}
+	if gr.Status != cache.GetHit {
+		t.Fatalf("cache status = %v, want GetHit (Exchange should have stored the result)", gr.Status)
+	}
+	if gr.Entry.Value != tok.Value {
+		t.Errorf("cached value = %q, want %q (must match returned token bytes)", gr.Entry.Value, tok.Value)
+	}
+	if !gr.Entry.ExpiresAt.Equal(tok.ExpiresAt) {
+		t.Errorf("cached ExpiresAt = %v, want %v", gr.Entry.ExpiresAt, tok.ExpiresAt)
+	}
+	if got := callCount.Load(); got != 1 {
+		t.Errorf("IdP called %d times during setup, want 1", got)
+	}
+}
+
+// TestExchange_InvalidateForcesRefetch pins the invalidation contract used
+// by OAuthAuthenticator.HandleAuthFailure. After Invalidate for a key, the
+// next Exchange must miss the cache and re-fetch from the IdP. If this
+// regresses, the broker's 401-retry loop keeps re-serving the stale token.
+func TestExchange_InvalidateForcesRefetch(t *testing.T) {
+	t.Parallel()
+
+	var callCount atomic.Int32
+	srv := countingIdP(&callCount)
+	defer srv.Close()
+
+	e := newTestExchanger(t, srv.URL)
+
+	input := validInput()
+	first, err := e.Exchange(context.Background(), input)
+	if err != nil {
+		t.Fatalf("first Exchange: %v", err)
+	}
+
+	e.Invalidate(context.Background(), DeduplicationKeyInput{
+		SubjectToken: input.SubjectToken,
+		BrokerAlias:  input.BrokerAlias,
+	})
+
+	second, err := e.Exchange(context.Background(), input)
+	if err != nil {
+		t.Fatalf("second Exchange: %v", err)
+	}
+
+	if got := callCount.Load(); got != 2 {
+		t.Errorf("IdP called %d times, want 2 (Invalidate should have forced a re-fetch)", got)
+	}
+	if first.Value == second.Value {
+		t.Errorf("token values equal (%q) — second Exchange should have fetched a fresh token, not returned a cached one", first.Value)
+	}
+}
+
+// TestExchange_ConcurrentMissesCollapse verifies the interplay between
+// singleflight and the cache: many concurrent misses for the same key must
+// collapse into ONE IdP call and ONE cache write. Without this guarantee,
+// a burst of first-time requests would hammer the IdP and race the cache.
+func TestExchange_ConcurrentMissesCollapse(t *testing.T) {
+	t.Parallel()
+
+	var callCount atomic.Int32
+	gate := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount.Add(1)
+		<-gate
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("burst-tok", 3600))
+	}))
+	defer srv.Close()
+
+	e := newTestExchanger(t, srv.URL)
+
+	input := validInput()
+	const n = 100
+	var wg sync.WaitGroup
+	tokens := make([]*Token, n)
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			tokens[idx], errs[idx] = e.Exchange(context.Background(), input)
+		}(i)
+	}
+	// Let goroutines queue up on singleflight before releasing the IdP.
+	time.Sleep(50 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+
+	for i := 0; i < n; i++ {
+		if errs[i] != nil {
+			t.Errorf("goroutine %d: error = %v", i, errs[i])
+			continue
+		}
+		if tokens[i] == nil || tokens[i].Value != "burst-tok" {
+			t.Errorf("goroutine %d: token = %+v, want burst-tok", i, tokens[i])
+		}
+	}
+	if got := callCount.Load(); got != 1 {
+		t.Errorf("IdP called %d times, want 1 (singleflight must collapse concurrent misses)", got)
+	}
+
+	// The winning singleflight caller must have written the result to the
+	// cache; a follow-up lookup for the same key must be a hit.
+	key := computeDeduplicationKey(DeduplicationKeyInput{
+		SubjectToken: input.SubjectToken,
+		BrokerAlias:  input.BrokerAlias,
+	})
+	gr, err := e.cache.Get(context.Background(), key)
+	if err != nil {
+		t.Fatalf("post-burst cache.Get: %v", err)
+	}
+	if gr.Status != cache.GetHit {
+		t.Errorf("cache status after burst = %v, want GetHit (singleflight winner should have stored the token)", gr.Status)
+	}
+}
+
+// countingCache wraps a real TokenCache and counts Put calls. Used to prove
+// that the singleflight-winner gating actually collapses N concurrent Put
+// attempts into 1, not just N Puts that Otter happens to deduplicate.
+type countingCache struct {
+	inner cache.TokenCache
+	puts  atomic.Int32
+}
+
+func (c *countingCache) Get(ctx context.Context, key string) (cache.GetResult, error) {
+	return c.inner.Get(ctx, key)
+}
+func (c *countingCache) Put(ctx context.Context, key string, entry cache.CachedCredential) (cache.PutResult, error) {
+	c.puts.Add(1)
+	return c.inner.Put(ctx, key, entry)
+}
+func (c *countingCache) Delete(ctx context.Context, key string) (cache.DeleteResult, error) {
+	return c.inner.Delete(ctx, key)
+}
+func (c *countingCache) Close() error {
+	return c.inner.Close()
+}
+
+// TestExchange_SingleflightWinnerOnlyWritesCache pins the C1/C2 contract:
+// when N goroutines burst-miss the same key, only the singleflight winner
+// runs cache.Put. Waiters that received a shared result must NOT re-Put
+// (that would produce N redundant writes and N log lines per burst).
+func TestExchange_SingleflightWinnerOnlyWritesCache(t *testing.T) {
+	t.Parallel()
+
+	var callCount atomic.Int32
+	gate := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount.Add(1)
+		<-gate
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("winner-tok", 3600))
+	}))
+	defer srv.Close()
+
+	e := newTestExchanger(t, srv.URL)
+	// Wrap the real cache with a counter so we can observe the number of
+	// Put calls the exchanger actually makes.
+	counter := &countingCache{inner: e.cache}
+	e.cache = counter
+
+	input := validInput()
+	const n = 100
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = e.Exchange(context.Background(), input)
+		}()
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+
+	if got := callCount.Load(); got != 1 {
+		t.Errorf("IdP called %d times, want 1 (singleflight collapses concurrent misses)", got)
+	}
+	if got := counter.puts.Load(); got != 1 {
+		t.Errorf("cache.Put called %d times, want 1 (only the singleflight winner should Put)", got)
+	}
+}

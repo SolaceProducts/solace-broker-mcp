@@ -46,7 +46,7 @@ func readFormBody(t *testing.T, req *http.Request) url.Values {
 func TestBuildIdPRequest_MandatoryRFCFields(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestBuildIdPRequest_MandatoryRFCFields(t *testing.T) {
 func TestBuildIdPRequest_ClientSecretPost(t *testing.T) {
 	t.Parallel()
 
-	p := validParams()
+	p := validParams(t)
 	p.ClientAuthMethod = ClientSecretPost
 	p.ClientID = "my-client"
 	p.ClientSecret = "my-secret"
@@ -115,7 +115,7 @@ func TestBuildIdPRequest_ClientSecretPost(t *testing.T) {
 func TestBuildIdPRequest_ClientSecretBasic(t *testing.T) {
 	t.Parallel()
 
-	p := validParams()
+	p := validParams(t)
 	p.ClientAuthMethod = ClientSecretBasic
 	p.ClientID = "my-client"
 	p.ClientSecret = "my-secret"
@@ -174,7 +174,7 @@ func TestBuildIdPRequest_NeverBothCredentials(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			p := validParams()
+			p := validParams(t)
 			p.ClientAuthMethod = tc.method
 			p.ClientID = "cid"
 			p.ClientSecret = "csec"
@@ -240,6 +240,7 @@ func TestBuildIdPRequest_UnknownGrantType(t *testing.T) {
 
 			if err == nil {
 				t.Fatal("expected error for unknown GrantType, got nil")
+				return
 			}
 			if req != nil {
 				t.Errorf("expected nil request on error, got non-nil")
@@ -287,6 +288,7 @@ func TestBuildIdPRequest_UnknownClientAuthMethod(t *testing.T) {
 
 			if err == nil {
 				t.Fatal("expected error for unknown ClientAuthMethod, got nil")
+				return
 			}
 			if req != nil {
 				t.Errorf("expected nil request on error, got non-nil")
@@ -335,6 +337,7 @@ func TestBuildIdPRequest_UnknownAudienceFormat(t *testing.T) {
 
 			if err == nil {
 				t.Fatal("expected error for unknown AudienceFormat, got nil")
+				return
 			}
 			if req != nil {
 				t.Errorf("expected nil request on error, got non-nil")
@@ -366,7 +369,7 @@ func TestBuildIdPRequest_AudienceConditional(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			e, err := New(validParams())
+			e, err := New(validParams(t))
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
@@ -414,7 +417,7 @@ func TestBuildIdPRequest_ScopeConditional(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			e, err := New(validParams())
+			e, err := New(validParams(t))
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
@@ -456,7 +459,7 @@ func TestBuildIdPRequest_ContentTypeAlwaysSet(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			p := validParams()
+			p := validParams(t)
 			p.ClientAuthMethod = tc.method
 			e, err := New(p)
 			if err != nil {
@@ -483,7 +486,7 @@ func TestBuildIdPRequest_ContentTypeAlwaysSet(t *testing.T) {
 func TestBuildIdPRequest_ContextPropagation(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -526,6 +529,7 @@ func TestBuildIdPRequest_MalformedTokenURL(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("expected error for malformed tokenURL, got nil")
+		return
 	}
 	if req != nil {
 		t.Errorf("expected nil request on error, got non-nil")
@@ -545,7 +549,7 @@ func TestBuildIdPRequest_MalformedTokenURL(t *testing.T) {
 func TestBuildIdPRequest_MethodIsPOST(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -569,7 +573,7 @@ func TestBuildIdPRequest_MethodIsPOST(t *testing.T) {
 func TestBuildIdPRequest_URLEqualsTokenURL(t *testing.T) {
 	t.Parallel()
 
-	p := validParams()
+	p := validParams(t)
 	p.TokenURL = "https://idp.example.com/v2/token"
 	e, err := New(p)
 	if err != nil {
@@ -595,7 +599,7 @@ func TestBuildIdPRequest_URLEqualsTokenURL(t *testing.T) {
 func TestBuildIdPRequest_BrokerAliasExcluded(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -625,7 +629,7 @@ func TestBuildIdPRequest_BrokerAliasExcluded(t *testing.T) {
 func TestBuildIdPRequest_EmptySubjectTokenPassThrough(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -660,7 +664,7 @@ func TestBuildIdPRequest_EmptySubjectTokenPassThrough(t *testing.T) {
 func TestBuildIdPRequest_ScopeDuplicatesPreserved(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -690,7 +694,7 @@ func TestBuildIdPRequest_ScopeDuplicatesPreserved(t *testing.T) {
 func TestBuildIdPRequest_BlankScopeElementProducesEmptyValue(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -15,10 +15,11 @@ import (
 )
 
 type fakeExchanger struct {
-	returnToken *tokenexchange.Token
-	returnErr   error
-	mu          sync.Mutex
-	calls       []tokenexchange.ExchangeInput
+	returnToken    *tokenexchange.Token
+	returnErr      error
+	mu             sync.Mutex
+	calls          []tokenexchange.ExchangeInput
+	invalidateCalls []tokenexchange.DeduplicationKeyInput
 }
 
 func (f *fakeExchanger) Exchange(_ context.Context, input tokenexchange.ExchangeInput) (*tokenexchange.Token, error) {
@@ -26,6 +27,12 @@ func (f *fakeExchanger) Exchange(_ context.Context, input tokenexchange.Exchange
 	f.calls = append(f.calls, input)
 	f.mu.Unlock()
 	return f.returnToken, f.returnErr
+}
+
+func (f *fakeExchanger) Invalidate(_ context.Context, input tokenexchange.DeduplicationKeyInput) {
+	f.mu.Lock()
+	f.invalidateCalls = append(f.invalidateCalls, input)
+	f.mu.Unlock()
 }
 
 // ctxWithSubjectToken runs the InjectRawSubjectToken middleware to place
@@ -129,10 +136,39 @@ func TestOAuthAuthenticator_AddAuth_ExchangeError(t *testing.T) {
 	}
 }
 
-func TestOAuthAuthenticator_HandleAuthFailure(t *testing.T) {
+func TestOAuthAuthenticator_HandleAuthFailure_NoSubjectToken(t *testing.T) {
 	a := NewOAuthAuthenticator(&fakeExchanger{}, "aud", nil, "b")
-	if got := a.HandleAuthFailure(context.Background(), nil); got {
-		t.Error("HandleAuthFailure should return false for OAuth (stateless, no retry)")
+	if a.HandleAuthFailure(context.Background(), nil) {
+		t.Error("expected false when no subject token on context")
+	}
+}
+
+// TestOAuthAuthenticator_HandleAuthFailure_WithSubjectToken pins the
+// current contract: eviction happens (Invalidate is called with the
+// right key so the *next* request pulls a fresh token), but the return
+// is false so the resilience layer does not retry in-flight. Retrying
+// in-flight would replay the same *http.Request with the stale
+// Authorization header — see the docstring on HandleAuthFailure and
+// SOL-151624 for the PrepareRetry follow-up that flips this to true.
+func TestOAuthAuthenticator_HandleAuthFailure_WithSubjectToken(t *testing.T) {
+	exchg := &fakeExchanger{}
+	a := NewOAuthAuthenticator(exchg, "aud", nil, "my-broker")
+
+	ctx := ctxWithSubjectToken(t, "agent-jwt")
+	if a.HandleAuthFailure(ctx, nil) {
+		t.Error("expected false — in-flight retry is deferred to SOL-151624")
+	}
+
+	exchg.mu.Lock()
+	defer exchg.mu.Unlock()
+	if len(exchg.invalidateCalls) != 1 {
+		t.Fatalf("expected 1 Invalidate call, got %d", len(exchg.invalidateCalls))
+	}
+	if exchg.invalidateCalls[0].BrokerAlias != "my-broker" {
+		t.Errorf("broker alias = %q, want %q", exchg.invalidateCalls[0].BrokerAlias, "my-broker")
+	}
+	if exchg.invalidateCalls[0].SubjectToken != "agent-jwt" {
+		t.Errorf("subject token = %q, want %q", exchg.invalidateCalls[0].SubjectToken, "agent-jwt")
 	}
 }
 

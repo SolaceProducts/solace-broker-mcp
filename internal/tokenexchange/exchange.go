@@ -19,17 +19,44 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+
+	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
 )
 
 // Exchange performs an RFC 8693 token exchange against the configured IdP.
-// Concurrent calls with the same (subjectToken, brokerAlias) pair are
-// collapsed into a single IdP round-trip via singleflight.
+// It checks the cache first; on a miss, concurrent calls with the same
+// (subjectToken, brokerAlias) pair are collapsed into a single IdP
+// round-trip via singleflight, and the result is cached for future calls.
 func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, error) {
 	key := computeDeduplicationKey(DeduplicationKeyInput{
 		SubjectToken: input.SubjectToken,
 		BrokerAlias:  input.BrokerAlias,
 	})
 
+	// Cross-time dedup: serve from cache if a fresh token exists.
+	gr, getErr := e.cache.Get(ctx, key)
+	if getErr != nil {
+		slog.WarnContext(ctx, "token cache get failed", "broker", input.BrokerAlias, "error", getErr)
+	} else {
+		slog.Log(ctx, gr.Status.Level(), "token cache get", "broker", input.BrokerAlias, "status", gr.Status)
+		if gr.Status == cache.GetHit {
+			return &Token{
+				Value:     gr.Entry.Value,
+				ExpiresAt: gr.Entry.ExpiresAt,
+			}, nil
+		}
+	}
+
+	// In-flight dedup: collapse concurrent misses into one IdP call. The
+	// cache Put runs INSIDE the singleflight func so it executes exactly
+	// once per burst (only the winner runs the func; all waiters share its
+	// return value). Doing Put outside would run it N times for N concurrent
+	// callers, producing N redundant writes and log lines.
+	//
+	// The success log stays OUTSIDE the func because it's per-caller
+	// observability: a caller that cancelled mid-exchange should not
+	// see "exchange succeeded" attributed to their request. The Put log
+	// is per-exchange and stays inside with the Put.
 	start := e.nowFunc()
 	v, err, _ := e.group.Do(key, func() (interface{}, error) {
 		// Detach from the caller's context so one caller's cancellation
@@ -37,7 +64,23 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 		// The explicit timeout bounds the detached call independently.
 		exchCtx, cancel := context.WithTimeout(context.Background(), e.exchangeTimeout)
 		defer cancel()
-		return e.doExchange(exchCtx, input)
+
+		tok, err := e.doExchange(exchCtx, input)
+		if err != nil {
+			return nil, err
+		}
+
+		pr, putErr := e.cache.Put(exchCtx, key, cache.CachedCredential{
+			Value:     tok.Value,
+			ExpiresAt: tok.ExpiresAt,
+		})
+		if putErr != nil {
+			slog.WarnContext(exchCtx, "token cache put failed", "broker", input.BrokerAlias, "error", putErr)
+		} else {
+			slog.Log(exchCtx, pr.Status.Level(), "token cache put", "broker", input.BrokerAlias, "status", pr.Status)
+		}
+
+		return tok, nil
 	})
 	elapsed := e.nowFunc().Sub(start)
 
@@ -57,10 +100,34 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 		return nil, err
 	}
 
-	slog.Debug("token exchange succeeded",
+	tok := v.(*Token)
+
+	slog.DebugContext(ctx, "token exchange succeeded",
 		slog.String("broker", input.BrokerAlias),
 		slog.Duration("exchange_elapsed", elapsed))
-	return v.(*Token), nil
+
+	return tok, nil
+}
+
+// Close releases resources held by the cache backend (e.g. Otter's
+// background eviction goroutines). Must be called after all in-flight
+// Exchange calls have completed.
+func (e *Exchanger) Close() error {
+	return e.cache.Close()
+}
+
+// Invalidate evicts a cached token for the given (subjectToken, brokerAlias)
+// pair. Called by OAuthAuthenticator.HandleAuthFailure when the broker
+// rejects the token with a 401 — the next Exchange call will miss the
+// cache and fetch a fresh token from the IdP.
+func (e *Exchanger) Invalidate(ctx context.Context, input DeduplicationKeyInput) {
+	key := computeDeduplicationKey(input)
+	_, err := e.cache.Delete(ctx, key)
+	if err != nil {
+		slog.WarnContext(ctx, "token cache delete failed", "broker", input.BrokerAlias, "error", err)
+	} else {
+		slog.DebugContext(ctx, "token cache invalidated", "broker", input.BrokerAlias)
+	}
 }
 
 func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token, error) {

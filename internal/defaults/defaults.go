@@ -226,6 +226,27 @@ const DefaultRetryMaxInterval = 30 * time.Second
 // are an IdP misconfiguration for machine-to-machine flows.
 const DefaultTokenExpirySkew = 30 * time.Second
 
+// DefaultOAuthCacheMaxSize is the maximum number of entries in the in-memory
+// OAuth token cache. When full, Otter's adaptive W-TinyLFU eviction policy
+// removes the least valuable entries automatically.
+//
+// Decided: 10000 entries.
+// Reasoning: enterprise deployments typically have far fewer concurrent users
+// than 10000; this provides generous headroom while keeping memory bounded
+// (each entry is a short string + time.Time, O(100 bytes) → ~1 MB at max).
+const DefaultOAuthCacheMaxSize = 10000
+
+// DefaultMaxOAuthTokenTTL caps the maximum TTL of any entry in the OAuth token
+// cache. Handles two edge cases: IdPs that omit expires_in (RFC 8693 makes it
+// RECOMMENDED, not mandatory) and IdPs that return absurdly large expires_in
+// values (e.g., 100 years).
+//
+// Decided: 24 hours.
+// Reasoning: enterprise IdPs typically issue tokens valid for minutes to hours.
+// A 24h cap accepts any realistic expiry while bounding memory and ensuring
+// stale tokens are eventually evicted even if the background sweeper misfires.
+const DefaultMaxOAuthTokenTTL = 24 * time.Hour
+
 // DefaultSaturationThresholdMs is the latency above which a tool call is
 // considered slow enough to emit a saturation signal (a future observability
 // story consumes this). Expressed in milliseconds to match the YAML field

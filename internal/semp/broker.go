@@ -44,6 +44,10 @@ type BrokerClient struct {
 // from brokerCfg.Auth and passes the same pointer to both protocol clients.
 // newAuthenticator is a pure dispatcher; each Authenticator constructor
 // owns its own precondition checks.
+//
+// exchanger is the process-wide token exchanger for OAuth brokers. Pass
+// nil when no broker uses OAuth; newAuthenticator returns an error if an
+// OAuth broker is configured without an exchanger.
 func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, exchanger *tokenexchange.Exchanger) (*BrokerClient, error) {
 	jar, err := newCookieJar(alias, brokerCfg.Auth.Mode)
 	if err != nil {
@@ -115,6 +119,9 @@ func newAuthenticator(alias string, brokerCfg *config.BrokerConfig, jar *resilie
 	case config.AuthModeBearer:
 		return auth.NewBearerAuthenticator(cfg.Token), nil
 	case config.AuthModeOAuth:
+		if exchanger == nil {
+			return nil, fmt.Errorf("oauth auth requires a token exchanger for broker %q", alias)
+		}
 		return auth.NewOAuthAuthenticator(exchanger, cfg.Audience, cfg.Scopes, alias), nil
 	default:
 		return nil, fmt.Errorf("unsupported auth mode %q for broker %q", cfg.Mode, alias)
