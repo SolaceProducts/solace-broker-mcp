@@ -18,12 +18,20 @@ func newReq(t *testing.T) *http.Request {
 	return req
 }
 
+// stubJar is a no-op CookieJarClearer for tests that construct a
+// BasicAuthenticator but don't exercise the jar-clearing path. Tests
+// that need to observe Clear() calls or error paths should use their
+// own recording stub.
+type stubJar struct{}
+
+func (stubJar) Clear() error { return nil }
+
 func TestBasicAuthenticator_AddAuth(t *testing.T) {
 	const (
 		user = "admin"
 		pass = "s3cret"
 	)
-	a := NewBasicAuthenticator(user, pass, nil)
+	a := NewBasicAuthenticator(user, pass, stubJar{})
 	req := newReq(t)
 
 	if err := a.AddAuth(context.Background(), req); err != nil {
@@ -63,7 +71,7 @@ func TestAuthenticator_ConcurrentAddAuth_NoFieldMutation(t *testing.T) {
 	const goroutines = 16
 
 	t.Run("basic", func(t *testing.T) {
-		a := NewBasicAuthenticator("admin", "s3cret", nil)
+		a := NewBasicAuthenticator("admin", "s3cret", stubJar{})
 		wantUser, wantPass := a.username, a.password
 		wantCreds := wantUser + ":" + wantPass
 

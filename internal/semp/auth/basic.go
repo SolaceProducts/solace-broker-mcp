@@ -17,10 +17,15 @@ type BasicAuthenticator struct {
 }
 
 // NewBasicAuthenticator returns a BasicAuthenticator that will attach the
-// given credentials to every request via http.Request.SetBasicAuth.
-// jar may be nil — HandleAuthFailure will return retry=false when no jar
-// is available.
+// given credentials to every request via http.Request.SetBasicAuth. The
+// jar is required — HandleAuthFailure clears it to force fresh Basic
+// credentials on the retry, so an authenticator without a jar cannot
+// recover from a 401. Panics if jar is nil — a nil jar is a wiring bug,
+// not a runtime condition.
 func NewBasicAuthenticator(username, password string, jar CookieJarClearer) *BasicAuthenticator {
+	if jar == nil {
+		panic("NewBasicAuthenticator: jar must be non-nil")
+	}
 	return &BasicAuthenticator{username: username, password: password, jar: jar}
 }
 
@@ -34,12 +39,8 @@ func (a *BasicAuthenticator) AddAuth(_ context.Context, req *http.Request) error
 
 // HandleAuthFailure clears stale session cookies so the next request
 // re-sends raw Basic credentials. Returns retry=true on success so the
-// Sender retries the request. Returns retry=false when no jar is
-// available or the clear fails.
+// Sender retries the request. Returns retry=false when the clear fails.
 func (a *BasicAuthenticator) HandleAuthFailure(_ context.Context, _ http.Header) bool {
-	if a.jar == nil {
-		return false
-	}
 	if err := a.jar.Clear(); err != nil {
 		slog.Warn("basic auth: 401 received but failed to clear cookie jar",
 			slog.String("error", err.Error()))
