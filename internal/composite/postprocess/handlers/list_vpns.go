@@ -113,10 +113,3 @@ func ListVpns(stepResults map[string]map[string]any) (map[string]any, error) {
 	}
 	return out, nil
 }
-
-// boolField returns the named bool from item. Returns ok=false for missing,
-// nil, or unexpected types so the caller can skip the row rather than abort.
-func boolField(item map[string]any, name string) (bool, bool) {
-	v, ok := item[name].(bool)
-	return v, ok
-}
