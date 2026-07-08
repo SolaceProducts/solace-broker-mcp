@@ -331,6 +331,37 @@ func TestNewTokenCache_ErrorOnMaxSizeZero(t *testing.T) {
 	}
 }
 
+// T12a: MaxTTL<=0 returns an error at construction. A zero or negative MaxTTL
+// would clamp every safeTTL to <= 0 in Put, causing every entry to be silently
+// dropped as PutDroppedTTL — a valid-looking cache that never caches anything.
+// Fail loud at construction instead.
+func TestNewTokenCache_ErrorOnMaxTTLZero(t *testing.T) {
+	t.Parallel()
+	_, err := NewTokenCache(CacheConfig{MaxSize: 100, ClockSkew: 0, MaxTTL: 0})
+	if err == nil {
+		t.Fatal("expected error for MaxTTL=0, got nil")
+	}
+}
+
+func TestNewTokenCache_ErrorOnMaxTTLNegative(t *testing.T) {
+	t.Parallel()
+	_, err := NewTokenCache(CacheConfig{MaxSize: 100, ClockSkew: 0, MaxTTL: -time.Second})
+	if err == nil {
+		t.Fatal("expected error for negative MaxTTL, got nil")
+	}
+}
+
+// T12b: A negative ClockSkew is a wiring bug — it would extend the effective
+// TTL past the token's real ExpiresAt, serving already-expired credentials
+// after Otter's sweeper hasn't caught up yet.
+func TestNewTokenCache_ErrorOnClockSkewNegative(t *testing.T) {
+	t.Parallel()
+	_, err := NewTokenCache(CacheConfig{MaxSize: 100, ClockSkew: -time.Second, MaxTTL: time.Hour})
+	if err == nil {
+		t.Fatal("expected error for negative ClockSkew, got nil")
+	}
+}
+
 // T14: All Put/Get/Delete calls return nil error, including edge cases.
 func TestErrors_AlwaysNil(t *testing.T) {
 	t.Parallel()
