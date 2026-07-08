@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Config-tool (management) functional tests, driven over the MCP JSON-RPC wire
-# (Mode 1, no LLM). Each tool family (VPN, queue, topic-endpoint) is exercised
-# through a full create → verify → update → verify → delete → verify-absent
-# round-trip on both brokers, plus cross-broker isolation, annotation, and
-# error-translation checks.
+# (Mode 1, no LLM). Each tool family (VPN, queue, topic-endpoint, RDP) is
+# exercised through a full create → verify → update → verify → delete →
+# verify-absent round-trip on both brokers, plus cross-broker isolation,
+# annotation, and error-translation checks.
 #
 # Fixture model: per-test ownership. Each test creates its own e2e-config-*
 # object, acts on it, asserts, and deletes it. A suite-level sweep runs on entry
@@ -53,22 +53,24 @@ call_tool_ok() {
     return 0
 }
 
-# Assert a VPN/queue name is (or is not) present in a list tool's output.
-#   $1 broker   $2 list_tool (list-vpns|list-queues)   $3 name   $4 present(true|false)
+# Assert an object name is (or is not) present in a list tool's output.
+#   $1 broker   $2 list_tool (list-vpns|list-queues|list-rdps)   $3 name   $4 present(true|false)
 assert_listed() {
     local broker="$1" list_tool="$2" name="$3" present="$4"
-    local args resp content data_path expr
-    if [ "$list_tool" = "list-vpns" ]; then
-        args=$(jq -nc --arg b "$broker" '{broker:$b,maxResults:500}')
-        data_path=".vpns.data"
-    else
-        args=$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",maxResults:500}')
-        data_path=".queues.data | map(select(.msgVpnName==\"default\"))"
-    fi
+    local args resp content data_path key expr
+    case "$list_tool" in
+        list-vpns)
+            args=$(jq -nc --arg b "$broker" '{broker:$b,maxResults:500}')
+            data_path=".vpns.data"; key="msgVpnName" ;;
+        list-queues)
+            args=$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",maxResults:500}')
+            data_path=".queues.data | map(select(.msgVpnName==\"default\"))"; key="queueName" ;;
+        list-rdps)
+            args=$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",maxResults:500}')
+            data_path=".rdps.data"; key="restDeliveryPointName" ;;
+    esac
     resp=$(mcp_call_tool "$list_tool" "$args") || return 1
     content=$(extract_content "$resp")
-    local key
-    [ "$list_tool" = "list-vpns" ] && key="msgVpnName" || key="queueName"
     if [ "$present" = "true" ]; then
         expr="($data_path | map(.$key) | index(\"$name\")) != null"
     else
@@ -163,6 +165,60 @@ test_te_roundtrip() {
     fi
 }
 
+# ── RDP round-trip ───────────────────────────────────────────────────────────
+# RDPs live in the default VPN and have monitoring tools (list-rdps,
+# get-rdp-status), so presence/absence and the enabled read-back go through the
+# MCP monitoring path (the read-after-write / cache-invalidation assertion). A
+# newly created RDP is disabled by default and carries no consumers or queue
+# bindings — no MCP tool creates those, so they are out of scope here.
+test_rdp_roundtrip() {
+    local broker="$1"
+    local name="e2e-config-rdp-$broker"
+
+    # create — disabled by default
+    local resp content
+    call_tool_ok "create-rdp" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",restDeliveryPointName:$n}')" \
+        "create-rdp [$broker]" || return 1
+    assert_listed "$broker" "list-rdps" "$name" "true" || return 1
+
+    # Baseline: a freshly created RDP is disabled by default. Asserting this makes
+    # the enabled=true check after the update meaningful — it proves the update
+    # changed state rather than reading a value that was already set.
+    resp=$(mcp_call_tool "list-rdps" "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",maxResults:500}')") || return 1
+    content=$(extract_content "$resp")
+    assert_json_field "$content" \
+        "(.rdps.data[] | select(.restDeliveryPointName==\"$name\") | .enabled)" "false" \
+        "create-rdp [$broker]: $name is disabled by default" || return 1
+
+    # get-rdp-status resolves the specific RDP (DoD: visible via get-rdp-status).
+    # Assert the RDP name is in the payload, not just the always-present rdpStatus
+    # step key — otherwise the check passes for any/empty response.
+    resp=$(mcp_call_tool "get-rdp-status" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",restDeliveryPointName:$n}')") || return 1
+    content=$(extract_content "$resp")
+    assert_contains "$content" "rdpStatus" \
+        "get-rdp-status [$broker]: returns an rdpStatus section" || return 1
+    assert_contains "$content" "$name" \
+        "get-rdp-status [$broker]: resolves the specific RDP $name" || return 1
+
+    # update: enable it — list-rdps must read back enabled=true (not stale)
+    call_tool_ok "update-rdp" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",restDeliveryPointName:$n,rdpConfig:{enabled:true}}')" \
+        "update-rdp [$broker]" || return 1
+    resp=$(mcp_call_tool "list-rdps" "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",maxResults:500}')") || return 1
+    content=$(extract_content "$resp")
+    assert_json_field "$content" \
+        "(.rdps.data[] | select(.restDeliveryPointName==\"$name\") | .enabled)" "true" \
+        "update-rdp [$broker]: enabled=true reflected" || return 1
+
+    # delete
+    call_tool_ok "delete-rdp" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",restDeliveryPointName:$n}')" \
+        "delete-rdp [$broker]" || return 1
+    assert_listed "$broker" "list-rdps" "$name" "false" || return 1
+}
+
 # ── Cross-cutting ────────────────────────────────────────────────────────────
 
 # A create/delete on broker-a's fixture must leave broker-b untouched. Uses one
@@ -179,6 +235,34 @@ test_cross_broker_isolation() {
         "isolation: delete-queue [broker-a]" || return 1
 }
 
+# RDP cross-broker isolation: an identically-named RDP exists on BOTH brokers;
+# create+delete on broker-a must leave broker-b's copy untouched (the ticket's
+# isolation DoD). Kept as its own test so a failure names the RDP path and never
+# hides behind the queue isolation above.
+test_rdp_cross_broker_isolation() {
+    local rdp="e2e-config-rdp-iso"
+    call_tool_ok "create-rdp" \
+        "$(jq -nc --arg n "$rdp" '{broker:"broker-a",msgVpnName:"default",restDeliveryPointName:$n}')" \
+        "isolation: create-rdp [broker-a]" || return 1
+    call_tool_ok "create-rdp" \
+        "$(jq -nc --arg n "$rdp" '{broker:"broker-b",msgVpnName:"default",restDeliveryPointName:$n}')" \
+        "isolation: create-rdp [broker-b]" || return 1
+    assert_listed "broker-a" "list-rdps" "$rdp" "true" || return 1
+    assert_listed "broker-b" "list-rdps" "$rdp" "true" || return 1
+
+    call_tool_ok "delete-rdp" \
+        "$(jq -nc --arg n "$rdp" '{broker:"broker-a",msgVpnName:"default",restDeliveryPointName:$n}')" \
+        "isolation: delete-rdp [broker-a]" || return 1
+    assert_listed "broker-a" "list-rdps" "$rdp" "false" || return 1
+    # broker-b's identically-named RDP must survive broker-a's delete.
+    assert_listed "broker-b" "list-rdps" "$rdp" "true"  || return 1
+
+    # Clean up broker-b's copy (the sweep also covers it).
+    call_tool_ok "delete-rdp" \
+        "$(jq -nc --arg n "$rdp" '{broker:"broker-b",msgVpnName:"default",restDeliveryPointName:$n}')" \
+        "isolation: delete-rdp [broker-b] cleanup" || return 1
+}
+
 # tools/list advertises every config tool with its declared annotations. All are
 # write tools (readOnlyHint=false); create-* are non-destructive, update-*/
 # delete-* are destructive. readOnlyHint/destructiveHint are omitempty on the
@@ -188,21 +272,21 @@ test_annotations() {
     sid=$(mcp_initialize) || return 1
     resp=$(mcp_request "$sid" '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}') || return 1
 
-    for t in create-message-vpn create-queue create-topic-endpoint \
+    for t in create-message-vpn create-queue create-topic-endpoint create-rdp \
              update-message-vpn delete-message-vpn update-queue delete-queue \
-             update-topic-endpoint delete-topic-endpoint; do
+             update-topic-endpoint delete-topic-endpoint update-rdp delete-rdp; do
         assert_json_field "$resp" "([.result.tools[].name] | index(\"$t\")) != null" "true" \
             "annotations: $t advertised in tools/list" || return 1
         assert_json_field "$resp" "(.result.tools[] | select(.name==\"$t\") | .annotations.readOnlyHint) // false" "false" \
             "annotations: $t readOnlyHint=false" || return 1
     done
 
-    for t in create-message-vpn create-queue create-topic-endpoint; do
+    for t in create-message-vpn create-queue create-topic-endpoint create-rdp; do
         assert_json_field "$resp" "(.result.tools[] | select(.name==\"$t\") | .annotations.destructiveHint) // false" "false" \
             "annotations: $t destructiveHint=false" || return 1
     done
     for t in update-message-vpn delete-message-vpn update-queue delete-queue \
-             update-topic-endpoint delete-topic-endpoint; do
+             update-topic-endpoint delete-topic-endpoint update-rdp delete-rdp; do
         assert_json_field "$resp" "(.result.tools[] | select(.name==\"$t\") | .annotations.destructiveHint) // false" "true" \
             "annotations: $t destructiveHint=true" || return 1
     done
@@ -243,6 +327,8 @@ test_queue_roundtrip_a() { test_queue_roundtrip broker-a; }
 test_queue_roundtrip_b() { test_queue_roundtrip broker-b; }
 test_te_roundtrip_a()    { test_te_roundtrip broker-a; }
 test_te_roundtrip_b()    { test_te_roundtrip broker-b; }
+test_rdp_roundtrip_a()   { test_rdp_roundtrip broker-a; }
+test_rdp_roundtrip_b()   { test_rdp_roundtrip broker-b; }
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
@@ -254,7 +340,10 @@ run_test "Queue round-trip (broker-a)"          test_queue_roundtrip_a
 run_test "Queue round-trip (broker-b)"          test_queue_roundtrip_b
 run_test "Topic-endpoint round-trip (broker-a)" test_te_roundtrip_a
 run_test "Topic-endpoint round-trip (broker-b)" test_te_roundtrip_b
-run_test "Cross-broker isolation"               test_cross_broker_isolation
+run_test "RDP round-trip (broker-a)"            test_rdp_roundtrip_a
+run_test "RDP round-trip (broker-b)"            test_rdp_roundtrip_b
+run_test "Cross-broker isolation (queue)"       test_cross_broker_isolation
+run_test "Cross-broker isolation (RDP)"         test_rdp_cross_broker_isolation
 run_test "Annotations (tools/list)"             test_annotations
 run_test "Error translation (duplicate create)" test_error_translation
 
