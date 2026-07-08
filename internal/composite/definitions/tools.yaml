@@ -30,7 +30,12 @@ tools:
     description: >
       Get the operational status of a REST Delivery Point including its
       enabled state, up/down status, client name, client profile, last
-      failure reason, queue bindings, and REST consumer status.
+      failure reason, queue bindings, and REST consumer status. 
+      The response includes a summary block with bindingDownCount / consumerDownCount
+      (bindings or REST consumers with up == false, regardless of 
+      enabled state — both the disabled-and-down and the unexpectedly-down 
+      sets are counted), and byBindingLastFailureReason / byConsumerLastFailureReason 
+      (active failures only; recovered entries with stale reasons are excluded).
     annotations:
       readOnly: true
     parameters:
@@ -198,7 +203,11 @@ tools:
       List Message VPNs on the broker with their enabled state, connection
       count, and basic health status. Returns up to 100 by default (max 500
       via maxResults). Use this to discover which VPNs exist and identify any
-      that are down or have no active connections.
+      that are down or have no active connections. TThe response summary counts 
+      enabled VPNs in state == "down" under downCount and enabled+up VPNs with 
+      zero connections under zeroConnectionCount (standby VPNs are excluded from both); 
+      admin-disabled VPNs land in disabledCount only and are excluded from downCount 
+      and zeroConnectionCount.
     annotations:
       readOnly: true
     parameters:
@@ -347,12 +356,12 @@ tools:
       List all REST Delivery Points in a Message VPN with their enabled state,
       up/down status, and last failure reason. Use this to discover which RDPs
       exist and identify any that are down. The response includes a summary
-      block with downCount (enabled RDPs that are not up — the
-      unexpectedly-down set, matching the shape of list-vpns.downCount),
+      block with downCount (enabled RDPs that are not up — the unexpectedly-down set),
       disabledCount, and byLastFailureReason (counts of unexpectedly-down RDPs
       grouped by their failure reason; admin-disabled RDPs and recovered RDPs
       with stale reasons are excluded). For detailed RDP status including
       consumers and queue bindings, use get-rdp-status.
+      
     annotations:
       readOnly: true
     parameters:
@@ -416,7 +425,10 @@ tools:
       to ACK), because the broker self-throttles via the transmit window
       before TCP egress can stall. To find slow guaranteed consumers, use
       list-queues / get-queue-metrics. Server-side filtered via SEMP where
-      clause — only matching clients are returned.
+      clause — only matching clients are returned. The response includes a 
+      summary block with byClientProfile, byPlatform (grouped counts), 
+      and totalTxDiscardedMsgCount (cumulative lifetime discards across 
+      all slow subscribers, not a rate).
     annotations:
       readOnly: true
     parameters:
@@ -457,8 +469,12 @@ tools:
       List per-queue message discard counts for a Message VPN. Returns each
       queue with its TTL-expired, max-redelivery-exceeded, spool-quota-exceeded,
       and other discard category counters. Use this to diagnose why messages
-      are being dropped across queues. For broker-wide or per-VPN aggregate
-      totals, use get-discard-stats.
+      are being dropped across queues. The response summary counts queues with any 
+      cumulative discards (discardingQueueCount) and provides topOffenderQueues — 
+      the top 10 by total cumulative discard count, each annotated with its 
+      dominantCategory; topOffenderQueues is omitted from summary entirely when 
+      no discards are present, so its absence is a meaningful zero signal.
+      For broker-wide or per-VPN aggregate totals, use get-discard-stats. 
     annotations:
       readOnly: true
     parameters:
