@@ -95,6 +95,13 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	return tok, nil
 }
 
+// Close releases resources held by the cache backend (e.g. Otter's
+// background eviction goroutines). Must be called after all in-flight
+// Exchange calls have completed.
+func (e *Exchanger) Close() error {
+	return e.cache.Close()
+}
+
 // Invalidate evicts a cached token for the given (subjectToken, brokerAlias)
 // pair. Called by OAuthAuthenticator.HandleAuthFailure when the broker
 // rejects the token with a 401 — the next Exchange call will miss the

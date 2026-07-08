@@ -596,6 +596,7 @@ func main() {
 				slog.String("error", err.Error()))
 			os.Exit(1)
 		}
+		defer exchanger.Close()
 	}
 
 	// 4. Create broker pool
