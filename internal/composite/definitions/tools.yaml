@@ -471,7 +471,8 @@ tools:
       and other discard category counters. Use this to diagnose why messages
       are being dropped across queues. The response summary counts queues with any
       cumulative discards (discardingQueueCount) and provides topOffenderQueues —
-      the top 10 by total cumulative discard count, each annotated with its
+      the top 10 by total cumulative count of truly-lost discards (messages
+      successfully moved to a DMQ are excluded), each annotated with its
       dominantCategory; topOffenderQueues is omitted from summary entirely when
       no discards are present, so its absence is a meaningful zero signal.
       For broker-wide or per-VPN aggregate totals, use get-discard-stats.
