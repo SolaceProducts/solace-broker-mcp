@@ -34,6 +34,7 @@ import (
 
 	internalauth "github.com/SolaceDev/solace-broker-mcp/internal/auth"
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache/cachetest"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tokenexchange"
 	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
@@ -95,6 +96,7 @@ func runOAuthVisibilityTest(t *testing.T, label string, idpHandler http.HandlerF
 	}))
 	defer fakeBroker.Close()
 
+	tc := cachetest.Default(t)
 	exchanger, err := tokenexchange.New(tokenexchange.Params{
 		TokenURL:         fakeIdP.URL,
 		ClientID:         "mcp-server",
@@ -103,6 +105,7 @@ func runOAuthVisibilityTest(t *testing.T, label string, idpHandler http.HandlerF
 		GrantType:        tokenexchange.GrantTypeTokenExchange,
 		AudienceParam:    tokenexchange.AudienceParamAudience,
 		HTTPClient:       fakeIdP.Client(),
+		Cache:            tc,
 	})
 	if err != nil {
 		t.Fatalf("tokenexchange.New: %v", err)
@@ -135,6 +138,7 @@ func runOAuthVisibilityTestNoSubjectToken(t *testing.T) {
 	}))
 	defer fakeBroker.Close()
 
+	tc := cachetest.Default(t)
 	exchanger, err := tokenexchange.New(tokenexchange.Params{
 		TokenURL:         fakeIdP.URL,
 		ClientID:         "mcp-server",
@@ -143,6 +147,7 @@ func runOAuthVisibilityTestNoSubjectToken(t *testing.T) {
 		GrantType:        tokenexchange.GrantTypeTokenExchange,
 		AudienceParam:    tokenexchange.AudienceParamAudience,
 		HTTPClient:       fakeIdP.Client(),
+		Cache:            tc,
 	})
 	if err != nil {
 		t.Fatalf("tokenexchange.New: %v", err)

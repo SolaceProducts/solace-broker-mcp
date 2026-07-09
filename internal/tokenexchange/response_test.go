@@ -63,7 +63,7 @@ func (b *trackingBodyOK) Close() error {
 func TestParseIdPResponse_BodyAlwaysClosedOnError(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestParseIdPResponse_BodyAlwaysClosedOnError(t *testing.T) {
 func TestParseIdPResponse_BodyAlwaysClosedOnSuccess(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestParseIdPResponse_BodyAlwaysClosedOnSuccess(t *testing.T) {
 func TestParseIdPResponse_BodySizeCappedAt1MiB(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestParseIdPResponse_BodySizeCappedAt1MiB(t *testing.T) {
 func TestParseIdPResponse_NonJSONContentTypeReturnsInvalidResponse(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestParseIdPResponse_NonJSONContentTypeReturnsInvalidResponse(t *testing.T)
 func TestParseIdPResponse_MissingContentTypeBypassesGuard(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestParseIdPResponse_MissingContentTypeBypassesGuard(t *testing.T) {
 func TestParseIdPResponse_MalformedContentTypeBypassesGuard(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestResponseMediaType_CaseInsensitive(t *testing.T) {
 func TestParseSuccessBody_InvalidJSONReturnsInvalidResponse(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestParseSuccessBody_MissingAccessTokenReturnsInvalidResponse(t *testing.T)
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			e, err := New(validParams())
+			e, err := New(validParams(t))
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
@@ -374,7 +374,7 @@ func TestParseSuccessBody_TokenTypeCaseInsensitiveBearer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			e, err := New(validParams())
+			e, err := New(validParams(t))
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
@@ -423,7 +423,7 @@ func TestParseSuccessBody_IssuedTokenTypeExactMatchRequired(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			e, err := New(validParams()) // sets GrantTypeTokenExchange
+			e, err := New(validParams(t)) // sets GrantTypeTokenExchange
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
@@ -500,7 +500,7 @@ func TestParseSuccessBody_ExpiresInNonPositiveReturnsInvalidResponse(t *testing.
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			e, err := New(validParams())
+			e, err := New(validParams(t))
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
@@ -526,7 +526,7 @@ func TestParseSuccessBody_ExpiresInNonPositiveReturnsInvalidResponse(t *testing.
 func TestParseSuccessBody_ExpiresInOverflowGuard(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -562,7 +562,7 @@ func TestParseSuccessBody_ExpiresInOverflowGuard(t *testing.T) {
 func TestParseSuccessBody_TokenConstructionAndExpiresAt(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -578,6 +578,7 @@ func TestParseSuccessBody_TokenConstructionAndExpiresAt(t *testing.T) {
 	}
 	if tok == nil {
 		t.Fatal("tok = nil, want non-nil")
+		return
 	}
 	if tok.Value != "my-token" {
 		t.Errorf("tok.Value = %q, want %q", tok.Value, "my-token")
@@ -594,7 +595,7 @@ func TestParseSuccessBody_TokenConstructionAndExpiresAt(t *testing.T) {
 func TestParseIdPResponse_FourxxOAuthErrorReturnsExchangeRejected(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -627,7 +628,7 @@ func TestParseIdPResponse_FourxxOAuthErrorReturnsExchangeRejected(t *testing.T) 
 func TestParseIdPResponse_FourxxNonOAuthBodyReturnsExchangeTransport(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -672,7 +673,7 @@ func TestParseIdPResponse_ThreexxAndFivexxReturnExchangeTransport(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			e, err := New(validParams())
+			e, err := New(validParams(t))
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
@@ -764,7 +765,7 @@ func TestClassifyClientError_ErrorDescriptionNotInMessage(t *testing.T) {
 func TestParseIdPResponse_HappyPath(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -784,6 +785,7 @@ func TestParseIdPResponse_HappyPath(t *testing.T) {
 	}
 	if tok == nil {
 		t.Fatal("tok = nil, want non-nil")
+		return
 	}
 	if tok.Value != "exchanged-token" {
 		t.Errorf("tok.Value = %q, want %q", tok.Value, "exchanged-token")
@@ -815,7 +817,7 @@ func TestParseSuccessBody_ShortLivedTokenReturnsNonErrorTokenWithPastExpiresAt(t
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			e, err := New(validParams())
+			e, err := New(validParams(t))
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
@@ -829,6 +831,7 @@ func TestParseSuccessBody_ShortLivedTokenReturnsNonErrorTokenWithPastExpiresAt(t
 			}
 			if tok == nil {
 				t.Fatal("tok = nil, want non-nil")
+				return
 			}
 
 			wantExpiresAt := now.Add(time.Duration(tc.expiresIn)*time.Second - 30*time.Second)
@@ -861,7 +864,7 @@ func TestParseSuccessBody_ShortLivedTokenReturnsNonErrorTokenWithPastExpiresAt(t
 func TestParseIdPResponse_OversizedBodySurfacesAsInvalidResponseNotTransport(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -896,7 +899,7 @@ func TestParseIdPResponse_OversizedBodySurfacesAsInvalidResponseNotTransport(t *
 func TestParseSuccessBody_NullBodyTriggersAccessTokenMissingError(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -939,7 +942,7 @@ func TestClassifyClientError_ExplicitEmptyErrorFieldRoutesToTransport(t *testing
 func TestParseSuccessBody_UnknownFieldsSilentlyIgnored(t *testing.T) {
 	t.Parallel()
 
-	e, err := New(validParams())
+	e, err := New(validParams(t))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -962,6 +965,7 @@ func TestParseSuccessBody_UnknownFieldsSilentlyIgnored(t *testing.T) {
 	}
 	if tok == nil {
 		t.Fatal("tok = nil, want non-nil")
+		return
 	}
 	if tok.Value != "tok" {
 		t.Errorf("tok.Value = %q, want %q", tok.Value, "tok")

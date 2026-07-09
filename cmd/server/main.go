@@ -35,6 +35,7 @@ import (
 	_ "github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess/handlers" // register handlers via init()
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
 	"github.com/SolaceDev/solace-broker-mcp/internal/idpclient"
 	"github.com/SolaceDev/solace-broker-mcp/internal/middleware/recovery"
 	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
@@ -459,8 +460,24 @@ func newTokenExchanger(oauthCfg *config.BrokerOAuthConfig) (*tokenexchange.Excha
 	if err != nil {
 		return nil, fmt.Errorf("creating IdP HTTP client: %w", err)
 	}
-	exchanger, err := tokenexchange.FromConfig(oauthCfg, httpClient)
+	tokenCache, err := cache.NewTokenCache(cache.CacheConfig{
+		MaxSize:   defaults.DefaultOAuthCacheMaxSize,
+		ClockSkew: defaults.DefaultTokenExpirySkew,
+		MaxTTL:    defaults.DefaultMaxOAuthTokenTTL,
+	})
 	if err != nil {
+		return nil, fmt.Errorf("creating token cache: %w", err)
+	}
+	exchanger, err := tokenexchange.FromConfig(oauthCfg, httpClient, tokenCache)
+	if err != nil {
+		// Cache already started its Otter eviction goroutine on construction.
+		// Release it before returning so the failed-startup path doesn't leak
+		// resources (the eventual os.Exit(1) reaps them anyway, but a test
+		// that drives this path would leak per invocation).
+		if closeErr := tokenCache.Close(); closeErr != nil {
+			slog.Warn("closing token cache after exchanger construction failed",
+				slog.String("error", closeErr.Error()))
+		}
 		return nil, fmt.Errorf("creating token exchanger: %w", err)
 	}
 	slog.Info("token exchanger created for broker OAuth")
@@ -587,6 +604,12 @@ func main() {
 				slog.String("error", err.Error()))
 			os.Exit(1)
 		}
+		defer func() {
+			if closeErr := exchanger.Close(); closeErr != nil {
+				slog.Warn("closing token exchanger on shutdown",
+					slog.String("error", closeErr.Error()))
+			}
+		}()
 	}
 
 	// 4. Create broker pool

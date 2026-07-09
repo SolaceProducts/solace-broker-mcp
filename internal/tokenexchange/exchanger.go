@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -39,6 +40,7 @@ type Exchanger struct {
 	audienceParam    AudienceFormat
 	httpClient       *http.Client
 	exchangeTimeout  time.Duration
+	cache            cache.TokenCache
 	group            singleflight.Group
 	nowFunc          func() time.Time
 }
@@ -57,6 +59,9 @@ func New(p Params) (*Exchanger, error) {
 	if p.HTTPClient == nil {
 		return nil, errors.New("tokenexchange: HTTPClient is required")
 	}
+	if p.Cache == nil {
+		return nil, errors.New("tokenexchange: Cache is required")
+	}
 	return &Exchanger{
 		tokenURL:         p.TokenURL,
 		clientID:         p.ClientID,
@@ -66,6 +71,7 @@ func New(p Params) (*Exchanger, error) {
 		audienceParam:    p.AudienceParam,
 		httpClient:       p.HTTPClient,
 		exchangeTimeout:  defaults.DefaultOIDCHTTPTimeout,
+		cache:            p.Cache,
 		nowFunc:          time.Now,
 	}, nil
 }

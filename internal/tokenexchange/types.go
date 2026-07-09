@@ -36,6 +36,8 @@ import (
 	"errors"
 	"net/http"
 	"time"
+
+	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
 )
 
 // ClientAuthMethod identifies the OAuth client-authentication method the
@@ -115,6 +117,10 @@ type Params struct {
 	// HTTPClient is the IdP-bound HTTP client; typically built via
 	// idpclient.NewHTTPClient so the SOL-150219 timeout bound applies.
 	HTTPClient *http.Client
+	// Cache is the token cache for cross-time deduplication. The exchanger
+	// checks the cache before hitting the IdP and stores successful
+	// exchange results. Required — a nil cache is a wiring bug.
+	Cache cache.TokenCache
 }
 
 // ExchangeInput are the per-call inputs to Exchange. Subject token comes
