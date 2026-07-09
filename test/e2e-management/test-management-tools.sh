@@ -85,7 +85,7 @@ assert_listed() {
 test_vpn_roundtrip() {
     local broker="$1"
     local name="e2e-config-vpn-$broker"
-    local burl mon
+    local burl
     burl=$(broker_url_for "$broker")
 
     call_tool_ok "create-message-vpn" \
@@ -96,9 +96,8 @@ test_vpn_roundtrip() {
     call_tool_ok "update-message-vpn" \
         "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:$n,msgVpnConfig:{maxConnectionCount:50}}')" \
         "update-message-vpn [$broker]" || return 1
-    mon=$(semp_monitor_get "$burl" "msgVpns/$name") || { log_fail "update-message-vpn [$broker]: monitor GET failed"; return 1; }
-    assert_json_field "$mon" ".data.maxConnectionCount" "50" \
-        "update-message-vpn [$broker]: maxConnectionCount reflected" || return 1
+    verify_monitor_object "$burl" "$broker" "msgVpns/$name" 30 '.data.maxConnectionCount == 50' \
+        || { log_fail "update-message-vpn [$broker]: maxConnectionCount not reflected"; return 1; }
 
     call_tool_ok "delete-message-vpn" \
         "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:$n}')" \
@@ -111,7 +110,7 @@ test_vpn_roundtrip() {
 test_queue_roundtrip() {
     local broker="$1"
     local name="e2e-config-queue-$broker"
-    local burl mon
+    local burl
     burl=$(broker_url_for "$broker")
 
     call_tool_ok "create-queue" \
@@ -122,9 +121,8 @@ test_queue_roundtrip() {
     call_tool_ok "update-queue" \
         "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,queueConfig:{maxMsgSpoolUsage:10}}')" \
         "update-queue [$broker]" || return 1
-    mon=$(semp_monitor_get "$burl" "msgVpns/$BROKER_VPN/queues/$name") || { log_fail "update-queue [$broker]: monitor GET failed"; return 1; }
-    assert_json_field "$mon" ".data.maxMsgSpoolUsage" "10" \
-        "update-queue [$broker]: maxMsgSpoolUsage reflected" || return 1
+    verify_monitor_object "$burl" "$broker" "msgVpns/$BROKER_VPN/queues/$name" 30 '.data.maxMsgSpoolUsage == 10' \
+        || { log_fail "update-queue [$broker]: maxMsgSpoolUsage not reflected"; return 1; }
 
     call_tool_ok "delete-queue" \
         "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n}')" \
@@ -137,24 +135,21 @@ test_queue_roundtrip() {
 test_te_roundtrip() {
     local broker="$1"
     local name="e2e-config-te-$broker"
-    local burl mon
+    local burl
     burl=$(broker_url_for "$broker")
 
     call_tool_ok "create-topic-endpoint" \
         "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",topicEndpointName:$n,topicEndpointConfig:{accessType:"non-exclusive"}}')" \
         "create-topic-endpoint [$broker]" || return 1
-    if ! semp_monitor_get "$burl" "msgVpns/$BROKER_VPN/topicEndpoints/$name" >/dev/null 2>&1; then
-        log_fail "create-topic-endpoint [$broker]: $name not visible via monitor GET"
-        return 1
-    fi
+    verify_monitor_object "$burl" "$broker" "msgVpns/$BROKER_VPN/topicEndpoints/$name" \
+        || { log_fail "create-topic-endpoint [$broker]: $name not visible"; return 1; }
 
     # Topic endpoints use maxSpoolUsage (queues use maxMsgSpoolUsage).
     call_tool_ok "update-topic-endpoint" \
         "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",topicEndpointName:$n,topicEndpointConfig:{maxSpoolUsage:10}}')" \
         "update-topic-endpoint [$broker]" || return 1
-    mon=$(semp_monitor_get "$burl" "msgVpns/$BROKER_VPN/topicEndpoints/$name") || { log_fail "update-topic-endpoint [$broker]: monitor GET failed"; return 1; }
-    assert_json_field "$mon" ".data.maxSpoolUsage" "10" \
-        "update-topic-endpoint [$broker]: maxSpoolUsage reflected" || return 1
+    verify_monitor_object "$burl" "$broker" "msgVpns/$BROKER_VPN/topicEndpoints/$name" 30 '.data.maxSpoolUsage == 10' \
+        || { log_fail "update-topic-endpoint [$broker]: maxSpoolUsage not reflected"; return 1; }
 
     call_tool_ok "delete-topic-endpoint" \
         "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",topicEndpointName:$n}')" \

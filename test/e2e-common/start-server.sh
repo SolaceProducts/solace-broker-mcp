@@ -20,10 +20,9 @@ for arg in "$@"; do
     case "$arg" in
         --bg) MODE="background" ;;
         *)
-            # Treat as SUITE_DIR if not already set
-            if [ -z "$SUITE_DIR" ]; then
-                SUITE_DIR="$arg"
-            fi
+            echo "Unknown argument: $arg" >&2
+            echo "Usage: SUITE_DIR=/path/to/suite $0 [--bg]" >&2
+            exit 1
             ;;
     esac
 done

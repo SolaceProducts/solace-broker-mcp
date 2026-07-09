@@ -357,18 +357,21 @@ semp_monitor_get() {
 #   $3 object_path   path under SEMP/v2/__private_monitor__,
 #                    e.g. "msgVpns/default/queues/test-queue-2"
 #   $4 max_attempts  optional, default 30
+#   $5 predicate     optional jq bool expr, e.g. ".data.maxSpoolUsage == 10"
 verify_monitor_object() {
     local broker_url="$1"
     local label="$2"
     local object_path="$3"
     local max_attempts="${4:-30}"
+    local predicate="${5:-}"
     local monitor="$broker_url/SEMP/v2/__private_monitor__"
     local description="${object_path##*/}"
-    local attempt=0
+    local attempt=0 body
 
     while [ $attempt -lt $max_attempts ]; do
-        if curl -sf -u "$BROKER_USER:$BROKER_PASS" \
-            "$monitor/$object_path" >/dev/null 2>&1; then
+        if body=$(curl -sf -u "$BROKER_USER:$BROKER_PASS" \
+            "$monitor/$object_path" 2>/dev/null) \
+           && { [ -z "$predicate" ] || [ "$(jq -r "$predicate" <<<"$body")" = "true" ]; }; then
             log_info "  monitor visible: $description on $label (${attempt}s)"
             return 0
         fi

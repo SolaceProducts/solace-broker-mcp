@@ -231,7 +231,7 @@ Fixtures are cleaned up before creation (to handle leftover state) and after tes
 |---|---|
 | `test_health_endpoint` | `GET /health` returns `{"status":"healthy"}` (legacy back-compat body; `/livez` is the canonical liveness endpoint and returns `{"status":"alive"}`) |
 | `test_initialize` | MCP handshake completes, server returns `Mcp-Session-Id` |
-| `test_list_tools` | `tools/list` returns all 17 tools (composite: `get-rdp-status`, `get-queue-metrics`, `get-client-details`, `list-client-subscriptions`, `get-vpn-health`, `list-vpns`, `list-queues`, `list-clients`, `get-message-rates`, `list-rdps`, `get-replication-status`, `list-slow-subscribers`, `list-queue-discards`; native: `list-brokers`, `get-broker-status`, `get-redundancy-status`, `get-discard-stats`) |
+| `test_list_tools` | `tools/list` includes the expected tools — asserts a representative subset is present (`get-rdp-status`, `list-brokers`, `get-queue-metrics`, `get-client-details`, `list-client-subscriptions`). The server runs with `enable_write_tools` on, so `tools/list` returns the 17 monitoring tools plus the 10 management tools. |
 | `test_list_brokers` | `list-brokers` response includes both `broker-a` and `broker-b` |
 | `test_get_rdp_status_broker_a` | `get-rdp-status` on broker-a returns 3-step response |
 | `test_get_rdp_status_not_found` | Nonexistent RDP name returns a JSON-RPC error |
@@ -263,7 +263,7 @@ Usage: `./bin/agent <server-url>`
 
 It performs:
 1. Connect to the MCP server via `StreamableClientTransport`
-2. Call `session.ListTools()` — verify all 17 tools are present
+2. Call `session.ListTools()` — verify a representative subset of tools is present
 3. Call `list-brokers` tool — verify both `broker-a` and `broker-b` aliases appear
 4. For each broker (`broker-a`, `broker-b`):
    - Call `get-rdp-status` with the test fixtures — verify 3-step structured response
