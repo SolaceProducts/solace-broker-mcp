@@ -15,6 +15,8 @@ E2E_DIR     := test/e2e-basic-mcp
 COMPOSE_E2E := docker compose -f $(E2E_DIR)/docker-compose.yml
 E2E_MON_DIR := test/e2e-monitoring
 COMPOSE_E2E_MON := docker compose -f $(E2E_MON_DIR)/docker-compose.yml
+E2E_MGMT_DIR := test/e2e-management
+COMPOSE_E2E_MGMT := docker compose -f $(E2E_MGMT_DIR)/docker-compose.yml
 
 .DEFAULT_GOAL := help
 
@@ -88,7 +90,7 @@ e2e-monitoring-up: ## Start brokers for the e2e-monitoring suite (use `e2e-monit
 
 .PHONY: e2e-monitoring
 e2e-monitoring: ## Run the e2e-monitoring suite (requires brokers from `make e2e-monitoring-up`)
-	bash $(E2E_MON_DIR)/test-monitoring-tools.sh
+	bash $(E2E_MON_DIR)/run-all.sh
 
 .PHONY: e2e-monitoring-down
 e2e-monitoring-down: ## Stop and remove e2e-monitoring brokers
@@ -97,8 +99,27 @@ e2e-monitoring-down: ## Stop and remove e2e-monitoring brokers
 .PHONY: e2e-monitoring-all
 e2e-monitoring-all: ## Full e2e-monitoring cycle: brokers up, wait for health, run suite, tear down (tears down even on failure)
 	$(COMPOSE_E2E_MON) up -d
-	@. $(E2E_MON_DIR)/helpers.sh && wait_for_all_brokers 120 && bash $(E2E_MON_DIR)/test-monitoring-tools.sh; t=$$?; \
+	@. $(E2E_MON_DIR)/helpers.sh && wait_for_all_brokers 120 && bash $(E2E_MON_DIR)/run-all.sh; t=$$?; \
 	$(COMPOSE_E2E_MON) down -v || echo "WARN: e2e-monitoring-all teardown failed"; \
+	exit $$t
+
+.PHONY: e2e-management-up
+e2e-management-up: ## Start brokers for the e2e-management suite (use `e2e-management-all` for the full cycle)
+	$(COMPOSE_E2E_MGMT) up -d
+
+.PHONY: e2e-management
+e2e-management: ## Run the e2e-management suite (requires brokers from `make e2e-management-up`)
+	bash $(E2E_MGMT_DIR)/run-all.sh
+
+.PHONY: e2e-management-down
+e2e-management-down: ## Stop and remove e2e-management brokers
+	$(COMPOSE_E2E_MGMT) down -v
+
+.PHONY: e2e-management-all
+e2e-management-all: ## Full e2e-management cycle: brokers up, wait for health, run suite, tear down (tears down even on failure)
+	$(COMPOSE_E2E_MGMT) up -d
+	@. $(E2E_MGMT_DIR)/helpers.sh && wait_for_all_brokers 120 && bash $(E2E_MGMT_DIR)/run-all.sh; t=$$?; \
+	$(COMPOSE_E2E_MGMT) down -v || echo "WARN: e2e-management-all teardown failed"; \
 	exit $$t
 
 # ── Docker ───────────────────────────────────────────────────────────────────

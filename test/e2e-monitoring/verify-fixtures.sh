@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SEMP-direct fixture-state verification for SOL-150024 acceptance criteria.
-# Invoked by test-monitoring-tools.sh after create_fixtures; assumes the
+# Invoked by run-all.sh after create_fixtures; assumes the
 # brokers are running and the fixtures have already been created.
 # Exits non-zero on any failed assertion so the parent runner short-circuits.
 

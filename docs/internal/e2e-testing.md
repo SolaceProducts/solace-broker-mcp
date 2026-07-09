@@ -2,7 +2,18 @@
 
 This document describes the E2E testing strategy, structure, and how to run the tests locally and in CI.
 
-For a quickstart and the suite's port allocation, see [`test/e2e-basic-mcp/README.md`](../../test/e2e-basic-mcp/README.md). A separate monitoring-focused suite lives under [`test/e2e-monitoring/`](../../test/e2e-monitoring/README.md), and an LLM-driven eval harness that runs natural-language scenarios through the Claude Code CLI lives under [`test/e2e-monitoring/llm/`](../../test/e2e-monitoring/llm/README.md). The LLM suite is non-gating and only runs via manual `workflow_dispatch` ([`llm-eval.yml`](../../.github/workflows/llm-eval.yml)).
+For a quickstart and the suite's port allocation, see [`test/e2e-basic-mcp/README.md`](../../test/e2e-basic-mcp/README.md). A separate monitoring-focused suite lives under [`test/e2e-monitoring/`](../../test/e2e-monitoring/README.md), and a management/config-tool suite lives under [`test/e2e-management/`](../../test/e2e-management/README.md). An LLM-driven eval harness that runs natural-language scenarios through the Claude Code CLI lives under [`test/e2e-monitoring/llm/`](../../test/e2e-monitoring/llm/README.md). The LLM suite is non-gating and only runs via manual `workflow_dispatch` ([`llm-eval.yml`](../../.github/workflows/llm-eval.yml)).
+
+## Shared scaffold — `test/e2e-common/lib.sh`
+
+The generic scaffold shared by the tool-testing suites — broker readiness, MCP server build/start/stop, config generation (`write_config`), SEMP operations, the MCP JSON-RPC wire helpers, assertions, and the test runner — lives in [`test/e2e-common/lib.sh`](../../test/e2e-common/lib.sh). Each suite keeps only its own fixtures and sources the lib. Every suite runs one server with `enable_write_tools` on, so both read and write tools are registered.
+
+Location-independence contract: a suite sets `SUITE_DIR` (its own directory) before sourcing the lib, which derives `BIN_DIR`/`ENV_FILE`/`REPO_ROOT` from it and sources the suite's `.env`. This lets one lib serve `e2e-monitoring`, `e2e-management`, and future suites, each with its own `bin/`, `.env`, ports, and containers.
+
+| Suite | Fixtures | Focus |
+|---|---|---|
+| `e2e-monitoring` | F1–F7, created up front + broker-driver traffic | monitoring tools |
+| `e2e-management` | per-test `e2e-config-*`, created/torn down inside each test | config tools (create/update/delete VPN, queue, topic-endpoint) |
 
 ---
 
@@ -113,7 +124,7 @@ When iterating on a specific scenario, start the server once and run tests again
 docker compose -f test/e2e-basic-mcp/docker-compose.yml up -d
 
 # 2. Build and start the MCP server in the background
-bash test/e2e-basic-mcp/start-server.sh --bg
+SUITE_DIR=test/e2e-basic-mcp bash test/e2e-common/start-server.sh --bg
 
 # 3. Create broker test fixtures on both brokers
 source test/e2e-basic-mcp/helpers.sh && create_fixtures
@@ -128,14 +139,14 @@ kill $(cat test/e2e-basic-mcp/bin/mcp-server.pid)
 
 ### Start the MCP server standalone
 
-`start-server.sh` compiles the MCP server from the latest source and starts it against the E2E brokers. Useful for manual testing or development.
+The shared `e2e-common/start-server.sh` compiles the MCP server from the latest source and starts it against a suite's E2E brokers. Useful for manual testing or development.
 
 ```bash
 # Foreground (Ctrl-C to stop)
-bash test/e2e-basic-mcp/start-server.sh
+SUITE_DIR=test/e2e-basic-mcp bash test/e2e-common/start-server.sh
 
 # Background (writes PID file for later stop)
-bash test/e2e-basic-mcp/start-server.sh --bg
+SUITE_DIR=test/e2e-basic-mcp bash test/e2e-common/start-server.sh --bg
 kill $(cat test/e2e-basic-mcp/bin/mcp-server.pid)   # stop
 ```
 
@@ -220,7 +231,7 @@ Fixtures are cleaned up before creation (to handle leftover state) and after tes
 |---|---|
 | `test_health_endpoint` | `GET /health` returns `{"status":"healthy"}` (legacy back-compat body; `/livez` is the canonical liveness endpoint and returns `{"status":"alive"}`) |
 | `test_initialize` | MCP handshake completes, server returns `Mcp-Session-Id` |
-| `test_list_tools` | `tools/list` returns all 17 tools (composite: `get-rdp-status`, `get-queue-metrics`, `get-client-details`, `list-client-subscriptions`, `get-vpn-health`, `list-vpns`, `list-queues`, `list-clients`, `get-message-rates`, `list-rdps`, `get-replication-status`, `list-slow-subscribers`, `list-queue-discards`; native: `list-brokers`, `get-broker-status`, `get-redundancy-status`, `get-discard-stats`) |
+| `test_list_tools` | `tools/list` includes the expected tools — asserts a representative subset is present (`get-rdp-status`, `list-brokers`, `get-queue-metrics`, `get-client-details`, `list-client-subscriptions`). The server runs with `enable_write_tools` on, so `tools/list` returns the 17 monitoring tools plus the 12 management tools. |
 | `test_list_brokers` | `list-brokers` response includes both `broker-a` and `broker-b` |
 | `test_get_rdp_status_broker_a` | `get-rdp-status` on broker-a returns 3-step response |
 | `test_get_rdp_status_not_found` | Nonexistent RDP name returns a JSON-RPC error |
@@ -252,7 +263,7 @@ Usage: `./bin/agent <server-url>`
 
 It performs:
 1. Connect to the MCP server via `StreamableClientTransport`
-2. Call `session.ListTools()` — verify all 17 tools are present
+2. Call `session.ListTools()` — verify a representative subset of tools is present
 3. Call `list-brokers` tool — verify both `broker-a` and `broker-b` aliases appear
 4. For each broker (`broker-a`, `broker-b`):
    - Call `get-rdp-status` with the test fixtures — verify 3-step structured response
