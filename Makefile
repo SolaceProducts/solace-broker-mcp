@@ -17,6 +17,8 @@ E2E_MON_DIR := test/e2e-monitoring
 COMPOSE_E2E_MON := docker compose -f $(E2E_MON_DIR)/docker-compose.yml
 E2E_MGMT_DIR := test/e2e-management
 COMPOSE_E2E_MGMT := docker compose -f $(E2E_MGMT_DIR)/docker-compose.yml
+E2E_ACT_DIR := test/e2e-action
+COMPOSE_E2E_ACT := docker compose -f $(E2E_ACT_DIR)/docker-compose.yml
 
 .DEFAULT_GOAL := help
 
@@ -120,6 +122,25 @@ e2e-management-all: ## Full e2e-management cycle: brokers up, wait for health, r
 	$(COMPOSE_E2E_MGMT) up -d
 	@. $(E2E_MGMT_DIR)/helpers.sh && wait_for_all_brokers 120 && bash $(E2E_MGMT_DIR)/run-all.sh; t=$$?; \
 	$(COMPOSE_E2E_MGMT) down -v || echo "WARN: e2e-management-all teardown failed"; \
+	exit $$t
+
+.PHONY: e2e-action-up
+e2e-action-up: ## Start brokers for the e2e-action suite (use `e2e-action-all` for the full cycle)
+	$(COMPOSE_E2E_ACT) up -d
+
+.PHONY: e2e-action
+e2e-action: ## Run the e2e-action suite (requires brokers from `make e2e-action-up`)
+	bash $(E2E_ACT_DIR)/run-all.sh
+
+.PHONY: e2e-action-down
+e2e-action-down: ## Stop and remove e2e-action brokers
+	$(COMPOSE_E2E_ACT) down -v
+
+.PHONY: e2e-action-all
+e2e-action-all: ## Full e2e-action cycle: brokers up, wait for health, run suite, tear down (tears down even on failure)
+	$(COMPOSE_E2E_ACT) up -d
+	@. $(E2E_ACT_DIR)/helpers.sh && wait_for_all_brokers 120 && bash $(E2E_ACT_DIR)/run-all.sh; t=$$?; \
+	$(COMPOSE_E2E_ACT) down -v || echo "WARN: e2e-action-all teardown failed"; \
 	exit $$t
 
 # ── Docker ───────────────────────────────────────────────────────────────────

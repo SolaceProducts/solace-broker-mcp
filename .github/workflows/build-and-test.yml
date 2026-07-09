@@ -76,7 +76,7 @@ jobs:
       - name: Vet
         run: |
           go vet ./...
-          (cd test/e2e-monitoring/broker-driver && go vet ./...)
+          (cd test/e2e-common/broker-driver && go vet ./...)
 
       - name: Test
         # -race enables the Go race detector to catch data races on shared state (e.g. BrokerPool).
@@ -225,3 +225,37 @@ jobs:
       - name: Tear down brokers
         if: always()
         run: docker compose -f test/e2e-management/docker-compose.yml down -v
+
+  e2e-action:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Start Solace brokers
+        run: SUITE_DIR=test/e2e-action bash test/e2e-common/setup-brokers.sh
+
+      - name: Run E2E tests
+        run: bash test/e2e-action/run-all.sh
+
+      - name: Broker logs (on failure)
+        if: failure()
+        run: |
+          echo "=== solace-e2e-act-a ==="
+          docker logs solace-e2e-act-a 2>&1 | tail -100
+          echo "=== solace-e2e-act-b ==="
+          docker logs solace-e2e-act-b 2>&1 | tail -100
+
+      - name: MCP server log (on failure)
+        if: failure()
+        run: cat test/e2e-action/bin/mcp-server.log 2>/dev/null || echo "No server log found"
+
+      - name: Tear down brokers
+        if: always()
+        run: docker compose -f test/e2e-action/docker-compose.yml down -v
