@@ -41,7 +41,7 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*sempv2.HTTPClient, 
 	if jarErr != nil {
 		t.Fatalf("NewSafeCookieJar: %v", jarErr)
 	}
-	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret", jar), jar)
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret", "test-broker", jar), jar)
 	if err != nil {
 		t.Fatalf("NewHTTPClient() error: %v", err)
 	}
@@ -917,7 +917,7 @@ func TestClient_Execute_Timeout(t *testing.T) {
 	if jarErr != nil {
 		t.Fatalf("NewSafeCookieJar: %v", jarErr)
 	}
-	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret", jar), jar)
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret", "test-broker", jar), jar)
 	if err != nil {
 		t.Fatalf("NewHTTPClient() error: %v", err)
 	}
@@ -992,7 +992,7 @@ func TestClient_TransportPool_ReusesConnections(t *testing.T) {
 	if jarErr != nil {
 		t.Fatalf("NewSafeCookieJar: %v", jarErr)
 	}
-	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret", jar), jar)
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret", "test-broker", jar), jar)
 	if err != nil {
 		t.Fatalf("NewHTTPClient: %v", err)
 	}

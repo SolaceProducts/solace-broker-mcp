@@ -31,14 +31,14 @@ func TestNewBasicAuthenticator_PanicsOnNilJar(t *testing.T) {
 	defer func() {
 		r := recover()
 		if r == nil {
-			t.Fatal("NewBasicAuthenticator(_, _, nil) did not panic")
+			t.Fatal("NewBasicAuthenticator(_, _, _, nil) did not panic")
 		}
 		got, ok := r.(string)
 		if !ok || got != wantMsg {
 			t.Fatalf("panic value = %#v, want string %q", r, wantMsg)
 		}
 	}()
-	NewBasicAuthenticator("admin", "s3cret", nil)
+	NewBasicAuthenticator("admin", "s3cret", "test-broker", nil)
 }
 
 // TestNewBasicAuthenticator_TypedNilJar_DoesNotPanic pins the accepted
@@ -61,7 +61,7 @@ func TestNewBasicAuthenticator_TypedNilJar_DoesNotPanic(t *testing.T) {
 			t.Fatalf("NewBasicAuthenticator with typed-nil jar panicked unexpectedly: %v", r)
 		}
 	}()
-	_ = NewBasicAuthenticator("admin", "s3cret", typedNil)
+	_ = NewBasicAuthenticator("admin", "s3cret", "test-broker", typedNil)
 }
 
 // TestBasicAuthenticator_HandleAuthFailure_ClearsJarAndReturnsTrue pins
@@ -72,7 +72,7 @@ func TestNewBasicAuthenticator_TypedNilJar_DoesNotPanic(t *testing.T) {
 // the retry loop that might silently drop the Clear() call.
 func TestBasicAuthenticator_HandleAuthFailure_ClearsJarAndReturnsTrue(t *testing.T) {
 	jar := &recordingJar{}
-	a := NewBasicAuthenticator("admin", "s3cret", jar)
+	a := NewBasicAuthenticator("admin", "s3cret", "test-broker", jar)
 
 	if !a.HandleAuthFailure(context.Background(), nil) {
 		t.Error("HandleAuthFailure returned false, want true on successful clear")
@@ -89,7 +89,7 @@ func TestBasicAuthenticator_HandleAuthFailure_ClearsJarAndReturnsTrue(t *testing
 func TestBasicAuthenticator_HandleAuthFailure_JarClearError(t *testing.T) {
 	sentinel := errors.New("clear failed")
 	jar := &recordingJar{clearErr: sentinel}
-	a := NewBasicAuthenticator("admin", "s3cret", jar)
+	a := NewBasicAuthenticator("admin", "s3cret", "test-broker", jar)
 
 	if a.HandleAuthFailure(context.Background(), nil) {
 		t.Error("HandleAuthFailure returned true, want false when jar.Clear() fails")

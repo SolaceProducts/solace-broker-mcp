@@ -31,7 +31,7 @@ func TestBasicAuthenticator_AddAuth(t *testing.T) {
 		user = "admin"
 		pass = "s3cret"
 	)
-	a := NewBasicAuthenticator(user, pass, stubJar{})
+	a := NewBasicAuthenticator(user, pass, "test-broker", stubJar{})
 	req := newReq(t)
 
 	if err := a.AddAuth(context.Background(), req); err != nil {
@@ -71,7 +71,7 @@ func TestAuthenticator_ConcurrentAddAuth_NoFieldMutation(t *testing.T) {
 	const goroutines = 16
 
 	t.Run("basic", func(t *testing.T) {
-		a := NewBasicAuthenticator("admin", "s3cret", stubJar{})
+		a := NewBasicAuthenticator("admin", "s3cret", "test-broker", stubJar{})
 		wantUser, wantPass := a.username, a.password
 		wantCreds := wantUser + ":" + wantPass
 

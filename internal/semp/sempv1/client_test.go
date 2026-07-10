@@ -54,7 +54,7 @@ func newTestClient(t *testing.T, srv *httptest.Server) *HTTPClient {
 	if err != nil {
 		t.Fatalf("NewSafeCookieJar: %v", err)
 	}
-	return newTestClientWith(t, srv, auth.NewBasicAuthenticator("user", "pass", jar), jar)
+	return newTestClientWith(t, srv, auth.NewBasicAuthenticator("user", "pass", "test-broker", jar), jar)
 }
 
 const successEnvelope = `<rpc-reply><rpc><show><version/></show></rpc><execute-result code="ok"/></rpc-reply>`
@@ -106,7 +106,7 @@ func TestExecute_RequestConstruction(t *testing.T) {
 		if jarErr != nil {
 			t.Fatalf("NewSafeCookieJar: %v", jarErr)
 		}
-		client := newTestClientWith(t, srv, auth.NewBasicAuthenticator("user", "pass", jar), jar)
+		client := newTestClientWith(t, srv, auth.NewBasicAuthenticator("user", "pass", "test-broker", jar), jar)
 
 		_, err := client.Execute(context.Background(), `<rpc><show/></rpc>`)
 		if err != nil {
@@ -458,7 +458,7 @@ func TestHTTPClient_LogValue_ExcludesCredentials(t *testing.T) {
 	}{
 		{
 			name:    "basic auth credentials are not logged",
-			authn:   auth.NewBasicAuthenticator("SECRET_USERNAME_VAL", "SECRET_PASSWORD_VAL", basicJar),
+			authn:   auth.NewBasicAuthenticator("SECRET_USERNAME_VAL", "SECRET_PASSWORD_VAL", "test-broker", basicJar),
 			jar:     basicJar,
 			secrets: []string{"SECRET_USERNAME_VAL", "SECRET_PASSWORD_VAL"},
 		},

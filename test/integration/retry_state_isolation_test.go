@@ -101,7 +101,7 @@ func TestSenderRetryStateIsolatedUnderConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSafeCookieJar: %v", err)
 	}
-	authn := auth.NewBasicAuthenticator("admin", "secret", jar)
+	authn := auth.NewBasicAuthenticator("admin", "secret", "test-broker", jar)
 
 	httpClient := server.Client()
 	httpClient.Jar = jar

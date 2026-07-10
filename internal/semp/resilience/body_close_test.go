@@ -60,7 +60,7 @@ func newErrorHandlerTestSender(t *testing.T) *Sender {
 		RetryMaxInterval:   10 * time.Millisecond,
 	}
 	jar := mustNewSafeCookieJar(t)
-	authn := auth.NewBasicAuthenticator("admin", "secret", jar)
+	authn := auth.NewBasicAuthenticator("admin", "secret", "test-broker", jar)
 	return New(&http.Client{Jar: jar}, sempCfg, authn, "http://broker.example:8080", NewSemaphore(10))
 }
 

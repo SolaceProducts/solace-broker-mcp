@@ -40,7 +40,7 @@ func newTestClientRetries(t *testing.T, maxRetries int, handler http.HandlerFunc
 	if jarErr != nil {
 		t.Fatalf("NewSafeCookieJar: %v", jarErr)
 	}
-	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret", jar), jar)
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret", "test-broker", jar), jar)
 	if err != nil {
 		t.Fatalf("NewHTTPClient: %v", err)
 	}

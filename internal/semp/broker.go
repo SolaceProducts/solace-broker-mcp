@@ -115,7 +115,7 @@ func newAuthenticator(alias string, brokerCfg *config.BrokerConfig, jar *resilie
 	cfg := brokerCfg.Auth
 	switch cfg.Mode {
 	case config.AuthModeBasic:
-		return auth.NewBasicAuthenticator(cfg.Username, cfg.Password, jar), nil
+		return auth.NewBasicAuthenticator(cfg.Username, cfg.Password, alias, jar), nil
 	case config.AuthModeBearer:
 		return auth.NewBearerAuthenticator(cfg.Token), nil
 	case config.AuthModeOAuth:
