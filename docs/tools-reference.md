@@ -160,7 +160,7 @@ appliances add a `hardwareDetails` section. Field shape is documented in
 { "broker": "prod-broker" }
 ```
 
-**Example request:** "Is prod-broker healthy? When did it last restart?"
+**Example request:** "What's prod-broker's current status? When did it last restart?"
 
 ### get-redundancy-status
 
