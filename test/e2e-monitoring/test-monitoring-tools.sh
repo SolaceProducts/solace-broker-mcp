@@ -71,43 +71,43 @@ test_list_vpns_b()            { test_list_vpns "broker-b"; }
 test_list_vpns_pagination_a() { test_list_vpns_pagination "broker-a"; }
 test_list_vpns_pagination_b() { test_list_vpns_pagination "broker-b"; }
 
-# ── Tool 2: get-vpn-health (F1 multi-VPN; VPN-scoped) ────────────────────────
+# ── Tool 2: get-vpn-status (F1 multi-VPN; VPN-scoped) ────────────────────────
 # Value check (AC 5): the base `default` VPN reports enabled=true with services
 # up; F1's `test-vpn` reports enabled=false / state=down. This is the case
 # FR-0's extract_content exists for — a substring match on the raw envelope
 # cannot reliably tell "enabled":false from "enabled":true.
-# Envelope: {"vpnHealth":{"data":{...}}} — a single object, not a collection.
+# Envelope: {"vpnStatus":{"data":{...}}} — a single object, not a collection.
 
-test_get_vpn_health_default() {
+test_get_vpn_status_default() {
     local broker="$1"
     local response content
-    response=$(mcp_call_tool "get-vpn-health" \
+    response=$(mcp_call_tool "get-vpn-status" \
         "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
     content=$(extract_content "$response")
-    assert_json_field "$content" '.vpnHealth.data.enabled' "true" \
-        "get-vpn-health [$broker]: default VPN must be enabled" || return 1
-    assert_json_field "$content" '.vpnHealth.data.state' "up" \
-        "get-vpn-health [$broker]: default VPN state must be up" || return 1
-    assert_json_field "$content" '.vpnHealth.data.serviceSmfPlainTextUp' "true" \
-        "get-vpn-health [$broker]: default VPN SMF service must be up" || return 1
+    assert_json_field "$content" '.vpnStatus.data.enabled' "true" \
+        "get-vpn-status [$broker]: default VPN must be enabled" || return 1
+    assert_json_field "$content" '.vpnStatus.data.state' "up" \
+        "get-vpn-status [$broker]: default VPN state must be up" || return 1
+    assert_json_field "$content" '.vpnStatus.data.serviceSmfPlainTextUp' "true" \
+        "get-vpn-status [$broker]: default VPN SMF service must be up" || return 1
 }
 
-test_get_vpn_health_testvpn() {
+test_get_vpn_status_testvpn() {
     local broker="$1"
     local response content
-    response=$(mcp_call_tool "get-vpn-health" \
+    response=$(mcp_call_tool "get-vpn-status" \
         "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"test-vpn"}')") || return 1
     content=$(extract_content "$response")
-    assert_json_field "$content" '.vpnHealth.data.enabled' "false" \
-        "get-vpn-health [$broker]: test-vpn must be disabled (enabled=false)" || return 1
-    assert_json_field "$content" '.vpnHealth.data.state' "down" \
-        "get-vpn-health [$broker]: test-vpn state must be down" || return 1
+    assert_json_field "$content" '.vpnStatus.data.enabled' "false" \
+        "get-vpn-status [$broker]: test-vpn must be disabled (enabled=false)" || return 1
+    assert_json_field "$content" '.vpnStatus.data.state' "down" \
+        "get-vpn-status [$broker]: test-vpn state must be down" || return 1
 }
 
-test_get_vpn_health_default_a() { test_get_vpn_health_default "broker-a"; }
-test_get_vpn_health_default_b() { test_get_vpn_health_default "broker-b"; }
-test_get_vpn_health_testvpn_a() { test_get_vpn_health_testvpn "broker-a"; }
-test_get_vpn_health_testvpn_b() { test_get_vpn_health_testvpn "broker-b"; }
+test_get_vpn_status_default_a() { test_get_vpn_status_default "broker-a"; }
+test_get_vpn_status_default_b() { test_get_vpn_status_default "broker-b"; }
+test_get_vpn_status_testvpn_a() { test_get_vpn_status_testvpn "broker-a"; }
+test_get_vpn_status_testvpn_b() { test_get_vpn_status_testvpn "broker-b"; }
 
 # ── Tool 3: list-queues (F2 multi-queue; VPN-scoped) ─────────────────────────
 # Primary: the default-VPN queue collection includes F2's test-queue,
@@ -714,10 +714,10 @@ run_test "Tool 1 — list-vpns (broker-b)"               test_list_vpns_b
 run_test "Tool 1 — list-vpns pagination (broker-a)"    test_list_vpns_pagination_a
 run_test "Tool 1 — list-vpns pagination (broker-b)"    test_list_vpns_pagination_b
 
-run_test "Tool 2 — get-vpn-health default (broker-a)"  test_get_vpn_health_default_a
-run_test "Tool 2 — get-vpn-health default (broker-b)"  test_get_vpn_health_default_b
-run_test "Tool 2 — get-vpn-health test-vpn (broker-a)" test_get_vpn_health_testvpn_a
-run_test "Tool 2 — get-vpn-health test-vpn (broker-b)" test_get_vpn_health_testvpn_b
+run_test "Tool 2 — get-vpn-status default (broker-a)"  test_get_vpn_status_default_a
+run_test "Tool 2 — get-vpn-status default (broker-b)"  test_get_vpn_status_default_b
+run_test "Tool 2 — get-vpn-status test-vpn (broker-a)" test_get_vpn_status_testvpn_a
+run_test "Tool 2 — get-vpn-status test-vpn (broker-b)" test_get_vpn_status_testvpn_b
 
 run_test "Tool 3 — list-queues (broker-a)"             test_list_queues_a
 run_test "Tool 3 — list-queues (broker-b)"             test_list_queues_b

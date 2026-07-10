@@ -135,7 +135,7 @@ request). Replace `prod-broker` with one of your configured aliases (from
 
 ```json
 { "name": "list-vpns", "arguments": { "broker": "prod-broker", "maxResults": 50 } }
-{ "name": "get-vpn-health", "arguments": { "broker": "prod-broker", "msgVpnName": "default" } }
+{ "name": "get-vpn-status", "arguments": { "broker": "prod-broker", "msgVpnName": "default" } }
 { "name": "get-message-rates", "arguments": { "broker": "prod-broker", "msgVpnName": "default" } }
 ```
 

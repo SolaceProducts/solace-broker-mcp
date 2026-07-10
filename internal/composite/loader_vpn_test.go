@@ -5,19 +5,19 @@ import (
 	"testing/fstest"
 )
 
-func TestLoadTools_GetVPNHealth(t *testing.T) {
+func TestLoadTools_GetVPNStatus(t *testing.T) {
 	yaml := `
 tools:
-  - name: get-vpn-health
+  - name: get-vpn-status
     description: >
-      Get health and connection statistics for a Message VPN.
+      Get operational status and connection statistics for a Message VPN.
     parameters:
       - name: msgVpnName
         type: string
         required: true
         description: "The name of the Message VPN"
     steps:
-      - id: vpnHealth
+      - id: vpnStatus
         operation: monitor/getMsgVpn
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
@@ -38,8 +38,8 @@ tools:
 	}
 
 	tool := tools[0]
-	if tool.Name != "get-vpn-health" {
-		t.Errorf("expected name %q, got %q", "get-vpn-health", tool.Name)
+	if tool.Name != "get-vpn-status" {
+		t.Errorf("expected name %q, got %q", "get-vpn-status", tool.Name)
 	}
 	if len(tool.Parameters) != 1 {
 		t.Fatalf("expected 1 parameter, got %d", len(tool.Parameters))
@@ -50,14 +50,14 @@ tools:
 	if len(tool.Steps) != 1 {
 		t.Fatalf("expected 1 step, got %d", len(tool.Steps))
 	}
-	if tool.Steps[0].ID != "vpnHealth" {
-		t.Errorf("expected step ID %q, got %q", "vpnHealth", tool.Steps[0].ID)
+	if tool.Steps[0].ID != "vpnStatus" {
+		t.Errorf("expected step ID %q, got %q", "vpnStatus", tool.Steps[0].ID)
 	}
 	if tool.Steps[0].Operation != "monitor/getMsgVpn" {
 		t.Errorf("expected operation %q, got %q", "monitor/getMsgVpn", tool.Steps[0].Operation)
 	}
 	if tool.Steps[0].FollowPages {
-		t.Error("expected FollowPages=false for get-vpn-health step")
+		t.Error("expected FollowPages=false for get-vpn-status step")
 	}
 	if tool.Result.Strategy != "collect" {
 		t.Errorf("expected strategy %q, got %q", "collect", tool.Result.Strategy)

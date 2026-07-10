@@ -520,7 +520,7 @@ mcp_request() {
 # A tool's real output is escaped JSON nested in .result.content[0].text; this
 # returns that inner payload so assertions can run assert_json_field against the
 # tool's structured output rather than substring-matching the whole envelope.
-#   response=$(mcp_call_tool "get-vpn-health" "$args")
+#   response=$(mcp_call_tool "get-vpn-status" "$args")
 #   content=$(extract_content "$response")
 #   assert_json_field "$content" ".enabled" "false"
 extract_content() {

@@ -25,17 +25,17 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 )
 
-// getVPNHealthTool returns the get-vpn-health tool definition for tests.
-func getVPNHealthTool() CompositeTool {
+// getVPNStatusTool returns the get-vpn-status tool definition for tests.
+func getVPNStatusTool() CompositeTool {
 	return CompositeTool{
-		Name:        "get-vpn-health",
-		Description: "Get health and connection statistics for a Message VPN",
+		Name:        "get-vpn-status",
+		Description: "Get operational status and connection statistics for a Message VPN",
 		Parameters: []ParameterDef{
 			{Name: "msgVpnName", Type: "string", Required: true},
 		},
 		Steps: []Step{
 			{
-				ID:        "vpnHealth",
+				ID:        "vpnStatus",
 				Operation: "monitor/getMsgVpn",
 				Args: map[string]string{
 					"msgVpnName": "{{.Params.msgVpnName}}",
@@ -188,7 +188,7 @@ func makeVPNItems(n int) []any {
 	return items
 }
 
-func TestExecute_GetVPNHealth_ReturnsData(t *testing.T) {
+func TestExecute_GetVPNStatus_ReturnsData(t *testing.T) {
 	client := newMockClient()
 	client.responses["getMsgVpn"] = &sempv2.Result{
 		Data: map[string]any{
@@ -203,16 +203,16 @@ func TestExecute_GetVPNHealth_ReturnsData(t *testing.T) {
 
 	executor := NewCompositeExecutor(testOperations())
 
-	result, err := executor.Execute(context.Background(), getVPNHealthTool(), client, map[string]any{
+	result, err := executor.Execute(context.Background(), getVPNStatusTool(), client, map[string]any{
 		"msgVpnName": "default",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	vpnData, ok := result["vpnHealth"].(map[string]any)
+	vpnData, ok := result["vpnStatus"].(map[string]any)
 	if !ok {
-		t.Fatal("expected vpnHealth key containing a map")
+		t.Fatal("expected vpnStatus key containing a map")
 	}
 	if vpnData["msgVpnName"] != "default" {
 		t.Errorf("msgVpnName = %v, want default", vpnData["msgVpnName"])
@@ -222,7 +222,7 @@ func TestExecute_GetVPNHealth_ReturnsData(t *testing.T) {
 	}
 }
 
-func TestExecute_GetVPNHealth_SEMPError(t *testing.T) {
+func TestExecute_GetVPNStatus_SEMPError(t *testing.T) {
 	client := newMockClient()
 	client.errors["getMsgVpn"] = &sempv2.SEMPError{
 		Operation:  "getMsgVpn",
@@ -232,7 +232,7 @@ func TestExecute_GetVPNHealth_SEMPError(t *testing.T) {
 
 	executor := NewCompositeExecutor(testOperations())
 
-	_, err := executor.Execute(context.Background(), getVPNHealthTool(), client, map[string]any{
+	_, err := executor.Execute(context.Background(), getVPNStatusTool(), client, map[string]any{
 		"msgVpnName": "nonexistent",
 	})
 	if err == nil {
