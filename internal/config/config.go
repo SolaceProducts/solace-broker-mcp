@@ -56,6 +56,14 @@ type ServerConfig struct {
 	TLSCertFile   string              // path to TLS certificate file (optional, enables HTTPS)
 	TLSKeyFile    string              // path to TLS private key file (optional, requires TLSCertFile)
 
+	// TLSTerminatedUpstream acknowledges that TLS is terminated by an upstream
+	// proxy or ingress, so the server may serve a plaintext listener under
+	// mcp_client_auth.mode: oauth. Without it, OAuth mode with no cert/key is a
+	// fatal config error (the listener would transmit client bearer tokens and
+	// tool results in cleartext while validating as production). Honored only in
+	// OAuth mode; ignored in the dev modes. See OAuthPlaintextListenerAcknowledged.
+	TLSTerminatedUpstream bool
+
 	// EnableWriteTools gates registration of every write/action tool (any tool
 	// that is not read-only — e.g. delete-queue-messages, clear-queue-stats,
 	// disconnect-client, clear-client-stats). Default false — write tools do
@@ -450,18 +458,19 @@ type SEMPConfig struct {
 // yamlConfig is the intermediate representation used for YAML unmarshalling.
 // It mirrors the YAML file structure before being transformed into ServerConfig.
 type yamlConfig struct {
-	Brokers          map[string]*BrokerConfig `yaml:"brokers"`
-	SEMP             SEMPConfig               `yaml:"semp"`
-	Port             int                      `yaml:"port"`
-	ListenAddress    string                   `yaml:"listen_address"`
-	LogLevel         string                   `yaml:"log_level"`
-	DevelopmentMode  *bool                    `yaml:"development_mode"` // *bool so we can detect presence-in-YAML (deprecation warning); the value is ignored
-	MCPClientAuth    MCPClientAuthConfig      `yaml:"mcp_client_auth"`
-	BrokerOAuth      *BrokerOAuthConfig       `yaml:"broker_oauth"`
-	TLSCertFile      string                   `yaml:"tls_cert_file"`
-	TLSKeyFile       string                   `yaml:"tls_key_file"`
-	EnableWriteTools bool                     `yaml:"enable_write_tools"` // default false; gates registration of write/action tools
-	Observability    ObservabilityConfig      `yaml:"observability"`      // numeric tunables parse here; capability flags come from OBS_* env vars (see ObservabilityConfig)
+	Brokers               map[string]*BrokerConfig `yaml:"brokers"`
+	SEMP                  SEMPConfig               `yaml:"semp"`
+	Port                  int                      `yaml:"port"`
+	ListenAddress         string                   `yaml:"listen_address"`
+	LogLevel              string                   `yaml:"log_level"`
+	DevelopmentMode       *bool                    `yaml:"development_mode"` // *bool so we can detect presence-in-YAML (deprecation warning); the value is ignored
+	MCPClientAuth         MCPClientAuthConfig      `yaml:"mcp_client_auth"`
+	BrokerOAuth           *BrokerOAuthConfig       `yaml:"broker_oauth"`
+	TLSCertFile           string                   `yaml:"tls_cert_file"`
+	TLSKeyFile            string                   `yaml:"tls_key_file"`
+	TLSTerminatedUpstream bool                     `yaml:"tls_terminated_upstream"` // acknowledges upstream TLS termination; allows a plaintext listener under mcp_client_auth.mode: oauth
+	EnableWriteTools      bool                     `yaml:"enable_write_tools"`      // default false; gates registration of write/action tools
+	Observability         ObservabilityConfig      `yaml:"observability"`           // numeric tunables parse here; capability flags come from OBS_* env vars (see ObservabilityConfig)
 
 	AllowRemoteUnauthenticated bool `yaml:"allow_remote_unauthenticated"` // opt-in to a non-loopback bind under mcp_client_auth.mode: disabled
 	AllowInsecureBrokerTLS     bool `yaml:"allow_insecure_broker_tls"`    // opt-in to a broker insecure_skip_verify: true under mcp_client_auth.mode: oauth
@@ -564,17 +573,18 @@ func LoadConfig(path string) (*ServerConfig, error) {
 	}
 
 	cfg := &ServerConfig{
-		brokers:          raw.Brokers,
-		SEMP:             raw.SEMP,
-		Port:             raw.Port,
-		ListenAddress:    raw.ListenAddress,
-		LogLevel:         raw.LogLevel,
-		MCPClientAuth:    raw.MCPClientAuth,
-		BrokerOAuth:      raw.BrokerOAuth,
-		TLSCertFile:      raw.TLSCertFile,
-		TLSKeyFile:       raw.TLSKeyFile,
-		EnableWriteTools: raw.EnableWriteTools,
-		Observability:    raw.Observability,
+		brokers:               raw.Brokers,
+		SEMP:                  raw.SEMP,
+		Port:                  raw.Port,
+		ListenAddress:         raw.ListenAddress,
+		LogLevel:              raw.LogLevel,
+		MCPClientAuth:         raw.MCPClientAuth,
+		BrokerOAuth:           raw.BrokerOAuth,
+		TLSCertFile:           raw.TLSCertFile,
+		TLSKeyFile:            raw.TLSKeyFile,
+		TLSTerminatedUpstream: raw.TLSTerminatedUpstream,
+		EnableWriteTools:      raw.EnableWriteTools,
+		Observability:         raw.Observability,
 
 		AllowRemoteUnauthenticated: raw.AllowRemoteUnauthenticated,
 		AllowInsecureBrokerTLS:     raw.AllowInsecureBrokerTLS,
@@ -995,6 +1005,21 @@ func validate(cfg *ServerConfig) error {
 		} else if err := validateBrokerURL(cfg.MCPClientAuth.ResourceURL, cfg.IsProductionMode()); err != nil {
 			errs = append(errs, fmt.Errorf("mcp_client_auth.resource_url: %w", err))
 		}
+		// Listener transport: OAuth mode is production, so a plaintext listener
+		// must be an explicit choice. With no server-side TLS and no upstream-
+		// termination acknowledgment the listener would carry client bearer
+		// tokens and tool results in cleartext while validating as production.
+		// resource_url being https:// does not imply the listener is encrypted.
+		// TLSCertFile == "" is the "TLS is off" signal (same convention as
+		// StaticTokenExposedCleartext); a half-configured cert/key pair is caught
+		// independently by the pairing check below.
+		if cfg.TLSCertFile == "" && !cfg.TLSTerminatedUpstream {
+			errs = append(errs, fmt.Errorf(
+				"mcp_client_auth.mode %q serves a plaintext listener with no TLS: "+
+					"provide tls_cert_file and tls_key_file to terminate TLS at the server, "+
+					"or set tls_terminated_upstream: true to acknowledge TLS is terminated "+
+					"by an upstream proxy/ingress", AuthModeOAuth))
+		}
 	default:
 		errs = append(errs, fmt.Errorf("mcp_client_auth.mode %q is invalid (must be one of %v)", cfg.MCPClientAuth.Mode, validAuthClientModes))
 	}
@@ -1395,6 +1420,20 @@ func (c *ServerConfig) StaticTokenExposedCleartext() bool {
 	return c.MCPClientAuth.Mode == AuthModeStatic &&
 		!isLoopbackHost(c.ListenAddress) &&
 		c.TLSCertFile == ""
+}
+
+// OAuthPlaintextListenerAcknowledged reports whether OAuth (production) mode is
+// serving a plaintext listener under an explicit tls_terminated_upstream
+// acknowledgment. validate() rejects OAuth-mode-with-no-TLS unless this
+// acknowledgment is set, so this predicate is only ever true for a config that
+// deliberately relies on an upstream proxy/ingress for TLS. The caller emits a
+// startup WARN (see banner.LogOAuthPlaintextListener) so operators can confirm
+// the terminating proxy is actually in front of the listener. TLS is
+// both-or-neither (validated), so an empty cert file means TLS is off.
+func (c *ServerConfig) OAuthPlaintextListenerAcknowledged() bool {
+	return c.MCPClientAuth.Mode == AuthModeOAuth &&
+		c.TLSCertFile == "" &&
+		c.TLSTerminatedUpstream
 }
 
 // isLoopbackHost reports whether host binds the loopback interface only.

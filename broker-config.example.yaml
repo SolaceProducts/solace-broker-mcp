@@ -26,6 +26,14 @@ log_level: info   # debug, info, warn, error
 tls_cert_file: ""
 tls_key_file: ""
 
+# Under mcp_client_auth.mode: oauth (production), the server refuses to start
+# with a plaintext listener unless TLS is configured above OR you acknowledge
+# that TLS is terminated by an upstream proxy/ingress. This example assumes an
+# upstream terminates TLS (see resource_url below), so the acknowledgment is set;
+# the server logs a startup WARN while it serves plaintext. Remove this and set
+# tls_cert_file/tls_key_file to terminate TLS at the server instead.
+tls_terminated_upstream: true
+
 # Under mcp_client_auth.mode: oauth (production), a broker with
 # insecure_skip_verify: true is refused at startup. Uncomment to accept the risk
 # that disabling broker cert verification exposes the broker admin credential to MITM.

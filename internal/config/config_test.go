@@ -586,6 +586,141 @@ brokers:
 	}
 }
 
+// oauthTLSMatrixBroker is the broker block shared by the OAuth-listener-TLS
+// matrix tests below. https:// is required because mode: oauth enforces TLS on
+// broker URLs (validateBrokerURL).
+const oauthTLSMatrixBroker = `
+brokers:
+  prod:
+    url: "https://broker.example.com:943"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+
+// OAuth mode with neither TLS certs nor the tls_terminated_upstream
+// acknowledgment must fail: the listener would carry client bearer tokens in
+// cleartext while validating as production. The error must name both
+// remediation paths.
+func TestLoadConfig_OAuthNoTLSNoAck_ReturnsError(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"
+` + oauthTLSMatrixBroker
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for oauth mode with no TLS and no acknowledgment")
+	}
+	for _, want := range []string{"tls_cert_file", "tls_key_file", "tls_terminated_upstream"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should name %q remediation path, got: %v", want, err)
+		}
+	}
+}
+
+// OAuth mode with tls_terminated_upstream: true and no certs is valid — the
+// operator has acknowledged TLS is terminated upstream.
+func TestLoadConfig_OAuthTLSTerminatedUpstream_Valid(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"
+tls_terminated_upstream: true
+` + oauthTLSMatrixBroker
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.TLSTerminatedUpstream {
+		t.Error("expected TLSTerminatedUpstream to be true")
+	}
+	if !cfg.OAuthPlaintextListenerAcknowledged() {
+		t.Error("expected OAuthPlaintextListenerAcknowledged() to be true for oauth+ack+no-certs")
+	}
+}
+
+// OAuth mode with TLS certs behaves as before: valid, and the plaintext-listener
+// predicate is false (the server terminates TLS itself).
+func TestLoadConfig_OAuthWithTLSCerts_Valid(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"
+tls_cert_file: "/tmp/cert.pem"
+tls_key_file: "/tmp/key.pem"
+` + oauthTLSMatrixBroker
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.OAuthPlaintextListenerAcknowledged() {
+		t.Error("expected OAuthPlaintextListenerAcknowledged() to be false when TLS certs are set")
+	}
+}
+
+// OAuth mode with BOTH TLS certs and tls_terminated_upstream: true is valid, and
+// certs win: the server terminates TLS itself, so the plaintext-listener
+// predicate stays false and no WARN fires. This documents the precedence for an
+// operator migrating from upstream termination to direct TLS who leaves the ack
+// flag set.
+func TestLoadConfig_OAuthCertsAndAck_CertsWin(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"
+tls_cert_file: "/tmp/cert.pem"
+tls_key_file: "/tmp/key.pem"
+tls_terminated_upstream: true
+` + oauthTLSMatrixBroker
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.TLSTerminatedUpstream {
+		t.Error("expected TLSTerminatedUpstream to be stored as true")
+	}
+	if cfg.OAuthPlaintextListenerAcknowledged() {
+		t.Error("certs must win: OAuthPlaintextListenerAcknowledged() should be false when TLS certs are set even if the ack is also set")
+	}
+}
+
+// Non-OAuth modes are unaffected by the OAuth listener-TLS rule: static with no
+// certs still validates, and tls_terminated_upstream is ignored outside oauth
+// (the field's documented "honored only in OAuth mode" contract) — setting it
+// under static neither errors nor flips the plaintext-listener predicate.
+func TestLoadConfig_StaticNoTLS_UnaffectedByOAuthRule(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+tls_terminated_upstream: true
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("static mode with no TLS must remain valid: %v", err)
+	}
+	if cfg.OAuthPlaintextListenerAcknowledged() {
+		t.Error("OAuthPlaintextListenerAcknowledged() must be false outside oauth mode")
+	}
+}
+
 func TestLoadConfig_EnvOverridePort(t *testing.T) {
 	t.Setenv("MCP_SERVER_PORT", "9091")
 
@@ -1005,6 +1140,7 @@ mcp_client_auth:
   audience: "solace-mcp"
   resource_url: "https://mcp.example.com"
 allow_insecure_broker_tls: true
+tls_terminated_upstream: true
 `
 	if _, err := LoadConfig(writeTemp(t, yaml)); err != nil {
 		t.Fatalf("insecure_skip_verify with allow_insecure_broker_tls should pass: %v", err)
@@ -1891,7 +2027,8 @@ func TestLoadConfig_AuthMode_CaseInsensitive(t *testing.T) {
 			case "oauth":
 				extra = `  issuer: "https://idp.example.com"
   audience: "mcp"
-  resource_url: "https://mcp.example.com/mcp"`
+  resource_url: "https://mcp.example.com/mcp"
+tls_terminated_upstream: true`
 			}
 			yaml := `
 mcp_client_auth:
@@ -3653,7 +3790,7 @@ func listenAddressYAML(mode, listenLine, overrideLine string) string {
 	case "static":
 		authBlock = "mcp_client_auth:\n  mode: static\n  dev_token: test\n"
 	case "oauth":
-		authBlock = "mcp_client_auth:\n  mode: oauth\n  issuer: \"https://idp.example.com\"\n  audience: \"mcp\"\n  resource_url: \"https://mcp.example.com/mcp\"\n"
+		authBlock = "mcp_client_auth:\n  mode: oauth\n  issuer: \"https://idp.example.com\"\n  audience: \"mcp\"\n  resource_url: \"https://mcp.example.com/mcp\"\ntls_terminated_upstream: true\n"
 	default:
 		authBlock = "mcp_client_auth:\n  mode: " + mode + "\n"
 	}

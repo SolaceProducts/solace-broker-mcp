@@ -107,3 +107,20 @@ func Test_StaticCleartextExposure(t *testing.T) {
 		}
 	}
 }
+
+func Test_OAuthPlaintextListener(t *testing.T) {
+	buf, restore := captureSlog(t)
+	defer restore()
+	LogOAuthPlaintextListener("0.0.0.0:9090")
+	out := buf.String()
+	for _, want := range []string{
+		"level=WARN",
+		"OAuth mode on a plaintext listener",
+		"tls_terminated_upstream",
+		"bind_address=0.0.0.0:9090",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("oauth-plaintext-listener banner missing %q\nfull output:\n%s", want, out)
+		}
+	}
+}

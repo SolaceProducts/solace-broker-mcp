@@ -251,6 +251,38 @@ The `audience` value must exactly match the value configured in step 1.2. Set `r
 
 > **Note:** Under `mode: oauth` the validator enforces `https://` on the `issuer` URL. When running Keycloak locally for testing, terminate TLS in front of it (for example, via Caddy or a reverse proxy) or run Keycloak with a TLS cert. The `resource_url` may remain `http://` for local-bind testing.
 
+### TLS for the MCP server's own listener
+
+`mode: oauth` is a production profile, so the server must not silently serve its
+own listener over plaintext — client bearer tokens and tool results would travel
+in cleartext. There are two supported deployment patterns; OAuth mode requires
+exactly one of them, or startup fails with a config error.
+
+1. **Direct TLS at the server.** Set both `tls_cert_file` and `tls_key_file`. The
+   server listens over HTTPS itself.
+
+   ```yaml
+   tls_cert_file: "/etc/mcp-server/tls/tls.crt"
+   tls_key_file: "/etc/mcp-server/tls/tls.key"
+   ```
+
+2. **TLS terminated upstream.** A reverse proxy, load balancer, or Kubernetes
+   ingress terminates TLS and forwards plaintext to the server on a private
+   network. Acknowledge this explicitly:
+
+   ```yaml
+   tls_terminated_upstream: true
+   ```
+
+   The server then serves plaintext on its bind address and logs a startup
+   `WARN` naming `tls_terminated_upstream`, so a missing terminating proxy stays
+   visible in triage logs. Make sure the proxy is actually in front of the bind
+   address.
+
+Under `mode: oauth`, providing **neither** certs nor `tls_terminated_upstream` is
+a fatal config error. (The setting is ignored in the `disabled`/`static` dev
+modes.)
+
 ### Step 3: Start the MCP Server
 
 Run the server:

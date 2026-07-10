@@ -17,6 +17,13 @@ data:
       audience: "mcp-server"
       resource_url: "https://mcp.example.com/mcp"
 
+    # TLS for the server's own listener is terminated by the ingress/service in
+    # front of this pod (the Service exposes plaintext :9090). Acknowledge that
+    # so mode: oauth does not refuse to start; the server logs a startup WARN.
+    # To terminate TLS in the pod instead, set tls_cert_file/tls_key_file and
+    # remove this line.
+    tls_terminated_upstream: true
+
     semp:
       max_concurrent_per_broker: 10
       request_timeout_duration: 1m
