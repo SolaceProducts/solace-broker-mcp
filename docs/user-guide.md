@@ -5,7 +5,7 @@ The Solace Event Broker MCP Server is an [MCP (Model Context Protocol)](https://
 Application scenarios:
 
 - **Incident triage** — Query event broker status, queue activity, and slow consumers using natural language queries instead of direct SEMP API calls.
-- **Operational monitoring** — Monitor VPN health, client connections, and message rates across multiple brokers through a conversational interface.
+- **Operational monitoring** — Monitor VPN status, client connections, and message rates across multiple brokers through a conversational interface.
 - **Multi-broker management** — Configure multiple event broker connections and address them by alias in queries.
 
 Built with Go using the official [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk).
