@@ -133,7 +133,7 @@ fidelity, refusal — not as a port of the direct test catalog.
 | ID | Fixture | Brokers | What it proves |
 | --- | --- | --- | --- |
 | `f1-list-vpns` | F1 | a | Entity-set fidelity — answer's VPN names match `list-vpns` output exactly |
-| `f1-vpn-status` | F1 | a | Tool disambiguation (VPN name → `get-vpn-status`) + healthy-state reporting on the `default` VPN |
+| `f1-vpn-status` | F1 | a | Tool disambiguation (VPN name → `get-vpn-status`) + operational-state reporting on the `default` VPN |
 | `f1-broker-status` | F1 | a | Tool disambiguation (broker-level prompt → `get-broker-status`, not VPN tools) + operational-state reporting on a clean broker |
 | `f2-unbound-queues` | F2 | a | Reasoning over tool result — filter `bindCount==0` |
 | `f3-subscriptions` | F3 | a, b | Multi-arg parameterization — pulls VPN + client name out of the prompt |

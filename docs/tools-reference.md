@@ -244,7 +244,8 @@ REST, Web), and discard counts.
 
 Operational status and connection statistics for one VPN: enabled state,
 active connection count, total subscription count, and service states for
-SMF, REST, and MQTT. Reports raw state, not a health verdict.
+AMQP, MQTT, REST, and SMF (plaintext and TLS variants where applicable).
+Reports raw state, not a health verdict.
 
 **Parameters:**
 
