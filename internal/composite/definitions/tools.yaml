@@ -177,12 +177,15 @@ tools:
     result:
       strategy: collect
 
-  - name: get-vpn-health
+  - name: get-vpn-status
     description: >
-      Get health and connection statistics for a Message VPN. Returns enabled
-      state, active connection count, total subscription count, and service
-      states for SMF, REST, and MQTT protocols. Use this to assess whether a
-      VPN is operational and identify service-level problems.
+      Get operational status and connection statistics for a Message VPN.
+      Returns enabled state, active connection count, total subscription
+      count, and service states for SMF, REST, and MQTT protocols. Reports
+      raw state, not a health verdict - whether a VPN is "healthy" depends on
+      deployment intent this tool doesn't have (e.g. a VPN with zero active
+      connections may be idle by design, not broken). Use this to check
+      whether a VPN's services are up and identify service-level problems.
     annotations:
       readOnly: true
     parameters:
@@ -191,7 +194,7 @@ tools:
         required: true
         description: "The name of the Message VPN"
     steps:
-      - id: vpnHealth
+      - id: vpnStatus
         operation: monitor/getMsgVpn
         args:
           msgVpnName: "{{.Params.msgVpnName}}"

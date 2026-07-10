@@ -117,7 +117,7 @@ The server exposes 17 read-only tools plus 13 write tools (30 total when write t
 | Tool | Description |
 |---|---|
 | `list-vpns` | List all Message VPNs on an event broker with their enabled state, connection count, and status. Default 100 results, max 500. |
-| `get-vpn-health` | Health and connection statistics for a specific VPN: enabled state, active connections, subscription count, and service states for SMF, REST, and MQTT. |
+| `get-vpn-status` | Operational status and connection statistics for a specific VPN: enabled state, active connections, subscription count, and service states for SMF, REST, and MQTT. |
 | `get-message-rates` | Current and average message/byte throughput rates for a VPN. |
 
 ### Queues

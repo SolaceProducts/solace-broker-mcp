@@ -97,7 +97,7 @@ queues, and topic endpoints) are gated behind the same flag and documented under
 | Discovery | [`list-brokers`](#list-brokers) | — |
 | Broker Status | [`get-broker-status`](#get-broker-status), [`get-redundancy-status`](#get-redundancy-status) | — |
 | Replication | [`get-replication-status`](#get-replication-status) | — |
-| Message VPN | [`list-vpns`](#list-vpns), [`get-vpn-health`](#get-vpn-health), [`get-message-rates`](#get-message-rates) | — |
+| Message VPN | [`list-vpns`](#list-vpns), [`get-vpn-status`](#get-vpn-status), [`get-message-rates`](#get-message-rates) | — |
 | Queues | [`list-queues`](#list-queues), [`get-queue-metrics`](#get-queue-metrics) | — |
 | Clients | [`list-clients`](#list-clients), [`get-client-details`](#get-client-details), [`list-client-subscriptions`](#list-client-subscriptions), [`list-slow-subscribers`](#list-slow-subscribers) | — |
 | REST Delivery Points | [`list-rdps`](#list-rdps), [`get-rdp-status`](#get-rdp-status) | — |
@@ -240,10 +240,11 @@ REST, Web), and discard counts.
 
 **Example request:** "List the VPNs on prod-broker and flag any that are down."
 
-### get-vpn-health
+### get-vpn-status
 
-Health and connection statistics for one VPN: enabled state, active connection
-count, total subscription count, and service states for SMF, REST, and MQTT.
+Operational status and connection statistics for one VPN: enabled state,
+active connection count, total subscription count, and service states for
+SMF, REST, and MQTT. Reports raw state, not a health verdict.
 
 **Parameters:**
 
@@ -252,7 +253,7 @@ count, total subscription count, and service states for SMF, REST, and MQTT.
 | `broker` | string | yes | Target broker alias. |
 | `msgVpnName` | string | yes | The Message VPN. |
 
-**Returns:** step-keyed envelope, step `vpnHealth`. Selected fields: `msgVpnName`,
+**Returns:** step-keyed envelope, step `vpnStatus`. Selected fields: `msgVpnName`,
 `enabled`, `state`, `msgVpnConnections`, `maxConnectionCount`,
 `msgVpnTotalUniqueSubscriptions`, per-service up/failure fields, spool usage, and
 discard counts.

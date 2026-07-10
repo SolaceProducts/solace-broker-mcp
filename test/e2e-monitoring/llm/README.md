@@ -133,7 +133,7 @@ fidelity, refusal — not as a port of the direct test catalog.
 | ID | Fixture | Brokers | What it proves |
 | --- | --- | --- | --- |
 | `f1-list-vpns` | F1 | a | Entity-set fidelity — answer's VPN names match `list-vpns` output exactly |
-| `f1-vpn-health` | F1 | a | Tool disambiguation (VPN name → `get-vpn-health`) + healthy-state reporting on the `default` VPN |
+| `f1-vpn-status` | F1 | a | Tool disambiguation (VPN name → `get-vpn-status`) + healthy-state reporting on the `default` VPN |
 | `f1-broker-status` | F1 | a | Tool disambiguation (broker-level prompt → `get-broker-status`, not VPN tools) + operational-state reporting on a clean broker |
 | `f2-unbound-queues` | F2 | a | Reasoning over tool result — filter `bindCount==0` |
 | `f3-subscriptions` | F3 | a, b | Multi-arg parameterization — pulls VPN + client name out of the prompt |
@@ -287,17 +287,17 @@ Sample run of two scenarios:
 [INFO]  answer set:      default test-vpn
 [PASS]  f1-list-vpns [broker-a]
 
-════════ [2/2] f1-vpn-health [broker-a] ════════
+════════ [2/2] f1-vpn-status [broker-a] ════════
 [INFO]  prompt: Is the default VPN healthy on broker-a?
-[INFO]  tool call: get-vpn-health {"broker":"broker-a","msgVpnName":"default"}
+[INFO]  tool call: get-vpn-status {"broker":"broker-a","msgVpnName":"default"}
 [INFO]  answer: Mostly healthy — `default` VPN is enabled, …  ($0.0419, claude-opus-4-7)
-[PASS]  f1-vpn-health [broker-a]
+[PASS]  f1-vpn-status [broker-a]
 
 ════════════════════════════════════════════════════════
 scenario                                     result
 ────────────────────────────────────────────────────────
 f1-list-vpns [broker-a]                      PASS
-f1-vpn-health [broker-a]                     PASS
+f1-vpn-status [broker-a]                     PASS
 ════════════════════════════════════════════════════════
 Summary: PASS=2  FAIL=0  (of 2)  total cost: $0.0696
 ```
