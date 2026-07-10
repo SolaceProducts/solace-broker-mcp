@@ -160,7 +160,7 @@ appliances add a `hardwareDetails` section. Field shape is documented in
 { "broker": "prod-broker" }
 ```
 
-**Example request:** "Is prod-broker healthy? When did it last restart?"
+**Example request:** "What's prod-broker's current status? When did it last restart?"
 
 ### get-redundancy-status
 
@@ -219,7 +219,7 @@ useful "has replication been flaky recently?" signal.
 
 ### list-vpns
 
-List Message VPNs with enabled state, connection count, and basic health.
+List Message VPNs with enabled state, connection count, and basic status.
 
 **Parameters:**
 
