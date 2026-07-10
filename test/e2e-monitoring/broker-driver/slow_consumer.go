@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -141,8 +142,11 @@ func runSlowConsumer(args []string) int {
 	// deferred publisher.Terminate does not race a still-running PublishBytes
 	// (F4's runPublisher gets this for free by publishing synchronously).
 	var publisherDone sync.WaitGroup
+	payload := bytes.Repeat([]byte{'x'}, *size)
+	dest := resource.TopicOf(*topic)
+	publishFn := func() error { return publisher.PublishBytes(payload, dest) }
 	publisherDone.Go(func() {
-		publishLoop(publisher, *topic, *size, *rate, stop)
+		publishLoop(publishFn, *rate, stop)
 	})
 	slowConsumeLoop(receiver, *ackDelay, stop)
 	publisherDone.Wait()

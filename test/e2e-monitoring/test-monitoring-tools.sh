@@ -71,6 +71,61 @@ test_list_vpns_b()            { test_list_vpns "broker-b"; }
 test_list_vpns_pagination_a() { test_list_vpns_pagination "broker-a"; }
 test_list_vpns_pagination_b() { test_list_vpns_pagination "broker-b"; }
 
+# Summary aggregation (SOL-151519): recompute each summary count from the raw
+# rows in the same response and require equality. Presence, type, and value
+# consistency all fall out of one check. Fixtures on the default VPN provide:
+# `default` (enabled, up, ≥1 conn), `test-vpn` (disabled) → disabledCount≥1,
+# `test-vpn-empty` (enabled, 0 conn) → zeroConnectionCount≥1. Counts are asserted
+# derived, not absolute, so the test survives future VPN additions.
+#
+# The recompute predicates gate on required-field TYPE (boolean/string/number)
+# before applying the count criterion, mirroring the handler's skip-don't-abort
+# rule: a row with a missing or wrong-typed required field lands in
+# summary.skipped, not in any count. Without the type gate, a disabled VPN with
+# msgVpnConnections:null gets counted here but skipped by the handler, and the
+# equality assertion flakes.
+test_list_vpns_summary() {
+    local broker="$1"
+    local label="list-vpns [$broker]"
+    local response content
+    response=$(mcp_call_tool "list-vpns" "$(jq -nc --arg b "$broker" '{broker:$b}')") || return 1
+    content=$(extract_content "$response")
+
+    # Filter to rows the handler would NOT skip. All four counts share the
+    # same required-field set (enabled, state, msgVpnConnections), so gate
+    # once and reuse across the recompute assertions.
+    local well_typed='[.vpns.data[] | select((.enabled | type) == "boolean" and (.state | type) == "string" and (.msgVpnConnections | type) == "number")]'
+
+    assert_recompute_count "$content" "$label" "$well_typed" "disabledCount" \
+        '.enabled == false' || return 1
+    assert_recompute_count "$content" "$label" "$well_typed" "downCount" \
+        '.enabled == true and .state == "down"' || return 1
+    assert_recompute_count "$content" "$label" "$well_typed" "standbyCount" \
+        '.enabled == true and .state == "standby"' || return 1
+    assert_recompute_count "$content" "$label" "$well_typed" "zeroConnectionCount" \
+        '.enabled == true and .state == "up" and .msgVpnConnections == 0' || return 1
+    # scanned is a direct equality against .vpns.data length — an uncapped
+    # call is not truncated so scanned reflects the full population.
+    assert_json_field "$content" \
+        '(.summary.scanned) == (.vpns.data | length)' "true" \
+        "$label: summary.scanned must equal len(data)" || return 1
+    # Non-zero coverage sanity: fixture must produce at least one disabled
+    # VPN (test-vpn), else the disabledCount recompute-equality is a vacuous
+    # 0==0 pass that would silently hide a broken handler.
+    #
+    # No coverage guard on zeroConnectionCount: Solace attaches a reserved
+    # `#client` internal connection to every enabled+up VPN, so msgVpnConnections
+    # is ≥1 by broker invariant and the count can never fire from a fixture.
+    # This is a real limitation of the handler predicate as designed — filed as
+    # a follow-up (see the assertion story's notes).
+    assert_json_field "$content" \
+        '(.summary.disabledCount) >= 1' "true" \
+        "$label: at least one disabled VPN expected (fixture: test-vpn)" || return 1
+}
+
+test_list_vpns_summary_a() { test_list_vpns_summary "broker-a"; }
+test_list_vpns_summary_b() { test_list_vpns_summary "broker-b"; }
+
 # ── Tool 2: get-vpn-status (F1 multi-VPN; VPN-scoped) ────────────────────────
 # Value check (AC 5): the base `default` VPN reports enabled=true with services
 # up; F1's `test-vpn` reports enabled=false / state=down. This is the case
@@ -171,6 +226,57 @@ test_list_queues_pagination_a() { test_list_queues_pagination "broker-a"; }
 test_list_queues_pagination_b() { test_list_queues_pagination "broker-b"; }
 test_list_queues_vpn_scope_a()  { test_list_queues_vpn_scope "broker-a"; }
 test_list_queues_vpn_scope_b()  { test_list_queues_vpn_scope "broker-b"; }
+
+# Summary aggregation (SOL-151519): recompute each summary count from raw rows
+# and require equality. Fixtures on the default VPN cover each signal:
+#   - test-queue-3 (unbound), test-queue-ttl, test-queue-lowprio-congestion,
+#     test-queue-discards-spool (egressEnabled=false, no consumer)
+#     → noConsumerCount ≥ 1
+#   - test-queue-lowprio-congestion (F-lowprio: rejectLowPriorityMsgLimit=5,
+#     egressEnabled=false, ~100 priority-0 msgs published) → congestedCount ≥ 1
+#   - test-queue-discards-spool (F7 spool: 1 MB quota, ~2 MB attempted)
+#     → nearFullCount ≥ 1 (msgSpoolUsage saturates near maxMsgSpoolUsage)
+#
+# nearFull ratio: msgSpoolUsage bytes / (maxMsgSpoolUsage MB × 1 MB) ≥ 0.8,
+# with `maxMsgSpoolUsage > 0` gating the division (jq short-circuits `and`).
+test_list_queues_summary() {
+    local broker="$1"
+    local label="list-queues [$broker]"
+    local response content
+    response=$(mcp_call_tool "list-queues" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
+    content=$(extract_content "$response")
+
+    # RequiredFields per handler: bindCount, lowPriorityMsgCongestionState,
+    # msgSpoolUsage, maxMsgSpoolUsage.
+    local well_typed='[.queues.data[] | select((.bindCount | type) == "number" and (.lowPriorityMsgCongestionState | type) == "string" and (.msgSpoolUsage | type) == "number" and (.maxMsgSpoolUsage | type) == "number")]'
+
+    assert_recompute_count "$content" "$label" "$well_typed" "noConsumerCount" \
+        '.bindCount == 0' || return 1
+    assert_recompute_count "$content" "$label" "$well_typed" "congestedCount" \
+        '.lowPriorityMsgCongestionState == "congested"' || return 1
+    # 1048576 = 1024*1024 (bytesPerMB in the handler). maxMsgSpoolUsage > 0 gate
+    # mirrors the handler skip for unbounded/unset quotas.
+    assert_recompute_count "$content" "$label" "$well_typed" "nearFullCount" \
+        '.maxMsgSpoolUsage > 0 and (.msgSpoolUsage / (.maxMsgSpoolUsage * 1048576)) >= 0.8' || return 1
+    assert_json_field "$content" \
+        '(.summary.scanned) == (.queues.data | length)' "true" \
+        "$label: summary.scanned must equal len(data)" || return 1
+    # Non-zero coverage sanity — one guard per count so a broken handler
+    # emitting all zeros cannot pass by vacuous 0==0 equality.
+    assert_json_field "$content" \
+        '(.summary.noConsumerCount) >= 1' "true" \
+        "$label: at least one queue with bindCount=0 expected (fixtures: test-queue-3, etc.)" || return 1
+    assert_json_field "$content" \
+        '(.summary.congestedCount) >= 1' "true" \
+        "$label: at least one congested queue expected (fixture: test-queue-lowprio-congestion)" || return 1
+    assert_json_field "$content" \
+        '(.summary.nearFullCount) >= 1' "true" \
+        "$label: at least one near-full queue expected (fixture: test-queue-discards-spool)" || return 1
+}
+
+test_list_queues_summary_a() { test_list_queues_summary "broker-a"; }
+test_list_queues_summary_b() { test_list_queues_summary "broker-b"; }
 
 # ── Tool 4: list-clients (F3 connected client; VPN-scoped) ───────────────────
 # Primary: the default-VPN client list includes this broker's deterministic F3
@@ -345,11 +451,11 @@ test_get_message_rates_a() { test_get_message_rates "broker-a"; }
 test_get_message_rates_b() { test_get_message_rates "broker-b"; }
 
 # ── Tool 8: list-rdps (base fixture) ─────────────────────────────────────────
-# Primary: the default-VPN RDP collection includes the base test-rdp.
-# Pagination: the base fixture provisions a single RDP, so maxResults=1 returns
-# that one entry untruncated. This confirms the cap is accepted and the full set
-# is returned, but cannot demonstrate multi-page truncation — no second RDP
-# exists to drop.
+# Primary: the default-VPN RDP collection includes the base test-rdp and
+# test-rdp-failing (SOL-151519 fixture: enabled RDP pointed at an unreachable
+# host so its lastFailureReason populates for byLastFailureReason coverage).
+# Pagination: with two RDPs, maxResults=1 returns one entry with truncated=true;
+# the uncapped call returns both entries untruncated.
 # Envelope: {"rdps":{"data":[...],"truncated":bool}}.
 
 test_list_rdps() {
@@ -361,6 +467,9 @@ test_list_rdps() {
     assert_json_field "$content" \
         '(.rdps.data | map(.restDeliveryPointName) | index("test-rdp")) != null' "true" \
         "list-rdps [$broker]: test-rdp must be present" || return 1
+    assert_json_field "$content" \
+        '(.rdps.data | map(.restDeliveryPointName) | index("test-rdp-failing")) != null' "true" \
+        "list-rdps [$broker]: test-rdp-failing must be present" || return 1
     # No duplicates across the full (uncapped) set — page stitching must not
     # repeat an RDP (PR goal: pagination has no gaps/duplicates).
     assert_json_field "$content" \
@@ -371,19 +480,75 @@ test_list_rdps() {
 test_list_rdps_pagination() {
     local broker="$1"
     local response content
+    # maxResults=1 caps the result to one entry and marks it truncated
+    # (two RDPs total on the default VPN: test-rdp + test-rdp-failing).
     response=$(mcp_call_tool "list-rdps" \
         "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",maxResults:1}')") || return 1
     content=$(extract_content "$response")
     assert_json_field "$content" '.rdps.data | length' "1" \
         "list-rdps [$broker]: maxResults=1 must return exactly 1 RDP" || return 1
+    assert_json_field "$content" '.rdps.truncated' "true" \
+        "list-rdps [$broker]: maxResults=1 must flag truncated=true" || return 1
+    # The uncapped call returns both RDPs, untruncated.
+    response=$(mcp_call_tool "list-rdps" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '(.rdps.data | length) >= 2' "true" \
+        "list-rdps [$broker]: uncapped call must return all RDPs" || return 1
     assert_json_field "$content" '.rdps.truncated' "false" \
-        "list-rdps [$broker]: single base RDP must report truncated=false" || return 1
+        "list-rdps [$broker]: uncapped call must not be truncated" || return 1
 }
 
 test_list_rdps_a()            { test_list_rdps "broker-a"; }
 test_list_rdps_b()            { test_list_rdps "broker-b"; }
 test_list_rdps_pagination_a() { test_list_rdps_pagination "broker-a"; }
 test_list_rdps_pagination_b() { test_list_rdps_pagination "broker-b"; }
+
+# Summary aggregation (SOL-151519): recompute each summary count from raw rows
+# and require equality. Fixtures on the default VPN provide:
+#   - test-rdp        (enabled=false)                 → disabledCount ≥ 1
+#   - test-rdp-failing (enabled=true, unreachable)    → downCount ≥ 1, and
+#     lastFailureReason populates ~10s after create → byLastFailureReason
+#     has ≥ 1 non-empty key.
+test_list_rdps_summary() {
+    local broker="$1"
+    local label="list-rdps [$broker]"
+    local response content
+    response=$(mcp_call_tool "list-rdps" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
+    content=$(extract_content "$response")
+
+    # RequiredFields per handler: up, enabled, lastFailureReason.
+    local well_typed='[.rdps.data[] | select((.up | type) == "boolean" and (.enabled | type) == "boolean" and (.lastFailureReason | type) == "string")]'
+
+    assert_recompute_count "$content" "$label" "$well_typed" "downCount" \
+        '.enabled == true and .up == false' || return 1
+    assert_recompute_count "$content" "$label" "$well_typed" "disabledCount" \
+        '.enabled == false' || return 1
+    # byLastFailureReason: enabled + down RDPs with non-empty reason, grouped
+    # by reason string. Empty-string bucket is dropped by both handler and
+    # this recompute so the map stays LLM-readable.
+    assert_recompute_group "$content" "$label" "$well_typed" "byLastFailureReason" \
+        '.up == false and .enabled == true and .lastFailureReason != ""' \
+        '.lastFailureReason' || return 1
+    assert_json_field "$content" \
+        '(.summary.scanned) == (.rdps.data | length)' "true" \
+        "$label: summary.scanned must equal len(data)" || return 1
+    # Non-zero coverage: fixture must exercise each of the three summary
+    # signals, else the recompute-equality assertions above pass vacuously.
+    assert_json_field "$content" \
+        '(.summary.disabledCount) >= 1' "true" \
+        "$label: at least one disabled RDP expected (fixture: test-rdp)" || return 1
+    assert_json_field "$content" \
+        '(.summary.downCount) >= 1' "true" \
+        "$label: at least one enabled+down RDP expected (fixture: test-rdp-failing)" || return 1
+    assert_json_field "$content" \
+        '(.summary.byLastFailureReason | length) >= 1' "true" \
+        "$label: byLastFailureReason must have at least one entry (fixture: test-rdp-failing)" || return 1
+}
+
+test_list_rdps_summary_a() { test_list_rdps_summary "broker-a"; }
+test_list_rdps_summary_b() { test_list_rdps_summary "broker-b"; }
 
 # ── Tool 9: get-queue-metrics (F5 slow guaranteed-message consumer) ──────────
 # Value check: get-queue-metrics surfaces the slow-consumer diagnostic that the
@@ -516,6 +681,55 @@ test_list_slow_subscribers_b() { test_list_slow_subscribers "broker-b" "$BROKER_
 test_list_slow_subscribers_pagination_a() { test_list_slow_subscribers_pagination "broker-a" "$BROKER_A_URL" "$F6_SUB_CLIENT_NAME_A" "a"; }
 test_list_slow_subscribers_pagination_b() { test_list_slow_subscribers_pagination "broker-b" "$BROKER_B_URL" "$F6_SUB_CLIENT_NAME_B" "b"; }
 
+# Summary aggregation (SOL-151519): recompute the two grouped counts from raw
+# rows, sum the discard counter, and require equality. The list-slow-subscribers
+# collection is server-side filtered to slowSubscriber=true, so every row
+# contributes — the handler does not skip any well-typed row. F6 provides the
+# one qualifying subscriber per broker, guaranteeing non-zero coverage on both
+# groupings.
+test_list_slow_subscribers_summary() {
+    local broker="$1"
+    local label="list-slow-subscribers [$broker]"
+    local response content
+    response=$(mcp_call_tool "list-slow-subscribers" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
+    content=$(extract_content "$response")
+
+    # RequiredFields per handler: clientProfileName, platform, txDiscardedMsgCount.
+    local well_typed='[.slowSubscribers.data[] | select((.clientProfileName | type) == "string" and (.platform | type) == "string" and (.txDiscardedMsgCount | type) == "number")]'
+
+    # Groupings: handler counts every well-typed row (no predicate filter), so
+    # the recompute predicate is `true`. group_by keys on the row's field.
+    assert_recompute_group "$content" "$label" "$well_typed" "byClientProfile" \
+        'true' '.clientProfileName' || return 1
+    assert_recompute_group "$content" "$label" "$well_typed" "byPlatform" \
+        'true' '.platform' || return 1
+    # totalTxDiscardedMsgCount is a sum, not a count — inline rather than
+    # extracting a third recompute helper for a single call site (would violate
+    # the extract-on-second-use rule). `add // 0` matches the handler's zero
+    # initializer for the empty-list case.
+    assert_json_field "$content" \
+        "(.summary.totalTxDiscardedMsgCount) == ($well_typed | map(.txDiscardedMsgCount) | add // 0)" "true" \
+        "$label: summary.totalTxDiscardedMsgCount must equal sum of row values" || return 1
+    assert_json_field "$content" \
+        '(.summary.scanned) == (.slowSubscribers.data | length)' "true" \
+        "$label: summary.scanned must equal len(data)" || return 1
+    # Non-zero coverage: F6 provides one slow subscriber per broker, so both
+    # grouped maps must have ≥1 key. totalTxDiscardedMsgCount is likely > 0 by
+    # the time the test runs (SIGSTOP + flood accumulates discards), but the
+    # non-zero guard on the two maps is sufficient — a stalled discard counter
+    # would still be caught by the sum-equality above.
+    assert_json_field "$content" \
+        '(.summary.byClientProfile | length) >= 1' "true" \
+        "$label: byClientProfile must have at least one entry (fixture: F6 slow subscriber)" || return 1
+    assert_json_field "$content" \
+        '(.summary.byPlatform | length) >= 1' "true" \
+        "$label: byPlatform must have at least one entry (fixture: F6 slow subscriber)" || return 1
+}
+
+test_list_slow_subscribers_summary_a() { test_list_slow_subscribers_summary "broker-a"; }
+test_list_slow_subscribers_summary_b() { test_list_slow_subscribers_summary "broker-b"; }
+
 # ── Tool 11: list-queue-discards (F7 spool + TTL discards; per-queue) ─────────
 # Value check (AC 13): list-queue-discards returns each queue's per-category
 # discard counters. F7-spool's queue overflows its 1 MB spool quota
@@ -572,6 +786,68 @@ test_list_queue_discards_a()            { test_list_queue_discards "broker-a"; }
 test_list_queue_discards_b()            { test_list_queue_discards "broker-b"; }
 test_list_queue_discards_pagination_a() { test_list_queue_discards_pagination "broker-a"; }
 test_list_queue_discards_pagination_b() { test_list_queue_discards_pagination "broker-b"; }
+
+# Summary aggregation (SOL-151519): recompute discardingQueueCount and the top
+# offender list from raw rows and require equality. Fixtures on the default VPN
+# provide multiple offenders:
+#   - test-queue-discards-spool (F7 spool)         → maxMsgSpoolUsageExceededDiscardedMsgCount
+#   - test-queue-discards-ttl   (F7 ttl)           → maxTtlExpiredDiscardedMsgCount
+#   - test-queue-lowprio-congestion (F-lowprio)    → lowPriorityMsgCongestionDiscardedMsgCount
+# → discardingQueueCount ≥ 3, topOffenderQueues has ≥ 3 entries with correct
+# dominantCategory per queue.
+#
+# The 13 discard field names match the handler's discardFields (SOL-151316),
+# pre-sorted alphabetically. Both sides tie-break dominantCategory on
+# alphabetical field name (strict > + sorted list → first-encountered wins).
+test_list_queue_discards_summary() {
+    local broker="$1"
+    local label="list-queue-discards [$broker]"
+    local response content
+    response=$(mcp_call_tool "list-queue-discards" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
+    content=$(extract_content "$response")
+
+    # Sorted-alphabetical list matches handler init (SOL-151316); both sides
+    # must use the SAME order so the ties in dominantCategory resolve identically.
+    local fields_jq='["clientProfileDeniedDiscardedMsgCount","destinationGroupErrorDiscardedMsgCount","disabledDiscardedMsgCount","lowPriorityMsgCongestionDiscardedMsgCount","maxMsgSizeExceededDiscardedMsgCount","maxMsgSpoolUsageExceededDiscardedMsgCount","maxRedeliveryExceededDiscardedMsgCount","maxRedeliveryExceededToDmqFailedMsgCount","maxTtlExceededDiscardedMsgCount","maxTtlExpiredDiscardedMsgCount","maxTtlExpiredToDmqFailedMsgCount","noLocalDeliveryDiscardedMsgCount","xaTransactionNotSupportedDiscardedMsgCount"]'
+
+    # well_typed: identifiers well-typed AND every one of the 13 counters is a
+    # number. `all(FIELDS[]; …)` folds the per-field check without spelling out
+    # 13 && clauses.
+    local well_typed="[.queueDiscards.data[] | . as \$r | select((\$r.queueName | type) == \"string\" and (\$r.msgVpnName | type) == \"string\" and all(${fields_jq}[]; (\$r[.] | type) == \"number\"))]"
+
+    # offenders: for each well-typed row, compute {queueName, msgVpnName,
+    # totalDiscards, dominantCategory} and drop rows with totalDiscards == 0
+    # (matches handler's `if total > 0` filter). Reused for both count and top-10.
+    # dominantCategory: reduce with strict > (handler behaviour) over the
+    # pre-sorted field list → the alphabetically-earliest field wins on ties.
+    local offenders="${well_typed} | map(. as \$r | ${fields_jq} as \$F | (\$F | map(\$r[.]) | add) as \$total | (\$F | reduce .[] as \$f ({max:0,name:\"\"}; if \$r[\$f] > .max then {max:\$r[\$f], name:\$f} else . end) | .name) as \$dominant | {queueName: \$r.queueName, msgVpnName: \$r.msgVpnName, totalDiscards: \$total, dominantCategory: \$dominant}) | map(select(.totalDiscards > 0))"
+
+    assert_json_field "$content" \
+        "(.summary.discardingQueueCount) == (${offenders} | length)" "true" \
+        "$label: summary.discardingQueueCount must equal recomputed offender count" || return 1
+    # topOffenderQueues: sort desc by totalDiscards, asc by queueName (handler
+    # comparator), cap at 10. Handler omits the key when the list is empty; use
+    # `// []` so an absent key still equals our (also empty) recompute.
+    assert_json_field "$content" \
+        "(.summary.topOffenderQueues // []) == (${offenders} | sort_by([-.totalDiscards, .queueName]) | .[0:10])" "true" \
+        "$label: summary.topOffenderQueues must equal recomputed top-10 offenders" || return 1
+    assert_json_field "$content" \
+        '(.summary.scanned) == (.queueDiscards.data | length)' "true" \
+        "$label: summary.scanned must equal len(data)" || return 1
+    # Non-zero coverage: fixtures produce ≥3 offenders per broker (F7 spool +
+    # F7 ttl + F-lowprio). Guarding on ≥1 keeps the assertion robust if any
+    # single fixture is later removed while still catching a broken handler.
+    assert_json_field "$content" \
+        '(.summary.discardingQueueCount) >= 1' "true" \
+        "$label: at least one discarding queue expected (fixtures: F7 spool/ttl, F-lowprio)" || return 1
+    assert_json_field "$content" \
+        '(.summary.topOffenderQueues | length) >= 1' "true" \
+        "$label: topOffenderQueues must have at least one entry (fixtures: F7 spool/ttl, F-lowprio)" || return 1
+}
+
+test_list_queue_discards_summary_a() { test_list_queue_discards_summary "broker-a"; }
+test_list_queue_discards_summary_b() { test_list_queue_discards_summary "broker-b"; }
 
 # ── Tool 12: get-discard-stats (F7 discards; broker-wide + per-VPN aggregates) ─
 # Value check (AC 13, aggregate half): get-discard-stats is a NATIVE SEMPv1 tool
@@ -713,6 +989,8 @@ run_test "Tool 1 — list-vpns (broker-a)"               test_list_vpns_a
 run_test "Tool 1 — list-vpns (broker-b)"               test_list_vpns_b
 run_test "Tool 1 — list-vpns pagination (broker-a)"    test_list_vpns_pagination_a
 run_test "Tool 1 — list-vpns pagination (broker-b)"    test_list_vpns_pagination_b
+run_test "Tool 1 — list-vpns summary (broker-a)"       test_list_vpns_summary_a
+run_test "Tool 1 — list-vpns summary (broker-b)"       test_list_vpns_summary_b
 
 run_test "Tool 2 — get-vpn-status default (broker-a)"  test_get_vpn_status_default_a
 run_test "Tool 2 — get-vpn-status default (broker-b)"  test_get_vpn_status_default_b
@@ -725,6 +1003,8 @@ run_test "Tool 3 — list-queues pagination (broker-a)"  test_list_queues_pagina
 run_test "Tool 3 — list-queues pagination (broker-b)"  test_list_queues_pagination_b
 run_test "Tool 3 — list-queues VPN scope (broker-a)"   test_list_queues_vpn_scope_a
 run_test "Tool 3 — list-queues VPN scope (broker-b)"   test_list_queues_vpn_scope_b
+run_test "Tool 3 — list-queues summary (broker-a)"     test_list_queues_summary_a
+run_test "Tool 3 — list-queues summary (broker-b)"     test_list_queues_summary_b
 
 run_test "Tool 4 — list-clients (broker-a)"            test_list_clients_a
 run_test "Tool 4 — list-clients (broker-b)"            test_list_clients_b
@@ -746,6 +1026,8 @@ run_test "Tool 8 — list-rdps (broker-a)"               test_list_rdps_a
 run_test "Tool 8 — list-rdps (broker-b)"               test_list_rdps_b
 run_test "Tool 8 — list-rdps pagination (broker-a)"    test_list_rdps_pagination_a
 run_test "Tool 8 — list-rdps pagination (broker-b)"    test_list_rdps_pagination_b
+run_test "Tool 8 — list-rdps summary (broker-a)"       test_list_rdps_summary_a
+run_test "Tool 8 — list-rdps summary (broker-b)"       test_list_rdps_summary_b
 
 run_test "Tool 9 — get-queue-metrics slow consumer (broker-a)" test_get_queue_metrics_slow_consumer_a
 run_test "Tool 9 — get-queue-metrics slow consumer (broker-b)" test_get_queue_metrics_slow_consumer_b
@@ -754,11 +1036,15 @@ run_test "Tool 10 — list-slow-subscribers (broker-a)"            test_list_slo
 run_test "Tool 10 — list-slow-subscribers (broker-b)"            test_list_slow_subscribers_b
 run_test "Tool 10 — list-slow-subscribers pagination (broker-a)" test_list_slow_subscribers_pagination_a
 run_test "Tool 10 — list-slow-subscribers pagination (broker-b)" test_list_slow_subscribers_pagination_b
+run_test "Tool 10 — list-slow-subscribers summary (broker-a)"    test_list_slow_subscribers_summary_a
+run_test "Tool 10 — list-slow-subscribers summary (broker-b)"    test_list_slow_subscribers_summary_b
 
 run_test "Tool 11 — list-queue-discards (broker-a)"             test_list_queue_discards_a
 run_test "Tool 11 — list-queue-discards (broker-b)"             test_list_queue_discards_b
 run_test "Tool 11 — list-queue-discards pagination (broker-a)"  test_list_queue_discards_pagination_a
 run_test "Tool 11 — list-queue-discards pagination (broker-b)"  test_list_queue_discards_pagination_b
+run_test "Tool 11 — list-queue-discards summary (broker-a)"     test_list_queue_discards_summary_a
+run_test "Tool 11 — list-queue-discards summary (broker-b)"     test_list_queue_discards_summary_b
 
 run_test "Tool 12 — get-discard-stats broker-wide (broker-a)"   test_get_discard_stats_broker_wide_a
 run_test "Tool 12 — get-discard-stats broker-wide (broker-b)"   test_get_discard_stats_broker_wide_b
