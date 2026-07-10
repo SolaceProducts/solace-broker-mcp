@@ -117,6 +117,15 @@ func newCookieJar(alias string, mode string) (*resilience.SafeCookieJar, error) 
 // exchanger) live inside each constructor and fail fast via
 // auth.WiringError panics. The dispatcher does not re-validate them;
 // its only error path is an unknown auth mode.
+//
+// The nil-exchanger case for OAuth requires one bit of conversion
+// hygiene: passing a concrete nil *tokenexchange.Exchanger into
+// NewOAuthAuthenticator's tokenExchanger interface parameter would
+// produce a typed-nil interface header ({type: *Exchanger, value: nil})
+// that silently bypasses the constructor's `exchanger == nil` guard
+// (Go's classic nil-interface gotcha — see go.dev/doc/faq#nil_error).
+// Check the concrete pointer here and pass untyped nil so the guard
+// fires and the WiringError panic carries the broker alias.
 func newAuthenticator(alias string, brokerCfg *config.BrokerConfig, jar *resilience.SafeCookieJar, exchanger *tokenexchange.Exchanger) (auth.Authenticator, error) {
 	cfg := brokerCfg.Auth
 	switch cfg.Mode {
@@ -125,6 +134,9 @@ func newAuthenticator(alias string, brokerCfg *config.BrokerConfig, jar *resilie
 	case config.AuthModeBearer:
 		return auth.NewBearerAuthenticator(cfg.Token), nil
 	case config.AuthModeOAuth:
+		if exchanger == nil {
+			return auth.NewOAuthAuthenticator(nil, cfg.Audience, cfg.Scopes, alias), nil
+		}
 		return auth.NewOAuthAuthenticator(exchanger, cfg.Audience, cfg.Scopes, alias), nil
 	default:
 		return nil, fmt.Errorf("unsupported auth mode %q for broker %q", cfg.Mode, alias)

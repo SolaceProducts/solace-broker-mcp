@@ -11,6 +11,7 @@ import (
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 )
 
@@ -235,4 +236,52 @@ func TestBrokerClient_SharedJar_401ClearVisibleAcrossProtocols(t *testing.T) {
 	if got, _ := v1Cookie.Load().(string); got != "" {
 		t.Errorf("V1 request carried cookie %q — jar is not shared across protocols", got)
 	}
+}
+
+// TestNewBrokerClient_OAuth_NilExchanger_PanicsWithWiringError pins the
+// dispatcher-boundary contract for the nil-exchanger case: when an OAuth
+// broker is wired with a nil *tokenexchange.Exchanger, newAuthenticator
+// must produce a panic that carries the broker alias via auth.WiringError.
+//
+// The trap this defends against: passing the concrete nil pointer directly
+// into NewOAuthAuthenticator's tokenExchanger interface parameter produces
+// a typed-nil interface header ({type: *Exchanger, value: nil}) that
+// silently bypasses the constructor's `exchanger == nil` guard — a later
+// runtime nil-pointer panic then reaches withRecovery with panic_type
+// *runtime.PanicNilError and no broker context, losing the WiringError
+// diagnostic contract this ticket added. A future refactor that "cleans
+// up" the pre-conversion nil check in newAuthenticator as redundant would
+// silently re-introduce that regression; this test fails loudly when it
+// does.
+func TestNewBrokerClient_OAuth_NilExchanger_PanicsWithWiringError(t *testing.T) {
+	brokerCfg := &config.BrokerConfig{
+		URL: "http://example.test",
+		Auth: config.AuthConfig{
+			Mode:     config.AuthModeOAuth,
+			Audience: "broker-audience",
+			Scopes:   []string{"read"},
+		},
+	}
+	const wantAlias = "test-broker"
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("NewBrokerClient with nil exchanger did not panic")
+		}
+		we, ok := r.(auth.WiringError)
+		if !ok {
+			t.Fatalf("panic value = %#v, want auth.WiringError", r)
+		}
+		if we.BrokerAlias != wantAlias {
+			t.Errorf("BrokerAlias = %q, want %q", we.BrokerAlias, wantAlias)
+		}
+		const wantReason = "NewOAuthAuthenticator: exchanger must be non-nil"
+		if we.Reason != wantReason {
+			t.Errorf("Reason = %q, want %q", we.Reason, wantReason)
+		}
+	}()
+
+	_, _ = semp.NewBrokerClient(wantAlias, brokerCfg, testSEMPConfig(), nil)
+	t.Fatal("expected panic before this point")
 }
