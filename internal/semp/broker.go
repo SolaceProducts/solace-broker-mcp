@@ -46,8 +46,12 @@ type BrokerClient struct {
 // owns its own precondition checks.
 //
 // exchanger is the process-wide token exchanger for OAuth brokers. Pass
-// nil when no broker uses OAuth; newAuthenticator returns an error if an
-// OAuth broker is configured without an exchanger.
+// nil when no broker uses OAuth; the OAuth branch of newAuthenticator
+// assumes a non-nil exchanger and does not re-check — the invariant is
+// owned by internal/config validateBroker + validateBrokerOAuthConfig
+// (which reject an OAuth broker without exchanger coordinates at
+// startup) and by main.go, which builds the exchanger whenever
+// Hop2OAuthActive() returns true.
 func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, exchanger *tokenexchange.Exchanger) (*BrokerClient, error) {
 	jar, err := newCookieJar(alias, brokerCfg.Auth.Mode)
 	if err != nil {
