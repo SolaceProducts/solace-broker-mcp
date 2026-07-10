@@ -111,6 +111,11 @@ func newCookieJar(alias string, mode string) (*resilience.SafeCookieJar, error) 
 // auth config. Each mode has its own constructor with mode-specific deps;
 // this switch is the single dispatch point so NewBrokerClient stays
 // focused on wiring clients.
+//
+// Per-mode wiring invariants (e.g. non-nil cookie jar, non-nil token
+// exchanger) live inside each constructor and fail fast via
+// auth.WiringError panics. The dispatcher does not re-validate them;
+// its only error path is an unknown auth mode.
 func newAuthenticator(alias string, brokerCfg *config.BrokerConfig, jar *resilience.SafeCookieJar, exchanger *tokenexchange.Exchanger) (auth.Authenticator, error) {
 	cfg := brokerCfg.Auth
 	switch cfg.Mode {
@@ -119,9 +124,6 @@ func newAuthenticator(alias string, brokerCfg *config.BrokerConfig, jar *resilie
 	case config.AuthModeBearer:
 		return auth.NewBearerAuthenticator(cfg.Token), nil
 	case config.AuthModeOAuth:
-		if exchanger == nil {
-			return nil, fmt.Errorf("oauth auth requires a token exchanger for broker %q", alias)
-		}
 		return auth.NewOAuthAuthenticator(exchanger, cfg.Audience, cfg.Scopes, alias), nil
 	default:
 		return nil, fmt.Errorf("unsupported auth mode %q for broker %q", cfg.Mode, alias)
