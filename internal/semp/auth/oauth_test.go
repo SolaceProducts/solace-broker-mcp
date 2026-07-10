@@ -53,6 +53,53 @@ func ctxWithSubjectToken(t *testing.T, token string) context.Context {
 	return captured
 }
 
+// TestNewOAuthAuthenticator_PanicsOnNilExchanger pins the constructor
+// contract: a nil exchanger is a wiring bug and must fail fast at
+// construction, not later on the first AddAuth call. Symmetric to
+// TestNewBasicAuthenticator_PanicsOnNilJar.
+//
+// The panic message is part of the assertion so a future refactor that
+// panics for a different reason (bad audience, empty alias, etc.) can't
+// quietly pass this test while dropping the nil-exchanger guard.
+func TestNewOAuthAuthenticator_PanicsOnNilExchanger(t *testing.T) {
+	const wantMsg = "NewOAuthAuthenticator: exchanger must be non-nil"
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("NewOAuthAuthenticator(nil, ...) did not panic")
+		}
+		got, ok := r.(string)
+		if !ok || got != wantMsg {
+			t.Fatalf("panic value = %#v, want string %q", r, wantMsg)
+		}
+	}()
+	NewOAuthAuthenticator(nil, "aud", nil, "b")
+}
+
+// TestNewOAuthAuthenticator_TypedNilExchanger_DoesNotPanic pins the
+// accepted limit of the nil-exchanger guard: a typed-nil implementation
+// (Go's classic "nil interface vs. nil concrete" gotcha — see
+// https://go.dev/doc/faq#nil_error) produces a non-nil interface value
+// and slips past the == nil check.
+//
+// This is intentional and matches the ecosystem convention: defend at
+// the producer, not the consumer. Production wiring (newAuthenticator in
+// internal/semp/broker.go) never emits a typed-nil, so the case is
+// unreachable in production. Symmetric to
+// TestNewBasicAuthenticator_TypedNilJar_DoesNotPanic. If we ever adopt
+// reflect-based detection or a linter that upgrades this to a
+// compile-time error, this test will fail — and that failure is the
+// intended signal that we're deliberately changing the contract.
+func TestNewOAuthAuthenticator_TypedNilExchanger_DoesNotPanic(t *testing.T) {
+	var typedNil *fakeExchanger // nil pointer, but wrapping it in the interface produces a non-nil header
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("NewOAuthAuthenticator with typed-nil exchanger panicked unexpectedly: %v", r)
+		}
+	}()
+	_ = NewOAuthAuthenticator(typedNil, "aud", nil, "b")
+}
+
 func TestOAuthAuthenticator_AddAuth(t *testing.T) {
 	exchg := &fakeExchanger{
 		returnToken: &tokenexchange.Token{
