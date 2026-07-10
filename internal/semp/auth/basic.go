@@ -11,10 +11,9 @@ import (
 // so AddAuth and HandleAuthFailure are safe to call concurrently from
 // any number of goroutines.
 type BasicAuthenticator struct {
-	username    string
-	password    string
-	brokerAlias string
-	jar         CookieJarClearer
+	username string
+	password string
+	jar      CookieJarClearer
 }
 
 // NewBasicAuthenticator returns a BasicAuthenticator that will attach the
@@ -22,14 +21,15 @@ type BasicAuthenticator struct {
 // jar is required — HandleAuthFailure clears it to force fresh Basic
 // credentials on the retry, so an authenticator without a jar cannot
 // recover from a 401. Panics with a WiringError if jar is nil — a nil
-// jar is a wiring bug, not a runtime condition. The brokerAlias flows
-// into the panic payload so the tool-handler recovery layer can log
-// which broker tripped the invariant.
+// jar is a wiring bug, not a runtime condition. brokerAlias flows into
+// the panic payload so the tool-handler recovery layer can log which
+// broker tripped the invariant; it is not stored on the successful path
+// because no runtime code path reads it.
 func NewBasicAuthenticator(username, password, brokerAlias string, jar CookieJarClearer) *BasicAuthenticator {
 	if jar == nil {
 		panic(WiringError{BrokerAlias: brokerAlias, Reason: "NewBasicAuthenticator: jar must be non-nil"})
 	}
-	return &BasicAuthenticator{username: username, password: password, brokerAlias: brokerAlias, jar: jar}
+	return &BasicAuthenticator{username: username, password: password, jar: jar}
 }
 
 // AddAuth attaches an Authorization: Basic header to req. The ctx is

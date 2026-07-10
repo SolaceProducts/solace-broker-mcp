@@ -56,8 +56,10 @@ const internalErrorBody = `{"error":"internal_error","error_description":"the se
 // On a recovered panic it logs at ERROR with event="panic_recovered", the panic
 // value's Go TYPE (panic_type) and a structured stack trace. It logs only the
 // type, never the panic value's text: panic values are unaudited and can carry
-// arbitrary strings, the same secure-logging rule withRecovery applies in
-// internal/tools (see docs/internal/secure-logging-rules.md).
+// arbitrary strings (see docs/internal/secure-logging-rules.md). The sibling
+// tool-handler recovery layer in internal/tools follows the same base rule but
+// extracts pre-vetted fields from auth.WiringError panics; this HTTP-mux-level
+// middleware does not, because auth-wiring panics do not surface here.
 //
 // Recovery is unconditional: buildRootHandler always wraps the mux with this
 // middleware. There is no flag to disable it.
