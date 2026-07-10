@@ -42,8 +42,13 @@ type BrokerClient struct {
 // NewBrokerClient is the single builder of per-broker Authenticators. It
 // delegates to newAuthenticator to construct exactly one Authenticator
 // from brokerCfg.Auth and passes the same pointer to both protocol clients.
-// newAuthenticator is a pure dispatcher; each Authenticator constructor
-// owns its own precondition checks.
+// newAuthenticator is a pure dispatcher: it maps brokerCfg.Auth.Mode to
+// the matching Authenticator constructor and passes through the wiring
+// dependencies. Precondition invariants (non-nil jar for basic, non-nil
+// exchanger for oauth) are owned upstream — by newCookieJar + this
+// function's error propagation for jar, and by internal/config
+// validateBroker + validateBrokerOAuthConfig + cmd/server/main.go for
+// exchanger. See each constructor's docstring for the invariant owner.
 //
 // exchanger is the process-wide token exchanger for OAuth brokers. Pass
 // nil when no broker uses OAuth; the OAuth branch of newAuthenticator
