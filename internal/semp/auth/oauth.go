@@ -31,12 +31,11 @@ type OAuthAuthenticator struct {
 
 // NewOAuthAuthenticator returns an OAuthAuthenticator that will exchange
 // the agent's inbound token for a broker-scoped token on every SEMP
-// request. Panics if exchanger is nil — a nil exchanger is a wiring
-// bug, not a runtime condition.
+// request. The non-nil exchanger invariant is owned by config validation
+// (see internal/config validateBrokerConfig + validateBrokerOAuthConfig):
+// a broker with auth.mode: oauth is rejected at startup unless the
+// preconditions that cause main.go to build a real exchanger hold.
 func NewOAuthAuthenticator(exchanger tokenExchanger, audience string, scopes []string, brokerAlias string) *OAuthAuthenticator {
-	if exchanger == nil {
-		panic("NewOAuthAuthenticator: exchanger must be non-nil")
-	}
 	return &OAuthAuthenticator{
 		exchanger:   exchanger,
 		audience:    audience,
