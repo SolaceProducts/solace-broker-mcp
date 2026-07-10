@@ -58,22 +58,34 @@ func ctxWithSubjectToken(t *testing.T, token string) context.Context {
 // construction, not later on the first AddAuth call. Symmetric to
 // TestNewBasicAuthenticator_PanicsOnNilJar.
 //
-// The panic message is part of the assertion so a future refactor that
-// panics for a different reason (bad audience, empty alias, etc.) can't
-// quietly pass this test while dropping the nil-exchanger guard.
+// The panic value's type AND reason string are both asserted so a future
+// refactor that panics for a different reason (bad audience, empty
+// alias, etc.) can't quietly pass this test while dropping the
+// nil-exchanger guard. The broker-alias field is asserted separately
+// so the diagnostic contract the tool-handler recovery layer relies on
+// stays pinned.
 func TestNewOAuthAuthenticator_PanicsOnNilExchanger(t *testing.T) {
-	const wantMsg = "NewOAuthAuthenticator: exchanger must be non-nil"
+	const (
+		wantAlias  = "test-broker"
+		wantReason = "NewOAuthAuthenticator: exchanger must be non-nil"
+	)
 	defer func() {
 		r := recover()
 		if r == nil {
 			t.Fatal("NewOAuthAuthenticator(nil, ...) did not panic")
 		}
-		got, ok := r.(string)
-		if !ok || got != wantMsg {
-			t.Fatalf("panic value = %#v, want string %q", r, wantMsg)
+		we, ok := r.(WiringError)
+		if !ok {
+			t.Fatalf("panic value = %#v, want WiringError", r)
+		}
+		if we.BrokerAlias != wantAlias {
+			t.Errorf("WiringError.BrokerAlias = %q, want %q", we.BrokerAlias, wantAlias)
+		}
+		if we.Reason != wantReason {
+			t.Errorf("WiringError.Reason = %q, want %q", we.Reason, wantReason)
 		}
 	}()
-	NewOAuthAuthenticator(nil, "aud", nil, "b")
+	NewOAuthAuthenticator(nil, "aud", nil, wantAlias)
 }
 
 // TestNewOAuthAuthenticator_TypedNilExchanger_DoesNotPanic pins the

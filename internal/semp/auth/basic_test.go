@@ -23,22 +23,33 @@ func (r *recordingJar) Clear() error {
 // at first 401 recovery attempt. Same rationale as
 // NewOAuthAuthenticator's nil-exchanger panic.
 //
-// The panic message is part of the assertion so a future refactor that
-// panics for a different reason (bad username, etc.) can't quietly pass
-// this test while dropping the nil-jar guard.
+// The panic value's type AND reason string are both asserted so a future
+// refactor that panics for a different reason (bad username, etc.) can't
+// quietly pass this test while dropping the nil-jar guard. The
+// broker-alias field is asserted separately so the diagnostic contract
+// the tool-handler recovery layer relies on stays pinned.
 func TestNewBasicAuthenticator_PanicsOnNilJar(t *testing.T) {
-	const wantMsg = "NewBasicAuthenticator: jar must be non-nil"
+	const (
+		wantAlias  = "test-broker"
+		wantReason = "NewBasicAuthenticator: jar must be non-nil"
+	)
 	defer func() {
 		r := recover()
 		if r == nil {
 			t.Fatal("NewBasicAuthenticator(_, _, _, nil) did not panic")
 		}
-		got, ok := r.(string)
-		if !ok || got != wantMsg {
-			t.Fatalf("panic value = %#v, want string %q", r, wantMsg)
+		we, ok := r.(WiringError)
+		if !ok {
+			t.Fatalf("panic value = %#v, want WiringError", r)
+		}
+		if we.BrokerAlias != wantAlias {
+			t.Errorf("WiringError.BrokerAlias = %q, want %q", we.BrokerAlias, wantAlias)
+		}
+		if we.Reason != wantReason {
+			t.Errorf("WiringError.Reason = %q, want %q", we.Reason, wantReason)
 		}
 	}()
-	NewBasicAuthenticator("admin", "s3cret", "test-broker", nil)
+	NewBasicAuthenticator("admin", "s3cret", wantAlias, nil)
 }
 
 // TestNewBasicAuthenticator_TypedNilJar_DoesNotPanic pins the accepted

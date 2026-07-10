@@ -21,12 +21,13 @@ type BasicAuthenticator struct {
 // given credentials to every request via http.Request.SetBasicAuth. The
 // jar is required — HandleAuthFailure clears it to force fresh Basic
 // credentials on the retry, so an authenticator without a jar cannot
-// recover from a 401. Panics if jar is nil — a nil jar is a wiring bug,
-// not a runtime condition. The brokerAlias is retained for diagnostic
-// use by the wiring-panic payload (see WiringError).
+// recover from a 401. Panics with a WiringError if jar is nil — a nil
+// jar is a wiring bug, not a runtime condition. The brokerAlias flows
+// into the panic payload so the tool-handler recovery layer can log
+// which broker tripped the invariant.
 func NewBasicAuthenticator(username, password, brokerAlias string, jar CookieJarClearer) *BasicAuthenticator {
 	if jar == nil {
-		panic("NewBasicAuthenticator: jar must be non-nil")
+		panic(WiringError{BrokerAlias: brokerAlias, Reason: "NewBasicAuthenticator: jar must be non-nil"})
 	}
 	return &BasicAuthenticator{username: username, password: password, brokerAlias: brokerAlias, jar: jar}
 }
