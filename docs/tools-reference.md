@@ -219,7 +219,7 @@ useful "has replication been flaky recently?" signal.
 
 ### list-vpns
 
-List Message VPNs with enabled state, connection count, and basic health.
+List Message VPNs with enabled state, connection count, and basic status.
 
 **Parameters:**
 
