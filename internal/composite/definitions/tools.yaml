@@ -202,7 +202,7 @@ tools:
   - name: list-vpns
     description: >
       List Message VPNs on the broker with their enabled state, connection
-      count, and basic health status. Returns up to 100 by default (max 500
+      count, and basic status. Returns up to 100 by default (max 500
       via maxResults). Use this to discover which VPNs exist and identify any
       that are down or have no active connections. The response summary counts
       enabled VPNs in state == "down" under downCount and enabled+up VPNs with
