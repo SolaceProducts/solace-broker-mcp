@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -258,6 +259,76 @@ func TestPanicAuditedAsError(t *testing.T) {
 	// The raw panic value is unaudited text and must not reach the audit line.
 	if containsStr(logBuf.String(), "simulated handler bug") {
 		t.Errorf("raw panic value leaked into logs: %s", logBuf.String())
+	}
+}
+
+// TestWithRecovery_WiringErrorLogsBrokerAlias pins the diagnostic contract
+// for auth.WiringError panics: when the wrapped handler panics with a
+// typed WiringError value, withRecovery type-switches on it and adds
+// broker_alias + wiring_reason as pre-vetted structured fields on the
+// "tool handler panicked" log record. Every OTHER panic type continues
+// to log only panic_type + stack — TestPanicAuditedAsError covers that
+// path end-to-end with a plain-string panic and asserts no leak.
+//
+// This test calls withRecovery directly rather than routing through the
+// MCP client/server/transport: the behavior under test is entirely
+// inside withRecovery's defer block, and a direct call keeps the test's
+// failure modes matched to the code under test.
+//
+// Without this contract, an operator seeing a wiring panic in production
+// cannot identify which broker's config tripped the invariant — a real
+// gap Andrea raised on PR #149.
+func TestWithRecovery_WiringErrorLogsBrokerAlias(t *testing.T) {
+	var logBuf bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(oldLogger)
+
+	const (
+		wantTool   = "wiring-panic-tool"
+		wantAlias  = "prod-east"
+		wantReason = "NewOAuthAuthenticator: exchanger must be non-nil"
+	)
+	handler := withRecovery(wantTool, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		panic(auth.WiringError{BrokerAlias: wantAlias, Reason: wantReason})
+	})
+
+	result, err := handler(context.Background(), &mcp.CallToolRequest{})
+	if err != nil {
+		t.Fatalf("withRecovery propagated an error instead of recovering: %v", err)
+	}
+	if result == nil || !result.IsError {
+		t.Fatalf("withRecovery did not return the sanitized error result on panic: %+v", result)
+	}
+
+	var entry map[string]any
+	for _, raw := range strings.Split(logBuf.String(), "\n") {
+		if raw == "" {
+			continue
+		}
+		var m map[string]any
+		if uerr := json.Unmarshal([]byte(raw), &m); uerr != nil {
+			t.Fatalf("non-JSON log line %q: %v", raw, uerr)
+		}
+		if m["msg"] == "tool handler panicked" && m["tool"] == wantTool {
+			if entry != nil {
+				t.Fatalf("expected exactly 1 recovery-layer panic line, got 2+: %s", logBuf.String())
+			}
+			entry = m
+		}
+	}
+	if entry == nil {
+		t.Fatalf("no recovery-layer panic line found: %s", logBuf.String())
+	}
+
+	if got := entry["panic_type"]; got != "auth.WiringError" {
+		t.Errorf("panic_type = %v, want %q", got, "auth.WiringError")
+	}
+	if got := entry["broker_alias"]; got != wantAlias {
+		t.Errorf("broker_alias = %v, want %q", got, wantAlias)
+	}
+	if got := entry["wiring_reason"]; got != wantReason {
+		t.Errorf("wiring_reason = %v, want %q", got, wantReason)
 	}
 }
 

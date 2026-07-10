@@ -26,6 +26,7 @@ import (
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -68,10 +69,24 @@ func withRecovery(toolName string, h mcp.ToolHandler) mcp.ToolHandler {
 				// stack trace pinpoints the panic site without echoing the
 				// value, and the agent sees only the generic message below,
 				// matching the unknown-error branch of buildErrorMessage.
-				slog.Error("tool handler panicked",
+				//
+				// auth.WiringError is the one typed exception: its fields
+				// are explicitly declared as safe-to-log (broker alias from
+				// config, reason string authored in-package), so they are
+				// extracted here to give operators broker-context on
+				// constructor-panic invariants. All other panic types stay
+				// redacted per the secure-logging rule.
+				attrs := []any{
 					slog.String("tool", toolName),
 					slog.String("panic_type", fmt.Sprintf("%T", r)),
-					slog.String("stack", string(debug.Stack())))
+					slog.String("stack", string(debug.Stack())),
+				}
+				if we, ok := r.(auth.WiringError); ok {
+					attrs = append(attrs,
+						slog.String("broker_alias", we.BrokerAlias),
+						slog.String("wiring_reason", we.Reason))
+				}
+				slog.Error("tool handler panicked", attrs...)
 				result = &mcp.CallToolResult{
 					StructuredContent: map[string]any{
 						"error":     serverInternalErrorMessage,
