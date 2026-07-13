@@ -43,8 +43,8 @@ internal/
 │   ├── correlationhdr/         Writes correlation ID (X-Correlation-ID + traceparent) onto outbound SEMP requests
 │   ├── resilience/             Sender: rate limiting, method-aware retries, cookie jar, per-broker in-flight cap
 │   ├── sempv1/                 SEMPv1 client — XML envelope protocol
-│   └── sempv2/                 SEMPv2 client — HTTP + embedded OpenAPI spec (private monitor only)
-│       └── specs/              Embedded Swagger JSON (private monitor spec only)
+│   └── sempv2/                 SEMPv2 client — HTTP + embedded OpenAPI specs (private monitor + private config)
+│       └── specs/              Embedded Swagger JSON: private monitor (reads) + private config (writes)
 ├── tokenexchange/              RFC 8693 token exchange (hop 2) — GATED behind Hop2OAuthActive(); cached + singleflight-deduped
 ├── composite/                  YAML-driven composite tool engine: loader, validator, step executor
 │   ├── definitions/            tools.yaml — composite tool definitions (source of truth for the composite tool list)
@@ -333,7 +333,7 @@ sequenceDiagram
 
 | Signal | Status | Notes |
 |---|---|---|
-| **Correlation ID** | Implemented | `/mcp` middleware resolves traceparent → `X-Correlation-ID` → generated UUIDv7 (`internal/observability/correlation/correlation.go:97`); stamped on every request-scoped slog record and echoed on the response header; propagated to the broker via `internal/semp/correlationhdr/correlationhdr.go:48`; also stamped on `CallToolResult.Meta` (`internal/tools/register.go`). Default ON. |
+| **Correlation ID** | Implemented | `/mcp` middleware resolves traceparent → `X-Correlation-ID` → generated UUIDv7 (`internal/observability/correlation/middleware.go:97`); stamped on every request-scoped slog record and echoed on the response header; propagated to the broker via `internal/semp/correlationhdr/correlationhdr.go:48`; also stamped on `CallToolResult.Meta` (`internal/tools/register.go`). Default ON. |
 | **Health / readiness** | Implemented | `/livez`, `/health`, `/readyz` (readiness decoupled from broker per ADR-004; `internal/observability/health/readiness.go`). |
 | **Audit log** | Skeleton | Capability gate only (`internal/observability/audit/audit.go:27`); record emission not yet implemented. Default OFF. |
 | **Metrics** | Skeleton | Capability gate only (`internal/observability/metrics/metrics.go:27`); instruments/export not yet implemented. Default OFF. |
@@ -436,7 +436,7 @@ cap is per broker.
 | Component | Knows about | Does NOT know about | Ref |
 |---|---|---|---|
 | **Recovery middleware** | The whole mux; panics | Anything downstream-specific | `internal/middleware/recovery/middleware.go` |
-| **Correlation middleware** | Request context, trace/correlation IDs, slog | Auth, brokers, tools | `internal/observability/correlation/correlation.go:97` |
+| **Correlation middleware** | Request context, trace/correlation IDs, slog | Auth, brokers, tools | `internal/observability/correlation/middleware.go:97` |
 | **Auth middleware** | Client auth mode, OIDC verifier, static token | Brokers, SEMP, tools | `internal/auth/middleware.go:40` |
 | **Registry (register.go)** | MCP SDK, write-tool gate, correlation stamping, audit identity | HTTP calls, SEMP protocol | `internal/tools/register.go` |
 | **ToolManager** | Routing, broker resolution, param/output validation, audit logging | HTTP, SEMP wire format | `internal/tools/manager.go` |
