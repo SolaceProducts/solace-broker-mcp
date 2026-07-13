@@ -101,7 +101,7 @@ parameters. Representative queries and the shape they return:
 | You ask | Tool invoked | Returns (shape) |
 |---|---|---|
 | "What brokers are configured?" | `list-brokers` | `{ "brokers": ["prod-broker", "dev-broker"] }` |
-| "Is prod-broker healthy?" | `get-broker-status` | envelope with version, uptime, resource and spool utilization |
+| "What's prod-broker's current status?" | `get-broker-status` | envelope with version, uptime, resource and spool utilization |
 | "List queues with a backlog on the default VPN" | `list-queues` | envelope `{ "queues": [ { "queueName": ..., "spooledMsgCount": ... }, ... ] }` |
 | "Why is orders.q backing up?" | `get-queue-metrics` | envelope `{ "queueMetrics": { "spooledMsgCount": ..., "txUnackedMsgCount": ..., "bindCount": ... } }` |
 | "Are there slow subscribers on the default VPN?" | `list-slow-subscribers` | envelope `{ "slowSubscribers": [ ... ] }` (empty array if none) |
@@ -135,7 +135,7 @@ request). Replace `prod-broker` with one of your configured aliases (from
 
 ```json
 { "name": "list-vpns", "arguments": { "broker": "prod-broker", "maxResults": 50 } }
-{ "name": "get-vpn-health", "arguments": { "broker": "prod-broker", "msgVpnName": "default" } }
+{ "name": "get-vpn-status", "arguments": { "broker": "prod-broker", "msgVpnName": "default" } }
 { "name": "get-message-rates", "arguments": { "broker": "prod-broker", "msgVpnName": "default" } }
 ```
 

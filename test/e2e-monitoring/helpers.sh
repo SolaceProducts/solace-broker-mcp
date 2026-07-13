@@ -440,6 +440,64 @@ cleanup_slow_subscriber_on() {
     log_info "Slow-subscriber cleanup on $label deferred to stop_broker_drivers"
 }
 
+# F-lowprio constants. A queue with rejectLowPriorityMsgEnabled + a low limit
+# and egressEnabled=false latches lowPriorityMsgCongestionState="congested"
+# once ≥ F_LOWPRIO_LIMIT priority-0 messages accumulate: no consumer drains
+# it, so congestion is sticky. Feeds list-queues.congestedCount. Fresh fixture
+# rather than reusing F7's spool queue — single-responsibility per fixture.
+F_LOWPRIO_QUEUE="test-queue-lowprio-congestion"
+F_LOWPRIO_TOPIC="e2e-monitoring/lowprio/topic"
+F_LOWPRIO_LIMIT=5     # rejectLowPriorityMsgLimit; must be exceeded to flip state
+F_LOWPRIO_RATE=50     # msg/s; 50/s × 2s = 100 msgs (well past the limit)
+F_LOWPRIO_DURATION="2s"
+
+# Provisions F_LOWPRIO_QUEUE and runs a one-shot broker-driver publisher with
+# --priority=0 --duration=2s. The queue's rejectLowPriorityMsgLimit gates the
+# congestion signal; egressEnabled=false ensures messages sit until deleted.
+# Waits for the state to flip before returning so downstream assertions can
+# read the aggregation without their own poll.
+create_lowprio_congestion_on() {
+    local semp_config="$1"
+    local label="$2"
+    local broker_url="$3"
+    local broker_letter="$4"
+    log_info "Creating lowprio-congestion fixture on $label (queue=$F_LOWPRIO_QUEUE limit=$F_LOWPRIO_LIMIT) ..."
+
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues" \
+        "{\"queueName\":\"$F_LOWPRIO_QUEUE\",\"accessType\":\"non-exclusive\",\"permission\":\"consume\",\"ingressEnabled\":true,\"egressEnabled\":false,\"rejectLowPriorityMsgEnabled\":true,\"rejectLowPriorityMsgLimit\":$F_LOWPRIO_LIMIT}" >/dev/null
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues/$F_LOWPRIO_QUEUE/subscriptions" \
+        "{\"subscriptionTopic\":\"$F_LOWPRIO_TOPIC\"}" >/dev/null
+
+    local pidfile="$BIN_DIR/broker-driver-lowprio-$broker_letter.pid"
+    "$BIN_DIR/broker-driver" publisher \
+        --broker="$broker_letter" \
+        --vpn="$BROKER_VPN" \
+        --client-name="e2e-monitoring-lowprio-$broker_letter" \
+        --topic="$F_LOWPRIO_TOPIC" \
+        --rate="$F_LOWPRIO_RATE" \
+        --duration="$F_LOWPRIO_DURATION" \
+        --priority=0 \
+        --message-type=persistent \
+        --pidfile="$pidfile"
+
+    # Predicate poll: the field is "live state", so verify it flipped rather
+    # than assuming the publish alone is enough. The downstream summary
+    # assertion depends on this — fail the fixture here rather than surface it
+    # as a mysterious count mismatch later.
+    verify_monitor_object "$broker_url" "$label" \
+        "msgVpns/$BROKER_VPN/queues/$F_LOWPRIO_QUEUE" \
+        15 '.data.lowPriorityMsgCongestionState == "congested"'
+
+    log_info "Lowprio-congestion fixture created on $label"
+}
+
+cleanup_lowprio_congestion_on() {
+    local semp_config="$1"
+    local label="$2"
+    log_info "Cleaning up lowprio-congestion fixture on $label ..."
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/queues/$F_LOWPRIO_QUEUE"
+}
+
 # F7-spool constants.
 F7_SPOOL_QUEUE="test-queue-discards-spool"
 F7_SPOOL_TOPIC="e2e-monitoring/discards/spool"
@@ -575,6 +633,10 @@ create_fixtures() {
     create_discard_spool_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL" b
     create_discard_ttl_on "$BROKER_A_SEMP_CONFIG" "broker-a" a
     create_discard_ttl_on "$BROKER_B_SEMP_CONFIG" "broker-b" b
+    # Lowprio-congestion is independent of F5/F6/F7 and needs no long-lived
+    # driver — the one-shot publish fills the queue and congestion holds.
+    create_lowprio_congestion_on "$BROKER_A_SEMP_CONFIG" "broker-a" "$BROKER_A_URL" a
+    create_lowprio_congestion_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL" b
 }
 
 cleanup_fixtures() {
@@ -594,6 +656,8 @@ cleanup_fixtures() {
     cleanup_sustained_traffic_on "broker-b"
     cleanup_connected_client_on "broker-a"
     cleanup_connected_client_on "broker-b"
+    cleanup_lowprio_congestion_on "$BROKER_A_SEMP_CONFIG" "broker-a"
+    cleanup_lowprio_congestion_on "$BROKER_B_SEMP_CONFIG" "broker-b"
     cleanup_multi_vpn_on "$BROKER_A_SEMP_CONFIG" "broker-a"
     cleanup_multi_vpn_on "$BROKER_B_SEMP_CONFIG" "broker-b"
     cleanup_multi_queue_on "$BROKER_A_SEMP_CONFIG" "broker-a"

@@ -20,12 +20,11 @@ type BasicAuthenticator struct {
 // given credentials to every request via http.Request.SetBasicAuth. The
 // jar is required — HandleAuthFailure clears it to force fresh Basic
 // credentials on the retry, so an authenticator without a jar cannot
-// recover from a 401. Panics if jar is nil — a nil jar is a wiring bug,
-// not a runtime condition.
+// recover from a 401. The non-nil jar invariant is owned by the caller
+// chain: newCookieJar builds and returns a non-nil jar whenever
+// auth.mode is basic, and NewBrokerClient propagates any construction
+// error before newAuthenticator dispatches to this constructor.
 func NewBasicAuthenticator(username, password string, jar CookieJarClearer) *BasicAuthenticator {
-	if jar == nil {
-		panic("NewBasicAuthenticator: jar must be non-nil")
-	}
 	return &BasicAuthenticator{username: username, password: password, jar: jar}
 }
 

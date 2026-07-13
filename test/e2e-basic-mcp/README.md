@@ -66,12 +66,15 @@ multi-broker routing.
 `default` VPN of **both** brokers via the SEMP config API, cleaning up any leftover
 state first:
 
-| Object              | Name            | Purpose                                          |
-| ------------------- | --------------- | ------------------------------------------------ |
-| Queue               | `test-queue`    | Backs the RDP queue binding and `get-queue-metrics` |
-| REST Delivery Point | `test-rdp`      | Target of `get-rdp-status`                        |
-| REST Consumer       | `test-consumer` | Attached to `test-rdp`                            |
-| Queue Binding       | `test-queue`    | Binds `test-queue` to `test-rdp`                  |
+| Object              | Name                    | Purpose                                                                   |
+| ------------------- | ----------------------- | ------------------------------------------------------------------------- |
+| Queue               | `test-queue`            | Backs the RDP queue binding and `get-queue-metrics`                       |
+| REST Delivery Point | `test-rdp`              | Target of `get-rdp-status`                                                |
+| REST Consumer       | `test-consumer`         | Attached to `test-rdp`                                                    |
+| Queue Binding       | `test-queue`            | Binds `test-queue` to `test-rdp`                                          |
+| REST Delivery Point | `test-rdp-failing`      | Enabled RDP pointed at an unreachable remote — exercises down-path fields |
+| REST Consumer       | `test-consumer-failing` | Attached to `test-rdp-failing`                                            |
+| Queue Binding       | `test-queue`            | Binds `test-queue` to `test-rdp-failing`                                  |
 
 This is the same base fixture the `e2e-monitoring` suite copies and extends.
 

@@ -80,7 +80,7 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 | Discovery | `list-brokers` | List configured broker aliases for use as the `broker` parameter |
 | Broker status | `get-broker-status`, `get-redundancy-status` | Snapshot of version, uptime, resources, spool, and HA and mate-link state |
 | Replication | `get-replication-status` | Replication role, sync eligibility, bridge status, transaction mode, and queued-message counts |
-| Message VPN | `list-vpns`, `get-vpn-health`, `get-message-rates` | List VPNs, check per-VPN service health, read message and byte rates |
+| Message VPN | `list-vpns`, `get-vpn-status`, `get-message-rates` | List VPNs, check per-VPN service status, read message and byte rates |
 | Queues | `list-queues`, `get-queue-metrics` | List queues with cumulative spooled count and throughput; drill into a single queue for authoritative current depth, spool, and rates |
 | Clients | `list-clients`, `get-client-details`, `list-client-subscriptions`, `list-slow-subscribers` | List connections, inspect per-client rates and discards, list subscriptions, filter for slow-subscriber-flagged clients |
 | REST Delivery Points | `list-rdps`, `get-rdp-status` | List RDPs; inspect bindings, REST consumers, and last failure reason |
