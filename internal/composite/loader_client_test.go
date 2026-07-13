@@ -269,3 +269,98 @@ tools:
 		t.Error("expected optional maxResults parameter")
 	}
 }
+
+func TestLoadTools_DisconnectClient(t *testing.T) {
+	yaml := `
+tools:
+  - name: disconnect-client
+    description: Forcibly disconnect a connected client.
+    annotations:
+      readOnly: false
+      destructive: true
+      idempotent: false
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN the client is connected to."
+      - name: clientName
+        type: string
+        required: true
+        description: "The name of the client connection to act on."
+    steps:
+      - id: disconnect
+        operation: action/doMsgVpnClientDisconnect
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          clientName: "{{.Params.clientName}}"
+    result:
+      strategy: collect
+`
+	fsys := fstest.MapFS{"tools.yaml": &fstest.MapFile{Data: []byte(yaml)}}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	tool := tools[0]
+	if tool.Annotations.Destructive == nil || !*tool.Annotations.Destructive {
+		t.Error("expected Destructive = true")
+	}
+	if tool.Steps[0].Operation != "action/doMsgVpnClientDisconnect" {
+		t.Errorf("expected operation %q, got %q", "action/doMsgVpnClientDisconnect", tool.Steps[0].Operation)
+	}
+}
+
+func TestLoadTools_ClearClientStats(t *testing.T) {
+	yaml := `
+tools:
+  - name: clear-client-stats
+    description: Reset the per-connection statistics counters for a client.
+    annotations:
+      readOnly: false
+      destructive: false
+      idempotent: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN the client is connected to."
+      - name: clientName
+        type: string
+        required: true
+        description: "The name of the client connection to act on."
+    steps:
+      - id: clearStats
+        operation: action/doMsgVpnClientClearStats
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          clientName: "{{.Params.clientName}}"
+    result:
+      strategy: collect
+`
+	fsys := fstest.MapFS{"tools.yaml": &fstest.MapFile{Data: []byte(yaml)}}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	tool := tools[0]
+	if tool.Annotations.Destructive == nil || *tool.Annotations.Destructive {
+		t.Error("expected Destructive = false")
+	}
+	if tool.Annotations.Idempotent == nil || !*tool.Annotations.Idempotent {
+		t.Error("expected Idempotent = true")
+	}
+	if tool.Steps[0].Operation != "action/doMsgVpnClientClearStats" {
+		t.Errorf("expected operation %q, got %q", "action/doMsgVpnClientClearStats", tool.Steps[0].Operation)
+	}
+}

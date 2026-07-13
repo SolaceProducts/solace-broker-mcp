@@ -119,9 +119,8 @@ func (h *Handler) Metadata() tools.Metadata {
 
 // buildSEMPv2Operation returns the monitor/getMsgVpnQueue operation. Native
 // handlers do not receive the parsed OpenAPI catalog, so the operation is
-// declared inline (same pattern as the queueactions handlers). The path is the
-// private monitor endpoint because fields like bindCount are not available on
-// the public monitor endpoint.
+// declared inline. The path is the private monitor endpoint because fields
+// like bindCount are not available on the public monitor endpoint.
 func buildSEMPv2Operation() *sempv2.Operation {
 	return &sempv2.Operation{
 		ID:     "getMsgVpnQueue",
