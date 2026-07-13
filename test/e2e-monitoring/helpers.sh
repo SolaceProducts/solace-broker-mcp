@@ -541,10 +541,12 @@ create_lowprio_congestion_on() {
         --pidfile="$pidfile"
 
     # Predicate poll: the field is "live state", so verify it flipped rather
-    # than assuming the publish alone is enough.
+    # than assuming the publish alone is enough. The downstream summary
+    # assertion depends on this — fail the fixture here rather than surface it
+    # as a mysterious count mismatch later.
     verify_monitor_object "$broker_url" "$label" \
         "msgVpns/$BROKER_VPN/queues/$F_LOWPRIO_QUEUE" \
-        15 '.data.lowPriorityMsgCongestionState == "congested"' || true
+        15 '.data.lowPriorityMsgCongestionState == "congested"'
 
     log_info "Lowprio-congestion fixture created on $label"
 }

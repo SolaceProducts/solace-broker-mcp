@@ -74,9 +74,11 @@ test_list_vpns_pagination_b() { test_list_vpns_pagination "broker-b"; }
 # Summary aggregation (SOL-151519): recompute each summary count from the raw
 # rows in the same response and require equality. Presence, type, and value
 # consistency all fall out of one check. Fixtures on the default VPN provide:
-# `default` (enabled, up, ≥1 conn), `test-vpn` (disabled) → disabledCount≥1,
-# `test-vpn-empty` (enabled, 0 conn) → zeroConnectionCount≥1. Counts are asserted
-# derived, not absolute, so the test survives future VPN additions.
+# `default` (enabled, up, ≥1 conn) and `test-vpn` (disabled) → disabledCount≥1.
+# Counts are asserted derived, not absolute, so the test survives future VPN
+# additions. zeroConnectionCount is covered only by the recompute-equality
+# assertion (never by a >=1 guard) — see the note below on why the fixture
+# cannot force a zero-connection VPN.
 #
 # The recompute predicates gate on required-field TYPE (boolean/string/number)
 # before applying the count criterion, mirroring the handler's skip-don't-abort

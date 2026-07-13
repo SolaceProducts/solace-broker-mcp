@@ -145,13 +145,14 @@ func runPublisher(args []string) int {
 	return 0
 }
 
-// publishLoop fires once per tick at `rate` msg/s until the done channel
-// signals, returning the (sent, failed) publish counts. PersistentMessage
-// Publisher.PublishBytes blocks only when the in-flight buffer is full
-// (OnBackPressureWait); for the F4 target rate against an idle broker the
-// buffer never fills, so each tick publishes promptly. The ~8% steady-state
-// undershoot the spec acknowledges comes from the Go scheduler + broker ack
-// roundtrip, not from this loop.
+// publishLoop fires the caller-supplied publish func once per tick at
+// `rate` msg/s until the done channel signals, returning the (sent, failed)
+// counts. The injected publish is expected to be non-blocking under steady
+// state — the persistent-message publishers used here block only when the
+// in-flight buffer fills under OnBackPressureWait, and at the F4 target rate
+// against an idle broker that never happens. The ~8% steady-state undershoot
+// the spec acknowledges comes from the Go scheduler + broker ack roundtrip,
+// not from this loop.
 func publishLoop(publish func() error, rate int, done <-chan os.Signal) (int64, int64) {
 	interval := time.Second / time.Duration(rate)
 	ticker := time.NewTicker(interval)

@@ -427,9 +427,11 @@ create_fixtures_on() {
     log_info "Fixtures created on $label"
 }
 
-# Best-effort visibility check for the base queue and RDP. verify_monitor_object
-# warns and returns non-zero on timeout rather than aborting, so the run
-# proceeds even if the monitor endpoint is still catching up.
+# Visibility checks for the base queue and RDPs. The existence probes are
+# best-effort (verify_monitor_object warns on timeout so the run continues if
+# the monitor endpoint is still catching up), but the lastFailureReason poll
+# is required — its value feeds the summary-aggregation assertions and a
+# missing value would surface as a bogus count mismatch downstream.
 verify_fixtures() {
     local broker_url="$1"
     local label="$2"
@@ -439,10 +441,11 @@ verify_fixtures() {
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp-failing" || true
     # Poll until the failing consumer's lastFailureReason is populated. Retries
     # to the unreachable endpoint are asynchronous, so the field can be empty
-    # for the first few seconds; the aggregation assertions depend on it.
+    # for the first few seconds; the aggregation assertions depend on it, so
+    # fail fixture creation here rather than let the summary counts drift later.
     verify_monitor_object "$broker_url" "$label" \
         "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp-failing/restConsumers/test-consumer-failing" \
-        30 '.data.lastFailureReason != ""' || true
+        30 '.data.lastFailureReason != ""'
 }
 
 # Deletes the base fixtures in reverse dependency order (binding → consumer →
