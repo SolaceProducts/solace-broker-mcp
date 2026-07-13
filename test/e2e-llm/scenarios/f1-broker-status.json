@@ -1,6 +1,6 @@
 {
   "_doc": "F1 positive: broker-level prompt with no VPN/queue/client name should route to get-broker-status (not list-vpns, not get-vpn-status). Broker is up, fixtures are healthy, so the model must report operational state — catches a model that hedges or invents capacity issues from a clean snapshot.",
-  "prompt": "Give a one-line verdict on $BROKER's health.",
+  "prompt": "What's the overall status of $BROKER?",
   "expected_tool": "mcp__solace-broker__get-broker-status",
   "required_substrings_any_of": ["operational", "running", "healthy", "is up"],
   "forbidden_substrings": ["is down", "is not operational", "is unhealthy", "restarted recently", "out of capacity"]
