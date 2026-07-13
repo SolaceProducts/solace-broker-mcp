@@ -30,6 +30,13 @@ fi
 
 SUITE_DIR="$E2E_DIR" bash "$COMMON_DIR/setup-brokers.sh"
 
+# Cross-suite sourcing: pulls create_fixtures/cleanup_fixtures and the F1–F7
+# helpers from the monitoring suite. Safe today because e2e-management/helpers.sh
+# only defines sweep_config_fixtures (no name overlap). SOL-150727 will layer
+# in management helpers for write-tool scenarios — if either side adds a
+# colliding function name (create_fixtures, cleanup_fixtures, etc.) the second
+# source silently redefines the first with no warning. Namespace new helpers
+# (mon_ / mgmt_) or pull shared ones into e2e-common/lib.sh before that lands.
 # shellcheck disable=SC1091
 source "$E2E_DIR/helpers.sh"
 
