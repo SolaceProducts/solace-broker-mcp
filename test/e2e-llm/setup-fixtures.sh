@@ -13,7 +13,8 @@
 set -euo pipefail
 
 LLM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-E2E_DIR="$(cd "$LLM_DIR/.." && pwd)"
+E2E_DIR="$(cd "$LLM_DIR/../e2e-monitoring" && pwd)"
+COMMON_DIR="$(cd "$LLM_DIR/../e2e-common" && pwd)"
 
 # shellcheck disable=SC1091
 source "$LLM_DIR/config.env"
@@ -27,7 +28,7 @@ if [ "$BROKER_TARGET" != "local-docker" ]; then
     exit 0
 fi
 
-bash "$E2E_DIR/setup-brokers.sh"
+SUITE_DIR="$E2E_DIR" bash "$COMMON_DIR/setup-brokers.sh"
 
 # shellcheck disable=SC1091
 source "$E2E_DIR/helpers.sh"
@@ -50,7 +51,7 @@ mcp_pid_is_server() {
 if [ -f "$MCP_PIDFILE" ] && mcp_pid_is_server "$(cat "$MCP_PIDFILE")"; then
     log_info "MCP server already running (PID=$(cat "$MCP_PIDFILE")) — reusing"
 else
-    bash "$E2E_DIR/start-server.sh" --bg
+    SUITE_DIR="$E2E_DIR" bash "$COMMON_DIR/start-server.sh" --bg
 fi
 
 create_fixtures

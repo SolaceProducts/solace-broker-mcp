@@ -6,7 +6,7 @@
 set -euo pipefail
 
 LLM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-E2E_DIR="$(cd "$LLM_DIR/.." && pwd)"
+E2E_DIR="$(cd "$LLM_DIR/../e2e-monitoring" && pwd)"
 
 # shellcheck disable=SC1091
 source "$LLM_DIR/config.env"

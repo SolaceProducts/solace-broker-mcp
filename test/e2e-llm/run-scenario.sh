@@ -29,13 +29,13 @@
 #   numeric_match.regex       extracts a number from the answer
 #   numeric_match.min/max     extracted number MUST fall in [min, max]
 #
-# Env-var substitution: ../helpers.sh is auto-sourced (if present) so
-# scenarios can reference $F3_CLIENT_NAME_A etc. as literals.
+# Env-var substitution: ../e2e-monitoring/helpers.sh is auto-sourced (if
+# present) so scenarios can reference $F3_CLIENT_NAME_A etc. as literals.
 
 set -euo pipefail
 
 RUNNER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HELPERS="$RUNNER_DIR/../helpers.sh"
+HELPERS="$RUNNER_DIR/../e2e-monitoring/helpers.sh"
 
 # Suite-wide config. Anything exported beforehand wins (each value is
 # `${X:-default}` in config.env). The runner has no hardcoded MCP URL,
