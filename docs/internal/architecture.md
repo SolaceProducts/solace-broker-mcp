@@ -417,7 +417,7 @@ cap is per broker.
 | Decision | Why |
 |---|---|
 | **Lazy broker client creation** | With 500 configured brokers, only active ones allocate HTTP clients and TCP connections (`internal/semp/pool.go`) |
-| **sempv2.Client is an interface** | Enables mock testing of the executor without HTTP; enables future OAuth wrapper without changing the executor |
+| **sempv2.Client is an interface** | Enables mock testing of the executor without HTTP. OAuth support did not need it: it shipped via the separate `auth.Authenticator` seam (`internal/semp/auth/oauth.go:25`), built by `NewBrokerClient` and invoked per request via `AddAuth(ctx, req)`, so the executor and this interface stay untouched by auth. |
 | **Monitor and config specs are embedded** | The private monitor spec backs read tools (exposes extended fields like `bindCount` absent from the public spec); the private config spec backs the write/CRUD tools. The action spec remains unembedded. `validSpecTypes` in `internal/semp/sempv2/operation.go:37` recognizes `__private_monitor__` and `__private_config__` and gates any addition. |
 | **Operation IDs prefixed with spec type** | Keys like `monitor/getMsgVpnQueue` stay unambiguous — operationIds repeat across the SEMP monitor/config/action APIs, so re-embedding a spec later can't collide |
 | **$ref parameters resolved at parse time** | Shared query params (select, where, count, cursor) are available to all operations, not silently lost |
