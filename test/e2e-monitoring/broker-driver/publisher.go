@@ -47,6 +47,7 @@ func runPublisher(args []string) int {
 	msgType := stringFlag(fs, "message-type", "persistent", "publish QoS: 'persistent' (only supported value today)")
 	duration := fs.Duration("duration", 0, "stop after this long (0 = run until signal)")
 	pidfile := stringFlag(fs, "pidfile", "", "path to write this process's PID to on startup")
+	priority := fs.Int("priority", -1, "message priority 0-255 (unset = fast PublishBytes path). Values below the endpoint's reject-low-priority-msg-limit trip lowPriorityMsgCongestionState on spool-limited queues.")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -63,6 +64,9 @@ func runPublisher(args []string) int {
 	}
 	if *msgType != "persistent" {
 		return fatalf("publisher: --message-type=%q not supported (only 'persistent')", *msgType)
+	}
+	if *priority < -1 || *priority > 255 {
+		return fatalf("publisher: --priority must be -1 (unset) or 0..255 (got %d)", *priority)
 	}
 
 	host, ok := resolveBrokerHost(*broker)
@@ -99,9 +103,25 @@ func runPublisher(args []string) int {
 	}
 	defer os.Remove(*pidfile)
 
+	payload := bytes.Repeat([]byte{'x'}, *size)
+	dest := resource.TopicOf(*topic)
+	publishFn := func() error {
+		return publisher.PublishBytes(payload, dest)
+	}
+	if *priority >= 0 {
+		msgBuilder := service.MessageBuilder().WithPriority(*priority)
+		publishFn = func() error {
+			msg, err := msgBuilder.BuildWithByteArrayPayload(payload)
+			if err != nil {
+				return err
+			}
+			return publisher.Publish(msg, dest, nil, nil)
+		}
+	}
+
 	fmt.Fprintf(os.Stderr,
-		"broker-driver publisher ready: topic=%s rate=%d msg/s size=%dB type=%s pid=%d host=%s\n",
-		*topic, *rate, *size, *msgType, os.Getpid(), host)
+		"broker-driver publisher ready: topic=%s rate=%d msg/s size=%dB type=%s priority=%d pid=%d host=%s\n",
+		*topic, *rate, *size, *msgType, *priority, os.Getpid(), host)
 
 	done := signalChannel()
 	if *duration > 0 {
@@ -114,7 +134,7 @@ func runPublisher(args []string) int {
 		}()
 	}
 
-	sent, failed := publishLoop(publisher, *topic, *size, *rate, done)
+	sent, failed := publishLoop(publishFn, *rate, done)
 	fmt.Fprintf(os.Stderr, "broker-driver publisher: shutting down sent=%d failed=%d\n", sent, failed)
 	// Mirror publish-batch: a non-zero failed count is a real fault (with
 	// OnBackPressureWait, PublishBytes blocks on backpressure rather than
@@ -125,16 +145,15 @@ func runPublisher(args []string) int {
 	return 0
 }
 
-// publishLoop fires once per tick at `rate` msg/s until the done channel
-// signals, returning the (sent, failed) publish counts. PersistentMessage
-// Publisher.PublishBytes blocks only when the in-flight buffer is full
-// (OnBackPressureWait); for the F4 target rate against an idle broker the
-// buffer never fills, so each tick publishes promptly. The ~8% steady-state
-// undershoot the spec acknowledges comes from the Go scheduler + broker ack
-// roundtrip, not from this loop.
-func publishLoop(publisher persistentBytesPublisher, topic string, size, rate int, done <-chan os.Signal) (int64, int64) {
-	payload := bytes.Repeat([]byte{'x'}, size)
-	dest := resource.TopicOf(topic)
+// publishLoop fires the caller-supplied publish func once per tick at
+// `rate` msg/s until the done channel signals, returning the (sent, failed)
+// counts. The injected publish is expected to be non-blocking under steady
+// state — the persistent-message publishers used here block only when the
+// in-flight buffer fills under OnBackPressureWait, and at the F4 target rate
+// against an idle broker that never happens. The ~8% steady-state undershoot
+// the spec acknowledges comes from the Go scheduler + broker ack roundtrip,
+// not from this loop.
+func publishLoop(publish func() error, rate int, done <-chan os.Signal) (int64, int64) {
 	interval := time.Second / time.Duration(rate)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -145,20 +164,13 @@ func publishLoop(publisher persistentBytesPublisher, topic string, size, rate in
 		case <-done:
 			return sent, failed
 		case <-ticker.C:
-			if err := publisher.PublishBytes(payload, dest); err != nil {
+			if err := publish(); err != nil {
 				failed++
 				continue
 			}
 			sent++
 		}
 	}
-}
-
-// persistentBytesPublisher narrows the surface we use from the Solace API
-// so publishLoop stays tiny and trivially testable if we ever swap the
-// loop logic for a token-bucket variant.
-type persistentBytesPublisher interface {
-	PublishBytes(message []byte, destination *resource.Topic) error
 }
 
 // signalChannel returns a buffered chan that delivers SIGINT/SIGTERM.
