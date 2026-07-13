@@ -77,7 +77,7 @@ graph TB
         REC["recovery<br/>panic → 500 (outermost)"]
         LIMIT["body-limit<br/>413 before correlation"]
         CORR["correlation.Middleware<br/>resolve/gen correlation ID"]
-        AUTHMW["auth.NewAuthMiddleware<br/>static | oauth(OIDC) | disabled"]
+        AUTHMW["auth.NewAuthMiddleware<br/>static / oauth(OIDC) / disabled"]
     end
 
     subgraph "internal/auth + identity"
@@ -99,9 +99,9 @@ graph TB
 
     subgraph "internal/semp"
         POOL["pool.go<br/>Lazy BrokerClient<br/>(RWMutex)"]
-        BROKER["broker.go<br/>Holds v1+v2 clients,<br/>authenticator, cookie jar"]
+        BROKER["broker.go<br/>Holds v1+v2 clients<br/>+ authenticator"]
         SENDER["resilience/sender.go<br/>rate limit, method-aware retry,<br/>in-flight cap"]
-        SAUTH["auth/<br/>basic | bearer | oauth"]
+        SAUTH["auth/<br/>basic / bearer / oauth"]
         V1["sempv1/client.go"]
         V2["sempv2/client.go<br/>+ embedded spec"]
         CHDR["correlationhdr/<br/>propagate ID to broker"]
@@ -154,9 +154,13 @@ graph TB
 
 ## Inbound Auth & Two-Hop Identity
 
-The server is a **resource server**, not the authorization authority — an
-external OIDC issuer is (`internal/auth/middleware.go:135`). Identity crosses
-two hops:
+The server is a **resource server on hop 1** — it validates inbound tokens but
+is not the authorization authority; an external OIDC issuer is
+(`internal/auth/middleware.go:135`). On **hop 2** (oauth broker mode) it
+switches roles and acts as an **OAuth client** of the IdP, exchanging the
+caller's token using its own registered client credentials
+(`client_secret_basic`/`client_secret_post`, `internal/tokenexchange/request.go:111`).
+Identity crosses two hops:
 
 - **Hop 1 (inbound, always on when auth enabled):** validate the client's
   bearer token. `auth.NewAuthMiddleware` selects the backend by
@@ -443,7 +447,7 @@ cap is per broker.
 | **Composite Executor** | Tool definitions, steps, templates, result strategies | Brokers, HTTP, auth | `internal/composite/executor.go` |
 | **postprocess handlers** | Step result maps → summary | HTTP, brokers, MCP protocol | `internal/composite/postprocess/` |
 | **BrokerPool** | Map of configs, lazy client creation, RWMutex | Tools, MCP protocol, HTTP details | `internal/semp/pool.go` |
-| **BrokerClient** | SEMPv1 + SEMPv2 clients, authenticator, cookie jar, in-flight semaphore | Tools, steps, MCP protocol | `internal/semp/broker.go:26` |
+| **BrokerClient** | SEMPv1 + SEMPv2 clients, authenticator; wires the cookie jar (basic auth only) and the shared per-broker in-flight semaphore at construction, then hands them downstream | Tools, steps, MCP protocol | `internal/semp/broker.go:26` |
 | **resilience Sender** | Rate limiting, method-aware retry, in-flight cap, auth-failure re-auth | Tools, brokers by name, MCP protocol | `internal/semp/resilience/` |
 | **Broker Authenticator** | basic / bearer / oauth outbound auth | Tools, MCP protocol | `internal/semp/auth/` |
 | **sempv2.HTTPClient** | HTTP calls, auth headers, JSON parsing, correlation header | Tools, brokers, MCP protocol | `internal/semp/sempv2/client.go` |
