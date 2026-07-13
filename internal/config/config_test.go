@@ -661,8 +661,7 @@ brokers:
 
 // TestLoadConfig_CredentialsTrimmedBeforeEmptyCheck pins the invariant that
 // validateBroker rejects whitespace-only credentials at startup rather than
-// letting them through to fail every request at runtime. Matches the existing
-// whitespace-stripping check on oauth scopes.
+// letting them through to fail every request at runtime.
 func TestLoadConfig_CredentialsTrimmedBeforeEmptyCheck(t *testing.T) {
 	const clientAuthBlock = `
 mcp_client_auth:
@@ -2566,8 +2565,6 @@ brokers:
     auth:
       mode: oauth
       audience: solace-broker-prod
-      scopes:
-        - "semp:read"
 `,
 			wantErr:          true,
 			wantErrSubstring: notYetSupported,
@@ -2749,7 +2746,13 @@ brokers:
 			wantErrSubstring: notYetSupported,
 		},
 		{
-			name: "per-broker scopes contains a whitespace-only entry",
+			// The removed per-broker auth.scopes field must stay removed:
+			// strict YAML decoding (KnownFields(true)) rejects any config
+			// that still declares it, so operators who upgrade past the
+			// removal see a loud error at startup rather than silently
+			// losing behavior. See dedup_key.go for why per-user scopes
+			// (if ever reintroduced) must join the dedup key.
+			name: "per-broker auth.scopes is a removed field — strict decoder rejects it",
 			yaml: clientAuthBlock + validBrokerOAuth + `
 brokers:
   prod:
@@ -2759,10 +2762,9 @@ brokers:
       audience: solace-broker-prod
       scopes:
         - "semp:read"
-        - "   "
 `,
 			wantErr:          true,
-			wantErrSubstring: `broker "prod": auth.scopes[1] is empty or whitespace-only`,
+			wantErrSubstring: `field scopes not found in type config.AuthConfig`,
 		},
 		{
 			name: "broker_oauth.grant_type missing",

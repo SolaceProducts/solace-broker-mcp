@@ -898,7 +898,6 @@ func TestExchange_RequestBodyContainsExpectedFields(t *testing.T) {
 		SubjectToken: "my-jwt",
 		BrokerAlias:  "my-broker",
 		Audience:     "https://broker.example.com",
-		Scopes:       []string{"read", "write"},
 	}
 
 	_, err := e.Exchange(context.Background(), input)
@@ -911,12 +910,17 @@ func TestExchange_RequestBodyContainsExpectedFields(t *testing.T) {
 		"subject_token":      "my-jwt",
 		"subject_token_type": URNTokenTypeAccessToken,
 		"audience":           "https://broker.example.com",
-		"scope":              "read write",
 	}
 	for key, want := range checks {
 		if got := capturedForm.Get(key); got != want {
 			t.Errorf("form[%q] = %q, want %q", key, got, want)
 		}
+	}
+
+	// scope must NOT appear — the exchange request omits it so the IdP
+	// applies its per-client / per-user default scopes.
+	if _, present := capturedForm["scope"]; present {
+		t.Errorf("form[%q] present (value=%q); want absent", "scope", capturedForm.Get("scope"))
 	}
 
 	// BrokerAlias must NOT appear in the request.

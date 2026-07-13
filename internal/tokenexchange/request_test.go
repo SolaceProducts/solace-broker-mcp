@@ -394,51 +394,30 @@ func TestBuildIdPRequest_AudienceConditional(t *testing.T) {
 	}
 }
 
-// TestBuildIdPRequest_ScopeConditional verifies that the "scope" form field
-// is absent for nil or empty slices, and present with a space-joined value
-// (per RFC 6749 §3.3) for non-empty slices.
-func TestBuildIdPRequest_ScopeConditional(t *testing.T) {
+// TestBuildIdPRequest_NoScopeParameter pins the current behavior: the
+// exchange request never sends the RFC 6749 §3.3 "scope" parameter, so the
+// IdP grants its per-client / per-user default scopes. Per-broker scopes
+// were removed as the wrong axis for user-varying entitlement (see the
+// package doc on request.go). A future change that re-introduces a per-
+// user scope parameter must also join it to the dedup key (see dedup_key.go).
+func TestBuildIdPRequest_NoScopeParameter(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name        string
-		scopes      []string
-		wantPresent bool
-		wantValue   string
-	}{
-		{"nil scopes", nil, false, ""},
-		{"empty slice", []string{}, false, ""},
-		{"single scope", []string{"read"}, true, "read"},
-		{"multiple scopes", []string{"read", "write"}, true, "read write"},
-		{"three scopes", []string{"a", "b", "c"}, true, "a b c"},
+	e, err := New(validParams(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
+		SubjectToken: "tok",
+		Audience:     "aud",
+	})
+	if err != nil {
+		t.Fatalf("buildIdPRequest: %v", err)
 	}
 
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			e, err := New(validParams(t))
-			if err != nil {
-				t.Fatalf("New: %v", err)
-			}
-			req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
-				SubjectToken: "tok",
-				Scopes:       tc.scopes,
-			})
-			if err != nil {
-				t.Fatalf("buildIdPRequest: %v", err)
-			}
-
-			form := readFormBody(t, req)
-
-			_, present := form["scope"]
-			if present != tc.wantPresent {
-				t.Errorf("scope present = %v, want %v", present, tc.wantPresent)
-			}
-			if tc.wantPresent && form.Get("scope") != tc.wantValue {
-				t.Errorf("scope = %q, want %q", form.Get("scope"), tc.wantValue)
-			}
-		})
+	form := readFormBody(t, req)
+	if _, present := form["scope"]; present {
+		t.Errorf("scope form field present (value=%q); want absent so IdP applies its default scopes", form.Get("scope"))
 	}
 }
 
@@ -658,63 +637,3 @@ func TestBuildIdPRequest_EmptySubjectTokenPassThrough(t *testing.T) {
 	}
 }
 
-// TestBuildIdPRequest_ScopeDuplicatesPreserved pins the current behavior
-// where buildIdPRequest does not deduplicate scope values — duplicates are
-// joined as-is into the "scope" form field.
-func TestBuildIdPRequest_ScopeDuplicatesPreserved(t *testing.T) {
-	t.Parallel()
-
-	e, err := New(validParams(t))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
-		SubjectToken: "tok",
-		Scopes:       []string{"read", "read", "write"},
-	})
-	if err != nil {
-		t.Fatalf("buildIdPRequest: %v", err)
-	}
-
-	form := readFormBody(t, req)
-
-	// Current behavior: duplicates are joined as-is, not deduplicated.
-	if got := form.Get("scope"); got != "read read write" {
-		t.Errorf("scope = %q, want %q (duplicates preserved)", got, "read read write")
-	}
-}
-
-// TestBuildIdPRequest_BlankScopeElementProducesEmptyValue verifies the edge
-// case where Scopes: []string{""} has len == 1, so the scope branch fires
-// and strings.Join produces "". The form body contains "scope=" (key present,
-// value empty) which is NOT the same as the scope field being absent — some
-// IdPs treat an explicit empty scope as a parse error while omitting scope
-// causes the IdP to apply its default scopes.
-func TestBuildIdPRequest_BlankScopeElementProducesEmptyValue(t *testing.T) {
-	t.Parallel()
-
-	e, err := New(validParams(t))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	req, err := e.buildIdPRequest(context.Background(), ExchangeInput{
-		SubjectToken: "tok",
-		Scopes:       []string{""}, // single blank-string element — enters scope branch
-	})
-	if err != nil {
-		t.Fatalf("buildIdPRequest: %v", err)
-	}
-
-	form := readFormBody(t, req)
-
-	// Blank element enters the scope branch — key is present, not omitted.
-	if _, present := form["scope"]; !present {
-		t.Errorf("scope key absent for Scopes: []string{\"\"} — expected present with empty value (blank element enters scope branch)")
-	}
-	// Value is empty string (not omitted field).
-	if got := form.Get("scope"); got != "" {
-		t.Errorf("scope = %q, want empty string (blank element joined to empty)", got)
-	}
-}
