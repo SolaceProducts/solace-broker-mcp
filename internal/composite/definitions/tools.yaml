@@ -712,6 +712,65 @@ tools:
     result:
       strategy: collect
 
+  - name: delete-queue-messages
+    description: >
+      Permanently delete ALL spooled messages from a queue. This is irreversible
+      — the deleted messages cannot be recovered. BEFORE INVOKING THIS TOOL,
+      obtain explicit user confirmation, restating the target (broker, VPN,
+      queue) and that all spooled messages will be permanently lost. The
+      confirmation MUST come as a separate user reply received AFTER you state
+      the target and effect — do not treat the user's original request as a
+      pre-confirmation, even if it implies intent. Use after confirmed intent
+      to drain a queue (e.g. clearing a dead-letter backlog).
+    annotations:
+      readOnly: false
+      destructive: true
+      idempotent: false
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the queue."
+      - name: queueName
+        type: string
+        required: true
+        description: "The name of the queue to act on."
+    steps:
+      - id: deleteMsgs
+        operation: action/doMsgVpnQueueDeleteMsgs
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          queueName: "{{.Params.queueName}}"
+    result:
+      strategy: collect
+
+  - name: clear-queue-stats
+    description: >
+      Reset the statistics counters for a queue. Non-destructive: this resets
+      monitoring counters only and does not affect spooled messages or message
+      delivery. Useful for establishing a fresh metrics baseline during testing.
+    annotations:
+      readOnly: false
+      destructive: false
+      idempotent: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the queue."
+      - name: queueName
+        type: string
+        required: true
+        description: "The name of the queue to act on."
+    steps:
+      - id: clearStats
+        operation: action/doMsgVpnQueueClearStats
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          queueName: "{{.Params.queueName}}"
+    result:
+      strategy: collect
+
   - name: create-topic-endpoint
     description: >
       Create a topic endpoint in a Message VPN. Requires msgVpnName to identify
@@ -930,5 +989,65 @@ tools:
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           restDeliveryPointName: "{{.Params.restDeliveryPointName}}"
+    result:
+      strategy: collect
+
+  - name: disconnect-client
+    description: >
+      Forcibly disconnect a connected client. This is service-impacting and
+      irreversible for the active session — it terminates the connection and
+      the client must reconnect to resume. BEFORE INVOKING THIS TOOL, obtain
+      explicit user confirmation, restating the target (broker, VPN, client
+      name) and the service interruption. The confirmation MUST come as a
+      separate user reply received AFTER you state the target and effect — do
+      not treat the user's original request as a pre-confirmation, even if it
+      implies intent. Common use: disconnect a slow subscriber identified via
+      list-slow-subscribers or get-client-details.
+    annotations:
+      readOnly: false
+      destructive: true
+      idempotent: false
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN the client is connected to."
+      - name: clientName
+        type: string
+        required: true
+        description: "The name of the client connection to act on."
+    steps:
+      - id: disconnect
+        operation: action/doMsgVpnClientDisconnect
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          clientName: "{{.Params.clientName}}"
+    result:
+      strategy: collect
+
+  - name: clear-client-stats
+    description: >
+      Reset the per-connection statistics counters for a client.
+      Non-destructive: this resets monitoring counters only and does not
+      disconnect the client or affect message delivery.
+    annotations:
+      readOnly: false
+      destructive: false
+      idempotent: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN the client is connected to."
+      - name: clientName
+        type: string
+        required: true
+        description: "The name of the client connection to act on."
+    steps:
+      - id: clearStats
+        operation: action/doMsgVpnClientClearStats
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          clientName: "{{.Params.clientName}}"
     result:
       strategy: collect

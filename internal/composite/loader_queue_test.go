@@ -443,3 +443,98 @@ tools:
 		t.Errorf("expected strategy %q, got %q", "collect", tool.Result.Strategy)
 	}
 }
+
+func TestLoadTools_DeleteQueueMessages(t *testing.T) {
+	yaml := `
+tools:
+  - name: delete-queue-messages
+    description: Permanently delete ALL spooled messages from a queue.
+    annotations:
+      readOnly: false
+      destructive: true
+      idempotent: false
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the queue."
+      - name: queueName
+        type: string
+        required: true
+        description: "The name of the queue to act on."
+    steps:
+      - id: deleteMsgs
+        operation: action/doMsgVpnQueueDeleteMsgs
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          queueName: "{{.Params.queueName}}"
+    result:
+      strategy: collect
+`
+	fsys := fstest.MapFS{"tools.yaml": &fstest.MapFile{Data: []byte(yaml)}}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	tool := tools[0]
+	if tool.Annotations.Destructive == nil || !*tool.Annotations.Destructive {
+		t.Error("expected Destructive = true")
+	}
+	if tool.Steps[0].Operation != "action/doMsgVpnQueueDeleteMsgs" {
+		t.Errorf("expected operation %q, got %q", "action/doMsgVpnQueueDeleteMsgs", tool.Steps[0].Operation)
+	}
+}
+
+func TestLoadTools_ClearQueueStats(t *testing.T) {
+	yaml := `
+tools:
+  - name: clear-queue-stats
+    description: Reset the statistics counters for a queue.
+    annotations:
+      readOnly: false
+      destructive: false
+      idempotent: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the queue."
+      - name: queueName
+        type: string
+        required: true
+        description: "The name of the queue to act on."
+    steps:
+      - id: clearStats
+        operation: action/doMsgVpnQueueClearStats
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          queueName: "{{.Params.queueName}}"
+    result:
+      strategy: collect
+`
+	fsys := fstest.MapFS{"tools.yaml": &fstest.MapFile{Data: []byte(yaml)}}
+
+	tools, err := LoadTools(fsys, "tools.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(tools))
+	}
+
+	tool := tools[0]
+	if tool.Annotations.Destructive == nil || *tool.Annotations.Destructive {
+		t.Error("expected Destructive = false")
+	}
+	if tool.Annotations.Idempotent == nil || !*tool.Annotations.Idempotent {
+		t.Error("expected Idempotent = true")
+	}
+	if tool.Steps[0].Operation != "action/doMsgVpnQueueClearStats" {
+		t.Errorf("expected operation %q, got %q", "action/doMsgVpnQueueClearStats", tool.Steps[0].Operation)
+	}
+}

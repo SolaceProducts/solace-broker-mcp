@@ -223,7 +223,7 @@ Completely independent — load on prod-us does not affect prod-eu.
 |---|---|
 | **Lazy broker client creation** | With 500 configured brokers, only active ones allocate HTTP clients and TCP connections |
 | **sempv2.Client is an interface** | Enables mock testing of executor without HTTP; enables future OAuth wrapper without changing executor |
-| **Only the private monitor spec is embedded** | Exposes extended fields (e.g. `bindCount`) absent from the public spec; the config and action specs were removed as unused (SOL-148431). `validSpecTypes` in `internal/semp/sempv2/operation.go` is the gate for re-adding one. |
+| **Private monitor, config, and action specs are embedded** | Exposes extended fields (e.g. `bindCount`) absent from the public specs. `validSpecTypes` in `internal/semp/sempv2/operation.go` is the gate for adding any future spec. |
 | **Operation IDs prefixed with spec type** | Keys like `monitor/getMsgVpnQueue` stay unambiguous — operationIds repeat across the SEMP monitor/config/action APIs, so re-embedding a spec later can't collide |
 | **$ref parameters resolved at parse time** | Shared query params (select, where, count, cursor) are available to all operations, not silently lost |
 | **Handler resolves broker, executor receives client** | Executor is pure orchestration — no knowledge of brokers, auth, or pools. Auth changes (OAuth) don't touch executor. |

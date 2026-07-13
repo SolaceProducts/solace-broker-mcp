@@ -194,24 +194,28 @@ func TestParseSpecs_SpecTypeDerivation(t *testing.T) {
 		t.Fatalf("ParseSpecs() error: %v", err)
 	}
 
-	// Every key must use a known normalized spec-type prefix: monitor/(private
-	// monitor) or config/(private config).
+	// Every key must use a known normalized spec-type prefix, and every embedded
+	// private spec must contribute at least one operation under its normalized
+	// prefix — proving each __private_*__ basePath is wired into the spec-type
+	// maps.
+	validPrefixes := []string{"monitor/", "config/", "action/"}
+	seen := make(map[string]bool, len(validPrefixes))
 	for key := range ops {
-		if !strings.HasPrefix(key, "monitor/") && !strings.HasPrefix(key, "config/") {
+		matched := false
+		for _, prefix := range validPrefixes {
+			if strings.HasPrefix(key, prefix) {
+				seen[prefix] = true
+				matched = true
+				break
+			}
+		}
+		if !matched {
 			t.Errorf("operation key %q does not have a valid spec type prefix", key)
 		}
 	}
-
-	// The private config spec must contribute at least one config/ operation,
-	// proving __private_config__ is wired into the spec-type maps.
-	foundConfig := false
-	for key := range ops {
-		if strings.HasPrefix(key, "config/") {
-			foundConfig = true
-			break
+	for _, prefix := range validPrefixes {
+		if !seen[prefix] {
+			t.Errorf("no %s operations parsed; private %s spec not loaded", prefix, strings.TrimSuffix(prefix, "/"))
 		}
-	}
-	if !foundConfig {
-		t.Error("no config/ operations parsed; private config spec not loaded")
 	}
 }

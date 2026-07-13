@@ -737,3 +737,111 @@ func TestExecute_DeleteQueue_NoBodyConstructed(t *testing.T) {
 		t.Error("expected deleteQueue result to be collected")
 	}
 }
+
+// deleteQueueMessagesTool mirrors the delete-queue-messages YAML definition.
+func deleteQueueMessagesTool() CompositeTool {
+	return CompositeTool{
+		Name: "delete-queue-messages",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "queueName", Type: "string", Required: true},
+		},
+		Steps: []Step{{
+			ID:        "deleteMsgs",
+			Operation: "action/doMsgVpnQueueDeleteMsgs",
+			Args: map[string]string{
+				"msgVpnName": "{{.Params.msgVpnName}}",
+				"queueName":  "{{.Params.queueName}}",
+			},
+		}},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// clearQueueStatsTool mirrors the clear-queue-stats YAML definition.
+func clearQueueStatsTool() CompositeTool {
+	return CompositeTool{
+		Name: "clear-queue-stats",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "queueName", Type: "string", Required: true},
+		},
+		Steps: []Step{{
+			ID:        "clearStats",
+			Operation: "action/doMsgVpnQueueClearStats",
+			Args: map[string]string{
+				"msgVpnName": "{{.Params.msgVpnName}}",
+				"queueName":  "{{.Params.queueName}}",
+			},
+		}},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// TestExecute_DeleteQueueMessages verifies the tool issues the deleteMsgs action
+// with both path params filled in, synthesizes an empty request body (the SEMP
+// action declares a body param with an empty schema), and collects the step
+// result under the "deleteMsgs" key.
+func TestExecute_DeleteQueueMessages(t *testing.T) {
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), deleteQueueMessagesTool(), capture, map[string]any{
+		"msgVpnName": "vpn-a",
+		"queueName":  "orders",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(recorded))
+	}
+	if recorded[0].opID != "doMsgVpnQueueDeleteMsgs" {
+		t.Errorf("opID = %q, want doMsgVpnQueueDeleteMsgs", recorded[0].opID)
+	}
+	if recorded[0].args["msgVpnName"] != "vpn-a" {
+		t.Errorf("args[msgVpnName] = %v, want vpn-a", recorded[0].args["msgVpnName"])
+	}
+	if recorded[0].args["queueName"] != "orders" {
+		t.Errorf("args[queueName] = %v, want orders", recorded[0].args["queueName"])
+	}
+	body, ok := recorded[0].args["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("args[body] = %v (%T), want empty map[string]any", recorded[0].args["body"], recorded[0].args["body"])
+	}
+	if len(body) != 0 {
+		t.Errorf("body = %v, want empty map", body)
+	}
+	if result["deleteMsgs"] == nil {
+		t.Error("expected deleteMsgs result to be collected")
+	}
+}
+
+// TestExecute_ClearQueueStats verifies clear-queue-stats issues the clearStats
+// action on the correct queue path and collects under the step ID.
+func TestExecute_ClearQueueStats(t *testing.T) {
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), clearQueueStatsTool(), capture, map[string]any{
+		"msgVpnName": "vpn-a",
+		"queueName":  "orders",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if recorded[0].opID != "doMsgVpnQueueClearStats" {
+		t.Errorf("opID = %q, want doMsgVpnQueueClearStats", recorded[0].opID)
+	}
+	if result["clearStats"] == nil {
+		t.Error("expected clearStats result to be collected")
+	}
+}
