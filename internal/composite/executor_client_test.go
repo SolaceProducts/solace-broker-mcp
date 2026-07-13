@@ -528,3 +528,104 @@ func TestExecute_ListSlowSubscribers_TruncatesAtMaxResults(t *testing.T) {
 		t.Errorf("expected 1 SEMP call, got %d", len(client.calls))
 	}
 }
+
+// disconnectClientTool mirrors the disconnect-client YAML definition.
+func disconnectClientTool() CompositeTool {
+	return CompositeTool{
+		Name: "disconnect-client",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "clientName", Type: "string", Required: true},
+		},
+		Steps: []Step{{
+			ID:        "disconnect",
+			Operation: "action/doMsgVpnClientDisconnect",
+			Args: map[string]string{
+				"msgVpnName": "{{.Params.msgVpnName}}",
+				"clientName": "{{.Params.clientName}}",
+			},
+		}},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// clearClientStatsTool mirrors the clear-client-stats YAML definition.
+func clearClientStatsTool() CompositeTool {
+	return CompositeTool{
+		Name: "clear-client-stats",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "clientName", Type: "string", Required: true},
+		},
+		Steps: []Step{{
+			ID:        "clearStats",
+			Operation: "action/doMsgVpnClientClearStats",
+			Args: map[string]string{
+				"msgVpnName": "{{.Params.msgVpnName}}",
+				"clientName": "{{.Params.clientName}}",
+			},
+		}},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// TestExecute_DisconnectClient verifies disconnect-client issues the PUT with
+// both path params filled in, synthesizes an empty request body, and collects
+// under the "disconnect" step ID.
+func TestExecute_DisconnectClient(t *testing.T) {
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), disconnectClientTool(), capture, map[string]any{
+		"msgVpnName": "vpn-a",
+		"clientName": "consumer-7",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if recorded[0].opID != "doMsgVpnClientDisconnect" {
+		t.Errorf("opID = %q, want doMsgVpnClientDisconnect", recorded[0].opID)
+	}
+	if recorded[0].args["clientName"] != "consumer-7" {
+		t.Errorf("args[clientName] = %v, want consumer-7", recorded[0].args["clientName"])
+	}
+	body, ok := recorded[0].args["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("args[body] = %v (%T), want empty map[string]any", recorded[0].args["body"], recorded[0].args["body"])
+	}
+	if len(body) != 0 {
+		t.Errorf("body = %v, want empty map", body)
+	}
+	if result["disconnect"] == nil {
+		t.Error("expected disconnect result to be collected")
+	}
+}
+
+// TestExecute_ClearClientStats verifies clear-client-stats issues the clearStats
+// action on the correct client path and collects under the step ID.
+func TestExecute_ClearClientStats(t *testing.T) {
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	result, err := executor.Execute(context.Background(), clearClientStatsTool(), capture, map[string]any{
+		"msgVpnName": "vpn-a",
+		"clientName": "consumer-7",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if recorded[0].opID != "doMsgVpnClientClearStats" {
+		t.Errorf("opID = %q, want doMsgVpnClientClearStats", recorded[0].opID)
+	}
+	if result["clearStats"] == nil {
+		t.Error("expected clearStats result to be collected")
+	}
+}

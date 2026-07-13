@@ -84,6 +84,46 @@ func testOperations() map[string]*sempv2.Operation {
 			Method: "PUT",
 			Path:   "/SEMP/v2/action/msgVpns/{msgVpnName}/queues/{queueName}/startReplay",
 		},
+		"action/doMsgVpnQueueDeleteMsgs": {
+			ID:     "doMsgVpnQueueDeleteMsgs",
+			Method: "PUT",
+			Path:   "/SEMP/v2/__private_action__/msgVpns/{msgVpnName}/queues/{queueName}/deleteMsgs",
+			Parameters: []sempv2.Parameter{
+				{Name: "msgVpnName", In: "path", Type: "string", Required: true},
+				{Name: "queueName", In: "path", Type: "string", Required: true},
+				{Name: "body", In: "body", Type: "object", Required: true},
+			},
+		},
+		"action/doMsgVpnQueueClearStats": {
+			ID:     "doMsgVpnQueueClearStats",
+			Method: "PUT",
+			Path:   "/SEMP/v2/__private_action__/msgVpns/{msgVpnName}/queues/{queueName}/clearStats",
+			Parameters: []sempv2.Parameter{
+				{Name: "msgVpnName", In: "path", Type: "string", Required: true},
+				{Name: "queueName", In: "path", Type: "string", Required: true},
+				{Name: "body", In: "body", Type: "object", Required: true},
+			},
+		},
+		"action/doMsgVpnClientDisconnect": {
+			ID:     "doMsgVpnClientDisconnect",
+			Method: "PUT",
+			Path:   "/SEMP/v2/__private_action__/msgVpns/{msgVpnName}/clients/{clientName}/disconnect",
+			Parameters: []sempv2.Parameter{
+				{Name: "msgVpnName", In: "path", Type: "string", Required: true},
+				{Name: "clientName", In: "path", Type: "string", Required: true},
+				{Name: "body", In: "body", Type: "object", Required: true},
+			},
+		},
+		"action/doMsgVpnClientClearStats": {
+			ID:     "doMsgVpnClientClearStats",
+			Method: "PUT",
+			Path:   "/SEMP/v2/__private_action__/msgVpns/{msgVpnName}/clients/{clientName}/clearStats",
+			Parameters: []sempv2.Parameter{
+				{Name: "msgVpnName", In: "path", Type: "string", Required: true},
+				{Name: "clientName", In: "path", Type: "string", Required: true},
+				{Name: "body", In: "body", Type: "object", Required: true},
+			},
+		},
 		"monitor/getMsgVpn": {
 			ID:     "getMsgVpn",
 			Method: "GET",
