@@ -202,7 +202,7 @@ consume:
 }
 
 // persistentAckReceiver narrows the Solace receiver surface the consume loop
-// uses, mirroring persistentBytesPublisher in publisher.go.
+// uses to just the two calls it needs, so tests can substitute a fake.
 type persistentAckReceiver interface {
 	ReceiveMessage(timeout time.Duration) (message.InboundMessage, error)
 	Ack(msg message.InboundMessage) error
