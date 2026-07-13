@@ -290,15 +290,16 @@ test_disconnect_cross_broker_isolation() {
     if [ -z "$ca" ] || [ -z "$cb" ]; then
         log_fail "isolation(disconnect): could not read both clientIds (a='$ca' b='$cb')"; rc=1
     else
-        call_tool_ok "disconnect-client" \
+        if call_tool_ok "disconnect-client" \
             "$(jq -nc --arg c "$c" '{broker:"broker-a",msgVpnName:"default",clientName:$c}')" \
-            "isolation(disconnect): disconnect on broker-a" \
-            && {
-                poll_client_reconnected "$BROKER_A_URL" "$c" "$ca" || { log_fail "isolation(disconnect): broker-a session not terminated"; rc=1; }
-                # broker-b's client must be untouched — same session (clientId).
-                local cb_after; cb_after=$(read_client_id "$BROKER_B_URL" "$c")
-                [ "$cb_after" = "$cb" ] || { log_fail "isolation(disconnect): broker-b clientId changed ($cb -> '$cb_after')"; rc=1; }
-            } || rc=1
+            "isolation(disconnect): disconnect on broker-a"; then
+            poll_client_reconnected "$BROKER_A_URL" "$c" "$ca" || { log_fail "isolation(disconnect): broker-a session not terminated"; rc=1; }
+            # broker-b's client must be untouched — same session (clientId).
+            local cb_after; cb_after=$(read_client_id "$BROKER_B_URL" "$c")
+            [ "$cb_after" = "$cb" ] || { log_fail "isolation(disconnect): broker-b clientId changed ($cb -> '$cb_after')"; rc=1; }
+        else
+            rc=1
+        fi
     fi
 
     stop_broker_drivers
