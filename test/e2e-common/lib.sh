@@ -269,6 +269,75 @@ stop_server() {
     MCP_SERVER_PID=""
 }
 
+# ── broker-driver (messaging-layer fixtures) ─────────────────────────────────
+# The broker-driver is a Go/CGo binary (solace.dev/go/messaging → libsolclient)
+# that connects over SMF to produce broker states SEMP/curl cannot: connected
+# clients, spooled messages, sustained traffic. Suites that need messaging-layer
+# fixtures (monitoring's F3–F7, action's client/spool fixtures) build it and reap
+# its long-lived processes via these helpers; pure-SEMP suites (management) don't.
+# The sources live in test/e2e-common/broker-driver with their own go.mod.
+#
+# Suites that use it must `export BROKER_A_SMF_PORT BROKER_B_SMF_PORT` (from their
+# .env) so the driver can resolve --broker=a|b to a host SMF port.
+
+build_broker_driver() {
+    log_info "Building broker-driver binary (CGo: libsolclient via solace.dev/go/messaging) ..."
+    mkdir -p "$BIN_DIR"
+    (cd "$REPO_ROOT/test/e2e-common/broker-driver" && go build -o "$BIN_DIR/broker-driver" .)
+    log_info "broker-driver binary built: $BIN_DIR/broker-driver"
+}
+
+# Path pattern for broker-driver PID files, scoped to this suite's own bin/.
+# Every long-lived driver self-writes a "$BIN_DIR/broker-driver-<role>.pid" that
+# stop_broker_drivers reaps. Suite-scoped via BIN_DIR, so one suite never reaps
+# another's drivers.
+BROKER_DRIVER_PIDFILE_GLOB="$BIN_DIR/broker-driver-*.pid"
+
+# Polls for a broker-driver's self-written pidfile — its readiness signal — up to
+# 10s (20 * 0.5s). Returns non-zero and logs which driver failed and where to
+# look if the file is still absent/empty.
+#   $1 pidfile   $2 label   $3 logfile   $4 what (driver description)
+wait_for_pidfile() {
+    local pidfile="$1"
+    local label="$2"
+    local logfile="$3"
+    local what="$4"
+    local max_attempts=20     # 20 * 0.5s = 10s
+    local attempt=0
+    while [ $attempt -lt $max_attempts ] && [ ! -s "$pidfile" ]; do
+        sleep 0.5
+        attempt=$((attempt + 1))
+    done
+    if [ ! -s "$pidfile" ]; then
+        log_fail "$what did not create pidfile on $label within 10s; see $logfile"
+        return 1
+    fi
+}
+
+# Stop all long-lived broker-driver processes this suite spawned. Reads each PID
+# file under bin/ and hands the PIDs to kill_gracefully (TERM, then KILL after a
+# shared 5s grace). SIGCONTs first so a deliberately-SIGSTOP'd driver (monitoring
+# F6) can receive the TERM. Safe to call when there are no PID files.
+stop_broker_drivers() {
+    local pidfiles=( $BROKER_DRIVER_PIDFILE_GLOB )
+    [ -e "${pidfiles[0]}" ] || return 0
+
+    local pids=() f
+    for f in "${pidfiles[@]}"; do
+        pids+=("$(<"$f")")
+    done
+    local pid
+    for pid in "${pids[@]}"; do
+        kill -0 "$pid" 2>/dev/null && kill -CONT "$pid" 2>/dev/null || true
+    done
+    kill_gracefully "${pids[@]}"
+
+    rm -f $BROKER_DRIVER_PIDFILE_GLOB
+    # Let the broker finish cleaning up stale SMF sessions before subsequent SEMP
+    # config operations (e.g. deleting a queue a driver was bound to) run.
+    sleep 3
+}
+
 # Generate the MCP server config from .env-derived values so ports stay in sync.
 # Credentials use ${VAR_NAME} substitution — resolved by the server via ENV_FILE.
 # enable_write_tools is on for every suite: all suites exercise one server with

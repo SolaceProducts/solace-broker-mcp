@@ -45,6 +45,7 @@ broker-config.yaml
 !test/e2e-basic-mcp/.env
 !test/e2e-monitoring/.env
 !test/e2e-management/.env
+!test/e2e-action/.env
 
 # Working documents that must not be committed (see OPEN_SOURCE_STATUS.md)
 Mark2-report.md
