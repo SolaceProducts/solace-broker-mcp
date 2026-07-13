@@ -596,21 +596,16 @@ Annotations: `readOnly: false`, `destructiveHint: true`, `idempotentHint: false`
 
 **Parameters:**
 
-| Name | Type | Required | Constraints | Description |
-|---|---|---|---|---|
-| `broker` | string | yes | — | Target broker alias. |
-| `msgVpnName` | string | yes | `minLength: 1` | The Message VPN the client is connected to. |
-| `clientName` | string | yes | `minLength: 1` | The client connection to disconnect. |
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target broker alias. |
+| `msgVpnName` | string | yes | The Message VPN the client is connected to. |
+| `clientName` | string | yes | The client connection to disconnect. |
 
-**Returns:** strict object `{ status, msgVpnName, clientName }`, `status` is the
-enum `"ok"`, `additionalProperties: false`.
+**Returns:** `{ disconnect: { data: {}, meta: { responseCode: 200, ... } } }`.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" }
-```
-
-```json
-{ "status": "ok", "msgVpnName": "default", "clientName": "consumer-7" }
 ```
 
 **Example request:** "Disconnect consumer-7 on the default VPN." (The agent will
@@ -625,7 +620,7 @@ Annotations: `readOnly: false`, `destructiveHint: false`, `idempotentHint: true`
 
 **Parameters:** same as `disconnect-client` (`broker`, `msgVpnName`, `clientName`).
 
-**Returns:** `{ status: "ok", msgVpnName, clientName }`.
+**Returns:** `{ clearStats: { data: {}, meta: { responseCode: 200, ... } } }`.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" }
@@ -644,21 +639,16 @@ Annotations: `readOnly: false`, `destructiveHint: true`, `idempotentHint: false`
 
 **Parameters:**
 
-| Name | Type | Required | Constraints | Description |
-|---|---|---|---|---|
-| `broker` | string | yes | — | Target broker alias. |
-| `msgVpnName` | string | yes | `minLength: 1` | The Message VPN containing the queue. |
-| `queueName` | string | yes | `minLength: 1` | The queue to drain. |
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target broker alias. |
+| `msgVpnName` | string | yes | The Message VPN containing the queue. |
+| `queueName` | string | yes | The queue to drain. |
 
-**Returns:** strict object `{ status, msgVpnName, queueName }`, `status` is the
-enum `"ok"`, `additionalProperties: false`.
+**Returns:** `{ deleteMsgs: { data: {}, meta: { responseCode: 200, ... } } }`.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "default", "queueName": "dead-letter.q" }
-```
-
-```json
-{ "status": "ok", "msgVpnName": "default", "queueName": "dead-letter.q" }
 ```
 
 **Example request:** "Drain dead-letter.q on the default VPN." (The agent will ask
@@ -674,7 +664,7 @@ Annotations: `readOnly: false`, `destructiveHint: false`, `idempotentHint: true`
 **Parameters:** same as `delete-queue-messages` (`broker`, `msgVpnName`,
 `queueName`).
 
-**Returns:** `{ status: "ok", msgVpnName, queueName }`.
+**Returns:** `{ clearStats: { data: {}, meta: { responseCode: 200, ... } } }`.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q" }

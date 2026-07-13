@@ -6,7 +6,7 @@
 set -euo pipefail
 
 LLM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-E2E_DIR="$(cd "$LLM_DIR/.." && pwd)"
+E2E_DIR="$(cd "$LLM_DIR/../e2e-monitoring" && pwd)"
 
 # shellcheck disable=SC1091
 source "$LLM_DIR/config.env"
@@ -21,9 +21,22 @@ fi
 # shellcheck disable=SC1091
 source "$E2E_DIR/helpers.sh"
 
+# stop_server (lib.sh) only kills $MCP_SERVER_PID, which is empty in a fresh
+# shell. Load the PID from the pidfile written by start-server.sh --bg, and
+# confirm it still names the mcp-server binary before signalling — same
+# guard setup-fixtures.sh uses to avoid killing a PID-recycled process.
+MCP_PIDFILE="$BIN_DIR/mcp-server.pid"
+if [ -f "$MCP_PIDFILE" ]; then
+    pid=$(cat "$MCP_PIDFILE")
+    if kill -0 "$pid" 2>/dev/null \
+        && [ "$(ps -p "$pid" -o comm= 2>/dev/null | tr -d '[:space:]')" = "mcp-server" ]; then
+        MCP_SERVER_PID="$pid"
+    fi
+fi
+
 stop_server || true
 cleanup_fixtures || true
-rm -f "$BIN_DIR/mcp-server.pid"
+rm -f "$MCP_PIDFILE"
 
 log_ok "Fixtures torn down. Brokers still running."
 echo "To stop brokers too:"

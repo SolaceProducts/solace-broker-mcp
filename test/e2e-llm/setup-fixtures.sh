@@ -13,7 +13,8 @@
 set -euo pipefail
 
 LLM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-E2E_DIR="$(cd "$LLM_DIR/.." && pwd)"
+E2E_DIR="$(cd "$LLM_DIR/../e2e-monitoring" && pwd)"
+COMMON_DIR="$(cd "$LLM_DIR/../e2e-common" && pwd)"
 
 # shellcheck disable=SC1091
 source "$LLM_DIR/config.env"
@@ -27,8 +28,15 @@ if [ "$BROKER_TARGET" != "local-docker" ]; then
     exit 0
 fi
 
-bash "$E2E_DIR/setup-brokers.sh"
+SUITE_DIR="$E2E_DIR" bash "$COMMON_DIR/setup-brokers.sh"
 
+# Cross-suite sourcing: pulls create_fixtures/cleanup_fixtures and the F1–F7
+# helpers from the monitoring suite. Safe today because e2e-management/helpers.sh
+# only defines sweep_config_fixtures (no name overlap). SOL-150727 will layer
+# in management helpers for write-tool scenarios — if either side adds a
+# colliding function name (create_fixtures, cleanup_fixtures, etc.) the second
+# source silently redefines the first with no warning. Namespace new helpers
+# (mon_ / mgmt_) or pull shared ones into e2e-common/lib.sh before that lands.
 # shellcheck disable=SC1091
 source "$E2E_DIR/helpers.sh"
 
@@ -50,7 +58,7 @@ mcp_pid_is_server() {
 if [ -f "$MCP_PIDFILE" ] && mcp_pid_is_server "$(cat "$MCP_PIDFILE")"; then
     log_info "MCP server already running (PID=$(cat "$MCP_PIDFILE")) — reusing"
 else
-    bash "$E2E_DIR/start-server.sh" --bg
+    SUITE_DIR="$E2E_DIR" bash "$COMMON_DIR/start-server.sh" --bg
 fi
 
 create_fixtures

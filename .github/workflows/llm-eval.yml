@@ -1,7 +1,7 @@
 name: LLM E2E Eval (Manual)
 
 # Non-gating, manually-triggered run of the LLM e2e eval suite under
-# test/e2e-monitoring/llm/. Costs API credits per invocation — do not
+# test/e2e-llm/. Costs API credits per invocation — do not
 # add a per-PR or scheduled trigger here. Operating model (cadence,
 # ownership, pass thresholds) is out of scope for SOL-150789.
 
@@ -14,7 +14,7 @@ on:
         default: 'main'
         type: string
       broker_target:
-        description: 'Broker target (matches a file in test/e2e-monitoring/llm/targets/)'
+        description: 'Broker target (matches a file in test/e2e-llm/targets/)'
         required: false
         default: 'local-docker'
         type: string
@@ -52,7 +52,7 @@ jobs:
         # scans the same lockfile), then we prepend node_modules/.bin
         # so `claude` resolves on PATH. Single source of truth for the
         # version: package.json — config.env reads from there.
-        working-directory: test/e2e-monitoring/llm
+        working-directory: test/e2e-llm
         run: |
           npm ci
           echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
@@ -63,7 +63,7 @@ jobs:
         # on BROKER_TARGET. Lab targets are assumed already running.
         env:
           BROKER_TARGET: ${{ inputs.broker_target }}
-        run: bash test/e2e-monitoring/llm/setup-fixtures.sh
+        run: bash test/e2e-llm/setup-fixtures.sh
 
       - name: Verify LLM service credentials present
         # Fail fast and loud rather than silently falling into the
@@ -103,7 +103,7 @@ jobs:
           if [ -n "$SCENARIO_FILTER" ]; then
             ARGS+=(--filter "$SCENARIO_FILTER")
           fi
-          bash test/e2e-monitoring/llm/run-all.sh "${ARGS[@]}"
+          bash test/e2e-llm/run-all.sh "${ARGS[@]}"
 
       - name: Broker logs (on failure)
         if: failure() && inputs.broker_target == 'local-docker'
