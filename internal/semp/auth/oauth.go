@@ -25,7 +25,6 @@ type tokenExchanger interface {
 type OAuthAuthenticator struct {
 	exchanger   tokenExchanger
 	audience    string
-	scopes      []string
 	brokerAlias string
 }
 
@@ -42,11 +41,10 @@ type OAuthAuthenticator struct {
 // main.go swallowed newTokenExchanger's error, or Hop2OAuthActive
 // returned true without an exchanger being constructed. Do not add a
 // nil-check here; fix the upstream invariant.
-func NewOAuthAuthenticator(exchanger tokenExchanger, audience string, scopes []string, brokerAlias string) *OAuthAuthenticator {
+func NewOAuthAuthenticator(exchanger tokenExchanger, audience string, brokerAlias string) *OAuthAuthenticator {
 	return &OAuthAuthenticator{
 		exchanger:   exchanger,
 		audience:    audience,
-		scopes:      scopes,
 		brokerAlias: brokerAlias,
 	}
 }
@@ -68,7 +66,6 @@ func (a *OAuthAuthenticator) AddAuth(ctx context.Context, req *http.Request) err
 		SubjectToken: subjectToken,
 		BrokerAlias:  a.brokerAlias,
 		Audience:     a.audience,
-		Scopes:       a.scopes,
 	})
 	if err != nil {
 		return fmt.Errorf("oauth auth: token exchange failed: %w", err)

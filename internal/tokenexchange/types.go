@@ -16,7 +16,7 @@
 // a single IdP. The Exchanger is a process singleton: deployment-global
 // protocol state (IdP endpoint, MCP server client credentials, grant type,
 // audience-param wire format) lives on the struct; per-broker values
-// (subject token, audience, scopes) flow through the Exchange method.
+// (subject token, audience) flow through the Exchange method.
 //
 // Two entry points: tokenexchange.New(Params) for tests, and
 // tokenexchange.FromConfig(*config.BrokerOAuthConfig, *http.Client) for
@@ -138,10 +138,6 @@ type ExchangeInput struct {
 	// (brokers.<alias>.auth.oauth.audience). Sent to the IdP in the form
 	// field selected by Params.AudienceParam.
 	Audience string
-	// Scopes are the per-broker scopes
-	// (brokers.<alias>.auth.oauth.scopes). Sent to the IdP space-joined
-	// in the "scope" form field when non-empty; omitted otherwise.
-	Scopes []string
 }
 
 // Token is the result of a successful token exchange. Value is the

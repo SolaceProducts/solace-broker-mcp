@@ -60,7 +60,7 @@ func TestOAuthAuthenticator_AddAuth(t *testing.T) {
 			ExpiresAt: time.Now().Add(5 * time.Minute),
 		},
 	}
-	a := NewOAuthAuthenticator(exchg, "broker-audience", []string{"scope1", "scope2"}, "my-broker")
+	a := NewOAuthAuthenticator(exchg, "broker-audience", "my-broker")
 
 	ctx := ctxWithSubjectToken(t, "agent-jwt-token")
 	req := newReq(t)
@@ -89,16 +89,13 @@ func TestOAuthAuthenticator_AddAuth(t *testing.T) {
 	if call.Audience != "broker-audience" {
 		t.Errorf("Audience = %q, want %q", call.Audience, "broker-audience")
 	}
-	if len(call.Scopes) != 2 || call.Scopes[0] != "scope1" || call.Scopes[1] != "scope2" {
-		t.Errorf("Scopes = %v, want [scope1 scope2]", call.Scopes)
-	}
 }
 
 func TestOAuthAuthenticator_AddAuth_NoSubjectToken(t *testing.T) {
 	exchg := &fakeExchanger{
 		returnToken: &tokenexchange.Token{Value: "should-not-reach"},
 	}
-	a := NewOAuthAuthenticator(exchg, "aud", nil, "b")
+	a := NewOAuthAuthenticator(exchg, "aud", "b")
 
 	req := newReq(t)
 	err := a.AddAuth(context.Background(), req)
@@ -123,7 +120,7 @@ func TestOAuthAuthenticator_AddAuth_ExchangeError(t *testing.T) {
 	exchg := &fakeExchanger{
 		returnErr: tokenexchange.ErrExchangeRejected,
 	}
-	a := NewOAuthAuthenticator(exchg, "aud", nil, "b")
+	a := NewOAuthAuthenticator(exchg, "aud", "b")
 
 	ctx := ctxWithSubjectToken(t, "agent-token")
 	req := newReq(t)
@@ -137,7 +134,7 @@ func TestOAuthAuthenticator_AddAuth_ExchangeError(t *testing.T) {
 }
 
 func TestOAuthAuthenticator_HandleAuthFailure_NoSubjectToken(t *testing.T) {
-	a := NewOAuthAuthenticator(&fakeExchanger{}, "aud", nil, "b")
+	a := NewOAuthAuthenticator(&fakeExchanger{}, "aud", "b")
 	if a.HandleAuthFailure(context.Background(), nil) {
 		t.Error("expected false when no subject token on context")
 	}
@@ -152,7 +149,7 @@ func TestOAuthAuthenticator_HandleAuthFailure_NoSubjectToken(t *testing.T) {
 // SOL-151624 for the PrepareRetry follow-up that flips this to true.
 func TestOAuthAuthenticator_HandleAuthFailure_WithSubjectToken(t *testing.T) {
 	exchg := &fakeExchanger{}
-	a := NewOAuthAuthenticator(exchg, "aud", nil, "my-broker")
+	a := NewOAuthAuthenticator(exchg, "aud", "my-broker")
 
 	ctx := ctxWithSubjectToken(t, "agent-jwt")
 	if a.HandleAuthFailure(ctx, nil) {
@@ -185,7 +182,7 @@ func TestOAuthAuthenticator_ConcurrentAddAuth(t *testing.T) {
 			ExpiresAt: time.Now().Add(5 * time.Minute),
 		},
 	}
-	a := NewOAuthAuthenticator(exchg, "broker-aud", []string{"s1"}, "b")
+	a := NewOAuthAuthenticator(exchg, "broker-aud", "b")
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
