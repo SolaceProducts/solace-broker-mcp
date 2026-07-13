@@ -398,8 +398,9 @@ func TestBuildIdPRequest_AudienceConditional(t *testing.T) {
 // exchange request never sends the RFC 6749 §3.3 "scope" parameter, so the
 // IdP grants its per-client / per-user default scopes. Per-broker scopes
 // were removed as the wrong axis for user-varying entitlement (see the
-// package doc on request.go). A future change that re-introduces a per-
-// user scope parameter must also join it to the dedup key (see dedup_key.go).
+// buildIdPRequest doc comment in request.go). A future change that
+// re-introduces a per-user scope parameter must also join it to the
+// dedup key (see dedup_key.go).
 func TestBuildIdPRequest_NoScopeParameter(t *testing.T) {
 	t.Parallel()
 
