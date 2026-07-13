@@ -37,6 +37,7 @@ type Parameter struct {
 var validSpecTypes = map[string]bool{
 	"__private_monitor__": true,
 	"__private_config__":  true,
+	"__private_action__":  true,
 }
 
 // privateToPublicSpecType normalizes private basePath suffixes to their public key equivalents
@@ -45,6 +46,7 @@ var validSpecTypes = map[string]bool{
 var privateToPublicSpecType = map[string]string{
 	"__private_monitor__": "monitor",
 	"__private_config__":  "config",
+	"__private_action__":  "action",
 }
 
 // ParseSpecs reads all embedded Swagger 2.0 JSON spec files from the given
