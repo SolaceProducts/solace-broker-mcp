@@ -543,9 +543,10 @@ func main() {
 
 	// oauth mode requires TLS unless the operator acknowledged upstream TLS
 	// termination (tls_terminated_upstream: true). When they did, the listener
-	// serves plaintext — warn loudly so a missing terminating proxy is visible.
+	// serves plaintext — warn loudly so a missing terminating proxy is visible,
+	// and escalate the warning when the plaintext port is bound to all interfaces.
 	if cfg.OAuthPlaintextListenerAcknowledged() {
-		banner.LogOAuthPlaintextListener(cfg.BindAddress())
+		banner.LogOAuthPlaintextListener(cfg.BindAddress(), cfg.ListensOnAllInterfaces())
 	}
 
 	// Reconfigure slog with the user-configured level. cfg.LogLevel is

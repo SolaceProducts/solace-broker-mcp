@@ -32,6 +32,11 @@ tls_key_file: ""
 # upstream terminates TLS (see resource_url below), so the acknowledgment is set;
 # the server logs a startup WARN while it serves plaintext. Remove this and set
 # tls_cert_file/tls_key_file to terminate TLS at the server instead.
+#
+# Bind scope: this flag does not restrict where the server binds. Under
+# mode: oauth, listen_address defaults to all interfaces, so the plaintext port
+# is reachable by anything that can route to it — not just the terminating
+# proxy. Set listen_address above to the proxy-facing interface only.
 tls_terminated_upstream: true
 
 # Under mcp_client_auth.mode: oauth (production), a broker with

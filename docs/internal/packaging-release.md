@@ -310,7 +310,11 @@ which has no shell, curl, or wget.
 - **Use `${VAR_NAME}` references** for credentials in the config file. Never
   hardcode passwords or tokens.
 - **Enable TLS** via `tls_cert_file` and `tls_key_file`, or terminate TLS at
-  a load balancer / ingress controller.
+  a load balancer / ingress controller. Under `mode: oauth` the server refuses
+  to start with a plaintext listener unless one of these is in place: set the
+  certs, or set `tls_terminated_upstream: true` to acknowledge upstream
+  termination (the server then serves plaintext and logs a startup WARN, which
+  escalates when the bind is a wildcard interface).
 - **Container runs as non-root** (UID 65534 in distroless). Do not override
   with `--user root`.
 - **Run as a non-root user** on bare metal deployments. Create a dedicated

@@ -623,6 +623,16 @@ func applyDefaults(cfg *ServerConfig) {
 	if cfg.ListenAddress == "" && strings.ToLower(cfg.MCPClientAuth.Mode) != AuthModeOAuth {
 		cfg.ListenAddress = defaults.DefaultLoopbackListenAddress
 	}
+	// Trim TLS cert/key paths for the same reason as listen_address above: a
+	// whitespace-only value (an unresolved ${VAR}, or a secret mounted with a
+	// trailing newline) must read as "no path". Otherwise it stays non-empty,
+	// silently satisfies the oauth plaintext-listener guard in validate() with no
+	// acknowledgment, and then fails deep inside ListenAndServeTLS instead of
+	// clearly at LoadConfig. Normalizing here means every downstream reader — the
+	// cert/key pairing check, OAuthPlaintextListenerAcknowledged, and startServer —
+	// agrees on the "TLS is off" signal.
+	cfg.TLSCertFile = strings.TrimSpace(cfg.TLSCertFile)
+	cfg.TLSKeyFile = strings.TrimSpace(cfg.TLSKeyFile)
 	if cfg.SEMP.MaxConcurrentPerBroker == 0 {
 		cfg.SEMP.MaxConcurrentPerBroker = defaults.DefaultMaxConcurrentPerBroker
 	}
@@ -1010,8 +1020,9 @@ func validate(cfg *ServerConfig) error {
 		// tokens and tool results in cleartext while validating as production.
 		// resource_url being https:// does not imply the listener is encrypted.
 		// TLSCertFile == "" is the "TLS is off" signal (same convention as
-		// StaticTokenExposedCleartext); a half-configured cert/key pair is caught
-		// independently by the pairing check below.
+		// StaticTokenExposedCleartext); paths are trimmed in applyDefaults so a
+		// whitespace-only value counts as absent here. A half-configured cert/key
+		// pair is caught independently by the pairing check below.
 		if cfg.TLSCertFile == "" && !cfg.TLSTerminatedUpstream {
 			errs = append(errs, fmt.Errorf(
 				"mcp_client_auth.mode %q serves a plaintext listener with no TLS: "+
@@ -1424,6 +1435,20 @@ func (c *ServerConfig) OAuthPlaintextListenerAcknowledged() bool {
 	return c.MCPClientAuth.Mode == AuthModeOAuth &&
 		c.TLSCertFile == "" &&
 		c.TLSTerminatedUpstream
+}
+
+// ListensOnAllInterfaces reports whether the effective listener binds every
+// network interface: an empty listen_address (the oauth default) or an
+// unspecified IP (0.0.0.0, ::). This is the widest-reach bind, and matters when
+// the listener is plaintext under tls_terminated_upstream — a wildcard bind means
+// anything that can route to the port, not just the terminating proxy, can read
+// the cleartext traffic. Callers use it to escalate the plaintext-listener WARN.
+func (c *ServerConfig) ListensOnAllInterfaces() bool {
+	if strings.TrimSpace(c.ListenAddress) == "" {
+		return true
+	}
+	ip := net.ParseIP(c.ListenAddress)
+	return ip != nil && ip.IsUnspecified()
 }
 
 // isLoopbackHost reports whether host binds the loopback interface only.

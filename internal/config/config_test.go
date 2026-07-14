@@ -694,6 +694,53 @@ tls_terminated_upstream: true
 	}
 }
 
+// A whitespace-only cert path (e.g. an unresolved ${VAR} or a secret mounted with
+// a trailing newline) must count as "no TLS": applyDefaults trims it, so oauth
+// with no acknowledgment still fails cleanly at LoadConfig rather than passing
+// validation and blowing up later inside ListenAndServeTLS.
+func TestLoadConfig_OAuthWhitespaceCertPath_TreatedAsNoTLS(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"
+tls_cert_file: "   "
+tls_key_file: "   "
+` + oauthTLSMatrixBroker
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error: a whitespace-only cert path must count as no TLS under oauth with no acknowledgment")
+	}
+	if !strings.Contains(err.Error(), "tls_terminated_upstream") {
+		t.Errorf("error should name the acknowledgment remediation path, got: %v", err)
+	}
+	if cfg != nil {
+		t.Errorf("expected nil config on validation failure, got: %+v", cfg)
+	}
+}
+
+func TestServerConfig_ListensOnAllInterfaces(t *testing.T) {
+	cases := []struct {
+		addr string
+		want bool
+	}{
+		{"", true},        // unset — the oauth default (all interfaces)
+		{"0.0.0.0", true}, // IPv4 unspecified
+		{"::", true},      // IPv6 unspecified
+		{"   ", true},     // whitespace-only reads as unset
+		{"127.0.0.1", false},
+		{"::1", false},
+		{"10.0.0.5", false}, // a specific (proxy-facing) interface
+	}
+	for _, tc := range cases {
+		cfg := &ServerConfig{ListenAddress: tc.addr}
+		if got := cfg.ListensOnAllInterfaces(); got != tc.want {
+			t.Errorf("ListensOnAllInterfaces() with addr=%q = %v, want %v", tc.addr, got, tc.want)
+		}
+	}
+}
+
 // Non-OAuth modes are unaffected by the OAuth listener-TLS rule: static with no
 // certs still validates, and tls_terminated_upstream is ignored outside oauth
 // (the field's documented "honored only in OAuth mode" contract) — setting it
