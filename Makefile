@@ -154,7 +154,7 @@ docker: ## Build the Docker image (override with IMAGE=, IMAGE_TAG=, VERSION=)
 # OAuth path (JWT validation, RFC 8693 token exchange) can be exercised end
 # to end on localhost.  Every target below is idempotent — safe to re-run.
 
-OAUTH_COMPOSE_DIR := docker/oauth-dev
+OAUTH_COMPOSE_DIR := dev/oauth-token-exchange
 OAUTH_COMPOSE     := podman compose -f $(OAUTH_COMPOSE_DIR)/docker-compose.yaml
 OAUTH_CERT_ROOT   := $(CURDIR)/.local/certs
 
@@ -182,12 +182,31 @@ oauth-down: ## Stop and remove the Keycloak dev container
 oauth-reset: oauth-down oauth-init ## Full reset: tear down Keycloak, restart, re-init
 
 .PHONY: dev-up
-dev-up: oauth-init ## Bring the whole OAuth dev environment up (certs + Keycloak + init)
+dev-up: oauth-init ## Bring the Keycloak dev environment up (certs + Keycloak + init)
 	@echo ""
-	@echo "▶ Ready. Launch the MCP server:"
+	@echo "▶ Keycloak ready. For the two-broker OAuth stack (recommended for end-to-end):"
+	@echo "    make dev-up-full"
+	@echo "▶ Or launch the MCP server against Keycloak-only:"
 	@echo "    make run-oauth"
-	@echo "▶ Launch Claude Code with the CA bundle:"
-	@echo "    NODE_EXTRA_CA_CERTS=$(OAUTH_CERT_ROOT)/combined-ca-bundle.crt claude"
+
+.PHONY: dev-up-full
+dev-up-full: dev-up ## Bring up Keycloak + configure the two Solace brokers, and stage broker-config
+	@./scripts/setup-oauth-brokers.sh
+	@if [ ! -f broker-config.oauth-test.yaml ]; then \
+	  cp broker-config.oauth-test.example.yaml broker-config.oauth-test.yaml; \
+	  echo ""; \
+	  echo "▶ Wrote broker-config.oauth-test.yaml from the template."; \
+	  echo "  Edit it and replace REPLACE_WITH_MCP_SERVER_CLIENT_SECRET with the"; \
+	  echo "  Keycloak client secret (Clients → mcp-server-client → Credentials)."; \
+	else \
+	  echo ""; \
+	  echo "▶ broker-config.oauth-test.yaml already exists — leaving it as-is."; \
+	fi
+	@echo ""
+	@echo "▶ Two manual steps remain (see dev/oauth-token-exchange/README.md):"
+	@echo "    1. In another terminal: make run-oauth"
+	@echo "    2. Launch Claude Code with the CA bundle:"
+	@echo "         NODE_EXTRA_CA_CERTS=$(OAUTH_CERT_ROOT)/combined-ca-bundle.crt claude"
 
 .PHONY: run-oauth
 run-oauth: oauth-init ## Run the MCP server against the local OAuth dev environment

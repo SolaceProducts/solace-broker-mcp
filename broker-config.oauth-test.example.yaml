@@ -1,0 +1,68 @@
+# Example MCP server config for the local OAuth dev stack.
+#
+# Copy this to broker-config.oauth-test.yaml (which is gitignored) and fill in
+# the placeholder marked below. See dev/oauth-token-exchange/broker-setup.md for the
+# full setup walkthrough.
+
+port: 19090
+log_level: debug
+
+# Dev-only: the two brokers use self-signed TLS certs from the standard Solace
+# container image. Required when insecure_skip_verify is set on any broker
+# while mcp_client_auth.mode is "oauth" — the validator otherwise rejects that
+# combination as a MITM risk.
+allow_insecure_broker_tls: true
+
+tls_cert_file: ".local/certs/mcp-server/mcp-server.crt"
+tls_key_file:  ".local/certs/mcp-server/mcp-server.key"
+
+# Hop 1: agent → MCP server. JWT validation on the way in.
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://localhost:18443/realms/mcp-test-realm"
+  audience: "mcp-server-client"
+  resource_url: "https://localhost:19090/mcp"
+
+# Hop 2: MCP server → broker. RFC 8693 token exchange on the way out.
+broker_oauth:
+  idp_token_endpoint: "https://localhost:18443/realms/mcp-test-realm/protocol/openid-connect/token"
+  mcp_server_client_id: "mcp-server-client"
+  mcp_server_client_auth:
+    client_secret_basic:
+      # The realm export ships with a stable secret for mcp-server-client —
+      # every `make dev-up-full` imports the same value. Copy it from
+      # Keycloak once and reuse:
+      #   https://localhost:18443/admin/master/console/
+      #   → mcp-test-realm → Clients → mcp-server-client → Credentials tab
+      # If you regenerate the secret in Keycloak, re-copy here.
+      secret: "REPLACE_WITH_MCP_SERVER_CLIENT_SECRET"
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: "audience"
+
+semp:
+  max_concurrent_per_broker: 10
+  request_timeout_duration: 30s
+  request_min_interval: 50ms
+  retries: 2
+  retry_min_interval: 200ms
+  retry_max_interval: 2s
+
+# Two brokers configured by scripts/setup-oauth-brokers.sh.
+# prod-us → solace container (SEMP TLS on 1943)
+# test-us → solace-b container (SEMP TLS on 1945)
+# They differ only in the audience they require — solace-broker vs
+# solace-broker-second — matching the two audience mappers on the
+# mcp-server-client Keycloak client.
+brokers:
+  prod-us:
+    url: "https://localhost:1943"
+    insecure_skip_verify: true
+    auth:
+      mode: oauth
+      audience: "solace-broker"
+  test-us:
+    url: "https://localhost:1945"
+    insecure_skip_verify: true
+    auth:
+      mode: oauth
+      audience: "solace-broker-second"

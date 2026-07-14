@@ -1,6 +1,6 @@
 # Local OAuth dev stack: a single Keycloak container with TLS and realm import.
 #
-# All paths are relative to this file's directory (docker/oauth-dev/).
+# All paths are relative to this file's directory (dev/oauth-token-exchange/).
 # The Makefile's `keycloak-up` target is the intended entry point:
 #     make keycloak-up
 #

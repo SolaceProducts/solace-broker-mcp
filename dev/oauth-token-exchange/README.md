@@ -17,10 +17,42 @@ Chosen to avoid the "everyone uses 8443" collision zone:
 | Keycloak HTTP      | `18180`   | `8080`       |
 | MCP server (TLS)   | `19090`   | —            |
 
-## One-time setup (fresh machine or fresh worktree)
+## First-time setup
 
-Register the MCP server in Claude Code. If a prior registration exists (e.g.
-from the manual hop1 setup), remove it first — the URL will have changed:
+Follow these five steps in order on a fresh machine (or fresh worktree).
+Everything is idempotent — safe to re-run if you get interrupted.
+
+**1. Bring up Keycloak + brokers.**
+
+```bash
+make dev-up-full
+```
+
+This generates certs, starts Keycloak (imports the realm, resets user
+passwords, disables HSTS), starts the two Solace brokers (`solace`,
+`solace-b`), and configures their OAuth profiles + group mappings. If
+`broker-config.oauth-test.yaml` doesn't exist yet, it's created from the
+tracked template. Deep dive: [broker-setup.md](./broker-setup.md).
+
+**2. Fill in the MCP-server client secret.**
+
+Open `broker-config.oauth-test.yaml` (in the repo root) and replace the
+`REPLACE_WITH_MCP_SERVER_CLIENT_SECRET` placeholder with the value from
+Keycloak:
+
+- Open [https://localhost:18443/admin/master/console/](https://localhost:18443/admin/master/console/)
+  (click through the "not private" warning — this is the self-signed dev
+  cert; **do not** install it into the system keychain).
+- Login: `admin` / `admin`.
+- Switch to `mcp-test-realm` (top-left dropdown).
+- Clients → `mcp-server-client` → **Credentials** tab → copy **Client
+  Secret** → paste into the config file.
+
+The realm export ships with a stable secret, so this value survives
+across `oauth-reset` cycles. You only need to re-copy if you rotate the
+secret in Keycloak.
+
+**3. Register the MCP server in Claude Code.**
 
 ```bash
 claude mcp remove solace-oauth-dev 2>/dev/null || true
@@ -28,33 +60,71 @@ claude mcp add --transport http --client-id agentic-app-client \
   solace-oauth-dev https://localhost:19090/mcp
 ```
 
-## Every-time flow
+The `remove` is a safety net in case a previous registration (e.g. from
+the older hop1 setup) points at a different URL.
+
+**4. Start the MCP server in a spare terminal.**
 
 ```bash
-# 1. Bring the stack up (certs + Keycloak + realm init).  Idempotent.
-make dev-up
-
-# 2. In a spare terminal — foreground server, Ctrl+C to stop.
 make run-oauth
+```
 
-# 3. Launch Claude Code with the CA bundle.  Must be a fresh Claude Code
-#    process — NODE_EXTRA_CA_CERTS is only read at startup.
+Foreground process — leave it running, Ctrl+C to stop. You'll come back
+to this terminal to read server logs when debugging.
+
+**5. Launch Claude Code with the CA bundle.**
+
+In a fresh terminal (a *new* one — `NODE_EXTRA_CA_CERTS` is only read at
+process start):
+
+```bash
 NODE_EXTRA_CA_CERTS="$(pwd)/.local/certs/combined-ca-bundle.crt" claude
 ```
 
-In Claude Code: `/mcp`, select `solace-oauth-dev`, log in with one of the
-test users below.
+Inside Claude Code:
+
+- Run `/mcp`.
+- Select `solace-oauth-dev`.
+- A browser opens for Keycloak login. Sign in as
+  `test-admin-user` / `password` (see the [Test users](#test-users) table).
+
+Verify with a simple tool call in the chat: `list brokers` should return
+`prod-us` and `test-us`. `list vpns for prod-us` should succeed.
+
+## Every-time flow (after first-time setup)
+
+Once step 2 (client secret) and step 3 (Claude Code registration) are done,
+day-to-day work is just two commands:
+
+```bash
+# 1. Bring the stack back up.  Idempotent — no-op if everything's running,
+#    starts what's stopped, reconfigures the OAuth profiles on the brokers.
+make dev-up-full
+
+# 2. In a spare terminal.
+make run-oauth
+```
+
+Then in a fresh terminal:
+
+```bash
+NODE_EXTRA_CA_CERTS="$(pwd)/.local/certs/combined-ca-bundle.crt" claude
+```
+
+The MCP registration and the client secret survive across reboots and
+`oauth-reset` cycles, so those two setup steps are truly one-time.
 
 ## Test users
 
-Both users are defined in `realm-export.json`.  Passwords are stripped
-from realm exports on purpose (they'd leak into git otherwise); the
-`keycloak-init.sh` script resets them every time the container starts.
+Both users are defined in `realm-export.json` and pre-mapped to realm
+roles (`solace-admins`, `solace-readonly`). Passwords aren't in the
+export — `keycloak-init.sh` resets them to `password` every time the
+container starts.
 
-| Username             | Password   | Role in the realm             |
-|----------------------|------------|-------------------------------|
-| `test-admin-user`    | `password` | admin — use this for the flow |
-| `test-readonly-user` | `password` | reserved for RBAC scenarios   |
+| Username             | Password   | Role assigned by realm import | Broker access |
+|----------------------|------------|-------------------------------|---------------|
+| `test-admin-user`    | `password` | `solace-admins`               | admin         |
+| `test-readonly-user` | `password` | `solace-readonly`             | read-only     |
 
 ## Troubleshooting
 
