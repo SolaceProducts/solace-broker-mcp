@@ -283,10 +283,11 @@ least one of them, or startup fails with a config error.
    > **Bind scope:** this flag only permits the plaintext listener — it does not
    > restrict where the server binds. Under `mode: oauth`, `listen_address`
    > defaults to all interfaces (`0.0.0.0`), so the plaintext port is reachable by
-   > anything that can route to it, not only the terminating proxy. The startup
-   > `WARN` escalates in this case. Set `listen_address` to the proxy-facing
-   > interface (e.g. loopback for a same-host sidecar, or the pod's private
-   > interface) so only the terminator can reach the port.
+   > anything that can route to it, not only the terminating proxy. Make sure the
+   > network scope is trusted: on Kubernetes keep the Service `ClusterIP` and put
+   > the TLS-terminating ingress in front of it; on bare metal set `listen_address`
+   > to the proxy-facing interface (loopback for a same-host proxy) so only the
+   > terminator can reach the port.
 
 If **both** are set, direct TLS takes precedence: the server terminates TLS
 itself and `tls_terminated_upstream` is ignored (no plaintext, no `WARN`).

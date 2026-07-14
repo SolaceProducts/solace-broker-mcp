@@ -134,19 +134,14 @@ const staticCleartextBanner = `
 // the WARN self-documents why the plaintext listener was allowed, and logs
 // bindAddr so operators can confirm which interface is exposed.
 //
-// allInterfaces escalates the message: the acknowledgment's entire safety premise
-// is that only the terminating proxy can reach the plaintext port, but nothing in
-// the config restricts the bind — under oauth the listener defaults to all
-// interfaces. When the effective bind is a wildcard the plaintext port is reachable
-// by anything that can route to it, so the banner calls that out explicitly and
-// tags the line with all_interfaces=true.
-func LogOAuthPlaintextListener(bindAddr string, allInterfaces bool) {
-	if allInterfaces {
-		slog.Warn(oauthPlaintextListenerBanner+oauthPlaintextAllInterfacesWarning,
-			slog.String("bind_address", bindAddr),
-			slog.Bool("all_interfaces", true))
-		return
-	}
+// The banner does NOT escalate on a wildcard (all-interfaces) bind. Under oauth
+// the listener defaults to all interfaces, and a wildcard bind is exactly the
+// correct, common configuration behind a Kubernetes Service/ingress — the
+// process cannot tell a locked-down pod netns from a LAN-exposed host, so an
+// escalation there would fire loudest on the recommended deployment and train
+// operators to ignore it. The bind-scope caveat is documented instead (see
+// docs/authentication.md and the example configs).
+func LogOAuthPlaintextListener(bindAddr string) {
 	slog.Warn(oauthPlaintextListenerBanner, slog.String("bind_address", bindAddr))
 }
 
@@ -160,16 +155,6 @@ const oauthPlaintextListenerBanner = `
   terminating proxy is actually in front of the bind address
   below, or set tls_cert_file/tls_key_file to terminate TLS
   at the server instead.
-============================================================`
-
-// oauthPlaintextAllInterfacesWarning is appended to the plaintext-listener banner
-// when the bind is a wildcard (all interfaces). The acknowledgment assumes only
-// the terminating proxy can reach the port; a wildcard bind breaks that premise.
-const oauthPlaintextAllInterfacesWarning = `
-  WARNING: this plaintext listener is bound to ALL network
-  interfaces — anything that can route to the port, not just
-  the terminating proxy, can read the cleartext bearer tokens.
-  Set listen_address to the proxy-facing interface only.
 ============================================================`
 
 // LogOAuthNotSupported is the OAuth-not-supported guard headline. It is

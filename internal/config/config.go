@@ -1437,20 +1437,6 @@ func (c *ServerConfig) OAuthPlaintextListenerAcknowledged() bool {
 		c.TLSTerminatedUpstream
 }
 
-// ListensOnAllInterfaces reports whether the effective listener binds every
-// network interface: an empty listen_address (the oauth default) or an
-// unspecified IP (0.0.0.0, ::). This is the widest-reach bind, and matters when
-// the listener is plaintext under tls_terminated_upstream — a wildcard bind means
-// anything that can route to the port, not just the terminating proxy, can read
-// the cleartext traffic. Callers use it to escalate the plaintext-listener WARN.
-func (c *ServerConfig) ListensOnAllInterfaces() bool {
-	if strings.TrimSpace(c.ListenAddress) == "" {
-		return true
-	}
-	ip := net.ParseIP(c.ListenAddress)
-	return ip != nil && ip.IsUnspecified()
-}
-
 // isLoopbackHost reports whether host binds the loopback interface only.
 // "localhost" and any loopback IP (127.0.0.0/8, ::1) qualify; an empty host
 // means all interfaces and is NOT loopback. Used to keep the unauthenticated

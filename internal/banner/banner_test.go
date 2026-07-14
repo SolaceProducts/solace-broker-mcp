@@ -111,40 +111,16 @@ func Test_StaticCleartextExposure(t *testing.T) {
 func Test_OAuthPlaintextListener(t *testing.T) {
 	buf, restore := captureSlog(t)
 	defer restore()
-	// Non-wildcard bind: base banner only, no all-interfaces escalation.
-	LogOAuthPlaintextListener("10.0.0.5:9090", false)
+	LogOAuthPlaintextListener(":9090")
 	out := buf.String()
 	for _, want := range []string{
 		"level=WARN",
 		"OAuth mode on a plaintext listener",
 		"tls_terminated_upstream",
-		"bind_address=10.0.0.5:9090",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("oauth-plaintext-listener banner missing %q\nfull output:\n%s", want, out)
-		}
-	}
-	if strings.Contains(out, "ALL network") || strings.Contains(out, "all_interfaces=true") {
-		t.Errorf("non-wildcard bind should not emit the all-interfaces escalation, got:\n%s", out)
-	}
-}
-
-func Test_OAuthPlaintextListener_AllInterfaces(t *testing.T) {
-	buf, restore := captureSlog(t)
-	defer restore()
-	// Wildcard bind: base banner PLUS the all-interfaces escalation and tag.
-	LogOAuthPlaintextListener(":9090", true)
-	out := buf.String()
-	for _, want := range []string{
-		"level=WARN",
-		"OAuth mode on a plaintext listener",
-		"bound to ALL network",
-		"Set listen_address to the proxy-facing interface",
-		"all_interfaces=true",
 		"bind_address=:9090",
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("all-interfaces banner missing %q\nfull output:\n%s", want, out)
+			t.Errorf("oauth-plaintext-listener banner missing %q\nfull output:\n%s", want, out)
 		}
 	}
 }

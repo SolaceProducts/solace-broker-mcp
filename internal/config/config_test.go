@@ -720,27 +720,6 @@ tls_key_file: "   "
 	}
 }
 
-func TestServerConfig_ListensOnAllInterfaces(t *testing.T) {
-	cases := []struct {
-		addr string
-		want bool
-	}{
-		{"", true},        // unset — the oauth default (all interfaces)
-		{"0.0.0.0", true}, // IPv4 unspecified
-		{"::", true},      // IPv6 unspecified
-		{"   ", true},     // whitespace-only reads as unset
-		{"127.0.0.1", false},
-		{"::1", false},
-		{"10.0.0.5", false}, // a specific (proxy-facing) interface
-	}
-	for _, tc := range cases {
-		cfg := &ServerConfig{ListenAddress: tc.addr}
-		if got := cfg.ListensOnAllInterfaces(); got != tc.want {
-			t.Errorf("ListensOnAllInterfaces() with addr=%q = %v, want %v", tc.addr, got, tc.want)
-		}
-	}
-}
-
 // Non-OAuth modes are unaffected by the OAuth listener-TLS rule: static with no
 // certs still validates, and tls_terminated_upstream is ignored outside oauth
 // (the field's documented "honored only in OAuth mode" contract) — setting it

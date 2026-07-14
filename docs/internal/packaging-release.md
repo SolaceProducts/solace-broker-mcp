@@ -313,8 +313,8 @@ which has no shell, curl, or wget.
   a load balancer / ingress controller. Under `mode: oauth` the server refuses
   to start with a plaintext listener unless one of these is in place: set the
   certs, or set `tls_terminated_upstream: true` to acknowledge upstream
-  termination (the server then serves plaintext and logs a startup WARN, which
-  escalates when the bind is a wildcard interface).
+  termination (the server then serves plaintext and logs a startup WARN). Ensure
+  the plaintext port's network scope is trusted — keep it behind the terminator.
 - **Container runs as non-root** (UID 65534 in distroless). Do not override
   with `--user root`.
 - **Run as a non-root user** on bare metal deployments. Create a dedicated
