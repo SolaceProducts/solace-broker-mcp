@@ -75,17 +75,17 @@ func (a *OAuthAuthenticator) AddAuth(ctx context.Context, req *http.Request) err
 	return nil
 }
 
-// HandleAuthFailure evicts the cached token and returns true to trigger an
-// in-flight retry. The resilience layer's PrepareRetry hook re-invokes AddAuth
-// before the retry, so the retried request carries a fresh token.
-func (a *OAuthAuthenticator) HandleAuthFailure(ctx context.Context, _ http.Header) bool {
+// HandleAuthFailure evicts the cached token and signals a retry that must
+// re-authenticate — the token is refreshable, so AddAuth fetches a fresh one.
+// With no subject token there is nothing to exchange, so it declines to retry.
+func (a *OAuthAuthenticator) HandleAuthFailure(ctx context.Context, _ http.Header) AuthFailureResult {
 	subjectToken, ok := internalauth.RawSubjectTokenFromContext(ctx)
 	if !ok {
-		return false
+		return AuthFailureResult{}
 	}
 	a.exchanger.Invalidate(ctx, tokenexchange.DeduplicationKeyInput{
 		SubjectToken: subjectToken,
 		BrokerAlias:  a.brokerAlias,
 	})
-	return true
+	return AuthFailureResult{Retry: true, ReAuth: true}
 }

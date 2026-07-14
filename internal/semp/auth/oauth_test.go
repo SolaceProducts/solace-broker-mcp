@@ -134,22 +134,25 @@ func TestOAuthAuthenticator_AddAuth_ExchangeError(t *testing.T) {
 }
 
 func TestOAuthAuthenticator_HandleAuthFailure_NoSubjectToken(t *testing.T) {
-	a := NewOAuthAuthenticator(&fakeExchanger{}, "aud", "b")
-	if a.HandleAuthFailure(context.Background(), nil) {
-		t.Error("expected false when no subject token on context")
+	a := NewOAuthAuthenticator(&fakeExchanger{}, "aud", nil, "b")
+	if a.HandleAuthFailure(context.Background(), nil).Retry {
+		t.Error("expected Retry=false when no subject token on context")
 	}
 }
 
 // TestOAuthAuthenticator_HandleAuthFailure_WithSubjectToken verifies that
-// HandleAuthFailure evicts the cached token and returns true to trigger
-// an in-flight retry via the PrepareRetry hook.
+// HandleAuthFailure evicts the cached token and returns Retry=true, ReAuth=true.
 func TestOAuthAuthenticator_HandleAuthFailure_WithSubjectToken(t *testing.T) {
 	exchg := &fakeExchanger{}
 	a := NewOAuthAuthenticator(exchg, "aud", "my-broker")
 
 	ctx := ctxWithSubjectToken(t, "agent-jwt")
-	if !a.HandleAuthFailure(ctx, nil) {
-		t.Error("expected true — should signal retry after cache eviction")
+	res := a.HandleAuthFailure(ctx, nil)
+	if !res.Retry {
+		t.Error("expected Retry=true — should signal retry after cache eviction")
+	}
+	if !res.ReAuth {
+		t.Error("expected ReAuth=true — OAuth token is refreshable, retry must re-run AddAuth")
 	}
 
 	exchg.mu.Lock()

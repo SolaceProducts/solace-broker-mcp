@@ -41,7 +41,8 @@ func bearerAuth(t *testing.T) auth.Authenticator {
 }
 
 // rotatingTokenAuth is a fake authenticator for OAuth 401 retry tests.
-// AddAuth sets a distinct bearer token per call; HandleAuthFailure returns true.
+// AddAuth sets a distinct bearer token per call; HandleAuthFailure returns
+// Retry+ReAuth, mimicking OAuth semantics.
 type rotatingTokenAuth struct {
 	mu      sync.Mutex
 	callNum int
@@ -58,8 +59,8 @@ func (a *rotatingTokenAuth) AddAuth(_ context.Context, req *http.Request) error 
 	return nil
 }
 
-func (a *rotatingTokenAuth) HandleAuthFailure(_ context.Context, _ http.Header) bool {
-	return true
+func (a *rotatingTokenAuth) HandleAuthFailure(_ context.Context, _ http.Header) auth.AuthFailureResult {
+	return auth.AuthFailureResult{Retry: true, ReAuth: true}
 }
 
 // newTestSender creates a Sender configured for testing with the given

@@ -37,13 +37,15 @@ func (a *BasicAuthenticator) AddAuth(_ context.Context, req *http.Request) error
 }
 
 // HandleAuthFailure clears stale session cookies so the next request
-// re-sends raw Basic credentials. Returns retry=true on success so the
-// Sender retries the request. Returns retry=false when the clear fails.
-func (a *BasicAuthenticator) HandleAuthFailure(_ context.Context, _ http.Header) bool {
+// re-sends raw Basic credentials. On success it returns Retry=true so the
+// Sender retries; ReAuth stays false because the Basic Authorization header
+// is static — the recovery here is the jar clear, and re-running AddAuth on
+// the retry would only re-set the same header.
+func (a *BasicAuthenticator) HandleAuthFailure(_ context.Context, _ http.Header) AuthFailureResult {
 	if err := a.jar.Clear(); err != nil {
 		slog.Warn("basic auth: 401 received but failed to clear cookie jar",
 			slog.String("error", err.Error()))
-		return false
+		return AuthFailureResult{}
 	}
-	return true
+	return AuthFailureResult{Retry: true}
 }
