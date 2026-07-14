@@ -1,12 +1,15 @@
 package resilience
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -636,6 +639,188 @@ func TestSender_Retry_429_SkipsReAuth(t *testing.T) {
 	}
 	if len(authn.tokens) != 1 {
 		t.Errorf("expected AddAuth called once (no re-auth on 429), got %d", len(authn.tokens))
+	}
+}
+
+// reauthFailAuth mimics OAuth where the first AddAuth succeeds but the re-auth
+// AddAuth (after a 401) fails — e.g. the IdP is unreachable. HandleAuthFailure
+// signals Retry+ReAuth, so prepareRetry invokes AddAuth again, which errors.
+type reauthFailAuth struct {
+	mu      sync.Mutex
+	calls   int
+	failErr error
+}
+
+func (a *reauthFailAuth) AddAuth(_ context.Context, req *http.Request) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.calls++
+	if a.calls >= 2 {
+		return a.failErr
+	}
+	req.Header.Set("Authorization", "Bearer initial")
+	return nil
+}
+
+func (a *reauthFailAuth) HandleAuthFailure(_ context.Context, _ http.Header) auth.AuthFailureResult {
+	return auth.AuthFailureResult{Retry: true, ReAuth: true}
+}
+
+// TestSender_Retry_401_OAuth_CapsAtOneReauth pins the auth401Retried cap: a
+// broker that keeps returning 401 (bad credentials a refresh cannot fix) is
+// retried exactly once, then surfaced as a 401 — it never loops to a third
+// attempt. This is the realistic bad path and the cap is the only thing
+// stopping a re-auth storm, so it deserves a direct regression test.
+func TestSender_Retry_401_OAuth_CapsAtOneReauth(t *testing.T) {
+	var requestCount atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`unauthorized`))
+	}))
+	defer server.Close()
+
+	authn := &rotatingTokenAuth{}
+	sender := newTestSender(t, server.Client(), authn, 3)
+	sender.brokerURL = server.URL
+
+	req := newGetRequest(t, server.URL)
+	if err := authn.AddAuth(context.Background(), req); err != nil {
+		t.Fatalf("AddAuth: %v", err)
+	}
+
+	resp, err := sender.Do(context.Background(), req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	// When the cap makes checkRetry return false, Do() returns the last
+	// response (not an error); the caller inspects the status code.
+	if err != nil {
+		t.Fatalf("expected the 401 response, got error: %v", err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("StatusCode = %d, want 401", resp.StatusCode)
+	}
+	if requestCount.Load() != 2 {
+		t.Errorf("expected exactly 2 requests (original + one capped re-auth retry), got %d", requestCount.Load())
+	}
+	// One initial AddAuth (by the test) + one re-auth in prepareRetry.
+	if len(authn.tokens) != 2 {
+		t.Errorf("expected AddAuth called twice, got %d", len(authn.tokens))
+	}
+}
+
+// TestSender_Retry_401_OAuth_ReauthAddAuthError_IsSurfacedAndLogged covers the
+// IdP-down path: the retry's AddAuth fails, so retryablehttp aborts with the
+// prepare error. The failure must be surfaced (not swallowed), carry the last
+// observed 401 rather than status 0, and be logged with broker + operation so
+// the resilience layer does not go silent.
+func TestSender_Retry_401_OAuth_ReauthAddAuthError_IsSurfacedAndLogged(t *testing.T) {
+	var requestCount atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`unauthorized`))
+	}))
+	defer server.Close()
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	idpErr := errors.New("idp unreachable")
+	authn := &reauthFailAuth{failErr: idpErr}
+	sender := newTestSender(t, server.Client(), authn, 3)
+	sender.brokerURL = server.URL
+
+	req := newGetRequest(t, server.URL)
+	if err := authn.AddAuth(context.Background(), req); err != nil {
+		t.Fatalf("AddAuth: %v", err)
+	}
+
+	ctx := context.WithValue(context.Background(), OperationIDKey{}, "get-queue")
+	resp, err := sender.Do(ctx, req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+
+	if err == nil {
+		t.Fatal("expected error when re-auth AddAuth fails")
+	}
+	if !errors.Is(err, idpErr) {
+		t.Errorf("error should wrap the AddAuth failure; got %v", err)
+	}
+
+	var exhausted *RetriesExhaustedError
+	if !errors.As(err, &exhausted) {
+		t.Fatalf("expected RetriesExhaustedError, got %T: %v", err, err)
+	}
+	if exhausted.StatusCode != http.StatusUnauthorized {
+		t.Errorf("StatusCode = %d, want 401 (last observed status, not 0)", exhausted.StatusCode)
+	}
+	if requestCount.Load() != 1 {
+		t.Errorf("expected 1 request (retry never sent — prepareRetry failed first), got %d", requestCount.Load())
+	}
+
+	logs := buf.String()
+	if !strings.Contains(logs, "level=ERROR") {
+		t.Errorf("expected an ERROR log on the re-auth failure path; got:\n%s", logs)
+	}
+	for _, want := range []string{"operation=get-queue", "idp unreachable"} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("log missing %q; got:\n%s", want, logs)
+		}
+	}
+}
+
+// TestSender_Retry_401_OAuth_ReAuthsOnRetry_POST covers re-auth over POST marked
+// retry-safe (WithRetrySafe) — the SEMPv1 <show> production path. Without the
+// marker the non-idempotent-method guard would deny the retry entirely.
+func TestSender_Retry_401_OAuth_ReAuthsOnRetry_POST(t *testing.T) {
+	var requestCount atomic.Int32
+	var capturedTokens []string
+	var mu sync.Mutex
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		capturedTokens = append(capturedTokens, r.Header.Get("Authorization"))
+		mu.Unlock()
+
+		if requestCount.Add(1) == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`unauthorized`))
+			return
+		}
+		jsonOK(w)
+	}))
+	defer server.Close()
+
+	authn := &rotatingTokenAuth{}
+	sender := newTestSender(t, server.Client(), authn, 3)
+	sender.brokerURL = server.URL
+
+	req := newMethodRequest(t, http.MethodPost, server.URL)
+	if err := authn.AddAuth(context.Background(), req); err != nil {
+		t.Fatalf("AddAuth: %v", err)
+	}
+
+	resp, err := sender.Do(WithRetrySafe(context.Background()), req)
+	if err != nil {
+		t.Fatalf("Do() error: %v", err)
+	}
+	resp.Body.Close()
+
+	if requestCount.Load() != 2 {
+		t.Errorf("expected 2 requests (original + retry), got %d", requestCount.Load())
+	}
+	if len(authn.tokens) != 2 {
+		t.Fatalf("expected AddAuth called twice, got %d", len(authn.tokens))
+	}
+	if capturedTokens[0] == capturedTokens[1] {
+		t.Errorf("POST retry should carry fresh token; both requests had %q", capturedTokens[0])
 	}
 }
 

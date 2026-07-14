@@ -64,6 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - OIDC token verifier now bounds the HTTP client used by go-oidc for both startup discovery and lazy JWKS refresh (10s per-request timeout). Previously, the verifier fell back to `http.DefaultClient` (zero timeout), and a slow or hung identity provider during key rotation could wedge the JWKS-refresh goroutine indefinitely and stall per-request token verification past the inbound MCP request's own server-side deadlines. The existing 30s discovery deadline is preserved. Operators running an IdP that legitimately takes longer than 10s to serve `/jwks` will see auth fail closed; document the timeout if your environment requires tuning. Tracked under SOL-150219.
 
+- OAuth broker requests now recover from an expired token in-flight. When a broker returns `401 Unauthorized` under `auth.mode: oauth`, the SEMP transport evicts the cached broker token and retries the request once with a freshly exchanged token, instead of failing the call immediately. The recovery decision belongs to the authenticator: `HandleAuthFailure` returns whether to retry and whether the retry must re-authenticate, so static modes (basic, bearer) are unaffected. The re-auth is capped at one attempt per request, so a persistently rejected credential surfaces as a `401` rather than looping. If the token exchange itself fails during the retry (e.g. the IdP is unreachable), the failure is now logged with broker and operation and carries the last observed `401` status. Tracked under SOL-151624.
+
 ## [0.1.0] - 2026-04-24
 
 ### Added
