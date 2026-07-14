@@ -18,50 +18,11 @@ source "$SUITE_DIR/../e2e-common/lib.sh"
 # same single source of truth (.env, sourced by the shared library).
 export BROKER_A_SMF_PORT BROKER_B_SMF_PORT
 
-# ── broker-driver ────────────────────────────────────────────────────────────
-
-build_broker_driver() {
-    log_info "Building broker-driver binary (CGo: libsolclient via solace.dev/go/messaging) ..."
-    mkdir -p "$BIN_DIR"
-    (cd "$SUITE_DIR/broker-driver" && go build -o "$BIN_DIR/broker-driver" .)
-    log_info "broker-driver binary built: $BIN_DIR/broker-driver"
-}
-
-# Path pattern for broker-driver PID files. Defined once here so the
-# stop helper and any future code use the same convention.
-BROKER_DRIVER_PIDFILE_GLOB="$BIN_DIR/broker-driver-f*.pid"
-
-# Stop any long-lived broker-driver processes that fixtures F3-F7 spawn.
-# Reads each PID file under bin/ and hands the PIDs to kill_gracefully, which
-# signals them concurrently (TERM, then KILL after a shared 5s grace window).
-# Safe to call when there are no PID files.
-stop_broker_drivers() {
-    local pidfiles=( $BROKER_DRIVER_PIDFILE_GLOB )
-    [ -e "${pidfiles[0]}" ] || return 0
-
-    local pids=() f
-    for f in "${pidfiles[@]}"; do
-        pids+=("$(<"$f")")
-    done
-    # Resume any SIGSTOP'd driver (the F6 slow-subscriber is deliberately
-    # stopped) so the SIGTERM kill_gracefully sends is actually delivered —
-    # a stopped process ignores SIGTERM and would otherwise burn the full 5s
-    # grace before SIGKILL. SIGCONT is a no-op on running drivers.
-    # Guard with `kill -0` (as kill_gracefully does): a driver may have exited
-    # early and left a stale pidfile whose PID the OS has since recycled, so we
-    # only signal PIDs that are still alive and never disturb an unrelated one.
-    local pid
-    for pid in "${pids[@]}"; do
-        kill -0 "$pid" 2>/dev/null && kill -CONT "$pid" 2>/dev/null || true
-    done
-    kill_gracefully "${pids[@]}"
-
-    rm -f $BROKER_DRIVER_PIDFILE_GLOB
-    # Allow the broker to finish cleaning up stale SMF sessions before
-    # subsequent SEMP config operations run. Only reached when broker-drivers
-    # were actually running (the early return 0 above skips this otherwise).
-    sleep 3
-}
+# broker-driver lifecycle helpers (build_broker_driver, wait_for_pidfile,
+# stop_broker_drivers, BROKER_DRIVER_PIDFILE_GLOB) now live in the shared
+# e2e-common/lib.sh — the monitoring and action suites both use them. The sources
+# moved to test/e2e-common/broker-driver too. This file keeps only the
+# monitoring-specific F1–F7 fixtures below.
 
 # ── Broker fixtures (F1–F7, layered on the shared base set in lib.sh) ─────────
 
@@ -141,27 +102,6 @@ cleanup_multi_queue_on() {
 F3_CLIENT_NAME_A="e2e-monitoring-connected-a"
 F3_CLIENT_NAME_B="e2e-monitoring-connected-b"
 F3_SUBSCRIPTIONS="e2e-monitoring/connected/t1,e2e-monitoring/connected/t2"
-
-# Polls for a broker-driver's self-written pidfile — the driver's readiness
-# signal — up to 10s (20 * 0.5s). Returns non-zero and logs which driver failed
-# and where to look if the file is still absent/empty. Shared by the F3/F4/F5
-# fixture starters, which differ only in the driver description ($what).
-wait_for_pidfile() {
-    local pidfile="$1"
-    local label="$2"
-    local logfile="$3"
-    local what="$4"           # driver description for the failure message
-    local max_attempts=20     # 20 * 0.5s = 10s
-    local attempt=0
-    while [ $attempt -lt $max_attempts ] && [ ! -s "$pidfile" ]; do
-        sleep 0.5
-        attempt=$((attempt + 1))
-    done
-    if [ ! -s "$pidfile" ]; then
-        log_fail "$what did not create pidfile on $label within 10s; see $logfile"
-        return 1
-    fi
-}
 
 # Spawn a long-lived broker-driver process that binds a persistent receiver
 # to test-queue and holds direct topic subscriptions, satisfying F3. The
@@ -500,6 +440,64 @@ cleanup_slow_subscriber_on() {
     log_info "Slow-subscriber cleanup on $label deferred to stop_broker_drivers"
 }
 
+# F-lowprio constants. A queue with rejectLowPriorityMsgEnabled + a low limit
+# and egressEnabled=false latches lowPriorityMsgCongestionState="congested"
+# once ≥ F_LOWPRIO_LIMIT priority-0 messages accumulate: no consumer drains
+# it, so congestion is sticky. Feeds list-queues.congestedCount. Fresh fixture
+# rather than reusing F7's spool queue — single-responsibility per fixture.
+F_LOWPRIO_QUEUE="test-queue-lowprio-congestion"
+F_LOWPRIO_TOPIC="e2e-monitoring/lowprio/topic"
+F_LOWPRIO_LIMIT=5     # rejectLowPriorityMsgLimit; must be exceeded to flip state
+F_LOWPRIO_RATE=50     # msg/s; 50/s × 2s = 100 msgs (well past the limit)
+F_LOWPRIO_DURATION="2s"
+
+# Provisions F_LOWPRIO_QUEUE and runs a one-shot broker-driver publisher with
+# --priority=0 --duration=2s. The queue's rejectLowPriorityMsgLimit gates the
+# congestion signal; egressEnabled=false ensures messages sit until deleted.
+# Waits for the state to flip before returning so downstream assertions can
+# read the aggregation without their own poll.
+create_lowprio_congestion_on() {
+    local semp_config="$1"
+    local label="$2"
+    local broker_url="$3"
+    local broker_letter="$4"
+    log_info "Creating lowprio-congestion fixture on $label (queue=$F_LOWPRIO_QUEUE limit=$F_LOWPRIO_LIMIT) ..."
+
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues" \
+        "{\"queueName\":\"$F_LOWPRIO_QUEUE\",\"accessType\":\"non-exclusive\",\"permission\":\"consume\",\"ingressEnabled\":true,\"egressEnabled\":false,\"rejectLowPriorityMsgEnabled\":true,\"rejectLowPriorityMsgLimit\":$F_LOWPRIO_LIMIT}" >/dev/null
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues/$F_LOWPRIO_QUEUE/subscriptions" \
+        "{\"subscriptionTopic\":\"$F_LOWPRIO_TOPIC\"}" >/dev/null
+
+    local pidfile="$BIN_DIR/broker-driver-lowprio-$broker_letter.pid"
+    "$BIN_DIR/broker-driver" publisher \
+        --broker="$broker_letter" \
+        --vpn="$BROKER_VPN" \
+        --client-name="e2e-monitoring-lowprio-$broker_letter" \
+        --topic="$F_LOWPRIO_TOPIC" \
+        --rate="$F_LOWPRIO_RATE" \
+        --duration="$F_LOWPRIO_DURATION" \
+        --priority=0 \
+        --message-type=persistent \
+        --pidfile="$pidfile"
+
+    # Predicate poll: the field is "live state", so verify it flipped rather
+    # than assuming the publish alone is enough. The downstream summary
+    # assertion depends on this — fail the fixture here rather than surface it
+    # as a mysterious count mismatch later.
+    verify_monitor_object "$broker_url" "$label" \
+        "msgVpns/$BROKER_VPN/queues/$F_LOWPRIO_QUEUE" \
+        15 '.data.lowPriorityMsgCongestionState == "congested"'
+
+    log_info "Lowprio-congestion fixture created on $label"
+}
+
+cleanup_lowprio_congestion_on() {
+    local semp_config="$1"
+    local label="$2"
+    log_info "Cleaning up lowprio-congestion fixture on $label ..."
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/queues/$F_LOWPRIO_QUEUE"
+}
+
 # F7-spool constants.
 F7_SPOOL_QUEUE="test-queue-discards-spool"
 F7_SPOOL_TOPIC="e2e-monitoring/discards/spool"
@@ -635,6 +633,10 @@ create_fixtures() {
     create_discard_spool_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL" b
     create_discard_ttl_on "$BROKER_A_SEMP_CONFIG" "broker-a" a
     create_discard_ttl_on "$BROKER_B_SEMP_CONFIG" "broker-b" b
+    # Lowprio-congestion is independent of F5/F6/F7 and needs no long-lived
+    # driver — the one-shot publish fills the queue and congestion holds.
+    create_lowprio_congestion_on "$BROKER_A_SEMP_CONFIG" "broker-a" "$BROKER_A_URL" a
+    create_lowprio_congestion_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL" b
 }
 
 cleanup_fixtures() {
@@ -654,6 +656,8 @@ cleanup_fixtures() {
     cleanup_sustained_traffic_on "broker-b"
     cleanup_connected_client_on "broker-a"
     cleanup_connected_client_on "broker-b"
+    cleanup_lowprio_congestion_on "$BROKER_A_SEMP_CONFIG" "broker-a"
+    cleanup_lowprio_congestion_on "$BROKER_B_SEMP_CONFIG" "broker-b"
     cleanup_multi_vpn_on "$BROKER_A_SEMP_CONFIG" "broker-a"
     cleanup_multi_vpn_on "$BROKER_B_SEMP_CONFIG" "broker-b"
     cleanup_multi_queue_on "$BROKER_A_SEMP_CONFIG" "broker-a"

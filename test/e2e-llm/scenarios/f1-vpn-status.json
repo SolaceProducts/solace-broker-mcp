@@ -1,0 +1,7 @@
+{
+  "_doc": "F1 positive: VPN-name in prompt should force get-vpn-status (not list-vpns). default VPN is enabled, up, and serving traffic, so the model must correctly report healthy state — catches a model that defaults to pessimistic phrasing or hedges on positive cases.",
+  "prompt": "Is the default VPN healthy on $BROKER?",
+  "expected_tool": "mcp__solace-broker__get-vpn-status",
+  "required_substrings_any_of": ["healthy", "operational", "enabled", "no issues"],
+  "forbidden_substrings": ["vpn is not healthy", "vpn is unhealthy", "vpn is disabled", "vpn is down", "vpn is not operational"]
+}

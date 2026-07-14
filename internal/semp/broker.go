@@ -42,12 +42,21 @@ type BrokerClient struct {
 // NewBrokerClient is the single builder of per-broker Authenticators. It
 // delegates to newAuthenticator to construct exactly one Authenticator
 // from brokerCfg.Auth and passes the same pointer to both protocol clients.
-// newAuthenticator is a pure dispatcher; each Authenticator constructor
-// owns its own precondition checks.
+// newAuthenticator is a pure dispatcher: it maps brokerCfg.Auth.Mode to
+// the matching Authenticator constructor and passes through the wiring
+// dependencies. Precondition invariants (non-nil jar for basic, non-nil
+// exchanger for oauth) are owned upstream — by newCookieJar + this
+// function's error propagation for jar, and by internal/config
+// validateBroker + validateBrokerOAuthConfig + cmd/server/main.go for
+// exchanger. See each constructor's docstring for the invariant owner.
 //
 // exchanger is the process-wide token exchanger for OAuth brokers. Pass
-// nil when no broker uses OAuth; newAuthenticator returns an error if an
-// OAuth broker is configured without an exchanger.
+// nil when no broker uses OAuth; the OAuth branch of newAuthenticator
+// assumes a non-nil exchanger and does not re-check — the invariant is
+// owned by internal/config validateBroker + validateBrokerOAuthConfig
+// (which reject an OAuth broker without exchanger coordinates at
+// startup) and by main.go, which builds the exchanger whenever
+// Hop2OAuthActive() returns true.
 func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, exchanger *tokenexchange.Exchanger) (*BrokerClient, error) {
 	jar, err := newCookieJar(alias, brokerCfg.Auth.Mode)
 	if err != nil {
@@ -119,10 +128,7 @@ func newAuthenticator(alias string, brokerCfg *config.BrokerConfig, jar *resilie
 	case config.AuthModeBearer:
 		return auth.NewBearerAuthenticator(cfg.Token), nil
 	case config.AuthModeOAuth:
-		if exchanger == nil {
-			return nil, fmt.Errorf("oauth auth requires a token exchanger for broker %q", alias)
-		}
-		return auth.NewOAuthAuthenticator(exchanger, cfg.Audience, cfg.Scopes, alias), nil
+		return auth.NewOAuthAuthenticator(exchanger, cfg.Audience, alias), nil
 	default:
 		return nil, fmt.Errorf("unsupported auth mode %q for broker %q", cfg.Mode, alias)
 	}

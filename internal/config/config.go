@@ -381,12 +381,11 @@ type AuthConfig struct {
 	Password string `yaml:"password"` // basic auth password (use ${VAR_NAME} for env var)
 	Token    string `yaml:"token"`    // bearer token (use ${VAR_NAME} for env var)
 
-	// OAuth-mode fields. Used when Mode == "oauth"; ignored otherwise. Both
-	// are optional in V1 — the broker's OAuth profile may have audience or
-	// scope validation disabled. The runtime omits the field from the
+	// OAuth-mode field. Used when Mode == "oauth"; ignored otherwise.
+	// Optional in V1 — the broker's OAuth profile may have audience
+	// validation disabled. The runtime omits the field from the
 	// token-exchange request when empty.
-	Audience string   `yaml:"audience,omitempty"`
-	Scopes   []string `yaml:"scopes,omitempty"`
+	Audience string `yaml:"audience,omitempty"`
 }
 
 // LogValue implements slog.LogValuer for AuthConfig. It exposes only the auth
@@ -1197,15 +1196,6 @@ func validateBroker(broker *BrokerConfig, productionMode bool) []error {
 		// token-exchange request.
 		if broker.Auth.Audience != "" && strings.TrimSpace(broker.Auth.Audience) == "" {
 			errs = append(errs, fmt.Errorf("broker %q: auth.audience is empty or whitespace-only", alias))
-		}
-
-		// Scopes is optional, but reject whitespace-only entries that would
-		// silently produce a malformed scope value in the token-exchange
-		// request.
-		for i, s := range broker.Auth.Scopes {
-			if strings.TrimSpace(s) == "" {
-				errs = append(errs, fmt.Errorf("broker %q: auth.scopes[%d] is empty or whitespace-only", alias, i))
-			}
 		}
 
 		// RUNTIME GUARD: schema accepts oauth mode (and the OAuth fields

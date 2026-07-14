@@ -97,7 +97,7 @@ queues, and topic endpoints) are gated behind the same flag and documented under
 | Discovery | [`list-brokers`](#list-brokers) | — |
 | Broker Status | [`get-broker-status`](#get-broker-status), [`get-redundancy-status`](#get-redundancy-status) | — |
 | Replication | [`get-replication-status`](#get-replication-status) | — |
-| Message VPN | [`list-vpns`](#list-vpns), [`get-vpn-health`](#get-vpn-health), [`get-message-rates`](#get-message-rates) | — |
+| Message VPN | [`list-vpns`](#list-vpns), [`get-vpn-status`](#get-vpn-status), [`get-message-rates`](#get-message-rates) | — |
 | Queues | [`list-queues`](#list-queues), [`get-queue-metrics`](#get-queue-metrics) | — |
 | Clients | [`list-clients`](#list-clients), [`get-client-details`](#get-client-details), [`list-client-subscriptions`](#list-client-subscriptions), [`list-slow-subscribers`](#list-slow-subscribers) | — |
 | REST Delivery Points | [`list-rdps`](#list-rdps), [`get-rdp-status`](#get-rdp-status) | — |
@@ -160,7 +160,7 @@ appliances add a `hardwareDetails` section. Field shape is documented in
 { "broker": "prod-broker" }
 ```
 
-**Example request:** "Is prod-broker healthy? When did it last restart?"
+**Example request:** "What's prod-broker's current status? When did it last restart?"
 
 ### get-redundancy-status
 
@@ -219,7 +219,7 @@ useful "has replication been flaky recently?" signal.
 
 ### list-vpns
 
-List Message VPNs with enabled state, connection count, and basic health.
+List Message VPNs with enabled state, connection count, and basic status.
 
 **Parameters:**
 
@@ -240,10 +240,12 @@ REST, Web), and discard counts.
 
 **Example request:** "List the VPNs on prod-broker and flag any that are down."
 
-### get-vpn-health
+### get-vpn-status
 
-Health and connection statistics for one VPN: enabled state, active connection
-count, total subscription count, and service states for SMF, REST, and MQTT.
+Operational status and connection statistics for one VPN: enabled state,
+active connection count, total subscription count, and service states for
+AMQP, MQTT, REST, and SMF (plaintext and TLS variants where applicable).
+Reports raw state, not a health verdict.
 
 **Parameters:**
 
@@ -252,7 +254,7 @@ count, total subscription count, and service states for SMF, REST, and MQTT.
 | `broker` | string | yes | Target broker alias. |
 | `msgVpnName` | string | yes | The Message VPN. |
 
-**Returns:** step-keyed envelope, step `vpnHealth`. Selected fields: `msgVpnName`,
+**Returns:** step-keyed envelope, step `vpnStatus`. Selected fields: `msgVpnName`,
 `enabled`, `state`, `msgVpnConnections`, `maxConnectionCount`,
 `msgVpnTotalUniqueSubscriptions`, per-service up/failure fields, spool usage, and
 discard counts.
@@ -594,21 +596,16 @@ Annotations: `readOnly: false`, `destructiveHint: true`, `idempotentHint: false`
 
 **Parameters:**
 
-| Name | Type | Required | Constraints | Description |
-|---|---|---|---|---|
-| `broker` | string | yes | — | Target broker alias. |
-| `msgVpnName` | string | yes | `minLength: 1` | The Message VPN the client is connected to. |
-| `clientName` | string | yes | `minLength: 1` | The client connection to disconnect. |
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target broker alias. |
+| `msgVpnName` | string | yes | The Message VPN the client is connected to. |
+| `clientName` | string | yes | The client connection to disconnect. |
 
-**Returns:** strict object `{ status, msgVpnName, clientName }`, `status` is the
-enum `"ok"`, `additionalProperties: false`.
+**Returns:** `{ disconnect: { data: {}, meta: { responseCode: 200, ... } } }`.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" }
-```
-
-```json
-{ "status": "ok", "msgVpnName": "default", "clientName": "consumer-7" }
 ```
 
 **Example request:** "Disconnect consumer-7 on the default VPN." (The agent will
@@ -623,7 +620,7 @@ Annotations: `readOnly: false`, `destructiveHint: false`, `idempotentHint: true`
 
 **Parameters:** same as `disconnect-client` (`broker`, `msgVpnName`, `clientName`).
 
-**Returns:** `{ status: "ok", msgVpnName, clientName }`.
+**Returns:** `{ clearStats: { data: {}, meta: { responseCode: 200, ... } } }`.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" }
@@ -642,21 +639,16 @@ Annotations: `readOnly: false`, `destructiveHint: true`, `idempotentHint: false`
 
 **Parameters:**
 
-| Name | Type | Required | Constraints | Description |
-|---|---|---|---|---|
-| `broker` | string | yes | — | Target broker alias. |
-| `msgVpnName` | string | yes | `minLength: 1` | The Message VPN containing the queue. |
-| `queueName` | string | yes | `minLength: 1` | The queue to drain. |
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target broker alias. |
+| `msgVpnName` | string | yes | The Message VPN containing the queue. |
+| `queueName` | string | yes | The queue to drain. |
 
-**Returns:** strict object `{ status, msgVpnName, queueName }`, `status` is the
-enum `"ok"`, `additionalProperties: false`.
+**Returns:** `{ deleteMsgs: { data: {}, meta: { responseCode: 200, ... } } }`.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "default", "queueName": "dead-letter.q" }
-```
-
-```json
-{ "status": "ok", "msgVpnName": "default", "queueName": "dead-letter.q" }
 ```
 
 **Example request:** "Drain dead-letter.q on the default VPN." (The agent will ask
@@ -672,7 +664,7 @@ Annotations: `readOnly: false`, `destructiveHint: false`, `idempotentHint: true`
 **Parameters:** same as `delete-queue-messages` (`broker`, `msgVpnName`,
 `queueName`).
 
-**Returns:** `{ status: "ok", msgVpnName, queueName }`.
+**Returns:** `{ clearStats: { data: {}, meta: { responseCode: 200, ... } } }`.
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q" }

@@ -269,6 +269,75 @@ stop_server() {
     MCP_SERVER_PID=""
 }
 
+# ── broker-driver (messaging-layer fixtures) ─────────────────────────────────
+# The broker-driver is a Go/CGo binary (solace.dev/go/messaging → libsolclient)
+# that connects over SMF to produce broker states SEMP/curl cannot: connected
+# clients, spooled messages, sustained traffic. Suites that need messaging-layer
+# fixtures (monitoring's F3–F7, action's client/spool fixtures) build it and reap
+# its long-lived processes via these helpers; pure-SEMP suites (management) don't.
+# The sources live in test/e2e-common/broker-driver with their own go.mod.
+#
+# Suites that use it must `export BROKER_A_SMF_PORT BROKER_B_SMF_PORT` (from their
+# .env) so the driver can resolve --broker=a|b to a host SMF port.
+
+build_broker_driver() {
+    log_info "Building broker-driver binary (CGo: libsolclient via solace.dev/go/messaging) ..."
+    mkdir -p "$BIN_DIR"
+    (cd "$REPO_ROOT/test/e2e-common/broker-driver" && go build -o "$BIN_DIR/broker-driver" .)
+    log_info "broker-driver binary built: $BIN_DIR/broker-driver"
+}
+
+# Path pattern for broker-driver PID files, scoped to this suite's own bin/.
+# Every long-lived driver self-writes a "$BIN_DIR/broker-driver-<role>.pid" that
+# stop_broker_drivers reaps. Suite-scoped via BIN_DIR, so one suite never reaps
+# another's drivers.
+BROKER_DRIVER_PIDFILE_GLOB="$BIN_DIR/broker-driver-*.pid"
+
+# Polls for a broker-driver's self-written pidfile — its readiness signal — up to
+# 10s (20 * 0.5s). Returns non-zero and logs which driver failed and where to
+# look if the file is still absent/empty.
+#   $1 pidfile   $2 label   $3 logfile   $4 what (driver description)
+wait_for_pidfile() {
+    local pidfile="$1"
+    local label="$2"
+    local logfile="$3"
+    local what="$4"
+    local max_attempts=20     # 20 * 0.5s = 10s
+    local attempt=0
+    while [ $attempt -lt $max_attempts ] && [ ! -s "$pidfile" ]; do
+        sleep 0.5
+        attempt=$((attempt + 1))
+    done
+    if [ ! -s "$pidfile" ]; then
+        log_fail "$what did not create pidfile on $label within 10s; see $logfile"
+        return 1
+    fi
+}
+
+# Stop all long-lived broker-driver processes this suite spawned. Reads each PID
+# file under bin/ and hands the PIDs to kill_gracefully (TERM, then KILL after a
+# shared 5s grace). SIGCONTs first so a deliberately-SIGSTOP'd driver (monitoring
+# F6) can receive the TERM. Safe to call when there are no PID files.
+stop_broker_drivers() {
+    local pidfiles=( $BROKER_DRIVER_PIDFILE_GLOB )
+    [ -e "${pidfiles[0]}" ] || return 0
+
+    local pids=() f
+    for f in "${pidfiles[@]}"; do
+        pids+=("$(<"$f")")
+    done
+    local pid
+    for pid in "${pids[@]}"; do
+        kill -0 "$pid" 2>/dev/null && kill -CONT "$pid" 2>/dev/null || true
+    done
+    kill_gracefully "${pids[@]}"
+
+    rm -f $BROKER_DRIVER_PIDFILE_GLOB
+    # Let the broker finish cleaning up stale SMF sessions before subsequent SEMP
+    # config operations (e.g. deleting a queue a driver was bound to) run.
+    sleep 3
+}
+
 # Generate the MCP server config from .env-derived values so ports stay in sync.
 # Credentials use ${VAR_NAME} substitution — resolved by the server via ENV_FILE.
 # enable_write_tools is on for every suite: all suites exercise one server with
@@ -406,6 +475,20 @@ create_fixtures_on() {
     semp_post "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp/queueBindings" \
         '{"queueBindingName":"test-queue","postRequestTarget":"/test"}' >/dev/null
 
+    # test-rdp-failing: enabled RDP pointed at an unreachable remote so its
+    # consumer's connect attempts fail and populate lastFailureReason on the RDP,
+    # its restConsumers, and its queueBindings. Gives list-rdps.byLastFailureReason
+    # and get-rdp-status.by{Binding,Consumer}LastFailureReason a real value to
+    # aggregate. Separate from test-rdp (kept as the admin-disabled case).
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints" \
+        '{"restDeliveryPointName":"test-rdp-failing","enabled":true}' >/dev/null
+
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp-failing/restConsumers" \
+        '{"restConsumerName":"test-consumer-failing","remoteHost":"127.0.0.1","remotePort":1,"tlsEnabled":false,"enabled":true}' >/dev/null
+
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp-failing/queueBindings" \
+        '{"queueBindingName":"test-queue","postRequestTarget":"/test"}' >/dev/null
+
     # The private monitor endpoint can lag the config API, so confirm the
     # objects are visible before dependent fixtures/tests run.
     verify_fixtures "$broker_url" "$label"
@@ -413,15 +496,25 @@ create_fixtures_on() {
     log_info "Fixtures created on $label"
 }
 
-# Best-effort visibility check for the base queue and RDP. verify_monitor_object
-# warns and returns non-zero on timeout rather than aborting, so the run
-# proceeds even if the monitor endpoint is still catching up.
+# Visibility checks for the base queue and RDPs. The existence probes are
+# best-effort (verify_monitor_object warns on timeout so the run continues if
+# the monitor endpoint is still catching up), but the lastFailureReason poll
+# is required — its value feeds the summary-aggregation assertions and a
+# missing value would surface as a bogus count mismatch downstream.
 verify_fixtures() {
     local broker_url="$1"
     local label="$2"
     log_info "Verifying base fixtures visible on $label ..."
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/queues/test-queue" || true
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp" || true
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp-failing" || true
+    # Poll until the failing consumer's lastFailureReason is populated. Retries
+    # to the unreachable endpoint are asynchronous, so the field can be empty
+    # for the first few seconds; the aggregation assertions depend on it, so
+    # fail fixture creation here rather than let the summary counts drift later.
+    verify_monitor_object "$broker_url" "$label" \
+        "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp-failing/restConsumers/test-consumer-failing" \
+        30 '.data.lastFailureReason != ""'
 }
 
 # Deletes the base fixtures in reverse dependency order (binding → consumer →
@@ -431,6 +524,9 @@ cleanup_fixtures_on() {
     local semp_config="$1"
     local label="$2"
     log_info "Cleaning up fixtures on $label ..."
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp-failing/queueBindings/test-queue"
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp-failing/restConsumers/test-consumer-failing"
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp-failing"
     semp_delete "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp/queueBindings/test-queue"
     semp_delete "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp/restConsumers/test-consumer"
     semp_delete "$semp_config" "msgVpns/$BROKER_VPN/restDeliveryPoints/test-rdp"
@@ -520,7 +616,7 @@ mcp_request() {
 # A tool's real output is escaped JSON nested in .result.content[0].text; this
 # returns that inner payload so assertions can run assert_json_field against the
 # tool's structured output rather than substring-matching the whole envelope.
-#   response=$(mcp_call_tool "get-vpn-health" "$args")
+#   response=$(mcp_call_tool "get-vpn-status" "$args")
 #   content=$(extract_content "$response")
 #   assert_json_field "$content" ".enabled" "false"
 extract_content() {
@@ -580,6 +676,46 @@ assert_json_field() {
         log_fail "  Actual:   $actual"
         return 1
     fi
+}
+
+# Assert that .summary.<field> in <content> equals the count of rows in
+# <well_typed> that match <row_predicate>. Primary building block for the
+# SOL-151519 summary-aggregation checks: the handler emits scalar counts over
+# well-typed rows matching a predicate; the test recomputes with the same
+# well-typed filter and predicate and requires equality.
+#
+# Args:
+#   $1 content         MCP tool response payload (after extract_content)
+#   $2 label           prefix for the failure message, e.g. "list-rdps [broker-a]"
+#   $3 well_typed      jq expression returning a filtered array of rows the
+#                      handler would NOT skip, e.g.
+#                      '[.rdps.data[] | select((.up|type)=="boolean" ...)]'
+#   $4 field           summary field name, e.g. "disabledCount"
+#   $5 row_predicate   jq boolean expression over a single row, e.g.
+#                      '.enabled == false'
+assert_recompute_count() {
+    local content="$1" label="$2" well_typed="$3" field="$4" predicate="$5"
+    assert_json_field "$content" \
+        "(.summary.${field}) == (${well_typed} | map(select(${predicate})) | length)" "true" \
+        "${label}: summary.${field} must equal recomputed count from rows"
+}
+
+# Assert that .summary.<field> in <content> — an object shaped
+# {key: count} — equals the grouped tally of <well_typed> rows matching
+# <row_predicate>, keyed by <group_expr>. Handler-side skip filters (e.g.
+# omit empty-string keys) must be encoded in <row_predicate> so both sides
+# apply the same filter.
+#
+# Args mirror assert_recompute_count plus:
+#   $6 group_expr      jq expression selecting the group key on a single row,
+#                      starting with '.', e.g. '.lastFailureReason'
+assert_recompute_group() {
+    local content="$1" label="$2" well_typed="$3" field="$4" predicate="$5" group_expr="$6"
+    # from_entries over grouped rows gives {key: count}. Empty input → {}
+    # which matches the handler's initial empty map when nothing qualifies.
+    assert_json_field "$content" \
+        "(.summary.${field}) == (${well_typed} | map(select(${predicate})) | group_by(${group_expr}) | map({key: .[0]${group_expr}, value: length}) | from_entries)" "true" \
+        "${label}: summary.${field} must equal recomputed grouping from rows"
 }
 
 # ── Test Runner ──────────────────────────────────────────────────────────────

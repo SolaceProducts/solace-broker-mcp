@@ -1,7 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:base"],
-  "description": "Tightly scoped: Renovate only watches the LLM e2e harness's pinned Claude Code CLI version. No other deps in this repo are managed here — Go modules and other manifests are explicitly ignored to prevent runaway PRs. Bumps follow npm's `stable` dist-tag (deliberately lagged from `latest`); see test/e2e-monitoring/llm/README.md for the bump procedure.",
+  "description": "Tightly scoped: Renovate only watches the LLM e2e harness's pinned Claude Code CLI version. No other deps in this repo are managed here — Go modules and other manifests are explicitly ignored to prevent runaway PRs. Bumps follow npm's `stable` dist-tag (deliberately lagged from `latest`); see test/e2e-llm/README.md for the bump procedure.",
   "enabledManagers": ["npm"],
   "ignorePaths": ["**/node_modules/**"],
   "labels": ["dependencies", "llm-eval"],
@@ -14,14 +14,14 @@
     },
     {
       "matchPackageNames": ["@anthropic-ai/claude-code"],
-      "matchFileNames": ["test/e2e-monitoring/llm/package.json"],
+      "matchFileNames": ["test/e2e-llm/package.json"],
       "enabled": true,
       "followTag": "stable",
       "automerge": false,
       "rangeStrategy": "pin",
       "commitMessageTopic": "Claude Code CLI pin",
       "prBodyNotes": [
-        "Before merging: run `./run-all.sh` twice from `test/e2e-monitoring/llm/` against the candidate version, confirm 16/16 pass both times. See the README's bump procedure."
+        "Before merging: run `./run-all.sh` twice from `test/e2e-llm/` against the candidate version, confirm 16/16 pass both times. See the README's bump procedure."
       ]
     }
   ]

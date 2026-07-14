@@ -25,8 +25,14 @@ import (
 
 // buildIdPRequest assembles a POST to the IdP token endpoint. Each
 // concern — grant-type wire shape, subject token, client authentication,
-// audience format, scopes — is handled by its own method so new grant
-// types or auth methods grow in isolation.
+// audience format — is handled by its own method so new grant types or
+// auth methods grow in isolation.
+//
+// Note on scopes: the request omits the RFC 6749 §3.3 "scope" parameter
+// entirely, so the IdP grants its per-client / per-user default scopes.
+// A future ticket may reintroduce scopes as a per-user value derived
+// from the subject token; if it ever varies per call for the same
+// subject token, it must join the dedup key (see dedup_key.go).
 //
 // The request is built first with an empty body. Setters receive both
 // the form (for body fields) and the request (for headers), so each
@@ -53,7 +59,6 @@ func (e *Exchanger) buildIdPRequest(ctx context.Context, input ExchangeInput) (*
 	if err := e.setAudience(form, input); err != nil {
 		return nil, err
 	}
-	e.setScopes(form, input)
 
 	encoded := form.Encode()
 	req.Body = io.NopCloser(strings.NewReader(encoded))
@@ -134,13 +139,4 @@ func (e *Exchanger) setAudience(form url.Values, input ExchangeInput) error {
 		return fmt.Errorf("tokenexchange: unknown AudienceFormat %d (programming error — Params built outside FromConfig)", e.audienceParam)
 	}
 	return nil
-}
-
-// setScopes adds the space-joined scope field per RFC 6749 §3.3.
-// Omitted when the caller passed an empty slice so the IdP applies
-// its per-client default scopes.
-func (e *Exchanger) setScopes(form url.Values, input ExchangeInput) {
-	if len(input.Scopes) > 0 {
-		form.Set("scope", strings.Join(input.Scopes, " "))
-	}
 }

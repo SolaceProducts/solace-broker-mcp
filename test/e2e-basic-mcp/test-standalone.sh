@@ -197,6 +197,70 @@ test_get_queue_metrics_broker_b() {
     assert_contains "$response" "test-queue" "Response should mention the queue name" || return 1
 }
 
+# ── SOL-151519: get-rdp-status summary aggregation ───────────────────────────
+# Recompute each summary count from the raw queueBindings / restConsumers rows
+# and require equality. The existing get-rdp-status tests above target test-rdp
+# (disabled) — that RDP's bindings/consumers all report up=false but with an
+# empty lastFailureReason, so its by{Binding,Consumer}LastFailureReason maps
+# would always be empty. Target test-rdp-failing (enabled, unreachable remote)
+# instead so lastFailureReason is populated and the grouped maps carry ≥ 1
+# entry, exercising the code path the aggregation is designed for.
+test_get_rdp_status_summary() {
+    local broker="$1"
+    local label="get-rdp-status [$broker]"
+    local response content
+    response=$(mcp_call_tool "get-rdp-status" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",restDeliveryPointName:"test-rdp-failing"}')") || return 1
+    content=$(extract_content "$response")
+
+    # Handler emits flat summary keys (no nesting), so the recompute helper's
+    # `.summary.<field>` lookup lands correctly.
+    # RequiredFields per step: up, lastFailureReason.
+    local bindings_wt='[.queueBindings.data[] | select((.up | type) == "boolean" and (.lastFailureReason | type) == "string")]'
+    local consumers_wt='[.restConsumers.data[] | select((.up | type) == "boolean" and (.lastFailureReason | type) == "string")]'
+
+    # Binding counts
+    assert_recompute_count "$content" "$label" "$bindings_wt" "bindingUpCount" \
+        '.up == true' || return 1
+    assert_recompute_count "$content" "$label" "$bindings_wt" "bindingDownCount" \
+        '.up == false' || return 1
+    assert_recompute_group "$content" "$label" "$bindings_wt" "byBindingLastFailureReason" \
+        '.up == false and .lastFailureReason != ""' '.lastFailureReason' || return 1
+    assert_json_field "$content" \
+        '(.summary.bindingScannedCount) == (.queueBindings.data | length)' "true" \
+        "$label: summary.bindingScannedCount must equal len(queueBindings.data)" || return 1
+
+    # Consumer counts
+    assert_recompute_count "$content" "$label" "$consumers_wt" "consumerUpCount" \
+        '.up == true' || return 1
+    assert_recompute_count "$content" "$label" "$consumers_wt" "consumerDownCount" \
+        '.up == false' || return 1
+    assert_recompute_group "$content" "$label" "$consumers_wt" "byConsumerLastFailureReason" \
+        '.up == false and .lastFailureReason != ""' '.lastFailureReason' || return 1
+    assert_json_field "$content" \
+        '(.summary.consumerScannedCount) == (.restConsumers.data | length)' "true" \
+        "$label: summary.consumerScannedCount must equal len(restConsumers.data)" || return 1
+
+    # Non-zero coverage: test-rdp-failing has 1 queueBinding + 1 restConsumer,
+    # both down with a populated lastFailureReason. Each guard catches a
+    # different vacuous-0==0 pass in the handler.
+    assert_json_field "$content" \
+        '(.summary.bindingDownCount) >= 1' "true" \
+        "$label: at least one down queueBinding expected (fixture: test-rdp-failing)" || return 1
+    assert_json_field "$content" \
+        '(.summary.consumerDownCount) >= 1' "true" \
+        "$label: at least one down restConsumer expected (fixture: test-rdp-failing)" || return 1
+    assert_json_field "$content" \
+        '(.summary.byBindingLastFailureReason | length) >= 1' "true" \
+        "$label: byBindingLastFailureReason must have at least one entry (fixture: test-rdp-failing)" || return 1
+    assert_json_field "$content" \
+        '(.summary.byConsumerLastFailureReason | length) >= 1' "true" \
+        "$label: byConsumerLastFailureReason must have at least one entry (fixture: test-rdp-failing)" || return 1
+}
+
+test_get_rdp_status_summary_a() { test_get_rdp_status_summary "broker-a"; }
+test_get_rdp_status_summary_b() { test_get_rdp_status_summary "broker-b"; }
+
 # ── Run ──────────────────────────────────────────────────────────────────────
 
 run_test "Health endpoint"                    test_health_endpoint
@@ -208,5 +272,7 @@ run_test "Get RDP status not found"          test_get_rdp_status_not_found
 run_test "Get queue metrics (broker-a)"      test_get_queue_metrics_broker_a
 run_test "Get RDP status (broker-b)"         test_get_rdp_status_broker_b
 run_test "Get queue metrics (broker-b)"      test_get_queue_metrics_broker_b
+run_test "Get RDP status summary (broker-a)" test_get_rdp_status_summary_a
+run_test "Get RDP status summary (broker-b)" test_get_rdp_status_summary_b
 
 print_summary "Standalone tests"
