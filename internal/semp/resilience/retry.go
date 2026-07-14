@@ -22,6 +22,7 @@ type retryState struct {
 	other5xxRetried bool   // true after first non-429/503 5xx retry
 	method          string // HTTP method captured at Do() time for idempotency check
 	retrySafe       bool   // caller-declared semantic idempotency (see WithRetrySafe)
+	needsReauth     bool   // true when the next retry should re-run AddAuth (set on 401)
 }
 
 // retrySafeKey is the context key for the caller-declared retry-safe marker.
@@ -106,6 +107,7 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 			state.auth401Retried = true
 			retry := d.authenticator.HandleAuthFailure(ctx, resp.Header)
 			if retry {
+				state.needsReauth = true // signal PrepareRetry to re-run AddAuth
 				slog.Warn("retrying: 401 received, auth handler recovered",
 					slog.String("broker", d.brokerURL))
 			} else {

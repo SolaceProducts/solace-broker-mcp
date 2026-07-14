@@ -86,6 +86,7 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 	retryClient.Backoff = retryablehttp.RateLimitLinearJitterBackoff
 	retryClient.CheckRetry = d.checkRetry
 	retryClient.ErrorHandler = d.errorHandler
+	retryClient.PrepareRetry = d.prepareRetry
 	retryClient.Logger = nil // manual logging in checkRetry
 	d.retryClient = retryClient
 
@@ -236,6 +237,17 @@ func (b *cancelOnCloseReadCloser) Close() error {
 	err := b.ReadCloser.Close()
 	b.cancel()
 	return err
+}
+
+// prepareRetry re-runs AddAuth when the previous attempt failed with 401.
+// Skipped on 429/503/5xx retries to avoid unnecessary IdP round-trips.
+func (d *Sender) prepareRetry(req *http.Request) error {
+	state := getRetryState(req.Context())
+	if state.needsReauth {
+		state.needsReauth = false
+		return d.authenticator.AddAuth(req.Context(), req)
+	}
+	return nil
 }
 
 // Close releases resources held by the Sender. Stops the rate limiter ticker

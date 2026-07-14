@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -37,6 +38,28 @@ func basicAuth(t *testing.T, jar *SafeCookieJar) auth.Authenticator {
 func bearerAuth(t *testing.T) auth.Authenticator {
 	t.Helper()
 	return auth.NewBearerAuthenticator("static-token")
+}
+
+// rotatingTokenAuth is a fake authenticator for OAuth 401 retry tests.
+// AddAuth sets a distinct bearer token per call; HandleAuthFailure returns true.
+type rotatingTokenAuth struct {
+	mu      sync.Mutex
+	callNum int
+	tokens  []string
+}
+
+func (a *rotatingTokenAuth) AddAuth(_ context.Context, req *http.Request) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.callNum++
+	token := fmt.Sprintf("oauth-tok-%d", a.callNum)
+	a.tokens = append(a.tokens, token)
+	req.Header.Set("Authorization", "Bearer "+token)
+	return nil
+}
+
+func (a *rotatingTokenAuth) HandleAuthFailure(_ context.Context, _ http.Header) bool {
+	return true
 }
 
 // newTestSender creates a Sender configured for testing with the given
@@ -529,6 +552,89 @@ func TestSender_Retry_401_Bearer_FailsImmediately(t *testing.T) {
 	}
 	if resp.StatusCode != 401 {
 		t.Errorf("expected status 401, got %d", resp.StatusCode)
+	}
+}
+
+func TestSender_Retry_401_OAuth_ReAuthsOnRetry(t *testing.T) {
+	var requestCount atomic.Int32
+	var capturedTokens []string
+	var mu sync.Mutex
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		capturedTokens = append(capturedTokens, r.Header.Get("Authorization"))
+		mu.Unlock()
+
+		count := requestCount.Add(1)
+		if count == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`unauthorized`))
+			return
+		}
+		jsonOK(w)
+	}))
+	defer server.Close()
+
+	authn := &rotatingTokenAuth{}
+	sender := newTestSender(t, server.Client(), authn, 3)
+	sender.brokerURL = server.URL
+
+	req := newGetRequest(t, server.URL)
+	if err := authn.AddAuth(context.Background(), req); err != nil {
+		t.Fatalf("AddAuth: %v", err)
+	}
+
+	resp, err := sender.Do(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Do() error: %v", err)
+	}
+	resp.Body.Close()
+
+	if requestCount.Load() != 2 {
+		t.Errorf("expected 2 requests (original + retry), got %d", requestCount.Load())
+	}
+	if len(authn.tokens) != 2 {
+		t.Fatalf("expected AddAuth called twice, got %d", len(authn.tokens))
+	}
+	if capturedTokens[0] == capturedTokens[1] {
+		t.Errorf("retry should carry fresh token; both requests had %q", capturedTokens[0])
+	}
+}
+
+func TestSender_Retry_429_SkipsReAuth(t *testing.T) {
+	var requestCount atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count := requestCount.Add(1)
+		if count == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`rate limited`))
+			return
+		}
+		jsonOK(w)
+	}))
+	defer server.Close()
+
+	authn := &rotatingTokenAuth{}
+	sender := newTestSender(t, server.Client(), authn, 3)
+	sender.brokerURL = server.URL
+
+	req := newGetRequest(t, server.URL)
+	if err := authn.AddAuth(context.Background(), req); err != nil {
+		t.Fatalf("AddAuth: %v", err)
+	}
+
+	resp, err := sender.Do(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Do() error: %v", err)
+	}
+	resp.Body.Close()
+
+	if requestCount.Load() != 2 {
+		t.Errorf("expected 2 requests (original + retry), got %d", requestCount.Load())
+	}
+	if len(authn.tokens) != 1 {
+		t.Errorf("expected AddAuth called once (no re-auth on 429), got %d", len(authn.tokens))
 	}
 }
 
