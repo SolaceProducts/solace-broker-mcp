@@ -1622,6 +1622,27 @@ func sanitizeURLString(s string) string {
 // applyEnvOverrides checks for environment variable overrides and applies them
 // to the config. This runs before validate() so overridden values are still
 // range-checked. The overridden value is validated via ValidatePort internally.
+// envBool reads name from the environment and parses it as a boolean. When the
+// var is unset, it silently returns def. When the var IS set but holds a value
+// strconv.ParseBool rejects, it logs a slog.Warn naming the var and the default
+// in effect, then returns def. The context parameter identifies the subsystem
+// in the warning message (e.g. "observability", "tool authorization").
+// Tolerant so a typo cannot abort startup — but the warning ensures the
+// fallback is not silent.
+func envBool(name string, def bool, context string) bool {
+	v, ok := os.LookupEnv(name)
+	if !ok {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		slog.Warn(fmt.Sprintf("ignoring unparseable %s flag; using default", context),
+			"var", name, "value", v, "default", def)
+		return def
+	}
+	return b
+}
+
 func applyEnvOverrides(cfg *ServerConfig) error {
 	if envPort := os.Getenv("MCP_SERVER_PORT"); envPort != "" {
 		port, err := strconv.Atoi(envPort)
@@ -1673,7 +1694,7 @@ const envEnableToolAuthorization = "ENABLE_TOOL_AUTHORIZATION"
 // lifecycle. When the full tool-authorization feature ships, delete this
 // function and its constant, and make the gated calls unconditional.
 func toolAuthorizationFeatureEnabled() bool {
-	return envBool(envEnableToolAuthorization, false)
+	return envBool(envEnableToolAuthorization, false, "tool authorization")
 }
 
 // unreleasedBrokerOAuthEnabled reports whether ENABLE_UNRELEASED_BROKER_OAUTH
@@ -1692,5 +1713,5 @@ func toolAuthorizationFeatureEnabled() bool {
 // structural preconditions remain), delete the validateBroker guard and
 // the banner branch, and then delete this function and its constant.
 func unreleasedBrokerOAuthEnabled() bool {
-	return envBool(envEnableUnreleasedBrokerOAuth, false)
+	return envBool(envEnableUnreleasedBrokerOAuth, false, "broker OAuth")
 }
