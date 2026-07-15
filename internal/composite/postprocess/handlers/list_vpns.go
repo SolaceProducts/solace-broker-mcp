@@ -45,7 +45,16 @@ func init() {
 //   - standbyCount:         enabled VPNs whose state == "standby" (informational;
 //     HA mode, not a problem)
 //   - zeroConnectionCount:  VPNs with enabled == true && state == "up" &&
-//     msgVpnConnections == 0 (configured to serve but nobody's connecting).
+//     msgVpnConnections <= 1 (configured to serve but nobody's connecting).
+//     The <=1 (not ==0) accounts for a broker invariant: Solace attaches a
+//     reserved internal `#client` (clientUsername "#client-username") to every
+//     enabled+up VPN, so msgVpnConnections is ≥1 by construction. Empirically
+//     #client is a deterministic +1 offset — never >1 — and vanishes cleanly
+//     when the VPN is disabled. Per-service counter summation is not a viable
+//     alternative: #client is folded into msgVpnConnectionsServiceSmf too, so
+//     the same dead-metric bug applies. Scope note: msgVpnConnections also
+//     includes bridge / DMR / replication service connections, so a VPN with
+//     only those and no user clients will not be counted as zero-connection.
 //
 // down/standby/zeroConnection are all gated on enabled==true so a disabled VPN
 // (which typically reports state=="down") lands in disabledCount only, and the
@@ -93,7 +102,12 @@ func ListVpns(stepResults map[string]map[string]any) (map[string]any, error) {
 		case "standby":
 			standby++
 		case "up":
-			if conns == 0 {
+			// <=1 (not ==0) subtracts the reserved `#client` internal
+			// connection the broker attaches to every enabled+up VPN. Prefer
+			// the inequality over `conns - 1 == 0` so a hypothetical absence
+			// of #client (conns==0) still counts as zero-connection rather
+			// than underflowing past it.
+			if conns <= 1 {
 				zeroConn++
 			}
 		}
