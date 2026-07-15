@@ -101,8 +101,8 @@ var ipv6Pattern = regexp.MustCompile(`(?i)\[?(?:` +
 // The full unsuppressed/unsanitized error is never returned to the agent; it is
 // logged server-side by logToolResult as the "detail" field on the single
 // per-invocation error line, so the whole event stays in one record.
-func (m *ToolManager) buildErrorResult(err error) *mcp.CallToolResult {
-	msg, suggestions := buildErrorMessage(err)
+func (m *ToolManager) buildErrorResult(err error, brokerAlias string) *mcp.CallToolResult {
+	msg, suggestions := buildErrorMessage(err, brokerAlias)
 	retryable := isRetryable(err)
 
 	structured := map[string]any{
@@ -165,7 +165,12 @@ func (m *ToolManager) buildErrorResult(err error) *mcp.CallToolResult {
 //
 // Suggestions are the curated generic hint for the broker's comRc_t code.
 // Server-suppressed (5xx, except 503) errors get no object-level guidance.
-func buildErrorMessage(err error) (string, []string) {
+//
+// brokerAlias is the caller's own config label for the invocation (never a
+// host, URL, or IP). When non-empty it is echoed back on the code-72
+// (permission-denied) path so a multi-broker operator can tell which broker
+// denied the request from the agent's output alone.
+func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 	var retriesErr *resilience.RetriesExhaustedError
 	var sempv2Err *sempv2.SEMPError
 	var sempv1Err *sempv1.Error
@@ -203,6 +208,16 @@ func buildErrorMessage(err error) (string, []string) {
 	// (except 503) get no object-level guidance.
 	if status >= 500 && status != 503 {
 		return message, nil
+	}
+	// Code 72 (permission denied): when the caller's broker alias is known,
+	// replace the broker's own text with an alias-tagged authorization message
+	// and suppress the generic code-72 hint. That hint points at management role
+	// and VPN scope — the Basic-auth knobs — which actively misleads an OAuth
+	// operator, where authorization is governed by the oauthProfile
+	// accessLevelGroups mapping instead. When the alias is empty the behavior is
+	// unchanged: the broker's own message plus the generic hint below.
+	if code == 72 && brokerAlias != "" {
+		return fmt.Sprintf("Authorization failed on broker %q.", brokerAlias), nil
 	}
 	if info, ok := translatedErrorCodes[code]; ok && info.hint != "" {
 		return message, []string{info.hint}

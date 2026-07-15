@@ -194,7 +194,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	if handleErr != nil {
 		errorType = "execution_error"
 		toolErr = fmt.Errorf("executing tool %q: %w", name, handleErr)
-		return m.buildErrorResult(toolErr), nil
+		return m.buildErrorResult(toolErr, brokerAlias), nil
 	}
 
 	// Guard against nil results from handler.
