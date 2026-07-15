@@ -134,7 +134,7 @@ func TestOAuthAuthenticator_AddAuth_ExchangeError(t *testing.T) {
 }
 
 func TestOAuthAuthenticator_HandleAuthFailure_NoSubjectToken(t *testing.T) {
-	a := NewOAuthAuthenticator(&fakeExchanger{}, "aud", nil, "b")
+	a := NewOAuthAuthenticator(&fakeExchanger{}, "aud", "b")
 	if a.HandleAuthFailure(context.Background(), nil).Retry {
 		t.Error("expected Retry=false when no subject token on context")
 	}
