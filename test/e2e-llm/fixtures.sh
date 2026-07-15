@@ -15,22 +15,9 @@
 # intentionally mirrors e2e-action/helpers.sh's `create_spooled_queue`
 # and `spawn_action_client` shapes so the fixture surface stays familiar.
 
-# curl wrapper that pulls $BROKER_USER / $BROKER_PASS from the environment
-# and feeds basic-auth via curl -K - (stdin config) instead of -u on the
-# command line. Keeps the password out of the process argv so `ps` on the
-# host can't see it. Callers pass any curl args as usual (e.g. -sf, -X DELETE,
-# -w '%{http_code}'). Backslashes and double quotes in the values are
-# escaped for curl's -K parser. Exported so scenario setup.cmd /
-# teardown.cmd / ground_truth.shell strings — which run in `bash -c`
-# children — can invoke it.
-semp_curl() {
-    local u="${BROKER_USER:?BROKER_USER not set}"
-    local p="${BROKER_PASS:?BROKER_PASS not set}"
-    u="${u//\\/\\\\}"; u="${u//\"/\\\"}"
-    p="${p//\\/\\\\}"; p="${p//\"/\\\"}"
-    printf 'user = "%s:%s"\n' "$u" "$p" | curl -K - "$@"
-}
-export -f semp_curl
+# semp_curl (basic-auth via curl -K - to keep the password out of argv) lives
+# in test/e2e-common/lib.sh and is inherited transitively via helpers.sh →
+# lib.sh. See SOL-151860 for the consolidation.
 
 # ── Fixture names ────────────────────────────────────────────────────────────
 # All share the e2e-llm- prefix so monitoring/management sweeps never touch

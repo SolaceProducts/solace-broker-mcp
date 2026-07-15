@@ -291,8 +291,8 @@ wait_for_slow_subscriber() {
         # rate=0 + stable discards = broker drained the egress (real decay);
         # rate>0 or rising discards = broker still delivering/dropping
         # (flag wrong, or just a momentary dip).
-        body=$(curl -s -o - -w '\n__HTTP_STATUS__%{http_code}' \
-            -u "$BROKER_USER:$BROKER_PASS" "$url" 2>/dev/null) || true
+        body=$(semp_curl -s -o - -w '\n__HTTP_STATUS__%{http_code}' \
+            "$url" 2>/dev/null) || true
         http_status="${body##*__HTTP_STATUS__}"
         body="${body%__HTTP_STATUS__*}"
         # `|| flag=""` so a transient non-JSON body (jq exits non-zero) just
