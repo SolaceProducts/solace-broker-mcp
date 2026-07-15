@@ -6,7 +6,6 @@
 set -euo pipefail
 
 LLM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-E2E_DIR="$(cd "$LLM_DIR/../e2e-monitoring" && pwd)"
 
 # shellcheck disable=SC1091
 source "$LLM_DIR/config.env"
@@ -18,8 +17,11 @@ if [ "$BROKER_TARGET" != "local-docker" ]; then
     exit 0
 fi
 
+# Source LLM helpers, which set SUITE_DIR=$LLM_DIR before pulling in the
+# monitoring F1–F7 cleanup functions — so BIN_DIR pidfiles and .env-derived
+# SEMP URLs point at this suite's tree, not monitoring's.
 # shellcheck disable=SC1091
-source "$E2E_DIR/helpers.sh"
+source "$LLM_DIR/helpers.sh"
 
 # stop_server (lib.sh) only kills $MCP_SERVER_PID, which is empty in a fresh
 # shell. Load the PID from the pidfile written by start-server.sh --bg, and
@@ -35,9 +37,14 @@ if [ -f "$MCP_PIDFILE" ]; then
 fi
 
 stop_server || true
+# Order matters: LLM cleanup runs FIRST so the kick-target broker-driver
+# clients release their queue bindings before cleanup_fixtures (monitoring)
+# reaps every broker-driver process via the pidfile glob — otherwise a
+# still-bound client would block the semp_delete on its queue.
+cleanup_llm_standing_fixtures || true
 cleanup_fixtures || true
 rm -f "$MCP_PIDFILE"
 
 log_ok "Fixtures torn down. Brokers still running."
 echo "To stop brokers too:"
-echo "  docker compose -f $E2E_DIR/docker-compose.yml down -v"
+echo "  docker compose -f $LLM_DIR/docker-compose.yml down -v"

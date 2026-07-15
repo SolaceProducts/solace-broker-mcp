@@ -199,6 +199,7 @@ func buildOAuthPoolAndManager(t *testing.T, idpURL, brokerURL string, exchanger 
 # is required. Under mcp_client_auth.mode: oauth (production) that is refused at
 # startup unless the operator opts in via allow_insecure_broker_tls: true.
 allow_insecure_broker_tls: true
+tls_terminated_upstream: true
 mcp_client_auth:
   mode: oauth
   issuer: "https://fake-issuer.example.com"

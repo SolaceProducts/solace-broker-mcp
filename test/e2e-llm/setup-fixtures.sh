@@ -13,7 +13,6 @@
 set -euo pipefail
 
 LLM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-E2E_DIR="$(cd "$LLM_DIR/../e2e-monitoring" && pwd)"
 COMMON_DIR="$(cd "$LLM_DIR/../e2e-common" && pwd)"
 
 # shellcheck disable=SC1091
@@ -28,17 +27,22 @@ if [ "$BROKER_TARGET" != "local-docker" ]; then
     exit 0
 fi
 
-SUITE_DIR="$E2E_DIR" bash "$COMMON_DIR/setup-brokers.sh"
+# Pass SUITE_DIR=$LLM_DIR so setup-brokers.sh uses this suite's own
+# docker-compose.yml (containers named solace-e2e-llm-a/b) and this
+# suite's .env / bin/ / ports — not the monitoring suite's.
+SUITE_DIR="$LLM_DIR" bash "$COMMON_DIR/setup-brokers.sh"
 
-# Cross-suite sourcing: pulls create_fixtures/cleanup_fixtures and the F1–F7
-# helpers from the monitoring suite. Safe today because e2e-management/helpers.sh
-# only defines sweep_config_fixtures (no name overlap). SOL-150727 will layer
-# in management helpers for write-tool scenarios — if either side adds a
-# colliding function name (create_fixtures, cleanup_fixtures, etc.) the second
-# source silently redefines the first with no warning. Namespace new helpers
-# (mon_ / mgmt_) or pull shared ones into e2e-common/lib.sh before that lands.
+# Source LLM helpers, which set SUITE_DIR=$LLM_DIR before pulling in the
+# monitoring suite's create_fixtures/cleanup_fixtures/F1–F7 helpers and
+# layering fixtures.sh on top. Safe today because e2e-management/helpers.sh
+# only defines sweep_config_fixtures (no name overlap). SOL-150727 will
+# layer in management helpers for write-tool scenarios — if either side
+# adds a colliding function name (create_fixtures, cleanup_fixtures, etc.)
+# the second source silently redefines the first with no warning.
+# Namespace new helpers (mon_ / mgmt_) or pull shared ones into
+# e2e-common/lib.sh before that lands.
 # shellcheck disable=SC1091
-source "$E2E_DIR/helpers.sh"
+source "$LLM_DIR/helpers.sh"
 
 build_broker_driver
 
@@ -58,10 +62,17 @@ mcp_pid_is_server() {
 if [ -f "$MCP_PIDFILE" ] && mcp_pid_is_server "$(cat "$MCP_PIDFILE")"; then
     log_info "MCP server already running (PID=$(cat "$MCP_PIDFILE")) — reusing"
 else
-    SUITE_DIR="$E2E_DIR" bash "$COMMON_DIR/start-server.sh" --bg
+    SUITE_DIR="$LLM_DIR" bash "$COMMON_DIR/start-server.sh" --bg
 fi
 
 create_fixtures
+
+# Mode-2 write/destructive-tool scenarios (a2, a3, b1, b3, b4, b5) reach for
+# LLM-specific standing objects (e2e-llm-action-queue-broker-{a,b},
+# e2e-llm-kick-target-{a,b}). Provision AFTER create_fixtures so build_broker_driver
+# has produced $BIN_DIR/broker-driver — the kick-target client needs it to hold
+# its long-lived connection open.
+create_llm_standing_fixtures
 
 log_ok "Fixtures provisioned. Long-running drivers:"
 ls "$BIN_DIR"/broker-driver-f*.pid 2>/dev/null || echo "  (none — F3/F4/F5/F6 expected)"

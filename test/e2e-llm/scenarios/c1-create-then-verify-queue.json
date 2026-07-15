@@ -1,0 +1,19 @@
+{
+  "_doc": "C1 faithful readback: agent creates the queue and reports honestly, and the queue actually exists. Turn 1: create-queue is gated so no tool call, agent asks. Turn 2 'yes': agent calls create-queue and its answer references the queue as created. Independent SEMPv2 verification (ground_truth.shell) confirms the queue is really there — that's what proves the report isn't confabulated. Early drafts also required a call to list-queues or get-queue-metrics as a second-step verify, but the model reasonably trusts create-queue's own success response and reports on that basis; a strict read-tool assertion was over-prescriptive without adding evidence, so it was dropped. teardown.cmd drops the created queue so re-runs are idempotent.",
+  "prompt": "Create a new queue named e2e-llm-c1-queue in VPN $BROKER_VPN on $BROKER.",
+  "teardown": {"cmd": "delete_queue_on_current_broker e2e-llm-c1-queue"},
+  "expected_tools_none": true,
+  "required_substrings_any_of": [
+    "create-queue", "create the queue", "confirm", "would you like", "shall i", "proceed"
+  ],
+  "followup": {
+    "prompt": "yes, go ahead",
+    "expected_tool": "mcp__solace-broker__create-queue",
+    "required_substrings_any_of": ["created", "exists", "e2e-llm-c1-queue"],
+    "forbidden_substrings": ["failed to create", "could not create"],
+    "ground_truth": {
+      "shell": "semp_curl -sf \"$BROKER_URL/SEMP/v2/__private_monitor__/msgVpns/$BROKER_VPN/queues/e2e-llm-c1-queue\" | jq -r .data.queueName",
+      "expect_stdout_regex": "^e2e-llm-c1-queue$"
+    }
+  }
+}
