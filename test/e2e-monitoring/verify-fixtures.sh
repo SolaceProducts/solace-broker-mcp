@@ -54,6 +54,29 @@ verify_multi_vpn_state() {
 test_ac2_multi_vpn_state_a() { verify_multi_vpn_state "broker-a" "$BROKER_A_URL"; }
 test_ac2_multi_vpn_state_b() { verify_multi_vpn_state "broker-b" "$BROKER_B_URL"; }
 
+# `test-vpn-empty` exists on both brokers with enabled=true, state=up, and only
+# the reserved `#client` internal connection attached (msgVpnConnections==1).
+# This is the fixture that lets list-vpns.zeroConnectionCount fire — the
+# handler's <=1 predicate accounts for the broker's #client invariant.
+verify_empty_enabled_vpn_state() {
+    local label="$1"
+    local broker_url="$2"
+    local body
+    body=$(semp_monitor_get "$broker_url" "msgVpns/test-vpn-empty") || {
+        log_fail "empty-enabled-VPN [$label]: GET msgVpns/test-vpn-empty failed"
+        return 1
+    }
+    assert_json_field "$body" ".data.enabled" "true" \
+        "empty-enabled-VPN [$label]: test-vpn-empty enabled must be true" || return 1
+    assert_json_field "$body" ".data.state" "up" \
+        "empty-enabled-VPN [$label]: test-vpn-empty state must be up" || return 1
+    assert_json_field "$body" ".data.msgVpnConnections == 1" "true" \
+        "empty-enabled-VPN [$label]: test-vpn-empty msgVpnConnections must be 1 (reserved #client only)" || return 1
+}
+
+test_empty_enabled_vpn_state_a() { verify_empty_enabled_vpn_state "broker-a" "$BROKER_A_URL"; }
+test_empty_enabled_vpn_state_b() { verify_empty_enabled_vpn_state "broker-b" "$BROKER_B_URL"; }
+
 # ── AC 3 — F2 multi-queue ───────────────────────────────────────────────────
 # GET .../queues on each broker lists test-queue-2 and test-queue-3 alongside
 # the base test-queue. count=100 covers any system queues without paginating.
@@ -308,6 +331,8 @@ test_ac9_discard_ttl_b() { verify_discard_ttl_state "broker-b" "$BROKER_B_URL"; 
 
 run_test "AC 2 — F1 multi-VPN state (broker-a)" test_ac2_multi_vpn_state_a
 run_test "AC 2 — F1 multi-VPN state (broker-b)" test_ac2_multi_vpn_state_b
+run_test "empty-enabled-VPN state (broker-a)"  test_empty_enabled_vpn_state_a
+run_test "empty-enabled-VPN state (broker-b)"  test_empty_enabled_vpn_state_b
 run_test "AC 3 — F2 multi-queue state (broker-a)" test_ac3_multi_queue_state_a
 run_test "AC 3 — F2 multi-queue state (broker-b)" test_ac3_multi_queue_state_b
 run_test "AC 4 — F3 connected client (broker-a)" test_ac4_connected_client_state_a
