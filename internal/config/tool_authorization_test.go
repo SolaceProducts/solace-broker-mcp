@@ -21,6 +21,13 @@ import (
 	"testing"
 )
 
+// enableToolAuthorizationFlag sets ENABLE_TOOL_AUTHORIZATION=true for the
+// duration of the test so the feature-gated validation and defaults fire.
+func enableToolAuthorizationFlag(t *testing.T) {
+	t.Helper()
+	t.Setenv(envEnableToolAuthorization, "true")
+}
+
 // oauthBaseYAML is the minimal valid oauth scaffold shared by tool_authorization
 // tests. Every test appends its tool_authorization block under mcp_client_auth.
 const oauthBaseYAML = `
@@ -38,6 +45,7 @@ tls_terminated_upstream: true
 // applyDefaults synthesizes &ToolAuthorizationConfig{Enabled: nil} so the
 // I3 validator arm fires with the exact Q18 error message.
 func TestToolAuthorization_Q1_OmittedBlockSynthesizedInOAuthMode(t *testing.T) {
+	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth
@@ -58,6 +66,7 @@ mcp_client_auth:
 
 // Q2: enabled: false alone is a legal opt-out — no other fields required.
 func TestToolAuthorization_Q2_EnabledFalseAloneIsLegal(t *testing.T) {
+	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth
@@ -82,6 +91,7 @@ mcp_client_auth:
 
 // Q2: enabled: false with populated fields loads; structural rules still apply.
 func TestToolAuthorization_Q2_EnabledFalseWithPopulatedFieldsLoads(t *testing.T) {
+	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth
@@ -117,6 +127,7 @@ mcp_client_auth:
 
 // Q3: Omitted groups_claim_name defaults to pointer-to-"groups".
 func TestToolAuthorization_Q3_OmittedGroupsClaimNameDefaultsToGroups(t *testing.T) {
+	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth
@@ -146,6 +157,7 @@ mcp_client_auth:
 // Q3a: Explicit blank groups_claim_name values are rejected with the exact
 // docstring-pinned error text.
 func TestToolAuthorization_Q3a_BlankGroupsClaimNameRejected(t *testing.T) {
+	enableToolAuthorizationFlag(t)
 	const wantErr = `mcp_client_auth.tool_authorization.groups_claim_name must be a non-blank string when set; omit the field to accept the default ("groups")`
 
 	cases := []struct {
@@ -182,6 +194,7 @@ mcp_client_auth:
 
 // Q4: enabled: true with empty access_level_groups is rejected.
 func TestToolAuthorization_Q4_EnabledTrueEmptyAccessLevelGroupsRejected(t *testing.T) {
+	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth
@@ -204,6 +217,7 @@ mcp_client_auth:
 
 // Q5: Case-sensitive group names are preserved through load.
 func TestToolAuthorization_Q5_CaseSensitiveGroupNamesPreserved(t *testing.T) {
+	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth
@@ -237,6 +251,7 @@ mcp_client_auth:
 
 // Q6: Group name with trailing whitespace is accepted verbatim.
 func TestToolAuthorization_Q6_WhitespaceInGroupNamePreservedVerbatim(t *testing.T) {
+	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth
@@ -267,6 +282,7 @@ mcp_client_auth:
 // Q7: Empty and whitespace-only group names are rejected with the exact
 // docstring-pinned error text.
 func TestToolAuthorization_Q7_EmptyAndWhitespaceOnlyGroupNamesRejected(t *testing.T) {
+	enableToolAuthorizationFlag(t)
 	const wantErr = "mcp_client_auth.tool_authorization.access_level_groups: group name cannot be empty or whitespace-only"
 
 	cases := []struct {
@@ -307,6 +323,7 @@ mcp_client_auth:
 // LoadConfig. The "unset" (nil) case cannot survive validation — it is covered
 // by Q17/Q18.
 func TestToolAuthorization_Q10_LogValueEnabledThreeWay(t *testing.T) {
+	enableToolAuthorizationFlag(t)
 	cases := []struct {
 		name        string
 		enabledYAML string
@@ -360,6 +377,7 @@ mcp_client_auth:
 
 // Q11: LogValue renders groups_claim_name verbatim.
 func TestToolAuthorization_Q11_LogValueGroupsClaimNameVerbatim(t *testing.T) {
+	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth
@@ -388,6 +406,7 @@ mcp_client_auth:
 
 // Q12: LogValue omits access_level_groups from the emitted slog record.
 func TestToolAuthorization_Q12_LogValueOmitsAccessLevelGroups(t *testing.T) {
+	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth
@@ -419,6 +438,7 @@ mcp_client_auth:
 // Q14/Q15: I1 fires when tool_authorization is present under non-oauth modes.
 // Error text is identical across modes with the current mode interpolated.
 func TestToolAuthorization_Q14_Q15_I1_NonOAuthModeWithBlockRejects(t *testing.T) {
+	enableToolAuthorizationFlag(t)
 	cases := []struct {
 		name     string
 		mode     string
@@ -468,6 +488,7 @@ brokers:
 
 // Q17/Q18: I3 fires when oauth mode + enabled is omitted from the block.
 func TestToolAuthorization_Q17_Q18_I3_OAuthModeEnabledOmittedRejects(t *testing.T) {
+	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth
