@@ -194,6 +194,7 @@ func TestBuildErrorMessage(t *testing.T) {
 	var tests = []struct {
 		name            string
 		input           error
+		brokerAlias     string
 		wantMsg         string
 		wantSuggestions []string
 	}{
@@ -201,6 +202,7 @@ func TestBuildErrorMessage(t *testing.T) {
 		{
 			"retries exhausted carries no suggestions",
 			&resilience.RetriesExhaustedError{StatusCode: 503, Attempts: 3},
+			"broker-eu-prod",
 			"Request failed after 3 attempts (HTTP 503). Internal retries exhausted; try again later.",
 			nil,
 		},
@@ -208,39 +210,71 @@ func TestBuildErrorMessage(t *testing.T) {
 		{
 			"sempv2 code 6 yields hint",
 			&sempv2.SEMPError{StatusCode: 404, SEMPCode: 6, Description: "Queue not found"},
+			"broker-eu-prod",
 			"Queue not found",
 			[]string{"Verify the name is correct."},
+		},
+		// Code 72 (permission denied) with a known alias: message is replaced with
+		// an alias-tagged line and the generic role/VPN-scope hint is suppressed.
+		{
+			"sempv2 code 72 with alias tags broker, drops hint",
+			&sempv2.SEMPError{StatusCode: 403, SEMPCode: 72, Description: "not authorized"},
+			"broker-oauth",
+			`Authorization failed on broker "broker-oauth".`,
+			nil,
+		},
+		{
+			"sempv1 code 72 with alias tags broker, drops hint",
+			&sempv1.Error{Kind: sempv1.ErrorKindPermission, StatusCode: 200, ReasonCode: 72, Message: "not authorized"},
+			"broker-oauth",
+			`Authorization failed on broker "broker-oauth".`,
+			nil,
+		},
+		// Code 72 with an empty alias: unchanged — broker's own message plus the
+		// existing generic code-72 hint.
+		{
+			"sempv2 code 72 empty alias falls back to broker text plus generic hint",
+			&sempv2.SEMPError{StatusCode: 403, SEMPCode: 72, Description: "not authorized"},
+			"",
+			"not authorized",
+			[]string{"Credentials lack permission; check the management role/VPN scope."},
 		},
 		// Suppression happens before the hint lookup: a suppressed 5xx gets no hint
 		// even though its code (6) has one in the table.
 		{
 			"sempv2 500 suppressed gives no hint even with known code",
 			&sempv2.SEMPError{StatusCode: 500, SEMPCode: 6, Description: "stack trace"},
+			"broker-eu-prod",
 			genericInternalMessage,
 			nil,
 		},
-		// Exchange errors route through buildExchangeErrorMessage.
+		// Exchange errors route through buildExchangeErrorMessage. A non-empty
+		// alias is passed to confirm these paths are untouched by the alias.
 		{
 			"exchange rejected",
 			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeRejected, Message: "invalid_grant"},
+			"broker-oauth",
 			"Authentication failed: the identity provider rejected the token exchange. Contact your administrator.",
 			nil,
 		},
 		{
 			"exchange transport",
 			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeTransport, Message: "connect timeout"},
+			"broker-oauth",
 			"Authentication failed: unable to reach the identity provider. Try again shortly.",
 			nil,
 		},
 		{
 			"exchange invalid response",
 			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrInvalidResponse, Message: "unexpected content-type"},
+			"broker-oauth",
 			"Authentication failed: the identity provider returned an unexpected response. Contact your administrator.",
 			nil,
 		},
 		{
 			"exchange missing subject",
 			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeMissingSubject, Message: "no subject token on context"},
+			"broker-oauth",
 			"Authentication failed: no identity token was found for the current session. Contact your administrator.",
 			nil,
 		},
@@ -249,6 +283,7 @@ func TestBuildErrorMessage(t *testing.T) {
 		{
 			"unknown error",
 			errors.New("boom"),
+			"broker-eu-prod",
 			genericInternalMessage,
 			nil,
 		},
@@ -256,7 +291,7 @@ func TestBuildErrorMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg, suggestions := buildErrorMessage(tt.input)
+			msg, suggestions := buildErrorMessage(tt.input, tt.brokerAlias)
 			if msg != tt.wantMsg {
 				t.Errorf("%s: msg = %q, want %q", tt.name, msg, tt.wantMsg)
 			}
@@ -274,7 +309,7 @@ func TestBuildErrorResult_ExchangeError_StructuredFields(t *testing.T) {
 		Message:  "invalid_grant",
 	})
 
-	result := m.buildErrorResult(err)
+	result := m.buildErrorResult(err, "my-broker")
 
 	if !result.IsError {
 		t.Fatal("expected IsError=true")
@@ -296,7 +331,7 @@ func TestBuildErrorResult_ExchangeError_StructuredFields(t *testing.T) {
 		Sentinel: tokenexchange.ErrExchangeTransport,
 		Message:  "dial timeout",
 	})
-	transportResult := m.buildErrorResult(transportErr)
+	transportResult := m.buildErrorResult(transportErr, "my-broker")
 	transportStructured := transportResult.StructuredContent.(map[string]any)
 	if got := transportStructured["retryable"]; got != true {
 		t.Errorf("transport retryable = %v, want true", got)
@@ -307,7 +342,7 @@ func TestBuildErrorResult_ExchangeError_StructuredFields(t *testing.T) {
 		Message:     "no subject token on context",
 		BrokerAlias: "my-broker",
 	}
-	missingResult := m.buildErrorResult(missingSubjectErr)
+	missingResult := m.buildErrorResult(missingSubjectErr, "my-broker")
 	missingStructured := missingResult.StructuredContent.(map[string]any)
 	if got := missingStructured["error_source"]; got != "token_exchange" {
 		t.Errorf("missing subject error_source = %v, want %q", got, "token_exchange")
