@@ -52,7 +52,9 @@ func init() {
 //     #client is a deterministic +1 offset — never >1 — and vanishes cleanly
 //     when the VPN is disabled. Per-service counter summation is not a viable
 //     alternative: #client is folded into msgVpnConnectionsServiceSmf too, so
-//     the same dead-metric bug applies.
+//     the same dead-metric bug applies. Scope note: msgVpnConnections also
+//     includes bridge / DMR / replication service connections, so a VPN with
+//     only those and no user clients will not be counted as zero-connection.
 //
 // down/standby/zeroConnection are all gated on enabled==true so a disabled VPN
 // (which typically reports state=="down") lands in disabledCount only, and the

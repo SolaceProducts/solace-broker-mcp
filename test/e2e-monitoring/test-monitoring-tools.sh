@@ -120,6 +120,13 @@ test_list_vpns_summary() {
     # Solace attaches a reserved internal `#client` to every enabled+up VPN
     # (broker invariant), so a "no real clients" VPN reports conns==1, not 0.
     # The handler encodes the same predicate; see list_vpns.go for details.
+    # Because this recompute mirrors the handler predicate, its independent
+    # value is thin — the real guards are (1) the coverage guard below
+    # (`zeroConnectionCount >= 1`) and (2) the SEMP-direct assertion in
+    # verify-fixtures.sh that `test-vpn-empty.msgVpnConnections == 1`. If the
+    # broker ever attaches more (or fewer) than one internal client, the
+    # verify-fixtures tripwire fires before this recompute goes silent, so
+    # don't relax that `==1` assertion without a matching update here.
     assert_json_field "$content" \
         '(.summary.disabledCount) >= 1' "true" \
         "$label: at least one disabled VPN expected (fixture: test-vpn)" || return 1
