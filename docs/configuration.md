@@ -40,6 +40,7 @@ The server resolves variables at startup. The `.env` file loads automatically be
 | `allow_insecure_broker_tls` | — | `false` | Opt-in to a broker with `insecure_skip_verify: true` while `mcp_client_auth.mode: oauth`. Acknowledges that disabling broker certificate verification exposes the broker admin credential to a man-in-the-middle. |
 | `tls_cert_file` | — | none | Path to TLS certificate (PEM). |
 | `tls_key_file` | — | none | Path to TLS private key (PEM). |
+| `tls_terminated_upstream` | — | `false` | Opt-in to a plaintext listener while `mcp_client_auth.mode: oauth`. Acknowledges that TLS is terminated by an upstream proxy/ingress. Ignored in the dev modes. |
 | `log_level` | — | `info` | Log verbosity: `debug`, `info`, `warn`, `error`. |
 | `enable_write_tools` | — | `false` | When `true`, register every tool that is not read-only (13 in total): the four action-API tools (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`) plus the nine Config-API management tools (`create`/`update`/`delete` for `message-vpn`, `queue`, and `topic-endpoint`). This includes the non-destructive stats-reset tools (which still mutate broker state) and provisioning tools such as `delete-message-vpn`. When `false`, those tools are skipped at registration and never appear in `tools/list`. Secure-by-default for trial / dev deployments. |
 
@@ -50,6 +51,8 @@ port: 9090
 tls_cert_file: "/etc/certs/server.pem"
 tls_key_file: "/etc/certs/server-key.pem"
 ```
+
+Under `mode: oauth` (production) a plaintext listener would carry client bearer tokens and tool results in cleartext, so it is **refused at startup** unless either TLS certs are set (above) or `tls_terminated_upstream: true` acknowledges that an upstream proxy/ingress terminates TLS. With the acknowledgment the server serves plaintext and logs a startup `WARN`. The dev modes (`static`/`disabled`) are unaffected. See [Authentication](authentication.md) for the two deployment patterns.
 
 **Bind address:** When `listen_address` is unset, the effective bind depends on `mcp_client_auth.mode` so the dev modes are safe by default — they are not reachable from the network unless an operator opts in:
 

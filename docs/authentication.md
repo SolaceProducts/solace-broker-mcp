@@ -10,6 +10,7 @@ The Solace Event Broker MCP Server supports three authentication modes for MCP c
   - [Choose a client registration method](#choose-a-client-registration-method)
   - [Step 1: Set up the identity provider](#step-1-set-up-the-identity-provider)
   - [Step 2: Configure the MCP server](#step-2-configure-the-mcp-server)
+  - [TLS for the MCP server's own listener](#tls-for-the-mcp-servers-own-listener)
   - [Step 3: Start the MCP server](#step-3-start-the-mcp-server)
   - [Step 4: Add the server to Claude Code](#step-4-add-the-server-to-claude-code)
 - [Troubleshooting](#troubleshooting)
@@ -246,10 +247,52 @@ The `audience` value must exactly match the value configured in step 1.2. Set `r
 >   mode: oauth
 >   issuer: "https://localhost:8443/realms/solace"
 >   audience: "solace-mcp-server"
->   resource_url: "http://localhost:9090/mcp"
+>   resource_url: "https://localhost:9090/mcp"
 > ```
 
-> **Note:** Under `mode: oauth` the validator enforces `https://` on the `issuer` URL. When running Keycloak locally for testing, terminate TLS in front of it (for example, via Caddy or a reverse proxy) or run Keycloak with a TLS cert. The `resource_url` may remain `http://` for local-bind testing.
+> **Note:** Under `mode: oauth` the validator enforces `https://` on **both** the `issuer` and `resource_url` URLs (an `http://` value is rejected at startup). When running Keycloak locally for testing, terminate TLS in front of it (for example, via Caddy or a reverse proxy) or run Keycloak with a TLS cert. `resource_url` is the externally advertised identifier for OAuth discovery, so it must be `https://` even when the MCP server's own listener is plaintext behind an upstream terminator — see [TLS for the MCP server's own listener](#tls-for-the-mcp-servers-own-listener) below.
+
+### TLS for the MCP server's own listener
+
+`mode: oauth` is a production profile, so the server must not silently serve its
+own listener over plaintext — client bearer tokens and tool results would travel
+in cleartext. There are two supported deployment patterns; OAuth mode requires at
+least one of them, or startup fails with a config error.
+
+1. **Direct TLS at the server.** Set both `tls_cert_file` and `tls_key_file`. The
+   server listens over HTTPS itself.
+
+   ```yaml
+   tls_cert_file: "/etc/mcp-server/tls/tls.crt"
+   tls_key_file: "/etc/mcp-server/tls/tls.key"
+   ```
+
+2. **TLS terminated upstream.** A reverse proxy, load balancer, or Kubernetes
+   ingress terminates TLS and forwards plaintext to the server on a private
+   network. Acknowledge this explicitly:
+
+   ```yaml
+   tls_terminated_upstream: true
+   ```
+
+   The server then serves plaintext on its bind address and logs a startup
+   `WARN` naming `tls_terminated_upstream`, so a missing terminating proxy stays
+   visible in triage logs. Make sure the proxy is actually in front of the bind
+   address.
+
+   > **Bind scope:** this flag only permits the plaintext listener — it does not
+   > restrict where the server binds. Under `mode: oauth`, `listen_address`
+   > defaults to all interfaces (`0.0.0.0`), so the plaintext port is reachable by
+   > anything that can route to it, not only the terminating proxy. Make sure the
+   > network scope is trusted: on Kubernetes keep the Service `ClusterIP` and put
+   > the TLS-terminating ingress in front of it; on bare metal set `listen_address`
+   > to the proxy-facing interface (loopback for a same-host proxy) so only the
+   > terminator can reach the port.
+
+If **both** are set, direct TLS takes precedence: the server terminates TLS
+itself and `tls_terminated_upstream` is ignored (no plaintext, no `WARN`).
+Providing **neither** is a fatal config error. The setting is ignored entirely in
+the `disabled`/`static` dev modes.
 
 ### Step 3: Start the MCP Server
 

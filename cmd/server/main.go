@@ -35,9 +35,9 @@ import (
 	_ "github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess/handlers" // register handlers via init()
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
-	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
 	"github.com/SolaceDev/solace-broker-mcp/internal/idpclient"
 	"github.com/SolaceDev/solace-broker-mcp/internal/middleware/recovery"
+	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
 	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
 	"github.com/SolaceDev/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
@@ -539,6 +539,13 @@ func main() {
 	// shared dev token would travel plaintext on a routable interface.
 	if cfg.StaticTokenExposedCleartext() {
 		banner.LogStaticCleartextExposure(cfg.BindAddress())
+	}
+
+	// oauth mode requires TLS unless the operator acknowledged upstream TLS
+	// termination (tls_terminated_upstream: true). When they did, the listener
+	// serves plaintext — warn loudly so a missing terminating proxy is visible.
+	if cfg.OAuthPlaintextListenerAcknowledged() {
+		banner.LogOAuthPlaintextListener(cfg.BindAddress())
 	}
 
 	// Reconfigure slog with the user-configured level. cfg.LogLevel is

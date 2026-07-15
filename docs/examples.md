@@ -274,6 +274,12 @@ mcp_client_auth:
   audience: "solace-mcp-server"
   resource_url: "https://your-mcp-server.example.com/mcp"
 
+# TLS for the server's own listener. Either terminate TLS here with
+# tls_cert_file/tls_key_file, or acknowledge that a proxy/ingress terminates it
+# (oauth mode refuses a plaintext listener otherwise). This example assumes an
+# upstream terminator; the server then logs a startup WARN while serving plaintext.
+tls_terminated_upstream: true
+
 brokers:
   prod-broker:
     url: "https://prod.example.com:1943"

@@ -10,6 +10,10 @@
 # To use a different broker, modify the URL below:
 
 port: 9091
+# The OAuth integration test drives the server on a plaintext listener; TLS is a
+# separate concern here. Acknowledge upstream TLS termination so mode: oauth does
+# not refuse to start with no cert/key.
+tls_terminated_upstream: true
 mcp_client_auth:
   mode: oauth
   issuer: "https://localhost:8443/realms/solace"
