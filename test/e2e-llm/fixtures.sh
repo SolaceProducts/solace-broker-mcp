@@ -101,7 +101,7 @@ delete_queue_on_current_broker() {
     # existed — that's fine. Any other non-2xx is a warning worth surfacing.
     local code
     code=$(semp_curl -s -o /dev/null -w '%{http_code}' -X DELETE \
-        "$BROKER_SEMP_CONFIG/msgVpns/$BROKER_VPN/queues/$queue" 2>/dev/null || echo "000")
+        "$SEMP_CONFIG/msgVpns/$BROKER_VPN/queues/$queue" 2>/dev/null || echo "000")
     case "$code" in
         2*|404) ;;
         *) echo "delete_queue_on_current_broker: DELETE $queue returned HTTP $code (queue may leak)" >&2 ;;

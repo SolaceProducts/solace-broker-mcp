@@ -83,7 +83,7 @@ cleanup() {
     # $RUN_FILE around in case teardown wants to inspect it (nothing does
     # today, but the ordering is the safer default).
     if [ -n "$TEARDOWN_CMD" ]; then
-        bash -c "$TEARDOWN_CMD" >&2 || log_warn "teardown.cmd exited non-zero (fixture may need manual reset)"
+        bash -c "set -euo pipefail; $TEARDOWN_CMD" >&2 || log_warn "teardown.cmd exited non-zero (fixture may need manual reset)"
     fi
     rm -f "$RUN_FILE" "$RUN_FILE2"
     [ -n "$RENDERED_MCP_CONFIG" ] && rm -f "$RENDERED_MCP_CONFIG"
@@ -229,7 +229,7 @@ SCENARIO_NAME="$(basename "$SCENARIO_FILE" .json) [$BROKER]"
 TEARDOWN_CMD=$(jq -r '.teardown.cmd // empty' <<<"$EXPANDED")
 SETUP_CMD=$(jq -r '.setup.cmd // empty' <<<"$EXPANDED")
 if [ -n "$SETUP_CMD" ]; then
-    bash -c "$SETUP_CMD" >&2 || { log_err "setup.cmd failed — aborting scenario"; exit 2; }
+    bash -c "set -euo pipefail; $SETUP_CMD" >&2 || { log_err "setup.cmd failed — aborting scenario"; exit 2; }
 fi
 
 log_info "prompt: $PROMPT"
@@ -368,6 +368,16 @@ run_assertions() {
         fail "$label: ground_truth.jq/answer_regex and ground_truth.shell/expect_stdout_regex are mutually exclusive"
         return
     fi
+    # Fail fast on a partially-specified pair — otherwise the check below skips
+    # silently and the scenario passes on other assertions, hiding the misconfig.
+    if { [ -n "$gt_jq" ] && [ -z "$gt_regex" ]; } || { [ -z "$gt_jq" ] && [ -n "$gt_regex" ]; }; then
+        fail "$label: ground_truth.jq and ground_truth.answer_regex must both be set"
+        return
+    fi
+    if { [ -n "$gt_shell" ] && [ -z "$gt_expect" ]; } || { [ -z "$gt_shell" ] && [ -n "$gt_expect" ]; }; then
+        fail "$label: ground_truth.shell and ground_truth.expect_stdout_regex must both be set"
+        return
+    fi
 
     local tool_calls answer
     tool_calls=$(jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="tool_use") | .name' "$run_file" | sort -u)
@@ -482,7 +492,7 @@ run_assertions() {
     if [ -n "$gt_shell" ] && [ -n "$gt_expect" ]; then
         local gt_out gt_rc
         set +e
-        gt_out=$(bash -c "$gt_shell" 2>&1)
+        gt_out=$(bash -c "set -euo pipefail; $gt_shell" 2>&1)
         gt_rc=$?
         set -e
         log_info "$label ground_truth.shell → $(echo "$gt_out" | tr '\n' ' ' | head -c 120)"
