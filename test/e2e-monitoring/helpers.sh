@@ -9,7 +9,10 @@ set -euo pipefail
 
 # SUITE_DIR contract (see e2e-common/lib.sh): set our own directory, then source
 # the shared library, which derives BIN_DIR/ENV_FILE/REPO_ROOT and .env from it.
-SUITE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Honor a pre-set SUITE_DIR so cross-suite sourcing (e.g. e2e-llm/helpers.sh
+# reusing our F1–F7 code against the LLM suite's .env / bin / ports) keeps
+# the caller's tree instead of being silently rewired to e2e-monitoring.
+SUITE_DIR="${SUITE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 # shellcheck source=../e2e-common/lib.sh
 source "$SUITE_DIR/../e2e-common/lib.sh"
 
