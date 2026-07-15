@@ -600,6 +600,9 @@ func TestSender_Retry_401_OAuth_ReAuthsOnRetry(t *testing.T) {
 	if len(authn.tokens) != 2 {
 		t.Fatalf("expected AddAuth called twice, got %d", len(authn.tokens))
 	}
+	if len(capturedTokens) != 2 {
+		t.Fatalf("server saw %d requests, want 2; cannot compare tokens", len(capturedTokens))
+	}
 	if capturedTokens[0] == capturedTokens[1] {
 		t.Errorf("retry should carry fresh token; both requests had %q", capturedTokens[0])
 	}
@@ -818,6 +821,9 @@ func TestSender_Retry_401_OAuth_ReAuthsOnRetry_POST(t *testing.T) {
 	}
 	if len(authn.tokens) != 2 {
 		t.Fatalf("expected AddAuth called twice, got %d", len(authn.tokens))
+	}
+	if len(capturedTokens) != 2 {
+		t.Fatalf("server saw %d requests, want 2; cannot compare tokens", len(capturedTokens))
 	}
 	if capturedTokens[0] == capturedTokens[1] {
 		t.Errorf("POST retry should carry fresh token; both requests had %q", capturedTokens[0])
