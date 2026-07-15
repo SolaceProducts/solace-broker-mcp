@@ -17,6 +17,8 @@ package tokenexchange
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"log/slog"
 )
 
 // DeduplicationKeyInput defines the fields that determine whether two
@@ -29,6 +31,22 @@ import (
 type DeduplicationKeyInput struct {
 	SubjectToken string
 	BrokerAlias  string
+}
+
+// String, GoString, and LogValue redact SubjectToken so
+// DeduplicationKeyInput never leaks it through fmt formatting or slog
+// reflection. Value receivers so *DeduplicationKeyInput is covered too.
+// Pattern mirrors cache.CachedCredential.
+func (d DeduplicationKeyInput) String() string {
+	return fmt.Sprintf("DeduplicationKeyInput{BrokerAlias: %q}", d.BrokerAlias)
+}
+
+func (d DeduplicationKeyInput) GoString() string {
+	return d.String()
+}
+
+func (d DeduplicationKeyInput) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("broker_alias", d.BrokerAlias))
 }
 
 // computeDeduplicationKey produces a deterministic, collision-resistant
