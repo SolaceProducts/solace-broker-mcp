@@ -749,6 +749,7 @@ tools:
       Reset the statistics counters for a queue. Non-destructive: this resets
       monitoring counters only and does not affect spooled messages or message
       delivery. Useful for establishing a fresh metrics baseline during testing.
+      To purge/drain messages from a queue, use delete-queue-messages instead.
     annotations:
       readOnly: false
       destructive: false
