@@ -135,25 +135,24 @@ func TestOAuthAuthenticator_AddAuth_ExchangeError(t *testing.T) {
 
 func TestOAuthAuthenticator_HandleAuthFailure_NoSubjectToken(t *testing.T) {
 	a := NewOAuthAuthenticator(&fakeExchanger{}, "aud", "b")
-	if a.HandleAuthFailure(context.Background(), nil) {
-		t.Error("expected false when no subject token on context")
+	if a.HandleAuthFailure(context.Background(), nil).Retry {
+		t.Error("expected Retry=false when no subject token on context")
 	}
 }
 
-// TestOAuthAuthenticator_HandleAuthFailure_WithSubjectToken pins the
-// current contract: eviction happens (Invalidate is called with the
-// right key so the *next* request pulls a fresh token), but the return
-// is false so the resilience layer does not retry in-flight. Retrying
-// in-flight would replay the same *http.Request with the stale
-// Authorization header — see the docstring on HandleAuthFailure and
-// SOL-151624 for the PrepareRetry follow-up that flips this to true.
+// TestOAuthAuthenticator_HandleAuthFailure_WithSubjectToken verifies that
+// HandleAuthFailure evicts the cached token and returns Retry=true, ReAuth=true.
 func TestOAuthAuthenticator_HandleAuthFailure_WithSubjectToken(t *testing.T) {
 	exchg := &fakeExchanger{}
 	a := NewOAuthAuthenticator(exchg, "aud", "my-broker")
 
 	ctx := ctxWithSubjectToken(t, "agent-jwt")
-	if a.HandleAuthFailure(ctx, nil) {
-		t.Error("expected false — in-flight retry is deferred to SOL-151624")
+	res := a.HandleAuthFailure(ctx, nil)
+	if !res.Retry {
+		t.Error("expected Retry=true — should signal retry after cache eviction")
+	}
+	if !res.ReAuth {
+		t.Error("expected ReAuth=true — OAuth token is refreshable, retry must re-run AddAuth")
 	}
 
 	exchg.mu.Lock()

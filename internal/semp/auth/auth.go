@@ -30,7 +30,21 @@ import (
 // token refresh) must provide their own synchronization.
 type Authenticator interface {
 	AddAuth(ctx context.Context, req *http.Request) error
-	HandleAuthFailure(ctx context.Context, respHeader http.Header) (retry bool)
+
+	// HandleAuthFailure is called by the resilience layer when the broker
+	// rejects a request with 401 Unauthorized. It performs any recovery the
+	// auth mode allows (evicting a cached token, clearing session cookies)
+	// and returns how the resilience layer should proceed.
+	HandleAuthFailure(ctx context.Context, respHeader http.Header) AuthFailureResult
+}
+
+// AuthFailureResult tells the resilience layer how to respond to a 401.
+// Retry reports whether the request should be retried at all. ReAuth reports
+// whether that retry must first re-invoke AddAuth to attach refreshed
+// credentials. ReAuth is only consulted when Retry is true.
+type AuthFailureResult struct {
+	Retry  bool
+	ReAuth bool
 }
 
 // CookieJarClearer is accepted by BasicAuthenticator to clear stale
