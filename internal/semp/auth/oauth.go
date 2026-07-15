@@ -75,29 +75,17 @@ func (a *OAuthAuthenticator) AddAuth(ctx context.Context, req *http.Request) err
 	return nil
 }
 
-// HandleAuthFailure evicts the cached token for this broker and subject
-// token so the next request from the same caller misses the cache and
-// fetches a fresh token from the IdP. Returns false: the in-flight
-// retry is not attempted.
-//
-// Why not return true today: the resilience layer does not re-invoke
-// AddAuth between attempts (retryablehttp replays the same *http.Request
-// with the stale Authorization header). Returning true would guarantee
-// another 401 plus one wasted round-trip and backoff — strictly worse
-// than pre-cache behavior. SOL-151624 tracks wiring a PrepareRetry hook
-// that re-runs AddAuth on retry; once that lands, this returns true.
-//
-// Basic/Bearer are unaffected — their AddAuth sets a static header, so
-// replaying the request on retry carries the same (still-correct) value.
-// Only OAuth needs the PrepareRetry hook to make in-flight recovery work.
-func (a *OAuthAuthenticator) HandleAuthFailure(ctx context.Context, _ http.Header) bool {
+// HandleAuthFailure evicts the cached token and signals a retry that must
+// re-authenticate — the token is refreshable, so AddAuth fetches a fresh one.
+// With no subject token there is nothing to exchange, so it declines to retry.
+func (a *OAuthAuthenticator) HandleAuthFailure(ctx context.Context, _ http.Header) AuthFailureResult {
 	subjectToken, ok := internalauth.RawSubjectTokenFromContext(ctx)
 	if !ok {
-		return false
+		return AuthFailureResult{}
 	}
 	a.exchanger.Invalidate(ctx, tokenexchange.DeduplicationKeyInput{
 		SubjectToken: subjectToken,
 		BrokerAlias:  a.brokerAlias,
 	})
-	return false
+	return AuthFailureResult{Retry: true, ReAuth: true}
 }

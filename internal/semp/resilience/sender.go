@@ -86,6 +86,7 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 	retryClient.Backoff = retryablehttp.RateLimitLinearJitterBackoff
 	retryClient.CheckRetry = d.checkRetry
 	retryClient.ErrorHandler = d.errorHandler
+	retryClient.PrepareRetry = d.prepareRetry
 	retryClient.Logger = nil // manual logging in checkRetry
 	d.retryClient = retryClient
 
@@ -120,6 +121,13 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 	// (a direct-construction test), retryBudget stays 0 and Do skips the
 	// deadline — a backoff-only budget would allot no time to the attempts
 	// themselves and fire spuriously under load.
+	//
+	// Caveat: an OAuth re-auth retry runs the token exchange inside
+	// prepareRetry on a context detached from the request (see
+	// tokenexchange.Exchange), bounded only by its own exchange timeout rather
+	// than this budget. On such a retry the slot can therefore be held up to
+	// that exchange timeout beyond retryBudget. Immaterial at default timeouts;
+	// worth noting for very short tunings.
 	if sempCfg.RequestTimeoutDuration > 0 {
 		retryMax := *sempCfg.Retries
 		d.retryBudget = time.Duration(retryMax+1)*sempCfg.RequestTimeoutDuration +
@@ -238,6 +246,19 @@ func (b *cancelOnCloseReadCloser) Close() error {
 	return err
 }
 
+// prepareRetry re-runs AddAuth when the authenticator signalled ReAuth on the
+// preceding 401 (carried as needsReauth on the retry state). Skipped for
+// 429/503/5xx retries and for auth modes whose recovery does not need fresh
+// credentials (e.g. Basic, where AddAuth would only re-set a static header).
+func (d *Sender) prepareRetry(req *http.Request) error {
+	state := getRetryState(req.Context())
+	if state.needsReauth {
+		state.needsReauth = false
+		return d.authenticator.AddAuth(req.Context(), req)
+	}
+	return nil
+}
+
 // Close releases resources held by the Sender. Stops the rate limiter ticker
 // if one is running. Safe to call multiple times.
 func (d *Sender) Close() {
@@ -266,15 +287,37 @@ func (d *Sender) errorHandler(resp *http.Response, err error, numTries int) (*ht
 		_ = resp.Body.Close()
 	}
 
-	if err != nil {
-		return nil, &RetriesExhaustedError{Attempts: numTries, Err: err}
-	}
-
+	// Extract the operation ID up front so every exit path can name it. It
+	// lives on the request context, reachable via resp.Request on any path
+	// where a response was seen (including the err path below, where resp
+	// holds the last attempt's response).
 	opID := "unknown"
 	if resp != nil && resp.Request != nil {
 		if id, ok := resp.Request.Context().Value(OperationIDKey{}).(string); ok {
 			opID = id
 		}
+	}
+
+	// err != nil covers connection errors (resp == nil) and a PrepareRetry
+	// failure — e.g. the re-auth token exchange failing because the IdP is
+	// down, where resp still holds the last 401. Without logging here that
+	// case would go silent, and reporting StatusCode 0 would hide the 401 a
+	// caller keys on; carry the last observed status through when we have it.
+	if err != nil {
+		if resp != nil {
+			slog.Error("request failed after retries exhausted",
+				slog.String("broker", d.brokerURL),
+				slog.String("operation", opID),
+				slog.Int("status", resp.StatusCode),
+				slog.Int("attempts", numTries),
+				slog.String("error", err.Error()))
+			return nil, &RetriesExhaustedError{
+				StatusCode: resp.StatusCode,
+				Attempts:   numTries,
+				Err:        err,
+			}
+		}
+		return nil, &RetriesExhaustedError{Attempts: numTries, Err: err}
 	}
 
 	if resp != nil {

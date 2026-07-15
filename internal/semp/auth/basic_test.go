@@ -28,8 +28,12 @@ func TestBasicAuthenticator_HandleAuthFailure_ClearsJarAndReturnsTrue(t *testing
 	jar := &recordingJar{}
 	a := NewBasicAuthenticator("admin", "s3cret", jar)
 
-	if !a.HandleAuthFailure(context.Background(), nil) {
-		t.Error("HandleAuthFailure returned false, want true on successful clear")
+	res := a.HandleAuthFailure(context.Background(), nil)
+	if !res.Retry {
+		t.Error("HandleAuthFailure returned Retry=false, want true on successful clear")
+	}
+	if res.ReAuth {
+		t.Error("HandleAuthFailure returned ReAuth=true, want false — the Basic header is static")
 	}
 	if jar.clearCalls != 1 {
 		t.Errorf("jar.Clear() called %d times, want 1", jar.clearCalls)
@@ -45,8 +49,8 @@ func TestBasicAuthenticator_HandleAuthFailure_JarClearError(t *testing.T) {
 	jar := &recordingJar{clearErr: sentinel}
 	a := NewBasicAuthenticator("admin", "s3cret", jar)
 
-	if a.HandleAuthFailure(context.Background(), nil) {
-		t.Error("HandleAuthFailure returned true, want false when jar.Clear() fails")
+	if a.HandleAuthFailure(context.Background(), nil).Retry {
+		t.Error("HandleAuthFailure returned Retry=true, want false when jar.Clear() fails")
 	}
 	if jar.clearCalls != 1 {
 		t.Errorf("jar.Clear() called %d times, want 1", jar.clearCalls)
