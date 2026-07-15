@@ -123,6 +123,40 @@ const staticCleartextBanner = `
   a loopback address.
 ============================================================`
 
+// LogOAuthPlaintextListener warns that OAuth (production) mode is serving a
+// plaintext listener under an explicit tls_terminated_upstream acknowledgment —
+// the caller decides when to emit it (see config.OAuthPlaintextListenerAcknowledged).
+// The listener carries client bearer tokens and tool results, so it must sit
+// behind a TLS-terminating proxy/ingress; if none is in front, that traffic is
+// on the wire in cleartext. This is a WARN, not a hard error: validate() already
+// required the operator to acknowledge upstream termination, so the plaintext
+// listener is a deliberate choice. The banner names the acknowledgment field so
+// the WARN self-documents why the plaintext listener was allowed, and logs
+// bindAddr so operators can confirm which interface is exposed.
+//
+// The banner does NOT escalate on a wildcard (all-interfaces) bind. Under oauth
+// the listener defaults to all interfaces, and a wildcard bind is exactly the
+// correct, common configuration behind a Kubernetes Service/ingress — the
+// process cannot tell a locked-down pod netns from a LAN-exposed host, so an
+// escalation there would fire loudest on the recommended deployment and train
+// operators to ignore it. The bind-scope caveat is documented instead (see
+// docs/authentication.md and the example configs).
+func LogOAuthPlaintextListener(bindAddr string) {
+	slog.Warn(oauthPlaintextListenerBanner, slog.String("bind_address", bindAddr))
+}
+
+const oauthPlaintextListenerBanner = `
+============================================================
+  OAuth mode on a plaintext listener (tls_terminated_upstream)
+  The server is serving HTTP without TLS because
+  tls_terminated_upstream: true acknowledges an upstream proxy
+  or ingress terminates TLS. Client bearer tokens and tool
+  results travel unencrypted on this listener — ensure the
+  terminating proxy is actually in front of the bind address
+  below, or set tls_cert_file/tls_key_file to terminate TLS
+  at the server instead.
+============================================================`
+
 // LogOAuthNotSupported is the OAuth-not-supported guard headline. It is
 // logged when any broker is configured with auth.mode: oauth, which the
 // schema accepts but no current runtime can use (the OAuth-on-brokers
