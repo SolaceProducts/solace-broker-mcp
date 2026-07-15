@@ -1,6 +1,7 @@
 ---
 name: dax-onboard
 description: Interactive onboarding for new DAX (Developer and Agent Experience) team members. Walks through team context, environment setup, architecture, workflows, and first-ticket guidance, adapting depth to the joiner's role and experience. Use for onboarding, or invoke a specific phase with `/dax-onboard setup | architecture | first-ticket`.
+user_invocable: true
 ---
 
 # DAX (Developer and Agent Experience) — Team Onboarding Skill
@@ -189,7 +190,7 @@ docker run -d --name solace-broker \
 ```bash
 go run ./cmd/server
 ```
-- Verify health endpoint: `curl http://localhost:9090/health` → `{"status": "ok"}`
+- Verify health: `curl http://localhost:9090/health` → `{"status":"healthy"}` (backward-compat endpoint). The canonical liveness endpoint is `/livez` → `{"status":"alive"}`.
 
 **Step 6 — Connect from Claude Code**
 ```bash
@@ -206,7 +207,8 @@ go test ./...
 
 #### Mesh MCP
 
-- Early stage — code repo coming later in Q1
+- Earlier-stage than Broker MCP. Check the DAX Home page (Phase 2) and the `MCPMesh`
+  component in Jira for current status, and whether a code repo exists yet.
 - Design docs in `SolaceDev/discovery/Mesh-MCP/`
 
 ---
@@ -316,9 +318,10 @@ Cover these points at a level matching the joiner's familiarity:
 After all previous phases, help the joiner pick their first ticket.
 
 **Steps:**
-1. Fetch open issues from the backlog (board `7637`) with JQL:
+1. Fetch open issues from the backlog (board `7637`) with JQL. Replace `<COMPONENT>` with the
+   component for the joiner's product area — `MCPBroker`, `MCPDocs`, or `MCPMesh`:
    ```
-   project = SOL AND status in (Open, "To Do") AND component = [selected_area]
+   project = SOL AND statusCategory != Done AND component = "<COMPONENT>"
    ORDER BY priority DESC, created ASC
    ```
 2. Filter for good starter criteria:
