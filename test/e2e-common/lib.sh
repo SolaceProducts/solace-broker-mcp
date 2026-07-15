@@ -93,10 +93,37 @@ log_warn()  { echo -e "${YELLOW}[WARN]${NC}  $*" >&2; }
 
 # ── Broker Readiness ─────────────────────────────────────────────────────────
 
+# curl wrapper that pulls $BROKER_USER / $BROKER_PASS from the environment and
+# feeds basic-auth via curl -K - (stdin config) instead of -u on the command
+# line. Keeps the password out of the process argv so `ps` on the host can't
+# see it. Callers pass any curl args as usual (e.g. -sf, -X DELETE,
+# -w '%{http_code}'). Backslashes and double quotes in the values are escaped
+# for curl's -K parser; newlines/CRs are rejected outright to prevent config
+# injection. Exported so scenario setup.cmd / teardown.cmd / ground_truth.shell
+# strings — which run in `bash -c` children — can invoke it. Defined here
+# (above wait_for_broker) so every caller in this file resolves it regardless
+# of source order. Introduced by SOL-150727 (LLM suite); consolidated by
+# SOL-151860.
+semp_curl() {
+    local u="${BROKER_USER:?BROKER_USER not set}"
+    local p="${BROKER_PASS:?BROKER_PASS not set}"
+    if [[ "$u" == *[$'\n\r']* || "$p" == *[$'\n\r']* ]]; then
+        echo "semp_curl: BROKER_USER/BROKER_PASS must not contain newlines" >&2
+        return 2
+    fi
+    u="${u//\\/\\\\}"; u="${u//\"/\\\"}"
+    p="${p//\\/\\\\}"; p="${p//\"/\\\"}"
+    printf 'user = "%s:%s"\n' "$u" "$p" | curl -K - "$@"
+}
+export -f semp_curl
+
 wait_for_broker() {
     local broker_url="${1:-$BROKER_URL}"
     local max_attempts="${2:-60}"
     local semp_config="$broker_url/SEMP/v2/config"
+    local queues_url="$semp_config/msgVpns/$BROKER_VPN/queues"
+    local probe_url="$queues_url/_e2e_spool_probe_"
+    local probe_body='{"queueName":"_e2e_spool_probe_","accessType":"non-exclusive"}'
     # Shared budget across both phases: SEMP API readiness + message-spool
     # readiness must complete within max_attempts seconds combined. The
     # attempt counter is intentionally not reset between phases.
@@ -105,8 +132,7 @@ wait_for_broker() {
 
     # Phase 1: Wait for SEMP API to respond
     while [ $attempt -lt "$max_attempts" ]; do
-        if semp_curl -sf \
-            "$semp_config/msgVpns/$BROKER_VPN" >/dev/null 2>&1; then
+        if semp_curl -sf "$semp_config/msgVpns/$BROKER_VPN" >/dev/null 2>&1; then
             break
         fi
         sleep 1
@@ -125,20 +151,16 @@ wait_for_broker() {
     # exist on the broker. Delete it before we try to create a fresh one,
     # otherwise the create returns "already exists" and we time out blaming
     # the broker.
-    semp_curl -sf -X DELETE \
-        "$semp_config/msgVpns/$BROKER_VPN/queues/_e2e_spool_probe_" >/dev/null 2>&1 || true
+    semp_curl -sf -X DELETE "$probe_url" >/dev/null 2>&1 || true
 
     local phase2_start=$attempt
     while [ $attempt -lt "$max_attempts" ]; do
         local http_code
-        http_code=$(semp_curl -s -o /dev/null -w "%{http_code}" -X POST \
-            -H "Content-Type: application/json" \
-            "$semp_config/msgVpns/$BROKER_VPN/queues" \
-            -d '{"queueName":"_e2e_spool_probe_","accessType":"non-exclusive"}')
+        http_code=$(semp_curl -s -o /dev/null -w "%{http_code}" \
+            -X POST -H "Content-Type: application/json" \
+            -d "$probe_body" "$queues_url")
         if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
-            # Clean up probe queue
-            semp_curl -sf -X DELETE \
-                "$semp_config/msgVpns/$BROKER_VPN/queues/_e2e_spool_probe_" >/dev/null 2>&1 || true
+            semp_curl -sf -X DELETE "$probe_url" >/dev/null 2>&1 || true
             log_info "Broker fully ready after ${attempt}s (message spool writable) ($broker_url)"
             return 0
         fi
@@ -371,23 +393,6 @@ EOF
 }
 
 # ── SEMP Operations ──────────────────────────────────────────────────────────
-
-# curl wrapper that pulls $BROKER_USER / $BROKER_PASS from the environment and
-# feeds basic-auth via curl -K - (stdin config) instead of -u on the command
-# line. Keeps the password out of the process argv so `ps` on the host can't
-# see it. Callers pass any curl args as usual (e.g. -sf, -X DELETE,
-# -w '%{http_code}'). Backslashes and double quotes in the values are escaped
-# for curl's -K parser. Exported so scenario setup.cmd / teardown.cmd /
-# ground_truth.shell strings — which run in `bash -c` children — can invoke
-# it. Introduced by SOL-150727 (LLM suite); consolidated here by SOL-151860.
-semp_curl() {
-    local u="${BROKER_USER:?BROKER_USER not set}"
-    local p="${BROKER_PASS:?BROKER_PASS not set}"
-    u="${u//\\/\\\\}"; u="${u//\"/\\\"}"
-    p="${p//\\/\\\\}"; p="${p//\"/\\\"}"
-    printf 'user = "%s:%s"\n' "$u" "$p" | curl -K - "$@"
-}
-export -f semp_curl
 
 semp_post() {
     local semp_config="$1"
