@@ -631,6 +631,7 @@ mcp_client_auth:
   issuer: "https://idp.example.com"
   audience: "mcp"
   resource_url: "https://mcp.example.com/mcp"
+  tool_authorization: {enabled: false}
 tls_terminated_upstream: true
 ` + oauthTLSMatrixBroker
 	cfg, err := LoadConfig(writeTemp(t, yaml))
@@ -654,6 +655,7 @@ mcp_client_auth:
   issuer: "https://idp.example.com"
   audience: "mcp"
   resource_url: "https://mcp.example.com/mcp"
+  tool_authorization: {enabled: false}
 tls_cert_file: "/tmp/cert.pem"
 tls_key_file: "/tmp/key.pem"
 ` + oauthTLSMatrixBroker
@@ -678,6 +680,7 @@ mcp_client_auth:
   issuer: "https://idp.example.com"
   audience: "mcp"
   resource_url: "https://mcp.example.com/mcp"
+  tool_authorization: {enabled: false}
 tls_cert_file: "/tmp/cert.pem"
 tls_key_file: "/tmp/key.pem"
 tls_terminated_upstream: true
@@ -1164,6 +1167,7 @@ mcp_client_auth:
   issuer: "https://idp.example.com"
   audience: "solace-mcp"
   resource_url: "https://mcp.example.com"
+  tool_authorization: {enabled: false}
 allow_insecure_broker_tls: true
 tls_terminated_upstream: true
 `
@@ -2053,6 +2057,7 @@ func TestLoadConfig_AuthMode_CaseInsensitive(t *testing.T) {
 				extra = `  issuer: "https://idp.example.com"
   audience: "mcp"
   resource_url: "https://mcp.example.com/mcp"
+  tool_authorization: {enabled: false}
 tls_terminated_upstream: true`
 			}
 			yaml := `
@@ -3818,7 +3823,7 @@ func listenAddressYAML(mode, listenLine, overrideLine string) string {
 	case "static":
 		authBlock = "mcp_client_auth:\n  mode: static\n  dev_token: test\n"
 	case "oauth":
-		authBlock = "mcp_client_auth:\n  mode: oauth\n  issuer: \"https://idp.example.com\"\n  audience: \"mcp\"\n  resource_url: \"https://mcp.example.com/mcp\"\ntls_terminated_upstream: true\n"
+		authBlock = "mcp_client_auth:\n  mode: oauth\n  issuer: \"https://idp.example.com\"\n  audience: \"mcp\"\n  resource_url: \"https://mcp.example.com/mcp\"\n  tool_authorization: {enabled: false}\ntls_terminated_upstream: true\n"
 	default:
 		authBlock = "mcp_client_auth:\n  mode: " + mode + "\n"
 	}

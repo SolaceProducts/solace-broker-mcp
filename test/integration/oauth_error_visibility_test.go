@@ -205,6 +205,7 @@ mcp_client_auth:
   issuer: "https://fake-issuer.example.com"
   audience: "mcp-server"
   resource_url: "https://localhost:9999/mcp"
+  tool_authorization: {enabled: false}
 broker_oauth:
   idp_token_endpoint: %q
   mcp_server_client_id: mcp-server

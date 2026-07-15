@@ -327,6 +327,40 @@ type MCPClientAuthConfig struct {
 	// rejects configs that omit it. See docs/superpowers/specs/2026-05-20-client-auth-mode-design.md
 	// for the design rationale.
 	Mode string `yaml:"mode"`
+
+	// Pointer so absence-in-YAML is distinguishable from present-with-enabled:false;
+	// drives I1 by shape and I3 via Enabled *bool.
+	ToolAuthorization *ToolAuthorizationConfig `yaml:"tool_authorization"`
+}
+
+// ToolAuthorizationConfig holds the parsed tool_authorization YAML block.
+// Field names mirror the Solace broker's OAuth profile
+// (accessLevelGroupsClaimName, accessLevelGroups) for cross-product consistency.
+type ToolAuthorizationConfig struct {
+	// *bool so presence-in-YAML is distinguishable from default; enforces I3.
+	Enabled           *bool               `yaml:"enabled"`
+	GroupsClaimName   *string             `yaml:"groups_claim_name"`
+	AccessLevelGroups map[string][]string `yaml:"access_level_groups"`
+}
+
+// LogValue implements slog.LogValuer for ToolAuthorizationConfig.
+func (t ToolAuthorizationConfig) LogValue() slog.Value {
+	enabled := "unset"
+	if t.Enabled != nil {
+		if *t.Enabled {
+			enabled = "true"
+		} else {
+			enabled = "false"
+		}
+	}
+	groupsClaimName := ""
+	if t.GroupsClaimName != nil {
+		groupsClaimName = *t.GroupsClaimName
+	}
+	return slog.GroupValue(
+		slog.String("enabled", enabled),
+		slog.String("groups_claim_name", groupsClaimName),
+	)
 }
 
 // validLogLevels is the allowlist of slog levels operators may configure.
@@ -659,6 +693,18 @@ func applyDefaults(cfg *ServerConfig) {
 	}
 	// InsecureSkipVerify is not defaulted here — Go's zero value for bool
 	// (false) already matches the intended default (verify TLS certificates).
+
+	// Q1: synthesize an empty ToolAuthorizationConfig when the block is omitted
+	// in oauth mode, so the I3 validator arm always sees a non-nil pointer.
+	if strings.ToLower(cfg.MCPClientAuth.Mode) == AuthModeOAuth && cfg.MCPClientAuth.ToolAuthorization == nil {
+		cfg.MCPClientAuth.ToolAuthorization = &ToolAuthorizationConfig{Enabled: nil}
+	}
+	// Q3: default GroupsClaimName to "groups" when the block is present but
+	// the field is omitted (nil), matching the Solace broker's own default.
+	if cfg.MCPClientAuth.ToolAuthorization != nil && cfg.MCPClientAuth.ToolAuthorization.GroupsClaimName == nil {
+		def := "groups"
+		cfg.MCPClientAuth.ToolAuthorization.GroupsClaimName = &def
+	}
 
 	// Observability numeric tunables (saturation_threshold_ms, etc.). The
 	// capability flags are env-driven and applied in applyEnvOverrides instead.
@@ -1032,6 +1078,45 @@ func validate(cfg *ServerConfig) error {
 		}
 	default:
 		errs = append(errs, fmt.Errorf("mcp_client_auth.mode %q is invalid (must be one of %v)", cfg.MCPClientAuth.Mode, validAuthClientModes))
+	}
+
+	// I1 (Q14–Q16): tool_authorization is only legal under oauth mode.
+	if cfg.MCPClientAuth.Mode != AuthModeOAuth && cfg.MCPClientAuth.ToolAuthorization != nil {
+		errs = append(errs, fmt.Errorf(
+			`mcp_client_auth.tool_authorization is only supported when mcp_client_auth.mode is "oauth" (currently: %q); either set mode to "oauth" or remove the tool_authorization block`,
+			cfg.MCPClientAuth.Mode))
+	}
+
+	// I3 (Q17–Q18): in oauth mode, enabled must be set explicitly.
+	if cfg.MCPClientAuth.Mode == AuthModeOAuth && cfg.MCPClientAuth.ToolAuthorization != nil && cfg.MCPClientAuth.ToolAuthorization.Enabled == nil {
+		errs = append(errs, fmt.Errorf(
+			`mcp_client_auth.tool_authorization.enabled must be set explicitly to true or false when mcp_client_auth.mode is "oauth"`))
+	}
+
+	// Q3a: groups_claim_name explicitly set to empty or whitespace-only.
+	if cfg.MCPClientAuth.ToolAuthorization != nil &&
+		cfg.MCPClientAuth.ToolAuthorization.GroupsClaimName != nil &&
+		strings.TrimSpace(*cfg.MCPClientAuth.ToolAuthorization.GroupsClaimName) == "" {
+		errs = append(errs, fmt.Errorf(
+			`mcp_client_auth.tool_authorization.groups_claim_name must be a non-blank string when set; omit the field to accept the default ("groups")`))
+	}
+
+	// Structural validation of access_level_groups when the block is present.
+	if ta := cfg.MCPClientAuth.ToolAuthorization; ta != nil {
+		// Q4: enabled: true with empty access_level_groups is a config error.
+		if ta.Enabled != nil && *ta.Enabled && len(ta.AccessLevelGroups) == 0 {
+			errs = append(errs, fmt.Errorf(
+				"mcp_client_auth.tool_authorization.access_level_groups is required when mcp_client_auth.tool_authorization.enabled is true"))
+		}
+
+		// Q7: empty or whitespace-only group name is a config coherence error.
+		for groupName := range ta.AccessLevelGroups {
+			if strings.TrimSpace(groupName) == "" {
+				errs = append(errs, fmt.Errorf(
+					"mcp_client_auth.tool_authorization.access_level_groups: group name cannot be empty or whitespace-only"))
+				break
+			}
+		}
 	}
 
 	// listen_address: validate form, then guard the disabled-mode exposure.
