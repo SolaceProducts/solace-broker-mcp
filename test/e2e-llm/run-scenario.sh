@@ -6,21 +6,37 @@
 # prompt and the assertions, so this script is generic across scenarios.
 #
 # Usage:   ./run-scenario.sh scenarios/<name>.json
-# Prereqs: brokers + MCP server up; `claude`, `jq`, `envsubst` on PATH.
+# Prereqs: brokers + MCP server up; `claude`, `jq`, `envsubst`, `uuidgen`
+#          on PATH.
 # Exit:    0 pass, 1 assertion failed, 2 setup/invocation error.
 #
 # Scenario fields (all optional except `prompt`):
-#   prompt                    NL question sent to Claude
+#   prompt                    NL question sent to Claude (turn 1)
 #   brokers                   array of brokers run-all.sh iterates this scenario
 #                             over (default: ["broker-a"]). Single-scenario runs
 #                             here ignore this field — use $BROKER env var.
 #   mcp_config                path to MCP config JSON (default: mcp-config.json)
+#   setup.cmd                 bash string run before turn 1; non-zero exit
+#                             fails the scenario with rc 2 (test-infra error,
+#                             not an assertion failure). Runs in a `bash -c`
+#                             child with fixture functions (semp_curl,
+#                             refill_e2e_llm_action_queue, etc.) exported via
+#                             `export -f` visible.
+#   teardown.cmd              bash string run in the EXIT trap (always runs,
+#                             even on assertion failure). Same environment
+#                             as setup.cmd. Use to restore fixture state.
 #   expected_tool             single tool name that MUST be called
 #   expected_tool_any_of      array; at least one MUST be called
 #   expected_tools_all_of     array; all MUST be called
 #   expected_tools_none       true → assert ZERO tool calls (MCP-down test)
 #   ground_truth.jq           jq path applied to the tool_result to extract entity set
 #   ground_truth.answer_regex regex applied to the answer to extract entity set
+#   ground_truth.shell        bash pipeline; usually `semp_curl … | jq …`
+#   ground_truth.expect_stdout_regex
+#                             stdout of ground_truth.shell MUST match this regex.
+#                             ground_truth.{jq,answer_regex} and
+#                             ground_truth.{shell,expect_stdout_regex} are
+#                             mutually exclusive per scope.
 #   required_substrings       each MUST appear in the answer (case-insensitive)
 #   required_substrings_any_of  at least ONE MUST appear (case-insensitive) —
 #                             use when paraphrases are equally valid (e.g.
@@ -28,14 +44,21 @@
 #   forbidden_substrings      each MUST NOT appear in the answer
 #   numeric_match.regex       extracts a number from the answer
 #   numeric_match.min/max     extracted number MUST fall in [min, max]
+#   followup                  optional second turn. Object with the same
+#                             assertion field names as the top level, plus a
+#                             required `prompt`. Turn 1 uses `--session-id
+#                             <uuid>`; turn 2 uses `--resume <uuid>` so the
+#                             agent sees turn-1 context.
 #
-# Env-var substitution: ../e2e-monitoring/helpers.sh is auto-sourced (if
-# present) so scenarios can reference $F3_CLIENT_NAME_A etc. as literals.
+# Env-var substitution: ./helpers.sh is auto-sourced (if present), which in
+# turn pulls in the monitoring suite's F1–F7 helpers and this suite's
+# fixtures.sh — so scenarios can reference $F3_CLIENT_NAME_A,
+# $E2E_LLM_ACTION_QUEUE, etc. as literals.
 
 set -euo pipefail
 
 RUNNER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HELPERS="$RUNNER_DIR/../e2e-monitoring/helpers.sh"
+HELPERS="$RUNNER_DIR/helpers.sh"
 
 # Suite-wide config. Anything exported beforehand wins (each value is
 # `${X:-default}` in config.env). The runner has no hardcoded MCP URL,
@@ -45,14 +68,24 @@ source "$RUNNER_DIR/config.env"
 
 DEFAULT_MCP_CONFIG="$RUNNER_DIR/mcp-config.json.tmpl"
 
-# Stream-json events go straight to the user's terminal AND a temp file we
-# parse for assertions. Rendered MCP config (from a .tmpl) lives next to it,
-# also temp. Trap-cleanup deletes both unconditionally — no persistent
-# transcripts.
+# Stream-json events go straight to the user's terminal AND per-turn temp
+# files we parse for assertions. Rendered MCP config (from a .tmpl) lives
+# next to them, also temp. Trap-cleanup deletes them unconditionally — no
+# persistent transcripts — and also runs teardown.cmd, if the scenario
+# declared one, before deleting the run files.
 RUN_FILE=$(mktemp -t llm-scenario.XXXXXXXX.jsonl)
+RUN_FILE2=$(mktemp -t llm-scenario.XXXXXXXX.jsonl)
 RENDERED_MCP_CONFIG=""
+TEARDOWN_CMD=""
 cleanup() {
-    rm -f "$RUN_FILE"
+    # Teardown FIRST — its whole job is to restore fixture state (re-prime a
+    # drained queue, drop a created queue, etc.). Running before rm keeps
+    # $RUN_FILE around in case teardown wants to inspect it (nothing does
+    # today, but the ordering is the safer default).
+    if [ -n "$TEARDOWN_CMD" ]; then
+        bash -c "$TEARDOWN_CMD" >&2 || log_warn "teardown.cmd exited non-zero (fixture may need manual reset)"
+    fi
+    rm -f "$RUN_FILE" "$RUN_FILE2"
     [ -n "$RENDERED_MCP_CONFIG" ] && rm -f "$RENDERED_MCP_CONFIG"
 }
 trap cleanup EXIT INT TERM HUP
@@ -60,19 +93,27 @@ trap cleanup EXIT INT TERM HUP
 # Source helpers.sh for shared colours (RED/GREEN/YELLOW/CYAN/NC), the
 # log_info/log_ok/log_fail family, and fixture name vars (F1_*,
 # F3_CLIENT_NAME_A, F5_QUEUE, …) that envsubst needs to resolve $-refs in
-# scenario JSON. The `set -a` wrapping exports the fixture names. Fallback
-# defs cover the case where helpers.sh isn't on disk (e.g. CI image without
-# the e2e-monitoring tree) so the version-pin check below can still log.
+# scenario JSON. LLM helpers.sh transitively sources the monitoring suite's
+# F1–F7 helpers (with SUITE_DIR pinned to this suite so ports/.env resolve
+# here, not in monitoring/) and this suite's fixtures.sh — but we re-source
+# fixtures.sh explicitly so a future refactor of helpers.sh can't silently
+# drop the E2E_LLM_ACTION_QUEUE_A/B / E2E_LLM_KICK_TARGET_A/B alias inputs.
+# The `set -a` wrapping exports the fixture names. Fallback defs cover the
+# case where helpers.sh isn't on disk (e.g. CI image without the e2e-llm
+# tree) so the version-pin check below can still log.
 if [ -f "$HELPERS" ]; then
     set -a
     # shellcheck disable=SC1090
     source "$HELPERS"
+    # shellcheck disable=SC1091
+    source "$RUNNER_DIR/fixtures.sh"
     set +a
 else
     RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; NC='\033[0m'
     log_info() { echo -e "${CYAN}[INFO]${NC}  $*" >&2; }
     log_ok()   { echo -e "${GREEN}[PASS]${NC}  $*" >&2; }
     log_fail() { echo -e "${RED}[FAIL]${NC}  $*" >&2; }
+    log_warn() { echo -e "${YELLOW}[WARN]${NC}  $*" >&2; }
 fi
 # helpers.sh has log_warn but not these two — define them either way.
 log_err()  { echo -e "${RED}[ERROR]${NC} $*" >&2; }
@@ -94,10 +135,20 @@ case "$BROKER" in
 esac
 export BROKER
 if [ -n "$BROKER_SUFFIX" ]; then
-    for v in F3_CLIENT_NAME F6_SUB_CLIENT_NAME; do
+    for v in F3_CLIENT_NAME F6_SUB_CLIENT_NAME E2E_LLM_ACTION_QUEUE E2E_LLM_KICK_TARGET; do
         src="${v}_${BROKER_SUFFIX}"
         export "$v"="${!src:-}"
     done
+    # Point BROKER_URL / SEMP_CONFIG at the current broker so Mode-2 scenarios'
+    # setup.cmd / teardown.cmd / ground_truth.shell strings (which reach for
+    # $BROKER_URL/SEMP/v2/__private_monitor__/… via semp_curl) hit the right
+    # broker on both broker-a and broker-b runs. lib.sh defaults BROKER_URL to
+    # BROKER_A_URL; without this alias, broker-b scenarios would silently
+    # verify against broker-a state.
+    _url_src="BROKER_${BROKER_SUFFIX}_URL"
+    _semp_src="BROKER_${BROKER_SUFFIX}_SEMP_CONFIG"
+    export BROKER_URL="${!_url_src:-${BROKER_URL:-}}"
+    export SEMP_CONFIG="${!_semp_src:-${SEMP_CONFIG:-}}"
 fi
 
 SCENARIO_FILE="${1:-}"
@@ -142,7 +193,7 @@ UNSET_VARS=$(
 if [ -n "$UNSET_VARS" ]; then
     log_err "scenario references unset env var(s):"
     echo "$UNSET_VARS" >&2
-    log_hint "source test/e2e-monitoring/helpers.sh, or run after setup-brokers.sh"
+    log_hint "source test/e2e-llm/helpers.sh, or run after ./setup-fixtures.sh"
     exit 2
 fi
 EXPANDED=$(envsubst < "$SCENARIO_FILE")
@@ -165,23 +216,21 @@ if [[ "$MCP_CONFIG" == *.tmpl ]]; then
     MCP_CONFIG="$RENDERED_MCP_CONFIG"
 fi
 
-EXPECTED_TOOL=$(jq -r '.expected_tool // empty' <<<"$EXPANDED")
-EXPECTED_ANY=$(jq -r '.expected_tool_any_of[]? // empty' <<<"$EXPANDED")
-EXPECTED_ALL=$(jq -r '.expected_tools_all_of[]? // empty' <<<"$EXPANDED")
-EXPECTED_NONE=$(jq -r '.expected_tools_none // false' <<<"$EXPANDED")
-
-GT_JQ=$(jq -r '.ground_truth.jq // empty' <<<"$EXPANDED")
-GT_REGEX=$(jq -r '.ground_truth.answer_regex // empty' <<<"$EXPANDED")
-
-REQUIRED=$(jq -r '.required_substrings[]? // empty' <<<"$EXPANDED")
-REQUIRED_ANY=$(jq -r '.required_substrings_any_of[]? // empty' <<<"$EXPANDED")
-FORBIDDEN=$(jq -r '.forbidden_substrings[]? // empty' <<<"$EXPANDED")
-
-NUM_REGEX=$(jq -r '.numeric_match.regex // empty' <<<"$EXPANDED")
-NUM_MIN=$(jq -r '.numeric_match.min // empty' <<<"$EXPANDED")
-NUM_MAX=$(jq -r '.numeric_match.max // empty' <<<"$EXPANDED")
-
 SCENARIO_NAME="$(basename "$SCENARIO_FILE" .json) [$BROKER]"
+
+# ── Setup / teardown hooks ────────────────────────────────────────────────────
+# setup.cmd runs BEFORE turn 1 and its non-zero exit kills the scenario with
+# rc 2 (test infra error, not an assertion failure). teardown.cmd runs in the
+# EXIT trap regardless of outcome — its whole job is to restore fixture state
+# so the next run finds things where it expects them. Both `bash -c` children
+# inherit exported functions from fixtures.sh (semp_curl,
+# refill_e2e_llm_action_queue, delete_queue_on_current_broker) plus the
+# per-broker BROKER_URL / SEMP_CONFIG / *_QUEUE / *_TARGET aliases set above.
+TEARDOWN_CMD=$(jq -r '.teardown.cmd // empty' <<<"$EXPANDED")
+SETUP_CMD=$(jq -r '.setup.cmd // empty' <<<"$EXPANDED")
+if [ -n "$SETUP_CMD" ]; then
+    bash -c "$SETUP_CMD" >&2 || { log_err "setup.cmd failed — aborting scenario"; exit 2; }
+fi
 
 log_info "prompt: $PROMPT"
 
@@ -214,31 +263,11 @@ elif [ -n "${LLM_SERVICE_API_KEY:-}" ]; then
     fi
 fi
 
-CLAUDE_ARGS=(
-    --mcp-config "$MCP_CONFIG"
-    --strict-mcp-config
-    # `--tools ""` disables Claude's built-in tools (Bash, Read, WebSearch, …)
-    # so the agent can only reach for MCP tools.
-    --tools ""
-    # `--allowed-tools` IS load-bearing in --print mode — it's the
-    # auto-approve list. Without it, every MCP tool call gets denied with
-    # "I need permission to run X — please approve and I'll retry." Wildcard
-    # auto-approves every tool from our MCP server (the only one loaded,
-    # thanks to --strict-mcp-config), so the list stays maintenance-free
-    # as the server adds tools. Assertion logic catches wrong tool choices.
-    --allowed-tools "mcp__solace-broker__*"
-    --output-format stream-json
-    --verbose
-    --max-turns 5
-    "${CLAUDE_MODEL_ARGS[@]}"
-    -p "$PROMPT"
-)
-
-# `tee` keeps the full raw JSONL in $RUN_FILE so jq can parse it for
-# assertions; the compact formatter below summarizes each event into one
-# short line for the user (raw stream-json is unreadable for 11 scenarios).
+# `tee` keeps the full raw JSONL in a per-turn run file so jq can parse it
+# for assertions; the compact formatter below summarizes each event into
+# one short line for the user (raw stream-json is unreadable at suite scale).
 JQ_PRETTY='
-def info(msg): "\u001b[0;36m[INFO]\u001b[0m  " + msg;
+def info(msg): "[0;36m[INFO][0m  " + msg;
 if .type == "assistant" then
   .message.content[] | (
     if .type == "tool_use" then
@@ -251,141 +280,243 @@ elif .type == "result" then
     + "  ($\((.total_cost_usd * 10000 + 0.5 | floor) / 10000), \(.modelUsage | keys[0] // "?"))")
 else empty end
 '
-set +e
-claude "${CLAUDE_ARGS[@]}" | tee "$RUN_FILE" | jq -r --unbuffered "$JQ_PRETTY"
-# Only the `claude` exit code matters for the run; jq is just a display
-# prettifier and $RUN_FILE is the source of truth for all downstream
-# assertions, so a malformed event slipping past jq is harmless here.
-CLAUDE_EXIT=${PIPESTATUS[0]}
-set -e
 
-if [ "$CLAUDE_EXIT" -ne 0 ]; then
-    log_err "claude exited $CLAUDE_EXIT"
-    # The pretty filter above only surfaces tool_use/result events, so a
-    # CLI-level failure (auth, network, model overload) shows nothing
-    # diagnostic on its own. Dump the tail of the raw stream-json so the
-    # actual error is visible before the EXIT trap removes $RUN_FILE.
-    log_err "last 20 stream events:"
-    tail -20 "$RUN_FILE" >&2 || true
-    exit 2
-fi
-
-# ── Parse ─────────────────────────────────────────────────────────────────────
-# TOOL_CALLS and ANSWER feed the assertion logic below. We don't echo them
-# back to the user — the live `→` and `✓` stream lines already show every
-# tool call and the final answer.
-TOOL_CALLS=$(jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="tool_use") | .name' "$RUN_FILE" | sort -u)
-ANSWER=$(jq -r 'select(.type=="result") | .result' "$RUN_FILE")
-
-# Append this scenario's cost to the wrapper's tally file, if the wrapper
-# set one. Single source of truth for cost is the result event itself.
-if [ -n "${SCENARIO_COST_FILE:-}" ]; then
-    jq -r 'select(.type=="result") | .total_cost_usd' "$RUN_FILE" >> "$SCENARIO_COST_FILE" 2>/dev/null || true
-fi
+# invoke_claude <run_file> <prompt> [<extra claude args...>]
+# Streams claude's stream-json output through JQ_PRETTY for user-facing
+# summary lines AND tees the raw JSONL into <run_file> for downstream
+# assertions. Appends the turn's total_cost_usd to $SCENARIO_COST_FILE so
+# run-all.sh's totals include multi-turn scenarios' followup cost.
+# Non-zero claude exit dumps the last 20 events (the pretty filter only
+# surfaces tool_use/result, so an auth/overload failure would otherwise
+# show nothing diagnostic). Returns 2 on claude failure, 0 otherwise.
+invoke_claude() {
+    local run_file="$1" prompt="$2"; shift 2
+    local claude_args=(
+        --mcp-config "$MCP_CONFIG"
+        --strict-mcp-config
+        # `--tools ""` disables Claude's built-in tools (Bash, Read, WebSearch, …)
+        # so the agent can only reach for MCP tools.
+        --tools ""
+        # `--allowed-tools` IS load-bearing in --print mode — it's the
+        # auto-approve list. Without it, every MCP tool call gets denied with
+        # "I need permission to run X — please approve and I'll retry." Wildcard
+        # auto-approves every tool from our MCP server (the only one loaded,
+        # thanks to --strict-mcp-config), so the list stays maintenance-free
+        # as the server adds tools. Assertion logic catches wrong tool choices.
+        --allowed-tools "mcp__solace-broker__*"
+        --output-format stream-json
+        --verbose
+        --max-turns 5
+        "${CLAUDE_MODEL_ARGS[@]}"
+        "$@"
+        -p "$prompt"
+    )
+    set +e
+    claude "${claude_args[@]}" | tee "$run_file" | jq -r --unbuffered "$JQ_PRETTY"
+    local rc=${PIPESTATUS[0]}
+    set -e
+    if [ "$rc" -ne 0 ]; then
+        log_err "claude exited $rc"
+        log_err "last 20 stream events:"
+        tail -20 "$run_file" >&2 || true
+        return 2
+    fi
+    if [ -n "${SCENARIO_COST_FILE:-}" ]; then
+        jq -r 'select(.type=="result") | .total_cost_usd' "$run_file" >> "$SCENARIO_COST_FILE" 2>/dev/null || true
+    fi
+    return 0
+}
 
 PASS=1
 fail() { log_fail "$*"; PASS=0; }
 
-# ── Tool-choice assertions ────────────────────────────────────────────────────
-if [ -n "$EXPECTED_TOOL" ]; then
-    grep -Fqx "$EXPECTED_TOOL" <<<"$TOOL_CALLS" \
-        || fail "expected tool '$EXPECTED_TOOL' was not called"
-fi
+# run_assertions <run_file> <scoped_json> <turn_label>
+# Applies all assertion fields (tool-choice / substring / numeric /
+# ground_truth.{jq,answer_regex} / ground_truth.{shell,expect_stdout_regex})
+# against the scoped_json blob. Same field names work at scenario top level
+# and inside `followup`, so this function serves both turns.
+run_assertions() {
+    local run_file="$1" scoped="$2" label="$3"
 
-if [ -n "$EXPECTED_ANY" ]; then
-    MATCHED=""
-    while IFS= read -r t; do
-        [ -z "$t" ] && continue
-        if grep -Fqx "$t" <<<"$TOOL_CALLS"; then MATCHED="$t"; break; fi
-    done <<<"$EXPECTED_ANY"
-    [ -z "$MATCHED" ] && fail "no tool from expected_tool_any_of was called: $(echo "$EXPECTED_ANY" | tr '\n' ' ')"
-fi
+    local expected_tool expected_any expected_all expected_none
+    local required required_any forbidden
+    local num_regex num_min num_max
+    local gt_jq gt_regex gt_shell gt_expect
 
-if [ -n "$EXPECTED_ALL" ]; then
-    while IFS= read -r t; do
-        [ -z "$t" ] && continue
-        grep -Fqx "$t" <<<"$TOOL_CALLS" || fail "required tool '$t' was not called"
-    done <<<"$EXPECTED_ALL"
-fi
+    expected_tool=$(jq -r '.expected_tool // empty' <<<"$scoped")
+    expected_any=$(jq -r '.expected_tool_any_of[]? // empty' <<<"$scoped")
+    expected_all=$(jq -r '.expected_tools_all_of[]? // empty' <<<"$scoped")
+    expected_none=$(jq -r '.expected_tools_none // false' <<<"$scoped")
+    required=$(jq -r '.required_substrings[]? // empty' <<<"$scoped")
+    required_any=$(jq -r '.required_substrings_any_of[]? // empty' <<<"$scoped")
+    forbidden=$(jq -r '.forbidden_substrings[]? // empty' <<<"$scoped")
+    num_regex=$(jq -r '.numeric_match.regex // empty' <<<"$scoped")
+    num_min=$(jq -r '.numeric_match.min // empty' <<<"$scoped")
+    num_max=$(jq -r '.numeric_match.max // empty' <<<"$scoped")
+    gt_jq=$(jq -r '.ground_truth.jq // empty' <<<"$scoped")
+    gt_regex=$(jq -r '.ground_truth.answer_regex // empty' <<<"$scoped")
+    gt_shell=$(jq -r '.ground_truth.shell // empty' <<<"$scoped")
+    gt_expect=$(jq -r '.ground_truth.expect_stdout_regex // empty' <<<"$scoped")
 
-if [ "$EXPECTED_NONE" = "true" ] && [ -n "$TOOL_CALLS" ]; then
-    fail "expected zero tool calls but agent called: $(echo "$TOOL_CALLS" | tr '\n' ' ')"
-fi
+    # ground_truth has two flavors; they are mutually exclusive per scope.
+    # jq+answer_regex diffs an entity set derived from a tool_result against
+    # one derived from the answer text (Mode-1 read-tool coverage).
+    # shell+expect_stdout_regex runs an out-of-band SEMPv2 check to verify
+    # that the broker really is in the state the answer implies (Mode-2
+    # write-tool coverage). Allowing both would be ambiguous and mask misuse.
+    if [ -n "$gt_jq$gt_regex" ] && [ -n "$gt_shell$gt_expect" ]; then
+        fail "$label: ground_truth.jq/answer_regex and ground_truth.shell/expect_stdout_regex are mutually exclusive"
+        return
+    fi
 
-# ── Substring assertions ──────────────────────────────────────────────────────
-while IFS= read -r needle; do
-    [ -z "$needle" ] && continue
-    grep -qi -- "$needle" <<<"$ANSWER" || fail "required substring '$needle' missing"
-done <<<"$REQUIRED"
+    local tool_calls answer
+    tool_calls=$(jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="tool_use") | .name' "$run_file" | sort -u)
+    answer=$(jq -r 'select(.type=="result") | .result' "$run_file")
 
-if [ -n "$REQUIRED_ANY" ]; then
-    MATCHED_ANY=""
+    # ── Tool-choice ──
+    if [ -n "$expected_tool" ]; then
+        grep -Fqx "$expected_tool" <<<"$tool_calls" \
+            || fail "$label: expected tool '$expected_tool' was not called"
+    fi
+    if [ -n "$expected_any" ]; then
+        local matched=""
+        while IFS= read -r t; do
+            [ -z "$t" ] && continue
+            if grep -Fqx "$t" <<<"$tool_calls"; then matched="$t"; break; fi
+        done <<<"$expected_any"
+        [ -z "$matched" ] && fail "$label: no tool from expected_tool_any_of was called: $(echo "$expected_any" | tr '\n' ' ')"
+    fi
+    if [ -n "$expected_all" ]; then
+        while IFS= read -r t; do
+            [ -z "$t" ] && continue
+            grep -Fqx "$t" <<<"$tool_calls" || fail "$label: required tool '$t' was not called"
+        done <<<"$expected_all"
+    fi
+    if [ "$expected_none" = "true" ] && [ -n "$tool_calls" ]; then
+        fail "$label: expected zero tool calls but agent called: $(echo "$tool_calls" | tr '\n' ' ')"
+    fi
+
+    # ── Substrings ──
     while IFS= read -r needle; do
         [ -z "$needle" ] && continue
-        if grep -qi -- "$needle" <<<"$ANSWER"; then MATCHED_ANY="$needle"; break; fi
-    done <<<"$REQUIRED_ANY"
-    [ -z "$MATCHED_ANY" ] && fail "no substring from required_substrings_any_of present: $(echo "$REQUIRED_ANY" | tr '\n' ' ')"
-fi
+        grep -qi -- "$needle" <<<"$answer" || fail "$label: required substring '$needle' missing"
+    done <<<"$required"
 
-while IFS= read -r needle; do
-    [ -z "$needle" ] && continue
-    if grep -qi -- "$needle" <<<"$ANSWER"; then
-        fail "forbidden substring '$needle' present"
-        # Intentional: any single forbidden hit is a hard fail, so stop
-        # at the first one rather than spamming N fail lines for the
-        # same logical violation.
-        break
+    if [ -n "$required_any" ]; then
+        local matched_any=""
+        while IFS= read -r needle; do
+            [ -z "$needle" ] && continue
+            if grep -qi -- "$needle" <<<"$answer"; then matched_any="$needle"; break; fi
+        done <<<"$required_any"
+        [ -z "$matched_any" ] && fail "$label: no substring from required_substrings_any_of present: $(echo "$required_any" | tr '\n' ' ')"
     fi
-done <<<"$FORBIDDEN"
 
-# ── Numeric assertion ─────────────────────────────────────────────────────────
-if [ -n "$NUM_REGEX" ]; then
-    # Strip thousands-separator commas BEFORE the inner number regex — without
-    # this, "1,311 msg/sec" splits into "1" and "311" and awk gets two args.
-    NUM=$(grep -oE "$NUM_REGEX" <<<"$ANSWER" | head -1 | tr -d ',' | grep -oE '[0-9]+(\.[0-9]+)?' | head -1 || true)
-    if [ -z "$NUM" ]; then
-        fail "numeric_match.regex '$NUM_REGEX' found no number in answer"
-    else
-        if [ -n "$NUM_MIN" ] && awk "BEGIN{exit !($NUM < $NUM_MIN)}"; then
-            fail "extracted number $NUM below min $NUM_MIN"
+    while IFS= read -r needle; do
+        [ -z "$needle" ] && continue
+        if grep -qi -- "$needle" <<<"$answer"; then
+            # Intentional: any single forbidden hit is a hard fail, so stop
+            # at the first one rather than spamming N fail lines for the
+            # same logical violation.
+            fail "$label: forbidden substring '$needle' present"
+            break
         fi
-        if [ -n "$NUM_MAX" ] && awk "BEGIN{exit !($NUM > $NUM_MAX)}"; then
-            fail "extracted number $NUM above max $NUM_MAX"
+    done <<<"$forbidden"
+
+    # ── Numeric ──
+    if [ -n "$num_regex" ]; then
+        # Strip thousands-separator commas BEFORE the inner number regex —
+        # without this, "1,311 msg/sec" splits into "1" and "311" and awk
+        # gets two args.
+        local num
+        num=$(grep -oE "$num_regex" <<<"$answer" | head -1 | tr -d ',' | grep -oE '[0-9]+(\.[0-9]+)?' | head -1 || true)
+        if [ -z "$num" ]; then
+            fail "$label: numeric_match.regex '$num_regex' found no number in answer"
+        else
+            if [ -n "$num_min" ] && awk "BEGIN{exit !($num < $num_min)}"; then
+                fail "$label: extracted number $num below min $num_min"
+            fi
+            if [ -n "$num_max" ] && awk "BEGIN{exit !($num > $num_max)}"; then
+                fail "$label: extracted number $num above max $num_max"
+            fi
+            log_info "$label numeric: $num (in [$num_min, $num_max])"
         fi
-        log_info "numeric:         $NUM (in [$NUM_MIN, $NUM_MAX])"
     fi
-fi
 
-# ── Entity-set assertion (ground-truth diff) ──────────────────────────────────
-if [ -n "$GT_JQ" ] && [ -n "$GT_REGEX" ]; then
-    # All tool_use_ids whose name matches any expected_* declaration. If only
-    # expected_tool is set we filter on that; otherwise use whatever was called.
-    EXPECTED_IDS=$(jq -r --arg t "$EXPECTED_TOOL" '
-        select(.type=="assistant") | .message.content[]?
-        | select(.type=="tool_use")
-        | select($t == "" or .name == $t) | .id
-    ' "$RUN_FILE")
+    # ── ground_truth.jq / answer_regex (entity-set diff) ──
+    if [ -n "$gt_jq" ] && [ -n "$gt_regex" ]; then
+        # All tool_use_ids whose name matches any expected_* declaration. If
+        # only expected_tool is set we filter on that; otherwise use whatever
+        # was called.
+        local expected_ids expected_set answer_set missing extra
+        expected_ids=$(jq -r --arg t "$expected_tool" '
+            select(.type=="assistant") | .message.content[]?
+            | select(.type=="tool_use")
+            | select($t == "" or .name == $t) | .id
+        ' "$run_file")
+        expected_set=$(
+            while IFS= read -r id; do
+                [ -z "$id" ] && continue
+                jq -r --arg id "$id" '
+                    select(.type=="user") | .message.content[]?
+                    | select(.type=="tool_result" and .tool_use_id==$id)
+                    | .content | (try fromjson catch empty)
+                ' "$run_file" | jq -r "$gt_jq" 2>/dev/null
+            done <<<"$expected_ids" | sort -u
+        )
+        answer_set=$(grep -oE "$gt_regex" <<<"$answer" | sort -u || true)
+        log_info "$label expected set: $(echo "$expected_set" | tr '\n' ' ')"
+        log_info "$label answer set:   $(echo "$answer_set" | tr '\n' ' ')"
+        missing=$(comm -23 <(echo "$expected_set") <(echo "$answer_set"))
+        extra=$(comm -13 <(echo "$expected_set") <(echo "$answer_set"))
+        [ -n "$missing" ] && fail "$label: answer omitted entities: $(echo "$missing" | tr '\n' ' ')"
+        [ -n "$extra" ]   && fail "$label: answer fabricated entities: $(echo "$extra" | tr '\n' ' ')"
+    fi
 
-    EXPECTED_SET=$(
-        while IFS= read -r id; do
-            [ -z "$id" ] && continue
-            jq -r --arg id "$id" '
-                select(.type=="user") | .message.content[]?
-                | select(.type=="tool_result" and .tool_use_id==$id)
-                | .content | (try fromjson catch empty)
-            ' "$RUN_FILE" | jq -r "$GT_JQ" 2>/dev/null
-        done <<<"$EXPECTED_IDS" | sort -u
-    )
+    # ── ground_truth.shell / expect_stdout_regex (broker-state verification) ──
+    # Run the shell string in a `bash -c` child (inherits BROKER_URL,
+    # semp_curl, BROKER_USER/PASS/VPN via export / export -f) and match
+    # stdout. Used by Mode-2 scenarios to independently verify that the
+    # answer's claim ("queue drained", "vpn still there", "queue created")
+    # matches the broker's actual state — otherwise a confidently-worded
+    # confabulation would pass every text-level assertion.
+    if [ -n "$gt_shell" ] && [ -n "$gt_expect" ]; then
+        local gt_out gt_rc
+        set +e
+        gt_out=$(bash -c "$gt_shell" 2>&1)
+        gt_rc=$?
+        set -e
+        log_info "$label ground_truth.shell → $(echo "$gt_out" | tr '\n' ' ' | head -c 120)"
+        if [ "$gt_rc" -ne 0 ]; then
+            fail "$label: ground_truth.shell exited $gt_rc (stdout: $gt_out)"
+        elif ! grep -Eq -- "$gt_expect" <<<"$gt_out"; then
+            fail "$label: ground_truth stdout did not match /$gt_expect/ (got: $gt_out)"
+        fi
+    fi
+}
 
-    ANSWER_SET=$(grep -oE "$GT_REGEX" <<<"$ANSWER" | sort -u || true)
+# ── Turn 1 ────────────────────────────────────────────────────────────────────
+# --session-id pins the conversation id up front so a followup can resume
+# it deterministically. `--continue` would work for a single-scenario shell
+# but breaks the moment two scenarios run in parallel (each would resume
+# whichever "most recent" happened to land last). uuidgen is standard on
+# every distro we support; /proc/sys/kernel/random/uuid is the Linux
+# fallback if uuidgen isn't installed.
+SESSION_ID=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)
+invoke_claude "$RUN_FILE" "$PROMPT" --session-id "$SESSION_ID" || exit 2
 
-    log_info "expected set:    $(echo "$EXPECTED_SET" | tr '\n' ' ')"
-    log_info "answer set:      $(echo "$ANSWER_SET" | tr '\n' ' ')"
+run_assertions "$RUN_FILE" "$EXPANDED" "turn-1"
 
-    MISSING=$(comm -23 <(echo "$EXPECTED_SET") <(echo "$ANSWER_SET"))
-    EXTRA=$(comm -13 <(echo "$EXPECTED_SET") <(echo "$ANSWER_SET"))
-    [ -n "$MISSING" ] && fail "answer omitted entities: $(echo "$MISSING" | tr '\n' ' ')"
-    [ -n "$EXTRA" ]   && fail "answer fabricated entities: $(echo "$EXTRA" | tr '\n' ' ')"
+# ── Turn 2 (optional followup) ────────────────────────────────────────────────
+FOLLOWUP=$(jq -c '.followup // empty' <<<"$EXPANDED")
+if [ -n "$FOLLOWUP" ]; then
+    FOLLOWUP_PROMPT=$(jq -r '.prompt // empty' <<<"$FOLLOWUP")
+    if [ -z "$FOLLOWUP_PROMPT" ]; then
+        log_err "followup is set but followup.prompt is empty"
+        exit 2
+    fi
+    log_info "followup prompt: $FOLLOWUP_PROMPT"
+    invoke_claude "$RUN_FILE2" "$FOLLOWUP_PROMPT" --resume "$SESSION_ID" || exit 2
+    run_assertions "$RUN_FILE2" "$FOLLOWUP" "turn-2"
 fi
 
 if [ "$PASS" -eq 1 ]; then

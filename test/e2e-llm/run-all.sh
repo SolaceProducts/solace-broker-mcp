@@ -13,7 +13,7 @@ set -euo pipefail
 
 RUNNER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCENARIO_DIR="$RUNNER_DIR/scenarios"
-HELPERS="$RUNNER_DIR/../helpers.sh"
+HELPERS="$RUNNER_DIR/helpers.sh"
 
 # Suite-wide config — MCP_URL, MCP_BEARER_TOKEN, PRECHECK_BROKERS,
 # PINNED_CLAUDE_VERSION, etc. Anything exported beforehand wins.

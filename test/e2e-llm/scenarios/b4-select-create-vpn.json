@@ -1,0 +1,17 @@
+{
+  "_doc": "B4 tool selection: 'create a new VPN' unambiguously picks create-message-vpn. Tool is gated so the agent must NOT call on turn 1. Assertion targets the verbalized intent + a confirmation ask. Turn 2 'no': SEMPv2 GET on the target VPN name returns 404, confirming nothing was created. VPN name is intentionally out-of-suite ('e2e-llm-nope-vpn') so a stray create is easy to spot in cleanup.",
+  "prompt": "Create a new VPN named e2e-llm-nope-vpn on $BROKER.",
+  "expected_tools_none": true,
+  "required_substrings_any_of": [
+    "create-message-vpn", "create a vpn", "create the vpn", "e2e-llm-nope-vpn",
+    "confirm", "would you like", "shall i", "sure", "proceed"
+  ],
+  "followup": {
+    "prompt": "no, cancel",
+    "expected_tools_none": true,
+    "ground_truth": {
+      "shell": "semp_curl -so /dev/null -w '%{http_code}' \"$BROKER_URL/SEMP/v2/__private_monitor__/msgVpns/e2e-llm-nope-vpn\"",
+      "expect_stdout_regex": "^(400|404)$"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "_doc": "B1 tool selection under ambiguous phrasing. 'Clear the queue' has three plausible readings: (a) delete the spooled messages (correct — clearing contents), (b) reset stats counters (wrong — user said 'the queue', not 'the queue's stats'), or (c) delete the queue itself (wrong — most destructive interpretation). delete-queue-messages is gated, so the agent must NOT call it on turn 1 — it must describe the intent and ask. Assertion targets the verbalized intent (delete-queue-messages or paraphrase) and forbids the wrong picks. Turn 2 'no': no mutation.",
+  "prompt": "Clear queue $E2E_LLM_ACTION_QUEUE in VPN $BROKER_VPN on $BROKER.",
+  "setup": {"cmd": "refill_e2e_llm_action_queue"},
+  "expected_tools_none": true,
+  "required_substrings_any_of": [
+    "delete-queue-messages", "delete queue messages",
+    "spooled messages", "delete the messages", "delete all messages",
+    "drain", "empty the queue"
+  ],
+  "forbidden_substrings": [
+    "clear-queue-stats", "clear stats", "reset stats", "statistics counter",
+    "delete the queue itself", "delete-queue "
+  ],
+  "followup": {
+    "prompt": "no",
+    "expected_tools_none": true
+  }
+}
