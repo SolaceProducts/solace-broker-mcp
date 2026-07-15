@@ -70,7 +70,7 @@ verify_empty_enabled_vpn_state() {
         "empty-enabled-VPN [$label]: test-vpn-empty enabled must be true" || return 1
     assert_json_field "$body" ".data.state" "up" \
         "empty-enabled-VPN [$label]: test-vpn-empty state must be up" || return 1
-    assert_json_field "$body" ".data.msgVpnConnections == 1" "true" \
+    assert_json_field "$body" ".data.msgVpnConnections" "1" \
         "empty-enabled-VPN [$label]: test-vpn-empty msgVpnConnections must be 1 (reserved #client only)" || return 1
 }
 
