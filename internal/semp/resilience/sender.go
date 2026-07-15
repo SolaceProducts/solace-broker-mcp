@@ -246,8 +246,10 @@ func (b *cancelOnCloseReadCloser) Close() error {
 	return err
 }
 
-// prepareRetry re-runs AddAuth when the previous attempt failed with 401.
-// Skipped on 429/503/5xx retries to avoid unnecessary IdP round-trips.
+// prepareRetry re-runs AddAuth when the authenticator signalled ReAuth on the
+// preceding 401 (carried as needsReauth on the retry state). Skipped for
+// 429/503/5xx retries and for auth modes whose recovery does not need fresh
+// credentials (e.g. Basic, where AddAuth would only re-set a static header).
 func (d *Sender) prepareRetry(req *http.Request) error {
 	state := getRetryState(req.Context())
 	if state.needsReauth {
