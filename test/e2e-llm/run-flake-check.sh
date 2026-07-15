@@ -22,7 +22,7 @@
 set -euo pipefail
 
 RUNNER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HELPERS="$RUNNER_DIR/../helpers.sh"
+HELPERS="$RUNNER_DIR/helpers.sh"
 
 # Mirror run-all.sh / run-scenario.sh: load suite-wide config so
 # BROKER_TARGET, MCP_URL, PINNED_CLAUDE_VERSION, etc. are resolved the
