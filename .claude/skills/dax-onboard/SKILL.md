@@ -92,6 +92,9 @@ qualifiers exactly as the page states them. Note the linked milestone/epic Jira 
 
 #### 2c. People
 
+> Snapshot as of 2026-07-16 — DAX Home has no maintained roster to pull from, so this is
+> a point-in-time list. Verify against the DAX Home page / team directory; it will drift.
+
 | Name | Role / Focus |
 |------|-------------|
 | Andrea Ross | Senior Engineering Manager and Product Owner|
@@ -168,6 +171,15 @@ go mod download
 
 **Step 3 — Create local config**
 - Copy example config: `cp broker-config.example.yaml broker-config.yaml`
+- Set `mcp_client_auth.mode` to a dev mode in `broker-config.yaml` (the example defaults to
+  `oauth`, which is production-only). Default to `disabled` — no token needed:
+  ```yaml
+  mcp_client_auth:
+    mode: disabled
+  ```
+  To exercise the bearer path instead, use `mode: static` and ask the joiner to pick a
+  `dev_token` (any string); the same value must be reused when connecting the client in
+  Step 6. See `docs/examples.md`.
 - Create `.env` file with default dev credentials:
   ```env
   BROKER_USERNAME=admin
@@ -190,7 +202,9 @@ docker run -d --name solace-broker \
 ```bash
 go run ./cmd/server
 ```
-- Verify health: `curl http://localhost:9090/health` → `{"status":"healthy"}` (backward-compat endpoint). The canonical liveness endpoint is `/livez` → `{"status":"alive"}`.
+- Verify the server is up by checking for an HTTP 200 (don't match on an exact body, which can drift):
+  `curl -fsS -o /dev/null -w '%{http_code}' http://localhost:9090/livez` → `200`.
+  `/livez` is the canonical liveness probe; `/health` is a backward-compat alias.
 
 **Step 6 — Connect from Claude Code**
 ```bash
