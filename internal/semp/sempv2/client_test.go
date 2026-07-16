@@ -3,6 +3,7 @@ package sempv2_test
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"net"
@@ -1092,8 +1093,9 @@ func TestClient_TLSWiring(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected TLS verification error, got nil")
 		}
-		if !strings.Contains(err.Error(), "x509") && !strings.Contains(err.Error(), "certificate") {
-			t.Errorf("err = %v, want an x509/certificate verification error", err)
+		var unknownCA x509.UnknownAuthorityError
+		if !errors.As(err, &unknownCA) {
+			t.Errorf("err = %v, want errors.As(_, *x509.UnknownAuthorityError)", err)
 		}
 	})
 
