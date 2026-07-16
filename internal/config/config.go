@@ -328,8 +328,7 @@ type MCPClientAuthConfig struct {
 	// for the design rationale.
 	Mode string `yaml:"mode"`
 
-	// Pointer so absence-in-YAML is distinguishable from present-with-enabled:false;
-	// drives I1 by shape and I3 via Enabled *bool.
+	// Pointer so absence-in-YAML is distinguishable from present-with-enabled:false.
 	ToolAuthorization *ToolAuthorizationConfig `yaml:"tool_authorization"`
 }
 
@@ -337,7 +336,7 @@ type MCPClientAuthConfig struct {
 // Field names mirror the Solace broker's OAuth profile
 // (accessLevelGroupsClaimName, accessLevelGroups) for cross-product consistency.
 type ToolAuthorizationConfig struct {
-	// *bool so presence-in-YAML is distinguishable from default; enforces I3.
+	// *bool so presence-in-YAML is distinguishable from default.
 	Enabled           *bool               `yaml:"enabled"`
 	GroupsClaimName   *string             `yaml:"groups_claim_name"`
 	AccessLevelGroups map[string][]string `yaml:"access_level_groups"`
@@ -1165,15 +1164,15 @@ func countHop2Brokers(cfg *ServerConfig) int {
 }
 
 // validateHop1Hop2Alignment enforces the structural invariant that Hop 2
-// applyToolAuthorizationDefaults applies Q1 and Q3 defaults for the
-// tool_authorization block. Called only when ENABLE_TOOL_AUTHORIZATION is set.
+// applyToolAuthorizationDefaults applies defaults for the tool_authorization
+// block. Called only when ENABLE_TOOL_AUTHORIZATION is set.
 func applyToolAuthorizationDefaults(cfg *ServerConfig) {
-	// Q1: synthesize an empty ToolAuthorizationConfig when the block is omitted
-	// in oauth mode, so the I3 validator arm always sees a non-nil pointer.
+	// Synthesize an empty ToolAuthorizationConfig when the block is omitted
+	// in oauth mode, so the validator always sees a non-nil pointer.
 	if strings.ToLower(cfg.MCPClientAuth.Mode) == AuthModeOAuth && cfg.MCPClientAuth.ToolAuthorization == nil {
 		cfg.MCPClientAuth.ToolAuthorization = &ToolAuthorizationConfig{Enabled: nil}
 	}
-	// Q3: default GroupsClaimName to "groups" when the block is present but
+	// Default GroupsClaimName to "groups" when the block is present but
 	// the field is omitted (nil), matching the Solace broker's own default.
 	if cfg.MCPClientAuth.ToolAuthorization != nil && cfg.MCPClientAuth.ToolAuthorization.GroupsClaimName == nil {
 		def := "groups"
@@ -1182,25 +1181,25 @@ func applyToolAuthorizationDefaults(cfg *ServerConfig) {
 }
 
 // validateToolAuthorization checks the tool_authorization config block for
-// invariant violations (I1, I3) and structural coherence (Q3a, Q4, Q7).
+// invariant violations and structural coherence.
 // Called only when ENABLE_TOOL_AUTHORIZATION is set.
 func validateToolAuthorization(cfg *ServerConfig) []error {
 	var errs []error
 
-	// I1 (Q14–Q16): tool_authorization is only legal under oauth mode.
+	// tool_authorization is only legal under oauth mode.
 	if cfg.MCPClientAuth.Mode != AuthModeOAuth && cfg.MCPClientAuth.ToolAuthorization != nil {
 		errs = append(errs, fmt.Errorf(
 			`mcp_client_auth.tool_authorization is only supported when mcp_client_auth.mode is "oauth" (currently: %q); either set mode to "oauth" or remove the tool_authorization block`,
 			cfg.MCPClientAuth.Mode))
 	}
 
-	// I3 (Q17–Q18): in oauth mode, enabled must be set explicitly.
+	// In oauth mode, enabled must be set explicitly.
 	if cfg.MCPClientAuth.Mode == AuthModeOAuth && cfg.MCPClientAuth.ToolAuthorization != nil && cfg.MCPClientAuth.ToolAuthorization.Enabled == nil {
 		errs = append(errs, fmt.Errorf(
 			`mcp_client_auth.tool_authorization.enabled must be set explicitly to true or false when mcp_client_auth.mode is "oauth"`))
 	}
 
-	// Q3a: groups_claim_name explicitly set to empty or whitespace-only.
+	// groups_claim_name explicitly set to empty or whitespace-only.
 	if cfg.MCPClientAuth.ToolAuthorization != nil &&
 		cfg.MCPClientAuth.ToolAuthorization.GroupsClaimName != nil &&
 		strings.TrimSpace(*cfg.MCPClientAuth.ToolAuthorization.GroupsClaimName) == "" {
@@ -1210,13 +1209,13 @@ func validateToolAuthorization(cfg *ServerConfig) []error {
 
 	// Structural validation of access_level_groups when the block is present.
 	if ta := cfg.MCPClientAuth.ToolAuthorization; ta != nil {
-		// Q4: enabled: true with empty access_level_groups is a config error.
+		// enabled: true with empty access_level_groups is a config error.
 		if ta.Enabled != nil && *ta.Enabled && len(ta.AccessLevelGroups) == 0 {
 			errs = append(errs, fmt.Errorf(
 				"mcp_client_auth.tool_authorization.access_level_groups is required when mcp_client_auth.tool_authorization.enabled is true"))
 		}
 
-		// Q7: empty or whitespace-only group name is a config coherence error.
+		// Empty or whitespace-only group name is a config coherence error.
 		for groupName := range ta.AccessLevelGroups {
 			if strings.TrimSpace(groupName) == "" {
 				errs = append(errs, fmt.Errorf(
@@ -1679,11 +1678,11 @@ func applyEnvOverrides(cfg *ServerConfig) error {
 // in validateBroker when broker OAuth ships.
 const envEnableUnreleasedBrokerOAuth = "ENABLE_UNRELEASED_BROKER_OAUTH"
 
-// envEnableToolAuthorization gates the T1 tool-authorization config validation
-// (I1, I3, Q3a, Q4, Q7) and the applyDefaults synthesis (Q1, Q3). When unset
-// or false, the tool_authorization YAML block is parsed but ignored — existing
-// deployments are unaffected. Set truthy to activate validation during
-// development and testing. Remove when the full feature (T2–T6) ships.
+// envEnableToolAuthorization gates tool-authorization config validation
+// and defaults synthesis. When unset or false, the tool_authorization YAML
+// block is parsed but ignored — existing deployments are unaffected. Set
+// truthy to activate validation during development and testing. Remove when
+// the full tool-authorization feature ships.
 const envEnableToolAuthorization = "ENABLE_TOOL_AUTHORIZATION"
 
 // toolAuthorizationFeatureEnabled reports whether ENABLE_TOOL_AUTHORIZATION
