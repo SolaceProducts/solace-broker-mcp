@@ -549,11 +549,25 @@ func TestToolAuthorizationEnabled(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			enableToolAuthorizationFlag(t)
 			got := ToolAuthorizationEnabled(tc.cfg)
 			if got != tc.want {
 				t.Errorf("ToolAuthorizationEnabled() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestToolAuthorizationEnabled_featureFlagOff(t *testing.T) {
+	trueVal := true
+	cfg := &ServerConfig{
+		MCPClientAuth: MCPClientAuthConfig{
+			Mode:              AuthModeOAuth,
+			ToolAuthorization: &ToolAuthorizationConfig{Enabled: &trueVal},
+		},
+	}
+	if ToolAuthorizationEnabled(cfg) {
+		t.Error("ToolAuthorizationEnabled should return false when feature flag is off, even if config shape matches")
 	}
 }
 
