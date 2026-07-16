@@ -32,7 +32,7 @@ type Policy struct {
 	// toolCount is the number of distinct tools with at least one grant.
 	toolCount int
 
-	// groupCount is the number of distinct groups referenced across all grants.
+	// groupCount is the number of groups defined in the admin's config.
 	groupCount int
 }
 
@@ -64,8 +64,7 @@ type Decision struct {
 // cfg after NewPolicy returns cannot race with Authorize.
 //
 // Duplicate tool names within a single group are silently deduplicated (the
-// compiled index uses set semantics). A startup WARN is emitted at the call
-// site when duplicates are detected.
+// compiled index uses set semantics).
 //
 // NewPolicy does not consult cfg.Enabled — that is a precondition enforced
 // by the caller's composition-time gate (config.ToolAuthorizationEnabled).
