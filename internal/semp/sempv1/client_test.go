@@ -496,3 +496,63 @@ func TestHTTPClient_LogValue_ExcludesCredentials(t *testing.T) {
 		})
 	}
 }
+
+// TestNewHTTPClient_TLSWiring verifies InsecureSkipVerify threads through
+// NewHTTPClient into the transport by driving a real TLS handshake against
+// httptest.NewTLSServer's self-signed cert.
+func TestNewHTTPClient_TLSWiring(t *testing.T) {
+	newTLSClient := func(t *testing.T, srv *httptest.Server, insecure bool) *HTTPClient {
+		t.Helper()
+		brokerCfg := &config.BrokerConfig{
+			URL:                srv.URL,
+			Auth:               config.AuthConfig{Mode: config.AuthModeBasic},
+			InsecureSkipVerify: insecure,
+		}
+		retries := 0
+		minInterval := time.Duration(0)
+		sempCfg := &config.SEMPConfig{
+			RequestTimeoutDuration: 2 * time.Second,
+			Retries:                &retries,
+			RequestMinInterval:     &minInterval,
+			RetryMinInterval:       1 * time.Millisecond,
+			RetryMaxInterval:       10 * time.Millisecond,
+		}
+		jar, err := resilience.NewSafeCookieJar()
+		if err != nil {
+			t.Fatalf("NewSafeCookieJar: %v", err)
+		}
+		client, err := NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("user", "pass", jar), jar)
+		if err != nil {
+			t.Fatalf("NewHTTPClient: %v", err)
+		}
+		return client
+	}
+
+	t.Run("verification on rejects self-signed cert", func(t *testing.T) {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, successEnvelope)
+		}))
+		defer srv.Close()
+
+		client := newTLSClient(t, srv, false)
+		_, err := client.Execute(context.Background(), `<rpc><show><version/></show></rpc>`)
+		if err == nil {
+			t.Fatal("expected TLS verification error, got nil")
+		}
+		if !strings.Contains(err.Error(), "x509") && !strings.Contains(err.Error(), "certificate") {
+			t.Errorf("err = %v, want an x509/certificate verification error", err)
+		}
+	})
+
+	t.Run("verification skipped accepts self-signed cert", func(t *testing.T) {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, successEnvelope)
+		}))
+		defer srv.Close()
+
+		client := newTLSClient(t, srv, true)
+		if _, err := client.Execute(context.Background(), `<rpc><show><version/></show></rpc>`); err != nil {
+			t.Fatalf("Execute with InsecureSkipVerify=true: unexpected error: %v", err)
+		}
+	})
+}
