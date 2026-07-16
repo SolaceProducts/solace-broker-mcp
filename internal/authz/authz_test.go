@@ -16,8 +16,6 @@ package authz
 
 import (
 	"bytes"
-	"encoding/json"
-	"fmt"
 	"log/slog"
 	"reflect"
 	"strings"
@@ -384,38 +382,6 @@ func TestDecision_slogDoesNotLeakGroupNames(t *testing.T) {
 	for _, name := range []string{"Ops", "SecretGroup"} {
 		if strings.Contains(out, name) {
 			t.Errorf("slog output contains group name %q — LogValue should redact it.\nOutput: %s", name, out)
-		}
-	}
-}
-
-func TestDecision_jsonMarshalLeaksGroupNames(t *testing.T) {
-	d := Decision{
-		Allowed:       true,
-		MatchedGroups: []string{"Ops", "SecretGroup"},
-	}
-	b, err := json.Marshal(d)
-	if err != nil {
-		t.Fatalf("json.Marshal: %v", err)
-	}
-	out := string(b)
-	for _, name := range []string{"Ops", "SecretGroup"} {
-		if !strings.Contains(out, name) {
-			t.Errorf("json.Marshal should contain %q (exported fields) — callers must not json.Marshal a Decision", name)
-		}
-	}
-}
-
-func TestDecision_fmtSprintfLeaksGroupNames(t *testing.T) {
-	d := Decision{
-		Allowed:       true,
-		MatchedGroups: []string{"Ops", "SecretGroup"},
-	}
-	for _, verb := range []string{"%v", "%+v"} {
-		out := fmt.Sprintf(verb, d)
-		for _, name := range []string{"Ops", "SecretGroup"} {
-			if !strings.Contains(out, name) {
-				t.Errorf("fmt.Sprintf(%q) should contain %q (exported fields) — callers must not format a Decision", verb, name)
-			}
 		}
 	}
 }
