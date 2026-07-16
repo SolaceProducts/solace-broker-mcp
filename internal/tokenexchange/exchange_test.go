@@ -208,9 +208,13 @@ func TestExchange_DifferentKeysRunConcurrently(t *testing.T) {
 		t.Errorf("IdP called %d times, want 2 (different keys should not be deduplicated)", got)
 	}
 
+	// Lock: the httptest handler writes receivedTokens under receivedTokensMu,
+	// and wg tracks Exchange() completion, not the handler goroutine.
+	receivedTokensMu.Lock()
 	if !receivedTokens["tok-A"] || !receivedTokens["tok-B"] {
 		t.Errorf("IdP received subject_tokens = %v, want both tok-A and tok-B", receivedTokens)
 	}
+	receivedTokensMu.Unlock()
 }
 
 func TestExchange_SameTokenDifferentBrokersRunConcurrently(t *testing.T) {
@@ -264,9 +268,13 @@ func TestExchange_SameTokenDifferentBrokersRunConcurrently(t *testing.T) {
 		t.Errorf("IdP called %d times, want 2 (same token + different brokers must not be deduplicated)", got)
 	}
 
+	// Lock: the httptest handler writes receivedTokens under receivedTokensMu,
+	// and wg tracks Exchange() completion, not the handler goroutine.
+	receivedTokensMu.Lock()
 	if !receivedTokens["same-token"] {
 		t.Errorf("IdP received subject_tokens = %v, want same-token", receivedTokens)
 	}
+	receivedTokensMu.Unlock()
 }
 
 // ---------- B04: context cancellation does not affect other callers ----------
@@ -388,12 +396,17 @@ func TestExchange_CancellationScopedToKeyBoundary(t *testing.T) {
 	}
 
 	// Groups 2 and 3 must have reached the IdP with their respective subject tokens.
+	// Lock: group 1's context is cancelled, so its Exchange() returns early via
+	// wg.Done() while the detached-context IdP call's handler may still be writing
+	// receivedTokens. wg tracks Exchange() completion, not the handler goroutine.
+	receivedTokensMu.Lock()
 	if !receivedTokens["user-a-jwt"] {
 		t.Errorf("IdP never received subject_token=user-a-jwt (group 2)")
 	}
 	if !receivedTokens["user-c-jwt"] {
 		t.Errorf("IdP never received subject_token=user-c-jwt (group 3)")
 	}
+	receivedTokensMu.Unlock()
 }
 
 func TestExchange_DifferentTokensSameBrokerRunConcurrently(t *testing.T) {
@@ -451,9 +464,13 @@ func TestExchange_DifferentTokensSameBrokerRunConcurrently(t *testing.T) {
 		t.Errorf("IdP called %d times, want 2 (different tokens + same broker must not be deduplicated)", got)
 	}
 
+	// Lock: the httptest handler writes receivedTokens under receivedTokensMu,
+	// and wg tracks Exchange() completion, not the handler goroutine.
+	receivedTokensMu.Lock()
 	if !receivedTokens["user-a-jwt"] || !receivedTokens["user-c-jwt"] {
 		t.Errorf("IdP received subject_tokens = %v, want both user-a-jwt and user-c-jwt", receivedTokens)
 	}
+	receivedTokensMu.Unlock()
 }
 
 // ---------- B04: context cancellation supersedes error ----------
