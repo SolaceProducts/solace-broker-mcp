@@ -343,7 +343,10 @@ type ToolAuthorizationConfig struct {
 }
 
 // LogValue implements slog.LogValuer for ToolAuthorizationConfig.
-func (t ToolAuthorizationConfig) LogValue() slog.Value {
+func (t *ToolAuthorizationConfig) LogValue() slog.Value {
+	if t == nil {
+		return slog.GroupValue()
+	}
 	enabled := "unset"
 	if t.Enabled != nil {
 		if *t.Enabled {
