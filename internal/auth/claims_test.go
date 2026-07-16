@@ -160,9 +160,10 @@ func TestResolveGroups_SoftCap(t *testing.T) {
 	claims := map[string]any{"groups": elems}
 
 	var buf bytes.Buffer
+	prev := slog.Default()
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 	slog.SetDefault(logger)
-	defer slog.SetDefault(slog.Default())
+	defer slog.SetDefault(prev)
 
 	groups, ok := ResolveGroups(claims, "groups")
 	if !ok {
