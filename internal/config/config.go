@@ -1717,3 +1717,29 @@ func toolAuthorizationFeatureEnabled() bool {
 func unreleasedBrokerOAuthEnabled() bool {
 	return envBool(envEnableUnreleasedBrokerOAuth, false, "broker OAuth")
 }
+
+// ToolAuthorizationEnabled reports whether tool authorization should be
+// active at runtime. Returns true only when the feature flag is on AND
+// the config shape says enabled (mode is "oauth", the tool_authorization
+// block is present, the enabled flag is present, and the enabled flag is
+// true). Short-circuit AND in that order.
+//
+// The feature-flag check ensures this never returns true for a config
+// that skipped validation and defaults (they are gated behind the same
+// flag). When the feature ships and the flag is retired, delete the
+// toolAuthorizationFeatureEnabled() line — the rest stays.
+func ToolAuthorizationEnabled(cfg *ServerConfig) bool {
+	if !toolAuthorizationFeatureEnabled() {
+		return false
+	}
+	if cfg.MCPClientAuth.Mode != AuthModeOAuth {
+		return false
+	}
+	if cfg.MCPClientAuth.ToolAuthorization == nil {
+		return false
+	}
+	if cfg.MCPClientAuth.ToolAuthorization.Enabled == nil {
+		return false
+	}
+	return *cfg.MCPClientAuth.ToolAuthorization.Enabled
+}
