@@ -327,6 +327,42 @@ type MCPClientAuthConfig struct {
 	// rejects configs that omit it. See docs/superpowers/specs/2026-05-20-client-auth-mode-design.md
 	// for the design rationale.
 	Mode string `yaml:"mode"`
+
+	// Pointer so absence-in-YAML is distinguishable from present-with-enabled:false.
+	ToolAuthorization *ToolAuthorizationConfig `yaml:"tool_authorization"`
+}
+
+// ToolAuthorizationConfig holds the parsed tool_authorization YAML block.
+// Field names mirror the Solace broker's OAuth profile
+// (accessLevelGroupsClaimName, accessLevelGroups) for cross-product consistency.
+type ToolAuthorizationConfig struct {
+	// *bool so presence-in-YAML is distinguishable from default.
+	Enabled           *bool               `yaml:"enabled"`
+	GroupsClaimName   *string             `yaml:"groups_claim_name"`
+	AccessLevelGroups map[string][]string `yaml:"access_level_groups"`
+}
+
+// LogValue implements slog.LogValuer for ToolAuthorizationConfig.
+func (t *ToolAuthorizationConfig) LogValue() slog.Value {
+	if t == nil {
+		return slog.GroupValue()
+	}
+	enabled := "unset"
+	if t.Enabled != nil {
+		if *t.Enabled {
+			enabled = "true"
+		} else {
+			enabled = "false"
+		}
+	}
+	groupsClaimName := ""
+	if t.GroupsClaimName != nil {
+		groupsClaimName = *t.GroupsClaimName
+	}
+	return slog.GroupValue(
+		slog.String("enabled", enabled),
+		slog.String("groups_claim_name", groupsClaimName),
+	)
 }
 
 // validLogLevels is the allowlist of slog levels operators may configure.
@@ -659,6 +695,10 @@ func applyDefaults(cfg *ServerConfig) {
 	}
 	// InsecureSkipVerify is not defaulted here — Go's zero value for bool
 	// (false) already matches the intended default (verify TLS certificates).
+
+	if toolAuthorizationFeatureEnabled() {
+		applyToolAuthorizationDefaults(cfg)
+	}
 
 	// Observability numeric tunables (saturation_threshold_ms, etc.). The
 	// capability flags are env-driven and applied in applyEnvOverrides instead.
@@ -1034,6 +1074,10 @@ func validate(cfg *ServerConfig) error {
 		errs = append(errs, fmt.Errorf("mcp_client_auth.mode %q is invalid (must be one of %v)", cfg.MCPClientAuth.Mode, validAuthClientModes))
 	}
 
+	if toolAuthorizationFeatureEnabled() {
+		errs = append(errs, validateToolAuthorization(cfg)...)
+	}
+
 	// listen_address: validate form, then guard the disabled-mode exposure.
 	// An explicit value must be an IP or "localhost" so an unbindable host fails
 	// at startup rather than deep inside ListenAndServe. Empty is allowed (it
@@ -1123,6 +1167,70 @@ func countHop2Brokers(cfg *ServerConfig) int {
 }
 
 // validateHop1Hop2Alignment enforces the structural invariant that Hop 2
+// applyToolAuthorizationDefaults applies defaults for the tool_authorization
+// block. Called only when ENABLE_TOOL_AUTHORIZATION is set.
+func applyToolAuthorizationDefaults(cfg *ServerConfig) {
+	// Synthesize an empty ToolAuthorizationConfig when the block is omitted
+	// in oauth mode, so the validator always sees a non-nil pointer.
+	if strings.ToLower(cfg.MCPClientAuth.Mode) == AuthModeOAuth && cfg.MCPClientAuth.ToolAuthorization == nil {
+		cfg.MCPClientAuth.ToolAuthorization = &ToolAuthorizationConfig{Enabled: nil}
+	}
+	// Default GroupsClaimName to "groups" when the block is present but
+	// the field is omitted (nil), matching the Solace broker's own default.
+	if cfg.MCPClientAuth.ToolAuthorization != nil && cfg.MCPClientAuth.ToolAuthorization.GroupsClaimName == nil {
+		def := "groups"
+		cfg.MCPClientAuth.ToolAuthorization.GroupsClaimName = &def
+	}
+}
+
+// validateToolAuthorization checks the tool_authorization config block for
+// invariant violations and structural coherence.
+// Called only when ENABLE_TOOL_AUTHORIZATION is set.
+func validateToolAuthorization(cfg *ServerConfig) []error {
+	var errs []error
+
+	// tool_authorization is only legal under oauth mode.
+	if cfg.MCPClientAuth.Mode != AuthModeOAuth && cfg.MCPClientAuth.ToolAuthorization != nil {
+		errs = append(errs, fmt.Errorf(
+			`mcp_client_auth.tool_authorization is only supported when mcp_client_auth.mode is "oauth" (currently: %q); either set mode to "oauth" or remove the tool_authorization block`,
+			cfg.MCPClientAuth.Mode))
+	}
+
+	// In oauth mode, enabled must be set explicitly.
+	if cfg.MCPClientAuth.Mode == AuthModeOAuth && cfg.MCPClientAuth.ToolAuthorization != nil && cfg.MCPClientAuth.ToolAuthorization.Enabled == nil {
+		errs = append(errs, fmt.Errorf(
+			`mcp_client_auth.tool_authorization.enabled must be set explicitly to true or false when mcp_client_auth.mode is "oauth"`))
+	}
+
+	// groups_claim_name explicitly set to empty or whitespace-only.
+	if cfg.MCPClientAuth.ToolAuthorization != nil &&
+		cfg.MCPClientAuth.ToolAuthorization.GroupsClaimName != nil &&
+		strings.TrimSpace(*cfg.MCPClientAuth.ToolAuthorization.GroupsClaimName) == "" {
+		errs = append(errs, fmt.Errorf(
+			`mcp_client_auth.tool_authorization.groups_claim_name must be a non-blank string when set; omit the field to accept the default ("groups")`))
+	}
+
+	// Structural validation of access_level_groups when the block is present.
+	if ta := cfg.MCPClientAuth.ToolAuthorization; ta != nil {
+		// enabled: true with empty access_level_groups is a config error.
+		if ta.Enabled != nil && *ta.Enabled && len(ta.AccessLevelGroups) == 0 {
+			errs = append(errs, fmt.Errorf(
+				"mcp_client_auth.tool_authorization.access_level_groups is required when mcp_client_auth.tool_authorization.enabled is true"))
+		}
+
+		// Empty or whitespace-only group name is a config coherence error.
+		for groupName := range ta.AccessLevelGroups {
+			if strings.TrimSpace(groupName) == "" {
+				errs = append(errs, fmt.Errorf(
+					"mcp_client_auth.tool_authorization.access_level_groups: group name cannot be empty or whitespace-only"))
+				break
+			}
+		}
+	}
+
+	return errs
+}
+
 // OAuth on any broker requires Hop 1 OAuth on the MCP client auth. Returns
 // nil when the invariant holds (no Hop 2 brokers, or Hop 1 mode is oauth)
 // and an operator-facing error otherwise.
@@ -1516,6 +1624,27 @@ func sanitizeURLString(s string) string {
 // applyEnvOverrides checks for environment variable overrides and applies them
 // to the config. This runs before validate() so overridden values are still
 // range-checked. The overridden value is validated via ValidatePort internally.
+// envBool reads name from the environment and parses it as a boolean. When the
+// var is unset, it silently returns def. When the var IS set but holds a value
+// strconv.ParseBool rejects, it logs a slog.Warn naming the var and the default
+// in effect, then returns def. The context parameter identifies the subsystem
+// in the warning message (e.g. "observability", "tool authorization").
+// Tolerant so a typo cannot abort startup — but the warning ensures the
+// fallback is not silent.
+func envBool(name string, def bool, context string) bool {
+	v, ok := os.LookupEnv(name)
+	if !ok {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		slog.Warn(fmt.Sprintf("ignoring unparseable %s flag; using default", context),
+			"var", name, "value", v, "default", def)
+		return def
+	}
+	return b
+}
+
 func applyEnvOverrides(cfg *ServerConfig) error {
 	if envPort := os.Getenv("MCP_SERVER_PORT"); envPort != "" {
 		port, err := strconv.Atoi(envPort)
@@ -1552,6 +1681,24 @@ func applyEnvOverrides(cfg *ServerConfig) error {
 // in validateBroker when broker OAuth ships.
 const envEnableUnreleasedBrokerOAuth = "ENABLE_UNRELEASED_BROKER_OAUTH"
 
+// envEnableToolAuthorization gates tool-authorization config validation
+// and defaults synthesis. When unset or false, the tool_authorization YAML
+// block is parsed but ignored — existing deployments are unaffected. Set
+// truthy to activate validation during development and testing. Remove when
+// the full tool-authorization feature ships.
+const envEnableToolAuthorization = "ENABLE_TOOL_AUTHORIZATION"
+
+// toolAuthorizationFeatureEnabled reports whether ENABLE_TOOL_AUTHORIZATION
+// is set truthy.
+//
+// LIFECYCLE: this function, its constant, and the two gate sites
+// (applyToolAuthorizationDefaults, validateToolAuthorization) are one linked
+// lifecycle. When the full tool-authorization feature ships, delete this
+// function and its constant, and make the gated calls unconditional.
+func toolAuthorizationFeatureEnabled() bool {
+	return envBool(envEnableToolAuthorization, false, "tool authorization")
+}
+
 // unreleasedBrokerOAuthEnabled reports whether ENABLE_UNRELEASED_BROKER_OAUTH
 // is set truthy. Uses the same tolerant-parse behavior as the observability
 // flags (unparseable value → WARN + default of false) so a typo cannot
@@ -1568,5 +1715,5 @@ const envEnableUnreleasedBrokerOAuth = "ENABLE_UNRELEASED_BROKER_OAUTH"
 // structural preconditions remain), delete the validateBroker guard and
 // the banner branch, and then delete this function and its constant.
 func unreleasedBrokerOAuthEnabled() bool {
-	return envBool(envEnableUnreleasedBrokerOAuth, false)
+	return envBool(envEnableUnreleasedBrokerOAuth, false, "broker OAuth")
 }
