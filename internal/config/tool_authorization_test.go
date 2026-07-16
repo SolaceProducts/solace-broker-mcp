@@ -483,6 +483,94 @@ brokers:
 	}
 }
 
+// --- ToolAuthorizationEnabled ------------------------------------------------
+
+func TestToolAuthorizationEnabled(t *testing.T) {
+	trueVal := true
+	falseVal := false
+
+	cases := []struct {
+		name string
+		cfg  *ServerConfig
+		want bool
+	}{
+		{
+			name: "non-oauth mode returns false",
+			cfg: &ServerConfig{
+				MCPClientAuth: MCPClientAuthConfig{
+					Mode: "static",
+					ToolAuthorization: &ToolAuthorizationConfig{
+						Enabled: &trueVal,
+					},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "nil ToolAuthorization returns false",
+			cfg: &ServerConfig{
+				MCPClientAuth: MCPClientAuthConfig{
+					Mode:              AuthModeOAuth,
+					ToolAuthorization: nil,
+				},
+			},
+			want: false,
+		},
+		{
+			name: "nil Enabled returns false",
+			cfg: &ServerConfig{
+				MCPClientAuth: MCPClientAuthConfig{
+					Mode:              AuthModeOAuth,
+					ToolAuthorization: &ToolAuthorizationConfig{Enabled: nil},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "enabled false returns false",
+			cfg: &ServerConfig{
+				MCPClientAuth: MCPClientAuthConfig{
+					Mode:              AuthModeOAuth,
+					ToolAuthorization: &ToolAuthorizationConfig{Enabled: &falseVal},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "oauth mode with enabled true returns true",
+			cfg: &ServerConfig{
+				MCPClientAuth: MCPClientAuthConfig{
+					Mode:              AuthModeOAuth,
+					ToolAuthorization: &ToolAuthorizationConfig{Enabled: &trueVal},
+				},
+			},
+			want: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			enableToolAuthorizationFlag(t)
+			got := ToolAuthorizationEnabled(tc.cfg)
+			if got != tc.want {
+				t.Errorf("ToolAuthorizationEnabled() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestToolAuthorizationEnabled_featureFlagOff(t *testing.T) {
+	trueVal := true
+	cfg := &ServerConfig{
+		MCPClientAuth: MCPClientAuthConfig{
+			Mode:              AuthModeOAuth,
+			ToolAuthorization: &ToolAuthorizationConfig{Enabled: &trueVal},
+		},
+	}
+	if ToolAuthorizationEnabled(cfg) {
+		t.Error("ToolAuthorizationEnabled should return false when feature flag is off, even if config shape matches")
+	}
+}
+
 // In oauth mode, omitting enabled from the block is rejected.
 func TestToolAuthorization_OAuthModeEnabledOmittedRejects(t *testing.T) {
 	enableToolAuthorizationFlag(t)
