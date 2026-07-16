@@ -167,7 +167,8 @@ func createOIDCTokenVerifier(cfg *config.ServerConfig, httpClient *http.Client) 
 		}
 
 		if err := idToken.Claims(&claims); err != nil {
-			return nil, fmt.Errorf("failed to extract claims: %w", err)
+			slog.Warn("failed to extract claims",
+				slog.String("error", err.Error()))
 		}
 
 		// Parse scopes from JWT (space-separated string per OAuth 2.0 spec)
@@ -202,7 +203,7 @@ func createOIDCTokenVerifier(cfg *config.ServerConfig, httpClient *http.Client) 
 		// supporting arbitrary claim names for groups.
 		var raw map[string]any
 		if err := idToken.Claims(&raw); err != nil {
-			slog.Warn("failed to decode raw claims for groups extraction; treating as missing-claim",
+			slog.Warn("failed to extract claims",
 				slog.String("error", err.Error()))
 		} else {
 			groups, ok := ResolveGroups(raw, *cfg.MCPClientAuth.ToolAuthorization.GroupsClaimName)
