@@ -105,24 +105,34 @@ test_list_vpns_summary() {
     assert_recompute_count "$content" "$label" "$well_typed" "standbyCount" \
         '.enabled == true and .state == "standby"' || return 1
     assert_recompute_count "$content" "$label" "$well_typed" "zeroConnectionCount" \
-        '.enabled == true and .state == "up" and .msgVpnConnections == 0' || return 1
+        '.enabled == true and .state == "up" and .msgVpnConnections <= 1' || return 1
     # scanned is a direct equality against .vpns.data length — an uncapped
     # call is not truncated so scanned reflects the full population.
     assert_json_field "$content" \
         '(.summary.scanned) == (.vpns.data | length)' "true" \
         "$label: summary.scanned must equal len(data)" || return 1
-    # Non-zero coverage sanity: fixture must produce at least one disabled
-    # VPN (test-vpn), else the disabledCount recompute-equality is a vacuous
-    # 0==0 pass that would silently hide a broken handler.
+    # Non-zero coverage sanity: fixtures must produce at least one disabled
+    # VPN (test-vpn) and at least one bare enabled+up VPN (test-vpn-empty),
+    # else the recompute-equality on those counts is a vacuous 0==0 pass that
+    # would silently hide a broken handler.
     #
-    # No coverage guard on zeroConnectionCount: Solace attaches a reserved
-    # `#client` internal connection to every enabled+up VPN, so msgVpnConnections
-    # is ≥1 by broker invariant and the count can never fire from a fixture.
-    # This is a real limitation of the handler predicate as designed — filed as
-    # a follow-up (see the assertion story's notes).
+    # zeroConnectionCount's recompute uses `msgVpnConnections <= 1` because
+    # Solace attaches a reserved internal `#client` to every enabled+up VPN
+    # (broker invariant), so a "no real clients" VPN reports conns==1, not 0.
+    # The handler encodes the same predicate; see list_vpns.go for details.
+    # Because this recompute mirrors the handler predicate, its independent
+    # value is thin — the real guards are (1) the coverage guard below
+    # (`zeroConnectionCount >= 1`) and (2) the SEMP-direct assertion in
+    # verify-fixtures.sh that `test-vpn-empty.msgVpnConnections == 1`. If the
+    # broker ever attaches more (or fewer) than one internal client, the
+    # verify-fixtures tripwire fires before this recompute goes silent, so
+    # don't relax that `==1` assertion without a matching update here.
     assert_json_field "$content" \
         '(.summary.disabledCount) >= 1' "true" \
         "$label: at least one disabled VPN expected (fixture: test-vpn)" || return 1
+    assert_json_field "$content" \
+        '(.summary.zeroConnectionCount) >= 1' "true" \
+        "$label: at least one bare enabled+up VPN expected (fixture: test-vpn-empty)" || return 1
 }
 
 test_list_vpns_summary_a() { test_list_vpns_summary "broker-a"; }

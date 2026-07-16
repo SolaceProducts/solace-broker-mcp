@@ -66,6 +66,32 @@ cleanup_multi_vpn_on() {
     log_info "Multi-VPN fixture cleaned up on $label"
 }
 
+# Provisions a bare enabled VPN ("test-vpn-empty") with no client-user / ACL /
+# queue setup — its only job is to satisfy list-vpns.zeroConnectionCount, which
+# fires on enabled==true && state=="up" && msgVpnConnections<=1. Solace attaches
+# a reserved internal `#client` to every enabled+up VPN, so a "no real clients"
+# VPN reports msgVpnConnections==1; the handler's <=1 predicate accounts for
+# this. Deliberately distinct from `test-vpn` (enabled=false, feeds disabledCount).
+create_empty_enabled_vpn_on() {
+    local semp_config="$1"
+    local label="$2"
+    local broker_url="$3"
+    log_info "Creating empty-enabled-VPN fixture on $label ..."
+    semp_post "$semp_config" "msgVpns" \
+        '{"msgVpnName":"test-vpn-empty","enabled":true}' >/dev/null
+    verify_monitor_object "$broker_url" "$label" "msgVpns/test-vpn-empty" \
+        15 '.data.enabled == true and .data.state == "up"'
+    log_info "Empty-enabled-VPN fixture created on $label (test-vpn-empty, enabled=true)"
+}
+
+cleanup_empty_enabled_vpn_on() {
+    local semp_config="$1"
+    local label="$2"
+    log_info "Cleaning up empty-enabled-VPN fixture on $label ..."
+    semp_delete "$semp_config" "msgVpns/test-vpn-empty"
+    log_info "Empty-enabled-VPN fixture cleaned up on $label"
+}
+
 # Provisions two additional queues on the default VPN to exercise multi-queue
 # discovery and bound-vs-unbound state:
 #   - test-queue-2: non-exclusive, bound to the existing test-rdp
@@ -291,8 +317,8 @@ wait_for_slow_subscriber() {
         # rate=0 + stable discards = broker drained the egress (real decay);
         # rate>0 or rising discards = broker still delivering/dropping
         # (flag wrong, or just a momentary dip).
-        body=$(curl -s -o - -w '\n__HTTP_STATUS__%{http_code}' \
-            -u "$BROKER_USER:$BROKER_PASS" "$url" 2>/dev/null) || true
+        body=$(semp_curl -s -o - -w '\n__HTTP_STATUS__%{http_code}' \
+            "$url" 2>/dev/null) || true
         http_status="${body##*__HTTP_STATUS__}"
         body="${body%__HTTP_STATUS__*}"
         # `|| flag=""` so a transient non-JSON body (jq exits non-zero) just
@@ -613,6 +639,8 @@ create_fixtures() {
     create_multi_queue_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL"
     create_multi_vpn_on "$BROKER_A_SEMP_CONFIG" "broker-a" "$BROKER_A_URL"
     create_multi_vpn_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL"
+    create_empty_enabled_vpn_on "$BROKER_A_SEMP_CONFIG" "broker-a" "$BROKER_A_URL"
+    create_empty_enabled_vpn_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL"
     create_connected_client_on "broker-a" "$BROKER_A_URL" a "$F3_CLIENT_NAME_A"
     create_connected_client_on "broker-b" "$BROKER_B_URL" b "$F3_CLIENT_NAME_B"
     create_sustained_traffic_on "broker-a" "$BROKER_A_URL" a
@@ -661,6 +689,8 @@ cleanup_fixtures() {
     cleanup_connected_client_on "broker-b"
     cleanup_lowprio_congestion_on "$BROKER_A_SEMP_CONFIG" "broker-a"
     cleanup_lowprio_congestion_on "$BROKER_B_SEMP_CONFIG" "broker-b"
+    cleanup_empty_enabled_vpn_on "$BROKER_A_SEMP_CONFIG" "broker-a"
+    cleanup_empty_enabled_vpn_on "$BROKER_B_SEMP_CONFIG" "broker-b"
     cleanup_multi_vpn_on "$BROKER_A_SEMP_CONFIG" "broker-a"
     cleanup_multi_vpn_on "$BROKER_B_SEMP_CONFIG" "broker-b"
     cleanup_multi_queue_on "$BROKER_A_SEMP_CONFIG" "broker-a"
