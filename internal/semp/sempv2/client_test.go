@@ -3,6 +3,7 @@ package sempv2_test
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"net"
@@ -1040,4 +1041,74 @@ func TestClient_TransportPool_ReusesConnections(t *testing.T) {
 			"This usually means MaxIdleConnsPerHost is smaller than the concurrency cap.",
 			afterBatch2-afterBatch1, afterBatch1, afterBatch2)
 	}
+}
+
+// TestClient_TLSWiring verifies InsecureSkipVerify threads through
+// NewHTTPClient into the transport by driving a real TLS handshake against
+// httptest.NewTLSServer's self-signed cert.
+func TestClient_TLSWiring(t *testing.T) {
+	newTLSClient := func(t *testing.T, srv *httptest.Server, insecure bool) *sempv2.HTTPClient {
+		t.Helper()
+		brokerCfg := &config.BrokerConfig{
+			URL:                srv.URL,
+			Auth:               config.AuthConfig{Mode: "basic"},
+			InsecureSkipVerify: insecure,
+		}
+		retries := 0
+		minInterval := time.Duration(0)
+		sempCfg := &config.SEMPConfig{
+			RequestTimeoutDuration: 2 * time.Second,
+			Retries:                &retries,
+			RequestMinInterval:     &minInterval,
+		}
+		jar, err := resilience.NewSafeCookieJar()
+		if err != nil {
+			t.Fatalf("NewSafeCookieJar: %v", err)
+		}
+		client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret", jar), jar)
+		if err != nil {
+			t.Fatalf("NewHTTPClient: %v", err)
+		}
+		return client
+	}
+
+	op := &sempv2.Operation{
+		ID:     "getMsgVpn",
+		Method: "GET",
+		Path:   "/SEMP/v2/monitor/msgVpns/{msgVpnName}",
+		Parameters: []sempv2.Parameter{
+			{Name: "msgVpnName", In: "path"},
+		},
+	}
+
+	t.Run("verification on rejects self-signed cert", func(t *testing.T) {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}, "meta": map[string]any{}})
+		}))
+		defer srv.Close()
+
+		client := newTLSClient(t, srv, false)
+		_, err := client.Execute(context.Background(), op, map[string]any{"msgVpnName": "default"})
+		if err == nil {
+			t.Fatal("expected TLS verification error, got nil")
+		}
+		var unknownCA x509.UnknownAuthorityError
+		if !errors.As(err, &unknownCA) {
+			t.Errorf("err = %v, want errors.As(_, *x509.UnknownAuthorityError)", err)
+		}
+	})
+
+	t.Run("verification skipped accepts self-signed cert", func(t *testing.T) {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}, "meta": map[string]any{}})
+		}))
+		defer srv.Close()
+
+		client := newTLSClient(t, srv, true)
+		if _, err := client.Execute(context.Background(), op, map[string]any{"msgVpnName": "default"}); err != nil {
+			t.Fatalf("Execute with InsecureSkipVerify=true: unexpected error: %v", err)
+		}
+	})
 }

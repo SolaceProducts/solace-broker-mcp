@@ -81,6 +81,34 @@ func TestResponseHeaderTimeout_TracksOperatorConfiguredRequestTimeout(t *testing
 	}
 }
 
+// TestNewTunedTransport_TLSVerificationOnByDefault locks in the production
+// default: an unset insecure_skip_verify yields a transport with cert
+// verification on.
+func TestNewTunedTransport_TLSVerificationOnByDefault(t *testing.T) {
+	tr := NewTunedTransport(&config.BrokerConfig{}, &config.SEMPConfig{})
+
+	if tr.TLSClientConfig == nil {
+		t.Fatal("TLSClientConfig = nil, want non-nil")
+	}
+	if tr.TLSClientConfig.InsecureSkipVerify {
+		t.Error("InsecureSkipVerify = true for zero-value broker config, want false (verification on)")
+	}
+}
+
+// TestNewTunedTransport_TLSVerificationSkippedWhenConfigured asserts
+// insecure_skip_verify: true propagates into the transport (dev opt-out
+// for self-signed certs).
+func TestNewTunedTransport_TLSVerificationSkippedWhenConfigured(t *testing.T) {
+	tr := NewTunedTransport(&config.BrokerConfig{InsecureSkipVerify: true}, &config.SEMPConfig{})
+
+	if tr.TLSClientConfig == nil {
+		t.Fatal("TLSClientConfig = nil, want non-nil")
+	}
+	if !tr.TLSClientConfig.InsecureSkipVerify {
+		t.Error("InsecureSkipVerify = false, want true (config opt-out not honoured)")
+	}
+}
+
 // TestNewTunedTransport_MaxConnsPerHostEnforcesConcurrencyCap verifies the
 // per-broker in-flight bound is actually enforced at the transport. The
 // transport supplies a custom TLSClientConfig, which disables Go's automatic
