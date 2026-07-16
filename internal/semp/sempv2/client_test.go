@@ -1059,8 +1059,6 @@ func TestClient_TLSWiring(t *testing.T) {
 			RequestTimeoutDuration: 2 * time.Second,
 			Retries:                &retries,
 			RequestMinInterval:     &minInterval,
-			RetryMinInterval:       1 * time.Millisecond,
-			RetryMaxInterval:       10 * time.Millisecond,
 		}
 		jar, err := resilience.NewSafeCookieJar()
 		if err != nil {

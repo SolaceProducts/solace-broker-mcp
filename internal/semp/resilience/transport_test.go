@@ -85,13 +85,7 @@ func TestResponseHeaderTimeout_TracksOperatorConfiguredRequestTimeout(t *testing
 // default: an unset insecure_skip_verify yields a transport with cert
 // verification on.
 func TestNewTunedTransport_TLSVerificationOnByDefault(t *testing.T) {
-	brokerCfg := &config.BrokerConfig{URL: "https://broker.example.com:1943"}
-	sempCfg := &config.SEMPConfig{
-		MaxConcurrentPerBroker: 10,
-		RequestTimeoutDuration: defaults.DefaultSEMPRequestTimeoutDuration,
-	}
-
-	tr := NewTunedTransport(brokerCfg, sempCfg)
+	tr := NewTunedTransport(&config.BrokerConfig{}, &config.SEMPConfig{})
 
 	if tr.TLSClientConfig == nil {
 		t.Fatal("TLSClientConfig = nil, want non-nil")
@@ -105,16 +99,7 @@ func TestNewTunedTransport_TLSVerificationOnByDefault(t *testing.T) {
 // insecure_skip_verify: true propagates into the transport (dev opt-out
 // for self-signed certs).
 func TestNewTunedTransport_TLSVerificationSkippedWhenConfigured(t *testing.T) {
-	brokerCfg := &config.BrokerConfig{
-		URL:                "https://broker.example.com:1943",
-		InsecureSkipVerify: true,
-	}
-	sempCfg := &config.SEMPConfig{
-		MaxConcurrentPerBroker: 10,
-		RequestTimeoutDuration: defaults.DefaultSEMPRequestTimeoutDuration,
-	}
-
-	tr := NewTunedTransport(brokerCfg, sempCfg)
+	tr := NewTunedTransport(&config.BrokerConfig{InsecureSkipVerify: true}, &config.SEMPConfig{})
 
 	if tr.TLSClientConfig == nil {
 		t.Fatal("TLSClientConfig = nil, want non-nil")
