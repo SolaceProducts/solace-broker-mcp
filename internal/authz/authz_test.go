@@ -15,10 +15,12 @@
 package authz
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -343,21 +345,78 @@ func TestPolicy_LogValue_nil(t *testing.T) {
 	}
 }
 
-// --- H. Decision — data-protection drift tests ------------------------------
+// --- H. Decision — data-protection tests ------------------------------------
 
-func TestDecision_doesNotImplementStringer(t *testing.T) {
-	var d Decision
-	stringerType := reflect.TypeOf((*fmt.Stringer)(nil)).Elem()
-	if reflect.TypeOf(d).Implements(stringerType) {
-		t.Fatal("Decision must not implement fmt.Stringer — MatchedGroups would leak through fmt verbs")
+func TestDecision_LogValue_emitsCountNotNames(t *testing.T) {
+	d := Decision{
+		Allowed:       true,
+		MatchedGroups: []string{"Ops", "SecretGroup"},
+	}
+	v := d.LogValue()
+	if v.Kind() != slog.KindGroup {
+		t.Fatalf("LogValue kind = %v, want Group", v.Kind())
+	}
+	attrs := make(map[string]any)
+	for _, a := range v.Group() {
+		attrs[a.Key] = a.Value.Any()
+	}
+	if attrs["allowed"] != true {
+		t.Errorf("allowed = %v, want true", attrs["allowed"])
+	}
+	if attrs["matched_group_count"] != int64(2) {
+		t.Errorf("matched_group_count = %v, want 2", attrs["matched_group_count"])
+	}
+	if len(attrs) != 2 {
+		t.Errorf("expected exactly 2 attrs, got %d: %v", len(attrs), attrs)
 	}
 }
 
-func TestDecision_doesNotImplementJSONMarshaler(t *testing.T) {
-	var d Decision
-	marshalerType := reflect.TypeOf((*json.Marshaler)(nil)).Elem()
-	if reflect.TypeOf(d).Implements(marshalerType) {
-		t.Fatal("Decision must not implement json.Marshaler — MatchedGroups would leak through json.Marshal")
+func TestDecision_slogDoesNotLeakGroupNames(t *testing.T) {
+	d := Decision{
+		Allowed:       true,
+		MatchedGroups: []string{"Ops", "SecretGroup"},
+	}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	logger.Info("authz", slog.Any("decision", d))
+
+	out := buf.String()
+	for _, name := range []string{"Ops", "SecretGroup"} {
+		if strings.Contains(out, name) {
+			t.Errorf("slog output contains group name %q — LogValue should redact it.\nOutput: %s", name, out)
+		}
+	}
+}
+
+func TestDecision_jsonMarshalLeaksGroupNames(t *testing.T) {
+	d := Decision{
+		Allowed:       true,
+		MatchedGroups: []string{"Ops", "SecretGroup"},
+	}
+	b, err := json.Marshal(d)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	out := string(b)
+	for _, name := range []string{"Ops", "SecretGroup"} {
+		if !strings.Contains(out, name) {
+			t.Errorf("json.Marshal should contain %q (exported fields) — callers must not json.Marshal a Decision", name)
+		}
+	}
+}
+
+func TestDecision_fmtSprintfLeaksGroupNames(t *testing.T) {
+	d := Decision{
+		Allowed:       true,
+		MatchedGroups: []string{"Ops", "SecretGroup"},
+	}
+	for _, verb := range []string{"%v", "%+v"} {
+		out := fmt.Sprintf(verb, d)
+		for _, name := range []string{"Ops", "SecretGroup"} {
+			if !strings.Contains(out, name) {
+				t.Errorf("fmt.Sprintf(%q) should contain %q (exported fields) — callers must not format a Decision", verb, name)
+			}
+		}
 	}
 }
 

@@ -50,11 +50,22 @@ func (p *Policy) LogValue() slog.Value {
 
 // Decision is the value-typed result of an authorization check.
 //
-// Intentionally has no String() or MarshalJSON — MatchedGroups must not
-// leak through fmt.Sprintf or JSON serialization into unsanitized surfaces.
+// MatchedGroups is exported so callers can read it for audit logging, but
+// Decision implements slog.LogValuer to prevent accidental leakage: any
+// slog call that includes a Decision emits only Allowed and the count of
+// matched groups, never the group names themselves.
 type Decision struct {
 	Allowed       bool
 	MatchedGroups []string
+}
+
+// LogValue implements slog.LogValuer. Emits Allowed and the count of
+// matched groups — never group names.
+func (d Decision) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.Bool("allowed", d.Allowed),
+		slog.Int("matched_group_count", len(d.MatchedGroups)),
+	)
 }
 
 // NewPolicy builds a Policy from a parsed ToolAuthorizationConfig.
