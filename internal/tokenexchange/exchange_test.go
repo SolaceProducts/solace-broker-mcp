@@ -396,9 +396,9 @@ func TestExchange_CancellationScopedToKeyBoundary(t *testing.T) {
 	}
 
 	// Groups 2 and 3 must have reached the IdP with their respective subject tokens.
-	// Lock: group 1's context is cancelled, so its Exchange() returns early via
-	// wg.Done() while the detached-context IdP call's handler may still be writing
-	// receivedTokens. wg tracks Exchange() completion, not the handler goroutine.
+	// Lock to establish a happens-before edge with the httptest handler's writes to
+	// receivedTokens (the HTTP round-trip isn't synchronization the race detector
+	// can use).
 	receivedTokensMu.Lock()
 	if !receivedTokens["user-a-jwt"] {
 		t.Errorf("IdP never received subject_token=user-a-jwt (group 2)")
