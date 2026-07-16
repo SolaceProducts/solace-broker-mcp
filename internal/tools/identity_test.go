@@ -376,7 +376,8 @@ func TestTokenInfoStruct_hasExpectedFields(t *testing.T) {
 
 // TestTokenInfoExtra_isMapStringAny pins the type of TokenInfo.Extra. If the
 // SDK ever changes Extra to a strongly-typed struct or a different map shape,
-// our extraString helper breaks; this test catches it at compile/test time.
+// our extraString / extraStringSlice helpers break; this test catches it at
+// compile/test time.
 func TestTokenInfoExtra_isMapStringAny(t *testing.T) {
 	field, ok := reflect.TypeOf(sdkauth.TokenInfo{}).FieldByName("Extra")
 	if !ok {
@@ -385,6 +386,60 @@ func TestTokenInfoExtra_isMapStringAny(t *testing.T) {
 	want := reflect.TypeOf(map[string]any{})
 	if field.Type != want {
 		t.Errorf("TokenInfo.Extra type = %v, want %v", field.Type, want)
+	}
+}
+
+// TestTokenInfoExtra_perKeyTypeConvention pins the widened Extra convention:
+// audit-field keys (iss, client_id, jti) carry string values; the groups key
+// carries []string. An accessor exists for each key type. Unknown keys are
+// not permitted — adding one requires updating this test, the accessor set,
+// and the convention comment on extraString.
+func TestTokenInfoExtra_perKeyTypeConvention(t *testing.T) {
+	info := &sdkauth.TokenInfo{
+		Extra: map[string]any{
+			"iss":       "https://idp.example.com",
+			"client_id": "cursor-ide",
+			"jti":       "jti-1",
+			"groups":    []string{"Ops", "Monitoring"},
+		},
+	}
+
+	// Audit-field keys: must be readable via extraString.
+	for _, key := range []string{"iss", "client_id", "jti"} {
+		v := extraString(info, key)
+		if v == "" || v == verifierBugSentinel {
+			t.Errorf("extraString(%q) = %q; expected a valid string value", key, v)
+		}
+	}
+
+	// Groups key: must be readable via extraStringSlice.
+	groups, present := extraStringSlice(info, "groups")
+	if !present {
+		t.Fatal("extraStringSlice(\"groups\") returned present=false; expected true")
+	}
+	if len(groups) != 2 || groups[0] != "Ops" || groups[1] != "Monitoring" {
+		t.Errorf("extraStringSlice(\"groups\") = %v; expected [Ops Monitoring]", groups)
+	}
+
+	// Defensive copy: mutating the returned slice must not affect the
+	// underlying Extra storage.
+	groups[0] = "MUTATED"
+	original, _ := info.Extra["groups"].([]string)
+	if original[0] == "MUTATED" {
+		t.Error("extraStringSlice returned a reference instead of a defensive copy")
+	}
+
+	// Completeness: no unknown keys are permitted in Extra.
+	allowedKeys := map[string]bool{
+		"iss":       true,
+		"client_id": true,
+		"jti":       true,
+		"groups":    true,
+	}
+	for k := range info.Extra {
+		if !allowedKeys[k] {
+			t.Errorf("unexpected key %q in TokenInfo.Extra — update the convention comment, accessor set, and this test", k)
+		}
 	}
 }
 

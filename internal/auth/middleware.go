@@ -18,11 +18,13 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/authz"
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/idpclient"
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -174,15 +176,46 @@ func createOIDCTokenVerifier(cfg *config.ServerConfig, httpClient *http.Client) 
 			scopes = strings.Split(claims.Scope, " ")
 		}
 
+		extra := map[string]any{
+			"iss":       claims.Iss,
+			"client_id": claims.ClientID,
+			"jti":       claims.Jti,
+		}
+
+		if !config.ToolAuthorizationEnabled(cfg) {
+			return &sdkauth.TokenInfo{
+				UserID:     claims.Sub,
+				Scopes:     scopes,
+				Expiration: idToken.Expiry,
+				Extra:      extra,
+			}, nil
+		}
+
+		// Second decode: extract the admin-configured groups claim.
+		//
+		// Token verification already succeeded (go-oidc verified signature,
+		// issuer, audience, expiry) and the first-pass struct decode extracted
+		// the spec-defined known fields. This second decode into a generic map
+		// extracts the admin-configured groups claim whose JSON key is only
+		// known at runtime (via groups_claim_name in the config). The two-pass
+		// approach preserves compile-time type safety on the known fields while
+		// supporting arbitrary claim names for groups.
+		var raw map[string]any
+		if err := idToken.Claims(&raw); err != nil {
+			slog.Warn("failed to decode raw claims for groups extraction; treating as missing-claim",
+				slog.String("error", err.Error()))
+		} else {
+			groups, ok := ResolveGroups(raw, *cfg.MCPClientAuth.ToolAuthorization.GroupsClaimName)
+			if ok {
+				extra[authz.TokenInfoExtraKeyGroups] = groups
+			}
+		}
+
 		return &sdkauth.TokenInfo{
 			UserID:     claims.Sub,
 			Scopes:     scopes,
 			Expiration: idToken.Expiry,
-			Extra: map[string]any{
-				"iss":       claims.Iss,
-				"client_id": claims.ClientID,
-				"jti":       claims.Jti,
-			},
+			Extra:      extra,
 		}, nil
 	}, nil
 }
