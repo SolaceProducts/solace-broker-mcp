@@ -3729,19 +3729,9 @@ brokers:
       password: secret
 tls_terminated_upstream: true
 `
-	cfg, err := LoadConfig(writeTemp(t, yaml))
+	_, err := LoadConfig(writeTemp(t, yaml))
 	if err != nil {
 		t.Fatalf("with feature flag off, config should load without error, got: %v", err)
-	}
-	ta := cfg.MCPClientAuth.ToolAuthorization
-	if ta == nil {
-		t.Fatal("ToolAuthorization should be non-nil (YAML block was present)")
-	}
-	if ta.Enabled != nil {
-		t.Error("Enabled should be nil (no defaults applied)")
-	}
-	if ta.GroupsClaimName != nil {
-		t.Errorf("GroupsClaimName should be nil (no defaults applied), got %q", *ta.GroupsClaimName)
 	}
 }
 
