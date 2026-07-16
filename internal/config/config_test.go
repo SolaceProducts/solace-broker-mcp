@@ -3706,6 +3706,45 @@ brokers:
 	}
 }
 
+// TestLoadConfig_ToolAuthorization_FeatureFlagOff confirms that when
+// ENABLE_TOOL_AUTHORIZATION is unset (production default), the
+// tool_authorization YAML block is parsed but defaults and validation
+// are skipped entirely. Catches regressions where the
+// toolAuthorizationFeatureEnabled() gate is accidentally removed.
+func TestLoadConfig_ToolAuthorization_FeatureFlagOff(t *testing.T) {
+	// Deliberately NOT setting ENABLE_TOOL_AUTHORIZATION.
+	yaml := `
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"
+  tool_authorization: {}
+brokers:
+  dev:
+    url: "https://broker.example.com:943"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+tls_terminated_upstream: true
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("with feature flag off, config should load without error, got: %v", err)
+	}
+	ta := cfg.MCPClientAuth.ToolAuthorization
+	if ta == nil {
+		t.Fatal("ToolAuthorization should be non-nil (YAML block was present)")
+	}
+	if ta.Enabled != nil {
+		t.Error("Enabled should be nil (no defaults applied)")
+	}
+	if ta.GroupsClaimName != nil {
+		t.Errorf("GroupsClaimName should be nil (no defaults applied), got %q", *ta.GroupsClaimName)
+	}
+}
+
 // TestServerConfig_Hop2OAuthActive pins the four cases that define the
 // method's contract: all three preconditions true → returns true; and each
 // precondition individually flipped false → returns false. Together these
