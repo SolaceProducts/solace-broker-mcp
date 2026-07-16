@@ -192,7 +192,7 @@ func sanitizeClaim(s string) string {
 //   - Key present, value is a string: returns the string. Happy path.
 //
 //   - Key present, value is NOT a string: contract violation by our own
-//     verifier (commit 1 stashes only strings). We emit an ERROR-level slog
+//     verifier (audit-field keys stash only strings). We emit an ERROR-level slog
 //     entry naming the key and observed type, then return verifierBugSentinel.
 //     The audit-log line for this request still gets emitted (with the
 //     sentinel as the field value) — the panic version we shipped initially
