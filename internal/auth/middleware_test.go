@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/authz"
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
@@ -916,6 +917,172 @@ func Test_NewTokenVerifier_TLSWithSSLCertFile(t *testing.T) {
 		_, err := NewTokenVerifier(cfg, nil)
 		if err != nil {
 			t.Errorf("expected success with SSL_CERT_FILE set, got: %v", err)
+		}
+	})
+}
+
+func boolPtr(b bool) *bool       { return &b }
+func strPtr(s string) *string    { return &s }
+
+func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
+	mock := newMockOIDCServer(t)
+	defer mock.close()
+
+	t.Run("feature disabled omits groups key", func(t *testing.T) {
+		t.Setenv("ENABLE_TOOL_AUTHORIZATION", "false")
+
+		cfg := &config.ServerConfig{
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode:     config.AuthModeOAuth,
+				Issuer:   mock.issuer,
+				Audience: mock.audience,
+			},
+		}
+
+		verifier, err := NewTokenVerifier(cfg, nil)
+		if err != nil {
+			t.Fatalf("NewTokenVerifier: %v", err)
+		}
+
+		token, err := mock.createToken(map[string]interface{}{
+			"groups": []interface{}{"admin"},
+		})
+		if err != nil {
+			t.Fatalf("createToken: %v", err)
+		}
+
+		info, err := verifier(context.Background(), token, nil)
+		if err != nil {
+			t.Fatalf("verifier: %v", err)
+		}
+
+		if _, exists := info.Extra[authz.TokenInfoExtraKeyGroups]; exists {
+			t.Error("Extra should not contain groups key when feature is disabled")
+		}
+	})
+
+	t.Run("feature enabled with usable groups", func(t *testing.T) {
+		t.Setenv("ENABLE_TOOL_AUTHORIZATION", "true")
+
+		cfg := &config.ServerConfig{
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode:     config.AuthModeOAuth,
+				Issuer:   mock.issuer,
+				Audience: mock.audience,
+				ToolAuthorization: &config.ToolAuthorizationConfig{
+					Enabled:         boolPtr(true),
+					GroupsClaimName: strPtr("groups"),
+				},
+			},
+		}
+
+		verifier, err := NewTokenVerifier(cfg, nil)
+		if err != nil {
+			t.Fatalf("NewTokenVerifier: %v", err)
+		}
+
+		token, err := mock.createToken(map[string]interface{}{
+			"groups": []interface{}{"admin", "ops"},
+		})
+		if err != nil {
+			t.Fatalf("createToken: %v", err)
+		}
+
+		info, err := verifier(context.Background(), token, nil)
+		if err != nil {
+			t.Fatalf("verifier: %v", err)
+		}
+
+		raw, exists := info.Extra[authz.TokenInfoExtraKeyGroups]
+		if !exists {
+			t.Fatal("Extra should contain groups key")
+		}
+		groups, ok := raw.([]string)
+		if !ok {
+			t.Fatalf("groups value type = %T, want []string", raw)
+		}
+		if len(groups) != 2 || groups[0] != "admin" || groups[1] != "ops" {
+			t.Errorf("groups = %v, want [admin ops]", groups)
+		}
+	})
+
+	t.Run("feature enabled with absent claim", func(t *testing.T) {
+		t.Setenv("ENABLE_TOOL_AUTHORIZATION", "true")
+
+		cfg := &config.ServerConfig{
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode:     config.AuthModeOAuth,
+				Issuer:   mock.issuer,
+				Audience: mock.audience,
+				ToolAuthorization: &config.ToolAuthorizationConfig{
+					Enabled:         boolPtr(true),
+					GroupsClaimName: strPtr("groups"),
+				},
+			},
+		}
+
+		verifier, err := NewTokenVerifier(cfg, nil)
+		if err != nil {
+			t.Fatalf("NewTokenVerifier: %v", err)
+		}
+
+		token, err := mock.createToken(map[string]interface{}{})
+		if err != nil {
+			t.Fatalf("createToken: %v", err)
+		}
+
+		info, err := verifier(context.Background(), token, nil)
+		if err != nil {
+			t.Fatalf("verifier: %v", err)
+		}
+
+		if _, exists := info.Extra[authz.TokenInfoExtraKeyGroups]; exists {
+			t.Error("Extra should not contain groups key when claim is absent")
+		}
+	})
+
+	t.Run("feature enabled with empty array", func(t *testing.T) {
+		t.Setenv("ENABLE_TOOL_AUTHORIZATION", "true")
+
+		cfg := &config.ServerConfig{
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode:     config.AuthModeOAuth,
+				Issuer:   mock.issuer,
+				Audience: mock.audience,
+				ToolAuthorization: &config.ToolAuthorizationConfig{
+					Enabled:         boolPtr(true),
+					GroupsClaimName: strPtr("groups"),
+				},
+			},
+		}
+
+		verifier, err := NewTokenVerifier(cfg, nil)
+		if err != nil {
+			t.Fatalf("NewTokenVerifier: %v", err)
+		}
+
+		token, err := mock.createToken(map[string]interface{}{
+			"groups": []interface{}{},
+		})
+		if err != nil {
+			t.Fatalf("createToken: %v", err)
+		}
+
+		info, err := verifier(context.Background(), token, nil)
+		if err != nil {
+			t.Fatalf("verifier: %v", err)
+		}
+
+		raw, exists := info.Extra[authz.TokenInfoExtraKeyGroups]
+		if !exists {
+			t.Fatal("Extra should contain groups key for empty array (authenticated with zero groups)")
+		}
+		groups, ok := raw.([]string)
+		if !ok {
+			t.Fatalf("groups value type = %T, want []string", raw)
+		}
+		if len(groups) != 0 {
+			t.Errorf("groups = %v, want empty slice", groups)
 		}
 	})
 }
