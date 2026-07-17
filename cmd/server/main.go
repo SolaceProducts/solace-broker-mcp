@@ -55,6 +55,24 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// redactedKeys are attribute-key substrings that trigger [REDACTED] replacement
+// in slog output. Case-insensitive substring match — see redactSecretAttr.
+var redactedKeys = []string{"password", "token", "secret", "authorization", "credential", "api_key", "private_key"}
+
+// redactSecretAttr is the slog.HandlerOptions.ReplaceAttr filter used by
+// newSlogHandler. Any attribute whose key (lowercased) contains one of
+// redactedKeys has its value replaced with [REDACTED].
+func redactSecretAttr(_ []string, a slog.Attr) slog.Attr {
+	key := strings.ToLower(a.Key)
+	for _, r := range redactedKeys {
+		if strings.Contains(key, r) {
+			a.Value = slog.StringValue("[REDACTED]")
+			return a
+		}
+	}
+	return a
+}
+
 // newSlogHandler creates a slog handler with the ReplaceAttr safety net that
 // redacts values for keys matching common credential patterns. This is defense
 // in depth — credential-carrying types also implement slog.LogValuer to exclude
@@ -66,20 +84,9 @@ import (
 // loading itself can emit logs), then again with the user-configured level
 // from cfg.LogLevel after validation.
 func newSlogHandler(level slog.Level) slog.Handler {
-	redactedKeys := []string{"password", "token", "secret", "authorization", "credential", "api_key", "private_key"}
-
 	jsonHandler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: level,
-		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-			key := strings.ToLower(a.Key)
-			for _, redacted := range redactedKeys {
-				if strings.Contains(key, redacted) {
-					a.Value = slog.StringValue("[REDACTED]")
-					return a
-				}
-			}
-			return a
-		},
+		Level:       level,
+		ReplaceAttr: redactSecretAttr,
 	})
 
 	// Wrap the JSON handler so every request-scoped log line carries a
