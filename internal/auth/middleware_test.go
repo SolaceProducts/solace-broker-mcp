@@ -1086,3 +1086,93 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 		}
 	})
 }
+
+// --- buildTokenInfo unit tests (no IdP needed) -------------------------------
+
+func TestBuildTokenInfo(t *testing.T) {
+	baseCfg := &config.ServerConfig{
+		MCPClientAuth: config.MCPClientAuthConfig{
+			Mode: config.AuthModeOAuth,
+		},
+	}
+
+	t.Run("happy path extracts all claims", func(t *testing.T) {
+		c := makeClaims(t, `{
+			"sub": "user-42",
+			"scope": "read write",
+			"iss": "https://idp.example.com",
+			"client_id": "cursor-ide",
+			"jti": "abc-123"
+		}`)
+
+		info, err := buildTokenInfo(baseCfg, c, time.Now().Add(time.Hour))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if info.UserID != "user-42" {
+			t.Errorf("UserID = %q, want %q", info.UserID, "user-42")
+		}
+		if len(info.Scopes) != 2 || info.Scopes[0] != "read" || info.Scopes[1] != "write" {
+			t.Errorf("Scopes = %v, want [read write]", info.Scopes)
+		}
+		if info.Extra["iss"] != "https://idp.example.com" {
+			t.Errorf("Extra[iss] = %v", info.Extra["iss"])
+		}
+		if info.Extra["client_id"] != "cursor-ide" {
+			t.Errorf("Extra[client_id] = %v", info.Extra["client_id"])
+		}
+		if info.Extra["jti"] != "abc-123" {
+			t.Errorf("Extra[jti] = %v", info.Extra["jti"])
+		}
+	})
+
+	t.Run("missing sub is rejected", func(t *testing.T) {
+		c := makeClaims(t, `{"iss": "https://idp.example.com"}`)
+		_, err := buildTokenInfo(baseCfg, c, time.Now().Add(time.Hour))
+		if err == nil {
+			t.Fatal("expected error for missing sub")
+		}
+	})
+
+	t.Run("blank sub is rejected", func(t *testing.T) {
+		c := makeClaims(t, `{"sub": "   "}`)
+		_, err := buildTokenInfo(baseCfg, c, time.Now().Add(time.Hour))
+		if err == nil {
+			t.Fatal("expected error for blank sub")
+		}
+	})
+
+	t.Run("scope with wrong type is rejected", func(t *testing.T) {
+		c := makeClaims(t, `{"sub": "user-1", "scope": ["read", "write"]}`)
+		_, err := buildTokenInfo(baseCfg, c, time.Now().Add(time.Hour))
+		if err == nil {
+			t.Fatal("expected error for array scope")
+		}
+	})
+
+	t.Run("missing optional claims produce empty strings", func(t *testing.T) {
+		c := makeClaims(t, `{"sub": "user-1"}`)
+		info, err := buildTokenInfo(baseCfg, c, time.Now().Add(time.Hour))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for _, key := range []string{"client_id", "jti"} {
+			v, ok := info.Extra[key]
+			if !ok {
+				t.Errorf("Extra[%q] missing", key)
+				continue
+			}
+			if s, isStr := v.(string); !isStr || s != "" {
+				t.Errorf("Extra[%q] = %v (%T), want \"\"", key, v, v)
+			}
+		}
+	})
+
+	t.Run("client_id with wrong type is rejected", func(t *testing.T) {
+		c := makeClaims(t, `{"sub": "user-1", "client_id": 42}`)
+		_, err := buildTokenInfo(baseCfg, c, time.Now().Add(time.Hour))
+		if err == nil {
+			t.Fatal("expected error for non-string client_id")
+		}
+	})
+}

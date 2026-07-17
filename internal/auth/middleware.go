@@ -17,8 +17,8 @@ package auth
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -151,73 +151,153 @@ func createOIDCTokenVerifier(cfg *config.ServerConfig, httpClient *http.Client) 
 			return nil, fmt.Errorf("%w: %v", sdkauth.ErrInvalidToken, err)
 		}
 
-		// Extract claims.
+		// SINGLE claim decode.
 		//
-		// iss, client_id, and jti feed the per-invocation audit-log identity
-		// surface (SOL-149606). They are stashed in TokenInfo.Extra under the
-		// exact keys "iss", "client_id", "jti"; internal/tools/identity.go
-		// reads them by those keys. Drift-detection tests in that package pin
-		// the allowlist.
-		var claims struct {
-			Sub      string `json:"sub"`
-			Scope    string `json:"scope"`
-			Iss      string `json:"iss"`
-			ClientID string `json:"client_id"`
-			Jti      string `json:"jti"`
-		}
-
-		if err := idToken.Claims(&claims); err != nil {
-			slog.Warn("failed to extract claims",
-				slog.String("error", err.Error()))
-		}
-
-		// Parse scopes from JWT (space-separated string per OAuth 2.0 spec)
-		scopes := []string{}
-		if claims.Scope != "" {
-			scopes = strings.Split(claims.Scope, " ")
-		}
-
-		extra := map[string]any{
-			"iss":       claims.Iss,
-			"client_id": claims.ClientID,
-			"jti":       claims.Jti,
-		}
-
-		if !config.ToolAuthorizationEnabled(cfg) {
-			return &sdkauth.TokenInfo{
-				UserID:     claims.Sub,
-				Scopes:     scopes,
-				Expiration: idToken.Expiry,
-				Extra:      extra,
-			}, nil
-		}
-
-		// Second decode: extract the admin-configured groups claim.
+		// The claims payload is parsed exactly once, into
+		// map[string]json.RawMessage. All downstream extraction — the
+		// spec-defined identity claims AND the admin-configured groups
+		// claim — reads from this one view.
 		//
-		// Token verification already succeeded (go-oidc verified signature,
-		// issuer, audience, expiry) and the first-pass struct decode extracted
-		// the spec-defined known fields. This second decode into a generic map
-		// extracts the admin-configured groups claim whose JSON key is only
-		// known at runtime (via groups_claim_name in the config). The two-pass
-		// approach preserves compile-time type safety on the known fields while
-		// supporting arbitrary claim names for groups.
-		var raw map[string]any
+		// This deliberately replaces the previous two-pass approach
+		// (typed struct + generic map). encoding/json v1 matches struct
+		// fields case-insensitively with last-match-wins semantics and
+		// folds ſ (U+017F) / K (U+212A) to s / k, while map keys match
+		// exactly. Two decodes of the same bytes could therefore
+		// disagree about which claims exist — a parser differential
+		// between the audit-log identity surface (SOL-149606) and the
+		// authz groups path. One parse means one interpretation; the
+		// exact, case-sensitive key lookup below matches RFC 7519's
+		// case-sensitive claim names and the remediation the MCP go-sdk
+		// itself applied in GHSA-wvj2-96wp-fq3f.
+		//
+		// Residual v1 limitation: exact-duplicate top-level keys still
+		// resolve last-wins silently. Both identity and groups now see
+		// the same winner, so no differential remains; encoding/json/v2
+		// (jsontext duplicate-name rejection) can close this fully once
+		// adopted.
+		var raw map[string]json.RawMessage
 		if err := idToken.Claims(&raw); err != nil {
-			slog.Warn("failed to extract claims",
-				slog.String("error", err.Error()))
-		} else {
-			groups, ok := ResolveGroups(raw, *cfg.MCPClientAuth.ToolAuthorization.GroupsClaimName)
+			// FAIL CLOSED. Verification is not complete until the claims
+			// this server depends on are extracted and well-formed
+			// (RFC 8725 §3: reject the entire JWT when validation fails).
+			// The previous warn-and-continue produced authenticated
+			// requests with an empty UserID and blank audit identity.
+			return nil, fmt.Errorf("%w: decoding claims: %v", sdkauth.ErrInvalidToken, err)
+		}
+
+		return buildTokenInfo(cfg, Claims{raw: raw}, idToken.Expiry)
+	}, nil
+}
+
+// buildTokenInfo assembles the TokenInfo for a verified token from a single
+// decode of its claim bytes. Split from the verifier closure so the
+// extraction semantics (exact key match, fail-closed on malformed or missing
+// security-relevant claims) are unit-testable without an IdP.
+//
+// Claim requirement profile (deliberate, spec-grounded — do not "fix" by
+// making everything required or everything lenient):
+//
+//   - Enforced upstream by the go-oidc verifier before this runs:
+//     signature, iss, aud, exp. Three of RFC 9068's required claims are
+//     therefore already mandatory in effect.
+//   - Hard-required here: sub, non-blank. Required by RFC 9068 §2.2 for
+//     OAuth access tokens, and the audit surface (SOL-149606) is
+//     meaningless without it. (RFC 7519 alone leaves sub optional; the
+//     access-token profile is the binding one for this server.)
+//   - Tolerated-absent, fatal-if-malformed: scope, client_id, jti.
+//     RFC 9068 requires client_id and jti, but widely deployed IdPs do
+//     not emit them on access tokens (Keycloak and Auth0's default
+//     profile use azp; Azure AD uses appid/azp), so hard-requiring them
+//     would reject stock deployments of real customer IdPs. A present
+//     claim with the wrong JSON type is still rejected: absence is a
+//     sparse token, malformation means the payload can no longer be
+//     safely interpreted. Scope, when present, must be a space-delimited
+//     string per RFC 6749 §3.3 / RFC 9068.
+//   - Groups (authz enabled): absent claim → no groups key → authz
+//     denies by default.
+//
+// Any fail-closed violation returns sdkauth.ErrInvalidToken.
+func buildTokenInfo(cfg *config.ServerConfig, claims Claims, expiry time.Time) (*sdkauth.TokenInfo, error) {
+	sub, err := claims.String("sub")
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(sub) == "" {
+		// An authenticated principal with no visible subject is never a
+		// valid state: every audit row it generated would be anonymous.
+		// TrimSpace is used ONLY as a rejection predicate here — the
+		// stored UserID below is the exact claim bytes. Normalizing the
+		// value would conflate subjects the IdP considers distinct
+		// (RFC 7519 claims compare byte-for-byte), which is an identity
+		// mapping the IdP owns, not this server.
+		return nil, fmt.Errorf("%w: token has no subject", sdkauth.ErrInvalidToken)
+	}
+
+	// Scope is a space-separated string per OAuth 2.0 (RFC 6749 §3.3).
+	// IdPs that emit an array here (e.g. some Azure AD / Keycloak
+	// configurations) previously caused a partially-populated struct plus
+	// a swallowed warning; now they are rejected explicitly so the
+	// misconfiguration surfaces at the door.
+	scopeStr, err := claims.String("scope")
+	if err != nil {
+		return nil, err
+	}
+	scopes := []string{}
+	if scopeStr != "" {
+		scopes = strings.Split(scopeStr, " ")
+	}
+
+	// iss, client_id, and jti feed the per-invocation audit-log identity
+	// surface (SOL-149606). They are stashed in TokenInfo.Extra under the
+	// exact keys "iss", "client_id", "jti"; internal/tools/identity.go
+	// reads them by those keys. Drift-detection tests pin the allowlist.
+	iss, err := claims.String("iss")
+	if err != nil {
+		return nil, err
+	}
+	clientID, err := claims.String("client_id")
+	if err != nil {
+		return nil, err
+	}
+	jti, err := claims.String("jti")
+	if err != nil {
+		return nil, err
+	}
+
+	extra := map[string]any{
+		"iss":       iss,
+		"client_id": clientID,
+		"jti":       jti,
+	}
+
+	if config.ToolAuthorizationEnabled(cfg) {
+		name := *cfg.MCPClientAuth.ToolAuthorization.GroupsClaimName
+		// The admin-configured groups claim is hydrated lazily from THE
+		// SAME decoded view as the identity claims above, so the identity
+		// the audit log records and the groups the authz layer evaluates
+		// are by construction drawn from one interpretation of the token.
+		// ResolveGroups documents flat top-level lookup only (matching
+		// the broker's accessLevelGroupsClaimName stance), so exactly one
+		// claim is hydrated. Future consumers with different type needs
+		// get their own accessor method on Claims — never a per-consumer
+		// conversion loop here at the boundary.
+		val, exists, err := claims.Value(name)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			groups, ok := resolveGroupsValue(val)
 			if ok {
 				extra[authz.TokenInfoExtraKeyGroups] = groups
 			}
 		}
+	}
 
-		return &sdkauth.TokenInfo{
-			UserID:     claims.Sub,
-			Scopes:     scopes,
-			Expiration: idToken.Expiry,
-			Extra:      extra,
-		}, nil
+	return &sdkauth.TokenInfo{
+		UserID:     sub,
+		Scopes:     scopes,
+		Expiration: expiry,
+		Extra:      extra,
 	}, nil
 }
 
