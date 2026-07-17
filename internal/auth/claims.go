@@ -139,23 +139,24 @@ func resolveGroupsValue(v any) (groups []string, ok bool) {
 		if len(val) == 0 {
 			return []string{}, true
 		}
+		var count int
 		result := make([]string, 0, min(len(val), groupsSoftCap))
 		for _, elem := range val {
 			s, isStr := elem.(string)
 			if !isStr {
 				continue
 			}
-			result = append(result, s)
-			if len(result) >= groupsSoftCap {
-				break
+			count++
+			if len(result) < groupsSoftCap {
+				result = append(result, s)
 			}
 		}
 		if len(result) == 0 {
 			return nil, false
 		}
-		if len(result) >= groupsSoftCap && len(val) > groupsSoftCap {
+		if count > groupsSoftCap {
 			slog.Warn("token groups claim exceeded cap; truncated",
-				slog.Int("total", len(val)),
+				slog.Int("total", count),
 				slog.Int("cap", groupsSoftCap))
 		}
 		return result, true
