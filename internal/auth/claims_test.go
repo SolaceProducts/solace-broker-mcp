@@ -16,9 +16,153 @@ package auth
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
 	"testing"
 )
+
+// --- Claims accessor tests ---------------------------------------------------
+
+func makeClaims(t *testing.T, payload string) Claims {
+	t.Helper()
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(payload), &raw); err != nil {
+		t.Fatalf("makeClaims: %v", err)
+	}
+	return Claims{raw: raw}
+}
+
+func TestClaims_String(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		key     string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "present string",
+			payload: `{"sub": "user-42"}`,
+			key:     "sub",
+			want:    "user-42",
+		},
+		{
+			name:    "absent key",
+			payload: `{"sub": "user-42"}`,
+			key:     "jti",
+			want:    "",
+		},
+		{
+			name:    "empty string",
+			payload: `{"sub": ""}`,
+			key:     "sub",
+			want:    "",
+		},
+		{
+			name:    "wrong type number",
+			payload: `{"sub": 42}`,
+			key:     "sub",
+			wantErr: true,
+		},
+		{
+			name:    "wrong type array",
+			payload: `{"scope": ["read", "write"]}`,
+			key:     "scope",
+			wantErr: true,
+		},
+		{
+			name:    "wrong type boolean",
+			payload: `{"sub": true}`,
+			key:     "sub",
+			wantErr: true,
+		},
+		{
+			name:    "null value unmarshals to empty string",
+			payload: `{"jti": null}`,
+			key:     "jti",
+			want:    "",
+		},
+		{
+			name:    "case sensitive lookup",
+			payload: `{"Sub": "upper", "sub": "lower"}`,
+			key:     "sub",
+			want:    "lower",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := makeClaims(t, tt.payload)
+			got, err := c.String(tt.key)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("String(%q) = %q, want %q", tt.key, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClaims_Value(t *testing.T) {
+	tests := []struct {
+		name       string
+		payload    string
+		key        string
+		wantExists bool
+		wantNil    bool
+	}{
+		{
+			name:       "present string",
+			payload:    `{"groups": "admin"}`,
+			key:        "groups",
+			wantExists: true,
+		},
+		{
+			name:       "present array",
+			payload:    `{"groups": ["a", "b"]}`,
+			key:        "groups",
+			wantExists: true,
+		},
+		{
+			name:       "present null",
+			payload:    `{"groups": null}`,
+			key:        "groups",
+			wantExists: true,
+			wantNil:    true,
+		},
+		{
+			name:       "absent key",
+			payload:    `{"other": "value"}`,
+			key:        "groups",
+			wantExists: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := makeClaims(t, tt.payload)
+			val, exists, err := c.Value(tt.key)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if exists != tt.wantExists {
+				t.Fatalf("exists = %v, want %v", exists, tt.wantExists)
+			}
+			if tt.wantNil && val != nil {
+				t.Errorf("val = %v, want nil", val)
+			}
+		})
+	}
+}
+
+// --- ResolveGroups tests (map-based entry point) -----------------------------
 
 func TestResolveGroups(t *testing.T) {
 	tests := []struct {

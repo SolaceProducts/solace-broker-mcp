@@ -15,8 +15,62 @@
 package auth
 
 import (
+	"encoding/json"
+	"fmt"
 	"log/slog"
+
+	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 )
+
+// Claims is the single decoded view of a verified token's payload — the
+// canonical representation at the auth boundary. All claim access goes
+// through typed accessor methods with exact, case-sensitive key lookup
+// (RFC 7519 claim names are case-sensitive); the raw form never escapes
+// this package. Consumers with new type requirements add an accessor
+// method here rather than reshaping the map to their preference — the
+// boundary owns the representation, consumers adapt to the boundary.
+type Claims struct {
+	raw map[string]json.RawMessage
+}
+
+// String extracts an optional string claim. An absent claim returns
+// ("", nil). A present claim of any non-string JSON type is a hard
+// failure — callers depend on these values for identity, auditing, and
+// scope parsing, so a type mismatch means the token cannot be safely
+// interpreted.
+func (c Claims) String(key string) (string, error) {
+	msg, ok := c.raw[key]
+	if !ok {
+		return "", nil
+	}
+	var s string
+	if err := json.Unmarshal(msg, &s); err != nil {
+		return "", fmt.Errorf("%w: claim %q has unexpected type: %v", sdkauth.ErrInvalidToken, key, err)
+	}
+	return s, nil
+}
+
+// Value hydrates a single claim into its generic Go form (string, float64,
+// bool, []any, map[string]any, or nil for JSON null), lazily and on demand.
+// exists reports whether the key is present; a present JSON null yields
+// (nil, true, nil). Hydration is deterministic — every caller sees the
+// identical value for the same key — so lazy per-claim access cannot
+// reintroduce a parser differential.
+//
+// The error branch is defensive: the top-level document parse already
+// validated every stored RawMessage, so re-hydration cannot fail on syntax
+// today. If a future change ever makes it fire, fail closed rather than
+// compute an authorization decision over a partial claim set.
+func (c Claims) Value(key string) (val any, exists bool, err error) {
+	msg, ok := c.raw[key]
+	if !ok {
+		return nil, false, nil
+	}
+	if err := json.Unmarshal(msg, &val); err != nil {
+		return nil, true, fmt.Errorf("%w: claim %q is malformed: %v", sdkauth.ErrInvalidToken, key, err)
+	}
+	return val, true, nil
+}
 
 // groupsSoftCap is the maximum number of group values ResolveGroups returns.
 // Values beyond this are truncated (first N in JWT-array order) and a WARN
@@ -28,6 +82,11 @@ const groupsSoftCap = 250
 // claims map. claimName is looked up only as a top-level key — nested paths
 // are not supported, matching the Solace broker's accessLevelGroupsClaimName
 // stance.
+//
+// This is a thin lookup wrapper over resolveGroupsValue, which holds all
+// value semantics. The auth boundary (buildTokenInfo) performs its own
+// exact-key lookup via Claims.Value and calls resolveGroupsValue directly;
+// this map-based entry point is retained for existing callers and tests.
 //
 // Return semantics:
 //   - ok == true: groups contains the extracted values (possibly zero-length
@@ -50,7 +109,21 @@ func ResolveGroups(claims map[string]any, claimName string) (groups []string, ok
 	if !exists {
 		return nil, false
 	}
+	return resolveGroupsValue(v)
+}
 
+// resolveGroupsValue extracts a group list from a single hydrated claim
+// value. All type-switch semantics documented on ResolveGroups live here;
+// the two entry points cannot drift because ResolveGroups delegates to
+// this function unconditionally after its key lookup.
+//
+// NOTE (open policy, see buildTokenInfo): a present-but-unusable value —
+// wrong type, empty scalar, array of all non-strings — currently folds into
+// ok == false, and mixed arrays silently drop non-string elements. If the
+// team decides malformed groups should hard-reject the token, this function
+// grows a third "malformed" return state and buildTokenInfo maps it to
+// sdkauth.ErrInvalidToken.
+func resolveGroupsValue(v any) (groups []string, ok bool) {
 	if v == nil {
 		return nil, false
 	}
