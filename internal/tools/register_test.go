@@ -110,7 +110,7 @@ func TestRegisterWithServer(t *testing.T) {
 	mgr.Register(newStubHandler("test-tool"))
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	RegisterWithServer(mgr, server, pool, true, nil)
+	RegisterWithServer(mgr, server, pool, true, nil, "")
 
 	// No panic = tools registered successfully. The MCP SDK doesn't expose
 	// a way to list registered tools directly, so we verify by checking
@@ -164,7 +164,7 @@ func TestRegisterWithServer_WriteGated(t *testing.T) {
 			mgr.Register(destructiveWrite)
 
 			server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-			RegisterWithServer(mgr, server, pool, enableWriteTools, nil)
+			RegisterWithServer(mgr, server, pool, enableWriteTools, nil, "")
 			// No panic; gate behavior verified at integration layer via tools/list.
 		})
 	}
@@ -222,7 +222,7 @@ func TestPanicAuditedAsError(t *testing.T) {
 	mgr.Register(panicking)
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	RegisterWithServer(mgr, server, pool, true, nil)
+	RegisterWithServer(mgr, server, pool, true, nil, "")
 
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -531,7 +531,7 @@ func TestRegisterWithServer_NilPolicy_ByteIdenticalToPreRBAC(t *testing.T) {
 	mgr.Register(newStubHandler("test-tool"))
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	RegisterWithServer(mgr, server, pool, true, nil)
+	RegisterWithServer(mgr, server, pool, true, nil, "")
 
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -575,7 +575,7 @@ func TestRegisterWithServer_NonNilPolicy_AuthorizationAuditFires(t *testing.T) {
 	policy := policyGranting(t, []string{"Ops"}, "test-tool")
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	RegisterWithServer(mgr, server, pool, true, policy)
+	RegisterWithServer(mgr, server, pool, true, policy, "groups")
 
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -644,7 +644,7 @@ func TestRegisterListBrokers_NeverComposesWithAuthorization(t *testing.T) {
 	policy := policyGranting(t, []string{"Ops"}, "test-tool")
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	RegisterWithServer(mgr, server, pool, true, policy)
+	RegisterWithServer(mgr, server, pool, true, policy, "groups")
 	RegisterListBrokers(server, pool)
 
 	ctx := context.Background()

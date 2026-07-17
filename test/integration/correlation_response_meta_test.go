@@ -111,7 +111,7 @@ func metaTestServer(t *testing.T, h tools.ToolHandler, withCorrelation bool) *mc
 	mgr.Register(h)
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	tools.RegisterWithServer(mgr, server, pool, true, nil)
+	tools.RegisterWithServer(mgr, server, pool, true, nil, "")
 
 	var handler http.Handler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
 	if withCorrelation {

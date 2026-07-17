@@ -687,7 +687,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	tools.RegisterWithServer(mgr, server, pool, cfg.EnableWriteTools, policy)
+	// Pull the configured groups claim name for the missing-claim audit
+	// event. applyDefaults guarantees GroupsClaimName is non-nil whenever
+	// the tool_authorization block is non-nil, so this dereference is safe
+	// under the same gate that produced a non-nil policy. When RBAC is
+	// disabled the string is unused by RegisterWithServer.
+	var groupsClaimName string
+	if policy != nil {
+		groupsClaimName = *cfg.MCPClientAuth.ToolAuthorization.GroupsClaimName
+	}
+	tools.RegisterWithServer(mgr, server, pool, cfg.EnableWriteTools, policy, groupsClaimName)
 	slog.Info("tool registration complete",
 		slog.Bool("enable_write_tools", cfg.EnableWriteTools))
 

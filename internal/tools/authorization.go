@@ -24,15 +24,14 @@ import (
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/authz"
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceDev/solace-broker-mcp/internal/observability/logging/sanitize"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// Caller-facing messages. Deliberately identical in v1 so a caller cannot
-// distinguish "your groups don't grant this" from "your token has no groups
-// claim" — that distinction is admin-configuration metadata. Kept as separate
-// identifiers so a future evolution can amend one without touching the other;
-// the audit log distinguishes the outcomes via the decision field.
+// Caller-facing messages. Identical in v1 so a caller cannot distinguish
+// deny from missing-claim — that distinction is admin-configuration
+// metadata, kept on the server-side audit event instead.
 const (
 	authzDeniedMessage       = "You are not authorized to use this tool."
 	authzMissingClaimMessage = "You are not authorized to use this tool."
@@ -44,23 +43,37 @@ const (
 // exists so a grep finds every exempt-name touchpoint at once.
 const listBrokersToolName = "list-brokers"
 
+// matchedGroupsBound caps how many matched group names the audit event
+// carries on allow. 32 covers the largest realistic caller-group membership
+// without truncation while keeping single log records readable. When a
+// caller has more than 32 matching groups the surplus is dropped from the
+// slice but the true count remains in matched_groups_total and
+// matched_groups_truncated goes true.
+const matchedGroupsBound = 32
+
 // withAuthorization gates every invocation of toolName through policy.
 // On allow, dispatches to next unchanged. On deny or missing-claim, returns a
 // tool-level error result and skips next.
 //
 // Precondition: policy must be non-nil. The composition site
-// (RegisterWithServer) guarantees this by only composing the wrapper on the
-// non-nil-policy branch. A nil policy reaching here is a programmer error
-// that must not silently bypass authorization; the outer withRecovery catches
-// the resulting panic.
+// (RegisterWithServer) enforces this by only wrapping when RBAC is on.
+// A nil arriving here is a programmer error; the outer withRecovery
+// contains the resulting panic.
 //
-// Panic containment (from Authorize or the audit call site) is owned by the
-// outer withRecovery, so this closure reads as straight-line request logic.
-//
-// The audit event is a v1 placeholder — INFO for every outcome, minimal
-// fields. A follow-up ticket refines the level split and field schema.
-func withAuthorization(policy *authz.Policy, toolName string, next mcp.ToolHandler) mcp.ToolHandler {
+// Correlation ID is stamped onto each emitted record by the correlation
+// slog handler reading it from ctx — do NOT add correlation_id at this
+// call site, or the record will carry two.
+func withAuthorization(policy *authz.Policy, toolName string, configuredGroupsClaimName string, next mcp.ToolHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		// Enforce the precondition uniformly across every branch. Without
+		// this guard, nil policy panics on the branch that reaches
+		// policy.Authorize but silently returns a missing-claim deny on
+		// the branch that returns first — the doc's "panic on nil" promise
+		// would then hold on only one input shape.
+		if policy == nil {
+			panic("withAuthorization: nil policy (composition-site invariant violated)")
+		}
+
 		var info *sdkauth.TokenInfo
 		if req.Extra != nil {
 			info = req.Extra.TokenInfo
@@ -69,28 +82,61 @@ func withAuthorization(policy *authz.Policy, toolName string, next mcp.ToolHandl
 
 		groups, present := requestGroups(req)
 		if !present {
-			slog.LogAttrs(ctx, slog.LevelInfo, "tool authorization",
+			// No matched_groups* fields on missing-claim — the caller had
+			// no groups slice, so emitting empty ones would blur the deny
+			// signal. expected_claim carries the diagnostic instead.
+			slog.LogAttrs(ctx, slog.LevelWarn, "tool authorization",
 				slog.String("tool", toolName),
-				slog.String("decision", "denied_missing_claim"),
+				slog.String("decision", "denied"),
+				slog.String("decision_reason", "missing_claim"),
+				slog.String("expected_claim", sanitize.Claim(configuredGroupsClaimName)),
 				slog.Any("", id))
 			return authzErrorResult(authzMissingClaimMessage), nil
 		}
 
 		decision := policy.Authorize(groups, toolName)
 		if !decision.Allowed {
-			slog.LogAttrs(ctx, slog.LevelInfo, "tool authorization",
+			// The caller's actual groups are deliberately NOT logged on
+			// deny — see PR description "audit-log disclosure discipline"
+			// for the separation-of-duties rationale.
+			slog.LogAttrs(ctx, slog.LevelWarn, "tool authorization",
 				slog.String("tool", toolName),
 				slog.String("decision", "denied"),
+				slog.String("decision_reason", "not_permitted"),
+				slog.Any("matched_groups", []string{}),
+				slog.Int("matched_groups_total", 0),
+				slog.Bool("matched_groups_truncated", false),
 				slog.Any("", id))
 			return authzErrorResult(authzDeniedMessage), nil
 		}
 
+		bounded, total, truncated := boundMatchedGroups(decision.MatchedGroups)
 		slog.LogAttrs(ctx, slog.LevelInfo, "tool authorization",
 			slog.String("tool", toolName),
 			slog.String("decision", "allowed"),
+			slog.Any("matched_groups", bounded),
+			slog.Int("matched_groups_total", total),
+			slog.Bool("matched_groups_truncated", truncated),
 			slog.Any("", id))
 		return next(ctx, req)
 	}
+}
+
+// boundMatchedGroups sanitizes each element and applies matchedGroupsBound,
+// preserving Authorize's ordering. Returns the bounded slice, the true
+// pre-cap count, and whether truncation fired.
+func boundMatchedGroups(matched []string) (bounded []string, total int, truncated bool) {
+	total = len(matched)
+	limit := total
+	if limit > matchedGroupsBound {
+		limit = matchedGroupsBound
+		truncated = true
+	}
+	bounded = make([]string, 0, limit)
+	for i := 0; i < limit; i++ {
+		bounded = append(bounded, sanitize.Claim(matched[i]))
+	}
+	return bounded, total, truncated
 }
 
 // authzErrorResult builds the deny / missing-claim tool-level error result.
