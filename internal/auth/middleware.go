@@ -17,12 +17,15 @@ package auth
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/authz"
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/idpclient"
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -103,7 +106,7 @@ func createStaticTokenVerifier(expectedToken string) sdkauth.TokenVerifier {
 	return func(ctx context.Context, token string, req *http.Request) (*sdkauth.TokenInfo, error) {
 		// Use constant-time comparison to prevent timing attacks
 		if subtle.ConstantTimeCompare([]byte(token), []byte(expectedToken)) != 1 {
-			return nil, sdkauth.ErrInvalidToken
+			return nil, errVerificationFailed
 		}
 		return &sdkauth.TokenInfo{
 			Scopes:     []string{},
@@ -143,50 +146,106 @@ func createOIDCTokenVerifier(cfg *config.ServerConfig, httpClient *http.Client) 
 	})
 
 	return func(ctx context.Context, token string, req *http.Request) (*sdkauth.TokenInfo, error) {
-		// Verify JWT signature and standard claims (iss, aud, exp)
 		idToken, err := verifier.Verify(ctx, token)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", sdkauth.ErrInvalidToken, err)
+			slog.Warn("token verification failed",
+				slog.String("error", err.Error()))
+			return nil, errVerificationFailed
 		}
 
-		// Extract claims.
-		//
-		// iss, client_id, and jti feed the per-invocation audit-log identity
-		// surface (SOL-149606). They are stashed in TokenInfo.Extra under the
-		// exact keys "iss", "client_id", "jti"; internal/tools/identity.go
-		// reads them by those keys. Drift-detection tests in that package pin
-		// the allowlist.
-		var claims struct {
-			Sub      string `json:"sub"`
-			Scope    string `json:"scope"`
-			Iss      string `json:"iss"`
-			ClientID string `json:"client_id"`
-			Jti      string `json:"jti"`
+		// Single decode into map[string]json.RawMessage — identity and
+		// groups claims read from one parse, eliminating the parser
+		// differential that existed with the prior struct+map two-pass.
+		var raw map[string]json.RawMessage
+		if err := idToken.Claims(&raw); err != nil {
+			slog.Warn("token claims undecodable",
+				slog.String("error", err.Error()))
+			return nil, errMalformedClaims
 		}
 
-		if err := idToken.Claims(&claims); err != nil {
-			return nil, fmt.Errorf("failed to extract claims: %w", err)
+		info, err := buildTokenInfo(cfg, Claims{raw: raw}, idToken.Expiry)
+		if err != nil {
+			slog.Warn("token rejected",
+				slog.String("error", err.Error()))
+			return nil, sanitizeTokenError(err)
 		}
-
-		// Parse scopes from JWT (space-separated string per OAuth 2.0 spec)
-		scopes := []string{}
-		if claims.Scope != "" {
-			scopes = strings.Split(claims.Scope, " ")
-		}
-
-		return &sdkauth.TokenInfo{
-			UserID:     claims.Sub,
-			Scopes:     scopes,
-			Expiration: idToken.Expiry,
-			Extra: map[string]any{
-				"iss":       claims.Iss,
-				"client_id": claims.ClientID,
-				"jti":       claims.Jti,
-			},
-		}, nil
+		return info, nil
 	}, nil
 }
 
+// buildTokenInfo assembles the TokenInfo for a verified token. Split from
+// the verifier closure so claim extraction is unit-testable without an IdP.
+//
+// Claim policy: sub is hard-required (RFC 9068 §2.2); scope, client_id,
+// jti are tolerated-absent but fatal-if-malformed (real IdPs often omit
+// them); groups absent → authz denies by default.
+func buildTokenInfo(cfg *config.ServerConfig, claims Claims, expiry time.Time) (*sdkauth.TokenInfo, error) {
+	sub, err := claims.String("sub")
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(sub) == "" {
+		// TrimSpace for rejection only — UserID stores the exact bytes.
+		return nil, errNoSubject
+	}
+
+	scopeStr, err := claims.String("scope")
+	if err != nil {
+		return nil, err
+	}
+	scopes := []string{}
+	if scopeStr != "" {
+		scopes = strings.Split(scopeStr, " ")
+	}
+
+	iss, err := claims.String("iss")
+	if err != nil {
+		return nil, err
+	}
+	clientID, err := claims.String("client_id")
+	if err != nil {
+		return nil, err
+	}
+	jti, err := claims.String("jti")
+	if err != nil {
+		return nil, err
+	}
+
+	extra := map[string]any{
+		"iss":       iss,
+		"client_id": clientID,
+		"jti":       jti,
+	}
+
+	if config.ToolAuthorizationEnabled(cfg) {
+		// GroupsClaimName is guaranteed non-nil here: config.validate
+		// defaults it to "groups" when the tool_authorization block is present.
+		name := *cfg.MCPClientAuth.ToolAuthorization.GroupsClaimName
+		val, exists, err := claims.Value(name)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			groups, ok := resolveGroupsValue(val)
+			if ok {
+				extra[authz.TokenInfoExtraKeyGroups] = groups
+			} else {
+				slog.Debug("groups claim present but not resolvable",
+					slog.String("claim", name))
+			}
+		} else {
+			slog.Debug("groups claim not found in token",
+				slog.String("claim", name))
+		}
+	}
+
+	return &sdkauth.TokenInfo{
+		UserID:     sub,
+		Scopes:     scopes,
+		Expiration: expiry,
+		Extra:      extra,
+	}, nil
+}
 
 // NewProtectedResourceMetadataHandler creates an HTTP handler that serves
 // OAuth 2.0 Protected Resource Metadata (RFC 9728) for the MCP server.

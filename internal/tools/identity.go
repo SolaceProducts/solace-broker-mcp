@@ -38,7 +38,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/authz"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // absentSentinel is the single value any audit-log identity field takes when
@@ -173,6 +175,13 @@ func sanitizeClaim(s string) string {
 	return b.String()
 }
 
+// TokenInfo.Extra convention:
+//   - Audit-field keys (iss, client_id, jti) carry string values, read via
+//     extraString. These are the Identity audit schema fields.
+//   - Other keys carry per-key typed values, read via a per-key accessor
+//     (e.g. extraStringSlice for authz.TokenInfoExtraKeyGroups). The drift
+//     test asserts by key, not by blanket type.
+//
 // extraString reads a string-typed claim from TokenInfo.Extra by key.
 //
 // Three outcomes:
@@ -183,7 +192,7 @@ func sanitizeClaim(s string) string {
 //   - Key present, value is a string: returns the string. Happy path.
 //
 //   - Key present, value is NOT a string: contract violation by our own
-//     verifier (commit 1 stashes only strings). We emit an ERROR-level slog
+//     verifier (audit-field keys stash only strings). We emit an ERROR-level slog
 //     entry naming the key and observed type, then return verifierBugSentinel.
 //     The audit-log line for this request still gets emitted (with the
 //     sentinel as the field value) — the panic version we shipped initially
@@ -205,4 +214,48 @@ func extraString(t *sdkauth.TokenInfo, key string) string {
 		return verifierBugSentinel
 	}
 	return s
+}
+
+// extraStringSlice reads a []string-typed value from TokenInfo.Extra by key.
+// Missing keys return (nil, false). Present keys with the wrong type trigger
+// the same verifier-bug slog.Error path as extraString, then return
+// (nil, false). Present keys with a valid []string return a defensive copy
+// so callers may mutate freely without affecting request-scoped storage.
+func extraStringSlice(t *sdkauth.TokenInfo, key string) (values []string, present bool) {
+	if t == nil {
+		return nil, false
+	}
+	v, ok := t.Extra[key]
+	if !ok {
+		return nil, false
+	}
+	s, isSlice := v.([]string)
+	if !isSlice {
+		slog.Error("internal: TokenInfo.Extra has unexpected type — verifier contract violation",
+			slog.String("key", key),
+			slog.String("got_type", fmt.Sprintf("%T", v)))
+		return nil, false
+	}
+	cp := make([]string, len(s))
+	copy(cp, s)
+	return cp, true
+}
+
+// requestGroups extracts the caller's groups from the request identity.
+// Reads under authz.TokenInfoExtraKeyGroups. Returns (nil, false) when the
+// groups claim was missing from the token (the day-one IdP misconfiguration
+// case).
+//
+//nolint:unused // Called by withAuthorization (T4 enforcement wrapper, next ticket).
+func requestGroups(req *mcp.CallToolRequest) (groups []string, present bool) {
+	if req == nil {
+		return nil, false
+	}
+	if req.Extra == nil {
+		return nil, false
+	}
+	if req.Extra.TokenInfo == nil {
+		return nil, false
+	}
+	return extraStringSlice(req.Extra.TokenInfo, authz.TokenInfoExtraKeyGroups)
 }

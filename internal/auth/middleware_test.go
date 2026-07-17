@@ -15,13 +15,16 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,6 +33,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/authz"
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
@@ -916,6 +920,400 @@ func Test_NewTokenVerifier_TLSWithSSLCertFile(t *testing.T) {
 		_, err := NewTokenVerifier(cfg, nil)
 		if err != nil {
 			t.Errorf("expected success with SSL_CERT_FILE set, got: %v", err)
+		}
+	})
+}
+
+func boolPtr(b bool) *bool       { return &b }
+func strPtr(s string) *string    { return &s }
+
+// Test_OIDCVerifier_SanitizedErrorResponse verifies that when buildTokenInfo
+// rejects a token, the HTTP 401 response body contains only the static
+// sentinel text — no claim names, json type errors, or go-oidc detail.
+func Test_OIDCVerifier_SanitizedErrorResponse(t *testing.T) {
+	mock := newMockOIDCServer(t)
+	defer mock.close()
+
+	cfg := &config.ServerConfig{
+		Port: 9090,
+		MCPClientAuth: config.MCPClientAuthConfig{
+			Mode:        config.AuthModeOAuth,
+			Issuer:      mock.issuer,
+			Audience:    mock.audience,
+			ResourceURL: "http://localhost:9090/mcp",
+		},
+	}
+
+	middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler)
+	if err != nil {
+		t.Fatalf("NewAuthMiddleware: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		claims   map[string]interface{}
+		wantBody string
+	}{
+		{
+			name:     "blank sub returns sanitized errNoSubject",
+			claims:   map[string]interface{}{"sub": ""},
+			wantBody: errNoSubject.Error(),
+		},
+		{
+			name:     "wrong type scope returns sanitized errMalformedClaims",
+			claims:   map[string]interface{}{"sub": "user1", "scope": []string{"read"}},
+			wantBody: errMalformedClaims.Error(),
+		},
+		{
+			name:     "wrong type client_id returns sanitized errMalformedClaims",
+			claims:   map[string]interface{}{"sub": "user1", "client_id": 999},
+			wantBody: errMalformedClaims.Error(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token, err := mock.createToken(tt.claims)
+			if err != nil {
+				t.Fatalf("createToken: %v", err)
+			}
+
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+
+			rec := httptest.NewRecorder()
+			middleware.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401", rec.Code)
+			}
+
+			body := strings.TrimSpace(rec.Body.String())
+			if body != tt.wantBody {
+				t.Errorf("response body = %q, want %q", body, tt.wantBody)
+			}
+		})
+	}
+}
+
+func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
+	mock := newMockOIDCServer(t)
+	defer mock.close()
+
+	t.Run("feature disabled omits groups key", func(t *testing.T) {
+		t.Setenv("ENABLE_TOOL_AUTHORIZATION", "false")
+
+		cfg := &config.ServerConfig{
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode:     config.AuthModeOAuth,
+				Issuer:   mock.issuer,
+				Audience: mock.audience,
+			},
+		}
+
+		verifier, err := NewTokenVerifier(cfg, nil)
+		if err != nil {
+			t.Fatalf("NewTokenVerifier: %v", err)
+		}
+
+		token, err := mock.createToken(map[string]interface{}{
+			"groups": []interface{}{"admin"},
+		})
+		if err != nil {
+			t.Fatalf("createToken: %v", err)
+		}
+
+		info, err := verifier(context.Background(), token, nil)
+		if err != nil {
+			t.Fatalf("verifier: %v", err)
+		}
+
+		if _, exists := info.Extra[authz.TokenInfoExtraKeyGroups]; exists {
+			t.Error("Extra should not contain groups key when feature is disabled")
+		}
+	})
+
+	t.Run("feature enabled with usable groups", func(t *testing.T) {
+		t.Setenv("ENABLE_TOOL_AUTHORIZATION", "true")
+
+		cfg := &config.ServerConfig{
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode:     config.AuthModeOAuth,
+				Issuer:   mock.issuer,
+				Audience: mock.audience,
+				ToolAuthorization: &config.ToolAuthorizationConfig{
+					Enabled:         boolPtr(true),
+					GroupsClaimName: strPtr("groups"),
+				},
+			},
+		}
+
+		verifier, err := NewTokenVerifier(cfg, nil)
+		if err != nil {
+			t.Fatalf("NewTokenVerifier: %v", err)
+		}
+
+		token, err := mock.createToken(map[string]interface{}{
+			"groups": []interface{}{"admin", "ops"},
+		})
+		if err != nil {
+			t.Fatalf("createToken: %v", err)
+		}
+
+		info, err := verifier(context.Background(), token, nil)
+		if err != nil {
+			t.Fatalf("verifier: %v", err)
+		}
+
+		raw, exists := info.Extra[authz.TokenInfoExtraKeyGroups]
+		if !exists {
+			t.Fatal("Extra should contain groups key")
+		}
+		groups, ok := raw.([]string)
+		if !ok {
+			t.Fatalf("groups value type = %T, want []string", raw)
+		}
+		if len(groups) != 2 || groups[0] != "admin" || groups[1] != "ops" {
+			t.Errorf("groups = %v, want [admin ops]", groups)
+		}
+	})
+
+	t.Run("feature enabled with absent claim", func(t *testing.T) {
+		t.Setenv("ENABLE_TOOL_AUTHORIZATION", "true")
+
+		cfg := &config.ServerConfig{
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode:     config.AuthModeOAuth,
+				Issuer:   mock.issuer,
+				Audience: mock.audience,
+				ToolAuthorization: &config.ToolAuthorizationConfig{
+					Enabled:         boolPtr(true),
+					GroupsClaimName: strPtr("groups"),
+				},
+			},
+		}
+
+		verifier, err := NewTokenVerifier(cfg, nil)
+		if err != nil {
+			t.Fatalf("NewTokenVerifier: %v", err)
+		}
+
+		token, err := mock.createToken(map[string]interface{}{})
+		if err != nil {
+			t.Fatalf("createToken: %v", err)
+		}
+
+		info, err := verifier(context.Background(), token, nil)
+		if err != nil {
+			t.Fatalf("verifier: %v", err)
+		}
+
+		if _, exists := info.Extra[authz.TokenInfoExtraKeyGroups]; exists {
+			t.Error("Extra should not contain groups key when claim is absent")
+		}
+	})
+
+	t.Run("feature enabled with empty array", func(t *testing.T) {
+		t.Setenv("ENABLE_TOOL_AUTHORIZATION", "true")
+
+		cfg := &config.ServerConfig{
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode:     config.AuthModeOAuth,
+				Issuer:   mock.issuer,
+				Audience: mock.audience,
+				ToolAuthorization: &config.ToolAuthorizationConfig{
+					Enabled:         boolPtr(true),
+					GroupsClaimName: strPtr("groups"),
+				},
+			},
+		}
+
+		verifier, err := NewTokenVerifier(cfg, nil)
+		if err != nil {
+			t.Fatalf("NewTokenVerifier: %v", err)
+		}
+
+		token, err := mock.createToken(map[string]interface{}{
+			"groups": []interface{}{},
+		})
+		if err != nil {
+			t.Fatalf("createToken: %v", err)
+		}
+
+		info, err := verifier(context.Background(), token, nil)
+		if err != nil {
+			t.Fatalf("verifier: %v", err)
+		}
+
+		raw, exists := info.Extra[authz.TokenInfoExtraKeyGroups]
+		if !exists {
+			t.Fatal("Extra should contain groups key for empty array (authenticated with zero groups)")
+		}
+		groups, ok := raw.([]string)
+		if !ok {
+			t.Fatalf("groups value type = %T, want []string", raw)
+		}
+		if len(groups) != 0 {
+			t.Errorf("groups = %v, want empty slice", groups)
+		}
+	})
+}
+
+// --- buildTokenInfo unit tests (no IdP needed) -------------------------------
+
+func TestBuildTokenInfo(t *testing.T) {
+	baseCfg := &config.ServerConfig{
+		MCPClientAuth: config.MCPClientAuthConfig{
+			Mode: config.AuthModeOAuth,
+		},
+	}
+
+	t.Run("happy path extracts all claims", func(t *testing.T) {
+		c := makeClaims(t, `{
+			"sub": "user-42",
+			"scope": "read write",
+			"iss": "https://idp.example.com",
+			"client_id": "cursor-ide",
+			"jti": "abc-123"
+		}`)
+
+		info, err := buildTokenInfo(baseCfg, c, time.Now().Add(time.Hour))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if info.UserID != "user-42" {
+			t.Errorf("UserID = %q, want %q", info.UserID, "user-42")
+		}
+		if len(info.Scopes) != 2 || info.Scopes[0] != "read" || info.Scopes[1] != "write" {
+			t.Errorf("Scopes = %v, want [read write]", info.Scopes)
+		}
+		if info.Extra["iss"] != "https://idp.example.com" {
+			t.Errorf("Extra[iss] = %v", info.Extra["iss"])
+		}
+		if info.Extra["client_id"] != "cursor-ide" {
+			t.Errorf("Extra[client_id] = %v", info.Extra["client_id"])
+		}
+		if info.Extra["jti"] != "abc-123" {
+			t.Errorf("Extra[jti] = %v", info.Extra["jti"])
+		}
+	})
+
+	t.Run("missing sub is rejected with errNoSubject", func(t *testing.T) {
+		c := makeClaims(t, `{"iss": "https://idp.example.com"}`)
+		_, err := buildTokenInfo(baseCfg, c, time.Now().Add(time.Hour))
+		if err == nil {
+			t.Fatal("expected error for missing sub")
+		}
+		if !errors.Is(err, errNoSubject) {
+			t.Errorf("error = %v, want errNoSubject", err)
+		}
+	})
+
+	t.Run("blank sub is rejected with errNoSubject", func(t *testing.T) {
+		c := makeClaims(t, `{"sub": "   "}`)
+		_, err := buildTokenInfo(baseCfg, c, time.Now().Add(time.Hour))
+		if err == nil {
+			t.Fatal("expected error for blank sub")
+		}
+		if !errors.Is(err, errNoSubject) {
+			t.Errorf("error = %v, want errNoSubject", err)
+		}
+	})
+
+	t.Run("scope with wrong type is rejected with errMalformedClaims", func(t *testing.T) {
+		c := makeClaims(t, `{"sub": "user-1", "scope": ["read", "write"]}`)
+		_, err := buildTokenInfo(baseCfg, c, time.Now().Add(time.Hour))
+		if err == nil {
+			t.Fatal("expected error for array scope")
+		}
+		if !errors.Is(err, errMalformedClaims) {
+			t.Errorf("error = %v, want errMalformedClaims", err)
+		}
+	})
+
+	t.Run("missing optional claims produce empty strings", func(t *testing.T) {
+		c := makeClaims(t, `{"sub": "user-1"}`)
+		info, err := buildTokenInfo(baseCfg, c, time.Now().Add(time.Hour))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for _, key := range []string{"client_id", "jti"} {
+			v, ok := info.Extra[key]
+			if !ok {
+				t.Errorf("Extra[%q] missing", key)
+				continue
+			}
+			if s, isStr := v.(string); !isStr || s != "" {
+				t.Errorf("Extra[%q] = %v (%T), want \"\"", key, v, v)
+			}
+		}
+	})
+
+	t.Run("client_id with wrong type is rejected with errMalformedClaims", func(t *testing.T) {
+		c := makeClaims(t, `{"sub": "user-1", "client_id": 42}`)
+		_, err := buildTokenInfo(baseCfg, c, time.Now().Add(time.Hour))
+		if err == nil {
+			t.Fatal("expected error for non-string client_id")
+		}
+		if !errors.Is(err, errMalformedClaims) {
+			t.Errorf("error = %v, want errMalformedClaims", err)
+		}
+	})
+
+	t.Run("absent groups claim logs DEBUG diagnostic", func(t *testing.T) {
+		t.Setenv("ENABLE_TOOL_AUTHORIZATION", "true")
+
+		authzCfg := &config.ServerConfig{
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode: config.AuthModeOAuth,
+				ToolAuthorization: &config.ToolAuthorizationConfig{
+					Enabled:         boolPtr(true),
+					GroupsClaimName: strPtr("roles"),
+				},
+			},
+		}
+		c := makeClaims(t, `{"sub": "user-1"}`)
+
+		var buf bytes.Buffer
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		defer slog.SetDefault(prev)
+
+		_, err := buildTokenInfo(authzCfg, c, time.Now().Add(time.Hour))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(buf.String(), "groups claim not found in token") {
+			t.Errorf("expected DEBUG log for absent groups claim, got: %s", buf.String())
+		}
+	})
+
+	t.Run("unresolvable groups claim logs DEBUG diagnostic", func(t *testing.T) {
+		t.Setenv("ENABLE_TOOL_AUTHORIZATION", "true")
+
+		authzCfg := &config.ServerConfig{
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode: config.AuthModeOAuth,
+				ToolAuthorization: &config.ToolAuthorizationConfig{
+					Enabled:         boolPtr(true),
+					GroupsClaimName: strPtr("groups"),
+				},
+			},
+		}
+		// groups claim present but wrong type (number) — resolveGroupsValue returns ok=false
+		c := makeClaims(t, `{"sub": "user-1", "groups": 42}`)
+
+		var buf bytes.Buffer
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		defer slog.SetDefault(prev)
+
+		_, err := buildTokenInfo(authzCfg, c, time.Now().Add(time.Hour))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(buf.String(), "groups claim present but not resolvable") {
+			t.Errorf("expected DEBUG log for unresolvable groups claim, got: %s", buf.String())
 		}
 	})
 }
