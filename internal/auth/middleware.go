@@ -229,7 +229,13 @@ func buildTokenInfo(cfg *config.ServerConfig, claims Claims, expiry time.Time) (
 			groups, ok := resolveGroupsValue(val)
 			if ok {
 				extra[authz.TokenInfoExtraKeyGroups] = groups
+			} else {
+				slog.Debug("groups claim present but not resolvable",
+					slog.String("claim", name))
 			}
+		} else {
+			slog.Debug("groups claim not found in token",
+				slog.String("claim", name))
 		}
 	}
 

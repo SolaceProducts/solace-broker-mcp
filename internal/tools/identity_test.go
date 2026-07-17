@@ -33,6 +33,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/authz"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 )
 
@@ -400,7 +401,7 @@ func TestTokenInfoExtra_perKeyTypeConvention(t *testing.T) {
 			"iss":       "https://idp.example.com",
 			"client_id": "cursor-ide",
 			"jti":       "jti-1",
-			"groups":    []string{"Ops", "Monitoring"},
+			authz.TokenInfoExtraKeyGroups: []string{"Ops", "Monitoring"},
 		},
 	}
 
@@ -413,28 +414,28 @@ func TestTokenInfoExtra_perKeyTypeConvention(t *testing.T) {
 	}
 
 	// Groups key: must be readable via extraStringSlice.
-	groups, present := extraStringSlice(info, "groups")
+	groups, present := extraStringSlice(info, authz.TokenInfoExtraKeyGroups)
 	if !present {
-		t.Fatal("extraStringSlice(\"groups\") returned present=false; expected true")
+		t.Fatalf("extraStringSlice(%q) returned present=false; expected true", authz.TokenInfoExtraKeyGroups)
 	}
 	if len(groups) != 2 || groups[0] != "Ops" || groups[1] != "Monitoring" {
-		t.Errorf("extraStringSlice(\"groups\") = %v; expected [Ops Monitoring]", groups)
+		t.Errorf("extraStringSlice(%q) = %v; expected [Ops Monitoring]", authz.TokenInfoExtraKeyGroups, groups)
 	}
 
 	// Defensive copy: mutating the returned slice must not affect the
 	// underlying Extra storage.
 	groups[0] = "MUTATED"
-	original, _ := info.Extra["groups"].([]string)
+	original, _ := info.Extra[authz.TokenInfoExtraKeyGroups].([]string)
 	if original[0] == "MUTATED" {
 		t.Error("extraStringSlice returned a reference instead of a defensive copy")
 	}
 
 	// Completeness: no unknown keys are permitted in Extra.
 	allowedKeys := map[string]bool{
-		"iss":       true,
-		"client_id": true,
-		"jti":       true,
-		"groups":    true,
+		"iss":                        true,
+		"client_id":                  true,
+		"jti":                        true,
+		authz.TokenInfoExtraKeyGroups: true,
 	}
 	for k := range info.Extra {
 		if !allowedKeys[k] {

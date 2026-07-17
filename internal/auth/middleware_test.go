@@ -15,6 +15,7 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -23,6 +24,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -925,6 +927,75 @@ func Test_NewTokenVerifier_TLSWithSSLCertFile(t *testing.T) {
 func boolPtr(b bool) *bool       { return &b }
 func strPtr(s string) *string    { return &s }
 
+// Test_OIDCVerifier_SanitizedErrorResponse verifies that when buildTokenInfo
+// rejects a token, the HTTP 401 response body contains only the static
+// sentinel text — no claim names, json type errors, or go-oidc detail.
+func Test_OIDCVerifier_SanitizedErrorResponse(t *testing.T) {
+	mock := newMockOIDCServer(t)
+	defer mock.close()
+
+	cfg := &config.ServerConfig{
+		Port: 9090,
+		MCPClientAuth: config.MCPClientAuthConfig{
+			Mode:        config.AuthModeOAuth,
+			Issuer:      mock.issuer,
+			Audience:    mock.audience,
+			ResourceURL: "http://localhost:9090/mcp",
+		},
+	}
+
+	middleware, err := NewAuthMiddleware(cfg, nil, dummyHandler)
+	if err != nil {
+		t.Fatalf("NewAuthMiddleware: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		claims   map[string]interface{}
+		wantBody string
+	}{
+		{
+			name:     "blank sub returns sanitized errNoSubject",
+			claims:   map[string]interface{}{"sub": ""},
+			wantBody: errNoSubject.Error(),
+		},
+		{
+			name:     "wrong type scope returns sanitized errMalformedClaims",
+			claims:   map[string]interface{}{"sub": "user1", "scope": []string{"read"}},
+			wantBody: errMalformedClaims.Error(),
+		},
+		{
+			name:     "wrong type client_id returns sanitized errMalformedClaims",
+			claims:   map[string]interface{}{"sub": "user1", "client_id": 999},
+			wantBody: errMalformedClaims.Error(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token, err := mock.createToken(tt.claims)
+			if err != nil {
+				t.Fatalf("createToken: %v", err)
+			}
+
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+
+			rec := httptest.NewRecorder()
+			middleware.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401", rec.Code)
+			}
+
+			body := strings.TrimSpace(rec.Body.String())
+			if body != tt.wantBody {
+				t.Errorf("response body = %q, want %q", body, tt.wantBody)
+			}
+		})
+	}
+}
+
 func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 	mock := newMockOIDCServer(t)
 	defer mock.close()
@@ -1186,6 +1257,63 @@ func TestBuildTokenInfo(t *testing.T) {
 		}
 		if !errors.Is(err, errMalformedClaims) {
 			t.Errorf("error = %v, want errMalformedClaims", err)
+		}
+	})
+
+	t.Run("absent groups claim logs DEBUG diagnostic", func(t *testing.T) {
+		t.Setenv("ENABLE_TOOL_AUTHORIZATION", "true")
+
+		authzCfg := &config.ServerConfig{
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode: config.AuthModeOAuth,
+				ToolAuthorization: &config.ToolAuthorizationConfig{
+					Enabled:         boolPtr(true),
+					GroupsClaimName: strPtr("roles"),
+				},
+			},
+		}
+		c := makeClaims(t, `{"sub": "user-1"}`)
+
+		var buf bytes.Buffer
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		defer slog.SetDefault(prev)
+
+		_, err := buildTokenInfo(authzCfg, c, time.Now().Add(time.Hour))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(buf.String(), "groups claim not found in token") {
+			t.Errorf("expected DEBUG log for absent groups claim, got: %s", buf.String())
+		}
+	})
+
+	t.Run("unresolvable groups claim logs DEBUG diagnostic", func(t *testing.T) {
+		t.Setenv("ENABLE_TOOL_AUTHORIZATION", "true")
+
+		authzCfg := &config.ServerConfig{
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode: config.AuthModeOAuth,
+				ToolAuthorization: &config.ToolAuthorizationConfig{
+					Enabled:         boolPtr(true),
+					GroupsClaimName: strPtr("groups"),
+				},
+			},
+		}
+		// groups claim present but wrong type (number) — resolveGroupsValue returns ok=false
+		c := makeClaims(t, `{"sub": "user-1", "groups": 42}`)
+
+		var buf bytes.Buffer
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		defer slog.SetDefault(prev)
+
+		_, err := buildTokenInfo(authzCfg, c, time.Now().Add(time.Hour))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(buf.String(), "groups claim present but not resolvable") {
+			t.Errorf("expected DEBUG log for unresolvable groups claim, got: %s", buf.String())
 		}
 	})
 }
