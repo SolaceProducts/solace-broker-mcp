@@ -53,7 +53,8 @@ func (p *Policy) LogValue() slog.Value {
 // MatchedGroups is exported so callers can read it for audit logging, but
 // Decision implements slog.LogValuer to prevent accidental leakage: any
 // slog call that includes a Decision emits only Allowed and the count of
-// matched groups, never the group names themselves.
+// matched groups, never the group names themselves. fmt and json.Marshal
+// still render MatchedGroups — log only via slog.
 type Decision struct {
 	Allowed       bool
 	MatchedGroups []string
