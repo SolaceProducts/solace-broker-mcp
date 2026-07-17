@@ -216,3 +216,53 @@ func TestConstants(t *testing.T) {
 		t.Errorf("VerifierBugSentinel = %q, want %q", VerifierBugSentinel, "<verifier-bug>")
 	}
 }
+
+// TestClaim_exactMaxLenBytesReturnedUnchanged pins the cap as INCLUSIVE:
+// exactly MaxLen bytes of graphic input pass through untouched. A
+// future change that flipped the projected-length check from > to >= would
+// turn a 256-byte value into a 255-byte value silently — every audit-log
+// consumer holding sub-length expectations would see a regression at the
+// boundary. The check is on both length and identity of the returned
+// string so a naive impl that copied only the first 255 bytes fails
+// loudly.
+func TestClaim_exactMaxLenBytesReturnedUnchanged(t *testing.T) {
+	in := strings.Repeat("a", MaxLen)
+	got := Claim(in)
+	if got != in {
+		t.Errorf("MaxLen-byte input was altered; len(got) = %d, want %d and identity-equal to input", len(got), MaxLen)
+	}
+}
+
+// TestClaim_oneByteOverMaxLenReturnsPrefix pins the truncation shape as
+// PREFIX, not (say) suffix, middle window, or reversed. The migrated
+// cap test only pins length; this test pins the specific bytes that
+// survive. SIEM parsers that reason "the first 256 bytes are canonical"
+// depend on this. A future refactor that switched to keeping the last
+// MaxLen bytes (rare, but possible when someone hurriedly reaches for
+// a ring buffer) would break exactly this contract.
+func TestClaim_oneByteOverMaxLenReturnsPrefix(t *testing.T) {
+	in := strings.Repeat("a", MaxLen+1)
+	got := Claim(in)
+	want := strings.Repeat("a", MaxLen)
+	if got != want {
+		t.Errorf("Claim(len=%d) = %q (len=%d); want the first %d bytes of input", len(in), got, len(got), MaxLen)
+	}
+}
+
+// TestClaim_combiningDiacriticPassesThrough pins the strip set's
+// boundary from the OUTSIDE: Unicode category Mn (Mark, non-spacing)
+// includes combining marks such as U+0301 (combining acute accent).
+// These are graphic, not format, and must survive. A future contributor
+// who "broadened" the strip set to include Mn would silently mangle
+// every user identifier in decomposed Latin scripts (Vietnamese,
+// some Spanish/Portuguese normalization forms), CJK combining forms,
+// and any IdP that stores names in NFD normalization form.
+func TestClaim_combiningDiacriticPassesThrough(t *testing.T) {
+	// "e" + combining acute — renders as "é". Two runes, three bytes.
+	// If Mn were stripped we would see just "e".
+	in := "é"
+	got := Claim(in)
+	if got != in {
+		t.Errorf("Claim(%q) = %q, want %q — combining marks (Mn) must survive; only Cc/Cf/Zl/Zp are stripped", in, got, in)
+	}
+}
