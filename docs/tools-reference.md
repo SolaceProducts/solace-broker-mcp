@@ -5,8 +5,12 @@ parameters, output shape, an example invocation, and an example natural-language
 request. For task-oriented walkthroughs see [Examples](examples.md); for a
 narrative overview see the [User Guide](user-guide.md).
 
-The server exposes **17 read-only tools** plus **13 write tools** — 4 action
-tools and 9 Config-API management tools. The write tools are gated behind
+> **Note:** Results are interpreted and acted on by an AI assistant. Treat tool
+> output as input to a human decision, not as verified fact, and confirm any
+> write or destructive action before allowing it.
+
+The server exposes **17 read-only tools** plus **16 write tools** — 4 action
+tools and 12 Config-API management tools. The write tools are gated behind
 `enable_write_tools` (off by default) and are not registered with the MCP server
 when disabled — see
 [Action tools and `enable_write_tools`](#action-tools-and-enable_write_tools).

@@ -77,6 +77,9 @@ mcp_client_auth:
 # not appear in tools/list unless this is explicitly true. Leave off for trial /
 # dev deployments; flip on only when an operator deliberately wants the action
 # tools available.
+# When enabled, an AI assistant can delete queued messages, disconnect clients,
+# reset statistics, and create, update, or delete broker configuration (message
+# VPNs, queues, topic endpoints, REST delivery points) on the configured brokers.
 # enable_write_tools: false
 
 # SEMP client settings — controls how the server talks to brokers.

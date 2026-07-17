@@ -29,18 +29,19 @@ An MCP (Model Context Protocol) server for Solace event brokers, built with Go u
 - [CI](#ci)
 - [Contributing](#contributing)
 - [Security](#security)
+- [Disclaimer](#disclaimer)
 - [License](#license)
 
 ## Overview
 
-An HTTP service that exposes Solace event broker management and monitoring to AI assistants through the Model Context Protocol (MCP). The server provides 17 read-only tools that query event broker status, inspect queues, diagnose client issues, and monitor message traffic using SEMP v1 and v2 API calls.
+An HTTP service that exposes Solace event broker management and monitoring to AI assistants through the Model Context Protocol (MCP). The server provides 33 tools: 17 read-only tools that query event broker status, inspect queues, diagnose client issues, and monitor message traffic, plus 16 optional write and action tools (off by default) for operational actions and configuration. It uses SEMP v1 and v2 API calls.
 
 MCP-compatible clients, for example Claude Code, invoke these tools using natural language. The AI assistant translates requests into tool calls. The server handles authentication, rate limiting, retries, and response formatting.
 
 ## Features
 
 - **17 read-only monitoring tools** — Event broker status, message VPNs, queues, clients, and REST delivery points
-- **Optional action tools** — Disconnect clients, delete queued messages, and reset statistics; gated behind `enable_write_tools` (off by default)
+- **16 optional write and action tools** — Disconnect clients, delete queued messages, reset statistics, and create, update, or delete message VPNs, queues, topic endpoints, and REST delivery points; gated behind `enable_write_tools` (off by default)
 - **Client authentication** — Development mode (no auth), static bearer tokens, or OAuth 2.1/OIDC with JWT validation
 - **Multi-broker configuration** — Connect to multiple brokers and address them by configured alias
 - **Retry and rate limiting** — Configurable backoff intervals and concurrent request limits per broker
@@ -66,7 +67,7 @@ The server implements the MCP HTTP transport specification and exposes event bro
 │                  │                    │   Broker MCP Server      │                      │                  │
 │   AI Agent       │ ────────────────▶ │                          │  ──────────────────▶ │  Solace          │
 │  (Claude Code,   │   JSON-RPC         │  • Auth (OAuth / token)  │   HTTP(S) /SEMP      │  Event           │
-│  Claude Desktop) │   + Bearer JWT     │  • 17 read-only tools    │                      │  Broker(s)       │
+│  Claude Desktop) │   + Bearer JWT     │  • 17 read + 16 write    │                      │  Broker(s)       │
 │                  │                    │  • Rate-limit + retry    │                      │                  │
 │                  │ ◀──────────────── │  • SEMP client pool      │ ◀──────────────────  │                  │
 └──────────────────┘                    └──────────────────────────┘   basic / bearer     └──────────────────┘
@@ -75,6 +76,9 @@ The server implements the MCP HTTP transport specification and exposes event bro
 ## Tools
 
 The server exposes read-only tools grouped by what they inspect, plus write tools for operational actions and configuration management. Every tool except `list-brokers` takes a `broker` parameter naming a configured broker alias. See the [Tools Reference](docs/tools-reference.md) for full per-tool parameters, output shape, and example invocations; the [user guide](docs/user-guide.md#tools-reference) has the narrative overview.
+
+> **Note:** Results are interpreted and acted on by an AI assistant. Treat tool output as input to a human decision, not as verified fact, and confirm any write or destructive action before allowing it. See the [Disclaimer](#disclaimer).
+
 | Category | Tools | Description |
 |---|---|---|
 | Discovery | `list-brokers` | List configured broker aliases for use as the `broker` parameter |
@@ -86,9 +90,9 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 | REST Delivery Points | `list-rdps`, `get-rdp-status` | List RDPs; inspect bindings, REST consumers, and last failure reason |
 | Discards | `get-discard-stats`, `list-queue-discards` | Broker-wide and per-VPN discard aggregates; per-queue discard counters |
 | Actions | `delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats` | One tool per operational action. Destructive tools (`delete-queue-messages`, `disconnect-client`) are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; the `clear-*-stats` tools are non-destructive. |
-| Management | `create-message-vpn`, `update-message-vpn`, `delete-message-vpn`, `create-queue`, `update-queue`, `delete-queue`, `create-topic-endpoint`, `update-topic-endpoint`, `delete-topic-endpoint` | Create, update, and delete Config-API objects (Message VPNs, queues, topic endpoints). `delete-*` and the service-affecting `update-*` tools are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; `create-*` is additive and not annotated. |
+| Management | `create-message-vpn`, `update-message-vpn`, `delete-message-vpn`, `create-queue`, `update-queue`, `delete-queue`, `create-topic-endpoint`, `update-topic-endpoint`, `delete-topic-endpoint`, `create-rdp`, `update-rdp`, `delete-rdp` | Create, update, and delete Config-API objects (Message VPNs, queues, topic endpoints, REST delivery points). `delete-*` and the service-affecting `update-*` tools are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; `create-*` is additive and not annotated. |
 
-**The action and management tools are write tools, gated behind `enable_write_tools: true` in the config — default off; not registered in `tools/list` when disabled.** That's 13 write tools in total, on top of the 17 read-only tools.
+**The action and management tools are write tools, gated behind `enable_write_tools: true` in the config — default off; not registered in `tools/list` when disabled.** That's 16 write tools in total (4 action, 12 management), on top of the 17 read-only tools.
 
 > **Confirmation is not enforced.** `enable_write_tools` is the only enforced control. `destructiveHint` and the confirmation text in tool descriptions are hints, not enforced by the MCP protocol — whether the user is actually prompted depends on the client and the model.
 
@@ -404,8 +408,22 @@ Please read our [Code of Conduct](.github/CODE_OF_CONDUCT.md) before participati
 
 For security vulnerability reporting, please see [SECURITY.md](.github/SECURITY.md).
 
+## Disclaimer
+
+This software is provided under the Apache License 2.0 on an "AS IS" basis, without warranties or conditions of any kind. See the [LICENSE](LICENSE) file for the full terms. Use it at your own risk.
+
+This is a community-supported open-source project. It is provided on a best-effort basis with no service-level commitment, and it is not a supported Solace product.
+
+You are responsible for ensuring your use of this server complies with the terms governing your brokers and any laws, regulations, or policies that apply to you.
+
+**Production brokers.** This server issues real SEMP calls against the brokers you configure, including production brokers. Read operations add monitoring load; write operations (see [Tools](#tools)) change broker state. Test against a non-production broker before using it against production.
+
+**AI-generated output.** This server is driven by AI assistants that interpret broker data and decide which tools to call. AI models can misread data, draw wrong conclusions, and select the wrong tool or arguments. Review the server's responses before acting on them, and review every proposed write or destructive action before you allow it.
+
 ## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+
+Attribution and third-party components are listed in [NOTICE](NOTICE) and [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
 Copyright 2024-2026 Solace Corporation. All rights reserved.

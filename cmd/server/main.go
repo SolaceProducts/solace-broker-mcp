@@ -537,6 +537,16 @@ func main() {
 
 	slog.Info("server starting", slog.String("version", version.Version()))
 
+	// One-line release disclaimer, emitted once on every startup regardless of
+	// auth mode. It is deliberately SEPARATE from the insecure-mode banners in
+	// internal/banner (those are reserved for security-mode signals and must not
+	// be diluted). Emitted here in the bootstrap-INFO window — before the slog
+	// handler is reconfigured to cfg.LogLevel — so it stays visible even when the
+	// operator sets a higher log level. Wording tracks the README Disclaimer
+	// section and is finalized by Legal.
+	slog.Info("Community-supported open-source software, provided AS IS with no warranty. " +
+		"AI-driven; review output before acting. See the Disclaimer in the README.")
+
 	// 1. Load config. config.Load handles path resolution internally
 	//    (CONFIG_FILE env var, then /etc/mcp-server/config.yaml, then
 	//    ./broker-config.yaml). See config.Load docs for exact semantics.

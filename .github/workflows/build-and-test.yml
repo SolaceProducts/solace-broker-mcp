@@ -24,10 +24,13 @@ jobs:
   fossa_scan:
     if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
     name: FOSSA Scan
-    uses: SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml@main
+    uses: SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml@fc521b087f780457f92d4cb46038184e92ad2fbc # pinned 2026-05-12
     with:
       use_vault: true
       config_file: '.github/workflow-config.json'
+    secrets:
+      # Vault address is injected from an org/repo secret, not committed to the repo.
+      VAULT_URL: ${{ secrets.VAULT_URL }}
 
   lint:
     runs-on: ubuntu-latest
