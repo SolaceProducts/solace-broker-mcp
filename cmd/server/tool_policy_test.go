@@ -20,20 +20,11 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 )
 
-// These tests pin the buildToolPolicy postcondition that main relies on:
-// tool authorization enabled ⟺ returned *authz.Policy is non-nil. That
-// biconditional is what lets RegisterWithServer treat nil-policy as
-// "skip the wrapper" without ambiguity — the invariant is a property of
-// this function, not folklore scattered across the composition site.
-// The mirror direction (gate on ⟹ policy non-nil) is asserted by main
-// itself via a fail-closed guard immediately after the call; if a future
-// refactor accidentally makes buildToolPolicy return (nil, nil) on the
-// gate-on branch, this test suite fails first, and if this suite is
-// bypassed the guard aborts startup before the server accepts requests.
+// These tests pin buildToolPolicy's postcondition: gate enabled ⟺ returned
+// *authz.Policy is non-nil. Main's fail-closed guard asserts the mirror
+// direction; a break here fails these tests first.
 
-// makeEnabledConfig returns a minimal ServerConfig whose gate resolves
-// to true. Uses the smallest set of fields both ToolAuthorizationEnabled
-// and NewPolicy actually read.
+// makeEnabledConfig returns a minimal ServerConfig whose gate resolves to true.
 func makeEnabledConfig() *config.ServerConfig {
 	enabled := true
 	return &config.ServerConfig{
@@ -49,13 +40,9 @@ func makeEnabledConfig() *config.ServerConfig {
 	}
 }
 
-// TestBuildToolPolicy_GateOff_ReturnsNilNil pins the disabled-deployment
-// side of the biconditional: when the feature flag is absent, the gate
-// short-circuits to false regardless of config shape, and buildToolPolicy
-// must return (nil, nil). That nil is the signal RegisterWithServer keys
-// off to skip the authorization wrapper.
+// Gate off (feature flag unset) → (nil, nil) regardless of config contents.
 func TestBuildToolPolicy_GateOff_ReturnsNilNil(t *testing.T) {
-	// Feature flag not set: gate is off even with a fully-populated block.
+	// Feature flag unset: gate is off even with a populated RBAC block.
 	t.Setenv("ENABLE_TOOL_AUTHORIZATION", "")
 	cfg := makeEnabledConfig()
 
@@ -68,11 +55,7 @@ func TestBuildToolPolicy_GateOff_ReturnsNilNil(t *testing.T) {
 	}
 }
 
-// TestBuildToolPolicy_GateOn_ReturnsNonNilPolicy pins the enabled-
-// deployment side: with the feature flag set and a valid RBAC block,
-// the gate is true and NewPolicy succeeds — buildToolPolicy returns a
-// non-nil compiled Policy and no error. This is the postcondition
-// RegisterWithServer relies on to compose the authorization wrapper.
+// Gate on + valid block → non-nil Policy, no error.
 func TestBuildToolPolicy_GateOn_ReturnsNonNilPolicy(t *testing.T) {
 	t.Setenv("ENABLE_TOOL_AUTHORIZATION", "true")
 	cfg := makeEnabledConfig()
@@ -86,10 +69,8 @@ func TestBuildToolPolicy_GateOn_ReturnsNonNilPolicy(t *testing.T) {
 	}
 }
 
-// TestBuildToolPolicy_NonOAuthMode_GateFalse pins that the gate stays
-// off in non-OAuth deployments even when the feature flag is set —
-// tool authorization only runs when identity is available in tokens.
-// buildToolPolicy therefore returns (nil, nil), matching the gate.
+// Non-OAuth mode with flag set → gate off, (nil, nil). Tool authorization
+// only runs when identity is available in tokens.
 func TestBuildToolPolicy_NonOAuthMode_GateFalse(t *testing.T) {
 	t.Setenv("ENABLE_TOOL_AUTHORIZATION", "true")
 	cfg := makeEnabledConfig()

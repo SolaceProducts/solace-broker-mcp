@@ -28,61 +28,37 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// authzDeniedMessage is the caller-facing text returned when the compiled
-// policy denies a tool invocation. Uniform, minimum-information — no tool
-// name, no group names, no reason code — so an unauthorized caller learns
-// nothing about the policy shape. Full diagnostic detail lives in the
-// server-side authorization-decision log, joined to this response by the
-// correlation ID that flows through the outer withRecovery wrapper.
-const authzDeniedMessage = "You are not authorized to use this tool."
+// Caller-facing messages. Deliberately identical in v1 so a caller cannot
+// distinguish "your groups don't grant this" from "your token has no groups
+// claim" — that distinction is admin-configuration metadata. Kept as separate
+// identifiers so a future evolution can amend one without touching the other;
+// the audit log distinguishes the outcomes via the decision field.
+const (
+	authzDeniedMessage       = "You are not authorized to use this tool."
+	authzMissingClaimMessage = "You are not authorized to use this tool."
+)
 
-// authzMissingClaimMessage is the caller-facing text returned when the
-// caller's token does not carry the configured groups claim. Value is
-// intentionally identical to authzDeniedMessage: the caller cannot fix
-// either case themselves and any distinguishing detail (which claim was
-// expected, whether the token was structurally deficient vs merely
-// unprivileged) is admin-configuration metadata that must not reach an
-// unauthenticated-authorization caller. The two constants stay separate
-// identifiers so a future evolution can amend one without touching the
-// other; the audit log distinguishes the outcomes structurally.
-const authzMissingClaimMessage = "You are not authorized to use this tool."
-
-// listBrokersToolName names the discovery tool that is structurally
-// exempt from tool authorization. The exemption is expressed at the
-// registration API (RegisterListBrokers takes no policy argument);
-// this file uses the constant in ValidatePolicyToolNames' two
-// exempt-name branches and in its exempt-tool WARN attribute so a
-// contributor can grep for one identifier to find every exemption
-// touchpoint at once.
+// listBrokersToolName is the discovery tool that is structurally exempt from
+// tool authorization. Exemption lives at the registration API
+// (RegisterListBrokers takes no policy argument), not here — this constant
+// exists so a grep finds every exempt-name touchpoint at once.
 const listBrokersToolName = "list-brokers"
 
 // withAuthorization gates every invocation of toolName through policy.
+// On allow, dispatches to next unchanged. On deny or missing-claim, returns a
+// tool-level error result and skips next.
 //
-// On allow: emits an INFO-level "tool authorization" audit event, then
-// dispatches to next unchanged. The wrapper does not mutate ctx or req;
-// dispatch is byte-identical to the pre-RBAC path after the audit line.
+// Precondition: policy must be non-nil. The composition site
+// (RegisterWithServer) guarantees this by only composing the wrapper on the
+// non-nil-policy branch. A nil policy reaching here is a programmer error
+// that must not silently bypass authorization; the outer withRecovery catches
+// the resulting panic.
 //
-// On deny or missing-claim: emits the audit event, then returns a
-// tool-level error result (IsError: true, retryable: false) carrying the
-// uniform authzDeniedMessage / authzMissingClaimMessage. The result mirrors
-// withRecovery's panic branch shape so reviewers see one denial shape
-// across authorization, panic recovery, and validation errors.
+// Panic containment (from Authorize or the audit call site) is owned by the
+// outer withRecovery, so this closure reads as straight-line request logic.
 //
-// Nil policy is a precondition violation: the composition site
-// (RegisterWithServer) guarantees this wrapper is only composed when
-// policy is non-nil. A nil policy reaching this call is a programmer
-// error, not a runtime condition — the wrapper panics, the outer
-// withRecovery catches it, and the request fails visibly rather than
-// silently bypassing authorization.
-//
-// Panics from authz.Authorize or the audit call site are not recovered
-// here — the outer withRecovery wrapper owns panic containment, so this
-// wrapper reads as straight-line request logic.
-//
-// The audit event emitted here is a v1 placeholder: INFO level for every
-// outcome, minimal field set (identity, tool, decision string). A
-// follow-up ticket refines the level split, adds the bounded matched-
-// groups slice, and finalizes the audit field schema.
+// The audit event is a v1 placeholder — INFO for every outcome, minimal
+// fields. A follow-up ticket refines the level split and field schema.
 func withAuthorization(policy *authz.Policy, toolName string, next mcp.ToolHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		var info *sdkauth.TokenInfo
@@ -117,10 +93,9 @@ func withAuthorization(policy *authz.Policy, toolName string, next mcp.ToolHandl
 	}
 }
 
-// authzErrorResult builds the tool-level error result returned on deny
-// and missing-claim branches. Shape mirrors withRecovery's panic branch:
-// IsError true, StructuredContent with the uniform message and
-// retryable=false, plus a TextContent copy of the message.
+// authzErrorResult builds the deny / missing-claim tool-level error result.
+// Shape mirrors withRecovery's panic branch so callers see one denial shape
+// across authorization, panic recovery, and validation errors.
 func authzErrorResult(message string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{
 		StructuredContent: map[string]any{
@@ -132,27 +107,14 @@ func authzErrorResult(message string) *mcp.CallToolResult {
 	}
 }
 
-// ValidatePolicyToolNames verifies every tool name the admin wrote in
-// cfg.AccessLevelGroups resolves to a registered handler on mgr, or to
-// the structurally exempt "list-brokers" tool. Called from cmd/server/main.go
-// after RegisterWithServer and RegisterListBrokers return, before
-// server.Run — the union of mgr.Handlers() and "list-brokers" must be
-// fully populated by then.
+// ValidatePolicyToolNames checks every tool name in cfg.AccessLevelGroups
+// against the union of mgr.Handlers() and list-brokers. Call after both
+// registrations have populated mgr.
 //
-// Unknown tool names are collected across every group and returned as
-// one error per unknown tool, alphabetized, joined via errors.Join.
-// Format: `unknown tool "<name>" (referenced by groups: <g1>, <g2>, ...)`.
-// Deduplication is on the tool name (one bug, one report), but each row
-// carries the alphabetized list of every group that referenced it so the
-// admin's YAML edit is a self-contained fix task.
-//
-// Grants of "list-brokers" are known-tool grants (the union accepts the
-// literal), but the tool is structurally exempt from tool authorization —
-// the grant has no effect. Each such grant is reported via slog.Warn with
-// the referencing group list; they do not surface as errors and do not
-// block startup.
-//
-// Returns nil when every configured tool name resolves.
+// Returns one error row per unknown tool (deduped on the tool name so one
+// typo is one report), alphabetized by tool then by referencing group, joined
+// via errors.Join. Grants of list-brokers are inert — emitted as a WARN, not
+// an error — because the tool is exempt from authorization.
 func ValidatePolicyToolNames(cfg config.ToolAuthorizationConfig, mgr *ToolManager) error {
 	known := make(map[string]struct{})
 	for _, h := range mgr.Handlers() {
@@ -210,8 +172,7 @@ func ValidatePolicyToolNames(cfg config.ToolAuthorizationConfig, mgr *ToolManage
 	return errors.Join(rowErrs...)
 }
 
-// sortedKeys returns the keys of set in alphabetical order. Small helper
-// used by ValidatePolicyToolNames to produce deterministic error rows.
+// sortedKeys returns the keys of set in alphabetical order.
 func sortedKeys(set map[string]struct{}) []string {
 	out := make([]string, 0, len(set))
 	for k := range set {

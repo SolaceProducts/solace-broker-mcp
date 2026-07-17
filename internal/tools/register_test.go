@@ -495,21 +495,12 @@ func containsStr(s, substr string) bool {
 
 // --- Composition-site wiring tests (tool-authorization wrapper) ---
 //
-// These three tests pin the observable behavior of the composition
-// site inside RegisterWithServer: nil policy means no authorization
-// frame is composed and dispatch is byte-identical to pre-RBAC;
-// non-nil policy means the wrapper is composed and every tool call
-// emits the authorization audit event; and RegisterListBrokers never
-// composes the wrapper regardless of policy state, so list-brokers
-// remains available to every authenticated caller.
-//
 // Each test drives a real client→server call via mcp.NewInMemoryTransports
-// so the assertion is on what the operator sees in the log stream and
-// what the caller sees in the tool result — not on internal composition
-// state.
+// and asserts on observable outputs (log stream, tool result), not internal
+// composition state.
 
-// hasAuthzAuditLine reports whether buf contains any log record with
-// msg=="tool authorization" for the given tool name.
+// hasAuthzAuditLine reports whether buf contains a "tool authorization" log
+// record for the given tool name.
 func hasAuthzAuditLine(t *testing.T, buf *bytes.Buffer, tool string) bool {
 	t.Helper()
 	for _, raw := range strings.Split(buf.String(), "\n") {
@@ -527,13 +518,8 @@ func hasAuthzAuditLine(t *testing.T, buf *bytes.Buffer, tool string) bool {
 	return false
 }
 
-// TestRegisterWithServer_NilPolicy_ByteIdenticalToPreRBAC pins the
-// non-RBAC guarantee: when policy is nil, the composition site skips
-// withAuthorization and dispatch is byte-identical to the pre-RBAC
-// path. The existing "tool invoked" audit line fires; no
-// "tool authorization" line fires. A regression that accidentally
-// composed the wrapper anyway would secretly enable RBAC on every
-// non-RBAC deployment.
+// Nil policy → pre-RBAC "tool invoked" audit still fires; no
+// "tool authorization" line (wrapper is not composed).
 func TestRegisterWithServer_NilPolicy_ByteIdenticalToPreRBAC(t *testing.T) {
 	var logBuf bytes.Buffer
 	oldLogger := slog.Default()
@@ -572,19 +558,10 @@ func TestRegisterWithServer_NilPolicy_ByteIdenticalToPreRBAC(t *testing.T) {
 	}
 }
 
-// TestRegisterWithServer_NonNilPolicy_AuthorizationAuditFires pins the
-// enable side of the composition: when policy is non-nil, every
-// registered tool has the wrapper composed AND the wrapper actually
-// consults the policy on each request. Two assertions together prove
-// this: (1) a tool-authorization audit line appears, and (2) its
-// decision value matches what the policy would produce for this
-// caller. Asserting only on presence would pass even if the wrapper
-// emitted an unconditional log without running Authorize.
-//
-// The test drives via the SDK transport without OAuth middleware, so
-// req.Extra.TokenInfo is nil — the wrapper takes the missing-claim
-// branch. That path is uniquely identifiable by the decision value
-// AND by the caller-facing deny result, so both are asserted.
+// Non-nil policy → wrapper is composed AND consulted. The audit line fires
+// AND the decision value matches the caller-facing outcome (asserting only
+// on line presence would miss a wrapper emitting unconditional logs).
+// No OAuth middleware here, so TokenInfo is nil → missing-claim branch.
 func TestRegisterWithServer_NonNilPolicy_AuthorizationAuditFires(t *testing.T) {
 	var logBuf bytes.Buffer
 	oldLogger := slog.Default()
@@ -617,18 +594,13 @@ func TestRegisterWithServer_NonNilPolicy_AuthorizationAuditFires(t *testing.T) {
 		t.Fatalf("CallTool: %v", err)
 	}
 
-	// The wrapper must produce a tool-level deny result rather than
-	// letting the call through — no TokenInfo means missing-claim
-	// branch fires.
+	// Missing-claim branch → tool-level deny result.
 	if !res.IsError {
 		t.Errorf("expected IsError=true from missing-claim path; the wrapper was not composed or did not consult policy")
 	}
 
-	// The audit line must fire AND its decision must reflect the
-	// missing-claim outcome the wrapper actually took. If the
-	// wrapper emitted an unconditional "allowed" log while denying
-	// on the result path (or vice versa), only this assertion
-	// catches it.
+	// Audit decision must match the outcome — catches a wrapper that emits
+	// an unconditional "allowed" log while denying on the result path.
 	lines := authzLogLines(t, &logBuf)
 	toolLines := make([]map[string]any, 0, 1)
 	for _, l := range lines {
@@ -655,17 +627,8 @@ func TestRegisterWithServer_NonNilPolicy_AuthorizationAuditFires(t *testing.T) {
 	}
 }
 
-// TestRegisterListBrokers_NeverComposesWithAuthorization pins the
-// structural exemption of the discovery tool. list-brokers registers
-// via a dedicated function that takes no policy argument — an
-// invariant expressed at the API surface. This test drives a full
-// call to list-brokers alongside a policy-enabled RegisterWithServer,
-// with a policy that would deny list-brokers if it were wrapped, and
-// asserts that the call succeeds and no authorization audit line
-// fires. A regression that accidentally applied the wrapper to
-// list-brokers (e.g. a refactor that unified the two registration
-// paths) would make every authenticated caller lose broker
-// discovery.
+// list-brokers is structurally exempt. Even under a policy that grants it
+// nothing, the call succeeds and no "tool authorization" audit line fires.
 func TestRegisterListBrokers_NeverComposesWithAuthorization(t *testing.T) {
 	var logBuf bytes.Buffer
 	oldLogger := slog.Default()
@@ -676,9 +639,8 @@ func TestRegisterListBrokers_NeverComposesWithAuthorization(t *testing.T) {
 	mgr := NewToolManager(pool)
 	mgr.Register(newStubHandler("test-tool"))
 
-	// Policy that grants nothing to list-brokers — if the wrapper
-	// were accidentally composed on list-brokers, this policy would
-	// deny it.
+	// If the wrapper were accidentally composed on list-brokers, this
+	// policy (which grants nothing to it) would deny the call.
 	policy := policyGranting(t, []string{"Ops"}, "test-tool")
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)

@@ -23,16 +23,11 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 )
 
-// The ValidatePolicyToolNames tests exercise the startup gate that
-// catches admin typos in tool_authorization YAML before the server
-// accepts requests. Assertions are about what the operator sees in
-// the startup log (error rows, WARN lines) and the aggregate return
-// contract — nil vs an errors.Join'd chain — that main.go branches on.
+// These tests cover the startup validator that catches admin typos in
+// tool_authorization YAML. Assertions target the startup log (error rows,
+// WARN lines) and the aggregate return contract main.go branches on.
 
-// validateTestManager builds a ToolManager whose only registered
-// handlers are stubs named after the given tool names. Used to
-// simulate the "registered tool set" ValidatePolicyToolNames checks
-// against.
+// validateTestManager builds a ToolManager with stubs for the given names.
 func validateTestManager(t *testing.T, toolNames ...string) *ToolManager {
 	t.Helper()
 	pool := newRegTestPool(t)
@@ -43,10 +38,7 @@ func validateTestManager(t *testing.T, toolNames ...string) *ToolManager {
 	return mgr
 }
 
-// warnLinesMentioning returns every JSON slog line at WARN level whose
-// serialization contains the substring. Used to assert on the WARN
-// operators see about list-brokers grants without over-specifying the
-// message wording.
+// warnLinesMentioning returns every WARN JSON slog line containing substr.
 func warnLinesMentioning(t *testing.T, buf *bytes.Buffer, substr string) []map[string]any {
 	t.Helper()
 	var out []map[string]any
@@ -68,23 +60,15 @@ func warnLinesMentioning(t *testing.T, buf *bytes.Buffer, substr string) []map[s
 	return out
 }
 
-// errorRowCount counts the newline-joined rows in an errors.Join'd
-// error's rendered string. Used to assert on row counts without
-// coupling to the internal error-chain iteration API.
+// errorRowCount counts newline-joined rows in an errors.Join'd error string.
 func errorRowCount(err error) int {
 	if err == nil {
 		return 0
 	}
-	// errors.Join renders each wrapped error on its own line.
 	return strings.Count(err.Error(), "\n") + 1
 }
 
-// TestValidatePolicyToolNames_AllKnown_ReturnsNil pins the happy-path
-// contract: every configured tool name resolves to a registered handler
-// → nil error AND no operator-facing log output. The two assertions
-// together prove a silent no-op; either alone would miss a regression
-// that surfaced a spurious WARN on a clean config (masking real WARNs
-// operators care about) or that changed the return contract.
+// All-known config → nil error and zero log output (silent no-op).
 func TestValidatePolicyToolNames_AllKnown_ReturnsNil(t *testing.T) {
 	buf, cleanup := captureSlog(t)
 	defer cleanup()
@@ -105,11 +89,7 @@ func TestValidatePolicyToolNames_AllKnown_ReturnsNil(t *testing.T) {
 	}
 }
 
-// TestValidatePolicyToolNames_OneUnknown_ReportsToolAndGroup covers
-// the baseline error: one typo produces one error row naming both
-// the tool the admin wrote and the group that references it. The row
-// must be actionable — the admin should be able to grep their YAML
-// for either identifier.
+// One unknown tool → one error row naming both the tool and the group.
 func TestValidatePolicyToolNames_OneUnknown_ReportsToolAndGroup(t *testing.T) {
 	mgr := validateTestManager(t, "list-queues")
 	cfg := config.ToolAuthorizationConfig{
@@ -134,13 +114,7 @@ func TestValidatePolicyToolNames_OneUnknown_ReportsToolAndGroup(t *testing.T) {
 	}
 }
 
-// TestValidatePolicyToolNames_SameUnknownAcrossGroups_DedupedToOneRow
-// covers the dedup discipline: one typo referenced across N groups
-// produces one row, not N rows. Without dedup, an admin whose group
-// list references a common typo would see the same error N times —
-// noise that scales with grant count instead of with bug count. The
-// referencing groups must appear alphabetized on the single row so
-// the admin can fix each spot without re-reading the message.
+// Same typo across N groups → one deduped row; groups alphabetized.
 func TestValidatePolicyToolNames_SameUnknownAcrossGroups_DedupedToOneRow(t *testing.T) {
 	mgr := validateTestManager(t, "list-queues")
 	cfg := config.ToolAuthorizationConfig{
@@ -170,10 +144,7 @@ func TestValidatePolicyToolNames_SameUnknownAcrossGroups_DedupedToOneRow(t *test
 	}
 }
 
-// TestValidatePolicyToolNames_MultipleUnknowns_AlphabeticalOrder pins
-// the determinism operators need to diff startup logs across
-// environments and process restarts. Go map iteration is
-// non-deterministic; the validator must sort before emitting.
+// Multiple unknown tools → rows alphabetized (deterministic across restarts).
 func TestValidatePolicyToolNames_MultipleUnknowns_AlphabeticalOrder(t *testing.T) {
 	mgr := validateTestManager(t)
 	cfg := config.ToolAuthorizationConfig{
@@ -198,12 +169,7 @@ func TestValidatePolicyToolNames_MultipleUnknowns_AlphabeticalOrder(t *testing.T
 	}
 }
 
-// TestValidatePolicyToolNames_ListBrokersGrant_WarnsNotError covers
-// the exempt-tool disclosure: an admin grant of list-brokers is
-// legal (list-brokers is in the known-name union) but inert —
-// list-brokers is structurally exempt. The operator sees a WARN
-// naming the redundant grant; the function returns nil so startup
-// proceeds.
+// list-brokers grant → WARN, not error; startup proceeds.
 func TestValidatePolicyToolNames_ListBrokersGrant_WarnsNotError(t *testing.T) {
 	buf, cleanup := captureSlog(t)
 	defer cleanup()
@@ -223,21 +189,13 @@ func TestValidatePolicyToolNames_ListBrokersGrant_WarnsNotError(t *testing.T) {
 	if len(warns) != 1 {
 		t.Fatalf("expected exactly 1 WARN line about list-brokers, got %d: %s", len(warns), buf.String())
 	}
-	// The WARN must name the referencing group so the admin can find
-	// the inert grant in their YAML.
+	// WARN must name the referencing group so the admin can find it.
 	if !strings.Contains(buf.String(), "Ops") {
 		t.Errorf("WARN missing referencing group name Ops: %s", buf.String())
 	}
 }
 
-// TestValidatePolicyToolNames_UnknownsAndListBrokers_BothSurface
-// covers the interaction: a config with BOTH real typos AND
-// list-brokers grants must surface both signals — the error return
-// blocks startup for the typo, and the WARN separately informs the
-// admin their list-brokers grant is inert. A regression that
-// suppressed one when the other fired would either mask a security-
-// relevant typo or silently accept an inert grant the admin should
-// know about.
+// Typo + list-brokers grant on one config → both surfaces fire independently.
 func TestValidatePolicyToolNames_UnknownsAndListBrokers_BothSurface(t *testing.T) {
 	buf, cleanup := captureSlog(t)
 	defer cleanup()
@@ -264,13 +222,7 @@ func TestValidatePolicyToolNames_UnknownsAndListBrokers_BothSurface(t *testing.T
 	}
 }
 
-// TestValidatePolicyToolNames_CaseMismatchIsUnknown pins case-
-// sensitive comparison against list-brokers. Silent case-folding
-// would change security semantics: "List-Brokers" (title case) is
-// not the exempt tool, so it must produce an unknown-tool error
-// rather than a silent WARN. Anywhere in RBAC where a string
-// comparison could accidentally case-fold, an admin's YAML typo
-// changes access outcomes without the admin noticing.
+// Case-mismatched "List-Brokers" is unknown (not exempt) — no silent case-folding.
 func TestValidatePolicyToolNames_CaseMismatchIsUnknown(t *testing.T) {
 	buf, cleanup := captureSlog(t)
 	defer cleanup()
@@ -295,12 +247,7 @@ func TestValidatePolicyToolNames_CaseMismatchIsUnknown(t *testing.T) {
 	}
 }
 
-// TestValidatePolicyToolNames_EmptyAccessLevelGroups_ReturnsNil
-// covers the nil/empty edge: a config whose AccessLevelGroups is nil
-// or empty must return nil cleanly. In production this state is
-// blocked by the config validator upstream, but the function must
-// not panic if reached — same fail-safe posture as elsewhere in the
-// RBAC path.
+// Nil or empty AccessLevelGroups → nil, no log output (fail-safe).
 func TestValidatePolicyToolNames_EmptyAccessLevelGroups_ReturnsNil(t *testing.T) {
 	mgr := validateTestManager(t, "get-broker-status")
 	cases := []struct {

@@ -470,29 +470,17 @@ func newTokenExchanger(oauthCfg *config.BrokerOAuthConfig) (*tokenexchange.Excha
 	return exchanger, nil
 }
 
-// buildToolPolicy is the single, testable decision point for whether the
-// server should run with tool authorization and, if so, which compiled
-// Policy to use. Extracted from main so the invariant "gate enabled ⟺
-// returned policy is non-nil" is a postcondition of a named function
-// rather than a convention scattered across startup wiring — same
-// technique used for buildRootHandler and buildMCPEndpoint so the
-// assembled shape is asserted against real code rather than a hand-
-// rebuilt copy.
+// buildToolPolicy is the single, tested decision point for whether the server
+// runs with tool authorization and which compiled Policy to use. Extracted so
+// the invariant "gate enabled ⟺ returned policy is non-nil" is a
+// postcondition of a named function rather than folklore scattered across
+// startup.
 //
-// Return contract:
-//
-//   - Gate off (config.ToolAuthorizationEnabled(cfg) == false): returns
-//     (nil, nil). RegisterWithServer receives nil and skips the wrapper.
-//   - Gate on, NewPolicy succeeds: returns (policy, nil). RegisterWithServer
-//     composes withAuthorization on every registered tool.
-//   - Gate on, NewPolicy fails: returns (nil, err). Caller must fail
-//     startup — a partial RBAC state must never reach the request path.
-//
-// A non-nil policy is never returned when the gate is off. main's
-// fail-closed guard immediately after this call asserts the mirror
-// invariant (gate on ⟹ policy non-nil) so any future refactor that
-// breaks this function's contract aborts startup rather than silently
-// bypasses authorization on every OAuth request.
+// Returns (nil, nil) when the gate is off, (policy, nil) on success,
+// (nil, err) on compilation failure — callers must fail startup on the last.
+// Main's fail-closed guard immediately after this call asserts the mirror
+// direction so any future refactor that breaks the postcondition aborts
+// startup rather than silently bypassing authorization.
 func buildToolPolicy(cfg *config.ServerConfig) (*authz.Policy, error) {
 	if !config.ToolAuthorizationEnabled(cfg) {
 		return nil, nil
@@ -685,14 +673,10 @@ func main() {
 	registerMixedTools(mgr)
 
 	// Compile the tool-authorization policy. buildToolPolicy owns the
-	// gate-and-compile decision so the "enabled ⟺ policy non-nil"
-	// invariant is a named, tested postcondition of one function rather
-	// than a convention scattered across main. RegisterWithServer still
-	// receives a *authz.Policy that is nil iff RBAC is off; the fail-
-	// closed check below guards against a future refactor breaking the
-	// invariant (e.g. gate flipped on but constructor accidentally
-	// skipped) — silent fail-open on a security switch is exactly the
-	// SOL-149989 failure class this feature exists to prevent.
+	// gate-and-compile decision so the "enabled ⟺ policy non-nil" invariant
+	// is a tested postcondition of one function. The guard below defends
+	// against a future refactor breaking that postcondition — silent
+	// fail-open on a security switch is the SOL-149989 failure class.
 	policy, err := buildToolPolicy(cfg)
 	if err != nil {
 		slog.Error("tool authorization startup failed", slog.String("error", err.Error()))
@@ -707,23 +691,15 @@ func main() {
 	slog.Info("tool registration complete",
 		slog.Bool("enable_write_tools", cfg.EnableWriteTools))
 
-	// list-brokers is a discovery tool registered directly on the MCP
-	// server (it doesn't need broker resolution or the ToolManager pipeline).
-	// It also does not compose withAuthorization — the exemption is
-	// structural: RegisterListBrokers takes no policy argument and every
-	// authenticated caller keeps discovery regardless of the RBAC state.
+	// list-brokers is registered directly (no broker resolution needed) and
+	// takes no policy — the RBAC exemption is expressed structurally at this
+	// API surface.
 	tools.RegisterListBrokers(server, pool)
 
-	// Validate every configured tool name against the full registered
-	// handler set + list-brokers, now that both registrations have
-	// populated it. A typo in the admin's YAML would silently fail to
-	// grant what the admin thinks — an admin intending to grant
-	// delete-queue-messages who writes delete-que-messages would see
-	// the grant simply not take effect at request time, with no signal
-	// anywhere that the config is wrong. Catching that at startup is
-	// fatal by design: refuse to accept any request under a config
-	// whose grants do not mean what the admin thinks they mean.
-	// Skipped when RBAC is off.
+	// Validate every configured tool name now that both registrations have
+	// populated mgr. An admin typo would silently produce a grant that never
+	// takes effect at request time; catching it at startup is fatal by
+	// design. Skipped when RBAC is off.
 	if policy != nil {
 		if err := tools.ValidatePolicyToolNames(*cfg.MCPClientAuth.ToolAuthorization, mgr); err != nil {
 			slog.Error("tool authorization startup failed", slog.String("error", err.Error()))
@@ -732,13 +708,10 @@ func main() {
 		slog.Info("tool authorization is enabled",
 			slog.Any("policy", policy))
 	} else {
-		// Symmetric announcement: name the reason so a restart's startup
-		// log unambiguously records the RBAC posture. The config
-		// validator rejects a tool_authorization block outside oauth
-		// mode and rejects an oauth-mode block that omits the enabled
-		// key, so at this point exactly two disabled-paths are
-		// possible: auth mode is not oauth (block absent by contract),
-		// or auth mode is oauth and enabled is explicitly false.
+		// Announce the RBAC posture with the reason so startup logs are
+		// unambiguous. Config validator rejects a block outside oauth mode
+		// and requires enabled to be set in oauth mode, so exactly two
+		// disabled paths remain: non-oauth mode, or oauth with enabled:false.
 		if cfg.MCPClientAuth.Mode == config.AuthModeOAuth {
 			slog.Info("tool authorization is disabled (enabled=false in config)")
 		} else {

@@ -115,24 +115,16 @@ func stampCorrelationID(ctx context.Context, result *mcp.CallToolResult) {
 }
 
 // RegisterWithServer registers all tools from the ToolManager with the MCP
-// server. For each handler, it builds an mcp.Tool from the handler's Metadata
-// (with the broker parameter injected into the input schema) and creates a
-// handler closure that delegates to ToolManager.CallTool.
+// server. For each handler it builds an mcp.Tool (with the broker parameter
+// injected) and a closure that delegates to ToolManager.CallTool. This is
+// the translation boundary between our ToolHandler / Metadata vocabulary and
+// the SDK's mcp.Tool.
 //
-// This function is the translation boundary between the ToolManager's
-// ToolHandler / Metadata vocabulary and the SDK's mcp.Tool. Handlers and
-// the manager work in our own vocabulary; this is where it crosses over
-// to the SDK. RegisterListBrokers builds its own mcp.Tool independently
-// because list-brokers has no ToolHandler backing it (it's a discovery
-// primitive, not a broker operation).
-//
-// When policy is non-nil, each registered handler is additionally wrapped
-// with withAuthorization inside withRecovery, so every dispatch consults
-// the compiled tool-authorization policy before the tool runs. When policy
-// is nil, dispatch is byte-identical to the pre-RBAC path — no
-// authorization frame is composed and no per-request policy lookup fires.
-// The caller (cmd/server/main.go) owns the enable-gate; a nil argument is
-// how disablement is expressed to this function.
+// When policy is non-nil, each handler is wrapped with withAuthorization
+// inside withRecovery, so every dispatch consults the policy before the tool
+// runs. When policy is nil, no authorization frame is composed — the caller
+// (cmd/server/main.go) owns the enable-gate and expresses disablement here
+// as nil.
 func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerPool, enableWriteTools bool, policy *authz.Policy) {
 	type registration struct {
 		name    string
@@ -171,11 +163,9 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 			if err := json.Unmarshal(req.Params.Arguments, &params); err != nil {
 				return nil, fmt.Errorf("parsing tool arguments: %w", err)
 			}
-			// Extract per-invocation audit identity from the SDK request
-			// extras (SOL-149606). Both req.Extra and req.Extra.TokenInfo
-			// can be nil in disabled mode (no middleware) or under test
-			// scaffolding that constructs a bare CallToolRequest; the
-			// constructor handles nil cleanly.
+			// Per-invocation audit identity from the SDK extras (SOL-149606).
+			// Extra and TokenInfo can be nil in disabled mode or under test
+			// scaffolding; NewIdentityFromTokenInfo handles nil cleanly.
 			var info *sdkauth.TokenInfo
 			if req.Extra != nil {
 				info = req.Extra.TokenInfo
@@ -183,13 +173,9 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 			return mgr.CallTool(ctx, reg.name, params, NewIdentityFromTokenInfo(info))
 		}
 
-		// Compose the authorization wrapper INSIDE withRecovery so denials
-		// inherit correlation-ID stamping and panic containment. When
-		// policy is nil, no wrapper is composed and the outer withRecovery
-		// wraps callToolHandler directly — dispatch is byte-identical to
-		// the pre-RBAC path. list-brokers is exempt structurally: it
-		// registers via RegisterListBrokers, which never receives a policy
-		// argument and never composes withAuthorization.
+		// Compose withAuthorization INSIDE withRecovery so denials inherit
+		// correlation-ID stamping and panic containment. Nil policy skips
+		// the wrapper entirely — dispatch is byte-identical to pre-RBAC.
 		if policy != nil {
 			callToolHandler = withAuthorization(policy, reg.name, callToolHandler)
 		}

@@ -28,16 +28,11 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// The wrapper tests exercise withAuthorization in isolation — no MCP SDK
-// transport loop, no ToolManager pipeline. Each test drives the wrapper
-// with a hand-built *mcp.CallToolRequest and asserts on the returned
-// *mcp.CallToolResult, whether the stub `next` handler ran, and the
-// slog "tool authorization" audit line the operator sees.
+// These tests exercise withAuthorization in isolation. Each drives a
+// hand-built request and asserts on the returned result, whether the stub
+// `next` ran, and the emitted "tool authorization" slog line.
 
-// captureSlog replaces slog.Default with a JSON handler writing to buf,
-// returning the buffer plus a cleanup func the test defers. The audit
-// line is the operator's window; JSON output lets tests read exact
-// field values without regex-fragility.
+// captureSlog swaps slog.Default for a JSON handler writing to buf.
 func captureSlog(t *testing.T) (*bytes.Buffer, func()) {
 	t.Helper()
 	buf := &bytes.Buffer{}
@@ -46,8 +41,7 @@ func captureSlog(t *testing.T) (*bytes.Buffer, func()) {
 	return buf, func() { slog.SetDefault(prev) }
 }
 
-// authzLogLines returns every JSON log line in buf whose msg is
-// "tool authorization" — the audit surface the wrapper emits.
+// authzLogLines returns every "tool authorization" JSON log line in buf.
 func authzLogLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	t.Helper()
 	var out []map[string]any
@@ -66,10 +60,8 @@ func authzLogLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	return out
 }
 
-// policyGranting builds a real *authz.Policy that grants each tool in
-// tools to each group in groups. The wrapper's tests use a real Policy
-// (not a mock) so drift between wrapper and Policy surfaces at test
-// time.
+// policyGranting builds a real *authz.Policy granting each tool to each
+// group. Tests use a real Policy so wrapper/policy drift surfaces here.
 func policyGranting(t *testing.T, groups []string, tools ...string) *authz.Policy {
 	t.Helper()
 	access := make(map[string][]string, len(groups))
@@ -85,8 +77,7 @@ func policyGranting(t *testing.T, groups []string, tools ...string) *authz.Polic
 	return p
 }
 
-// emptyPolicy builds a policy with no grants. Every Authorize call
-// returns Allowed=false.
+// emptyPolicy builds a policy with no grants — every Authorize returns deny.
 func emptyPolicy(t *testing.T) *authz.Policy {
 	t.Helper()
 	p, err := authz.NewPolicy(config.ToolAuthorizationConfig{
@@ -98,9 +89,8 @@ func emptyPolicy(t *testing.T) *authz.Policy {
 	return p
 }
 
-// requestWithGroups builds a *mcp.CallToolRequest carrying the given
-// groups under the SDK-sanctioned Extra key. Mirrors what the auth
-// middleware writes on the enabled path.
+// requestWithGroups builds a request carrying groups under the Extra key
+// the middleware writes on the enabled path.
 func requestWithGroups(groups []string) *mcp.CallToolRequest {
 	return &mcp.CallToolRequest{
 		Extra: &mcp.RequestExtra{
@@ -114,9 +104,8 @@ func requestWithGroups(groups []string) *mcp.CallToolRequest {
 	}
 }
 
-// requestMissingGroupsClaim builds a *mcp.CallToolRequest with a
-// TokenInfo but no groups key in Extra — the "IdP omitted the claim"
-// case the middleware surfaces by leaving the key absent.
+// requestMissingGroupsClaim builds a request with TokenInfo but no groups
+// key in Extra — the "IdP omitted the claim" surface.
 func requestMissingGroupsClaim() *mcp.CallToolRequest {
 	return &mcp.CallToolRequest{
 		Extra: &mcp.RequestExtra{
@@ -129,8 +118,7 @@ func requestMissingGroupsClaim() *mcp.CallToolRequest {
 }
 
 // recordingHandler is a stub `next` handler that records every call and
-// returns a fixed sentinel result. Tests use its counter to assert
-// whether the wrapper dispatched or short-circuited.
+// returns a fixed sentinel result.
 type recordingHandler struct {
 	calls    int
 	returned *mcp.CallToolResult
@@ -153,10 +141,7 @@ func (r *recordingHandler) handler() mcp.ToolHandler {
 
 // --- Allow path ---
 
-// TestWithAuthorization_Allow_PassesThroughToNext pins the caller-facing
-// contract on the allow branch: the wrapper returns what next returned
-// (same pointer) and next runs exactly once. Any drift here breaks
-// every RBAC deployment's happy path.
+// Allow: next runs exactly once, wrapper returns its result pointer-identical.
 func TestWithAuthorization_Allow_PassesThroughToNext(t *testing.T) {
 	rec := newRecordingHandler()
 	wrapped := withAuthorization(
@@ -177,13 +162,8 @@ func TestWithAuthorization_Allow_PassesThroughToNext(t *testing.T) {
 	}
 }
 
-// TestWithAuthorization_Allow_EmitsInfoAuditWithDistinctDecision pins
-// the operator-facing contract: allow decisions emit an INFO
-// "tool authorization" audit line naming the tool and carrying a
-// decision value distinguishable from deny and missing-claim. The
-// exact decision string schema is finalized in the audit-refinement
-// follow-up ticket; this test locks distinguishability, not the
-// literal.
+// Allow: one INFO "tool authorization" line; decision distinguishable from
+// deny/missing (distinguishability, not literal — schema is v1 placeholder).
 func TestWithAuthorization_Allow_EmitsInfoAuditWithDistinctDecision(t *testing.T) {
 	buf, cleanup := captureSlog(t)
 	defer cleanup()
@@ -220,13 +200,8 @@ func TestWithAuthorization_Allow_EmitsInfoAuditWithDistinctDecision(t *testing.T
 
 // --- Deny path ---
 
-// TestWithAuthorization_Deny_ReturnsToolLevelErrorResult pins the
-// caller-facing distinction between tool-level errors and JSON-RPC
-// protocol errors: denials must return (*CallToolResult{IsError:true},
-// nil), not (nil, error). MCP clients treat a Go error return as a
-// session-level failure; the tool-level error result is what tells the
-// agent "the tool ran and produced an error outcome" — which is what
-// a policy denial is semantically.
+// Deny: returns (*CallToolResult{IsError:true}, nil) — a tool-level error the
+// agent surfaces, not a JSON-RPC error that kills the session.
 func TestWithAuthorization_Deny_ReturnsToolLevelErrorResult(t *testing.T) {
 	wrapped := withAuthorization(
 		emptyPolicy(t),
@@ -246,11 +221,8 @@ func TestWithAuthorization_Deny_ReturnsToolLevelErrorResult(t *testing.T) {
 	}
 }
 
-// TestWithAuthorization_Deny_ResultShapeAndMessage pins the caller-
-// facing payload: StructuredContent carries error+retryable with the
-// uniform authzDeniedMessage, and TextContent echoes the same message.
-// The retryable=false value tells the agent not to loop on the same
-// denied call.
+// Deny: StructuredContent carries error+retryable, TextContent echoes the
+// message. retryable=false tells the agent not to loop on the denial.
 func TestWithAuthorization_Deny_ResultShapeAndMessage(t *testing.T) {
 	wrapped := withAuthorization(
 		emptyPolicy(t),
@@ -281,9 +253,7 @@ func TestWithAuthorization_Deny_ResultShapeAndMessage(t *testing.T) {
 	}
 }
 
-// TestWithAuthorization_Deny_DoesNotCallNext is the security invariant:
-// a denied call must not reach the tool handler. If next ran on deny,
-// the tool's side effects would happen despite the denial.
+// Deny security invariant: next is not called; the tool never runs.
 func TestWithAuthorization_Deny_DoesNotCallNext(t *testing.T) {
 	rec := newRecordingHandler()
 	wrapped := withAuthorization(emptyPolicy(t), "delete-queue", rec.handler())
@@ -295,9 +265,7 @@ func TestWithAuthorization_Deny_DoesNotCallNext(t *testing.T) {
 	}
 }
 
-// TestWithAuthorization_Deny_EmitsInfoAuditWithDistinctDecision pins
-// the operator's ability to distinguish deny events from allow and
-// missing-claim events in the log stream.
+// Deny: INFO audit line with decision distinguishable from allow and missing.
 func TestWithAuthorization_Deny_EmitsInfoAuditWithDistinctDecision(t *testing.T) {
 	buf, cleanup := captureSlog(t)
 	defer cleanup()
@@ -326,12 +294,8 @@ func TestWithAuthorization_Deny_EmitsInfoAuditWithDistinctDecision(t *testing.T)
 
 // --- Missing-claim path ---
 
-// TestWithAuthorization_MissingClaim_ReturnsToolLevelErrorResult pins
-// the same tool-level-error contract as the deny path for the missing-
-// claim branch. The two branches share result-shape code but the
-// upstream trigger differs — locking both preserves the wrapper's
-// two-branch structure against a refactor that accidentally collapses
-// one into the other.
+// Missing-claim: same tool-level-error contract as deny, but with the
+// missing-claim message and shape.
 func TestWithAuthorization_MissingClaim_ReturnsToolLevelErrorResult(t *testing.T) {
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "get-broker-status"),
@@ -359,10 +323,7 @@ func TestWithAuthorization_MissingClaim_ReturnsToolLevelErrorResult(t *testing.T
 	}
 }
 
-// TestWithAuthorization_MissingClaim_DoesNotCallNext is the security
-// invariant for the missing-claim branch: an IdP misconfiguration
-// (token missing the groups claim) must not silently succeed as if
-// the caller were in every group.
+// Missing-claim security invariant: next is not called on IdP misconfig.
 func TestWithAuthorization_MissingClaim_DoesNotCallNext(t *testing.T) {
 	rec := newRecordingHandler()
 	wrapped := withAuthorization(
@@ -378,10 +339,8 @@ func TestWithAuthorization_MissingClaim_DoesNotCallNext(t *testing.T) {
 	}
 }
 
-// TestWithAuthorization_MissingClaim_EmitsDistinguishableDecision pins
-// the operator's ability to tell "IdP misconfigured (no groups
-// claim)" from "caller's groups don't grant this tool" — two failure
-// classes requiring different remediations.
+// Missing-claim: decision distinguishable from plain deny so operators can
+// tell IdP misconfig from grant miss.
 func TestWithAuthorization_MissingClaim_EmitsDistinguishableDecision(t *testing.T) {
 	buf, cleanup := captureSlog(t)
 	defer cleanup()
@@ -414,11 +373,7 @@ func TestWithAuthorization_MissingClaim_EmitsDistinguishableDecision(t *testing.
 
 // --- Nil/absent TokenInfo path ---
 
-// TestWithAuthorization_NilTokenInfo_TreatsAsMissingClaim covers the
-// bare-CallToolRequest case that test scaffolding and disabled-auth
-// deployments hit: req.Extra or req.Extra.TokenInfo is nil. The
-// wrapper must treat this as missing-claim rather than crashing or
-// silently allowing.
+// Nil Extra or nil TokenInfo → treated as missing-claim (no crash, no bypass).
 func TestWithAuthorization_NilTokenInfo_TreatsAsMissingClaim(t *testing.T) {
 	cases := []struct {
 		name string
@@ -455,11 +410,8 @@ func TestWithAuthorization_NilTokenInfo_TreatsAsMissingClaim(t *testing.T) {
 
 // --- Message constants ---
 
-// TestAuthzMessages_IdenticalForV1 locks in the v1 design decision
-// that deny and missing-claim callers see the same string. Any drift
-// (one message adds detail, the other doesn't) would leak the class
-// of denial to the caller — exactly the caller-side disclosure
-// discipline that keeps configuration metadata operator-only.
+// v1 messages are identical — any drift would leak the denial class
+// to the caller.
 func TestAuthzMessages_IdenticalForV1(t *testing.T) {
 	if authzDeniedMessage != authzMissingClaimMessage {
 		t.Errorf("v1 requires identical caller-facing messages; got denied=%q, missing=%q",
@@ -472,13 +424,8 @@ func TestAuthzMessages_IdenticalForV1(t *testing.T) {
 
 // --- Precondition ---
 
-// TestWithAuthorization_NilPolicy_Panics locks the fail-loud
-// precondition: composing the wrapper with a nil policy is a
-// programmer error. If the wrapper silently allowed on nil, every
-// RBAC-enabled deployment could accidentally bypass authorization
-// after a composition-site refactor — the exact silent-fail-open
-// class the feature exists to prevent. Panic + outer withRecovery
-// converts this to a visible 500 rather than a security regression.
+// Nil policy is a precondition violation — wrapper must panic (not silently
+// allow). Outer withRecovery converts the panic to a visible 500.
 func TestWithAuthorization_NilPolicy_Panics(t *testing.T) {
 	wrapped := withAuthorization(nil, "get-broker-status", newRecordingHandler().handler())
 
