@@ -29,11 +29,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// Caller-facing messages. Deliberately identical in v1 so a caller cannot
-// distinguish "your groups don't grant this" from "your token has no groups
-// claim" — that distinction is admin-configuration metadata. Kept as separate
-// identifiers so a future evolution can amend one without touching the other;
-// the audit log distinguishes the outcomes via the decision field.
+// Caller-facing messages. Identical in v1 so a caller cannot distinguish
+// deny from missing-claim — that distinction is admin-configuration
+// metadata, kept on the server-side audit event instead.
 const (
 	authzDeniedMessage       = "You are not authorized to use this tool."
 	authzMissingClaimMessage = "You are not authorized to use this tool."
@@ -58,28 +56,13 @@ const matchedGroupsBound = 32
 // tool-level error result and skips next.
 //
 // Precondition: policy must be non-nil. The composition site
-// (RegisterWithServer) guarantees this by only composing the wrapper on the
-// non-nil-policy branch. A nil policy reaching here is a programmer error
-// that must not silently bypass authorization; the outer withRecovery catches
-// the resulting panic.
+// (RegisterWithServer) enforces this by only wrapping when RBAC is on.
+// A nil arriving here is a programmer error; the outer withRecovery
+// contains the resulting panic.
 //
-// Panic containment (from Authorize or the audit call site) is owned by the
-// outer withRecovery, so this closure reads as straight-line request logic.
-//
-// Audit event: one "tool authorization" slog record per invocation, allow or
-// deny. Correlation ID is stamped by the correlation slog handler from ctx;
-// the call site does not add it manually. Level split: INFO on allow, WARN
-// on both deny outcomes (deny is not an error but is a notable event; a
-// missing groups claim is a configuration event, not a system failure).
-// Decision axis is a two-field split (decision + decision_reason) so
-// operators can filter deny clusters without conflating the "not permitted"
-// case with the "misconfigured token" case.
-//
-// configuredGroupsClaimName is the admin-authored JWT claim name the
-// resolver was told to look for; the missing-claim event names it under
-// expected_claim so operators reading the log can jump straight to the IdP
-// side. It passes through sanitize.Claim before emission because it is an
-// admin string reaching a log record.
+// Correlation ID is stamped onto each emitted record by the correlation
+// slog handler reading it from ctx — do NOT add correlation_id at this
+// call site, or the record will carry two.
 func withAuthorization(policy *authz.Policy, toolName string, configuredGroupsClaimName string, next mcp.ToolHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		var info *sdkauth.TokenInfo
@@ -90,9 +73,9 @@ func withAuthorization(policy *authz.Policy, toolName string, configuredGroupsCl
 
 		groups, present := requestGroups(req)
 		if !present {
-			// Missing-claim: no matched_groups fields on this outcome — the
-			// caller had no groups slice at all, so emitting empty ones would
-			// be dead noise. expected_claim carries the diagnostic instead.
+			// No matched_groups* fields on missing-claim — the caller had
+			// no groups slice, so emitting empty ones would blur the deny
+			// signal. expected_claim carries the diagnostic instead.
 			slog.LogAttrs(ctx, slog.LevelWarn, "tool authorization",
 				slog.String("tool", toolName),
 				slog.String("decision", "denied"),
@@ -104,12 +87,9 @@ func withAuthorization(policy *authz.Policy, toolName string, configuredGroupsCl
 
 		decision := policy.Authorize(groups, toolName)
 		if !decision.Allowed {
-			// Deny: matched_groups is always [] and total is always 0 by
-			// construction (a match would have flipped Allowed). Keeping the
-			// same three fields on deny as on allow gives SIEM parsers a
-			// uniform schema across both outcomes; the truncation bool is
-			// necessarily false. The caller's full extracted groups list is
-			// deliberately NOT logged here — see PR description.
+			// The caller's actual groups are deliberately NOT logged on
+			// deny — see PR description "audit-log disclosure discipline"
+			// for the separation-of-duties rationale.
 			slog.LogAttrs(ctx, slog.LevelWarn, "tool authorization",
 				slog.String("tool", toolName),
 				slog.String("decision", "denied"),
@@ -133,11 +113,9 @@ func withAuthorization(policy *authz.Policy, toolName string, configuredGroupsCl
 	}
 }
 
-// boundMatchedGroups sanitizes each element of matched and applies the
-// matchedGroupsBound cap, preserving the order Authorize returned. Returns
-// the bounded slice, the true count before capping, and whether truncation
-// fired. A nil or empty input produces an empty (non-nil) slice so the slog
-// attribute renders as [] rather than null.
+// boundMatchedGroups sanitizes each element and applies matchedGroupsBound,
+// preserving Authorize's ordering. Returns the bounded slice, the true
+// pre-cap count, and whether truncation fired.
 func boundMatchedGroups(matched []string) (bounded []string, total int, truncated bool) {
 	total = len(matched)
 	limit := total
