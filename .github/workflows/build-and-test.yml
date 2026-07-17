@@ -28,6 +28,9 @@ jobs:
     with:
       use_vault: true
       config_file: '.github/workflow-config.json'
+    secrets:
+      # Vault address is injected from an org/repo secret, not committed to the repo.
+      VAULT_URL: ${{ secrets.VAULT_URL }}
 
   lint:
     runs-on: ubuntu-latest

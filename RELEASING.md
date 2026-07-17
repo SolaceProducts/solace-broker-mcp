@@ -96,6 +96,7 @@ Before tagging:
 
 1. Confirm `main` is green: `gh run list --branch main --limit 1`.
 2. Update `CHANGELOG.md` on `main`: move the `[Unreleased]` items into a new version section and update the comparison links at the bottom.
+3. Regenerate the third-party license inventory from the toolchain: `go-licenses report ./cmd/server` supplies the module, version, and license data for `THIRD_PARTY_LICENSES.md`. Reconcile it against the FOSSA scan, which remains the authoritative check.
 
 After pushing the tag:
 
