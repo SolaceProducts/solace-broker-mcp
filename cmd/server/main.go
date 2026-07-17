@@ -470,6 +470,36 @@ func newTokenExchanger(oauthCfg *config.BrokerOAuthConfig) (*tokenexchange.Excha
 	return exchanger, nil
 }
 
+// buildToolPolicy is the single, testable decision point for whether the
+// server should run with tool authorization and, if so, which compiled
+// Policy to use. Extracted from main so the invariant "gate enabled ⟺
+// returned policy is non-nil" is a postcondition of a named function
+// rather than a convention scattered across startup wiring — same
+// technique used for buildRootHandler and buildMCPEndpoint so the
+// assembled shape is asserted against real code rather than a hand-
+// rebuilt copy.
+//
+// Return contract:
+//
+//   - Gate off (config.ToolAuthorizationEnabled(cfg) == false): returns
+//     (nil, nil). RegisterWithServer receives nil and skips the wrapper.
+//   - Gate on, NewPolicy succeeds: returns (policy, nil). RegisterWithServer
+//     composes withAuthorization on every registered tool.
+//   - Gate on, NewPolicy fails: returns (nil, err). Caller must fail
+//     startup — a partial RBAC state must never reach the request path.
+//
+// A non-nil policy is never returned when the gate is off. main's
+// fail-closed guard immediately after this call asserts the mirror
+// invariant (gate on ⟹ policy non-nil) so any future refactor that
+// breaks this function's contract aborts startup rather than silently
+// bypasses authorization on every OAuth request.
+func buildToolPolicy(cfg *config.ServerConfig) (*authz.Policy, error) {
+	if !config.ToolAuthorizationEnabled(cfg) {
+		return nil, nil
+	}
+	return authz.NewPolicy(*cfg.MCPClientAuth.ToolAuthorization)
+}
+
 func main() {
 	if len(os.Args) == 2 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
 		fmt.Println(version.Version())
@@ -654,18 +684,23 @@ func main() {
 	registerSEMPv1Tools(mgr)
 	registerMixedTools(mgr)
 
-	// Compile the tool-authorization policy when the composition-time gate
-	// says RBAC is on. NewPolicy runs BEFORE RegisterWithServer because the
-	// wrapper it composes needs the compiled *Policy. When the gate is off,
-	// policy stays nil and RegisterWithServer skips the wrapper — dispatch
-	// is byte-identical to the pre-RBAC path.
-	var policy *authz.Policy
-	if config.ToolAuthorizationEnabled(cfg) {
-		policy, err = authz.NewPolicy(*cfg.MCPClientAuth.ToolAuthorization)
-		if err != nil {
-			slog.Error("tool authorization startup failed", slog.String("error", err.Error()))
-			os.Exit(1)
-		}
+	// Compile the tool-authorization policy. buildToolPolicy owns the
+	// gate-and-compile decision so the "enabled ⟺ policy non-nil"
+	// invariant is a named, tested postcondition of one function rather
+	// than a convention scattered across main. RegisterWithServer still
+	// receives a *authz.Policy that is nil iff RBAC is off; the fail-
+	// closed check below guards against a future refactor breaking the
+	// invariant (e.g. gate flipped on but constructor accidentally
+	// skipped) — silent fail-open on a security switch is exactly the
+	// SOL-149989 failure class this feature exists to prevent.
+	policy, err := buildToolPolicy(cfg)
+	if err != nil {
+		slog.Error("tool authorization startup failed", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	if config.ToolAuthorizationEnabled(cfg) && policy == nil {
+		slog.Error("tool authorization is enabled in config but no policy was compiled — refusing to start rather than silently bypass authorization")
+		os.Exit(1)
 	}
 
 	tools.RegisterWithServer(mgr, server, pool, cfg.EnableWriteTools, policy)
