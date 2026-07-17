@@ -36,7 +36,11 @@ create_fixtures() {
 # 3s→30s backoff) into a fail-fast test budget so the unreachable-broker
 # case doesn't hang the smoke for minutes. Scoped to this suite because
 # other suites may depend on the longer backoff to smooth over broker
-# warm-up or transient blips.
+# warm-up or transient blips. request_timeout_duration is deliberately
+# left at its default: semp: is a global block that also applies to
+# broker-a/broker-b, and broker-dead's 127.0.0.1:1 returns ECONNREFUSED
+# immediately regardless of the timeout — the retry budget alone gives
+# fail-fast, without shortening happy-path requests on slow CI.
 write_config() {
     local config_file="$1"
     _lib_write_config "$config_file"
@@ -62,7 +66,6 @@ semp:
   retries: 2
   retry_min_interval: 500ms
   retry_max_interval: 1s
-  request_timeout_duration: 3s
 EOF
     log_info "Appended negative-path aliases (broker-bad-creds, broker-dead) and test retry budget to $config_file"
 }
