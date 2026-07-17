@@ -19,6 +19,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -105,7 +106,7 @@ func createStaticTokenVerifier(expectedToken string) sdkauth.TokenVerifier {
 	return func(ctx context.Context, token string, req *http.Request) (*sdkauth.TokenInfo, error) {
 		// Use constant-time comparison to prevent timing attacks
 		if subtle.ConstantTimeCompare([]byte(token), []byte(expectedToken)) != 1 {
-			return nil, sdkauth.ErrInvalidToken
+			return nil, errVerificationFailed
 		}
 		return &sdkauth.TokenInfo{
 			Scopes:     []string{},
@@ -145,99 +146,49 @@ func createOIDCTokenVerifier(cfg *config.ServerConfig, httpClient *http.Client) 
 	})
 
 	return func(ctx context.Context, token string, req *http.Request) (*sdkauth.TokenInfo, error) {
-		// Verify JWT signature and standard claims (iss, aud, exp)
 		idToken, err := verifier.Verify(ctx, token)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", sdkauth.ErrInvalidToken, err)
+			slog.Warn("token verification failed",
+				slog.String("error", err.Error()))
+			return nil, errVerificationFailed
 		}
 
-		// SINGLE claim decode.
-		//
-		// The claims payload is parsed exactly once, into
-		// map[string]json.RawMessage. All downstream extraction — the
-		// spec-defined identity claims AND the admin-configured groups
-		// claim — reads from this one view.
-		//
-		// This deliberately replaces the previous two-pass approach
-		// (typed struct + generic map). encoding/json v1 matches struct
-		// fields case-insensitively with last-match-wins semantics and
-		// folds ſ (U+017F) / K (U+212A) to s / k, while map keys match
-		// exactly. Two decodes of the same bytes could therefore
-		// disagree about which claims exist — a parser differential
-		// between the audit-log identity surface (SOL-149606) and the
-		// authz groups path. One parse means one interpretation; the
-		// exact, case-sensitive key lookup below matches RFC 7519's
-		// case-sensitive claim names and the remediation the MCP go-sdk
-		// itself applied in GHSA-wvj2-96wp-fq3f.
-		//
-		// Residual v1 limitation: exact-duplicate top-level keys still
-		// resolve last-wins silently. Both identity and groups now see
-		// the same winner, so no differential remains; encoding/json/v2
-		// (jsontext duplicate-name rejection) can close this fully once
-		// adopted.
+		// Single decode into map[string]json.RawMessage — identity and
+		// groups claims read from one parse, eliminating the parser
+		// differential that existed with the prior struct+map two-pass.
 		var raw map[string]json.RawMessage
 		if err := idToken.Claims(&raw); err != nil {
-			// FAIL CLOSED. Verification is not complete until the claims
-			// this server depends on are extracted and well-formed
-			// (RFC 8725 §3: reject the entire JWT when validation fails).
-			// The previous warn-and-continue produced authenticated
-			// requests with an empty UserID and blank audit identity.
-			return nil, fmt.Errorf("%w: decoding claims: %v", sdkauth.ErrInvalidToken, err)
+			slog.Warn("token claims undecodable",
+				slog.String("error", err.Error()))
+			return nil, errMalformedClaims
 		}
 
-		return buildTokenInfo(cfg, Claims{raw: raw}, idToken.Expiry)
+		info, err := buildTokenInfo(cfg, Claims{raw: raw}, idToken.Expiry)
+		if err != nil {
+			slog.Warn("token rejected",
+				slog.String("error", err.Error()))
+			return nil, sanitizeTokenError(err)
+		}
+		return info, nil
 	}, nil
 }
 
-// buildTokenInfo assembles the TokenInfo for a verified token from a single
-// decode of its claim bytes. Split from the verifier closure so the
-// extraction semantics (exact key match, fail-closed on malformed or missing
-// security-relevant claims) are unit-testable without an IdP.
+// buildTokenInfo assembles the TokenInfo for a verified token. Split from
+// the verifier closure so claim extraction is unit-testable without an IdP.
 //
-// Claim requirement profile (deliberate, spec-grounded — do not "fix" by
-// making everything required or everything lenient):
-//
-//   - Enforced upstream by the go-oidc verifier before this runs:
-//     signature, iss, aud, exp. Three of RFC 9068's required claims are
-//     therefore already mandatory in effect.
-//   - Hard-required here: sub, non-blank. Required by RFC 9068 §2.2 for
-//     OAuth access tokens, and the audit surface (SOL-149606) is
-//     meaningless without it. (RFC 7519 alone leaves sub optional; the
-//     access-token profile is the binding one for this server.)
-//   - Tolerated-absent, fatal-if-malformed: scope, client_id, jti.
-//     RFC 9068 requires client_id and jti, but widely deployed IdPs do
-//     not emit them on access tokens (Keycloak and Auth0's default
-//     profile use azp; Azure AD uses appid/azp), so hard-requiring them
-//     would reject stock deployments of real customer IdPs. A present
-//     claim with the wrong JSON type is still rejected: absence is a
-//     sparse token, malformation means the payload can no longer be
-//     safely interpreted. Scope, when present, must be a space-delimited
-//     string per RFC 6749 §3.3 / RFC 9068.
-//   - Groups (authz enabled): absent claim → no groups key → authz
-//     denies by default.
-//
-// Any fail-closed violation returns sdkauth.ErrInvalidToken.
+// Claim policy: sub is hard-required (RFC 9068 §2.2); scope, client_id,
+// jti are tolerated-absent but fatal-if-malformed (real IdPs often omit
+// them); groups absent → authz denies by default.
 func buildTokenInfo(cfg *config.ServerConfig, claims Claims, expiry time.Time) (*sdkauth.TokenInfo, error) {
 	sub, err := claims.String("sub")
 	if err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(sub) == "" {
-		// An authenticated principal with no visible subject is never a
-		// valid state: every audit row it generated would be anonymous.
-		// TrimSpace is used ONLY as a rejection predicate here — the
-		// stored UserID below is the exact claim bytes. Normalizing the
-		// value would conflate subjects the IdP considers distinct
-		// (RFC 7519 claims compare byte-for-byte), which is an identity
-		// mapping the IdP owns, not this server.
-		return nil, fmt.Errorf("%w: token has no subject", sdkauth.ErrInvalidToken)
+		// TrimSpace for rejection only — UserID stores the exact bytes.
+		return nil, errNoSubject
 	}
 
-	// Scope is a space-separated string per OAuth 2.0 (RFC 6749 §3.3).
-	// IdPs that emit an array here (e.g. some Azure AD / Keycloak
-	// configurations) previously caused a partially-populated struct plus
-	// a swallowed warning; now they are rejected explicitly so the
-	// misconfiguration surfaces at the door.
 	scopeStr, err := claims.String("scope")
 	if err != nil {
 		return nil, err
@@ -247,10 +198,6 @@ func buildTokenInfo(cfg *config.ServerConfig, claims Claims, expiry time.Time) (
 		scopes = strings.Split(scopeStr, " ")
 	}
 
-	// iss, client_id, and jti feed the per-invocation audit-log identity
-	// surface (SOL-149606). They are stashed in TokenInfo.Extra under the
-	// exact keys "iss", "client_id", "jti"; internal/tools/identity.go
-	// reads them by those keys. Drift-detection tests pin the allowlist.
 	iss, err := claims.String("iss")
 	if err != nil {
 		return nil, err
@@ -271,16 +218,9 @@ func buildTokenInfo(cfg *config.ServerConfig, claims Claims, expiry time.Time) (
 	}
 
 	if config.ToolAuthorizationEnabled(cfg) {
+		// GroupsClaimName is guaranteed non-nil here: config.validate
+		// defaults it to "groups" when the tool_authorization block is present.
 		name := *cfg.MCPClientAuth.ToolAuthorization.GroupsClaimName
-		// The admin-configured groups claim is hydrated lazily from THE
-		// SAME decoded view as the identity claims above, so the identity
-		// the audit log records and the groups the authz layer evaluates
-		// are by construction drawn from one interpretation of the token.
-		// ResolveGroups documents flat top-level lookup only (matching
-		// the broker's accessLevelGroupsClaimName stance), so exactly one
-		// claim is hydrated. Future consumers with different type needs
-		// get their own accessor method on Claims — never a per-consumer
-		// conversion loop here at the boundary.
 		val, exists, err := claims.Value(name)
 		if err != nil {
 			return nil, err
@@ -300,7 +240,6 @@ func buildTokenInfo(cfg *config.ServerConfig, claims Claims, expiry time.Time) (
 		Extra:      extra,
 	}, nil
 }
-
 
 // NewProtectedResourceMetadataHandler creates an HTTP handler that serves
 // OAuth 2.0 Protected Resource Metadata (RFC 9728) for the MCP server.

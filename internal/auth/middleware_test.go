@@ -21,6 +21,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1126,27 +1127,36 @@ func TestBuildTokenInfo(t *testing.T) {
 		}
 	})
 
-	t.Run("missing sub is rejected", func(t *testing.T) {
+	t.Run("missing sub is rejected with errNoSubject", func(t *testing.T) {
 		c := makeClaims(t, `{"iss": "https://idp.example.com"}`)
 		_, err := buildTokenInfo(baseCfg, c, time.Now().Add(time.Hour))
 		if err == nil {
 			t.Fatal("expected error for missing sub")
 		}
+		if !errors.Is(err, errNoSubject) {
+			t.Errorf("error = %v, want errNoSubject", err)
+		}
 	})
 
-	t.Run("blank sub is rejected", func(t *testing.T) {
+	t.Run("blank sub is rejected with errNoSubject", func(t *testing.T) {
 		c := makeClaims(t, `{"sub": "   "}`)
 		_, err := buildTokenInfo(baseCfg, c, time.Now().Add(time.Hour))
 		if err == nil {
 			t.Fatal("expected error for blank sub")
 		}
+		if !errors.Is(err, errNoSubject) {
+			t.Errorf("error = %v, want errNoSubject", err)
+		}
 	})
 
-	t.Run("scope with wrong type is rejected", func(t *testing.T) {
+	t.Run("scope with wrong type is rejected with errMalformedClaims", func(t *testing.T) {
 		c := makeClaims(t, `{"sub": "user-1", "scope": ["read", "write"]}`)
 		_, err := buildTokenInfo(baseCfg, c, time.Now().Add(time.Hour))
 		if err == nil {
 			t.Fatal("expected error for array scope")
+		}
+		if !errors.Is(err, errMalformedClaims) {
+			t.Errorf("error = %v, want errMalformedClaims", err)
 		}
 	})
 
@@ -1168,11 +1178,14 @@ func TestBuildTokenInfo(t *testing.T) {
 		}
 	})
 
-	t.Run("client_id with wrong type is rejected", func(t *testing.T) {
+	t.Run("client_id with wrong type is rejected with errMalformedClaims", func(t *testing.T) {
 		c := makeClaims(t, `{"sub": "user-1", "client_id": 42}`)
 		_, err := buildTokenInfo(baseCfg, c, time.Now().Add(time.Hour))
 		if err == nil {
 			t.Fatal("expected error for non-string client_id")
+		}
+		if !errors.Is(err, errMalformedClaims) {
+			t.Errorf("error = %v, want errMalformedClaims", err)
 		}
 	})
 }

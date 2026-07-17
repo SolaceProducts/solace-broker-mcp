@@ -18,8 +18,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-
-	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 )
 
 // Claims is the single decoded view of a verified token's payload — the
@@ -45,7 +43,7 @@ func (c Claims) String(key string) (string, error) {
 	}
 	var s string
 	if err := json.Unmarshal(msg, &s); err != nil {
-		return "", fmt.Errorf("%w: claim %q has unexpected type: %v", sdkauth.ErrInvalidToken, key, err)
+		return "", fmt.Errorf("%w: claim %q has unexpected type: %v", errMalformedClaims, key, err)
 	}
 	return s, nil
 }
@@ -67,7 +65,7 @@ func (c Claims) Value(key string) (val any, exists bool, err error) {
 		return nil, false, nil
 	}
 	if err := json.Unmarshal(msg, &val); err != nil {
-		return nil, true, fmt.Errorf("%w: claim %q is malformed: %v", sdkauth.ErrInvalidToken, key, err)
+		return nil, true, fmt.Errorf("%w: claim %q is malformed: %v", errMalformedClaims, key, err)
 	}
 	return val, true, nil
 }
