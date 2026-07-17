@@ -631,6 +631,7 @@ mcp_client_auth:
   issuer: "https://idp.example.com"
   audience: "mcp"
   resource_url: "https://mcp.example.com/mcp"
+
 tls_terminated_upstream: true
 ` + oauthTLSMatrixBroker
 	cfg, err := LoadConfig(writeTemp(t, yaml))
@@ -654,6 +655,7 @@ mcp_client_auth:
   issuer: "https://idp.example.com"
   audience: "mcp"
   resource_url: "https://mcp.example.com/mcp"
+
 tls_cert_file: "/tmp/cert.pem"
 tls_key_file: "/tmp/key.pem"
 ` + oauthTLSMatrixBroker
@@ -678,6 +680,7 @@ mcp_client_auth:
   issuer: "https://idp.example.com"
   audience: "mcp"
   resource_url: "https://mcp.example.com/mcp"
+
 tls_cert_file: "/tmp/cert.pem"
 tls_key_file: "/tmp/key.pem"
 tls_terminated_upstream: true
@@ -1164,6 +1167,7 @@ mcp_client_auth:
   issuer: "https://idp.example.com"
   audience: "solace-mcp"
   resource_url: "https://mcp.example.com"
+
 allow_insecure_broker_tls: true
 tls_terminated_upstream: true
 `
@@ -2053,6 +2057,7 @@ func TestLoadConfig_AuthMode_CaseInsensitive(t *testing.T) {
 				extra = `  issuer: "https://idp.example.com"
   audience: "mcp"
   resource_url: "https://mcp.example.com/mcp"
+
 tls_terminated_upstream: true`
 			}
 			yaml := `
@@ -3698,6 +3703,35 @@ brokers:
 	// this from silently living in production.
 	if !strings.Contains(out, "UNRELEASED FEATURE ENABLED") {
 		t.Errorf("expected UNRELEASED FEATURE ENABLED warning to fire when bypass is on, got:\n%s", out)
+	}
+}
+
+// TestLoadConfig_ToolAuthorization_FeatureFlagOff confirms that when
+// ENABLE_TOOL_AUTHORIZATION is unset (production default), the
+// tool_authorization YAML block is parsed but defaults and validation
+// are skipped entirely. Catches regressions where the
+// toolAuthorizationFeatureEnabled() gate is accidentally removed.
+func TestLoadConfig_ToolAuthorization_FeatureFlagOff(t *testing.T) {
+	// Deliberately NOT setting ENABLE_TOOL_AUTHORIZATION.
+	yaml := `
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"
+  tool_authorization: {}
+brokers:
+  dev:
+    url: "https://broker.example.com:943"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+tls_terminated_upstream: true
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("with feature flag off, config should load without error, got: %v", err)
 	}
 }
 

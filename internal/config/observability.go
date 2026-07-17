@@ -15,9 +15,7 @@
 package config
 
 import (
-	"log/slog"
 	"os"
-	"strconv"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 )
@@ -83,26 +81,6 @@ const (
 	envObsAuthFailureCounterEnabled = "OBS_AUTH_FAILURE_COUNTER_ENABLED"
 )
 
-// envBool reads name from the environment and parses it as a boolean. When the
-// var is unset, it silently returns def. When the var IS set but holds a value
-// strconv.ParseBool rejects, it logs a slog.Warn naming the var and the default
-// in effect, then returns def. We deliberately keep observability flags tolerant
-// (unlike MCP_SERVER_PORT, which fails hard on bad input) so a typo cannot abort
-// startup — but the warning ensures the fallback is not silent.
-func envBool(name string, def bool) bool {
-	v, ok := os.LookupEnv(name)
-	if !ok {
-		return def
-	}
-	b, err := strconv.ParseBool(v)
-	if err != nil {
-		slog.Warn("ignoring unparseable observability flag; using default",
-			"var", name, "value", v, "default", def)
-		return def
-	}
-	return b
-}
-
 // applyObservabilityEnv populates the capability flags on cfg from the OBS_*
 // environment variables, using the v1 "door-closing" defaults. Called from
 // applyEnvOverrides so it runs in the same phase as the other env-driven
@@ -111,11 +89,11 @@ func envBool(name string, def bool) bool {
 func applyObservabilityEnv(cfg *ServerConfig) {
 	o := &cfg.Observability
 
-	o.CorrelationIDEnabled = envBool(envObsCorrelationIDEnabled, true)
-	o.MetricsEnabled = envBool(envObsMetricsEnabled, false)
-	o.AuditLogEnabled = envBool(envObsAuditLogEnabled, false)
-	o.TracingEnabled = envBool(envObsTracingEnabled, false)
-	o.SaturationEventsEnabled = envBool(envObsSaturationEventsEnabled, false)
+	o.CorrelationIDEnabled = envBool(envObsCorrelationIDEnabled, true, "observability")
+	o.MetricsEnabled = envBool(envObsMetricsEnabled, false, "observability")
+	o.AuditLogEnabled = envBool(envObsAuditLogEnabled, false, "observability")
+	o.TracingEnabled = envBool(envObsTracingEnabled, false, "observability")
+	o.SaturationEventsEnabled = envBool(envObsSaturationEventsEnabled, false, "observability")
 
 	// Auth-failure counter follows metrics unless its own var is explicitly
 	// set. LookupEnv distinguishes "unset" (follow metrics) from "set to
@@ -125,7 +103,7 @@ func applyObservabilityEnv(cfg *ServerConfig) {
 		// explicit value; the o.MetricsEnabled default is unreachable here (it
 		// would only apply if the value were unparseable) — the follow-metrics
 		// behavior lives entirely in the else branch below.
-		o.AuthFailureCounterEnabled = envBool(envObsAuthFailureCounterEnabled, o.MetricsEnabled)
+		o.AuthFailureCounterEnabled = envBool(envObsAuthFailureCounterEnabled, o.MetricsEnabled, "observability")
 	} else {
 		o.AuthFailureCounterEnabled = o.MetricsEnabled
 	}
