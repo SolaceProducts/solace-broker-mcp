@@ -363,8 +363,13 @@ stop_broker_drivers() {
 # Credentials use ${VAR_NAME} substitution — resolved by the server via ENV_FILE.
 # enable_write_tools is on for every suite: all suites exercise one server with
 # both read and write tools registered.
+#
+# _lib_write_config emits the base two-broker config (broker-a/broker-b). A
+# suite's helpers.sh may override the public write_config to call this and
+# append suite-local aliases (see e2e-basic-mcp/helpers.sh); suites that need
+# no extras just use the default definition below.
 #   $1 config_file   path to write the generated YAML to
-write_config() {
+_lib_write_config() {
     local config_file="$1"
     cat > "$config_file" <<EOF
 port: ${MCP_PORT}
@@ -374,6 +379,17 @@ mcp_client_auth:
   dev_token: "\${MCP_DEV_TOKEN}"
 
 enable_write_tools: true
+
+# Short retry budget for tests. The server default is 10 retries with 3s→30s
+# backoff (production), which lets a single unreachable-broker call run for
+# minutes and hangs the negative-path smoke. These values fail fast on
+# connection errors while still exercising the retry path once. Happy-path
+# tests hit live brokers, so retries never trigger — no speed cost there.
+semp:
+  retries: 2
+  retry_min_interval: 500ms
+  retry_max_interval: 1s
+  request_timeout_duration: 3s
 
 brokers:
   broker-a:
@@ -391,6 +407,11 @@ brokers:
 EOF
     log_info "Config written to $config_file (broker-a=$BROKER_A_URL, broker-b=$BROKER_B_URL)"
 }
+
+# Default public entry point. Suites that need suite-local aliases override
+# this in their own helpers.sh (later-wins bash function definition) and call
+# _lib_write_config to emit the base body.
+write_config() { _lib_write_config "$@"; }
 
 # ── SEMP Operations ──────────────────────────────────────────────────────────
 
