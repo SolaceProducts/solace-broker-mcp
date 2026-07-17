@@ -17,18 +17,19 @@ binary.
 
 Two components are licensed under the Mozilla Public License 2.0. MPL-2.0 is
 file-level copyleft and is compatible with an Apache 2.0 distribution. We use
-them unmodified, preserve their license text and headers, and keep their source
-available at the URLs below. If we ever modify their source files, we must make
-those modified files available under MPL-2.0.
+them unmodified and preserve their license text and copyright headers. Their
+source is publicly available at the repositories named in their module paths. If
+we ever modify their source files, we must make those modified files available
+under MPL-2.0.
 
-| Component | Version | License | Source |
+| Component | Version | License | License text |
 |---|---|---|---|
 | `github.com/hashicorp/go-cleanhttp` | v0.5.2 | MPL-2.0 | [license](https://github.com/hashicorp/go-cleanhttp/blob/v0.5.2/LICENSE) |
 | `github.com/hashicorp/go-retryablehttp` | v0.7.8 | MPL-2.0 | [license](https://github.com/hashicorp/go-retryablehttp/blob/v0.7.8/LICENSE) |
 
 ## Permissive components
 
-| Component | Version | License | Source |
+| Component | Version | License | License text |
 |---|---|---|---|
 | `github.com/coreos/go-oidc/v3/oidc` | v3.18.0 | Apache-2.0 | [license](https://github.com/coreos/go-oidc/blob/v3.18.0/LICENSE) |
 | `github.com/dolthub/maphash` | v0.1.0 | Apache-2.0 | [license](https://github.com/dolthub/maphash/blob/v0.1.0/LICENSE) |

@@ -127,8 +127,9 @@ When deploying the Solace Broker MCP Server, follow these security guidelines:
 ### Write and destructive tools
 
 Write tools (`enable_write_tools: true`) let an AI assistant delete queued
-messages, disconnect clients, reset statistics, and manage VPN, queue, and
-topic-endpoint configuration. Leave `enable_write_tools` off unless an operator
+messages, disconnect clients, reset statistics, and manage VPN, queue,
+topic-endpoint, and REST delivery point configuration. Leave `enable_write_tools`
+off unless an operator
 deliberately needs these actions, and enable them only with
 `mcp_client_auth.mode: oauth` so every invocation is attributable in the audit
 log.
