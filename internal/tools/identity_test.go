@@ -31,9 +31,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/authz"
+	"github.com/SolaceDev/solace-broker-mcp/internal/observability/logging/sanitize"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 )
 
@@ -161,8 +161,8 @@ func TestNewIdentityFromTokenInfo_extraKeyMissing_normalizesToAbsent(t *testing.
 //
 // Three properties this test pins:
 //  1. The function does NOT panic (the panic version dropped the audit line).
-//  2. The return value is verifierBugSentinel, NOT absentSentinel — log
-//     consumers must be able to distinguish "claim missing" from "code bug."
+//  2. The return value is sanitize.VerifierBugSentinel, NOT absentSentinel —
+//     log consumers must be able to distinguish "claim missing" from "code bug."
 //  3. An ERROR-level log entry is emitted naming the bad key and the observed
 //     type, so ops alerting can fire on the contract violation.
 func TestExtraString_nonStringValue_emitsErrorAndReturnsSentinel(t *testing.T) {
@@ -178,12 +178,12 @@ func TestExtraString_nonStringValue_emitsErrorAndReturnsSentinel(t *testing.T) {
 	// (1) must not panic
 	id := NewIdentityFromTokenInfo(info)
 
-	// (2) sentinel is verifierBugSentinel, not absentSentinel
-	if id.iss != verifierBugSentinel {
-		t.Errorf("iss = %q, want %q (verifier-bug sentinel)", id.iss, verifierBugSentinel)
+	// (2) sentinel is sanitize.VerifierBugSentinel, not absentSentinel
+	if id.iss != sanitize.VerifierBugSentinel {
+		t.Errorf("iss = %q, want %q (verifier-bug sentinel)", id.iss, sanitize.VerifierBugSentinel)
 	}
-	if verifierBugSentinel == absentSentinel {
-		t.Fatal("verifierBugSentinel must differ from absentSentinel — log consumers rely on the distinction")
+	if sanitize.VerifierBugSentinel == absentSentinel {
+		t.Fatal("sanitize.VerifierBugSentinel must differ from absentSentinel — log consumers rely on the distinction")
 	}
 
 	// (3) an ERROR was emitted naming the key and type
@@ -196,111 +196,6 @@ func TestExtraString_nonStringValue_emitsErrorAndReturnsSentinel(t *testing.T) {
 	}
 	if !strings.Contains(logged, `"got_type":"int"`) {
 		t.Errorf("expected log entry to name the observed type %q, got: %s", "int", logged)
-	}
-}
-
-func TestSanitizeClaim_stripsControlChars(t *testing.T) {
-	cases := []struct {
-		name, in, want string
-	}{
-		{"CR LF", "foo\r\nbar", "foobar"},
-		{"tab", "foo\tbar", "foobar"},
-		{"ANSI ESC", "foo\x1B[31mred\x1B[0m", "foo[31mred[0m"},
-		{"DEL byte", "foo\x7Fbar", "foobar"},
-		{"NUL byte", "foo\x00bar", "foobar"},
-		{"vertical tab + form feed", "foo\x0B\x0Cbar", "foobar"},
-		{"plain", "auth0|abc123", "auth0|abc123"},
-		{"unicode passes through", "user-éñ", "user-éñ"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := sanitizeClaim(c.in); got != c.want {
-				t.Errorf("sanitizeClaim(%q) = %q, want %q", c.in, got, c.want)
-			}
-		})
-	}
-}
-
-func TestSanitizeClaim_capsAt256Bytes(t *testing.T) {
-	in := strings.Repeat("a", 300)
-	got := sanitizeClaim(in)
-	if len(got) != claimMaxLen {
-		t.Errorf("len = %d, want %d", len(got), claimMaxLen)
-	}
-}
-
-// TestSanitizeClaim_stripsBidiAndFormatChars pins the CWE-1007 audit-spoofing
-// defense raised in PR #74 review. A malicious IdP issues a sub like
-// "alice‮nimda" (RIGHT-TO-LEFT OVERRIDE between "alice" and "nimda").
-// Without the Cf-category strip, the bytes pass through unchanged, and any
-// bidi-aware UI (SIEM dashboards, terminals, JSON viewers) renders the value
-// visually as "aliceadmin" — misattributing the action to a different user.
-// The sanitizer must strip the override and emit a value that renders in
-// source order.
-func TestSanitizeClaim_stripsBidiAndFormatChars(t *testing.T) {
-	// Inputs use \u escapes so this source file stays pure ASCII.
-	// A literal BOM in source would break Go's parser, and literal
-	// bidi controls in source make this file dangerous to view in
-	// any bidi-aware editor (which is the whole point of stripping them).
-	cases := []struct {
-		name, in, want string
-	}{
-		{"RLO (U+202E)", "alice\u202Enimda", "alicenimda"},
-		{"PDF (U+202C)", "x\u202Cy", "xy"},
-		{"LRO (U+202D)", "a\u202Db", "ab"},
-		{"zero-width joiner (U+200D)", "user\u200Dname", "username"},
-		{"zero-width non-joiner (U+200C)", "user\u200Cname", "username"},
-		{"BOM (U+FEFF)", "\uFEFFuser", "user"},
-		{"soft hyphen (U+00AD)", "ad\u00ADmin", "admin"},
-		{"line separator (U+2028 Zl)", "a\u2028b", "ab"},
-		{"paragraph separator (U+2029 Zp)", "a\u2029b", "ab"},
-		{"C1 control NEL (U+0085)", "a\u0085b", "ab"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := sanitizeClaim(c.in); got != c.want {
-				t.Errorf("sanitizeClaim(%q) = %q, want %q", c.in, got, c.want)
-			}
-		})
-	}
-}
-
-// TestSanitizeClaim_truncatesOnRuneBoundary pins the UTF-8 safety property:
-// when the cap falls inside what would have been a multibyte codepoint, we
-// stop BEFORE writing the codepoint, never mid-bytes. Output is always
-// utf8.ValidString.
-//
-// 'é' is 2 bytes in UTF-8 (0xC3 0xA9). 128 of them = 256 bytes exactly,
-// which fits. 129 of them = 258 bytes would overflow the cap; the
-// sanitizer must stop at 128 and return 256 valid bytes — not 257 with a
-// dangling 0xC3.
-func TestSanitizeClaim_truncatesOnRuneBoundary(t *testing.T) {
-	in := strings.Repeat("é", 200) // 400 bytes, well over the 256 cap
-	got := sanitizeClaim(in)
-
-	if !utf8.ValidString(got) {
-		t.Errorf("sanitized output is not valid UTF-8: %q", got)
-	}
-	if len(got) > claimMaxLen {
-		t.Errorf("len = %d, exceeds cap %d", len(got), claimMaxLen)
-	}
-	// 128 two-byte runes = 256 bytes exactly.
-	if want := claimMaxLen; len(got) != want {
-		t.Errorf("len = %d, want exactly %d (128 × 2-byte runes)", len(got), want)
-	}
-}
-
-// TestSanitizeClaim_boundedWork pins the DoS-defense property: the sanitizer
-// must not iterate or allocate proportionally to input length. We feed in a
-// 10 MB input and assert the result is still capped — the existing 256-byte
-// cap check would pass with the old implementation too, but combined with
-// the rune-boundary check above we cover both halves of Copilot's review
-// note (PR #74).
-func TestSanitizeClaim_boundedWork_largeInput(t *testing.T) {
-	in := strings.Repeat("a", 10_000_000)
-	got := sanitizeClaim(in)
-	if len(got) != claimMaxLen {
-		t.Errorf("len = %d, want %d (cap must hold against multi-MB input)", len(got), claimMaxLen)
 	}
 }
 
@@ -408,7 +303,7 @@ func TestTokenInfoExtra_perKeyTypeConvention(t *testing.T) {
 	// Audit-field keys: must be readable via extraString.
 	for _, key := range []string{"iss", "client_id", "jti"} {
 		v := extraString(info, key)
-		if v == "" || v == verifierBugSentinel {
+		if v == "" || v == sanitize.VerifierBugSentinel {
 			t.Errorf("extraString(%q) = %q; expected a valid string value", key, v)
 		}
 	}
