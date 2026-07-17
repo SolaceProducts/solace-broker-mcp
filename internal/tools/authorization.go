@@ -65,6 +65,15 @@ const matchedGroupsBound = 32
 // call site, or the record will carry two.
 func withAuthorization(policy *authz.Policy, toolName string, configuredGroupsClaimName string, next mcp.ToolHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		// Enforce the precondition uniformly across every branch. Without
+		// this guard, nil policy panics on the branch that reaches
+		// policy.Authorize but silently returns a missing-claim deny on
+		// the branch that returns first — the doc's "panic on nil" promise
+		// would then hold on only one input shape.
+		if policy == nil {
+			panic("withAuthorization: nil policy (composition-site invariant violated)")
+		}
+
 		var info *sdkauth.TokenInfo
 		if req.Extra != nil {
 			info = req.Extra.TokenInfo

@@ -453,3 +453,19 @@ func TestWithAuthorization_NilPolicy_Panics(t *testing.T) {
 	}()
 	_, _ = wrapped(context.Background(), requestWithGroups([]string{"Ops"}))
 }
+
+// Nil policy must panic on every branch — including the branch that would
+// otherwise short-circuit to missing-claim before dereferencing policy.
+// Without the top-of-closure guard, nil + missing-claim would silently
+// return a deny result and the "nil policy is a precondition violation"
+// doc claim would hold on only one input shape.
+func TestWithAuthorization_NilPolicy_PanicsOnMissingClaimBranchToo(t *testing.T) {
+	wrapped := withAuthorization(nil, "get-broker-status", "", newRecordingHandler().handler())
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected wrapper to panic on nil policy even when request has no groups claim; got no panic (doc/code gap)")
+		}
+	}()
+	_, _ = wrapped(context.Background(), requestMissingGroupsClaim())
+}
