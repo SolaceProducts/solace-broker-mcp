@@ -492,3 +492,218 @@ func containsStr(s, substr string) bool {
 	}
 	return false
 }
+
+// --- Composition-site wiring tests (T4 enforcement wrapper) ---
+//
+// These three tests pin the observable behavior of the composition
+// site inside RegisterWithServer: nil policy means no authorization
+// frame is composed and dispatch is byte-identical to pre-RBAC;
+// non-nil policy means the wrapper is composed and every tool call
+// emits the authorization audit event; and RegisterListBrokers never
+// composes the wrapper regardless of policy state, so list-brokers
+// remains available to every authenticated caller.
+//
+// Each test drives a real client→server call via mcp.NewInMemoryTransports
+// so the assertion is on what the operator sees in the log stream and
+// what the caller sees in the tool result — not on internal composition
+// state.
+
+// hasAuthzAuditLine reports whether buf contains any log record with
+// msg=="tool authorization" for the given tool name.
+func hasAuthzAuditLine(t *testing.T, buf *bytes.Buffer, tool string) bool {
+	t.Helper()
+	for _, raw := range strings.Split(buf.String(), "\n") {
+		if raw == "" {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+			t.Fatalf("non-JSON log line %q: %v", raw, err)
+		}
+		if entry["msg"] == "tool authorization" && entry["tool"] == tool {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRegisterWithServer_NilPolicy_ByteIdenticalToPreRBAC pins the
+// non-RBAC guarantee: when policy is nil, the composition site skips
+// withAuthorization and dispatch is byte-identical to the pre-RBAC
+// path. The existing "tool invoked" audit line fires; no
+// "tool authorization" line fires. A regression that accidentally
+// composed the wrapper anyway would secretly enable RBAC on every
+// non-RBAC deployment.
+func TestRegisterWithServer_NilPolicy_ByteIdenticalToPreRBAC(t *testing.T) {
+	var logBuf bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(oldLogger)
+
+	pool := newRegTestPool(t)
+	mgr := NewToolManager(pool)
+	mgr.Register(newStubHandler("test-tool"))
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+	RegisterWithServer(mgr, server, pool, true, nil)
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go func() { _ = server.Run(ctx, serverTransport) }()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1.0"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer session.Close()
+
+	args := map[string]any{"broker": "dev", "msgVpnName": "default"}
+	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "test-tool", Arguments: args}); err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+
+	if len(auditLines(t, &logBuf, "test-tool")) != 1 {
+		t.Errorf("pre-RBAC path must still emit exactly 1 tool-invoked audit line; got %d: %s",
+			len(auditLines(t, &logBuf, "test-tool")), logBuf.String())
+	}
+	if hasAuthzAuditLine(t, &logBuf, "test-tool") {
+		t.Error("nil-policy composition emitted a tool-authorization audit line; the wrapper must NOT be composed when policy is nil (silent RBAC on non-RBAC deployment)")
+	}
+}
+
+// TestRegisterWithServer_NonNilPolicy_AuthorizationAuditFires pins the
+// enable side of the composition: when policy is non-nil, every
+// registered tool has the wrapper composed AND the wrapper actually
+// consults the policy on each request. Two assertions together prove
+// this: (1) a tool-authorization audit line appears, and (2) its
+// decision value matches what the policy would produce for this
+// caller. Asserting only on presence would pass even if the wrapper
+// emitted an unconditional log without running Authorize.
+//
+// The test drives via the SDK transport without OAuth middleware, so
+// req.Extra.TokenInfo is nil — the wrapper takes the missing-claim
+// branch. That path is uniquely identifiable by the decision value
+// AND by the caller-facing deny result, so both are asserted.
+func TestRegisterWithServer_NonNilPolicy_AuthorizationAuditFires(t *testing.T) {
+	var logBuf bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(oldLogger)
+
+	pool := newRegTestPool(t)
+	mgr := NewToolManager(pool)
+	mgr.Register(newStubHandler("test-tool"))
+
+	policy := policyGranting(t, []string{"Ops"}, "test-tool")
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+	RegisterWithServer(mgr, server, pool, true, policy)
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go func() { _ = server.Run(ctx, serverTransport) }()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1.0"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer session.Close()
+
+	args := map[string]any{"broker": "dev", "msgVpnName": "default"}
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "test-tool", Arguments: args})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+
+	// The wrapper must produce a tool-level deny result rather than
+	// letting the call through — no TokenInfo means missing-claim
+	// branch fires.
+	if !res.IsError {
+		t.Errorf("expected IsError=true from missing-claim path; the wrapper was not composed or did not consult policy")
+	}
+
+	// The audit line must fire AND its decision must reflect the
+	// missing-claim outcome the wrapper actually took. If the
+	// wrapper emitted an unconditional "allowed" log while denying
+	// on the result path (or vice versa), only this assertion
+	// catches it.
+	lines := authzLogLines(t, &logBuf)
+	toolLines := make([]map[string]any, 0, 1)
+	for _, l := range lines {
+		if l["tool"] == "test-tool" {
+			toolLines = append(toolLines, l)
+		}
+	}
+	if len(toolLines) != 1 {
+		t.Fatalf("expected exactly 1 tool-authorization audit line for test-tool, got %d: %s", len(toolLines), logBuf.String())
+	}
+	decision, _ := toolLines[0]["decision"].(string)
+	if decision == "" {
+		t.Fatalf("audit line missing decision field: %v", toolLines[0])
+	}
+	// The audit's decision value must not indicate allow — that would
+	// mean the wrapper is either not consulting policy or emitting an
+	// unconditional log that says the call was permitted despite the
+	// deny result the caller received above. The exact decision string
+	// schema is finalized in the audit-refinement follow-up ticket;
+	// this test locks the composition contract (wrapper ran, decision
+	// matches the deny-side outcome), not the literal string.
+	if strings.Contains(strings.ToLower(decision), "allow") {
+		t.Errorf("audit decision %q indicates allow but the caller-facing result was IsError=true; wrapper is inconsistent with its own outcome", decision)
+	}
+}
+
+// TestRegisterListBrokers_NeverComposesWithAuthorization pins the
+// structural exemption of the discovery tool. list-brokers registers
+// via a dedicated function that takes no policy argument — an
+// invariant expressed at the API surface. This test drives a full
+// call to list-brokers alongside a policy-enabled RegisterWithServer,
+// with a policy that would deny list-brokers if it were wrapped, and
+// asserts that the call succeeds and no authorization audit line
+// fires. A regression that accidentally applied the wrapper to
+// list-brokers (e.g. a refactor that unified the two registration
+// paths) would make every authenticated caller lose broker
+// discovery.
+func TestRegisterListBrokers_NeverComposesWithAuthorization(t *testing.T) {
+	var logBuf bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(oldLogger)
+
+	pool := newRegTestPool(t)
+	mgr := NewToolManager(pool)
+	mgr.Register(newStubHandler("test-tool"))
+
+	// Policy that grants nothing to list-brokers — if the wrapper
+	// were accidentally composed on list-brokers, this policy would
+	// deny it.
+	policy := policyGranting(t, []string{"Ops"}, "test-tool")
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+	RegisterWithServer(mgr, server, pool, true, policy)
+	RegisterListBrokers(server, pool)
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go func() { _ = server.Run(ctx, serverTransport) }()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1.0"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer session.Close()
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "list-brokers", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Errorf("list-brokers returned IsError=true under a policy-enabled server; the exemption is broken. Content=%v", res.Content)
+	}
+	if hasAuthzAuditLine(t, &logBuf, "list-brokers") {
+		t.Errorf("list-brokers emitted a tool-authorization audit line; the wrapper must not be composed on the exempt tool: %s", logBuf.String())
+	}
+}
