@@ -182,8 +182,6 @@ func extraStringSlice(t *sdkauth.TokenInfo, key string) (values []string, presen
 // Reads under authz.TokenInfoExtraKeyGroups. Returns (nil, false) when the
 // groups claim was missing from the token (the day-one IdP misconfiguration
 // case).
-//
-//nolint:unused // Called by withAuthorization (T4 enforcement wrapper, next ticket).
 func requestGroups(req *mcp.CallToolRequest) (groups []string, present bool) {
 	if req == nil {
 		return nil, false
