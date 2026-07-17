@@ -3,7 +3,8 @@
 End-to-end coverage for the core MCP protocol surface of the broker MCP server:
 the `initialize` handshake, `tools/list`, and a representative set of tool calls
 (`list-brokers`, `get-rdp-status`, `get-queue-metrics`) exercised through two
-independent clients. Runs two Solace brokers in containers, provisions a base
+independent clients, plus a negative-path smoke over the structured-error
+envelope contract. Runs two Solace brokers in containers, provisions a base
 fixture set on each, and verifies multi-broker routing.
 
 For the broader testing strategy and rationale (the "why"), see
@@ -18,7 +19,7 @@ Three commands for a full run:
 # 1. Bring brokers up. Safe to re-run; does nothing if already up.
 SUITE_DIR=test/e2e-basic-mcp bash test/e2e-common/setup-brokers.sh
 
-# 2. Build the server, create fixtures, run both scenarios, print a summary.
+# 2. Build the server, create fixtures, run all scenarios, print a summary.
 bash test/e2e-basic-mcp/run-all.sh
 
 # 3. Tear brokers down when you're done.
@@ -26,8 +27,8 @@ docker compose -f test/e2e-basic-mcp/docker-compose.yml down -v
 ```
 
 `run-all.sh` builds the MCP server and the Go agent, applies the base fixtures to
-both brokers, runs both scenarios, and cleans up the fixtures and server on exit
-(via an `EXIT` trap). It assumes the brokers are already up — run the
+both brokers, runs all three scenarios, and cleans up the fixtures and server on
+exit (via an `EXIT` trap). It assumes the brokers are already up — run the
 `setup-brokers.sh` step above first.
 
 ## Layout
@@ -38,17 +39,21 @@ test/e2e-basic-mcp/
 ├── .env                 # Single source of truth: ports, credentials, dev token
 ├── docker-compose.yml   # Two Solace PubSub+ broker containers
 ├── helpers.sh           # Suite fixtures (queue/RDP/consumer/binding); sources ../e2e-common/lib.sh
-├── run-all.sh           # Master runner: orchestrates both scenarios, prints summary table
-├── test-standalone.sh   # Scenario 1: raw curl MCP protocol tests
-├── test-agent.sh        # Scenario 2: builds and runs the Go MCP-SDK agent
-├── agent/               # Go MCP-SDK client program (own go.mod)
-└── bin/                 # Built binaries + pidfile (gitignored)
+├── run-all.sh              # Master runner: orchestrates all scenarios, prints summary table
+├── test-standalone.sh      # Scenario 1: raw curl MCP protocol tests
+├── test-agent.sh           # Scenario 2: builds and runs the Go MCP-SDK agent
+├── test-negative-paths.sh  # Scenario 3: structured-error envelope contract (SOL-150767)
+├── agent/                  # Go MCP-SDK client program (own go.mod)
+└── bin/                    # Built binaries + pidfile (gitignored)
 ```
 
 ## Scenarios
 
-Both scenarios run against **two brokers** (`broker-a`, `broker-b`) to verify
-multi-broker routing.
+Scenarios 1 and 2 run against **two brokers** (`broker-a`, `broker-b`) to verify
+multi-broker routing. Scenario 3 uses two additional negative-path aliases
+(`broker-bad-creds`, `broker-dead`) appended by this suite's `write_config()`
+override in `helpers.sh` so a single MCP server sees all four broker entries.
+The extras are local to this suite — other suites' server configs stay minimal.
 
 - **Scenario 1 — Standalone (`test-standalone.sh`).** Sends raw MCP JSON-RPC over
   `POST /mcp` with `curl`. Covers: `/health`, the `initialize` handshake,
@@ -59,6 +64,16 @@ multi-broker routing.
   the live server using the official Go MCP SDK
   (`github.com/modelcontextprotocol/go-sdk`). Validates `list-brokers`,
   `get-rdp-status` (3-section response), and `get-queue-metrics` on both brokers.
+- **Scenario 3 — Negative paths (`test-negative-paths.sh`).** SOL-150767 /
+  SOL-147161 §3.7. Confirms three tool-execution failures surface as clean MCP
+  structured errors through the full server + real-broker stack: bad
+  credentials (SEMPv2 401, non-retryable, no credential leak), broker
+  unreachable (retries exhausted, retryable, no `status` field), and a
+  not-found queue on `get-queue-metrics` (SEMPv2 signals not-found as HTTP
+  400 + sempCode 6, not literal 404 — asserted as both). Behavior coverage
+  itself is unit-tested in
+  `internal/semp/resilience/` — this scenario is the "we drove it once" smoke
+  on the envelope contract, not a comprehensive negative matrix.
 
 ## Fixtures
 

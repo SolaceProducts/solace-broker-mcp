@@ -58,12 +58,23 @@ else
     AGENT_EXIT=$?
 fi
 
-# 5. Summary table
+# 5. Run Scenario 3: Negative-path smoke (SOL-150767)
+log_info ""
+log_info "=== Scenario 3: Negative paths (envelope contract) ==="
+log_info ""
+if bash "$SCRIPT_DIR/test-negative-paths.sh"; then
+    NEGATIVE_EXIT=0
+else
+    NEGATIVE_EXIT=$?
+fi
+
+# 6. Summary table
 TOTAL_RUN=0
 TOTAL_PASSED=0
 TOTAL_FAILED=0
 SAW_STANDALONE=0
 SAW_AGENT=0
+SAW_NEGATIVE=0
 
 echo ""
 echo "┏━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━┳━━━━━━━━━┓"
@@ -77,8 +88,9 @@ if [ -f "$E2E_RESULTS_DIR/results.txt" ]; then
         TOTAL_PASSED=$((TOTAL_PASSED + passed))
         TOTAL_FAILED=$((TOTAL_FAILED + failed))
         case "$label" in
-            "Standalone tests") SAW_STANDALONE=1 ;;
-            "Agent tests")      SAW_AGENT=1      ;;
+            "Standalone tests")     SAW_STANDALONE=1 ;;
+            "Agent tests")          SAW_AGENT=1      ;;
+            "Negative-path tests")  SAW_NEGATIVE=1   ;;
         esac
     done < "$E2E_RESULTS_DIR/results.txt"
 fi
@@ -91,17 +103,21 @@ fi
 if [ "$SAW_AGENT" -eq 0 ] && [ "$AGENT_EXIT" -ne 0 ]; then
     printf "┃ %-23s ┃ %5s ┃ %7s ┃ %7s ┃\n" "Agent tests" "CRASH" "--" "--"
 fi
+if [ "$SAW_NEGATIVE" -eq 0 ] && [ "$NEGATIVE_EXIT" -ne 0 ]; then
+    printf "┃ %-23s ┃ %5s ┃ %7s ┃ %7s ┃\n" "Negative-path tests" "CRASH" "--" "--"
+fi
 
 echo "┣━━━━━━━━━━━━━━━━━━━━━━━━━╋━━━━━━━╋━━━━━━━━━╋━━━━━━━━━┫"
 printf "┃ %-23s ┃ %5s ┃ %7s ┃ %7s ┃\n" "TOTAL" "$TOTAL_RUN" "$TOTAL_PASSED" "$TOTAL_FAILED"
 echo "┗━━━━━━━━━━━━━━━━━━━━━━━━━┻━━━━━━━┻━━━━━━━━━┻━━━━━━━━━┛"
 echo ""
 
-if [ "$STANDALONE_EXIT" -eq 0 ] && [ "$AGENT_EXIT" -eq 0 ]; then
+if [ "$STANDALONE_EXIT" -eq 0 ] && [ "$AGENT_EXIT" -eq 0 ] && [ "$NEGATIVE_EXIT" -eq 0 ]; then
     log_ok "All E2E scenarios passed"
     exit 0
 else
     [ "$STANDALONE_EXIT" -ne 0 ] && log_fail "Standalone scenario failed"
     [ "$AGENT_EXIT" -ne 0 ] && log_fail "Agent scenario failed"
+    [ "$NEGATIVE_EXIT" -ne 0 ] && log_fail "Negative-path scenario failed"
     exit 1
 fi
