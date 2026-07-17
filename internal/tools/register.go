@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/authz"
 	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
@@ -121,7 +122,15 @@ func stampCorrelationID(ctx context.Context, result *mcp.CallToolResult) {
 // This function is the only translation boundary between our internal Metadata
 // type and the SDK's mcp.Tool. Handlers and the manager work in our own
 // vocabulary; this is where it crosses over to the SDK.
-func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerPool, enableWriteTools bool) {
+//
+// When policy is non-nil, each registered handler is additionally wrapped
+// with withAuthorization inside withRecovery, so every dispatch consults
+// the compiled tool-authorization policy before the tool runs. When policy
+// is nil, dispatch is byte-identical to the pre-RBAC path — no
+// authorization frame is composed and no per-request policy lookup fires.
+// The caller (cmd/server/main.go) owns the enable-gate; a nil argument is
+// how disablement is expressed to this function.
+func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerPool, enableWriteTools bool, policy *authz.Policy) {
 	type registration struct {
 		name    string
 		handler ToolHandler
@@ -154,7 +163,7 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 
 		mcpTool := toMCPTool(reg.meta, pool)
 
-		server.AddTool(mcpTool, withRecovery(reg.name, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		var callToolHandler mcp.ToolHandler = func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var params map[string]any
 			if err := json.Unmarshal(req.Params.Arguments, &params); err != nil {
 				return nil, fmt.Errorf("parsing tool arguments: %w", err)
@@ -169,7 +178,20 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 				info = req.Extra.TokenInfo
 			}
 			return mgr.CallTool(ctx, reg.name, params, NewIdentityFromTokenInfo(info))
-		}))
+		}
+
+		// Compose the authorization wrapper INSIDE withRecovery so denials
+		// inherit correlation-ID stamping and panic containment. When
+		// policy is nil, no wrapper is composed and the outer withRecovery
+		// wraps callToolHandler directly — dispatch is byte-identical to
+		// the pre-RBAC path. list-brokers is exempt structurally: it
+		// registers via RegisterListBrokers, which never receives a policy
+		// argument and never composes withAuthorization.
+		if policy != nil {
+			callToolHandler = withAuthorization(policy, reg.name, callToolHandler)
+		}
+
+		server.AddTool(mcpTool, withRecovery(reg.name, callToolHandler))
 	}
 }
 

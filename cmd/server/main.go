@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/auth"
+	"github.com/SolaceDev/solace-broker-mcp/internal/authz"
 	"github.com/SolaceDev/solace-broker-mcp/internal/banner"
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite"
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite/definitions"
@@ -652,13 +653,57 @@ func main() {
 	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor)
 	registerSEMPv1Tools(mgr)
 	registerMixedTools(mgr)
-	tools.RegisterWithServer(mgr, server, pool, cfg.EnableWriteTools)
+
+	// Compile the tool-authorization policy when the composition-time gate
+	// says RBAC is on. NewPolicy runs BEFORE RegisterWithServer because the
+	// wrapper it composes needs the compiled *Policy. When the gate is off,
+	// policy stays nil and RegisterWithServer skips the wrapper — dispatch
+	// is byte-identical to the pre-RBAC path.
+	var policy *authz.Policy
+	if config.ToolAuthorizationEnabled(cfg) {
+		policy, err = authz.NewPolicy(*cfg.MCPClientAuth.ToolAuthorization)
+		if err != nil {
+			slog.Error("tool authorization startup failed", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+	}
+
+	tools.RegisterWithServer(mgr, server, pool, cfg.EnableWriteTools, policy)
 	slog.Info("tool registration complete",
 		slog.Bool("enable_write_tools", cfg.EnableWriteTools))
 
 	// list-brokers is a discovery tool registered directly on the MCP
 	// server (it doesn't need broker resolution or the ToolManager pipeline).
+	// It also does not compose withAuthorization — the exemption is
+	// structural: RegisterListBrokers takes no policy argument and every
+	// authenticated caller keeps discovery regardless of the RBAC state.
 	tools.RegisterListBrokers(server, pool)
+
+	// Validate every configured tool name against the full registered
+	// handler set + list-brokers, now that both registrations have
+	// populated it. A typo in the admin's YAML would silently fail to
+	// grant what the admin thinks; catching it at startup is fatal by
+	// design (spec goal 7). Skipped when RBAC is off.
+	if policy != nil {
+		if err := tools.ValidatePolicyToolNames(*cfg.MCPClientAuth.ToolAuthorization, mgr); err != nil {
+			slog.Error("tool authorization startup failed", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+		slog.Info("tool authorization is enabled",
+			slog.Any("policy", policy))
+	} else {
+		// Symmetric announcement: name the reason so a restart's startup
+		// log unambiguously records the RBAC posture. When the auth mode
+		// is not oauth the block cannot be present (config validator I1);
+		// when the mode is oauth the block must set enabled explicitly
+		// (I3), so the only remaining false path is enabled: false.
+		if cfg.MCPClientAuth.Mode == config.AuthModeOAuth {
+			slog.Info("tool authorization is disabled (enabled=false in config)")
+		} else {
+			slog.Info("tool authorization is disabled",
+				slog.String("auth_mode", cfg.MCPClientAuth.Mode))
+		}
+	}
 
 	slog.Info("all tools registered")
 
