@@ -380,17 +380,6 @@ mcp_client_auth:
 
 enable_write_tools: true
 
-# Short retry budget for tests. The server default is 10 retries with 3s→30s
-# backoff (production), which lets a single unreachable-broker call run for
-# minutes and hangs the negative-path smoke. These values fail fast on
-# connection errors while still exercising the retry path once. Happy-path
-# tests hit live brokers, so retries never trigger — no speed cost there.
-semp:
-  retries: 2
-  retry_min_interval: 500ms
-  retry_max_interval: 1s
-  request_timeout_duration: 3s
-
 brokers:
   broker-a:
     url: "${BROKER_A_URL}"

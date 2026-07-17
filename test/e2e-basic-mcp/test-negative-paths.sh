@@ -8,12 +8,13 @@
 # Scenarios:
 #   - Bad credentials → SEMPv2 401, retryable=false, no credential leak
 #   - Broker unreachable → RetriesExhaustedError, retryable=true, no status
-#   - 404 not-found → SEMPv2 404, retryable=false
+#   - Nonexistent queue → SEMPv2 400 + sempCode 6 (NOT_FOUND), retryable=false
 #
 # The two negative-path broker aliases (broker-bad-creds, broker-dead) are
-# declared in the shared write_config() so a single MCP server sees all four
-# brokers, matching production shape. Requires: MCP server running on
-# $MCP_URL, broker fixtures created on broker-a (test-queue etc.).
+# appended by this suite's write_config() override in helpers.sh (which
+# calls _lib_write_config for the base body), so a single MCP server sees
+# all four brokers, matching production shape. Requires: MCP server running
+# on $MCP_URL, broker fixtures created on broker-a (test-queue etc.).
 
 set -euo pipefail
 source "$(dirname "$0")/helpers.sh"
@@ -50,7 +51,9 @@ test_bad_credentials() {
 
     # Credential-leak guard: the literal password must not appear anywhere
     # in the envelope. Covers the tool error message, structured content,
-    # and any incidental echo (e.g. from URL rendering).
+    # and any incidental echo (e.g. from URL rendering). Scope: exact
+    # substring only — JSON-escaped, URL-encoded, or base64 forms are not
+    # covered here; add those variants if a future leak vector demands it.
     assert_not_contains "$response" "$NEG_BAD_PASSWORD" \
         "bad-creds: password must not leak into the tool envelope" || return 1
 }
