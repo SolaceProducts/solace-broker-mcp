@@ -231,9 +231,9 @@ func extraStringSlice(t *sdkauth.TokenInfo, key string) (values []string, presen
 	}
 	s, isSlice := v.([]string)
 	if !isSlice {
-		slog.Error("TokenInfo.Extra: expected []string but found different type",
+		slog.Error("internal: TokenInfo.Extra has unexpected type — verifier contract violation",
 			slog.String("key", key),
-			slog.String("type_seen", fmt.Sprintf("%T", v)))
+			slog.String("got_type", fmt.Sprintf("%T", v)))
 		return nil, false
 	}
 	cp := make([]string, len(s))
