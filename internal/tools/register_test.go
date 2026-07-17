@@ -493,7 +493,7 @@ func containsStr(s, substr string) bool {
 	return false
 }
 
-// --- Composition-site wiring tests (T4 enforcement wrapper) ---
+// --- Composition-site wiring tests (tool-authorization wrapper) ---
 //
 // These three tests pin the observable behavior of the composition
 // site inside RegisterWithServer: nil policy means no authorization

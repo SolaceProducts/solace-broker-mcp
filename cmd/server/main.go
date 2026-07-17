@@ -717,8 +717,13 @@ func main() {
 	// Validate every configured tool name against the full registered
 	// handler set + list-brokers, now that both registrations have
 	// populated it. A typo in the admin's YAML would silently fail to
-	// grant what the admin thinks; catching it at startup is fatal by
-	// design (spec goal 7). Skipped when RBAC is off.
+	// grant what the admin thinks — an admin intending to grant
+	// delete-queue-messages who writes delete-que-messages would see
+	// the grant simply not take effect at request time, with no signal
+	// anywhere that the config is wrong. Catching that at startup is
+	// fatal by design: refuse to accept any request under a config
+	// whose grants do not mean what the admin thinks they mean.
+	// Skipped when RBAC is off.
 	if policy != nil {
 		if err := tools.ValidatePolicyToolNames(*cfg.MCPClientAuth.ToolAuthorization, mgr); err != nil {
 			slog.Error("tool authorization startup failed", slog.String("error", err.Error()))
@@ -728,10 +733,12 @@ func main() {
 			slog.Any("policy", policy))
 	} else {
 		// Symmetric announcement: name the reason so a restart's startup
-		// log unambiguously records the RBAC posture. When the auth mode
-		// is not oauth the block cannot be present (config validator I1);
-		// when the mode is oauth the block must set enabled explicitly
-		// (I3), so the only remaining false path is enabled: false.
+		// log unambiguously records the RBAC posture. The config
+		// validator rejects a tool_authorization block outside oauth
+		// mode and rejects an oauth-mode block that omits the enabled
+		// key, so at this point exactly two disabled-paths are
+		// possible: auth mode is not oauth (block absent by contract),
+		// or auth mode is oauth and enabled is explicitly false.
 		if cfg.MCPClientAuth.Mode == config.AuthModeOAuth {
 			slog.Info("tool authorization is disabled (enabled=false in config)")
 		} else {

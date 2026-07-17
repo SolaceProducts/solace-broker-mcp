@@ -47,9 +47,13 @@ const authzDeniedMessage = "You are not authorized to use this tool."
 // other; the audit log distinguishes the outcomes structurally.
 const authzMissingClaimMessage = "You are not authorized to use this tool."
 
-// listBrokersToolName is the exempt discovery tool. Named here (rather
-// than hardcoding the literal at ValidatePolicyToolNames' use site) so
-// the exemption is visible to a grep for the constant.
+// listBrokersToolName names the discovery tool that is structurally
+// exempt from tool authorization. The exemption is expressed at the
+// registration API (RegisterListBrokers takes no policy argument);
+// this file uses the constant in ValidatePolicyToolNames' two
+// exempt-name branches and in its exempt-tool WARN attribute so a
+// contributor can grep for one identifier to find every exemption
+// touchpoint at once.
 const listBrokersToolName = "list-brokers"
 
 // withAuthorization gates every invocation of toolName through policy.

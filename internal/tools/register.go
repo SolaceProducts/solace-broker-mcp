@@ -119,9 +119,12 @@ func stampCorrelationID(ctx context.Context, result *mcp.CallToolResult) {
 // (with the broker parameter injected into the input schema) and creates a
 // handler closure that delegates to ToolManager.CallTool.
 //
-// This function is the only translation boundary between our internal Metadata
-// type and the SDK's mcp.Tool. Handlers and the manager work in our own
-// vocabulary; this is where it crosses over to the SDK.
+// This function is the translation boundary between the ToolManager's
+// ToolHandler / Metadata vocabulary and the SDK's mcp.Tool. Handlers and
+// the manager work in our own vocabulary; this is where it crosses over
+// to the SDK. RegisterListBrokers builds its own mcp.Tool independently
+// because list-brokers has no ToolHandler backing it (it's a discovery
+// primitive, not a broker operation).
 //
 // When policy is non-nil, each registered handler is additionally wrapped
 // with withAuthorization inside withRecovery, so every dispatch consults
