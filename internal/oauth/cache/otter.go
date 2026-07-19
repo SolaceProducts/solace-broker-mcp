@@ -45,12 +45,12 @@ func newOtterTokenCache(cfg CacheConfig) (*otterTokenCache, error) {
 func (o *otterTokenCache) Get(_ context.Context, key string) (GetResult, error) {
 	entry, ok := o.cache.GetIfPresent(key)
 	if !ok {
-		return GetResult{Status: GetMissAbsent}, nil
+		return GetResult{Status: GetMiss}, nil
 	}
 	// Defend against future backend precision changes: verify freshness against
 	// wall-clock even though v2 has nanosecond expiration precision.
 	if !time.Now().Before(entry.ExpiresAt) {
-		return GetResult{Status: GetMissAbsent}, nil
+		return GetResult{Status: GetMiss}, nil
 	}
 	return GetResult{Entry: entry, Status: GetHit}, nil
 }

@@ -84,8 +84,8 @@ func TestGet_ReturnsFreshTokensOnly(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Get: %v", err)
 		}
-		if res.Status != GetMissAbsent {
-			t.Errorf("expected GetMissAbsent, got %v", res.Status)
+		if res.Status != GetMiss {
+			t.Errorf("expected GetMiss, got %v", res.Status)
 		}
 	})
 }
@@ -146,8 +146,8 @@ func TestDelete_RemovesEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post-delete Get: %v", err)
 	}
-	if res.Status != GetMissAbsent {
-		t.Error("expected GetMissAbsent after Delete")
+	if res.Status != GetMiss {
+		t.Error("expected GetMiss after Delete")
 	}
 }
 
@@ -282,15 +282,16 @@ func TestTTL_WithinSkewMargin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if res.Status != GetMissAbsent {
-		t.Error("expected GetMissAbsent for token within clock skew margin")
+	if res.Status != GetMiss {
+		t.Error("expected GetMiss for token within clock skew margin")
 	}
 }
 
-// T9: GetMissAbsent is returned for a never-stored key.
-// GetMissExpired exists for belt-and-suspenders (Otter sweeper lag) but is not
-// deterministically testable — Otter evicts before ExpiresAt is reached.
-func TestGetResult_AbsentStatus(t *testing.T) {
+// T9: GetMiss is returned for a never-stored key. GetMiss also covers the
+// wall-clock double-check branch where the backend returned an entry that has
+// passed its ExpiresAt; that branch is not deterministically testable because
+// the backend evicts stale entries before we observe them.
+func TestGetResult_MissStatus(t *testing.T) {
 	t.Parallel()
 	c := newTestCache(t, defaultCfg)
 	ctx := context.Background()
@@ -299,8 +300,8 @@ func TestGetResult_AbsentStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if res.Status != GetMissAbsent {
-		t.Errorf("got %v, want GetMissAbsent", res.Status)
+	if res.Status != GetMiss {
+		t.Errorf("got %v, want GetMiss", res.Status)
 	}
 	if res.Entry != (CachedCredential{}) {
 		t.Errorf("expected zero CachedCredential on miss, got %+v", res.Entry)
@@ -639,9 +640,8 @@ func TestConcurrentAccess_IncludesDelete(t *testing.T) {
 }
 
 // TestGetStatus_Level pins the slog level mapping the token exchanger consumes
-// at exchange.go:41. GetHit and GetMissAbsent are Debug (routine cache
-// traffic); GetMissExpired is Warn (a stale entry survived until Get — worth
-// noticing).
+// at exchange.go:41. Both GetHit and GetMiss are Debug — routine cache traffic
+// doesn't warrant a Warn.
 func TestGetStatus_Level(t *testing.T) {
 	t.Parallel()
 
@@ -651,7 +651,7 @@ func TestGetStatus_Level(t *testing.T) {
 		want   slog.Level
 	}{
 		{"hit is debug", GetHit, slog.LevelDebug},
-		{"miss_absent is debug", GetMissAbsent, slog.LevelDebug},
+		{"miss is debug", GetMiss, slog.LevelDebug},
 	}
 
 	for _, tc := range cases {

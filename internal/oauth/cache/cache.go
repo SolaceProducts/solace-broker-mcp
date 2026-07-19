@@ -43,16 +43,16 @@ func (c CachedCredential) GoString() string {
 type GetStatus int
 
 const (
-	GetHit        GetStatus = iota // Entry found and fresh.
-	GetMissAbsent                  // No entry for this key.
+	GetHit  GetStatus = iota // Entry found and fresh.
+	GetMiss                  // No fresh entry available for this key.
 )
 
 func (s GetStatus) String() string {
 	switch s {
 	case GetHit:
 		return "hit"
-	case GetMissAbsent:
-		return "miss_absent"
+	case GetMiss:
+		return "miss"
 	default:
 		return fmt.Sprintf("GetStatus(%d)", int(s))
 	}
@@ -63,7 +63,7 @@ func (s GetStatus) Level() slog.Level {
 }
 
 // GetResult is returned by Get. Callers inspect Status to distinguish
-// hit, clean miss, and expired miss — each has different diagnostic meaning.
+// a hit from a miss.
 type GetResult struct {
 	Entry  CachedCredential
 	Status GetStatus
