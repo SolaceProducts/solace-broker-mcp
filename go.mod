@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/getkin/kin-openapi v0.134.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
+	github.com/maypok86/otter/v2 v2.3.0
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/sony/gobreaker/v2 v2.4.0
 	golang.org/x/sync v0.20.0
@@ -12,10 +13,10 @@ require (
 )
 
 require (
-	github.com/dolthub/maphash v0.1.0 // indirect
-	github.com/gammazero/deque v0.2.1 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
-	github.com/maypok86/otter v1.2.4 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/stretchr/testify v1.11.1 // indirect
 )
 
 require (
