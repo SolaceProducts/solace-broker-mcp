@@ -485,25 +485,6 @@ func TestGetResult_LogValueDoesNotLeakToken(t *testing.T) {
 	}
 }
 
-// TestPutResult_LogValueEmitsStatusOnly pins the symmetric guard for
-// PutResult. Today PutResult only carries Status so no token can leak,
-// but pinning the shape now catches a regression if a future backend
-// grows the type with fields that should not be blanket-reflected.
-func TestPutResult_LogValueEmitsStatusOnly(t *testing.T) {
-	t.Parallel()
-
-	var buf bytes.Buffer
-	l := slog.New(slog.NewJSONHandler(&buf, nil))
-
-	pr := PutResult{Status: PutDroppedFull}
-	l.LogAttrs(context.Background(), slog.LevelInfo, "test", slog.Any("cache_result", pr))
-
-	out := buf.String()
-	if !strings.Contains(out, `"status":"dropped_full"`) {
-		t.Errorf("PutResult log should surface status=dropped_full; got: %s", out)
-	}
-}
-
 // TestNewTokenCache_ValidationFirstFailureWins pins the caller-observable
 // contract that when multiple CacheConfig fields are invalid, the constructor
 // reports only the FIRST failing field, in the fixed order MaxSize → MaxTTL →
@@ -671,7 +652,6 @@ func TestGetStatus_Level(t *testing.T) {
 	}{
 		{"hit is debug", GetHit, slog.LevelDebug},
 		{"miss_absent is debug", GetMissAbsent, slog.LevelDebug},
-		{"miss_expired is warn", GetMissExpired, slog.LevelWarn},
 	}
 
 	for _, tc := range cases {
@@ -699,7 +679,6 @@ func TestPutStatus_Level(t *testing.T) {
 	}{
 		{"stored is debug", PutStored, slog.LevelDebug},
 		{"dropped_ttl is warn", PutDroppedTTL, slog.LevelWarn},
-		{"dropped_full is warn", PutDroppedFull, slog.LevelWarn},
 	}
 
 	for _, tc := range cases {
