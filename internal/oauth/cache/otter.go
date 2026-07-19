@@ -47,11 +47,6 @@ func (o *otterTokenCache) Get(_ context.Context, key string) (GetResult, error) 
 	if !ok {
 		return GetResult{Status: GetMiss}, nil
 	}
-	// Defend against future backend precision changes: verify freshness against
-	// wall-clock even though v2 has nanosecond expiration precision.
-	if !time.Now().Before(entry.ExpiresAt) {
-		return GetResult{Status: GetMiss}, nil
-	}
 	return GetResult{Entry: entry, Status: GetHit}, nil
 }
 
