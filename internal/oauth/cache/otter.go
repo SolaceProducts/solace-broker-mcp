@@ -38,7 +38,7 @@ func (o *otterTokenCache) Get(_ context.Context, key string) (GetResult, error) 
 		return GetResult{Status: GetMissAbsent}, nil
 	}
 	if !time.Now().Before(entry.ExpiresAt) {
-		return GetResult{Status: GetMissExpired}, nil
+		return GetResult{Status: GetMissAbsent}, nil
 	}
 	return GetResult{Entry: entry, Status: GetHit}, nil
 }
@@ -50,9 +50,7 @@ func (o *otterTokenCache) Put(_ context.Context, key string, entry CachedCredent
 	if ttl <= 0 {
 		return PutResult{Status: PutDroppedTTL}, nil
 	}
-	if !o.cache.Set(key, entry, ttl) {
-		return PutResult{Status: PutDroppedFull}, nil
-	}
+	o.cache.Set(key, entry, ttl)
 	return PutResult{Status: PutStored}, nil
 }
 

@@ -43,9 +43,8 @@ func (c CachedCredential) GoString() string {
 type GetStatus int
 
 const (
-	GetHit         GetStatus = iota // Entry found and fresh.
-	GetMissAbsent                   // No entry for this key.
-	GetMissExpired                  // Entry exists but failed the freshness check.
+	GetHit        GetStatus = iota // Entry found and fresh.
+	GetMissAbsent                  // No entry for this key.
 )
 
 func (s GetStatus) String() string {
@@ -54,20 +53,13 @@ func (s GetStatus) String() string {
 		return "hit"
 	case GetMissAbsent:
 		return "miss_absent"
-	case GetMissExpired:
-		return "miss_expired"
 	default:
 		return fmt.Sprintf("GetStatus(%d)", int(s))
 	}
 }
 
 func (s GetStatus) Level() slog.Level {
-	switch s {
-	case GetMissExpired:
-		return slog.LevelWarn
-	default:
-		return slog.LevelDebug
-	}
+	return slog.LevelDebug
 }
 
 // GetResult is returned by Get. Callers inspect Status to distinguish
@@ -89,9 +81,8 @@ func (r GetResult) LogValue() slog.Value {
 type PutStatus int
 
 const (
-	PutStored     PutStatus = iota // Entry accepted and stored.
-	PutDroppedTTL                  // TTL was zero or negative after clock-skew; not stored.
-	PutDroppedFull                 // Otter's admission policy rejected the entry (cache full).
+	PutStored    PutStatus = iota // Entry accepted and stored.
+	PutDroppedTTL                 // TTL was zero or negative after clock-skew; not stored.
 )
 
 func (s PutStatus) String() string {
@@ -100,8 +91,6 @@ func (s PutStatus) String() string {
 		return "stored"
 	case PutDroppedTTL:
 		return "dropped_ttl"
-	case PutDroppedFull:
-		return "dropped_full"
 	default:
 		return fmt.Sprintf("PutStatus(%d)", int(s))
 	}
@@ -109,7 +98,7 @@ func (s PutStatus) String() string {
 
 func (s PutStatus) Level() slog.Level {
 	switch s {
-	case PutDroppedTTL, PutDroppedFull:
+	case PutDroppedTTL:
 		return slog.LevelWarn
 	default:
 		return slog.LevelDebug
