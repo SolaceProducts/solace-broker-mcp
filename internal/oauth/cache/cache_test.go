@@ -503,3 +503,212 @@ func TestPutResult_LogValueEmitsStatusOnly(t *testing.T) {
 		t.Errorf("PutResult log should surface status=dropped_full; got: %s", out)
 	}
 }
+
+// TestNewTokenCache_ValidationFirstFailureWins pins the caller-observable
+// contract that when multiple CacheConfig fields are invalid, the constructor
+// reports only the FIRST failing field, in the fixed order MaxSize → MaxTTL →
+// ClockSkew. Callers rely on this to fix misconfiguration one field at a time
+// without the error message swimming around as they patch each field.
+//
+// The assertion is deliberately loose on wording — it only checks that the
+// expected field name appears in the error. The exact phrasing is not part of
+// the contract.
+func TestNewTokenCache_ValidationFirstFailureWins(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		cfg       CacheConfig
+		wantField string
+	}{
+		{
+			name:      "all three invalid, MaxSize reported first",
+			cfg:       CacheConfig{MaxSize: 0, MaxTTL: 0, ClockSkew: -time.Second},
+			wantField: "MaxSize",
+		},
+		{
+			name:      "MaxTTL and ClockSkew invalid, MaxTTL reported first",
+			cfg:       CacheConfig{MaxSize: 100, MaxTTL: 0, ClockSkew: -time.Second},
+			wantField: "MaxTTL",
+		},
+		{
+			name:      "only ClockSkew invalid, ClockSkew reported",
+			cfg:       CacheConfig{MaxSize: 100, MaxTTL: time.Hour, ClockSkew: -time.Second},
+			wantField: "ClockSkew",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c, err := NewTokenCache(tc.cfg)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if c != nil {
+				t.Errorf("expected nil cache on error, got %T", c)
+			}
+			if !strings.Contains(err.Error(), tc.wantField) {
+				t.Errorf("expected error mentioning %q, got: %v", tc.wantField, err)
+			}
+		})
+	}
+}
+
+// TestPut_MaxTTLCapPreservesCallerExpiresAt pins the two-clock behaviour
+// callers depend on: when the caller's ExpiresAt is farther out than MaxTTL
+// allows, the cache internally retains the entry for the shorter MaxTTL, but
+// Get returns the caller's ORIGINAL ExpiresAt unchanged. The cache's internal
+// eviction clock and the value the caller sees are decoupled — a subsequent
+// backend must not silently "correct" the returned expiry to the shortened
+// retention window.
+func TestPut_MaxTTLCapPreservesCallerExpiresAt(t *testing.T) {
+	t.Parallel()
+	c := newTestCache(t, CacheConfig{MaxSize: 100, ClockSkew: 0, MaxTTL: time.Hour})
+	ctx := context.Background()
+
+	callerExpiry := time.Now().Add(48 * time.Hour)
+	tok := CachedCredential{Value: "v", ExpiresAt: callerExpiry}
+
+	if _, err := c.Put(ctx, "k", tok); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	res, err := c.Get(ctx, "k")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if res.Status != GetHit {
+		t.Fatalf("expected GetHit, got %v", res.Status)
+	}
+	if !res.Entry.ExpiresAt.Equal(callerExpiry) {
+		t.Errorf("ExpiresAt: got %v, want %v (caller's original value)", res.Entry.ExpiresAt, callerExpiry)
+	}
+}
+
+// TestClose_ReturnsNil pins the first-call contract for Close: it returns nil.
+// The wrapper does not promise anything about a second call; that is out of
+// scope here on purpose.
+func TestClose_ReturnsNil(t *testing.T) {
+	t.Parallel()
+	// Deliberately not using newTestCache — the test IS the Close.
+	c, err := NewTokenCache(defaultCfg)
+	if err != nil {
+		t.Fatalf("NewTokenCache: %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Errorf("Close: expected nil, got %v", err)
+	}
+}
+
+// TestConcurrentAccess_IncludesDelete pins that Delete is safe for concurrent
+// use alongside Put and Get. The whole point is racing operations on
+// overlapping keys: any legal outcome is fine, so this test asserts nothing
+// about values. The -race detector is what enforces the contract; the
+// assertion below is only that the test itself completes cleanly.
+func TestConcurrentAccess_IncludesDelete(t *testing.T) {
+	t.Parallel()
+	c := newTestCache(t, CacheConfig{MaxSize: 1000, ClockSkew: 0, MaxTTL: time.Hour})
+	ctx := context.Background()
+
+	const n = 50
+	expiresAt := time.Now().Add(10 * time.Minute)
+
+	var wg sync.WaitGroup
+	wg.Add(n * 3)
+
+	// Overlap keys across all three operation types by using key-<i%n>.
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			key := fmt.Sprintf("key-%d", i)
+			tok := CachedCredential{Value: fmt.Sprintf("val-%d", i), ExpiresAt: expiresAt}
+			if _, err := c.Put(ctx, key, tok); err != nil {
+				t.Errorf("Put(%s): %v", key, err)
+			}
+		}()
+	}
+
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			key := fmt.Sprintf("key-%d", i)
+			if _, err := c.Get(ctx, key); err != nil {
+				t.Errorf("Get(%s): %v", key, err)
+			}
+		}()
+	}
+
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			key := fmt.Sprintf("key-%d", i)
+			if _, err := c.Delete(ctx, key); err != nil {
+				t.Errorf("Delete(%s): %v", key, err)
+			}
+		}()
+	}
+
+	wg.Wait()
+	t.Logf("ran %d Put, %d Get, %d Delete goroutines on overlapping keys", n, n, n)
+}
+
+// TestGetStatus_Level pins the slog level mapping the token exchanger consumes
+// at exchange.go:41. GetHit and GetMissAbsent are Debug (routine cache
+// traffic); GetMissExpired is Warn (a stale entry survived until Get — worth
+// noticing).
+func TestGetStatus_Level(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		status GetStatus
+		want   slog.Level
+	}{
+		{"hit is debug", GetHit, slog.LevelDebug},
+		{"miss_absent is debug", GetMissAbsent, slog.LevelDebug},
+		{"miss_expired is warn", GetMissExpired, slog.LevelWarn},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tc.status.Level(); got != tc.want {
+				t.Errorf("%v.Level(): got %v, want %v", tc.status, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPutStatus_Level pins the slog level mapping the token exchanger consumes
+// at exchange.go:80. PutStored is Debug (routine); PutDroppedTTL and
+// PutDroppedFull are Warn (the caller asked us to cache something we couldn't
+// keep — worth surfacing).
+func TestPutStatus_Level(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		status PutStatus
+		want   slog.Level
+	}{
+		{"stored is debug", PutStored, slog.LevelDebug},
+		{"dropped_ttl is warn", PutDroppedTTL, slog.LevelWarn},
+		{"dropped_full is warn", PutDroppedFull, slog.LevelWarn},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tc.status.Level(); got != tc.want {
+				t.Errorf("%v.Level(): got %v, want %v", tc.status, got, tc.want)
+			}
+		})
+	}
+}
