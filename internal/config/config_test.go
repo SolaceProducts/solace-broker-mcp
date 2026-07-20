@@ -1404,6 +1404,51 @@ func TestMCPClientAuthConfig_LogValue_RedactsURLCredentials(t *testing.T) {
 	}
 }
 
+// TestAuthConfig_LogValue_RedactsCredentials pins that AuthConfig.LogValue
+// exposes only mode — username, password, and token must never appear in
+// rendered slog output. Uses sentinel strings so a leak is a deterministic
+// substring hit rather than a guess at what "a secret looks like". SOL-150757.
+func TestAuthConfig_LogValue_RedactsCredentials(t *testing.T) {
+	const (
+		sentUser = "SENTINEL_USERNAME_MUST_NOT_LEAK"
+		sentPass = "SENTINEL_PASSWORD_MUST_NOT_LEAK"
+		sentTok  = "SENTINEL_TOKEN_MUST_NOT_LEAK"
+	)
+
+	cases := []struct {
+		name string
+		mode string
+	}{
+		{"basic", "basic"},
+		{"bearer", "bearer"},
+		{"oauth", "oauth"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := AuthConfig{
+				Mode:     tc.mode,
+				Username: sentUser,
+				Password: sentPass,
+				Token:    sentTok,
+			}
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, nil))
+			logger.Info("auth config", slog.Any("auth", a))
+
+			out := buf.String()
+			for _, s := range []string{sentUser, sentPass, sentTok} {
+				if strings.Contains(out, s) {
+					t.Errorf("credential sentinel %q leaked through AuthConfig.LogValue:\n%s", s, out)
+				}
+			}
+			if !strings.Contains(out, `"mode":"`+tc.mode+`"`) {
+				t.Errorf("LogValue output should include mode=%q, got: %s", tc.mode, out)
+			}
+		})
+	}
+}
+
 func TestLoadConfig_LogLevel_Default(t *testing.T) {
 	yaml := `
 mcp_client_auth:
