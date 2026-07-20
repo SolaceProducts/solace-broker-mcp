@@ -16,7 +16,6 @@
     },
     "secrets": {
       "vault": {
-        "url": "https://vault.maas-vault-prod.solace.cloud:8200",
         "secret_path": "secret/data/tools/githubactions",
         "role": "cicd-workflows-secret-read-role"
       }

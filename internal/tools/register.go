@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/authz"
 	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
@@ -114,14 +115,21 @@ func stampCorrelationID(ctx context.Context, result *mcp.CallToolResult) {
 }
 
 // RegisterWithServer registers all tools from the ToolManager with the MCP
-// server. For each handler, it builds an mcp.Tool from the handler's Metadata
-// (with the broker parameter injected into the input schema) and creates a
-// handler closure that delegates to ToolManager.CallTool.
+// server. For each handler it builds an mcp.Tool (with the broker parameter
+// injected) and a closure that delegates to ToolManager.CallTool. This is
+// the translation boundary between our ToolHandler / Metadata vocabulary and
+// the SDK's mcp.Tool.
 //
-// This function is the only translation boundary between our internal Metadata
-// type and the SDK's mcp.Tool. Handlers and the manager work in our own
-// vocabulary; this is where it crosses over to the SDK.
-func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerPool, enableWriteTools bool) {
+// When policy is non-nil, each handler is wrapped with withAuthorization
+// inside withRecovery, so every dispatch consults the policy before the tool
+// runs. groupsClaimName is the admin-configured JWT claim name the
+// auth-middleware resolver was told to look for; the wrapper reports it on
+// the missing-claim audit event so operators can jump straight to the IdP
+// side of a day-one misconfiguration. When policy is nil, no authorization
+// frame is composed and groupsClaimName is unused — the caller
+// (cmd/server/main.go) owns the enable-gate and expresses disablement here
+// as nil.
+func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerPool, enableWriteTools bool, policy *authz.Policy, groupsClaimName string) {
 	type registration struct {
 		name    string
 		handler ToolHandler
@@ -154,22 +162,29 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 
 		mcpTool := toMCPTool(reg.meta, pool)
 
-		server.AddTool(mcpTool, withRecovery(reg.name, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		var callToolHandler mcp.ToolHandler = func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var params map[string]any
 			if err := json.Unmarshal(req.Params.Arguments, &params); err != nil {
 				return nil, fmt.Errorf("parsing tool arguments: %w", err)
 			}
-			// Extract per-invocation audit identity from the SDK request
-			// extras (SOL-149606). Both req.Extra and req.Extra.TokenInfo
-			// can be nil in disabled mode (no middleware) or under test
-			// scaffolding that constructs a bare CallToolRequest; the
-			// constructor handles nil cleanly.
+			// Per-invocation audit identity from the SDK extras (SOL-149606).
+			// Extra and TokenInfo can be nil in disabled mode or under test
+			// scaffolding; NewIdentityFromTokenInfo handles nil cleanly.
 			var info *sdkauth.TokenInfo
 			if req.Extra != nil {
 				info = req.Extra.TokenInfo
 			}
 			return mgr.CallTool(ctx, reg.name, params, NewIdentityFromTokenInfo(info))
-		}))
+		}
+
+		// Compose withAuthorization INSIDE withRecovery so denials inherit
+		// correlation-ID stamping and panic containment. Nil policy skips
+		// the wrapper entirely — dispatch is byte-identical to pre-RBAC.
+		if policy != nil {
+			callToolHandler = withAuthorization(policy, reg.name, groupsClaimName, callToolHandler)
+		}
+
+		server.AddTool(mcpTool, withRecovery(reg.name, callToolHandler))
 	}
 }
 

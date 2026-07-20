@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/auth"
+	"github.com/SolaceDev/solace-broker-mcp/internal/authz"
 	"github.com/SolaceDev/solace-broker-mcp/internal/banner"
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite"
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite/definitions"
@@ -54,6 +55,24 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// redactedKeys are attribute-key substrings that trigger [REDACTED] replacement
+// in slog output. Case-insensitive substring match — see redactSecretAttr.
+var redactedKeys = []string{"password", "token", "secret", "authorization", "credential", "api_key", "private_key"}
+
+// redactSecretAttr is the slog.HandlerOptions.ReplaceAttr filter used by
+// newSlogHandler. Any attribute whose key (lowercased) contains one of
+// redactedKeys has its value replaced with [REDACTED].
+func redactSecretAttr(_ []string, a slog.Attr) slog.Attr {
+	key := strings.ToLower(a.Key)
+	for _, r := range redactedKeys {
+		if strings.Contains(key, r) {
+			a.Value = slog.StringValue("[REDACTED]")
+			return a
+		}
+	}
+	return a
+}
+
 // newSlogHandler creates a slog handler with the ReplaceAttr safety net that
 // redacts values for keys matching common credential patterns. This is defense
 // in depth — credential-carrying types also implement slog.LogValuer to exclude
@@ -65,20 +84,9 @@ import (
 // loading itself can emit logs), then again with the user-configured level
 // from cfg.LogLevel after validation.
 func newSlogHandler(level slog.Level) slog.Handler {
-	redactedKeys := []string{"password", "token", "secret", "authorization", "credential", "api_key", "private_key"}
-
 	jsonHandler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: level,
-		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-			key := strings.ToLower(a.Key)
-			for _, redacted := range redactedKeys {
-				if strings.Contains(key, redacted) {
-					a.Value = slog.StringValue("[REDACTED]")
-					return a
-				}
-			}
-			return a
-		},
+		Level:       level,
+		ReplaceAttr: redactSecretAttr,
 	})
 
 	// Wrap the JSON handler so every request-scoped log line carries a
@@ -469,6 +477,36 @@ func newTokenExchanger(oauthCfg *config.BrokerOAuthConfig) (*tokenexchange.Excha
 	return exchanger, nil
 }
 
+// buildToolPolicy is the single, tested decision point for whether the server
+// runs with tool authorization and which compiled Policy to use. Extracted so
+// the invariant "gate enabled ⟺ returned policy is non-nil" is a
+// postcondition of a named function rather than folklore scattered across
+// startup.
+//
+// Returns (nil, nil) when the gate is off, (policy, nil) on success,
+// (nil, err) on compilation failure — callers must fail startup on the last.
+// Main's fail-closed guard immediately after this call asserts the mirror
+// direction so any future refactor that breaks the postcondition aborts
+// startup rather than silently bypassing authorization.
+func buildToolPolicy(cfg *config.ServerConfig) (*authz.Policy, error) {
+	if !config.ToolAuthorizationEnabled(cfg) {
+		return nil, nil
+	}
+	return authz.NewPolicy(*cfg.MCPClientAuth.ToolAuthorization)
+}
+
+// logStartupBanners emits the boot-time WARN banners: auth-mode signal,
+// static-cleartext exposure, and OAuth plaintext-listener acknowledgement.
+func logStartupBanners(cfg *config.ServerConfig) {
+	banner.LogStartupAuthMode(cfg.MCPClientAuth.Mode, cfg.MCPClientAuth.Issuer, cfg.BindAddress())
+	if cfg.StaticTokenExposedCleartext() {
+		banner.LogStaticCleartextExposure(cfg.BindAddress())
+	}
+	if cfg.OAuthPlaintextListenerAcknowledged() {
+		banner.LogOAuthPlaintextListener(cfg.BindAddress())
+	}
+}
+
 func main() {
 	if len(os.Args) == 2 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
 		fmt.Println(version.Version())
@@ -518,6 +556,16 @@ func main() {
 
 	slog.Info("server starting", slog.String("version", version.Version()))
 
+	// One-line release disclaimer, emitted once on every startup regardless of
+	// auth mode. It is deliberately SEPARATE from the insecure-mode banners in
+	// internal/banner (those are reserved for security-mode signals and must not
+	// be diluted). Emitted here in the bootstrap-INFO window — before the slog
+	// handler is reconfigured to cfg.LogLevel — so it stays visible even when the
+	// operator sets a higher log level. Wording tracks the README Disclaimer
+	// section and is finalized by Legal.
+	slog.Info("Community-supported open-source software, provided AS IS with no warranty. " +
+		"AI-driven; review output before acting. See the Disclaimer in the README.")
+
 	// 1. Load config. config.Load handles path resolution internally
 	//    (CONFIG_FILE env var, then /etc/mcp-server/config.yaml, then
 	//    ./broker-config.yaml). See config.Load docs for exact semantics.
@@ -532,21 +580,7 @@ func main() {
 	// level — at this point the bootstrap handler is at INFO, so WARN
 	// banner entries are always visible regardless of cfg.LogLevel.
 	// DO NOT move this into middleware; see internal/banner/banner.go.
-	banner.LogStartupAuthMode(cfg.MCPClientAuth.Mode, cfg.MCPClientAuth.Issuer, cfg.BindAddress())
-
-	// static mode allows a non-loopback bind without an override, but that only
-	// keeps the token safe if the transport is encrypted. Warn loudly when the
-	// shared dev token would travel plaintext on a routable interface.
-	if cfg.StaticTokenExposedCleartext() {
-		banner.LogStaticCleartextExposure(cfg.BindAddress())
-	}
-
-	// oauth mode requires TLS unless the operator acknowledged upstream TLS
-	// termination (tls_terminated_upstream: true). When they did, the listener
-	// serves plaintext — warn loudly so a missing terminating proxy is visible.
-	if cfg.OAuthPlaintextListenerAcknowledged() {
-		banner.LogOAuthPlaintextListener(cfg.BindAddress())
-	}
+	logStartupBanners(cfg)
 
 	// Reconfigure slog with the user-configured level. cfg.LogLevel is
 	// validated and normalized to one of debug/info/warn/error.
@@ -652,13 +686,63 @@ func main() {
 	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor)
 	registerSEMPv1Tools(mgr)
 	registerMixedTools(mgr)
-	tools.RegisterWithServer(mgr, server, pool, cfg.EnableWriteTools)
+
+	// Compile the tool-authorization policy. buildToolPolicy owns the
+	// gate-and-compile decision so the "enabled ⟺ policy non-nil" invariant
+	// is a tested postcondition of one function. The guard below defends
+	// against a future refactor breaking that postcondition — silent
+	// fail-open on a security switch is the SOL-149989 failure class.
+	policy, err := buildToolPolicy(cfg)
+	if err != nil {
+		slog.Error("tool authorization startup failed", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	if config.ToolAuthorizationEnabled(cfg) && policy == nil {
+		slog.Error("tool authorization is enabled in config but no policy was compiled — refusing to start rather than silently bypass authorization")
+		os.Exit(1)
+	}
+
+	// Pull the configured groups claim name for the missing-claim audit
+	// event. applyDefaults guarantees GroupsClaimName is non-nil whenever
+	// the tool_authorization block is non-nil, so this dereference is safe
+	// under the same gate that produced a non-nil policy. When RBAC is
+	// disabled the string is unused by RegisterWithServer.
+	var groupsClaimName string
+	if policy != nil {
+		groupsClaimName = *cfg.MCPClientAuth.ToolAuthorization.GroupsClaimName
+	}
+	tools.RegisterWithServer(mgr, server, pool, cfg.EnableWriteTools, policy, groupsClaimName)
 	slog.Info("tool registration complete",
 		slog.Bool("enable_write_tools", cfg.EnableWriteTools))
 
-	// list-brokers is a discovery tool registered directly on the MCP
-	// server (it doesn't need broker resolution or the ToolManager pipeline).
+	// list-brokers is registered directly (no broker resolution needed) and
+	// takes no policy — the RBAC exemption is expressed structurally at this
+	// API surface.
 	tools.RegisterListBrokers(server, pool)
+
+	// Validate every configured tool name now that both registrations have
+	// populated mgr. An admin typo would silently produce a grant that never
+	// takes effect at request time; catching it at startup is fatal by
+	// design. Skipped when RBAC is off.
+	if policy != nil {
+		if err := tools.ValidatePolicyToolNames(*cfg.MCPClientAuth.ToolAuthorization, mgr); err != nil {
+			slog.Error("tool authorization startup failed", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+		slog.Info("tool authorization is enabled",
+			slog.Any("policy", policy))
+	} else {
+		// Announce the RBAC posture with the reason so startup logs are
+		// unambiguous. Config validator rejects a block outside oauth mode
+		// and requires enabled to be set in oauth mode, so exactly two
+		// disabled paths remain: non-oauth mode, or oauth with enabled:false.
+		if cfg.MCPClientAuth.Mode == config.AuthModeOAuth {
+			slog.Info("tool authorization is disabled (enabled=false in config)")
+		} else {
+			slog.Info("tool authorization is disabled",
+				slog.String("auth_mode", cfg.MCPClientAuth.Mode))
+		}
+	}
 
 	slog.Info("all tools registered")
 

@@ -12,7 +12,7 @@ from unit tests.
 |---|---|---|---|
 | Unit | `internal/<pkg>/*_test.go` | `go test` | One component, sometimes a fake HTTP server |
 | **Integration (this dir)** | `test/integration/*_test.go` | `go test` | Multiple `internal/` components composed; fake brokers via `httptest.NewServer` |
-| E2E | `test/e2e-basic-mcp/`, `test/oauth/`, `test/e2e-monitoring/` | Shell scripts + Docker | Real binaries, real Solace brokers (or Keycloak), real network |
+| E2E | `test/e2e-basic-mcp/`, `test/e2e-oauth/`, `test/e2e-monitoring/`, `test/e2e-management/`, `test/e2e-action/` | Shell scripts + Docker | Real binaries, real Solace brokers (or Keycloak), real network |
 
 ## When a test belongs here
 

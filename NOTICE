@@ -1,0 +1,30 @@
+Solace Broker MCP Server
+Copyright 2024-2026 Solace Corporation
+
+This product includes software developed at Solace Corporation.
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file for the
+full terms.
+
+--------------------------------------------------------------------------------
+Third-party software
+
+This product includes third-party software. Each component and its license is
+listed in THIRD_PARTY_LICENSES.md, and can be reproduced from go.mod / go.sum.
+
+Components licensed under the Mozilla Public License 2.0
+(github.com/hashicorp/go-retryablehttp, github.com/hashicorp/go-cleanhttp) are
+used unmodified; their source is available from the repositories named in their
+module paths.
+
+--------------------------------------------------------------------------------
+Required attributions propagated from bundled dependencies
+
+github.com/coreos/go-oidc
+  Copyright 2014 CoreOS, Inc.
+  Licensed under the Apache License, Version 2.0.
+
+gopkg.in/yaml.v3
+  Copyright 2011-2019 Canonical Ltd. Licensed under the Apache License 2.0.
+  Portions derived from libyaml are licensed under the MIT License
+  (Copyright 2006-2010 Kirill Simonov).
