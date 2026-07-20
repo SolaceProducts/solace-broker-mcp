@@ -49,7 +49,7 @@ type errorResponse struct {
 //   - 2xx + valid JSON with required fields → *Token
 //   - 2xx + missing/unparseable fields → ErrInvalidResponse
 //   - 4xx + OAuth error JSON → ErrExchangeRejected (wraps error code)
-//   - 4xx + non-OAuth body → ErrExchangeTransport (possible proxy/WAF)
+//   - 4xx + non-OAuth body → ErrInvalidResponse (possible proxy/WAF interception)
 //   - 5xx / network-level → ErrExchangeTransport
 func (e *Exchanger) parseIdPResponse(resp *http.Response, now time.Time) (*Token, error) {
 	defer resp.Body.Close()
@@ -169,8 +169,8 @@ func classifyClientError(body []byte, statusCode int) error {
 	if err := json.Unmarshal(body, &er); err == nil && er.Error != "" {
 		if len(er.Error) > maxErrorCodeLen {
 			return &ExchangeError{
-				Sentinel:   ErrExchangeTransport,
-				Message:    fmt.Sprintf("token exchange transport failure: IdP returned HTTP %d with oversized error code (%d bytes) — not a standard OAuth error", statusCode, len(er.Error)),
+				Sentinel:   ErrInvalidResponse,
+				Message:    fmt.Sprintf("token exchange invalid response: IdP returned HTTP %d with oversized error code (%d bytes) — not a standard OAuth error", statusCode, len(er.Error)),
 				HTTPStatus: statusCode,
 			}
 		}
@@ -182,8 +182,8 @@ func classifyClientError(body []byte, statusCode int) error {
 	}
 
 	return &ExchangeError{
-		Sentinel:   ErrExchangeTransport,
-		Message:    fmt.Sprintf("token exchange transport failure: IdP returned HTTP %d with non-OAuth error body (possible proxy or WAF interception)", statusCode),
+		Sentinel:   ErrInvalidResponse,
+		Message:    fmt.Sprintf("token exchange invalid response: IdP returned HTTP %d with non-OAuth error body (possible proxy or WAF interception)", statusCode),
 		HTTPStatus: statusCode,
 	}
 }

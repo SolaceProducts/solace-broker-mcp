@@ -624,8 +624,9 @@ func TestParseIdPResponse_FourxxOAuthErrorReturnsExchangeRejected(t *testing.T) 
 }
 
 // T18: A 4xx response whose body is not a valid OAuth error JSON (e.g. an HTML
-// page from a WAF) returns ErrExchangeTransport with "proxy or WAF interception".
-func TestParseIdPResponse_FourxxNonOAuthBodyReturnsExchangeTransport(t *testing.T) {
+// page from a WAF) returns ErrInvalidResponse with "proxy or WAF interception".
+// Non-retryable — retrying an intercepted request will not yield a different response.
+func TestParseIdPResponse_FourxxNonOAuthBodyReturnsInvalidResponse(t *testing.T) {
 	t.Parallel()
 
 	e, err := New(validParams(t))
@@ -645,8 +646,11 @@ func TestParseIdPResponse_FourxxNonOAuthBodyReturnsExchangeTransport(t *testing.
 	if tok != nil {
 		t.Errorf("tok = %v, want nil", tok)
 	}
-	if !errors.Is(err, ErrExchangeTransport) {
-		t.Errorf("errors.Is(err, ErrExchangeTransport) = false, want true; err = %v", err)
+	if !errors.Is(err, ErrInvalidResponse) {
+		t.Errorf("errors.Is(err, ErrInvalidResponse) = false, want true; err = %v", err)
+	}
+	if errors.Is(err, ErrExchangeTransport) {
+		t.Errorf("errors.Is(err, ErrExchangeTransport) = true, want false — proxy/WAF interception must NOT be a transport failure")
 	}
 	if !strings.Contains(err.Error(), "proxy or WAF interception") {
 		t.Errorf("err.Error() = %q, want it to contain \"proxy or WAF interception\"", err.Error())
@@ -700,9 +704,12 @@ func TestParseIdPResponse_ThreexxAndFivexxReturnExchangeTransport(t *testing.T) 
 }
 
 // T20: An oversized error code (> maxErrorCodeLen bytes) routes to
-// ErrExchangeTransport to prevent log-line bloat. A code at exactly
-// maxErrorCodeLen bytes routes to ErrExchangeRejected with the full code.
-func TestClassifyClientError_OversizedErrorCodeReturnsTransport(t *testing.T) {
+// ErrInvalidResponse (non-retryable — the IdP is misbehaving or the
+// response is intercepted, neither of which a retry will fix) and
+// prevents log-line bloat by omitting the oversized code from the
+// message. A code at exactly maxErrorCodeLen bytes routes to
+// ErrExchangeRejected with the full code.
+func TestClassifyClientError_OversizedErrorCodeReturnsInvalidResponse(t *testing.T) {
 	t.Parallel()
 
 	longCode := strings.Repeat("a", maxErrorCodeLen+1) // 65 bytes
@@ -715,8 +722,11 @@ func TestClassifyClientError_OversizedErrorCodeReturnsTransport(t *testing.T) {
 	errExact := classifyClientError([]byte(exactBody), 400)
 
 	// Oversized assertions.
-	if !errors.Is(errOver, ErrExchangeTransport) {
-		t.Errorf("errors.Is(errOver, ErrExchangeTransport) = false, want true; err = %v", errOver)
+	if !errors.Is(errOver, ErrInvalidResponse) {
+		t.Errorf("errors.Is(errOver, ErrInvalidResponse) = false, want true; err = %v", errOver)
+	}
+	if errors.Is(errOver, ErrExchangeTransport) {
+		t.Errorf("errors.Is(errOver, ErrExchangeTransport) = true, want false — oversized error code must NOT be a transport failure")
 	}
 	if errors.Is(errOver, ErrExchangeRejected) {
 		t.Errorf("errors.Is(errOver, ErrExchangeRejected) = true, want false — oversized must NOT be a rejection")
@@ -922,14 +932,18 @@ func TestParseSuccessBody_NullBodyTriggersAccessTokenMissingError(t *testing.T) 
 }
 
 // T26: An explicit empty string in the "error" field falls through to the
-// transport-error path (no code to report), not the rejection path.
-func TestClassifyClientError_ExplicitEmptyErrorFieldRoutesToTransport(t *testing.T) {
+// non-OAuth-body path (no code to report), which classifies as
+// ErrInvalidResponse (proxy/WAF-shaped, non-retryable), not the rejection path.
+func TestClassifyClientError_ExplicitEmptyErrorFieldRoutesToInvalidResponse(t *testing.T) {
 	t.Parallel()
 
 	err := classifyClientError([]byte(`{"error":""}`), 400)
 
-	if !errors.Is(err, ErrExchangeTransport) {
-		t.Errorf("errors.Is(err, ErrExchangeTransport) = false, want true; err = %v", err)
+	if !errors.Is(err, ErrInvalidResponse) {
+		t.Errorf("errors.Is(err, ErrInvalidResponse) = false, want true; err = %v", err)
+	}
+	if errors.Is(err, ErrExchangeTransport) {
+		t.Errorf("errors.Is(err, ErrExchangeTransport) = true, want false — empty error field must NOT be a transport failure")
 	}
 	if errors.Is(err, ErrExchangeRejected) {
 		t.Errorf("errors.Is(err, ErrExchangeRejected) = true, want false — empty error field must NOT be a rejection")

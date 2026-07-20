@@ -1097,7 +1097,7 @@ func TestExchange_FourxxWithOAuthError(t *testing.T) {
 	}{
 		{"401 invalid_token", 401, `{"error":"invalid_token"}`, ErrExchangeRejected},
 		{"400 invalid_grant", 400, `{"error":"invalid_grant"}`, ErrExchangeRejected},
-		{"403 WAF HTML", 403, `<html>Denied</html>`, ErrExchangeTransport},
+		{"403 WAF HTML", 403, `<html>Denied</html>`, ErrInvalidResponse},
 		{"500 server error", 500, `Internal Server Error`, ErrExchangeTransport},
 	}
 
