@@ -80,6 +80,24 @@ tools:
 			wantSub: `not declared before this step`,
 		},
 		{
+			name: "forEach cannot reference itself",
+			yaml: `
+tools:
+  - name: t
+    description: d
+    steps:
+      - id: self
+        operation: monitor/getMsgVpnClients
+        forEach: self
+        forEachKey: msgVpnName
+        args:
+          msgVpnName: "{{.Item.msgVpnName}}"
+    result:
+      strategy: collect
+`,
+			wantSub: `forEach cannot reference the step itself`,
+		},
+		{
 			name: "forEach + parallel is rejected",
 			yaml: `
 tools:

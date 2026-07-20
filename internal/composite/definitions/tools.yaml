@@ -210,10 +210,11 @@ tools:
       via maxResults). Use this to discover which VPNs exist and identify any
       that are down or have no active connections. The response summary counts
       enabled VPNs in state == "down" under downCount and enabled+up VPNs with
-      no user client connections (excluding the reserved internal `#client` the
-      broker attaches to every up VPN) under zeroConnectionCount; standby VPNs
-      are excluded from both. Admin-disabled VPNs land in disabledCount only
-      and are excluded from downCount and zeroConnectionCount.
+      no non-reserved client connected under zeroConnectionCount — derived by
+      probing each enabled+up VPN for a client whose clientUsername does not
+      match Solace's reserved `#*` prefix. Standby VPNs are excluded from both.
+      Admin-disabled VPNs land in disabledCount only and are excluded from
+      downCount and zeroConnectionCount.
     annotations:
       readOnly: true
     parameters:

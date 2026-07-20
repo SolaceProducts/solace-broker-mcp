@@ -161,6 +161,9 @@ func validateFanOut(step Step, priorStepIDs map[string]bool, priorStepSelects ma
 	if step.Parallel {
 		return fmt.Errorf("step %s: forEach cannot be combined with parallel (fan-out has its own bounded concurrency)", step.ID)
 	}
+	if step.ForEach == step.ID {
+		return fmt.Errorf("step %s: forEach cannot reference the step itself", step.ID)
+	}
 	if !priorStepIDs[step.ForEach] {
 		return fmt.Errorf("step %s: forEach references step %q which is not declared before this step", step.ID, step.ForEach)
 	}

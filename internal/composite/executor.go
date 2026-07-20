@@ -224,15 +224,27 @@ const (
 // Fail-fast: the first per-row error cancels the errgroup and returns.
 //
 // Loader validation guarantees ForEach names a prior step and ForEachKey is
-// non-empty; this method still defends against a parent step that produced no
-// data (empty fan-out is legal) or rows whose ForEachKey value is missing or
-// non-string (structural error — the tool definition is broken).
+// non-empty; this method still defends against a parent step whose data field
+// is the wrong type (broken definition), rows whose ForEachKey value is
+// missing or non-string, and duplicate key values (last-writer-wins would
+// silently drop a per-row result). An absent or empty data field on the
+// parent is legal and yields an empty byKey. ForEachIf resolves under
+// missingkey=error and must produce a strconv.ParseBool literal; any
+// deviation is a hard error rather than a skip, so a broken predicate
+// surfaces at load-time verification instead of silently filtering rows.
 func (ce *CompositeExecutor) fetchFanOut(ctx context.Context, step Step, client sempv2.Client, execCtx *ExecuteContext) (map[string]any, error) {
 	parent, ok := execCtx.StepResults[step.ForEach]
 	if !ok {
 		return nil, fmt.Errorf("tool step %s: forEach step %q has no result in context; loader should have caught this", step.ID, step.ForEach)
 	}
-	rawItems, _ := parent["data"].([]any)
+	var rawItems []any
+	if raw, present := parent["data"]; present && raw != nil {
+		items, ok := raw.([]any)
+		if !ok {
+			return nil, fmt.Errorf("tool step %s: forEach parent %q data: want []any, got %T", step.ID, step.ForEach, raw)
+		}
+		rawItems = items
+	}
 
 	if _, ok := ce.operations[step.Operation]; !ok {
 		return nil, fmt.Errorf("tool step %s: operation %q not found in operation catalog", step.ID, step.Operation)
@@ -245,6 +257,7 @@ func (ce *CompositeExecutor) fetchFanOut(ctx context.Context, step Step, client 
 
 	byKey := make(map[string]any, len(rawItems))
 	var byKeyMu sync.Mutex
+	seenKeys := make(map[string]int, len(rawItems))
 	skipped := 0
 
 	g, gCtx := errgroup.WithContext(ctx)
@@ -280,16 +293,29 @@ func (ce *CompositeExecutor) fetchFanOut(ctx context.Context, step Step, client 
 		if !ok {
 			return nil, fmt.Errorf("tool step %s: forEachKey %q on forEach parent %q data[%d]: want string, got %T", step.ID, step.ForEachKey, step.ForEach, i, keyVal)
 		}
+		if prev, dup := seenKeys[keyStr]; dup {
+			return nil, fmt.Errorf("tool step %s: duplicate forEachKey %q=%q on forEach parent %q at data[%d] (already seen at data[%d])", step.ID, step.ForEachKey, keyStr, step.ForEach, i, prev)
+		}
+		seenKeys[keyStr] = i
+
+		// Acquire the concurrency slot in the dispatch loop, not inside the
+		// spawned goroutine, so at most `concurrency` goroutines exist at any
+		// moment rather than one per parent row. Matters when a fan-out
+		// scans hundreds+ of rows (large VPN or client populations). Select
+		// on gCtx.Done() so a peer error aborts the loop instead of blocking
+		// on a semaphore whose slots will never drain.
+		select {
+		case sem <- struct{}{}:
+		case <-gCtx.Done():
+		}
+		if gCtx.Err() != nil {
+			break
+		}
 
 		idx := i
 		row := item
 		key := keyStr
 		safego.Go(g, func() error {
-			select {
-			case sem <- struct{}{}:
-			case <-gCtx.Done():
-				return gCtx.Err()
-			}
 			defer func() { <-sem }()
 
 			iterCtx := &ExecuteContext{Params: execCtx.Params, StepResults: execCtx.StepResults, Item: row}

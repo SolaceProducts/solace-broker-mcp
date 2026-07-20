@@ -187,6 +187,46 @@ func TestFanOut_EmptyParent(t *testing.T) {
 	}
 }
 
+// TestFanOut_DuplicateKeyIsError: two parent rows sharing the same ForEachKey
+// value would silently overwrite in byKey under last-writer-wins. Surface it
+// as a hard error so a broken tool definition (or an unexpected broker
+// response) fails loud rather than dropping a per-row result.
+func TestFanOut_DuplicateKeyIsError(t *testing.T) {
+	client := newMockClient()
+	client.responses["getMsgVpns"] = &sempv2.Result{
+		Data: vpnRows(
+			map[string]any{"msgVpnName": "a"},
+			map[string]any{"msgVpnName": "a"},
+		),
+	}
+	ce := NewCompositeExecutor(testOperations())
+	_, err := ce.Execute(context.Background(), fanOutTool(), client, nil)
+	if err == nil {
+		t.Fatal("expected duplicate-key error, got nil")
+	}
+	if !contains(err.Error(), `duplicate forEachKey "msgVpnName"="a"`) {
+		t.Errorf("expected duplicate-key error, got: %v", err)
+	}
+}
+
+// TestFanOut_ParentDataWrongType: parent step returning a non-list `data`
+// field is a broken tool definition. Previously this silently produced an
+// empty byKey; now it must error so the misconfiguration surfaces.
+func TestFanOut_ParentDataWrongType(t *testing.T) {
+	client := newMockClient()
+	client.responses["getMsgVpns"] = &sempv2.Result{
+		Data: map[string]any{"data": "not-a-list"},
+	}
+	ce := NewCompositeExecutor(testOperations())
+	_, err := ce.Execute(context.Background(), fanOutTool(), client, nil)
+	if err == nil {
+		t.Fatal("expected error on non-list parent data, got nil")
+	}
+	if !contains(err.Error(), `forEach parent "vpns" data: want []any`) {
+		t.Errorf("expected data-type error, got: %v", err)
+	}
+}
+
 // TestFanOut_FailFast: one per-row error must abort the whole fan-out. The
 // story locks fail-fast semantics; if this test starts passing without an
 // error, we've silently drifted to best-effort and lost the guarantee.
