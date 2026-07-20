@@ -1226,6 +1226,29 @@ func validateToolAuthorization(cfg *ServerConfig) []error {
 				break
 			}
 		}
+
+		// Empty or whitespace-only tool name inside a group's list is a config
+		// coherence error. Indices are reported because an empty string is
+		// invisible in an error message otherwise; when a group has multiple
+		// offenders, they collapse into one line per group.
+		for groupName, tools := range ta.AccessLevelGroups {
+			var badIdx []string
+			for i, tool := range tools {
+				if strings.TrimSpace(tool) == "" {
+					badIdx = append(badIdx, strconv.Itoa(i))
+				}
+			}
+			if len(badIdx) == 0 {
+				continue
+			}
+			noun, verb := "name", "is"
+			if len(badIdx) > 1 {
+				noun, verb = "names", "are"
+			}
+			errs = append(errs, fmt.Errorf(
+				"mcp_client_auth.tool_authorization.access_level_groups: tool %s at %q [%s] %s empty or whitespace-only",
+				noun, groupName, strings.Join(badIdx, ", "), verb))
+		}
 	}
 
 	return errs

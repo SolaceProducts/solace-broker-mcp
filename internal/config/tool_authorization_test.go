@@ -317,6 +317,123 @@ mcp_client_auth:
 	}
 }
 
+// Empty and whitespace-only tool names inside a group's list are rejected.
+// Valid tool names pass. The error must include the group name and the
+// offending index — an empty string is invisible in an error otherwise.
+func TestToolAuthorization_EmptyAndWhitespaceOnlyToolNamesRejected(t *testing.T) {
+	enableToolAuthorizationFlag(t)
+
+	cases := []struct {
+		name       string
+		toolsYAML  string
+		wantErr    string
+		wantNoErr  bool
+	}{
+		{
+			name: "empty string at index 0",
+			toolsYAML: `        - ""
+        - list-queues`,
+			wantErr: `mcp_client_auth.tool_authorization.access_level_groups: tool name at "Ops" [0] is empty or whitespace-only`,
+		},
+		{
+			name: "single space at index 1",
+			toolsYAML: `        - get-broker-status
+        - " "`,
+			wantErr: `mcp_client_auth.tool_authorization.access_level_groups: tool name at "Ops" [1] is empty or whitespace-only`,
+		},
+		{
+			name: "tab-only at index 0",
+			toolsYAML: `        - "\t"
+        - list-queues`,
+			wantErr: `mcp_client_auth.tool_authorization.access_level_groups: tool name at "Ops" [0] is empty or whitespace-only`,
+		},
+		{
+			name: "mixed spaces and tabs at index 1",
+			toolsYAML: `        - get-broker-status
+        - " \t "`,
+			wantErr: `mcp_client_auth.tool_authorization.access_level_groups: tool name at "Ops" [1] is empty or whitespace-only`,
+		},
+		{
+			name: "valid tool names accepted",
+			toolsYAML: `        - get-broker-status
+        - list-queues`,
+			wantNoErr: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			yaml := `
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"
+  tool_authorization:
+    enabled: true
+    access_level_groups:
+      Ops:
+` + tc.toolsYAML + `
+` + oauthBaseYAML
+
+			_, err := LoadConfig(writeTemp(t, yaml))
+			if tc.wantNoErr {
+				if err != nil {
+					t.Fatalf("expected no error, got: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("expected error containing %q, got: %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// When a group has multiple empty tool names, they collapse into one error
+// line per group with all offending indices joined. This differs deliberately
+// from the group-name check, which breaks on the first offender because map
+// iteration order is nondeterministic; slice indices are stable so joining
+// them per group stays deterministic. Plural form ("names ... are") is used
+// when more than one index is bad.
+func TestToolAuthorization_MultipleEmptyToolNamesCollapsedPerGroup(t *testing.T) {
+	enableToolAuthorizationFlag(t)
+	yaml := `
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"
+  tool_authorization:
+    enabled: true
+    access_level_groups:
+      Ops:
+        - ""
+        - list-queues
+        - " "
+      Admin:
+        - get-broker-status
+        - "\t"
+` + oauthBaseYAML
+
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	// Ops has two bad indices → plural, joined.
+	wantOps := `tool names at "Ops" [0, 2] are empty or whitespace-only`
+	// Admin has one bad index → singular, unchanged form.
+	wantAdmin := `tool name at "Admin" [1] is empty or whitespace-only`
+	if !strings.Contains(err.Error(), wantOps) {
+		t.Errorf("expected error to contain %q, got: %v", wantOps, err)
+	}
+	if !strings.Contains(err.Error(), wantAdmin) {
+		t.Errorf("expected error to contain %q, got: %v", wantAdmin, err)
+	}
+}
+
 // LogValue renders enabled as "true" or "false" for configs that survive
 // LoadConfig. The "unset" (nil) case cannot survive validation — it is covered
 // by TestToolAuthorization_OAuthModeEnabledOmittedRejects.
