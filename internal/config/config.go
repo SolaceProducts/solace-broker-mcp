@@ -1227,27 +1227,36 @@ func validateToolAuthorization(cfg *ServerConfig) []error {
 			}
 		}
 
-		// Empty or whitespace-only tool name inside a group's list is a config
-		// coherence error. Indices are reported because an empty string is
-		// invisible in an error message otherwise; when a group has multiple
-		// offenders, they collapse into one line per group.
+		// Tool name must be a clean string: non-empty and equal to its trimmed
+		// form. This one invariant covers empty (""), whitespace-only (" ",
+		// "\t"), and surrounding-whitespace ("list-queues ", " list-queues")
+		// in a single rule. Trimming silently would hide the exact mistake
+		// this check is meant to surface (dropped value, bad template
+		// substitution, editor whitespace). Indices are reported per group
+		// because the value itself is not echoed back in the message.
+		//
+		// Boundary: internal whitespace ("list queues") is intentionally NOT
+		// rejected here. Such a name is syntactically a clean string but not
+		// a real tool; ValidatePolicyToolNames catches unknown names against
+		// the registry when enabled: true, and running that check under
+		// enabled: false is a separate concern.
 		for groupName, tools := range ta.AccessLevelGroups {
 			var badIdx []string
 			for i, tool := range tools {
-				if strings.TrimSpace(tool) == "" {
+				if tool == "" || tool != strings.TrimSpace(tool) {
 					badIdx = append(badIdx, strconv.Itoa(i))
 				}
 			}
 			if len(badIdx) == 0 {
 				continue
 			}
-			noun, verb := "name", "is"
+			noun := "name"
 			if len(badIdx) > 1 {
-				noun, verb = "names", "are"
+				noun = "names"
 			}
 			errs = append(errs, fmt.Errorf(
-				"mcp_client_auth.tool_authorization.access_level_groups: tool %s at %q [%s] %s empty or whitespace-only",
-				noun, groupName, strings.Join(badIdx, ", "), verb))
+				"mcp_client_auth.tool_authorization.access_level_groups: tool %s at %q [%s] must be non-empty and have no leading or trailing whitespace",
+				noun, groupName, strings.Join(badIdx, ", ")))
 		}
 	}
 
