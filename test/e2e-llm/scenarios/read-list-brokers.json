@@ -4,7 +4,7 @@
   "expected_tool": "mcp__solace-broker__list-brokers",
   "ground_truth": {
     "jq": ".brokers[]",
-    "answer_regex": "broker-[a-z]"
+    "answer_regex": "\\bbroker-[ab]\\b"
   },
   "required_substrings_any_of": ["broker-a", "broker-b"],
   "forbidden_substrings": ["cannot reach", "no brokers"]

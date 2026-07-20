@@ -11,7 +11,7 @@
     "expected_tools_none": true,
     "ground_truth": {
       "shell": "semp_curl -sf \"$BROKER_URL/SEMP/v2/__private_monitor__/msgVpns/$BROKER_VPN/topicEndpoints/$E2E_LLM_STANDING_TE\" | jq -r .data.topicEndpointName",
-      "expect_stdout_regex": "^e2e-llm-standing-te-broker-[ab]$"
+      "expect_stdout_regex": "^$E2E_LLM_STANDING_TE$"
     }
   }
 }

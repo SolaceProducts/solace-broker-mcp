@@ -3,8 +3,8 @@
 LLM-driven e2e test harness for the broker MCP server, using the Claude Code
 CLI as the agent. Sends NL prompts, captures `stream-json` output, and asserts
 on tool choice, answer fidelity, refusal behavior, and — for destructive tools
-— confirmation-gate honoring across a two-turn exchange. Thirty-two scenarios
-in two modes:
+— confirmation-gate honoring across a two-turn exchange. Thirty-five rows
+across two modes:
 
 - **Mode 1** (single-turn, read-only) — 19 scenarios: F1–F7 monitoring
   fixtures, six "remaining reads" (list-brokers, list-rdps, get-rdp-status,

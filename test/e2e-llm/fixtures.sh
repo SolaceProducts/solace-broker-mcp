@@ -36,7 +36,7 @@ E2E_LLM_KICK_TOPIC="e2e-llm/kick/msgs"
 # Standing topic endpoint for the B5-style delete-topic-endpoint scenario —
 # no equivalent standing TE exists in the monitoring layer (unlike test-vpn /
 # test-rdp), so the LLM suite owns it. Turn 2 "no" preserves it; the shell
-# ground truth GETs it and asserts msgVpnName echoes back.
+# ground truth GETs it and asserts topicEndpointName echoes back.
 E2E_LLM_STANDING_TE_A="e2e-llm-standing-te-broker-a"
 E2E_LLM_STANDING_TE_B="e2e-llm-standing-te-broker-b"
 
@@ -148,12 +148,21 @@ create_llm_standing_fixtures() {
 
 # Create the standing topic endpoint. Disabled so it holds no messages and
 # has no delivery-side effects — the scenario only cares that the object
-# exists so "no" can preserve it. Idempotent; 400-duplicate ignored.
+# exists so "no" can preserve it. Idempotent; the already-exists status
+# (400) is tolerated, any other non-2xx fails fast so auth/URL/schema
+# breakage surfaces here instead of as a confusing scenario failure later.
 _create_e2e_llm_standing_te_on() {
     local semp_config="$1" broker_letter="$2" te="$3"
     log_info "Provisioning LLM standing topic endpoint on broker-$broker_letter: $te"
-    semp_post "$semp_config" "msgVpns/$BROKER_VPN/topicEndpoints" \
-        "{\"topicEndpointName\":\"$te\",\"accessType\":\"non-exclusive\",\"permission\":\"consume\",\"ingressEnabled\":false,\"egressEnabled\":false}" >/dev/null || true
+    local code
+    code=$(semp_curl -s -o /dev/null -w '%{http_code}' -X POST \
+        -H "Content-Type: application/json" \
+        "$semp_config/msgVpns/$BROKER_VPN/topicEndpoints" \
+        -d "{\"topicEndpointName\":\"$te\",\"accessType\":\"non-exclusive\",\"permission\":\"consume\",\"ingressEnabled\":false,\"egressEnabled\":false}" 2>/dev/null || echo "000")
+    case "$code" in
+        2*|400) ;;
+        *) log_fail "provisioning standing TE $te on broker-$broker_letter returned HTTP $code"; return 1 ;;
+    esac
 }
 
 # Drop the LLM fixtures on both brokers. The kick-target broker-driver
