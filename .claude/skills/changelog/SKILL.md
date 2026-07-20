@@ -1,6 +1,6 @@
 ---
 name: changelog
-description: Draft a Keep-a-Changelog entry for the current change in the house voice — correct category (incl. Deprecated/Security), BREAKING detection across config schema and tool names, and a migration note
+description: Draft a Keep a Changelog entry for the current change in the house voice — correct category (incl. Deprecated/Security), BREAKING detection across config schema and tool names, and a migration note
 user_invocable: true
 ---
 
