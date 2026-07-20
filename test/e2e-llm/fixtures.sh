@@ -33,6 +33,12 @@ E2E_LLM_KICK_TARGET_B="e2e-llm-kick-target-b"
 E2E_LLM_KICK_QUEUE_A="e2e-llm-kick-target-queue-broker-a"
 E2E_LLM_KICK_QUEUE_B="e2e-llm-kick-target-queue-broker-b"
 E2E_LLM_KICK_TOPIC="e2e-llm/kick/msgs"
+# Standing topic endpoint for the B5-style delete-topic-endpoint scenario —
+# no equivalent standing TE exists in the monitoring layer (unlike test-vpn /
+# test-rdp), so the LLM suite owns it. Turn 2 "no" preserves it; the shell
+# ground truth GETs it and asserts msgVpnName echoes back.
+E2E_LLM_STANDING_TE_A="e2e-llm-standing-te-broker-a"
+E2E_LLM_STANDING_TE_B="e2e-llm-standing-te-broker-b"
 
 # Create the standing spooled queue (no consumer, ingress+egress enabled)
 # on one broker and subscribe it to E2E_LLM_ACTION_TOPIC. Idempotent —
@@ -136,6 +142,18 @@ create_llm_standing_fixtures() {
         "$E2E_LLM_KICK_TARGET_A" "$E2E_LLM_KICK_QUEUE_A"
     _spawn_llm_kick_client_on "$BROKER_B_SEMP_CONFIG" b "$BROKER_B_URL" \
         "$E2E_LLM_KICK_TARGET_B" "$E2E_LLM_KICK_QUEUE_B"
+    _create_e2e_llm_standing_te_on "$BROKER_A_SEMP_CONFIG" a "$E2E_LLM_STANDING_TE_A"
+    _create_e2e_llm_standing_te_on "$BROKER_B_SEMP_CONFIG" b "$E2E_LLM_STANDING_TE_B"
+}
+
+# Create the standing topic endpoint. Disabled so it holds no messages and
+# has no delivery-side effects — the scenario only cares that the object
+# exists so "no" can preserve it. Idempotent; 400-duplicate ignored.
+_create_e2e_llm_standing_te_on() {
+    local semp_config="$1" broker_letter="$2" te="$3"
+    log_info "Provisioning LLM standing topic endpoint on broker-$broker_letter: $te"
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/topicEndpoints" \
+        "{\"topicEndpointName\":\"$te\",\"accessType\":\"non-exclusive\",\"permission\":\"consume\",\"ingressEnabled\":false,\"egressEnabled\":false}" >/dev/null || true
 }
 
 # Drop the LLM fixtures on both brokers. The kick-target broker-driver
@@ -147,4 +165,6 @@ cleanup_llm_standing_fixtures() {
     semp_delete "$BROKER_B_SEMP_CONFIG" "msgVpns/$BROKER_VPN/queues/$E2E_LLM_ACTION_QUEUE_B"
     semp_delete "$BROKER_A_SEMP_CONFIG" "msgVpns/$BROKER_VPN/queues/$E2E_LLM_KICK_QUEUE_A"
     semp_delete "$BROKER_B_SEMP_CONFIG" "msgVpns/$BROKER_VPN/queues/$E2E_LLM_KICK_QUEUE_B"
+    semp_delete "$BROKER_A_SEMP_CONFIG" "msgVpns/$BROKER_VPN/topicEndpoints/$E2E_LLM_STANDING_TE_A"
+    semp_delete "$BROKER_B_SEMP_CONFIG" "msgVpns/$BROKER_VPN/topicEndpoints/$E2E_LLM_STANDING_TE_B"
 }

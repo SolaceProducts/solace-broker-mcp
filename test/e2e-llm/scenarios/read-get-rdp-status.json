@@ -1,0 +1,7 @@
+{
+  "_doc": "get-rdp-status: multi-arg parameterization (VPN + RDP name) pulled from the prompt, mirroring F3. Target is test-rdp — the disabled standing RDP created by monitoring's create_fixtures_on (test/e2e-common/lib.sh). Because the RDP is disabled, the correct answer reports 'disabled' / 'not enabled'; a model that guesses a healthy state fails the forbidden-substrings gate. Broker-a only.",
+  "prompt": "What's the status of RDP test-rdp in the default VPN on $BROKER?",
+  "expected_tool": "mcp__solace-broker__get-rdp-status",
+  "required_substrings_any_of": ["disabled", "not enabled", "shutdown"],
+  "forbidden_substrings": ["is up", "is healthy", "operational"]
+}

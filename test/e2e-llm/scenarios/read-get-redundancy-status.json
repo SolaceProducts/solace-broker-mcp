@@ -1,0 +1,7 @@
+{
+  "_doc": "get-redundancy-status: not-configured fidelity for the broker-level redundancy tool (SEMPv1). The local-docker containers are solo standalone brokers with no HA mate, so the parsed XML reports Config Status: Disabled / Redundancy Mode: None. Correct answer reports redundancy is disabled or the broker is standalone; a model that invents an active/backup role fails. Broker-a only.",
+  "prompt": "Is $BROKER running in a redundant HA pair?",
+  "expected_tool": "mcp__solace-broker__get-redundancy-status",
+  "required_substrings_any_of": ["disabled", "standalone", "not configured", "no redundancy", "not enabled"],
+  "forbidden_substrings": ["active/backup", "primary/backup", "mate is up", "is the active"]
+}
