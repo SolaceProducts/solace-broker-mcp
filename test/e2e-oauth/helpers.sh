@@ -191,12 +191,14 @@ start_oauth_server() {
 mint_token() {
     local username="$1" password="$2"
     local response token
-    response=$(curl -sf --cacert "$KEYCLOAK_CERT" -X POST "$KEYCLOAK_TOKEN_ENDPOINT" \
+    # password@- reads that field's value from stdin instead of argv, keeping
+    # it out of `ps`/`/proc` — same off-argv convention as semp_curl.
+    response=$(printf '%s' "$password" | curl -sf --cacert "$KEYCLOAK_CERT" -X POST "$KEYCLOAK_TOKEN_ENDPOINT" \
         -H "Content-Type: application/x-www-form-urlencoded" \
         -d "grant_type=password" \
         -d "client_id=${HOP1_CLIENT_ID}" \
         -d "username=${username}" \
-        -d "password=${password}")
+        --data-urlencode "password@-")
     token=$(jq -r '.access_token // empty' <<<"$response")
     if [ -z "$token" ]; then
         log_fail "mint_token($username): no access_token in response: $response"

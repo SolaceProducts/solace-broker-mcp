@@ -174,11 +174,12 @@ jobs:
       - name: Broker OAuth profile snapshot (on failure)
         if: failure()
         run: |
+          source test/e2e-oauth/helpers.sh
           echo "=== prod-us oauthProfile ==="
-          curl -s -u admin:admin http://localhost:8102/SEMP/v2/config/oauthProfiles/keycloak_profile || true
+          semp_curl -s "http://localhost:${BROKER_A_SEMP_PORT}/SEMP/v2/config/oauthProfiles/keycloak_profile" || true
           echo
           echo "=== test-us oauthProfile ==="
-          curl -s -u admin:admin http://localhost:8104/SEMP/v2/config/oauthProfiles/keycloak_profile || true
+          semp_curl -s "http://localhost:${BROKER_B_SEMP_PORT}/SEMP/v2/config/oauthProfiles/keycloak_profile" || true
 
       - name: Tear down
         if: always()

@@ -40,13 +40,28 @@ test_admin_path() {
 # request observable (Keycloak's own log is the observation point — see
 # count_token_exchanges).
 test_cache_hit() {
-    local token args before after delta
+    local token args before mid after delta i
     token=$(mint_token "$TEST_ADMIN_USER" "$TEST_USER_PASSWORD") || return 1
     args=$(jq -nc --arg b "$BROKER_A_ALIAS" '{broker:$b,maxResults:500}')
 
     before=$(count_token_exchanges)
     mcp_call_tool_as "$token" "list-vpns" "$args" >/dev/null || { log_fail "first call failed"; return 1; }
+
+    # The TOKEN_EXCHANGE log line reaches `docker logs` asynchronously
+    # (container stdout -> docker's log driver), so poll for it rather than
+    # sampling immediately.
+    for i in $(seq 1 25); do
+        mid=$(count_token_exchanges)
+        [ "$((mid - before))" -ge 1 ] && break
+        sleep 0.2
+    done
+    if [ "$((mid - before))" -lt 1 ]; then
+        log_fail "expected 1 token exchange after the first call, saw none within 5s"
+        return 1
+    fi
+
     mcp_call_tool_as "$token" "list-vpns" "$args" >/dev/null || { log_fail "second call failed"; return 1; }
+    sleep 1
     after=$(count_token_exchanges)
     delta=$((after - before))
 
@@ -80,8 +95,19 @@ test_cache_invalidation_on_401() {
     # Restore.
     upsert_profile "$BROKER_A_SEMP_PORT" "$BROKER_A_AUDIENCE" || { log_fail "failed to restore profile"; return 1; }
 
-    if ! mcp_call_tool_as "$token" "list-vpns" "$args" >/dev/null; then
-        log_fail "call after cache invalidation did not succeed"
+    # upsert_profile's read-after-write only confirms the SEMP config store
+    # reflects the restored audience, not that the broker's OAuth enforcement
+    # has reloaded it — bounded retry absorbs that gap.
+    local i success=false
+    for i in 1 2 3 4 5; do
+        if mcp_call_tool_as "$token" "list-vpns" "$args" >/dev/null; then
+            success=true
+            break
+        fi
+        sleep 1
+    done
+    if [ "$success" != "true" ]; then
+        log_fail "call after cache invalidation did not succeed within retries"
         return 1
     fi
     after=$(count_token_exchanges)

@@ -29,7 +29,12 @@ wait_for_keycloak 60
 
 build_server
 
-CONFIG_FILE=$(mktemp /tmp/e2e-oauth-config-XXXXXX.yaml)
+# BSD mktemp (macOS) only substitutes the X's when they're the template's
+# last characters — a trailing .yaml suffix breaks that. Get a random name
+# first, then add the extension.
+CONFIG_FILE=$(mktemp "${TMPDIR:-/tmp}/e2e-oauth-config-XXXXXX")
+mv "$CONFIG_FILE" "$CONFIG_FILE.yaml"
+CONFIG_FILE="$CONFIG_FILE.yaml"
 write_oauth_config "$CONFIG_FILE"
 
 start_oauth_server "$CONFIG_FILE"
