@@ -67,11 +67,11 @@ cleanup_multi_vpn_on() {
 }
 
 # Provisions a bare enabled VPN ("test-vpn-empty") with no client-user / ACL /
-# queue setup — its only job is to satisfy list-vpns.zeroConnectionCount, which
-# fires on enabled==true && state=="up" && msgVpnConnections<=1. Solace attaches
-# a reserved internal `#client` to every enabled+up VPN, so a "no real clients"
-# VPN reports msgVpnConnections==1; the handler's <=1 predicate accounts for
-# this. Deliberately distinct from `test-vpn` (enabled=false, feeds disabledCount).
+# queue setup — its only job is to satisfy list-vpns.zeroConnectionCount. The
+# handler probes each enabled+up VPN with getMsgVpnClients filtered by
+# `clientUsername != #*`; a VPN with no real client hits that empty-result
+# path and lands in the count. Deliberately distinct from `test-vpn`
+# (enabled=false, feeds disabledCount).
 create_empty_enabled_vpn_on() {
     local semp_config="$1"
     local label="$2"

@@ -20,20 +20,22 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess"
 )
 
-// listVpnsStepID is the step ID this handler keys into. Declared as a const
-// so the init-time RequiredSteps registration and the runtime lookup cannot
-// drift out of sync — and so the boot-time check in ValidatePostProcess
-// catches a YAML rename of the step.
-const listVpnsStepID = "vpns"
+// Step IDs this handler keys into. Declared as consts so the init-time
+// RequiredSteps registration and the runtime lookups cannot drift out of sync,
+// and so the boot-time cross-check in ValidatePostProcess catches a YAML
+// rename of either step.
+const (
+	listVpnsStepID    = "vpns"
+	listVpnsClientsID = "real-clients"
+)
 
 func init() {
 	postprocess.Register("listVpns", postprocess.Handler{
 		Fn:            ListVpns,
-		RequiredSteps: []string{listVpnsStepID},
-		RequiredFields: []string{
-			"enabled",
-			"state",
-			"msgVpnConnections",
+		RequiredSteps: []string{listVpnsStepID, listVpnsClientsID},
+		RequiredFieldsPerStep: map[string][]string{
+			listVpnsStepID:    {"enabled", "state", "msgVpnName"},
+			listVpnsClientsID: {"clientName"},
 		},
 	})
 }
@@ -44,26 +46,23 @@ func init() {
 //     operational alarm — "should be serving but isn't")
 //   - standbyCount:         enabled VPNs whose state == "standby" (informational;
 //     HA mode, not a problem)
-//   - zeroConnectionCount:  VPNs with enabled == true && state == "up" &&
-//     msgVpnConnections <= 1 (configured to serve but nobody's connecting).
-//     The <=1 (not ==0) accounts for a broker invariant: Solace attaches a
-//     reserved internal `#client` (clientUsername "#client-username") to every
-//     enabled+up VPN, so msgVpnConnections is ≥1 by construction. Empirically
-//     #client is a deterministic +1 offset — never >1 — and vanishes cleanly
-//     when the VPN is disabled. Per-service counter summation is not a viable
-//     alternative: #client is folded into msgVpnConnectionsServiceSmf too, so
-//     the same dead-metric bug applies. Scope note: msgVpnConnections also
-//     includes bridge / DMR / replication service connections, so a VPN with
-//     only those and no user clients will not be counted as zero-connection.
+//   - zeroConnectionCount:  enabled+up VPNs with no real (non-reserved) client
+//     connected. Derived directly from a per-VPN getMsgVpnClients probe filtered
+//     server-side by `clientUsername != #*` — the `#*` prefix is Solace's
+//     documented reserved-name contract for internal clients, so this is
+//     version-independent. Previous implementations (before the real-clients
+//     fan-out step) inferred this from `msgVpnConnections <= 1` on the empirical
+//     invariant that the reserved `#client` shows up as exactly one connection
+//     per enabled+up VPN. That invariant is no longer load-bearing.
 //
 // down/standby/zeroConnection are all gated on enabled==true so a disabled VPN
 // (which typically reports state=="down") lands in disabledCount only, and the
 // LLM can read each count as an independent signal without subtracting overlaps.
 //
-// The counts are over what the paginator actually returned. Under truncation
-// (followPages stopped at maxResults / capMax / maxPages), the summary also
-// includes scanned and truncated: true so the LLM sees the partial-scan reality
-// next to the counts rather than only on the raw data block.
+// The counts are over what the paginator actually returned for the vpns step.
+// Under truncation (followPages stopped at maxResults / capMax / maxPages), the
+// summary also includes scanned and truncated: true so the LLM sees the
+// partial-scan reality next to the counts rather than only on the raw data block.
 //
 // A VPN whose required fields are missing or the wrong type is skipped from
 // every counter and tallied into skipped (surfaced when non-zero). One odd row
@@ -79,6 +78,19 @@ func ListVpns(stepResults map[string]map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, fmt.Errorf("vpns.data: want []any, got %T", step["data"])
 	}
+	// real-clients is a fan-out result: { byKey: { vpnName: {data: [...], ...}, ...} }.
+	// When the vpns step returns zero rows, the fan-out has nothing to iterate and
+	// executor.fetchFanOut still stores an empty byKey — so we always expect the
+	// step to be present. Missing step is a wiring bug; empty byKey is legal.
+	clientsStep, ok := stepResults[listVpnsClientsID]
+	if !ok {
+		return nil, fmt.Errorf("step %q not in results", listVpnsClientsID)
+	}
+	byKey, ok := clientsStep["byKey"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("real-clients.byKey: want map[string]any, got %T", clientsStep["byKey"])
+	}
+
 	var disabled, down, standby, zeroConn, skipped int
 	for i, raw := range items {
 		v, ok := raw.(map[string]any)
@@ -87,7 +99,7 @@ func ListVpns(stepResults map[string]map[string]any) (map[string]any, error) {
 		}
 		enabled, ok1 := boolField(v, "enabled")
 		state, ok2 := stringField(v, "state")
-		conns, ok3 := numField(v, "msgVpnConnections")
+		vpnName, ok3 := stringField(v, "msgVpnName")
 		if !ok1 || !ok2 || !ok3 {
 			skipped++
 			continue
@@ -102,12 +114,7 @@ func ListVpns(stepResults map[string]map[string]any) (map[string]any, error) {
 		case "standby":
 			standby++
 		case "up":
-			// <=1 (not ==0) subtracts the reserved `#client` internal
-			// connection the broker attaches to every enabled+up VPN. Prefer
-			// the inequality over `conns - 1 == 0` so a hypothetical absence
-			// of #client (conns==0) still counts as zero-connection rather
-			// than underflowing past it.
-			if conns <= 1 {
+			if !hasRealClient(byKey, vpnName) {
 				zeroConn++
 			}
 		}
@@ -126,4 +133,23 @@ func ListVpns(stepResults map[string]map[string]any) (map[string]any, error) {
 		out["truncated"] = true
 	}
 	return out, nil
+}
+
+// hasRealClient returns true when the per-VPN probe returned at least one row.
+// A row present in byKey with a non-empty data[] means the broker had a client
+// whose clientUsername did not match the reserved `#*` prefix. Missing key or
+// empty data[] means "no real client" — the VPN is enabled+up but no user
+// clients are connected. A key can be missing legitimately when forEachIf
+// filtered the row out (disabled/down VPNs), but those branches never call
+// this function; when this fires and finds nothing, that IS the signal.
+func hasRealClient(byKey map[string]any, vpnName string) bool {
+	entry, ok := byKey[vpnName].(map[string]any)
+	if !ok {
+		return false
+	}
+	data, ok := entry["data"].([]any)
+	if !ok {
+		return false
+	}
+	return len(data) > 0
 }
