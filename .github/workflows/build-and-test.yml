@@ -138,28 +138,55 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_wrapper: false
+      - name: Generate dev TLS certs
+        run: |
+          source test/e2e-oauth/helpers.sh
+          ensure_tls_certs
 
-      - name: Setup Keycloak
-        run: bash test/oauth/setup-keycloak.sh
+      - name: Start Keycloak + brokers
+        run: docker compose -f test/e2e-oauth/docker-compose.yml up -d
 
-      - name: Run OAuth integration test
-        run: bash test/oauth/test-oauth.sh
+      - name: Wait for brokers + Keycloak
+        run: |
+          source test/e2e-oauth/helpers.sh
+          wait_for_all_brokers 120
+          wait_for_keycloak 120
+
+      - name: Configure OAuth profiles
+        run: bash test/e2e-oauth/configure-oauth-profiles.sh
+
+      - name: Run E2E tests
+        run: bash test/e2e-oauth/run-all.sh
+
+      - name: Broker logs (on failure)
+        if: failure()
+        run: |
+          echo "=== solace-e2e-oauth-a ==="
+          docker logs solace-e2e-oauth-a 2>&1 | tail -100
+          echo "=== solace-e2e-oauth-b ==="
+          docker logs solace-e2e-oauth-b 2>&1 | tail -100
 
       - name: Keycloak logs (on failure)
         if: failure()
-        run: docker logs keycloak-dev 2>&1 | tail -100
+        run: docker logs keycloak-e2e-oauth 2>&1 | tail -100
 
-      - name: MCP server logs (on failure)
+      - name: MCP server log (on failure)
         if: failure()
-        run: cat /tmp/mcp-oauth-test.log 2>/dev/null || echo "No server log found"
+        run: cat test/e2e-oauth/bin/mcp-server.log 2>/dev/null || echo "No server log found"
 
-      - name: Tear down Keycloak
+      - name: Broker OAuth profile snapshot (on failure)
+        if: failure()
+        run: |
+          source test/e2e-oauth/helpers.sh
+          echo "=== prod-us oauthProfile ==="
+          semp_curl -s "http://localhost:${BROKER_A_SEMP_PORT}/SEMP/v2/config/oauthProfiles/keycloak_profile" || true
+          echo
+          echo "=== test-us oauthProfile ==="
+          semp_curl -s "http://localhost:${BROKER_B_SEMP_PORT}/SEMP/v2/config/oauthProfiles/keycloak_profile" || true
+
+      - name: Tear down
         if: always()
-        run: cd test/oauth && docker compose down -v
+        run: docker compose -f test/e2e-oauth/docker-compose.yml down -v
 
   e2e-monitoring:
     runs-on: ubuntu-latest

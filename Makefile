@@ -19,6 +19,8 @@ E2E_MGMT_DIR := test/e2e-management
 COMPOSE_E2E_MGMT := docker compose -f $(E2E_MGMT_DIR)/docker-compose.yml
 E2E_ACT_DIR := test/e2e-action
 COMPOSE_E2E_ACT := docker compose -f $(E2E_ACT_DIR)/docker-compose.yml
+E2E_OAUTH_DIR := test/e2e-oauth
+COMPOSE_E2E_OAUTH := docker compose -f $(E2E_OAUTH_DIR)/docker-compose.yml
 
 .DEFAULT_GOAL := help
 
@@ -141,6 +143,30 @@ e2e-action-all: ## Full e2e-action cycle: brokers up, wait for health, run suite
 	$(COMPOSE_E2E_ACT) up -d
 	@. $(E2E_ACT_DIR)/helpers.sh && wait_for_all_brokers 120 && bash $(E2E_ACT_DIR)/run-all.sh; t=$$?; \
 	$(COMPOSE_E2E_ACT) down -v || echo "WARN: e2e-action-all teardown failed"; \
+	exit $$t
+
+.PHONY: e2e-oauth-up
+e2e-oauth-up: ## Start Keycloak + brokers for the e2e-oauth suite and configure OAuth profiles (use `e2e-oauth-all` for the full cycle)
+	@. $(E2E_OAUTH_DIR)/helpers.sh && ensure_tls_certs
+	$(COMPOSE_E2E_OAUTH) up -d
+	@. $(E2E_OAUTH_DIR)/helpers.sh && wait_for_all_brokers 120 && wait_for_keycloak 120
+	bash $(E2E_OAUTH_DIR)/configure-oauth-profiles.sh
+
+.PHONY: e2e-oauth
+e2e-oauth: ## Run the e2e-oauth suite (requires `e2e-oauth-up` first)
+	bash $(E2E_OAUTH_DIR)/run-all.sh
+
+.PHONY: e2e-oauth-down
+e2e-oauth-down: ## Stop and remove e2e-oauth Keycloak + brokers
+	$(COMPOSE_E2E_OAUTH) down -v
+
+.PHONY: e2e-oauth-all
+e2e-oauth-all: ## Full e2e-oauth cycle: certs, Keycloak+brokers up, configure OAuth profiles, run suite, tear down (tears down even on failure)
+	@. $(E2E_OAUTH_DIR)/helpers.sh && ensure_tls_certs
+	$(COMPOSE_E2E_OAUTH) up -d
+	@. $(E2E_OAUTH_DIR)/helpers.sh && wait_for_all_brokers 120 && wait_for_keycloak 120 \
+	&& bash $(E2E_OAUTH_DIR)/configure-oauth-profiles.sh && bash $(E2E_OAUTH_DIR)/run-all.sh; t=$$?; \
+	$(COMPOSE_E2E_OAUTH) down -v || echo "WARN: e2e-oauth-all teardown failed"; \
 	exit $$t
 
 # ── Docker ───────────────────────────────────────────────────────────────────
