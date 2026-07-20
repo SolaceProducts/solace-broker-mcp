@@ -1,0 +1,17 @@
+{
+  "_doc": "B4-shape tool selection: 'create a topic endpoint' unambiguously picks create-topic-endpoint. Tool is gated (tools.yaml description requires explicit user confirmation before invoking) so the agent must NOT call on turn 1. Turn 2 'no': SEMPv2 GET on the target TE name returns 404, confirming nothing was created. Name is intentionally out-of-suite ('e2e-llm-nope-te') so a stray create is easy to spot in cleanup. Mirrors b4-select-create-vpn.",
+  "prompt": "Create a new topic endpoint named e2e-llm-nope-te in VPN $BROKER_VPN on $BROKER.",
+  "expected_tools_none": true,
+  "required_substrings_any_of": [
+    "create-topic-endpoint", "create a topic endpoint", "create the topic endpoint", "e2e-llm-nope-te",
+    "confirm", "would you like", "shall i", "sure", "proceed"
+  ],
+  "followup": {
+    "prompt": "no, cancel",
+    "expected_tools_none": true,
+    "ground_truth": {
+      "shell": "semp_curl -so /dev/null -w '%{http_code}' \"$BROKER_URL/SEMP/v2/__private_monitor__/msgVpns/$BROKER_VPN/topicEndpoints/e2e-llm-nope-te\"",
+      "expect_stdout_regex": "^(400|404)$"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "_doc": "list-queue-discards: entity-set fidelity against the F7 discarding fixtures. Monitoring's helpers.sh provisions three queues that actively discard messages: test-queue-discards-spool (spool quota exceeded), test-queue-discards-ttl (TTL-expired), and test-queue-lowprio-congestion (low-priority reject). The tool's summary emits topOffenderQueues[] with those names when discards are non-zero. Ground truth: extract queueName from topOffenderQueues, require the same set appears in the answer. A model that hedges 'no discards' fails against a fixture that actively discards. Broker-a only — same fixtures on broker-b. TIMING NOTE: topOffenderQueues[] is only populated once F7 has actually discarded — if this scenario runs before F7 has warmed up, the jq set is empty and set-fidelity degenerates into whatever the model said matching the loose answer_regex. F7 discards accumulate within seconds of setup, so in practice the setup-fixtures.sh gap is enough; if this scenario ever starts flaking, add a setup.cmd wait-until-non-empty rather than loosening the assertion.",
+  "prompt": "Are any queues in the default VPN dropping messages on $BROKER?",
+  "expected_tool": "mcp__solace-broker__list-queue-discards",
+  "ground_truth": {
+    "jq": ".summary.topOffenderQueues[].queueName",
+    "answer_regex": "test-queue-[a-zA-Z0-9_-]+"
+  },
+  "required_substrings_any_of": ["test-queue-discards-spool", "test-queue-discards-ttl", "test-queue-lowprio-congestion"],
+  "forbidden_substrings": ["no queues are dropping", "not dropping any messages"]
+}

@@ -1,0 +1,7 @@
+{
+  "_doc": "get-replication-status: not-configured fidelity. The local-docker fixture (test/e2e-llm/docker-compose.yml) runs two standalone brokers with no HA/replication configured, so replicationEnabled=false and replicationRole is empty. Correct answer reports replication is disabled or not configured; a model that invents a role or a sync lag fails. Broker-a only.",
+  "prompt": "Is replication working for the default VPN on $BROKER?",
+  "expected_tool": "mcp__solace-broker__get-replication-status",
+  "required_substrings_any_of": ["not enabled", "disabled", "not configured", "no replication", "replicationenabled"],
+  "forbidden_substrings": ["replication is enabled", "replication is working", "actively replicating"]
+}

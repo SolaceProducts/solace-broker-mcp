@@ -1,0 +1,11 @@
+{
+  "_doc": "list-brokers: broker-less prompt. Unlike every other tool the MCP server exposes, list-brokers takes no broker parameter (see internal/tools/register.go RegisterListBrokers) — it's the discovery entry point. The prompt intentionally omits $BROKER so a naive 'always inject broker' path in the agent surfaces as a wrong-tool call (e.g. get-broker-status against a specific alias). Ground truth: the aliases in the returned .brokers array match the local-docker fixture set. Runs on broker-a only because the answer is broker-agnostic — duplicating on broker-b adds no signal.",
+  "prompt": "Which Solace brokers can you reach from here?",
+  "expected_tool": "mcp__solace-broker__list-brokers",
+  "ground_truth": {
+    "jq": ".brokers[]",
+    "answer_regex": "\\bbroker-[ab]\\b"
+  },
+  "required_substrings_any_of": ["broker-a", "broker-b"],
+  "forbidden_substrings": ["cannot reach", "no brokers"]
+}

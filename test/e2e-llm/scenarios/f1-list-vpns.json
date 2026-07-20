@@ -1,10 +1,10 @@
 {
-  "_doc": "F1 baseline: list all VPNs on $BROKER. Proves entity-set fidelity — the answer's VPN names match exactly what list-vpns returned.",
+  "_doc": "F1 baseline: list all VPNs on $BROKER. Proves entity-set fidelity — the answer's VPN names match exactly what list-vpns returned. answer_regex matches the fixture-layer naming pattern (default plus any test-* VPN) rather than enumerating current names, so a new test-* VPN in monitoring/helpers.sh doesn't silently break entity-set comparison the way an older '…-vpn'-suffix regex did with test-vpn-empty.",
   "prompt": "What VPNs are configured on $BROKER?",
   "expected_tool": "mcp__solace-broker__list-vpns",
   "ground_truth": {
     "jq": ".vpns.data[].msgVpnName",
-    "answer_regex": "\\b([a-zA-Z][a-zA-Z0-9_-]*-vpn|default)\\b"
+    "answer_regex": "\\b(default|test-[a-zA-Z0-9_-]+)\\b"
   },
   "required_substrings": ["test-vpn"],
   "forbidden_substrings": []
