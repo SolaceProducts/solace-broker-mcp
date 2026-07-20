@@ -147,6 +147,7 @@ func TestWithAuthorization_Allow_PassesThroughToNext(t *testing.T) {
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "get-broker-status"),
 		"get-broker-status",
+		"",
 		rec.handler(),
 	)
 
@@ -171,6 +172,7 @@ func TestWithAuthorization_Allow_EmitsInfoAuditWithDistinctDecision(t *testing.T
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "get-broker-status"),
 		"get-broker-status",
+		"",
 		newRecordingHandler().handler(),
 	)
 	if _, err := wrapped(context.Background(), requestWithGroups([]string{"Ops"})); err != nil {
@@ -206,6 +208,7 @@ func TestWithAuthorization_Deny_ReturnsToolLevelErrorResult(t *testing.T) {
 	wrapped := withAuthorization(
 		emptyPolicy(t),
 		"delete-queue",
+		"",
 		newRecordingHandler().handler(),
 	)
 
@@ -227,6 +230,7 @@ func TestWithAuthorization_Deny_ResultShapeAndMessage(t *testing.T) {
 	wrapped := withAuthorization(
 		emptyPolicy(t),
 		"delete-queue",
+		"",
 		newRecordingHandler().handler(),
 	)
 	got, _ := wrapped(context.Background(), requestWithGroups([]string{"Contractors"}))
@@ -256,7 +260,7 @@ func TestWithAuthorization_Deny_ResultShapeAndMessage(t *testing.T) {
 // Deny security invariant: next is not called; the tool never runs.
 func TestWithAuthorization_Deny_DoesNotCallNext(t *testing.T) {
 	rec := newRecordingHandler()
-	wrapped := withAuthorization(emptyPolicy(t), "delete-queue", rec.handler())
+	wrapped := withAuthorization(emptyPolicy(t), "delete-queue", "", rec.handler())
 
 	_, _ = wrapped(context.Background(), requestWithGroups([]string{"Contractors"}))
 
@@ -265,30 +269,34 @@ func TestWithAuthorization_Deny_DoesNotCallNext(t *testing.T) {
 	}
 }
 
-// Deny: INFO audit line with decision distinguishable from allow and missing.
-func TestWithAuthorization_Deny_EmitsInfoAuditWithDistinctDecision(t *testing.T) {
+// Deny: WARN audit line with a decision + decision_reason sub-axis that
+// tells the "not permitted" outcome apart from missing-claim.
+func TestWithAuthorization_Deny_EmitsWarnAuditWithDistinctDecision(t *testing.T) {
 	buf, cleanup := captureSlog(t)
 	defer cleanup()
 
-	wrapped := withAuthorization(emptyPolicy(t), "delete-queue", newRecordingHandler().handler())
+	wrapped := withAuthorization(emptyPolicy(t), "delete-queue", "", newRecordingHandler().handler())
 	_, _ = wrapped(context.Background(), requestWithGroups([]string{"Contractors"}))
 
 	lines := authzLogLines(t, buf)
 	if len(lines) != 1 {
 		t.Fatalf("expected exactly 1 audit line, got %d: %s", len(lines), buf.String())
 	}
-	if got := lines[0]["level"]; got != "INFO" {
-		t.Errorf("audit level = %v, want INFO", got)
+	// Deny is a notable but non-error event: WARN, not INFO (which would
+	// bury deny clusters at the same level as normal invocations) and not
+	// ERROR (which would flood on-call pagers designed for system failures).
+	if got := lines[0]["level"]; got != "WARN" {
+		t.Errorf("audit level = %v, want WARN", got)
 	}
 	decision, _ := lines[0]["decision"].(string)
-	if decision == "" {
-		t.Fatalf("audit line missing decision: %v", lines[0])
+	if decision != "denied" {
+		t.Errorf("decision = %q, want %q", decision, "denied")
 	}
-	// Deny's decision must be distinct from missing-claim so operators
-	// can tell "IdP omitted the claim" from "the claim was there but
-	// didn't grant the tool."
-	if decision == "denied_missing_claim" || strings.Contains(strings.ToLower(decision), "allow") {
-		t.Errorf("deny decision %q collides with another outcome value", decision)
+	// The sub-axis field distinguishes "not permitted" from missing-claim.
+	// It must be present on every deny outcome.
+	reason, _ := lines[0]["decision_reason"].(string)
+	if reason != "not_permitted" {
+		t.Errorf("decision_reason = %q, want %q", reason, "not_permitted")
 	}
 }
 
@@ -300,6 +308,7 @@ func TestWithAuthorization_MissingClaim_ReturnsToolLevelErrorResult(t *testing.T
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "get-broker-status"),
 		"get-broker-status",
+		"",
 		newRecordingHandler().handler(),
 	)
 
@@ -329,6 +338,7 @@ func TestWithAuthorization_MissingClaim_DoesNotCallNext(t *testing.T) {
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "get-broker-status"),
 		"get-broker-status",
+		"",
 		rec.handler(),
 	)
 
@@ -339,8 +349,10 @@ func TestWithAuthorization_MissingClaim_DoesNotCallNext(t *testing.T) {
 	}
 }
 
-// Missing-claim: decision distinguishable from plain deny so operators can
-// tell IdP misconfig from grant miss.
+// Missing-claim: decision_reason distinguishable from plain deny so operators
+// can tell IdP misconfig from grant miss. Both outcomes share
+// decision=denied (they are both non-allows); the sub-axis field carries
+// the diagnostic distinction.
 func TestWithAuthorization_MissingClaim_EmitsDistinguishableDecision(t *testing.T) {
 	buf, cleanup := captureSlog(t)
 	defer cleanup()
@@ -348,6 +360,7 @@ func TestWithAuthorization_MissingClaim_EmitsDistinguishableDecision(t *testing.
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "get-broker-status"),
 		"get-broker-status",
+		"groups",
 		newRecordingHandler().handler(),
 	)
 	_, _ = wrapped(context.Background(), requestMissingGroupsClaim())
@@ -357,17 +370,20 @@ func TestWithAuthorization_MissingClaim_EmitsDistinguishableDecision(t *testing.
 		t.Fatalf("expected exactly 1 audit line, got %d: %s", len(lines), buf.String())
 	}
 	decision, _ := lines[0]["decision"].(string)
-	if decision == "" {
-		t.Fatalf("audit line missing decision: %v", lines[0])
+	if decision != "denied" {
+		t.Errorf("decision = %q, want %q (missing-claim is a non-allow)", decision, "denied")
 	}
-	// Missing-claim must be distinguishable from a plain deny — an
-	// operator seeing many missing-claim events knows to check IdP
-	// mapper configuration, not group memberships.
-	if decision == "denied" {
-		t.Errorf("missing-claim decision must differ from plain deny; both were %q", decision)
+	// Missing-claim's diagnostic axis is decision_reason. An operator
+	// seeing many missing_claim reasons knows to check IdP mapper
+	// configuration, not group memberships.
+	reason, _ := lines[0]["decision_reason"].(string)
+	if reason != "missing_claim" {
+		t.Errorf("decision_reason = %q, want %q", reason, "missing_claim")
 	}
-	if strings.Contains(strings.ToLower(decision), "allow") {
-		t.Errorf("missing-claim decision %q looks like an allow value", decision)
+	// expected_claim carries the configured claim name — the actionable
+	// piece of information an operator needs to jump straight to the IdP.
+	if got := lines[0]["expected_claim"]; got != "groups" {
+		t.Errorf("expected_claim = %v, want %q", got, "groups")
 	}
 }
 
@@ -388,6 +404,7 @@ func TestWithAuthorization_NilTokenInfo_TreatsAsMissingClaim(t *testing.T) {
 			wrapped := withAuthorization(
 				policyGranting(t, []string{"Ops"}, "get-broker-status"),
 				"get-broker-status",
+				"",
 				rec.handler(),
 			)
 			got, err := wrapped(context.Background(), tc.req)
@@ -427,7 +444,7 @@ func TestAuthzMessages_IdenticalForV1(t *testing.T) {
 // Nil policy is a precondition violation — wrapper must panic (not silently
 // allow). Outer withRecovery converts the panic to a visible 500.
 func TestWithAuthorization_NilPolicy_Panics(t *testing.T) {
-	wrapped := withAuthorization(nil, "get-broker-status", newRecordingHandler().handler())
+	wrapped := withAuthorization(nil, "get-broker-status", "", newRecordingHandler().handler())
 
 	defer func() {
 		if r := recover(); r == nil {
@@ -435,4 +452,20 @@ func TestWithAuthorization_NilPolicy_Panics(t *testing.T) {
 		}
 	}()
 	_, _ = wrapped(context.Background(), requestWithGroups([]string{"Ops"}))
+}
+
+// Nil policy must panic on every branch — including the branch that would
+// otherwise short-circuit to missing-claim before dereferencing policy.
+// Without the top-of-closure guard, nil + missing-claim would silently
+// return a deny result and the "nil policy is a precondition violation"
+// doc claim would hold on only one input shape.
+func TestWithAuthorization_NilPolicy_PanicsOnMissingClaimBranchToo(t *testing.T) {
+	wrapped := withAuthorization(nil, "get-broker-status", "", newRecordingHandler().handler())
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected wrapper to panic on nil policy even when request has no groups claim; got no panic (doc/code gap)")
+		}
+	}()
+	_, _ = wrapped(context.Background(), requestMissingGroupsClaim())
 }

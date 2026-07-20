@@ -122,10 +122,14 @@ func stampCorrelationID(ctx context.Context, result *mcp.CallToolResult) {
 //
 // When policy is non-nil, each handler is wrapped with withAuthorization
 // inside withRecovery, so every dispatch consults the policy before the tool
-// runs. When policy is nil, no authorization frame is composed — the caller
+// runs. groupsClaimName is the admin-configured JWT claim name the
+// auth-middleware resolver was told to look for; the wrapper reports it on
+// the missing-claim audit event so operators can jump straight to the IdP
+// side of a day-one misconfiguration. When policy is nil, no authorization
+// frame is composed and groupsClaimName is unused — the caller
 // (cmd/server/main.go) owns the enable-gate and expresses disablement here
 // as nil.
-func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerPool, enableWriteTools bool, policy *authz.Policy) {
+func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerPool, enableWriteTools bool, policy *authz.Policy, groupsClaimName string) {
 	type registration struct {
 		name    string
 		handler ToolHandler
@@ -177,7 +181,7 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 		// correlation-ID stamping and panic containment. Nil policy skips
 		// the wrapper entirely — dispatch is byte-identical to pre-RBAC.
 		if policy != nil {
-			callToolHandler = withAuthorization(policy, reg.name, callToolHandler)
+			callToolHandler = withAuthorization(policy, reg.name, groupsClaimName, callToolHandler)
 		}
 
 		server.AddTool(mcpTool, withRecovery(reg.name, callToolHandler))
