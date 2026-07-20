@@ -21,28 +21,63 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess"
 )
 
-// vpn is a tiny helper to build a VPN item with the three required fields.
-func vpn(enabled bool, state string, conns float64) map[string]any {
+// vpn builds a VPN row with the three fields the handler reads. Older tests
+// carried msgVpnConnections here — dropped now that zeroConnectionCount comes
+// from the real-clients fan-out, not from the connection count.
+func vpn(enabled bool, state, name string) map[string]any {
 	return map[string]any{
-		"enabled":           enabled,
-		"state":             state,
-		"msgVpnConnections": conns,
+		"enabled":    enabled,
+		"state":      state,
+		"msgVpnName": name,
 	}
 }
 
+// clients builds a real-clients fan-out result keyed by VPN name. Each entry
+// carries {data: [rows...]}. Pass an empty slice for "VPN was probed but had
+// no real clients" (the zero-conn signal). Omit a VPN entirely for
+// "forEachIf skipped this row" (disabled VPNs never enter the map).
+func clients(byVpn map[string][]any) map[string]map[string]any {
+	byKey := make(map[string]any, len(byVpn))
+	for name, rows := range byVpn {
+		byKey[name] = map[string]any{"data": rows}
+	}
+	return map[string]map[string]any{"byKey": {"byKey": byKey}}
+}
+
+// input assembles both step results into the shape ListVpns receives.
+func input(items []any, byVpn map[string][]any) map[string]map[string]any {
+	res := clients(byVpn)
+	res["vpns"] = map[string]any{"data": items}
+	// clients() keyed under "byKey" as a workaround for map return typing;
+	// remap to the actual step ID here so ListVpns finds it.
+	res["real-clients"] = res["byKey"]
+	delete(res, "byKey")
+	return res
+}
+
+// row is a helper for the "there is at least one real client on this VPN" case.
+func clientRow() any { return map[string]any{"clientName": "app-1"} }
+
 func TestListVpns_Counts(t *testing.T) {
 	items := []any{
-		vpn(true, "up", 5),      // healthy
-		vpn(true, "up", 1),      // zeroConn — only #client attached
-		vpn(true, "up", 0),      // zeroConn — underflow safety (no #client)
-		vpn(true, "down", 0),    // down
-		vpn(true, "standby", 0), // standby (NOT zeroConn — standby excluded)
-		vpn(false, "up", 0),     // disabled (NOT zeroConn — disabled excluded)
-		vpn(false, "down", 0),   // disabled only (NOT down — down excludes disabled)
+		vpn(true, "up", "healthy"),      // healthy (has real client)
+		vpn(true, "up", "empty"),        // zeroConn — no real client
+		vpn(true, "up", "also-empty"),   // zeroConn — no real client (belt & braces)
+		vpn(true, "down", "downvpn"),    // down
+		vpn(true, "standby", "sby"),     // standby (NOT zeroConn)
+		vpn(false, "up", "disabled1"),   // disabled (NOT zeroConn)
+		vpn(false, "down", "disabled2"), // disabled only (NOT down)
 	}
-	got, err := ListVpns(map[string]map[string]any{
-		"vpns": {"data": items},
-	})
+	byVpn := map[string][]any{
+		"healthy":    {clientRow()},
+		"empty":      {},
+		"also-empty": {},
+		// downvpn / sby not in byKey since forEachIf on enabled==true still ran;
+		// the handler's state switch never checks byKey for those states.
+		"downvpn": {},
+		"sby":     {clientRow()},
+	}
+	got, err := ListVpns(input(items, byVpn))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,41 +97,44 @@ func TestListVpns_Counts(t *testing.T) {
 	}
 }
 
-// TestListVpns_ZeroConnectionExclusions asserts that zeroConnectionCount
-// counts ONLY enabled+up VPNs — an HA-standby broker (every VPN standby)
-// should report zeroConnectionCount: 0, not a fleet-wide false alarm.
-// A bare enabled+up VPN reports msgVpnConnections==1 (reserved `#client`
-// broker invariant), so the mix case uses conns==1 as the zero-conn marker.
+// TestListVpns_ZeroConnectionExclusions asserts zeroConnectionCount is gated on
+// enabled+up. An HA-standby broker (every VPN standby) must report 0, not a
+// fleet-wide false alarm.
 func TestListVpns_ZeroConnectionExclusions(t *testing.T) {
 	cases := []struct {
 		name  string
 		items []any
+		byVpn map[string][]any
 		want  int
 	}{
 		{
-			name:  "all standby (HA standby broker)",
-			items: []any{vpn(true, "standby", 1), vpn(true, "standby", 1)},
+			name:  "all standby",
+			items: []any{vpn(true, "standby", "a"), vpn(true, "standby", "b")},
+			byVpn: map[string][]any{"a": {clientRow()}, "b": {clientRow()}},
 			want:  0,
 		},
 		{
 			name:  "all disabled",
-			items: []any{vpn(false, "up", 0), vpn(false, "up", 0)},
+			items: []any{vpn(false, "up", "a"), vpn(false, "up", "b")},
+			byVpn: map[string][]any{}, // forEachIf filtered them
 			want:  0,
 		},
 		{
 			name:  "all down",
-			items: []any{vpn(true, "down", 0), vpn(true, "down", 0)},
+			items: []any{vpn(true, "down", "a"), vpn(true, "down", "b")},
+			byVpn: map[string][]any{"a": {}, "b": {}},
 			want:  0,
 		},
 		{
-			name:  "mix — only enabled+up+(<=1 conn) counts",
-			items: []any{vpn(true, "up", 1), vpn(true, "up", 2), vpn(true, "standby", 1), vpn(false, "up", 0)},
+			name:  "mix — only enabled+up+no-real-client counts",
+			items: []any{vpn(true, "up", "a"), vpn(true, "up", "b"), vpn(true, "standby", "c"), vpn(false, "up", "d")},
+			byVpn: map[string][]any{"a": {}, "b": {clientRow()}, "c": {clientRow()}},
 			want:  1,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := ListVpns(map[string]map[string]any{"vpns": {"data": tc.items}})
+			got, err := ListVpns(input(tc.items, tc.byVpn))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -107,18 +145,28 @@ func TestListVpns_ZeroConnectionExclusions(t *testing.T) {
 	}
 }
 
-// TestListVpns_DisabledExcludedFromStateCounts asserts down/standby/zeroConn
-// are all gated on enabled==true, so a disabled VPN (SEMP typically reports
-// state=="down" for these) lands in disabledCount only. This keeps the four
-// counts independently readable — the LLM shouldn't have to subtract overlaps
-// to answer "how many VPNs are actually broken?".
+// TestListVpns_MissingByKeyEntryIsZeroConn: forEachIf never filters
+// enabled+up rows, but if for any reason byKey has no entry for a VPN we
+// should treat it as "no real client" — not crash and not silently miss
+// the signal. Belt-and-braces against future YAML tweaks.
+func TestListVpns_MissingByKeyEntryIsZeroConn(t *testing.T) {
+	items := []any{vpn(true, "up", "orphan")}
+	got, err := ListVpns(input(items, map[string][]any{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["zeroConnectionCount"] != 1 {
+		t.Errorf("missing byKey entry should count as zero-conn, got %v", got["zeroConnectionCount"])
+	}
+}
+
 func TestListVpns_DisabledExcludedFromStateCounts(t *testing.T) {
 	items := []any{
-		vpn(false, "down", 0),
-		vpn(false, "standby", 0),
-		vpn(false, "up", 0),
+		vpn(false, "down", "a"),
+		vpn(false, "standby", "b"),
+		vpn(false, "up", "c"),
 	}
-	got, err := ListVpns(map[string]map[string]any{"vpns": {"data": items}})
+	got, err := ListVpns(input(items, map[string][]any{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,8 +181,9 @@ func TestListVpns_DisabledExcludedFromStateCounts(t *testing.T) {
 }
 
 func TestListVpns_AllUp(t *testing.T) {
-	items := []any{vpn(true, "up", 3), vpn(true, "up", 7)}
-	got, err := ListVpns(map[string]map[string]any{"vpns": {"data": items}})
+	items := []any{vpn(true, "up", "a"), vpn(true, "up", "b")}
+	byVpn := map[string][]any{"a": {clientRow()}, "b": {clientRow()}}
+	got, err := ListVpns(input(items, byVpn))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,28 +194,13 @@ func TestListVpns_AllUp(t *testing.T) {
 	}
 }
 
-func TestListVpns_AllDown(t *testing.T) {
-	items := []any{vpn(true, "down", 0), vpn(true, "down", 0), vpn(true, "down", 0)}
-	got, err := ListVpns(map[string]map[string]any{"vpns": {"data": items}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got["downCount"] != 3 {
-		t.Errorf("downCount: got %v, want 3", got["downCount"])
-	}
-}
-
-// TestListVpns_TruncationSurfaced mirrors the listQueues test: when the
-// paginator marks the step truncated, the summary must expose scanned and
-// truncated: true alongside the counts. Otherwise the LLM sees authoritative
-// looking counts and the truncation flag buried on a sibling object, and
-// tends to treat the counts as global rather than over the visible page.
 func TestListVpns_TruncationSurfaced(t *testing.T) {
-	items := []any{vpn(true, "up", 5), vpn(true, "down", 0)}
+	items := []any{vpn(true, "up", "a"), vpn(true, "down", "b")}
+	byVpn := map[string][]any{"a": {clientRow()}, "b": {}}
 	t.Run("truncated", func(t *testing.T) {
-		got, err := ListVpns(map[string]map[string]any{
-			"vpns": {"data": items, "truncated": true},
-		})
+		in := input(items, byVpn)
+		in["vpns"]["truncated"] = true
+		got, err := ListVpns(in)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -178,9 +212,7 @@ func TestListVpns_TruncationSurfaced(t *testing.T) {
 		}
 	})
 	t.Run("not truncated omits flag", func(t *testing.T) {
-		got, err := ListVpns(map[string]map[string]any{
-			"vpns": {"data": items, "truncated": false},
-		})
+		got, err := ListVpns(input(items, byVpn))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -191,7 +223,7 @@ func TestListVpns_TruncationSurfaced(t *testing.T) {
 }
 
 func TestListVpns_Empty(t *testing.T) {
-	got, err := ListVpns(map[string]map[string]any{"vpns": {"data": []any{}}})
+	got, err := ListVpns(input([]any{}, map[string][]any{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,19 +244,29 @@ func TestListVpns_Errors(t *testing.T) {
 		wantSub string
 	}{
 		{
-			name:    "missing step",
-			input:   map[string]map[string]any{},
+			name:    "missing vpns step",
+			input:   map[string]map[string]any{"real-clients": {"byKey": map[string]any{}}},
 			wantSub: `step "vpns" not in results`,
 		},
 		{
-			name:    "data wrong type",
-			input:   map[string]map[string]any{"vpns": {"data": "oops"}},
+			name:    "vpns data wrong type",
+			input:   map[string]map[string]any{"vpns": {"data": "oops"}, "real-clients": {"byKey": map[string]any{}}},
 			wantSub: "vpns.data: want []any",
 		},
 		{
-			name:    "item wrong type",
-			input:   map[string]map[string]any{"vpns": {"data": []any{"not-an-object"}}},
+			name:    "vpns item wrong type",
+			input:   map[string]map[string]any{"vpns": {"data": []any{"not-an-object"}}, "real-clients": {"byKey": map[string]any{}}},
 			wantSub: "vpns.data[0]: want object",
+		},
+		{
+			name:    "missing real-clients step",
+			input:   map[string]map[string]any{"vpns": {"data": []any{}}},
+			wantSub: `step "real-clients" not in results`,
+		},
+		{
+			name:    "real-clients byKey wrong type",
+			input:   map[string]map[string]any{"vpns": {"data": []any{}}, "real-clients": {"byKey": "oops"}},
+			wantSub: "real-clients.byKey: want map",
 		},
 	}
 	for _, tc := range cases {
@@ -237,14 +279,11 @@ func TestListVpns_Errors(t *testing.T) {
 	}
 }
 
-// TestListVpns_MissingField asserts that omitting any one required field
-// skips that VPN rather than aborting the call. Table-driven over each
-// field so reordering the handler's reads doesn't break the test for the
-// wrong reason. Hard-failing on one bad row would drop the raw list too —
-// a step down from the collect strategy.
+// TestListVpns_MissingField asserts that omitting any one required field on a
+// VPN row skips that VPN rather than aborting the call.
 func TestListVpns_MissingField(t *testing.T) {
-	full := vpn(true, "down", 0)
-	if _, err := ListVpns(map[string]map[string]any{"vpns": {"data": []any{full}}}); err != nil {
+	full := vpn(true, "down", "target")
+	if _, err := ListVpns(input([]any{full}, map[string][]any{})); err != nil {
 		t.Fatalf("baseline full input should pass, got %v", err)
 	}
 	for field := range full {
@@ -255,11 +294,8 @@ func TestListVpns_MissingField(t *testing.T) {
 					item[k] = v
 				}
 			}
-			// Pair the broken row with a healthy signal-emitting row (standby)
-			// distinct from the baseline's down signal, so we can also assert
-			// the healthy row's signal still lands.
-			healthy := vpn(true, "standby", 0)
-			got, err := ListVpns(map[string]map[string]any{"vpns": {"data": []any{item, healthy}}})
+			healthy := vpn(true, "standby", "healthy")
+			got, err := ListVpns(input([]any{item, healthy}, map[string][]any{"healthy": {clientRow()}}))
 			if err != nil {
 				t.Fatalf("expected skip on missing %q, got error %v", field, err)
 			}
@@ -276,14 +312,13 @@ func TestListVpns_MissingField(t *testing.T) {
 	}
 }
 
-// TestListVpns_NilField asserts that an explicit nil (what SEMP returns for
-// an unset field) is treated as a skip, not a hard fail. One VPN with a nil
-// msgVpnConnections shouldn't lose the raw list of every other VPN.
+// TestListVpns_NilField mirrors TestListVpns_MissingField for the case SEMP
+// returns an explicit nil rather than omitting the field.
 func TestListVpns_NilField(t *testing.T) {
-	bad := vpn(true, "up", 0)
-	bad["msgVpnConnections"] = nil
-	healthy := vpn(true, "down", 0)
-	got, err := ListVpns(map[string]map[string]any{"vpns": {"data": []any{bad, healthy}}})
+	bad := vpn(true, "up", "bad")
+	bad["state"] = nil
+	healthy := vpn(true, "down", "healthy")
+	got, err := ListVpns(input([]any{bad, healthy}, map[string][]any{}))
 	if err != nil {
 		t.Fatalf("nil field should skip, got %v", err)
 	}
@@ -295,12 +330,9 @@ func TestListVpns_NilField(t *testing.T) {
 	}
 }
 
-// TestListVpns_SkippedOmittedWhenZero keeps the summary key set minimal in
-// the common case — skipped is noise when nothing was skipped.
 func TestListVpns_SkippedOmittedWhenZero(t *testing.T) {
-	got, err := ListVpns(map[string]map[string]any{
-		"vpns": {"data": []any{vpn(true, "up", 1)}},
-	})
+	items := []any{vpn(true, "up", "a")}
+	got, err := ListVpns(input(items, map[string][]any{"a": {clientRow()}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,32 +342,62 @@ func TestListVpns_SkippedOmittedWhenZero(t *testing.T) {
 }
 
 // TestListVpns_ValidateTool exercises the boot-time cross-check for the
-// listVpns handler specifically. Ensures the registered RequiredFields match
-// what's needed so the server refuses to start if a future YAML edit drops
-// enabled/state/msgVpnConnections from the vpns step's select.
+// listVpns handler. Ensures RequiredFieldsPerStep matches the YAML selects and
+// that renaming either step (vpns / real-clients) is caught at boot.
 func TestListVpns_ValidateTool(t *testing.T) {
-	t.Run("select covers required fields", func(t *testing.T) {
+	t.Run("selects cover required fields", func(t *testing.T) {
 		err := postprocess.ValidateTool("list-vpns", "listVpns",
-			[]string{"vpns"},
-			map[string][]string{"vpns": {"enabled", "state", "msgVpnConnections", "msgVpnName"}})
+			[]string{"vpns", "real-clients"},
+			map[string][]string{
+				"vpns":         {"enabled", "state", "msgVpnName"},
+				"real-clients": {"clientName"},
+			})
 		if err != nil {
 			t.Fatalf("expected success, got %v", err)
 		}
 	})
-	t.Run("select missing state", func(t *testing.T) {
+	t.Run("vpns select missing state", func(t *testing.T) {
 		err := postprocess.ValidateTool("list-vpns", "listVpns",
-			[]string{"vpns"},
-			map[string][]string{"vpns": {"enabled", "msgVpnConnections"}})
+			[]string{"vpns", "real-clients"},
+			map[string][]string{
+				"vpns":         {"enabled", "msgVpnName"},
+				"real-clients": {"clientName"},
+			})
 		if err == nil || !strings.Contains(err.Error(), `"state"`) {
 			t.Fatalf("expected error mentioning state, got %v", err)
 		}
 	})
-	t.Run("step id renamed", func(t *testing.T) {
+	t.Run("real-clients select missing clientName", func(t *testing.T) {
 		err := postprocess.ValidateTool("list-vpns", "listVpns",
-			[]string{"messageVpns"},
-			map[string][]string{"messageVpns": {"enabled", "state", "msgVpnConnections"}})
+			[]string{"vpns", "real-clients"},
+			map[string][]string{
+				"vpns":         {"enabled", "state", "msgVpnName"},
+				"real-clients": {},
+			})
+		if err == nil || !strings.Contains(err.Error(), `"clientName"`) {
+			t.Fatalf("expected error mentioning clientName, got %v", err)
+		}
+	})
+	t.Run("vpns step renamed", func(t *testing.T) {
+		err := postprocess.ValidateTool("list-vpns", "listVpns",
+			[]string{"messageVpns", "real-clients"},
+			map[string][]string{
+				"messageVpns":  {"enabled", "state", "msgVpnName"},
+				"real-clients": {"clientName"},
+			})
 		if err == nil || !strings.Contains(err.Error(), `"vpns"`) {
 			t.Fatalf("expected error mentioning vpns step, got %v", err)
+		}
+	})
+	t.Run("real-clients step renamed", func(t *testing.T) {
+		err := postprocess.ValidateTool("list-vpns", "listVpns",
+			[]string{"vpns", "clients"},
+			map[string][]string{
+				"vpns":    {"enabled", "state", "msgVpnName"},
+				"clients": {"clientName"},
+			})
+		if err == nil || !strings.Contains(err.Error(), `"real-clients"`) {
+			t.Fatalf("expected error mentioning real-clients step, got %v", err)
 		}
 	})
 }

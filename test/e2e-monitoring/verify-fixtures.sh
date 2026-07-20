@@ -54,10 +54,11 @@ verify_multi_vpn_state() {
 test_ac2_multi_vpn_state_a() { verify_multi_vpn_state "broker-a" "$BROKER_A_URL"; }
 test_ac2_multi_vpn_state_b() { verify_multi_vpn_state "broker-b" "$BROKER_B_URL"; }
 
-# `test-vpn-empty` exists on both brokers with enabled=true, state=up, and only
-# the reserved `#client` internal connection attached (msgVpnConnections==1).
-# This is the fixture that lets list-vpns.zeroConnectionCount fire — the
-# handler's <=1 predicate accounts for the broker's #client invariant.
+# `test-vpn-empty` exists on both brokers with enabled=true, state=up, and no
+# user clients connected. This is the fixture that lets list-vpns.zeroConnectionCount
+# fire. The handler derives that count directly via a per-VPN getMsgVpnClients
+# probe filtered by `clientUsername != #*`, so we only assert enabled+up here —
+# no msgVpnConnections tripwire is needed.
 verify_empty_enabled_vpn_state() {
     local label="$1"
     local broker_url="$2"
@@ -70,8 +71,6 @@ verify_empty_enabled_vpn_state() {
         "empty-enabled-VPN [$label]: test-vpn-empty enabled must be true" || return 1
     assert_json_field "$body" ".data.state" "up" \
         "empty-enabled-VPN [$label]: test-vpn-empty state must be up" || return 1
-    assert_json_field "$body" ".data.msgVpnConnections" "1" \
-        "empty-enabled-VPN [$label]: test-vpn-empty msgVpnConnections must be 1 (reserved #client only)" || return 1
 }
 
 test_empty_enabled_vpn_state_a() { verify_empty_enabled_vpn_state "broker-a" "$BROKER_A_URL"; }

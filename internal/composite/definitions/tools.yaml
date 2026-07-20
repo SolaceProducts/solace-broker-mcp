@@ -249,6 +249,26 @@ tools:
           - serviceSmfPlainTextFailureReason
           - serviceSmfPlainTextUp
           - state
+      # Per-VPN "is any real (non-reserved) client connected?" probe. Feeds
+      # zeroConnectionCount in the postProcess handler. The `#*` prefix on
+      # clientUsername is Solace's documented reserved-name contract, so this
+      # is version-independent — no reliance on the empirical `#client
+      # counts as exactly one connection` invariant the old <=1 predicate
+      # rode on. count=1 is a boolean check: any row returned means the VPN
+      # has a real client. select=[clientName] keeps the payload minimal.
+      # forEachIf skips disabled VPNs — their state is always down, so a call
+      # would be wasted (and hits an admin-disabled service on some brokers).
+      - id: real-clients
+        operation: monitor/getMsgVpnClients
+        forEach: vpns
+        forEachIf: "{{.Item.enabled}}"
+        forEachKey: msgVpnName
+        args:
+          msgVpnName: "{{.Item.msgVpnName}}"
+          count: "1"
+          where: "clientUsername!=#*"
+        select:
+          - clientName
     result:
       strategy: postProcess
       postProcess: listVpns
