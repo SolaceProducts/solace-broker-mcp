@@ -257,12 +257,15 @@ tools:
       # counts as exactly one connection` invariant the old <=1 predicate
       # rode on. count=1 is a boolean check: any row returned means the VPN
       # has a real client. select=[clientName] keeps the payload minimal.
-      # forEachIf skips disabled VPNs — their state is always down, so a call
-      # would be wasted (and hits an admin-disabled service on some brokers).
+      # forEachIf restricts the probe to enabled+up VPNs, which are exactly the
+      # rows the postProcess handler consults for zeroConnectionCount. Disabled
+      # VPNs report state==down, and standby VPNs are excluded from the count;
+      # calling getMsgVpnClients on either would be wasted work (and hits an
+      # admin-disabled service on some brokers).
       - id: real-clients
         operation: monitor/getMsgVpnClients
         forEach: vpns
-        forEachIf: "{{.Item.enabled}}"
+        forEachIf: '{{and .Item.enabled (eq .Item.state "up")}}'
         forEachKey: msgVpnName
         args:
           msgVpnName: "{{.Item.msgVpnName}}"
