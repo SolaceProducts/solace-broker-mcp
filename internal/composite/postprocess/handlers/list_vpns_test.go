@@ -33,7 +33,8 @@ func vpn(enabled bool, state string, conns float64) map[string]any {
 func TestListVpns_Counts(t *testing.T) {
 	items := []any{
 		vpn(true, "up", 5),      // healthy
-		vpn(true, "up", 0),      // zeroConn
+		vpn(true, "up", 1),      // zeroConn — only #client attached
+		vpn(true, "up", 0),      // zeroConn — underflow safety (no #client)
 		vpn(true, "down", 0),    // down
 		vpn(true, "standby", 0), // standby (NOT zeroConn — standby excluded)
 		vpn(false, "up", 0),     // disabled (NOT zeroConn — disabled excluded)
@@ -49,7 +50,7 @@ func TestListVpns_Counts(t *testing.T) {
 		"disabledCount":       2,
 		"downCount":           1,
 		"standbyCount":        1,
-		"zeroConnectionCount": 1,
+		"zeroConnectionCount": 2,
 	}
 	for k, want := range checks {
 		if got[k] != want {
@@ -64,6 +65,8 @@ func TestListVpns_Counts(t *testing.T) {
 // TestListVpns_ZeroConnectionExclusions asserts that zeroConnectionCount
 // counts ONLY enabled+up VPNs — an HA-standby broker (every VPN standby)
 // should report zeroConnectionCount: 0, not a fleet-wide false alarm.
+// A bare enabled+up VPN reports msgVpnConnections==1 (reserved `#client`
+// broker invariant), so the mix case uses conns==1 as the zero-conn marker.
 func TestListVpns_ZeroConnectionExclusions(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -72,7 +75,7 @@ func TestListVpns_ZeroConnectionExclusions(t *testing.T) {
 	}{
 		{
 			name:  "all standby (HA standby broker)",
-			items: []any{vpn(true, "standby", 0), vpn(true, "standby", 0)},
+			items: []any{vpn(true, "standby", 1), vpn(true, "standby", 1)},
 			want:  0,
 		},
 		{
@@ -86,8 +89,8 @@ func TestListVpns_ZeroConnectionExclusions(t *testing.T) {
 			want:  0,
 		},
 		{
-			name:  "mix — only enabled+up+0 counts",
-			items: []any{vpn(true, "up", 0), vpn(true, "up", 1), vpn(true, "standby", 0), vpn(false, "up", 0)},
+			name:  "mix — only enabled+up+(<=1 conn) counts",
+			items: []any{vpn(true, "up", 1), vpn(true, "up", 2), vpn(true, "standby", 1), vpn(false, "up", 0)},
 			want:  1,
 		},
 	}

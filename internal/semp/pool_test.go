@@ -1,6 +1,7 @@
 package semp_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 )
 
 // writeTestConfig writes a minimal broker-config YAML to t.TempDir, loads it
@@ -469,6 +471,160 @@ func TestBrokerPool_Aliases_PreservesDisplayCasing(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("Aliases()[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func expectedBasicAuth(t *testing.T, user, pass string) string {
+	t.Helper()
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.com/", nil)
+	r.SetBasicAuth(user, pass)
+	return r.Header.Get("Authorization")
+}
+
+func twoBrokerConfig(t *testing.T, urlA, urlB string) *config.ServerConfig {
+	t.Helper()
+	yaml := fmt.Sprintf(`mcp_client_auth:
+  mode: disabled
+brokers:
+  broker-a:
+    url: %s
+    auth:
+      mode: basic
+      username: alice
+      password: secret-a
+  broker-b:
+    url: %s
+    auth:
+      mode: basic
+      username: bob
+      password: secret-b
+`, urlA, urlB)
+	path := filepath.Join(t.TempDir(), "broker-config.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	return cfg
+}
+
+func TestBrokerPool_CredentialIsolation_SEMPv2(t *testing.T) {
+	var mu sync.Mutex
+	var authA, authB string
+
+	serverA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		authA = r.Header.Get("Authorization")
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	}))
+	defer serverA.Close()
+
+	serverB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		authB = r.Header.Get("Authorization")
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	}))
+	defer serverB.Close()
+
+	pool := semp.NewBrokerPool(twoBrokerConfig(t, serverA.URL, serverB.URL), nil)
+
+	op := &sempv2.Operation{ID: "testOp", Method: http.MethodGet, Path: "/SEMP/v2/monitor/about"}
+
+	clientA, err := pool.GetSEMPv2("broker-a")
+	if err != nil {
+		t.Fatalf("GetSEMPv2(broker-a): %v", err)
+	}
+	if _, err := clientA.Execute(context.Background(), op, nil); err != nil {
+		t.Fatalf("clientA.Execute: %v", err)
+	}
+
+	clientB, err := pool.GetSEMPv2("broker-b")
+	if err != nil {
+		t.Fatalf("GetSEMPv2(broker-b): %v", err)
+	}
+	if _, err := clientB.Execute(context.Background(), op, nil); err != nil {
+		t.Fatalf("clientB.Execute: %v", err)
+	}
+
+	wantA := expectedBasicAuth(t, "alice", "secret-a")
+	wantB := expectedBasicAuth(t, "bob", "secret-b")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if authA != wantA {
+		t.Errorf("broker-a Authorization = %q, want %q", authA, wantA)
+	}
+	if authB != wantB {
+		t.Errorf("broker-b Authorization = %q, want %q", authB, wantB)
+	}
+	if authA == authB {
+		t.Errorf("broker-a and broker-b saw the same Authorization header %q — credentials crossed brokers", authA)
+	}
+}
+
+func TestBrokerPool_CredentialIsolation_SEMPv1(t *testing.T) {
+	var mu sync.Mutex
+	var authA, authB string
+
+	respBody := []byte(`<rpc-reply><rpc><show/></rpc><execute-result code="ok"/></rpc-reply>`)
+
+	serverA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		authA = r.Header.Get("Authorization")
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/xml")
+		_, _ = w.Write(respBody)
+	}))
+	defer serverA.Close()
+
+	serverB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		authB = r.Header.Get("Authorization")
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/xml")
+		_, _ = w.Write(respBody)
+	}))
+	defer serverB.Close()
+
+	pool := semp.NewBrokerPool(twoBrokerConfig(t, serverA.URL, serverB.URL), nil)
+
+	const rpc = `<rpc><show><version/></show></rpc>`
+
+	clientA, err := pool.GetSEMPv1("broker-a")
+	if err != nil {
+		t.Fatalf("GetSEMPv1(broker-a): %v", err)
+	}
+	if _, err := clientA.Execute(context.Background(), rpc); err != nil {
+		t.Fatalf("clientA.Execute: %v", err)
+	}
+
+	clientB, err := pool.GetSEMPv1("broker-b")
+	if err != nil {
+		t.Fatalf("GetSEMPv1(broker-b): %v", err)
+	}
+	if _, err := clientB.Execute(context.Background(), rpc); err != nil {
+		t.Fatalf("clientB.Execute: %v", err)
+	}
+
+	wantA := expectedBasicAuth(t, "alice", "secret-a")
+	wantB := expectedBasicAuth(t, "bob", "secret-b")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if authA != wantA {
+		t.Errorf("broker-a Authorization = %q, want %q", authA, wantA)
+	}
+	if authB != wantB {
+		t.Errorf("broker-b Authorization = %q, want %q", authB, wantB)
+	}
+	if authA == authB {
+		t.Errorf("broker-a and broker-b saw the same Authorization header %q — credentials crossed brokers", authA)
 	}
 }
 

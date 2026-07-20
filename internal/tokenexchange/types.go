@@ -34,6 +34,8 @@ package tokenexchange
 
 import (
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -123,6 +125,33 @@ type Params struct {
 	Cache cache.TokenCache
 }
 
+// String, GoString, and LogValue redact ClientSecret so Params never leaks
+// the OAuth client secret through fmt formatting or slog reflection. They
+// expose only the non-credential protocol fields; the infrastructure fields
+// (HTTPClient, Cache) are omitted as noise. Value receivers so *Params is
+// covered too. Pattern mirrors cache.CachedCredential.
+func (p Params) String() string {
+	return fmt.Sprintf("Params{TokenURL: %q, ClientID: %q, ClientAuthMethod: %d, GrantType: %d, AudienceParam: %d}",
+		p.TokenURL, p.ClientID, p.ClientAuthMethod, p.GrantType, p.AudienceParam)
+}
+
+func (p Params) GoString() string {
+	return p.String()
+}
+
+func (p Params) LogValue() slog.Value {
+	return slog.GroupValue(
+		// Key is "idp_endpoint", not "token_url": the ReplaceAttr net in
+		// cmd/server/main.go redacts any key containing "token", which would
+		// blank this non-credential URL and mislead operators.
+		slog.String("idp_endpoint", p.TokenURL),
+		slog.String("client_id", p.ClientID),
+		slog.Int("client_auth_method", int(p.ClientAuthMethod)),
+		slog.Int("grant_type", int(p.GrantType)),
+		slog.Int("audience_param", int(p.AudienceParam)),
+	)
+}
+
 // ExchangeInput are the per-call inputs to Exchange. Subject token comes
 // from ctx via Hop 1's InjectRawSubjectToken middleware (see
 // internal/auth.RawSubjectTokenFromContext) and is extracted by the
@@ -140,6 +169,25 @@ type ExchangeInput struct {
 	Audience string
 }
 
+// String, GoString, and LogValue redact SubjectToken (the inbound JWT) so
+// ExchangeInput never leaks it through fmt formatting or slog reflection.
+// Value receivers so *ExchangeInput is covered too. Pattern mirrors
+// cache.CachedCredential.
+func (i ExchangeInput) String() string {
+	return fmt.Sprintf("ExchangeInput{BrokerAlias: %q, Audience: %q}", i.BrokerAlias, i.Audience)
+}
+
+func (i ExchangeInput) GoString() string {
+	return i.String()
+}
+
+func (i ExchangeInput) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("broker_alias", i.BrokerAlias),
+		slog.String("audience", i.Audience),
+	)
+}
+
 // Token is the result of a successful token exchange. Value is the
 // exchanged bearer token; ExpiresAt is computed from the IdP-reported
 // expires_in minus a 30-second skew so callers (and the future cache)
@@ -147,6 +195,22 @@ type ExchangeInput struct {
 type Token struct {
 	Value     string
 	ExpiresAt time.Time
+}
+
+// String, GoString, and LogValue redact Value (the exchanged bearer token)
+// so Token never leaks it through fmt formatting or slog reflection. Value
+// receivers so the *Token returned by Exchange is covered too. Pattern
+// mirrors cache.CachedCredential.
+func (t Token) String() string {
+	return fmt.Sprintf("Token{ExpiresAt: %v}", t.ExpiresAt)
+}
+
+func (t Token) GoString() string {
+	return t.String()
+}
+
+func (t Token) LogValue() slog.Value {
+	return slog.GroupValue(slog.Time("expires_at", t.ExpiresAt))
 }
 
 // Sentinel errors the Exchanger returns. The per-call error is always one
