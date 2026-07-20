@@ -108,7 +108,8 @@ func TestNewSlogHandler_RedactsInRenderedOutput(t *testing.T) {
 }
 
 // captureStderr redirects os.Stderr to a pipe for the duration of fn, then
-// returns everything written. Restored via t.Cleanup.
+// returns everything written. Restored via defer before returning so callers
+// don't inherit a stderr pointing at a closed pipe for the rest of the test.
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -117,7 +118,7 @@ func captureStderr(t *testing.T, fn func()) string {
 	}
 	orig := os.Stderr
 	os.Stderr = w
-	t.Cleanup(func() { os.Stderr = orig })
+	defer func() { os.Stderr = orig }()
 
 	fn()
 	_ = w.Close()

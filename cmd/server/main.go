@@ -495,6 +495,18 @@ func buildToolPolicy(cfg *config.ServerConfig) (*authz.Policy, error) {
 	return authz.NewPolicy(*cfg.MCPClientAuth.ToolAuthorization)
 }
 
+// logStartupBanners emits the boot-time WARN banners: auth-mode signal,
+// static-cleartext exposure, and OAuth plaintext-listener acknowledgement.
+func logStartupBanners(cfg *config.ServerConfig) {
+	banner.LogStartupAuthMode(cfg.MCPClientAuth.Mode, cfg.MCPClientAuth.Issuer, cfg.BindAddress())
+	if cfg.StaticTokenExposedCleartext() {
+		banner.LogStaticCleartextExposure(cfg.BindAddress())
+	}
+	if cfg.OAuthPlaintextListenerAcknowledged() {
+		banner.LogOAuthPlaintextListener(cfg.BindAddress())
+	}
+}
+
 func main() {
 	if len(os.Args) == 2 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
 		fmt.Println(version.Version())
@@ -558,21 +570,7 @@ func main() {
 	// level — at this point the bootstrap handler is at INFO, so WARN
 	// banner entries are always visible regardless of cfg.LogLevel.
 	// DO NOT move this into middleware; see internal/banner/banner.go.
-	banner.LogStartupAuthMode(cfg.MCPClientAuth.Mode, cfg.MCPClientAuth.Issuer, cfg.BindAddress())
-
-	// static mode allows a non-loopback bind without an override, but that only
-	// keeps the token safe if the transport is encrypted. Warn loudly when the
-	// shared dev token would travel plaintext on a routable interface.
-	if cfg.StaticTokenExposedCleartext() {
-		banner.LogStaticCleartextExposure(cfg.BindAddress())
-	}
-
-	// oauth mode requires TLS unless the operator acknowledged upstream TLS
-	// termination (tls_terminated_upstream: true). When they did, the listener
-	// serves plaintext — warn loudly so a missing terminating proxy is visible.
-	if cfg.OAuthPlaintextListenerAcknowledged() {
-		banner.LogOAuthPlaintextListener(cfg.BindAddress())
-	}
+	logStartupBanners(cfg)
 
 	// Reconfigure slog with the user-configured level. cfg.LogLevel is
 	// validated and normalized to one of debug/info/warn/error.

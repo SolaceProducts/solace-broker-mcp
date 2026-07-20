@@ -15,25 +15,24 @@
 package main
 
 import (
+	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/banner"
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 )
 
-// TestStartupBanner_NoCredentialLeak drives the exact banner emissions main()
-// performs at boot (see main.go around the "Loud, refactor-robust signal"
-// block) with a config that carries sentinel credentials in every
-// secret-holding field, and asserts none of those sentinels reach stderr.
-//
-// This test guards the wiring: the banner package only takes primitives
-// (mode / issuer / bind_address), so a credential can leak only if a caller
-// hands one in. If a future refactor changes what main() passes to the
-// banner emitters, this test fires as soon as a secret-bearing field is
-// piped through. SOL-150757.
-func TestStartupBanner_NoCredentialLeak(t *testing.T) {
+// TestLogStartupBanners_NoCredentialLeak drives the same helper main() uses to
+// emit boot-time banners (logStartupBanners), fed a real *config.ServerConfig
+// loaded from YAML that carries sentinel credentials in every secret-holding
+// field reachable from the helper: MCPClientAuth.DevToken plus one basic and
+// one bearer broker's auth fields. If any future edit to logStartupBanners
+// pipes one of these fields into a banner call, the sentinel substring turns
+// the leak into a deterministic test failure. SOL-150757.
+func TestLogStartupBanners_NoCredentialLeak(t *testing.T) {
 	const (
 		sentDevTok    = "SENTINEL_DEV_TOKEN_MUST_NOT_LEAK"
 		sentBasicUser = "SENTINEL_BASIC_USERNAME_MUST_NOT_LEAK"
@@ -44,61 +43,102 @@ func TestStartupBanner_NoCredentialLeak(t *testing.T) {
 
 	// Cover each mode main() may see. Bind/TLS shape is chosen per mode to
 	// exercise the follow-up cleartext-exposure and plaintext-listener banners
-	// so all three main() emission paths run.
+	// so all three logStartupBanners emission paths run.
 	cases := []struct {
-		name          string
-		mode          string
-		listenAddress string
-		tlsTermUp     bool
+		name           string
+		clientAuthYAML string
+		listenAddress  string
+		tlsExtras      string
 	}{
-		// disabled: only LogStartupAuthMode fires.
-		{"disabled", config.AuthModeDisabled, "127.0.0.1", false},
-		// static + non-loopback + no TLS -> also fires LogStaticCleartextExposure.
-		{"static_cleartext", config.AuthModeStatic, "0.0.0.0", false},
-		// oauth + tls_terminated_upstream -> also fires LogOAuthPlaintextListener.
-		{"oauth_plaintext_upstream", config.AuthModeOAuth, "", true},
+		{
+			// disabled: only LogStartupAuthMode fires.
+			name: "disabled",
+			clientAuthYAML: fmt.Sprintf(`mcp_client_auth:
+  mode: disabled
+  dev_token: %s
+`, sentDevTok),
+			listenAddress: "127.0.0.1",
+		},
+		{
+			// static + non-loopback + no TLS -> also fires LogStaticCleartextExposure.
+			name: "static_cleartext",
+			clientAuthYAML: fmt.Sprintf(`mcp_client_auth:
+  mode: static
+  dev_token: %s
+`, sentDevTok),
+			listenAddress: "0.0.0.0",
+		},
+		{
+			// oauth + tls_terminated_upstream -> also fires LogOAuthPlaintextListener.
+			name: "oauth_plaintext_upstream",
+			clientAuthYAML: fmt.Sprintf(`mcp_client_auth:
+  mode: oauth
+  issuer: https://idp.example.com
+  audience: mcp
+  resource_url: https://mcp.example.com/mcp
+  dev_token: %s
+`, sentDevTok),
+			listenAddress: "0.0.0.0",
+			tlsExtras:     "tls_terminated_upstream: true\n",
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := &config.ServerConfig{
-				Port:          9090,
-				ListenAddress: tc.listenAddress,
-				MCPClientAuth: config.MCPClientAuthConfig{
-					Mode:        tc.mode,
-					Issuer:      "https://idp.example.com",
-					Audience:    "mcp",
-					ResourceURL: "https://mcp.example.com/mcp",
-					DevToken:    sentDevTok,
-				},
-				TLSTerminatedUpstream: tc.tlsTermUp,
+			yaml := fmt.Sprintf(`port: 9090
+listen_address: %s
+%s%sbrokers:
+  basic-broker:
+    url: https://broker-a.example.com:1943
+    auth:
+      mode: basic
+      username: %s
+      password: %s
+  bearer-broker:
+    url: https://broker-b.example.com:1943
+    auth:
+      mode: bearer
+      token: %s
+`, tc.listenAddress, tc.tlsExtras, tc.clientAuthYAML, sentBasicUser, sentBasicPass, sentBearerTok)
+
+			cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(cfgPath, []byte(yaml), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
 			}
-			// The broker Auth block also holds credentials; keep sentinels here
-			// even though the banner call sites don't reference brokers today.
-			// Guards against a future refactor piping broker auth through.
-			_ = config.BrokerConfig{
-				URL: "https://broker.example.com:1943",
-				Auth: config.AuthConfig{
-					Mode:     config.AuthModeBasic,
-					Username: sentBasicUser,
-					Password: sentBasicPass,
-					Token:    sentBearerTok,
-				},
+			cfg, err := config.LoadConfig(cfgPath)
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
 			}
+
+			// Prove the sentinels made it into cfg — otherwise the leak
+			// assertion below is vacuous (this is the bug the previous
+			// version of this test had).
+			assertContains := func(label, got, want string) {
+				t.Helper()
+				if !strings.Contains(got, want) {
+					t.Fatalf("%s did not carry sentinel: got %q, want to contain %q", label, got, want)
+				}
+			}
+			assertContains("MCPClientAuth.DevToken", cfg.MCPClientAuth.DevToken, sentDevTok)
+			basic, _ := cfg.Broker("basic-broker")
+			bearer, _ := cfg.Broker("bearer-broker")
+			if basic == nil || bearer == nil {
+				t.Fatalf("expected both sentinel brokers to load, got basic=%v bearer=%v", basic, bearer)
+			}
+			assertContains("basic-broker.Auth.Username", basic.Auth.Username, sentBasicUser)
+			assertContains("basic-broker.Auth.Password", basic.Auth.Password, sentBasicPass)
+			assertContains("bearer-broker.Auth.Token", bearer.Auth.Token, sentBearerTok)
 
 			out := captureStderr(t, func() {
 				// Install a handler that writes to (the captured) os.Stderr so
-				// slog output flows through the pipe.
+				// slog output flows through the pipe. Save/restore the previous
+				// default so later tests don't inherit a logger bound to the
+				// closed pipe.
+				prev := slog.Default()
 				slog.SetDefault(slog.New(newSlogHandler(slog.LevelInfo)))
+				t.Cleanup(func() { slog.SetDefault(prev) })
 
-				// Mirror main.go's startup banner sequence.
-				banner.LogStartupAuthMode(cfg.MCPClientAuth.Mode, cfg.MCPClientAuth.Issuer, cfg.BindAddress())
-				if cfg.StaticTokenExposedCleartext() {
-					banner.LogStaticCleartextExposure(cfg.BindAddress())
-				}
-				if cfg.OAuthPlaintextListenerAcknowledged() {
-					banner.LogOAuthPlaintextListener(cfg.BindAddress())
-				}
+				logStartupBanners(cfg)
 			})
 
 			for _, s := range sentinels {
