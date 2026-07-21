@@ -500,7 +500,7 @@ run_assertions() {
             haystack+="$raw"$'\n'
             expected_set+=$(jq -r "$gt_jq" <<<"$raw" 2>/dev/null || true)$'\n'
         done <<<"$expected_ids"
-        expected_set=$(echo "$expected_set" | grep -v '^$' | sort -u)
+        expected_set=$(echo "$expected_set" | grep -v '^$' | sort -u || true)
         answer_set=$(grep -oE "$gt_regex" <<<"$answer" | sort -u || true)
         log_info "$label expected set: $(echo "$expected_set" | tr '\n' ' ')"
         log_info "$label answer set:   $(echo "$answer_set" | tr '\n' ' ')"
