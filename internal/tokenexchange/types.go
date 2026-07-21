@@ -116,8 +116,10 @@ type Params struct {
 	// AudienceParam selects the wire format for the per-broker audience.
 	// V1: AudienceParamAudience.
 	AudienceParam AudienceFormat
-	// HTTPClient is the IdP-bound HTTP client; typically built via
-	// idpclient.NewHTTPClient so the SOL-150219 timeout bound applies.
+	// HTTPClient is the IdP-bound HTTP client; production builds it via
+	// idpclient.NewRetryingHTTPClient (transparent 5xx / connection-error
+	// retries) which composes NewHTTPClient (SOL-150219 timeout bound).
+	// Tests typically pass a plain *http.Client{}.
 	HTTPClient *http.Client
 	// Cache is the token cache for cross-time deduplication. The exchanger
 	// checks the cache before hitting the IdP and stores successful

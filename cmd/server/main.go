@@ -445,11 +445,16 @@ func registerMixedTools(mgr *tools.ToolManager) {
 // a singleflight.Group for request deduplication. None of these make an
 // outbound network call at construction time; the first IdP request
 // happens when a request-path goroutine calls Exchanger.Exchange().
-// (idpclient.NewHTTPClient does read local trust-store material —
-// SSL_CERT_FILE and the system cert pool — which is filesystem/OS I/O,
-// but not network.)
+// (idpclient.NewRetryingHTTPClient wraps NewHTTPClient, which does read
+// local trust-store material — SSL_CERT_FILE and the system cert pool —
+// so this is filesystem/OS I/O, but not network.)
+//
+// The client is the retrying variant: token-exchange calls transparently
+// retry 5xx and connection errors (see internal/idpclient/retrying.go).
+// JWKS refresh and OIDC discovery keep the non-retrying NewHTTPClient —
+// they are read-only lookups where a single failure is the right signal.
 func newTokenExchanger(oauthCfg *config.BrokerOAuthConfig) (*tokenexchange.Exchanger, error) {
-	httpClient, err := idpclient.NewHTTPClient()
+	httpClient, err := idpclient.NewRetryingHTTPClient()
 	if err != nil {
 		return nil, fmt.Errorf("creating IdP HTTP client: %w", err)
 	}
