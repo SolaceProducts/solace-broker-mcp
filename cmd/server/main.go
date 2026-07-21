@@ -454,14 +454,18 @@ func registerMixedTools(mgr *tools.ToolManager) {
 // JWKS refresh and OIDC discovery keep the non-retrying NewHTTPClient —
 // they are read-only lookups where a single failure is the right signal.
 func newTokenExchanger(oauthCfg *config.BrokerOAuthConfig) (*tokenexchange.Exchanger, error) {
-	// Retry knobs preserved from the pre-RetryOptions constants; the follow-up
-	// commit sources them from tokenexchange defaults so all timing decisions
-	// live in one package.
-	httpClient, err := idpclient.NewRetryingHTTPClient(idpclient.RetryOptions{
-		MaxRetries:   2,
-		RetryWaitMin: 1 * time.Second,
-		RetryWaitMax: 5 * time.Second,
-	})
+	// Retry knobs sourced from the tokenexchange package so per-attempt
+	// timeout, retry count, backoff bounds, and the derived chain deadline
+	// stay coherent. The per-attempt Timeout is applied via WithTimeout to
+	// the inner *http.Client that NewRetryingHTTPClient composes.
+	httpClient, err := idpclient.NewRetryingHTTPClient(
+		idpclient.RetryOptions{
+			MaxRetries:   tokenexchange.DefaultMaxRetries,
+			RetryWaitMin: tokenexchange.DefaultRetryWaitMin,
+			RetryWaitMax: tokenexchange.DefaultRetryWaitMax,
+		},
+		idpclient.WithTimeout(tokenexchange.DefaultPerAttemptTimeout),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("creating IdP HTTP client: %w", err)
 	}

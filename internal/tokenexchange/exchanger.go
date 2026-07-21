@@ -23,20 +23,6 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// defaultChainDeadline caps the total time Exchanger.Exchange spends on
-// the whole retry chain (all attempts + backoffs). See SOL-151520 and
-// docs/superpowers/specs/exchange-retries/retry-policy.md#q4 for the
-// derivation — 45s lands in the middle of the industry-observed 10-60s
-// band and comfortably clears the computed worst case at our retry
-// numbers (~36s).
-//
-// This bound is what prevents a hostile IdP returning a large
-// Retry-After from parking a singleflight slot for the caller-visible
-// deadline — retryablehttp.RateLimitLinearJitterBackoff intentionally
-// does NOT cap Retry-After at RetryWaitMax, so the chain deadline is
-// the only fence.
-const defaultChainDeadline = 45 * time.Second
-
 // Exchanger executes RFC 8693 token exchange against a single IdP. One
 // instance per process, shared by all per-request goroutines.
 //
@@ -87,8 +73,18 @@ func New(p Params) (*Exchanger, error) {
 		grantType:        p.GrantType,
 		audienceParam:    p.AudienceParam,
 		httpClient:       p.HTTPClient,
-		chainDeadline:    defaultChainDeadline,
-		cache:            p.Cache,
-		nowFunc:          time.Now,
+		// Chain deadline is derived from the retry knobs so all timing
+		// decisions compose coherently: changing MaxRetries or WaitMax
+		// via package defaults updates the chain bound automatically.
+		// Override argument is 0 today — extensibility hook for a future
+		// YAML surface. See ComputeChainDeadline in defaults.go.
+		chainDeadline: ComputeChainDeadline(
+			0,
+			DefaultPerAttemptTimeout,
+			DefaultRetryWaitMax,
+			DefaultMaxRetries,
+		),
+		cache:   p.Cache,
+		nowFunc: time.Now,
 	}, nil
 }

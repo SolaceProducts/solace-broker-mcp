@@ -159,8 +159,9 @@ func (e *Exchanger) Invalidate(ctx context.Context, input DeduplicationKeyInput)
 // failed" invariant from error-type.md — a pre-dispatch chain-deadline
 // expiry (attempts == 0) propagates raw context.DeadlineExceeded, which
 // is the honest signal that nothing was tried. In practice the
-// pre-dispatch case is nearly impossible at the 45s default deadline,
-// but the invariant is what keeps the sentinel meaningful.
+// pre-dispatch case is nearly impossible at the derived chain deadline
+// (see ComputeChainDeadline), but the invariant is what keeps the
+// sentinel meaningful.
 //
 // context.Canceled is NOT rewrapped: the retry loop runs on a detached
 // context (context.Background + WithTimeout), so the only cancellation
