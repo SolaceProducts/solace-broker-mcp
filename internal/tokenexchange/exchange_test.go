@@ -1406,11 +1406,18 @@ func TestExchange_SingleflightWinnerOnlyWritesCache(t *testing.T) {
 // newRetryingTestExchanger builds an Exchanger backed by the production
 // NewRetryingHTTPClient so the retry loop is exercised end-to-end.
 // A short per-attempt timeout keeps tests fast against connection-error
-// paths; the chain deadline is also cut short so backoff waits (1-5s)
-// don't dominate wall-clock.
+// paths; retry policy uses the shipped package defaults so behavior
+// matches production, but backoff waits (1-2s) still dominate wall-clock.
 func newRetryingTestExchanger(t *testing.T, serverURL string) *Exchanger {
 	t.Helper()
-	client, err := idpclient.NewRetryingHTTPClient(idpclient.WithTimeout(500 * time.Millisecond))
+	client, err := idpclient.NewRetryingHTTPClient(
+		idpclient.RetryOptions{
+			MaxRetries:   DefaultMaxRetries,
+			RetryWaitMin: DefaultRetryWaitMin,
+			RetryWaitMax: DefaultRetryWaitMax,
+		},
+		idpclient.WithTimeout(500*time.Millisecond),
+	)
 	if err != nil {
 		t.Fatalf("NewRetryingHTTPClient: %v", err)
 	}

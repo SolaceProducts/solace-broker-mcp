@@ -24,6 +24,22 @@ import (
 	"time"
 )
 
+// testRetryOptions returns a canonical RetryOptions for the retrying-client
+// tests. Pinned in one place so a policy tweak (e.g. bumping MaxRetries)
+// updates every test that depends on the "3 attempts total" invariant
+// through this constant rather than through scattered magic numbers.
+//
+// Values match the token-exchange defaults for retry count and backoff
+// bounds. Kept package-local because idpclient is not supposed to know
+// about tokenexchange's default constants — the test would circular-import.
+func testRetryOptions() RetryOptions {
+	return RetryOptions{
+		MaxRetries:   2,
+		RetryWaitMin: 1 * time.Second,
+		RetryWaitMax: 2 * time.Second,
+	}
+}
+
 // countingHandler is a tiny test double that returns a caller-specified
 // status on every hit and tracks how many hits it received.
 func countingHandler(t *testing.T, status int, body string, headers map[string]string) (http.HandlerFunc, *atomic.Int32) {
@@ -42,16 +58,17 @@ func countingHandler(t *testing.T, status int, body string, headers map[string]s
 }
 
 // TestNewRetryingHTTPClient_RetriesOn5xx asserts the core retry loop:
-// a server that always returns 500 gets hit exactly exchangeRetryMax+1
-// times (3 attempts total), and the final response the caller sees is
-// the last 500 (via PassthroughErrorHandler, not an ErrorHandler-wrapped
-// error).
+// a server that always returns 500 gets hit exactly MaxRetries+1 times
+// (3 attempts total with the shipped policy), and the final response the
+// caller sees is the last 500 (via PassthroughErrorHandler, not an
+// ErrorHandler-wrapped error).
 func TestNewRetryingHTTPClient_RetriesOn5xx(t *testing.T) {
 	handler, hits := countingHandler(t, http.StatusInternalServerError, "", nil)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
-	client, err := NewRetryingHTTPClient()
+	opts := testRetryOptions()
+	client, err := NewRetryingHTTPClient(opts)
 	if err != nil {
 		t.Fatalf("NewRetryingHTTPClient: %v", err)
 	}
@@ -65,11 +82,12 @@ func TestNewRetryingHTTPClient_RetriesOn5xx(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if got := hits.Load(); got != exchangeRetryMax+1 {
-		t.Errorf("server hits: got %d, want %d", got, exchangeRetryMax+1)
+	wantAttempts := int32(opts.MaxRetries + 1)
+	if got := hits.Load(); got != wantAttempts {
+		t.Errorf("server hits: got %d, want %d", got, wantAttempts)
 	}
-	if attempts() != exchangeRetryMax+1 {
-		t.Errorf("attempts counter: got %d, want %d", attempts(), exchangeRetryMax+1)
+	if int32(attempts()) != wantAttempts {
+		t.Errorf("attempts counter: got %d, want %d", attempts(), wantAttempts)
 	}
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Errorf("final status: got %d, want 500", resp.StatusCode)
@@ -83,7 +101,7 @@ func TestNewRetryingHTTPClient_NoRetryOn2xx(t *testing.T) {
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
-	client, err := NewRetryingHTTPClient()
+	client, err := NewRetryingHTTPClient(testRetryOptions())
 	if err != nil {
 		t.Fatalf("NewRetryingHTTPClient: %v", err)
 	}
@@ -120,7 +138,7 @@ func TestNewRetryingHTTPClient_NoRetryOn4xx(t *testing.T) {
 			srv := httptest.NewServer(handler)
 			defer srv.Close()
 
-			client, err := NewRetryingHTTPClient()
+			client, err := NewRetryingHTTPClient(testRetryOptions())
 			if err != nil {
 				t.Fatalf("NewRetryingHTTPClient: %v", err)
 			}
@@ -160,7 +178,7 @@ func TestNewRetryingHTTPClient_RetriesRecover(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client, err := NewRetryingHTTPClient()
+	client, err := NewRetryingHTTPClient(testRetryOptions())
 	if err != nil {
 		t.Fatalf("NewRetryingHTTPClient: %v", err)
 	}
@@ -192,14 +210,14 @@ func TestNewRetryingHTTPClient_CtxCancelAbortsBackoff(t *testing.T) {
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
-	client, err := NewRetryingHTTPClient()
+	client, err := NewRetryingHTTPClient(testRetryOptions())
 	if err != nil {
 		t.Fatalf("NewRetryingHTTPClient: %v", err)
 	}
 
 	// Cancel just after the first attempt runs — before the second attempt
-	// dispatches. exchangeRetryWaitMin is 1s, so 50ms is well inside the
-	// first backoff window.
+	// dispatches. testRetryOptions().RetryWaitMin is 1s, so 50ms is well
+	// inside the first backoff window.
 	ctx, cancel := context.WithCancel(context.Background())
 	ctx, attempts := WithAttemptsCounter(ctx)
 	time.AfterFunc(50*time.Millisecond, cancel)
@@ -241,7 +259,7 @@ func TestNewRetryingHTTPClient_ConnectionErrorRetries(t *testing.T) {
 
 	// Short per-attempt timeout to keep the test fast — 3 attempts × dial
 	// error is bounded by the timeout, not by real network waits.
-	client, err := NewRetryingHTTPClient(WithTimeout(200 * time.Millisecond))
+	client, err := NewRetryingHTTPClient(testRetryOptions(), WithTimeout(200*time.Millisecond))
 	if err != nil {
 		t.Fatalf("NewRetryingHTTPClient: %v", err)
 	}
@@ -257,8 +275,9 @@ func TestNewRetryingHTTPClient_ConnectionErrorRetries(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Do: expected connection error, got nil")
 	}
-	if attempts() != exchangeRetryMax+1 {
-		t.Errorf("attempts: got %d, want %d", attempts(), exchangeRetryMax+1)
+	wantAttempts := testRetryOptions().MaxRetries + 1
+	if attempts() != wantAttempts {
+		t.Errorf("attempts: got %d, want %d", attempts(), wantAttempts)
 	}
 }
 

@@ -22,28 +22,27 @@ import (
 	"github.com/hashicorp/go-retryablehttp"
 )
 
-// Retry policy for token-exchange calls. Tuned per SOL-151520; see
-// docs/superpowers/specs/exchange-retries/retry-policy.md for the rationale
-// behind each value. These are package-local because nothing outside this
-// file consumes them — promoting them to internal/defaults would imply a
-// coupling that does not exist.
-const (
-	// exchangeRetryMax is the number of retries in addition to the first
-	// attempt: 2 retries + 1 original = 3 attempts total.
-	exchangeRetryMax = 2
+// RetryOptions carries the tuning knobs for NewRetryingHTTPClient's
+// retry loop. Deliberately a plain struct with no smart defaults or
+// validation: the token-exchange layer owns the numbers (via its own
+// Default* constants and its ComputeChainDeadline formula) and passes
+// them in explicitly. This package stays a mechanical composition of
+// go-retryablehttp — no policy of its own.
+//
+// Zero values are legal but produce a client that never retries
+// (MaxRetries=0). RetryWaitMin/Max are only meaningful when MaxRetries>0.
+type RetryOptions struct {
+	// MaxRetries is the number of retries AFTER the first attempt.
+	// Total attempts = MaxRetries + 1.
+	MaxRetries int
 
-	// exchangeRetryWaitMin is the linear-jitter backoff floor. Matches the
-	// OAuth-endpoint convention (Salesforce, webhook retry guides): a token
-	// endpoint recovering from a spike needs more than a few hundred ms.
-	exchangeRetryWaitMin = 1 * time.Second
-
-	// exchangeRetryWaitMax caps the computed backoff. At 3 attempts the
-	// linear backoff never approaches 5s, so this is defense-in-depth for
-	// future attempt-cap increases. The library uncaps Retry-After from
-	// this ceiling by design, which is what we want — the IdP's guidance
-	// should win over our computed backoff.
-	exchangeRetryWaitMax = 5 * time.Second
-)
+	// RetryWaitMin and RetryWaitMax bound the jittered backoff between
+	// attempts. `RateLimitLinearJitterBackoff` samples uniformly in
+	// [min, max]; `Retry-After` overrides the sample when present and
+	// is uncapped from RetryWaitMax by design so the IdP's guidance wins.
+	RetryWaitMin time.Duration
+	RetryWaitMax time.Duration
+}
 
 // NewRetryingHTTPClient returns an *http.Client that retries transient IdP
 // failures automatically. Composition-only: the inner attempt client is a
@@ -69,7 +68,7 @@ const (
 // Callers that want to observe how many attempts a call took can wrap the
 // per-request context with WithAttemptsCounter before calling Do; see that
 // function's doc for details.
-func NewRetryingHTTPClient(opts ...Option) (*http.Client, error) {
+func NewRetryingHTTPClient(retry RetryOptions, opts ...Option) (*http.Client, error) {
 	inner, err := NewHTTPClient(opts...)
 	if err != nil {
 		return nil, err
@@ -82,9 +81,9 @@ func NewRetryingHTTPClient(opts ...Option) (*http.Client, error) {
 
 	rc := retryablehttp.NewClient()
 	rc.HTTPClient = inner
-	rc.RetryMax = exchangeRetryMax
-	rc.RetryWaitMin = exchangeRetryWaitMin
-	rc.RetryWaitMax = exchangeRetryWaitMax
+	rc.RetryMax = retry.MaxRetries
+	rc.RetryWaitMin = retry.RetryWaitMin
+	rc.RetryWaitMax = retry.RetryWaitMax
 	rc.Backoff = retryablehttp.RateLimitLinearJitterBackoff
 	rc.CheckRetry = checkRetry
 	// PassthroughErrorHandler returns the final response as-is instead of
