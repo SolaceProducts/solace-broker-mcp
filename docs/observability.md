@@ -215,11 +215,13 @@ audit sub-stream to a dedicated SIEM index.
 | `correlation_id` | Join key to logs, traces, and the broker-side entry | string |
 | `audit_schema_version` | The schema version, for query pinning | string (`1.0`) |
 
-**`principal` identity.** The principal is read once from the verified token and carried
-end to end through token exchange, so the broker's own SEMP log records the same human user.
-The committed claim set is `sub`, `scope`, `client_id`, `iss`, `jti`. A human-readable
-username (`preferred_username`) is **under review** as an open item, because it is PII that
-lands in an immutable audit store (see open items).
+**`principal` identity.** The audit event records only `principal.sub`, the opaque OIDC
+subject of the human user. That subject is read once from the verified token and carried end
+to end through token exchange, so the broker's own SEMP log records the same user. The full
+claim set propagated for that exchange is `sub`, `scope`, `client_id`, `iss`, `jti`; of these,
+only `sub` is written to the audit event. A human-readable username (`preferred_username`) is
+**under review** as an open item, because it is PII that would land in an immutable audit
+store (see open items).
 
 **`arguments_hash`.** SHA-256 (FIPS 180-4) over an RFC 8785 JSON Canonicalization Scheme
 form of the arguments (keys sorted, insignificant whitespace removed, nulls preserved). The
@@ -230,7 +232,8 @@ stored.
 ### Authentication events
 
 Alongside destructive-operation events, the audit stream records authentication lifecycle
-events with their own outcome values:
+events. The names below are distinct **event types**, not values of the shared `outcome`
+field:
 
 - `auth_success`, carrying `principal` and `agent_client_id`.
 - `auth_failure`, carrying `reason` (same closed set as `mcp_auth_failure_total`).
