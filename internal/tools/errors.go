@@ -301,6 +301,8 @@ func buildExchangeErrorMessage(err *tokenexchange.ExchangeError) string {
 		return "Authentication failed: no identity token was found for the current session. Contact your administrator."
 	case errors.Is(err, tokenexchange.ErrExchangeRequestBuild):
 		return "Authentication failed: an internal error occurred. Please contact your administrator."
+	case errors.Is(err, tokenexchange.ErrExchangeRetriesExhausted):
+		return "Authentication failed: identity provider unavailable after retries. Try again shortly."
 	default:
 		return "Authentication failed: an unexpected error occurred during token exchange. Contact your administrator."
 	}

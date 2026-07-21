@@ -213,9 +213,10 @@ func (t Token) LogValue() slog.Value {
 	return slog.GroupValue(slog.Time("expires_at", t.ExpiresAt))
 }
 
-// Sentinel errors the Exchanger returns. The per-call error is always one
-// of these three (possibly wrapped via fmt.Errorf with %w); upper layers
-// classify by errors.Is and map to broker-side HTTP status codes in T7b.
+// Sentinel errors the Exchanger returns. The per-call error is always
+// one of these sentinels (possibly wrapped via fmt.Errorf with %w or
+// carried on an *ExchangeError); upper layers classify by errors.Is and
+// map to broker-side HTTP status codes in T7b.
 var (
 	// ErrExchangeRejected — the IdP returned a 4xx with an OAuth-shaped
 	// JSON body. The exchange was refused; retrying without changing the
@@ -245,4 +246,13 @@ var (
 	// time, not a transient network condition; retrying reproduces the
 	// same failure. Non-retryable.
 	ErrExchangeRequestBuild = errors.New("token exchange request build failure")
+
+	// ErrExchangeRetriesExhausted — the server-side retry loop tried the
+	// exchange up to its attempt cap and every attempt failed with a
+	// retryable condition (ErrExchangeTransport). The last attempt's
+	// state is carried on the same *ExchangeError envelope; this sentinel
+	// only signals "we gave up." Non-retryable at the tools layer — the
+	// agent should not immediately retry a chain the server itself just
+	// exhausted (see SOL-151520 design docs).
+	ErrExchangeRetriesExhausted = errors.New("token exchange retries exhausted")
 )

@@ -26,8 +26,8 @@ import (
 // error line — same pattern as sempv1.Error and sempv2.SEMPError.
 //
 // Sentinel is one of ErrExchangeRejected, ErrExchangeTransport,
-// ErrInvalidResponse, ErrExchangeMissingSubject, or
-// ErrExchangeRequestBuild. Unwrap returns it so errors.Is works
+// ErrInvalidResponse, ErrExchangeMissingSubject, ErrExchangeRequestBuild,
+// or ErrExchangeRetriesExhausted. Unwrap returns it so errors.Is works
 // through any number of wrapping layers.
 //
 // Message is human-readable and safe to log (no tokens, secrets, or

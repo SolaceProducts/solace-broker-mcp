@@ -286,6 +286,13 @@ func TestBuildErrorMessage(t *testing.T) {
 			"Authentication failed: an internal error occurred. Please contact your administrator.",
 			nil,
 		},
+		{
+			"exchange retries exhausted",
+			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeRetriesExhausted, Message: "retries exhausted"},
+			"broker-oauth",
+			"Authentication failed: identity provider unavailable after retries. Try again shortly.",
+			nil,
+		},
 
 		// Unknown/internal errors never echo raw detail and carry no hint.
 		{
