@@ -469,24 +469,34 @@ run_assertions() {
     #                tool_result content — answer must not invent entities
     #                the broker never returned.
     #
-    # The fabrication universe is deliberately the RAW tool_result content,
-    # not expected_set. gt_jq is typically a narrow projection (e.g. only
+    # The fabrication universe is the set of tokens extracted from the RAW
+    # tool_result content by the same gt_regex used on the answer, NOT the
+    # narrow expected_set. gt_jq is typically a narrow projection (e.g. only
     # discarding queues, only unhealthy RDPs); an entity the model names for
     # legitimate context (an adjacent test-queue-*, a healthy sibling RDP)
     # exists on the broker and was returned by the tool, but is not in
-    # expected_set. Diffing extras against expected_set flagged those as
-    # fabrications; diffing against the raw tool_result correctly does not.
+    # expected_set — diffing extras against expected_set flagged those as
+    # fabrications. Diffing against gt_regex-extracted tokens from the raw
+    # tool_result correctly doesn't. Whole-token match (not substring): a
+    # fabricated `test-queue-discards` must not pass because it is a prefix
+    # of the real `test-queue-discards-spool`, and a fabricated `test-rdp`
+    # must not pass because it is a prefix of `test-rdp-failing`.
+    #
+    # Applies uniformly to every scenario with ground_truth.jq set — today:
+    # f1-list-vpns, f3-subscriptions, read-list-brokers, read-list-rdps,
+    # read-list-queue-discards. Each supplies its own answer_regex, so the
+    # fabrication universe is scenario-scoped.
     if [ -n "$gt_jq" ] && [ -n "$gt_regex" ]; then
-        local expected_ids expected_set answer_set haystack missing extra
+        local expected_ids expected_set answer_set haystack haystack_set missing extra
         expected_ids=$(jq -r --arg t "$expected_tool" '
             select(.type=="assistant") | .message.content[]?
             | select(.type=="tool_use")
             | select($t == "" or .name == $t) | .id
         ' "$run_file")
-        # Raw tool_result contents (concatenated) — used as the fabrication
-        # universe. Kept as one string; we substring-test each answer name.
-        # gt_jq is applied per-ID against each parsed tool_result to produce
-        # the must-appear set (a concatenated haystack is not valid JSON).
+        # Raw tool_result contents (concatenated) — gt_regex-extracted below
+        # to form the fabrication universe. gt_jq is applied per-ID against
+        # each raw tool_result to produce the must-appear expected_set (a
+        # concatenated haystack is not valid JSON, so per-ID here).
         haystack=""
         expected_set=""
         while IFS= read -r id; do
@@ -502,16 +512,18 @@ run_assertions() {
         done <<<"$expected_ids"
         expected_set=$(echo "$expected_set" | grep -v '^$' | sort -u || true)
         answer_set=$(grep -oE "$gt_regex" <<<"$answer" | sort -u || true)
-        log_info "$label expected set: $(echo "$expected_set" | tr '\n' ' ')"
-        log_info "$label answer set:   $(echo "$answer_set" | tr '\n' ' ')"
+        # Fabrication universe: same regex applied to the raw tool_result,
+        # producing a whole-token set. Prefix-of-real names (e.g. answer
+        # says `test-queue-discards`, real is `test-queue-discards-spool`)
+        # are correctly flagged; a substring haystack check wouldn't.
+        haystack_set=$(grep -oE "$gt_regex" <<<"$haystack" | sort -u || true)
+        log_info "$label expected set:  $(echo "$expected_set"  | tr '\n' ' ')"
+        log_info "$label answer set:    $(echo "$answer_set"    | tr '\n' ' ')"
+        log_info "$label haystack set:  $(echo "$haystack_set"  | tr '\n' ' ')"
         missing=$(comm -23 <(echo "$expected_set") <(echo "$answer_set"))
         [ -n "$missing" ] && fail "$label: answer omitted entities: $(echo "$missing" | tr '\n' ' ')"
-        extra=""
-        while IFS= read -r name; do
-            [ -z "$name" ] && continue
-            grep -qF -- "$name" <<<"$haystack" || extra+="$name "
-        done <<<"$answer_set"
-        [ -n "$extra" ] && fail "$label: answer fabricated entities: $extra"
+        extra=$(comm -23 <(echo "$answer_set") <(echo "$haystack_set"))
+        [ -n "$extra" ] && fail "$label: answer fabricated entities: $(echo "$extra" | tr '\n' ' ') (present in tool_result: $(echo "$haystack_set" | tr '\n' ' '))"
     fi
 
     # ── ground_truth.shell / expect_stdout_regex (broker-state verification) ──
