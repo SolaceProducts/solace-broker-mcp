@@ -105,6 +105,12 @@ func TestIsRetryable(t *testing.T) {
 		{"exchange invalid response", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrInvalidResponse, Message: "bad json"}, false},
 		{"exchange missing subject", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeMissingSubject, Message: "no subject token"}, false},
 		{"exchange request build", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeRequestBuild, Message: "unparseable URL"}, false},
+		// Retries-exhausted is deliberately non-retryable: we already tried
+		// three times and gave up. isRetryable=true here would let the agent
+		// hammer the IdP right after the server-side loop exhausted itself.
+		// Pins the current false-by-default fallthrough so a future rework of
+		// this function cannot silently flip it.
+		{"exchange retries exhausted", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeRetriesExhausted, Message: "gave up"}, false},
 		{"wrapped exchange transport", fmt.Errorf("oauth auth: %w", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeTransport, Message: "timeout"}), true},
 
 		// Fall-through / non-SEMP errors are never retryable.
@@ -260,10 +266,10 @@ func TestBuildErrorMessage(t *testing.T) {
 			nil,
 		},
 		{
-			"exchange transport → transient",
+			"exchange transport → transient (broker name deliberately absent)",
 			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeTransport, Message: "connect timeout"},
 			"broker-oauth",
-			"Authentication temporarily unavailable. Please try again in a moment.",
+			"Authentication is unavailable — the identity provider is not responding.",
 			nil,
 		},
 		{
@@ -288,10 +294,10 @@ func TestBuildErrorMessage(t *testing.T) {
 			nil,
 		},
 		{
-			"exchange retries exhausted → transient",
+			"exchange retries exhausted → transient (broker name deliberately absent)",
 			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeRetriesExhausted, Message: "retries exhausted"},
 			"broker-oauth",
-			"Authentication temporarily unavailable. Please try again in a moment.",
+			"Authentication is unavailable — the identity provider is not responding.",
 			nil,
 		},
 

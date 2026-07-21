@@ -61,7 +61,11 @@ func (e *ExchangeError) Unwrap() error { return e.Sentinel }
 // on the agent surface. See PR SOL-151520 for the rationale.
 func (e *ExchangeError) AgentMessage(brokerAlias string) string {
 	if errors.Is(e, ErrExchangeTransport) || errors.Is(e, ErrExchangeRetriesExhausted) {
-		return "Authentication temporarily unavailable. Please try again in a moment."
+		// Deliberately not broker-named: the IdP is a shared component,
+		// so a transport-class failure affects every broker at once.
+		// Naming a broker here would mislead the agent into thinking a
+		// different broker might work.
+		return "Authentication is unavailable — the identity provider is not responding."
 	}
 	return fmt.Sprintf("Authentication failed for broker %q. This is a server-side issue.", brokerAlias)
 }

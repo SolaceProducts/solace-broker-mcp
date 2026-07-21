@@ -27,7 +27,7 @@ import (
 // user-visible (the retryable=true structured field flows off the same
 // classification via isRetryable), so pin the exact set.
 func TestAgentMessage_TransientSentinels(t *testing.T) {
-	const wantTransient = "Authentication temporarily unavailable. Please try again in a moment."
+	const wantTransient = "Authentication is unavailable — the identity provider is not responding."
 
 	transient := []struct {
 		name     string
@@ -39,8 +39,15 @@ func TestAgentMessage_TransientSentinels(t *testing.T) {
 	for _, tc := range transient {
 		t.Run(tc.name, func(t *testing.T) {
 			e := &ExchangeError{Sentinel: tc.sentinel, Message: "should not leak"}
+			// Broker alias is deliberately NOT interpolated into the
+			// transient message — IdP-class failures affect every
+			// broker at once, so naming one would be misleading.
+			// Confirm the message is stable regardless of the alias.
 			if got := e.AgentMessage("any-broker"); got != wantTransient {
-				t.Errorf("AgentMessage = %q, want %q", got, wantTransient)
+				t.Errorf("AgentMessage(any-broker) = %q, want %q", got, wantTransient)
+			}
+			if got := e.AgentMessage(""); got != wantTransient {
+				t.Errorf("AgentMessage(empty alias) = %q, want %q (alias must not influence transient message)", got, wantTransient)
 			}
 		})
 	}
