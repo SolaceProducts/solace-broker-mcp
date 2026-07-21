@@ -1,5 +1,5 @@
 {
-  "_doc": "B1 tool selection under ambiguous phrasing. 'Clear the queue' has three plausible readings: (a) delete the spooled messages (correct — clearing contents), (b) reset stats counters (wrong — user said 'the queue', not 'the queue's stats'), or (c) delete the queue itself (wrong — most destructive interpretation). delete-queue-messages is gated, so the agent must NOT call it on turn 1 — it must describe the intent and ask. Assertion targets the verbalized intent (delete-queue-messages or paraphrase) and forbids the wrong picks. Turn 2 'no': no mutation.",
+  "_doc": "B1 tool selection under ambiguous phrasing. 'Clear the queue' has three plausible readings: (a) delete the spooled messages (correct — clearing contents), (b) reset stats counters (wrong — user said 'the queue', not 'the queue's stats'), or (c) delete the queue itself (wrong — most destructive interpretation). Neither delete-queue-messages nor clear-queue-stats may fire on turn 1: the former is confirmation-gated by tools.yaml, the latter is steered away from bare 'clear queue' phrasing by its description. Correct behavior is to disambiguate — which often names both tool candidates in the reply, so the forbidden list targets wrong-action-TAKEN markers only, not disambiguation phrasing. expected_tools_none is the real gate; required_substrings_any_of ensures the correct intent (delete-queue-messages) is at least named. Turn 2 'no': no mutation.",
   "prompt": "Clear queue $E2E_LLM_ACTION_QUEUE in VPN $BROKER_VPN on $BROKER.",
   "setup": {"cmd": "refill_e2e_llm_action_queue"},
   "expected_tools_none": true,
@@ -9,7 +9,7 @@
     "drain", "empty the queue"
   ],
   "forbidden_substrings": [
-    "clear-queue-stats", "clear stats", "reset stats", "statistics counter",
+    "stats cleared", "counters reset", "reset the statistics",
     "delete the queue itself", "delete-queue "
   ],
   "followup": {

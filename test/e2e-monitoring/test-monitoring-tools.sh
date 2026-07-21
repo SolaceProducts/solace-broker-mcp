@@ -76,16 +76,19 @@ test_list_vpns_pagination_b() { test_list_vpns_pagination "broker-b"; }
 # consistency all fall out of one check. Fixtures on the default VPN provide:
 # `default` (enabled, up, ≥1 conn) and `test-vpn` (disabled) → disabledCount≥1.
 # Counts are asserted derived, not absolute, so the test survives future VPN
-# additions. zeroConnectionCount is covered only by the recompute-equality
-# assertion (never by a >=1 guard) — see the note below on why the fixture
-# cannot force a zero-connection VPN.
+# additions.
 #
-# The recompute predicates gate on required-field TYPE (boolean/string/number)
-# before applying the count criterion, mirroring the handler's skip-don't-abort
-# rule: a row with a missing or wrong-typed required field lands in
-# summary.skipped, not in any count. Without the type gate, a disabled VPN with
-# msgVpnConnections:null gets counted here but skipped by the handler, and the
-# equality assertion flakes.
+# The recompute predicates gate on required-field TYPE (boolean/string) before
+# applying the count criterion, mirroring the handler's skip-don't-abort rule:
+# a row with a missing or wrong-typed required field lands in summary.skipped,
+# not in any count.
+#
+# zeroConnectionCount's recompute cross-references .real-clients.byKey (the
+# fan-out step's per-VPN "any non-#* client?" probe): an enabled+up VPN counts
+# as zero-connection when the probe returned no rows for it (missing key or
+# empty data[]). This directly mirrors the handler; both rely on the durable
+# `#*` reserved-name contract, not the older `#client counts as one connection`
+# invariant.
 test_list_vpns_summary() {
     local broker="$1"
     local label="list-vpns [$broker]"
@@ -94,9 +97,9 @@ test_list_vpns_summary() {
     content=$(extract_content "$response")
 
     # Filter to rows the handler would NOT skip. All four counts share the
-    # same required-field set (enabled, state, msgVpnConnections), so gate
-    # once and reuse across the recompute assertions.
-    local well_typed='[.vpns.data[] | select((.enabled | type) == "boolean" and (.state | type) == "string" and (.msgVpnConnections | type) == "number")]'
+    # same required-field set (enabled, state, msgVpnName), so gate once and
+    # reuse across the recompute assertions.
+    local well_typed='[.vpns.data[] | select((.enabled | type) == "boolean" and (.state | type) == "string" and (.msgVpnName | type) == "string")]'
 
     assert_recompute_count "$content" "$label" "$well_typed" "disabledCount" \
         '.enabled == false' || return 1
@@ -104,8 +107,24 @@ test_list_vpns_summary() {
         '.enabled == true and .state == "down"' || return 1
     assert_recompute_count "$content" "$label" "$well_typed" "standbyCount" \
         '.enabled == true and .state == "standby"' || return 1
-    assert_recompute_count "$content" "$label" "$well_typed" "zeroConnectionCount" \
-        '.enabled == true and .state == "up" and .msgVpnConnections <= 1' || return 1
+    # zeroConnectionCount: enabled+up rows whose real-clients probe returned
+    # no rows (missing byKey entry OR data:[]). Bespoke assertion — not
+    # assert_recompute_count — because the byKey lookup lives on the top-level
+    # response next to .vpns.data, and assert_recompute_count pipes well_typed
+    # first, which strips that context and leaves `.` as a single row.
+    assert_json_field "$content" \
+        '(.summary.zeroConnectionCount) == (
+            . as $root
+            | (($root["real-clients"].byKey) // {}) as $byKey
+            | '"$well_typed"'
+            | map(select(
+                .enabled == true and .state == "up" and
+                ($byKey[.msgVpnName] as $p |
+                    ($p == null or (($p.data // []) | length) == 0))
+              ))
+            | length
+        )' "true" \
+        "$label: summary.zeroConnectionCount must equal recomputed count from rows" || return 1
     # scanned is a direct equality against .vpns.data length — an uncapped
     # call is not truncated so scanned reflects the full population.
     assert_json_field "$content" \
@@ -115,18 +134,6 @@ test_list_vpns_summary() {
     # VPN (test-vpn) and at least one bare enabled+up VPN (test-vpn-empty),
     # else the recompute-equality on those counts is a vacuous 0==0 pass that
     # would silently hide a broken handler.
-    #
-    # zeroConnectionCount's recompute uses `msgVpnConnections <= 1` because
-    # Solace attaches a reserved internal `#client` to every enabled+up VPN
-    # (broker invariant), so a "no real clients" VPN reports conns==1, not 0.
-    # The handler encodes the same predicate; see list_vpns.go for details.
-    # Because this recompute mirrors the handler predicate, its independent
-    # value is thin — the real guards are (1) the coverage guard below
-    # (`zeroConnectionCount >= 1`) and (2) the SEMP-direct assertion in
-    # verify-fixtures.sh that `test-vpn-empty.msgVpnConnections == 1`. If the
-    # broker ever attaches more (or fewer) than one internal client, the
-    # verify-fixtures tripwire fires before this recompute goes silent, so
-    # don't relax that `==1` assertion without a matching update here.
     assert_json_field "$content" \
         '(.summary.disabledCount) >= 1' "true" \
         "$label: at least one disabled VPN expected (fixture: test-vpn)" || return 1

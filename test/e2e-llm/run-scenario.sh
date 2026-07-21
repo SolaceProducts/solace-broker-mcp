@@ -135,7 +135,7 @@ case "$BROKER" in
 esac
 export BROKER
 if [ -n "$BROKER_SUFFIX" ]; then
-    for v in F3_CLIENT_NAME F6_SUB_CLIENT_NAME E2E_LLM_ACTION_QUEUE E2E_LLM_KICK_TARGET; do
+    for v in F3_CLIENT_NAME F6_SUB_CLIENT_NAME E2E_LLM_ACTION_QUEUE E2E_LLM_KICK_TARGET E2E_LLM_STANDING_TE; do
         src="${v}_${BROKER_SUFFIX}"
         export "$v"="${!src:-}"
     done

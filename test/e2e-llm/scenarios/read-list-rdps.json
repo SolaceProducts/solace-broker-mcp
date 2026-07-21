@@ -1,0 +1,11 @@
+{
+  "_doc": "list-rdps: entity-set fidelity — answer's RDP names match .rdps.data[] exactly. The local fixture creates two standing RDPs in the default VPN via monitoring's create_fixtures_on (test/e2e-common/lib.sh): test-rdp (disabled) and test-rdp-failing (enabled, unreachable — surfaces in downCount). test-rdp-failing lets the answer talk about a real down state, so a model that hedges on health is exercised. Broker-a only — RDP names are identical on broker-b.",
+  "prompt": "What REST Delivery Points are configured in the default VPN on $BROKER?",
+  "expected_tool": "mcp__solace-broker__list-rdps",
+  "ground_truth": {
+    "jq": ".rdps.data[].restDeliveryPointName",
+    "answer_regex": "test-rdp(-failing)?"
+  },
+  "required_substrings_any_of": ["test-rdp"],
+  "forbidden_substrings": ["no rdps", "no rest delivery points", "none configured"]
+}
