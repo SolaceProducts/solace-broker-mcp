@@ -1584,7 +1584,7 @@ func TestClassifyRetryOutcome_DeadlineMidRetryRewrapped(t *testing.T) {
 	// the classifier surface narrow. If a future change decides to chain
 	// the underlying, this assertion becomes the reminder to update it.
 	if errors.Is(got, context.DeadlineExceeded) {
-		t.Errorf("underlying DeadlineExceeded is unexpectedly reachable via errors.Is — ExchangeError.Unwrap chained the cause; update this test and buildExchangeErrorMessage accordingly")
+		t.Errorf("underlying DeadlineExceeded is unexpectedly reachable via errors.Is — ExchangeError.Unwrap chained the cause; update this test and AgentMessage accordingly")
 	}
 	var exchErr *ExchangeError
 	if !errors.As(got, &exchErr) {
