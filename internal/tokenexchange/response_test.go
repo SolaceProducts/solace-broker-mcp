@@ -657,8 +657,13 @@ func TestParseIdPResponse_FourxxNonOAuthBodyReturnsInvalidResponse(t *testing.T)
 	}
 }
 
-// T19: 3xx and 5xx status codes return ErrExchangeTransport with the status
-// code in the message (no special body parsing for these ranges).
+// T19: 3xx, 429, and 5xx status codes return ErrExchangeTransport with the
+// status code in the message (no special body parsing for these ranges).
+// 429 is grouped here — not with other 4xx client errors — because the
+// retry policy treats it as retryable (see idpclient/retrying.go), and
+// after retries exhaust classifyRetryOutcome rewraps to
+// ErrExchangeRetriesExhausted, the same downstream sentinel as an
+// exhausted 5xx.
 func TestParseIdPResponse_ThreexxAndFivexxReturnExchangeTransport(t *testing.T) {
 	t.Parallel()
 
@@ -668,6 +673,7 @@ func TestParseIdPResponse_ThreexxAndFivexxReturnExchangeTransport(t *testing.T) 
 	}{
 		{"301 Moved Permanently", 301},
 		{"302 Found", 302},
+		{"429 Too Many Requests", 429},
 		{"500 Internal Server Error", 500},
 		{"503 Service Unavailable", 503},
 	}

@@ -94,6 +94,45 @@ func TestNewRetryingHTTPClient_RetriesOn5xx(t *testing.T) {
 	}
 }
 
+// TestNewRetryingHTTPClient_RetriesOn429 asserts 429 is retried the same
+// way as 5xx (up to MaxRetries+1 attempts) — a deliberate divergence
+// from an earlier iteration of the policy. The IdP's Retry-After header
+// governs the wait between attempts (via RateLimitLinearJitterBackoff),
+// and the chain deadline still fences a hostile / misconfigured value.
+// Here we send bare 429 (no Retry-After) so backoff samples the standard
+// [RetryWaitMin, RetryWaitMax] window, which is enough to prove the
+// retry loop engaged.
+func TestNewRetryingHTTPClient_RetriesOn429(t *testing.T) {
+	handler, hits := countingHandler(t, http.StatusTooManyRequests, "", nil)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	opts := testRetryOptions()
+	client, err := NewRetryingHTTPClient(opts)
+	if err != nil {
+		t.Fatalf("NewRetryingHTTPClient: %v", err)
+	}
+
+	ctx, attempts := WithAttemptsCounter(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	wantAttempts := int32(opts.MaxRetries + 1)
+	if got := hits.Load(); got != wantAttempts {
+		t.Errorf("server hits on persistent 429: got %d, want %d", got, wantAttempts)
+	}
+	if int32(attempts()) != wantAttempts {
+		t.Errorf("attempts counter on persistent 429: got %d, want %d", attempts(), wantAttempts)
+	}
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("final status: got %d, want 429", resp.StatusCode)
+	}
+}
+
 // TestNewRetryingHTTPClient_NoRetryOn2xx confirms a success returns after
 // exactly one attempt.
 func TestNewRetryingHTTPClient_NoRetryOn2xx(t *testing.T) {
@@ -120,8 +159,11 @@ func TestNewRetryingHTTPClient_NoRetryOn2xx(t *testing.T) {
 }
 
 // TestNewRetryingHTTPClient_NoRetryOn4xx covers the deliberate non-retry
-// on 4xx — including 401 (would not fix itself) and 429 (retrying
-// amplifies IdP throttling; see NewRetryingHTTPClient doc).
+// on 4xx except 429 — 401 would not fix itself on repeat; 400/403 are
+// non-transient client errors. 429 is deliberately excluded from this
+// table because our policy DOES retry it, deferring to the IdP's
+// Retry-After via RateLimitLinearJitterBackoff; see
+// TestNewRetryingHTTPClient_RetriesOn429 for that behavior.
 func TestNewRetryingHTTPClient_NoRetryOn4xx(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -130,7 +172,6 @@ func TestNewRetryingHTTPClient_NoRetryOn4xx(t *testing.T) {
 		{"400", http.StatusBadRequest},
 		{"401", http.StatusUnauthorized},
 		{"403", http.StatusForbidden},
-		{"429", http.StatusTooManyRequests},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -362,7 +403,7 @@ func TestCheckRetry_Table(t *testing.T) {
 		{"301 → no retry", ctx, http.StatusMovedPermanently, nil, false},
 		{"400 → no retry", ctx, http.StatusBadRequest, nil, false},
 		{"401 → no retry", ctx, http.StatusUnauthorized, nil, false},
-		{"429 → no retry (deliberate; see NewRetryingHTTPClient doc)", ctx, http.StatusTooManyRequests, nil, false},
+		{"429 → retry (Retry-After honored via backoff; see NewRetryingHTTPClient doc)", ctx, http.StatusTooManyRequests, nil, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

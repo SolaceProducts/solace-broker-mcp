@@ -51,13 +51,14 @@ type RetryOptions struct {
 //
 // Retry policy (see checkRetry):
 //   - HTTP 5xx: retry.
+//   - HTTP 429: retry. RateLimitLinearJitterBackoff parses the IdP's
+//     Retry-After header uncapped; we defer to that signal rather than
+//     second-guessing when to come back. Chain deadline still fences a
+//     hostile or misconfigured Retry-After. This matches
+//     retryablehttp.DefaultRetryPolicy and the general industry convention
+//     of treating 429 and 5xx as siblings for backoff purposes.
 //   - Connection errors (DNS, TLS handshake, body-read partials): retry.
-//   - Everything else (2xx, 3xx, 4xx including 401/429): no retry.
-//
-// The token-exchange layer deliberately does not retry 429: it talks to a
-// shared IdP, so N concurrent tool-call failures retrying in lockstep would
-// amplify the very throttle the IdP is signalling. Fail fast, let the
-// operator adjust.
+//   - Everything else (2xx, 3xx, 4xx except 429): no retry.
 //
 // The returned client has no outer Timeout — callers bound the whole
 // retry chain via context.WithTimeout, and the inner client's Timeout
@@ -108,11 +109,15 @@ func checkRetry(ctx context.Context, resp *http.Response, err error) (bool, erro
 	if err != nil {
 		return true, nil
 	}
-	if resp != nil && resp.StatusCode >= 500 {
+	if resp != nil && (resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests) {
 		return true, nil
 	}
-	// 2xx, 3xx, 4xx (including 401 and 429): no retry. 401 will not fix
-	// itself on repeat; 429 amplifies the throttle we are being told about.
+	// 2xx, 3xx, 4xx (except 429): no retry. 401 will not fix itself on
+	// repeat. 429 IS retried because RateLimitLinearJitterBackoff honors
+	// the IdP's Retry-After header uncapped — we defer to the IdP's rate-
+	// limit guidance rather than second-guessing it. The chain deadline
+	// (context.WithTimeout in Exchanger.Exchange) still fences a hostile
+	// Retry-After.
 	return false, nil
 }
 

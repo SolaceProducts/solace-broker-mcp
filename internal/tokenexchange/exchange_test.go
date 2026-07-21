@@ -1465,6 +1465,43 @@ func TestExchange_RetriesExhaustedOn5xx(t *testing.T) {
 	}
 }
 
+// TestExchange_RetriesExhaustedOn429 mirrors the 5xx exhaustion test for
+// the rate-limit path: parseIdPResponse now maps 429 → ErrExchangeTransport
+// so classifyRetryOutcome rewraps it as ErrExchangeRetriesExhausted after
+// the retry loop gives up. Guards the taxonomy alignment: a persistent
+// 429 is a "we tried, IdP kept refusing" story, same shape as a persistent
+// 5xx, and must NOT surface as ErrInvalidResponse (which was the pre-
+// SOL-151520 classification and would have implied a malformed response).
+func TestExchange_RetriesExhaustedOn429(t *testing.T) {
+	t.Parallel()
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	e := newRetryingTestExchanger(t, srv.URL)
+	_, err := e.Exchange(context.Background(), validInput())
+
+	if !errors.Is(err, ErrExchangeRetriesExhausted) {
+		t.Errorf("errors.Is(err, ErrExchangeRetriesExhausted) = false, want true; err = %v", err)
+	}
+	if errors.Is(err, ErrInvalidResponse) {
+		t.Errorf("errors.Is(err, ErrInvalidResponse) = true, want false (429 must NOT fall into the pre-retry non-OAuth-body branch)")
+	}
+	var exchErr *ExchangeError
+	if !errors.As(err, &exchErr) {
+		t.Fatalf("errors.As(err, *ExchangeError) = false; err = %v", err)
+	}
+	if exchErr.HTTPStatus != http.StatusTooManyRequests {
+		t.Errorf("HTTPStatus = %d, want 429 (last-attempt status must survive rewrap)", exchErr.HTTPStatus)
+	}
+	if got := hits.Load(); got != 3 {
+		t.Errorf("server hits = %d, want 3 (retry loop should have tried all attempts on 429)", got)
+	}
+}
+
 // TestExchange_RetryRecoversNoExhaustion covers the middle ground: two
 // 500s followed by a 200. attempts > 1, but the eventual success means
 // no error, so no rewrap. Guards against a bug where the counter's
