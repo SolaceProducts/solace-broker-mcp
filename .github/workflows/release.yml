@@ -19,6 +19,25 @@ jobs:
   test:
     uses: ./.github/workflows/build-and-test.yml
 
+  # Fail fast, before anything is published: a release must have a matching
+  # CHANGELOG block. build-binaries/build-docker depend on this, so a forgotten
+  # promotion can't leave a half-published release (image pushed, no notes).
+  release-notes:
+    name: Verify & extract release notes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Extract release notes from CHANGELOG
+        run: .github/scripts/extract-release-notes.sh "${GITHUB_REF_NAME}" release-notes.md
+      - name: Upload release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+
   fossa_scan:
     name: FOSSA Scan
     uses: SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml@fc521b087f780457f92d4cb46038184e92ad2fbc # pinned 2026-05-12
@@ -31,7 +50,7 @@ jobs:
       VAULT_URL: ${{ secrets.VAULT_URL }}
 
   build-binaries:
-    needs: test
+    needs: [test, release-notes]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -82,7 +101,7 @@ jobs:
           path: ${{ env.ARCHIVE }}
 
   build-docker:
-    needs: test
+    needs: [test, release-notes]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -143,9 +162,15 @@ jobs:
         working-directory: dist
         run: sha256sum *.tar.gz > checksums-sha256.txt
 
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          body_path: release-notes.md
           generate_release_notes: true
           files: |
             dist/*.tar.gz
