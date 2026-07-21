@@ -19,7 +19,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
 	"golang.org/x/sync/singleflight"
 )
@@ -39,10 +38,14 @@ type Exchanger struct {
 	grantType        GrantType
 	audienceParam    AudienceFormat
 	httpClient       *http.Client
-	exchangeTimeout  time.Duration
-	cache            cache.TokenCache
-	group            singleflight.Group
-	nowFunc          func() time.Time
+	// chainDeadline bounds the whole retry chain (attempts + backoffs)
+	// on a detached context in Exchange. Per-attempt bound lives on
+	// httpClient.Timeout (production wires NewRetryingHTTPClient, which
+	// composes NewHTTPClient's SOL-150219 default).
+	chainDeadline time.Duration
+	cache         cache.TokenCache
+	group         singleflight.Group
+	nowFunc       func() time.Time
 }
 
 // New constructs an Exchanger from Params. The config validator
@@ -70,8 +73,19 @@ func New(p Params) (*Exchanger, error) {
 		grantType:        p.GrantType,
 		audienceParam:    p.AudienceParam,
 		httpClient:       p.HTTPClient,
-		exchangeTimeout:  defaults.DefaultOIDCHTTPTimeout,
-		cache:            p.Cache,
-		nowFunc:          time.Now,
+		// Chain deadline is derived from the retry knobs so all timing
+		// decisions compose coherently: changing MaxRetries or WaitMax
+		// via package defaults updates the chain bound automatically.
+		// p.ChainDeadline (zero in production) is the override hook —
+		// tests use it to shrink the deadline; a future YAML surface
+		// would use it too. See ComputeChainDeadline in defaults.go.
+		chainDeadline: ComputeChainDeadline(
+			p.ChainDeadline,
+			DefaultPerAttemptTimeout,
+			DefaultRetryWaitMax,
+			DefaultMaxRetries,
+		),
+		cache:   p.Cache,
+		nowFunc: time.Now,
 	}, nil
 }

@@ -48,8 +48,12 @@ type errorResponse struct {
 //   - 2xx + non-JSON Content-Type → ErrInvalidResponse (SSO/proxy interception)
 //   - 2xx + valid JSON with required fields → *Token
 //   - 2xx + missing/unparseable fields → ErrInvalidResponse
-//   - 4xx + OAuth error JSON → ErrExchangeRejected (wraps error code)
-//   - 4xx + non-OAuth body → ErrExchangeTransport (possible proxy/WAF)
+//   - 429 → ErrExchangeTransport (grouped with 5xx; the retry policy
+//     treats 429 as a retryable transport-class signal, and after
+//     retries exhaust the honest downstream sentinel is
+//     ErrExchangeRetriesExhausted, not ErrInvalidResponse)
+//   - 4xx (other) + OAuth error JSON → ErrExchangeRejected (wraps error code)
+//   - 4xx (other) + non-OAuth body → ErrInvalidResponse (possible proxy/WAF interception)
 //   - 5xx / network-level → ErrExchangeTransport
 func (e *Exchanger) parseIdPResponse(resp *http.Response, now time.Time) (*Token, error) {
 	defer resp.Body.Close()
@@ -71,6 +75,19 @@ func (e *Exchanger) parseIdPResponse(resp *http.Response, now time.Time) (*Token
 			}
 		}
 		return e.parseSuccessBody(body, now)
+	}
+
+	// 429 groups with 5xx as ErrExchangeTransport because the retry
+	// policy treats it as retryable (idpclient/retrying.go). After
+	// retries exhaust, classifyRetryOutcome rewraps as
+	// ErrExchangeRetriesExhausted — the same downstream sentinel as
+	// exhausted 5xx.
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, &ExchangeError{
+			Sentinel:   ErrExchangeTransport,
+			Message:    "token exchange transport failure: IdP returned HTTP 429 (rate limited)",
+			HTTPStatus: resp.StatusCode,
+		}
 	}
 
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
@@ -169,8 +186,8 @@ func classifyClientError(body []byte, statusCode int) error {
 	if err := json.Unmarshal(body, &er); err == nil && er.Error != "" {
 		if len(er.Error) > maxErrorCodeLen {
 			return &ExchangeError{
-				Sentinel:   ErrExchangeTransport,
-				Message:    fmt.Sprintf("token exchange transport failure: IdP returned HTTP %d with oversized error code (%d bytes) — not a standard OAuth error", statusCode, len(er.Error)),
+				Sentinel:   ErrInvalidResponse,
+				Message:    fmt.Sprintf("token exchange invalid response: IdP returned HTTP %d with oversized error code (%d bytes) — not a standard OAuth error", statusCode, len(er.Error)),
 				HTTPStatus: statusCode,
 			}
 		}
@@ -182,8 +199,8 @@ func classifyClientError(body []byte, statusCode int) error {
 	}
 
 	return &ExchangeError{
-		Sentinel:   ErrExchangeTransport,
-		Message:    fmt.Sprintf("token exchange transport failure: IdP returned HTTP %d with non-OAuth error body (possible proxy or WAF interception)", statusCode),
+		Sentinel:   ErrInvalidResponse,
+		Message:    fmt.Sprintf("token exchange invalid response: IdP returned HTTP %d with non-OAuth error body (possible proxy or WAF interception)", statusCode),
 		HTTPStatus: statusCode,
 	}
 }
