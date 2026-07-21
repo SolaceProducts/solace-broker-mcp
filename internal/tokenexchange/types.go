@@ -125,6 +125,13 @@ type Params struct {
 	// checks the cache before hitting the IdP and stores successful
 	// exchange results. Required — a nil cache is a wiring bug.
 	Cache cache.TokenCache
+	// ChainDeadline optionally overrides the retry-loop total budget.
+	// Zero (the default) means "use ComputeChainDeadline's formula over
+	// the package defaults" — production leaves this unset. Tests use it
+	// to shrink the deadline so the mid-retry fire path is exercisable
+	// end-to-end without waiting out the production 19s budget. A future
+	// YAML surface would set it from broker_oauth.retry.chain_deadline.
+	ChainDeadline time.Duration
 }
 
 // String, GoString, and LogValue redact ClientSecret so Params never leaks

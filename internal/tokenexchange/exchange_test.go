@@ -1405,10 +1405,33 @@ func TestExchange_SingleflightWinnerOnlyWritesCache(t *testing.T) {
 
 // newRetryingTestExchanger builds an Exchanger backed by the production
 // NewRetryingHTTPClient so the retry loop is exercised end-to-end.
-// A short per-attempt timeout keeps tests fast against connection-error
-// paths; retry policy uses the shipped package defaults so behavior
-// matches production, but backoff waits (1-2s) still dominate wall-clock.
+// Per-attempt timeout is shortened to 500ms to keep connection-error
+// paths fast; retry policy and the chain deadline both use the shipped
+// package defaults, so behavior otherwise matches production. Backoff
+// waits (1-2s) dominate wall-clock for tests that hit RetryMax.
+//
+// For tests that specifically need to exercise the chain-deadline fence
+// mid-retry, use newRetryingTestExchangerWithChain to inject a shorter
+// chainDeadline via Params.ChainDeadline.
 func newRetryingTestExchanger(t *testing.T, serverURL string) *Exchanger {
+	t.Helper()
+	return buildRetryingTestExchanger(t, serverURL, 0)
+}
+
+// newRetryingTestExchangerWithChain is like newRetryingTestExchanger but
+// takes a chainDeadline override so a test can force the deadline fence
+// to fire mid-retry without waiting out the production ~19s budget.
+// The override threads through Params.ChainDeadline into
+// ComputeChainDeadline.
+func newRetryingTestExchangerWithChain(t *testing.T, serverURL string, chainDeadline time.Duration) *Exchanger {
+	t.Helper()
+	return buildRetryingTestExchanger(t, serverURL, chainDeadline)
+}
+
+// buildRetryingTestExchanger centralizes the common construction path.
+// A chainDeadline of 0 means "use the formula" (production behavior);
+// a positive value pins the exchanger's chain deadline to that value.
+func buildRetryingTestExchanger(t *testing.T, serverURL string, chainDeadline time.Duration) *Exchanger {
 	t.Helper()
 	client, err := idpclient.NewRetryingHTTPClient(
 		idpclient.RetryOptions{
@@ -1424,6 +1447,7 @@ func newRetryingTestExchanger(t *testing.T, serverURL string) *Exchanger {
 	p := validParams(t)
 	p.TokenURL = serverURL
 	p.HTTPClient = client
+	p.ChainDeadline = chainDeadline
 	e, err := New(p)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1639,5 +1663,53 @@ func TestClassifyRetryOutcome_DeadlineMidRetryRewrapped(t *testing.T) {
 	}
 	if !strings.Contains(exchErr.Message, "2 attempts") {
 		t.Errorf("Message = %q, want it to mention the attempt count", exchErr.Message)
+	}
+}
+
+// TestExchange_ChainDeadlineFiresMidRetry exercises the chain-deadline
+// fence end-to-end. The direct-unit variant above pins classifyRetryOutcome's
+// rewrap behavior, but never proves that the deadline actually fires
+// mid-retry through the real retry loop. This test does — it pins the
+// chain deadline to 1500ms via Params.ChainDeadline while the retry
+// backoff is 1-2s, so the deadline will fire during backoff between
+// attempts. Requires Params.ChainDeadline to make the test tractable
+// (otherwise we'd wait ~19s per run).
+//
+// The server returns 500 forever; the retry loop dispatches at least
+// one attempt, then the chain deadline expires during the first backoff.
+// Expected: sentinel = ErrExchangeRetriesExhausted (mid-retry deadline
+// path), attempts >= 1 (something was dispatched before the fence).
+func TestExchange_ChainDeadlineFiresMidRetry(t *testing.T) {
+	t.Parallel()
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	// 1500ms deadline < 1000ms min-backoff after the first attempt's
+	// ~fast 500 response means the deadline will fire during backoff.
+	e := newRetryingTestExchangerWithChain(t, srv.URL, 1500*time.Millisecond)
+
+	start := time.Now()
+	_, err := e.Exchange(context.Background(), validInput())
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, ErrExchangeRetriesExhausted) {
+		t.Errorf("errors.Is(err, ErrExchangeRetriesExhausted) = false, want true; err = %v", err)
+	}
+	// At least one attempt must have dispatched before the deadline fired —
+	// otherwise the "attempts >= 1" invariant in classifyRetryOutcome would
+	// short-circuit and we'd get raw context.DeadlineExceeded, not the
+	// exhaustion sentinel.
+	if got := hits.Load(); got < 1 {
+		t.Errorf("server hits = %d, want >= 1 (retry loop must dispatch at least once before deadline)", got)
+	}
+	// Wall-clock bound: the chain deadline is 1500ms; add generous slack
+	// for jitter, CI, and the classifier's post-loop work. If this fails,
+	// the deadline fence isn't firing — retry loop is running to completion.
+	if elapsed > 3*time.Second {
+		t.Errorf("elapsed = %v, want < 3s (chain deadline should have fenced the loop)", elapsed)
 	}
 }

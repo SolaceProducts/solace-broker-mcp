@@ -76,10 +76,11 @@ func New(p Params) (*Exchanger, error) {
 		// Chain deadline is derived from the retry knobs so all timing
 		// decisions compose coherently: changing MaxRetries or WaitMax
 		// via package defaults updates the chain bound automatically.
-		// Override argument is 0 today — extensibility hook for a future
-		// YAML surface. See ComputeChainDeadline in defaults.go.
+		// p.ChainDeadline (zero in production) is the override hook —
+		// tests use it to shrink the deadline; a future YAML surface
+		// would use it too. See ComputeChainDeadline in defaults.go.
 		chainDeadline: ComputeChainDeadline(
-			0,
+			p.ChainDeadline,
 			DefaultPerAttemptTimeout,
 			DefaultRetryWaitMax,
 			DefaultMaxRetries,
