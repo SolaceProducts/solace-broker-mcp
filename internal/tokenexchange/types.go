@@ -258,10 +258,10 @@ var (
 
 	// ErrExchangeRetriesExhausted — the server-side retry loop tried the
 	// exchange up to its attempt cap and every attempt failed with a
-	// retryable condition (ErrExchangeTransport). The last attempt's
-	// state is carried on the same *ExchangeError envelope; this sentinel
-	// only signals "we gave up." Non-retryable at the tools layer — the
-	// agent should not immediately retry a chain the server itself just
-	// exhausted (see SOL-151520 design docs).
+	// retryable condition (ErrExchangeTransport), or the chain deadline
+	// fired mid-retry. The last attempt's state is carried on the same
+	// *ExchangeError envelope; this sentinel only signals "we gave up."
+	// Non-retryable at the tools layer — the agent should not immediately
+	// retry a chain the server itself just exhausted.
 	ErrExchangeRetriesExhausted = errors.New("token exchange retries exhausted")
 )

@@ -155,11 +155,11 @@ func (e *Exchanger) Invalidate(ctx context.Context, input DeduplicationKeyInput)
 // loop finally gave up on), or a chain-deadline expiry that interrupted
 // a retry mid-flight.
 //
-// The attempts >= 1 guard preserves the "exhaustion means we tried and
-// failed" invariant from error-type.md — a pre-dispatch chain-deadline
-// expiry (attempts == 0) propagates raw context.DeadlineExceeded, which
-// is the honest signal that nothing was tried. In practice the
-// pre-dispatch case is nearly impossible at the derived chain deadline
+// The attempts >= 1 guard preserves the invariant that "exhaustion means
+// we tried and failed" — a pre-dispatch chain-deadline expiry
+// (attempts == 0) propagates raw context.DeadlineExceeded, which is the
+// honest signal that nothing was tried. In practice the pre-dispatch
+// case is nearly impossible at the derived chain deadline
 // (see ComputeChainDeadline), but the invariant is what keeps the
 // sentinel meaningful.
 //
