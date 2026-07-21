@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/SolaceDev/solace-broker-mcp/internal/idpclient"
 	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
 )
 
@@ -61,13 +62,29 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	v, err, _ := e.group.Do(key, func() (interface{}, error) {
 		// Detach from the caller's context so one caller's cancellation
 		// does not abort the shared IdP call for all singleflight waiters.
-		// The explicit timeout bounds the detached call independently.
-		exchCtx, cancel := context.WithTimeout(context.Background(), e.exchangeTimeout)
+		// The explicit timeout bounds the whole retry chain independently
+		// — httpClient.Timeout bounds each attempt, chainDeadline bounds
+		// attempts + backoffs together.
+		exchCtx, cancel := context.WithTimeout(context.Background(), e.chainDeadline)
 		defer cancel()
+
+		// Attach an attempts counter so the transport wrapper inside
+		// NewRetryingHTTPClient increments it on every attempt. We read
+		// it back after doExchange returns to distinguish a one-shot
+		// transport failure from a retries-exhausted one. Nil-safe: if
+		// httpClient isn't the retrying variant (tests with a plain
+		// *http.Client), the counter stays 0 and no rewrap fires.
+		exchCtx, attempts := idpclient.WithAttemptsCounter(exchCtx)
 
 		tok, err := e.doExchange(exchCtx, input)
 		if err != nil {
-			return nil, err
+			return nil, e.classifyRetryOutcome(exchCtx, err, attempts(), input.BrokerAlias)
+		}
+
+		if n := attempts(); n > 1 {
+			slog.DebugContext(exchCtx, "token exchange retried",
+				slog.String("broker", input.BrokerAlias),
+				slog.Int("attempts", n))
 		}
 
 		pr, putErr := e.cache.Put(exchCtx, key, cache.CachedCredential{
@@ -128,6 +145,60 @@ func (e *Exchanger) Invalidate(ctx context.Context, input DeduplicationKeyInput)
 	} else {
 		slog.DebugContext(ctx, "token cache invalidated", "broker", input.BrokerAlias)
 	}
+}
+
+// classifyRetryOutcome decides whether an error returned by doExchange
+// should be rewrapped as ErrExchangeRetriesExhausted. The rewrap fires
+// only when at least one attempt was actually dispatched (attempts >= 1)
+// AND the underlying failure is one the retry loop would have iterated
+// over: an ErrExchangeTransport sentinel (5xx or connection error the
+// loop finally gave up on), or a chain-deadline expiry that interrupted
+// a retry mid-flight.
+//
+// The attempts >= 1 guard preserves the "exhaustion means we tried and
+// failed" invariant from error-type.md — a pre-dispatch chain-deadline
+// expiry (attempts == 0) propagates raw context.DeadlineExceeded, which
+// is the honest signal that nothing was tried. In practice the
+// pre-dispatch case is nearly impossible at the 45s default deadline,
+// but the invariant is what keeps the sentinel meaningful.
+//
+// context.Canceled is NOT rewrapped: the retry loop runs on a detached
+// context (context.Background + WithTimeout), so the only cancellation
+// reaching it is the chain deadline firing as DeadlineExceeded. A raw
+// Canceled would indicate an internal bug, and the raw error is a
+// better diagnostic than a misleading exhaustion wrap.
+func (e *Exchanger) classifyRetryOutcome(ctx context.Context, err error, attempts int, brokerAlias string) error {
+	if attempts < 1 {
+		return err
+	}
+
+	var exchErr *ExchangeError
+	switch {
+	case errors.As(err, &exchErr) && errors.Is(err, ErrExchangeTransport):
+		// Fall through to rewrap below.
+	case errors.Is(err, context.DeadlineExceeded):
+		// Fall through — chain deadline interrupted a retry mid-flight.
+	default:
+		return err
+	}
+
+	slog.DebugContext(ctx, "token exchange retries exhausted",
+		slog.String("broker", brokerAlias),
+		slog.Int("attempts", attempts),
+		slog.String("underlying", err.Error()))
+
+	// Preserve the last attempt's HTTP status when we have one. On the
+	// deadline path there is no *ExchangeError to copy from, so
+	// HTTPStatus stays zero — that is the honest signal that the last
+	// attempt did not receive a response before the deadline fired.
+	rewrapped := &ExchangeError{
+		Sentinel: ErrExchangeRetriesExhausted,
+		Message:  fmt.Sprintf("token exchange retries exhausted after %d attempts: %s", attempts, err.Error()),
+	}
+	if exchErr != nil {
+		rewrapped.HTTPStatus = exchErr.HTTPStatus
+	}
+	return rewrapped
 }
 
 func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token, error) {

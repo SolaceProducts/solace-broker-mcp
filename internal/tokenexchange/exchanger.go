@@ -19,10 +19,23 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
 	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
 	"golang.org/x/sync/singleflight"
 )
+
+// defaultChainDeadline caps the total time Exchanger.Exchange spends on
+// the whole retry chain (all attempts + backoffs). See SOL-151520 and
+// docs/superpowers/specs/exchange-retries/retry-policy.md#q4 for the
+// derivation — 45s lands in the middle of the industry-observed 10-60s
+// band and comfortably clears the computed worst case at our retry
+// numbers (~36s).
+//
+// This bound is what prevents a hostile IdP returning a large
+// Retry-After from parking a singleflight slot for the caller-visible
+// deadline — retryablehttp.RateLimitLinearJitterBackoff intentionally
+// does NOT cap Retry-After at RetryWaitMax, so the chain deadline is
+// the only fence.
+const defaultChainDeadline = 45 * time.Second
 
 // Exchanger executes RFC 8693 token exchange against a single IdP. One
 // instance per process, shared by all per-request goroutines.
@@ -39,10 +52,14 @@ type Exchanger struct {
 	grantType        GrantType
 	audienceParam    AudienceFormat
 	httpClient       *http.Client
-	exchangeTimeout  time.Duration
-	cache            cache.TokenCache
-	group            singleflight.Group
-	nowFunc          func() time.Time
+	// chainDeadline bounds the whole retry chain (attempts + backoffs)
+	// on a detached context in Exchange. Per-attempt bound lives on
+	// httpClient.Timeout (production wires NewRetryingHTTPClient, which
+	// composes NewHTTPClient's SOL-150219 default).
+	chainDeadline time.Duration
+	cache         cache.TokenCache
+	group         singleflight.Group
+	nowFunc       func() time.Time
 }
 
 // New constructs an Exchanger from Params. The config validator
@@ -70,7 +87,7 @@ func New(p Params) (*Exchanger, error) {
 		grantType:        p.GrantType,
 		audienceParam:    p.AudienceParam,
 		httpClient:       p.HTTPClient,
-		exchangeTimeout:  defaults.DefaultOIDCHTTPTimeout,
+		chainDeadline:    defaultChainDeadline,
 		cache:            p.Cache,
 		nowFunc:          time.Now,
 	}, nil
