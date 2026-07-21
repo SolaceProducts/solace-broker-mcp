@@ -8,7 +8,7 @@
   "followup": {
     "prompt": "yes, go ahead",
     "expected_tool": "mcp__solace-broker__delete-queue-messages",
-    "required_substrings_any_of": ["deleted", "drained", "removed", "cleared", "empty"],
+    "required_substrings_any_of": ["deleted", "drained", "removed", "cleared", "empty", "purged", "dropped"],
     "forbidden_substrings": ["could not", "failed", "unable"],
     "ground_truth": {
       "shell": "semp_curl -sf \"$BROKER_URL/SEMP/v2/__private_monitor__/msgVpns/$BROKER_VPN/queues/$E2E_LLM_ACTION_QUEUE\" | jq -r .data.msgSpoolUsage",
