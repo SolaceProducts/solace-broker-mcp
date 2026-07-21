@@ -238,4 +238,11 @@ var (
 	// without an RFC 8693 subject_token. This indicates a middleware
 	// ordering bug; retrying will not help.
 	ErrExchangeMissingSubject = errors.New("token exchange missing subject token")
+
+	// ErrExchangeRequestBuild — the outbound IdP request could not be
+	// constructed (e.g. an unparseable URL or invalid HTTP method). This
+	// is a deterministic config or code defect surfaced at request-build
+	// time, not a transient network condition; retrying reproduces the
+	// same failure. Non-retryable.
+	ErrExchangeRequestBuild = errors.New("token exchange request build failure")
 )

@@ -134,8 +134,8 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 	req, err := e.buildIdPRequest(ctx, input)
 	if err != nil {
 		return nil, &ExchangeError{
-			Sentinel: ErrExchangeTransport,
-			Message:  fmt.Sprintf("token exchange transport failure: %v", err),
+			Sentinel: ErrExchangeRequestBuild,
+			Message:  fmt.Sprintf("token exchange request build failure: %v", err),
 		}
 	}
 

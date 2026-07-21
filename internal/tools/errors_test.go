@@ -106,6 +106,7 @@ func TestIsRetryable(t *testing.T) {
 		{"exchange rejected", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeRejected, Message: "invalid_grant"}, false},
 		{"exchange invalid response", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrInvalidResponse, Message: "bad json"}, false},
 		{"exchange missing subject", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeMissingSubject, Message: "no subject token"}, false},
+		{"exchange request build", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeRequestBuild, Message: "unparseable URL"}, false},
 		{"wrapped exchange transport", fmt.Errorf("oauth auth: %w", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeTransport, Message: "timeout"}), true},
 
 		// Fall-through / non-SEMP errors are never retryable.
@@ -276,6 +277,13 @@ func TestBuildErrorMessage(t *testing.T) {
 			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeMissingSubject, Message: "no subject token on context"},
 			"broker-oauth",
 			"Authentication failed: no identity token was found for the current session. Contact your administrator.",
+			nil,
+		},
+		{
+			"exchange request build",
+			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeRequestBuild, Message: "unparseable URL"},
+			"broker-oauth",
+			"Authentication failed: an internal error occurred. Please contact your administrator.",
 			nil,
 		},
 

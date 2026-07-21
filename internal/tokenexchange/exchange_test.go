@@ -580,9 +580,14 @@ func TestExchange_RejectedErrorReturned(t *testing.T) {
 	}
 }
 
-// ---------- B07: doExchange wraps buildIdPRequest errors as transport ----------
+// ---------- B07: doExchange classifies buildIdPRequest failures as non-retryable ----------
 
-func TestDoExchange_BuildRequestFailureWrapsAsTransport(t *testing.T) {
+// A request-construction failure is a deterministic config or code defect
+// (unparseable URL, invalid method), not a transient network condition.
+// It must classify as ErrExchangeRequestBuild — non-retryable — so the
+// server-side retry policy does not loop on it, and so the classifier
+// does not mislead the agent into retrying.
+func TestDoExchange_BuildRequestFailureClassifiesAsRequestBuild(t *testing.T) {
 	t.Parallel()
 
 	e := &Exchanger{
@@ -602,8 +607,11 @@ func TestDoExchange_BuildRequestFailureWrapsAsTransport(t *testing.T) {
 	if tok != nil {
 		t.Errorf("tok = %v, want nil on build failure", tok)
 	}
-	if !errors.Is(err, ErrExchangeTransport) {
-		t.Errorf("errors.Is(err, ErrExchangeTransport) = false, want true; err = %v", err)
+	if !errors.Is(err, ErrExchangeRequestBuild) {
+		t.Errorf("errors.Is(err, ErrExchangeRequestBuild) = false, want true; err = %v", err)
+	}
+	if errors.Is(err, ErrExchangeTransport) {
+		t.Errorf("errors.Is(err, ErrExchangeTransport) = true, want false — a request-build failure must NOT be a transport failure")
 	}
 }
 
@@ -950,7 +958,10 @@ func TestExchange_RequestBodyContainsExpectedFields(t *testing.T) {
 
 // ---------- B07 variant: unknown grant type through Exchange ----------
 
-func TestExchange_UnknownGrantTypeReturnsTransportError(t *testing.T) {
+// An unknown grant type fails at request-build time (before any HTTP call).
+// It must classify as ErrExchangeRequestBuild — a deterministic config
+// defect — not ErrExchangeTransport.
+func TestExchange_UnknownGrantTypeReturnsRequestBuildError(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -975,8 +986,11 @@ func TestExchange_UnknownGrantTypeReturnsTransportError(t *testing.T) {
 	if tok != nil {
 		t.Errorf("tok = %v, want nil for unknown grant type", tok)
 	}
-	if !errors.Is(err, ErrExchangeTransport) {
-		t.Errorf("errors.Is(err, ErrExchangeTransport) = false, want true; err = %v", err)
+	if !errors.Is(err, ErrExchangeRequestBuild) {
+		t.Errorf("errors.Is(err, ErrExchangeRequestBuild) = false, want true; err = %v", err)
+	}
+	if errors.Is(err, ErrExchangeTransport) {
+		t.Errorf("errors.Is(err, ErrExchangeTransport) = true, want false — request-build failure must NOT be a transport failure")
 	}
 }
 
