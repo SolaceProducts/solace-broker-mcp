@@ -248,7 +248,12 @@ func TestNewRetryingHTTPClient_ConnectionErrorRetries(t *testing.T) {
 	ctx, attempts := WithAttemptsCounter(context.Background())
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 
-	_, err = client.Do(req)
+	resp, err := client.Do(req)
+	if resp != nil {
+		// Defensive: connection errors surface with resp==nil, but bodyclose
+		// can't prove that, and we don't want to lint-suppress selectively.
+		_ = resp.Body.Close()
+	}
 	if err == nil {
 		t.Fatalf("Do: expected connection error, got nil")
 	}
@@ -267,6 +272,18 @@ func (s *stubRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
 }
 
+// roundTripAndClose invokes the recorder and closes any returned body,
+// so `bodyclose` doesn't flag the call site. The stubRoundTripper only
+// hands back http.NoBody so this is a no-op at runtime.
+func roundTripAndClose(t *testing.T, rec *attemptsRecorder, req *http.Request) {
+	t.Helper()
+	resp, err := rec.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	_ = resp.Body.Close()
+}
+
 // TestAttemptsRecorder_NilSafe covers the transport wrapper's guard for a
 // missing counter on ctx. Direct unit test — no HTTP server, no retry
 // loop — because the guard is a pure Go type-assertion. Regression guard
@@ -277,9 +294,7 @@ func TestAttemptsRecorder_NilSafe(t *testing.T) {
 
 	// Plain ctx — no WithAttemptsCounter.
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://example", nil)
-	if _, err := rec.RoundTrip(req); err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
+	roundTripAndClose(t, rec, req)
 	if inner.calls != 1 {
 		t.Errorf("inner calls: got %d, want 1", inner.calls)
 	}
@@ -294,12 +309,8 @@ func TestAttemptsRecorder_IncrementsWhenAttached(t *testing.T) {
 
 	ctx, attempts := WithAttemptsCounter(context.Background())
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://example", nil)
-	if _, err := rec.RoundTrip(req); err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
-	if _, err := rec.RoundTrip(req); err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
+	roundTripAndClose(t, rec, req)
+	roundTripAndClose(t, rec, req)
 	if got := attempts(); got != 2 {
 		t.Errorf("attempts: got %d, want 2", got)
 	}

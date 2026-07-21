@@ -53,25 +53,12 @@ type ExchangeError struct {
 func (e *ExchangeError) Error() string { return e.Message }
 func (e *ExchangeError) Unwrap() error { return e.Sentinel }
 
-// AgentMessage returns the sanitized, human-readable string safe to
-// surface to the MCP agent. Two categories, keyed on what the agent
-// (and the human downstream of it) can actually do:
-//
-//   - Transient (ErrExchangeTransport, ErrExchangeRetriesExhausted):
-//     the situation may resolve on its own. Message pairs with
-//     retryable=true in the structured result.
-//   - Permanent (everything else, including the default catch-all):
-//     no useful end-user action exists. The message names the broker
-//     so a multi-broker operator can grep the audit log for context.
-//
-// The message deliberately does not distinguish the individual
-// permanent-class sentinels (Rejected, InvalidResponse, MissingSubject,
-// RequestBuild). An agent cannot act on the difference between "IdP
-// rejected our credentials" and "IdP returned a malformed response" —
-// both require operator involvement. All the sentinel-specific detail
-// lives on the audit log line via LogAttrs, which is the right audience
-// for it. Sanitized-by-construction: no error text is embedded, so no
-// IdP-generated content ever reaches the agent through this surface.
+// AgentMessage returns the sanitized string safe to surface to the MCP
+// agent. Two categories: transient (Transport, RetriesExhausted) →
+// "try again"; permanent (everything else, including default) →
+// "server-side issue" named with brokerAlias. The Message field is
+// never embedded — sentinel-specific detail belongs on LogAttrs, not
+// on the agent surface. See PR SOL-151520 for the rationale.
 func (e *ExchangeError) AgentMessage(brokerAlias string) string {
 	if errors.Is(e, ErrExchangeTransport) || errors.Is(e, ErrExchangeRetriesExhausted) {
 		return "Authentication temporarily unavailable. Please try again in a moment."
