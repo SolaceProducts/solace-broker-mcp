@@ -147,7 +147,11 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 		// load when it can least handle it. Cap the transient retries and fail fast
 		// once the cap is hit so the caller sees a RetriesExhaustedError.
 		if state.transientRetried >= maxTransientRetries {
-			slog.Warn("not retrying: transient-error retry cap reached",
+			// Downgraded to DEBUG: the errorHandler logs an ERROR ("request failed
+			// after retries exhausted", carrying the cap-reached error string) for
+			// this same terminal failure, so a WARN here would double-log every
+			// capped 429/503 — noisy precisely when the broker is overloaded.
+			slog.Debug("not retrying: transient-error retry cap reached",
 				slog.String("broker", d.brokerURL),
 				slog.Int("status", resp.StatusCode),
 				slog.Int("cap", maxTransientRetries))
