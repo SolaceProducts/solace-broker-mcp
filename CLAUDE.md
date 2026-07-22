@@ -41,3 +41,14 @@ tool name; LLMs see and pattern-match against this string.
 
 Run `/check-logs` to scan for logging security violations. Fix all CRITICAL
 and HIGH issues before committing. Rules: `docs/internal/secure-logging-rules.md`.
+
+## Before opening a PR
+
+If the change touches production surface (`internal/config/`, tool definitions in
+`internal/composite/definitions/tools.yaml`, or native tool packages under
+`internal/tools/`), add a `CHANGELOG.md` entry under `[Unreleased]` — run
+`/changelog` to draft one from your diff. CI posts an advisory warning (not a
+block) on a behavior-changing PR with no `[Unreleased]` update, unless it carries
+the `no-changelog` label. The hard gate is at release time: cutting a release
+fails if the version's CHANGELOG block is missing, so entries must land before
+then.
