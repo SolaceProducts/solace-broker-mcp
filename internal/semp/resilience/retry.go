@@ -30,9 +30,11 @@ var errTransientCapReached = errors.New("transient-error (429/503) retry cap rea
 // retryStateKey is the context key for per-request retry state.
 type retryStateKey struct{}
 
-// retryState tracks per-request retry decisions to enforce "retry once" limits.
-// Each Do() call creates its own instance via context, so concurrent requests
-// to the same Sender are safe.
+// retryState tracks per-request retry decisions to enforce the retry caps: the
+// "retry once" limits for 401 re-auth (auth401Retried) and non-429/503 5xx
+// (other5xxRetried), plus the maxTransientRetries cap for 429/503
+// (transientRetried). Each Do() call creates its own instance via context, so
+// concurrent requests to the same Sender are safe.
 type retryState struct {
 	auth401Retried   bool   // true after first 401 re-auth attempt
 	other5xxRetried  bool   // true after first non-429/503 5xx retry

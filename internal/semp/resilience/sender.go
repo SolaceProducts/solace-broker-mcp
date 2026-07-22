@@ -162,7 +162,9 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	// with jittered backoff (RateLimitLinearJitterBackoff). During failure
 	// episodes, total broker traffic can reach (1 + maxTransientRetries) times
 	// the configured rate for a 429/503 episode (other retryable failures are
-	// bounded by RetryMax), but retries are spread over time by the backoff and
+	// capped tighter: 401 re-auth and non-429/503 5xx retry at most once, and
+	// only connection errors use the full RetryMax), but retries are spread
+	// over time by the backoff and
 	// jitter desynchronizes concurrent failures. The broker's Retry-After
 	// header (if present on 429/503) takes priority over computed backoff.
 	select {
