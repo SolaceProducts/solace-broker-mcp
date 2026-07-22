@@ -109,11 +109,14 @@ const (
 // With this package's defaults (5s, 2, 2s) the formula yields
 // 3*5s + 2*2s = 19s.
 //
-// The override parameter exists as an extensibility seam: a future YAML
-// path could surface a user-visible `broker_oauth.retry.chain_deadline`
-// key and thread it here. Today no caller passes a positive override,
-// so the formula wins. Keeping it in the signature costs nothing and
-// avoids the "extract override support later" refactor.
+// The override parameter exists as an extensibility seam. Unlike the
+// circuit breaker (whose broker_oauth.circuit_breaker YAML block is
+// shipped), the retry knobs have no YAML surface: a future
+// `broker_oauth.retry.chain_deadline` key could thread here. Today no
+// production caller passes a positive override (only tests do, via
+// Params.ChainDeadline), so the formula wins. Keeping it in the
+// signature costs nothing and avoids the "extract override support
+// later" refactor.
 //
 // Rationale for a formula rather than a hardcoded constant: retry knobs
 // compose — changing PerAttemptTimeout or MaxRetries without adjusting
