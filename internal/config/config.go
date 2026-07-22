@@ -250,8 +250,9 @@ func (b BrokerOAuthConfig) LogValue() slog.Value {
 		slog.String("grant_type", b.GrantType),
 		slog.String("audience_parameter_name", b.AudienceParam),
 		// Whether the breaker is on is operationally important and non-secret.
-		// The fully-resolved threshold values are logged by the runtime when it
-		// constructs the breaker; here we surface only the enabled state.
+		// Only the enabled state is surfaced here; the resolved threshold values
+		// are not currently logged (the breaker emits state transitions and a
+		// disabled-escape-hatch WARN, but not its config).
 		slog.Bool("circuit_breaker_enabled", b.BreakerEnabled()),
 	)
 }

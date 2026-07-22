@@ -46,8 +46,9 @@ const (
 )
 
 // Circuit-breaker defaults. Unexported because only DefaultCircuitBreakerConfig
-// reads them — no other package touches these numbers, and a future YAML surface
-// will override the config struct, not these constants.
+// reads them — no other package touches these numbers, and operator config
+// (broker_oauth.circuit_breaker) overlays the runtime struct in
+// resolveCircuitBreakerConfig rather than modifying these constants.
 //
 // Each value is anchored to the defaults mainstream breakers ship, then adjusted
 // for this deployment's shape: one shared IdP, protected by one process-wide

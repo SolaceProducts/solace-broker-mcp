@@ -22,9 +22,10 @@ import (
 )
 
 // CircuitBreakerConfig is the breaker's tuning surface. The breaker is always
-// constructed from this struct — even while the only source of values is
-// DefaultCircuitBreakerConfig — so the later YAML/environment plumbing plugs in
-// by populating the struct, not by rewiring the constructor.
+// constructed from this struct: DefaultCircuitBreakerConfig provides the base
+// values, and operator config (broker_oauth.circuit_breaker) overlays them via
+// tokenexchange.FromConfig — so config plugs in by populating the struct, not
+// by rewiring the constructor.
 //
 // The fields describe the conceptual window and thresholds, not gobreaker's
 // bucket granularity: that is derived internally so operators never configure a
@@ -75,9 +76,9 @@ func DefaultCircuitBreakerConfig() CircuitBreakerConfig {
 	}
 }
 
-// Validate guards the bounds a later YAML/environment override could violate.
-// The defaults always pass; the method exists now so the override path added
-// later has a validation seam already in place rather than a refactor.
+// Validate guards the bounds an operator override (broker_oauth.circuit_breaker)
+// could violate. The defaults always pass; FromConfig calls this as the final
+// gate after overlaying operator values onto the defaults.
 func (c CircuitBreakerConfig) Validate() error {
 	// Bounds are the shared config.*IdP* constants — the single source of truth
 	// also used by the config-layer YAML validator (config.validateIdPCircuitBreaker),

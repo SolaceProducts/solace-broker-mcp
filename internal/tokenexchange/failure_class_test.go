@@ -195,12 +195,16 @@ func TestExchangeError_LogAttrsBreakerState(t *testing.T) {
 	}
 }
 
-// TestClassifyRetryOutcome_DeadlinePathHasNoFailureClass asserts that when
+// TestClassifyRetryOutcome_DeadlinePathClassifiesAsNetwork asserts that when
 // the exhaustion rewrap fires on the chain-deadline path (no underlying
-// *ExchangeError to copy from), FailureClass stays None — the honest signal
-// that the last attempt received no classifiable response. This is the
-// counterpart to the transport-path tests that assert the class IS carried.
-func TestClassifyRetryOutcome_DeadlinePathHasNoFailureClass(t *testing.T) {
+// *ExchangeError to copy from), the outcome is classified Network — the whole
+// retry chain hung until the budget fired without a usable response, which is
+// an IdP availability failure. HTTPStatus stays 0 (there genuinely was no
+// response), but the class is NOT None: left as None the breaker would record
+// the hang as a success and dilute the failure rate. The breaker-verdict
+// assertions below are the real point — a hung chain must count as a failure,
+// never as success or an exclusion.
+func TestClassifyRetryOutcome_DeadlinePathClassifiesAsNetwork(t *testing.T) {
 	t.Parallel()
 
 	e, err := New(validParams(t))
@@ -218,11 +222,23 @@ func TestClassifyRetryOutcome_DeadlinePathHasNoFailureClass(t *testing.T) {
 	if !errors.As(out, &exchErr) {
 		t.Fatalf("errors.As(out, *ExchangeError) = false; out = %v", out)
 	}
-	if exchErr.FailureClass != FailureClassNone {
-		t.Errorf("FailureClass = %v, want None (deadline path has no underlying transport class)", exchErr.FailureClass)
+	if exchErr.FailureClass != FailureClassNetwork {
+		t.Errorf("FailureClass = %v, want Network (a hung chain is an availability failure)", exchErr.FailureClass)
 	}
 	if exchErr.HTTPStatus != 0 {
-		t.Errorf("HTTPStatus = %d, want 0 (deadline path has no status)", exchErr.HTTPStatus)
+		t.Errorf("HTTPStatus = %d, want 0 (deadline path has no response)", exchErr.HTTPStatus)
+	}
+
+	// The verdict this whole fix is about: a timed-out chain counts as a
+	// breaker failure, and is neither excluded nor a success.
+	if !isBreakerFailure(out) {
+		t.Error("isBreakerFailure = false, want true (a hung chain must count as a failure)")
+	}
+	if isBreakerExcluded(out) {
+		t.Error("isBreakerExcluded = true, want false (a hang is an availability signal, not excluded)")
+	}
+	if isBreakerSuccess(out) {
+		t.Error("isBreakerSuccess = true, want false (a hang must never dilute the failure rate)")
 	}
 }
 

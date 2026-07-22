@@ -25,9 +25,9 @@ import (
 // TestClassifyTransportError maps each Go transport error to its FailureClass.
 // The split that matters for the breaker: permanent endpoint misconfiguration
 // (TLS trust/hostname, DNS name-not-found) → Config (excluded); everything else
-// including a DNS *timeout* → Network (counted). The errors are wrapped in
-// url.Error/net.OpError shapes so the test exercises errors.As reaching through
-// the chain the way a real http.Client error arrives.
+// including a DNS *timeout* → Network (counted). Several cases wrap the cause
+// (via fmt.Errorf %w, or a net.OpError) so the test exercises errors.As
+// reaching through a chain the way a real http.Client error arrives.
 func TestClassifyTransportError(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

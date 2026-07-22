@@ -233,10 +233,22 @@ func (e *Exchanger) classifyRetryOutcome(ctx context.Context, err error, attempt
 		slog.String("underlying", err.Error()))
 
 	// Copy HTTPStatus and FailureClass forward: the new sentinel severs
-	// errors.Is back to ErrExchangeTransport, so these are the only signals
-	// of the underlying cause the breaker still has. On the deadline path
-	// exchErr is nil, so both stay zero — the honest "no response received"
-	// signal.
+	// errors.Is back to ErrExchangeTransport, so FailureClass is the only
+	// signal of the underlying cause the breaker still has.
+	//
+	// On the transport path (exchErr != nil) the surviving class is copied
+	// as-is — an exhausted run of 5xx stays Upstream5xx and counts, an
+	// exhausted network run stays Network, etc.
+	//
+	// On the deadline path exchErr is nil (the error was a bare
+	// context.DeadlineExceeded): the whole retry chain hung until the budget
+	// fired without ever producing a classifiable response. That is an IdP
+	// availability failure — "no usable response received" — so it is
+	// classified Network, the same class as a connection-level failure. Left
+	// as FailureClassNone it would collapse into the breaker's "not a
+	// transport outcome" bucket and be recorded as a SUCCESS, diluting the
+	// failure rate during exactly the sustained hang the breaker exists to
+	// catch. HTTPStatus stays zero — there genuinely was no response.
 	rewrapped := &ExchangeError{
 		Sentinel: ErrExchangeRetriesExhausted,
 		Message:  fmt.Sprintf("token exchange retries exhausted after %d attempts: %s", attempts, err.Error()),
@@ -244,6 +256,8 @@ func (e *Exchanger) classifyRetryOutcome(ctx context.Context, err error, attempt
 	if exchErr != nil {
 		rewrapped.HTTPStatus = exchErr.HTTPStatus
 		rewrapped.FailureClass = exchErr.FailureClass
+	} else {
+		rewrapped.FailureClass = FailureClassNetwork
 	}
 	return rewrapped
 }
