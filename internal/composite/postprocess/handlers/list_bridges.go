@@ -69,11 +69,15 @@ func init() {
 //     shape as list-rdps.downCount / list-vpns.downCount.
 //   - disabledCount:           bridges with enabled == false.
 //   - byInboundFailureReason:  count grouped by inboundFailureReason,
-//     restricted to down, enabled bridges with a non-empty reason, so the map
-//     reflects UNEXPECTED active failures — not stale reasons left over on a
-//     bridge that has since recovered. SEMP has no equivalent
-//     outboundFailureReason field, so outbound-only failures land in
-//     downCount without a bucketed reason.
+//     restricted to enabled bridges whose INBOUND direction specifically is
+//     unhealthy, with a non-empty reason. Gating on the inbound direction
+//     (not just "down") matters because SEMP does not clear
+//     inboundFailureReason when inboundState recovers — an outbound-only
+//     failure (inbound healthy, outbound not) can coexist with a stale
+//     non-empty inboundFailureReason from a since-recovered inbound issue;
+//     bucketing on "down" alone would misreport that as an active inbound
+//     failure. SEMP has no equivalent outboundFailureReason field, so
+//     outbound-only failures land in downCount without a bucketed reason.
 //
 // Robustness mirrors listRdps: a row missing or wrong-type on any required
 // field is tallied into skipped (surfaced when non-zero) rather than aborting
@@ -108,10 +112,16 @@ func ListBridges(stepResults map[string]map[string]any) (map[string]any, error) 
 			disabled++
 			continue
 		}
-		unhealthy := !bridgeInboundUpStates[inboundState] || !bridgeOutboundUpStates[outboundState]
-		if unhealthy {
+		inboundUnhealthy := !bridgeInboundUpStates[inboundState]
+		outboundUnhealthy := !bridgeOutboundUpStates[outboundState]
+		if inboundUnhealthy || outboundUnhealthy {
 			down++
-			if inboundFailureReason != "" {
+			// Bucket only when the inbound direction is itself the unhealthy
+			// one — an outbound-only failure can coexist with a stale,
+			// non-empty inboundFailureReason left over from a since-recovered
+			// inbound issue (SEMP does not clear it), which would otherwise
+			// misreport an active inbound failure that isn't happening.
+			if inboundUnhealthy && inboundFailureReason != "" {
 				byReason[inboundFailureReason]++
 			}
 		}

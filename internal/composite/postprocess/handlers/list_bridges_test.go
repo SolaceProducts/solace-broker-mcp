@@ -84,6 +84,32 @@ func TestListBridges_OutboundOnlyFailure(t *testing.T) {
 	}
 }
 
+// TestListBridges_OutboundOnlyFailureWithStaleInboundReason is the regression
+// test for the bucketing bug flagged in review (aross): SEMP does not clear
+// inboundFailureReason when inboundState recovers, so an outbound-only
+// failure can coexist with a non-empty, stale inboundFailureReason left over
+// from a since-recovered inbound issue. The bridge is down (outbound
+// unhealthy), but byInboundFailureReason must stay empty — bucketing here
+// would misreport an active inbound failure that isn't actually happening.
+func TestListBridges_OutboundOnlyFailureWithStaleInboundReason(t *testing.T) {
+	items := []any{
+		// inbound healthy but carries a stale reason from a past failure;
+		// outbound is the one that's actually down.
+		bridge(true, "ready-in-sync", "unknown-transitional-state", "stale connection refused"),
+	}
+	got, err := ListBridges(map[string]map[string]any{"bridges": {"data": items}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["downCount"] != 1 {
+		t.Errorf("downCount: got %v, want 1 (outbound-only failure must still count as down)", got["downCount"])
+	}
+	byReason := got["byInboundFailureReason"].(map[string]int)
+	if len(byReason) != 0 {
+		t.Errorf("byInboundFailureReason: want empty (inbound is healthy; the stale reason must not bucket), got %v", byReason)
+	}
+}
+
 // TestListBridges_UnidirectionalNotApplicableIsHealthy pins that
 // "not-applicable" on either direction means that direction doesn't apply to
 // this bridge and must not be treated as down.
