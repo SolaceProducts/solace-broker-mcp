@@ -2,7 +2,7 @@
 # MCP tool-level functional tests for SOL-150025 (tools 1–12: Block A 1–9,
 # Block B 10–12 — list-slow-subscribers, list-queue-discards, get-discard-stats).
 # Invoked by run-all.sh after verify-fixtures.sh; assumes the MCP
-# server is running and the F1–F7 fixtures have been created.
+# server is running and the F1–F8 fixtures have been created.
 #
 # Where verify-fixtures.sh asserts broker *state* via SEMP-direct calls, this
 # file exercises each MVP monitoring *tool* through the MCP server (JSON-RPC
@@ -1002,6 +1002,126 @@ test_get_broker_status() {
 test_get_broker_status_a() { test_get_broker_status "broker-a"; }
 test_get_broker_status_b() { test_get_broker_status "broker-b"; }
 
+# ── Tool 14: list-bridges (F8 bridges; VPN-scoped; SOL-152231) ───────────────
+# Primary: the bridge collection includes all three F8 fixtures. Pagination:
+# maxResults=1 returns one entry and flags truncated. Summary: downCount
+# counts test-bridge-failing (test-bridge-disabled is excluded from
+# downCount per the admin-disabled exclusion, matching list-rdps/list-vpns);
+# disabledCount counts test-bridge-disabled.
+#
+# byInboundFailureReason is deliberately NOT asserted to have an entry:
+# lab-verified against SEMP 2.46, a bridge's inboundFailureReason stays empty
+# for connection-level failures (unreachable host, bad remote VPN, wrong
+# credentials) — unlike RDPs' lastFailureReason, which does populate. The map
+# legitimately stays empty for every fixture here (test-bridge-disabled's
+# "Bridge disabled" reason is excluded since it's admin-disabled, not an
+# unexpected failure — see list_bridges.go).
+# Envelope: {"bridges":{"data":[...],"truncated":bool},"summary":{...}}.
+
+test_list_bridges() {
+    local broker="$1"
+    local response content name
+    response=$(mcp_call_tool "list-bridges" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
+    content=$(extract_content "$response")
+    for name in test-bridge test-bridge-failing test-bridge-disabled; do
+        assert_json_field "$content" \
+            "(.bridges.data | map(.bridgeName) | index(\"$name\")) != null" "true" \
+            "list-bridges [$broker]: $name must be present" || return 1
+    done
+    # No duplicates across the full (uncapped) set — guards against
+    # page-stitching bugs emitting the same bridge twice.
+    assert_json_field "$content" \
+        '(.bridges.data | map(.bridgeName)) as $n | ($n | length) == ($n | unique | length)' "true" \
+        "list-bridges [$broker]: bridge names must be unique (no pagination duplicates)" || return 1
+}
+
+test_list_bridges_pagination() {
+    local broker="$1"
+    local response content
+    # maxResults=1 caps the result to one entry and marks it truncated.
+    response=$(mcp_call_tool "list-bridges" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",maxResults:1}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '.bridges.data | length' "1" \
+        "list-bridges [$broker]: maxResults=1 must return exactly 1 bridge" || return 1
+    assert_json_field "$content" '.bridges.truncated' "true" \
+        "list-bridges [$broker]: maxResults=1 must flag truncated=true" || return 1
+    # The uncapped call returns every bridge (3: test-bridge, test-bridge-failing,
+    # test-bridge-disabled), untruncated.
+    response=$(mcp_call_tool "list-bridges" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '(.bridges.data | length) >= 3' "true" \
+        "list-bridges [$broker]: uncapped call must return all bridges" || return 1
+    assert_json_field "$content" '.bridges.truncated' "false" \
+        "list-bridges [$broker]: uncapped call must not be truncated" || return 1
+}
+
+test_list_bridges_summary() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "list-bridges" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" \
+        '(.summary.scanned) == (.bridges.data | length)' "true" \
+        "list-bridges [$broker]: summary.scanned must equal the returned bridge count" || return 1
+    assert_json_field "$content" '.summary.downCount >= 1' "true" \
+        "list-bridges [$broker]: at least one down bridge expected (fixture: test-bridge-failing)" || return 1
+    assert_json_field "$content" '.summary.disabledCount >= 1' "true" \
+        "list-bridges [$broker]: at least one disabled bridge expected (fixture: test-bridge-disabled)" || return 1
+}
+
+test_list_bridges_a()            { test_list_bridges "broker-a"; }
+test_list_bridges_b()            { test_list_bridges "broker-b"; }
+test_list_bridges_pagination_a() { test_list_bridges_pagination "broker-a"; }
+test_list_bridges_pagination_b() { test_list_bridges_pagination "broker-b"; }
+test_list_bridges_summary_a()    { test_list_bridges_summary "broker-a"; }
+test_list_bridges_summary_b()    { test_list_bridges_summary "broker-b"; }
+
+# ── Tool 15: get-bridge-status (F8 bridges; compound identifier; SOL-152231) ─
+# Primary: the healthy test-bridge resolves via the compound bridgeName +
+# bridgeVirtualRouter identifier and reports both connection directions up.
+# Down case: test-bridge-failing resolves and reports a non-healthy
+# inboundState. Bridges are the only object in this server identified by two
+# names rather than one — this is the first live-broker confirmation that the
+# compound path segment actually resolves the right object (unit tests only
+# pin the template substitution, not the real SEMP round-trip).
+# Envelope: {"bridgeStatus":{"data":{...}}} — a single object, not a collection.
+
+test_get_bridge_status_healthy() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "get-bridge-status" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",bridgeName:"test-bridge",bridgeVirtualRouter:"auto"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '.bridgeStatus.data.enabled' "true" \
+        "get-bridge-status [$broker]: test-bridge must be enabled" || return 1
+    assert_json_field "$content" '.bridgeStatus.data.inboundState' "ready-in-sync" \
+        "get-bridge-status [$broker]: test-bridge inboundState must be ready-in-sync" || return 1
+    assert_json_field "$content" '.bridgeStatus.data.outboundState' "ready" \
+        "get-bridge-status [$broker]: test-bridge outboundState must be ready" || return 1
+}
+
+test_get_bridge_status_failing() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "get-bridge-status" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",bridgeName:"test-bridge-failing",bridgeVirtualRouter:"auto"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '.bridgeStatus.data.enabled' "true" \
+        "get-bridge-status [$broker]: test-bridge-failing must be enabled (down despite being enabled)" || return 1
+    assert_json_field "$content" \
+        '.bridgeStatus.data.inboundState != "ready-in-sync" and .bridgeStatus.data.inboundState != "ready-subscribing"' "true" \
+        "get-bridge-status [$broker]: test-bridge-failing inboundState must not be healthy" || return 1
+}
+
+test_get_bridge_status_healthy_a() { test_get_bridge_status_healthy "broker-a"; }
+test_get_bridge_status_healthy_b() { test_get_bridge_status_healthy "broker-b"; }
+test_get_bridge_status_failing_a() { test_get_bridge_status_failing "broker-a"; }
+test_get_bridge_status_failing_b() { test_get_bridge_status_failing "broker-b"; }
+
 # ── Run ──────────────────────────────────────────────────────────────────────
 
 run_test "Tool 1 — list-vpns (broker-a)"               test_list_vpns_a
@@ -1072,5 +1192,17 @@ run_test "Tool 12 — get-discard-stats per-VPN (broker-b)"       test_get_disca
 
 run_test "Tool 13 — get-broker-status (broker-a)"               test_get_broker_status_a
 run_test "Tool 13 — get-broker-status (broker-b)"               test_get_broker_status_b
+
+run_test "Tool 14 — list-bridges (broker-a)"                    test_list_bridges_a
+run_test "Tool 14 — list-bridges (broker-b)"                    test_list_bridges_b
+run_test "Tool 14 — list-bridges pagination (broker-a)"         test_list_bridges_pagination_a
+run_test "Tool 14 — list-bridges pagination (broker-b)"         test_list_bridges_pagination_b
+run_test "Tool 14 — list-bridges summary (broker-a)"            test_list_bridges_summary_a
+run_test "Tool 14 — list-bridges summary (broker-b)"            test_list_bridges_summary_b
+
+run_test "Tool 15 — get-bridge-status healthy (broker-a)"       test_get_bridge_status_healthy_a
+run_test "Tool 15 — get-bridge-status healthy (broker-b)"       test_get_bridge_status_healthy_b
+run_test "Tool 15 — get-bridge-status failing (broker-a)"       test_get_bridge_status_failing_a
+run_test "Tool 15 — get-bridge-status failing (broker-b)"       test_get_bridge_status_failing_b
 
 print_summary "MCP tool tests"

@@ -100,6 +100,46 @@ verify_multi_queue_state() {
 test_ac3_multi_queue_state_a() { verify_multi_queue_state "broker-a" "$BROKER_A_URL"; }
 test_ac3_multi_queue_state_b() { verify_multi_queue_state "broker-b" "$BROKER_B_URL"; }
 
+# ── F8 bridges (SOL-152231) ──────────────────────────────────────────────────
+# test-bridge is up in both directions once both brokers' reciprocal bridges
+# exist; test-bridge-failing is down (its inboundFailureReason legitimately
+# stays empty — lab-verified, see helpers.sh); test-bridge-disabled is
+# admin-disabled.
+
+verify_bridge_state() {
+    local label="$1"
+    local broker_url="$2"
+    local body
+    body=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/bridges/test-bridge,auto") || {
+        log_fail "F8 [$label]: GET bridges/test-bridge,auto failed"
+        return 1
+    }
+    assert_json_field "$body" ".data.enabled" "true" \
+        "F8 [$label]: test-bridge enabled must be true" || return 1
+    assert_json_field "$body" ".data.inboundState" "ready-in-sync" \
+        "F8 [$label]: test-bridge inboundState must be ready-in-sync" || return 1
+    assert_json_field "$body" ".data.outboundState" "ready" \
+        "F8 [$label]: test-bridge outboundState must be ready" || return 1
+
+    body=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/bridges/test-bridge-failing,auto") || {
+        log_fail "F8 [$label]: GET bridges/test-bridge-failing,auto failed"
+        return 1
+    }
+    assert_json_field "$body" \
+        '.data.inboundState != "ready-in-sync" and .data.inboundState != "ready-subscribing"' "true" \
+        "F8 [$label]: test-bridge-failing inboundState must not be healthy" || return 1
+
+    body=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/bridges/test-bridge-disabled,auto") || {
+        log_fail "F8 [$label]: GET bridges/test-bridge-disabled,auto failed"
+        return 1
+    }
+    assert_json_field "$body" ".data.enabled" "false" \
+        "F8 [$label]: test-bridge-disabled enabled must be false" || return 1
+}
+
+test_f8_bridge_state_a() { verify_bridge_state "broker-a" "$BROKER_A_URL"; }
+test_f8_bridge_state_b() { verify_bridge_state "broker-b" "$BROKER_B_URL"; }
+
 # ── AC 4 — F3 connected client ──────────────────────────────────────────────
 # GET .../clients/<clientName> resolves on each broker, and the client's
 # subscriptions list contains every topic configured by the fixture.
@@ -334,6 +374,8 @@ run_test "empty-enabled-VPN state (broker-a)"  test_empty_enabled_vpn_state_a
 run_test "empty-enabled-VPN state (broker-b)"  test_empty_enabled_vpn_state_b
 run_test "AC 3 — F2 multi-queue state (broker-a)" test_ac3_multi_queue_state_a
 run_test "AC 3 — F2 multi-queue state (broker-b)" test_ac3_multi_queue_state_b
+run_test "F8 — bridge state (broker-a)" test_f8_bridge_state_a
+run_test "F8 — bridge state (broker-b)" test_f8_bridge_state_b
 run_test "AC 4 — F3 connected client (broker-a)" test_ac4_connected_client_state_a
 run_test "AC 4 — F3 connected client (broker-b)" test_ac4_connected_client_state_b
 run_test "AC 5 — F4 sustained traffic (broker-a)" test_ac5_sustained_traffic_state_a
