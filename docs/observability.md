@@ -64,7 +64,7 @@ not rename what is already there.
 | Audit units | Durations are in **milliseconds** (`duration_ms`). This differs from metrics on purpose: metrics follow Prometheus base units, audit follows common SIEM JSON convention. |
 | Timestamps | RFC 3339, UTC. |
 | Naming basis | Where OpenTelemetry publishes a semantic convention, we adopt it and translate `.` to `_` for Prometheus (for example `http.request.method` becomes `http_request_method`). Where OTel has no convention, we use a documented Solace-specific name. Each name below is tagged **OTel** or **Solace**. |
-| Cardinality | A CI check fails the build on any undocumented metric name or label key. Label values are drawn from finite domains (configured brokers, SEMP operations, HTTP status codes, the retry cap), so series cardinality stays bounded. No label carries a free-text or unbounded value. |
+| Cardinality | Every metric name and label key is documented here. A CI check that fails the build on any undocumented name or label key is planned for GA; today the catalog is maintained by review. Label values are drawn from finite domains (configured brokers, SEMP operations, HTTP status codes, the retry cap), so series cardinality stays bounded. No label carries a free-text or unbounded value. |
 | Redaction | Credentials, tokens, and raw tool arguments are never written to any signal. |
 
 ### Schema versioning
@@ -120,7 +120,7 @@ The core Rate / Errors / Duration signal for every tool the server exposes.
 - `outcome`: see [The outcome vocabulary](#the-outcome-vocabulary).
 - Histogram buckets (seconds): `0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10`.
 
-**Cardinality:** `|tool| x |broker| x |outcome|`. All three are finite and CI-enforced.
+**Cardinality:** `|tool| x |broker| x |outcome|`. All three draw from finite domains (CI enforcement planned for GA).
 
 ### SEMP requests (RED, per attempt)
 
