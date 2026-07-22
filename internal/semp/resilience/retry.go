@@ -5,11 +5,27 @@ package resilience
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 
 	"github.com/hashicorp/go-retryablehttp"
 )
+
+// maxTransientRetries caps how many times a single request is retried against
+// 429/503 ("broker overloaded/unavailable") responses, independently of the
+// larger RetryMax (config DefaultRetries, default 10). Retrying an overloaded
+// broker up to 10 times — and outside the per-broker rate limiter — amplifies
+// load precisely when the broker can least handle it. This bounds a transient
+// episode to 1 + maxTransientRetries requests. It is a resilience-policy
+// sub-cap, not an operator knob, so it lives here rather than in config.
+const maxTransientRetries = 3
+
+// errTransientCapReached is returned from checkRetry when maxTransientRetries is
+// hit. Returning an error (rather than a bare "don't retry") routes the request
+// through the Sender's errorHandler, so the caller sees the same
+// *RetriesExhaustedError it already handles for RetryMax exhaustion.
+var errTransientCapReached = errors.New("transient-error (429/503) retry cap reached")
 
 // retryStateKey is the context key for per-request retry state.
 type retryStateKey struct{}
@@ -18,11 +34,12 @@ type retryStateKey struct{}
 // Each Do() call creates its own instance via context, so concurrent requests
 // to the same Sender are safe.
 type retryState struct {
-	auth401Retried  bool   // true after first 401 re-auth attempt
-	other5xxRetried bool   // true after first non-429/503 5xx retry
-	method          string // HTTP method captured at Do() time for idempotency check
-	retrySafe       bool   // caller-declared semantic idempotency (see WithRetrySafe)
-	needsReauth     bool   // true when the next retry should re-run AddAuth (set on 401)
+	auth401Retried   bool   // true after first 401 re-auth attempt
+	other5xxRetried  bool   // true after first non-429/503 5xx retry
+	transientRetried int    // count of 429/503 retries taken (capped at maxTransientRetries)
+	method           string // HTTP method captured at Do() time for idempotency check
+	retrySafe        bool   // caller-declared semantic idempotency (see WithRetrySafe)
+	needsReauth      bool   // true when the next retry should re-run AddAuth (set on 401)
 }
 
 // retrySafeKey is the context key for the caller-declared retry-safe marker.
@@ -51,10 +68,10 @@ type OperationIDKey struct{}
 
 // getRetryState retrieves the per-request retryState from the context.
 // The key is attached by Sender.Do() before each request; callers must go
-// through Do() so the "retry once" caps (auth401Retried, other5xxRetried)
+// through Do() so the retry caps (auth401Retried, other5xxRetried, transientRetried)
 // are enforced. If the key is missing (direct retryablehttp use bypassing
-// Do), the fresh retryState means both caps start at false — effectively
-// allowing full RetryMax retries instead of the intended one-shot limits.
+// Do), the fresh retryState means every cap starts at its zero value,
+// effectively allowing full RetryMax retries instead of the intended limits.
 func getRetryState(ctx context.Context) *retryState {
 	if s, ok := ctx.Value(retryStateKey{}).(*retryState); ok {
 		return s
@@ -65,7 +82,7 @@ func getRetryState(ctx context.Context) *retryState {
 // checkRetry is the custom retry policy for retryablehttp. It implements:
 //   - POST and PATCH: never retried (non-idempotent — see guard below)
 //   - 401: delegate to Authenticator.HandleAuthFailure — retry once if it recovers
-//   - 429, 503: full retries with exponential backoff
+//   - 429, 503: retry with exponential backoff, capped at maxTransientRetries
 //   - Other 5xx: retry once only (likely a bug, not transient)
 //   - Connection errors: delegate to retryablehttp's default policy
 //   - All other status codes (4xx): no retry
@@ -124,10 +141,23 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 
 	case resp.StatusCode == http.StatusTooManyRequests, // 429
 		resp.StatusCode == http.StatusServiceUnavailable: // 503
-		// Transient broker conditions: full retries with exponential backoff.
+		// Transient broker conditions: retry with exponential backoff, but only
+		// up to maxTransientRetries. The broker is signalling overload/unavailability;
+		// retrying it RetryMax (10) times — and outside the rate limiter — amplifies
+		// load when it can least handle it. Cap the transient retries and fail fast
+		// once the cap is hit so the caller sees a RetriesExhaustedError.
+		if state.transientRetried >= maxTransientRetries {
+			slog.Warn("not retrying: transient-error retry cap reached",
+				slog.String("broker", d.brokerURL),
+				slog.Int("status", resp.StatusCode),
+				slog.Int("cap", maxTransientRetries))
+			return false, errTransientCapReached
+		}
+		state.transientRetried++
 		slog.Debug("retrying: transient broker error",
 			slog.String("broker", d.brokerURL),
-			slog.Int("status", resp.StatusCode))
+			slog.Int("status", resp.StatusCode),
+			slog.Int("attempt", state.transientRetried))
 		return true, nil
 
 	case resp.StatusCode >= 500:
