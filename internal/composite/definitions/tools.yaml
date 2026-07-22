@@ -421,6 +421,95 @@ tools:
       strategy: postProcess
       postProcess: listRdps
 
+  - name: list-bridges
+    description: >
+      List Bridges in a Message VPN with their enabled state, inbound/outbound
+      connection state, and last inbound failure reason. Use this to discover
+      which bridges exist and identify any that are down. Returns up to 100 by
+      default (max 500 via maxResults). A bridge has two independent
+      connection directions — inboundState (messages arriving from the remote
+      broker) and outboundState (messages sent to it) — either can fail on its
+      own. The response summary counts downCount (enabled bridges where the
+      applicable direction(s) aren't in an up state; a direction reporting
+      "not-applicable" doesn't apply to this bridge and is excluded),
+      disabledCount, and byInboundFailureReason (active inbound failures only;
+      recovered bridges with stale reasons are excluded — SEMP has no
+      equivalent failure-reason field for outbound). For additional per-bridge
+      diagnostic detail — connection establisher, failure category, and
+      client name — use get-bridge-status.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN to list Bridges for"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of bridges to return (default 100, max 500)"
+    steps:
+      - id: bridges
+        operation: monitor/getMsgVpnBridges
+        followPages: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          count: "100"
+        select:
+          - bridgeName
+          - bridgeVirtualRouter
+          - enabled
+          - inboundFailureReason
+          - inboundState
+          - msgVpnName
+          - outboundState
+          - remoteMsgVpnName
+          - remoteRouterName
+          - uptime
+    result:
+      strategy: postProcess
+      postProcess: listBridges
+
+  - name: get-bridge-status
+    description: >
+      Get the operational status of a Bridge including its enabled state,
+      inbound and outbound connection state, last inbound failure reason,
+      uptime, and the remote Message VPN and broker it connects to. A bridge
+      has two independent connection directions — inboundState (messages
+      arriving from the remote broker) and outboundState (messages sent to
+      it) — either can fail independently, so check both rather than assuming
+      one implies the other; a bridge with outboundState=="ready" but a stuck
+      inboundState is still broken for messages flowing in that direction.
+      bridgeVirtualRouter is almost always "auto" unless the broker
+      participates in an HA-redundant pair with distinct primary/backup
+      bridges. Use list-bridges first to discover which bridges exist and
+      identify down ones.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the Bridge"
+      - name: bridgeName
+        type: string
+        required: true
+        description: "The name of the Bridge"
+      - name: bridgeVirtualRouter
+        type: string
+        required: true
+        description: "The virtual router of the Bridge: primary, backup, or auto (most brokers use auto)"
+    steps:
+      - id: bridgeStatus
+        operation: monitor/getMsgVpnBridge
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          bridgeName: "{{.Params.bridgeName}}"
+          bridgeVirtualRouter: "{{.Params.bridgeVirtualRouter}}"
+          select: "bridgeName, bridgeVirtualRouter, clientName, enabled, establisher, inboundFailureReason, inboundState, msgVpnName, outboundState, remoteMsgVpnName, remoteRouterName, rxConnectionFailureCategory, uptime"
+    result:
+      strategy: collect
+
   - name: get-replication-status
     description: >
       Get replication state for a Message VPN including role, sync eligibility,
