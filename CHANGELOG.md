@@ -56,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - `Token` and `Exchange` types now implement `LogValue`/`String`/`GoString` guards so raw OAuth tokens cannot leak through `slog`, `fmt`, or `%#v` rendering. Tracked under SOL-151649.
+- SEMPv2 path-parameter values are now rejected before URL construction when they are empty or a dot segment (`.` or `..`). `buildURL` escaped `/` but left dot segments intact, so a value like `..` could, on a broker or fronting proxy that normalizes dot segments, collapse a request onto an unintended (e.g. parent) path — most consequentially on the destructive `config/deleteMsgVpn`, `config/deleteMsgVpnQueue`, and `action/doMsgVpnQueueDeleteMsgs` operations. The guard rejects the value with a clear error naming the parameter and covers read and destructive operations at the single substitution choke point. Tracked under SOL-152208.
 
 ## [0.5.0] - 2026-07-09
 
