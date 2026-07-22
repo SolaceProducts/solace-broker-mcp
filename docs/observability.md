@@ -363,6 +363,14 @@ audit, and trace schemas above.
 
 - **Inbound**, in priority order: the W3C `traceparent` header (its trace-id is used); then
   a legacy `X-Correlation-ID` header; otherwise the server generates a time-sortable UUIDv7.
+- **`X-Correlation-ID` acceptance.** An inbound value is trimmed of surrounding whitespace,
+  then accepted only if it is non-empty, at most 128 characters, and printable ASCII
+  (`0x21`–`0x7E`). Anything empty, longer, or carrying a control character (CR, LF, tab, NUL)
+  is rejected, and the server falls back to generating a UUIDv7. The value is rejected rather
+  than stripped, so a malformed or hostile ID never mutates into a different accepted one, and
+  an accepted ID is safe to echo on the response header and write into logs, traces, and audit
+  without escaping. A `traceparent` trace-id is always 32 hex characters, so the length cap
+  only ever bites an oversized `X-Correlation-ID`.
 - **Returned** to the caller on the response `X-Correlation-ID` header and in
   `CallToolResult.Meta["correlation_id"]`.
 - **Propagated** to the broker: every outbound SEMP request carries `X-Correlation-ID`.
