@@ -106,10 +106,14 @@ func isBreakerExcluded(err error) bool {
 	}
 
 	// A rate limit means the IdP is reachable and deliberately throttling;
-	// treating it as an outage would let throttling trip the breaker for
-	// everyone. Excluded regardless of whether retries were exhausted, which
-	// is why the class must survive the exhaustion rewrap.
-	if failureClassOf(err) == FailureClassRateLimited {
+	// a config fault (bad TLS trust/hostname, DNS name-not-found) means the
+	// endpoint is misconfigured, not down. Neither is an availability signal,
+	// so both are excluded — and excluded regardless of whether retries were
+	// exhausted, which is why the class must survive the exhaustion rewrap.
+	// Counting a config fault would let one operator typo trip the shared
+	// breaker for every tenant, and it would never heal.
+	switch failureClassOf(err) {
+	case FailureClassRateLimited, FailureClassConfig:
 		return true
 	}
 

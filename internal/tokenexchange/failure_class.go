@@ -34,6 +34,17 @@ const (
 	FailureClassRateLimited
 
 	FailureClassBodyRead
+
+	// FailureClassConfig is a permanent, operator-caused transport fault: an
+	// untrusted/expired TLS certificate, a hostname mismatch, or a DNS
+	// name-not-found for the configured IdP endpoint. Like a rate limit it
+	// shares the ErrExchangeTransport sentinel, but the breaker EXCLUDES it —
+	// it means the endpoint is misconfigured, not that the IdP is down, so
+	// counting it would let one operator typo trip the shared breaker for
+	// every tenant (and it would never heal, since the config does not fix
+	// itself). A DNS *timeout* is deliberately NOT in this class: that is a
+	// transient resolver fault, so it stays FailureClassNetwork and counts.
+	FailureClassConfig
 )
 
 // String is the log-safe label emitted in LogAttrs.
@@ -47,6 +58,8 @@ func (f FailureClass) String() string {
 		return "rate_limited"
 	case FailureClassBodyRead:
 		return "body_read"
+	case FailureClassConfig:
+		return "config"
 	default:
 		return "none"
 	}

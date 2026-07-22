@@ -55,6 +55,9 @@ func TestIsBreakerFailure(t *testing.T) {
 		{"rate-limited is not a failure", rawWith(FailureClassRateLimited), false},
 		{"exhausted rate-limited is not a failure", exhaustedWith(FailureClassRateLimited), false},
 
+		{"config fault is not a failure", rawWith(FailureClassConfig), false},
+		{"exhausted config fault is not a failure", exhaustedWith(FailureClassConfig), false},
+
 		{"rejection is not a failure", &ExchangeError{Sentinel: ErrExchangeRejected}, false},
 		{"invalid response is not a failure", &ExchangeError{Sentinel: ErrInvalidResponse}, false},
 		{"request build is not a failure", &ExchangeError{Sentinel: ErrExchangeRequestBuild}, false},
@@ -87,6 +90,9 @@ func TestIsBreakerExcluded(t *testing.T) {
 
 		{"rate-limited excluded", rawWith(FailureClassRateLimited), true},
 		{"exhausted rate-limited excluded", exhaustedWith(FailureClassRateLimited), true},
+
+		{"config fault excluded", rawWith(FailureClassConfig), true},
+		{"exhausted config fault excluded", exhaustedWith(FailureClassConfig), true},
 
 		{"network not excluded", rawWith(FailureClassNetwork), false},
 		{"5xx not excluded", rawWith(FailureClassUpstream5xx), false},
@@ -145,6 +151,8 @@ func TestBreakerClassification_ExcludedNeverCounted(t *testing.T) {
 		&ExchangeError{Sentinel: ErrExchangeMissingSubject},
 		rawWith(FailureClassRateLimited),
 		exhaustedWith(FailureClassRateLimited),
+		rawWith(FailureClassConfig),
+		exhaustedWith(FailureClassConfig),
 	}
 	for _, err := range excluded {
 		if !isBreakerExcluded(err) {

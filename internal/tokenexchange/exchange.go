@@ -265,7 +265,7 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 		return nil, &ExchangeError{
 			Sentinel:     ErrExchangeTransport,
 			Message:      fmt.Sprintf("token exchange transport failure: IdP request failed: %v", err),
-			FailureClass: FailureClassNetwork,
+			FailureClass: classifyTransportError(err),
 		}
 	}
 

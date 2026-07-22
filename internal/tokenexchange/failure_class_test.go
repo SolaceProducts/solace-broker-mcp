@@ -34,6 +34,7 @@ func TestFailureClass_String(t *testing.T) {
 		FailureClassUpstream5xx: "upstream_5xx",
 		FailureClassRateLimited: "rate_limited",
 		FailureClassBodyRead:    "body_read",
+		FailureClassConfig:      "config",
 		FailureClass(99):        "none", // unknown falls back to "none"
 	}
 	for fc, want := range cases {

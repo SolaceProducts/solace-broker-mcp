@@ -153,6 +153,54 @@ func TestBreaker_RateLimitExcludedNotCounted(t *testing.T) {
 	}
 }
 
+// TestBreaker_ConfigFaultExcludedNotCounted is the end-to-end proof of the
+// spec decision that an endpoint MISCONFIGURATION must not trip the breaker.
+// An httptest TLS server presents a cert signed by an unknown authority; the
+// plain client does not trust it, so httpClient.Do fails with an
+// x509.UnknownAuthorityError — exactly the "invalid/expired TLS certificate"
+// case situations.md says must NOT count. Even with the breaker set to trip on
+// a single counted failure, repeated attempts must leave it CLOSED, because a
+// config fault is excluded: one operator's bad cert must never fast-fail every
+// tenant.
+func TestBreaker_ConfigFaultExcludedNotCounted(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK) // never reached — TLS handshake fails first
+	}))
+	defer srv.Close()
+
+	// Plain client (no custom RootCAs) → the server's self-signed cert is
+	// untrusted → x509.UnknownAuthorityError on every attempt.
+	cfg := DefaultCircuitBreakerConfig()
+	cfg.ConsecutiveFailureThreshold = 1 // would trip immediately on a COUNTED failure
+	e := newBreakerTestExchangerPlain(t, srv.URL, cfg)
+
+	const attempts = 5
+	for i := 0; i < attempts; i++ {
+		in := validInput()
+		in.SubjectToken = fmt.Sprintf("cfg-fault-%d", i)
+		_, err := e.Exchange(context.Background(), in)
+		if !errors.Is(err, ErrExchangeTransport) {
+			t.Fatalf("attempt %d: err = %v, want ErrExchangeTransport", i, err)
+		}
+		var exchErr *ExchangeError
+		if errors.As(err, &exchErr) && exchErr.FailureClass != FailureClassConfig {
+			t.Fatalf("attempt %d: FailureClass = %v, want Config (untrusted TLS cert)", i, exchErr.FailureClass)
+		}
+	}
+
+	counts := e.breaker.Counts()
+	if counts.TotalFailures != 0 {
+		t.Errorf("breaker TotalFailures = %d, want 0 (a TLS config fault must be excluded)", counts.TotalFailures)
+	}
+	if counts.TotalExclusions != attempts {
+		t.Errorf("breaker TotalExclusions = %d, want %d", counts.TotalExclusions, attempts)
+	}
+	if e.breaker.State() != gobreaker.StateClosed {
+		t.Errorf("breaker State = %v, want closed (a config fault must never trip the shared breaker)", e.breaker.State())
+	}
+}
+
 // TestBreaker_OpenStateFailsFast asserts that once the breaker trips open, the
 // next Exchange is rejected with ErrExchangeCircuitOpen WITHOUT reaching the
 // IdP (server hit count does not increase).
