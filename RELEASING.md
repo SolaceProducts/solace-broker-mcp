@@ -44,7 +44,7 @@ Moving pointers let consumers track a stream instead of a fixed version:
 - Eval harness passes **[Planned]**
 - Coverage threshold met **[Planned]**
 - No performance regression **[Planned]**
-- Release notes drafted — today GitHub auto-generates notes at release time **[Planned]**
+- Release notes drafted — the GitHub Release body is minted from that version's `CHANGELOG.md` block, with the auto-generated PR list appended beneath; a missing block fails the release **[Implemented]**
 
 **Stable gate** — promotes a candidate to a stable version (drops the pre-release suffix):
 
@@ -70,7 +70,7 @@ Pushing the tag runs `.github/workflows/release.yml`, which:
 2. Runs the FOSSA scan against the tag.
 3. Builds binaries for `linux` and `darwin` × `amd64` and `arm64`.
 4. Builds and pushes a multi-arch image to `ghcr.io/solacedev/solace-broker-mcp` (`{version}`, `{major}.{minor}`, `latest`, `sha-<short-sha>` tags).
-5. Publishes a GitHub Release with auto-generated notes, the binary archives, and SHA-256 checksums.
+5. Publishes a GitHub Release whose notes are the tagged version's `CHANGELOG.md` block (with the auto-generated PR list appended beneath), plus the binary archives and SHA-256 checksums. If no `## [X.Y.Z]` block exists for the tag, the release fails rather than falling back to auto-only notes.
 
 Anyone with permission to push tags can cut a release.
 
@@ -95,13 +95,13 @@ The manual steps around the automated workflow.
 Before tagging:
 
 1. Confirm `main` is green: `gh run list --branch main --limit 1`.
-2. Update `CHANGELOG.md` on `main`: move the `[Unreleased]` items into a new version section and update the comparison links at the bottom.
+2. Update `CHANGELOG.md` on `main`: move the `[Unreleased]` items into a new dated `## [X.Y.Z]` version section and update the comparison links at the bottom. This is **required** — the release workflow extracts that block as the Release body and fails the release if the dated block is absent. Do it in a "prepare release" PR *before* tagging, so the block lives in the tagged commit.
 3. Regenerate the third-party license inventory from the toolchain: `go-licenses report ./cmd/server` supplies the module, version, and license data for `THIRD_PARTY_LICENSES.md`. Reconcile it against the FOSSA scan, which remains the authoritative check.
 
 After pushing the tag:
 
 1. Watch the run: `gh run list --workflow=release.yml --limit 1`; on failure, `gh run view <run-id> --log`.
-2. Verify the release: `gh release view <tag>` shows four binary archives, `checksums-sha256.txt`, and auto-generated notes; the image tags are present on `ghcr.io/solacedev/solace-broker-mcp`.
+2. Verify the release: `gh release view <tag>` shows four binary archives, `checksums-sha256.txt`, and the curated CHANGELOG notes (with the PR list appended); the image tags are present on `ghcr.io/solacedev/solace-broker-mcp`.
 3. Spot-check a binary: download the archive for your platform, verify it (`shasum -a 256 -c checksums-sha256.txt --ignore-missing`), and run `./solace-broker-mcp --version` — it prints the tag.
 4. Announce once verified: internal channels, and the [Solace Community](https://solace.community/) for releases worth a wider note.
 

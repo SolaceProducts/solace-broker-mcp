@@ -28,3 +28,23 @@ jobs:
     secrets:
       # Vault address is injected from an org/repo secret, not committed to the repo.
       VAULT_URL: ${{ secrets.VAULT_URL }}
+
+  changelog:
+    name: CHANGELOG updated
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Advise on a missing [Unreleased] entry for behavior-changing PRs
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          # advisory = warn but don't block the PR; the release is the hard gate.
+          # Flip to "blocking" to fail PRs that skip the changelog.
+          CHANGELOG_GATE_MODE: advisory
+        run: .github/scripts/changelog-check.sh

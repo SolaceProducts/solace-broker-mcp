@@ -192,7 +192,16 @@ func (c *HTTPClient) buildURL(op *Operation, args map[string]any) (string, error
 	for key, value := range args {
 		placeholder := "{" + key + "}"
 		if strings.Contains(path, placeholder) {
-			path = strings.ReplaceAll(path, placeholder, url.PathEscape(fmt.Sprintf("%v", value)))
+			s := fmt.Sprintf("%v", value)
+			// Reject empty and dot-segment values before substitution. url.PathEscape
+			// escapes "/", so a path-parameter value is always exactly one URL segment;
+			// "", "." and ".." are therefore the complete set of values that could
+			// produce an empty or dot segment and let a proxy or broker that normalizes
+			// dot-segments collapse the request onto an unintended (e.g. parent) path.
+			if s == "" || s == "." || s == ".." {
+				return "", fmt.Errorf("operation %s (path %q): path parameter %q has invalid value %q: empty and dot segments (\".\", \"..\") are not allowed", op.ID, op.Path, key, s)
+			}
+			path = strings.ReplaceAll(path, placeholder, url.PathEscape(s))
 		}
 	}
 

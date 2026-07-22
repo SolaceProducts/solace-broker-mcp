@@ -91,7 +91,7 @@ What are the current message rates for default VPN on my-broker?
 
 ## Tools Reference
 
-The server exposes 17 read-only tools plus 13 write tools (30 total when write tools are enabled). For full per-tool parameters, output shape, and example invocations, see the [Tools Reference](tools-reference.md); this section is the narrative overview. All broker-querying tools require a `broker` parameter to identify which configured event broker to query; `list-brokers` is the exception and returns the available event broker aliases. The write tools split into four action-API tools (operational actions against live objects) and nine Config-API management tools (create/update/delete for Message VPNs, queues, and topic endpoints); all are gated behind `enable_write_tools` (default off). The destructive ones (`delete-queue-messages`, `disconnect-client`, `delete-message-vpn`, `delete-queue`, `delete-topic-endpoint`) are marked via the MCP `destructiveHint` annotation and their descriptions instruct the calling LLM to obtain explicit user confirmation before invocation.
+The server exposes 19 read-only tools plus 16 write tools (35 total when write tools are enabled). For full per-tool parameters, output shape, and example invocations, see the [Tools Reference](tools-reference.md); this section is the narrative overview. All broker-querying tools require a `broker` parameter to identify which configured event broker to query; `list-brokers` is the exception and returns the available event broker aliases. The write tools split into four action-API tools (operational actions against live objects) and 12 Config-API management tools (create/update/delete for Message VPNs, queues, topic endpoints, and REST delivery points); all are gated behind `enable_write_tools` (default off). Tools marked destructive via the MCP `destructiveHint` annotation (including `delete-queue-messages`, `disconnect-client`, and the service-affecting `update-*`/`delete-*` management tools) have descriptions that instruct the calling LLM to obtain explicit user confirmation before invocation.
 
 ### Discovery
 
@@ -142,6 +142,13 @@ The server exposes 17 read-only tools plus 13 write tools (30 total when write t
 |---|---|
 | `list-rdps` | List all RDPs in a VPN with enabled state, up/down status, and last failure reason. Default 100 results, max 500. |
 | `get-rdp-status` | Detailed RDP status: enabled state, up/down status, client name, last failure reason, queue bindings, and REST consumer status. |
+
+### Bridges
+
+| Tool | Description |
+|---|---|
+| `list-bridges` | List bridges in a VPN with enabled state, inbound/outbound connection state, and last inbound failure reason. Default 100 results, max 500. |
+| `get-bridge-status` | Detailed status for a single bridge: enabled state, inbound/outbound connection state, last inbound failure reason, uptime, remote VPN/broker, connection establisher, and failure category. Bridges are identified by `bridgeName` + `bridgeVirtualRouter`. |
 
 ### Discards
 
