@@ -149,6 +149,21 @@ func testOperations() map[string]*sempv2.Operation {
 			Method: "GET",
 			Path:   "/SEMP/v2/__private_monitor__/msgVpns/{msgVpnName}/restDeliveryPoints",
 		},
+		"monitor/getMsgVpnBridges": {
+			ID:     "getMsgVpnBridges",
+			Method: "GET",
+			Path:   "/SEMP/v2/__private_monitor__/msgVpns/{msgVpnName}/bridges",
+		},
+		"monitor/getMsgVpnBridge": {
+			ID:     "getMsgVpnBridge",
+			Method: "GET",
+			Path:   "/SEMP/v2/__private_monitor__/msgVpns/{msgVpnName}/bridges/{bridgeName},{bridgeVirtualRouter}",
+			Parameters: []sempv2.Parameter{
+				{Name: "msgVpnName", In: "path", Type: "string", Required: true},
+				{Name: "bridgeName", In: "path", Type: "string", Required: true},
+				{Name: "bridgeVirtualRouter", In: "path", Type: "string", Required: true},
+			},
+		},
 		"config/createMsgVpn": {
 			ID:     "createMsgVpn",
 			Method: "POST",

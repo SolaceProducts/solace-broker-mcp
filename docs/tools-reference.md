@@ -9,7 +9,7 @@ narrative overview see the [User Guide](user-guide.md).
 > output as input to a human decision, not as verified fact, and confirm any
 > write or destructive action before allowing it.
 
-The server exposes **17 read-only tools** plus **16 write tools** — 4 action
+The server exposes **19 read-only tools** plus **16 write tools** — 4 action
 tools and 12 Config-API management tools. The write tools are gated behind
 `enable_write_tools` (off by default) and are not registered with the MCP server
 when disabled — see
@@ -504,6 +504,61 @@ bindings, and its REST consumers.
 ```
 
 **Example request:** "Why is the webhook-rdp on the default VPN failing?"
+
+---
+
+## Bridges
+
+### list-bridges
+
+List Bridges in a VPN with enabled state, inbound/outbound connection state,
+and last inbound failure reason. For full detail use `get-bridge-status`.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target broker alias. |
+| `msgVpnName` | string | yes | The Message VPN. |
+| `maxResults` | integer | no | Max bridges to return (default 100, max 500). |
+
+**Returns:** step-keyed envelope, step `bridges` (array). Selected fields per
+bridge: `bridgeName`, `bridgeVirtualRouter`, `enabled`, `inboundState`,
+`outboundState`, `inboundFailureReason`, `remoteMsgVpnName`,
+`remoteRouterName`, `uptime`.
+
+```json
+{ "broker": "prod-broker", "msgVpnName": "default" }
+```
+
+**Example request:** "List the bridges on the default VPN and flag any that are down."
+
+### get-bridge-status
+
+Detailed status for a single bridge. Bridges are identified by two names, not
+one — `bridgeName` and `bridgeVirtualRouter` — since a bridge configuration
+can differ between a broker's primary and backup virtual router in an HA
+pair; most deployments use `bridgeVirtualRouter: "auto"`.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target broker alias. |
+| `msgVpnName` | string | yes | The Message VPN containing the Bridge. |
+| `bridgeName` | string | yes | The bridge name. |
+| `bridgeVirtualRouter` | string | yes | `primary`, `backup`, or `auto` (most brokers use `auto`). |
+
+**Returns:** step-keyed envelope, step `bridgeStatus` (object): `bridgeName`,
+`bridgeVirtualRouter`, `clientName`, `enabled`, `establisher`,
+`inboundFailureReason`, `inboundState`, `outboundState`, `remoteMsgVpnName`,
+`remoteRouterName`, `rxConnectionFailureCategory`, `uptime`.
+
+```json
+{ "broker": "prod-broker", "msgVpnName": "default", "bridgeName": "bridge-to-dr", "bridgeVirtualRouter": "auto" }
+```
+
+**Example request:** "Why is bridge-to-dr on the default VPN down?"
 
 ---
 
