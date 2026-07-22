@@ -45,6 +45,25 @@ const (
 	DefaultRetryWaitMax = 2 * time.Second
 )
 
+// Circuit-breaker defaults. Unexported because only DefaultCircuitBreakerConfig
+// reads them — no other package touches these numbers, and a future YAML surface
+// will override the config struct, not these constants. Values are tuned for a
+// single shared IdP; see the accompanying field docs on CircuitBreakerConfig for
+// the reasoning behind each.
+const (
+	defaultCircuitBreakerFailureRateWindow = 30 * time.Second
+
+	defaultCircuitBreakerMinimumRequests uint32 = 10
+
+	defaultCircuitBreakerFailureRateThresholdPercent float64 = 50
+
+	defaultCircuitBreakerConsecutiveFailureThreshold uint32 = 5
+
+	defaultCircuitBreakerOpenStateDuration = 30 * time.Second
+
+	defaultCircuitBreakerHalfOpenProbeRequests uint32 = 2
+)
+
 // ComputeChainDeadline returns the total time budget for one exchange's
 // retry loop, applied via `context.WithTimeout` around the singleflight
 // function. The value bounds every attempt AND every backoff together —
