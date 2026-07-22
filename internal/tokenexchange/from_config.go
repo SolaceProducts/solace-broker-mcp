@@ -54,6 +54,12 @@ func FromConfig(cfg *config.BrokerOAuthConfig, httpClient *http.Client, tokenCac
 		return nil, err
 	}
 
+	// Production always runs with the breaker enabled, using the frozen
+	// defaults. A future YAML surface will override the config here; until
+	// then this is the single point that turns the breaker on for real
+	// deployments while tests default to nil (disabled).
+	breakerCfg := DefaultCircuitBreakerConfig()
+
 	return New(Params{
 		TokenURL:         cfg.TokenURL,
 		ClientID:         cfg.ClientID,
@@ -63,6 +69,7 @@ func FromConfig(cfg *config.BrokerOAuthConfig, httpClient *http.Client, tokenCac
 		AudienceParam:    audienceParam,
 		HTTPClient:       httpClient,
 		Cache:            tokenCache,
+		CircuitBreaker:   &breakerCfg,
 	})
 }
 

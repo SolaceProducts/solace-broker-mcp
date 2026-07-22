@@ -64,7 +64,7 @@ func (e *ExchangeError) Unwrap() error { return e.Sentinel }
 // never embedded — sentinel-specific detail belongs on LogAttrs, not
 // on the agent surface. See PR SOL-151520 for the rationale.
 func (e *ExchangeError) AgentMessage(brokerAlias string) string {
-	if errors.Is(e, ErrExchangeTransport) || errors.Is(e, ErrExchangeRetriesExhausted) {
+	if errors.Is(e, ErrExchangeTransport) || errors.Is(e, ErrExchangeRetriesExhausted) || errors.Is(e, ErrExchangeCircuitOpen) {
 		// Deliberately not broker-named: the IdP is a shared component,
 		// so a transport-class failure affects every broker at once.
 		// Naming a broker here would mislead the agent into thinking a

@@ -17,7 +17,66 @@ package tokenexchange
 import (
 	"context"
 	"errors"
+	"log/slog"
+
+	"github.com/sony/gobreaker/v2"
 )
+
+// breakerName labels the breaker in logs and metrics. Internal only — there is
+// one breaker per process guarding the one IdP, so operators never need to
+// change it.
+const breakerName = "idp-token-exchange"
+
+// newTokenExchangeCircuitBreaker builds the process-wide breaker from config.
+// The success type is *Token because that is what Exchange's protected section
+// returns. BucketPeriod is derived from the window (never operator-set) so the
+// failure rate is computed over ~10 rolling buckets.
+func newTokenExchangeCircuitBreaker(cfg CircuitBreakerConfig) *gobreaker.CircuitBreaker[*Token] {
+	return gobreaker.NewCircuitBreaker[*Token](gobreaker.Settings{
+		Name:          breakerName,
+		Interval:      cfg.FailureRateWindow,
+		BucketPeriod:  cfg.FailureRateWindow / 10,
+		Timeout:       cfg.OpenStateDuration,
+		MaxRequests:   cfg.HalfOpenProbeRequests,
+		ReadyToTrip:   newReadyToTrip(cfg),
+		IsSuccessful:  isBreakerSuccess,
+		IsExcluded:    isBreakerExcluded,
+		OnStateChange: logBreakerStateChange,
+	})
+}
+
+// newReadyToTrip builds the trip predicate. Two rules: a consecutive-failure
+// count that reacts fast even at low traffic where the rate rule may never
+// gather a sample, and a failure-rate rule gated by a minimum sample so a
+// couple of failures cannot trip on noise. The denominator excludes excluded
+// outcomes (429, cancellations) so throttling cannot dilute or drive the rate.
+func newReadyToTrip(cfg CircuitBreakerConfig) func(gobreaker.Counts) bool {
+	return func(counts gobreaker.Counts) bool {
+		if cfg.ConsecutiveFailureThreshold > 0 &&
+			counts.ConsecutiveFailures >= cfg.ConsecutiveFailureThreshold {
+			return true
+		}
+
+		evaluated := counts.TotalSuccesses + counts.TotalFailures
+		if evaluated < cfg.MinimumRequests {
+			return false
+		}
+
+		failureRate := float64(counts.TotalFailures) / float64(evaluated) * 100
+		return failureRate >= cfg.FailureRateThresholdPercent
+	}
+}
+
+// logBreakerStateChange is the one breaker callback allowed to do work: it is
+// not on the counter-classification path, so it runs outside the lock the
+// classification callbacks hold. State transitions are rare and operationally
+// important (the IdP just became unreachable, or recovered), so log at WARN.
+func logBreakerStateChange(name string, from, to gobreaker.State) {
+	slog.Warn("token exchange circuit breaker state change",
+		slog.String("breaker", name),
+		slog.String("from", from.String()),
+		slog.String("to", to.String()))
+}
 
 // The circuit breaker protects one shared IdP, so its counters must reflect
 // IdP availability and nothing else. These three functions translate a Layer 2
