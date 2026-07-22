@@ -17,6 +17,7 @@ package tokenexchange
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -37,6 +38,25 @@ func fastTripBreakerConfig() CircuitBreakerConfig {
 	c.ConsecutiveFailureThreshold = 1
 	c.OpenStateDuration = time.Hour
 	return c
+}
+
+// newBreakerTestExchangerPlain builds a breaker-enabled exchanger backed by a
+// PLAIN (non-retrying) *http.Client, so one 5xx is one fast logical failure
+// with no retry backoff. Used by the concurrency tests, where the point is the
+// breaker's shared-counter behavior under contention, not retry timing —
+// dragging each goroutine through the 1-2s backoff would only slow the test
+// without exercising anything new (retry-collapse is covered elsewhere).
+func newBreakerTestExchangerPlain(t *testing.T, serverURL string, cbCfg CircuitBreakerConfig) *Exchanger {
+	t.Helper()
+	p := validParams(t)
+	p.TokenURL = serverURL
+	p.HTTPClient = &http.Client{}
+	p.CircuitBreaker = &cbCfg
+	e, err := New(p)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return e
 }
 
 // newBreakerTestExchanger builds a retrying exchanger with the breaker enabled
@@ -268,5 +288,180 @@ func TestBreaker_SingleflightBurstCountsOnce(t *testing.T) {
 	}
 	if counts.TotalFailures != 1 {
 		t.Errorf("breaker TotalFailures = %d, want 1", counts.TotalFailures)
+	}
+}
+
+// TestBreaker_ConcurrentDistinctKeysCountExactlyOncePerCall is the shared-
+// counter integrity test for the "multiple users, multiple requests" case.
+//
+// Unlike the singleflight-burst test (one key → collapsed to one outcome),
+// every goroutine here uses a DISTINCT subject token, so each produces a
+// distinct dedup key, misses singleflight, and independently calls
+// breaker.Execute. That drives N goroutines onto the one process-wide breaker
+// at the same instant — the scenario where a lost update or a data race in the
+// shared counter would show up. The breaker threshold is set high enough that
+// it never trips, so every one of the N failures must be recorded (none
+// rejected early), and the count must be EXACTLY N: not N-k (a dropped update)
+// nor >N (double count). Run under -race (make check) so a torn write is caught
+// even if the arithmetic happened to land right.
+func TestBreaker_ConcurrentDistinctKeysCountExactlyOncePerCall(t *testing.T) {
+	t.Parallel()
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	// Pin the breaker so NO trip rule can fire — the test needs every one of
+	// the N outcomes recorded, none rejected by a partial open:
+	//   - consecutive rule disabled (0),
+	//   - rate rule starved (minimum requests unreachable),
+	//   - threshold pinned high too, so no default can surprise the test.
+	// And pin the counting window far longer than the test runs: if the
+	// rolling window rotated mid-test, old buckets would age out and Counts()
+	// could read < N with no bug in the breaker — a latent flake. 1h guarantees
+	// a single window for the whole run.
+	cfg := DefaultCircuitBreakerConfig()
+	cfg.ConsecutiveFailureThreshold = 0
+	cfg.MinimumRequests = 1 << 30
+	cfg.FailureRateThresholdPercent = 100
+	cfg.FailureRateWindow = time.Hour
+	e := newBreakerTestExchangerPlain(t, srv.URL, cfg)
+
+	const callers = 50
+	var (
+		wg    sync.WaitGroup
+		start = make(chan struct{}) // start barrier: release all goroutines at once
+	)
+	wg.Add(callers)
+	for i := 0; i < callers; i++ {
+		go func(i int) {
+			defer wg.Done()
+			in := validInput()
+			// Distinct subject token per goroutine → distinct dedup key →
+			// no singleflight collapse → its own breaker outcome.
+			in.SubjectToken = fmt.Sprintf("subject-token-%d", i)
+			<-start // block until every goroutine is spawned and ready
+			_, err := e.Exchange(context.Background(), in)
+			if !errors.Is(err, ErrExchangeTransport) {
+				t.Errorf("caller %d: err = %v, want ErrExchangeTransport (breaker stayed closed)", i, err)
+			}
+		}(i)
+	}
+	// All goroutines are parked on <-start; releasing here makes them contend
+	// on the shared breaker simultaneously rather than trickling through (a
+	// plain launch loop can let goroutine 0 finish before 49 is even spawned,
+	// so "concurrent" would be aspirational without this barrier).
+	close(start)
+	wg.Wait()
+
+	counts := e.breaker.Counts()
+	if counts.Requests != callers {
+		t.Errorf("breaker Requests = %d, want %d (one per distinct-key logical operation)", counts.Requests, callers)
+	}
+	if counts.TotalFailures != callers {
+		t.Errorf("breaker TotalFailures = %d, want %d (every concurrent failure recorded exactly once)", counts.TotalFailures, callers)
+	}
+	if counts.TotalSuccesses != 0 {
+		t.Errorf("breaker TotalSuccesses = %d, want 0 (all calls failed)", counts.TotalSuccesses)
+	}
+	if e.breaker.State() != gobreaker.StateClosed {
+		t.Errorf("breaker State = %v, want closed (thresholds set so it never trips)", e.breaker.State())
+	}
+	if got := hits.Load(); got != callers {
+		t.Errorf("server hits = %d, want %d (distinct keys must not collapse; one plain attempt each)", got, callers)
+	}
+}
+
+// TestBreaker_OpenBreakerRejectsStampedeCleanly checks the OTHER concurrency
+// risk: many goroutines hitting an ALREADY-OPEN breaker at once. The rejection
+// path (breaker.Execute short-circuits → mapCircuitOpen converts the library
+// error → enrichment) runs concurrently for every caller; a data race or a
+// bypass there would surface here.
+//
+// The breaker is tripped FIRST, serially, then the stampede is released against
+// the open state. This is deliberate: trying to trip the breaker *during* the
+// stampede is not deterministic — with a fast client the whole flood can pass
+// the closed-state check before the first failures register, so "some got
+// rejected" cannot be guaranteed. Concurrent RECORDING while closed is already
+// covered by the exact-count test; this isolates concurrent REJECTION while
+// open, which is what can be asserted without flake.
+//
+// Once open, EVERY caller must be rejected identically: error is
+// ErrExchangeCircuitOpen, never a raw gobreaker error (proves mapCircuitOpen
+// holds under contention), never nil; and the IdP is not touched at all. Run
+// under -race (make check) so a race in the reject path is caught even when the
+// counts happen to line up.
+func TestBreaker_OpenBreakerRejectsStampedeCleanly(t *testing.T) {
+	t.Parallel()
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	cfg := DefaultCircuitBreakerConfig()
+	cfg.ConsecutiveFailureThreshold = 3
+	cfg.MinimumRequests = 1 << 30 // isolate the trip to the consecutive rule
+	cfg.OpenStateDuration = time.Hour
+	e := newBreakerTestExchangerPlain(t, srv.URL, cfg)
+
+	// Phase 1: trip the breaker serially with distinct-key failures.
+	for i := 0; i < 3; i++ {
+		in := validInput()
+		in.SubjectToken = fmt.Sprintf("trip-%d", i)
+		_, _ = e.Exchange(context.Background(), in)
+	}
+	if e.breaker.State() != gobreaker.StateOpen {
+		t.Fatalf("breaker State = %v after 3 consecutive failures, want open", e.breaker.State())
+	}
+	hitsAfterTrip := hits.Load()
+
+	// Phase 2: stampede the now-open breaker.
+	const callers = 50
+	var (
+		wg          sync.WaitGroup
+		rawLeak     atomic.Int32
+		nilErr      atomic.Int32
+		circuitOpen atomic.Int32
+		other       atomic.Int32
+	)
+	wg.Add(callers)
+	for i := 0; i < callers; i++ {
+		go func(i int) {
+			defer wg.Done()
+			in := validInput()
+			in.SubjectToken = fmt.Sprintf("stampede-%d", i)
+			_, err := e.Exchange(context.Background(), in)
+			switch {
+			case err == nil:
+				nilErr.Add(1)
+			case errors.Is(err, gobreaker.ErrOpenState) || errors.Is(err, gobreaker.ErrTooManyRequests):
+				rawLeak.Add(1) // raw library error escaped mapCircuitOpen
+			case errors.Is(err, ErrExchangeCircuitOpen):
+				circuitOpen.Add(1)
+			default:
+				other.Add(1)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if got := rawLeak.Load(); got != 0 {
+		t.Errorf("raw gobreaker error leaked to %d caller(s); mapCircuitOpen must convert every open-state rejection", got)
+	}
+	if got := nilErr.Load(); got != 0 {
+		t.Errorf("%d caller(s) got a nil error; an open breaker must reject with an error", got)
+	}
+	if got := other.Load(); got != 0 {
+		t.Errorf("%d caller(s) got an unexpected error class", got)
+	}
+	if got := circuitOpen.Load(); got != callers {
+		t.Errorf("ErrExchangeCircuitOpen count = %d, want %d (every caller must be rejected by the open breaker)", got, callers)
+	}
+	if got := hits.Load(); got != hitsAfterTrip {
+		t.Errorf("server hits rose from %d to %d during the stampede; an open breaker must not call the IdP", hitsAfterTrip, got)
 	}
 }
