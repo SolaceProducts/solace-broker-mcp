@@ -16,7 +16,7 @@
 > [Correlation ID](#correlation-id) section describes shipped behaviour you can rely on
 > today.
 
-Once implemented, the Broker MCP Server will emit three observability signals:
+The Broker MCP Server is designed to emit three observability signals:
 
 - **Metrics**, on a Prometheus `/metrics` endpoint, for dashboards and alerts.
 - **An audit trail**, one JSON event per state-changing operation, for compliance evidence.
@@ -30,6 +30,22 @@ Metrics, audit, and tracing are each off by default and enabled per feature flag
 turn each on when your operations model is ready. Correlation IDs are on by default, since
 they carry no schema to review. This document describes what each signal contains and what
 each name means.
+
+### Implementation status
+
+This schema is published **ahead of the code** so the names can be reviewed before they
+freeze at GA. Each capability is tagged with its status as of this draft, and the capability
+headings below carry the same tag:
+
+| Capability | Status | Notes |
+|---|---|---|
+| Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
+| Metrics | **[Planned]** | The `/metrics` endpoint and instruments are not yet wired; the names and labels here are the proposal under review. |
+| Audit trail | **[Planned]** | Only the capability gate exists today; event emission lands in a later story. |
+| Distributed tracing | **[Planned]** | OTLP export is not yet wired. |
+
+Present-tense wording in a **[Planned]** section describes the **target** behavior under
+review, not what the current build emits. Only the **[Implemented]** capability is live today.
 
 ---
 
@@ -81,7 +97,10 @@ avoid. Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_
 
 ---
 
-## Metrics
+## Metrics — [Planned]
+
+> _Status: **[Planned]**. The `/metrics` endpoint and instruments are not yet wired in the
+> build; the names, types, and labels below are the proposal under review._
 
 All metrics are served on the `/metrics` endpoint (Story 14) in Prometheus text exposition
 format, behind `OBS_METRICS_ENABLED`. One exception: the authentication-failure counter
@@ -215,12 +234,15 @@ Self-observation for the trace exporter, exposed when both tracing and metrics a
 Standard `go_*` and `process_*` collectors from the Prometheus Go client library
 (`collectors.NewGoCollector()` and `collectors.NewProcessCollector()`): goroutine count,
 garbage-collection timing, memory stats, file descriptors, CPU. These names are upstream
-Prometheus conventions, not Solace-defined, and are listed here only so you know they are
-present for diagnosing memory pressure and goroutine leaks.
+Prometheus conventions, not Solace-defined, and are listed here only so you know they will be
+present, once the metrics endpoint is wired, for diagnosing memory pressure and goroutine leaks.
 
 ---
 
-## Audit trail
+## Audit trail — [Planned]
+
+> _Status: **[Planned]**. Only the capability gate exists today; audit-event emission lands in
+> a later story. The fields and delivery behavior below are the proposed schema._
 
 One JSON event is emitted per **state-changing** operation (for example `disconnect-client`,
 `delete-queue`, broker shutdown), at completion, with the outcome known. Read-only calls are
@@ -313,7 +335,10 @@ which you own.** The server does not itself persist or sign events.
 
 ---
 
-## Distributed tracing
+## Distributed tracing — [Planned]
+
+> _Status: **[Planned]**. OTLP export is not yet wired; the spans, attributes, and export
+> protocol below are the proposed design._
 
 OpenTelemetry spans at each hop of a request, exported over OTLP, enabled with
 `OBS_TRACING_ENABLED` (never automatic; you opt in after deploying a collector).
@@ -355,7 +380,9 @@ pilot feedback.
 
 ---
 
-## Correlation ID
+## Correlation ID — [Implemented]
+
+> _Status: **[Implemented]** and on by default (`OBS_CORRELATION_ID_ENABLED`)._
 
 One ID threads a request from the AI agent, through the server and every retry, out to the
 broker, and back. Today it anchors your logs and the broker's own log entry on the same
