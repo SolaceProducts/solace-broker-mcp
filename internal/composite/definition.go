@@ -50,6 +50,14 @@ type ParameterDef struct {
 // SEMPv2 operation by its prefixed ID (e.g., "monitor/getMsgVpnQueue") and
 // provides arguments as Go text/template expressions that are resolved against
 // the input parameters and prior step results.
+//
+// Fan-out. When ForEach is set the step iterates a prior step's data[] rows
+// concurrently instead of running once. Per iteration, the row is bound to
+// .Item in the template context so Args templates can reference row fields.
+// The result is a map keyed by row[ForEachKey] under a top-level "byKey" key —
+// see fetchFanOut in executor.go for the exact shape. Fan-out has its own
+// bounded concurrency (Concurrency, default fanOutDefaultConcurrency) and is
+// not combinable with Parallel (validated at load time).
 type Step struct {
 	ID          string            `yaml:"id"`
 	Operation   string            `yaml:"operation"`   // prefixed operationId (e.g., "monitor/getMsgVpnQueue")
@@ -57,6 +65,10 @@ type Step struct {
 	Select      []string          `yaml:"select"`      // SEMP select fields; joined with ", " into args["select"] at execute time
 	Parallel    bool              `yaml:"parallel"`    // group with adjacent parallel:true steps
 	FollowPages bool              `yaml:"followPages"` // follow SEMP nextPageUri links and aggregate all pages
+	ForEach     string            `yaml:"forEach"`     // step ID of a prior step whose data[] rows this step iterates
+	ForEachIf   string            `yaml:"forEachIf"`   // optional predicate template; iteration skipped when it resolves to a false bool
+	ForEachKey  string            `yaml:"forEachKey"`  // parent-row field whose value keys this step's result map (required with ForEach)
+	Concurrency int               `yaml:"concurrency"` // max in-flight per-row calls in fan-out; 0 means use the framework default
 }
 
 // ResultStrategy defines how step results are combined into the tool's final

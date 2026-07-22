@@ -5,14 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+> **Maintaining this file:** draft entries per PR under `[Unreleased]` (the
+> `/changelog` skill drafts one from your diff), and the release process promotes
+> `[Unreleased]` into a dated version block at tag time — see `RELEASING.md`. Entries
+> for released versions below were reconstructed from the per-tag GitHub Release notes;
+> the concise ones cite their SOL ticket, the detailed paragraphs were authored at the
+> time of the change.
+
 ## [Unreleased]
 
 ### Added
 - New MCP tools `list-bridges` and `get-bridge-status` for Bridge monitoring — the same list-then-drill-down pattern as `list-rdps`/`get-rdp-status`. `list-bridges` returns enabled state, inbound/outbound connection state, and last inbound failure reason for every bridge in a VPN (default 100, max 500 via `maxResults`), with a summary block (`downCount`, `disabledCount`, `byInboundFailureReason`). `get-bridge-status` returns additional per-bridge diagnostic detail — connection establisher, failure category, and client name — for one bridge, identified by `msgVpnName` + `bridgeName` + `bridgeVirtualRouter` (bridges are the only object in this server keyed by two names rather than one, since a bridge's config can differ between a broker's primary and backup virtual router in an HA pair). Tracked under SOL-152124.
 
-- New top-level `broker_oauth:` configuration block for upcoming OAuth authentication from the MCP server to brokers. Schema-only in this release — the OAuth runtime is not yet wired, and any broker with `auth.mode: oauth` is rejected at startup with a standalone error banner explaining the limitation and a per-broker validation error in the joined config error. The block holds the global IdP coordinates the MCP server will use to obtain broker-bound tokens: `idp_token_endpoint`, `mcp_server_client_id`, an `mcp_server_client_auth` discriminated union (one named sub-block per IANA "OAuth Token Endpoint Authentication Methods" identifier — V1 supports `client_secret_basic` and `client_secret_post`), `grant_type` (allowlisted to RFC 8693's token-exchange URN), and `audience_parameter_name` (allowlisted to `audience` | `scope` | `resource`). The discriminated-union shape structurally prevents misconfigured method/credential pairings — operators choose a method by populating its named sub-block; the validator enforces "exactly one sub-block populated." Per-broker `auth.mode: oauth` accepts an optional `audience` field whose value is forwarded to the IdP when set. The validator also enforces a permanent structural invariant: if any broker uses `auth.mode: oauth`, `mcp_client_auth.mode` must also be `oauth` (the MCP server cannot obtain a broker token without the agent's token from the client-auth side). Operator-facing banners and errors live in a new `internal/banner` package so future banners land in one canonical home. Tracked under SOL-150796.
-
-- Per-invocation caller identity on tool-invocation log lines (`sub`, `iss`, `client_id`, `jti`) in `oauth` and `static` client-auth modes. Missing optional claims surface as the `<absent>` sentinel so log consumers see a stable schema; `disabled` mode emits no identity fields. Tracked under SOL-149606.
+- Server-side retry loop for RFC 8693 token exchange to the IdP. Previously a single 5xx, HTTP 429, or connection error to the IdP failed the tool call outright; the loop now transparently retries up to three attempts total against transient signals (5xx, 429, and connection-level errors — DNS, TLS handshake, body-read partials), honoring the IdP's `Retry-After` header uncapped between attempts via jittered linear backoff. 4xx client errors (400, 401, 403) are deliberately not retried — they will not fix themselves on repeat. The whole retry loop is fenced by a chain-deadline (`context.WithTimeout` derived from the retry knobs — currently 19s worst case with the shipped defaults of 5s per attempt, 2 retries, and 1–2s backoff), which also bounds a hostile `Retry-After` value. When all attempts fail, a new `ErrExchangeRetriesExhausted` sentinel distinguishes "we tried and gave up" from a single-shot transport failure; the last attempt's HTTP status and IdP endpoint survive on the same `*ExchangeError` envelope for the audit line. JWKS refresh and OIDC discovery paths deliberately keep the non-retrying HTTP client — they are read-only lookups where a single failure is the correct signal. Tracked under SOL-151520.
+- New top-level `tool_authorization:` configuration block for upcoming per-tool authorization based on the caller's OIDC group membership. Schema-and-validation only in this release — the runtime is gated behind the `ENABLE_TOOL_AUTHORIZATION` environment variable, and with the flag unset (the default) the block is parsed but otherwise inert: no defaults are applied, no validation fires, and existing deployments are unaffected. The block holds `enabled`, `groups_claim_name` (the OIDC claim carrying the caller's groups), and `access_level_groups` (a map from access level to the group names granted it). When the flag is set truthy, the block's defaults and validation activate. Authorization decisions live in a new `internal/authz` package; its `Decision` type implements `slog.LogValuer` to emit only an `allowed` flag and a matched-group count, never the group names themselves, so the sanctioned logging path cannot leak group membership (`fmt`/`json.Marshal` still render exported fields and must not be used for a `Decision`). Tracked under SOL-151875 and SOL-151907.
 - Apache 2.0 LICENSE file for open source compliance
 - CONTRIBUTING.md with comprehensive contribution guidelines including DCO requirements
 - CODE_OF_CONDUCT.md with Contributor Covenant 2.1
@@ -29,9 +35,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **BREAKING**: MCP tool `get-vpn-health` renamed to `get-vpn-status`. Matches the `get-broker-health` → `get-broker-status` precedent (SOL-150707): the tool reports raw VPN state (enabled, connection count, per-service up/down), not a health verdict — whether a VPN is "healthy" depends on deployment intent the server doesn't have. Input parameters and output shape are unchanged; only the tool name and step key (`vpnHealth` → `vpnStatus`) changed. Migration: any client invoking the tool by name must switch to `get-vpn-status`. Tracked under SOL-151742.
 
+- SEMP permission-denied (code 72) errors are now tagged with the calling tool and operation, so an operator can see which tool call hit a broker authorization limit. Tracked under SOL-151718.
+
+- Disambiguated the `clear-queue-stats` and `delete-queue-messages` tool descriptions so agents stop conflating "reset counters" with "purge messages." Tracked under SOL-151850.
+
+- Removed the dangling "See the SEMP `<Type>` schema for the full list." pointer from the `create-message-vpn`, `update-message-vpn`, `create-queue`, `update-queue`, `create-topic-endpoint`, `update-topic-endpoint`, `create-rdp`, and `update-rdp` write-tool descriptions. The MCP server does not expose the SEMP schema, so the sentence sent agents chasing a resource they cannot reach; the attribute examples already inline in each description remain. Tracked under SOL-152203.
+
+- Reshaped the agent-facing surface for token-exchange failures. The `error` string a tool call returns for a token-exchange failure now collapses from six sentinel-specific messages into two categories: transient (`ErrExchangeTransport` and `ErrExchangeRetriesExhausted`) surface as `"Authentication is unavailable — the identity provider is not responding."` (deliberately not broker-named because a shared-IdP outage affects every broker at once); everything else surfaces as `"Authentication failed for broker \"X\". This is a server-side issue."` with the broker alias interpolated so a multi-broker operator can grep the audit line for context. No IdP-generated content is embedded in these strings, so an IdP that leaks sensitive material in an `error_description` field cannot bleed it into the agent surface. Related: the `retryable` flag on the tool result — which agents may branch on — now returns `false` for `ErrExchangeRetriesExhausted` (we already gave up, retrying doesn't help), for a 4xx response whose body is not a standard OAuth `error` JSON (previously `true` — a proxy/WAF interception page will not become a valid OAuth response on retry), and for an oversized OAuth error code (previously `true`). Sentinel-specific detail (endpoint, HTTP status, elapsed) still lands on the audit log line via `LogAttrs`, which is the right audience for it. Tracked under SOL-151520.
+
+- Updated the embedded SEMPv2 OpenAPI specs to the 10.26.2 rolling release (`10.26.2.9715`), so tool schemas track current broker attributes. The three spec files are renamed to `semp-v2-swagger-{action,config,monitor}.10.26.2.json`. Loading is unaffected — specs are picked up by the embed glob and typed from their `basePath`, not their filename. Tracked under SOL-152206.
+
+### Removed
+
+- Per-broker `brokers.<alias>.auth.scopes` field. The Hop-2 OAuth runtime is gated behind `ENABLE_UNRELEASED_BROKER_OAUTH` and was never activated with the field populated in the wild, so this removes surface rather than user-visible behavior. Rationale: scope entitlement is a property of the user (carried on the subject token), not of the broker — a single static per-broker list either hard-fails less-privileged users (strict IdPs reject `invalid_scope`) or under-scopes admins. The exchange request now omits the RFC 6749 §3.3 `scope` parameter, so the IdP grants its per-client / per-user default scopes. Config decoding is strict (`KnownFields(true)`), so any config still declaring `auth.scopes` fails loudly at startup — this is intentional and covered by a test. Follow-up SOL-151816 will design a per-user scope mechanism; if per-call scopes ever vary for the same subject token, they must also join the token-exchange dedup key (`internal/tokenexchange/dedup_key.go`).
+
+### Fixed
+
+- OAuth broker requests now recover from an expired token in-flight. When a broker returns `401 Unauthorized` under `auth.mode: oauth`, the SEMP transport evicts the cached broker token and retries the request once with a freshly exchanged token, instead of failing the call immediately. The recovery decision belongs to the authenticator: `HandleAuthFailure` returns whether to retry and whether the retry must re-authenticate, so static modes (basic, bearer) are unaffected. The re-auth is capped at one attempt per request, so a persistently rejected credential surfaces as a `401` rather than looping. If the token exchange itself fails during the retry (e.g. the IdP is unreachable), the failure is now logged with broker and operation and carries the last observed `401` status. Tracked under SOL-151624.
+
+- `list-vpns` aggregation no longer reports a dead `zeroConnectionCount`; the count now reflects actual per-VPN connection state. Tracked under SOL-151771.
+
+### Security
+
+- `Token` and `Exchange` types now implement `LogValue`/`String`/`GoString` guards so raw OAuth tokens cannot leak through `slog`, `fmt`, or `%#v` rendering. Tracked under SOL-151649.
+- SEMPv2 path-parameter values are now rejected before URL construction when they are empty or a dot segment (`.` or `..`). `buildURL` escaped `/` but left dot segments intact, so a value like `..` could, on a broker or fronting proxy that normalizes dot segments, collapse a request onto an unintended (e.g. parent) path — most consequentially on the destructive `config/deleteMsgVpn`, `config/deleteMsgVpnQueue`, and `action/doMsgVpnQueueDeleteMsgs` operations. The guard rejects the value with a clear error naming the parameter and covers read and destructive operations at the single substitution choke point. Tracked under SOL-152208.
+
+## [0.5.0] - 2026-07-09
+
+### Added
+- Action tools for queues and clients (queue actions and client actions). Tracked under SOL-148462.
+- Core management tools for VPN and queue administration. Tracked under SOL-148460.
+- RDP (REST Delivery Point) write tools. Tracked under SOL-148461.
+- `/livez` liveness endpoint, with `/health` retained as an alias. Tracked under SOL-151283.
+- `/readyz` readiness endpoint reflecting MCP-server readiness, decoupled from broker reachability. Tracked under SOL-151284.
+- Kubernetes split liveness/readiness/startup probes; `/ready` aliased to `/readyz`. Tracked under SOL-151285.
+- Correlation-ID HTTP middleware: the ID is forwarded to SEMPv1/v2 broker requests, returned in the MCP response header and `CallToolResult.Meta`, and emitted as a `slog` attribute on every request-scoped log line. Tracked under SOL-151279, SOL-151280, SOL-151281, SOL-151282.
+- Whole-mux HTTP panic-recovery middleware. Tracked under SOL-151286.
+- SIGTERM in-process drain (`/readyz` flips to 503 → drain → graceful shutdown); a second signal forces immediate shutdown. Tracked under SOL-151288 and SOL-151437.
+- `listen_address` server config with a loopback-only default, so the server does not bind a public interface unless explicitly configured. Tracked under SOL-150690.
+- RFC 8693 OAuth token-exchange runtime (broker-OAuth "Hop 2"), gated behind `ENABLE_UNRELEASED_BROKER_OAUTH`. Tracked under SOL-150799, SOL-150800, SOL-150801.
+- Aggregations for `list-vpns`, `list-rdps`, `list-slow-subscribers`, `list-queue-discards`, and `get-rdp-status`. Tracked under SOL-151313, SOL-151314, SOL-151315, SOL-151316, SOL-151343.
+- Accurate live queue-depth reporting. Tracked under SOL-150260.
+- New top-level `broker_oauth:` configuration block for upcoming OAuth authentication from the MCP server to brokers. Schema-only in this release — the OAuth runtime is not yet wired, and any broker with `auth.mode: oauth` is rejected at startup with a standalone error banner explaining the limitation and a per-broker validation error in the joined config error. The block holds the global IdP coordinates the MCP server will use to obtain broker-bound tokens: `idp_token_endpoint`, `mcp_server_client_id`, an `mcp_server_client_auth` discriminated union (one named sub-block per IANA "OAuth Token Endpoint Authentication Methods" identifier — V1 supports `client_secret_basic` and `client_secret_post`), `grant_type` (allowlisted to RFC 8693's token-exchange URN), and `audience_parameter_name` (allowlisted to `audience` | `scope` | `resource`). The discriminated-union shape structurally prevents misconfigured method/credential pairings — operators choose a method by populating its named sub-block; the validator enforces "exactly one sub-block populated." Per-broker `auth.mode: oauth` accepts an optional `audience` field whose value is forwarded to the IdP when set. The validator also enforces a permanent structural invariant: if any broker uses `auth.mode: oauth`, `mcp_client_auth.mode` must also be `oauth` (the MCP server cannot obtain a broker token without the agent's token from the client-auth side). Operator-facing banners and errors live in a new `internal/banner` package so future banners land in one canonical home. Tracked under SOL-150796.
+
+### Changed
+
+- **BREAKING**: Top-level client-authentication block renamed from `client_auth:` to `mcp_client_auth:`. The Go type renames to `MCPClientAuthConfig`, and the field on `ServerConfig` renames to `MCPClientAuth`. The rename disambiguates the operator-facing schema now that the new `broker_oauth:` block introduces a separate `broker_oauth.mcp_server_client_auth:` nested sub-block — the top-level `client_auth:` name was ambiguous between client authentication on the inbound side (agents authenticating to the MCP server) and on the outbound side (the MCP server authenticating to the IdP). Migration: rename the top-level `client_auth:` key in every config to `mcp_client_auth:`. No field semantics change; only the block name. Tracked under SOL-150796.
+
 - **BREAKING**: A broker configured with `insecure_skip_verify: true` is now refused at startup under `mcp_client_auth.mode: oauth` (production), unless a new top-level `allow_insecure_broker_tls: true` opt-in is also set. Previously this combination started successfully with only a `slog.Warn`, leaving TLS certificate verification disabled while the server still sent the broker admin credential over the connection on every SEMP request — an exploitable man-in-the-middle path. Mirrors the existing `allow_remote_unauthenticated` guard. `allow_insecure_broker_tls` is server-wide, not per-broker: it lifts the check for every broker in the config, not just the one being onboarded. Dev/static modes are unchanged and continue to allow self-signed brokers without the opt-in. Migration: add `allow_insecure_broker_tls: true` to accept the risk, or install a trusted certificate on the broker. Tracked under SOL-151517.
 
-- `ToolManager.CallTool` now takes a trailing `Identity` argument carrying per-invocation audit identity. This is an internal Go API (the package is `internal/tools`); on-the-wire MCP tool schemas and operator-visible config are unchanged. Tracked under SOL-149606.
+- Validator now trims whitespace before checking emptiness for basic-auth `username`/`password` and bearer-auth `token`. Configs whose credentials resolve to a whitespace-only string (e.g., `token: " "` or a `${VAR}` substitution that yields only whitespace) are now rejected at startup with a clear "required for X auth" error rather than passing validation and failing every SEMP request with a 401 at runtime. Tracked under SOL-150796.
+
+- Lifted `SafeCookieJar` to the broker level and delegated 401 recovery to the `Authenticator`. Tracked under SOL-151468.
+- Unified `downCount` semantics across the `list-*` aggregating tools. Tracked under SOL-151552.
+
+### Fixed
+- Bound broker-controlled error text at capture, so an oversized broker error can't blow up memory or logs. Tracked under SOL-151516.
+- Recover panics in `errgroup` worker goroutines instead of crashing the server. Tracked under SOL-151514.
+- Bound the overall SEMP retry chain with a deadline. Tracked under SOL-151518.
+
+## [0.4.0] - 2026-06-16
+
+### Added
+- Error translation and output sanitization for tool responses. Tracked under SOL-148434.
+- `get-hardware-details` step for appliance platforms. Tracked under SOL-150708.
+
+### Changed
+- **BREAKING**: MCP tool `get-broker-health` renamed to `get-broker-status`. The tool reports raw broker state, not a health verdict. Migration: any client invoking the tool by name must switch to `get-broker-status`. Tracked under SOL-150707.
+
+- Replaced the package-level `auth.AddAuth(ctx, req, cfg)` dispatcher with an `auth.Authenticator` interface and per-broker instances. `NewBrokerClient` is the single builder: it constructs one `Authenticator` per broker from `brokerCfg.Auth` and passes the same pointer to both the SEMPv1 and SEMPv2 protocol clients. The clients no longer read `brokerCfg.Auth`; they store the Authenticator on the struct and call `c.authenticator.AddAuth(ctx, req)` per request. No behavior change for existing `basic` and `bearer` auth modes — same Authorization headers, same retry/timeout posture, same config schema. Internal Go API: `sempv1.NewHTTPClient` and `sempv2.NewHTTPClient` signatures gained an `auth.Authenticator` parameter; these are only called from `semp.NewBrokerClient` and tests in the same module. Enables the upcoming OAuth Token Exchange (Hop 2) support without further protocol-client branching. Tracked under SOL-150794 and SOL-150795.
+
+- Enabled retries for read-only SEMPv1 `show` commands. Tracked under SOL-150664.
+- Enforced a per-broker connection bound via `MaxConnsPerHost` and a shared in-flight semaphore. Tracked under SOL-150665 and SOL-150116.
+
+### Fixed
+- Truncate broker-controlled error text at capture. Tracked under SOL-150663.
+- Cap inbound `/mcp` request body at 4 MiB. Tracked under SOL-150660.
+- Close the response body when SEMP retries are exhausted. Tracked under SOL-150661.
+- Recover tool-handler panics instead of crashing the server. Tracked under SOL-150685.
+
+### Security
+- Keep secrets out of YAML config parse errors in startup logs. Tracked under SOL-150666.
+
+## [0.3.0] - 2026-06-03
+
+### Added
+- Per-invocation caller identity on tool-invocation log lines (`sub`, `iss`, `client_id`, `jti`) in `oauth` and `static` client-auth modes. Missing optional claims surface as the `<absent>` sentinel so log consumers see a stable schema; `disabled` mode emits no identity fields. Tracked under SOL-149606.
+- Basic health endpoints. Tracked under SOL-148426.
+- Advanced monitoring tools: replication, discards, and slow subscribers. Tracked under SOL-148432.
+
+### Changed
 
 - **BREAKING**: Client auth config consolidated into single required `client_auth.mode` enum (`disabled` | `static` | `oauth`). The legacy `development_mode` flag is deprecated and ignored — its presence in YAML logs a deprecation warning at startup. The previous "development_mode + empty dev_token = silent no-auth" path (SOL-149921) is replaced by the explicit `mode: disabled`. Migration:
 
@@ -52,23 +145,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Tracked under SOL-149789.
 
+- `ToolManager.CallTool` now takes a trailing `Identity` argument carrying per-invocation audit identity. This is an internal Go API (the package is `internal/tools`); on-the-wire MCP tool schemas and operator-visible config are unchanged. Tracked under SOL-149606.
+
 - Config loader now rejects unknown YAML fields at startup instead of silently ignoring them. Previously, a typo like `developmnet_mode` or `insecure_skip_verfy` was accepted and the operator's intended override became a no-op. The loader now fails fast with an error naming the offending field. Existing configs with stale or misspelled keys will fail to start until the typo is corrected; configs with only valid keys are unaffected. Tracked under SOL-149927.
 
-- Replaced the package-level `auth.AddAuth(ctx, req, cfg)` dispatcher with an `auth.Authenticator` interface and per-broker instances. `NewBrokerClient` is the single builder: it constructs one `Authenticator` per broker from `brokerCfg.Auth` and passes the same pointer to both the SEMPv1 and SEMPv2 protocol clients. The clients no longer read `brokerCfg.Auth`; they store the Authenticator on the struct and call `c.authenticator.AddAuth(ctx, req)` per request. No behavior change for existing `basic` and `bearer` auth modes — same Authorization headers, same retry/timeout posture, same config schema. Internal Go API: `sempv1.NewHTTPClient` and `sempv2.NewHTTPClient` signatures gained an `auth.Authenticator` parameter; these are only called from `semp.NewBrokerClient` and tests in the same module. Enables the upcoming OAuth Token Exchange (Hop 2) support without further protocol-client branching. Tracked under SOL-150794 and SOL-150795.
+- Skip environment-variable substitution inside YAML comments. Tracked under SOL-149904.
 
-- **BREAKING**: Top-level client-authentication block renamed from `client_auth:` to `mcp_client_auth:`. The Go type renames to `MCPClientAuthConfig`, and the field on `ServerConfig` renames to `MCPClientAuth`. The rename disambiguates the operator-facing schema now that the new `broker_oauth:` block introduces a separate `broker_oauth.mcp_server_client_auth:` nested sub-block — the top-level `client_auth:` name was ambiguous between client authentication on the inbound side (agents authenticating to the MCP server) and on the outbound side (the MCP server authenticating to the IdP). Migration: rename the top-level `client_auth:` key in every config to `mcp_client_auth:`. No field semantics change; only the block name. Tracked under SOL-150796.
-
-- Validator now trims whitespace before checking emptiness for basic-auth `username`/`password` and bearer-auth `token`. Configs whose credentials resolve to a whitespace-only string (e.g., `token: " "` or a `${VAR}` substitution that yields only whitespace) are now rejected at startup with a clear "required for X auth" error rather than passing validation and failing every SEMP request with a 401 at runtime. Tracked under SOL-150796.
+### Deprecated
+- The `development_mode` config flag is deprecated in favor of `client_auth.mode` (see the consolidation entry under Changed). It is still parsed but ignored, and logs a deprecation warning at startup. Tracked under SOL-149989.
 
 ### Removed
-
-- Per-broker `brokers.<alias>.auth.scopes` field. The Hop-2 OAuth runtime is gated behind `ENABLE_UNRELEASED_BROKER_OAUTH` and was never activated with the field populated in the wild, so this removes surface rather than user-visible behavior. Rationale: scope entitlement is a property of the user (carried on the subject token), not of the broker — a single static per-broker list either hard-fails less-privileged users (strict IdPs reject `invalid_scope`) or under-scopes admins. The exchange request now omits the RFC 6749 §3.3 `scope` parameter, so the IdP grants its per-client / per-user default scopes. Config decoding is strict (`KnownFields(true)`), so any config still declaring `auth.scopes` fails loudly at startup — this is intentional and covered by a test. Follow-up SOL-151816 will design a per-user scope mechanism; if per-call scopes ever vary for the same subject token, they must also join the token-exchange dedup key (`internal/tokenexchange/dedup_key.go`).
+- **BREAKING**: `get-dmr-status` tool removed. Migration: clients invoking `get-dmr-status` must stop; DMR state is available through the remaining monitoring tools. Tracked under SOL-150316.
 
 ### Fixed
-
 - OIDC token verifier now bounds the HTTP client used by go-oidc for both startup discovery and lazy JWKS refresh (10s per-request timeout). Previously, the verifier fell back to `http.DefaultClient` (zero timeout), and a slow or hung identity provider during key rotation could wedge the JWKS-refresh goroutine indefinitely and stall per-request token verification past the inbound MCP request's own server-side deadlines. The existing 30s discovery deadline is preserved. Operators running an IdP that legitimately takes longer than 10s to serve `/jwks` will see auth fail closed; document the timeout if your environment requires tuning. Tracked under SOL-150219.
+- Wrap the cookie jar in an atomic `SafeCookieJar` to remove a 401 race. Tracked under SOL-149922.
+- Cap broker response body at 16 MiB. Tracked under SOL-149920.
+- Set granular timeouts on the SEMP HTTP transport, and `ReadTimeout`/`IdleTimeout` on the MCP HTTP server. Tracked under SOL-149925 and SOL-149914.
+- Close the broker pool on graceful shutdown. Tracked under SOL-149926.
 
-- OAuth broker requests now recover from an expired token in-flight. When a broker returns `401 Unauthorized` under `auth.mode: oauth`, the SEMP transport evicts the cached broker token and retries the request once with a freshly exchanged token, instead of failing the call immediately. The recovery decision belongs to the authenticator: `HandleAuthFailure` returns whether to retry and whether the retry must re-authenticate, so static modes (basic, bearer) are unaffected. The re-auth is capped at one attempt per request, so a persistently rejected credential surfaces as a `401` rather than looping. If the token exchange itself fails during the retry (e.g. the IdP is unreachable), the failure is now logged with broker and operation and carries the last observed `401` status. Tracked under SOL-151624.
+### Security
+- Redact userinfo credentials in broker-URL validation errors. Tracked under SOL-149923.
+- Warn on `insecure_skip_verify: true` in production mode. Tracked under SOL-149928.
+
+## [0.2.0] - 2026-05-15
+
+### Added
+- SEMPv1 SEMP API client foundation. Tracked under SOL-148424.
+- VPN-level monitoring tools: health, list, queues, and clients. Tracked under SOL-148429.
+- Remaining monitoring tools: DMR, message rates, and RDP. Tracked under SOL-148433.
+- `get-broker-health` tool. Tracked under SOL-148428.
+- `select=` field filtering across the monitoring tools to reduce the response size returned to the LLM. Tracked under SOL-149404.
+- Pagination page-count cap to prevent infinite loops. Tracked under SOL-149750.
+- CODEOWNERS file. Tracked under SOL-149790.
+
+### Changed
+- **BREAKING**: Reject `http://` broker and auth URLs in production mode. Migration: use `https://` for broker and auth URLs in production, or run in a development auth mode. Tracked under SOL-149665.
+- Rate limiting, retry logic, and MCP error translation. Tracked under SOL-148425.
+- Skip retry for non-idempotent HTTP methods (POST/PATCH). Tracked under SOL-149746.
+- Reject unknown fields in the composite YAML loader. Tracked under SOL-149670.
+- Tune the HTTP transport connection pool (`MaxIdleConnsPerHost`). Tracked under SOL-149748.
+- Fix misleading `list-*` tool descriptions that claimed to return all results. Tracked under SOL-149343.
+
+### Fixed
+- `.env` parser: strip quoted values and warn on an unreadable file. Tracked under SOL-149664.
+- Add `sync.RWMutex` to `ToolManager` to guard concurrent handlers-map access. Tracked under SOL-149671.
+- SEMPv2 HTTP headers: omit `Content-Type` on bodyless requests, add `Accept`. Tracked under SOL-149672.
+- `buildURL` errors on an unfilled path-parameter placeholder. Tracked under SOL-149749.
+- Replace `os.Exit(1)` in the `ListenAndServe` goroutine with an error channel. Tracked under SOL-149747.
+- Fix server startup/shutdown logging gaps. Tracked under SOL-149595.
 
 ## [0.1.0] - 2026-04-24
 
@@ -165,6 +290,10 @@ This project uses [Semantic Versioning](https://semver.org/):
 
 ## Links
 
-- [Unreleased]: https://github.com/SolaceDev/solace-broker-mcp/compare/v0.1.0...HEAD
-- [0.1.0]: https://github.com/SolaceDev/solace-broker-mcp/releases/tag/v0.1.0
+- [Unreleased]: https://github.com/SolaceDev/solace-broker-mcp/compare/v0.5.0...HEAD
+- [0.5.0]: https://github.com/SolaceDev/solace-broker-mcp/compare/v0.4.0...v0.5.0
+- [0.4.0]: https://github.com/SolaceDev/solace-broker-mcp/compare/v0.3.0...v0.4.0
+- [0.3.0]: https://github.com/SolaceDev/solace-broker-mcp/compare/v0.2.0...v0.3.0
+- [0.2.0]: https://github.com/SolaceDev/solace-broker-mcp/compare/v0.1.0...v0.2.0
+- [0.1.0]: https://github.com/SolaceDev/solace-broker-mcp/compare/v0.0.1...v0.1.0
 - [0.0.1]: https://github.com/SolaceDev/solace-broker-mcp/releases/tag/v0.0.1

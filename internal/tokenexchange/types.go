@@ -116,13 +116,22 @@ type Params struct {
 	// AudienceParam selects the wire format for the per-broker audience.
 	// V1: AudienceParamAudience.
 	AudienceParam AudienceFormat
-	// HTTPClient is the IdP-bound HTTP client; typically built via
-	// idpclient.NewHTTPClient so the SOL-150219 timeout bound applies.
+	// HTTPClient is the IdP-bound HTTP client; production builds it via
+	// idpclient.NewRetryingHTTPClient (transparent 5xx / connection-error
+	// retries) which composes NewHTTPClient (SOL-150219 timeout bound).
+	// Tests typically pass a plain *http.Client{}.
 	HTTPClient *http.Client
 	// Cache is the token cache for cross-time deduplication. The exchanger
 	// checks the cache before hitting the IdP and stores successful
 	// exchange results. Required — a nil cache is a wiring bug.
 	Cache cache.TokenCache
+	// ChainDeadline optionally overrides the retry-loop total budget.
+	// Zero (the default) means "use ComputeChainDeadline's formula over
+	// the package defaults" — production leaves this unset. Tests use it
+	// to shrink the deadline so the mid-retry fire path is exercisable
+	// end-to-end without waiting out the production 19s budget. A future
+	// YAML surface would set it from broker_oauth.retry.chain_deadline.
+	ChainDeadline time.Duration
 }
 
 // String, GoString, and LogValue redact ClientSecret so Params never leaks
@@ -213,9 +222,10 @@ func (t Token) LogValue() slog.Value {
 	return slog.GroupValue(slog.Time("expires_at", t.ExpiresAt))
 }
 
-// Sentinel errors the Exchanger returns. The per-call error is always one
-// of these three (possibly wrapped via fmt.Errorf with %w); upper layers
-// classify by errors.Is and map to broker-side HTTP status codes in T7b.
+// Sentinel errors the Exchanger returns. The per-call error is always
+// one of these sentinels (possibly wrapped via fmt.Errorf with %w or
+// carried on an *ExchangeError); upper layers classify by errors.Is and
+// map to broker-side HTTP status codes in T7b.
 var (
 	// ErrExchangeRejected — the IdP returned a 4xx with an OAuth-shaped
 	// JSON body. The exchange was refused; retrying without changing the
@@ -238,4 +248,20 @@ var (
 	// without an RFC 8693 subject_token. This indicates a middleware
 	// ordering bug; retrying will not help.
 	ErrExchangeMissingSubject = errors.New("token exchange missing subject token")
+
+	// ErrExchangeRequestBuild — the outbound IdP request could not be
+	// constructed (e.g. an unparseable URL or invalid HTTP method). This
+	// is a deterministic config or code defect surfaced at request-build
+	// time, not a transient network condition; retrying reproduces the
+	// same failure. Non-retryable.
+	ErrExchangeRequestBuild = errors.New("token exchange request build failure")
+
+	// ErrExchangeRetriesExhausted — the server-side retry loop tried the
+	// exchange up to its attempt cap and every attempt failed with a
+	// retryable condition (ErrExchangeTransport), or the chain deadline
+	// fired mid-retry. The last attempt's state is carried on the same
+	// *ExchangeError envelope; this sentinel only signals "we gave up."
+	// Non-retryable at the tools layer — the agent should not immediately
+	// retry a chain the server itself just exhausted.
+	ErrExchangeRetriesExhausted = errors.New("token exchange retries exhausted")
 )

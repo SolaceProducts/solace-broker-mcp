@@ -20,7 +20,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"text/template"
 
 	"golang.org/x/sync/errgroup"
@@ -34,9 +36,16 @@ import (
 // invocation gets its own context — not shared across calls. Params holds
 // the input parameters (with the broker param already stripped). StepResults
 // accumulates results from each completed step, keyed by step ID.
+//
+// Item is set only during a fan-out iteration (see fetchFanOut) and holds
+// the parent-step row that the current iteration is bound to. Templates
+// reference it as .Item, e.g. `{{.Item.msgVpnName}}`. It is nil for
+// non-fan-out steps; missingkey=error in ResolveArgs catches templates that
+// reference .Item outside a fan-out.
 type ExecuteContext struct {
 	Params      map[string]any
 	StepResults map[string]map[string]any
+	Item        map[string]any
 }
 
 // ExecutionBatch groups steps for execution. Sequential batches contain a
@@ -156,10 +165,20 @@ func (ce *CompositeExecutor) executeStep(ctx context.Context, step Step, client 
 	return nil
 }
 
-// runStep dispatches a step to the paginated or single-call fetch and returns
-// the resulting data map. It does not write to execCtx.StepResults so that
-// parallel callers can collect results without a shared-map race.
+// runStep dispatches a step to the fan-out, paginated, or single-call fetch
+// and returns the resulting data map. It does not write to execCtx.StepResults
+// so that parallel callers can collect results without a shared-map race.
 func (ce *CompositeExecutor) runStep(ctx context.Context, step Step, client sempv2.Client, execCtx *ExecuteContext) (map[string]any, error) {
+	if step.ForEach != "" {
+		return ce.fetchFanOut(ctx, step, client, execCtx)
+	}
+	return ce.runSingle(ctx, step, client, execCtx)
+}
+
+// runSingle runs a non-fan-out step. It honors FollowPages for paginated
+// list operations and otherwise issues a single SEMP call. Called both
+// directly by runStep and per-iteration by fetchFanOut.
+func (ce *CompositeExecutor) runSingle(ctx context.Context, step Step, client sempv2.Client, execCtx *ExecuteContext) (map[string]any, error) {
 	if step.FollowPages {
 		return ce.fetchPaginated(ctx, step, client, execCtx)
 	}
@@ -186,6 +205,152 @@ func (ce *CompositeExecutor) runStep(ctx context.Context, step Step, client semp
 	}
 
 	return result.Data, nil
+}
+
+// Fan-out concurrency defaults. Both are framework-level: fanOutDefaultConcurrency
+// is what a step gets when it doesn't set Concurrency; fanOutMaxConcurrency caps
+// what the YAML author can request, defending broker HTTP handlers from a
+// mistaken (or hostile) high value in a tool definition.
+const (
+	fanOutDefaultConcurrency = 8
+	fanOutMaxConcurrency     = 32
+)
+
+// fetchFanOut iterates a prior step's data[] rows and issues a SEMP call per
+// row concurrently, up to step.Concurrency (default fanOutDefaultConcurrency).
+// Per-row templating exposes the current row as .Item so Args can reference
+// row fields. Rows for which ForEachIf resolves to false are skipped and
+// counted under "skipped". Results are keyed by row[ForEachKey] under "byKey".
+// Fail-fast: the first per-row error cancels the errgroup and returns.
+//
+// Loader validation guarantees ForEach names a prior step and ForEachKey is
+// non-empty; this method still defends against a parent step whose data field
+// is the wrong type (broken definition), rows whose ForEachKey value is
+// missing or non-string, and duplicate key values (last-writer-wins would
+// silently drop a per-row result). An absent or empty data field on the
+// parent is legal and yields an empty byKey. ForEachIf resolves under
+// missingkey=error and must produce a strconv.ParseBool literal; any
+// deviation is a hard error rather than a skip, so a broken predicate
+// surfaces at load-time verification instead of silently filtering rows.
+func (ce *CompositeExecutor) fetchFanOut(ctx context.Context, step Step, client sempv2.Client, execCtx *ExecuteContext) (map[string]any, error) {
+	parent, ok := execCtx.StepResults[step.ForEach]
+	if !ok {
+		return nil, fmt.Errorf("tool step %s: forEach step %q has no result in context; loader should have caught this", step.ID, step.ForEach)
+	}
+	var rawItems []any
+	if raw, present := parent["data"]; present && raw != nil {
+		items, ok := raw.([]any)
+		if !ok {
+			return nil, fmt.Errorf("tool step %s: forEach parent %q data: want []any, got %T", step.ID, step.ForEach, raw)
+		}
+		rawItems = items
+	}
+
+	if _, ok := ce.operations[step.Operation]; !ok {
+		return nil, fmt.Errorf("tool step %s: operation %q not found in operation catalog", step.ID, step.Operation)
+	}
+
+	concurrency := step.Concurrency
+	if concurrency <= 0 {
+		concurrency = fanOutDefaultConcurrency
+	}
+
+	byKey := make(map[string]any, len(rawItems))
+	var byKeyMu sync.Mutex
+	seenKeys := make(map[string]int, len(rawItems))
+	skipped := 0
+
+	g, gCtx := errgroup.WithContext(ctx)
+	sem := make(chan struct{}, concurrency)
+
+	for i, raw := range rawItems {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("tool step %s: forEach parent %q data[%d]: want object, got %T", step.ID, step.ForEach, i, raw)
+		}
+
+		if step.ForEachIf != "" {
+			iterCtx := &ExecuteContext{Params: execCtx.Params, StepResults: execCtx.StepResults, Item: item}
+			resolved, err := resolveTemplateString("forEachIf", step.ForEachIf, iterCtx)
+			if err != nil {
+				return nil, fmt.Errorf("tool step %s: forEach parent %q data[%d]: forEachIf: %w", step.ID, step.ForEach, i, err)
+			}
+			pass, err := strconv.ParseBool(strings.TrimSpace(resolved))
+			if err != nil {
+				return nil, fmt.Errorf("tool step %s: forEach parent %q data[%d]: forEachIf must resolve to a bool literal, got %q", step.ID, step.ForEach, i, resolved)
+			}
+			if !pass {
+				skipped++
+				continue
+			}
+		}
+
+		keyVal, ok := item[step.ForEachKey]
+		if !ok {
+			return nil, fmt.Errorf("tool step %s: forEachKey %q missing on forEach parent %q data[%d]", step.ID, step.ForEachKey, step.ForEach, i)
+		}
+		keyStr, ok := keyVal.(string)
+		if !ok {
+			return nil, fmt.Errorf("tool step %s: forEachKey %q on forEach parent %q data[%d]: want string, got %T", step.ID, step.ForEachKey, step.ForEach, i, keyVal)
+		}
+		if prev, dup := seenKeys[keyStr]; dup {
+			return nil, fmt.Errorf("tool step %s: duplicate forEachKey %q=%q on forEach parent %q at data[%d] (already seen at data[%d])", step.ID, step.ForEachKey, keyStr, step.ForEach, i, prev)
+		}
+		seenKeys[keyStr] = i
+
+		// Acquire the concurrency slot in the dispatch loop, not inside the
+		// spawned goroutine, so at most `concurrency` goroutines exist at any
+		// moment rather than one per parent row. Matters when a fan-out
+		// scans hundreds+ of rows (large VPN or client populations). Select
+		// on gCtx.Done() so a peer error aborts the loop instead of blocking
+		// on a semaphore whose slots will never drain.
+		select {
+		case sem <- struct{}{}:
+		case <-gCtx.Done():
+		}
+		if gCtx.Err() != nil {
+			break
+		}
+
+		idx := i
+		row := item
+		key := keyStr
+		safego.Go(g, func() error {
+			defer func() { <-sem }()
+
+			iterCtx := &ExecuteContext{Params: execCtx.Params, StepResults: execCtx.StepResults, Item: row}
+			data, err := ce.runSingle(gCtx, step, client, iterCtx)
+			if err != nil {
+				return fmt.Errorf("forEach %s[%d] key=%q: %w", step.ForEach, idx, key, err)
+			}
+			byKeyMu.Lock()
+			byKey[key] = data
+			byKeyMu.Unlock()
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, fmt.Errorf("tool step %s: %w", step.ID, err)
+	}
+
+	result := map[string]any{"byKey": byKey}
+	if skipped > 0 {
+		result["skipped"] = skipped
+	}
+	return result, nil
+}
+
+// resolveTemplateString parses and executes a single Go text/template against
+// the execution context, mirroring ResolveArgs' safety guarantees (parse-error
+// wrapping, panic recovery via safeTemplateExecute). Used by fetchFanOut for
+// the ForEachIf predicate — a single template value, not the args map form.
+func resolveTemplateString(name, tmplStr string, execCtx *ExecuteContext) (string, error) {
+	tmpl, err := template.New(name).Option("missingkey=error").Parse(tmplStr)
+	if err != nil {
+		return "", fmt.Errorf("parse: %w", err)
+	}
+	return safeTemplateExecute(tmpl, execCtx)
 }
 
 // applySelect joins step.Select (if non-empty) into the comma-separated

@@ -1,0 +1,12 @@
+{
+  "_doc": "list-queue-discards: entity-set fidelity against the F7 discarding fixtures. Monitoring's helpers.sh provisions three queues that actively discard messages: test-queue-discards-spool (spool quota exceeded), test-queue-discards-ttl (TTL-expired), and test-queue-lowprio-congestion (low-priority reject). The tool's summary emits topOffenderQueues[] with those names when discards are non-zero. Ground truth: extract queueName from topOffenderQueues, require the same set appears in the answer. A model that hedges 'no discards' fails against a fixture that actively discards. Broker-a only — same fixtures on broker-b. Fabrication check runs against the raw tool_result (see run-scenario.sh), so an adjacent test-queue-* the model mentions for context is not flagged. TIMING: topOffenderQueues[] is only populated once F7 has actually discarded — setup.cmd polls the three discard counters until all are non-zero before turn 1, so the assertion doesn't race the fixture warm-up.",
+  "prompt": "Are any queues in the default VPN dropping messages on $BROKER?",
+  "expected_tool": "mcp__solace-broker__list-queue-discards",
+  "setup": {"cmd": "q() { semp_curl --connect-timeout 3 --max-time 5 -sf \"$BROKER_URL/SEMP/v2/__private_monitor__/msgVpns/$BROKER_VPN/queues/$1\" 2>/dev/null | jq -r \"$2\" 2>/dev/null; }; n() { local v=$(q \"$1\" \"$2\"); [ -n \"$v\" ] && [ \"$v\" != \"null\" ] && [ \"$v\" -gt 0 ] 2>/dev/null; }; deadline=$((SECONDS+30)); spool=0; ttl=0; lowprio=0; while [ \"$SECONDS\" -lt \"$deadline\" ]; do n test-queue-discards-spool '.data.maxMsgSpoolUsageExceededDiscardedMsgCount // 0' && spool=1; n test-queue-discards-ttl '((.data.maxTtlExpiredDiscardedMsgCount // 0) + (.data.maxTtlExpiredToDmqMsgCount // 0) + (.data.maxTtlExpiredToDmqFailedMsgCount // 0))' && ttl=1; n test-queue-lowprio-congestion '.data.lowPriorityMsgCongestionDiscardedMsgCount // 0' && lowprio=1; [ \"$spool\" = 1 ] && [ \"$ttl\" = 1 ] && [ \"$lowprio\" = 1 ] && exit 0; sleep 1; done; echo \"setup: F7 discard counters did not accumulate within 30s wall-clock (spool=$spool ttl=$ttl lowprio=$lowprio; 1=non-zero, 0=still-zero-or-unreachable) — verify broker reachable at $BROKER_URL and setup-fixtures.sh ran\" >&2; exit 1"},
+  "ground_truth": {
+    "jq": ".summary.topOffenderQueues[].queueName",
+    "answer_regex": "test-queue-[a-zA-Z0-9_-]+"
+  },
+  "required_substrings_any_of": ["test-queue-discards-spool", "test-queue-discards-ttl", "test-queue-lowprio-congestion"],
+  "forbidden_substrings": ["no queues are dropping", "not dropping any messages"]
+}

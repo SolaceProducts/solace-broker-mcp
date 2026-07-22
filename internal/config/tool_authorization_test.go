@@ -16,6 +16,7 @@ package config
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -314,6 +315,147 @@ mcp_client_auth:
 				t.Errorf("expected error %q, got: %v", wantErr, err)
 			}
 		})
+	}
+}
+
+// Unclean tool names inside a group's list are rejected. The rule is: a
+// tool name must be non-empty and equal to its trimmed form. This single
+// invariant covers empty, whitespace-only, and surrounding-whitespace
+// ("list-queues ") in one rule. Valid tool names pass; internal
+// whitespace ("list queues") is intentionally accepted at this layer —
+// it is a syntactically clean string, and unknown-tool detection is the
+// registry check's job.
+func TestToolAuthorization_UncleanToolNamesRejected(t *testing.T) {
+	enableToolAuthorizationFlag(t)
+
+	const wantErrTmpl = `mcp_client_auth.tool_authorization.access_level_groups: tool name at "Ops" [%s] must be non-empty and have no leading or trailing whitespace`
+
+	cases := []struct {
+		name      string
+		toolsYAML string
+		wantIdx   string // empty means expect no error
+	}{
+		{
+			name: "empty string at index 0",
+			toolsYAML: `        - ""
+        - list-queues`,
+			wantIdx: "0",
+		},
+		{
+			name: "single space at index 1",
+			toolsYAML: `        - get-broker-status
+        - " "`,
+			wantIdx: "1",
+		},
+		{
+			name: "tab-only at index 0",
+			toolsYAML: `        - "\t"
+        - list-queues`,
+			wantIdx: "0",
+		},
+		{
+			name: "mixed spaces and tabs at index 1",
+			toolsYAML: `        - get-broker-status
+        - " \t "`,
+			wantIdx: "1",
+		},
+		{
+			name: "trailing space at index 0",
+			toolsYAML: `        - "list-queues "
+        - get-broker-status`,
+			wantIdx: "0",
+		},
+		{
+			name: "leading space at index 1",
+			toolsYAML: `        - get-broker-status
+        - " list-queues"`,
+			wantIdx: "1",
+		},
+		{
+			name: "valid tool names accepted",
+			toolsYAML: `        - get-broker-status
+        - list-queues`,
+		},
+		{
+			name: "internal whitespace accepted at this layer",
+			toolsYAML: `        - "list queues"
+        - get-broker-status`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			yaml := `
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"
+  tool_authorization:
+    enabled: true
+    access_level_groups:
+      Ops:
+` + tc.toolsYAML + `
+` + oauthBaseYAML
+
+			_, err := LoadConfig(writeTemp(t, yaml))
+			if tc.wantIdx == "" {
+				if err != nil {
+					t.Fatalf("expected no error, got: %v", err)
+				}
+				return
+			}
+			wantErr := fmt.Sprintf(wantErrTmpl, tc.wantIdx)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", wantErr)
+			}
+			if !strings.Contains(err.Error(), wantErr) {
+				t.Errorf("expected error containing %q, got: %v", wantErr, err)
+			}
+		})
+	}
+}
+
+// When a group has multiple unclean tool names, they collapse into one
+// error line per group with all offending indices joined. Slice indices
+// are stable so this stays deterministic (in contrast to the group-name
+// check, which breaks on the first offender because map iteration is
+// nondeterministic). Plural noun ("names") is used when more than one
+// index is bad. Every group with offenders is reported (accumulation
+// across groups is preserved).
+func TestToolAuthorization_MultipleUncleanToolNamesCollapsedPerGroup(t *testing.T) {
+	enableToolAuthorizationFlag(t)
+	yaml := `
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp"
+  resource_url: "https://mcp.example.com/mcp"
+  tool_authorization:
+    enabled: true
+    access_level_groups:
+      Ops:
+        - ""
+        - list-queues
+        - " "
+        - "list-queues "
+      Admin:
+        - get-broker-status
+        - "\t"
+` + oauthBaseYAML
+
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	// Ops has three bad indices (empty, whitespace-only, trailing space) → plural, joined.
+	wantOps := `tool names at "Ops" [0, 2, 3] must be non-empty and have no leading or trailing whitespace`
+	// Admin has one bad index → singular.
+	wantAdmin := `tool name at "Admin" [1] must be non-empty and have no leading or trailing whitespace`
+	if !strings.Contains(err.Error(), wantOps) {
+		t.Errorf("expected error to contain %q, got: %v", wantOps, err)
+	}
+	if !strings.Contains(err.Error(), wantAdmin) {
+		t.Errorf("expected error to contain %q, got: %v", wantAdmin, err)
 	}
 }
 

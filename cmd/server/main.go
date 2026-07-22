@@ -55,6 +55,24 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// redactedKeys are attribute-key substrings that trigger [REDACTED] replacement
+// in slog output. Case-insensitive substring match — see redactSecretAttr.
+var redactedKeys = []string{"password", "token", "secret", "authorization", "credential", "api_key", "private_key"}
+
+// redactSecretAttr is the slog.HandlerOptions.ReplaceAttr filter used by
+// newSlogHandler. Any attribute whose key (lowercased) contains one of
+// redactedKeys has its value replaced with [REDACTED].
+func redactSecretAttr(_ []string, a slog.Attr) slog.Attr {
+	key := strings.ToLower(a.Key)
+	for _, r := range redactedKeys {
+		if strings.Contains(key, r) {
+			a.Value = slog.StringValue("[REDACTED]")
+			return a
+		}
+	}
+	return a
+}
+
 // newSlogHandler creates a slog handler with the ReplaceAttr safety net that
 // redacts values for keys matching common credential patterns. This is defense
 // in depth — credential-carrying types also implement slog.LogValuer to exclude
@@ -66,20 +84,9 @@ import (
 // loading itself can emit logs), then again with the user-configured level
 // from cfg.LogLevel after validation.
 func newSlogHandler(level slog.Level) slog.Handler {
-	redactedKeys := []string{"password", "token", "secret", "authorization", "credential", "api_key", "private_key"}
-
 	jsonHandler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: level,
-		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-			key := strings.ToLower(a.Key)
-			for _, redacted := range redactedKeys {
-				if strings.Contains(key, redacted) {
-					a.Value = slog.StringValue("[REDACTED]")
-					return a
-				}
-			}
-			return a
-		},
+		Level:       level,
+		ReplaceAttr: redactSecretAttr,
 	})
 
 	// Wrap the JSON handler so every request-scoped log line carries a
@@ -438,11 +445,27 @@ func registerMixedTools(mgr *tools.ToolManager) {
 // a singleflight.Group for request deduplication. None of these make an
 // outbound network call at construction time; the first IdP request
 // happens when a request-path goroutine calls Exchanger.Exchange().
-// (idpclient.NewHTTPClient does read local trust-store material —
-// SSL_CERT_FILE and the system cert pool — which is filesystem/OS I/O,
-// but not network.)
+// (idpclient.NewRetryingHTTPClient wraps NewHTTPClient, which does read
+// local trust-store material — SSL_CERT_FILE and the system cert pool —
+// so this is filesystem/OS I/O, but not network.)
+//
+// The client is the retrying variant: token-exchange calls transparently
+// retry 5xx and connection errors (see internal/idpclient/retrying.go).
+// JWKS refresh and OIDC discovery keep the non-retrying NewHTTPClient —
+// they are read-only lookups where a single failure is the right signal.
 func newTokenExchanger(oauthCfg *config.BrokerOAuthConfig) (*tokenexchange.Exchanger, error) {
-	httpClient, err := idpclient.NewHTTPClient()
+	// Retry knobs sourced from the tokenexchange package so per-attempt
+	// timeout, retry count, backoff bounds, and the derived chain deadline
+	// stay coherent. The per-attempt Timeout is applied via WithTimeout to
+	// the inner *http.Client that NewRetryingHTTPClient composes.
+	httpClient, err := idpclient.NewRetryingHTTPClient(
+		idpclient.RetryOptions{
+			MaxRetries:   tokenexchange.DefaultMaxRetries,
+			RetryWaitMin: tokenexchange.DefaultRetryWaitMin,
+			RetryWaitMax: tokenexchange.DefaultRetryWaitMax,
+		},
+		idpclient.WithTimeout(tokenexchange.DefaultPerAttemptTimeout),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("creating IdP HTTP client: %w", err)
 	}
@@ -486,6 +509,18 @@ func buildToolPolicy(cfg *config.ServerConfig) (*authz.Policy, error) {
 		return nil, nil
 	}
 	return authz.NewPolicy(*cfg.MCPClientAuth.ToolAuthorization)
+}
+
+// logStartupBanners emits the boot-time WARN banners: auth-mode signal,
+// static-cleartext exposure, and OAuth plaintext-listener acknowledgement.
+func logStartupBanners(cfg *config.ServerConfig) {
+	banner.LogStartupAuthMode(cfg.MCPClientAuth.Mode, cfg.MCPClientAuth.Issuer, cfg.BindAddress())
+	if cfg.StaticTokenExposedCleartext() {
+		banner.LogStaticCleartextExposure(cfg.BindAddress())
+	}
+	if cfg.OAuthPlaintextListenerAcknowledged() {
+		banner.LogOAuthPlaintextListener(cfg.BindAddress())
+	}
 }
 
 func main() {
@@ -561,21 +596,7 @@ func main() {
 	// level — at this point the bootstrap handler is at INFO, so WARN
 	// banner entries are always visible regardless of cfg.LogLevel.
 	// DO NOT move this into middleware; see internal/banner/banner.go.
-	banner.LogStartupAuthMode(cfg.MCPClientAuth.Mode, cfg.MCPClientAuth.Issuer, cfg.BindAddress())
-
-	// static mode allows a non-loopback bind without an override, but that only
-	// keeps the token safe if the transport is encrypted. Warn loudly when the
-	// shared dev token would travel plaintext on a routable interface.
-	if cfg.StaticTokenExposedCleartext() {
-		banner.LogStaticCleartextExposure(cfg.BindAddress())
-	}
-
-	// oauth mode requires TLS unless the operator acknowledged upstream TLS
-	// termination (tls_terminated_upstream: true). When they did, the listener
-	// serves plaintext — warn loudly so a missing terminating proxy is visible.
-	if cfg.OAuthPlaintextListenerAcknowledged() {
-		banner.LogOAuthPlaintextListener(cfg.BindAddress())
-	}
+	logStartupBanners(cfg)
 
 	// Reconfigure slog with the user-configured level. cfg.LogLevel is
 	// validated and normalized to one of debug/info/warn/error.

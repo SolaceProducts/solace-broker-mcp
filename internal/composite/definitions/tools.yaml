@@ -210,10 +210,11 @@ tools:
       via maxResults). Use this to discover which VPNs exist and identify any
       that are down or have no active connections. The response summary counts
       enabled VPNs in state == "down" under downCount and enabled+up VPNs with
-      no user client connections (excluding the reserved internal `#client` the
-      broker attaches to every up VPN) under zeroConnectionCount; standby VPNs
-      are excluded from both. Admin-disabled VPNs land in disabledCount only
-      and are excluded from downCount and zeroConnectionCount.
+      no non-reserved client connected under zeroConnectionCount — derived by
+      probing each enabled+up VPN for a client whose clientUsername does not
+      match Solace's reserved `#*` prefix. Standby VPNs are excluded from both.
+      Admin-disabled VPNs land in disabledCount only and are excluded from
+      downCount and zeroConnectionCount.
     annotations:
       readOnly: true
     parameters:
@@ -249,6 +250,29 @@ tools:
           - serviceSmfPlainTextFailureReason
           - serviceSmfPlainTextUp
           - state
+      # Per-VPN "is any real (non-reserved) client connected?" probe. Feeds
+      # zeroConnectionCount in the postProcess handler. The `#*` prefix on
+      # clientUsername is Solace's documented reserved-name contract, so this
+      # is version-independent — no reliance on the empirical `#client
+      # counts as exactly one connection` invariant the old <=1 predicate
+      # rode on. count=1 is a boolean check: any row returned means the VPN
+      # has a real client. select=[clientName] keeps the payload minimal.
+      # forEachIf restricts the probe to enabled+up VPNs, which are exactly the
+      # rows the postProcess handler consults for zeroConnectionCount. Disabled
+      # VPNs report state==down, and standby VPNs are excluded from the count;
+      # calling getMsgVpnClients on either would be wasted work (and hits an
+      # admin-disabled service on some brokers).
+      - id: real-clients
+        operation: monitor/getMsgVpnClients
+        forEach: vpns
+        forEachIf: '{{and .Item.enabled (eq .Item.state "up")}}'
+        forEachKey: msgVpnName
+        args:
+          msgVpnName: "{{.Item.msgVpnName}}"
+          count: "1"
+          where: "clientUsername!=#*"
+        select:
+          - clientName
     result:
       strategy: postProcess
       postProcess: listVpns
@@ -631,7 +655,7 @@ tools:
       - name: msgVpnConfig
         type: object
         required: false
-        description: "Optional MsgVpn attributes (enabled, maxConnectionCount, maxMsgSpoolUsage, etc.). Omitted attributes use broker defaults. Do not include msgVpnName here. See the SEMP MsgVpn schema for the full list."
+        description: "Optional MsgVpn attributes (enabled, maxConnectionCount, maxMsgSpoolUsage, etc.). Omitted attributes use broker defaults. Do not include msgVpnName here."
     steps:
       - id: createVpn
         operation: config/createMsgVpn
@@ -660,7 +684,7 @@ tools:
       - name: msgVpnConfig
         type: object
         required: true
-        description: "MsgVpn attributes to update (enabled, maxConnectionCount, maxMsgSpoolUsage, etc.). Only provided attributes are changed. Do not include msgVpnName here. See the SEMP MsgVpn schema for the full list."
+        description: "MsgVpn attributes to update (enabled, maxConnectionCount, maxMsgSpoolUsage, etc.). Only provided attributes are changed. Do not include msgVpnName here."
     steps:
       - id: updateVpn
         operation: config/updateMsgVpn
@@ -722,7 +746,7 @@ tools:
       - name: queueConfig
         type: object
         required: false
-        description: "Optional Queue attributes (accessType, egressEnabled, ingressEnabled, maxMsgSpoolUsage, permission, etc.). Omitted attributes use broker defaults. Do not include msgVpnName or queueName here. See the SEMP Queue schema for the full list."
+        description: "Optional Queue attributes (accessType, egressEnabled, ingressEnabled, maxMsgSpoolUsage, permission, etc.). Omitted attributes use broker defaults. Do not include msgVpnName or queueName here."
     steps:
       - id: createQueue
         operation: config/createMsgVpnQueue
@@ -760,7 +784,7 @@ tools:
       - name: queueConfig
         type: object
         required: true
-        description: "Queue attributes to update (egressEnabled, ingressEnabled, maxMsgSpoolUsage, maxRedeliveryCount, permission, etc.). Only provided attributes are changed. Do not include msgVpnName or queueName here. See the SEMP Queue schema for the full list."
+        description: "Queue attributes to update (egressEnabled, ingressEnabled, maxMsgSpoolUsage, maxRedeliveryCount, permission, etc.). Only provided attributes are changed. Do not include msgVpnName or queueName here."
     steps:
       - id: updateQueue
         operation: config/updateMsgVpnQueue
@@ -889,7 +913,7 @@ tools:
       - name: topicEndpointConfig
         type: object
         required: false
-        description: "Optional TopicEndpoint attributes (accessType, egressEnabled, ingressEnabled, maxMsgSpoolUsage, permission, etc.). Omitted attributes use broker defaults. Do not include msgVpnName or topicEndpointName here. See the SEMP TopicEndpoint schema for the full list."
+        description: "Optional TopicEndpoint attributes (accessType, egressEnabled, ingressEnabled, maxMsgSpoolUsage, permission, etc.). Omitted attributes use broker defaults. Do not include msgVpnName or topicEndpointName here."
     steps:
       - id: createTopicEndpoint
         operation: config/createMsgVpnTopicEndpoint
@@ -929,7 +953,7 @@ tools:
       - name: topicEndpointConfig
         type: object
         required: true
-        description: "TopicEndpoint attributes to update (egressEnabled, ingressEnabled, maxMsgSpoolUsage, maxRedeliveryCount, permission, etc.). Only provided attributes are changed. Do not include msgVpnName or topicEndpointName here. See the SEMP TopicEndpoint schema for the full list."
+        description: "TopicEndpoint attributes to update (egressEnabled, ingressEnabled, maxMsgSpoolUsage, maxRedeliveryCount, permission, etc.). Only provided attributes are changed. Do not include msgVpnName or topicEndpointName here."
     steps:
       - id: updateTopicEndpoint
         operation: config/updateMsgVpnTopicEndpoint
@@ -1000,7 +1024,7 @@ tools:
       - name: rdpConfig
         type: object
         required: false
-        description: "Optional RestDeliveryPoint attributes (enabled, clientProfileName, service, vendor). Omitted attributes use broker defaults. Do not include msgVpnName or restDeliveryPointName here. See the SEMP RestDeliveryPoint schema for the full list."
+        description: "Optional RestDeliveryPoint attributes (enabled, clientProfileName, service, vendor). Omitted attributes use broker defaults. Do not include msgVpnName or restDeliveryPointName here."
     steps:
       - id: createRdp
         operation: config/createMsgVpnRestDeliveryPoint
@@ -1040,7 +1064,7 @@ tools:
       - name: rdpConfig
         type: object
         required: true
-        description: "RestDeliveryPoint attributes to update (enabled, clientProfileName, service, vendor). Only provided attributes are changed. Do not include msgVpnName or restDeliveryPointName here. See the SEMP RestDeliveryPoint schema for the full list."
+        description: "RestDeliveryPoint attributes to update (enabled, clientProfileName, service, vendor). Only provided attributes are changed. Do not include msgVpnName or restDeliveryPointName here."
     steps:
       - id: updateRdp
         operation: config/updateMsgVpnRestDeliveryPoint

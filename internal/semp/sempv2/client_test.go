@@ -220,6 +220,77 @@ func TestClient_Execute_AllPathParamsProvided_NoError(t *testing.T) {
 	}
 }
 
+// TestClient_Execute_RejectsUnsafePathParam verifies that empty and dot-segment
+// path-parameter values ("", ".", "..") are rejected in buildURL before any HTTP
+// request is issued. Because url.PathEscape escapes "/", a path-parameter value
+// is always exactly one URL segment, so these three values are the complete set
+// that can collapse a targeted request onto an unintended path (e.g. a proxy or
+// broker that normalizes dot-segments). A legitimate value containing dots must
+// be unaffected.
+func TestClient_Execute_RejectsUnsafePathParam(t *testing.T) {
+	for _, bad := range []struct {
+		name  string
+		value string
+	}{
+		{"empty", ""},
+		{"single dot", "."},
+		{"double dot", ".."},
+	} {
+		t.Run("rejects "+bad.name, func(t *testing.T) {
+			client, server := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				t.Error("handler called unexpectedly; buildURL should have errored")
+				w.WriteHeader(http.StatusInternalServerError)
+			})
+			defer server.Close()
+
+			op := testOp("DELETE",
+				sempv2.Parameter{Name: "msgVpnName", In: "path"},
+				sempv2.Parameter{Name: "queueName", In: "path"},
+			)
+
+			_, err := client.Execute(context.Background(), op, map[string]any{
+				"msgVpnName": "default",
+				"queueName":  bad.value,
+			})
+			if err == nil {
+				t.Fatalf("expected error for unsafe path parameter value %q, got nil", bad.value)
+			}
+			// The error must name the offending parameter so an operator can
+			// locate it; the quoted form distinguishes it from the {queueName}
+			// placeholder in the path template.
+			if !strings.Contains(err.Error(), `path parameter "queueName"`) {
+				t.Errorf("error = %q, expected it to name the offending parameter queueName", err.Error())
+			}
+		})
+	}
+
+	t.Run("allows legitimate dotted value", func(t *testing.T) {
+		var handlerCalled bool
+		client, server := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			handlerCalled = true
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{})
+		})
+		defer server.Close()
+
+		op := testOp("GET",
+			sempv2.Parameter{Name: "msgVpnName", In: "path"},
+			sempv2.Parameter{Name: "queueName", In: "path"},
+		)
+
+		_, err := client.Execute(context.Background(), op, map[string]any{
+			"msgVpnName": "default",
+			"queueName":  "my.queue.v2",
+		})
+		if err != nil {
+			t.Fatalf("Execute() with legitimate dotted value: unexpected error: %v", err)
+		}
+		if !handlerCalled {
+			t.Error("handler was not called; a legitimate dotted value must not be rejected")
+		}
+	})
+}
+
 func TestClient_Execute_PathParams(t *testing.T) {
 	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.Path, "/msgVpns/my-vpn/queues/my-queue") {

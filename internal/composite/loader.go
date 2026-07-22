@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io/fs"
+	"slices"
 
 	"gopkg.in/yaml.v3"
 
@@ -70,6 +71,7 @@ func validateTool(tool *CompositeTool) error {
 	}
 
 	stepIDs := make(map[string]bool, len(tool.Steps))
+	stepSelects := make(map[string][]string, len(tool.Steps))
 	for _, step := range tool.Steps {
 		if step.ID == "" {
 			return fmt.Errorf("step ID is required")
@@ -79,6 +81,7 @@ func validateTool(tool *CompositeTool) error {
 			return fmt.Errorf("duplicate step ID: %s", step.ID)
 		}
 		stepIDs[step.ID] = true
+		stepSelects[step.ID] = step.Select
 
 		if step.Operation == "" {
 			return fmt.Errorf("step operation is required for step %s", step.ID)
@@ -91,6 +94,10 @@ func validateTool(tool *CompositeTool) error {
 			if _, dup := step.Args["select"]; dup {
 				return fmt.Errorf("step %s: cannot set both args.select and select", step.ID)
 			}
+		}
+
+		if err := validateFanOut(step, stepIDs, stepSelects); err != nil {
+			return err
 		}
 	}
 
@@ -128,6 +135,47 @@ func validateTool(tool *CompositeTool) error {
 		return fmt.Errorf("result strategy %q is not supported; supported values: collect, postProcess", tool.Result.Strategy)
 	}
 
+	return nil
+}
+
+// validateFanOut checks the fan-out-specific fields on a step. Called from
+// validateTool during the step-loop walk so stepIDs and stepSelects are
+// populated only for steps seen SO FAR — that is what enforces the
+// forward-reference ban (a fan-out step cannot name a step declared later).
+//
+// The rules mirror the plan:
+//   - ForEach must name a step already seen (no forward refs).
+//   - ForEach + Parallel is rejected (fan-out has its own concurrency).
+//   - ForEach requires a non-empty ForEachKey.
+//   - When the parent step declares a non-empty select, ForEachKey must be in it,
+//     so the key is guaranteed to reach the executor on parent rows.
+//   - Concurrency is in [0, fanOutMaxConcurrency]; 0 means "use the framework default".
+//   - Any fan-out field on a step without ForEach is a config smell and rejected.
+func validateFanOut(step Step, priorStepIDs map[string]bool, priorStepSelects map[string][]string) error {
+	if step.ForEach == "" {
+		if step.ForEachIf != "" || step.ForEachKey != "" || step.Concurrency != 0 {
+			return fmt.Errorf("step %s: forEachIf/forEachKey/concurrency require forEach to be set", step.ID)
+		}
+		return nil
+	}
+	if step.Parallel {
+		return fmt.Errorf("step %s: forEach cannot be combined with parallel (fan-out has its own bounded concurrency)", step.ID)
+	}
+	if step.ForEach == step.ID {
+		return fmt.Errorf("step %s: forEach cannot reference the step itself", step.ID)
+	}
+	if !priorStepIDs[step.ForEach] {
+		return fmt.Errorf("step %s: forEach references step %q which is not declared before this step", step.ID, step.ForEach)
+	}
+	if step.ForEachKey == "" {
+		return fmt.Errorf("step %s: forEach requires forEachKey", step.ID)
+	}
+	if parentSelect := priorStepSelects[step.ForEach]; len(parentSelect) > 0 && !slices.Contains(parentSelect, step.ForEachKey) {
+		return fmt.Errorf("step %s: forEachKey %q is not in parent step %q's select — it will be missing on iteration rows", step.ID, step.ForEachKey, step.ForEach)
+	}
+	if step.Concurrency < 0 || step.Concurrency > fanOutMaxConcurrency {
+		return fmt.Errorf("step %s: concurrency %d out of range [0, %d]", step.ID, step.Concurrency, fanOutMaxConcurrency)
+	}
 	return nil
 }
 
