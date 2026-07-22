@@ -27,12 +27,17 @@ case ",${LABELS:-}," in
     ;;
 esac
 
+# advisory (default) warns without blocking; blocking fails the PR. Decide once
+# so every non-OK exit below honors the mode.
+MODE="${CHANGELOG_GATE_MODE:-advisory}"
+if [ "$MODE" = "blocking" ]; then LEVEL="::error::"; EC=1; else LEVEL="::warning::"; EC=0; fi
+
 # Diff from the merge-base, not the base tip: if main advances while the PR is
 # open, base.sha moves forward, and a two-dot diff would misattribute unrelated
 # commits. The merge-base isolates this PR's own changes.
 MERGE_BASE=$(git merge-base "$BASE" "$HEAD") || {
-  echo "::error::Could not compute a merge-base for '$BASE' and '$HEAD' — the branch shares no common ancestor with the base (force-pushed base or shallow clone?). Cannot evaluate the CHANGELOG gate." >&2
-  exit 1
+  echo "${LEVEL}Could not compute a merge-base for '$BASE' and '$HEAD' — the branch shares no common ancestor with the base (force-pushed base or shallow clone?). Skipping the CHANGELOG check." >&2
+  exit "$EC"
 }
 
 # Production surface whose change requires a CHANGELOG entry. Mirrors the
@@ -59,20 +64,14 @@ extract_unreleased() {
 }
 
 if [ "$(extract_unreleased "$MERGE_BASE")" = "$(extract_unreleased "$HEAD")" ]; then
-  # Advisory (default): warn but pass, so a PR is never blocked. Blocking: fail.
-  if [ "${CHANGELOG_GATE_MODE:-advisory}" = "blocking" ]; then
-    level="::error::"; ec=1
-  else
-    level="::warning::"; ec=0
-  fi
-  echo "${level}This PR changes production surface but the CHANGELOG.md [Unreleased] section is unchanged."
+  echo "${LEVEL}This PR changes production surface but the CHANGELOG.md [Unreleased] section is unchanged."
   echo "Triggered by:"
   sed 's/^/  - /' <<<"$surface_hits"
   echo
   echo "Add an entry under [Unreleased] — run /changelog to draft one from your diff —"
   echo "or apply the 'no-changelog' label if this change has no user- or operator-visible"
   echo "surface (pure test/refactor/docs)."
-  exit "$ec"
+  exit "$EC"
 fi
 
 echo "CHANGELOG [Unreleased] updated — OK."

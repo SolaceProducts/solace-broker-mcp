@@ -35,7 +35,7 @@ extract_unreleased() {
 
 if [ "$(extract_unreleased "$base")" = "$(extract_unreleased HEAD)" ]; then
   cat <<'EOF'
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"This branch changes production surface (internal/config, internal/tools, or tools.yaml) but CHANGELOG.md [Unreleased] has no new entry. Run /changelog to draft one before opening/updating the PR, or plan to apply the 'no-changelog' label. The CI changelog gate will otherwise fail this PR."}}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"This branch changes production surface (internal/config, internal/tools, or tools.yaml) but CHANGELOG.md [Unreleased] has no new entry. Run /changelog to draft one before opening/updating the PR, or apply the 'no-changelog' label. CI will post an advisory warning (non-blocking); the release will fail at tag time if the entry is still missing."}}
 EOF
 fi
 
