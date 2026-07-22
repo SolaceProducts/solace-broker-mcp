@@ -26,7 +26,9 @@ surface_hits=$(grep -E '^(internal/config/|internal/tools/|internal/composite/de
 [ -n "$surface_hits" ] || exit 0
 
 extract_unreleased() {
-  git show "$1:CHANGELOG.md" 2>/dev/null | awk '
+  # || true so a missing CHANGELOG.md at this ref yields empty output rather than
+  # tripping `set -o pipefail` (keeps the hook non-blocking).
+  { git show "$1:CHANGELOG.md" 2>/dev/null || true; } | awk '
     /^## \[Unreleased\]/ { p = 1; next }
     p && /^## \[/        { exit }
     p                    { print }

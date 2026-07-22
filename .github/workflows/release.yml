@@ -162,6 +162,8 @@ jobs:
         working-directory: dist
         run: sha256sum *.tar.gz > checksums-sha256.txt
 
+      # A single artifact downloaded by name extracts flat into the working dir
+      # (no name-subdirectory), so body_path: release-notes.md below resolves.
       - name: Download release notes
         uses: actions/download-artifact@v4
         with:
