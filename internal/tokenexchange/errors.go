@@ -36,7 +36,7 @@ import (
 // error_description fields). It is the value Error() returns.
 //
 // Fields populated at construction (response.go / doExchange):
-//   - Sentinel, Message, HTTPStatus
+//   - Sentinel, Message, HTTPStatus, FailureClass
 //
 // Fields enriched by Exchange() before returning:
 //   - TokenEndpoint, BrokerAlias, Audience, Elapsed
@@ -47,7 +47,11 @@ type ExchangeError struct {
 	BrokerAlias   string
 	Audience      string
 	HTTPStatus    int
-	Elapsed       time.Duration
+	// FailureClass survives the ErrExchangeRetriesExhausted rewrap, which
+	// replaces Sentinel — it is the only signal of the underlying transport
+	// cause the breaker still has once retries are exhausted.
+	FailureClass FailureClass
+	Elapsed      time.Duration
 }
 
 func (e *ExchangeError) Error() string { return e.Message }
@@ -86,6 +90,9 @@ func (e *ExchangeError) LogAttrs() []slog.Attr {
 	}
 	if e.HTTPStatus != 0 {
 		attrs = append(attrs, slog.Int("idp_http_status", e.HTTPStatus))
+	}
+	if e.FailureClass != FailureClassNone {
+		attrs = append(attrs, slog.String("failure_class", e.FailureClass.String()))
 	}
 	if e.Elapsed != 0 {
 		attrs = append(attrs, slog.Duration("exchange_elapsed", e.Elapsed))

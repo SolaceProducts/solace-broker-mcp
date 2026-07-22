@@ -188,16 +188,18 @@ func (e *Exchanger) classifyRetryOutcome(ctx context.Context, err error, attempt
 		slog.Int("attempts", attempts),
 		slog.String("underlying", err.Error()))
 
-	// Preserve the last attempt's HTTP status when we have one. On the
-	// deadline path there is no *ExchangeError to copy from, so
-	// HTTPStatus stays zero — that is the honest signal that the last
-	// attempt did not receive a response before the deadline fired.
+	// Copy HTTPStatus and FailureClass forward: the new sentinel severs
+	// errors.Is back to ErrExchangeTransport, so these are the only signals
+	// of the underlying cause the breaker still has. On the deadline path
+	// exchErr is nil, so both stay zero — the honest "no response received"
+	// signal.
 	rewrapped := &ExchangeError{
 		Sentinel: ErrExchangeRetriesExhausted,
 		Message:  fmt.Sprintf("token exchange retries exhausted after %d attempts: %s", attempts, err.Error()),
 	}
 	if exchErr != nil {
 		rewrapped.HTTPStatus = exchErr.HTTPStatus
+		rewrapped.FailureClass = exchErr.FailureClass
 	}
 	return rewrapped
 }
@@ -217,8 +219,9 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 			return nil, ctx.Err()
 		}
 		return nil, &ExchangeError{
-			Sentinel: ErrExchangeTransport,
-			Message:  fmt.Sprintf("token exchange transport failure: IdP request failed: %v", err),
+			Sentinel:     ErrExchangeTransport,
+			Message:      fmt.Sprintf("token exchange transport failure: IdP request failed: %v", err),
+			FailureClass: FailureClassNetwork,
 		}
 	}
 
