@@ -105,11 +105,47 @@ type ServerConfig struct {
 // their respective allowlists (validGrantTypes, validAudienceParams). No
 // defaults — operators acknowledge each protocol choice explicitly.
 type BrokerOAuthConfig struct {
-	TokenURL      string           `yaml:"idp_token_endpoint"`      // IdP token endpoint (token-exchange POST target). YAML key uses "endpoint" to match the OAuth spec and OIDC Discovery JSON (`token_endpoint`); Go field keeps `URL` to match the language convention (golang.org/x/oauth2 also names its field TokenURL).
-	ClientID      string           `yaml:"mcp_server_client_id"`    // MCP server's client_id registered at the IdP
-	ClientAuth    BrokerClientAuth `yaml:"mcp_server_client_auth"`  // discriminated union; exactly one sub-block populated
-	GrantType     string           `yaml:"grant_type"`              // required; must be in validGrantTypes
-	AudienceParam string           `yaml:"audience_parameter_name"` // required; one of {audience, scope, resource}
+	TokenURL       string                      `yaml:"idp_token_endpoint"`      // IdP token endpoint (token-exchange POST target). YAML key uses "endpoint" to match the OAuth spec and OIDC Discovery JSON (`token_endpoint`); Go field keeps `URL` to match the language convention (golang.org/x/oauth2 also names its field TokenURL).
+	ClientID       string                      `yaml:"mcp_server_client_id"`    // MCP server's client_id registered at the IdP
+	ClientAuth     BrokerClientAuth            `yaml:"mcp_server_client_auth"`  // discriminated union; exactly one sub-block populated
+	GrantType      string                      `yaml:"grant_type"`              // required; must be in validGrantTypes
+	AudienceParam  string                      `yaml:"audience_parameter_name"` // required; one of {audience, scope, resource}
+	CircuitBreaker *BrokerCircuitBreakerConfig `yaml:"circuit_breaker"`         // optional; nil → safe defaults. Nested here (not top-level) because the breaker only protects OAuth token exchange, which exists only when this block does.
+}
+
+// BrokerCircuitBreakerConfig is the operator-facing schema for the token-
+// exchange circuit breaker. It nests under broker_oauth because the breaker
+// has nothing to protect without OAuth token exchange. Every field is optional;
+// an omitted field falls back to the shipped default, so `circuit_breaker: {}`
+// is equivalent to omitting the block entirely (all defaults, enabled).
+//
+// This is the schema type; the runtime type (tokenexchange.CircuitBreakerConfig)
+// is produced by translation in tokenexchange.FromConfig. Pointer fields let the
+// translator tell "operator omitted this" from "operator set the zero value",
+// which matters for validation (a set-to-zero threshold is an error; an omitted
+// one takes the default).
+type BrokerCircuitBreakerConfig struct {
+	// Enabled is the escape hatch. Nil or true keeps the breaker on; false
+	// disables it (retries still run) and logs a WARN. Disabling is not
+	// recommended in production.
+	Enabled *bool `yaml:"enabled"`
+
+	FailureRateWindow           *time.Duration `yaml:"failure_rate_window"`
+	MinimumRequests             *uint32        `yaml:"minimum_requests"`
+	FailureRateThresholdPercent *float64       `yaml:"failure_rate_threshold_percent"`
+	ConsecutiveFailureThreshold *uint32        `yaml:"consecutive_failure_threshold"`
+	OpenStateDuration           *time.Duration `yaml:"open_state_duration"`
+	HalfOpenProbeRequests       *uint32        `yaml:"half_open_probe_requests"`
+}
+
+// BreakerEnabled reports whether the breaker should be constructed. The default
+// (nil block or nil Enabled) is true — the breaker is on unless an operator
+// explicitly sets enabled: false.
+func (b *BrokerOAuthConfig) BreakerEnabled() bool {
+	if b == nil || b.CircuitBreaker == nil || b.CircuitBreaker.Enabled == nil {
+		return true
+	}
+	return *b.CircuitBreaker.Enabled
 }
 
 // BrokerClientAuth is a discriminated union of OAuth client authentication
@@ -245,6 +281,10 @@ func (b BrokerOAuthConfig) LogValue() slog.Value {
 		slog.String("mcp_server_client_auth_method", method),
 		slog.String("grant_type", b.GrantType),
 		slog.String("audience_parameter_name", b.AudienceParam),
+		// Whether the breaker is on is operationally important and non-secret.
+		// The fully-resolved threshold values are logged by the runtime when it
+		// constructs the breaker; here we surface only the enabled state.
+		slog.Bool("circuit_breaker_enabled", b.BreakerEnabled()),
 	)
 }
 
@@ -1454,8 +1494,47 @@ func validateBrokerOAuthConfig(cfg *ServerConfig) []error {
 	// fields are checked below in the per-method validators.
 	errs = append(errs, validateBrokerClientAuth(cfg.BrokerOAuth.ClientAuth)...)
 
+	errs = append(errs, validateBrokerCircuitBreaker(cfg.BrokerOAuth.CircuitBreaker)...)
+
 	return errs
 }
+
+// validateBrokerCircuitBreaker checks the operator-set circuit-breaker fields.
+// Only set (non-nil) fields are checked — an omitted field takes the shipped
+// default, which is valid by construction. Bounds mirror
+// tokenexchange.CircuitBreakerConfig.Validate so config validation catches a
+// bad value at startup rather than at Exchanger construction. A nil block means
+// "all defaults" and is always valid.
+func validateBrokerCircuitBreaker(cb *BrokerCircuitBreakerConfig) []error {
+	if cb == nil {
+		return nil
+	}
+	var errs []error
+
+	if cb.FailureRateWindow != nil && *cb.FailureRateWindow < 10*time.Millisecond {
+		errs = append(errs, fmt.Errorf("broker_oauth.circuit_breaker.failure_rate_window must be at least 10ms, got %v", *cb.FailureRateWindow))
+	}
+	if cb.MinimumRequests != nil && *cb.MinimumRequests == 0 {
+		errs = append(errs, fmt.Errorf("broker_oauth.circuit_breaker.minimum_requests must be at least 1"))
+	}
+	if cb.FailureRateThresholdPercent != nil && (*cb.FailureRateThresholdPercent <= 0 || *cb.FailureRateThresholdPercent > 100) {
+		errs = append(errs, fmt.Errorf("broker_oauth.circuit_breaker.failure_rate_threshold_percent must be in (0, 100], got %v", *cb.FailureRateThresholdPercent))
+	}
+	// consecutive_failure_threshold: 0 is valid — it disables the rule.
+	if cb.OpenStateDuration != nil && *cb.OpenStateDuration <= 0 {
+		errs = append(errs, fmt.Errorf("broker_oauth.circuit_breaker.open_state_duration must be positive, got %v", *cb.OpenStateDuration))
+	}
+	if cb.HalfOpenProbeRequests != nil && (*cb.HalfOpenProbeRequests < 1 || *cb.HalfOpenProbeRequests > maxBrokerHalfOpenProbeRequests) {
+		errs = append(errs, fmt.Errorf("broker_oauth.circuit_breaker.half_open_probe_requests must be in [1, %d], got %d", maxBrokerHalfOpenProbeRequests, *cb.HalfOpenProbeRequests))
+	}
+
+	return errs
+}
+
+// maxBrokerHalfOpenProbeRequests mirrors tokenexchange's cap. Duplicated as a
+// config-layer constant rather than imported to keep the config package free of
+// a dependency on the runtime package (the dependency runs the other way).
+const maxBrokerHalfOpenProbeRequests uint32 = 10
 
 // validateBrokerClientAuth enforces the discriminated-union shape of the
 // mcp_server_client_auth block: exactly one sub-block populated, with that sub-block's

@@ -16,6 +16,7 @@ package tokenexchange
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
@@ -54,11 +55,11 @@ func FromConfig(cfg *config.BrokerOAuthConfig, httpClient *http.Client, tokenCac
 		return nil, err
 	}
 
-	// Production always runs with the breaker enabled, using the frozen
-	// defaults. A future YAML surface will override the config here; until
-	// then this is the single point that turns the breaker on for real
-	// deployments while tests default to nil (disabled).
-	breakerCfg := DefaultCircuitBreakerConfig()
+	// Resolve the breaker config: start from the shipped defaults and overlay
+	// only the fields the operator set. A nil result means the operator
+	// disabled the breaker (enabled: false) — Params.CircuitBreaker nil leaves
+	// the breaker off while retries still run.
+	breakerCfg := resolveCircuitBreakerConfig(cfg.CircuitBreaker)
 
 	return New(Params{
 		TokenURL:         cfg.TokenURL,
@@ -69,8 +70,43 @@ func FromConfig(cfg *config.BrokerOAuthConfig, httpClient *http.Client, tokenCac
 		AudienceParam:    audienceParam,
 		HTTPClient:       httpClient,
 		Cache:            tokenCache,
-		CircuitBreaker:   &breakerCfg,
+		CircuitBreaker:   breakerCfg,
 	})
+}
+
+// resolveCircuitBreakerConfig overlays operator-set fields onto the shipped
+// defaults. Returns nil when the operator disabled the breaker (enabled:
+// false), which New reads as "breaker off". An omitted block or omitted field
+// takes the default.
+func resolveCircuitBreakerConfig(cb *config.BrokerCircuitBreakerConfig) *CircuitBreakerConfig {
+	if cb != nil && cb.Enabled != nil && !*cb.Enabled {
+		slog.Warn("token exchange circuit breaker is DISABLED by configuration; " +
+			"the IdP is unprotected against failure storms (not recommended in production)")
+		return nil
+	}
+
+	resolved := DefaultCircuitBreakerConfig()
+	if cb != nil {
+		if cb.FailureRateWindow != nil {
+			resolved.FailureRateWindow = *cb.FailureRateWindow
+		}
+		if cb.MinimumRequests != nil {
+			resolved.MinimumRequests = *cb.MinimumRequests
+		}
+		if cb.FailureRateThresholdPercent != nil {
+			resolved.FailureRateThresholdPercent = *cb.FailureRateThresholdPercent
+		}
+		if cb.ConsecutiveFailureThreshold != nil {
+			resolved.ConsecutiveFailureThreshold = *cb.ConsecutiveFailureThreshold
+		}
+		if cb.OpenStateDuration != nil {
+			resolved.OpenStateDuration = *cb.OpenStateDuration
+		}
+		if cb.HalfOpenProbeRequests != nil {
+			resolved.HalfOpenProbeRequests = *cb.HalfOpenProbeRequests
+		}
+	}
+	return &resolved
 }
 
 // resolveClientAuth determines the client auth method and extracts the
