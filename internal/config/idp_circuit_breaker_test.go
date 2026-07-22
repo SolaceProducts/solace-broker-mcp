@@ -116,19 +116,61 @@ func TestLoadConfig_CircuitBreaker_OmittedBlockIsNil(t *testing.T) {
 }
 
 // TestLoadConfig_CircuitBreaker_BadValueRejected proves an out-of-bounds
-// breaker value fails at config load, not at Exchanger construction.
+// breaker value fails at config load (not at Exchanger construction) AND that
+// the operator-facing error carries everything needed to fix it: the dotted
+// field path, the valid range, and the offending value. A vague "invalid
+// config" would technically reject the value but leave the operator guessing —
+// these assertions pin the message contract.
 func TestLoadConfig_CircuitBreaker_BadValueRejected(t *testing.T) {
-	silenceLogs(t)
-	yaml := breakerYAMLPrefix + `  circuit_breaker:
-    failure_rate_threshold_percent: 150
-` + breakerYAMLBrokerSuffix
-
-	_, err := LoadConfig(writeTemp(t, yaml))
-	if err == nil {
-		t.Fatal("expected error for out-of-bounds failure_rate_threshold_percent, got nil")
+	cases := []struct {
+		name        string
+		line        string
+		wantField   string // dotted path the operator must see
+		wantInRange string // a fragment of the stated valid range
+		wantValue   string // the offending value echoed back
+	}{
+		{
+			name:        "threshold over 100",
+			line:        "failure_rate_threshold_percent: 150",
+			wantField:   "broker_oauth.circuit_breaker.failure_rate_threshold_percent",
+			wantInRange: "(0, 100]",
+			wantValue:   "150",
+		},
+		{
+			name:        "open duration over cap",
+			line:        "open_state_duration: 5h",
+			wantField:   "broker_oauth.circuit_breaker.open_state_duration",
+			wantInRange: "1h0m0s", // the MaxIdPOpenStateDuration ceiling in the message
+			wantValue:   "5h0m0s",
+		},
+		{
+			name:        "minimum_requests over cap",
+			line:        "minimum_requests: 2000000",
+			wantField:   "broker_oauth.circuit_breaker.minimum_requests",
+			wantInRange: "1000000",
+			wantValue:   "2000000",
+		},
 	}
-	if !strings.Contains(err.Error(), "failure_rate_threshold_percent") {
-		t.Errorf("error %q does not mention the offending field", err.Error())
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			silenceLogs(t)
+			yaml := breakerYAMLPrefix + "  circuit_breaker:\n    " + tc.line + "\n" + breakerYAMLBrokerSuffix
+
+			_, err := LoadConfig(writeTemp(t, yaml))
+			if err == nil {
+				t.Fatalf("expected error for %s, got nil", tc.name)
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, tc.wantField) {
+				t.Errorf("error does not name the field %q: %s", tc.wantField, msg)
+			}
+			if !strings.Contains(msg, tc.wantInRange) {
+				t.Errorf("error does not state the valid range %q: %s", tc.wantInRange, msg)
+			}
+			if !strings.Contains(msg, tc.wantValue) {
+				t.Errorf("error does not echo the offending value %q: %s", tc.wantValue, msg)
+			}
+		})
 	}
 }
 
@@ -144,9 +186,9 @@ func TestBreakerEnabled(t *testing.T) {
 	}{
 		{"nil oauth block", nil, true},
 		{"no circuit_breaker block", &BrokerOAuthConfig{}, true},
-		{"block present, enabled omitted", &BrokerOAuthConfig{CircuitBreaker: &BrokerCircuitBreakerConfig{}}, true},
-		{"enabled true", &BrokerOAuthConfig{CircuitBreaker: &BrokerCircuitBreakerConfig{Enabled: ptr(true)}}, true},
-		{"enabled false", &BrokerOAuthConfig{CircuitBreaker: &BrokerCircuitBreakerConfig{Enabled: ptr(false)}}, false},
+		{"block present, enabled omitted", &BrokerOAuthConfig{CircuitBreaker: &IdPCircuitBreakerConfig{}}, true},
+		{"enabled true", &BrokerOAuthConfig{CircuitBreaker: &IdPCircuitBreakerConfig{Enabled: ptr(true)}}, true},
+		{"enabled false", &BrokerOAuthConfig{CircuitBreaker: &IdPCircuitBreakerConfig{Enabled: ptr(false)}}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -165,42 +207,50 @@ func TestValidateBrokerCircuitBreaker(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name    string
-		cb      *BrokerCircuitBreakerConfig
+		cb      *IdPCircuitBreakerConfig
 		wantErr bool
 	}{
 		{"nil block valid", nil, false},
-		{"empty block valid (all defaults)", &BrokerCircuitBreakerConfig{}, false},
-		{"enabled false alone valid", &BrokerCircuitBreakerConfig{Enabled: ptr(false)}, false},
+		{"empty block valid (all defaults)", &IdPCircuitBreakerConfig{}, false},
+		{"enabled false alone valid", &IdPCircuitBreakerConfig{Enabled: ptr(false)}, false},
 
-		{"window at floor valid", &BrokerCircuitBreakerConfig{FailureRateWindow: ptr(10 * time.Millisecond)}, false},
-		{"window below floor", &BrokerCircuitBreakerConfig{FailureRateWindow: ptr(time.Millisecond)}, true},
-		{"window zero", &BrokerCircuitBreakerConfig{FailureRateWindow: ptr(time.Duration(0))}, true},
+		{"window at floor valid", &IdPCircuitBreakerConfig{FailureRateWindow: ptr(MinIdPFailureRateWindow)}, false},
+		{"window below floor", &IdPCircuitBreakerConfig{FailureRateWindow: ptr(time.Millisecond)}, true},
+		{"window zero", &IdPCircuitBreakerConfig{FailureRateWindow: ptr(time.Duration(0))}, true},
+		{"window at cap valid", &IdPCircuitBreakerConfig{FailureRateWindow: ptr(MaxIdPFailureRateWindow)}, false},
+		{"window over cap", &IdPCircuitBreakerConfig{FailureRateWindow: ptr(MaxIdPFailureRateWindow + time.Second)}, true},
 
-		{"minimum requests zero", &BrokerCircuitBreakerConfig{MinimumRequests: ptr(uint32(0))}, true},
-		{"minimum requests one valid", &BrokerCircuitBreakerConfig{MinimumRequests: ptr(uint32(1))}, false},
+		{"minimum requests zero", &IdPCircuitBreakerConfig{MinimumRequests: ptr(uint32(0))}, true},
+		{"minimum requests one valid", &IdPCircuitBreakerConfig{MinimumRequests: ptr(uint32(1))}, false},
+		{"minimum requests at cap valid", &IdPCircuitBreakerConfig{MinimumRequests: ptr(MaxIdPMinimumRequests)}, false},
+		{"minimum requests over cap", &IdPCircuitBreakerConfig{MinimumRequests: ptr(MaxIdPMinimumRequests + 1)}, true},
 
-		{"threshold zero", &BrokerCircuitBreakerConfig{FailureRateThresholdPercent: ptr(0.0)}, true},
-		{"threshold over 100", &BrokerCircuitBreakerConfig{FailureRateThresholdPercent: ptr(100.5)}, true},
-		{"threshold exactly 100 valid", &BrokerCircuitBreakerConfig{FailureRateThresholdPercent: ptr(100.0)}, false},
+		{"threshold zero", &IdPCircuitBreakerConfig{FailureRateThresholdPercent: ptr(0.0)}, true},
+		{"threshold over 100", &IdPCircuitBreakerConfig{FailureRateThresholdPercent: ptr(100.5)}, true},
+		{"threshold exactly 100 valid", &IdPCircuitBreakerConfig{FailureRateThresholdPercent: ptr(100.0)}, false},
 
-		{"consecutive zero valid (disables rule)", &BrokerCircuitBreakerConfig{ConsecutiveFailureThreshold: ptr(uint32(0))}, false},
+		{"consecutive zero valid (disables rule)", &IdPCircuitBreakerConfig{ConsecutiveFailureThreshold: ptr(uint32(0))}, false},
+		{"consecutive at cap valid", &IdPCircuitBreakerConfig{ConsecutiveFailureThreshold: ptr(MaxIdPConsecutiveFailureThreshold)}, false},
+		{"consecutive over cap", &IdPCircuitBreakerConfig{ConsecutiveFailureThreshold: ptr(MaxIdPConsecutiveFailureThreshold + 1)}, true},
 
-		{"open duration zero", &BrokerCircuitBreakerConfig{OpenStateDuration: ptr(time.Duration(0))}, true},
-		{"open duration positive valid", &BrokerCircuitBreakerConfig{OpenStateDuration: ptr(time.Second)}, false},
+		{"open duration zero", &IdPCircuitBreakerConfig{OpenStateDuration: ptr(time.Duration(0))}, true},
+		{"open duration positive valid", &IdPCircuitBreakerConfig{OpenStateDuration: ptr(time.Second)}, false},
+		{"open duration at cap valid", &IdPCircuitBreakerConfig{OpenStateDuration: ptr(MaxIdPOpenStateDuration)}, false},
+		{"open duration over cap", &IdPCircuitBreakerConfig{OpenStateDuration: ptr(MaxIdPOpenStateDuration + time.Second)}, true},
 
-		{"probes zero", &BrokerCircuitBreakerConfig{HalfOpenProbeRequests: ptr(uint32(0))}, true},
-		{"probes at cap valid", &BrokerCircuitBreakerConfig{HalfOpenProbeRequests: ptr(maxBrokerHalfOpenProbeRequests)}, false},
-		{"probes over cap", &BrokerCircuitBreakerConfig{HalfOpenProbeRequests: ptr(maxBrokerHalfOpenProbeRequests + 1)}, true},
+		{"probes zero", &IdPCircuitBreakerConfig{HalfOpenProbeRequests: ptr(uint32(0))}, true},
+		{"probes at cap valid", &IdPCircuitBreakerConfig{HalfOpenProbeRequests: ptr(MaxIdPHalfOpenProbeRequests)}, false},
+		{"probes over cap", &IdPCircuitBreakerConfig{HalfOpenProbeRequests: ptr(MaxIdPHalfOpenProbeRequests + 1)}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			errs := validateBrokerCircuitBreaker(tc.cb)
+			errs := validateIdPCircuitBreaker(tc.cb)
 			if tc.wantErr && len(errs) == 0 {
-				t.Errorf("validateBrokerCircuitBreaker() = no errors, want at least one")
+				t.Errorf("validateIdPCircuitBreaker() = no errors, want at least one")
 			}
 			if !tc.wantErr && len(errs) != 0 {
-				t.Errorf("validateBrokerCircuitBreaker() = %v, want none", errs)
+				t.Errorf("validateIdPCircuitBreaker() = %v, want none", errs)
 			}
 		})
 	}

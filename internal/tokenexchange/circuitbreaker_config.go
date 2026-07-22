@@ -17,6 +17,8 @@ package tokenexchange
 import (
 	"fmt"
 	"time"
+
+	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 )
 
 // CircuitBreakerConfig is the breaker's tuning surface. The breaker is always
@@ -77,32 +79,33 @@ func DefaultCircuitBreakerConfig() CircuitBreakerConfig {
 // The defaults always pass; the method exists now so the override path added
 // later has a validation seam already in place rather than a refactor.
 func (c CircuitBreakerConfig) Validate() error {
-	if c.FailureRateWindow <= 0 {
-		return fmt.Errorf("circuit breaker: failure_rate_window must be positive, got %v", c.FailureRateWindow)
+	// Bounds are the shared config.*IdP* constants — the single source of truth
+	// also used by the config-layer YAML validator (config.validateIdPCircuitBreaker),
+	// so a value rejected here is rejected there and vice versa. Derived bucket
+	// granularity is window/10, so the floor keeps the bucket period non-zero;
+	// the ceilings are sanity guardrails, not recommended ranges (see the
+	// constants' doc in config/idp_circuit_breaker.go).
+	if c.FailureRateWindow < config.MinIdPFailureRateWindow || c.FailureRateWindow > config.MaxIdPFailureRateWindow {
+		return fmt.Errorf("circuit breaker: failure_rate_window must be in [%v, %v], got %v", config.MinIdPFailureRateWindow, config.MaxIdPFailureRateWindow, c.FailureRateWindow)
 	}
-	// Derived bucket granularity is window/10 (see the breaker constructor); a
-	// window under 10 buckets' worth would round to a zero bucket period.
-	if c.FailureRateWindow < 10*time.Millisecond {
-		return fmt.Errorf("circuit breaker: failure_rate_window must be at least 10ms, got %v", c.FailureRateWindow)
-	}
-	if c.MinimumRequests == 0 {
-		return fmt.Errorf("circuit breaker: minimum_requests must be at least 1")
+	if c.MinimumRequests == 0 || c.MinimumRequests > config.MaxIdPMinimumRequests {
+		return fmt.Errorf("circuit breaker: minimum_requests must be in [1, %d], got %d", config.MaxIdPMinimumRequests, c.MinimumRequests)
 	}
 	if c.FailureRateThresholdPercent <= 0 || c.FailureRateThresholdPercent > 100 {
 		return fmt.Errorf("circuit breaker: failure_rate_threshold_percent must be in (0, 100], got %v", c.FailureRateThresholdPercent)
 	}
 	// ConsecutiveFailureThreshold == 0 is intentionally allowed: it disables the
-	// consecutive-failure rule, leaving the rate rule as the only trip.
-	if c.OpenStateDuration <= 0 {
-		return fmt.Errorf("circuit breaker: open_state_duration must be positive, got %v", c.OpenStateDuration)
+	// consecutive-failure rule, leaving the rate rule as the only trip. The cap
+	// is a nonsense guard only and is deliberately NOT tied to MinimumRequests —
+	// the two trip rules are independent (see newReadyToTrip).
+	if c.ConsecutiveFailureThreshold > config.MaxIdPConsecutiveFailureThreshold {
+		return fmt.Errorf("circuit breaker: consecutive_failure_threshold must not exceed %d, got %d", config.MaxIdPConsecutiveFailureThreshold, c.ConsecutiveFailureThreshold)
 	}
-	if c.HalfOpenProbeRequests < 1 || c.HalfOpenProbeRequests > maxHalfOpenProbeRequests {
-		return fmt.Errorf("circuit breaker: half_open_probe_requests must be in [1, %d], got %d", maxHalfOpenProbeRequests, c.HalfOpenProbeRequests)
+	if c.OpenStateDuration <= 0 || c.OpenStateDuration > config.MaxIdPOpenStateDuration {
+		return fmt.Errorf("circuit breaker: open_state_duration must be in (0, %v], got %v", config.MaxIdPOpenStateDuration, c.OpenStateDuration)
+	}
+	if c.HalfOpenProbeRequests < 1 || c.HalfOpenProbeRequests > config.MaxIdPHalfOpenProbeRequests {
+		return fmt.Errorf("circuit breaker: half_open_probe_requests must be in [1, %d], got %d", config.MaxIdPHalfOpenProbeRequests, c.HalfOpenProbeRequests)
 	}
 	return nil
 }
-
-// maxHalfOpenProbeRequests bounds how much traffic a single recovery attempt
-// can send at a still-fragile IdP. Most deployments want 1-3; the cap leaves
-// headroom without allowing a probe burst.
-const maxHalfOpenProbeRequests uint32 = 10

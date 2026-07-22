@@ -40,7 +40,7 @@ func TestResolveCircuitBreakerConfig_NilUsesDefaults(t *testing.T) {
 // enabled: false yields a nil runtime config, which New reads as "breaker off".
 func TestResolveCircuitBreakerConfig_DisabledReturnsNil(t *testing.T) {
 	t.Parallel()
-	got := resolveCircuitBreakerConfig(&config.BrokerCircuitBreakerConfig{Enabled: ptr(false)})
+	got := resolveCircuitBreakerConfig(&config.IdPCircuitBreakerConfig{Enabled: ptr(false)})
 	if got != nil {
 		t.Errorf("resolveCircuitBreakerConfig(enabled=false) = %+v, want nil", *got)
 	}
@@ -50,7 +50,7 @@ func TestResolveCircuitBreakerConfig_DisabledReturnsNil(t *testing.T) {
 // explicit enabled: true with no other fields is the same as the defaults.
 func TestResolveCircuitBreakerConfig_EnabledTrueUsesDefaults(t *testing.T) {
 	t.Parallel()
-	got := resolveCircuitBreakerConfig(&config.BrokerCircuitBreakerConfig{Enabled: ptr(true)})
+	got := resolveCircuitBreakerConfig(&config.IdPCircuitBreakerConfig{Enabled: ptr(true)})
 	if got == nil || *got != DefaultCircuitBreakerConfig() {
 		t.Errorf("resolveCircuitBreakerConfig(enabled=true) = %v, want defaults", got)
 	}
@@ -60,7 +60,7 @@ func TestResolveCircuitBreakerConfig_EnabledTrueUsesDefaults(t *testing.T) {
 // the operator set are overlaid; the rest keep their defaults.
 func TestResolveCircuitBreakerConfig_PartialOverlay(t *testing.T) {
 	t.Parallel()
-	got := resolveCircuitBreakerConfig(&config.BrokerCircuitBreakerConfig{
+	got := resolveCircuitBreakerConfig(&config.IdPCircuitBreakerConfig{
 		FailureRateThresholdPercent: ptr(75.0),
 		OpenStateDuration:           ptr(90 * time.Second),
 	})
@@ -80,7 +80,7 @@ func TestResolveCircuitBreakerConfig_PartialOverlay(t *testing.T) {
 // the result differs from the defaults on each.
 func TestResolveCircuitBreakerConfig_FullOverlay(t *testing.T) {
 	t.Parallel()
-	got := resolveCircuitBreakerConfig(&config.BrokerCircuitBreakerConfig{
+	got := resolveCircuitBreakerConfig(&config.IdPCircuitBreakerConfig{
 		FailureRateWindow:           ptr(60 * time.Second),
 		MinimumRequests:             ptr(uint32(20)),
 		FailureRateThresholdPercent: ptr(80.0),

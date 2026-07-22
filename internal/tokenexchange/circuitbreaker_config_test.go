@@ -17,6 +17,8 @@ package tokenexchange
 import (
 	"testing"
 	"time"
+
+	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 )
 
 // TestDefaultCircuitBreakerConfig_Values pins the shipped defaults. A change
@@ -82,8 +84,10 @@ func TestCircuitBreakerConfig_Validate(t *testing.T) {
 		{"zero window", mutate(func(c *CircuitBreakerConfig) { c.FailureRateWindow = 0 }), true},
 		{"negative window", mutate(func(c *CircuitBreakerConfig) { c.FailureRateWindow = -time.Second }), true},
 		{"sub-bucket window", mutate(func(c *CircuitBreakerConfig) { c.FailureRateWindow = time.Millisecond }), true},
+		{"window over cap", mutate(func(c *CircuitBreakerConfig) { c.FailureRateWindow = config.MaxIdPFailureRateWindow + time.Second }), true},
 
 		{"zero minimum requests", mutate(func(c *CircuitBreakerConfig) { c.MinimumRequests = 0 }), true},
+		{"minimum requests over cap", mutate(func(c *CircuitBreakerConfig) { c.MinimumRequests = config.MaxIdPMinimumRequests + 1 }), true},
 
 		{"zero threshold", mutate(func(c *CircuitBreakerConfig) { c.FailureRateThresholdPercent = 0 }), true},
 		{"negative threshold", mutate(func(c *CircuitBreakerConfig) { c.FailureRateThresholdPercent = -1 }), true},
@@ -91,13 +95,15 @@ func TestCircuitBreakerConfig_Validate(t *testing.T) {
 		{"threshold exactly 100 ok", mutate(func(c *CircuitBreakerConfig) { c.FailureRateThresholdPercent = 100 }), false},
 
 		{"zero consecutive disables rule (allowed)", mutate(func(c *CircuitBreakerConfig) { c.ConsecutiveFailureThreshold = 0 }), false},
+		{"consecutive over cap", mutate(func(c *CircuitBreakerConfig) { c.ConsecutiveFailureThreshold = config.MaxIdPConsecutiveFailureThreshold + 1 }), true},
 
 		{"zero open duration", mutate(func(c *CircuitBreakerConfig) { c.OpenStateDuration = 0 }), true},
 		{"negative open duration", mutate(func(c *CircuitBreakerConfig) { c.OpenStateDuration = -time.Second }), true},
+		{"open duration over cap", mutate(func(c *CircuitBreakerConfig) { c.OpenStateDuration = config.MaxIdPOpenStateDuration + time.Second }), true},
 
 		{"zero probes", mutate(func(c *CircuitBreakerConfig) { c.HalfOpenProbeRequests = 0 }), true},
-		{"probes at cap ok", mutate(func(c *CircuitBreakerConfig) { c.HalfOpenProbeRequests = maxHalfOpenProbeRequests }), false},
-		{"probes over cap", mutate(func(c *CircuitBreakerConfig) { c.HalfOpenProbeRequests = maxHalfOpenProbeRequests + 1 }), true},
+		{"probes at cap ok", mutate(func(c *CircuitBreakerConfig) { c.HalfOpenProbeRequests = config.MaxIdPHalfOpenProbeRequests }), false},
+		{"probes over cap", mutate(func(c *CircuitBreakerConfig) { c.HalfOpenProbeRequests = config.MaxIdPHalfOpenProbeRequests + 1 }), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

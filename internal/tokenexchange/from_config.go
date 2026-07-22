@@ -78,7 +78,7 @@ func FromConfig(cfg *config.BrokerOAuthConfig, httpClient *http.Client, tokenCac
 // defaults. Returns nil when the operator disabled the breaker (enabled:
 // false), which New reads as "breaker off". An omitted block or omitted field
 // takes the default.
-func resolveCircuitBreakerConfig(cb *config.BrokerCircuitBreakerConfig) *CircuitBreakerConfig {
+func resolveCircuitBreakerConfig(cb *config.IdPCircuitBreakerConfig) *CircuitBreakerConfig {
 	if cb != nil && cb.Enabled != nil && !*cb.Enabled {
 		slog.Warn("token exchange circuit breaker is DISABLED by configuration; " +
 			"the IdP is unprotected against failure storms (not recommended in production)")

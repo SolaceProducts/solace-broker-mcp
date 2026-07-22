@@ -324,7 +324,7 @@ func TestBreaker_ConcurrentDistinctKeysCountExactlyOncePerCall(t *testing.T) {
 	// a single window for the whole run.
 	cfg := DefaultCircuitBreakerConfig()
 	cfg.ConsecutiveFailureThreshold = 0
-	cfg.MinimumRequests = 1 << 30
+	cfg.MinimumRequests = 1_000_000 // the max allowed; far above N so the rate rule never trips
 	cfg.FailureRateThresholdPercent = 100
 	cfg.FailureRateWindow = time.Hour
 	e := newBreakerTestExchangerPlain(t, srv.URL, cfg)
@@ -404,7 +404,7 @@ func TestBreaker_OpenBreakerRejectsStampedeCleanly(t *testing.T) {
 
 	cfg := DefaultCircuitBreakerConfig()
 	cfg.ConsecutiveFailureThreshold = 3
-	cfg.MinimumRequests = 1 << 30 // isolate the trip to the consecutive rule
+	cfg.MinimumRequests = 1_000_000 // max allowed; isolates the trip to the consecutive rule
 	cfg.OpenStateDuration = time.Hour
 	e := newBreakerTestExchangerPlain(t, srv.URL, cfg)
 
