@@ -566,7 +566,7 @@ tools:
       - name: msgVpnConfig
         type: object
         required: false
-        description: "Optional MsgVpn attributes (enabled, maxConnectionCount, maxMsgSpoolUsage, etc.). Omitted attributes use broker defaults. Do not include msgVpnName here. See the SEMP MsgVpn schema for the full list."
+        description: "Optional MsgVpn attributes (enabled, maxConnectionCount, maxMsgSpoolUsage, etc.). Omitted attributes use broker defaults. Do not include msgVpnName here."
     steps:
       - id: createVpn
         operation: config/createMsgVpn
@@ -595,7 +595,7 @@ tools:
       - name: msgVpnConfig
         type: object
         required: true
-        description: "MsgVpn attributes to update (enabled, maxConnectionCount, maxMsgSpoolUsage, etc.). Only provided attributes are changed. Do not include msgVpnName here. See the SEMP MsgVpn schema for the full list."
+        description: "MsgVpn attributes to update (enabled, maxConnectionCount, maxMsgSpoolUsage, etc.). Only provided attributes are changed. Do not include msgVpnName here."
     steps:
       - id: updateVpn
         operation: config/updateMsgVpn
@@ -657,7 +657,7 @@ tools:
       - name: queueConfig
         type: object
         required: false
-        description: "Optional Queue attributes (accessType, egressEnabled, ingressEnabled, maxMsgSpoolUsage, permission, etc.). Omitted attributes use broker defaults. Do not include msgVpnName or queueName here. See the SEMP Queue schema for the full list."
+        description: "Optional Queue attributes (accessType, egressEnabled, ingressEnabled, maxMsgSpoolUsage, permission, etc.). Omitted attributes use broker defaults. Do not include msgVpnName or queueName here."
     steps:
       - id: createQueue
         operation: config/createMsgVpnQueue
@@ -695,7 +695,7 @@ tools:
       - name: queueConfig
         type: object
         required: true
-        description: "Queue attributes to update (egressEnabled, ingressEnabled, maxMsgSpoolUsage, maxRedeliveryCount, permission, etc.). Only provided attributes are changed. Do not include msgVpnName or queueName here. See the SEMP Queue schema for the full list."
+        description: "Queue attributes to update (egressEnabled, ingressEnabled, maxMsgSpoolUsage, maxRedeliveryCount, permission, etc.). Only provided attributes are changed. Do not include msgVpnName or queueName here."
     steps:
       - id: updateQueue
         operation: config/updateMsgVpnQueue
@@ -824,7 +824,7 @@ tools:
       - name: topicEndpointConfig
         type: object
         required: false
-        description: "Optional TopicEndpoint attributes (accessType, egressEnabled, ingressEnabled, maxMsgSpoolUsage, permission, etc.). Omitted attributes use broker defaults. Do not include msgVpnName or topicEndpointName here. See the SEMP TopicEndpoint schema for the full list."
+        description: "Optional TopicEndpoint attributes (accessType, egressEnabled, ingressEnabled, maxMsgSpoolUsage, permission, etc.). Omitted attributes use broker defaults. Do not include msgVpnName or topicEndpointName here."
     steps:
       - id: createTopicEndpoint
         operation: config/createMsgVpnTopicEndpoint
@@ -864,7 +864,7 @@ tools:
       - name: topicEndpointConfig
         type: object
         required: true
-        description: "TopicEndpoint attributes to update (egressEnabled, ingressEnabled, maxMsgSpoolUsage, maxRedeliveryCount, permission, etc.). Only provided attributes are changed. Do not include msgVpnName or topicEndpointName here. See the SEMP TopicEndpoint schema for the full list."
+        description: "TopicEndpoint attributes to update (egressEnabled, ingressEnabled, maxMsgSpoolUsage, maxRedeliveryCount, permission, etc.). Only provided attributes are changed. Do not include msgVpnName or topicEndpointName here."
     steps:
       - id: updateTopicEndpoint
         operation: config/updateMsgVpnTopicEndpoint
@@ -935,7 +935,7 @@ tools:
       - name: rdpConfig
         type: object
         required: false
-        description: "Optional RestDeliveryPoint attributes (enabled, clientProfileName, service, vendor). Omitted attributes use broker defaults. Do not include msgVpnName or restDeliveryPointName here. See the SEMP RestDeliveryPoint schema for the full list."
+        description: "Optional RestDeliveryPoint attributes (enabled, clientProfileName, service, vendor). Omitted attributes use broker defaults. Do not include msgVpnName or restDeliveryPointName here."
     steps:
       - id: createRdp
         operation: config/createMsgVpnRestDeliveryPoint
@@ -975,7 +975,7 @@ tools:
       - name: rdpConfig
         type: object
         required: true
-        description: "RestDeliveryPoint attributes to update (enabled, clientProfileName, service, vendor). Only provided attributes are changed. Do not include msgVpnName or restDeliveryPointName here. See the SEMP RestDeliveryPoint schema for the full list."
+        description: "RestDeliveryPoint attributes to update (enabled, clientProfileName, service, vendor). Only provided attributes are changed. Do not include msgVpnName or restDeliveryPointName here."
     steps:
       - id: updateRdp
         operation: config/updateMsgVpnRestDeliveryPoint
