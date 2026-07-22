@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/sony/gobreaker/v2"
 )
 
 // exhaustedWith wraps a transport-class *ExchangeError the way
@@ -134,6 +136,149 @@ func TestIsBreakerSuccess(t *testing.T) {
 		if isBreakerSuccess(err) {
 			t.Errorf("isBreakerSuccess(%v) = true, want false", err)
 		}
+	}
+}
+
+// TestNewReadyToTrip pins newReadyToTrip's two independent rules (see its
+// "Regime gap" doc comment): a consecutive-failure count, and a failure-rate
+// rule gated by a minimum sample. Most cases isolate one rule by disabling or
+// starving the other, since the two thresholds are otherwise unrelated.
+func TestNewReadyToTrip(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		cfg    func() CircuitBreakerConfig
+		counts gobreaker.Counts
+		want   bool
+	}{
+		// Rate rule: DefaultCircuitBreakerConfig (MinimumRequests=10,
+		// FailureRateThresholdPercent=50) with the consecutive rule disabled
+		// (threshold 0) so these cases isolate the rate rule.
+		{
+			name: "below minimum requests never trips, even at 100% failure",
+			cfg: func() CircuitBreakerConfig {
+				cfg := DefaultCircuitBreakerConfig()
+				cfg.ConsecutiveFailureThreshold = 0
+				return cfg
+			},
+			counts: gobreaker.Counts{Requests: 9, TotalFailures: 9},
+			want:   false,
+		},
+		{
+			name: "exactly at minimum requests and exactly at threshold rate trips",
+			cfg: func() CircuitBreakerConfig {
+				cfg := DefaultCircuitBreakerConfig()
+				cfg.ConsecutiveFailureThreshold = 0
+				return cfg
+			},
+			counts: gobreaker.Counts{Requests: 10, TotalSuccesses: 5, TotalFailures: 5},
+			want:   true,
+		},
+		{
+			name: "at minimum requests but below threshold rate does not trip",
+			cfg: func() CircuitBreakerConfig {
+				cfg := DefaultCircuitBreakerConfig()
+				cfg.ConsecutiveFailureThreshold = 0
+				return cfg
+			},
+			counts: gobreaker.Counts{Requests: 10, TotalSuccesses: 6, TotalFailures: 4},
+			want:   false,
+		},
+		{
+			name: "large sample just under threshold rate does not trip",
+			cfg: func() CircuitBreakerConfig {
+				cfg := DefaultCircuitBreakerConfig()
+				cfg.ConsecutiveFailureThreshold = 0
+				return cfg
+			},
+			counts: gobreaker.Counts{Requests: 1000, TotalSuccesses: 501, TotalFailures: 499},
+			want:   false,
+		},
+		{
+			name: "exclusions cannot fill the minimum-requests floor",
+			cfg: func() CircuitBreakerConfig {
+				cfg := DefaultCircuitBreakerConfig()
+				cfg.ConsecutiveFailureThreshold = 0
+				return cfg
+			},
+			counts: gobreaker.Counts{Requests: 1009, TotalFailures: 9, TotalExclusions: 1000},
+			want:   false,
+		},
+		{
+			name: "exclusions do not dilute an already-tripping rate",
+			cfg: func() CircuitBreakerConfig {
+				cfg := DefaultCircuitBreakerConfig()
+				cfg.ConsecutiveFailureThreshold = 0
+				return cfg
+			},
+			counts: gobreaker.Counts{Requests: 110, TotalSuccesses: 5, TotalFailures: 5, TotalExclusions: 100},
+			want:   true,
+		},
+		{
+			name: "zero evaluated does not trip and does not panic",
+			cfg: func() CircuitBreakerConfig {
+				cfg := DefaultCircuitBreakerConfig()
+				cfg.ConsecutiveFailureThreshold = 0
+				return cfg
+			},
+			counts: gobreaker.Counts{},
+			want:   false,
+		},
+
+		// Consecutive rule: MinimumRequests set far above any test sample so
+		// the rate rule can never fire, isolating the consecutive rule.
+		{
+			name: "consecutive failures at threshold trips",
+			cfg: func() CircuitBreakerConfig {
+				cfg := DefaultCircuitBreakerConfig()
+				cfg.MinimumRequests = 1_000_000
+				return cfg
+			},
+			counts: gobreaker.Counts{ConsecutiveFailures: 5},
+			want:   true,
+		},
+		{
+			name: "consecutive failures one below threshold does not trip",
+			cfg: func() CircuitBreakerConfig {
+				cfg := DefaultCircuitBreakerConfig()
+				cfg.MinimumRequests = 1_000_000
+				return cfg
+			},
+			counts: gobreaker.Counts{ConsecutiveFailures: 4},
+			want:   false,
+		},
+		{
+			name: "zero threshold disables the consecutive rule even at huge counts",
+			cfg: func() CircuitBreakerConfig {
+				cfg := DefaultCircuitBreakerConfig()
+				cfg.MinimumRequests = 1_000_000
+				cfg.ConsecutiveFailureThreshold = 0
+				return cfg
+			},
+			counts: gobreaker.Counts{ConsecutiveFailures: 1000},
+			want:   false,
+		},
+
+		// Both rules live, as shipped: pins that the consecutive rule is
+		// checked before the sample floor, so it can trip even when the rate
+		// rule's MinimumRequests sample is unmet.
+		{
+			name: "consecutive rule trips ahead of an unmet sample floor",
+			cfg: func() CircuitBreakerConfig {
+				return DefaultCircuitBreakerConfig()
+			},
+			counts: gobreaker.Counts{Requests: 5, TotalFailures: 5, ConsecutiveFailures: 5},
+			want:   true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			readyToTrip := newReadyToTrip(tc.cfg())
+			if got := readyToTrip(tc.counts); got != tc.want {
+				t.Errorf("newReadyToTrip(...)(%+v) = %v, want %v", tc.counts, got, tc.want)
+			}
+		})
 	}
 }
 

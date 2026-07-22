@@ -428,6 +428,333 @@ func TestBreaker_ConcurrentDistinctKeysCountExactlyOncePerCall(t *testing.T) {
 	}
 }
 
+// ---------- SOL-151600: half-open recovery coverage ----------
+//
+// The tests below exercise the open -> half-open -> closed recovery arc,
+// which TestBreaker_OpenStateFailsFast and friends above never touch (they
+// pin OpenStateDuration to an hour specifically to stay open). gobreaker
+// v2.4.0 has no fake-clock hook, so recovery must be observed through a real
+// wall-clock wait; recoveryBreakerConfig keeps that wait short (250ms) while
+// starving every OTHER trip/decay rule so the only thing moving the breaker
+// is the consecutive-failure rule and the half-open probe budget.
+
+// recoveryBreakerConfig trips on a single failure and opens for only 250ms,
+// so tests can observe the half-open transition without a long sleep. The
+// rate rule and bucket decay are starved/frozen (MinimumRequests far above
+// anything a test drives, FailureRateWindow an hour) so only the consecutive
+// rule and the half-open probe budget are in play — nothing else can trip or
+// heal the breaker out from under an assertion.
+func recoveryBreakerConfig() CircuitBreakerConfig {
+	c := DefaultCircuitBreakerConfig()
+	c.ConsecutiveFailureThreshold = 1
+	c.MinimumRequests = 1_000_000
+	c.FailureRateWindow = time.Hour
+	c.OpenStateDuration = 250 * time.Millisecond
+	c.HalfOpenProbeRequests = 2
+	return c
+}
+
+// waitForBreakerState polls State() until it equals want or the deadline
+// expires. Polling is safe here specifically because the open -> half-open
+// transition in gobreaker v2.4.0 is LAZY and LATCHING: it is evaluated
+// inside State()/beforeRequest() only when the open timer has elapsed, and
+// half-open does not expire on its own (there is no background timer). So
+// there is no window in which the transition can fire and be missed between
+// polls — a slow machine only delays observing it, it cannot skip past it.
+func waitForBreakerState(t *testing.T, cb interface{ State() gobreaker.State }, want gobreaker.State) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if got := cb.State(); got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("breaker State = %v after 10s, want %v", cb.State(), want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// inputWithSubject returns a validInput() clone with a distinct SubjectToken.
+// Every logical probe in the tests below must use its own token: the token
+// cache would otherwise serve a repeat SubjectToken straight from cache
+// (never reaching the breaker), and singleflight would collapse concurrent
+// calls sharing a token into one breaker outcome.
+func inputWithSubject(s string) ExchangeInput {
+	in := validInput()
+	in.SubjectToken = s
+	return in
+}
+
+// TestBreaker_RecoveryClosesAfterConsecutiveProbeSuccesses pins the full
+// recovery arc: an open breaker only closes after HalfOpenProbeRequests
+// consecutive successful probes, not after the first one.
+func TestBreaker_RecoveryClosesAfterConsecutiveProbeSuccesses(t *testing.T) {
+	t.Parallel()
+	var (
+		hits    atomic.Int32
+		healthy atomic.Bool
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		if !healthy.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("recovered-tok", 3600))
+	}))
+	defer srv.Close()
+
+	cfg := recoveryBreakerConfig()
+	e := newBreakerTestExchangerPlain(t, srv.URL, cfg)
+
+	// Unhealthy: one failure trips the breaker (ConsecutiveFailureThreshold=1).
+	_, err := e.Exchange(context.Background(), inputWithSubject("recovery-trip"))
+	if !errors.Is(err, ErrExchangeTransport) {
+		t.Fatalf("trip call err = %v, want ErrExchangeTransport", err)
+	}
+	if e.breaker.State() != gobreaker.StateOpen {
+		t.Fatalf("breaker State = %v after tripping failure, want open", e.breaker.State())
+	}
+
+	// IdP recovers; wait out the open timer for the lazy/latching transition.
+	healthy.Store(true)
+	waitForBreakerState(t, e.breaker, gobreaker.StateHalfOpen)
+
+	// Probe 1 of 2: must succeed and reach the IdP, but must NOT close the
+	// breaker on its own — HalfOpenProbeRequests=2 requires two in a row.
+	hitsBeforeProbe1 := hits.Load()
+	_, err = e.Exchange(context.Background(), inputWithSubject("recovery-probe-1"))
+	if err != nil {
+		t.Fatalf("probe 1 err = %v, want nil (IdP is healthy)", err)
+	}
+	if got := hits.Load(); got != hitsBeforeProbe1+1 {
+		t.Errorf("hits after probe 1 = %d, want %d (probe must reach the IdP)", got, hitsBeforeProbe1+1)
+	}
+	if got := e.breaker.State(); got != gobreaker.StateHalfOpen {
+		t.Errorf("breaker State after 1 probe success = %v, want half-open (needs 2 consecutive)", got)
+	}
+	if got := e.breaker.Counts().ConsecutiveSuccesses; got != 1 {
+		t.Errorf("ConsecutiveSuccesses after probe 1 = %d, want 1", got)
+	}
+
+	// Probe 2 of 2: second consecutive success closes the breaker.
+	_, err = e.Exchange(context.Background(), inputWithSubject("recovery-probe-2"))
+	if err != nil {
+		t.Fatalf("probe 2 err = %v, want nil", err)
+	}
+	if got := e.breaker.State(); got != gobreaker.StateClosed {
+		t.Errorf("breaker State after 2 consecutive probe successes = %v, want closed", got)
+	}
+
+	// Post-recovery: an ordinary call succeeds and reaches the IdP normally.
+	hitsBeforePostRecovery := hits.Load()
+	_, err = e.Exchange(context.Background(), inputWithSubject("recovery-post"))
+	if err != nil {
+		t.Fatalf("post-recovery call err = %v, want nil", err)
+	}
+	if got := hits.Load(); got != hitsBeforePostRecovery+1 {
+		t.Errorf("hits after post-recovery call = %d, want %d", got, hitsBeforePostRecovery+1)
+	}
+}
+
+// TestBreaker_HalfOpenProbeFailureReopens asserts that a single failed probe
+// in half-open reopens the breaker immediately (it does not tolerate one
+// failure the way the consecutive-success rule tolerates partial recovery).
+func TestBreaker_HalfOpenProbeFailureReopens(t *testing.T) {
+	t.Parallel()
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable) // unhealthy throughout
+	}))
+	defer srv.Close()
+
+	cfg := recoveryBreakerConfig()
+	e := newBreakerTestExchangerPlain(t, srv.URL, cfg)
+
+	_, err := e.Exchange(context.Background(), inputWithSubject("reopen-trip"))
+	if !errors.Is(err, ErrExchangeTransport) {
+		t.Fatalf("trip call err = %v, want ErrExchangeTransport", err)
+	}
+	if e.breaker.State() != gobreaker.StateOpen {
+		t.Fatalf("breaker State = %v after tripping failure, want open", e.breaker.State())
+	}
+
+	waitForBreakerState(t, e.breaker, gobreaker.StateHalfOpen)
+
+	hitsBeforeProbe := hits.Load()
+	probeStart := time.Now()
+	_, err = e.Exchange(context.Background(), inputWithSubject("reopen-probe"))
+	if !errors.Is(err, ErrExchangeTransport) {
+		t.Fatalf("probe err = %v, want ErrExchangeTransport", err)
+	}
+	if got := hits.Load(); got != hitsBeforeProbe+1 {
+		t.Errorf("hits after probe = %d, want %d (probe must genuinely reach the IdP, not fast-fail)", got, hitsBeforeProbe+1)
+	}
+
+	// Two-tier reopen assertion. The failed probe both reopens the breaker
+	// AND restarts the open timer, so a slow/stalled test goroutine could in
+	// principle observe the timer having already re-expired back to
+	// half-open by the time we check. That is still a healthy outcome (not a
+	// bug), so we only require StateOpen exactly when we know we checked
+	// well within the fresh OpenStateDuration window; otherwise the only hard
+	// requirement is that it did NOT close — closed would mean the failed
+	// probe was wrongly treated as a success or failed to reopen the breaker.
+	s := e.breaker.State()
+	if s == gobreaker.StateClosed {
+		t.Fatalf("breaker State = closed after a failed half-open probe, want open (or half-open if the timer already re-expired)")
+	}
+	if time.Since(probeStart) < cfg.OpenStateDuration {
+		if s != gobreaker.StateOpen {
+			t.Errorf("breaker State = %v within the fresh open window, want open (failed probe must reopen immediately)", s)
+		}
+	}
+}
+
+// TestBreaker_HalfOpenRejectsBeyondProbeBudget asserts the half-open probe
+// budget is enforced under concurrency: with HalfOpenProbeRequests=2, a third
+// concurrent caller is rejected without reaching the IdP while two probes are
+// already in flight, and the breaker still closes once those two succeed.
+func TestBreaker_HalfOpenRejectsBeyondProbeBudget(t *testing.T) {
+	t.Parallel()
+	var (
+		hits    atomic.Int32
+		healthy atomic.Bool
+		entered = make(chan struct{}, 2)
+		release = make(chan struct{})
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if !healthy.Load() {
+			hits.Add(1)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		entered <- struct{}{}
+		<-release
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("budget-tok", 3600))
+	}))
+	defer srv.Close()
+
+	cfg := recoveryBreakerConfig()
+	e := newBreakerTestExchangerPlain(t, srv.URL, cfg)
+
+	_, err := e.Exchange(context.Background(), inputWithSubject("budget-trip"))
+	if !errors.Is(err, ErrExchangeTransport) {
+		t.Fatalf("trip call err = %v, want ErrExchangeTransport", err)
+	}
+
+	healthy.Store(true)
+	waitForBreakerState(t, e.breaker, gobreaker.StateHalfOpen)
+
+	var (
+		wg         sync.WaitGroup
+		errA, errB error
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, errA = e.Exchange(context.Background(), inputWithSubject("budget-probe-a"))
+	}()
+	go func() {
+		defer wg.Done()
+		_, errB = e.Exchange(context.Background(), inputWithSubject("budget-probe-b"))
+	}()
+
+	// Deterministic barrier: both probe slots are provably held once we've
+	// received twice from entered. No sleeps — a sleep-based "give it time to
+	// start" wait would be both slower and capable of flaking.
+	<-entered
+	<-entered
+
+	hitsBeforeThird := hits.Load()
+	_, errC := e.Exchange(context.Background(), inputWithSubject("budget-probe-c"))
+	if !errors.Is(errC, ErrExchangeCircuitOpen) {
+		t.Fatalf("third caller err = %v, want ErrExchangeCircuitOpen (probe budget of 2 already spent)", errC)
+	}
+	if got := hits.Load(); got != hitsBeforeThird {
+		t.Errorf("hits rose from %d to %d; the rejected third caller must never reach the IdP", hitsBeforeThird, got)
+	}
+
+	close(release)
+	wg.Wait()
+
+	if errA != nil {
+		t.Errorf("probe A err = %v, want nil", errA)
+	}
+	if errB != nil {
+		t.Errorf("probe B err = %v, want nil", errB)
+	}
+	if got := e.breaker.State(); got != gobreaker.StateClosed {
+		t.Errorf("breaker State after both probes succeeded = %v, want closed", got)
+	}
+}
+
+// TestBreaker_HalfOpenExcludedProbeRefundsSlot asserts a 429 during half-open
+// is excluded rather than counted: it must not reopen the breaker and must
+// not consume a probe slot, so the next two genuine successes still close it.
+func TestBreaker_HalfOpenExcludedProbeRefundsSlot(t *testing.T) {
+	t.Parallel()
+	var mode atomic.Int32 // 0=unhealthy(503), 1=rate-limited(429), 2=healthy(200)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		switch mode.Load() {
+		case 1:
+			w.WriteHeader(http.StatusTooManyRequests)
+		case 2:
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, successJSON("refund-tok", 3600))
+		default:
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := recoveryBreakerConfig()
+	e := newBreakerTestExchangerPlain(t, srv.URL, cfg)
+
+	_, err := e.Exchange(context.Background(), inputWithSubject("refund-trip"))
+	if !errors.Is(err, ErrExchangeTransport) {
+		t.Fatalf("trip call err = %v, want ErrExchangeTransport", err)
+	}
+
+	mode.Store(1)
+	waitForBreakerState(t, e.breaker, gobreaker.StateHalfOpen)
+
+	_, err = e.Exchange(context.Background(), inputWithSubject("refund-429"))
+	if err == nil {
+		t.Fatal("429 probe err = nil, want a rejection error")
+	}
+	if got := e.breaker.State(); got != gobreaker.StateHalfOpen {
+		t.Errorf("breaker State after excluded 429 probe = %v, want half-open (exclusion must not reopen)", got)
+	}
+	if got := e.breaker.Counts().TotalExclusions; got != 1 {
+		t.Errorf("TotalExclusions after 429 probe = %d, want 1", got)
+	}
+
+	// The excluded probe must not have consumed budget: two genuine
+	// successes now still close the breaker exactly as in the plain
+	// recovery case.
+	mode.Store(2)
+	_, err = e.Exchange(context.Background(), inputWithSubject("refund-probe-1"))
+	if err != nil {
+		t.Fatalf("healthy probe 1 err = %v, want nil", err)
+	}
+	if got := e.breaker.State(); got != gobreaker.StateHalfOpen {
+		t.Errorf("breaker State after 1 healthy probe = %v, want half-open (still needs 2 consecutive)", got)
+	}
+
+	_, err = e.Exchange(context.Background(), inputWithSubject("refund-probe-2"))
+	if err != nil {
+		t.Fatalf("healthy probe 2 err = %v, want nil", err)
+	}
+	if got := e.breaker.State(); got != gobreaker.StateClosed {
+		t.Errorf("breaker State after 2 consecutive healthy probes = %v, want closed", got)
+	}
+}
+
 // TestBreaker_OpenBreakerRejectsStampedeCleanly checks the OTHER concurrency
 // risk: many goroutines hitting an ALREADY-OPEN breaker at once. The rejection
 // path (breaker.Execute short-circuits → mapCircuitOpen converts the library
