@@ -29,8 +29,8 @@ import (
 //
 // Sentinel is one of ErrExchangeRejected, ErrExchangeTransport,
 // ErrInvalidResponse, ErrExchangeMissingSubject, ErrExchangeRequestBuild,
-// or ErrExchangeRetriesExhausted. Unwrap returns it so errors.Is works
-// through any number of wrapping layers.
+// ErrExchangeRetriesExhausted, or ErrExchangeCircuitOpen. Unwrap returns
+// it so errors.Is works through any number of wrapping layers.
 //
 // Message is human-readable and safe to log (no tokens, secrets, or
 // error_description fields). It is the value Error() returns.

@@ -25,8 +25,7 @@ import (
 
 // FromConfig constructs an Exchanger from the validated broker_oauth
 // config block and a pre-built HTTP client (production wires the
-// retrying variant via idpclient.NewRetryingHTTPClient). This is the
-// only file in the package that imports internal/config — tests use
+// retrying variant via idpclient.NewRetryingHTTPClient). Tests use
 // New(Params) directly.
 //
 // The config validator (internal/config.validateBrokerOAuthConfig) has

@@ -24,12 +24,13 @@
 // *Exchanger; FromConfig translates YAML schema (discriminated union of
 // client-auth methods, string-typed enums) into the typed Params shape.
 //
-// The Exchanger does not cache exchanged tokens (deferred to a follow-up
-// story), does not retry IdP failures, and does not fall back to a
-// secondary IdP. It builds RFC 8693 requests, parses responses, classifies
-// failures into three sentinel errors, and (optionally) deduplicates
-// concurrent identical exchanges via singleflight to protect the IdP from
-// stampedes.
+// The Exchanger caches successful exchanges, deduplicates concurrent
+// identical exchanges via singleflight to protect the IdP from stampedes,
+// and guards the IdP with a process-wide circuit breaker (circuitbreaker.go).
+// Retries of transient IdP failures live in the injected HTTP client, not
+// here (production wires idpclient.NewRetryingHTTPClient). It does not fall
+// back to a secondary IdP. It builds RFC 8693 requests, parses responses,
+// and classifies failures into the ExchangeError sentinels (errors.go).
 package tokenexchange
 
 import (

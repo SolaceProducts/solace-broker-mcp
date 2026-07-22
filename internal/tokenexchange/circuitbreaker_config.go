@@ -47,9 +47,11 @@ type CircuitBreakerConfig struct {
 	FailureRateThresholdPercent float64
 
 	// ConsecutiveFailureThreshold opens the breaker after this many failures in
-	// a row regardless of sample size. It exists for the low-traffic case where
-	// the rate rule may never gather MinimumRequests during a full outage. Zero
-	// disables the rule.
+	// a row, without waiting for the rate rule's MinimumRequests sample. The
+	// count is window-bound (gobreaker decays it as the rolling window's buckets
+	// age out), so it trips fast-failing outages; failures spaced out by long
+	// retry chains may never accumulate — see newReadyToTrip's regime note.
+	// Zero disables the rule.
 	ConsecutiveFailureThreshold uint32
 
 	// OpenStateDuration is how long the breaker stays fully open before allowing

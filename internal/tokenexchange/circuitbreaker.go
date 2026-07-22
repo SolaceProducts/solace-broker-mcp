@@ -22,7 +22,7 @@ import (
 	"github.com/sony/gobreaker/v2"
 )
 
-// breakerName labels the breaker in logs and metrics. Internal only — there is
+// breakerName labels the breaker in logs. Internal only — there is
 // one breaker per process guarding the one IdP, so operators never need to
 // change it.
 const breakerName = "idp-token-exchange"
@@ -46,10 +46,19 @@ func newTokenExchangeCircuitBreaker(cfg CircuitBreakerConfig) *gobreaker.Circuit
 }
 
 // newReadyToTrip builds the trip predicate. Two rules: a consecutive-failure
-// count that reacts fast even at low traffic where the rate rule may never
-// gather a sample, and a failure-rate rule gated by a minimum sample so a
-// couple of failures cannot trip on noise. The denominator excludes excluded
-// outcomes (429, cancellations) so throttling cannot dilute or drive the rate.
+// count, and a failure-rate rule gated by a minimum sample so a couple of
+// failures cannot trip on noise. The denominator excludes excluded outcomes
+// (429, cancellations) so throttling cannot dilute or drive the rate.
+//
+// Regime gap, deliberate: gobreaker's ConsecutiveFailures counter is
+// window-bound — it decays as the rolling window's buckets (window/10) age
+// out — so the consecutive rule only trips when counted failures arrive in
+// quick succession, i.e. a fast-failing outage such as connection refused.
+// A slow outage whose failures each burn the full retry-chain deadline
+// (~19s) spaces them too far apart to ever accumulate, and at traffic too
+// low for MinimumRequests the rate rule cannot trip either, so in that
+// low-traffic slow-failure regime the breaker stays closed (fails open):
+// exchanges still run their normal retry/timeout budget.
 func newReadyToTrip(cfg CircuitBreakerConfig) func(gobreaker.Counts) bool {
 	return func(counts gobreaker.Counts) bool {
 		if cfg.ConsecutiveFailureThreshold > 0 &&
@@ -67,10 +76,14 @@ func newReadyToTrip(cfg CircuitBreakerConfig) func(gobreaker.Counts) bool {
 	}
 }
 
-// logBreakerStateChange is the one breaker callback allowed to do work: it is
-// not on the counter-classification path, so it runs outside the lock the
-// classification callbacks hold. State transitions are rare and operationally
-// important (the IdP just became unreachable, or recovered), so log at WARN.
+// logBreakerStateChange runs UNDER the breaker's internal mutex — gobreaker
+// (v2.4.0) fires OnStateChange from afterRequest while cb.mutex is held — so
+// while it executes, all breaker traffic is serialized behind it. Transitions
+// are rare and the work here is a single WARN log, which is acceptable; keep
+// this callback to cheap logging only (no blocking work, and no State()/
+// Counts() calls — those re-take the same lock). Transitions are
+// operationally important (the IdP just became unreachable, or recovered),
+// hence WARN.
 func logBreakerStateChange(name string, from, to gobreaker.State) {
 	slog.Warn("token exchange circuit breaker state change",
 		slog.String("breaker", name),

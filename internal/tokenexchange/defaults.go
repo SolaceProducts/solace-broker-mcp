@@ -66,22 +66,26 @@ const (
 	// 2-out-of-2 blip cannot open the breaker. Lower than Hystrix's 20 and
 	// Resilience4j's 100 on purpose — those protect high-volume RPC paths;
 	// token exchange sees far less traffic, and the consecutive-failure rule
-	// covers the low-traffic outage case the higher minimums would miss.
+	// covers the fast-failing low-traffic outage case the higher minimums
+	// would miss (but not the slow-failure one — see newReadyToTrip).
 	defaultCircuitBreakerMinimumRequests uint32 = 10
 
 	// 50%: half of counted (non-excluded) operations failing is a clear outage
 	// signal. Mirrors Resilience4j's and Polly's failure-rate defaults exactly.
 	defaultCircuitBreakerFailureRateThresholdPercent float64 = 50
 
-	// 5: consecutive failures that trip immediately regardless of sample size —
-	// the fast path for a full outage at low traffic. Matches gobreaker's and
-	// Envoy's consecutive-5xx default of 5.
+	// 5: consecutive failures trip without waiting for the rate rule's sample —
+	// the fast path for a fast-failing outage (e.g. connection refused). The
+	// counter is window-bound and decays as rolling buckets age out, so slow
+	// deadline-bound failures do not accumulate (see newReadyToTrip). Matches
+	// gobreaker's and Envoy's consecutive-5xx default of 5.
 	defaultCircuitBreakerConsecutiveFailureThreshold uint32 = 5
 
 	// 30s open before probing recovery. Between Hystrix's 5s and Resilience4j's/
 	// gobreaker's 60s. Long enough not to hammer a still-down IdP, short enough
-	// that recovery is detected promptly; a multi-replica fleet may raise it so
-	// replicas don't all probe at once.
+	// that recovery is detected promptly. Note gobreaker applies no jitter to
+	// this timeout, so raising it uniformly across a multi-replica fleet shifts
+	// simultaneous probing later rather than de-correlating it.
 	defaultCircuitBreakerOpenStateDuration = 30 * time.Second
 
 	// 2: recovery probes admitted in half-open. Requires two consecutive

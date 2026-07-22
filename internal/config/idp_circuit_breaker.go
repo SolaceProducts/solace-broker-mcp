@@ -103,7 +103,9 @@ func validateIdPCircuitBreaker(cb *IdPCircuitBreakerConfig) []error {
 	// upper cap is a nonsense guard only (real values are ~5); it is NOT tied
 	// to minimum_requests — the two trip rules are independent (a run of
 	// consecutive failures vs. a failure rate over a sample), so coupling them
-	// would break the low-traffic case the consecutive rule exists for.
+	// would break the fast-failing low-traffic outage case the consecutive
+	// rule exists for (its regime limits are documented at
+	// tokenexchange.newReadyToTrip).
 	if cb.ConsecutiveFailureThreshold != nil && *cb.ConsecutiveFailureThreshold > MaxIdPConsecutiveFailureThreshold {
 		errs = append(errs, fmt.Errorf("broker_oauth.circuit_breaker.consecutive_failure_threshold must not exceed %d, got %d", MaxIdPConsecutiveFailureThreshold, *cb.ConsecutiveFailureThreshold))
 	}
