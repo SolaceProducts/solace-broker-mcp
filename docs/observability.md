@@ -83,8 +83,11 @@ avoid. Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_
 
 ## Metrics
 
-All metrics are served on the `/metrics` endpoint (Story 14) behind `OBS_METRICS_ENABLED`,
-in Prometheus text exposition format.
+All metrics are served on the `/metrics` endpoint (Story 14) in Prometheus text exposition
+format, behind `OBS_METRICS_ENABLED`. One exception: the authentication-failure counter
+(`mcp_auth_failure_total`) has its own flag, `OBS_AUTH_FAILURE_COUNTER_ENABLED`. It defaults
+to whatever `OBS_METRICS_ENABLED` is, but can be set independently, so a security team can
+collect auth-failure signal without turning on the full metrics surface.
 
 ### Server and scrape health
 
