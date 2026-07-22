@@ -300,10 +300,14 @@ needs. Field semantics:
   every Mode-2 turn 1, where the destructive tool is gated and must NOT
   fire until the user confirms).
 - **`ground_truth.jq`** — applied to the matching `tool_result`'s parsed
-  content to produce the *truth set* of entities.
+  content to produce the *must-appear set* — every name it emits MUST be
+  named in the answer (omission check).
 - **`ground_truth.answer_regex`** — applied to the model's final answer to
-  produce the *answer set*. Runner asserts both sets are equal (catches both
-  omissions and fabrications).
+  extract entity names. Each match MUST appear as a substring of the raw
+  `tool_result` content — otherwise it is a fabrication. The fabrication
+  universe is the raw tool_result, NOT the `ground_truth.jq` set, so a name
+  the model uses for context (an adjacent seeded entity that the tool
+  returned) is not flagged.
 - **`ground_truth.shell`** — bash pipeline (usually `semp_curl … | jq …`)
   that reads live broker state independent of the agent. See the setup /
   teardown env note above for the vars/functions available.

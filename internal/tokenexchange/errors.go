@@ -15,6 +15,8 @@
 package tokenexchange
 
 import (
+	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 )
@@ -26,8 +28,9 @@ import (
 // error line — same pattern as sempv1.Error and sempv2.SEMPError.
 //
 // Sentinel is one of ErrExchangeRejected, ErrExchangeTransport,
-// ErrInvalidResponse, or ErrExchangeMissingSubject. Unwrap returns
-// it so errors.Is works through any number of wrapping layers.
+// ErrInvalidResponse, ErrExchangeMissingSubject, ErrExchangeRequestBuild,
+// or ErrExchangeRetriesExhausted. Unwrap returns it so errors.Is works
+// through any number of wrapping layers.
 //
 // Message is human-readable and safe to log (no tokens, secrets, or
 // error_description fields). It is the value Error() returns.
@@ -49,6 +52,23 @@ type ExchangeError struct {
 
 func (e *ExchangeError) Error() string { return e.Message }
 func (e *ExchangeError) Unwrap() error { return e.Sentinel }
+
+// AgentMessage returns the sanitized string safe to surface to the MCP
+// agent. Two categories: transient (Transport, RetriesExhausted) →
+// "try again"; permanent (everything else, including default) →
+// "server-side issue" named with brokerAlias. The Message field is
+// never embedded — sentinel-specific detail belongs on LogAttrs, not
+// on the agent surface. See PR SOL-151520 for the rationale.
+func (e *ExchangeError) AgentMessage(brokerAlias string) string {
+	if errors.Is(e, ErrExchangeTransport) || errors.Is(e, ErrExchangeRetriesExhausted) {
+		// Deliberately not broker-named: the IdP is a shared component,
+		// so a transport-class failure affects every broker at once.
+		// Naming a broker here would mislead the agent into thinking a
+		// different broker might work.
+		return "Authentication is unavailable — the identity provider is not responding."
+	}
+	return fmt.Sprintf("Authentication failed for broker %q. This is a server-side issue.", brokerAlias)
+}
 
 // LogAttrs returns structured slog attributes for this error. Called by
 // logToolResult — field ownership stays with the type so the manager

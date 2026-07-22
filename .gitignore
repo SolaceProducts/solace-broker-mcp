@@ -52,3 +52,9 @@ broker-config.yaml
 Mark2-report.md
 open-source.md
 .nfs*
+
+# Understand Anything: commit the graph, but not local scratch (see docs/internal/understand-anything.md)
+.ua/intermediate/
+.ua/diff-overlay.json
+.ua/.trash-*/
+.ua/tmp/

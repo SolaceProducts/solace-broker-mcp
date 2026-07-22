@@ -189,7 +189,7 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 			retriesErr.Attempts, retriesErr.StatusCode), nil
 
 	case errors.As(err, &exchErr):
-		return buildExchangeErrorMessage(exchErr), nil
+		return exchErr.AgentMessage(brokerAlias), nil
 
 	case errors.As(err, &sempv2Err):
 		status, code = sempv2Err.StatusCode, sempv2Err.SEMPCode
@@ -287,21 +287,6 @@ func buildSEMPv2Message(err *sempv2.SEMPError) string {
 		msg = fmt.Sprintf("%s returned HTTP %d", err.Operation, err.StatusCode)
 	}
 	return msg
-}
-
-func buildExchangeErrorMessage(err *tokenexchange.ExchangeError) string {
-	switch {
-	case errors.Is(err, tokenexchange.ErrExchangeRejected):
-		return "Authentication failed: the identity provider rejected the token exchange. Contact your administrator."
-	case errors.Is(err, tokenexchange.ErrExchangeTransport):
-		return "Authentication failed: unable to reach the identity provider. Try again shortly."
-	case errors.Is(err, tokenexchange.ErrInvalidResponse):
-		return "Authentication failed: the identity provider returned an unexpected response. Contact your administrator."
-	case errors.Is(err, tokenexchange.ErrExchangeMissingSubject):
-		return "Authentication failed: no identity token was found for the current session. Contact your administrator."
-	default:
-		return "Authentication failed: an unexpected error occurred during token exchange. Contact your administrator."
-	}
 }
 
 // isRetryable returns true for errors that represent transient conditions where

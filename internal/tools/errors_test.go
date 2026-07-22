@@ -18,9 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
@@ -106,6 +104,13 @@ func TestIsRetryable(t *testing.T) {
 		{"exchange rejected", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeRejected, Message: "invalid_grant"}, false},
 		{"exchange invalid response", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrInvalidResponse, Message: "bad json"}, false},
 		{"exchange missing subject", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeMissingSubject, Message: "no subject token"}, false},
+		{"exchange request build", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeRequestBuild, Message: "unparseable URL"}, false},
+		// Retries-exhausted is deliberately non-retryable: we already tried
+		// three times and gave up. isRetryable=true here would let the agent
+		// hammer the IdP right after the server-side loop exhausted itself.
+		// Pins the current false-by-default fallthrough so a future rework of
+		// this function cannot silently flip it.
+		{"exchange retries exhausted", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeRetriesExhausted, Message: "gave up"}, false},
 		{"wrapped exchange transport", fmt.Errorf("oauth auth: %w", &tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeTransport, Message: "timeout"}), true},
 
 		// Fall-through / non-SEMP errors are never retryable.
@@ -248,34 +253,51 @@ func TestBuildErrorMessage(t *testing.T) {
 			genericInternalMessage,
 			nil,
 		},
-		// Exchange errors route through buildExchangeErrorMessage. A non-empty
-		// alias is passed to confirm these paths are untouched by the alias.
+		// Exchange errors route through (*ExchangeError).AgentMessage. The
+		// two-category collapse means transport + retries-exhausted share
+		// the transient message; every other sentinel (including the
+		// default catch-all) shares the permanent "server-side" message
+		// with the broker alias embedded.
 		{
-			"exchange rejected",
+			"exchange rejected → permanent",
 			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeRejected, Message: "invalid_grant"},
 			"broker-oauth",
-			"Authentication failed: the identity provider rejected the token exchange. Contact your administrator.",
+			`Authentication failed for broker "broker-oauth". This is a server-side issue.`,
 			nil,
 		},
 		{
-			"exchange transport",
+			"exchange transport → transient (broker name deliberately absent)",
 			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeTransport, Message: "connect timeout"},
 			"broker-oauth",
-			"Authentication failed: unable to reach the identity provider. Try again shortly.",
+			"Authentication is unavailable — the identity provider is not responding.",
 			nil,
 		},
 		{
-			"exchange invalid response",
+			"exchange invalid response → permanent",
 			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrInvalidResponse, Message: "unexpected content-type"},
 			"broker-oauth",
-			"Authentication failed: the identity provider returned an unexpected response. Contact your administrator.",
+			`Authentication failed for broker "broker-oauth". This is a server-side issue.`,
 			nil,
 		},
 		{
-			"exchange missing subject",
+			"exchange missing subject → permanent",
 			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeMissingSubject, Message: "no subject token on context"},
 			"broker-oauth",
-			"Authentication failed: no identity token was found for the current session. Contact your administrator.",
+			`Authentication failed for broker "broker-oauth". This is a server-side issue.`,
+			nil,
+		},
+		{
+			"exchange request build → permanent",
+			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeRequestBuild, Message: "unparseable URL"},
+			"broker-oauth",
+			`Authentication failed for broker "broker-oauth". This is a server-side issue.`,
+			nil,
+		},
+		{
+			"exchange retries exhausted → transient (broker name deliberately absent)",
+			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeRetriesExhausted, Message: "retries exhausted"},
+			"broker-oauth",
+			"Authentication is unavailable — the identity provider is not responding.",
 			nil,
 		},
 
@@ -352,79 +374,6 @@ func TestBuildErrorResult_ExchangeError_StructuredFields(t *testing.T) {
 	}
 }
 
-func TestBuildExchangeErrorMessage(t *testing.T) {
-	tests := []struct {
-		name string
-		err  *tokenexchange.ExchangeError
-		want string
-	}{
-		{
-			"rejected",
-			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeRejected, Message: "invalid_grant"},
-			"Authentication failed: the identity provider rejected the token exchange. Contact your administrator.",
-		},
-		{
-			"transport",
-			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeTransport, Message: "dial timeout"},
-			"Authentication failed: unable to reach the identity provider. Try again shortly.",
-		},
-		{
-			"invalid response",
-			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrInvalidResponse, Message: "bad content-type"},
-			"Authentication failed: the identity provider returned an unexpected response. Contact your administrator.",
-		},
-		{
-			"missing subject",
-			&tokenexchange.ExchangeError{Sentinel: tokenexchange.ErrExchangeMissingSubject, Message: "no subject token"},
-			"Authentication failed: no identity token was found for the current session. Contact your administrator.",
-		},
-		{
-			"unknown sentinel falls to default",
-			&tokenexchange.ExchangeError{Sentinel: errors.New("something else"), Message: "weird"},
-			"Authentication failed: an unexpected error occurred during token exchange. Contact your administrator.",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := buildExchangeErrorMessage(tt.err); got != tt.want {
-				t.Errorf("got %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestExchangeError_NeverContainsSecrets(t *testing.T) {
-	secrets := []string{"subject-token-value", "access-token-value", "client-secret-value"}
-
-	err := &tokenexchange.ExchangeError{
-		Sentinel:      tokenexchange.ErrExchangeRejected,
-		Message:       "IdP rejected the grant",
-		TokenEndpoint: "https://idp.example.com/token",
-		BrokerAlias:   "my-broker",
-		Audience:      "https://broker.example.com",
-		HTTPStatus:    400,
-		Elapsed:       150 * time.Millisecond,
-	}
-
-	agentMsg := buildExchangeErrorMessage(err)
-	errorStr := err.Error()
-
-	for _, secret := range secrets {
-		if strings.Contains(agentMsg, secret) {
-			t.Errorf("agent message contains secret %q: %s", secret, agentMsg)
-		}
-		if strings.Contains(errorStr, secret) {
-			t.Errorf("Error() contains secret %q: %s", secret, errorStr)
-		}
-	}
-
-	for _, attr := range err.LogAttrs() {
-		val := attr.Value.String()
-		for _, secret := range secrets {
-			if strings.Contains(val, secret) {
-				t.Errorf("LogAttrs() attr %q contains secret %q: %s", attr.Key, secret, val)
-			}
-		}
-	}
-}
+// Note: TestAgentMessage_* and TestExchangeError_NeverContainsSecrets
+// live in internal/tokenexchange/errors_test.go — they exercise methods
+// on *ExchangeError, and belong with the type they test.

@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceDev/solace-broker-mcp/internal/idpclient"
 	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
 	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache/cachetest"
 )
@@ -580,9 +581,14 @@ func TestExchange_RejectedErrorReturned(t *testing.T) {
 	}
 }
 
-// ---------- B07: doExchange wraps buildIdPRequest errors as transport ----------
+// ---------- B07: doExchange classifies buildIdPRequest failures as non-retryable ----------
 
-func TestDoExchange_BuildRequestFailureWrapsAsTransport(t *testing.T) {
+// A request-construction failure is a deterministic config or code defect
+// (unparseable URL, invalid method), not a transient network condition.
+// It must classify as ErrExchangeRequestBuild — non-retryable — so the
+// server-side retry policy does not loop on it, and so the classifier
+// does not mislead the agent into retrying.
+func TestDoExchange_BuildRequestFailureClassifiesAsRequestBuild(t *testing.T) {
 	t.Parallel()
 
 	e := &Exchanger{
@@ -602,8 +608,11 @@ func TestDoExchange_BuildRequestFailureWrapsAsTransport(t *testing.T) {
 	if tok != nil {
 		t.Errorf("tok = %v, want nil on build failure", tok)
 	}
-	if !errors.Is(err, ErrExchangeTransport) {
-		t.Errorf("errors.Is(err, ErrExchangeTransport) = false, want true; err = %v", err)
+	if !errors.Is(err, ErrExchangeRequestBuild) {
+		t.Errorf("errors.Is(err, ErrExchangeRequestBuild) = false, want true; err = %v", err)
+	}
+	if errors.Is(err, ErrExchangeTransport) {
+		t.Errorf("errors.Is(err, ErrExchangeTransport) = true, want false — a request-build failure must NOT be a transport failure")
 	}
 }
 
@@ -950,7 +959,10 @@ func TestExchange_RequestBodyContainsExpectedFields(t *testing.T) {
 
 // ---------- B07 variant: unknown grant type through Exchange ----------
 
-func TestExchange_UnknownGrantTypeReturnsTransportError(t *testing.T) {
+// An unknown grant type fails at request-build time (before any HTTP call).
+// It must classify as ErrExchangeRequestBuild — a deterministic config
+// defect — not ErrExchangeTransport.
+func TestExchange_UnknownGrantTypeReturnsRequestBuildError(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -975,8 +987,11 @@ func TestExchange_UnknownGrantTypeReturnsTransportError(t *testing.T) {
 	if tok != nil {
 		t.Errorf("tok = %v, want nil for unknown grant type", tok)
 	}
-	if !errors.Is(err, ErrExchangeTransport) {
-		t.Errorf("errors.Is(err, ErrExchangeTransport) = false, want true; err = %v", err)
+	if !errors.Is(err, ErrExchangeRequestBuild) {
+		t.Errorf("errors.Is(err, ErrExchangeRequestBuild) = false, want true; err = %v", err)
+	}
+	if errors.Is(err, ErrExchangeTransport) {
+		t.Errorf("errors.Is(err, ErrExchangeTransport) = true, want false — request-build failure must NOT be a transport failure")
 	}
 }
 
@@ -1097,7 +1112,7 @@ func TestExchange_FourxxWithOAuthError(t *testing.T) {
 	}{
 		{"401 invalid_token", 401, `{"error":"invalid_token"}`, ErrExchangeRejected},
 		{"400 invalid_grant", 400, `{"error":"invalid_grant"}`, ErrExchangeRejected},
-		{"403 WAF HTML", 403, `<html>Denied</html>`, ErrExchangeTransport},
+		{"403 WAF HTML", 403, `<html>Denied</html>`, ErrInvalidResponse},
 		{"500 server error", 500, `Internal Server Error`, ErrExchangeTransport},
 	}
 
@@ -1383,5 +1398,318 @@ func TestExchange_SingleflightWinnerOnlyWritesCache(t *testing.T) {
 	}
 	if got := counter.puts.Load(); got != 1 {
 		t.Errorf("cache.Put called %d times, want 1 (only the singleflight winner should Put)", got)
+	}
+}
+
+// ---------- SOL-151520: retries + exhaustion sentinel ----------
+
+// newRetryingTestExchanger builds an Exchanger backed by the production
+// NewRetryingHTTPClient so the retry loop is exercised end-to-end.
+// Per-attempt timeout is shortened to 500ms to keep connection-error
+// paths fast; retry policy and the chain deadline both use the shipped
+// package defaults, so behavior otherwise matches production. Backoff
+// waits (1-2s) dominate wall-clock for tests that hit RetryMax.
+//
+// For tests that specifically need to exercise the chain-deadline fence
+// mid-retry, use newRetryingTestExchangerWithChain to inject a shorter
+// chainDeadline via Params.ChainDeadline.
+func newRetryingTestExchanger(t *testing.T, serverURL string) *Exchanger {
+	t.Helper()
+	return buildRetryingTestExchanger(t, serverURL, 0)
+}
+
+// newRetryingTestExchangerWithChain is like newRetryingTestExchanger but
+// takes a chainDeadline override so a test can force the deadline fence
+// to fire mid-retry without waiting out the production ~19s budget.
+// The override threads through Params.ChainDeadline into
+// ComputeChainDeadline.
+func newRetryingTestExchangerWithChain(t *testing.T, serverURL string, chainDeadline time.Duration) *Exchanger {
+	t.Helper()
+	return buildRetryingTestExchanger(t, serverURL, chainDeadline)
+}
+
+// buildRetryingTestExchanger centralizes the common construction path.
+// A chainDeadline of 0 means "use the formula" (production behavior);
+// a positive value pins the exchanger's chain deadline to that value.
+func buildRetryingTestExchanger(t *testing.T, serverURL string, chainDeadline time.Duration) *Exchanger {
+	t.Helper()
+	client, err := idpclient.NewRetryingHTTPClient(
+		idpclient.RetryOptions{
+			MaxRetries:   DefaultMaxRetries,
+			RetryWaitMin: DefaultRetryWaitMin,
+			RetryWaitMax: DefaultRetryWaitMax,
+		},
+		idpclient.WithTimeout(500*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatalf("NewRetryingHTTPClient: %v", err)
+	}
+	p := validParams(t)
+	p.TokenURL = serverURL
+	p.HTTPClient = client
+	p.ChainDeadline = chainDeadline
+	e, err := New(p)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return e
+}
+
+// TestExchange_RetriesExhaustedOn5xx asserts the exhaustion rewrap fires
+// when the retry loop gives up on repeated 5xx: sentinel switches from
+// ErrExchangeTransport (what parseIdPResponse produced) to
+// ErrExchangeRetriesExhausted (what the classifier produced).
+func TestExchange_RetriesExhaustedOn5xx(t *testing.T) {
+	t.Parallel()
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	e := newRetryingTestExchanger(t, srv.URL)
+	_, err := e.Exchange(context.Background(), validInput())
+
+	if !errors.Is(err, ErrExchangeRetriesExhausted) {
+		t.Errorf("errors.Is(err, ErrExchangeRetriesExhausted) = false, want true; err = %v", err)
+	}
+	if errors.Is(err, ErrExchangeTransport) {
+		t.Errorf("errors.Is(err, ErrExchangeTransport) = true, want false (should be rewrapped, not the raw transport sentinel)")
+	}
+	var exchErr *ExchangeError
+	if !errors.As(err, &exchErr) {
+		t.Fatalf("errors.As(err, *ExchangeError) = false; err = %v", err)
+	}
+	if exchErr.HTTPStatus != http.StatusInternalServerError {
+		t.Errorf("HTTPStatus = %d, want 500 (last-attempt status must survive rewrap)", exchErr.HTTPStatus)
+	}
+	if got := hits.Load(); got != 3 {
+		t.Errorf("server hits = %d, want 3 (retryablehttp should have tried all attempts)", got)
+	}
+}
+
+// TestExchange_RetriesExhaustedOn429 mirrors the 5xx exhaustion test for
+// the rate-limit path: parseIdPResponse now maps 429 → ErrExchangeTransport
+// so classifyRetryOutcome rewraps it as ErrExchangeRetriesExhausted after
+// the retry loop gives up. Guards the taxonomy alignment: a persistent
+// 429 is a "we tried, IdP kept refusing" story, same shape as a persistent
+// 5xx, and must NOT surface as ErrInvalidResponse (which was the pre-
+// SOL-151520 classification and would have implied a malformed response).
+func TestExchange_RetriesExhaustedOn429(t *testing.T) {
+	t.Parallel()
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	e := newRetryingTestExchanger(t, srv.URL)
+	_, err := e.Exchange(context.Background(), validInput())
+
+	if !errors.Is(err, ErrExchangeRetriesExhausted) {
+		t.Errorf("errors.Is(err, ErrExchangeRetriesExhausted) = false, want true; err = %v", err)
+	}
+	if errors.Is(err, ErrInvalidResponse) {
+		t.Errorf("errors.Is(err, ErrInvalidResponse) = true, want false (429 must NOT fall into the pre-retry non-OAuth-body branch)")
+	}
+	var exchErr *ExchangeError
+	if !errors.As(err, &exchErr) {
+		t.Fatalf("errors.As(err, *ExchangeError) = false; err = %v", err)
+	}
+	if exchErr.HTTPStatus != http.StatusTooManyRequests {
+		t.Errorf("HTTPStatus = %d, want 429 (last-attempt status must survive rewrap)", exchErr.HTTPStatus)
+	}
+	if got := hits.Load(); got != 3 {
+		t.Errorf("server hits = %d, want 3 (retry loop should have tried all attempts on 429)", got)
+	}
+}
+
+// TestExchange_RetryRecoversNoExhaustion covers the middle ground: two
+// 500s followed by a 200. attempts > 1, but the eventual success means
+// no error, so no rewrap. Guards against a bug where the counter's
+// non-zero value would spuriously trigger exhaustion on the success
+// path.
+func TestExchange_RetryRecoversNoExhaustion(t *testing.T) {
+	t.Parallel()
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := hits.Add(1)
+		if n < 3 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("recovered-tok", 3600))
+	}))
+	defer srv.Close()
+
+	e := newRetryingTestExchanger(t, srv.URL)
+	tok, err := e.Exchange(context.Background(), validInput())
+	if err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+	if tok == nil || tok.Value != "recovered-tok" {
+		t.Errorf("tok = %+v, want value=recovered-tok", tok)
+	}
+	if got := hits.Load(); got != 3 {
+		t.Errorf("server hits = %d, want 3", got)
+	}
+}
+
+// TestExchange_ConnectionErrorRetriesExhausted covers the retry-loop
+// path where every attempt fails at the network layer (server closed
+// before any request is dispatched). parseIdPResponse never runs, so
+// doExchange produces ErrExchangeTransport from the httpClient.Do error
+// branch; the classifier still rewraps. HTTPStatus stays 0 because the
+// last attempt never saw a response.
+func TestExchange_ConnectionErrorRetriesExhausted(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := srv.URL
+	srv.Close()
+
+	e := newRetryingTestExchanger(t, url)
+	_, err := e.Exchange(context.Background(), validInput())
+
+	if !errors.Is(err, ErrExchangeRetriesExhausted) {
+		t.Errorf("errors.Is(err, ErrExchangeRetriesExhausted) = false, want true; err = %v", err)
+	}
+	var exchErr *ExchangeError
+	if !errors.As(err, &exchErr) {
+		t.Fatalf("errors.As(err, *ExchangeError) = false; err = %v", err)
+	}
+	if exchErr.HTTPStatus != 0 {
+		t.Errorf("HTTPStatus = %d, want 0 (no HTTP response was received)", exchErr.HTTPStatus)
+	}
+}
+
+// TestExchange_RejectedNotRewrapped is the negative case: a 4xx OAuth
+// error is not retried by the retry loop (checkRetry declines), so
+// attempts stays at 1. The classifier's attempts >= 1 guard is TRUE,
+// but the underlying sentinel is ErrExchangeRejected — the rewrap
+// filter (ErrExchangeTransport OR DeadlineExceeded) excludes it,
+// and the raw rejection sentinel propagates unchanged.
+func TestExchange_RejectedNotRewrapped(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":"invalid_grant"}`)
+	}))
+	defer srv.Close()
+
+	e := newRetryingTestExchanger(t, srv.URL)
+	_, err := e.Exchange(context.Background(), validInput())
+
+	if !errors.Is(err, ErrExchangeRejected) {
+		t.Errorf("errors.Is(err, ErrExchangeRejected) = false, want true; err = %v", err)
+	}
+	if errors.Is(err, ErrExchangeRetriesExhausted) {
+		t.Errorf("errors.Is(err, ErrExchangeRetriesExhausted) = true, want false (4xx is not retryable, should not be rewrapped)")
+	}
+}
+
+// TestClassifyRetryOutcome_ZeroAttemptsPassthrough asserts the
+// attempts >= 1 invariant: a raw context.DeadlineExceeded (or any
+// error) with attempts == 0 is passed through untouched. This is the
+// pre-dispatch-deadline case from error-type.md — nothing was tried,
+// so the exhaustion sentinel would be a lie.
+func TestClassifyRetryOutcome_ZeroAttemptsPassthrough(t *testing.T) {
+	t.Parallel()
+	e := newTestExchanger(t, "http://unused")
+
+	underlying := context.DeadlineExceeded
+	got := e.classifyRetryOutcome(context.Background(), underlying, 0, "test-broker")
+	if got != underlying {
+		t.Errorf("classifyRetryOutcome with attempts=0: got %v, want raw underlying (%v)", got, underlying)
+	}
+	if errors.Is(got, ErrExchangeRetriesExhausted) {
+		t.Errorf("attempts=0 must not rewrap as ErrExchangeRetriesExhausted; got %v", got)
+	}
+}
+
+// TestClassifyRetryOutcome_DeadlineMidRetryRewrapped covers the
+// spec-required rewrap of a mid-retry chain-deadline expiry: when
+// attempts >= 1 and the underlying is context.DeadlineExceeded, the
+// classifier stamps the exhaustion sentinel with the deadline error
+// embedded in the message (HTTPStatus stays 0 because no *ExchangeError
+// is available on that path).
+func TestClassifyRetryOutcome_DeadlineMidRetryRewrapped(t *testing.T) {
+	t.Parallel()
+	e := newTestExchanger(t, "http://unused")
+
+	got := e.classifyRetryOutcome(context.Background(), context.DeadlineExceeded, 2, "test-broker")
+	if got == context.DeadlineExceeded {
+		t.Fatalf("classifier returned the raw underlying error; want a rewrapped *ExchangeError")
+	}
+	if !errors.Is(got, ErrExchangeRetriesExhausted) {
+		t.Errorf("errors.Is = false, want true (mid-retry deadline should rewrap); got %v", got)
+	}
+	// Deliberate: ExchangeError.Unwrap returns only the Sentinel, so the
+	// deadline error is intentionally NOT reachable via errors.Is. This
+	// matches the pattern of the other sentinels in the family and keeps
+	// the classifier surface narrow. If a future change decides to chain
+	// the underlying, this assertion becomes the reminder to update it.
+	if errors.Is(got, context.DeadlineExceeded) {
+		t.Errorf("underlying DeadlineExceeded is unexpectedly reachable via errors.Is — ExchangeError.Unwrap chained the cause; update this test and AgentMessage accordingly")
+	}
+	var exchErr *ExchangeError
+	if !errors.As(got, &exchErr) {
+		t.Fatalf("errors.As failed for %v", got)
+	}
+	if exchErr.HTTPStatus != 0 {
+		t.Errorf("HTTPStatus = %d, want 0 (no last-attempt status on deadline path)", exchErr.HTTPStatus)
+	}
+	if !strings.Contains(exchErr.Message, "2 attempts") {
+		t.Errorf("Message = %q, want it to mention the attempt count", exchErr.Message)
+	}
+}
+
+// TestExchange_ChainDeadlineFiresMidRetry exercises the chain-deadline
+// fence end-to-end. The direct-unit variant above pins classifyRetryOutcome's
+// rewrap behavior, but never proves that the deadline actually fires
+// mid-retry through the real retry loop. This test does — it pins the
+// chain deadline to 1500ms via Params.ChainDeadline while the retry
+// backoff is 1-2s, so the deadline will fire during backoff between
+// attempts. Requires Params.ChainDeadline to make the test tractable
+// (otherwise we'd wait ~19s per run).
+//
+// The server returns 500 forever; the retry loop dispatches at least
+// one attempt, then the chain deadline expires during the first backoff.
+// Expected: sentinel = ErrExchangeRetriesExhausted (mid-retry deadline
+// path), attempts >= 1 (something was dispatched before the fence).
+func TestExchange_ChainDeadlineFiresMidRetry(t *testing.T) {
+	t.Parallel()
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	// 1500ms deadline < 1000ms min-backoff after the first attempt's
+	// ~fast 500 response means the deadline will fire during backoff.
+	e := newRetryingTestExchangerWithChain(t, srv.URL, 1500*time.Millisecond)
+
+	start := time.Now()
+	_, err := e.Exchange(context.Background(), validInput())
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, ErrExchangeRetriesExhausted) {
+		t.Errorf("errors.Is(err, ErrExchangeRetriesExhausted) = false, want true; err = %v", err)
+	}
+	// At least one attempt must have dispatched before the deadline fired —
+	// otherwise the "attempts >= 1" invariant in classifyRetryOutcome would
+	// short-circuit and we'd get raw context.DeadlineExceeded, not the
+	// exhaustion sentinel.
+	if got := hits.Load(); got < 1 {
+		t.Errorf("server hits = %d, want >= 1 (retry loop must dispatch at least once before deadline)", got)
+	}
+	// Wall-clock bound: the chain deadline is 1500ms; add generous slack
+	// for jitter, CI, and the classifier's post-loop work. If this fails,
+	// the deadline fence isn't firing — retry loop is running to completion.
+	if elapsed > 3*time.Second {
+		t.Errorf("elapsed = %v, want < 3s (chain deadline should have fenced the loop)", elapsed)
 	}
 }
