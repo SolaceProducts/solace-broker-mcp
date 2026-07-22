@@ -797,6 +797,30 @@
           "x-type": "BOOL_PARAM",
           "x-writeOnly": false
         },
+        "configSyncSynchronizeClientCertEnabled": {
+          "description": "Enable or disable the synchronizing of global client certificates within High Availability groups. The transition from not synchronizing to synchronizing will cause the High Availability mate to fall out of sync. Recommendation: leave this as enabled.\n\nThe minimum access scope/level required to retrieve this attribute is \"global/read-only\". The minimum access scope/level required to change this attribute is \"global/read-write\". Changes to this attribute are synchronized to HA mates via config-sync. The default value is `true`.",
+          "type": "boolean",
+          "x-accessLevels": {
+            "get": "global/read-only",
+            "patch": "global/read-write"
+          },
+          "x-autoDisable": [],
+          "x-configSyncDefault": false,
+          "x-configSyncTableType": "router",
+          "x-default": true,
+          "x-deprecated": false,
+          "x-identifying": false,
+          "x-identifyingDirect": false,
+          "x-opaque": false,
+          "x-readOnlyOther": false,
+          "x-readOnlyPost": false,
+          "x-readOptional": false,
+          "x-requiredPost": false,
+          "x-requiresDisable": [],
+          "x-sensitive": false,
+          "x-type": "BOOL_PARAM",
+          "x-writeOnly": false
+        },
         "configSyncSynchronizeUsernameEnabled": {
           "description": "Enable or disable the synchronizing of usernames within High Availability groups. The transition from not synchronizing to synchronizing will cause the High Availability mate to fall out of sync. Recommendation: leave this as enabled.\n\nThe minimum access scope/level required to retrieve this attribute is \"global/read-only\". The minimum access scope/level required to change this attribute is \"global/read-write\". Changes to this attribute are synchronized to HA mates via config-sync. The default value is `true`.",
           "type": "boolean",
@@ -5265,7 +5289,7 @@
           "x-writeOnly": false
         },
         "authenticationClientCertContent": {
-          "description": "The PEM formatted content for the client certificate used to login to the remote node. It must consist of a private key and between one and three certificates comprising the certificate trust chain.\n\nThe minimum access scope/level required to retrieve this attribute is \"global/read-only\". The minimum access scope/level required to change this attribute is \"global/mesh-manager\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Modifying this attribute while the object (or the relevant part of the object) is administratively enabled may be service impacting as enabled will be temporarily set to false to apply the change. The default value is `\"\"`.",
+          "description": "The PEM formatted content for the client certificate used to login to the remote node. It must consist of a private key and between one and three certificates comprising the certificate trust chain.\n\nThe minimum access scope/level required to retrieve this attribute is \"global/read-only\". The minimum access scope/level required to change this attribute is \"global/mesh-manager\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Modifying this attribute while the object (or the relevant part of the object) is administratively enabled may be service impacting as enabled will be temporarily set to false to apply the change. Changes to this attribute are synchronized to HA mates via config-sync. The default value is `\"\"`.",
           "maxLength": 32768,
           "minLength": 0,
           "type": "string",
@@ -5276,6 +5300,7 @@
             "enabled"
           ],
           "x-configSyncDefault": "",
+          "x-configSyncTableType": "router",
           "x-default": "",
           "x-deprecated": false,
           "x-identifying": false,
@@ -5315,7 +5340,7 @@
           "x-writeOnly": false
         },
         "authenticationClientCertPassword": {
-          "description": "The password for the client certificate.\n\nThe minimum access scope/level required to change this attribute is \"global/mesh-manager\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Modifying this attribute while the object (or the relevant part of the object) is administratively enabled may be service impacting as enabled will be temporarily set to false to apply the change. The default value is `\"\"`.",
+          "description": "The password for the client certificate.\n\nThe minimum access scope/level required to change this attribute is \"global/mesh-manager\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Modifying this attribute while the object (or the relevant part of the object) is administratively enabled may be service impacting as enabled will be temporarily set to false to apply the change. Changes to this attribute are synchronized to HA mates via config-sync. The default value is `\"\"`.",
           "maxLength": 512,
           "minLength": 0,
           "type": "string",
@@ -5326,6 +5351,7 @@
             "enabled"
           ],
           "x-configSyncDefault": "",
+          "x-configSyncTableType": "router",
           "x-default": "",
           "x-deprecated": false,
           "x-identifying": false,
@@ -8529,6 +8555,30 @@
           "x-type": "BOOL_PARAM",
           "x-writeOnly": false
         },
+        "configSyncSynchronizeClientCertEnabled": {
+          "description": "Enable or disable the synchronizing of client certificates within High Availability groups and to Disaster Recovery site. The transition from not synchronizing to synchronizing will cause the High Availability mate or Disaster Recovery site to fall out of sync. Recommendation: leave this as enabled.\n\nNote: The replication bridge client certificate attributes are an exception to this setting; they are instead synchronized by the `configSyncSynchronizeClientCertEnabled` attribute of the Broker object.\n\nThe minimum access scope/level required to retrieve this attribute is \"vpn/read-only\". The minimum access scope/level required to change this attribute is \"global/mesh-manager\". Changes to this attribute are synchronized to HA mates and replication sites via config-sync. The default value is `true`.",
+          "type": "boolean",
+          "x-accessLevels": {
+            "get": "vpn/read-only",
+            "patch": "global/mesh-manager"
+          },
+          "x-autoDisable": [],
+          "x-configSyncDefault": false,
+          "x-configSyncTableType": "vpn",
+          "x-default": true,
+          "x-deprecated": false,
+          "x-identifying": false,
+          "x-identifyingDirect": false,
+          "x-opaque": false,
+          "x-readOnlyOther": false,
+          "x-readOnlyPost": false,
+          "x-readOptional": false,
+          "x-requiredPost": false,
+          "x-requiresDisable": [],
+          "x-sensitive": false,
+          "x-type": "BOOL_PARAM",
+          "x-writeOnly": false
+        },
         "distributedCacheManagementEnabled": {
           "description": "Enable or disable managing of cache instances over the message bus.\n\nThe minimum access scope/level required to retrieve this attribute is \"vpn/read-only\". The minimum access scope/level required to change this attribute is \"vpn/read-write\". The default value is `true`. Deprecated. Distributed cache management is now redundancy aware and thus no longer requires administrative intervention for operational state.",
           "type": "boolean",
@@ -9258,7 +9308,7 @@
           "x-writeOnly": true
         },
         "replicationBridgeAuthenticationClientCertContent": {
-          "description": "The PEM formatted content for the client certificate used by this bridge to login to the Remote Message VPN. It must consist of a private key and between one and three certificates comprising the certificate trust chain.\n\nThe minimum access scope/level required to retrieve this attribute is \"vpn/read-only\". The minimum access scope/level required to change this attribute is \"global/mesh-manager\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). The default value is `\"\"`.",
+          "description": "The PEM formatted content for the client certificate used by this bridge to login to the Remote Message VPN. It must consist of a private key and between one and three certificates comprising the certificate trust chain.\n\nNote: The synchronization of this attribute is controlled by the `configSyncSynchronizeClientCertEnabled` attribute of the Broker object, not the attribute of the same name on the Message VPN object.\n\nThe minimum access scope/level required to retrieve this attribute is \"vpn/read-only\". The minimum access scope/level required to change this attribute is \"global/mesh-manager\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Changes to this attribute are synchronized to HA mates via config-sync. The default value is `\"\"`.",
           "maxLength": 32768,
           "minLength": 0,
           "type": "string",
@@ -9267,6 +9317,7 @@
           },
           "x-autoDisable": [],
           "x-configSyncDefault": "",
+          "x-configSyncTableType": "router",
           "x-default": "",
           "x-deprecated": false,
           "x-identifying": false,
@@ -9282,7 +9333,7 @@
           "x-writeOnly": true
         },
         "replicationBridgeAuthenticationClientCertPassword": {
-          "description": "The password for the client certificate.\n\nThe minimum access scope/level required to change this attribute is \"global/mesh-manager\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). The default value is `\"\"`.",
+          "description": "The password for the client certificate.\n\nNote: The synchronization of this attribute is controlled by the `configSyncSynchronizeClientCertEnabled` attribute of the Broker object, not the attribute of the same name on the Message VPN object.\n\nThe minimum access scope/level required to change this attribute is \"global/mesh-manager\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Changes to this attribute are synchronized to HA mates via config-sync. The default value is `\"\"`.",
           "maxLength": 512,
           "minLength": 0,
           "type": "string",
@@ -9291,6 +9342,7 @@
           },
           "x-autoDisable": [],
           "x-configSyncDefault": "",
+          "x-configSyncTableType": "router",
           "x-default": "",
           "x-deprecated": false,
           "x-identifying": false,
@@ -14236,7 +14288,7 @@
           "x-writeOnly": true
         },
         "remoteAuthenticationClientCertContent": {
-          "description": "The PEM formatted content for the client certificate used by the Bridge to login to the remote Message VPN. It must consist of a private key and between one and three certificates comprising the certificate trust chain.\n\nThe minimum access scope/level required to retrieve this attribute is \"vpn/read-only\". The minimum access scope/level required to change this attribute is \"vpn/read-write\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Modifying this attribute while the object (or the relevant part of the object) is administratively enabled may be service impacting as enabled will be temporarily set to false to apply the change. The default value is `\"\"`.",
+          "description": "The PEM formatted content for the client certificate used by the Bridge to login to the remote Message VPN. It must consist of a private key and between one and three certificates comprising the certificate trust chain.\n\nThe minimum access scope/level required to retrieve this attribute is \"vpn/read-only\". The minimum access scope/level required to change this attribute is \"vpn/read-write\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Modifying this attribute while the object (or the relevant part of the object) is administratively enabled may be service impacting as enabled will be temporarily set to false to apply the change. Changes to this attribute are synchronized to HA mates and replication sites via config-sync. The default value is `\"\"`.",
           "maxLength": 32768,
           "minLength": 0,
           "type": "string",
@@ -14247,6 +14299,7 @@
             "enabled"
           ],
           "x-configSyncDefault": "",
+          "x-configSyncTableType": "vpn",
           "x-default": "",
           "x-deprecated": false,
           "x-identifying": false,
@@ -14262,7 +14315,7 @@
           "x-writeOnly": true
         },
         "remoteAuthenticationClientCertPassword": {
-          "description": "The password for the client certificate.\n\nThe minimum access scope/level required to change this attribute is \"vpn/read-write\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Modifying this attribute while the object (or the relevant part of the object) is administratively enabled may be service impacting as enabled will be temporarily set to false to apply the change. The default value is `\"\"`.",
+          "description": "The password for the client certificate.\n\nThe minimum access scope/level required to change this attribute is \"vpn/read-write\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Modifying this attribute while the object (or the relevant part of the object) is administratively enabled may be service impacting as enabled will be temporarily set to false to apply the change. Changes to this attribute are synchronized to HA mates and replication sites via config-sync. The default value is `\"\"`.",
           "maxLength": 512,
           "minLength": 0,
           "type": "string",
@@ -14273,6 +14326,7 @@
             "enabled"
           ],
           "x-configSyncDefault": "",
+          "x-configSyncTableType": "vpn",
           "x-default": "",
           "x-deprecated": false,
           "x-identifying": false,
@@ -20965,6 +21019,110 @@
       ],
       "type": "object"
     },
+    "MsgVpnDmrExportFilter": {
+      "properties": {
+        "msgVpnName": {
+          "description": "The name of the Message VPN.\n\nThe minimum access scope/level required to retrieve this attribute is \"vpn/read-only\". (private API only)",
+          "maxLength": 32,
+          "minLength": 1,
+          "pattern": "^[^*?]+$",
+          "type": "string",
+          "x-accessLevels": {
+            "get": "vpn/read-only"
+          },
+          "x-autoDisable": [],
+          "x-deprecated": false,
+          "x-identifying": true,
+          "x-identifyingDirect": false,
+          "x-opaque": false,
+          "x-readOnlyOther": true,
+          "x-readOnlyPost": true,
+          "x-readOptional": false,
+          "x-requiredPost": false,
+          "x-requiresDisable": [],
+          "x-sensitive": false,
+          "x-type": "msgSvc_NameConfig_param",
+          "x-writeOnly": false
+        },
+        "subscriptionFilter": {
+          "description": "The topic of the Export Filter.\n\nThe minimum access scope/level required to retrieve this attribute is \"vpn/read-only\". (private API only)",
+          "maxLength": 250,
+          "minLength": 1,
+          "type": "string",
+          "x-accessLevels": {
+            "get": "vpn/read-only"
+          },
+          "x-autoDisable": [],
+          "x-deprecated": false,
+          "x-identifying": true,
+          "x-identifyingDirect": true,
+          "x-opaque": false,
+          "x-readOnlyOther": true,
+          "x-readOnlyPost": false,
+          "x-readOptional": false,
+          "x-requiredPost": true,
+          "x-requiresDisable": [],
+          "x-sensitive": false,
+          "x-type": "TOPIC_EXPORT_SHARED",
+          "x-writeOnly": false
+        }
+      },
+      "type": "object",
+      "x-accessLevels": {
+        "delete": "vpn/read-write",
+        "post": "vpn/read-write"
+      },
+      "x-configSyncTableTypeCreateDelete": "vpn"
+    },
+    "MsgVpnDmrExportFilterLinks": {
+      "properties": {
+        "uri": {
+          "description": "The URI of this Export Filter object.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "MsgVpnDmrExportFilterResponse": {
+      "properties": {
+        "data": {
+          "$ref": "#/definitions/MsgVpnDmrExportFilter"
+        },
+        "links": {
+          "$ref": "#/definitions/MsgVpnDmrExportFilterLinks"
+        },
+        "meta": {
+          "$ref": "#/definitions/SempMeta"
+        }
+      },
+      "required": [
+        "meta"
+      ],
+      "type": "object"
+    },
+    "MsgVpnDmrExportFiltersResponse": {
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/definitions/MsgVpnDmrExportFilter"
+          },
+          "type": "array"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/definitions/MsgVpnDmrExportFilterLinks"
+          },
+          "type": "array"
+        },
+        "meta": {
+          "$ref": "#/definitions/SempMeta"
+        }
+      },
+      "required": [
+        "meta"
+      ],
+      "type": "object"
+    },
     "MsgVpnEventConnectionCountThreshold": {
       "description": "The thresholds for the client connection count event of the Message VPN, relative to `maxConnectionCount`.",
       "properties": {
@@ -24575,7 +24733,7 @@
           "x-writeOnly": false
         },
         "authenticationClientCertContent": {
-          "description": "The PEM formatted content for the client certificate used by the Kafka Receiver to login to the remote Kafka broker. To be used when authenticationScheme is \"client-certificate\". Alternatively this will be used for other values of authenticationScheme when the Kafka Broker has an `ssl.client.auth` setting of \"requested\" or \"required\" and KIP-684 (mTLS) is supported by the Kafka Broker.\n\nThe minimum access scope/level required to retrieve this attribute is \"vpn/read-only\". The minimum access scope/level required to change this attribute is \"vpn/read-write\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Modifying this attribute while the object (or the relevant part of the object) is administratively enabled may be service impacting as enabled will be temporarily set to false to apply the change. The default value is `\"\"`.",
+          "description": "The PEM formatted content for the client certificate used by the Kafka Receiver to login to the remote Kafka broker. To be used when authenticationScheme is \"client-certificate\". Alternatively this will be used for other values of authenticationScheme when the Kafka Broker has an `ssl.client.auth` setting of \"requested\" or \"required\" and KIP-684 (mTLS) is supported by the Kafka Broker.\n\nThe minimum access scope/level required to retrieve this attribute is \"vpn/read-only\". The minimum access scope/level required to change this attribute is \"vpn/read-write\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Modifying this attribute while the object (or the relevant part of the object) is administratively enabled may be service impacting as enabled will be temporarily set to false to apply the change. Changes to this attribute are synchronized to HA mates and replication sites via config-sync. The default value is `\"\"`.",
           "maxLength": 32768,
           "minLength": 0,
           "type": "string",
@@ -24586,6 +24744,7 @@
             "enabled"
           ],
           "x-configSyncDefault": "",
+          "x-configSyncTableType": "vpn",
           "x-default": "",
           "x-deprecated": false,
           "x-identifying": false,
@@ -24601,7 +24760,7 @@
           "x-writeOnly": true
         },
         "authenticationClientCertPassword": {
-          "description": "The password for the client certificate. To be used when authenticationScheme is \"client-certificate\". Alternatively this will be used for other values of authenticationScheme when the Kafka Broker has an `ssl.client.auth` setting of \"requested\" or \"required\" and KIP-684 (mTLS) is supported by the Kafka Broker.\n\nThe minimum access scope/level required to change this attribute is \"vpn/read-write\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Modifying this attribute while the object (or the relevant part of the object) is administratively enabled may be service impacting as enabled will be temporarily set to false to apply the change. The default value is `\"\"`.",
+          "description": "The password for the client certificate. To be used when authenticationScheme is \"client-certificate\". Alternatively this will be used for other values of authenticationScheme when the Kafka Broker has an `ssl.client.auth` setting of \"requested\" or \"required\" and KIP-684 (mTLS) is supported by the Kafka Broker.\n\nThe minimum access scope/level required to change this attribute is \"vpn/read-write\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Modifying this attribute while the object (or the relevant part of the object) is administratively enabled may be service impacting as enabled will be temporarily set to false to apply the change. Changes to this attribute are synchronized to HA mates and replication sites via config-sync. The default value is `\"\"`.",
           "maxLength": 512,
           "minLength": 0,
           "type": "string",
@@ -24612,6 +24771,7 @@
             "enabled"
           ],
           "x-configSyncDefault": "",
+          "x-configSyncTableType": "vpn",
           "x-default": "",
           "x-deprecated": false,
           "x-identifying": false,
@@ -25900,7 +26060,7 @@
           "x-writeOnly": false
         },
         "authenticationClientCertContent": {
-          "description": "The PEM formatted content for the client certificate used by the Kafka Sender to login to the remote Kafka broker. To be used when authenticationScheme is \"client-certificate\". Alternatively this will be used for other values of authenticationScheme when the Kafka Broker has an `ssl.client.auth` setting of \"requested\" or \"required\" and KIP-684 (mTLS) is supported by the Kafka Broker.\n\nThe minimum access scope/level required to retrieve this attribute is \"vpn/read-only\". The minimum access scope/level required to change this attribute is \"vpn/read-write\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Modifying this attribute while the object (or the relevant part of the object) is administratively enabled may be service impacting as enabled will be temporarily set to false to apply the change. The default value is `\"\"`.",
+          "description": "The PEM formatted content for the client certificate used by the Kafka Sender to login to the remote Kafka broker. To be used when authenticationScheme is \"client-certificate\". Alternatively this will be used for other values of authenticationScheme when the Kafka Broker has an `ssl.client.auth` setting of \"requested\" or \"required\" and KIP-684 (mTLS) is supported by the Kafka Broker.\n\nThe minimum access scope/level required to retrieve this attribute is \"vpn/read-only\". The minimum access scope/level required to change this attribute is \"vpn/read-write\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Modifying this attribute while the object (or the relevant part of the object) is administratively enabled may be service impacting as enabled will be temporarily set to false to apply the change. Changes to this attribute are synchronized to HA mates and replication sites via config-sync. The default value is `\"\"`.",
           "maxLength": 32768,
           "minLength": 0,
           "type": "string",
@@ -25911,6 +26071,7 @@
             "enabled"
           ],
           "x-configSyncDefault": "",
+          "x-configSyncTableType": "vpn",
           "x-default": "",
           "x-deprecated": false,
           "x-identifying": false,
@@ -25926,7 +26087,7 @@
           "x-writeOnly": true
         },
         "authenticationClientCertPassword": {
-          "description": "The password for the client certificate. To be used when authenticationScheme is \"client-certificate\". Alternatively this will be used for other values of authenticationScheme when the Kafka Broker has an `ssl.client.auth` setting of \"requested\" or \"required\" and KIP-684 (mTLS) is supported by the Kafka Broker.\n\nThe minimum access scope/level required to change this attribute is \"vpn/read-write\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Modifying this attribute while the object (or the relevant part of the object) is administratively enabled may be service impacting as enabled will be temporarily set to false to apply the change. The default value is `\"\"`.",
+          "description": "The password for the client certificate. To be used when authenticationScheme is \"client-certificate\". Alternatively this will be used for other values of authenticationScheme when the Kafka Broker has an `ssl.client.auth` setting of \"requested\" or \"required\" and KIP-684 (mTLS) is supported by the Kafka Broker.\n\nThe minimum access scope/level required to change this attribute is \"vpn/read-write\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Modifying this attribute while the object (or the relevant part of the object) is administratively enabled may be service impacting as enabled will be temporarily set to false to apply the change. Changes to this attribute are synchronized to HA mates and replication sites via config-sync. The default value is `\"\"`.",
           "maxLength": 512,
           "minLength": 0,
           "type": "string",
@@ -25937,6 +26098,7 @@
             "enabled"
           ],
           "x-configSyncDefault": "",
+          "x-configSyncTableType": "vpn",
           "x-default": "",
           "x-deprecated": false,
           "x-identifying": false,
@@ -27098,6 +27260,10 @@
         },
         "dmrBridgesUri": {
           "description": "The URI of this Message VPN's collection of DMR Bridge objects.",
+          "type": "string"
+        },
+        "dmrExportFiltersUri": {
+          "description": "The URI of this Message VPN's collection of Export Filter objects. (private API only)",
           "type": "string"
         },
         "jndiConnectionFactoriesUri": {
@@ -32751,7 +32917,7 @@
           "x-writeOnly": false
         },
         "authenticationClientCertContent": {
-          "description": "The PEM formatted content for the client certificate that the REST Consumer will present to the REST host. It must consist of a private key and between one and three certificates comprising the certificate trust chain.\n\nThe minimum access scope/level required to retrieve this attribute is \"vpn/read-only\". The minimum access scope/level required to change this attribute is \"vpn/read-write\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Modifying this attribute while the object (or the relevant part of the object) is administratively enabled may be service impacting as enabled will be temporarily set to false to apply the change. The default value is `\"\"`.",
+          "description": "The PEM formatted content for the client certificate that the REST Consumer will present to the REST host. It must consist of a private key and between one and three certificates comprising the certificate trust chain.\n\nThe minimum access scope/level required to retrieve this attribute is \"vpn/read-only\". The minimum access scope/level required to change this attribute is \"vpn/read-write\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Modifying this attribute while the object (or the relevant part of the object) is administratively enabled may be service impacting as enabled will be temporarily set to false to apply the change. Changes to this attribute are synchronized to HA mates and replication sites via config-sync. The default value is `\"\"`.",
           "maxLength": 32768,
           "minLength": 0,
           "type": "string",
@@ -32762,6 +32928,7 @@
             "enabled"
           ],
           "x-configSyncDefault": "",
+          "x-configSyncTableType": "vpn",
           "x-default": "",
           "x-deprecated": false,
           "x-identifying": false,
@@ -32777,7 +32944,7 @@
           "x-writeOnly": true
         },
         "authenticationClientCertPassword": {
-          "description": "The password for the client certificate.\n\nThe minimum access scope/level required to change this attribute is \"vpn/read-write\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Modifying this attribute while the object (or the relevant part of the object) is administratively enabled may be service impacting as enabled will be temporarily set to false to apply the change. The default value is `\"\"`.",
+          "description": "The password for the client certificate.\n\nThe minimum access scope/level required to change this attribute is \"vpn/read-write\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Modifying this attribute while the object (or the relevant part of the object) is administratively enabled may be service impacting as enabled will be temporarily set to false to apply the change. Changes to this attribute are synchronized to HA mates and replication sites via config-sync. The default value is `\"\"`.",
           "maxLength": 512,
           "minLength": 0,
           "type": "string",
@@ -32788,6 +32955,7 @@
             "enabled"
           ],
           "x-configSyncDefault": "",
+          "x-configSyncTableType": "vpn",
           "x-default": "",
           "x-deprecated": false,
           "x-identifying": false,
@@ -37950,7 +38118,7 @@
           "x-writeOnly": false
         },
         "authenticationClientCertContent": {
-          "description": "The PEM formatted content for the client certificate used by the broker to login to the token and introspection endpoints. To be used when authenticationScheme is \"client-certificate\".\n\nThe minimum access scope/level required to change this attribute is \"global/admin\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). The default value is `\"\"`.",
+          "description": "The PEM formatted content for the client certificate used by the broker to login to the token and introspection endpoints. To be used when authenticationScheme is \"client-certificate\".\n\nThe minimum access scope/level required to change this attribute is \"global/admin\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Changes to this attribute are synchronized to HA mates via config-sync. The default value is `\"\"`.",
           "maxLength": 32768,
           "minLength": 0,
           "type": "string",
@@ -37959,6 +38127,7 @@
           },
           "x-autoDisable": [],
           "x-configSyncDefault": "",
+          "x-configSyncTableType": "router",
           "x-default": "",
           "x-deprecated": false,
           "x-identifying": false,
@@ -37974,7 +38143,7 @@
           "x-writeOnly": true
         },
         "authenticationClientCertPassword": {
-          "description": "The password for the client certificate. To be used when authenticationScheme is \"client-certificate\".\n\nThe minimum access scope/level required to change this attribute is \"global/admin\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). The default value is `\"\"`.",
+          "description": "The password for the client certificate. To be used when authenticationScheme is \"client-certificate\".\n\nThe minimum access scope/level required to change this attribute is \"global/admin\". This attribute is absent from a GET and not updated when absent in a PUT, subject to the exceptions [here](https://docs.solace.com/Admin/SEMP/SEMP-API-Archit.htm#HTTP_Methods). Changes to this attribute are synchronized to HA mates via config-sync. The default value is `\"\"`.",
           "maxLength": 512,
           "minLength": 0,
           "type": "string",
@@ -37983,6 +38152,7 @@
           },
           "x-autoDisable": [],
           "x-configSyncDefault": "",
+          "x-configSyncTableType": "router",
           "x-default": "",
           "x-deprecated": false,
           "x-identifying": false,
@@ -42655,7 +42825,7 @@
     },
     "description": "SEMP (starting in `v2`) is a RESTful API for configuring, monitoring, and administering a Solace Event Broker. This specification defines the following API:\n\n\nAPI|Base Path|Purpose\n:---|:---|:---\nPrivate configuration|/SEMP/v2/\\_\\_private\\_config\\_\\_|Internal use only\n\n\n\nThe following APIs are also available:\n\n\nAPI|Base Path|Purpose\n:---|:---|:---\nPrivate action|/SEMP/v2/\\_\\_private\\_action\\_\\_|Internal use only\nPrivate monitoring|/SEMP/v2/\\_\\_private\\_monitor\\_\\_|Internal use only\n\n\n\nFor tutorials, architectural and protocol design documentation, and other information about the SEMP API, consult the [SEMP documentation](https://docs.solace.com/Admin/SEMP/Using-SEMP.htm) on the Solace website. The SEMP API specifications are also [available for download](https://solace.com/downloads/).\n\nIf you need additional support, please contact us at [support@solace.com](mailto:support@solace.com).",
     "title": "SEMP (Solace Element Management Protocol)",
-    "version": "10.26.0.8615"
+    "version": "10.26.2.9715"
   },
   "parameters": {
     "countQuery": {
@@ -57588,6 +57758,243 @@
           "dmrBridge"
         ],
         "x-supportedInSempDirect": true
+      }
+    },
+    "/msgVpns/{msgVpnName}/dmrExportFilters": {
+      "get": {
+        "description": "Get a list of Export Filter objects.\n\nAn Export Filter restricts which of the Message VPN's local subscriptions are advertised over external DMR links to remote clusters.\n\n\nAttribute|Identifying\n:---|:---:\nmsgVpnName|x\nsubscriptionFilter|x\n\n\n\nThe minimum access scope/level required to perform this operation is \"vpn/read-only\".\n\nThe maximum number of objects that can be returned in a single page is 100.\n\n(private API only)",
+        "operationId": "getMsgVpnDmrExportFilters",
+        "parameters": [
+          {
+            "description": "The name of the Message VPN.",
+            "in": "path",
+            "name": "msgVpnName",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "$ref": "#/parameters/countQuery"
+          },
+          {
+            "$ref": "#/parameters/cursorQuery"
+          },
+          {
+            "$ref": "#/parameters/forceFullPageQuery"
+          },
+          {
+            "$ref": "#/parameters/opaquePasswordQuery"
+          },
+          {
+            "$ref": "#/parameters/whereQuery"
+          },
+          {
+            "$ref": "#/parameters/selectQuery"
+          },
+          {
+            "$ref": "#/parameters/solSessionHeader"
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "The list of Export Filter objects' attributes, and the request metadata.",
+            "schema": {
+              "$ref": "#/definitions/MsgVpnDmrExportFiltersResponse"
+            }
+          },
+          "default": {
+            "description": "The error response.",
+            "schema": {
+              "$ref": "#/definitions/SempMetaOnlyResponse"
+            }
+          }
+        },
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "summary": "Get a list of Export Filter objects.",
+        "tags": [
+          "all",
+          "msgVpn",
+          "dmrExportFilter"
+        ],
+        "x-supportedInSempDirect": false
+      },
+      "post": {
+        "description": "Create an Export Filter object. Any attribute missing from the request will be set to its default value. The creation of instances of this object are synchronized to HA mates and replication sites via config-sync.\n\nAn Export Filter restricts which of the Message VPN's local subscriptions are advertised over external DMR links to remote clusters.\n\n\nAttribute|Identifying|Const|Required|Read-Only\n:---|:---:|:---:|:---:|:---:\nmsgVpnName|x|||x\nsubscriptionFilter|x|x|x|\n\n\n\nThe minimum access scope/level required to perform this operation is \"vpn/read-write\". A different access scope/level may also be required when providing values for specific attributes.\n\n(private API only)",
+        "operationId": "createMsgVpnDmrExportFilter",
+        "parameters": [
+          {
+            "description": "The name of the Message VPN.",
+            "in": "path",
+            "name": "msgVpnName",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "description": "The Export Filter object's attributes.",
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/MsgVpnDmrExportFilter"
+            }
+          },
+          {
+            "$ref": "#/parameters/opaquePasswordQuery"
+          },
+          {
+            "$ref": "#/parameters/selectQuery"
+          },
+          {
+            "$ref": "#/parameters/solSessionHeader"
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "The Export Filter object's attributes after being created, and the request metadata.",
+            "schema": {
+              "$ref": "#/definitions/MsgVpnDmrExportFilterResponse"
+            }
+          },
+          "default": {
+            "description": "The error response.",
+            "schema": {
+              "$ref": "#/definitions/SempMetaOnlyResponse"
+            }
+          }
+        },
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "summary": "Create an Export Filter object.",
+        "tags": [
+          "all",
+          "msgVpn",
+          "dmrExportFilter"
+        ],
+        "x-supportedInSempDirect": false
+      }
+    },
+    "/msgVpns/{msgVpnName}/dmrExportFilters/{subscriptionFilter}": {
+      "delete": {
+        "description": "Delete an Export Filter object. The deletion of instances of this object are synchronized to HA mates and replication sites via config-sync.\n\nAn Export Filter restricts which of the Message VPN's local subscriptions are advertised over external DMR links to remote clusters.\n\nThe minimum access scope/level required to perform this operation is \"vpn/read-write\".\n\n(private API only)",
+        "operationId": "deleteMsgVpnDmrExportFilter",
+        "parameters": [
+          {
+            "description": "The name of the Message VPN.",
+            "in": "path",
+            "name": "msgVpnName",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "description": "The topic of the Export Filter.",
+            "in": "path",
+            "name": "subscriptionFilter",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "$ref": "#/parameters/solSessionHeader"
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "The request metadata.",
+            "schema": {
+              "$ref": "#/definitions/SempMetaOnlyResponse"
+            }
+          },
+          "default": {
+            "description": "The error response.",
+            "schema": {
+              "$ref": "#/definitions/SempMetaOnlyResponse"
+            }
+          }
+        },
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "summary": "Delete an Export Filter object.",
+        "tags": [
+          "all",
+          "msgVpn",
+          "dmrExportFilter"
+        ],
+        "x-supportedInSempDirect": false
+      },
+      "get": {
+        "description": "Get an Export Filter object.\n\nAn Export Filter restricts which of the Message VPN's local subscriptions are advertised over external DMR links to remote clusters.\n\n\nAttribute|Identifying\n:---|:---:\nmsgVpnName|x\nsubscriptionFilter|x\n\n\n\nThe minimum access scope/level required to perform this operation is \"vpn/read-only\".\n\n(private API only)",
+        "operationId": "getMsgVpnDmrExportFilter",
+        "parameters": [
+          {
+            "description": "The name of the Message VPN.",
+            "in": "path",
+            "name": "msgVpnName",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "description": "The topic of the Export Filter.",
+            "in": "path",
+            "name": "subscriptionFilter",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "$ref": "#/parameters/opaquePasswordQuery"
+          },
+          {
+            "$ref": "#/parameters/selectQuery"
+          },
+          {
+            "$ref": "#/parameters/solSessionHeader"
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "The Export Filter object's attributes, and the request metadata.",
+            "schema": {
+              "$ref": "#/definitions/MsgVpnDmrExportFilterResponse"
+            }
+          },
+          "default": {
+            "description": "The error response.",
+            "schema": {
+              "$ref": "#/definitions/SempMetaOnlyResponse"
+            }
+          }
+        },
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ],
+        "summary": "Get an Export Filter object.",
+        "tags": [
+          "all",
+          "msgVpn",
+          "dmrExportFilter"
+        ],
+        "x-supportedInSempDirect": false
       }
     },
     "/msgVpns/{msgVpnName}/jndiConnectionFactories": {
