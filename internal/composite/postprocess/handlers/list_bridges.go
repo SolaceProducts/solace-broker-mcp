@@ -116,11 +116,7 @@ func ListBridges(stepResults map[string]map[string]any) (map[string]any, error) 
 		outboundUnhealthy := !bridgeOutboundUpStates[outboundState]
 		if inboundUnhealthy || outboundUnhealthy {
 			down++
-			// Bucket only when the inbound direction is itself the unhealthy
-			// one — an outbound-only failure can coexist with a stale,
-			// non-empty inboundFailureReason left over from a since-recovered
-			// inbound issue (SEMP does not clear it), which would otherwise
-			// misreport an active inbound failure that isn't happening.
+			// Gated on inboundUnhealthy specifically — see byInboundFailureReason above.
 			if inboundUnhealthy && inboundFailureReason != "" {
 				byReason[inboundFailureReason]++
 			}

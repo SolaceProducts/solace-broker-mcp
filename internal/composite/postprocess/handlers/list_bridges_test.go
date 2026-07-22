@@ -84,13 +84,13 @@ func TestListBridges_OutboundOnlyFailure(t *testing.T) {
 	}
 }
 
-// TestListBridges_OutboundOnlyFailureWithStaleInboundReason is the regression
-// test for the bucketing bug flagged in review (aross): SEMP does not clear
-// inboundFailureReason when inboundState recovers, so an outbound-only
-// failure can coexist with a non-empty, stale inboundFailureReason left over
-// from a since-recovered inbound issue. The bridge is down (outbound
-// unhealthy), but byInboundFailureReason must stay empty — bucketing here
-// would misreport an active inbound failure that isn't actually happening.
+// TestListBridges_OutboundOnlyFailureWithStaleInboundReason pins that SEMP
+// not clearing inboundFailureReason when inboundState recovers cannot leak
+// into the bucket: an outbound-only failure can coexist with a non-empty,
+// stale inboundFailureReason left over from a since-recovered inbound issue.
+// The bridge is down (outbound unhealthy), but byInboundFailureReason must
+// stay empty — bucketing here would misreport an active inbound failure that
+// isn't actually happening.
 func TestListBridges_OutboundOnlyFailureWithStaleInboundReason(t *testing.T) {
 	items := []any{
 		// inbound healthy but carries a stale reason from a past failure;
