@@ -94,6 +94,12 @@ func (e *ExchangeError) LogAttrs() []slog.Attr {
 	if e.FailureClass != FailureClassNone {
 		attrs = append(attrs, slog.String("failure_class", e.FailureClass.String()))
 	}
+	// A circuit-open rejection made no IdP call, so it carries no FailureClass
+	// or HTTPStatus. Emit a structured marker so an operator can filter/alert on
+	// "the breaker fast-failed this" rather than substring-matching the message.
+	if errors.Is(e, ErrExchangeCircuitOpen) {
+		attrs = append(attrs, slog.String("breaker_state", "open"))
+	}
 	if e.Elapsed != 0 {
 		attrs = append(attrs, slog.Duration("exchange_elapsed", e.Elapsed))
 	}

@@ -264,6 +264,12 @@ func TestBreaker_OpenStateErrorIsTransientAndEnriched(t *testing.T) {
 	if got := exchErr.AgentMessage(validInput().BrokerAlias); got != wantTransient {
 		t.Errorf("AgentMessage = %q, want transient %q", got, wantTransient)
 	}
+	// The structured breaker_state marker must survive enrichment, so an
+	// operator can filter for breaker-fast-failed calls without parsing the
+	// message. No failure_class: no IdP call was attempted.
+	if !hasLogAttr(exchErr.LogAttrs(), "breaker_state", "open") {
+		t.Errorf("LogAttrs missing breaker_state=open on enriched open-state error; got %v", exchErr.LogAttrs())
+	}
 }
 
 // TestBreaker_DisabledCallsIdPAndRetries asserts the escape hatch: with the

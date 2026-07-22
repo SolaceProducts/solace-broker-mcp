@@ -169,6 +169,32 @@ func TestExchangeError_LogAttrsIncludesFailureClass(t *testing.T) {
 	}
 }
 
+// TestExchangeError_LogAttrsBreakerState asserts the circuit-open case gets a
+// structured breaker_state=open marker (so operators can filter/alert on it),
+// carries no failure_class (no IdP call was attempted), and that non-open
+// errors omit the marker entirely.
+func TestExchangeError_LogAttrsBreakerState(t *testing.T) {
+	t.Parallel()
+
+	open := &ExchangeError{Sentinel: ErrExchangeCircuitOpen}
+	if !hasLogAttr(open.LogAttrs(), "breaker_state", "open") {
+		t.Errorf("LogAttrs missing breaker_state=open for circuit-open error; got %v", open.LogAttrs())
+	}
+	for _, a := range open.LogAttrs() {
+		if a.Key == "failure_class" {
+			t.Errorf("circuit-open error must not carry failure_class (no IdP call was made); got %v", open.LogAttrs())
+		}
+	}
+
+	// A genuine transport failure must NOT get the breaker_state marker.
+	notOpen := &ExchangeError{Sentinel: ErrExchangeTransport, FailureClass: FailureClassNetwork}
+	for _, a := range notOpen.LogAttrs() {
+		if a.Key == "breaker_state" {
+			t.Errorf("non-open error emitted breaker_state; want omitted; got %v", notOpen.LogAttrs())
+		}
+	}
+}
+
 // TestClassifyRetryOutcome_DeadlinePathHasNoFailureClass asserts that when
 // the exhaustion rewrap fires on the chain-deadline path (no underlying
 // *ExchangeError to copy from), FailureClass stays None — the honest signal
