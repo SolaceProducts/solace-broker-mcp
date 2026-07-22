@@ -47,20 +47,46 @@ const (
 
 // Circuit-breaker defaults. Unexported because only DefaultCircuitBreakerConfig
 // reads them — no other package touches these numbers, and a future YAML surface
-// will override the config struct, not these constants. Values are tuned for a
-// single shared IdP; see the accompanying field docs on CircuitBreakerConfig for
-// the reasoning behind each.
+// will override the config struct, not these constants.
+//
+// Each value is anchored to the defaults mainstream breakers ship, then adjusted
+// for this deployment's shape: one shared IdP, protected by one process-wide
+// breaker, at token-exchange volumes (lower than a general RPC path). Reference
+// points: Hystrix, Resilience4j, Polly, Envoy outlier detection, sony/gobreaker.
 const (
+	// 30s: long enough to ride out a brief blip, short enough that a resolved
+	// outage stops influencing the breaker within ~half a minute. Deliberately
+	// longer than mainstream defaults (Hystrix 10s, Polly 30s, Envoy 10s)
+	// because token-exchange traffic is lower-volume, so a slightly longer
+	// window gathers a usable sample.
 	defaultCircuitBreakerFailureRateWindow = 30 * time.Second
 
+	// 10: minimum classified operations before the rate rule may trip, so a
+	// 2-out-of-2 blip cannot open the breaker. Lower than Hystrix's 20 and
+	// Resilience4j's 100 on purpose — those protect high-volume RPC paths;
+	// token exchange sees far less traffic, and the consecutive-failure rule
+	// covers the low-traffic outage case the higher minimums would miss.
 	defaultCircuitBreakerMinimumRequests uint32 = 10
 
+	// 50%: half of counted (non-excluded) operations failing is a clear outage
+	// signal. Mirrors Resilience4j's and Polly's failure-rate defaults exactly.
 	defaultCircuitBreakerFailureRateThresholdPercent float64 = 50
 
+	// 5: consecutive failures that trip immediately regardless of sample size —
+	// the fast path for a full outage at low traffic. Matches gobreaker's and
+	// Envoy's consecutive-5xx default of 5.
 	defaultCircuitBreakerConsecutiveFailureThreshold uint32 = 5
 
+	// 30s open before probing recovery. Between Hystrix's 5s and Resilience4j's/
+	// gobreaker's 60s. Long enough not to hammer a still-down IdP, short enough
+	// that recovery is detected promptly; a multi-replica fleet may raise it so
+	// replicas don't all probe at once.
 	defaultCircuitBreakerOpenStateDuration = 30 * time.Second
 
+	// 2: recovery probes admitted in half-open. Requires two consecutive
+	// successes to close (stronger evidence than a single probe) without
+	// bursting a fragile IdP. Between the common "1 trial call" (Hystrix, Polly,
+	// gobreaker) and Resilience4j's 10.
 	defaultCircuitBreakerHalfOpenProbeRequests uint32 = 2
 )
 
