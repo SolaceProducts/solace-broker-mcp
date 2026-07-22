@@ -1030,10 +1030,13 @@ test_list_bridges() {
             "list-bridges [$broker]: $name must be present" || return 1
     done
     # No duplicates across the full (uncapped) set — guards against
-    # page-stitching bugs emitting the same bridge twice.
+    # page-stitching bugs emitting the same bridge twice. Keyed on the compound
+    # bridgeName+bridgeVirtualRouter identifier (not bridgeName alone) since
+    # that's a bridge's real identity — a broker can legitimately have the
+    # same bridgeName on different virtual routers (e.g. primary vs backup).
     assert_json_field "$content" \
-        '(.bridges.data | map(.bridgeName)) as $n | ($n | length) == ($n | unique | length)' "true" \
-        "list-bridges [$broker]: bridge names must be unique (no pagination duplicates)" || return 1
+        '(.bridges.data | map("\(.bridgeName)|\(.bridgeVirtualRouter)")) as $k | ($k | length) == ($k | unique | length)' "true" \
+        "list-bridges [$broker]: bridgeName+bridgeVirtualRouter pairs must be unique (no pagination duplicates)" || return 1
 }
 
 test_list_bridges_pagination() {
@@ -1113,7 +1116,7 @@ test_get_bridge_status_failing() {
     assert_json_field "$content" '.bridgeStatus.data.enabled' "true" \
         "get-bridge-status [$broker]: test-bridge-failing must be enabled (down despite being enabled)" || return 1
     assert_json_field "$content" \
-        '.bridgeStatus.data.inboundState != "ready-in-sync" and .bridgeStatus.data.inboundState != "ready-subscribing"' "true" \
+        '.bridgeStatus.data.inboundState != "ready-in-sync" and .bridgeStatus.data.inboundState != "ready-subscribing" and .bridgeStatus.data.inboundState != "not-applicable"' "true" \
         "get-bridge-status [$broker]: test-bridge-failing inboundState must not be healthy" || return 1
 }
 

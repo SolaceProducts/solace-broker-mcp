@@ -126,7 +126,7 @@ verify_bridge_state() {
         return 1
     }
     assert_json_field "$body" \
-        '.data.inboundState != "ready-in-sync" and .data.inboundState != "ready-subscribing"' "true" \
+        '.data.inboundState != "ready-in-sync" and .data.inboundState != "ready-subscribing" and .data.inboundState != "not-applicable"' "true" \
         "F8 [$label]: test-bridge-failing inboundState must not be healthy" || return 1
 
     body=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/bridges/test-bridge-disabled,auto") || {
