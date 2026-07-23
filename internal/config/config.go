@@ -693,12 +693,8 @@ func applyDefaults(cfg *ServerConfig) {
 	if cfg.SEMP.RetryMaxInterval == 0 {
 		cfg.SEMP.RetryMaxInterval = defaults.DefaultRetryMaxInterval
 	}
-	// InsecureSkipVerify is not defaulted here — Go's zero value for bool
-	// (false) already matches the intended default (verify TLS certificates).
 
-	if toolAuthorizationFeatureEnabled() {
-		applyToolAuthorizationDefaults(cfg)
-	}
+	applyToolAuthorizationDefaults(cfg)
 
 	// Observability numeric tunables (saturation_threshold_ms, etc.). The
 	// capability flags are env-driven and applied in applyEnvOverrides instead.
@@ -1074,9 +1070,7 @@ func validate(cfg *ServerConfig) error {
 		errs = append(errs, fmt.Errorf("mcp_client_auth.mode %q is invalid (must be one of %v)", cfg.MCPClientAuth.Mode, validAuthClientModes))
 	}
 
-	if toolAuthorizationFeatureEnabled() {
-		errs = append(errs, validateToolAuthorization(cfg)...)
-	}
+	errs = append(errs, validateToolAuthorization(cfg)...)
 
 	// listen_address: validate form, then guard the disabled-mode exposure.
 	// An explicit value must be an IP or "localhost" so an unbindable host fails
@@ -1166,9 +1160,8 @@ func countHop2Brokers(cfg *ServerConfig) int {
 	return n
 }
 
-// validateHop1Hop2Alignment enforces the structural invariant that Hop 2
 // applyToolAuthorizationDefaults applies defaults for the tool_authorization
-// block. Called only when ENABLE_TOOL_AUTHORIZATION is set.
+// block.
 func applyToolAuthorizationDefaults(cfg *ServerConfig) {
 	// Synthesize an empty ToolAuthorizationConfig when the block is omitted
 	// in oauth mode, so the validator always sees a non-nil pointer.
@@ -1185,7 +1178,6 @@ func applyToolAuthorizationDefaults(cfg *ServerConfig) {
 
 // validateToolAuthorization checks the tool_authorization config block for
 // invariant violations and structural coherence.
-// Called only when ENABLE_TOOL_AUTHORIZATION is set.
 func validateToolAuthorization(cfg *ServerConfig) []error {
 	var errs []error
 
@@ -1713,24 +1705,6 @@ func applyEnvOverrides(cfg *ServerConfig) error {
 // in validateBroker when broker OAuth ships.
 const envEnableUnreleasedBrokerOAuth = "ENABLE_UNRELEASED_BROKER_OAUTH"
 
-// envEnableToolAuthorization gates tool-authorization config validation
-// and defaults synthesis. When unset or false, the tool_authorization YAML
-// block is parsed but ignored — existing deployments are unaffected. Set
-// truthy to activate validation during development and testing. Remove when
-// the full tool-authorization feature ships.
-const envEnableToolAuthorization = "ENABLE_TOOL_AUTHORIZATION"
-
-// toolAuthorizationFeatureEnabled reports whether ENABLE_TOOL_AUTHORIZATION
-// is set truthy.
-//
-// LIFECYCLE: this function, its constant, and the two gate sites
-// (applyToolAuthorizationDefaults, validateToolAuthorization) are one linked
-// lifecycle. When the full tool-authorization feature ships, delete this
-// function and its constant, and make the gated calls unconditional.
-func toolAuthorizationFeatureEnabled() bool {
-	return envBool(envEnableToolAuthorization, false, "tool authorization")
-}
-
 // unreleasedBrokerOAuthEnabled reports whether ENABLE_UNRELEASED_BROKER_OAUTH
 // is set truthy. Uses the same tolerant-parse behavior as the observability
 // flags (unparseable value → WARN + default of false) so a typo cannot
@@ -1751,19 +1725,11 @@ func unreleasedBrokerOAuthEnabled() bool {
 }
 
 // ToolAuthorizationEnabled reports whether tool authorization should be
-// active at runtime. Returns true only when the feature flag is on AND
-// the config shape says enabled (mode is "oauth", the tool_authorization
-// block is present, the enabled flag is present, and the enabled flag is
-// true). Short-circuit AND in that order.
-//
-// The feature-flag check ensures this never returns true for a config
-// that skipped validation and defaults (they are gated behind the same
-// flag). When the feature ships and the flag is retired, delete the
-// toolAuthorizationFeatureEnabled() line — the rest stays.
+// active at runtime. Returns true only when the config shape says enabled:
+// mode is "oauth", the tool_authorization block is present, the enabled
+// flag is present, and the enabled flag is true. Short-circuit AND in that
+// order.
 func ToolAuthorizationEnabled(cfg *ServerConfig) bool {
-	if !toolAuthorizationFeatureEnabled() {
-		return false
-	}
 	if cfg.MCPClientAuth.Mode != AuthModeOAuth {
 		return false
 	}
