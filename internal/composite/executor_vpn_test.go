@@ -570,7 +570,8 @@ func TestExecute_UpdateMessageVPN_RejectsUnknownBodyField(t *testing.T) {
 				{Name: "msgVpnName", In: "path", Type: "string", Required: true},
 				{Name: "body", In: "body", Type: "object", Required: true},
 			},
-			BodyFields: map[string]bool{"msgVpnName": true, "enabled": true},
+			BodyFields:    map[string]bool{"msgVpnName": true, "enabled": true},
+			SchemaVersion: "10.26.2.9715",
 		},
 	}
 	executor := NewCompositeExecutor(ops)

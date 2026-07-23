@@ -29,14 +29,14 @@ import (
 //
 // Sentinel is one of ErrExchangeRejected, ErrExchangeTransport,
 // ErrInvalidResponse, ErrExchangeMissingSubject, ErrExchangeRequestBuild,
-// or ErrExchangeRetriesExhausted. Unwrap returns it so errors.Is works
-// through any number of wrapping layers.
+// ErrExchangeRetriesExhausted, or ErrExchangeCircuitOpen. Unwrap returns
+// it so errors.Is works through any number of wrapping layers.
 //
 // Message is human-readable and safe to log (no tokens, secrets, or
 // error_description fields). It is the value Error() returns.
 //
 // Fields populated at construction (response.go / doExchange):
-//   - Sentinel, Message, HTTPStatus
+//   - Sentinel, Message, HTTPStatus, FailureClass
 //
 // Fields enriched by Exchange() before returning:
 //   - TokenEndpoint, BrokerAlias, Audience, Elapsed
@@ -47,7 +47,11 @@ type ExchangeError struct {
 	BrokerAlias   string
 	Audience      string
 	HTTPStatus    int
-	Elapsed       time.Duration
+	// FailureClass survives the ErrExchangeRetriesExhausted rewrap, which
+	// replaces Sentinel — it is the only signal of the underlying transport
+	// cause the breaker still has once retries are exhausted.
+	FailureClass FailureClass
+	Elapsed      time.Duration
 }
 
 func (e *ExchangeError) Error() string { return e.Message }
@@ -60,7 +64,7 @@ func (e *ExchangeError) Unwrap() error { return e.Sentinel }
 // never embedded — sentinel-specific detail belongs on LogAttrs, not
 // on the agent surface. See PR SOL-151520 for the rationale.
 func (e *ExchangeError) AgentMessage(brokerAlias string) string {
-	if errors.Is(e, ErrExchangeTransport) || errors.Is(e, ErrExchangeRetriesExhausted) {
+	if errors.Is(e, ErrExchangeTransport) || errors.Is(e, ErrExchangeRetriesExhausted) || errors.Is(e, ErrExchangeCircuitOpen) {
 		// Deliberately not broker-named: the IdP is a shared component,
 		// so a transport-class failure affects every broker at once.
 		// Naming a broker here would mislead the agent into thinking a
@@ -86,6 +90,15 @@ func (e *ExchangeError) LogAttrs() []slog.Attr {
 	}
 	if e.HTTPStatus != 0 {
 		attrs = append(attrs, slog.Int("idp_http_status", e.HTTPStatus))
+	}
+	if e.FailureClass != FailureClassNone {
+		attrs = append(attrs, slog.String("failure_class", e.FailureClass.String()))
+	}
+	// A circuit-open rejection made no IdP call, so it carries no FailureClass
+	// or HTTPStatus. Emit a structured marker so an operator can filter/alert on
+	// "the breaker fast-failed this" rather than substring-matching the message.
+	if errors.Is(e, ErrExchangeCircuitOpen) {
+		attrs = append(attrs, slog.String("breaker_state", "open"))
 	}
 	if e.Elapsed != 0 {
 		attrs = append(attrs, slog.Duration("exchange_elapsed", e.Elapsed))

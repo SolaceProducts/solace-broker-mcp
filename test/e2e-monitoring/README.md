@@ -2,8 +2,9 @@
 
 End-to-end tests for the monitoring tools — `list-vpns`, `list-queues`, `list-clients`,
 `get-message-rates`, `list-slow-subscribers`, `list-queue-discards`, `get-discard-stats`,
-`get-broker-status`, and others. Runs two Solace brokers, provisions baseline + extended
-fixtures (F1–F7), and drives both SEMP-layer and messaging-layer broker state.
+`get-broker-status`, `list-bridges`, `get-bridge-status`, and others. Runs two Solace
+brokers, provisions baseline + extended fixtures (F1–F8), and drives both SEMP-layer
+and messaging-layer broker state.
 
 Builds on the shared scaffold in [`../e2e-common/`](../e2e-common/README.md).
 
@@ -44,8 +45,8 @@ existing RDP/queue tools run against the base fixture copied from
 utilization), so the default Dockerized broker state already populates every
 curated field.
 
-F1–F7 are implemented today, driven by the `broker-driver` binary for the
-client-bearing fixtures (F3–F7).
+F1–F8 are implemented today, driven by the `broker-driver` binary for the
+client-bearing fixtures (F3–F7); F8 is one-shot SEMP only, like F1/F2.
 
 | ID       | Fixture                  | Required broker state                                                                                                                                  | Lifecycle                          | MCP tools supported                                                                |
 | -------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------- | ---------------------------------------------------------------------------------- |
@@ -58,6 +59,7 @@ client-bearing fixtures (F3–F7).
 | F6       | Slow direct subscriber   | A direct topic subscriber on each broker is `SIGSTOP`ed while a separate publisher floods its topic (`rate=3000`, `size=50000`), closing its TCP egress window so the broker sets the per-client `slowSubscriber` flag. Distinct from F5: this is the per-client flag a slow-ACK guaranteed consumer never trips (SOL-150328). **Verification:** `clients/<name>.slowSubscriber == true` (polled — rolling ~1 min window). | background broker-driver (subscriber `SIGSTOP`ed + flood publisher) | `list-slow-subscribers`                                                            |
 | F7-spool | Discards via spool quota | Queue `test-queue-discards-spool` with `maxMsgSpoolUsage=1 MB` + `egressEnabled=false`; one-shot publish ~2 MB. **Verification:** `maxMsgSpoolUsageExceededDiscardedMsgCount > 0` after one-shot publish. | one-shot SEMP + one-shot broker-driver publish | `list-queue-discards` (per-queue), `get-discard-stats` (broker-wide)               |
 | F7-ttl   | Discards via TTL expiry  | Queue `test-queue-discards-ttl` with `maxTtl=1 s` + no consumer; one-shot publish + 2 s wait. **Verification:** `maxTtlExpiredDiscardedMsgCount > 0` after one-shot publish. | one-shot SEMP + one-shot broker-driver publish | `list-queue-discards` (per-queue), `get-discard-stats` (broker-wide)               |
+| F8       | Bridges (SOL-152231)     | Three bridges per broker, each pointed at the *other* broker (the only fixture that's inherently cross-broker rather than independent per side): `test-bridge` (healthy, bidirectional once both sides exist), `test-bridge-failing` (enabled, remote location `127.0.0.1:1` — connection refused, never converges), `test-bridge-disabled` (`enabled=false`). **Verification:** `list-bridges`/`get-bridge-status` field values — see [F8 — bridge connection-state findings](#f8--bridge-connection-state-findings). | one-shot SEMP                      | `list-bridges` (`downCount`/`disabledCount` aggregation), `get-bridge-status` (compound-identifier lookup) |
 
 Activation order is deterministic: F1 and F2 (SEMP-only) before F3/F4
 (client-bearing). F5, F6, and F7 follow F3/F4 — each owns dedicated resources
@@ -254,6 +256,45 @@ the publisher ramps, check:
 - Both are **cumulative counters** — non-zero persists, so no sustained traffic
   is required after the one-shot publish.
 
+### F8 — bridge connection-state findings
+
+Lab-verified against SEMP 2.46 (the `solace-pubsub-standard:latest` image this
+suite runs). These are load-bearing for `list_bridges.go`'s classification
+logic and for how the F8 fixtures/assertions are built — don't assume the
+SEMP spec's prose description of a field is the full story without checking
+real broker behavior first.
+
+- **`outboundState` depends on the peer's reciprocal bridge existing.** A
+  bridge configured on only one side (e.g. broker-a → broker-b with no
+  bridge configured back from broker-b) reports `outboundState:
+  "not-applicable"` even though `inboundState` is already `"ready-in-sync"`.
+  Once both sides are configured, `outboundState` converges to `"ready"` on
+  both. This is why `create_bridges_on` must run for **both** brokers before
+  `verify_bridges_on` polls either one.
+- **`inboundFailureReason` does not reliably populate for connection-level
+  failures**, unlike RDPs' `lastFailureReason`. Tested three ways — an
+  unreachable host (connection refused), a nonexistent remote VPN name, and
+  wrong credentials — all three left `inboundFailureReason` empty and
+  `rxConnectionFailureCategory` at `"no-failure"` indefinitely (polled up to
+  40s), while `inboundState` correctly settled at `"not-ready-wait-next"`.
+  The `test-bridge-failing` fixture and its assertions rely on `inboundState`
+  / `downCount`, not `byInboundFailureReason`, for this reason. An
+  **admin-disabled** bridge is the one case that *does* populate a reason
+  (`inboundFailureReason: "Bridge disabled"`) — which is exactly why the
+  postprocess handler must exclude admin-disabled bridges from
+  `byInboundFailureReason` (mirrors `list-rdps`' "RDP Shutdown" exclusion);
+  without a real down-but-unreachable fixture to contrast against, that
+  exclusion's necessity wouldn't be obvious from unit tests alone.
+- **Deleting a bridge cascades its `remoteMsgVpns` sub-resource** — unlike
+  RDPs, which require deleting `queueBindings`/`restConsumers` before the RDP
+  itself. `cleanup_bridges_on` only issues one `DELETE` per bridge.
+- **Bridges use the public `/SEMP/v2/config` API**, same as every other
+  fixture in this suite (`BROKER_A_SEMP_CONFIG`/`BROKER_B_SEMP_CONFIG`) — no
+  need for `__private_config__`.
+- **The pre-provisioned `default` client-username** (empty password, already
+  used by `connected_client.go` for F3/F4/F5) works for a bridge's remote
+  authentication too — no new client-username fixture was needed.
+
 ## Cleanup order
 
 `test-monitoring-tools.sh` runs the following cleanup steps, in this order,
@@ -268,7 +309,10 @@ when it exits (for any reason — normal end, error, Ctrl-C, killed):
    termination signal, waits up to 5 seconds, then force-kills anything
    still running.
 3. **Delete broker fixtures** (`cleanup_fixtures` in `helpers.sh`).
-   Order: bindings → consumers → RDPs → queues → VPNs.
+   Order: bindings → consumers → RDPs → queues → VPNs → bridges. Bridges have
+   no ordering dependency on any other fixture (their delete cascades their
+   own `remoteMsgVpns` sub-resource — see F8 above) — they're placed here
+   only because that's where `create_bridges_on` was inserted.
 4. **Remove the MCP server PID file** (`bin/mcp-server.pid`).
 
 Step 2 must run before step 3 — the broker refuses to delete a queue with
