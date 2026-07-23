@@ -2,7 +2,7 @@
 # Monitoring-suite helpers. The generic scaffold (broker readiness, MCP server
 # lifecycle, config generation, SEMP ops, base broker fixtures, MCP wire,
 # assertions, test runner) lives in the shared library; this file adds only the
-# monitoring-specific fixtures (F1–F7) and broker-driver orchestration.
+# monitoring-specific fixtures (F1–F8) and broker-driver orchestration.
 # Source from test scripts: source "$(dirname "$0")/helpers.sh"
 
 set -euo pipefail
@@ -10,7 +10,7 @@ set -euo pipefail
 # SUITE_DIR contract (see e2e-common/lib.sh): set our own directory, then source
 # the shared library, which derives BIN_DIR/ENV_FILE/REPO_ROOT and .env from it.
 # Honor a pre-set SUITE_DIR so cross-suite sourcing (e.g. e2e-llm/helpers.sh
-# reusing our F1–F7 code against the LLM suite's .env / bin / ports) keeps
+# reusing our F1–F8 code against the LLM suite's .env / bin / ports) keeps
 # the caller's tree instead of being silently rewired to e2e-monitoring.
 SUITE_DIR="${SUITE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 # shellcheck source=../e2e-common/lib.sh
@@ -25,9 +25,9 @@ export BROKER_A_SMF_PORT BROKER_B_SMF_PORT
 # stop_broker_drivers, BROKER_DRIVER_PIDFILE_GLOB) now live in the shared
 # e2e-common/lib.sh — the monitoring and action suites both use them. The sources
 # moved to test/e2e-common/broker-driver too. This file keeps only the
-# monitoring-specific F1–F7 fixtures below.
+# monitoring-specific F1–F8 fixtures below.
 
-# ── Broker fixtures (F1–F7, layered on the shared base set in lib.sh) ─────────
+# ── Broker fixtures (F1–F8, layered on the shared base set in lib.sh) ─────────
 
 verify_multi_vpn_on() {
     local broker_url="$1"
@@ -124,6 +124,148 @@ cleanup_multi_queue_on() {
     semp_delete "$semp_config" "msgVpns/$BROKER_VPN/queues/test-queue-2"
     semp_delete "$semp_config" "msgVpns/$BROKER_VPN/queues/test-queue-3"
     log_info "Multi-queue fixtures cleaned up on $label"
+}
+
+# F8 bridges — SOL-152231. Distinct from every other fixture in this file:
+# F1-F7 apply independently per broker, but a bridge is inherently
+# cross-broker, so each side's fixture points at the OTHER broker's internal
+# container hostname (fixed by docker-compose.yml's `hostname:` field, not
+# .env-configurable like the host-mapped ports — reachable from the sibling
+# container over the compose network's default bridge on 55555, the SMF
+# plaintext listener's *internal* container port).
+F8_REMOTE_HOST_FROM_A="solace-e2e-mon-b"
+F8_REMOTE_HOST_FROM_B="solace-e2e-mon-a"
+F8_SMF_PORT=55555
+
+# Bridge health-state constants and predicate, mirroring bridgeInboundUpStates
+# / bridgeOutboundUpStates in list_bridges.go. Single source of truth for the
+# assertions in this file's verify_bridges_on plus verify-fixtures.sh and
+# test-monitoring-tools.sh (both source this file) — without it, three
+# hand-copied predicates could silently drift out of sync with a future change
+# to the server's classification and still pass.
+BRIDGE_HEALTHY_INBOUND_STATE="ready-in-sync"
+BRIDGE_HEALTHY_OUTBOUND_STATE="ready"
+
+# jq boolean fragment: true when the inboundState value at jq path $1 (e.g.
+# ".data.inboundState" or ".bridgeStatus.data.inboundState" — callers differ
+# on whether they're reading a raw SEMP body or an MCP tool response) is NOT
+# one of this server's healthy inbound states.
+bridge_inbound_unhealthy_jq() {
+    local path="$1"
+    printf '%s != "%s" and %s != "ready-subscribing" and %s != "not-applicable"' \
+        "$path" "$BRIDGE_HEALTHY_INBOUND_STATE" "$path" "$path"
+}
+
+# jq boolean fragment: true when the inboundState value at jq path $1 IS one
+# of this server's healthy inbound states — the logical complement of
+# bridge_inbound_unhealthy_jq above, kept as its own function (not `not (...)`)
+# so callers read naturally either way. "ready-subscribing" is a real healthy
+# state (still adding configured subscriptions), not just "not yet broken" —
+# a bridge with no remote subscriptions configured, like this suite's
+# fixtures, likely never lingers there, but asserting the exact steady-state
+# value alone was stricter than the server's own classification and a
+# plausible flake source on slower CI runners.
+bridge_inbound_healthy_jq() {
+    local path="$1"
+    printf '%s == "%s" or %s == "ready-subscribing"' \
+        "$path" "$BRIDGE_HEALTHY_INBOUND_STATE" "$path"
+}
+
+# Creates three bridges on one broker, pointed at $remote_host (the sibling
+# broker's container hostname). Does NOT verify convergence — call
+# verify_bridges_on for both brokers only after create_bridges_on has run for
+# both, since a lone one-sided bridge's outboundState reports
+# "not-applicable" until the peer's reciprocal bridge also exists
+# (lab-verified against SEMP 2.46; see verify_bridges_on).
+#
+# LAB-VERIFIED: deleting a bridge cascades its remoteMsgVpns sub-resource
+# automatically (unlike RDPs, which require deleting queueBindings/
+# restConsumers before the RDP itself) — cleanup_bridges_on below only
+# deletes the three top-level bridge objects.
+create_bridges_on() {
+    local semp_config="$1"
+    local label="$2"
+    local remote_host="$3"
+    log_info "Creating bridge fixtures on $label (remote: $remote_host) ..."
+
+    # test-bridge: healthy once both sides exist. remoteAuthenticationScheme
+    # basic + clientUsername "default" with an empty password reuses the same
+    # pre-provisioned `default` client-username the broker-driver F3/F4/etc.
+    # fixtures already authenticate as (connected_client.go) — no new
+    # client-username fixture needed.
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/bridges" \
+        '{"bridgeName":"test-bridge","bridgeVirtualRouter":"auto","enabled":true,"remoteAuthenticationScheme":"basic","remoteAuthenticationBasicClientUsername":"default","remoteAuthenticationBasicPassword":""}' >/dev/null
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/bridges/test-bridge,auto/remoteMsgVpns" \
+        "$(jq -nc --arg loc "$remote_host:$F8_SMF_PORT" \
+            '{remoteMsgVpnName:"default",remoteMsgVpnLocation:$loc,remoteMsgVpnInterface:"",enabled:true,tlsEnabled:false,clientUsername:"default",password:""}')" >/dev/null
+
+    # test-bridge-failing: enabled, pointed at an address nothing listens on
+    # (immediate TCP refusal) so inboundState settles into a down/retry state.
+    # LAB-VERIFIED (SEMP 2.46): unlike RDPs' lastFailureReason, a bridge's
+    # inboundFailureReason and rxConnectionFailureCategory stay empty /
+    # "no-failure" for connection-level failures — tested against an
+    # unreachable host, a nonexistent remote VPN name, and wrong credentials,
+    # all three left inboundFailureReason == "" indefinitely. Only
+    # inboundState changes (settles at "not-ready-wait-next"). Do not assert
+    # byInboundFailureReason has an entry from this fixture — assert
+    # downCount instead (see test-monitoring-tools.sh).
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/bridges" \
+        '{"bridgeName":"test-bridge-failing","bridgeVirtualRouter":"auto","enabled":true,"remoteAuthenticationScheme":"basic","remoteAuthenticationBasicClientUsername":"default","remoteAuthenticationBasicPassword":""}' >/dev/null
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/bridges/test-bridge-failing,auto/remoteMsgVpns" \
+        '{"remoteMsgVpnName":"default","remoteMsgVpnLocation":"127.0.0.1:1","remoteMsgVpnInterface":"","enabled":true,"tlsEnabled":false,"clientUsername":"default","password":""}' >/dev/null
+
+    # test-bridge-disabled: enabled=false — feeds disabledCount. LAB-VERIFIED:
+    # inboundFailureReason == "Bridge disabled" here (unlike the failing case
+    # above, which never populates a reason) — this is exactly the case the
+    # postprocess handler's admin-disabled exclusion from
+    # byInboundFailureReason must catch, mirroring list-rdps' "RDP Shutdown"
+    # exclusion.
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/bridges" \
+        '{"bridgeName":"test-bridge-disabled","bridgeVirtualRouter":"auto","enabled":false,"remoteAuthenticationScheme":"basic","remoteAuthenticationBasicClientUsername":"default","remoteAuthenticationBasicPassword":""}' >/dev/null
+
+    log_info "Bridge fixtures created on $label"
+}
+
+# Polls all three bridges to their converged terminal state. Call only after
+# create_bridges_on has run for BOTH brokers — test-bridge's outboundState
+# depends on the peer's reciprocal bridge existing (lab-verified: a one-sided
+# bridge reports outboundState "not-applicable" until both sides are up).
+#
+# These three calls are bare (no `|| true`): a timeout here aborts
+# create_fixtures rather than degrading to a downstream test failure. That's
+# deliberate, not an oversight — it matches the same required-convergence
+# pattern already used by create_empty_enabled_vpn_on above (also bare) and
+# the RDP-failing-reason poll in e2e-common/lib.sh: the tool-level summary/
+# downCount assertions in test-monitoring-tools.sh depend on this exact state,
+# so failing loudly here (with a clear "which bridge, which broker" message)
+# beats a vaguer downstream assertion mismatch. The tradeoff is real —
+# bridges are the one cross-broker, two-sided handshake in this suite and so
+# the most timeout-prone fixture — but softening only this one call would
+# make it inconsistent with its same-file sibling rather than actually safer.
+verify_bridges_on() {
+    local broker_url="$1"
+    local label="$2"
+    log_info "Verifying bridge fixtures visible on $label ..."
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/bridges/test-bridge,auto" \
+        30 "($(bridge_inbound_healthy_jq '.data.inboundState')) and .data.outboundState == \"$BRIDGE_HEALTHY_OUTBOUND_STATE\""
+    # No inboundFailureReason predicate here (it never populates for this
+    # fixture — see create_bridges_on) — poll on the classification this
+    # server's own down logic uses instead (matches
+    # bridgeInboundUpStates/bridgeOutboundUpStates in list_bridges.go).
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/bridges/test-bridge-failing,auto" \
+        30 "$(bridge_inbound_unhealthy_jq '.data.inboundState')"
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/bridges/test-bridge-disabled,auto" \
+        15 '.data.enabled == false'
+}
+
+cleanup_bridges_on() {
+    local semp_config="$1"
+    local label="$2"
+    log_info "Cleaning up bridge fixtures on $label ..."
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/bridges/test-bridge-disabled,auto"
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/bridges/test-bridge-failing,auto"
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/bridges/test-bridge,auto"
+    log_info "Bridge fixtures cleaned up on $label"
 }
 
 # F3 connected client — single source of truth for the fixture's identifiers,
@@ -637,6 +779,12 @@ create_fixtures() {
     create_fixtures_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL"
     create_multi_queue_on "$BROKER_A_SEMP_CONFIG" "broker-a" "$BROKER_A_URL"
     create_multi_queue_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL"
+    # Both sides' bridge objects must exist before either side is verified —
+    # test-bridge's outboundState depends on the peer's reciprocal bridge.
+    create_bridges_on "$BROKER_A_SEMP_CONFIG" "broker-a" "$F8_REMOTE_HOST_FROM_A"
+    create_bridges_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$F8_REMOTE_HOST_FROM_B"
+    verify_bridges_on "$BROKER_A_URL" "broker-a"
+    verify_bridges_on "$BROKER_B_URL" "broker-b"
     create_multi_vpn_on "$BROKER_A_SEMP_CONFIG" "broker-a" "$BROKER_A_URL"
     create_multi_vpn_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL"
     create_empty_enabled_vpn_on "$BROKER_A_SEMP_CONFIG" "broker-a" "$BROKER_A_URL"
@@ -693,6 +841,8 @@ cleanup_fixtures() {
     cleanup_empty_enabled_vpn_on "$BROKER_B_SEMP_CONFIG" "broker-b"
     cleanup_multi_vpn_on "$BROKER_A_SEMP_CONFIG" "broker-a"
     cleanup_multi_vpn_on "$BROKER_B_SEMP_CONFIG" "broker-b"
+    cleanup_bridges_on "$BROKER_A_SEMP_CONFIG" "broker-a"
+    cleanup_bridges_on "$BROKER_B_SEMP_CONFIG" "broker-b"
     cleanup_multi_queue_on "$BROKER_A_SEMP_CONFIG" "broker-a"
     cleanup_multi_queue_on "$BROKER_B_SEMP_CONFIG" "broker-b"
     cleanup_fixtures_on "$BROKER_A_SEMP_CONFIG" "broker-a"

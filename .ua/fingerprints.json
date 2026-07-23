@@ -1,8 +1,125 @@
 {
   "version": "1.0.0",
-  "gitCommitHash": "c1f193ea253213b0d4019e829217170cdd416473",
-  "generatedAt": "2026-07-21T16:49:34.403Z",
+  "gitCommitHash": "c4955e9172cf021b9640e932f9f05c1800cd88f6",
+  "generatedAt": "2026-07-23T17:53:12.004Z",
   "files": {
+    ".claude/hooks/changelog-reminder.sh": {
+      "filePath": ".claude/hooks/changelog-reminder.sh",
+      "contentHash": "518464d5869ffdc26b08a1eab4b280e1e2a1834fcec05230de53c1b4ba562eb2",
+      "functions": [
+        {
+          "name": "extract_unreleased",
+          "params": [],
+          "exported": false,
+          "lineCount": 9
+        }
+      ],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 47,
+      "hasStructuralAnalysis": true
+    },
+    ".claude/review-balance-history.tsv": {
+      "filePath": ".claude/review-balance-history.tsv",
+      "contentHash": "0587c542638be07bb5af309166940edf870c9d1d9b4cc411c647d2131bdb87bb",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 11,
+      "hasStructuralAnalysis": false
+    },
+    ".claude/review-balance.json": {
+      "filePath": ".claude/review-balance.json",
+      "contentHash": "20aea0a9186732fdec29e0bafb128d2bd36fcb69c7ced185d26fc71d7bb6892f",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 17,
+      "hasStructuralAnalysis": true
+    },
+    ".claude/settings.json": {
+      "filePath": ".claude/settings.json",
+      "contentHash": "29c3d16d90ad51dd93c17753b86f467165a4ba84f08ae6b8d1babaac5bcb0f46",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 16,
+      "hasStructuralAnalysis": true
+    },
+    ".claude/skills/add-logs/SKILL.md": {
+      "filePath": ".claude/skills/add-logs/SKILL.md",
+      "contentHash": "80290d62462e52688f55be9028497b533af8f453e844ba67e2188d92f6b37fef",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 118,
+      "hasStructuralAnalysis": true
+    },
+    ".claude/skills/changelog/SKILL.md": {
+      "filePath": ".claude/skills/changelog/SKILL.md",
+      "contentHash": "6a85cda9bc6b41a2d9f42cdbae80fb552db967eff320225d19889aabc5f21976",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 126,
+      "hasStructuralAnalysis": true
+    },
+    ".claude/skills/check-logs/SKILL.md": {
+      "filePath": ".claude/skills/check-logs/SKILL.md",
+      "contentHash": "ee3f059f538e8ecf5fb26c0b67062401df2ce5058564e3aa426334c5966c0a69",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 116,
+      "hasStructuralAnalysis": true
+    },
+    ".claude/skills/cut-release/SKILL.md": {
+      "filePath": ".claude/skills/cut-release/SKILL.md",
+      "contentHash": "4db8af39ce64d235053ece84a8d0bc289a824225d2c0ab240806e70a28b85d84",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 208,
+      "hasStructuralAnalysis": true
+    },
+    ".dockerignore": {
+      "filePath": ".dockerignore",
+      "contentHash": "03cd9bd558c538ff80fba7efa70e90d381db27e4fd69b06a2b13fa7c06d3b648",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 20,
+      "hasStructuralAnalysis": false
+    },
+    ".fossa.yml": {
+      "filePath": ".fossa.yml",
+      "contentHash": "f77c9af880eda5019e9f7d8258e456357563a67c0648463769c6aa2a5281c127",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 34,
+      "hasStructuralAnalysis": true
+    },
+    ".github/ADMIN_SETUP.md": {
+      "filePath": ".github/ADMIN_SETUP.md",
+      "contentHash": "7692d1cc560cacb94bfa83d9972ca4faa63ea97618dd06b2c6bb44254f1d889c",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 284,
+      "hasStructuralAnalysis": true
+    },
     ".github/CODEOWNERS": {
       "filePath": ".github/CODEOWNERS",
       "contentHash": "dbe07a12344204d3718942727af9625eea6e6aff09c305cf8c66b5b0371ece6f",
@@ -13,15 +130,272 @@
       "totalLines": 4,
       "hasStructuralAnalysis": false
     },
-    ".ua/.understandignore": {
-      "filePath": ".ua/.understandignore",
-      "contentHash": "69e523ac20ab9169737877bfd0c8b24a51c6a1b41f04b298f659a9e32cc199a8",
+    ".github/CODE_OF_CONDUCT.md": {
+      "filePath": ".github/CODE_OF_CONDUCT.md",
+      "contentHash": "74383470c75f9160c508f9c107ccaf388363a9fd89fc22fe478b2ac1749765aa",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 102,
-      "hasStructuralAnalysis": false
+      "totalLines": 86,
+      "hasStructuralAnalysis": true
+    },
+    ".github/CONTRIBUTING.md": {
+      "filePath": ".github/CONTRIBUTING.md",
+      "contentHash": "0be7b78d0e86f30b7090a4502c6e3dc994bcced6e36e1afcc4fbebe39b96b9c3",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 271,
+      "hasStructuralAnalysis": true
+    },
+    ".github/ISSUE_TEMPLATE/bug_report.yml": {
+      "filePath": ".github/ISSUE_TEMPLATE/bug_report.yml",
+      "contentHash": "abd00f4a1fa4f65934f4f4b39d8edca3bad5691f97e1d2ce72df64deeecafd0c",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 143,
+      "hasStructuralAnalysis": true
+    },
+    ".github/ISSUE_TEMPLATE/config.yml": {
+      "filePath": ".github/ISSUE_TEMPLATE/config.yml",
+      "contentHash": "1cda2f56190308c4493dd99ca5b0da4cd270bfe84adc5d8bc78af8f8e75c4f7f",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 12,
+      "hasStructuralAnalysis": true
+    },
+    ".github/ISSUE_TEMPLATE/feature_request.yml": {
+      "filePath": ".github/ISSUE_TEMPLATE/feature_request.yml",
+      "contentHash": "6323d247cfabb95561310ab750f2b94138e1bc4b0643392129acfcee7a361aac",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 128,
+      "hasStructuralAnalysis": true
+    },
+    ".github/OPEN_SOURCE_STATUS.md": {
+      "filePath": ".github/OPEN_SOURCE_STATUS.md",
+      "contentHash": "1209c43f2c1a1a72b3bdd72a041e10f7661b5118b9a47a62c38c7b54fe6ff8d2",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 186,
+      "hasStructuralAnalysis": true
+    },
+    ".github/PULL_REQUEST_TEMPLATE.md": {
+      "filePath": ".github/PULL_REQUEST_TEMPLATE.md",
+      "contentHash": "f317eeb2dab1b09bb0b92695181cb5215cdafaae64af56eccfe9e68b0f88a642",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 126,
+      "hasStructuralAnalysis": true
+    },
+    ".github/SECURITY.md": {
+      "filePath": ".github/SECURITY.md",
+      "contentHash": "2643c67a472668acb643873257b2a750041bb926342070b12a1fb5d983f98e14",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 200,
+      "hasStructuralAnalysis": true
+    },
+    ".github/renovate.json": {
+      "filePath": ".github/renovate.json",
+      "contentHash": "fdb65cb0fe3960fff7709536312990907f83aa7aea46961c3c60a73422b5a702",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 29,
+      "hasStructuralAnalysis": true
+    },
+    ".github/scripts/changelog-check.sh": {
+      "filePath": ".github/scripts/changelog-check.sh",
+      "contentHash": "bfa06f59af0c602d27a65713b26681e63aaa19e24f43d446069c8db499bdf330",
+      "functions": [
+        {
+          "name": "extract_unreleased",
+          "params": [],
+          "exported": false,
+          "lineCount": 9
+        }
+      ],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 81,
+      "hasStructuralAnalysis": true
+    },
+    ".github/scripts/extract-release-notes.sh": {
+      "filePath": ".github/scripts/extract-release-notes.sh",
+      "contentHash": "716f5b2b8498b695ac50be3ebc66b4d62a80945523f49c60a015c24f94a18d5c",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 36,
+      "hasStructuralAnalysis": true
+    },
+    ".github/scripts/production-surface.sh": {
+      "filePath": ".github/scripts/production-surface.sh",
+      "contentHash": "9939eb86449b0501477d5f8130d75696cfaf50f4b08e8a30811e160046612f3f",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 15,
+      "hasStructuralAnalysis": true
+    },
+    ".github/workflow-config.json": {
+      "filePath": ".github/workflow-config.json",
+      "contentHash": "7116175769cd6afa3ef95c94afc62e9684b4313439ebd956bb364116afc08b8d",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 25,
+      "hasStructuralAnalysis": true
+    },
+    ".github/workflows/build-and-test.yml": {
+      "filePath": ".github/workflows/build-and-test.yml",
+      "contentHash": "3e9a9bee54b38bfa81e6693ca64acd063a586d978cf95097b69f4996dafabb62",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 292,
+      "hasStructuralAnalysis": true
+    },
+    ".github/workflows/ci-pr.yaml": {
+      "filePath": ".github/workflows/ci-pr.yaml",
+      "contentHash": "ba089bbbfc631f679c45e68e60398ac7da187ac01d82bfe44fd2c4ffbfc8dd9d",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 51,
+      "hasStructuralAnalysis": true
+    },
+    ".github/workflows/fossa-scan.yaml": {
+      "filePath": ".github/workflows/fossa-scan.yaml",
+      "contentHash": "7b108a2ce81dc3f53d5b9c98c63b6494652b1adf5421201d285f68319b1f0c23",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 31,
+      "hasStructuralAnalysis": true
+    },
+    ".github/workflows/llm-eval.yml": {
+      "filePath": ".github/workflows/llm-eval.yml",
+      "contentHash": "acf065e2adb3a2cccefea5a99f054e6126386f66c5495add355e39d7978708cd",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 123,
+      "hasStructuralAnalysis": true
+    },
+    ".github/workflows/release.yml": {
+      "filePath": ".github/workflows/release.yml",
+      "contentHash": "b83522f1add96ec4964b077ad86efe8edd78bdb7bbd8f9f019c5c11d25eb969b",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 180,
+      "hasStructuralAnalysis": true
+    },
+    ".github/workflows/transition_on_merge.yaml": {
+      "filePath": ".github/workflows/transition_on_merge.yaml",
+      "contentHash": "1b99690d4ab737e8dffb5fe464da809a7df53d736bc17f3d3e3ca8f71517333f",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 14,
+      "hasStructuralAnalysis": true
+    },
+    ".golangci.yml": {
+      "filePath": ".golangci.yml",
+      "contentHash": "8a5c74b82894fadd0e5c93c32a10f9f36505d4d19be415b23ab904321d91bc03",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 41,
+      "hasStructuralAnalysis": true
+    },
+    "CHANGELOG.md": {
+      "filePath": "CHANGELOG.md",
+      "contentHash": "f29695b1ec15dcb300a49bcc811775017d4794ee13ffbc931d4745f2ea60de3e",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 305,
+      "hasStructuralAnalysis": true
+    },
+    "CLAUDE.md": {
+      "filePath": "CLAUDE.md",
+      "contentHash": "4728184accd6d85bd955445407a23b0472c2bb4ec3fdff87288f2219a0648753",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 55,
+      "hasStructuralAnalysis": true
+    },
+    "DISCLAIMERS.md": {
+      "filePath": "DISCLAIMERS.md",
+      "contentHash": "8bd9d8f2b2430c7f041d47f90554e57a6ff7d5c7882a89ce8f11dd4e09a9d8fb",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 219,
+      "hasStructuralAnalysis": true
+    },
+    "Dockerfile": {
+      "filePath": "Dockerfile",
+      "contentHash": "4ae3fa843c5c8f9ed40a47ffae5cb0ed1057fb864044991c8e5a9df9ae8cdef2",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 29,
+      "hasStructuralAnalysis": true
+    },
+    "EXAMPLES.md": {
+      "filePath": "EXAMPLES.md",
+      "contentHash": "3bf24488f5080fe422b6999f4ad5e43ca81ae23e9d630bb8e2c31e4276b8df9f",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 14,
+      "hasStructuralAnalysis": true
+    },
+    "Makefile": {
+      "filePath": "Makefile",
+      "contentHash": "3c45e7ff7fb3714ced3a570fa15174588250662dda528bc3995d25b86354348f",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 177,
+      "hasStructuralAnalysis": true
     },
     "NOTICE": {
       "filePath": "NOTICE",
@@ -32,6 +406,56 @@
       "exports": [],
       "totalLines": 31,
       "hasStructuralAnalysis": false
+    },
+    "README.md": {
+      "filePath": "README.md",
+      "contentHash": "a04df2a2286392c7668fafd267d62c16b7b459b41f90f734062522ef1533877b",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 431,
+      "hasStructuralAnalysis": true
+    },
+    "RELEASING.md": {
+      "filePath": "RELEASING.md",
+      "contentHash": "813b4e481fc0a14496c8e661cf96bb03df1c34e7fcaf7eaf32620c0da6265adf",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 134,
+      "hasStructuralAnalysis": true
+    },
+    "THIRD_PARTY_LICENSES.md": {
+      "filePath": "THIRD_PARTY_LICENSES.md",
+      "contentHash": "188536ded1d3cdf4d5e8291d954f0ffd2f8d892d886bff0516eee461f00266f1",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 73,
+      "hasStructuralAnalysis": true
+    },
+    "TOOLS.md": {
+      "filePath": "TOOLS.md",
+      "contentHash": "3185a792658b308794814f2c1e764c7ec50d1a617973db8bcf7c7509ae5213f0",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 15,
+      "hasStructuralAnalysis": true
+    },
+    "broker-config.example.yaml": {
+      "filePath": "broker-config.example.yaml",
+      "contentHash": "bdba004ba3b6fe642339107a27e02b74bc4189187c8487bf9bb718a32979750f",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 110,
+      "hasStructuralAnalysis": true
     },
     "cmd/server/body_limit_test.go": {
       "filePath": "cmd/server/body_limit_test.go",
@@ -277,7 +701,7 @@
     },
     "cmd/server/main.go": {
       "filePath": "cmd/server/main.go",
-      "contentHash": "dc95c0bcdc4bee1af11bced829f927176d6f3a417df5680d20e3eba9433f2169",
+      "contentHash": "70db621ee2bc68a29e77f6202d1ad03186ef7725526793095db298cc434a6bd6",
       "functions": [
         {
           "name": "redactSecretAttr",
@@ -430,7 +854,7 @@
           ],
           "returnType": "(*tokenexchange.Exchanger, error)",
           "exported": false,
-          "lineCount": 28
+          "lineCount": 39
         },
         {
           "name": "buildToolPolicy",
@@ -703,7 +1127,7 @@
         }
       ],
       "exports": [],
-      "totalLines": 879,
+      "totalLines": 895,
       "hasStructuralAnalysis": true
     },
     "cmd/server/main_test.go": {
@@ -1614,6 +2038,336 @@
       ],
       "totalLines": 87,
       "hasStructuralAnalysis": true
+    },
+    "deploy/kubernetes/configmap.yaml": {
+      "filePath": "deploy/kubernetes/configmap.yaml",
+      "contentHash": "fbe0a42c3cca29e7a3348d298cc5242038743c5b03b4e1c093102d874ef30906",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 47,
+      "hasStructuralAnalysis": true
+    },
+    "deploy/kubernetes/deployment.yaml": {
+      "filePath": "deploy/kubernetes/deployment.yaml",
+      "contentHash": "d7d13fd057014c8165a61118bbe04f8e42ab3fe33849b8d0fd7d9f5692fa498b",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 100,
+      "hasStructuralAnalysis": true
+    },
+    "deploy/kubernetes/secret.yaml": {
+      "filePath": "deploy/kubernetes/secret.yaml",
+      "contentHash": "06718fad4155460b3d14d7879c807ba3001b3e5f95eca73d52e48953b6cc0f71",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 21,
+      "hasStructuralAnalysis": true
+    },
+    "deploy/kubernetes/service.yaml": {
+      "filePath": "deploy/kubernetes/service.yaml",
+      "contentHash": "cb0eb5b3139acbcbd909a915612a66200073ae508d2d59fb1dd301190929b2ea",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 16,
+      "hasStructuralAnalysis": true
+    },
+    "docs/authentication.md": {
+      "filePath": "docs/authentication.md",
+      "contentHash": "a332b01eacd1058dcfa124e26b6a2b47ffb3fe75f199159599ad0b605fbaec73",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 471,
+      "hasStructuralAnalysis": true
+    },
+    "docs/configuration.md": {
+      "filePath": "docs/configuration.md",
+      "contentHash": "85b138695ffbca6e8a1b7d395a14ce7e3ea71c04e8efdab09d95eccf54adebdf",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 121,
+      "hasStructuralAnalysis": true
+    },
+    "docs/examples.md": {
+      "filePath": "docs/examples.md",
+      "contentHash": "bac04e35e1ebc367a6ebbcbe137d723eddac566a59d0d3da839dd7ea00c6f8c7",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 295,
+      "hasStructuralAnalysis": true
+    },
+    "docs/internal/architecture.md": {
+      "filePath": "docs/internal/architecture.md",
+      "contentHash": "1cb9b9b51db40def1f9585ee3d2d955fa7f333eb7325022e7e8579a8dde54545",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 471,
+      "hasStructuralAnalysis": true
+    },
+    "docs/internal/e2e-testing.md": {
+      "filePath": "docs/internal/e2e-testing.md",
+      "contentHash": "e6255b1b9b5b264eae665a0434b859a36bb5959cdebf3021466fff7c6a68e3f1",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 322,
+      "hasStructuralAnalysis": true
+    },
+    "docs/internal/packaging-release.md": {
+      "filePath": "docs/internal/packaging-release.md",
+      "contentHash": "557e9da2f03af9b619ab3b89223a18fa88171ba93a3213bdcd4e5948577b0b51",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 328,
+      "hasStructuralAnalysis": true
+    },
+    "docs/internal/secure-logging-rules.md": {
+      "filePath": "docs/internal/secure-logging-rules.md",
+      "contentHash": "306269932e38e7a03de4e33800051028d1c115c2cb7317a6d770396df308060d",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 89,
+      "hasStructuralAnalysis": true
+    },
+    "docs/internal/semp/get-broker-status-curated-fields.md": {
+      "filePath": "docs/internal/semp/get-broker-status-curated-fields.md",
+      "contentHash": "006058d468cb706857f238a59b3c658850c35aebd46d30d08327d60efef65a44",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 324,
+      "hasStructuralAnalysis": true
+    },
+    "docs/internal/semp/get-discard-stats-curated-fields.md": {
+      "filePath": "docs/internal/semp/get-discard-stats-curated-fields.md",
+      "contentHash": "3da1d89ab289d785c1ac0ed89a70100041cfbdacd4b7ea4be0871a64ed77d958",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 230,
+      "hasStructuralAnalysis": true
+    },
+    "docs/internal/semp/sempv1-client-design.md": {
+      "filePath": "docs/internal/semp/sempv1-client-design.md",
+      "contentHash": "7662d0e915db8c151fdc175793bff6ed3411542f4b6845d4cf21a2d19fd30a34",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 623,
+      "hasStructuralAnalysis": true
+    },
+    "docs/internal/todo-gaps.md": {
+      "filePath": "docs/internal/todo-gaps.md",
+      "contentHash": "92a028a99aea220fcbe5209a5b81c1443f6c48bd1bf67c3f8eb425dfb1010748",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 135,
+      "hasStructuralAnalysis": true
+    },
+    "docs/internal/understand-anything.md": {
+      "filePath": "docs/internal/understand-anything.md",
+      "contentHash": "b09b25d2f82edbcb0363a35ab47c1004c14bdb52a7536a8754bbc73a3fff3275",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 113,
+      "hasStructuralAnalysis": true
+    },
+    "docs/oauth/token-exchange-SOL-150070/architecture-plan.md": {
+      "filePath": "docs/oauth/token-exchange-SOL-150070/architecture-plan.md",
+      "contentHash": "33b685887e3e9b879bc754b49ee329dca2399b067f035d729ae47b11389be5ff",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 1373,
+      "hasStructuralAnalysis": true
+    },
+    "docs/sam-integration.md": {
+      "filePath": "docs/sam-integration.md",
+      "contentHash": "2b537b8aced7130c96d215afcb253a9d6cd5a29da9b5cdcf85e19de883226a76",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 107,
+      "hasStructuralAnalysis": true
+    },
+    "docs/superpowers/plans/2026-05-20-client-auth-mode.md": {
+      "filePath": "docs/superpowers/plans/2026-05-20-client-auth-mode.md",
+      "contentHash": "a73b94c30f1522bdfc2300f2d670d3520d12187766f01df490b6bd81623309fa",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 2167,
+      "hasStructuralAnalysis": true
+    },
+    "docs/superpowers/plans/2026-05-21-pr62-review-fixes.md": {
+      "filePath": "docs/superpowers/plans/2026-05-21-pr62-review-fixes.md",
+      "contentHash": "97e285fa10f0d9f5edfc1aaf05f2fd045a2e099d8668ca8be8676a84316e1913",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 649,
+      "hasStructuralAnalysis": true
+    },
+    "docs/superpowers/plans/2026-05-25-broker-alias-contract.md": {
+      "filePath": "docs/superpowers/plans/2026-05-25-broker-alias-contract.md",
+      "contentHash": "ed4c73de0b5741ae934b38f6fe3adb1fd50377d2e3b812f91a4a73255a3ef697",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 777,
+      "hasStructuralAnalysis": true
+    },
+    "docs/superpowers/plans/2026-05-27-sol-149606-tool-invocation-identity-audit.md": {
+      "filePath": "docs/superpowers/plans/2026-05-27-sol-149606-tool-invocation-identity-audit.md",
+      "contentHash": "b6a55b25c939eee94f6a875d78135cc08b9ac605e9a67a471ec265c50a096c5d",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 796,
+      "hasStructuralAnalysis": true
+    },
+    "docs/superpowers/plans/2026-06-14-sol-150070-implementation-decisions.md": {
+      "filePath": "docs/superpowers/plans/2026-06-14-sol-150070-implementation-decisions.md",
+      "contentHash": "b63f3667c1244dfe775942b1c6a5ba181f141aac17374f050aaca57175f5e324",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 246,
+      "hasStructuralAnalysis": true
+    },
+    "docs/superpowers/plans/2026-06-26-obs-story1-story7.md": {
+      "filePath": "docs/superpowers/plans/2026-06-26-obs-story1-story7.md",
+      "contentHash": "3343702f692c2c3a1adb5f4cfab57310145c6412c1027bc98a3aa1670ae0d9be",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 49,
+      "hasStructuralAnalysis": true
+    },
+    "docs/superpowers/plans/2026-06-29-sol-150860-docs-gaps.md": {
+      "filePath": "docs/superpowers/plans/2026-06-29-sol-150860-docs-gaps.md",
+      "contentHash": "71d6c5ba4bd4bb11a09b1b51b83479d43c38658c960d89dbe9af7c75081900c6",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 84,
+      "hasStructuralAnalysis": true
+    },
+    "docs/superpowers/plans/oauth-token-exchange/2026-06-21-SOL-150797-T3-raw-subject-token.md": {
+      "filePath": "docs/superpowers/plans/oauth-token-exchange/2026-06-21-SOL-150797-T3-raw-subject-token.md",
+      "contentHash": "8e2b32a864b2c4a151e14943598fb1157b286791183273aac7cd985cb95cda45",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 335,
+      "hasStructuralAnalysis": true
+    },
+    "docs/superpowers/plans/oauth-token-exchange/SOL-150796-T2-config-schema.md": {
+      "filePath": "docs/superpowers/plans/oauth-token-exchange/SOL-150796-T2-config-schema.md",
+      "contentHash": "9fbbc0f03b8e71404626b38392494937bffb0e8ccf0dd6a76d9e981a4581e2e5",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 952,
+      "hasStructuralAnalysis": true
+    },
+    "docs/superpowers/specs/2026-05-20-client-auth-mode-design.md": {
+      "filePath": "docs/superpowers/specs/2026-05-20-client-auth-mode-design.md",
+      "contentHash": "621cff93e14a3877895ec8831cfc88dd1ef35f12f4239721c91ae6c978e6dd40",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 281,
+      "hasStructuralAnalysis": true
+    },
+    "docs/tools-reference.md": {
+      "filePath": "docs/tools-reference.md",
+      "contentHash": "9e91e581f1c7311635b43b638a38e83835c06f7aa0dbcb2186cf45bb02d930a4",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 960,
+      "hasStructuralAnalysis": true
+    },
+    "docs/user-guide.md": {
+      "filePath": "docs/user-guide.md",
+      "contentHash": "d5e09c1e292414c83bce3c477681e3e17a49d652655af9e192528408be34d069",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 280,
+      "hasStructuralAnalysis": true
+    },
+    "fixit-notes.md": {
+      "filePath": "fixit-notes.md",
+      "contentHash": "c675d2a5a0aa8a03ed1a0943b2a7a40776ba50521ce06f38d7420262e2d4192e",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 47,
+      "hasStructuralAnalysis": true
+    },
+    "go.mod": {
+      "filePath": "go.mod",
+      "contentHash": "dc754cc1456efb932d45bc61495584d802fe2225aedc7b6b41736f8a8976d262",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 43,
+      "hasStructuralAnalysis": false
+    },
+    "go.sum": {
+      "filePath": "go.sum",
+      "contentHash": "a5cb21c91bcd203d89be312bdd4d4221cb342cff6cbfe7714ee172f5438a08cb",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 97,
+      "hasStructuralAnalysis": false
     },
     "internal/.gitkeep": {
       "filePath": "internal/.gitkeep",
@@ -3363,9 +4117,19 @@
       "totalLines": 24,
       "hasStructuralAnalysis": true
     },
+    "internal/composite/definitions/tools.yaml": {
+      "filePath": "internal/composite/definitions/tools.yaml",
+      "contentHash": "640f4e31cf3ba29a3b3d8294e6eb8dc330f5d81f24801c2a1dccb0fa11820020",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 1172,
+      "hasStructuralAnalysis": true
+    },
     "internal/composite/executor.go": {
       "filePath": "internal/composite/executor.go",
-      "contentHash": "9042f6fad0f58235bbb2ca9d74f0dac996b3af3aeb2181d39f6072f8aca6237f",
+      "contentHash": "416e10bfe5fc8b851dfdd66f59f515aa523aaced54f69c23a8097679e2afd25d",
       "functions": [
         {
           "name": "NewCompositeExecutor",
@@ -3564,7 +4328,7 @@
           ],
           "returnType": "(map[string]any, error)",
           "exported": false,
-          "lineCount": 58
+          "lineCount": 68
         },
         {
           "name": "ApplyResultStrategy",
@@ -3719,7 +4483,94 @@
         "ResolveArgs",
         "ApplyResultStrategy"
       ],
-      "totalLines": 749,
+      "totalLines": 759,
+      "hasStructuralAnalysis": true
+    },
+    "internal/composite/executor_bridge_test.go": {
+      "filePath": "internal/composite/executor_bridge_test.go",
+      "contentHash": "dc0352ec4181b3a0ef5372ae0b74d33cdd6f89557fc0a4567645c2ea31dc5c85",
+      "functions": [
+        {
+          "name": "listBridgesTool",
+          "params": [],
+          "returnType": "CompositeTool",
+          "exported": false,
+          "lineCount": 22
+        },
+        {
+          "name": "getBridgeStatusTool",
+          "params": [],
+          "returnType": "CompositeTool",
+          "exported": false,
+          "lineCount": 23
+        },
+        {
+          "name": "makeBridgeItems",
+          "params": [
+            "n"
+          ],
+          "returnType": "[]any",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "TestExecute_ListBridges_SinglePage",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 35
+        },
+        {
+          "name": "TestExecute_ListBridges_TruncatesAtMaxResults",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 28
+        },
+        {
+          "name": "TestExecute_GetBridgeStatus_CompoundPathParams",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 32
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "sync",
+          "specifiers": [
+            "sync"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        }
+      ],
+      "exports": [
+        "TestExecute_ListBridges_SinglePage",
+        "TestExecute_ListBridges_TruncatesAtMaxResults",
+        "TestExecute_GetBridgeStatus_CompoundPathParams"
+      ],
+      "totalLines": 189,
       "hasStructuralAnalysis": true
     },
     "internal/composite/executor_client_test.go": {
@@ -4355,7 +5206,7 @@
     },
     "internal/composite/executor_helpers_test.go": {
       "filePath": "internal/composite/executor_helpers_test.go",
-      "contentHash": "af5a821613b008aacb4906bfe104d94b4993af1a4b3350c95699ad10eb8549d5",
+      "contentHash": "115848d6e9f58689876e277fa9562fa1fea68a7c7d31e1451f54ec6438faef45",
       "functions": [
         {
           "name": "newMockClient",
@@ -4380,7 +5231,7 @@
           "params": [],
           "returnType": "map[string]*sempv2.Operation",
           "exported": false,
-          "lineCount": 200
+          "lineCount": 215
         },
         {
           "name": "newSeqMockClient",
@@ -4530,7 +5381,7 @@
         "Execute",
         "Execute"
       ],
-      "totalLines": 351,
+      "totalLines": 366,
       "hasStructuralAnalysis": true
     },
     "internal/composite/executor_queue_test.go": {
@@ -5029,7 +5880,7 @@
     },
     "internal/composite/executor_vpn_test.go": {
       "filePath": "internal/composite/executor_vpn_test.go",
-      "contentHash": "adc78da9670d99893c2ca13748dbf03328ae85687b0fa9527445fa905eac9f52",
+      "contentHash": "f90a3d8ed8011b75e4ecc75b96f58b2e62beafa9fdecf2e33c70146d2328dcdb",
       "functions": [
         {
           "name": "getVPNStatusTool",
@@ -5183,7 +6034,7 @@
             "t"
           ],
           "exported": true,
-          "lineCount": 39
+          "lineCount": 40
         },
         {
           "name": "TestExecute_UpdateMessageVPN_BodyExcludesPathParam",
@@ -5281,7 +6132,7 @@
         "TestExecute_DeleteMessageVPN_NoBodyConstructed",
         "TestExecute_DeleteMessageVPN_SEMPError"
       ],
-      "totalLines": 726,
+      "totalLines": 727,
       "hasStructuralAnalysis": true
     },
     "internal/composite/loader.go": {
@@ -5374,6 +6225,49 @@
       "totalLines": 210,
       "hasStructuralAnalysis": true
     },
+    "internal/composite/loader_bridge_test.go": {
+      "filePath": "internal/composite/loader_bridge_test.go",
+      "contentHash": "31723b75d824f795881d32414f5457939bb974be4bae12b015fffe9c9821ed02",
+      "functions": [
+        {
+          "name": "TestLoadTools_ListBridges",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 69
+        },
+        {
+          "name": "TestLoadTools_GetBridgeStatus",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 76
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        },
+        {
+          "source": "testing/fstest",
+          "specifiers": [
+            "fstest"
+          ]
+        }
+      ],
+      "exports": [
+        "TestLoadTools_ListBridges",
+        "TestLoadTools_GetBridgeStatus"
+      ],
+      "totalLines": 174,
+      "hasStructuralAnalysis": true
+    },
     "internal/composite/loader_client_test.go": {
       "filePath": "internal/composite/loader_client_test.go",
       "contentHash": "a2564dab21296dc4a026bda6b04276142fdb8e04067d713e7435bf3ec028a3c3",
@@ -5451,6 +6345,46 @@
         "TestLoadTools_ClearClientStats"
       ],
       "totalLines": 366,
+      "hasStructuralAnalysis": true
+    },
+    "internal/composite/loader_cross_reference_test.go": {
+      "filePath": "internal/composite/loader_cross_reference_test.go",
+      "contentHash": "27018ec05998924292c5ca3fe381e90298685ad4dcd460286d4cec40dbe64d99",
+      "functions": [
+        {
+          "name": "TestListTools_ReferenceTheirDetailTool",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 34
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        },
+        {
+          "source": "github.com/SolaceDev/solace-broker-mcp/internal/composite/definitions",
+          "specifiers": [
+            "definitions"
+          ]
+        }
+      ],
+      "exports": [
+        "TestListTools_ReferenceTheirDetailTool"
+      ],
+      "totalLines": 64,
       "hasStructuralAnalysis": true
     },
     "internal/composite/loader_fanout_test.go": {
@@ -6238,6 +7172,174 @@
         "TestGetRdpStatus_ValidateTool"
       ],
       "totalLines": 354,
+      "hasStructuralAnalysis": true
+    },
+    "internal/composite/postprocess/handlers/list_bridges.go": {
+      "filePath": "internal/composite/postprocess/handlers/list_bridges.go",
+      "contentHash": "5e71da3d43f121ee66ae206b7091b6ffb82200973a215848a80a46ad354e2545",
+      "functions": [
+        {
+          "name": "init",
+          "params": [],
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "ListBridges",
+          "params": [
+            "stepResults"
+          ],
+          "returnType": "(map[string]any, error)",
+          "exported": true,
+          "lineCount": 52
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess",
+          "specifiers": [
+            "postprocess"
+          ]
+        }
+      ],
+      "exports": [
+        "ListBridges"
+      ],
+      "totalLines": 139,
+      "hasStructuralAnalysis": true
+    },
+    "internal/composite/postprocess/handlers/list_bridges_test.go": {
+      "filePath": "internal/composite/postprocess/handlers/list_bridges_test.go",
+      "contentHash": "b24a4f31fb9817d71d8f2e3864681ac5ca173c1d44cded3b59f607c59a1ca611",
+      "functions": [
+        {
+          "name": "bridge",
+          "params": [
+            "enabled",
+            "inboundState",
+            "outboundState",
+            "inboundFailureReason"
+          ],
+          "returnType": "map[string]any",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "TestListBridges_Counts",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 33
+        },
+        {
+          "name": "TestListBridges_OutboundOnlyFailure",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "TestListBridges_OutboundOnlyFailureWithStaleInboundReason",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "TestListBridges_UnidirectionalNotApplicableIsHealthy",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "TestListBridges_TruncationSurfaced",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 28
+        },
+        {
+          "name": "TestListBridges_Empty",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 26
+        },
+        {
+          "name": "TestListBridges_Errors",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 31
+        },
+        {
+          "name": "TestListBridges_MissingField",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 37
+        },
+        {
+          "name": "TestListBridges_NilField",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 15
+        },
+        {
+          "name": "TestListBridges_SkippedOmittedWhenZero",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        }
+      ],
+      "exports": [
+        "TestListBridges_Counts",
+        "TestListBridges_OutboundOnlyFailure",
+        "TestListBridges_OutboundOnlyFailureWithStaleInboundReason",
+        "TestListBridges_UnidirectionalNotApplicableIsHealthy",
+        "TestListBridges_TruncationSurfaced",
+        "TestListBridges_Empty",
+        "TestListBridges_Errors",
+        "TestListBridges_MissingField",
+        "TestListBridges_NilField",
+        "TestListBridges_SkippedOmittedWhenZero"
+      ],
+      "totalLines": 293,
       "hasStructuralAnalysis": true
     },
     "internal/composite/postprocess/handlers/list_queue_discards.go": {
@@ -7487,7 +8589,7 @@
     },
     "internal/config/config.go": {
       "filePath": "internal/config/config.go",
-      "contentHash": "04f4d4f76fa1ba0fbe39aec8f14c265d385d88d7ea749260656ffac15b118ce3",
+      "contentHash": "6560711753317e183dbb4a17c6635fbd89e66cd244cb086e11ecbf46fcca6373",
       "functions": [
         {
           "name": "selectedMethod",
@@ -7508,7 +8610,7 @@
           "params": [],
           "returnType": "slog.Value",
           "exported": true,
-          "lineCount": 10
+          "lineCount": 15
         },
         {
           "name": "LogValue",
@@ -7729,7 +8831,7 @@
           ],
           "returnType": "[]error",
           "exported": false,
-          "lineCount": 62
+          "lineCount": 64
         },
         {
           "name": "validateBrokerClientAuth",
@@ -7909,10 +9011,11 @@
             "ClientID",
             "ClientAuth",
             "GrantType",
-            "AudienceParam"
+            "AudienceParam",
+            "CircuitBreaker"
           ],
           "exported": true,
-          "lineCount": 7
+          "lineCount": 8
         },
         {
           "name": "BrokerClientAuth",
@@ -8169,7 +9272,7 @@
         "OAuthPlaintextListenerAcknowledged",
         "ToolAuthorizationEnabled"
       ],
-      "totalLines": 1778,
+      "totalLines": 1789,
       "hasStructuralAnalysis": true
     },
     "internal/config/config_test.go": {
@@ -9283,6 +10386,170 @@
       "totalLines": 4072,
       "hasStructuralAnalysis": true
     },
+    "internal/config/idp_circuit_breaker.go": {
+      "filePath": "internal/config/idp_circuit_breaker.go",
+      "contentHash": "2606c0abf99e4792bfe867e072531cb341e62fa7bf5e15a694d98b9e30700764",
+      "functions": [
+        {
+          "name": "BreakerEnabled",
+          "params": [],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "validateIdPCircuitBreaker",
+          "params": [
+            "cb"
+          ],
+          "returnType": "[]error",
+          "exported": false,
+          "lineCount": 34
+        }
+      ],
+      "classes": [
+        {
+          "name": "IdPCircuitBreakerConfig",
+          "methods": [],
+          "properties": [
+            "Enabled",
+            "FailureRateWindow",
+            "MinimumRequests",
+            "FailureRateThresholdPercent",
+            "ConsecutiveFailureThreshold",
+            "OpenStateDuration",
+            "HalfOpenProbeRequests"
+          ],
+          "exported": true,
+          "lineCount": 13
+        }
+      ],
+      "imports": [
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [
+        "IdPCircuitBreakerConfig",
+        "BreakerEnabled"
+      ],
+      "totalLines": 121,
+      "hasStructuralAnalysis": true
+    },
+    "internal/config/idp_circuit_breaker_test.go": {
+      "filePath": "internal/config/idp_circuit_breaker_test.go",
+      "contentHash": "13c6dfaac77da2076789393136a721732890c320657946b71d48d5966136343c",
+      "functions": [
+        {
+          "name": "ptr",
+          "params": [
+            "v"
+          ],
+          "returnType": "*T",
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "silenceLogs",
+          "params": [
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "TestLoadConfig_CircuitBreaker_ParsesFromYAML",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 36
+        },
+        {
+          "name": "TestLoadConfig_CircuitBreaker_OmittedBlockIsNil",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestLoadConfig_CircuitBreaker_BadValueRejected",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 52
+        },
+        {
+          "name": "TestBreakerEnabled",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 22
+        },
+        {
+          "name": "TestValidateBrokerCircuitBreaker",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 52
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "bytes",
+          "specifiers": [
+            "bytes"
+          ]
+        },
+        {
+          "source": "log/slog",
+          "specifiers": [
+            "slog"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [
+        "TestLoadConfig_CircuitBreaker_ParsesFromYAML",
+        "TestLoadConfig_CircuitBreaker_OmittedBlockIsNil",
+        "TestLoadConfig_CircuitBreaker_BadValueRejected",
+        "TestBreakerEnabled",
+        "TestValidateBrokerCircuitBreaker"
+      ],
+      "totalLines": 258,
+      "hasStructuralAnalysis": true
+    },
     "internal/config/observability.go": {
       "filePath": "internal/config/observability.go",
       "contentHash": "3e5abc2df2b18485affbef3ba0359b04bff3e5627846f3b792bbe75be484d427",
@@ -10004,6 +11271,309 @@
         "TestMain"
       ],
       "totalLines": 54,
+      "hasStructuralAnalysis": true
+    },
+    "internal/idpclient/retrying.go": {
+      "filePath": "internal/idpclient/retrying.go",
+      "contentHash": "80bcd85916562e83b282d668a974742cd2b6aac54c32ad9942bf9a5f4aa4c6f5",
+      "functions": [
+        {
+          "name": "NewRetryingHTTPClient",
+          "params": [
+            "retry"
+          ],
+          "returnType": "(*http.Client, error)",
+          "exported": true,
+          "lineCount": 26
+        },
+        {
+          "name": "checkRetry",
+          "params": [
+            "ctx",
+            "resp",
+            "err"
+          ],
+          "returnType": "(bool, error)",
+          "exported": false,
+          "lineCount": 21
+        },
+        {
+          "name": "WithAttemptsCounter",
+          "params": [
+            "ctx"
+          ],
+          "returnType": "(context.Context, func() int)",
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "RoundTrip",
+          "params": [
+            "req"
+          ],
+          "returnType": "(*http.Response, error)",
+          "exported": true,
+          "lineCount": 6
+        }
+      ],
+      "classes": [
+        {
+          "name": "RetryOptions",
+          "methods": [],
+          "properties": [
+            "MaxRetries",
+            "RetryWaitMin",
+            "RetryWaitMax"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "attemptsKey",
+          "methods": [],
+          "properties": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "attemptsRecorder",
+          "methods": [
+            "RoundTrip"
+          ],
+          "properties": [
+            "inner"
+          ],
+          "exported": false,
+          "lineCount": 3
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "github.com/hashicorp/go-retryablehttp",
+          "specifiers": [
+            "go-retryablehttp"
+          ]
+        }
+      ],
+      "exports": [
+        "RetryOptions",
+        "NewRetryingHTTPClient",
+        "WithAttemptsCounter",
+        "RoundTrip"
+      ],
+      "totalLines": 162,
+      "hasStructuralAnalysis": true
+    },
+    "internal/idpclient/retrying_test.go": {
+      "filePath": "internal/idpclient/retrying_test.go",
+      "contentHash": "7210baf110465221d985945179a59606651c0fbd6c6a624bdf0441c48660406e",
+      "functions": [
+        {
+          "name": "testRetryOptions",
+          "params": [],
+          "returnType": "RetryOptions",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "countingHandler",
+          "params": [
+            "t",
+            "status",
+            "body",
+            "headers"
+          ],
+          "returnType": "(http.HandlerFunc, *atomic.Int32)",
+          "exported": false,
+          "lineCount": 14
+        },
+        {
+          "name": "TestNewRetryingHTTPClient_RetriesOn5xx",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 31
+        },
+        {
+          "name": "TestNewRetryingHTTPClient_RetriesOn429",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 30
+        },
+        {
+          "name": "TestNewRetryingHTTPClient_NoRetryOn2xx",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 22
+        },
+        {
+          "name": "TestNewRetryingHTTPClient_NoRetryOn4xx",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 40
+        },
+        {
+          "name": "TestNewRetryingHTTPClient_RetriesRecover",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 32
+        },
+        {
+          "name": "TestNewRetryingHTTPClient_CtxCancelAbortsBackoff",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 45
+        },
+        {
+          "name": "TestNewRetryingHTTPClient_ConnectionErrorRetries",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 28
+        },
+        {
+          "name": "RoundTrip",
+          "params": [],
+          "returnType": "(*http.Response, error)",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "roundTripAndClose",
+          "params": [
+            "t",
+            "rec",
+            "req"
+          ],
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "TestAttemptsRecorder_NilSafe",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "TestAttemptsRecorder_IncrementsWhenAttached",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "TestCheckRetry_Table",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 50
+        }
+      ],
+      "classes": [
+        {
+          "name": "stubRoundTripper",
+          "methods": [
+            "RoundTrip"
+          ],
+          "properties": [
+            "calls"
+          ],
+          "exported": false,
+          "lineCount": 1
+        }
+      ],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "net/http/httptest",
+          "specifiers": [
+            "httptest"
+          ]
+        },
+        {
+          "source": "sync/atomic",
+          "specifiers": [
+            "atomic"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [
+        "TestNewRetryingHTTPClient_RetriesOn5xx",
+        "TestNewRetryingHTTPClient_RetriesOn429",
+        "TestNewRetryingHTTPClient_NoRetryOn2xx",
+        "TestNewRetryingHTTPClient_NoRetryOn4xx",
+        "TestNewRetryingHTTPClient_RetriesRecover",
+        "TestNewRetryingHTTPClient_CtxCancelAbortsBackoff",
+        "TestNewRetryingHTTPClient_ConnectionErrorRetries",
+        "RoundTrip",
+        "TestAttemptsRecorder_NilSafe",
+        "TestAttemptsRecorder_IncrementsWhenAttached",
+        "TestCheckRetry_Table"
+      ],
+      "totalLines": 433,
       "hasStructuralAnalysis": true
     },
     "internal/middleware/recovery/middleware.go": {
@@ -14730,7 +16300,7 @@
     },
     "internal/semp/resilience/retry.go": {
       "filePath": "internal/semp/resilience/retry.go",
-      "contentHash": "0ea6166992a3a148d3d72ba029f226d047a13d3c48ceade4870cdd9049b72d78",
+      "contentHash": "39eb13c1ec715647f8cb2f0576e6db22d5d14457aa1bf2ce754057e2f718234d",
       "functions": [
         {
           "name": "WithRetrySafe",
@@ -14768,7 +16338,7 @@
           ],
           "returnType": "(bool, error)",
           "exported": false,
-          "lineCount": 78
+          "lineCount": 95
         }
       ],
       "classes": [
@@ -14785,12 +16355,13 @@
           "properties": [
             "auth401Retried",
             "other5xxRetried",
+            "transientRetried",
             "method",
             "retrySafe",
             "needsReauth"
           ],
           "exported": false,
-          "lineCount": 7
+          "lineCount": 8
         },
         {
           "name": "retrySafeKey",
@@ -14812,6 +16383,12 @@
           "source": "context",
           "specifiers": [
             "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
           ]
         },
         {
@@ -14837,7 +16414,7 @@
         "WithRetrySafe",
         "OperationIDKey"
       ],
-      "totalLines": 150,
+      "totalLines": 186,
       "hasStructuralAnalysis": true
     },
     "internal/semp/resilience/retry_safe_test.go": {
@@ -14951,7 +16528,7 @@
     },
     "internal/semp/resilience/sender.go": {
       "filePath": "internal/semp/resilience/sender.go",
-      "contentHash": "a805100294d800de95bb9110594512a7ad98fc68ad29e12fa6c9b9a61381e4e8",
+      "contentHash": "6eab339db9fd2398e74361bd7f4abb5950ea21380cf191e01eaffa42d115612f",
       "functions": [
         {
           "name": "Error",
@@ -14988,7 +16565,7 @@
           ],
           "returnType": "(*http.Response, error)",
           "exported": true,
-          "lineCount": 74
+          "lineCount": 77
         },
         {
           "name": "Close",
@@ -15137,12 +16714,12 @@
         "Close",
         "Close"
       ],
-      "totalLines": 337,
+      "totalLines": 340,
       "hasStructuralAnalysis": true
     },
     "internal/semp/resilience/sender_test.go": {
       "filePath": "internal/semp/resilience/sender_test.go",
-      "contentHash": "f0bdc2c64c1773f11458fadecd6620a5b2f3b011438d958c6e45fe2a25d4221d",
+      "contentHash": "58c7ec38bc36dc2d5edde4dee9f5284769676a83168dc48961427bb08b824730",
       "functions": [
         {
           "name": "mustNewSafeCookieJar",
@@ -15419,6 +16996,14 @@
           ],
           "exported": true,
           "lineCount": 33
+        },
+        {
+          "name": "TestSender_Do_TransientError_CappedRetries",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 39
         },
         {
           "name": "TestSender_Retry_500_RetriesOnce",
@@ -15698,6 +17283,7 @@
         "TestSender_Retry_429_RetriesWithBackoff",
         "TestSender_Retry_503_RetriesWithBackoff",
         "TestSender_Retry_429_ExhaustsRetries",
+        "TestSender_Do_TransientError_CappedRetries",
         "TestSender_Retry_500_RetriesOnce",
         "TestSender_Retry_502_RetriesOnce",
         "TestSender_Retry_500_SucceedsOnRetry",
@@ -15714,7 +17300,7 @@
         "TestSenderDo_SemaphoreWaitRespectsContextCancel",
         "TestNew_PanicsOnNilSemaphore"
       ],
-      "totalLines": 1453,
+      "totalLines": 1500,
       "hasStructuralAnalysis": true
     },
     "internal/semp/resilience/transport.go": {
@@ -16780,7 +18366,7 @@
     },
     "internal/semp/sempv2/client.go": {
       "filePath": "internal/semp/sempv2/client.go",
-      "contentHash": "a8ca2e235c6f942fd534394f26d08d17f021b932b17d7fa22d159b727e55fcac",
+      "contentHash": "819eff5b2f9047e055fb1a5764a544955958e77895045083f5a7f4aeec96f96f",
       "functions": [
         {
           "name": "Error",
@@ -16834,7 +18420,7 @@
           ],
           "returnType": "(string, error)",
           "exported": false,
-          "lineCount": 21
+          "lineCount": 30
         },
         {
           "name": "unfilledPlaceholders",
@@ -17060,12 +18646,12 @@
         "NewHTTPClient",
         "Execute"
       ],
-      "totalLines": 409,
+      "totalLines": 418,
       "hasStructuralAnalysis": true
     },
     "internal/semp/sempv2/client_test.go": {
       "filePath": "internal/semp/sempv2/client_test.go",
-      "contentHash": "5c89b24cde338b9732321b8f6acaff7f171268d661ef1c96ecf51c6e3b31449f",
+      "contentHash": "a6b3a0d065ea0a8c0426b4e04cb95c854fad5e3441ba9d50d61ed6baa8b108bb",
       "functions": [
         {
           "name": "newTestClient",
@@ -17125,6 +18711,14 @@
           ],
           "exported": true,
           "lineCount": 20
+        },
+        {
+          "name": "TestClient_Execute_RejectsUnsafePathParam",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 63
         },
         {
           "name": "TestClient_Execute_PathParams",
@@ -17436,6 +19030,7 @@
         "TestClient_Execute_MissingPathParam_ReturnsError",
         "TestClient_Execute_MissingPathParam_DeduplicatedInError",
         "TestClient_Execute_AllPathParamsProvided_NoError",
+        "TestClient_Execute_RejectsUnsafePathParam",
         "TestClient_Execute_PathParams",
         "TestClient_Execute_QueryParams",
         "TestClient_Execute_QueryParams_ArrayCSVRawCommas",
@@ -17461,7 +19056,7 @@
         "TestClient_TransportPool_ReusesConnections",
         "TestClient_TLSWiring"
       ],
-      "totalLines": 1115,
+      "totalLines": 1186,
       "hasStructuralAnalysis": true
     },
     "internal/semp/sempv2/correlation_test.go": {
@@ -17680,7 +19275,7 @@
     },
     "internal/semp/sempv2/operation.go": {
       "filePath": "internal/semp/sempv2/operation.go",
-      "contentHash": "c315dd4a994b0f3976d86e64cdf1ca306a58c1657d572e3ad08782e90f0000f7",
+      "contentHash": "5e9f798aee2f6ca6f050669db9a36a6c630880f871c924cf9fdbb2421ee9047a",
       "functions": [
         {
           "name": "ParseSpecs",
@@ -17689,7 +19284,7 @@
           ],
           "returnType": "(map[string]*Operation, error)",
           "exported": true,
-          "lineCount": 72
+          "lineCount": 73
         },
         {
           "name": "deriveSpecType",
@@ -17732,7 +19327,8 @@
             "Path",
             "Parameters",
             "Description",
-            "BodyFields"
+            "BodyFields",
+            "SchemaVersion"
           ],
           "exported": true,
           "lineCount": 9
@@ -17782,12 +19378,12 @@
         "Parameter",
         "ParseSpecs"
       ],
-      "totalLines": 230,
+      "totalLines": 231,
       "hasStructuralAnalysis": true
     },
     "internal/semp/sempv2/operation_test.go": {
       "filePath": "internal/semp/sempv2/operation_test.go",
-      "contentHash": "1a189863be1cc0c31948a71792df59259e1c10f2bee4f9647a6a1408379690aa",
+      "contentHash": "4f26d0014227d7627532b61b597dd7e2deed7ca9a055315be3411e180b36af6b",
       "functions": [
         {
           "name": "TestParseSpecs_OperationCount",
@@ -17811,7 +19407,7 @@
             "t"
           ],
           "exported": true,
-          "lineCount": 29
+          "lineCount": 34
         },
         {
           "name": "TestParseSpecs_RefParametersResolved",
@@ -17900,7 +19496,7 @@
         "TestParseSpecs_NoDuplicateKeys",
         "TestParseSpecs_SpecTypeDerivation"
       ],
-      "totalLines": 222,
+      "totalLines": 227,
       "hasStructuralAnalysis": true
     },
     "internal/semp/sempv2/specs/embed.go": {
@@ -17918,6 +19514,589 @@
       ],
       "exports": [],
       "totalLines": 15,
+      "hasStructuralAnalysis": true
+    },
+    "internal/tokenexchange/circuitbreaker.go": {
+      "filePath": "internal/tokenexchange/circuitbreaker.go",
+      "contentHash": "4f11498212a8cc22f7cf42d27a058330749f48bd3bb1ef14f876d8fc4ace1094",
+      "functions": [
+        {
+          "name": "newTokenExchangeCircuitBreaker",
+          "params": [
+            "cfg"
+          ],
+          "returnType": "*gobreaker.CircuitBreaker[*Token]",
+          "exported": false,
+          "lineCount": 13
+        },
+        {
+          "name": "newReadyToTrip",
+          "params": [
+            "cfg"
+          ],
+          "returnType": "func(gobreaker.Counts) bool",
+          "exported": false,
+          "lineCount": 16
+        },
+        {
+          "name": "logBreakerStateChange",
+          "params": [
+            "name",
+            "from",
+            "to"
+          ],
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "isBreakerExcluded",
+          "params": [
+            "err"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 28
+        },
+        {
+          "name": "isBreakerSuccess",
+          "params": [
+            "err"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "isBreakerFailure",
+          "params": [
+            "err"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "failureClassOf",
+          "params": [
+            "err"
+          ],
+          "returnType": "FailureClass",
+          "exported": false,
+          "lineCount": 7
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "log/slog",
+          "specifiers": [
+            "slog"
+          ]
+        },
+        {
+          "source": "github.com/sony/gobreaker/v2",
+          "specifiers": [
+            "v2"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 171,
+      "hasStructuralAnalysis": true
+    },
+    "internal/tokenexchange/circuitbreaker_config.go": {
+      "filePath": "internal/tokenexchange/circuitbreaker_config.go",
+      "contentHash": "367213bdd77d0e6e2fd83e21e3db9a80f7e58723098d08d28a989fc7582296ad",
+      "functions": [
+        {
+          "name": "DefaultCircuitBreakerConfig",
+          "params": [],
+          "returnType": "CircuitBreakerConfig",
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "Validate",
+          "params": [],
+          "returnType": "error",
+          "exported": true,
+          "lineCount": 31
+        }
+      ],
+      "classes": [
+        {
+          "name": "CircuitBreakerConfig",
+          "methods": [
+            "Validate"
+          ],
+          "properties": [
+            "FailureRateWindow",
+            "MinimumRequests",
+            "FailureRateThresholdPercent",
+            "ConsecutiveFailureThreshold",
+            "OpenStateDuration",
+            "HalfOpenProbeRequests"
+          ],
+          "exported": true,
+          "lineCount": 33
+        }
+      ],
+      "imports": [
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "github.com/SolaceDev/solace-broker-mcp/internal/config",
+          "specifiers": [
+            "config"
+          ]
+        }
+      ],
+      "exports": [
+        "CircuitBreakerConfig",
+        "DefaultCircuitBreakerConfig",
+        "Validate"
+      ],
+      "totalLines": 115,
+      "hasStructuralAnalysis": true
+    },
+    "internal/tokenexchange/circuitbreaker_config_test.go": {
+      "filePath": "internal/tokenexchange/circuitbreaker_config_test.go",
+      "contentHash": "6ac2524ed9079a960ebab499cfd50e5912d03d42f340f1dddea11a0f1fe8b99e",
+      "functions": [
+        {
+          "name": "TestDefaultCircuitBreakerConfig_Values",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 15
+        },
+        {
+          "name": "TestDefaultCircuitBreakerConfig_Validates",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "TestDefaultCircuitBreakerConfig_ReturnsFreshValue",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "TestCircuitBreakerConfig_Validate",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 55
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "github.com/SolaceDev/solace-broker-mcp/internal/config",
+          "specifiers": [
+            "config"
+          ]
+        }
+      ],
+      "exports": [
+        "TestDefaultCircuitBreakerConfig_Values",
+        "TestDefaultCircuitBreakerConfig_Validates",
+        "TestDefaultCircuitBreakerConfig_ReturnsFreshValue",
+        "TestCircuitBreakerConfig_Validate"
+      ],
+      "totalLines": 121,
+      "hasStructuralAnalysis": true
+    },
+    "internal/tokenexchange/circuitbreaker_exchange_test.go": {
+      "filePath": "internal/tokenexchange/circuitbreaker_exchange_test.go",
+      "contentHash": "d6a4b312066b32220efe87948a4229cc0b0beaac822b3436d9c53a27207ce4d0",
+      "functions": [
+        {
+          "name": "fastTripBreakerConfig",
+          "params": [],
+          "returnType": "CircuitBreakerConfig",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "newBreakerTestExchangerPlain",
+          "params": [
+            "t",
+            "serverURL",
+            "cbCfg"
+          ],
+          "returnType": "*Exchanger",
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "newBreakerTestExchanger",
+          "params": [
+            "t",
+            "serverURL",
+            "cbCfg"
+          ],
+          "returnType": "*Exchanger",
+          "exported": false,
+          "lineCount": 23
+        },
+        {
+          "name": "TestBreaker_OneLogicalOperationCountsOnce",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 31
+        },
+        {
+          "name": "TestBreaker_RateLimitExcludedNotCounted",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 27
+        },
+        {
+          "name": "TestBreaker_ConfigFaultExcludedNotCounted",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 38
+        },
+        {
+          "name": "TestBreaker_OpenStateFailsFast",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 30
+        },
+        {
+          "name": "TestBreaker_OpenStateErrorIsTransientAndEnriched",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 33
+        },
+        {
+          "name": "TestBreaker_DisabledCallsIdPAndRetries",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 26
+        },
+        {
+          "name": "TestBreaker_SingleflightBurstCountsOnce",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 39
+        },
+        {
+          "name": "TestBreaker_ConcurrentDistinctKeysCountExactlyOncePerCall",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 69
+        },
+        {
+          "name": "recoveryBreakerConfig",
+          "params": [],
+          "returnType": "CircuitBreakerConfig",
+          "exported": false,
+          "lineCount": 9
+        },
+        {
+          "name": "waitForBreakerState",
+          "params": [
+            "t",
+            "cb",
+            "want"
+          ],
+          "exported": false,
+          "lineCount": 13
+        },
+        {
+          "name": "inputWithSubject",
+          "params": [
+            "s"
+          ],
+          "returnType": "ExchangeInput",
+          "exported": false,
+          "lineCount": 5
+        },
+        {
+          "name": "TestBreaker_RecoveryClosesAfterConsecutiveProbeSuccesses",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 69
+        },
+        {
+          "name": "TestBreaker_HalfOpenProbeFailureReopens",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 50
+        },
+        {
+          "name": "TestBreaker_HalfOpenRejectsBeyondProbeBudget",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 75
+        },
+        {
+          "name": "TestBreaker_HalfOpenExcludedProbeRefundsSlot",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 58
+        },
+        {
+          "name": "TestBreaker_OpenBreakerRejectsStampedeCleanly",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 72
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "net/http/httptest",
+          "specifiers": [
+            "httptest"
+          ]
+        },
+        {
+          "source": "sync",
+          "specifiers": [
+            "sync"
+          ]
+        },
+        {
+          "source": "sync/atomic",
+          "specifiers": [
+            "atomic"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "github.com/SolaceDev/solace-broker-mcp/internal/idpclient",
+          "specifiers": [
+            "idpclient"
+          ]
+        },
+        {
+          "source": "github.com/sony/gobreaker/v2",
+          "specifiers": [
+            "v2"
+          ]
+        }
+      ],
+      "exports": [
+        "TestBreaker_OneLogicalOperationCountsOnce",
+        "TestBreaker_RateLimitExcludedNotCounted",
+        "TestBreaker_ConfigFaultExcludedNotCounted",
+        "TestBreaker_OpenStateFailsFast",
+        "TestBreaker_OpenStateErrorIsTransientAndEnriched",
+        "TestBreaker_DisabledCallsIdPAndRetries",
+        "TestBreaker_SingleflightBurstCountsOnce",
+        "TestBreaker_ConcurrentDistinctKeysCountExactlyOncePerCall",
+        "TestBreaker_RecoveryClosesAfterConsecutiveProbeSuccesses",
+        "TestBreaker_HalfOpenProbeFailureReopens",
+        "TestBreaker_HalfOpenRejectsBeyondProbeBudget",
+        "TestBreaker_HalfOpenExcludedProbeRefundsSlot",
+        "TestBreaker_OpenBreakerRejectsStampedeCleanly"
+      ],
+      "totalLines": 849,
+      "hasStructuralAnalysis": true
+    },
+    "internal/tokenexchange/circuitbreaker_test.go": {
+      "filePath": "internal/tokenexchange/circuitbreaker_test.go",
+      "contentHash": "c3e38ccfba468d438d04f923559e4596afb02d6cb60c1d97caf5a5229b3aea39",
+      "functions": [
+        {
+          "name": "exhaustedWith",
+          "params": [
+            "class"
+          ],
+          "returnType": "*ExchangeError",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "rawWith",
+          "params": [
+            "class"
+          ],
+          "returnType": "*ExchangeError",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "TestIsBreakerFailure",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 40
+        },
+        {
+          "name": "TestIsBreakerExcluded",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 35
+        },
+        {
+          "name": "TestIsBreakerSuccess",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 23
+        },
+        {
+          "name": "TestNewReadyToTrip",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 138
+        },
+        {
+          "name": "TestBreakerClassification_ExcludedNeverCounted",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 21
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        },
+        {
+          "source": "github.com/sony/gobreaker/v2",
+          "specifiers": [
+            "v2"
+          ]
+        }
+      ],
+      "exports": [
+        "TestIsBreakerFailure",
+        "TestIsBreakerExcluded",
+        "TestIsBreakerSuccess",
+        "TestNewReadyToTrip",
+        "TestBreakerClassification_ExcludedNeverCounted"
+      ],
+      "totalLines": 311,
       "hasStructuralAnalysis": true
     },
     "internal/tokenexchange/dedup_key.go": {
@@ -18097,9 +20276,102 @@
       "totalLines": 106,
       "hasStructuralAnalysis": true
     },
+    "internal/tokenexchange/defaults.go": {
+      "filePath": "internal/tokenexchange/defaults.go",
+      "contentHash": "48553e25308aebbd7c7d7967023520b0193bd801624a45675a15b46830a0463c",
+      "functions": [
+        {
+          "name": "ComputeChainDeadline",
+          "params": [
+            "override",
+            "perAttempt",
+            "retryWaitMax",
+            "maxRetries"
+          ],
+          "returnType": "time.Duration",
+          "exported": true,
+          "lineCount": 12
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [
+        "ComputeChainDeadline"
+      ],
+      "totalLines": 137,
+      "hasStructuralAnalysis": true
+    },
+    "internal/tokenexchange/defaults_test.go": {
+      "filePath": "internal/tokenexchange/defaults_test.go",
+      "contentHash": "e555bcd32f2b0ff069a7737472a8672093a77811bab91911b3d58ebe859bc08f",
+      "functions": [
+        {
+          "name": "TestComputeChainDeadline_FormulaAcrossInputs",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 52
+        },
+        {
+          "name": "TestComputeChainDeadline_OverrideWins",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 25
+        },
+        {
+          "name": "TestComputeChainDeadline_ZeroOrNegativeOverrideUsesFormula",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "TestDefaults_PinShippedValues",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 14
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [
+        "TestComputeChainDeadline_FormulaAcrossInputs",
+        "TestComputeChainDeadline_OverrideWins",
+        "TestComputeChainDeadline_ZeroOrNegativeOverrideUsesFormula",
+        "TestDefaults_PinShippedValues"
+      ],
+      "totalLines": 144,
+      "hasStructuralAnalysis": true
+    },
     "internal/tokenexchange/errors.go": {
       "filePath": "internal/tokenexchange/errors.go",
-      "contentHash": "0885b2865427e5db65b223ea45301aae802b68e3c1308e693397b83e2b870108",
+      "contentHash": "2899380264bfa46bb38b2e28649df934b6c663cb825f5ca9808022f75833d1e9",
       "functions": [
         {
           "name": "Error",
@@ -18116,11 +20388,20 @@
           "lineCount": 1
         },
         {
+          "name": "AgentMessage",
+          "params": [
+            "brokerAlias"
+          ],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 10
+        },
+        {
           "name": "LogAttrs",
           "params": [],
           "returnType": "[]slog.Attr",
           "exported": true,
-          "lineCount": 19
+          "lineCount": 28
         }
       ],
       "classes": [
@@ -18129,6 +20410,7 @@
           "methods": [
             "Error",
             "Unwrap",
+            "AgentMessage",
             "LogAttrs"
           ],
           "properties": [
@@ -18138,13 +20420,26 @@
             "BrokerAlias",
             "Audience",
             "HTTPStatus",
+            "FailureClass",
             "Elapsed"
           ],
           "exported": true,
-          "lineCount": 9
+          "lineCount": 13
         }
       ],
       "imports": [
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
         {
           "source": "log/slog",
           "specifiers": [
@@ -18162,14 +20457,88 @@
         "ExchangeError",
         "Error",
         "Unwrap",
+        "AgentMessage",
         "LogAttrs"
       ],
-      "totalLines": 75,
+      "totalLines": 108,
+      "hasStructuralAnalysis": true
+    },
+    "internal/tokenexchange/errors_test.go": {
+      "filePath": "internal/tokenexchange/errors_test.go",
+      "contentHash": "55ee13ad293c7e9072fc21b2e7b6d9518821cb4ad188ce1869b57ea51e121274",
+      "functions": [
+        {
+          "name": "TestAgentMessage_TransientSentinels",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 26
+        },
+        {
+          "name": "TestAgentMessage_PermanentSentinels",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 23
+        },
+        {
+          "name": "TestAgentMessage_NeverLeaksInternalDetail",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 29
+        },
+        {
+          "name": "TestExchangeError_NeverContainsSecrets",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 37
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        }
+      ],
+      "exports": [
+        "TestAgentMessage_TransientSentinels",
+        "TestAgentMessage_PermanentSentinels",
+        "TestAgentMessage_NeverLeaksInternalDetail",
+        "TestExchangeError_NeverContainsSecrets"
+      ],
+      "totalLines": 163,
       "hasStructuralAnalysis": true
     },
     "internal/tokenexchange/exchange.go": {
       "filePath": "internal/tokenexchange/exchange.go",
-      "contentHash": "fc67a059c8b3f16859ed12e9511924c8074b1375a778fa399f76e7a972b0baa0",
+      "contentHash": "113baf8e7e16df4878a8f9027dc61498105e7266f9b176a4a99fb1f69551525b",
       "functions": [
         {
           "name": "Exchange",
@@ -18179,7 +20548,36 @@
           ],
           "returnType": "(*Token, error)",
           "exported": true,
-          "lineCount": 81
+          "lineCount": 65
+        },
+        {
+          "name": "runProtectedExchange",
+          "params": [
+            "key",
+            "input"
+          ],
+          "returnType": "(*Token, error)",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "runExchangeOnce",
+          "params": [
+            "key",
+            "input"
+          ],
+          "returnType": "(*Token, error)",
+          "exported": false,
+          "lineCount": 39
+        },
+        {
+          "name": "mapCircuitOpen",
+          "params": [
+            "err"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 9
         },
         {
           "name": "Close",
@@ -18198,6 +20596,18 @@
           "lineCount": 9
         },
         {
+          "name": "classifyRetryOutcome",
+          "params": [
+            "ctx",
+            "err",
+            "attempts",
+            "brokerAlias"
+          ],
+          "returnType": "error",
+          "exported": false,
+          "lineCount": 49
+        },
+        {
           "name": "doExchange",
           "params": [
             "ctx",
@@ -18205,7 +20615,7 @@
           ],
           "returnType": "(*Token, error)",
           "exported": false,
-          "lineCount": 22
+          "lineCount": 23
         }
       ],
       "classes": [],
@@ -18235,9 +20645,21 @@
           ]
         },
         {
+          "source": "github.com/SolaceDev/solace-broker-mcp/internal/idpclient",
+          "specifiers": [
+            "idpclient"
+          ]
+        },
+        {
           "source": "github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache",
           "specifiers": [
             "cache"
+          ]
+        },
+        {
+          "source": "github.com/sony/gobreaker/v2",
+          "specifiers": [
+            "v2"
           ]
         }
       ],
@@ -18246,12 +20668,12 @@
         "Close",
         "Invalidate"
       ],
-      "totalLines": 155,
+      "totalLines": 288,
       "hasStructuralAnalysis": true
     },
     "internal/tokenexchange/exchange_test.go": {
       "filePath": "internal/tokenexchange/exchange_test.go",
-      "contentHash": "99147f86419044e1d128f06e5da78976b4a92bdf2fc5876a495b2f4fbfb37ba1",
+      "contentHash": "564914fd5bc4caf7fc3d12e3eb47579002e0dbfc5c3f5093401194b45286397b",
       "functions": [
         {
           "name": "newTestExchanger",
@@ -18368,12 +20790,12 @@
           "lineCount": 21
         },
         {
-          "name": "TestDoExchange_BuildRequestFailureWrapsAsTransport",
+          "name": "TestDoExchange_BuildRequestFailureClassifiesAsRequestBuild",
           "params": [
             "t"
           ],
           "exported": true,
-          "lineCount": 24
+          "lineCount": 27
         },
         {
           "name": "TestDoExchange_HTTPFailureWithCancelledContextReturnsContextError",
@@ -18487,12 +20909,12 @@
           "lineCount": 51
         },
         {
-          "name": "TestExchange_UnknownGrantTypeReturnsTransportError",
+          "name": "TestExchange_UnknownGrantTypeReturnsRequestBuildError",
           "params": [
             "t"
           ],
           "exported": true,
-          "lineCount": 29
+          "lineCount": 32
         },
         {
           "name": "TestExchange_SingleflightSharesErrors",
@@ -18604,6 +21026,102 @@
           ],
           "exported": true,
           "lineCount": 40
+        },
+        {
+          "name": "newRetryingTestExchanger",
+          "params": [
+            "t",
+            "serverURL"
+          ],
+          "returnType": "*Exchanger",
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "newRetryingTestExchangerWithChain",
+          "params": [
+            "t",
+            "serverURL",
+            "chainDeadline"
+          ],
+          "returnType": "*Exchanger",
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "buildRetryingTestExchanger",
+          "params": [
+            "t",
+            "serverURL",
+            "chainDeadline"
+          ],
+          "returnType": "*Exchanger",
+          "exported": false,
+          "lineCount": 23
+        },
+        {
+          "name": "TestExchange_RetriesExhaustedOn5xx",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 36
+        },
+        {
+          "name": "TestExchange_RetriesExhaustedOn429",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 35
+        },
+        {
+          "name": "TestExchange_RetryRecoversNoExhaustion",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 26
+        },
+        {
+          "name": "TestExchange_ConnectionErrorRetriesExhausted",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 27
+        },
+        {
+          "name": "TestExchange_RejectedNotRewrapped",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "TestClassifyRetryOutcome_ZeroAttemptsPassthrough",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "TestClassifyRetryOutcome_DeadlineMidRetryRewrapped",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 30
+        },
+        {
+          "name": "TestExchange_ChainDeadlineFiresMidRetry",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 34
         }
       ],
       "classes": [
@@ -18729,6 +21247,12 @@
           ]
         },
         {
+          "source": "github.com/SolaceDev/solace-broker-mcp/internal/idpclient",
+          "specifiers": [
+            "idpclient"
+          ]
+        },
+        {
           "source": "github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache",
           "specifiers": [
             "cache"
@@ -18752,7 +21276,7 @@
         "TestExchange_ContextDeadlineExceededReturnsDeadlineError",
         "TestExchange_TransportErrorReturned",
         "TestExchange_RejectedErrorReturned",
-        "TestDoExchange_BuildRequestFailureWrapsAsTransport",
+        "TestDoExchange_BuildRequestFailureClassifiesAsRequestBuild",
         "TestDoExchange_HTTPFailureWithCancelledContextReturnsContextError",
         "TestDoExchange_HTTPFailureWithoutContextErrorReturnsTransport",
         "TestDoExchange_PassesNowFuncToParseIdPResponse",
@@ -18765,7 +21289,7 @@
         "TestExchange_ContextErrorNotLogged",
         "TestExchange_InvalidResponseError",
         "TestExchange_RequestBodyContainsExpectedFields",
-        "TestExchange_UnknownGrantTypeReturnsTransportError",
+        "TestExchange_UnknownGrantTypeReturnsRequestBuildError",
         "TestExchange_SingleflightSharesErrors",
         "TestExchange_ResponseFieldsPreserved",
         "TestExchange_FourxxWithOAuthError",
@@ -18777,14 +21301,22 @@
         "Put",
         "Delete",
         "Close",
-        "TestExchange_SingleflightWinnerOnlyWritesCache"
+        "TestExchange_SingleflightWinnerOnlyWritesCache",
+        "TestExchange_RetriesExhaustedOn5xx",
+        "TestExchange_RetriesExhaustedOn429",
+        "TestExchange_RetryRecoversNoExhaustion",
+        "TestExchange_ConnectionErrorRetriesExhausted",
+        "TestExchange_RejectedNotRewrapped",
+        "TestClassifyRetryOutcome_ZeroAttemptsPassthrough",
+        "TestClassifyRetryOutcome_DeadlineMidRetryRewrapped",
+        "TestExchange_ChainDeadlineFiresMidRetry"
       ],
-      "totalLines": 1388,
+      "totalLines": 1736,
       "hasStructuralAnalysis": true
     },
     "internal/tokenexchange/exchanger.go": {
       "filePath": "internal/tokenexchange/exchanger.go",
-      "contentHash": "a67716a698e9f144094eb08885ab41243e6415a8dde3621fd71a9a4b6b44d02c",
+      "contentHash": "e662dea59f162818b079f55447adda89c4d080c6cddc32e99fd69fa13ccb1828",
       "functions": [
         {
           "name": "New",
@@ -18793,7 +21325,7 @@
           ],
           "returnType": "(*Exchanger, error)",
           "exported": true,
-          "lineCount": 20
+          "lineCount": 43
         }
       ],
       "classes": [
@@ -18808,13 +21340,14 @@
             "grantType",
             "audienceParam",
             "httpClient",
-            "exchangeTimeout",
+            "chainDeadline",
             "cache",
             "group",
-            "nowFunc"
+            "nowFunc",
+            "breaker"
           ],
           "exported": true,
-          "lineCount": 13
+          "lineCount": 22
         }
       ],
       "imports": [
@@ -18837,15 +21370,15 @@
           ]
         },
         {
-          "source": "github.com/SolaceDev/solace-broker-mcp/internal/defaults",
-          "specifiers": [
-            "defaults"
-          ]
-        },
-        {
           "source": "github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache",
           "specifiers": [
             "cache"
+          ]
+        },
+        {
+          "source": "github.com/sony/gobreaker/v2",
+          "specifiers": [
+            "v2"
           ]
         },
         {
@@ -18859,7 +21392,7 @@
         "Exchanger",
         "New"
       ],
-      "totalLines": 78,
+      "totalLines": 110,
       "hasStructuralAnalysis": true
     },
     "internal/tokenexchange/exchanger_test.go": {
@@ -18944,9 +21477,158 @@
       "totalLines": 125,
       "hasStructuralAnalysis": true
     },
+    "internal/tokenexchange/failure_class.go": {
+      "filePath": "internal/tokenexchange/failure_class.go",
+      "contentHash": "465252082651625df7b9dea37178a797112bcc94b7d8a87ec7c6ed0d2f7a8437",
+      "functions": [
+        {
+          "name": "String",
+          "params": [],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 16
+        }
+      ],
+      "classes": [],
+      "imports": [],
+      "exports": [
+        "String"
+      ],
+      "totalLines": 67,
+      "hasStructuralAnalysis": true
+    },
+    "internal/tokenexchange/failure_class_test.go": {
+      "filePath": "internal/tokenexchange/failure_class_test.go",
+      "contentHash": "0a7411da9c7d5b144cc427d816afa54fedcfc266d16c40937d5ebaba40b62880",
+      "functions": [
+        {
+          "name": "TestFailureClass_String",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "TestParseIdPResponse_FailureClassPerStatus",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 44
+        },
+        {
+          "name": "TestParseIdPResponse_FailureClassBodyRead",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 25
+        },
+        {
+          "name": "TestDoExchange_FailureClassNetwork",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 24
+        },
+        {
+          "name": "TestExchangeError_LogAttrsIncludesFailureClass",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 15
+        },
+        {
+          "name": "TestExchangeError_LogAttrsBreakerState",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 21
+        },
+        {
+          "name": "TestClassifyRetryOutcome_DeadlinePathClassifiesAsNetwork",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 37
+        },
+        {
+          "name": "hasLogAttr",
+          "params": [
+            "attrs",
+            "key",
+            "val"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 8
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "context",
+          "specifiers": [
+            "context"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "log/slog",
+          "specifiers": [
+            "slog"
+          ]
+        },
+        {
+          "source": "net/http",
+          "specifiers": [
+            "http"
+          ]
+        },
+        {
+          "source": "net/http/httptest",
+          "specifiers": [
+            "httptest"
+          ]
+        },
+        {
+          "source": "strings",
+          "specifiers": [
+            "strings"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        }
+      ],
+      "exports": [
+        "TestFailureClass_String",
+        "TestParseIdPResponse_FailureClassPerStatus",
+        "TestParseIdPResponse_FailureClassBodyRead",
+        "TestDoExchange_FailureClassNetwork",
+        "TestExchangeError_LogAttrsIncludesFailureClass",
+        "TestExchangeError_LogAttrsBreakerState",
+        "TestClassifyRetryOutcome_DeadlinePathClassifiesAsNetwork"
+      ],
+      "totalLines": 255,
+      "hasStructuralAnalysis": true
+    },
     "internal/tokenexchange/from_config.go": {
       "filePath": "internal/tokenexchange/from_config.go",
-      "contentHash": "438676aff91464772a89a6f042ba8db60423ee33a4a45ef6f6a374972075abdc",
+      "contentHash": "bf3c1d5eff848985110cf322a349f7278e04fca2dc8c10b316a076b2c92c4f13",
       "functions": [
         {
           "name": "FromConfig",
@@ -18957,7 +21639,16 @@
           ],
           "returnType": "(*Exchanger, error)",
           "exported": true,
-          "lineCount": 31
+          "lineCount": 38
+        },
+        {
+          "name": "resolveCircuitBreakerConfig",
+          "params": [
+            "cb"
+          ],
+          "returnType": "*CircuitBreakerConfig",
+          "exported": false,
+          "lineCount": 30
         },
         {
           "name": "resolveClientAuth",
@@ -18996,6 +21687,12 @@
           ]
         },
         {
+          "source": "log/slog",
+          "specifiers": [
+            "slog"
+          ]
+        },
+        {
           "source": "net/http",
           "specifiers": [
             "http"
@@ -19017,7 +21714,92 @@
       "exports": [
         "FromConfig"
       ],
-      "totalLines": 106,
+      "totalLines": 149,
+      "hasStructuralAnalysis": true
+    },
+    "internal/tokenexchange/from_config_breaker_test.go": {
+      "filePath": "internal/tokenexchange/from_config_breaker_test.go",
+      "contentHash": "6cc8351e0d56da03f3a1e7dbea15853092684b1d27b96293537655e29ee3c494",
+      "functions": [
+        {
+          "name": "ptr",
+          "params": [
+            "v"
+          ],
+          "returnType": "*T",
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "TestResolveCircuitBreakerConfig_NilUsesDefaults",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TestResolveCircuitBreakerConfig_DisabledReturnsNil",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "TestResolveCircuitBreakerConfig_EnabledTrueUsesDefaults",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "TestResolveCircuitBreakerConfig_PartialOverlay",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "TestResolveCircuitBreakerConfig_FullOverlay",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 22
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "github.com/SolaceDev/solace-broker-mcp/internal/config",
+          "specifiers": [
+            "config"
+          ]
+        }
+      ],
+      "exports": [
+        "TestResolveCircuitBreakerConfig_NilUsesDefaults",
+        "TestResolveCircuitBreakerConfig_DisabledReturnsNil",
+        "TestResolveCircuitBreakerConfig_EnabledTrueUsesDefaults",
+        "TestResolveCircuitBreakerConfig_PartialOverlay",
+        "TestResolveCircuitBreakerConfig_FullOverlay"
+      ],
+      "totalLines": 103,
       "hasStructuralAnalysis": true
     },
     "internal/tokenexchange/from_config_test.go": {
@@ -19500,7 +22282,7 @@
     },
     "internal/tokenexchange/response.go": {
       "filePath": "internal/tokenexchange/response.go",
-      "contentHash": "b628e401799766816a5585abd150855d1d66a8d1bdae1867c3897d2e848d1948",
+      "contentHash": "e8c41692d8effbf643db2645163a6af7db47011c531acefaaaa10fa593c2e99e",
       "functions": [
         {
           "name": "parseIdPResponse",
@@ -19510,7 +22292,7 @@
           ],
           "returnType": "(*Token, error)",
           "exported": false,
-          "lineCount": 32
+          "lineCount": 48
         },
         {
           "name": "parseSuccessBody",
@@ -19616,12 +22398,12 @@
         }
       ],
       "exports": [],
-      "totalLines": 190,
+      "totalLines": 210,
       "hasStructuralAnalysis": true
     },
     "internal/tokenexchange/response_test.go": {
       "filePath": "internal/tokenexchange/response_test.go",
-      "contentHash": "24b75593f44c26ac9483470d2967e25f03107f9aa2120cca7fdc63f21467bdec",
+      "contentHash": "7cc017b2809d6f74859ccd838766a23a2924c6934f13b8982df37ec47ee02091",
       "functions": [
         {
           "name": "Read",
@@ -19792,12 +22574,12 @@
           "lineCount": 30
         },
         {
-          "name": "TestParseIdPResponse_FourxxNonOAuthBodyReturnsExchangeTransport",
+          "name": "TestParseIdPResponse_FourxxNonOAuthBodyReturnsInvalidResponse",
           "params": [
             "t"
           ],
           "exported": true,
-          "lineCount": 27
+          "lineCount": 30
         },
         {
           "name": "TestParseIdPResponse_ThreexxAndFivexxReturnExchangeTransport",
@@ -19805,15 +22587,15 @@
             "t"
           ],
           "exported": true,
-          "lineCount": 43
+          "lineCount": 44
         },
         {
-          "name": "TestClassifyClientError_OversizedErrorCodeReturnsTransport",
+          "name": "TestClassifyClientError_OversizedErrorCodeReturnsInvalidResponse",
           "params": [
             "t"
           ],
           "exported": true,
-          "lineCount": 37
+          "lineCount": 40
         },
         {
           "name": "TestClassifyClientError_ErrorDescriptionNotInMessage",
@@ -19856,12 +22638,12 @@
           "lineCount": 24
         },
         {
-          "name": "TestClassifyClientError_ExplicitEmptyErrorFieldRoutesToTransport",
+          "name": "TestClassifyClientError_ExplicitEmptyErrorFieldRoutesToInvalidResponse",
           "params": [
             "t"
           ],
           "exported": true,
-          "lineCount": 12
+          "lineCount": 15
         },
         {
           "name": "TestParseSuccessBody_UnknownFieldsSilentlyIgnored",
@@ -19971,23 +22753,114 @@
         "TestParseSuccessBody_ExpiresInOverflowGuard",
         "TestParseSuccessBody_TokenConstructionAndExpiresAt",
         "TestParseIdPResponse_FourxxOAuthErrorReturnsExchangeRejected",
-        "TestParseIdPResponse_FourxxNonOAuthBodyReturnsExchangeTransport",
+        "TestParseIdPResponse_FourxxNonOAuthBodyReturnsInvalidResponse",
         "TestParseIdPResponse_ThreexxAndFivexxReturnExchangeTransport",
-        "TestClassifyClientError_OversizedErrorCodeReturnsTransport",
+        "TestClassifyClientError_OversizedErrorCodeReturnsInvalidResponse",
         "TestClassifyClientError_ErrorDescriptionNotInMessage",
         "TestParseIdPResponse_HappyPath",
         "TestParseSuccessBody_ShortLivedTokenReturnsNonErrorTokenWithPastExpiresAt",
         "TestParseIdPResponse_OversizedBodySurfacesAsInvalidResponseNotTransport",
         "TestParseSuccessBody_NullBodyTriggersAccessTokenMissingError",
-        "TestClassifyClientError_ExplicitEmptyErrorFieldRoutesToTransport",
+        "TestClassifyClientError_ExplicitEmptyErrorFieldRoutesToInvalidResponse",
         "TestParseSuccessBody_UnknownFieldsSilentlyIgnored"
       ],
-      "totalLines": 974,
+      "totalLines": 994,
+      "hasStructuralAnalysis": true
+    },
+    "internal/tokenexchange/transport_error.go": {
+      "filePath": "internal/tokenexchange/transport_error.go",
+      "contentHash": "f1792e6efb24e7ce0664b890dbf41d17b764946e8c26e37d9f1d295aa7ab49f6",
+      "functions": [
+        {
+          "name": "classifyTransportError",
+          "params": [
+            "err"
+          ],
+          "returnType": "FailureClass",
+          "exported": false,
+          "lineCount": 23
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "crypto/x509",
+          "specifiers": [
+            "x509"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "net",
+          "specifiers": [
+            "net"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 57,
+      "hasStructuralAnalysis": true
+    },
+    "internal/tokenexchange/transport_error_test.go": {
+      "filePath": "internal/tokenexchange/transport_error_test.go",
+      "contentHash": "4d0c6bc8c13a11ecaa2021ffe4da666efb3fb4a755bd6ef40e3446a8e7224d7b",
+      "functions": [
+        {
+          "name": "TestClassifyTransportError",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 57
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "crypto/x509",
+          "specifiers": [
+            "x509"
+          ]
+        },
+        {
+          "source": "errors",
+          "specifiers": [
+            "errors"
+          ]
+        },
+        {
+          "source": "fmt",
+          "specifiers": [
+            "fmt"
+          ]
+        },
+        {
+          "source": "net",
+          "specifiers": [
+            "net"
+          ]
+        },
+        {
+          "source": "testing",
+          "specifiers": [
+            "testing"
+          ]
+        }
+      ],
+      "exports": [
+        "TestClassifyTransportError"
+      ],
+      "totalLines": 88,
       "hasStructuralAnalysis": true
     },
     "internal/tokenexchange/types.go": {
       "filePath": "internal/tokenexchange/types.go",
-      "contentHash": "b03c110206b7d0f31afc923af8166b94557acdb9056e18d2bfb00424dbd55972",
+      "contentHash": "be83948b5513d15786a08723f732a71fa738829a7a2faf4beb09a078ebee0247",
       "functions": [
         {
           "name": "String",
@@ -20069,10 +22942,12 @@
             "GrantType",
             "AudienceParam",
             "HTTPClient",
-            "Cache"
+            "Cache",
+            "ChainDeadline",
+            "CircuitBreaker"
           ],
           "exported": true,
-          "lineCount": 24
+          "lineCount": 39
         },
         {
           "name": "ExchangeInput",
@@ -20156,7 +23031,7 @@
         "GoString",
         "LogValue"
       ],
-      "totalLines": 242,
+      "totalLines": 284,
       "hasStructuralAnalysis": true
     },
     "internal/tools/authorization.go": {
@@ -21214,7 +24089,7 @@
     },
     "internal/tools/errors.go": {
       "filePath": "internal/tools/errors.go",
-      "contentHash": "34d79b57a33db131e59b321a56e97ff1d55cd73873b256f5041ca9c8a21475b5",
+      "contentHash": "1727bc74ae3882572e70a44457d1a4b92b72ae065c39f347a6cf352bb1c09dd8",
       "functions": [
         {
           "name": "buildErrorResult",
@@ -21253,15 +24128,6 @@
           "returnType": "string",
           "exported": false,
           "lineCount": 16
-        },
-        {
-          "name": "buildExchangeErrorMessage",
-          "params": [
-            "err"
-          ],
-          "returnType": "string",
-          "exported": false,
-          "lineCount": 14
         },
         {
           "name": "isRetryable",
@@ -21345,12 +24211,12 @@
         }
       ],
       "exports": [],
-      "totalLines": 342,
+      "totalLines": 327,
       "hasStructuralAnalysis": true
     },
     "internal/tools/errors_test.go": {
       "filePath": "internal/tools/errors_test.go",
-      "contentHash": "242472461f61dfaba560bdb928c48ed1ee27b927a0fb6734252f2f37302663a7",
+      "contentHash": "924e81e6249ac2017984a628285e77f070bd6d5699faaf821d1306d3e9e4d499",
       "functions": [
         {
           "name": "TestSanitizeBrokerText",
@@ -21366,7 +24232,7 @@
             "t"
           ],
           "exported": true,
-          "lineCount": 50
+          "lineCount": 57
         },
         {
           "name": "TestBuildSEMPv2Message",
@@ -21390,7 +24256,7 @@
             "t"
           ],
           "exported": true,
-          "lineCount": 111
+          "lineCount": 128
         },
         {
           "name": "TestBuildErrorResult_ExchangeError_StructuredFields",
@@ -21399,22 +24265,6 @@
           ],
           "exported": true,
           "lineCount": 49
-        },
-        {
-          "name": "TestBuildExchangeErrorMessage",
-          "params": [
-            "t"
-          ],
-          "exported": true,
-          "lineCount": 41
-        },
-        {
-          "name": "TestExchangeError_NeverContainsSecrets",
-          "params": [
-            "t"
-          ],
-          "exported": true,
-          "lineCount": 34
         }
       ],
       "classes": [],
@@ -21438,21 +24288,9 @@
           ]
         },
         {
-          "source": "strings",
-          "specifiers": [
-            "strings"
-          ]
-        },
-        {
           "source": "testing",
           "specifiers": [
             "testing"
-          ]
-        },
-        {
-          "source": "time",
-          "specifiers": [
-            "time"
           ]
         },
         {
@@ -21486,11 +24324,9 @@
         "TestBuildSEMPv2Message",
         "TestBuildSEMPv1Message",
         "TestBuildErrorMessage",
-        "TestBuildErrorResult_ExchangeError_StructuredFields",
-        "TestBuildExchangeErrorMessage",
-        "TestExchangeError_NeverContainsSecrets"
+        "TestBuildErrorResult_ExchangeError_StructuredFields"
       ],
-      "totalLines": 431,
+      "totalLines": 380,
       "hasStructuralAnalysis": true
     },
     "internal/tools/identity.go": {
@@ -22938,6 +25774,16 @@
       "totalLines": 55,
       "hasStructuralAnalysis": true
     },
+    "internal/tools/queuemetrics/testdata/show_queue_detail.xml": {
+      "filePath": "internal/tools/queuemetrics/testdata/show_queue_detail.xml",
+      "contentHash": "cfa3b7a5f30dd6dac466f6702a14458637f7dbbbb230841b84f34b7df60f324e",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 25,
+      "hasStructuralAnalysis": false
+    },
     "internal/tools/register.go": {
       "filePath": "internal/tools/register.go",
       "contentHash": "d3702ece8e2b0d48866e9f9001afb3c3c2211cec0d89d2a38c98dba5e09aa336",
@@ -24136,6 +26982,66 @@
       "totalLines": 72,
       "hasStructuralAnalysis": true
     },
+    "internal/tools/sempv1/brokerstatus/testdata/show_hardware_details_appliance.xml": {
+      "filePath": "internal/tools/sempv1/brokerstatus/testdata/show_hardware_details_appliance.xml",
+      "contentHash": "554000de472a88046c9dd2b2660e908d76a00653f519b6b4af90fd209c66bab1",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 226,
+      "hasStructuralAnalysis": false
+    },
+    "internal/tools/sempv1/brokerstatus/testdata/show_memory.xml": {
+      "filePath": "internal/tools/sempv1/brokerstatus/testdata/show_memory.xml",
+      "contentHash": "37990bd69ea6d3ed6797ce7020e3d6046e1ef3d67daa321ede3d50ead3a2e5c3",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 125,
+      "hasStructuralAnalysis": false
+    },
+    "internal/tools/sempv1/brokerstatus/testdata/show_message_spool_detail.xml": {
+      "filePath": "internal/tools/sempv1/brokerstatus/testdata/show_message_spool_detail.xml",
+      "contentHash": "30b040225029c2328386f950548726933c2c67db21ef99d232a233aedab3eafa",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 185,
+      "hasStructuralAnalysis": false
+    },
+    "internal/tools/sempv1/brokerstatus/testdata/show_system.xml": {
+      "filePath": "internal/tools/sempv1/brokerstatus/testdata/show_system.xml",
+      "contentHash": "08a3d75b70f0d93319e7ecece767457d67dd23f611eb53904b39119408fae49e",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 21,
+      "hasStructuralAnalysis": false
+    },
+    "internal/tools/sempv1/brokerstatus/testdata/show_version.xml": {
+      "filePath": "internal/tools/sempv1/brokerstatus/testdata/show_version.xml",
+      "contentHash": "ffaec6211574913c60d95be9aa8a4bdc456c663212cdacbcd6e413bbca0652ad",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 51,
+      "hasStructuralAnalysis": false
+    },
+    "internal/tools/sempv1/brokerstatus/testdata/show_version_appliance.xml": {
+      "filePath": "internal/tools/sempv1/brokerstatus/testdata/show_version_appliance.xml",
+      "contentHash": "b08b6a813241bfd6e93346c9e7010f2aa1ec2ae88f7ef7c5629afcb168724414",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 52,
+      "hasStructuralAnalysis": false
+    },
     "internal/tools/sempv1/brokerstatus/version_response.go": {
       "filePath": "internal/tools/sempv1/brokerstatus/version_response.go",
       "contentHash": "0ed9bde520a145bac75c41a9bc787db8a4495f97510ffbda335d3f8960be90bb",
@@ -24832,6 +27738,36 @@
       "totalLines": 99,
       "hasStructuralAnalysis": true
     },
+    "internal/tools/sempv1/discardstats/testdata/show_message_spool_stats.xml": {
+      "filePath": "internal/tools/sempv1/discardstats/testdata/show_message_spool_stats.xml",
+      "contentHash": "031010e733bb7684f0447ee2c89113c33d6d89c81cf45edbf2b4695b79943647",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 141,
+      "hasStructuralAnalysis": false
+    },
+    "internal/tools/sempv1/discardstats/testdata/show_message_vpn_default_stats.xml": {
+      "filePath": "internal/tools/sempv1/discardstats/testdata/show_message_vpn_default_stats.xml",
+      "contentHash": "0db4dbd658312af39efba0c47abc3437d789340d84074370876d748895381d48",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 183,
+      "hasStructuralAnalysis": false
+    },
+    "internal/tools/sempv1/discardstats/testdata/show_stats_client.xml": {
+      "filePath": "internal/tools/sempv1/discardstats/testdata/show_stats_client.xml",
+      "contentHash": "7d1c9e71f5b702bb4e3c3c17fc91f5cc51ad28bac90f14a1ad13256094efc5ca",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 127,
+      "hasStructuralAnalysis": false
+    },
     "internal/tools/sempv1/discardstats/vpn_stats_response.go": {
       "filePath": "internal/tools/sempv1/discardstats/vpn_stats_response.go",
       "contentHash": "524c864ff199cc9b22124a178462eee16b0073d8598a6fcf91e3d317f7d1fa3d",
@@ -25344,6 +28280,16 @@
       "totalLines": 127,
       "hasStructuralAnalysis": true
     },
+    "internal/tools/sempv1/redundancy/testdata/show_redundancy_standalone.xml": {
+      "filePath": "internal/tools/sempv1/redundancy/testdata/show_redundancy_standalone.xml",
+      "contentHash": "8ffe2235239f53413e0ed501a8e80a470fe38f8e4bd3a0e65dc391b6fac5a2b5",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 71,
+      "hasStructuralAnalysis": false
+    },
     "internal/tools/types.go": {
       "filePath": "internal/tools/types.go",
       "contentHash": "179398140c0601b74f400d3fd3e8d7153e024c18c9aeaca9efd805c2854a5f61",
@@ -25645,6 +28591,36 @@
         "Version"
       ],
       "totalLines": 12,
+      "hasStructuralAnalysis": true
+    },
+    "sweep-notes.md": {
+      "filePath": "sweep-notes.md",
+      "contentHash": "a7f6c5fb10deee1c520a1d87463aa6055e0d98324fb886e921a5a26eeaf5fe8b",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 83,
+      "hasStructuralAnalysis": true
+    },
+    "watch-for-prs-notes.md": {
+      "filePath": "watch-for-prs-notes.md",
+      "contentHash": "4749e49548abe1bcab85022f2874678528943e23d735cc543098600c3ce24447",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 19,
+      "hasStructuralAnalysis": true
+    },
+    "watch-my-prs-notes.md": {
+      "filePath": "watch-my-prs-notes.md",
+      "contentHash": "01b9ed788b3e12db0b10612d31b69fa5ddb88fa4194567832040c3a8c05c7b48",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 131,
       "hasStructuralAnalysis": true
     }
   }
