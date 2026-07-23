@@ -156,6 +156,21 @@ bridge_inbound_unhealthy_jq() {
         "$path" "$BRIDGE_HEALTHY_INBOUND_STATE" "$path" "$path"
 }
 
+# jq boolean fragment: true when the inboundState value at jq path $1 IS one
+# of this server's healthy inbound states — the logical complement of
+# bridge_inbound_unhealthy_jq above, kept as its own function (not `not (...)`)
+# so callers read naturally either way. "ready-subscribing" is a real healthy
+# state (still adding configured subscriptions), not just "not yet broken" —
+# a bridge with no remote subscriptions configured, like this suite's
+# fixtures, likely never lingers there, but asserting the exact steady-state
+# value alone was stricter than the server's own classification and a
+# plausible flake source on slower CI runners.
+bridge_inbound_healthy_jq() {
+    local path="$1"
+    printf '%s == "%s" or %s == "ready-subscribing"' \
+        "$path" "$BRIDGE_HEALTHY_INBOUND_STATE" "$path"
+}
+
 # Creates three bridges on one broker, pointed at $remote_host (the sibling
 # broker's container hostname). Does NOT verify convergence — call
 # verify_bridges_on for both brokers only after create_bridges_on has run for
@@ -232,7 +247,7 @@ verify_bridges_on() {
     local label="$2"
     log_info "Verifying bridge fixtures visible on $label ..."
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/bridges/test-bridge,auto" \
-        30 ".data.inboundState == \"$BRIDGE_HEALTHY_INBOUND_STATE\" and .data.outboundState == \"$BRIDGE_HEALTHY_OUTBOUND_STATE\""
+        30 "($(bridge_inbound_healthy_jq '.data.inboundState')) and .data.outboundState == \"$BRIDGE_HEALTHY_OUTBOUND_STATE\""
     # No inboundFailureReason predicate here (it never populates for this
     # fixture — see create_bridges_on) — poll on the classification this
     # server's own down logic uses instead (matches

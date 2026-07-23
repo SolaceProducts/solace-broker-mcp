@@ -1111,8 +1111,8 @@ test_get_bridge_status_healthy() {
     content=$(extract_content "$response")
     assert_json_field "$content" '.bridgeStatus.data.enabled' "true" \
         "get-bridge-status [$broker]: test-bridge must be enabled" || return 1
-    assert_json_field "$content" '.bridgeStatus.data.inboundState' "$BRIDGE_HEALTHY_INBOUND_STATE" \
-        "get-bridge-status [$broker]: test-bridge inboundState must be $BRIDGE_HEALTHY_INBOUND_STATE" || return 1
+    assert_json_field "$content" "$(bridge_inbound_healthy_jq '.bridgeStatus.data.inboundState')" "true" \
+        "get-bridge-status [$broker]: test-bridge inboundState must be healthy ($BRIDGE_HEALTHY_INBOUND_STATE or ready-subscribing)" || return 1
     assert_json_field "$content" '.bridgeStatus.data.outboundState' "$BRIDGE_HEALTHY_OUTBOUND_STATE" \
         "get-bridge-status [$broker]: test-bridge outboundState must be $BRIDGE_HEALTHY_OUTBOUND_STATE" || return 1
 }

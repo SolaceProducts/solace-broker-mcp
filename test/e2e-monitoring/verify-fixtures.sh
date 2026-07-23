@@ -116,8 +116,8 @@ verify_bridge_state() {
     }
     assert_json_field "$body" ".data.enabled" "true" \
         "F8 [$label]: test-bridge enabled must be true" || return 1
-    assert_json_field "$body" ".data.inboundState" "$BRIDGE_HEALTHY_INBOUND_STATE" \
-        "F8 [$label]: test-bridge inboundState must be $BRIDGE_HEALTHY_INBOUND_STATE" || return 1
+    assert_json_field "$body" "$(bridge_inbound_healthy_jq '.data.inboundState')" "true" \
+        "F8 [$label]: test-bridge inboundState must be healthy ($BRIDGE_HEALTHY_INBOUND_STATE or ready-subscribing)" || return 1
     assert_json_field "$body" ".data.outboundState" "$BRIDGE_HEALTHY_OUTBOUND_STATE" \
         "F8 [$label]: test-bridge outboundState must be $BRIDGE_HEALTHY_OUTBOUND_STATE" || return 1
 
