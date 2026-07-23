@@ -15,6 +15,7 @@
 package composite
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -24,10 +25,22 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2/specs"
 )
 
+// kebabCaseRE matches valid kebab-case: lowercase letters/digits separated by single hyphens.
+var kebabCaseRE = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
+
 func findTool(tools []CompositeTool, name string) *CompositeTool {
 	for i := range tools {
 		if tools[i].Name == name {
 			return &tools[i]
+		}
+	}
+	return nil
+}
+
+func findStep(tool *CompositeTool, id string) *Step {
+	for i := range tool.Steps {
+		if tool.Steps[i].ID == id {
+			return &tool.Steps[i]
 		}
 	}
 	return nil
@@ -40,10 +53,10 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 	}
 
 	t.Run("count", func(t *testing.T) {
-		// Guard against silent tool drops — update this floor when tools are intentionally removed.
-		const minToolCount = 30
-		if len(tools) < minToolCount {
-			t.Errorf("tool count: got %d, want >= %d (silent drop?)", len(tools), minToolCount)
+		// Exact count guards against silent drops and accidental additions — update deliberately.
+		const wantToolCount = 30
+		if len(tools) != wantToolCount {
+			t.Errorf("tool count: got %d, want %d", len(tools), wantToolCount)
 		}
 	})
 
@@ -55,11 +68,8 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 			}
 			seen[tool.Name] = true
 
-			if tool.Name != strings.ToLower(tool.Name) {
-				t.Errorf("tool %q: name contains uppercase (must be kebab-case)", tool.Name)
-			}
-			if strings.Contains(tool.Name, "_") {
-				t.Errorf("tool %q: name contains underscore (must be kebab-case, not snake_case)", tool.Name)
+			if !kebabCaseRE.MatchString(tool.Name) {
+				t.Errorf("tool %q: invalid name (must be kebab-case)", tool.Name)
 			}
 		}
 	})
@@ -84,6 +94,39 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 		}
 	})
 
+	// Spot-check get-replication-status — the tool that motivated this test (no e2e coverage).
+	t.Run("spot/get-replication-status", func(t *testing.T) {
+		tool := findTool(tools, "get-replication-status")
+		if tool == nil {
+			t.Fatal("tool not found")
+			return
+		}
+		step := findStep(tool, "replication")
+		if step == nil {
+			t.Fatal("step 'replication' not found")
+			return
+		}
+		if step.Operation != "monitor/getMsgVpn" {
+			t.Errorf("operation: got %q, want %q", step.Operation, "monitor/getMsgVpn")
+		}
+		selectArg, ok := step.Args["select"]
+		if !ok {
+			t.Fatal("args.select not present")
+			return
+		}
+		// Validate key replication fields are present in the comma-joined select string.
+		for _, field := range []string{
+			"replicationRole",
+			"replicationSyncEligible",
+			"replicationBridgeUp",
+			"replicationTransactionMode",
+		} {
+			if !strings.Contains(selectArg, field) {
+				t.Errorf("args.select missing %q", field)
+			}
+		}
+	})
+
 	// Spot-check a fan-out tool to catch YAML→struct decoding bugs in forEach/forEachKey fields.
 	t.Run("spot/list-vpns", func(t *testing.T) {
 		tool := findTool(tools, "list-vpns")
@@ -91,25 +134,16 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 			t.Fatal("tool not found")
 			return
 		}
-		if len(tool.Steps) < 2 {
-			t.Fatalf("got %d steps, want >= 2 (vpns + fan-out probe)", len(tool.Steps))
-		}
-		var fanoutStep *Step
-		for i := range tool.Steps {
-			if tool.Steps[i].ForEach != "" {
-				fanoutStep = &tool.Steps[i]
-				break
-			}
-		}
-		if fanoutStep == nil {
-			t.Fatal("no fan-out step found")
+		step := findStep(tool, "real-clients")
+		if step == nil {
+			t.Fatal("step 'real-clients' not found")
 			return
 		}
-		if fanoutStep.ForEach != "vpns" {
-			t.Errorf("forEach: got %q, want %q", fanoutStep.ForEach, "vpns")
+		if step.ForEach != "vpns" {
+			t.Errorf("forEach: got %q, want %q", step.ForEach, "vpns")
 		}
-		if fanoutStep.ForEachKey != "msgVpnName" {
-			t.Errorf("forEachKey: got %q, want %q", fanoutStep.ForEachKey, "msgVpnName")
+		if step.ForEachKey != "msgVpnName" {
+			t.Errorf("forEachKey: got %q, want %q", step.ForEachKey, "msgVpnName")
 		}
 	})
 }
