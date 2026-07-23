@@ -116,17 +116,19 @@ verify_bridge_state() {
     }
     assert_json_field "$body" ".data.enabled" "true" \
         "F8 [$label]: test-bridge enabled must be true" || return 1
-    assert_json_field "$body" ".data.inboundState" "ready-in-sync" \
-        "F8 [$label]: test-bridge inboundState must be ready-in-sync" || return 1
-    assert_json_field "$body" ".data.outboundState" "ready" \
-        "F8 [$label]: test-bridge outboundState must be ready" || return 1
+    assert_json_field "$body" ".data.inboundState" "$BRIDGE_HEALTHY_INBOUND_STATE" \
+        "F8 [$label]: test-bridge inboundState must be $BRIDGE_HEALTHY_INBOUND_STATE" || return 1
+    assert_json_field "$body" ".data.outboundState" "$BRIDGE_HEALTHY_OUTBOUND_STATE" \
+        "F8 [$label]: test-bridge outboundState must be $BRIDGE_HEALTHY_OUTBOUND_STATE" || return 1
 
     body=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/bridges/test-bridge-failing,auto") || {
         log_fail "F8 [$label]: GET bridges/test-bridge-failing,auto failed"
         return 1
     }
+    assert_json_field "$body" ".data.enabled" "true" \
+        "F8 [$label]: test-bridge-failing enabled must be true (down despite being enabled)" || return 1
     assert_json_field "$body" \
-        '.data.inboundState != "ready-in-sync" and .data.inboundState != "ready-subscribing" and .data.inboundState != "not-applicable"' "true" \
+        "$(bridge_inbound_unhealthy_jq '.data.inboundState')" "true" \
         "F8 [$label]: test-bridge-failing inboundState must not be healthy" || return 1
 
     body=$(semp_monitor_get "$broker_url" "msgVpns/$BROKER_VPN/bridges/test-bridge-disabled,auto") || {

@@ -137,6 +137,25 @@ F8_REMOTE_HOST_FROM_A="solace-e2e-mon-b"
 F8_REMOTE_HOST_FROM_B="solace-e2e-mon-a"
 F8_SMF_PORT=55555
 
+# Bridge health-state constants and predicate, mirroring bridgeInboundUpStates
+# / bridgeOutboundUpStates in list_bridges.go. Single source of truth for the
+# assertions in this file's verify_bridges_on plus verify-fixtures.sh and
+# test-monitoring-tools.sh (both source this file) — without it, three
+# hand-copied predicates could silently drift out of sync with a future change
+# to the server's classification and still pass.
+BRIDGE_HEALTHY_INBOUND_STATE="ready-in-sync"
+BRIDGE_HEALTHY_OUTBOUND_STATE="ready"
+
+# jq boolean fragment: true when the inboundState value at jq path $1 (e.g.
+# ".data.inboundState" or ".bridgeStatus.data.inboundState" — callers differ
+# on whether they're reading a raw SEMP body or an MCP tool response) is NOT
+# one of this server's healthy inbound states.
+bridge_inbound_unhealthy_jq() {
+    local path="$1"
+    printf '%s != "%s" and %s != "ready-subscribing" and %s != "not-applicable"' \
+        "$path" "$BRIDGE_HEALTHY_INBOUND_STATE" "$path" "$path"
+}
+
 # Creates three bridges on one broker, pointed at $remote_host (the sibling
 # broker's container hostname). Does NOT verify convergence — call
 # verify_bridges_on for both brokers only after create_bridges_on has run for
@@ -196,18 +215,30 @@ create_bridges_on() {
 # create_bridges_on has run for BOTH brokers — test-bridge's outboundState
 # depends on the peer's reciprocal bridge existing (lab-verified: a one-sided
 # bridge reports outboundState "not-applicable" until both sides are up).
+#
+# These three calls are bare (no `|| true`): a timeout here aborts
+# create_fixtures rather than degrading to a downstream test failure. That's
+# deliberate, not an oversight — it matches the same required-convergence
+# pattern already used by create_empty_enabled_vpn_on above (also bare) and
+# the RDP-failing-reason poll in e2e-common/lib.sh: the tool-level summary/
+# downCount assertions in test-monitoring-tools.sh depend on this exact state,
+# so failing loudly here (with a clear "which bridge, which broker" message)
+# beats a vaguer downstream assertion mismatch. The tradeoff is real —
+# bridges are the one cross-broker, two-sided handshake in this suite and so
+# the most timeout-prone fixture — but softening only this one call would
+# make it inconsistent with its same-file sibling rather than actually safer.
 verify_bridges_on() {
     local broker_url="$1"
     local label="$2"
     log_info "Verifying bridge fixtures visible on $label ..."
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/bridges/test-bridge,auto" \
-        30 '.data.inboundState == "ready-in-sync" and .data.outboundState == "ready"'
+        30 ".data.inboundState == \"$BRIDGE_HEALTHY_INBOUND_STATE\" and .data.outboundState == \"$BRIDGE_HEALTHY_OUTBOUND_STATE\""
     # No inboundFailureReason predicate here (it never populates for this
     # fixture — see create_bridges_on) — poll on the classification this
     # server's own down logic uses instead (matches
     # bridgeInboundUpStates/bridgeOutboundUpStates in list_bridges.go).
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/bridges/test-bridge-failing,auto" \
-        30 '.data.inboundState != "ready-in-sync" and .data.inboundState != "ready-subscribing" and .data.inboundState != "not-applicable"'
+        30 "$(bridge_inbound_unhealthy_jq '.data.inboundState')"
     verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/bridges/test-bridge-disabled,auto" \
         15 '.data.enabled == false'
 }

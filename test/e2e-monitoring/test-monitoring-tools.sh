@@ -1055,8 +1055,8 @@ test_list_bridges_pagination() {
     response=$(mcp_call_tool "list-bridges" \
         "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
     content=$(extract_content "$response")
-    assert_json_field "$content" '(.bridges.data | length) >= 3' "true" \
-        "list-bridges [$broker]: uncapped call must return all bridges" || return 1
+    assert_json_field "$content" '(.bridges.data | length) == 3' "true" \
+        "list-bridges [$broker]: uncapped call must return exactly the 3 F8 bridges" || return 1
     assert_json_field "$content" '.bridges.truncated' "false" \
         "list-bridges [$broker]: uncapped call must not be truncated" || return 1
 }
@@ -1101,10 +1101,10 @@ test_get_bridge_status_healthy() {
     content=$(extract_content "$response")
     assert_json_field "$content" '.bridgeStatus.data.enabled' "true" \
         "get-bridge-status [$broker]: test-bridge must be enabled" || return 1
-    assert_json_field "$content" '.bridgeStatus.data.inboundState' "ready-in-sync" \
-        "get-bridge-status [$broker]: test-bridge inboundState must be ready-in-sync" || return 1
-    assert_json_field "$content" '.bridgeStatus.data.outboundState' "ready" \
-        "get-bridge-status [$broker]: test-bridge outboundState must be ready" || return 1
+    assert_json_field "$content" '.bridgeStatus.data.inboundState' "$BRIDGE_HEALTHY_INBOUND_STATE" \
+        "get-bridge-status [$broker]: test-bridge inboundState must be $BRIDGE_HEALTHY_INBOUND_STATE" || return 1
+    assert_json_field "$content" '.bridgeStatus.data.outboundState' "$BRIDGE_HEALTHY_OUTBOUND_STATE" \
+        "get-bridge-status [$broker]: test-bridge outboundState must be $BRIDGE_HEALTHY_OUTBOUND_STATE" || return 1
 }
 
 test_get_bridge_status_failing() {
@@ -1116,7 +1116,7 @@ test_get_bridge_status_failing() {
     assert_json_field "$content" '.bridgeStatus.data.enabled' "true" \
         "get-bridge-status [$broker]: test-bridge-failing must be enabled (down despite being enabled)" || return 1
     assert_json_field "$content" \
-        '.bridgeStatus.data.inboundState != "ready-in-sync" and .bridgeStatus.data.inboundState != "ready-subscribing" and .bridgeStatus.data.inboundState != "not-applicable"' "true" \
+        "$(bridge_inbound_unhealthy_jq '.bridgeStatus.data.inboundState')" "true" \
         "get-bridge-status [$broker]: test-bridge-failing inboundState must not be healthy" || return 1
 }
 

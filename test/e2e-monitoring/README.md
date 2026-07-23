@@ -309,7 +309,7 @@ when it exits (for any reason — normal end, error, Ctrl-C, killed):
    termination signal, waits up to 5 seconds, then force-kills anything
    still running.
 3. **Delete broker fixtures** (`cleanup_fixtures` in `helpers.sh`).
-   Order: bindings → consumers → RDPs → queues → bridges → VPNs. Bridges have
+   Order: bindings → consumers → RDPs → queues → VPNs → bridges. Bridges have
    no ordering dependency on any other fixture (their delete cascades their
    own `remoteMsgVpns` sub-resource — see F8 above) — they're placed here
    only because that's where `create_bridges_on` was inserted.
