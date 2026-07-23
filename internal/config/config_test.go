@@ -631,6 +631,8 @@ mcp_client_auth:
   issuer: "https://idp.example.com"
   audience: "mcp"
   resource_url: "https://mcp.example.com/mcp"
+  tool_authorization:
+    enabled: false
 
 tls_terminated_upstream: true
 ` + oauthTLSMatrixBroker
@@ -655,6 +657,8 @@ mcp_client_auth:
   issuer: "https://idp.example.com"
   audience: "mcp"
   resource_url: "https://mcp.example.com/mcp"
+  tool_authorization:
+    enabled: false
 
 tls_cert_file: "/tmp/cert.pem"
 tls_key_file: "/tmp/key.pem"
@@ -680,6 +684,8 @@ mcp_client_auth:
   issuer: "https://idp.example.com"
   audience: "mcp"
   resource_url: "https://mcp.example.com/mcp"
+  tool_authorization:
+    enabled: false
 
 tls_cert_file: "/tmp/cert.pem"
 tls_key_file: "/tmp/key.pem"
@@ -1167,6 +1173,8 @@ mcp_client_auth:
   issuer: "https://idp.example.com"
   audience: "solace-mcp"
   resource_url: "https://mcp.example.com"
+  tool_authorization:
+    enabled: false
 
 allow_insecure_broker_tls: true
 tls_terminated_upstream: true
@@ -2102,6 +2110,8 @@ func TestLoadConfig_AuthMode_CaseInsensitive(t *testing.T) {
 				extra = `  issuer: "https://idp.example.com"
   audience: "mcp"
   resource_url: "https://mcp.example.com/mcp"
+  tool_authorization:
+    enabled: false
 
 tls_terminated_upstream: true`
 			}
@@ -3751,35 +3761,6 @@ brokers:
 	}
 }
 
-// TestLoadConfig_ToolAuthorization_FeatureFlagOff confirms that when
-// ENABLE_TOOL_AUTHORIZATION is unset (production default), the
-// tool_authorization YAML block is parsed but defaults and validation
-// are skipped entirely. Catches regressions where the
-// toolAuthorizationFeatureEnabled() gate is accidentally removed.
-func TestLoadConfig_ToolAuthorization_FeatureFlagOff(t *testing.T) {
-	// Deliberately NOT setting ENABLE_TOOL_AUTHORIZATION.
-	yaml := `
-mcp_client_auth:
-  mode: oauth
-  issuer: "https://idp.example.com"
-  audience: "mcp"
-  resource_url: "https://mcp.example.com/mcp"
-  tool_authorization: {}
-brokers:
-  dev:
-    url: "https://broker.example.com:943"
-    auth:
-      mode: basic
-      username: admin
-      password: secret
-tls_terminated_upstream: true
-`
-	_, err := LoadConfig(writeTemp(t, yaml))
-	if err != nil {
-		t.Fatalf("with feature flag off, config should load without error, got: %v", err)
-	}
-}
-
 // TestServerConfig_Hop2OAuthActive pins the four cases that define the
 // method's contract: all three preconditions true → returns true; and each
 // precondition individually flipped false → returns false. Together these
@@ -3897,7 +3878,7 @@ func listenAddressYAML(mode, listenLine, overrideLine string) string {
 	case "static":
 		authBlock = "mcp_client_auth:\n  mode: static\n  dev_token: test\n"
 	case "oauth":
-		authBlock = "mcp_client_auth:\n  mode: oauth\n  issuer: \"https://idp.example.com\"\n  audience: \"mcp\"\n  resource_url: \"https://mcp.example.com/mcp\"\ntls_terminated_upstream: true\n"
+		authBlock = "mcp_client_auth:\n  mode: oauth\n  issuer: \"https://idp.example.com\"\n  audience: \"mcp\"\n  resource_url: \"https://mcp.example.com/mcp\"\n  tool_authorization:\n    enabled: false\ntls_terminated_upstream: true\n"
 	default:
 		authBlock = "mcp_client_auth:\n  mode: " + mode + "\n"
 	}

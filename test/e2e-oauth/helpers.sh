@@ -103,6 +103,10 @@ mcp_client_auth:
   issuer: "${KEYCLOAK_ISSUER}"
   audience: "${HOP1_AUDIENCE}"
   resource_url: "https://localhost:${MCP_PORT}/mcp"
+  # This suite tests broker OAuth (hop 2), not tool authorization.
+  # Explicit opt-out is required in oauth mode.
+  tool_authorization:
+    enabled: false
 
 broker_oauth:
   idp_token_endpoint: "${KEYCLOAK_TOKEN_ENDPOINT}"

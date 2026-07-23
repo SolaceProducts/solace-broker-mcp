@@ -203,7 +203,7 @@ These tools create, update, and delete broker configuration objects via the SEMP
 
 ### Authentication
 
-The server supports open access, static token, and OAuth/OIDC authentication for MCP clients, and basic auth or bearer token for broker connections. See the [Authentication](authentication.md) guide for setup instructions.
+The server supports open access, static token, and OAuth/OIDC authentication for MCP clients, and basic auth or bearer token for broker connections. Under OAuth mode, the server also supports claim-based tool authorization — gating individual MCP tools by the caller's group or role memberships — which must be opted in or out explicitly. See the [Authentication](authentication.md) guide for setup instructions and the [Tool Authorization](configuration.md#tool-authorization) reference for the policy schema and audit-log shape.
 
 ## Deployment Targets
 

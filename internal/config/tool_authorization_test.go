@@ -22,13 +22,6 @@ import (
 	"testing"
 )
 
-// enableToolAuthorizationFlag sets ENABLE_TOOL_AUTHORIZATION=true for the
-// duration of the test so the feature-gated validation and defaults fire.
-func enableToolAuthorizationFlag(t *testing.T) {
-	t.Helper()
-	t.Setenv(envEnableToolAuthorization, "true")
-}
-
 // oauthBaseYAML is the minimal valid oauth scaffold shared by tool_authorization
 // tests. Every test appends its tool_authorization block under mcp_client_auth.
 const oauthBaseYAML = `
@@ -46,7 +39,6 @@ tls_terminated_upstream: true
 // applyDefaults synthesizes &ToolAuthorizationConfig{Enabled: nil} so the
 // validator fires requiring enabled to be set explicitly.
 func TestToolAuthorization_OmittedBlockSynthesizedInOAuthMode(t *testing.T) {
-	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth
@@ -67,7 +59,6 @@ mcp_client_auth:
 
 // enabled: false alone is a legal opt-out — no other fields required.
 func TestToolAuthorization_EnabledFalseAloneIsLegal(t *testing.T) {
-	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth
@@ -92,7 +83,6 @@ mcp_client_auth:
 
 // enabled: false with populated fields loads; structural rules still apply.
 func TestToolAuthorization_EnabledFalseWithPopulatedFieldsLoads(t *testing.T) {
-	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth
@@ -128,7 +118,6 @@ mcp_client_auth:
 
 // Omitted groups_claim_name defaults to pointer-to-"groups".
 func TestToolAuthorization_OmittedGroupsClaimNameDefaultsToGroups(t *testing.T) {
-	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth
@@ -157,7 +146,6 @@ mcp_client_auth:
 
 // Explicit blank groups_claim_name values are rejected.
 func TestToolAuthorization_BlankGroupsClaimNameRejected(t *testing.T) {
-	enableToolAuthorizationFlag(t)
 	const wantErr = `mcp_client_auth.tool_authorization.groups_claim_name must be a non-blank string when set; omit the field to accept the default ("groups")`
 
 	cases := []struct {
@@ -194,7 +182,6 @@ mcp_client_auth:
 
 // enabled: true with empty access_level_groups is rejected.
 func TestToolAuthorization_EnabledTrueEmptyAccessLevelGroupsRejected(t *testing.T) {
-	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth
@@ -217,7 +204,6 @@ mcp_client_auth:
 
 // Case-sensitive group names are preserved through load.
 func TestToolAuthorization_CaseSensitiveGroupNamesPreserved(t *testing.T) {
-	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth
@@ -251,7 +237,6 @@ mcp_client_auth:
 
 // Group name with trailing whitespace is accepted verbatim.
 func TestToolAuthorization_WhitespaceInGroupNamePreservedVerbatim(t *testing.T) {
-	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth
@@ -281,7 +266,6 @@ mcp_client_auth:
 
 // Empty and whitespace-only group names are rejected.
 func TestToolAuthorization_EmptyAndWhitespaceOnlyGroupNamesRejected(t *testing.T) {
-	enableToolAuthorizationFlag(t)
 	const wantErr = "mcp_client_auth.tool_authorization.access_level_groups: group name cannot be empty or whitespace-only"
 
 	cases := []struct {
@@ -326,7 +310,6 @@ mcp_client_auth:
 // it is a syntactically clean string, and unknown-tool detection is the
 // registry check's job.
 func TestToolAuthorization_UncleanToolNamesRejected(t *testing.T) {
-	enableToolAuthorizationFlag(t)
 
 	const wantErrTmpl = `mcp_client_auth.tool_authorization.access_level_groups: tool name at "Ops" [%s] must be non-empty and have no leading or trailing whitespace`
 
@@ -423,7 +406,6 @@ mcp_client_auth:
 // index is bad. Every group with offenders is reported (accumulation
 // across groups is preserved).
 func TestToolAuthorization_MultipleUncleanToolNamesCollapsedPerGroup(t *testing.T) {
-	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth
@@ -463,7 +445,6 @@ mcp_client_auth:
 // LoadConfig. The "unset" (nil) case cannot survive validation — it is covered
 // by TestToolAuthorization_OAuthModeEnabledOmittedRejects.
 func TestToolAuthorization_LogValueEnabledRendering(t *testing.T) {
-	enableToolAuthorizationFlag(t)
 	cases := []struct {
 		name        string
 		enabledYAML string
@@ -517,7 +498,6 @@ mcp_client_auth:
 
 // LogValue renders groups_claim_name verbatim.
 func TestToolAuthorization_LogValueGroupsClaimNameVerbatim(t *testing.T) {
-	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth
@@ -546,7 +526,6 @@ mcp_client_auth:
 
 // LogValue omits access_level_groups from the emitted slog record.
 func TestToolAuthorization_LogValueOmitsAccessLevelGroups(t *testing.T) {
-	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth
@@ -577,7 +556,6 @@ mcp_client_auth:
 
 // tool_authorization under non-oauth modes is rejected.
 func TestToolAuthorization_NonOAuthModeWithBlockRejects(t *testing.T) {
-	enableToolAuthorizationFlag(t)
 	cases := []struct {
 		name     string
 		mode     string
@@ -691,7 +669,6 @@ func TestToolAuthorizationEnabled(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			enableToolAuthorizationFlag(t)
 			got := ToolAuthorizationEnabled(tc.cfg)
 			if got != tc.want {
 				t.Errorf("ToolAuthorizationEnabled() = %v, want %v", got, tc.want)
@@ -700,22 +677,8 @@ func TestToolAuthorizationEnabled(t *testing.T) {
 	}
 }
 
-func TestToolAuthorizationEnabled_featureFlagOff(t *testing.T) {
-	trueVal := true
-	cfg := &ServerConfig{
-		MCPClientAuth: MCPClientAuthConfig{
-			Mode:              AuthModeOAuth,
-			ToolAuthorization: &ToolAuthorizationConfig{Enabled: &trueVal},
-		},
-	}
-	if ToolAuthorizationEnabled(cfg) {
-		t.Error("ToolAuthorizationEnabled should return false when feature flag is off, even if config shape matches")
-	}
-}
-
 // In oauth mode, omitting enabled from the block is rejected.
 func TestToolAuthorization_OAuthModeEnabledOmittedRejects(t *testing.T) {
-	enableToolAuthorizationFlag(t)
 	yaml := `
 mcp_client_auth:
   mode: oauth

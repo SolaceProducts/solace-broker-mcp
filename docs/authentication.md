@@ -11,6 +11,7 @@ The Solace Event Broker MCP Server supports three authentication modes for MCP c
   - [Step 1: Set up the identity provider](#step-1-set-up-the-identity-provider)
   - [Step 2: Configure the MCP server](#step-2-configure-the-mcp-server)
   - [TLS for the MCP server's own listener](#tls-for-the-mcp-servers-own-listener)
+  - [Tool authorization (claim-based RBAC)](#tool-authorization-claim-based-rbac)
   - [Step 3: Start the MCP server](#step-3-start-the-mcp-server)
   - [Step 4: Add the server to Claude Code](#step-4-add-the-server-to-claude-code)
 - [Troubleshooting](#troubleshooting)
@@ -294,6 +295,71 @@ itself and `tls_terminated_upstream` is ignored (no plaintext, no `WARN`).
 Providing **neither** is a fatal config error. The setting is ignored entirely in
 the `disabled`/`static` dev modes.
 
+### Tool authorization (claim-based RBAC)
+
+Under `mode: oauth`, the server can gate individual MCP tools by the caller's
+group or role memberships. Configure a claim in the IdP that lists these
+memberships and map each name to the tools it may invoke; the server compares
+every incoming tool call against the policy and denies calls whose memberships
+do not grant that tool. Tool authorization is only supported under `mode: oauth`
+— a `tool_authorization` block under `mode: static` or `mode: disabled` is
+refused at startup.
+
+**Every oauth deployment must opt in or out explicitly.** The `tool_authorization`
+block is required under `mode: oauth` and its `enabled` field must be set to
+`true` or `false` — there is no default. This forces a deliberate choice on
+tool-level access control instead of silently allowing everything.
+
+At the IdP, emit a claim in each access token that lists the caller's group or
+role memberships. In Keycloak this is a **Group Membership** (or **Realm Roles**)
+mapper on the same scope you used for the audience mapper — mapping the claim
+name to whatever you choose to set as `groups_claim_name` (the default is
+`groups`, matching the broker's own OAuth profile).
+
+At the MCP server, add a `tool_authorization` block under `mcp_client_auth`. To
+turn the feature ON, set `enabled: true` and populate `access_level_groups`:
+
+```yaml
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://your-idp.example.com/realms/your-realm"
+  audience: "solace-mcp-server"
+  resource_url: "https://your-mcp-server.example.com/mcp"
+  tool_authorization:
+    enabled: true
+    groups_claim_name: "groups"
+    access_level_groups:
+      Ops:
+        - list-vpns
+        - list-queues
+        - get-queue-metrics
+      Admin:
+        - list-vpns
+        - list-queues
+        - get-queue-metrics
+        - delete-queue-messages
+```
+
+To turn the feature OFF (every authenticated caller can invoke any tool), the
+block still has to be present — set only `enabled: false` and omit the rest:
+
+```yaml
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://your-idp.example.com/realms/your-realm"
+  audience: "solace-mcp-server"
+  resource_url: "https://your-mcp-server.example.com/mcp"
+  tool_authorization:
+    enabled: false
+```
+
+`list-brokers` is structurally exempt — every authenticated caller can invoke it
+regardless of their groups, so a caller can always discover which broker aliases
+exist. See [Tool authorization](configuration.md#tool-authorization) in the
+configuration reference for the full field description, the audit-log shape
+emitted on each decision, and the meaning of the `decision_reason` codes
+(`missing_claim`, `not_permitted`).
+
 ### Step 3: Start the MCP Server
 
 Run the server:
@@ -375,10 +441,48 @@ A browser window opens on first use for user login. The IdP must support anonymo
    │              │              │              │
 ```
 
+**Authentication flow (`mode: oauth` with `tool_authorization.enabled: true`):**
+
+```
+ Agent          MCP Server     IdP            Broker
+   │              │              │              │
+   │───── 1 ──────▶              │              │       1. MCP request (no token)
+   ◀───── 2 ──────│              │              │       2. 401 + resource-metadata pointer
+   │───── 3 ──────▶              │              │       3. GET /.well-known/oauth-protected-resource
+   │───────────── 4 ─────────────▶              │       4. Register (DCR) or use pre-registered client
+   ◀───────────── 5 ─────────────▶              │       5. Browser login: Authorization Code + PKCE
+   ◀───────────── 6 ─────────────│              │       6. Access token (JWT with memberships in
+   │              │              │              │          `groups_claim_name`, aud = configured
+   │              │              │              │          audience)
+   │───── 7 ──────▶              │              │       7. MCP request + Bearer JWT
+   │              │───── 8 ──────▶              │       8. Validate JWT — fetch JWKS (sig, iss, aud, exp)
+   │              │──┐           │              │       9. Read `groups_claim_name` from JWT
+   │              │  │ 9         │              │          → run policy: is tool granted?
+   │              │◀─┘           │              │          → allow → emit `tool authorization` INFO,
+   │              │              │              │            continue to step 10
+   │              │              │              │          → deny → emit `tool authorization` WARN,
+   │              │              │              │            jump straight to step 12
+   │              │              │              │            with a "not authorized" error
+   │              │───────────── 10 ────────────▶       10. (Allow path only) Tool call → SEMP
+   │              ◀──────────── 11 ─────────────│       11. (Allow path only) SEMP response
+   ◀──── 12 ──────│              │              │       12. Tool result — real result on allow,
+   │              │              │              │           "You are not authorized to use this tool."
+   │              │              │              │           error on deny
+   │              │              │              │
+```
+
+> **`list-brokers` skips the step-9 gate** — it is structurally exempt and
+> answers locally from the server's configured broker list without a step-9
+> policy check or a step-10/11 SEMP call. The audit line for a `list-brokers`
+> call is the regular `tool invoked` line only; no `tool authorization` line
+> is emitted. This lets a caller always discover configured broker aliases
+> before invoking any other tool.
+
 > **Two independent auth legs.** Client→server auth (steps 1–8, the JWT above) is
-> distinct from server→broker auth (step 9), which uses each broker's configured
-> `auth.mode` (`basic` or `bearer`). Broker-bound OAuth via RFC 8693 token exchange
-> (the `broker_oauth:` config block) is **schema-only** in the current release and
+> distinct from server→broker auth (step 9 or 10 depending on whether tool
+> authorization is enabled), which uses each broker's configured `auth.mode`
+> (`basic` or `bearer`). Broker-bound OAuth via RFC 8693 token exchange (the
+> `broker_oauth:` config block) is **schema-only** in the current release and
 > not yet wired — see the [CHANGELOG](../CHANGELOG.md).
 
 The numbered steps in detail:
@@ -469,3 +573,12 @@ This error occurs during Dynamic Client Registration when the IdP rejects the re
 - The `--client-id` does not match any client in the IdP
 - If using a confidential client, the client secret may be incorrect — re-add the server with `claude mcp add ... --client-secret` to re-enter it
 - Verify the client is not disabled or expired in the IdP
+
+### "You are not authorized to use this tool." from a valid user (Mode 3)
+
+This is a tool-authorization denial. The token authenticated successfully, but the server's claim-based policy did not grant the tool. The caller-facing message is deliberately generic — grep the server logs for a `msg: "tool authorization"` line at the same `correlation_id` to see why:
+
+- `decision_reason: "missing_claim"` with `expected_claim: "<name>"` — the token had no claim by that name at the top level of the JWT. Common causes, in order of likelihood: (a) the IdP's memberships mapper is not applied to the caller's client scope (fix at the IdP); (b) `groups_claim_name` in the server config does not match the claim the IdP actually emits (fix at the server); (c) the IdP emits memberships inside a nested object (e.g. `authorization.roles`) — the server only reads top-level claims, so flatten the memberships into a top-level claim with an IdP mapper.
+- `decision_reason: "not_permitted"` with `matched_groups: []` — the claim was present but none of the caller's memberships grant the tool. Fix by adding the tool to a group the caller is a member of, or adding the caller to a group that already grants it.
+
+`list-brokers` is exempt and will always succeed for any authenticated caller — a successful `list-brokers` call in the same session as a denied tool call confirms the token itself is valid and it is the tool-authorization policy that is denying. See [Tool authorization](configuration.md#tool-authorization) for the full audit-line schema.

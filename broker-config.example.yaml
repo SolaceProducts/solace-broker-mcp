@@ -59,6 +59,42 @@ mcp_client_auth:
   audience: "mcp-server"
   resource_url: "https://mcp.example.com/mcp"
 
+  # Tool authorization (RBAC). REQUIRED under mode: oauth — you must opt in or
+  # out explicitly with the `enabled` field. A tool_authorization block under
+  # mode: static or mode: disabled is rejected at startup.
+  #
+  # Turn it OFF (all authenticated callers can invoke any tool):
+  #
+  # tool_authorization:
+  #   enabled: false
+  #
+  # Turn it ON — gates which MCP tools a caller may invoke based on the groups
+  # carried by their access token:
+  #
+  # tool_authorization:
+  #   enabled: true
+  #   groups_claim_name: "groups"      # optional; defaults to "groups". Must
+  #                                    # match the claim your IdP emits.
+  #   access_level_groups:             # required when enabled: true
+  #     Ops:
+  #       - list-vpns
+  #       - list-queues
+  #       - get-queue-metrics
+  #     Admin:                          # examples only — to grant every tool
+  #       - list-vpns                   # to a group, list every tool name
+  #       - list-queues                 # explicitly (no wildcard).
+  #       - get-queue-metrics
+  #       - delete-queue-messages
+  #
+  # access_level_groups is a map from group name (as it appears in the token)
+  # to the list of MCP tool names that group grants. A caller is allowed to
+  # invoke a tool when at least one of their groups grants it (union
+  # semantics). Every gated tool that no group grants is unreachable.
+  #
+  # list-brokers is structurally exempt — every authenticated caller can call
+  # it regardless of their groups, since a caller needs it to discover which
+  # broker aliases exist before invoking any other tool.
+
 # Development examples (uncomment one and comment out the oauth block above):
 #
 # mcp_client_auth:
