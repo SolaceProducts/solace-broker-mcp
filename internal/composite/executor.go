@@ -704,18 +704,19 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 	// op.BodyFields is nil when the schema couldn't be introspected, in which
 	// case we skip the check and defer to the broker as before.
 	//
-	// A field can be unknown for two reasons: a wrong/typo'd name (the common
-	// case), or a genuinely new attribute on a broker that is newer than the
-	// embedded schema. The message names both and reports the schema version so
-	// the reader can tell which case they're in.
+	// A field can be unknown for three reasons: a wrong/typo'd name, a tool-only
+	// param that should be declared as path/query/header, or a genuinely new
+	// attribute on a broker newer than the embedded schema. The caller gets a
+	// terse error naming all three; operators get the schema version in a
+	// structured log line for fleet-level correlation.
 	if op.BodyFields != nil {
 		for field := range body {
 			if _, known := op.BodyFields[field]; !known {
-				schema := "embedded SEMP schema"
-				if op.SchemaVersion != "" {
-					schema += ": broker v" + op.SchemaVersion
-				}
-				return nil, fmt.Errorf("request body field %q is not a known attribute of operation %q (%s). Check for the correct name — or, if %q is a newly released broker attribute, try a newer version of the MCP server", field, op.ID, schema, field)
+				slog.Debug("rejecting unknown body field",
+					"field", field,
+					"operation", op.ID,
+					"schemaVersion", op.SchemaVersion)
+				return nil, fmt.Errorf("request body field %q is not a known attribute of operation %q; check the name, ensure tool-only params are declared as path/query/header, or try a newer MCP server", field, op.ID)
 			}
 		}
 	}
