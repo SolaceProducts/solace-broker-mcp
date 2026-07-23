@@ -31,13 +31,21 @@ takes `v="0.6.0"`; keep the **`v`-prefixed** form (`v0.6.0`) for the git tag and
 segments. Never pass the raw argument through un-normalized (a `v0.6.0` input must not yield
 `## [v0.6.0]` or a `vv0.6.0` tag).
 
-**Preconditions:** `gh` must be authenticated — run `gh auth status` up front; if it fails, stop and
-tell the operator to run `gh auth login`. Every phase below depends on `gh`.
+**Preconditions:** run `gh auth status` up front. Phases B–E (open/watch the PR, tag, report)
+**require** an authenticated `gh` — if it's unavailable, stop and have the operator run
+`gh auth login` before those phases. Phase A2 alone can degrade to a `git log` fallback when `gh` is
+missing (less precise — see A2), so preparation may proceed unauthenticated, but the release cannot
+be cut without `gh`.
 
 ## Phase A — Prepare the changelog
 
-**A1. Sync and preconditions.** First `git fetch origin main --tags` so every check below runs
-against fresh remote state, not a stale local `main`. Warn if the working tree is dirty.
+**A1. Sync and preconditions.** First `git fetch origin main --tags` so every step runs against
+fresh remote state. Warn if the working tree is dirty. **The promotion must be based on
+`origin/main`, not the local checkout** — `git fetch` updates the `origin/main` ref but not your
+local `main`/working tree, so a local `main` that's behind origin would make A4 promote a stale
+`CHANGELOG.md` and silently drop `[Unreleased]` entries merged since. The release branch is
+therefore created *from the fetched remote tip* (see the clean-start path below), and A2–A4 run on
+that branch.
 
 `vPREV` (for the compare range) is the highest **stable** tag strictly *below* the target version —
 not the global newest tag. Filter out pre-release tags (those containing `-`) and any tag ≥ the
@@ -56,16 +64,24 @@ Check, in order:
 - An open PR from `release/vX.Y.Z` (`gh pr list --head "release/vX.Y.Z" --state open`) → resume the
   Phase C watch on it.
 - A `release/vX.Y.Z` branch exists (local or remote) but no PR → push it and open the PR (Phase B).
-- None of the above → start clean at A2.
+- None of the above → create the release branch from the fresh remote tip
+  (`git switch -c release/vX.Y.Z origin/main`) so promotion runs on the latest `main`, then start at A2.
 
-**A2. Gap detection + auto-draft.** Enumerate PRs merged since `vPREV`
-(`gh pr list --base main --state merged --json number,title,mergedAt,headRefName,files`, kept if
-merged after `git log -1 --format=%cI vPREV`; fall back to `git log vPREV..main --format=%s%n%b`
-if `gh` is unavailable — degrade, don't fail). Keep only PRs hitting **production surface**, using
-the exact filter from `.claude/hooks/changelog-reminder.sh`:
+**A2. Gap detection + auto-draft.** Enumerate PRs merged since `vPREV`:
 ```
-grep -E '^(internal/config/|internal/tools/|internal/composite/definitions/tools\.yaml)' \
-  | grep -v '_test\.go$'
+gh pr list --base main --state merged --limit 500 \
+  --json number,title,mergedAt,headRefName,files
+```
+The explicit `--limit 500` is **required** — `gh`'s default is 30, and a release window wider than
+that would silently drop older merged PRs and miss their gaps (the exact failure this phase exists to
+catch). Keep those merged after `git log -1 --format=%cI vPREV`. If `gh` is unavailable, fall back to
+`git log vPREV..origin/main --format=%s%n%b` — this degrades gracefully but is less precise, so
+prefer the authenticated `gh` path (see Preconditions). Keep only PRs hitting **production surface**, filtered
+with the single source of truth shared by the reminder hook and CI gate — source it, never re-embed
+the pattern:
+```
+source .github/scripts/production-surface.sh
+grep -E "$SURFACE_RE" | grep -v "$SURFACE_TEST_EXCLUDE"
 ```
 Cross-check each qualifying PR's `SOL-XXXXX` against the `Tracked under SOL-…` trailers in
 `[Unreleased]`. For each gap, invoke the **`/changelog`** skill (Skill tool) with that PR's range to
@@ -84,10 +100,11 @@ contents per `RELEASING.md` (pre-1.0: any `- **BREAKING**:` → MINOR; new **Add
 - Touch nothing else — no existing bullets, and not the bottom `## Release Process` / `##
   Versioning` sections.
 
-**A5. Verify the promotion.** The release gate only checks that the version block is non-empty, so
-assert the rest by hand before proceeding:
-- `.github/scripts/extract-release-notes.sh vX.Y.Z /tmp/release-notes-dryrun.md` → non-empty
-  `## [X.Y.Z]` block.
+**A5. Verify the promotion.** The release gate only fails when the version *section is missing* — a
+heading-only block with no entries still passes it — so assert the rest by hand before proceeding:
+- `.github/scripts/extract-release-notes.sh vX.Y.Z /tmp/release-notes-dryrun.md` succeeds **and** the
+  extracted block contains at least one real entry (a line starting with `- `), not just the
+  `## [X.Y.Z]` heading.
 - A fresh `## [Unreleased]` heading still exists above the dated block (dropping it silently breaks
   the next cycle's gap detection and the changelog hook).
 - The `## Links` block has a well-formed `[Unreleased]: …/compare/vX.Y.Z...HEAD` and a new
@@ -97,7 +114,8 @@ If any check fails, the promotion is malformed — fix before proceeding.
 
 ## Phase B — Open the prepare-release PR
 
-- Branch off `main`: `git switch -c release/vX.Y.Z` (never commit release changes on `main`).
+- The `release/vX.Y.Z` branch was already created from `origin/main` in A1 (never commit release
+  changes on `main` itself) — confirm you're on it with the promotion staged.
 - Commit only `CHANGELOG.md`: `Prepare release vX.Y.Z`, ending the message with the
   `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>` trailer.
 - Push and open the PR with `gh pr create`, base `main`, body ending with the
@@ -128,13 +146,15 @@ The merge is the go-ahead, but still verify the hard gates before pushing. `MERG
 
 - `git fetch origin main --tags`.
 - **Tag-exists guard — distinguish remote from local-only.** If `vX.Y.Z` is on the remote
-  (`git ls-remote --tags origin "vX.Y.Z"` non-empty) → the release was already cut; stop and roll
-  forward with the next PATCH (tags are immutable). If it exists **locally only** (`git tag --list`
-  matches but the remote does not) → a previous push failed *after* tagging; do **not** roll forward
-  — just re-run `git push origin vX.Y.Z` to finish, then go to Phase E.
+  (`git ls-remote --tags origin "vX.Y.Z"` non-empty) → this version is already released; tags are
+  immutable, so do **not** re-tag — go to Phase E and report the existing release (matching A1's
+  resume behavior). Shipping further changes needs a *new* version, i.e. a fresh `/cut-release`. If
+  the tag exists **locally only** (`git tag --list` matches but the remote does not) → a previous
+  push failed *after* tagging; re-run `git push origin vX.Y.Z` to finish, then go to Phase E.
 - **Verify `origin/main` carries the dated block** — extract from the *remote* branch and refuse if
-  empty (the promotion did not actually merge). Substitute the **bare** version for `v=` (e.g.
-  `v="0.6.0"`, never `v0.6.0`):
+  the block is empty **or contains no entry line (`^- `)**: a heading-only block still passes the
+  release gate but ships empty notes, and usually means the promotion did not actually merge.
+  Substitute the **bare** version for `v=` (e.g. `v="0.6.0"`, never `v0.6.0`):
   ```
   git show origin/main:CHANGELOG.md | awk -v v="0.6.0" '
     BEGIN { gsub(/\./, "\\.", v) }
@@ -175,13 +195,13 @@ The merge is the go-ahead, but still verify the hard gates before pushing. `MERG
 
 - One human gate only: reviewing/merging the changelog PR. Never merge the PR yourself.
 - Never invent a SOL ticket number — halt on any `SOL-????` placeholder (Phase A2).
-- Reuse the exact production-surface filter from `.claude/hooks/changelog-reminder.sh` — keep it in
-  sync with that hook and `.github/scripts/changelog-check.sh` (the CI gate) if the surface changes.
+- Source the production-surface pattern from `.github/scripts/production-surface.sh` — the single
+  source of truth shared with the reminder hook and CI gate. Never re-embed the regex.
 - Only edit the `[Unreleased]` heading, the new dated block, and the `## Links` lines in
   `CHANGELOG.md`. Never rewrite existing bullets or the bottom `## Release Process` / `##
   Versioning` sections.
-- Never reuse or force-update a tag; never tag when the tagged commit lacks the dated block on
-  `origin/main` or its `build-and-test` run is not `success` (Phase D).
+- Never reuse or force-update a tag; never tag when the tagged commit's `origin/main` block is
+  missing or entry-less, or its `build-and-test` run is not `success` (Phase D).
 - Tag the exact merge commit captured in Phase C, verified to be an ancestor of `origin/main` —
   never the branch tip or local `HEAD`.
 - Do not modify the `/changelog` skill — invoke it unchanged for gap drafting.

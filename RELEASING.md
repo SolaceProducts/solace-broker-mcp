@@ -92,6 +92,11 @@ Pre-release tags (`v0.4.0-beta.1`) and the `:edge`/`:alpha`/`:beta` pointers fol
 
 The manual steps around the automated workflow.
 
+> The `/cut-release` skill (`.claude/skills/cut-release/SKILL.md`) automates this runbook
+> step-for-step — promote `[Unreleased]` in a prepare-release PR, tag the merge commit, verify the
+> run. Prefer it over doing these by hand; the steps below are the contract it follows and the
+> manual fallback.
+
 Before tagging:
 
 1. Confirm `main` is green: `gh run list --branch main --limit 1`.
