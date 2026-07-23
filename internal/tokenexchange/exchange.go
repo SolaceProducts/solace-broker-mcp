@@ -22,6 +22,7 @@ import (
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/idpclient"
 	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
+	"github.com/sony/gobreaker/v2"
 )
 
 // Exchange performs an RFC 8693 token exchange against the configured IdP.
@@ -60,44 +61,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	// is per-exchange and stays inside with the Put.
 	start := e.nowFunc()
 	v, err, _ := e.group.Do(key, func() (interface{}, error) {
-		// Detach from the caller's context so one caller's cancellation
-		// does not abort the shared IdP call for all singleflight waiters.
-		// The explicit timeout bounds the whole retry chain independently
-		// — httpClient.Timeout bounds each attempt, chainDeadline bounds
-		// attempts + backoffs together.
-		exchCtx, cancel := context.WithTimeout(context.Background(), e.chainDeadline)
-		defer cancel()
-
-		// Attach an attempts counter so the transport wrapper inside
-		// NewRetryingHTTPClient increments it on every attempt. We read
-		// it back after doExchange returns to distinguish a one-shot
-		// transport failure from a retries-exhausted one. Nil-safe: if
-		// httpClient isn't the retrying variant (tests with a plain
-		// *http.Client), the counter stays 0 and no rewrap fires.
-		exchCtx, attempts := idpclient.WithAttemptsCounter(exchCtx)
-
-		tok, err := e.doExchange(exchCtx, input)
-		if err != nil {
-			return nil, e.classifyRetryOutcome(exchCtx, err, attempts(), input.BrokerAlias)
-		}
-
-		if n := attempts(); n > 1 {
-			slog.DebugContext(exchCtx, "token exchange retried",
-				slog.String("broker", input.BrokerAlias),
-				slog.Int("attempts", n))
-		}
-
-		pr, putErr := e.cache.Put(exchCtx, key, cache.CachedCredential{
-			Value:     tok.Value,
-			ExpiresAt: tok.ExpiresAt,
-		})
-		if putErr != nil {
-			slog.WarnContext(exchCtx, "token cache put failed", "broker", input.BrokerAlias, "error", putErr)
-		} else {
-			slog.Log(exchCtx, pr.Status.Level(), "token cache put", "broker", input.BrokerAlias, "status", pr.Status)
-		}
-
-		return tok, nil
+		return e.runProtectedExchange(key, input)
 	})
 	elapsed := e.nowFunc().Sub(start)
 
@@ -105,6 +69,11 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 		return nil, ctxErr
 	}
 	if err != nil {
+		// Map the breaker's open-state rejection (returned by Execute
+		// without the func running) onto our own sentinel before
+		// enrichment, so upper layers see ErrExchangeCircuitOpen rather
+		// than a raw gobreaker error.
+		err = mapCircuitOpen(err)
 		var exchErr *ExchangeError
 		if errors.As(err, &exchErr) {
 			enriched := *exchErr
@@ -124,6 +93,81 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 		slog.Duration("exchange_elapsed", elapsed))
 
 	return tok, nil
+}
+
+// runProtectedExchange runs one logical exchange under the circuit breaker.
+// The breaker wraps the whole IdP-facing section — retries, classification,
+// and the cache Put — so it records exactly ONE outcome per logical exchange
+// regardless of how many HTTP attempts the retry loop made, and observes the
+// CLASSIFIED error (so IsSuccessful/IsExcluded see the right FailureClass).
+//
+// It runs inside the singleflight func, so only the burst winner reaches the
+// breaker — concurrent identical callers share the winner's result and do not
+// each record an outcome. When the breaker is disabled (nil), the same section
+// runs directly; retries and classification are unaffected.
+func (e *Exchanger) runProtectedExchange(key string, input ExchangeInput) (*Token, error) {
+	if e.breaker == nil {
+		return e.runExchangeOnce(key, input)
+	}
+	return e.breaker.Execute(func() (*Token, error) {
+		return e.runExchangeOnce(key, input)
+	})
+}
+
+// runExchangeOnce performs the detached, retry-bounded IdP call, classifies the
+// outcome, and caches a success. This is the unit the breaker measures.
+func (e *Exchanger) runExchangeOnce(key string, input ExchangeInput) (*Token, error) {
+	// Detach from the caller's context so one caller's cancellation does not
+	// abort the shared IdP call for all singleflight waiters. The explicit
+	// timeout bounds the whole retry chain independently — httpClient.Timeout
+	// bounds each attempt, chainDeadline bounds attempts + backoffs together.
+	exchCtx, cancel := context.WithTimeout(context.Background(), e.chainDeadline)
+	defer cancel()
+
+	// Attach an attempts counter so the transport wrapper inside
+	// NewRetryingHTTPClient increments it on every attempt. We read it back
+	// after doExchange returns to distinguish a one-shot transport failure
+	// from a retries-exhausted one. Nil-safe: if httpClient isn't the retrying
+	// variant (tests with a plain *http.Client), the counter stays 0 and no
+	// rewrap fires.
+	exchCtx, attempts := idpclient.WithAttemptsCounter(exchCtx)
+
+	tok, err := e.doExchange(exchCtx, input)
+	if err != nil {
+		return nil, e.classifyRetryOutcome(exchCtx, err, attempts(), input.BrokerAlias)
+	}
+
+	if n := attempts(); n > 1 {
+		slog.DebugContext(exchCtx, "token exchange retried",
+			slog.String("broker", input.BrokerAlias),
+			slog.Int("attempts", n))
+	}
+
+	pr, putErr := e.cache.Put(exchCtx, key, cache.CachedCredential{
+		Value:     tok.Value,
+		ExpiresAt: tok.ExpiresAt,
+	})
+	if putErr != nil {
+		slog.WarnContext(exchCtx, "token cache put failed", "broker", input.BrokerAlias, "error", putErr)
+	} else {
+		slog.Log(exchCtx, pr.Status.Level(), "token cache put", "broker", input.BrokerAlias, "status", pr.Status)
+	}
+
+	return tok, nil
+}
+
+// mapCircuitOpen converts gobreaker's open-state sentinels into our own
+// ErrExchangeCircuitOpen envelope. Both mean "the breaker refused the call
+// without running it"; upper layers should never see a raw gobreaker error.
+// Any other error passes through unchanged.
+func mapCircuitOpen(err error) error {
+	if errors.Is(err, gobreaker.ErrOpenState) || errors.Is(err, gobreaker.ErrTooManyRequests) {
+		return &ExchangeError{
+			Sentinel: ErrExchangeCircuitOpen,
+			Message:  "token exchange circuit open: identity provider recently unavailable, not attempting",
+		}
+	}
+	return err
 }
 
 // Close releases resources held by the cache backend (e.g. Otter's
@@ -188,16 +232,32 @@ func (e *Exchanger) classifyRetryOutcome(ctx context.Context, err error, attempt
 		slog.Int("attempts", attempts),
 		slog.String("underlying", err.Error()))
 
-	// Preserve the last attempt's HTTP status when we have one. On the
-	// deadline path there is no *ExchangeError to copy from, so
-	// HTTPStatus stays zero — that is the honest signal that the last
-	// attempt did not receive a response before the deadline fired.
+	// Copy HTTPStatus and FailureClass forward: the new sentinel severs
+	// errors.Is back to ErrExchangeTransport, so FailureClass is the only
+	// signal of the underlying cause the breaker still has.
+	//
+	// On the transport path (exchErr != nil) the surviving class is copied
+	// as-is — an exhausted run of 5xx stays Upstream5xx and counts, an
+	// exhausted network run stays Network, etc.
+	//
+	// On the deadline path exchErr is nil (the error was a bare
+	// context.DeadlineExceeded): the whole retry chain hung until the budget
+	// fired without ever producing a classifiable response. That is an IdP
+	// availability failure — "no usable response received" — so it is
+	// classified Network, the same class as a connection-level failure. Left
+	// as FailureClassNone it would collapse into the breaker's "not a
+	// transport outcome" bucket and be recorded as a SUCCESS, diluting the
+	// failure rate during exactly the sustained hang the breaker exists to
+	// catch. HTTPStatus stays zero — there genuinely was no response.
 	rewrapped := &ExchangeError{
 		Sentinel: ErrExchangeRetriesExhausted,
 		Message:  fmt.Sprintf("token exchange retries exhausted after %d attempts: %s", attempts, err.Error()),
 	}
 	if exchErr != nil {
 		rewrapped.HTTPStatus = exchErr.HTTPStatus
+		rewrapped.FailureClass = exchErr.FailureClass
+	} else {
+		rewrapped.FailureClass = FailureClassNetwork
 	}
 	return rewrapped
 }
@@ -217,8 +277,9 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 			return nil, ctx.Err()
 		}
 		return nil, &ExchangeError{
-			Sentinel: ErrExchangeTransport,
-			Message:  fmt.Sprintf("token exchange transport failure: IdP request failed: %v", err),
+			Sentinel:     ErrExchangeTransport,
+			Message:      fmt.Sprintf("token exchange transport failure: IdP request failed: %v", err),
+			FailureClass: classifyTransportError(err),
 		}
 	}
 

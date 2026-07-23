@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
+	"github.com/sony/gobreaker/v2"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -46,6 +47,11 @@ type Exchanger struct {
 	cache         cache.TokenCache
 	group         singleflight.Group
 	nowFunc       func() time.Time
+	// breaker is the process-wide circuit breaker guarding the IdP call.
+	// Nil means the breaker is disabled (the escape hatch, and the default
+	// for tests that don't opt in) — Exchange then calls the IdP directly
+	// while retries still apply.
+	breaker *gobreaker.CircuitBreaker[*Token]
 }
 
 // New constructs an Exchanger from Params. The config validator
@@ -65,6 +71,17 @@ func New(p Params) (*Exchanger, error) {
 	if p.Cache == nil {
 		return nil, errors.New("tokenexchange: Cache is required")
 	}
+
+	// Build the breaker up front so a bad config fails startup rather than
+	// surfacing on the first exchange. Nil config leaves breaker nil (disabled).
+	var breaker *gobreaker.CircuitBreaker[*Token]
+	if p.CircuitBreaker != nil {
+		if err := p.CircuitBreaker.Validate(); err != nil {
+			return nil, err
+		}
+		breaker = newTokenExchangeCircuitBreaker(*p.CircuitBreaker)
+	}
+
 	return &Exchanger{
 		tokenURL:         p.TokenURL,
 		clientID:         p.ClientID,
@@ -87,5 +104,6 @@ func New(p Params) (*Exchanger, error) {
 		),
 		cache:   p.Cache,
 		nowFunc: time.Now,
+		breaker: breaker,
 	}, nil
 }
