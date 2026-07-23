@@ -703,10 +703,20 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 	// the body and rejected by the broker with an opaque "unknown attribute" 400.
 	// op.BodyFields is nil when the schema couldn't be introspected, in which
 	// case we skip the check and defer to the broker as before.
+	//
+	// A field can be unknown for three reasons: a wrong/typo'd name, a tool-only
+	// param that should be declared as path/query/header, or a genuinely new
+	// attribute on a broker newer than the embedded schema. The caller gets a
+	// terse error naming all three; operators get the schema version in a
+	// structured log line for fleet-level correlation.
 	if op.BodyFields != nil {
 		for field := range body {
-			if !op.BodyFields[field] {
-				return nil, fmt.Errorf("request body field %q is not a known attribute of operation %q; tool-only params must be declared as path/query/header params, not spread into the body", field, op.ID)
+			if _, known := op.BodyFields[field]; !known {
+				slog.Debug("rejecting unknown body field",
+					"field", field,
+					"operation", op.ID,
+					"schemaVersion", op.SchemaVersion)
+				return nil, fmt.Errorf("request body field %q is not a known attribute of operation %q; check the name, ensure tool-only params are declared as path/query/header, or try a newer MCP server", field, op.ID)
 			}
 		}
 	}
