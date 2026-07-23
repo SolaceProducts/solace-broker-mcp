@@ -513,6 +513,163 @@ tools:
     result:
       strategy: collect
 
+  - name: list-kafka-receivers
+    description: >
+      List Kafka Receivers in a Message VPN with their enabled state, up/down
+      status, and last failure reason. A Kafka Receiver pulls messages from an
+      external Kafka cluster into this Message VPN. Use this to discover which
+      Kafka Receivers exist and identify any that are down. Returns up to 100
+      by default (max 500 via maxResults). The response includes a summary
+      block with downCount (enabled receivers that are not up — the
+      unexpectedly-down set), disabledCount, and byFailureReason (counts of
+      unexpectedly-down receivers grouped by their failure reason;
+      admin-disabled receivers and recovered receivers with stale reasons are
+      excluded). For per-receiver connection details including the remote
+      Kafka bootstrap address and topic-binding health, use
+      get-kafka-receiver-status.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN to list Kafka Receivers for"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of Kafka Receivers to return (default 100, max 500)"
+    steps:
+      - id: kafkaReceivers
+        operation: monitor/getMsgVpnKafkaReceivers
+        followPages: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          count: "100"
+        select:
+          - authenticationScheme
+          - bootstrapAddressList
+          - clientName
+          - connectionCount
+          - enabled
+          - failureReason
+          - kafkaReceiverName
+          - msgVpnName
+          - topicBindingCount
+          - topicBindingUpCount
+          - transportTlsEnabled
+          - up
+          - uptime
+    result:
+      strategy: postProcess
+      postProcess: listKafkaReceivers
+
+  - name: get-kafka-receiver-status
+    description: >
+      Get the operational status of a Kafka Receiver including its enabled
+      state, up/down status, last failure reason, uptime, and topic-binding
+      health (topicBindingUpCount out of topicBindingCount — how many of its
+      configured Kafka-topic-to-Solace-destination bindings are actually
+      healthy). Use list-kafka-receivers first to discover which Kafka
+      Receivers exist and identify down ones.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the Kafka Receiver"
+      - name: kafkaReceiverName
+        type: string
+        required: true
+        description: "The name of the Kafka Receiver"
+    steps:
+      - id: kafkaReceiverStatus
+        operation: monitor/getMsgVpnKafkaReceiver
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          kafkaReceiverName: "{{.Params.kafkaReceiverName}}"
+          select: "authenticationScheme, bootstrapAddressList, clientName, connectionCount, enabled, failureReason, kafkaReceiverName, lastNotice, lastNoticeTime, msgVpnName, topicBindingCount, topicBindingUpCount, transportTlsEnabled, up, upSinceTime, uptime"
+    result:
+      strategy: collect
+
+  - name: list-kafka-senders
+    description: >
+      List Kafka Senders in a Message VPN with their enabled state, up/down
+      status, and last failure reason. A Kafka Sender pushes messages from
+      this Message VPN's queues out to an external Kafka cluster. Use this to
+      discover which Kafka Senders exist and identify any that are down.
+      Returns up to 100 by default (max 500 via maxResults). The response
+      includes a summary block with downCount (enabled senders that are not
+      up — the unexpectedly-down set), disabledCount, and byFailureReason
+      (counts of unexpectedly-down senders grouped by their failure reason;
+      admin-disabled senders and recovered senders with stale reasons are
+      excluded). For per-sender connection details including the remote Kafka
+      bootstrap address and queue-binding health, use get-kafka-sender-status.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN to list Kafka Senders for"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of Kafka Senders to return (default 100, max 500)"
+    steps:
+      - id: kafkaSenders
+        operation: monitor/getMsgVpnKafkaSenders
+        followPages: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          count: "100"
+        select:
+          - authenticationScheme
+          - bootstrapAddressList
+          - clientName
+          - connectionCount
+          - enabled
+          - failureReason
+          - kafkaSenderName
+          - msgVpnName
+          - queueBindingCount
+          - queueBindingUpCount
+          - transportTlsEnabled
+          - up
+          - uptime
+    result:
+      strategy: postProcess
+      postProcess: listKafkaSenders
+
+  - name: get-kafka-sender-status
+    description: >
+      Get the operational status of a Kafka Sender including its enabled
+      state, up/down status, last failure reason, uptime, and queue-binding
+      health (queueBindingUpCount out of queueBindingCount — how many of its
+      configured Solace-queue-to-Kafka-topic bindings are actually healthy).
+      Use list-kafka-senders first to discover which Kafka Senders exist and
+      identify down ones.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the Kafka Sender"
+      - name: kafkaSenderName
+        type: string
+        required: true
+        description: "The name of the Kafka Sender"
+    steps:
+      - id: kafkaSenderStatus
+        operation: monitor/getMsgVpnKafkaSender
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          kafkaSenderName: "{{.Params.kafkaSenderName}}"
+          select: "authenticationScheme, bootstrapAddressList, clientName, connectionCount, enabled, failureReason, kafkaSenderName, lastNotice, lastNoticeTime, msgVpnName, queueBindingCount, queueBindingUpCount, transportTlsEnabled, up, upSinceTime, uptime"
+    result:
+      strategy: collect
+
   - name: get-replication-status
     description: >
       Get replication state for a Message VPN including role, sync eligibility,

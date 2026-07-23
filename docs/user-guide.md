@@ -91,7 +91,7 @@ What are the current message rates for default VPN on my-broker?
 
 ## Tools Reference
 
-The server exposes 19 read-only tools plus 16 write tools (35 total when write tools are enabled). For full per-tool parameters, output shape, and example invocations, see the [Tools Reference](tools-reference.md); this section is the narrative overview. All broker-querying tools require a `broker` parameter to identify which configured event broker to query; `list-brokers` is the exception and returns the available event broker aliases. The write tools split into four action-API tools (operational actions against live objects) and 12 Config-API management tools (create/update/delete for Message VPNs, queues, topic endpoints, and REST delivery points); all are gated behind `enable_write_tools` (default off). Tools marked destructive via the MCP `destructiveHint` annotation (including `delete-queue-messages`, `disconnect-client`, and the service-affecting `update-*`/`delete-*` management tools) have descriptions that instruct the calling LLM to obtain explicit user confirmation before invocation.
+The server exposes 23 read-only tools plus 16 write tools (39 total when write tools are enabled). For full per-tool parameters, output shape, and example invocations, see the [Tools Reference](tools-reference.md); this section is the narrative overview. All broker-querying tools require a `broker` parameter to identify which configured event broker to query; `list-brokers` is the exception and returns the available event broker aliases. The write tools split into four action-API tools (operational actions against live objects) and 12 Config-API management tools (create/update/delete for Message VPNs, queues, topic endpoints, and REST delivery points); all are gated behind `enable_write_tools` (default off). Tools marked destructive via the MCP `destructiveHint` annotation (including `delete-queue-messages`, `disconnect-client`, and the service-affecting `update-*`/`delete-*` management tools) have descriptions that instruct the calling LLM to obtain explicit user confirmation before invocation.
 
 ### Discovery
 
@@ -149,6 +149,15 @@ The server exposes 19 read-only tools plus 16 write tools (35 total when write t
 |---|---|
 | `list-bridges` | List bridges in a VPN with enabled state, inbound/outbound connection state, and last inbound failure reason. Default 100 results, max 500. |
 | `get-bridge-status` | Detailed status for a single bridge: enabled state, inbound/outbound connection state, last inbound failure reason, uptime, remote VPN/broker, connection establisher, and failure category. Bridges are identified by `bridgeName` + `bridgeVirtualRouter`. |
+
+### Kafka
+
+| Tool | Description |
+|---|---|
+| `list-kafka-receivers` | List Kafka Receivers in a VPN (pull messages in from an external Kafka cluster) with enabled state, up/down status, and last failure reason. Default 100 results, max 500. |
+| `get-kafka-receiver-status` | Detailed status for a single Kafka Receiver: enabled state, up/down status, last failure reason, uptime, and topic-binding health (`topicBindingUpCount` out of `topicBindingCount`). |
+| `list-kafka-senders` | List Kafka Senders in a VPN (push messages out to an external Kafka cluster) with enabled state, up/down status, and last failure reason. Default 100 results, max 500. |
+| `get-kafka-sender-status` | Detailed status for a single Kafka Sender: enabled state, up/down status, last failure reason, uptime, and queue-binding health (`queueBindingUpCount` out of `queueBindingCount`). |
 
 ### Discards
 
