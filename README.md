@@ -43,6 +43,7 @@ MCP-compatible clients, for example Claude Code, invoke these tools using natura
 - **19 read-only monitoring tools** — Event broker status, message VPNs, queues, clients, REST delivery points, and bridges
 - **16 optional write and action tools** — Disconnect clients, delete queued messages, reset statistics, and create, update, or delete message VPNs, queues, topic endpoints, and REST delivery points; gated behind `enable_write_tools` (off by default)
 - **Client authentication** — Development mode (no auth), static bearer tokens, or OAuth 2.1/OIDC with JWT validation
+- **Claim-based tool authorization** — Under OAuth mode, gate individual MCP tools by a configurable OIDC claim carrying the caller's group or role memberships (`groups` by default); `list-brokers` stays exempt so callers can always discover configured brokers
 - **Multi-broker configuration** — Connect to multiple brokers and address them by configured alias
 - **Retry and rate limiting** — Configurable backoff intervals and concurrent request limits per broker
 - **Deployment options** — Standalone binary, Docker container, or Go source
@@ -138,6 +139,8 @@ brokers:
 `mcp_client_auth.mode: disabled` skips client authentication entirely — only use this for local development. For production, set `mcp_client_auth.mode: oauth` and provide `issuer`, `audience`, and `resource_url`. A third mode, `static`, accepts a fixed bearer token for local development with realistic auth flow. See [Authentication](docs/authentication.md) for full setup instructions.
 
 **Audit-log identity.** In `oauth` and `static` modes, every tool-invocation log line carries the caller's `sub`, `iss`, `client_id`, and `jti` claims (the latter three appear as `<absent>` when the IdP does not issue them). A separate sentinel `<verifier-bug>` is reserved for an internal coding error — it should never appear in production, and its presence indicates a bug in the server's claim-extraction code, not in the caller's token; alert on it. The request still completes and the audit line is still written. In `disabled` mode no client auth runs, so log lines carry no identity fields at all. **`disabled` and `static` modes are not real audit trails**: `disabled` lines have no attribution, and `static` lines attribute every invocation to the hardcoded `dev-user`. Use `oauth` mode for any deployment whose audit logs need to answer "who ran what tool against which broker?"
+
+Under `oauth` mode with a `tool_authorization` policy configured, each gated tool call also emits a `"tool authorization"` audit line at the same `correlation_id` — logged at `INFO` on allow and `WARN` on deny, with a `decision_reason` code operators can filter and alert on. See [Tool authorization](docs/configuration.md#tool-authorization) for the full schema.
 
 Each event broker needs:
 - `url` — the SEMP management API base URL

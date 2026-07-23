@@ -105,6 +105,73 @@ Configured under the `mcp_client_auth` key. The `mode` field is required and sel
 | `mcp_client_auth.issuer` | IdP issuer URL. Required when `mcp_client_auth.mode` is `oauth`. |
 | `mcp_client_auth.audience` | Expected `aud` claim value. Required when `mcp_client_auth.mode` is `oauth`. |
 | `mcp_client_auth.resource_url` | OAuth resource URL (for example, `https://mcp.example.com/mcp`). Required when `mcp_client_auth.mode` is `oauth`. |
+| `mcp_client_auth.tool_authorization` | Optional claim-based tool authorization block. Only legal under `mcp_client_auth.mode: oauth` — the validator refuses to start if it is set under `static` or `disabled`. See [Tool authorization](#tool-authorization) below. |
+
+## Tool Authorization
+
+Under `mcp_client_auth.mode: oauth`, the server can gate individual MCP tools by the caller's group or role memberships. The caller's identity provider must include a claim in the issued access token that lists these memberships — the name of the claim is configurable via `groups_claim_name` (defaulting to `"groups"`). The server compares the values in that claim against a policy the operator defines under `mcp_client_auth.tool_authorization`. Under `mode: static` or `mode: disabled` the feature is off and a `tool_authorization` block is a startup error.
+
+**Opting in or out is required under `mode: oauth`.** You must set `enabled` explicitly to `true` or `false` — there is no implicit default. Omitting the block, or omitting `enabled` from it, is a startup error. This forces every oauth deployment to make a deliberate choice on tool-level access control.
+
+Opt out — every authenticated caller can invoke any tool:
+
+```yaml
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp-server"
+  resource_url: "https://mcp.example.com/mcp"
+  tool_authorization:
+    enabled: false
+```
+
+Opt in — gate tools by group:
+
+```yaml
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp-server"
+  resource_url: "https://mcp.example.com/mcp"
+  tool_authorization:
+    enabled: true
+    groups_claim_name: "groups"
+    access_level_groups:
+      Ops:
+        - list-vpns
+        - list-queues
+        - get-queue-metrics
+      Admin:
+        - list-vpns
+        - list-queues
+        - get-queue-metrics
+        - delete-queue-messages
+```
+
+| YAML field | Description |
+|---|---|
+| `enabled` | Required. `true` turns tool authorization on; `false` turns it off. There is no default — the field must be present under `mode: oauth`. |
+| `groups_claim_name` | Name of the OIDC claim in the caller's JWT that carries their group or role memberships. Optional; defaults to `"groups"`. Must match the claim your IdP emits (see [Authentication](authentication.md) for setting this up on the IdP side). Only meaningful when `enabled: true`. **Top-level lookup only** — the value is read from the top of the JWT claims object; nested paths (e.g. `authorization.roles`) are not supported. If your IdP emits memberships inside a nested object, flatten them into a top-level claim with an IdP mapper before the token is issued. |
+| `access_level_groups` | Map from group name — as it appears in the caller's token — to the list of MCP tool names that group grants. Required when `enabled: true`. Union semantics: a caller is allowed to invoke a tool when at least one of their groups grants it. A tool that no group grants is unreachable by every caller. **No wildcard** — a group that should grant every tool must list every tool name explicitly. This is deliberate: an "all tools" glob would silently include every newly-added tool at upgrade time, without the operator noticing the surface expanded. |
+
+**`list-brokers` is structurally exempt.** Every authenticated caller can invoke `list-brokers` regardless of their groups; the tool is not composed with the authorization wrapper at all. A caller needs it to discover which broker aliases exist before invoking any other tool, so gating it would deadlock every session. Listing `list-brokers` in an `access_level_groups` entry is inert — the server emits a startup `WARN` naming the group but the grant has no effect.
+
+**Group soft cap.** If a caller's claim carries more than 250 memberships, the server uses the first 250 in JWT-array order and emits a WARN naming the caller. The cap sits above the ceilings of the major IdPs (Entra 200, Okta 100), so legitimate deployments never hit it — the WARN indicates either a claim mapper misconfiguration on the IdP or a caller belonging to unusually many groups.
+
+**Audit logging.** Every gated tool invocation emits a single structured log line with `msg: "tool authorization"` before dispatching the underlying tool call. The line carries the caller identity fields the server already logs (`sub`, `iss`, `client_id`, `jti`, `correlation_id`) plus authorization-specific fields:
+
+| Field | On allow | On deny |
+|---|---|---|
+| `decision` | `"allowed"` | `"denied"` |
+| `decision_reason` | (absent) | `"missing_claim"` when the token has no claim under the configured `groups_claim_name`, or `"not_permitted"` when the claim is present but no matched group grants the tool |
+| `expected_claim` | (absent) | the configured `groups_claim_name` — present on `missing_claim` so operators can distinguish an IdP mapper misconfiguration (token missing the claim entirely) from a server-side typo (`groups_claim_name` set to a value the IdP does not emit) |
+| `matched_groups` | sanitized names of the caller groups that grant the tool | `[]` on `not_permitted`; absent on `missing_claim` |
+| `matched_groups_total` | the true number of matched groups before capping | `0` on `not_permitted`; absent on `missing_claim` |
+| `matched_groups_truncated` | `true` when `matched_groups` was capped at 32 entries | `false` on `not_permitted`; absent on `missing_claim` |
+
+Allow decisions log at `INFO`; denials log at `WARN`. The caller sees only a generic `"You are not authorized to use this tool."` error — the distinction between `missing_claim` and `not_permitted` stays server-side. `list-brokers` calls never emit this line because the tool is not gated; a `"tool invoked"` line stands alone for them.
+
+Denied caller groups are never logged on the deny path — only the fact of denial and the reason code. That separation is deliberate: it keeps a caller's group membership off the operator's audit stream while still letting alerting fire on `decision: "denied"`.
 
 ## Rate Limiting and Retry
 
