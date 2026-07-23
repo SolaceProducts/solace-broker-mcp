@@ -40,13 +40,14 @@ MERGE_BASE=$(git merge-base "$BASE" "$HEAD") || {
   exit "$EC"
 }
 
-# Production surface whose change requires a CHANGELOG entry. Mirrors the
-# breaking-surface list in the /changelog skill and SOL-152075. Go test files
-# are excluded — a test-only change is not user- or operator-visible.
-surface_re='^(internal/config/|internal/tools/|internal/composite/definitions/tools\.yaml)'
+# Production surface whose change requires a CHANGELOG entry. The pattern is the
+# single source of truth in production-surface.sh, shared with the reminder hook
+# and the /cut-release skill — do not re-copy it here. Go test files are excluded
+# (a test-only change is not user- or operator-visible).
+source "$(dirname "${BASH_SOURCE[0]}")/production-surface.sh"
 
 changed=$(git diff --name-only "$MERGE_BASE" "$HEAD")
-surface_hits=$(grep -E "$surface_re" <<<"$changed" | grep -v '_test\.go$' || true)
+surface_hits=$(grep -E "$SURFACE_RE" <<<"$changed" | grep -v "$SURFACE_TEST_EXCLUDE" || true)
 
 if [ -z "$surface_hits" ]; then
   echo "No production surface touched — CHANGELOG entry not required."
