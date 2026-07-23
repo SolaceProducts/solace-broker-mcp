@@ -24,12 +24,13 @@
 // *Exchanger; FromConfig translates YAML schema (discriminated union of
 // client-auth methods, string-typed enums) into the typed Params shape.
 //
-// The Exchanger does not cache exchanged tokens (deferred to a follow-up
-// story), does not retry IdP failures, and does not fall back to a
-// secondary IdP. It builds RFC 8693 requests, parses responses, classifies
-// failures into three sentinel errors, and (optionally) deduplicates
-// concurrent identical exchanges via singleflight to protect the IdP from
-// stampedes.
+// The Exchanger caches successful exchanges, deduplicates concurrent
+// identical exchanges via singleflight to protect the IdP from stampedes,
+// and guards the IdP with a process-wide circuit breaker (circuitbreaker.go).
+// Retries of transient IdP failures live in the injected HTTP client, not
+// here (production wires idpclient.NewRetryingHTTPClient). It does not fall
+// back to a secondary IdP. It builds RFC 8693 requests, parses responses,
+// and classifies failures into the ExchangeError sentinels (errors.go).
 package tokenexchange
 
 import (
@@ -132,6 +133,12 @@ type Params struct {
 	// end-to-end without waiting out the production 19s budget. A future
 	// YAML surface would set it from broker_oauth.retry.chain_deadline.
 	ChainDeadline time.Duration
+	// CircuitBreaker enables the process-wide breaker guarding the IdP
+	// call. Nil (the default) disables it — the escape hatch, and the
+	// default for tests that don't exercise breaker behavior. Production
+	// passes DefaultCircuitBreakerConfig(). New validates it and fails
+	// closed if the config is out of bounds.
+	CircuitBreaker *CircuitBreakerConfig
 }
 
 // String, GoString, and LogValue redact ClientSecret so Params never leaks
@@ -264,4 +271,13 @@ var (
 	// Non-retryable at the tools layer — the agent should not immediately
 	// retry a chain the server itself just exhausted.
 	ErrExchangeRetriesExhausted = errors.New("token exchange retries exhausted")
+
+	// ErrExchangeCircuitOpen — the circuit breaker refused the exchange
+	// without calling the IdP, because recent failures tripped it open (or
+	// its half-open probe budget is spent). Distinct from
+	// ErrExchangeRetriesExhausted ("we tried and gave up") because here the
+	// server did not try at all. Transient-class: the agent should back off,
+	// not retry immediately, and the breaker will admit a probe once its
+	// open duration elapses.
+	ErrExchangeCircuitOpen = errors.New("token exchange circuit open")
 )

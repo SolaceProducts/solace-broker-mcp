@@ -922,6 +922,53 @@ func TestSender_Retry_429_ExhaustsRetries(t *testing.T) {
 	}
 }
 
+// TestSender_Do_TransientError_CappedRetries verifies that a persistent 429 or
+// 503 is retried at most maxTransientRetries times, independently of the (much
+// larger) configured RetryMax, so the client cannot amplify load into an
+// already-overloaded broker. The cap surfaces the same *RetriesExhaustedError
+// the caller already handles for RetryMax exhaustion, with errTransientCapReached
+// as the underlying cause. RetryMax is set to 10 here so that a missing cap would
+// show up as 11 requests, not maxTransientRetries+1.
+func TestSender_Do_TransientError_CappedRetries(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var requestCount atomic.Int32
+			sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, _ *http.Request) {
+				requestCount.Add(1)
+				w.WriteHeader(status)
+			}, "basic", 10)
+			defer server.Close()
+
+			resp, err := sender.Do(context.Background(), newGetRequest(t, server.URL))
+			if resp != nil {
+				resp.Body.Close()
+			}
+			if err == nil {
+				t.Fatal("expected error when the transient-retry cap is reached")
+			}
+
+			wantRequests := int32(maxTransientRetries + 1)
+			if requestCount.Load() != wantRequests {
+				t.Errorf("requests = %d, want %d (original + %d capped retries)", requestCount.Load(), wantRequests, maxTransientRetries)
+			}
+
+			var exhausted *RetriesExhaustedError
+			if !errors.As(err, &exhausted) {
+				t.Fatalf("expected *RetriesExhaustedError, got %T: %v", err, err)
+			}
+			if exhausted.StatusCode != status {
+				t.Errorf("StatusCode = %d, want %d", exhausted.StatusCode, status)
+			}
+			if exhausted.Attempts != int(wantRequests) {
+				t.Errorf("Attempts = %d, want %d", exhausted.Attempts, wantRequests)
+			}
+			if !errors.Is(err, errTransientCapReached) {
+				t.Errorf("error chain = %v, want errors.Is(_, errTransientCapReached)", err)
+			}
+		})
+	}
+}
+
 // --- Retry Tests: Other 5xx ---
 
 func TestSender_Retry_500_RetriesOnce(t *testing.T) {

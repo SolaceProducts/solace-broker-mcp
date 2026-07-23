@@ -61,8 +61,9 @@ func (e *Exchanger) parseIdPResponse(resp *http.Response, now time.Time) (*Token
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
 	if err != nil {
 		return nil, &ExchangeError{
-			Sentinel: ErrExchangeTransport,
-			Message:  fmt.Sprintf("token exchange transport failure: reading IdP response body: %v", err),
+			Sentinel:     ErrExchangeTransport,
+			Message:      fmt.Sprintf("token exchange transport failure: reading IdP response body: %v", err),
+			FailureClass: FailureClassBodyRead,
 		}
 	}
 
@@ -84,9 +85,10 @@ func (e *Exchanger) parseIdPResponse(resp *http.Response, now time.Time) (*Token
 	// exhausted 5xx.
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return nil, &ExchangeError{
-			Sentinel:   ErrExchangeTransport,
-			Message:    "token exchange transport failure: IdP returned HTTP 429 (rate limited)",
-			HTTPStatus: resp.StatusCode,
+			Sentinel:     ErrExchangeTransport,
+			Message:      "token exchange transport failure: IdP returned HTTP 429 (rate limited)",
+			HTTPStatus:   resp.StatusCode,
+			FailureClass: FailureClassRateLimited,
 		}
 	}
 
@@ -95,9 +97,10 @@ func (e *Exchanger) parseIdPResponse(resp *http.Response, now time.Time) (*Token
 	}
 
 	return nil, &ExchangeError{
-		Sentinel:   ErrExchangeTransport,
-		Message:    fmt.Sprintf("token exchange transport failure: IdP returned HTTP %d", resp.StatusCode),
-		HTTPStatus: resp.StatusCode,
+		Sentinel:     ErrExchangeTransport,
+		Message:      fmt.Sprintf("token exchange transport failure: IdP returned HTTP %d", resp.StatusCode),
+		HTTPStatus:   resp.StatusCode,
+		FailureClass: FailureClassUpstream5xx,
 	}
 }
 
