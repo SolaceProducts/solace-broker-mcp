@@ -1001,8 +1001,6 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 	defer mock.close()
 
 	t.Run("feature disabled omits groups key", func(t *testing.T) {
-		t.Setenv("ENABLE_TOOL_AUTHORIZATION", "false")
-
 		cfg := &config.ServerConfig{
 			MCPClientAuth: config.MCPClientAuthConfig{
 				Mode:     config.AuthModeOAuth,
@@ -1034,8 +1032,6 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 	})
 
 	t.Run("feature enabled with usable groups", func(t *testing.T) {
-		t.Setenv("ENABLE_TOOL_AUTHORIZATION", "true")
-
 		cfg := &config.ServerConfig{
 			MCPClientAuth: config.MCPClientAuthConfig{
 				Mode:     config.AuthModeOAuth,
@@ -1079,8 +1075,6 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 	})
 
 	t.Run("feature enabled with absent claim", func(t *testing.T) {
-		t.Setenv("ENABLE_TOOL_AUTHORIZATION", "true")
-
 		cfg := &config.ServerConfig{
 			MCPClientAuth: config.MCPClientAuthConfig{
 				Mode:     config.AuthModeOAuth,
@@ -1114,8 +1108,6 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 	})
 
 	t.Run("feature enabled with empty array", func(t *testing.T) {
-		t.Setenv("ENABLE_TOOL_AUTHORIZATION", "true")
-
 		cfg := &config.ServerConfig{
 			MCPClientAuth: config.MCPClientAuthConfig{
 				Mode:     config.AuthModeOAuth,
@@ -1261,8 +1253,6 @@ func TestBuildTokenInfo(t *testing.T) {
 	})
 
 	t.Run("absent groups claim logs DEBUG diagnostic", func(t *testing.T) {
-		t.Setenv("ENABLE_TOOL_AUTHORIZATION", "true")
-
 		authzCfg := &config.ServerConfig{
 			MCPClientAuth: config.MCPClientAuthConfig{
 				Mode: config.AuthModeOAuth,
@@ -1289,8 +1279,6 @@ func TestBuildTokenInfo(t *testing.T) {
 	})
 
 	t.Run("unresolvable groups claim logs DEBUG diagnostic", func(t *testing.T) {
-		t.Setenv("ENABLE_TOOL_AUTHORIZATION", "true")
-
 		authzCfg := &config.ServerConfig{
 			MCPClientAuth: config.MCPClientAuthConfig{
 				Mode: config.AuthModeOAuth,

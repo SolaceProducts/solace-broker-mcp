@@ -40,11 +40,12 @@ func makeEnabledConfig() *config.ServerConfig {
 	}
 }
 
-// Gate off (feature flag unset) → (nil, nil) regardless of config contents.
+// Gate off (config disables it) → (nil, nil) regardless of other config contents.
 func TestBuildToolPolicy_GateOff_ReturnsNilNil(t *testing.T) {
-	// Feature flag unset: gate is off even with a populated RBAC block.
-	t.Setenv("ENABLE_TOOL_AUTHORIZATION", "")
+	// Enabled: false → gate is off even with a populated RBAC block.
+	disabled := false
 	cfg := makeEnabledConfig()
+	cfg.MCPClientAuth.ToolAuthorization.Enabled = &disabled
 
 	policy, err := buildToolPolicy(cfg)
 	if err != nil {
@@ -57,7 +58,6 @@ func TestBuildToolPolicy_GateOff_ReturnsNilNil(t *testing.T) {
 
 // Gate on + valid block → non-nil Policy, no error.
 func TestBuildToolPolicy_GateOn_ReturnsNonNilPolicy(t *testing.T) {
-	t.Setenv("ENABLE_TOOL_AUTHORIZATION", "true")
 	cfg := makeEnabledConfig()
 
 	policy, err := buildToolPolicy(cfg)
@@ -69,10 +69,9 @@ func TestBuildToolPolicy_GateOn_ReturnsNonNilPolicy(t *testing.T) {
 	}
 }
 
-// Non-OAuth mode with flag set → gate off, (nil, nil). Tool authorization
-// only runs when identity is available in tokens.
+// Non-OAuth mode → gate off, (nil, nil). Tool authorization only runs when
+// identity is available in tokens.
 func TestBuildToolPolicy_NonOAuthMode_GateFalse(t *testing.T) {
-	t.Setenv("ENABLE_TOOL_AUTHORIZATION", "true")
 	cfg := makeEnabledConfig()
 	cfg.MCPClientAuth.Mode = config.AuthModeStatic
 

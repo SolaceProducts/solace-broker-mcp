@@ -77,6 +77,8 @@ func TestLogStartupBanners_NoCredentialLeak(t *testing.T) {
   audience: mcp
   resource_url: https://mcp.example.com/mcp
   dev_token: %s
+  tool_authorization:
+    enabled: false
 `, sentDevTok),
 			listenAddress: "0.0.0.0",
 			tlsExtras:     "tls_terminated_upstream: true\n",
