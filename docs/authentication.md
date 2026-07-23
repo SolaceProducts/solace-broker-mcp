@@ -471,11 +471,12 @@ A browser window opens on first use for user login. The IdP must support anonymo
    │              │              │              │
 ```
 
-> **`list-brokers` skips the step-9 gate** — it is structurally exempt and always
-> reaches the broker (steps 10–12) for any authenticated caller. The audit line
-> for a `list-brokers` call is the regular `tool invoked` line only; no
-> `tool authorization` line is emitted. This lets a caller always discover
-> configured broker aliases before invoking any other tool.
+> **`list-brokers` skips the step-9 gate** — it is structurally exempt and
+> answers locally from the server's configured broker list without a step-9
+> policy check or a step-10/11 SEMP call. The audit line for a `list-brokers`
+> call is the regular `tool invoked` line only; no `tool authorization` line
+> is emitted. This lets a caller always discover configured broker aliases
+> before invoking any other tool.
 
 > **Two independent auth legs.** Client→server auth (steps 1–8, the JWT above) is
 > distinct from server→broker auth (step 9 or 10 depending on whether tool

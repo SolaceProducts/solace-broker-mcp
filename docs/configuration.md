@@ -105,7 +105,7 @@ Configured under the `mcp_client_auth` key. The `mode` field is required and sel
 | `mcp_client_auth.issuer` | IdP issuer URL. Required when `mcp_client_auth.mode` is `oauth`. |
 | `mcp_client_auth.audience` | Expected `aud` claim value. Required when `mcp_client_auth.mode` is `oauth`. |
 | `mcp_client_auth.resource_url` | OAuth resource URL (for example, `https://mcp.example.com/mcp`). Required when `mcp_client_auth.mode` is `oauth`. |
-| `mcp_client_auth.tool_authorization` | Optional claim-based tool authorization block. Only legal under `mcp_client_auth.mode: oauth` — the validator refuses to start if it is set under `static` or `disabled`. See [Tool authorization](#tool-authorization) below. |
+| `mcp_client_auth.tool_authorization` | Claim-based tool authorization block. Required under `mcp_client_auth.mode: oauth` — the `enabled` field must be set explicitly to `true` or `false`; omitting the block, or omitting `enabled` from it, is a startup error. Not legal under `static` or `disabled`. See [Tool authorization](#tool-authorization) below. |
 
 ## Tool Authorization
 
@@ -156,7 +156,7 @@ mcp_client_auth:
 
 **`list-brokers` is structurally exempt.** Every authenticated caller can invoke `list-brokers` regardless of their groups; the tool is not composed with the authorization wrapper at all. A caller needs it to discover which broker aliases exist before invoking any other tool, so gating it would deadlock every session. Listing `list-brokers` in an `access_level_groups` entry is inert — the server emits a startup `WARN` naming the group but the grant has no effect.
 
-**Group soft cap.** If a caller's claim carries more than 250 memberships, the server uses the first 250 in JWT-array order and emits a WARN naming the caller. The cap sits above the ceilings of the major IdPs (Entra 200, Okta 100), so legitimate deployments never hit it — the WARN indicates either a claim mapper misconfiguration on the IdP or a caller belonging to unusually many groups.
+**Group soft cap.** If a caller's claim carries more than 250 memberships, the server uses the first 250 in JWT-array order and emits a WARN carrying the total count and the cap (no caller identity, so as not to reveal group counts per user on the shared log stream). The cap sits above the ceilings of the major IdPs (Entra 200, Okta 100), so legitimate deployments never hit it — the WARN indicates either a claim mapper misconfiguration on the IdP or a caller belonging to unusually many groups.
 
 **Audit logging.** Every gated tool invocation emits a single structured log line with `msg: "tool authorization"` before dispatching the underlying tool call. The line carries the caller identity fields the server already logs (`sub`, `iss`, `client_id`, `jti`, `correlation_id`) plus authorization-specific fields:
 

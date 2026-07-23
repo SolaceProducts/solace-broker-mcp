@@ -1000,12 +1000,15 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 	mock := newMockOIDCServer(t)
 	defer mock.close()
 
-	t.Run("feature disabled omits groups key", func(t *testing.T) {
+	t.Run("tool_authorization opt-out omits groups key", func(t *testing.T) {
 		cfg := &config.ServerConfig{
 			MCPClientAuth: config.MCPClientAuthConfig{
 				Mode:     config.AuthModeOAuth,
 				Issuer:   mock.issuer,
 				Audience: mock.audience,
+				ToolAuthorization: &config.ToolAuthorizationConfig{
+					Enabled: boolPtr(false),
+				},
 			},
 		}
 
@@ -1027,7 +1030,7 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 		}
 
 		if _, exists := info.Extra[authz.TokenInfoExtraKeyGroups]; exists {
-			t.Error("Extra should not contain groups key when feature is disabled")
+			t.Error("Extra should not contain groups key when tool_authorization is opt-out")
 		}
 	})
 
