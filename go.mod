@@ -6,6 +6,7 @@ require (
 	github.com/getkin/kin-openapi v0.134.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/modelcontextprotocol/go-sdk v1.5.0
+	github.com/sony/gobreaker/v2 v2.4.0
 	golang.org/x/sync v0.20.0
 	gopkg.in/yaml.v3 v3.0.1
 )
