@@ -9,7 +9,7 @@ narrative overview see the [User Guide](user-guide.md).
 > output as input to a human decision, not as verified fact, and confirm any
 > write or destructive action before allowing it.
 
-The server exposes **19 read-only tools** plus **16 write tools** — 4 action
+The server exposes **23 read-only tools** plus **16 write tools** — 4 action
 tools and 12 Config-API management tools. The write tools are gated behind
 `enable_write_tools` (off by default) and are not registered with the MCP server
 when disabled — see
@@ -105,6 +105,8 @@ queues, and topic endpoints) are gated behind the same flag and documented under
 | Queues | [`list-queues`](#list-queues), [`get-queue-metrics`](#get-queue-metrics) | — |
 | Clients | [`list-clients`](#list-clients), [`get-client-details`](#get-client-details), [`list-client-subscriptions`](#list-client-subscriptions), [`list-slow-subscribers`](#list-slow-subscribers) | — |
 | REST Delivery Points | [`list-rdps`](#list-rdps), [`get-rdp-status`](#get-rdp-status) | — |
+| Bridges | [`list-bridges`](#list-bridges), [`get-bridge-status`](#get-bridge-status) | — |
+| Kafka | [`list-kafka-receivers`](#list-kafka-receivers), [`get-kafka-receiver-status`](#get-kafka-receiver-status), [`list-kafka-senders`](#list-kafka-senders), [`get-kafka-sender-status`](#get-kafka-sender-status) | — |
 | Discards | [`get-discard-stats`](#get-discard-stats), [`list-queue-discards`](#list-queue-discards) | — |
 | Actions | [`disconnect-client`](#disconnect-client), [`clear-client-stats`](#clear-client-stats), [`delete-queue-messages`](#delete-queue-messages), [`clear-queue-stats`](#clear-queue-stats) | write |
 | Management | [`create-message-vpn`](#create-message-vpn), [`update-message-vpn`](#update-message-vpn), [`delete-message-vpn`](#delete-message-vpn), [`create-queue`](#create-queue), [`update-queue`](#update-queue), [`delete-queue`](#delete-queue), [`create-topic-endpoint`](#create-topic-endpoint), [`update-topic-endpoint`](#update-topic-endpoint), [`delete-topic-endpoint`](#delete-topic-endpoint) | write |
@@ -564,6 +566,114 @@ pair; most deployments use `bridgeVirtualRouter: "auto"`.
 ```
 
 **Example request:** "Why is bridge-to-dr on the default VPN down?"
+
+---
+
+## Kafka
+
+### list-kafka-receivers
+
+List Kafka Receivers in a VPN with enabled state, up/down status, and last
+failure reason. A Kafka Receiver pulls messages from an external Kafka
+cluster into this VPN. For full detail use `get-kafka-receiver-status`.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target broker alias. |
+| `msgVpnName` | string | yes | The Message VPN. |
+| `maxResults` | integer | no | Max Kafka Receivers to return (default 100, max 500). |
+
+**Returns:** step-keyed envelope, step `kafkaReceivers` (array). Selected
+fields per receiver: `kafkaReceiverName`, `clientName`, `enabled`, `up`,
+`failureReason`, `uptime`, `connectionCount`, `topicBindingCount`,
+`topicBindingUpCount`, `bootstrapAddressList`, `authenticationScheme`,
+`transportTlsEnabled`.
+
+```json
+{ "broker": "prod-broker", "msgVpnName": "default" }
+```
+
+**Example request:** "List the Kafka Receivers on the default VPN and flag any that are down."
+
+### get-kafka-receiver-status
+
+Detailed status for a single Kafka Receiver, including topic-binding health
+(`topicBindingUpCount` out of `topicBindingCount` — how many of its configured
+Kafka-topic-to-Solace-destination bindings are actually healthy).
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target broker alias. |
+| `msgVpnName` | string | yes | The Message VPN containing the Kafka Receiver. |
+| `kafkaReceiverName` | string | yes | The Kafka Receiver name. |
+
+**Returns:** step-keyed envelope, step `kafkaReceiverStatus` (object):
+`kafkaReceiverName`, `clientName`, `enabled`, `up`, `failureReason`, `uptime`,
+`upSinceTime`, `lastNotice`, `lastNoticeTime`, `connectionCount`,
+`topicBindingCount`, `topicBindingUpCount`, `bootstrapAddressList`,
+`authenticationScheme`, `transportTlsEnabled`.
+
+```json
+{ "broker": "prod-broker", "msgVpnName": "default", "kafkaReceiverName": "orders-ingest" }
+```
+
+**Example request:** "Why is the orders-ingest Kafka Receiver on the default VPN down?"
+
+### list-kafka-senders
+
+List Kafka Senders in a VPN with enabled state, up/down status, and last
+failure reason. A Kafka Sender pushes messages from this VPN's queues out to
+an external Kafka cluster. For full detail use `get-kafka-sender-status`.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target broker alias. |
+| `msgVpnName` | string | yes | The Message VPN. |
+| `maxResults` | integer | no | Max Kafka Senders to return (default 100, max 500). |
+
+**Returns:** step-keyed envelope, step `kafkaSenders` (array). Selected
+fields per sender: `kafkaSenderName`, `clientName`, `enabled`, `up`,
+`failureReason`, `uptime`, `connectionCount`, `queueBindingCount`,
+`queueBindingUpCount`, `bootstrapAddressList`, `authenticationScheme`,
+`transportTlsEnabled`.
+
+```json
+{ "broker": "prod-broker", "msgVpnName": "default" }
+```
+
+**Example request:** "List the Kafka Senders on the default VPN and flag any that are down."
+
+### get-kafka-sender-status
+
+Detailed status for a single Kafka Sender, including queue-binding health
+(`queueBindingUpCount` out of `queueBindingCount` — how many of its configured
+Solace-queue-to-Kafka-topic bindings are actually healthy).
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target broker alias. |
+| `msgVpnName` | string | yes | The Message VPN containing the Kafka Sender. |
+| `kafkaSenderName` | string | yes | The Kafka Sender name. |
+
+**Returns:** step-keyed envelope, step `kafkaSenderStatus` (object):
+`kafkaSenderName`, `clientName`, `enabled`, `up`, `failureReason`, `uptime`,
+`upSinceTime`, `lastNotice`, `lastNoticeTime`, `connectionCount`,
+`queueBindingCount`, `queueBindingUpCount`, `bootstrapAddressList`,
+`authenticationScheme`, `transportTlsEnabled`.
+
+```json
+{ "broker": "prod-broker", "msgVpnName": "default", "kafkaSenderName": "orders-export" }
+```
+
+**Example request:** "Why is the orders-export Kafka Sender on the default VPN down?"
 
 ---
 
