@@ -12,6 +12,10 @@
 # server code and its unit tests. Remove this line to include it.
 test/
 
+# Generated SEMP swagger specs (~6.7MB machine-generated OpenAPI JSON). Each
+# collapses to a single low-value node; embed.go represents the specs package.
+internal/semp/sempv2/specs/*.json
+
 # --- From .gitignore (uncomment to exclude) ---
 
 # *.exe
