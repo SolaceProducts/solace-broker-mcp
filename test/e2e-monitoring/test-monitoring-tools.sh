@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# MCP tool-level functional tests for SOL-150025 (tools 1–12: Block A 1–9,
-# Block B 10–12 — list-slow-subscribers, list-queue-discards, get-discard-stats).
+# MCP tool-level functional tests. Originally added for SOL-150025 (tools
+# 1–12: Block A 1–9, Block B 10–12 — list-slow-subscribers,
+# list-queue-discards, get-discard-stats); tools 13-15 (get-broker-status,
+# list-bridges, get-bridge-status) were added in later tickets — see each
+# tool's own section header below for the ticket that added it.
 # Invoked by run-all.sh after verify-fixtures.sh; assumes the MCP
 # server is running and the F1–F8 fixtures have been created.
 #
@@ -1070,10 +1073,17 @@ test_list_bridges_summary() {
     assert_json_field "$content" \
         '(.summary.scanned) == (.bridges.data | length)' "true" \
         "list-bridges [$broker]: summary.scanned must equal the returned bridge count" || return 1
-    assert_json_field "$content" '.summary.downCount >= 1' "true" \
-        "list-bridges [$broker]: at least one down bridge expected (fixture: test-bridge-failing)" || return 1
-    assert_json_field "$content" '.summary.disabledCount >= 1' "true" \
-        "list-bridges [$broker]: at least one disabled bridge expected (fixture: test-bridge-disabled)" || return 1
+    # Exact counts, not >= 1 — the F8 fixture set is deterministic (3 bridges:
+    # 1 down, 1 disabled, 1 healthy), so an overcounting regression (e.g. the
+    # healthy bridge also landing in downCount) would still pass a >= 1 guard.
+    assert_json_field "$content" '.bridges.data | length' "3" \
+        "list-bridges [$broker]: uncapped call must return exactly the 3 F8 bridges" || return 1
+    assert_json_field "$content" '.summary.scanned' "3" \
+        "list-bridges [$broker]: summary.scanned must be 3 for the F8 fixture set" || return 1
+    assert_json_field "$content" '.summary.downCount' "1" \
+        "list-bridges [$broker]: downCount must be 1 (fixture: test-bridge-failing)" || return 1
+    assert_json_field "$content" '.summary.disabledCount' "1" \
+        "list-bridges [$broker]: disabledCount must be 1 (fixture: test-bridge-disabled)" || return 1
 }
 
 test_list_bridges_a()            { test_list_bridges "broker-a"; }
