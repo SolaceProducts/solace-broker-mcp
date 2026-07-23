@@ -155,7 +155,10 @@ func TestToolListBudget(t *testing.T) {
 			if err != nil {
 				t.Fatalf("marshal tools: %v", err)
 			}
-			tokens := len(payload) / bytesPerToken
+			// Ceiling division, not floor — a regression guardrail should round its
+			// estimate up (conservative), not down, so it never under-reports by up
+			// to bytesPerToken-1 tokens right at the threshold boundary.
+			tokens := (len(payload) + bytesPerToken - 1) / bytesPerToken
 
 			t.Logf("%s: %d tools, %d bytes, ~%d tokens (budget: %d tokens)",
 				tc.name, len(allTools), len(payload), tokens, tc.maxTokens)
