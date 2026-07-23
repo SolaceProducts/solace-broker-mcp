@@ -56,6 +56,10 @@ test: ## Run unit tests
 test-race: ## Run unit tests with the race detector (matches CI)
 	go test -race -v ./...
 
+.PHONY: bench
+bench: ## Run benchmarks repo-wide (matches CI; -run=^$ skips regular tests so only Benchmark* funcs execute)
+	go test -run=^$$ -bench=. -benchmem ./...
+
 .PHONY: vet
 vet: ## go vet
 	go vet ./...
