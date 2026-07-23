@@ -87,6 +87,16 @@ jobs:
         # but worth revisiting if test times become a problem as the suite grows.
         run: go test -race -v ./...
 
+      - name: Benchmark
+        # Informational, not a pass/fail gate — wall-clock timing is too CI-noisy to
+        # threshold reliably (runner contention, no dedicated hardware). The actual
+        # regression gate for tool-payload size is TestToolListBudget (byte/token
+        # thresholds in cmd/server), which runs as a normal test above and does fail
+        # CI. This step just makes ns/op and B/op visible in the Actions log so a
+        # marshalling regression (e.g. an accidental O(n^2) in a postprocess handler)
+        # is easy to spot in review, per SOL-152125.
+        run: make bench
+
       - name: Check for test files
         run: |
           TEST_FILES=$(find . -name '*_test.go' -not -path './vendor/*' | head -1)
