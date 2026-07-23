@@ -710,7 +710,7 @@ func (ce *CompositeExecutor) constructRequestBody(op *sempv2.Operation, args, pa
 	// the reader can tell which case they're in.
 	if op.BodyFields != nil {
 		for field := range body {
-			if !op.BodyFields[field] {
+			if _, known := op.BodyFields[field]; !known {
 				schema := "embedded SEMP schema"
 				if op.SchemaVersion != "" {
 					schema += ": broker v" + op.SchemaVersion
