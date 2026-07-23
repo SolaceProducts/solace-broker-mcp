@@ -403,12 +403,13 @@ audit, and trace schemas above.
   only ever bites an oversized `X-Correlation-ID`.
 - **Returned** to the caller on the response `X-Correlation-ID` header and in
   `CallToolResult.Meta["correlation_id"]`.
-- **Propagated** to the broker: every outbound SEMP request carries `X-Correlation-ID`.
-  `traceparent` is sent only when the ID is a valid W3C trace-id (32 lowercase hex, not
-  all-zero) — that is, when the caller supplied one inbound. A server-generated UUIDv7,
-  which is the default when no caller header arrives, is not a valid trace-id, so no
-  `traceparent` goes out rather than a malformed one. On retry the same ID is reused, so
-  all attempts share one ID in the broker's logs.
+- **Propagated** to the broker: every outbound SEMP request carries `X-Correlation-ID`. It
+  also carries a `traceparent`, with a fresh child span-id, only when the ID is a valid W3C
+  trace-id: 32 lowercase hex characters, not all-zero, which in practice means it arrived on
+  an inbound `traceparent`. A new child span per outbound hop is correct W3C behaviour. For a
+  server-generated UUIDv7 or a legacy `X-Correlation-ID` value, no `traceparent` is sent,
+  since a non-conformant trace-id would be worse than none. On retry, the same ID is reused,
+  so all attempts share one ID in the broker's logs.
 - **Logged** as the `correlation_id` attribute on every log line within the request.
 
 ---
