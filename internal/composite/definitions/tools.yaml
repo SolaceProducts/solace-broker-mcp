@@ -214,7 +214,8 @@ tools:
       probing each enabled+up VPN for a client whose clientUsername does not
       match Solace's reserved `#*` prefix. Standby VPNs are excluded from both.
       Admin-disabled VPNs land in disabledCount only and are excluded from
-      downCount and zeroConnectionCount.
+      downCount and zeroConnectionCount. For per-service TLS status and AMQP
+      support, use get-vpn-status.
     annotations:
       readOnly: true
     parameters:
@@ -293,7 +294,8 @@ tools:
       guaranteed-message consumers: queues with spooledMsgCount rising across
       successive calls, txUnackedMsgCount high, rxMsgRate > txMsgRate, and
       bindCount > 0 indicate consumer-side slowness even when slowSubscriber is
-      false on the bound client.
+      false on the bound client. For authoritative current queue depth and
+      per-queue discard/redelivery counters, use get-queue-metrics.
     annotations:
       readOnly: true
     parameters:
@@ -338,7 +340,8 @@ tools:
       messaging) — it does not flip for slow guaranteed-message consumers. To
       scan a VPN for slow guaranteed consumers, use list-queues and look for
       queues with growing spooledMsgCount, high txUnackedMsgCount, and rxMsgRate
-      > txMsgRate while bindCount > 0.
+      > txMsgRate while bindCount > 0. For per-client discard counts, byte/
+      message rates, and software version, use get-client-details.
     annotations:
       readOnly: true
     parameters:

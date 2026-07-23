@@ -22,7 +22,9 @@ base=$(git merge-base origin/main HEAD 2>/dev/null || git merge-base main HEAD 2
 changed=$(git diff --name-only "$base"...HEAD 2>/dev/null) || exit 0
 
 # Production surface, excluding Go test files (a test-only change needs no entry).
-surface_hits=$(grep -E '^(internal/config/|internal/tools/|internal/composite/definitions/tools\.yaml)' <<<"$changed" | grep -v '_test\.go$' || true)
+# Pattern is the single source of truth shared with the CI gate and /cut-release.
+source "$(dirname "${BASH_SOURCE[0]}")/../../.github/scripts/production-surface.sh"
+surface_hits=$(grep -E "$SURFACE_RE" <<<"$changed" | grep -v "$SURFACE_TEST_EXCLUDE" || true)
 [ -n "$surface_hits" ] || exit 0
 
 extract_unreleased() {

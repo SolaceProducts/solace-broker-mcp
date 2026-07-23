@@ -1484,6 +1484,13 @@ func TestExchange_RetriesExhaustedOn5xx(t *testing.T) {
 	if exchErr.HTTPStatus != http.StatusInternalServerError {
 		t.Errorf("HTTPStatus = %d, want 500 (last-attempt status must survive rewrap)", exchErr.HTTPStatus)
 	}
+	// FailureClass must survive the rewrap even though the sentinel was
+	// replaced. This is the signal the circuit breaker reads to decide an
+	// exhausted 5xx counts as a failure — losing it here is exactly the
+	// sever bug this assertion guards against.
+	if exchErr.FailureClass != FailureClassUpstream5xx {
+		t.Errorf("FailureClass = %v, want Upstream5xx (must survive the exhaustion rewrap)", exchErr.FailureClass)
+	}
 	if got := hits.Load(); got != 3 {
 		t.Errorf("server hits = %d, want 3 (retryablehttp should have tried all attempts)", got)
 	}
@@ -1520,6 +1527,12 @@ func TestExchange_RetriesExhaustedOn429(t *testing.T) {
 	}
 	if exchErr.HTTPStatus != http.StatusTooManyRequests {
 		t.Errorf("HTTPStatus = %d, want 429 (last-attempt status must survive rewrap)", exchErr.HTTPStatus)
+	}
+	// FailureClass must survive the rewrap and remain RateLimited — this
+	// is what lets the circuit breaker EXCLUDE an exhausted 429 from the
+	// failure percentage rather than counting it as an availability failure.
+	if exchErr.FailureClass != FailureClassRateLimited {
+		t.Errorf("FailureClass = %v, want RateLimited (must survive rewrap so the breaker can exclude it)", exchErr.FailureClass)
 	}
 	if got := hits.Load(); got != 3 {
 		t.Errorf("server hits = %d, want 3 (retry loop should have tried all attempts on 429)", got)
@@ -1582,6 +1595,13 @@ func TestExchange_ConnectionErrorRetriesExhausted(t *testing.T) {
 	}
 	if exchErr.HTTPStatus != 0 {
 		t.Errorf("HTTPStatus = %d, want 0 (no HTTP response was received)", exchErr.HTTPStatus)
+	}
+	// HTTPStatus == 0 alone is ambiguous (shared with the body-read and
+	// deadline paths); FailureClass is what disambiguates an exhausted
+	// network failure so the circuit breaker can count it. Assert it
+	// survives the rewrap.
+	if exchErr.FailureClass != FailureClassNetwork {
+		t.Errorf("FailureClass = %v, want Network (must survive rewrap; disambiguates the HTTPStatus==0 case)", exchErr.FailureClass)
 	}
 }
 

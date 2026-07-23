@@ -223,7 +223,8 @@ useful "has replication been flaky recently?" signal.
 
 ### list-vpns
 
-List Message VPNs with enabled state, connection count, and basic status.
+List Message VPNs with enabled state, connection count, and basic status. For
+per-service TLS status and AMQP support, use `get-vpn-status`.
 
 **Parameters:**
 
@@ -296,10 +297,12 @@ equivalents.
 
 ### list-queues
 
-List queues in a VPN with depth, unacked count, bind count, congestion state, and
+List queues in a VPN with cumulative spooled count (`spooledMsgCount` — lifetime,
+not live depth), unacked count, bind count, congestion state, and
 rates. Primary VPN-wide scan for slow guaranteed-message consumers (growing
 `spooledMsgCount`, high `txUnackedMsgCount`, `rxMsgRate > txMsgRate`,
-`bindCount > 0`).
+`bindCount > 0`). For authoritative current queue depth and per-queue
+discard/redelivery counters, use `get-queue-metrics`.
 
 **Parameters:**
 
@@ -356,7 +359,9 @@ flip for slow ACKs).
 
 List active clients in a VPN with rates, uptime, and the `slowSubscriber` field.
 Note: `slowSubscriber` flags TCP-egress stalls (mainly direct messaging); it does
-not flip for slow guaranteed consumers — use `list-queues` for those.
+not flip for slow guaranteed consumers — use `list-queues` for those. For
+per-client discard counts, byte/message rates, and software version, use
+`get-client-details`.
 
 **Parameters:**
 
