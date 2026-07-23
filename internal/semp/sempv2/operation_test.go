@@ -86,6 +86,11 @@ func TestParseSpecs_BodyFields(t *testing.T) {
 		}
 	}
 
+	// SchemaVersion carries the spec's info.version for use in unknown-attribute errors.
+	if create.SchemaVersion == "" {
+		t.Error("config/createMsgVpn.SchemaVersion should be populated from the spec's info.version")
+	}
+
 	// A GET op has no request body, so BodyFields is nil (validation skipped).
 	get, ok := ops["monitor/getMsgVpnQueue"]
 	if !ok {

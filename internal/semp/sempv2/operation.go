@@ -15,13 +15,14 @@ import (
 // It holds the HTTP method, path template with parameter placeholders, and the
 // parameter definitions needed to construct a valid request.
 type Operation struct {
-	ID          string         // operationId from OpenAPI spec (e.g., "getMsgVpnQueue")
-	Method      string         // HTTP method (GET, POST, PUT, PATCH, DELETE)
-	Path        string         // path template including basePath (e.g., "/SEMP/v2/monitor/msgVpns/{msgVpnName}/queues/{queueName}")
-	Parameters  []Parameter    // path, query, and body parameters
-	Description string         // human-readable description from the spec
-	BodyFields map[string]bool // BodyFields is the set of attribute names the operation's request body accepts, resolved from the body parameter's
-	                           // schema. It is nil when the operation has no body or its schema couldn't be resolved to a concrete property set.
+	ID          string          // operationId from OpenAPI spec (e.g., "getMsgVpnQueue")
+	Method      string          // HTTP method (GET, POST, PUT, PATCH, DELETE)
+	Path        string          // path template including basePath (e.g., "/SEMP/v2/monitor/msgVpns/{msgVpnName}/queues/{queueName}")
+	Parameters  []Parameter     // path, query, and body parameters
+	Description string          // human-readable description from the spec
+	BodyFields  map[string]bool // BodyFields is the set of attribute names the operation's request body accepts, resolved from the body parameter's
+// schema. It is nil when the operation has no body or its schema couldn't be resolved to a concrete property set.
+	SchemaVersion string        // broker version of the embedded spec this operation was parsed from (info.version, e.g. "10.26.2.9715").
 }
 
 // Parameter describes a single parameter for a SEMPv2 operation.
@@ -109,12 +110,13 @@ func ParseSpecs(fsys fs.FS) (map[string]*Operation, error) {
 
 				key := specType + "/" + opDef.OperationID
 				operations[key] = &Operation{
-					ID:          opDef.OperationID,
-					Method:      method,
-					Path:        spec.BasePath + path,
-					Parameters:  params,
-					Description: description,
-					BodyFields:  extractBodyFields(opDef, spec.Parameters, spec.Definitions),
+					ID:            opDef.OperationID,
+					Method:        method,
+					Path:          spec.BasePath + path,
+					Parameters:    params,
+					Description:   description,
+					BodyFields:    extractBodyFields(opDef, spec.Parameters, spec.Definitions),
+					SchemaVersion: spec.Info.Version,
 				}
 			}
 		}

@@ -570,7 +570,8 @@ func TestExecute_UpdateMessageVPN_RejectsUnknownBodyField(t *testing.T) {
 				{Name: "msgVpnName", In: "path", Type: "string", Required: true},
 				{Name: "body", In: "body", Type: "object", Required: true},
 			},
-			BodyFields: map[string]bool{"msgVpnName": true, "enabled": true},
+			BodyFields:    map[string]bool{"msgVpnName": true, "enabled": true},
+			SchemaVersion: "10.26.2.9715",
 		},
 	}
 	executor := NewCompositeExecutor(ops)
@@ -587,6 +588,11 @@ func TestExecute_UpdateMessageVPN_RejectsUnknownBodyField(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "dryRun") {
 		t.Errorf("error should name the unknown field, got: %v", err)
+	}
+	// The message must carry the schema version so the reader can judge whether the
+	// attribute is simply newer than the embedded spec.
+	if !strings.Contains(err.Error(), "broker v10.26.2.9715") {
+		t.Errorf("error should report the embedded schema version, got: %v", err)
 	}
 	if len(recorded) != 0 {
 		t.Errorf("expected no SEMP calls on rejected body, got %d", len(recorded))
