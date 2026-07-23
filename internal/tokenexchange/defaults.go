@@ -45,6 +45,56 @@ const (
 	DefaultRetryWaitMax = 2 * time.Second
 )
 
+// Circuit-breaker defaults. Unexported because only DefaultCircuitBreakerConfig
+// reads them — no other package touches these numbers, and operator config
+// (broker_oauth.circuit_breaker) overlays the runtime struct in
+// resolveCircuitBreakerConfig rather than modifying these constants.
+//
+// Each value is anchored to the defaults mainstream breakers ship, then adjusted
+// for this deployment's shape: one shared IdP, protected by one process-wide
+// breaker, at token-exchange volumes (lower than a general RPC path). Reference
+// points: Hystrix, Resilience4j, Polly, Envoy outlier detection, sony/gobreaker.
+const (
+	// 30s: long enough to ride out a brief blip, short enough that a resolved
+	// outage stops influencing the breaker within ~half a minute. Deliberately
+	// longer than mainstream defaults (Hystrix 10s, Polly 30s, Envoy 10s)
+	// because token-exchange traffic is lower-volume, so a slightly longer
+	// window gathers a usable sample.
+	defaultCircuitBreakerFailureRateWindow = 30 * time.Second
+
+	// 10: minimum classified operations before the rate rule may trip, so a
+	// 2-out-of-2 blip cannot open the breaker. Lower than Hystrix's 20 and
+	// Resilience4j's 100 on purpose — those protect high-volume RPC paths;
+	// token exchange sees far less traffic, and the consecutive-failure rule
+	// covers the fast-failing low-traffic outage case the higher minimums
+	// would miss (but not the slow-failure one — see newReadyToTrip).
+	defaultCircuitBreakerMinimumRequests uint32 = 10
+
+	// 50%: half of counted (non-excluded) operations failing is a clear outage
+	// signal. Mirrors Resilience4j's and Polly's failure-rate defaults exactly.
+	defaultCircuitBreakerFailureRateThresholdPercent float64 = 50
+
+	// 5: consecutive failures trip without waiting for the rate rule's sample —
+	// the fast path for a fast-failing outage (e.g. connection refused). The
+	// counter is window-bound and decays as rolling buckets age out, so slow
+	// deadline-bound failures do not accumulate (see newReadyToTrip). Matches
+	// gobreaker's and Envoy's consecutive-5xx default of 5.
+	defaultCircuitBreakerConsecutiveFailureThreshold uint32 = 5
+
+	// 30s open before probing recovery. Between Hystrix's 5s and Resilience4j's/
+	// gobreaker's 60s. Long enough not to hammer a still-down IdP, short enough
+	// that recovery is detected promptly. Note gobreaker applies no jitter to
+	// this timeout, so raising it uniformly across a multi-replica fleet shifts
+	// simultaneous probing later rather than de-correlating it.
+	defaultCircuitBreakerOpenStateDuration = 30 * time.Second
+
+	// 2: recovery probes admitted in half-open. Requires two consecutive
+	// successes to close (stronger evidence than a single probe) without
+	// bursting a fragile IdP. Between the common "1 trial call" (Hystrix, Polly,
+	// gobreaker) and Resilience4j's 10.
+	defaultCircuitBreakerHalfOpenProbeRequests uint32 = 2
+)
+
 // ComputeChainDeadline returns the total time budget for one exchange's
 // retry loop, applied via `context.WithTimeout` around the singleflight
 // function. The value bounds every attempt AND every backoff together —
@@ -59,11 +109,14 @@ const (
 // With this package's defaults (5s, 2, 2s) the formula yields
 // 3*5s + 2*2s = 19s.
 //
-// The override parameter exists as an extensibility seam: a future YAML
-// path could surface a user-visible `broker_oauth.retry.chain_deadline`
-// key and thread it here. Today no caller passes a positive override,
-// so the formula wins. Keeping it in the signature costs nothing and
-// avoids the "extract override support later" refactor.
+// The override parameter exists as an extensibility seam. Unlike the
+// circuit breaker (whose broker_oauth.circuit_breaker YAML block is
+// shipped), the retry knobs have no YAML surface: a future
+// `broker_oauth.retry.chain_deadline` key could thread here. Today no
+// production caller passes a positive override (only tests do, via
+// Params.ChainDeadline), so the formula wins. Keeping it in the
+// signature costs nothing and avoids the "extract override support
+// later" refactor.
 //
 // Rationale for a formula rather than a hardcoded constant: retry knobs
 // compose — changing PerAttemptTimeout or MaxRetries without adjusting
