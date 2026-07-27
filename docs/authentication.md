@@ -481,9 +481,10 @@ A browser window opens on first use for user login. The IdP must support anonymo
 > **Two independent auth legs.** Client→server auth (steps 1–8, the JWT above) is
 > distinct from server→broker auth (step 9 or 10 depending on whether tool
 > authorization is enabled), which uses each broker's configured `auth.mode`
-> (`basic` or `bearer`). Broker-bound OAuth via RFC 8693 token exchange (the
-> `broker_oauth:` config block) is **schema-only** in the current release and
-> not yet wired — see the [CHANGELOG](../CHANGELOG.md).
+> (`basic`, `bearer`, or `oauth`). Broker-bound OAuth via RFC 8693 token
+> exchange (the `broker_oauth:` config block) obtains a broker-bound token by
+> exchanging the client's Hop 1 token, and requires `mcp_client_auth.mode:
+> oauth` — see the [CHANGELOG](../CHANGELOG.md).
 
 The numbered steps in detail:
 
