@@ -21,6 +21,10 @@ import (
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 )
 
+// boolPtr returns a pointer to v, for the *bool annotation fields that
+// distinguish "omitted" from "explicitly false".
+func boolPtr(v bool) *bool { return &v }
+
 // mockClient implements sempv2.Client for testing. It records which operations
 // were called (in order) and returns preconfigured responses.
 type mockClient struct {

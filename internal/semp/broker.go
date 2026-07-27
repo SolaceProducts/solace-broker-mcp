@@ -24,20 +24,26 @@ import (
 // the broker's lifetime — see Decision 7 in
 // docs/oauth/token-exchange-SOL-150070/architecture-plan.md for the rationale.
 type BrokerClient struct {
-	sempV1Client *sempv1.HTTPClient // SEMPv1 protocol client (concrete for Close)
-	sempV2Client *sempv2.HTTPClient // SEMPv2 protocol client (concrete for Close)
+	sempV1Client *sempv1.HTTPClient // SEMPv1 protocol client
+	sempV2Client *sempv2.HTTPClient // SEMPv2 protocol client
 	// authenticator is the single Authenticator built for a broker. Both
 	// protocol clients already hold this pointer via their Sender. Retained
 	// here for future accessors (e.g. health checks, token introspection).
 	authenticator auth.Authenticator
-	alias         string // broker alias (for error messages)
+	// rateLimiter is the broker's shared request pacer, held by both protocol
+	// clients' Senders. Owned here so Close() is its single stop site.
+	rateLimiter *resilience.RateLimiter
+	alias       string // broker alias (for error messages)
 }
 
 // NewBrokerClient creates a BrokerClient for the given broker configuration.
 // It initializes the SEMPv1 and SEMPv2 HTTP clients with the broker's
-// connection settings. Both clients share one in-flight semaphore so
-// semp.max_concurrent_per_broker caps the broker as a whole, not each
-// protocol client separately.
+// connection settings. Both clients share one in-flight semaphore and one
+// rate limiter, so semp.max_concurrent_per_broker and
+// semp.request_min_interval cap the broker as a whole rather than each
+// protocol client separately. Per-client copies of either would silently
+// allow 2× the configured value (SOL-150116 for the cap, SOL-152401 for the
+// rate).
 //
 // NewBrokerClient is the single builder of per-broker Authenticators. It
 // delegates to newAuthenticator to construct exactly one Authenticator
@@ -67,18 +73,22 @@ func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *conf
 		return nil, fmt.Errorf("creating authenticator for broker %q: %w", alias, err)
 	}
 	sem := resilience.NewSemaphore(sempCfg.MaxConcurrentPerBroker)
-	sempV1Client, err := sempv1.NewHTTPClient(brokerCfg, sempCfg, sem, authn, jar)
+	limiter := resilience.NewRateLimiter(*sempCfg.RequestMinInterval)
+	sempV1Client, err := sempv1.NewHTTPClient(brokerCfg, sempCfg, sem, limiter, authn, jar)
 	if err != nil {
+		limiter.Stop()
 		return nil, fmt.Errorf("creating SEMPv1 client for broker %q: %w", alias, err)
 	}
-	sempV2Client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, sem, authn, jar)
+	sempV2Client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, sem, limiter, authn, jar)
 	if err != nil {
+		limiter.Stop()
 		return nil, fmt.Errorf("creating SEMPv2 client for broker %q: %w", alias, err)
 	}
 	return &BrokerClient{
 		sempV1Client:  sempV1Client,
 		sempV2Client:  sempV2Client,
 		authenticator: authn,
+		rateLimiter:   limiter,
 		alias:         alias,
 	}, nil
 }
@@ -95,10 +105,12 @@ func (b *BrokerClient) SEMPv2() sempv2.Client {
 	return b.sempV2Client
 }
 
-// Close releases resources held by both protocol clients (rate limiter tickers).
+// Close releases the broker's shared rate limiter. It is the single stop site:
+// the limiter is created once per broker and both protocol clients only read
+// from it, so there is nothing per-client left to release. Safe to call more
+// than once.
 func (b *BrokerClient) Close() {
-	b.sempV1Client.Close()
-	b.sempV2Client.Close()
+	b.rateLimiter.Stop()
 }
 
 // newCookieJar returns a SafeCookieJar for basic auth brokers, nil for

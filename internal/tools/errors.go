@@ -184,6 +184,29 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 		// The underlying network error can contain a host or IP address, so
 		// don't show it. Just report how many attempts were made and the
 		// status. Retry-exhaustion carries no object-level suggestions.
+		if retriesErr.NonIdempotent {
+			// The request was deliberately not replayed because the broker may
+			// already have carried it out. Telling the agent to try again would
+			// re-run exactly the side effect the retry policy just refused to
+			// duplicate — for a queue purge, destroying everything spooled
+			// since the original call.
+			msg := "Request failed and was deliberately not retried, because repeating " +
+				"this operation is not safe: the broker may have already applied it. " +
+				"Check the current state before deciding whether to issue it again."
+			// The broker's own reason, when it gave one, is what narrows "may have
+			// applied it" down to an answer. A 503 saying "Replication Is Standby"
+			// or "VPN busy reconciling" is a pre-execution rejection: nothing ran.
+			// Withholding it leaves the agent guessing on the one operation where
+			// guessing is most expensive.
+			//
+			// Subject to the same 5xx suppression as every other broker-text path:
+			// the gate fires on 429, 503, and other 5xx, and that last group is
+			// exactly the class whose description may carry internal detail.
+			if retriesErr.Detail != "" && brokerTextMayBeShown(retriesErr.StatusCode) {
+				msg += " The broker reported: " + sanitizeBrokerText(retriesErr.Detail)
+			}
+			return msg, nil
+		}
 		return fmt.Sprintf(
 			"Request failed after %d attempts (HTTP %d). Internal retries exhausted; try again later.",
 			retriesErr.Attempts, retriesErr.StatusCode), nil
@@ -206,7 +229,7 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 
 	// Suggestions, shared by the SEMPv1/SEMPv2 paths. Server-suppressed 5xx
 	// (except 503) get no object-level guidance.
-	if status >= 500 && status != 503 {
+	if !brokerTextMayBeShown(status) {
 		return message, nil
 	}
 	// Code 72 (permission denied): when the caller's broker alias is known,
@@ -272,14 +295,26 @@ func buildSEMPv1Message(err *sempv1.Error) string {
 	}
 }
 
+// brokerTextMayBeShown reports whether the broker's own description is safe to
+// pass to the agent for this status.
+//
+// 500-class responses can carry internal detail — stack context, hostnames,
+// component names — so their text is replaced with a generic message. 503 is
+// the deliberate exception: it carries a safe and operationally useful reason
+// (e.g. "VPN 'X' is busy reconciling", "Replication Is Standby").
+//
+// This is the single definition of that rule. Every path that echoes broker
+// text to the agent must go through it — the rule was previously restated at
+// each site, and a new path that forgot it leaked 5xx detail (caught in review
+// on #219).
+func brokerTextMayBeShown(status int) bool {
+	return status < 500 || status == 503
+}
+
 func buildSEMPv2Message(err *sempv2.SEMPError) string {
-	// For 500 and other server errors, display a generic message so we don't
-	// leak internal detail. 503 is the exception: it carries a safe, useful
-	// reason (e.g. "VPN 'X' is busy reconciling", "Replication Is Standby"),
-	// so we let it through.
 	var msg string
 	switch {
-	case err.StatusCode >= 500 && err.StatusCode != 503:
+	case !brokerTextMayBeShown(err.StatusCode):
 		msg = genericInternalMessage
 	case err.Description != "":
 		msg = sanitizeBrokerText(err.Description)
@@ -300,7 +335,11 @@ func isRetryable(err error) bool {
 	}
 	var retriesErr *resilience.RetriesExhaustedError
 	if errors.As(err, &retriesErr) {
-		return true
+		// A request the caller declared non-idempotent was not replayed at all,
+		// because the broker may already have carried it out. Reporting it as
+		// retryable would invite the agent to repeat the very side effect the
+		// retry policy refused to duplicate.
+		return !retriesErr.NonIdempotent
 	}
 	var sempv2Err *sempv2.SEMPError
 	if errors.As(err, &sempv2Err) {

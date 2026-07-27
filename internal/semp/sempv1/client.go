@@ -52,12 +52,6 @@ func (c *HTTPClient) LogValue() slog.Value {
 	)
 }
 
-// Close releases resources held by the HTTPClient (rate limiter ticker).
-// Safe to call multiple times.
-func (c *HTTPClient) Close() {
-	c.sender.Close()
-}
-
 // NewHTTPClient creates an HTTPClient configured for a specific broker. It
 // sets up a per-broker HTTP transport with TLS settings and delegates retry
 // and rate limiting to a shared resilience.Sender. No network I/O happens
@@ -72,7 +66,13 @@ func (c *HTTPClient) Close() {
 // sem is the broker's shared in-flight semaphore and must be non-nil
 // (resilience.New panics otherwise); see semp.NewBrokerClient, which shares
 // one semaphore across both protocol clients of a broker.
-func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, sem resilience.Semaphore, authn auth.Authenticator, jar *resilience.SafeCookieJar) (*HTTPClient, error) {
+//
+// limiter is the broker's shared rate limiter and must likewise be non-nil
+// (resilience.New panics otherwise). It carries the same sharing requirement:
+// one per broker, passed to both protocol clients, because a per-client limiter
+// admits up to 2x the configured rate (SOL-152401). Its lifetime belongs to the
+// caller — BrokerClient.Close() stops it, so this client must not.
+func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, sem resilience.Semaphore, limiter *resilience.RateLimiter, authn auth.Authenticator, jar *resilience.SafeCookieJar) (*HTTPClient, error) {
 	if authn == nil {
 		panic("sempv1.NewHTTPClient: nil authenticator")
 	}
@@ -93,7 +93,7 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, s
 	baseURL := strings.TrimSuffix(brokerCfg.URL, "/")
 
 	return &HTTPClient{
-		sender:        resilience.New(httpClient, sempCfg, authn, baseURL, sem),
+		sender:        resilience.New(httpClient, sempCfg, authn, baseURL, sem, limiter),
 		baseURL:       baseURL,
 		authenticator: authn,
 	}, nil
