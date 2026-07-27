@@ -4,8 +4,8 @@
 # check against them, and asserts the exit code and output.
 #
 # Run manually:  .github/scripts/dco-check.test.sh
-# Runs in CI as the first step of the `dco` job in .github/workflows/ci-pr.yaml,
-# so the gate's logic is verified on every PR rather than trusted.
+# Runs in CI as a step of the `dco` job in .github/workflows/dco.yaml, so the
+# gate's logic is verified on every PR rather than trusted.
 #
 set -euo pipefail
 

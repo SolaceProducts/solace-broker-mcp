@@ -152,6 +152,19 @@ Navigate to: **Settings → Branches → Branch protection rules → Add rule**
 > Worth enabling alongside, though not a substitute for either: **Require review
 > from Code Owners** (see above), so a change to the gate itself cannot land
 > unreviewed.
+>
+> **Interaction with fork workflow approval.** If you set *Require approval for
+> all outside collaborators* (Settings → Actions → General), the `pull_request`
+> jobs in `ci-pr.yaml` sit queued on an outside contributor's PR until a
+> maintainer approves the run, and their checks read **pending**, not failing.
+> `DCO sign-off` is exempt, because GitHub runs `pull_request_target` workflows
+> "in the context of the base branch … regardless of approval settings". It
+> reports a real verdict straight away.
+>
+> The failure mode to avoid: seeing a *different* check stuck pending on a fork
+> PR, concluding the required-checks list is misconfigured, and dropping
+> `DCO sign-off` from it. That quietly removes the control. If a check is
+> pending on a fork PR, approve the workflow run; do not edit the required list.
 
 **Rules applied to admins:**
 - ⬜ Allow admins to bypass (leave UNCHECKED - admins should follow same rules)

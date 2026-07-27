@@ -25,6 +25,17 @@ name: DCO
 # that adds or edits this workflow does not exercise its own new version. The
 # base ref's version runs. The change takes effect for pull requests opened
 # after it merges.
+#
+# Second consequence, and a useful one. When the repository requires approval
+# for fork pull request workflows ("Require approval for all outside
+# collaborators"), a `pull_request` run sits queued until a maintainer approves
+# it, so its checks show as *pending* rather than passing or failing. This gate
+# is exempt. Per GitHub's documentation: "Workflows triggered by
+# pull_request_target events are run in the context of the base branch. Since
+# the base branch is considered trusted, workflows triggered by these events
+# will always run, regardless of approval settings." So DCO reports a real
+# verdict on an outside contributor's first pull request without a maintainer
+# having to click anything, while the `pull_request` jobs in ci-pr.yaml wait.
 
 on:
   pull_request_target:

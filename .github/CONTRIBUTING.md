@@ -273,6 +273,11 @@ The check reports the offending commits and the exact commands to fix them. Ther
 is no label or flag that skips it. Use your real name — no pseudonyms or
 anonymous contributions.
 
+If you are contributing from a fork, some of our CI jobs wait for a maintainer to
+approve the run and will show as **pending** on your first PR. That is normal and
+nothing for you to fix. `DCO sign-off` is not one of them: it runs straight away,
+so its result is always a real verdict on your commits.
+
 ## Questions?
 
 - **General questions:** Start a [GitHub Discussion](https://github.com/SolaceDev/solace-broker-mcp/discussions)
