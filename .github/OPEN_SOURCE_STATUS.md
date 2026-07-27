@@ -109,11 +109,14 @@ These settings must be configured by repository admin:
 - Require PR reviews before merge
 - Require CI checks to pass
 - Prevent force pushes to main
-- See: ADMIN_SETUP.md → "Branch Protection Rules"
+- See: ADMIN_SETUP.md → "Branch Protection"
 
 ### 4. Security Features (5 minutes)
 - Enable secret scanning and secret-scanning push protection (both currently off)
-- Dependabot alerts, Dependabot security updates, and CodeQL are already on
+- Turn off "Allow GitHub Actions to create and approve pull requests" (currently on)
+- Dependabot alerts and Dependabot security updates are already on
+- CodeQL runs on every PR, but the repository API reports Code Security as
+  disabled; confirm the configuration rather than assuming it
 - See: ADMIN_SETUP.md → "Security Settings"
 
 ### 5. Make Repository Public (5 minutes)
@@ -148,7 +151,7 @@ These settings must be configured by repository admin:
 
 ### Immediate (Before Public Release)
 
-1. **Admin configures repository** - See ADMIN_SETUP.md (~30 minutes)
+1. **Admin configures repository** - See ADMIN_SETUP.md (~40 minutes)
 2. **Cut a release if `[Unreleased]` warrants it** - See RELEASING.md
 3. **Make repository public** - Settings → Danger Zone → Change visibility
 
