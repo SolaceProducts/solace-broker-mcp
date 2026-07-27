@@ -113,7 +113,7 @@ go run ./cmd/server
 
 ### PR Review Process
 
-1. **Automated checks** — CI must pass (build, lint, test, E2E)
+1. **Automated checks** — CI must pass (build, lint, test, E2E, DCO sign-off)
 2. **Maintainer review** — At least one maintainer approval required
 3. **Address feedback** — Respond to review comments and make requested changes
 4. **Squash or rebase** — Clean up commit history if requested
@@ -242,17 +242,31 @@ Signed-off-by: Your Name <your.email@example.com>
 
 ```bash
 # Amend the last commit
-git commit --amend -s
+git commit --amend -s --no-edit && git push --force-with-lease
 
 # Sign off all commits in your branch
-git rebase HEAD~N --signoff  # N = number of commits
+git rebase --signoff HEAD~N && git push --force-with-lease  # N = number of commits
 ```
+
+`git commit -s` signs off with your `git config user.email`, which is also the
+address CI matches against, so make sure it is set to the one you mean to use.
 
 ### Enforcement
 
-- CI checks for DCO sign-off on all commits
-- PRs with unsigned commits will not be merged
-- Use your real name (no pseudonyms or anonymous contributions)
+The `DCO sign-off` check in CI blocks any PR that is missing a sign-off. What it
+checks, precisely:
+
+- Every commit your PR adds. Commits already on `main` are not re-checked.
+- Each of those commits needs a `Signed-off-by:` line whose email matches the
+  commit's own author or committer, compared case-insensitively. A sign-off
+  copied along with someone else's commit does not count.
+- Merge commits are exempt, so `git merge main` to refresh your branch is fine.
+- `Co-Authored-By:` trailers are ignored. Co-authors do not need their own
+  sign-off.
+
+The check reports the offending commits and the exact commands to fix them. There
+is no label or flag that skips it. Use your real name — no pseudonyms or
+anonymous contributions.
 
 ## Questions?
 

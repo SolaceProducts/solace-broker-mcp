@@ -133,9 +133,16 @@ Navigate to: **Settings → Branches → Branch protection rules → Add rule**
     - `lint`
     - `e2e`
     - `e2e-oauth`
+    - `DCO sign-off`
 - ✅ **Require conversation resolution before merging**
 - ✅ **Do not allow bypassing the above settings** (enforces rules for admins too)
-- ⬜ Require signed commits (optional - DCO is sufficient)
+- ⬜ Require signed commits (optional — GPG signing is separate from DCO)
+
+> **`DCO sign-off` is not optional.** It stands in for a contributor licence
+> agreement, and a check that is not in the list above enforces nothing. It also
+> has to be *required* rather than merely present: `pull_request` workflows run
+> from the PR's own ref, so a fork can delete the job — a required check that
+> never reports blocks the merge, an unrequired one does not.
 
 **Rules applied to admins:**
 - ⬜ Allow admins to bypass (leave UNCHECKED - admins should follow same rules)
@@ -235,7 +242,7 @@ GitHub Rulesets are the new way to configure branch protection (more flexible th
 - Bypass: Nobody (or specific users/teams)
 - Rules:
   - Require pull request with 1 approval
-  - Require status checks: build, lint, e2e, e2e-oauth
+  - Require status checks: build, lint, e2e, e2e-oauth, `DCO sign-off`
   - Block force pushes
   - Block deletions
 

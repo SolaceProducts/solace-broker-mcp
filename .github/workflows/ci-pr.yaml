@@ -29,6 +29,29 @@ jobs:
       # Vault address is injected from an org/repo secret, not committed to the repo.
       VAULT_URL: ${{ secrets.VAULT_URL }}
 
+  dco:
+    name: DCO sign-off
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # The check walks the PR's commit range, so it needs real history.
+          fetch-depth: 0
+      # The gate stands in for a contributor licence agreement, so its logic is
+      # verified on every run rather than trusted. Fails closed: a broken check
+      # blocks the merge instead of waving it through.
+      - name: Self-test the DCO check
+        run: .github/scripts/dco-check.test.sh
+      - name: Verify every commit contributed by this PR is signed off
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: .github/scripts/dco-check.sh
+
   changelog:
     name: CHANGELOG updated
     runs-on: ubuntu-latest
