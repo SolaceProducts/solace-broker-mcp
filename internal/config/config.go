@@ -105,16 +105,20 @@ type ServerConfig struct {
 // their respective allowlists (validGrantTypes, validAudienceParams). No
 // defaults — operators acknowledge each protocol choice explicitly.
 type BrokerOAuthConfig struct {
-	TokenURL       string                      `yaml:"idp_token_endpoint"`      // IdP token endpoint (token-exchange POST target). YAML key uses "endpoint" to match the OAuth spec and OIDC Discovery JSON (`token_endpoint`); Go field keeps `URL` to match the language convention (golang.org/x/oauth2 also names its field TokenURL).
-	ClientID       string                      `yaml:"mcp_server_client_id"`    // MCP server's client_id registered at the IdP
-	ClientAuth     BrokerClientAuth            `yaml:"mcp_server_client_auth"`  // discriminated union; exactly one sub-block populated
-	GrantType      string                      `yaml:"grant_type"`              // required; must be in validGrantTypes
-	AudienceParam  string                      `yaml:"audience_parameter_name"` // required; one of {audience, scope, resource}
-	CircuitBreaker *IdPCircuitBreakerConfig    `yaml:"circuit_breaker"`         // optional; nil → safe defaults. Nested here (not top-level) because the breaker protects the IdP token exchange, which exists only when this block does.
+	TokenURL       string                   `yaml:"idp_token_endpoint"`      // IdP token endpoint (token-exchange POST target). YAML key uses "endpoint" to match the OAuth spec and OIDC Discovery JSON (`token_endpoint`); Go field keeps `URL` to match the language convention (golang.org/x/oauth2 also names its field TokenURL).
+	ClientID       string                   `yaml:"mcp_server_client_id"`    // MCP server's client_id registered at the IdP
+	ClientAuth     BrokerClientAuth         `yaml:"mcp_server_client_auth"`  // discriminated union; exactly one sub-block populated
+	GrantType      string                   `yaml:"grant_type"`              // required; must be in validGrantTypes
+	AudienceParam  string                   `yaml:"audience_parameter_name"` // required; one of {audience, scope, resource}
+	CircuitBreaker *IdPCircuitBreakerConfig `yaml:"circuit_breaker"`         // optional; nil → safe defaults. Nested here (not top-level) because the breaker protects the IdP token exchange, which exists only when this block does.
+	RetryAfter     *IdPRetryAfterConfig     `yaml:"retry_after"`             // optional; nil → shipped default cap (SOL-152285)
 }
 
 // IdPCircuitBreakerConfig, its BreakerEnabled helper, validation, and the
 // shared ceiling constants live in idp_circuit_breaker.go.
+//
+// IdPRetryAfterConfig, its validation, and its ceiling constant live in
+// idp_retry_after.go.
 
 // BrokerClientAuth is a discriminated union of OAuth client authentication
 // methods the MCP server uses with the IdP at the token endpoint. Exactly
@@ -1456,6 +1460,7 @@ func validateBrokerOAuthConfig(cfg *ServerConfig) []error {
 	errs = append(errs, validateBrokerClientAuth(cfg.BrokerOAuth.ClientAuth)...)
 
 	errs = append(errs, validateIdPCircuitBreaker(cfg.BrokerOAuth.CircuitBreaker)...)
+	errs = append(errs, validateIdPRetryAfter(cfg.BrokerOAuth.RetryAfter)...)
 
 	return errs
 }

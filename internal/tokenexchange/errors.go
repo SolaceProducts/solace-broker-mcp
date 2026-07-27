@@ -29,8 +29,9 @@ import (
 //
 // Sentinel is one of ErrExchangeRejected, ErrExchangeTransport,
 // ErrInvalidResponse, ErrExchangeMissingSubject, ErrExchangeRequestBuild,
-// ErrExchangeRetriesExhausted, or ErrExchangeCircuitOpen. Unwrap returns
-// it so errors.Is works through any number of wrapping layers.
+// ErrExchangeRetriesExhausted, ErrExchangeCircuitOpen, or
+// ErrExchangeRateLimited. Unwrap returns it so errors.Is works through any
+// number of wrapping layers.
 //
 // Message is human-readable and safe to log (no tokens, secrets, or
 // error_description fields). It is the value Error() returns.
@@ -52,6 +53,16 @@ type ExchangeError struct {
 	// cause the breaker still has once retries are exhausted.
 	FailureClass FailureClass
 	Elapsed      time.Duration
+	// RetryAfterResult carries the outcome of parsing the 429 response's
+	// Retry-After header (present only when HTTPStatus == 429). Populated in
+	// parseIdPResponse and copied forward by classifyRetryOutcome's rewrap
+	// to ErrExchangeRetriesExhausted — the same "survive the rewrap"
+	// treatment FailureClass gets, and for the same reason: this is the
+	// last attempt's signal, and it is what runExchangeOnce uses to raise
+	// the shared rate-limit gate on exhaustion. Nil when the response was
+	// not a 429 at all (as opposed to a 429 with no usable header, which
+	// is a non-nil result with ok == false).
+	RetryAfterResult *retryAfterResult
 }
 
 func (e *ExchangeError) Error() string { return e.Message }
@@ -64,11 +75,9 @@ func (e *ExchangeError) Unwrap() error { return e.Sentinel }
 // never embedded — sentinel-specific detail belongs on LogAttrs, not
 // on the agent surface. See PR SOL-151520 for the rationale.
 func (e *ExchangeError) AgentMessage(brokerAlias string) string {
-	if errors.Is(e, ErrExchangeTransport) || errors.Is(e, ErrExchangeRetriesExhausted) || errors.Is(e, ErrExchangeCircuitOpen) {
-		// Deliberately not broker-named: the IdP is a shared component,
-		// so a transport-class failure affects every broker at once.
-		// Naming a broker here would mislead the agent into thinking a
-		// different broker might work.
+	if errors.Is(e, ErrExchangeTransport) || errors.Is(e, ErrExchangeRetriesExhausted) || errors.Is(e, ErrExchangeCircuitOpen) || errors.Is(e, ErrExchangeRateLimited) {
+		// Deliberately not broker-named: the IdP is shared, so naming one
+		// broker would mislead the agent into thinking another might work.
 		return "Authentication is unavailable — the identity provider is not responding."
 	}
 	return fmt.Sprintf("Authentication failed for broker %q. This is a server-side issue.", brokerAlias)
@@ -99,6 +108,11 @@ func (e *ExchangeError) LogAttrs() []slog.Attr {
 	// "the breaker fast-failed this" rather than substring-matching the message.
 	if errors.Is(e, ErrExchangeCircuitOpen) {
 		attrs = append(attrs, slog.String("breaker_state", "open"))
+	}
+	// Distinct marker from breaker_state: this was the Retry-After gate, not
+	// the breaker, refusing the call.
+	if errors.Is(e, ErrExchangeRateLimited) {
+		attrs = append(attrs, slog.String("gate", "retry_after"))
 	}
 	if e.Elapsed != 0 {
 		attrs = append(attrs, slog.Duration("exchange_elapsed", e.Elapsed))

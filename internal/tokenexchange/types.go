@@ -26,11 +26,13 @@
 //
 // The Exchanger caches successful exchanges, deduplicates concurrent
 // identical exchanges via singleflight to protect the IdP from stampedes,
-// and guards the IdP with a process-wide circuit breaker (circuitbreaker.go).
-// Retries of transient IdP failures live in the injected HTTP client, not
-// here (production wires idpclient.NewRetryingHTTPClient). It does not fall
-// back to a secondary IdP. It builds RFC 8693 requests, parses responses,
-// and classifies failures into the ExchangeError sentinels (errors.go).
+// guards the IdP with a process-wide circuit breaker (circuitbreaker.go),
+// and honors a 429's Retry-After via a shared backoff gate
+// (retry_after_gate.go). Retries of transient IdP failures live in the
+// injected HTTP client, not here (production wires
+// idpclient.NewRetryingHTTPClient). It does not fall back to a secondary
+// IdP. It builds RFC 8693 requests, parses responses, and classifies
+// failures into the ExchangeError sentinels (errors.go).
 package tokenexchange
 
 import (
@@ -139,6 +141,11 @@ type Params struct {
 	// passes DefaultCircuitBreakerConfig(). New validates it and fails
 	// closed if the config is out of bounds.
 	CircuitBreaker *CircuitBreakerConfig
+	// MaxHonoredRetryAfter caps how long the shared Retry-After gate
+	// (SOL-152285) honors an IdP's 429 Retry-After — see clampRetryAfter.
+	// Zero means "use defaultMaxHonoredRetryAfter", same convention as
+	// ChainDeadline above.
+	MaxHonoredRetryAfter time.Duration
 }
 
 // String, GoString, and LogValue redact ClientSecret so Params never leaks
@@ -280,4 +287,10 @@ var (
 	// not retry immediately, and the breaker will admit a probe once its
 	// open duration elapses.
 	ErrExchangeCircuitOpen = errors.New("token exchange circuit open")
+
+	// ErrExchangeRateLimited — a shared gate is honoring the IdP's own
+	// Retry-After from a prior exhausted 429 chain; no IdP round-trip was
+	// attempted. Kept distinct from ErrExchangeCircuitOpen so an operator
+	// can tell "IdP is down" apart from "IdP is fine, just throttling."
+	ErrExchangeRateLimited = errors.New("token exchange rate limited")
 )

@@ -755,6 +755,91 @@ func TestBreaker_HalfOpenExcludedProbeRefundsSlot(t *testing.T) {
 	}
 }
 
+// Uses a RETRYING client (unlike TestBreaker_HalfOpenExcludedProbeRefundsSlot's
+// plain client, which never exhausts — see that test's doc).
+func TestBreaker_HalfOpenRetryAfterGateBlocksNextProbe(t *testing.T) {
+	t.Parallel()
+	var mode atomic.Int32 // 0=unhealthy(503), 1=rate-limited(429 + Retry-After), 2=healthy(200)
+	var rateLimitedHits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		switch mode.Load() {
+		case 1:
+			rateLimitedHits.Add(1)
+			// Small on purpose: idpclient's retry loop honors Retry-After
+			// UNCAPPED between attempts, so a larger value here would blow
+			// the ~19s chain deadline before exhaustion and misclassify as
+			// a real breaker failure instead of rate-limited.
+			w.Header().Set("Retry-After", "2")
+			w.WriteHeader(http.StatusTooManyRequests)
+		case 2:
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, successJSON("gate-tok", 3600))
+		default:
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := recoveryBreakerConfig()
+	e := newBreakerTestExchanger(t, srv.URL, cfg)
+
+	// Only the gate's clock is pinned; idpclient's own inter-attempt backoff
+	// has no injectable clock and still runs on real time.
+	gateNow := time.Now()
+	e.nowFunc = func() time.Time { return gateNow }
+
+	_, err := e.Exchange(context.Background(), inputWithSubject("gate-trip"))
+	// Retrying client, so a persistent 503 exhausts to ErrExchangeRetriesExhausted.
+	if !errors.Is(err, ErrExchangeRetriesExhausted) {
+		t.Fatalf("trip call err = %v, want ErrExchangeRetriesExhausted", err)
+	}
+
+	mode.Store(1)
+	waitForBreakerState(t, e.breaker, gobreaker.StateHalfOpen)
+
+	_, err = e.Exchange(context.Background(), inputWithSubject("gate-429-probe"))
+	if !errors.Is(err, ErrExchangeRetriesExhausted) {
+		t.Fatalf("429 probe err = %v, want ErrExchangeRetriesExhausted", err)
+	}
+	if got := rateLimitedHits.Load(); got < 2 {
+		t.Fatalf("rate-limited hits = %d, want the chain to have retried at least once before exhausting", got)
+	}
+	if got := e.breaker.State(); got != gobreaker.StateHalfOpen {
+		t.Errorf("breaker State after exhausted 429 probe = %v, want half-open (excluded, must not reopen)", got)
+	}
+
+	hitsBeforeGatedCall := rateLimitedHits.Load()
+	_, err = e.Exchange(context.Background(), inputWithSubject("gate-blocked"))
+	if !errors.Is(err, ErrExchangeRateLimited) {
+		t.Fatalf("gated call err = %v, want ErrExchangeRateLimited", err)
+	}
+	if got := rateLimitedHits.Load(); got != hitsBeforeGatedCall {
+		t.Errorf("rate-limited hits changed from %d to %d — gated call must not reach the IdP", hitsBeforeGatedCall, got)
+	}
+	if got := e.breaker.State(); got != gobreaker.StateHalfOpen {
+		t.Errorf("breaker State after gated rejection = %v, want unchanged half-open (gate check runs before the breaker)", got)
+	}
+
+	gateNow = gateNow.Add(3 * time.Second)
+	mode.Store(2)
+
+	_, err = e.Exchange(context.Background(), inputWithSubject("gate-probe-1"))
+	if err != nil {
+		t.Fatalf("post-gate probe 1 err = %v, want nil", err)
+	}
+	if got := e.breaker.State(); got != gobreaker.StateHalfOpen {
+		t.Errorf("breaker State after 1 healthy probe = %v, want half-open (still needs 2 consecutive)", got)
+	}
+
+	_, err = e.Exchange(context.Background(), inputWithSubject("gate-probe-2"))
+	if err != nil {
+		t.Fatalf("post-gate probe 2 err = %v, want nil", err)
+	}
+	if got := e.breaker.State(); got != gobreaker.StateClosed {
+		t.Errorf("breaker State after 2 consecutive healthy probes = %v, want closed", got)
+	}
+}
+
 // TestBreaker_OpenBreakerRejectsStampedeCleanly checks the OTHER concurrency
 // risk: many goroutines hitting an ALREADY-OPEN breaker at once. The rejection
 // path (breaker.Execute short-circuits → mapCircuitOpen converts the library

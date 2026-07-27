@@ -105,7 +105,16 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 // breaker — concurrent identical callers share the winner's result and do not
 // each record an outcome. When the breaker is disabled (nil), the same section
 // runs directly; retries and classification are unaffected.
+//
+// gateCheck runs FIRST, before the breaker — a gated call records no
+// breaker outcome and makes no IdP round-trip, regardless of breaker state.
 func (e *Exchanger) runProtectedExchange(key string, input ExchangeInput) (*Token, error) {
+	if e.gateCheck() {
+		return nil, &ExchangeError{
+			Sentinel: ErrExchangeRateLimited,
+			Message:  "token exchange rate limited: honoring IdP Retry-After, not attempting",
+		}
+	}
 	if e.breaker == nil {
 		return e.runExchangeOnce(key, input)
 	}
@@ -134,7 +143,9 @@ func (e *Exchanger) runExchangeOnce(key string, input ExchangeInput) (*Token, er
 
 	tok, err := e.doExchange(exchCtx, input)
 	if err != nil {
-		return nil, e.classifyRetryOutcome(exchCtx, err, attempts(), input.BrokerAlias)
+		classified := e.classifyRetryOutcome(exchCtx, err, attempts(), input.BrokerAlias)
+		e.raiseGateOnExhaustedRateLimit(classified, input.BrokerAlias)
+		return nil, classified
 	}
 
 	if n := attempts(); n > 1 {
@@ -256,6 +267,9 @@ func (e *Exchanger) classifyRetryOutcome(ctx context.Context, err error, attempt
 	if exchErr != nil {
 		rewrapped.HTTPStatus = exchErr.HTTPStatus
 		rewrapped.FailureClass = exchErr.FailureClass
+		// Survives the rewrap for the same reason FailureClass does — the
+		// gate is raised only from the last attempt's outcome.
+		rewrapped.RetryAfterResult = exchErr.RetryAfterResult
 	} else {
 		rewrapped.FailureClass = FailureClassNetwork
 	}

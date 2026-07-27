@@ -20,6 +20,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -84,11 +85,15 @@ func (e *Exchanger) parseIdPResponse(resp *http.Response, now time.Time) (*Token
 	// ErrExchangeRetriesExhausted — the same downstream sentinel as
 	// exhausted 5xx.
 	if resp.StatusCode == http.StatusTooManyRequests {
+		// Parsed on every 429, not just the last attempt — classifyRetryOutcome
+		// only keeps whichever ExchangeError this call happens to produce last.
+		retryAfter := parseRetryAfter(resp.Header.Values("Retry-After"), now)
 		return nil, &ExchangeError{
-			Sentinel:     ErrExchangeTransport,
-			Message:      "token exchange transport failure: IdP returned HTTP 429 (rate limited)",
-			HTTPStatus:   resp.StatusCode,
-			FailureClass: FailureClassRateLimited,
+			Sentinel:         ErrExchangeTransport,
+			Message:          "token exchange transport failure: IdP returned HTTP 429 (rate limited)",
+			HTTPStatus:       resp.StatusCode,
+			FailureClass:     FailureClassRateLimited,
+			RetryAfterResult: &retryAfter,
 		}
 	}
 
@@ -170,6 +175,42 @@ func responseMediaType(resp *http.Response) string {
 		return ""
 	}
 	return mediaType
+}
+
+// retryAfterResult is the outcome of parsing a Retry-After header. ok is
+// false when absent or unparseable — raw preserves the original value so
+// callers can distinguish "absent" from "present but malformed" in logs.
+type retryAfterResult struct {
+	delay time.Duration
+	ok    bool
+	raw   string
+}
+
+// parseRetryAfter parses delta-seconds or HTTP-date per RFC 9110 §10.2.3.
+// A negative delta or a past HTTP-date (e.g. IdP clock skew) floors to a
+// zero delay rather than a negative one, since a gate must never close
+// before it opens.
+func parseRetryAfter(headerValues []string, now time.Time) retryAfterResult {
+	if len(headerValues) == 0 || headerValues[0] == "" {
+		return retryAfterResult{ok: false}
+	}
+	raw := headerValues[0]
+
+	if seconds, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		if seconds < 0 {
+			return retryAfterResult{delay: 0, ok: true, raw: raw}
+		}
+		return retryAfterResult{delay: time.Duration(seconds) * time.Second, ok: true, raw: raw}
+	}
+
+	if when, err := http.ParseTime(raw); err == nil {
+		if delta := when.Sub(now); delta > 0 {
+			return retryAfterResult{delay: delta, ok: true, raw: raw}
+		}
+		return retryAfterResult{delay: 0, ok: true, raw: raw}
+	}
+
+	return retryAfterResult{ok: false, raw: raw}
 }
 
 // maxExpiresInSeconds is the largest expires_in we accept before
