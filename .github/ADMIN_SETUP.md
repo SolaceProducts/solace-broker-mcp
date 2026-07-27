@@ -215,9 +215,13 @@ both of which need a CI change. Tracked separately.
    triggered by a fork, so the reusable workflow finds an empty Vault URL and
    exits 1. It runs, and it goes red.
 
-`CHANGELOG updated`, `Analyze (go)`, and Copilot review do run normally on fork
-PRs. Until the CI fix lands, merge community contributions by pushing the branch
-into this repository yourself.
+`CHANGELOG updated` and `Analyze (go)` do run on fork PRs. The `changelog` job
+needs only `contents: read` and no secrets, and CodeQL analyzes
+`refs/pull/N/head`. Copilot review is inconsistent even on same-repo PRs, so do
+not count on it either way.
+
+Until the CI fix lands, merge community contributions by pushing the branch into
+this repository yourself.
 
 ---
 
@@ -229,11 +233,17 @@ Navigate to: **Settings → Actions → General → Workflow permissions**
 - ⚪ Read and write permissions (needed for release workflow to create releases).
   Currently set.
 - 🚨 **Allow GitHub Actions to create and approve pull requests: turn this OFF.
-  It is currently ON.** Combined with a write `GITHUB_TOKEN` and a `main` ruleset
-  that needs exactly one approval and has an empty bypass list, a workflow can
-  approve a pull request and satisfy the only human gate on `main`. Nothing here
-  needs it: Renovate opens PRs with its own GitHub App installation token, and no
-  workflow in this repository opens or approves PRs.
+  It is currently ON.** With a write `GITHUB_TOKEN` and a `main` ruleset that
+  needs exactly one approval and has an empty bypass list, a workflow can approve
+  a pull request and satisfy the only human gate on `main`.
+
+  The exposure is not a fork contributor. On a public repo a fork PR's
+  `GITHUB_TOKEN` is read-only. It is a workflow running on a branch *inside* this
+  repository, and this repository allows all actions with no SHA pinning required
+  (see "Fork pull request workflows" below), so a compromised third-party action
+  inherits that ability. Nothing here needs the setting: Renovate opens PRs with
+  its own GitHub App installation token, and no workflow in this repository opens
+  or approves PRs.
 
 **Alternative (more restrictive):**
 - ⚪ Read repository contents and packages permissions
@@ -244,11 +254,18 @@ Navigate to: **Settings → Actions → General → Workflow permissions**
 Navigate to: **Settings → Actions → General → Fork pull request workflows from
 outside collaborators**
 
-Pick the approval posture before the repo goes public. The default on a public
-repo is "require approval for first-time contributors", which is the weakest of
-the three. This repository allows all actions and does not require SHA pinning, so
-"require approval for all outside collaborators" is the safer default until that
-changes.
+Pick the approval posture before the repo goes public. GitHub offers three
+options, and the default on a public repo is the middle one:
+
+1. Require approval for first-time contributors who are new to GitHub
+2. **Require approval for first-time contributors** (the default)
+3. Require approval for all external contributors
+
+Choose option 3. Under the default, a contributor's workflow runs unreviewed from
+their second pull request onward. This repository allows all actions and does not
+require SHA pinning (`allowed_actions: all`, `sha_pinning_required: false`), so
+until that tightens, a human should look at every external workflow run before it
+executes.
 
 ---
 
@@ -271,12 +288,14 @@ writing; re-check, do not assume.
   list.
 - ⬜ **"Allow GitHub Actions to create and approve pull requests" turned off.**
   Still on.
+- ⬜ **Fork pull request workflows set to require approval for all external
+  contributors.** The default is weaker; see the GitHub Actions Permissions
+  section.
 - ⬜ **Secret scanning and push protection enabled.** Both still off.
-- ⬜ **Decide whether to cut a release first.** v0.1.0 through v0.5.0 are already
-  tagged and published (v0.5.0 on 2026-07-10), so this is not about a first
-  release existing. `[Unreleased]` in `CHANGELOG.md` currently carries BREAKING
-  entries, so the public repo's newest release would not describe what is on
-  `main`.
+- ⬜ **A release cut that covers `main`.** v0.1.0 through v0.5.0 are already tagged
+  and published (v0.5.0 on 2026-07-10), so this is not about a first release
+  existing. `[Unreleased]` in `CHANGELOG.md` carries BREAKING entries, so v0.5.0
+  does not describe `main`. Cut one before the flip.
 - ⬜ **`/discussions` links repointed** (see the Features section)
 
 **When ready:**
@@ -309,16 +328,28 @@ Navigate to: **Settings → Collaborators and teams**
 
 Navigate to: **Settings → General → Pull Requests**
 
-**Recommended:**
-- ✅ Allow merge commits (default)
-- ✅ Allow squash merging (useful for cleaning up commit history)
-- ✅ Allow rebase merging
-- ✅ Always suggest updating pull request branches
-- ✅ Automatically delete head branches (keeps repo clean)
+| Setting | Target | Live now |
+|---------|--------|----------|
+| Allow merge commits | ✅ On | On |
+| Allow squash merging | ✅ On | On |
+| Allow rebase merging | ✅ On | On |
+| Automatically delete head branches | ✅ On | On |
+| Always suggest updating pull request branches | ✅ On | **Off** |
 
-**Default commit message:**
-- Squash: "Pull request title and description"
-- Merge: "Pull request title"
+Turn on "Always suggest updating pull request branches". `main-protection` requires
+branches to be up to date before merging, so without the suggestion a contributor
+hits a stale-branch block with no button offering to fix it. That is a poor first
+experience for someone outside the team who does not know the ruleset exists.
+
+**Default commit messages.** Live values, which differ from the labels in the UI:
+
+| Merge type | Title | Message |
+|------------|-------|---------|
+| Squash | `COMMIT_OR_PR_TITLE` | `COMMIT_MESSAGES` |
+| Merge | `MERGE_MESSAGE` | `PR_TITLE` |
+
+These are the defaults and no change is needed. They are recorded here so a future
+reader can tell a deliberate setting from drift.
 
 ---
 
