@@ -205,6 +205,15 @@ func parseRetryAfter(headerValues []string, now time.Time) retryAfterResult {
 		if seconds < 0 {
 			return retryAfterResult{delay: 0, ok: true, raw: raw}
 		}
+		// Bound BEFORE multiplying by time.Second: strconv.ParseInt accepts
+		// any int64, but time.Duration is also int64 nanoseconds, so a huge
+		// seconds value overflows the multiplication and can wrap to an
+		// arbitrary (possibly negative, possibly small-and-plausible-looking)
+		// duration that would silently corrupt the gate. Reuses
+		// maxExpiresInSeconds — same arithmetic ceiling, same file.
+		if seconds > maxExpiresInSeconds {
+			return retryAfterResult{ok: false, raw: raw}
+		}
 		return retryAfterResult{delay: time.Duration(seconds) * time.Second, ok: true, raw: raw}
 	}
 

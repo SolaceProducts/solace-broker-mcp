@@ -19,7 +19,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1070,6 +1072,27 @@ func TestParseRetryAfter(t *testing.T) {
 			headers:   []string{" " + now.Add(90*time.Second).Format(http.TimeFormat) + " "},
 			wantOK:    true,
 			wantDelay: 90 * time.Second,
+		},
+		{
+			name:      "delta-seconds at the overflow ceiling is still valid",
+			headers:   []string{strconv.FormatInt(maxExpiresInSeconds, 10)},
+			wantOK:    true,
+			wantDelay: time.Duration(maxExpiresInSeconds) * time.Second,
+		},
+		{
+			// A huge but syntactically valid int64 would overflow
+			// time.Duration(seconds)*time.Second and wrap to an arbitrary
+			// (possibly negative, possibly plausible-looking) duration if
+			// not bounded before the multiply. Must be rejected, not silently
+			// corrupted into a bogus delay.
+			name:    "delta-seconds beyond overflow ceiling is unparseable",
+			headers: []string{strconv.FormatInt(maxExpiresInSeconds+1, 10)},
+			wantOK:  false,
+		},
+		{
+			name:    "delta-seconds at math.MaxInt64 is unparseable, not a silent overflow",
+			headers: []string{strconv.FormatInt(math.MaxInt64, 10)},
+			wantOK:  false,
 		},
 	}
 

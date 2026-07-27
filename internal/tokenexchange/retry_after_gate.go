@@ -134,8 +134,9 @@ func logGateNotSet(brokerAlias string, raw string) {
 		slog.String("retry_after_raw", capString(raw, maxRetryAfterRawLogLen)))
 }
 
-// capString truncates s to at most n bytes, appending a marker so a
-// truncated value in logs is never mistaken for the complete one.
+// capString truncates the body to at most n bytes, then appends a
+// "...(truncated)" marker — so the total returned length can exceed n —
+// so a truncated value in logs is never mistaken for the complete one.
 func capString(s string, n int) string {
 	if len(s) <= n {
 		return s

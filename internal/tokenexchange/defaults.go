@@ -95,9 +95,9 @@ const (
 	defaultCircuitBreakerHalfOpenProbeRequests uint32 = 2
 )
 
-// defaultMaxHonoredRetryAfter matches defaultCircuitBreakerOpenStateDuration
-// — little point honoring a Retry-After longer than the breaker's own
-// open-state window already pauses for.
+// defaultMaxHonoredRetryAfter is double defaultCircuitBreakerOpenStateDuration
+// (30s) — an IdP asking for materially longer than the breaker's own
+// recovery window is unusual enough to clamp rather than honor uncapped.
 const defaultMaxHonoredRetryAfter = 60 * time.Second
 
 // ComputeChainDeadline returns the total time budget for one exchange's
