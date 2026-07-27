@@ -24,12 +24,7 @@ func newOtterTokenCache(cfg CacheConfig) (*otterTokenCache, error) {
 	c, err := otter.New(&otter.Options[string, CachedCredential]{
 		MaximumSize: cfg.MaxSize,
 		ExpiryCalculator: otter.ExpiryWritingFunc[string, CachedCredential](func(entry otter.Entry[string, CachedCredential]) time.Duration {
-			raw := time.Until(entry.Value.ExpiresAt) - clockSkew
-			ttl := min(raw, maxTTL)
-			if ttl <= 0 {
-				return 0
-			}
-			return ttl
+			return deriveTTL(entry.Value.ExpiresAt, clockSkew, maxTTL)
 		}),
 	})
 	if err != nil {
@@ -42,6 +37,19 @@ func newOtterTokenCache(cfg CacheConfig) (*otterTokenCache, error) {
 	}, nil
 }
 
+// deriveTTL is the single source of truth for how a caller-supplied ExpiresAt
+// becomes an installed backend TTL. Used by Put for its PutDroppedTTL
+// short-circuit and by the ExpiryCalculator for the installed lifetime; both
+// must agree or a Put would report Stored on an entry the backend won't retain.
+// Returns 0 when the entry is already past its safe lifetime.
+func deriveTTL(expiresAt time.Time, clockSkew, maxTTL time.Duration) time.Duration {
+	ttl := min(time.Until(expiresAt)-clockSkew, maxTTL)
+	if ttl <= 0 {
+		return 0
+	}
+	return ttl
+}
+
 func (o *otterTokenCache) Get(_ context.Context, key string) (GetResult, error) {
 	entry, ok := o.cache.GetIfPresent(key)
 	if !ok {
@@ -51,10 +59,7 @@ func (o *otterTokenCache) Get(_ context.Context, key string) (GetResult, error) 
 }
 
 func (o *otterTokenCache) Put(_ context.Context, key string, entry CachedCredential) (PutResult, error) {
-	rawTTL := time.Until(entry.ExpiresAt)
-	safeTTL := rawTTL - o.clockSkew
-	ttl := min(safeTTL, o.maxTTL)
-	if ttl <= 0 {
+	if deriveTTL(entry.ExpiresAt, o.clockSkew, o.maxTTL) == 0 {
 		return PutResult{Status: PutDroppedTTL}, nil
 	}
 	o.cache.Set(key, entry)
