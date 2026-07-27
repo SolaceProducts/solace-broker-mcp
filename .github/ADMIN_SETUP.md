@@ -215,11 +215,14 @@ both of which need a CI change. Tracked separately.
    triggered by a fork, so the reusable workflow finds an empty Vault URL and
    exits 1. It runs, and it goes red.
 
-`CHANGELOG updated` and `Analyze (go)` do run on fork PRs. The `changelog` job
-needs only `contents: read` and no secrets, and CodeQL analyzes
-`refs/pull/N/head`. Copilot review is inconsistent even on same-repo PRs, so do
-not count on it either way.
+What about the rest? Nobody has ever opened a fork pull request against this
+repository, so none of this is observed. `CHANGELOG updated` should be fine:
+`ci-pr.yaml` gives that job only `contents: read` and it reads no secrets.
+`Analyze (go)` comes from CodeQL default setup, which is expected to run but has
+not been seen against a fork here. Copilot review is inconsistent even on
+same-repo pull requests, so do not count on it either way.
 
+Confirm all three against a real fork pull request before you rely on any of them.
 Until the CI fix lands, merge community contributions by pushing the branch into
 this repository yourself.
 
@@ -261,11 +264,12 @@ options, and the default on a public repo is the middle one:
 2. **Require approval for first-time contributors** (the default)
 3. Require approval for all external contributors
 
-Choose option 3. Under the default, a contributor's workflow runs unreviewed from
-their second pull request onward. This repository allows all actions and does not
-require SHA pinning (`allowed_actions: all`, `sha_pinning_required: false`), so
-until that tightens, a human should look at every external workflow run before it
-executes.
+Choose option 3. GitHub defines the default as "only users who have never had a
+commit or pull request merged into this repository will require approval", so a
+contributor is exempt permanently once any one of their contributions merges. This
+repository allows all actions and does not require SHA pinning
+(`allowed_actions: all`, `sha_pinning_required: false`), so until that tightens, a
+human should look at every external workflow run before it executes.
 
 ---
 
@@ -334,12 +338,17 @@ Navigate to: **Settings → General → Pull Requests**
 | Allow squash merging | ✅ On | On |
 | Allow rebase merging | ✅ On | On |
 | Automatically delete head branches | ✅ On | On |
-| Always suggest updating pull request branches | ✅ On | **Off** |
+| Always suggest updating pull request branches | ⬜ No effect here | Off |
 
-Turn on "Always suggest updating pull request branches". `main-protection` requires
-branches to be up to date before merging, so without the suggestion a contributor
-hits a stale-branch block with no button offering to fix it. That is a poor first
-experience for someone outside the team who does not know the ruleset exists.
+"Always suggest updating pull request branches" changes nothing on `main`, so
+leave it. GitHub only restricts the "Update branch" button when the base branch
+does *not* require branches to be up to date; the setting lifts that restriction.
+`main-protection` sets `strict_required_status_checks_policy: true`, so the button
+is already offered on every stale pull request to `main`. Turn the setting on only
+if you later add a protected branch without the up-to-date requirement.
+
+Note that "Update branch" needs write access to the head branch either way, so a
+fork contributor never gets the button and has to rebase locally.
 
 **Default commit messages.** Live values, which differ from the labels in the UI:
 
