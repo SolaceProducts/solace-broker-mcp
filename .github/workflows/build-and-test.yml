@@ -32,6 +32,23 @@ jobs:
       # Vault address is injected from an org/repo secret, not committed to the repo.
       VAULT_URL: ${{ secrets.VAULT_URL }}
 
+  report_to_guardian:
+    needs: fossa_scan
+    if: needs.fossa_scan.result == 'success' && github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Update solace-cloud-manifest dev entry (sha + version)
+        uses: SolaceDev/maas-build-actions/.github/actions/update-dynamodb-release-manifest@master
+        with:
+          release_tag: dev
+          squad: ai
+          repository: ${{ github.event.repository.name }}
+          version: ${{ github.ref_name }}
+          sha: ${{ github.sha }}
+
   lint:
     runs-on: ubuntu-latest
     steps:
