@@ -336,7 +336,7 @@ writing; re-check, do not assume.
   section.
 - ⬜ **Secret scanning and push protection enabled.** Both still off.
 - ⬜ **A release cut that covers `main`.** v0.1.0 through v0.5.0 are already tagged
-  and published (v0.5.0 on 2026-07-10), so this is not about a first release
+  and published (v0.5.0 tagged 2026-07-09), so this is not about a first release
   existing. `[Unreleased]` in `CHANGELOG.md` carries BREAKING entries, so v0.5.0
   does not describe `main`. Cut one before the flip.
 - ⬜ **`/discussions` links repointed** (see the Features section)

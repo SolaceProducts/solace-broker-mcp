@@ -127,7 +127,7 @@ These settings must be configured by repository admin:
 **ONLY AFTER:**
 - Admin tasks above are complete
 - A release has been cut that covers what is on `main`. The newest release is
-  v0.5.0 (2026-07-10), and `[Unreleased]` in `CHANGELOG.md` carries BREAKING
+  v0.5.0 (tagged 2026-07-09), and `[Unreleased]` in `CHANGELOG.md` carries BREAKING
   entries, so v0.5.0 does **not** describe `main` today. Cut one before the flip
   or the first thing a new user downloads is behind the code they are reading.
 - See: ADMIN_SETUP.md → "Visibility Settings"
