@@ -1,0 +1,67 @@
+name: DCO
+
+# WHY THIS IS NOT IN ci-pr.yaml, AND WHY THE TRIGGER IS pull_request_target
+#
+# This gate stands in for a contributor licence agreement, so a pull request
+# must not be able to switch it off. `pull_request` runs workflows from the
+# pull request's own ref, which means a fork can edit this file. Deleting the
+# job is harmless — a required status check that never reports blocks the merge
+# — but two edits would sail through: adding `if: false` to the job, because
+# GitHub counts a conditionally skipped job as a *successful* required check,
+# and replacing the script invocation with `exit 0`.
+#
+# `pull_request_target` runs the workflow definition and the checked-out files
+# from the BASE ref, so both this file and the script it runs are the reviewed
+# versions on `main` regardless of what the pull request contains.
+#
+# pull_request_target is dangerous when a workflow checks out and *executes*
+# pull-request code with the elevated token it grants. This one does not. It
+# checks out the base ref, fetches the pull request's commits as data, and
+# reads their metadata with git. No pull-request file is built, sourced, or
+# executed, no secrets are referenced, and the token is narrowed to
+# `contents: read` below.
+#
+# One consequence, stated so it is not mistaken for a failure: a pull request
+# that adds or edits this workflow does not exercise its own new version. The
+# base ref's version runs. The change takes effect for pull requests opened
+# after it merges.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    name: DCO sign-off
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the base ref (this is what makes the gate untamperable)
+        uses: actions/checkout@v4
+        with:
+          # The check walks the pull request's commit range, so it needs real
+          # history rather than a shallow clone.
+          fetch-depth: 0
+      - name: Fetch the pull request's commits
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        # Data, not code: the commits are read with `git`, never executed.
+        run: git fetch --no-tags --quiet origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/${PR_NUMBER}"
+      # The gate's own logic is verified on every run rather than trusted. Fails
+      # closed: a broken check blocks the merge instead of waving it through.
+      - name: Self-test the DCO check
+        run: .github/scripts/dco-check.test.sh
+      - name: Verify every commit contributed by this pull request is signed off
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: .github/scripts/dco-check.sh

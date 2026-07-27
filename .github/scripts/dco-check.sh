@@ -24,12 +24,16 @@
 # reachable from the PR head but not from the base. Commits already on the base
 # branch are somebody else's contribution and are not re-litigated here.
 #
-# Merge commits are exempt. Keeping a branch current with `git merge main`
-# produces a commit git does not sign off, and its content comes from commits
-# that are checked in their own right. Caveat, stated so it is not mistaken for
-# coverage: edits made while resolving a merge conflict live only in the merge
-# commit and are therefore not covered. Every mainstream DCO implementation,
-# GitHub's DCO app included, shares this exemption.
+# Merge commits are exempt only when they contribute nothing of their own.
+# Keeping a branch current with `git merge main` produces a commit git does not
+# sign off, and all of its content comes from commits checked in their own
+# right, so requiring a sign-off there would be friction with no control value.
+# A merge commit *can* carry content no parent has — conflict resolutions, and
+# an "evil merge" that simply adds files while merging. `git diff-tree --cc`
+# prints exactly those hunks, so a merge with a non-empty combined diff is
+# treated as a contribution and must be signed off (`git merge --signoff`).
+# Note that most DCO implementations, GitHub's DCO app included, exempt merges
+# unconditionally and are bypassable this way.
 #
 # Squash-merge safety: the repo's squash-message setting is COMMIT_MESSAGES, so
 # the individual commits' sign-off lines survive into the squashed commit on
@@ -42,11 +46,13 @@
 # the identity Renovate actually commits under.
 #
 # Fork PRs: needs only a checkout and read-only `contents: read`. No secrets, no
-# API token. A fork *can* edit this file or drop the job in its own PR, because
-# `pull_request` runs workflows from the PR's own ref. Branch protection is the
-# defence: this check must stay in the required-status-checks list (see
-# .github/ADMIN_SETUP.md), because a required check that never reports blocks the
-# merge rather than passing it.
+# API token. A PR cannot switch the gate off, because .github/workflows/dco.yaml
+# is triggered by `pull_request_target` and therefore runs the base ref's copy of
+# both the workflow and this script. Under a plain `pull_request` trigger a fork
+# could add `if: false` to the job, which GitHub counts as a *successful*
+# required check, or swap the script out for `exit 0`. The job must also stay in
+# the required-status-checks list (.github/ADMIN_SETUP.md), so that deleting it
+# leaves a required check that never reports and blocks the merge.
 #
 # Env:
 #   HEAD_SHA  head commit of the PR       (defaults to HEAD)
@@ -79,8 +85,28 @@ fi
 # shellcheck disable=SC2086 # EXCLUDE_BASE_REF is a single rev or deliberately empty
 commits=$(git rev-list --no-merges "$HEAD_REV" "^${BASE_REV}" $EXCLUDE_BASE_REF)
 
-if [ -z "$commits" ]; then
-  echo "No non-merge commits contributed by this PR — nothing to check."
+# Add back any merge commit that introduces content no parent has. Without this,
+# a PR consisting of a single merge commit that adds a file reports "nothing to
+# check" and passes with no sign-off anywhere in it.
+# shellcheck disable=SC2086 # as above
+for merge in $(git rev-list --merges "$HEAD_REV" "^${BASE_REV}" $EXCLUDE_BASE_REF); do
+  if [ -n "$(git diff-tree --cc --no-commit-id "$merge")" ]; then
+    commits="${commits}"$'\n'"${merge}"
+  fi
+done
+
+if [ -z "${commits//[[:space:]]/}" ]; then
+  # Nothing to check. Confirm that really means "contributes nothing" rather
+  # than "the range computation missed something", and fail closed if not.
+  if [ -n "$EXCLUDE_BASE_REF" ] && git merge-base --is-ancestor "$HEAD_REV" "${EXCLUDE_BASE_REF#^}"; then
+    echo "The PR head is already contained in the base branch — nothing to check."
+    exit 0
+  fi
+  if ! git diff --quiet "$BASE_REV" "$HEAD_REV"; then
+    echo "::error::This pull request changes files but contributes no commit that could carry a sign-off. Nothing here is covered by the Developer Certificate of Origin." >&2
+    exit 1
+  fi
+  echo "No commits contributed by this PR — nothing to check."
   exit 0
 fi
 
@@ -136,6 +162,10 @@ while IFS= read -r sha; do
   echo "  $(git show -s --format='%h %s' "$sha")"
   echo "    author:    $(git show -s --format='%an <%ae>' "$sha")"
   echo "    committer: $(git show -s --format='%cn <%ce>' "$sha")"
+  if [ "$(git rev-list --no-walk --count --merges "$sha")" -gt 0 ]; then
+    echo "    this is a merge commit that adds content no parent has, so it needs"
+    echo "    its own sign-off — redo it with \`git merge --signoff\`"
+  fi
   found=$(signoff_lines "$sha")
   if [ -n "$found" ]; then
     echo "    sign-off present but no email matches the author or committer:"

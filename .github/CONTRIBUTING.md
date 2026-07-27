@@ -256,11 +256,16 @@ address CI matches against, so make sure it is set to the one you mean to use.
 The `DCO sign-off` check in CI blocks any PR that is missing a sign-off. What it
 checks, precisely:
 
-- Every commit your PR adds. Commits already on `main` are not re-checked.
-- Each of those commits needs a `Signed-off-by:` line whose email matches the
-  commit's own author or committer, compared case-insensitively. A sign-off
-  copied along with someone else's commit does not count.
-- Merge commits are exempt, so `git merge main` to refresh your branch is fine.
+- Every commit your PR adds. Commits already on the branch you are targeting are
+  not re-checked.
+- Each of those commits needs a `Signed-off-by:` line, starting its own line,
+  whose email matches that commit's own author or committer, compared
+  case-insensitively. A sign-off copied along with someone else's commit does not
+  count.
+- Merge commits are exempt while they only bring in existing commits, so
+  refreshing your branch with `git merge main` is fine. A merge that adds content
+  of its own — a conflict resolution, or files added during the merge — counts as
+  a contribution and needs its own sign-off (`git merge --signoff`).
 - `Co-Authored-By:` trailers are ignored. Co-authors do not need their own
   sign-off.
 

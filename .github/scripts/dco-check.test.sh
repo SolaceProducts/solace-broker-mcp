@@ -45,6 +45,15 @@ commit() {
     git -C "$dir" commit -q --allow-empty -m "$msg"
 }
 
+# content_commit <repo> <file> <message> — a commit that actually changes a file,
+# so merge behaviour can be exercised with real content rather than empty trees.
+content_commit() {
+  local dir="$1" file="$2" msg="$3"
+  echo "$msg" >>"$dir/$file"
+  git -C "$dir" add "$file"
+  git -C "$dir" commit -q -m "$msg"
+}
+
 # expect <want_exit> <case name> <repo> [output_substring]
 expect() {
   local want="$1" name="$2" dir="$3" needle="${4:-}"
@@ -58,13 +67,13 @@ expect() {
   ) || rc=$?
 
   if [ "$rc" -ne "$want" ]; then
-    printf 'SELF-TEST FAILED: %s — expected exit %s, got %s\n' "$name" "$want" "$rc"
+    printf '::error::SELF-TEST FAILED: %s — expected exit %s, got %s. This is a defect in the DCO check itself, not a problem with your commits.\n' "$name" "$want" "$rc"
     printf '%s\n' "$out" | sed 's/^/    | /'
     fail_count=$((fail_count + 1))
     return
   fi
   if [ -n "$needle" ] && ! grep -qF -- "$needle" <<<"$out"; then
-    printf 'SELF-TEST FAILED: %s — output missing %q\n' "$name" "$needle"
+    printf '::error::SELF-TEST FAILED: %s — output missing %q. This is a defect in the DCO check itself, not a problem with your commits.\n' "$name" "$needle"
     printf '%s\n' "$out" | sed 's/^/    | /'
     fail_count=$((fail_count + 1))
     return
@@ -201,6 +210,88 @@ else
   printf '%s\n' "$out" | sed 's/^/    | /'
   fail_count=$((fail_count + 1))
 fi
+
+# --- 13b. an "evil merge" cannot smuggle content past the gate ---------------
+# A merge commit can carry content no parent has. If merges were exempt
+# unconditionally, a PR consisting of one such merge would report "nothing to
+# check" and pass with no sign-off anywhere in it.
+evil_merge_repo() {
+  local r; r=$(new_repo "$1")
+  local base; base=$(git -C "$r" rev-parse HEAD)
+  content_commit "$r" f.txt "main moves
+
+Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
+  git -C "$r" update-ref refs/remotes/origin/main "$(git -C "$r" rev-parse HEAD)"
+  git -C "$r" checkout -q -b feature "$base"
+  printf '%s' "$r"
+}
+
+r=$(evil_merge_repo evil_merge_alone)
+git -C "$r" merge -q --no-commit --no-ff main >/dev/null 2>&1 || true
+echo BACKDOOR >"$r/backdoor.txt"; git -C "$r" add backdoor.txt
+git -C "$r" commit -q -m "Merge branch 'main'"
+expect 1 "a merge commit cannot smuggle in unsigned content" "$r" "merge commit that adds content"
+
+r=$(evil_merge_repo evil_merge_beside_signed)
+content_commit "$r" g.txt "honest signed work
+
+Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
+git -C "$r" merge -q --no-commit --no-ff main >/dev/null 2>&1 || true
+echo BACKDOOR >"$r/backdoor.txt"; git -C "$r" add backdoor.txt
+git -C "$r" commit -q -m "Merge branch 'main'"
+expect 1 "an evil merge beside a signed commit still fails" "$r" "merge commit that adds content"
+
+r=$(evil_merge_repo evil_merge_signed)
+git -C "$r" merge -q --no-commit --no-ff main >/dev/null 2>&1 || true
+echo CONTENT >"$r/resolved.txt"; git -C "$r" add resolved.txt
+git -C "$r" commit -q -m "Merge branch 'main'
+
+Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
+expect 0 "a signed content-bearing merge passes" "$r" "signed off — OK"
+
+r=$(evil_merge_repo clean_merge_with_content)
+content_commit "$r" g.txt "honest signed work
+
+Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
+git -C "$r" merge -q --no-ff -m "Merge branch 'main' into feature" main
+expect 0 "an ordinary clean merge of the base branch stays exempt" "$r" "signed off — OK"
+
+# --- 13c. bots get no exemption ----------------------------------------------
+# An author-name exemption would be forgeable with `git commit --author`, so
+# there must not be one. Renovate signs off via renovate.json commitBody.
+r=$(new_repo bot_no_exemption)
+commit "$r" "chore(deps): bump the pinned CLI" \
+  "renovate[bot]" "29139614+renovate[bot]@users.noreply.github.com"
+expect 1 "an unsigned bot commit is not exempt" "$r" "no Signed-off-by line found"
+
+r=$(new_repo bot_signed)
+commit "$r" "chore(deps): bump the pinned CLI
+
+Signed-off-by: renovate[bot] <29139614+renovate[bot]@users.noreply.github.com>" \
+  "renovate[bot]" "29139614+renovate[bot]@users.noreply.github.com"
+expect 0 "a signed bot commit passes" "$r" "signed off — OK"
+
+# --- 13d. the email comparison is equality, not substring --------------------
+r=$(new_repo substring_email)
+commit "$r" "add a thing
+
+Signed-off-by: $ALICE_NAME <example.com>"
+expect 1 "a sign-off email that is only a substring fails" "$r" "no email matches"
+
+# --- 13e. any one matching sign-off is enough --------------------------------
+r=$(new_repo second_signoff_matches)
+commit "$r" "forwarded work
+
+Signed-off-by: $BOB_NAME <$BOB_EMAIL>
+Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
+expect 0 "a later matching sign-off is accepted" "$r" "signed off — OK"
+
+# --- 13f. a sign-off must start its own line, not appear inside prose --------
+r=$(new_repo signoff_inside_prose)
+commit "$r" "add a thing
+
+I keep forgetting the Signed-off-by: $ALICE_NAME <$ALICE_EMAIL> line."
+expect 1 "a sign-off mentioned mid-sentence does not count" "$r" "no Signed-off-by line found"
 
 # --- 14. an empty range passes -----------------------------------------------
 r=$(new_repo empty_range)

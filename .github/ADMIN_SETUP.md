@@ -139,10 +139,19 @@ Navigate to: **Settings → Branches → Branch protection rules → Add rule**
 - ⬜ Require signed commits (optional — GPG signing is separate from DCO)
 
 > **`DCO sign-off` is not optional.** It stands in for a contributor licence
-> agreement, and a check that is not in the list above enforces nothing. It also
-> has to be *required* rather than merely present: `pull_request` workflows run
-> from the PR's own ref, so a fork can delete the job — a required check that
-> never reports blocks the merge, an unrequired one does not.
+> agreement, so the repository is not covered until it is in the list above. A
+> check that is not required enforces nothing.
+>
+> Two distinct tampering routes, and what stops each:
+>
+> | Route | Defence |
+> |---|---|
+> | A pull request deletes the job | Required-status-check registration. The check never reports, and a required check that never reports blocks the merge. |
+> | A pull request edits the job (`if: false`, or `run: exit 0`) | The `pull_request_target` trigger on `.github/workflows/dco.yaml`. It runs the base ref's copy of the workflow and the script, so the pull request's version is never used. Without it, GitHub counts a conditionally skipped job as a *successful* required check. |
+>
+> Worth enabling alongside, though not a substitute for either: **Require review
+> from Code Owners** (see above), so a change to the gate itself cannot land
+> unreviewed.
 
 **Rules applied to admins:**
 - ⬜ Allow admins to bypass (leave UNCHECKED - admins should follow same rules)
