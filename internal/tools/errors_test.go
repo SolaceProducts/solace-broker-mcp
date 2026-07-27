@@ -231,6 +231,38 @@ func TestBuildErrorMessage(t *testing.T) {
 				"current state before deciding whether to issue it again.",
 			nil,
 		},
+		// A 503 is the one 5xx whose broker text is safe to pass on, and on this
+		// path it is the reason the operator most needs: "Replication Is Standby"
+		// is a pre-execution rejection, so the purge definitively did not run.
+		{
+			"non-idempotent 503 surfaces the broker's reason",
+			&resilience.RetriesExhaustedError{
+				Attempts: 1, NonIdempotent: true, StatusCode: 503,
+				Detail: "Replication Is Standby", Err: errors.New("not retried"),
+			},
+			"broker-eu-prod",
+			"Request failed and was deliberately not retried, because repeating this " +
+				"operation is not safe: the broker may have already applied it. Check the " +
+				"current state before deciding whether to issue it again. " +
+				"The broker reported: Replication Is Standby",
+			nil,
+		},
+		// Other 5xx descriptions can carry internal detail, so this path suppresses
+		// them exactly like every other broker-text path. Without the guard the
+		// non-idempotent branch became a way around the 5xx rule (review on #219).
+		{
+			"non-idempotent 500 withholds the broker's reason",
+			&resilience.RetriesExhaustedError{
+				Attempts: 1, NonIdempotent: true, StatusCode: 500,
+				Detail: "panic in mgmt-plane worker 3 at solace-node-7.internal",
+				Err:    errors.New("not retried"),
+			},
+			"broker-eu-prod",
+			"Request failed and was deliberately not retried, because repeating this " +
+				"operation is not safe: the broker may have already applied it. Check the " +
+				"current state before deciding whether to issue it again.",
+			nil,
+		},
 		// A known comRc_t code surfaces its curated hint alongside the message.
 		{
 			"sempv2 code 6 yields hint",

@@ -198,7 +198,11 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 			// or "VPN busy reconciling" is a pre-execution rejection: nothing ran.
 			// Withholding it leaves the agent guessing on the one operation where
 			// guessing is most expensive.
-			if retriesErr.Detail != "" {
+			//
+			// Subject to the same 5xx suppression as every other broker-text path:
+			// the gate fires on 429, 503, and other 5xx, and that last group is
+			// exactly the class whose description may carry internal detail.
+			if retriesErr.Detail != "" && brokerTextMayBeShown(retriesErr.StatusCode) {
 				msg += " The broker reported: " + sanitizeBrokerText(retriesErr.Detail)
 			}
 			return msg, nil
@@ -225,7 +229,7 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 
 	// Suggestions, shared by the SEMPv1/SEMPv2 paths. Server-suppressed 5xx
 	// (except 503) get no object-level guidance.
-	if status >= 500 && status != 503 {
+	if !brokerTextMayBeShown(status) {
 		return message, nil
 	}
 	// Code 72 (permission denied): when the caller's broker alias is known,
@@ -291,14 +295,26 @@ func buildSEMPv1Message(err *sempv1.Error) string {
 	}
 }
 
+// brokerTextMayBeShown reports whether the broker's own description is safe to
+// pass to the agent for this status.
+//
+// 500-class responses can carry internal detail — stack context, hostnames,
+// component names — so their text is replaced with a generic message. 503 is
+// the deliberate exception: it carries a safe and operationally useful reason
+// (e.g. "VPN 'X' is busy reconciling", "Replication Is Standby").
+//
+// This is the single definition of that rule. Every path that echoes broker
+// text to the agent must go through it — the rule was previously restated at
+// each site, and a new path that forgot it leaked 5xx detail (caught in review
+// on #219).
+func brokerTextMayBeShown(status int) bool {
+	return status < 500 || status == 503
+}
+
 func buildSEMPv2Message(err *sempv2.SEMPError) string {
-	// For 500 and other server errors, display a generic message so we don't
-	// leak internal detail. 503 is the exception: it carries a safe, useful
-	// reason (e.g. "VPN 'X' is busy reconciling", "Replication Is Standby"),
-	// so we let it through.
 	var msg string
 	switch {
-	case err.StatusCode >= 500 && err.StatusCode != 503:
+	case !brokerTextMayBeShown(err.StatusCode):
 		msg = genericInternalMessage
 	case err.Description != "":
 		msg = sanitizeBrokerText(err.Description)

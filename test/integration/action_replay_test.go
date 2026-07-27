@@ -64,19 +64,33 @@ func TestActionToolIsNotReplayedOnTransportError(t *testing.T) {
 			Method: http.MethodPut,
 			Path:   "/SEMP/v2/__private_action__/testAction",
 		},
+		// A config-namespace PUT, for the omitted-annotation case. validateTool
+		// rejects an action/ step whose annotations.idempotent is unset, so that
+		// combination cannot reach production and a fixture built on it would
+		// pin behaviour for a tool that can never exist. Omission is still legal
+		// outside action/, which is where the "omitted changes nothing" guarantee
+		// actually has to hold.
+		"config/updateTestObject": {
+			ID:     "updateTestObject",
+			Method: http.MethodPut,
+			Path:   "/SEMP/v2/config/__private_test__/testObject",
+		},
 	}
 
-	newTool := func(idempotent *bool) composite.CompositeTool {
+	newToolFor := func(operation string, idempotent *bool) composite.CompositeTool {
 		return composite.CompositeTool{
 			Name:        "test-action-tool",
 			Description: "fixture",
 			Steps: []composite.Step{{
 				ID:        "act",
-				Operation: "action/doTestAction",
+				Operation: operation,
 			}},
 			Result:      composite.ResultStrategy{Strategy: "collect"},
 			Annotations: composite.ToolAnnotations{Idempotent: idempotent},
 		}
+	}
+	newTool := func(idempotent *bool) composite.CompositeTool {
+		return newToolFor("action/doTestAction", idempotent)
 	}
 
 	// Aborting the handler closes the connection without a response, which the
@@ -155,13 +169,21 @@ func TestActionToolIsNotReplayedOnTransportError(t *testing.T) {
 	// The annotation is a *bool so that "omitted" is distinguishable from
 	// "explicitly false". Only an explicit false may narrow the retry policy;
 	// a tool that says nothing must behave exactly as it did before this change.
+	//
+	// Deliberately a config/ operation, not action/: validateTool requires an
+	// explicit idempotent on every action/ step, so an action tool with the
+	// annotation omitted cannot load. Testing it here would pin behaviour for a
+	// configuration production rejects, and would read as if omission were an
+	// option for action tools. config/ is where omission remains legal, so it is
+	// where the guarantee needs holding.
 	t.Run("idempotent omitted leaves the policy untouched", func(t *testing.T) {
 		var hits atomic.Int32
 		client, server := newBrokerAndClient(t, &hits)
 		defer server.Close()
 
 		executor := composite.NewCompositeExecutor(operations)
-		_, err := executor.Execute(context.Background(), newTool(nil), client, map[string]any{})
+		_, err := executor.Execute(context.Background(),
+			newToolFor("config/updateTestObject", nil), client, map[string]any{})
 		if err == nil {
 			t.Fatal("expected the broken connection to surface as an error, got nil")
 		}
