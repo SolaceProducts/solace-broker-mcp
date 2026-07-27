@@ -73,13 +73,22 @@ second forum. This supersedes the earlier plan to open Discussions.
 ⚠️ **Before flipping public**: three links still point at `/discussions`, which
 404s while Discussions is off.
 
-- `.github/CONTRIBUTING.md:49`
-- `.github/CONTRIBUTING.md:259`
-- `.github/ISSUE_TEMPLATE/config.yml:4` (the issue-template chooser)
+Find them, rather than trusting a line number that will drift:
 
-`.github/ISSUE_TEMPLATE/feature_request.yml:122` also says "issues and
-discussions" in prose. Repointing all of them at the Solace Community category is
-tracked separately. Confirm that landed, or expect broken links from day one.
+```bash
+grep -rn '/discussions' .github/
+```
+
+At the time of writing that returns two links in `.github/CONTRIBUTING.md` and
+one in `.github/ISSUE_TEMPLATE/config.yml` (the issue-template chooser). This
+also mentions "issues and discussions" in prose, with no link to break:
+
+```bash
+grep -rn 'issues and discussions' .github/
+```
+
+Repointing all of them at the Solace Community category is tracked separately.
+Confirm that landed, or expect broken links from day one.
 
 ---
 
