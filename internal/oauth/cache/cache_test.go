@@ -287,10 +287,9 @@ func TestTTL_WithinSkewMargin(t *testing.T) {
 	}
 }
 
-// T9: GetMiss is returned for a never-stored key. GetMiss also covers the
-// wall-clock double-check branch where the backend returned an entry that has
-// passed its ExpiresAt; that branch is not deterministically testable because
-// the backend evicts stale entries before we observe them.
+// T9: GetMiss is returned for a never-stored key. GetMiss is the single
+// non-hit status the wrapper produces; the backend surfaces expired entries
+// as absent internally, so no separate expired-hit status exists.
 func TestGetResult_MissStatus(t *testing.T) {
 	t.Parallel()
 	c := newTestCache(t, defaultCfg)
@@ -600,7 +599,8 @@ func TestConcurrentAccess_IncludesDelete(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(n * 3)
 
-	// Overlap keys across all three operation types by using key-<i%n>.
+	// Overlap keys across Put/Get/Delete by using the same key-<i> for the
+	// same i, so each iteration exercises all three operations on one key.
 	for i := 0; i < n; i++ {
 		i := i
 		go func() {
@@ -666,9 +666,8 @@ func TestGetStatus_Level(t *testing.T) {
 }
 
 // TestPutStatus_Level pins the slog level mapping the token exchanger consumes
-// at exchange.go:80. PutStored is Debug (routine); PutDroppedTTL and
-// PutDroppedFull are Warn (the caller asked us to cache something we couldn't
-// keep — worth surfacing).
+// at exchange.go:80. PutStored is Debug (routine); PutDroppedTTL is Warn (the
+// caller asked us to cache something we couldn't keep — worth surfacing).
 func TestPutStatus_Level(t *testing.T) {
 	t.Parallel()
 
