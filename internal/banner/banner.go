@@ -157,57 +157,6 @@ const oauthPlaintextListenerBanner = `
   at the server instead.
 ============================================================`
 
-// LogOAuthNotSupported is the OAuth-not-supported guard headline. It is
-// logged when any broker is configured with auth.mode: oauth, which the
-// schema accepts but no current runtime can use (the OAuth-on-brokers
-// runtime ships in a follow-up sub-ticket). The n argument is the count
-// of affected brokers; the function formats it with the correct
-// singular/plural form ("1 broker" vs "N brokers").
-//
-// The banner is logged via slog.Error as a SEPARATE log line from the joined
-// validation error — operators see the headline first, then the comprehensive
-// error with broker names. Wording is operator-language: what we detected,
-// why it failed, what to do today, and that the feature is planned.
-//
-// This is a *headline* — it intentionally does not list broker names. The
-// joined validation error (returned by config.validate() and logged by main)
-// carries the per-broker rejection messages with the broker aliases, so
-// operators have the names there. Keeping the headline broker-name-free
-// means the banner scales: 1 affected broker or 47, the headline stays the
-// same shape.
-//
-// LIFECYCLE — REMOVE WHEN THE OAUTH RUNTIME LANDS:
-// This banner, the validateBroker check inside internal/config that produces
-// oauthBrokerCount, and the call site in config.validate() are all part of
-// the same temporary guard. They exist only because the schema ships
-// ahead of the runtime that consumes it. When the
-// runtime sub-ticket (SOL-150070 follow-ups: token exchanger + oauth
-// Authenticator + cookie jar) lands and the per-broker oauth flow actually
-// works, delete all three together. At that point LogHop2WithoutHop1 below
-// becomes the load-bearing startup check for OAuth-on-broker configs.
-func LogOAuthNotSupported(n int) {
-	noun := "1 broker"
-	if n != 1 {
-		noun = fmt.Sprintf("%d brokers", n)
-	}
-	slog.Error(fmt.Sprintf(oauthNotSupportedBanner, noun))
-}
-
-const oauthNotSupportedBanner = `
-============================================================
-  This version of the MCP server does not yet support
-  authenticating to brokers using OAuth.
-
-  Your config has %s with auth.mode: oauth, which the server
-  recognizes but cannot use. The server will not start.
-
-  To proceed today, change those brokers to use auth.mode:
-  basic (username + password) or auth.mode: bearer (static
-  token). Both are fully supported in this version.
-
-  OAuth broker authentication is planned in a future release.
-============================================================`
-
 // LogHop2WithoutHop1 is the structural-mismatch headline for the Hop 1 /
 // Hop 2 OAuth alignment invariant: if any broker uses auth.mode: oauth
 // (Hop 2 — MCP server obtains a broker-bound token via RFC 8693 token
@@ -223,31 +172,15 @@ const oauthNotSupportedBanner = `
 // case is already caught by the mcp_client_auth.mode-is-required
 // validator before this banner can fire).
 //
-// Like LogOAuthNotSupported this is a *headline* — it intentionally does
-// not list broker names. The joined validation error (returned by
-// config.validate() and logged by main) carries the per-broker context.
+// This is a *headline* — it intentionally does not list broker names. The
+// joined validation error (returned by config.validate() and logged by main)
+// carries the per-broker context.
 //
-// LIFECYCLE — KEEP. This banner is PERMANENT. Unlike LogOAuthNotSupported
-// (the not-yet-supported guard above, which is temporary), this check
-// enforces an invariant that holds for every release of the MCP server:
-// Hop 2 OAuth structurally requires Hop 1 OAuth. When the OAuth-on-brokers
-// runtime ships and the not-yet-supported guard is removed, this banner
-// becomes the load-bearing startup check for operators who try to enable
-// Hop 2 without Hop 1.
-//
-// GATING ORDER — both emission and the corresponding validation-error
-// append are intentionally suppressed by the caller while the
-// OAuth-not-supported guard is in effect (the call site in
-// config.validate() routes to this banner only when oauthBrokerCount == 0).
-// While the guard is active the operator's misconfiguration is already
-// fully explained by "OAuth on brokers is not yet supported" — telling
-// them additionally about a Hop 1 / Hop 2 mismatch would point at a
-// remediation path for a feature that does not yet run. The validator
-// function validateHop1Hop2Alignment stays callable from
-// TestValidateHop1Hop2Alignment_Direct so the invariant logic is
-// exercised today even though validate() does not surface it. When the
-// guard goes away, the suppression goes away with it, and this banner
-// (and its error) fire whenever the invariant is violated.
+// This banner is PERMANENT: it enforces an invariant that holds for every
+// release of the MCP server — Hop 2 OAuth structurally requires Hop 1 OAuth.
+// config.validate() calls validateHop1Hop2Alignment unconditionally whenever
+// any broker uses auth.mode: oauth, and this banner fires alongside the
+// validation error whenever the invariant is violated.
 func LogHop2WithoutHop1(n int, hop1Mode string) {
 	noun := "1 broker"
 	if n != 1 {
