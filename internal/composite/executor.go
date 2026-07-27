@@ -29,6 +29,7 @@ import (
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess"
 	"github.com/SolaceDev/solace-broker-mcp/internal/safego"
+	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
 )
 
@@ -99,6 +100,16 @@ func (ce *CompositeExecutor) Execute(ctx context.Context, tool CompositeTool, cl
 		if k != "broker" {
 			execParams[k] = v
 		}
+	}
+
+	// Carry the tool's declared non-idempotency down to the retry policy. The
+	// SEMP layer otherwise infers replay safety from the HTTP method, which is
+	// wrong for the action API: it routes destructive RPC over PUT, so a
+	// replayed delete-queue-messages purges whatever was spooled since the
+	// caller's request. Only an explicit `idempotent: false` marks the request;
+	// omitted or true leaves the existing policy untouched.
+	if tool.Annotations.Idempotent != nil && !*tool.Annotations.Idempotent {
+		ctx = resilience.WithRetryUnsafe(ctx)
 	}
 
 	execCtx := &ExecuteContext{

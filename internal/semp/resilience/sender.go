@@ -1,7 +1,9 @@
 package resilience
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -20,9 +22,39 @@ type RetriesExhaustedError struct {
 	StatusCode int   // HTTP status code (0 when failure is a network error)
 	Attempts   int   // total attempts made
 	Err        error // underlying cause (nil for HTTP-status exhaustion)
+
+	// NonIdempotent reports that the caller declared the request
+	// non-idempotent (WithRetryUnsafe), so the retry policy deliberately did
+	// not replay it. Callers must not present this failure as "try again":
+	// the broker may already have carried out the request, which is the whole
+	// reason no retry was attempted. Upper layers key their agent-facing
+	// retryable flag off this.
+	NonIdempotent bool
+
+	// Body is the final response body, truncated at errorHandlerDrainLimit and
+	// empty when the failure left no response. errorHandler has to drain the
+	// body to release the connection, which would otherwise destroy the only
+	// explanation the broker gave. That matters most on the NonIdempotent path:
+	// a 503 carries a reason (e.g. "Replication Is Standby") that often shows
+	// the operation was rejected before execution, which is exactly what tells
+	// an operator whether the purge they are worried about actually ran.
+	//
+	// Protocol-agnostic on purpose — this type is shared by SEMPv1 and SEMPv2,
+	// so the bytes are kept raw and each client parses them in its own terms.
+	Body []byte
+
+	// Detail is the broker's human-readable reason, parsed out of Body by the
+	// protocol client that understands the framing. Empty when the body carried
+	// none. Already broker-sourced text, so callers must sanitize before showing
+	// it to an agent.
+	Detail string
 }
 
 func (e *RetriesExhaustedError) Error() string {
+	if e.NonIdempotent {
+		return fmt.Sprintf("request failed after %d attempt(s) and was not retried "+
+			"because the caller declared it non-idempotent: %v", e.Attempts, e.Err)
+	}
 	if e.Err != nil {
 		return fmt.Sprintf("request failed after %d attempts: %v", e.Attempts, e.Err)
 	}
@@ -202,10 +234,11 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	// Attach per-request retry state for checkRetry, including the HTTP method
 	// so the non-idempotent method guard can fire even on connection errors
 	// (where resp is nil and resp.Request.Method is unavailable), and the
-	// caller's retry-safe marker (WithRetrySafe).
+	// caller's idempotency markers (WithRetrySafe / WithRetryUnsafe).
 	ctx = context.WithValue(ctx, retryStateKey{}, &retryState{
-		method:    req.Method,
-		retrySafe: isRetrySafe(ctx),
+		method:      req.Method,
+		retrySafe:   isRetrySafe(ctx),
+		retryUnsafe: isRetryUnsafe(ctx),
 	})
 	req = req.WithContext(ctx)
 
@@ -221,6 +254,17 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	if err != nil {
 		if cancel != nil {
 			cancel()
+		}
+		// Record that the non-idempotency guard was in force, so upper layers
+		// do not tell the agent to "try again later" on a request the broker
+		// may already have carried out. This is set here rather than in
+		// errorHandler because a connection error leaves resp nil, so
+		// errorHandler has no route back to the request context.
+		if isRetryUnsafe(ctx) {
+			var exhausted *RetriesExhaustedError
+			if errors.As(err, &exhausted) {
+				exhausted.NonIdempotent = true
+			}
 		}
 		return nil, err
 	}
@@ -285,9 +329,15 @@ const errorHandlerDrainLimit = 4096
 // and close here, then construct a RetriesExhaustedError from the status code
 // and attempt count.
 func (d *Sender) errorHandler(resp *http.Response, err error, numTries int) (*http.Response, error) {
+	// Capture the drained bytes rather than discarding them: the read has to
+	// happen either way to release the connection, and on the non-idempotency
+	// path these bytes are the broker's only account of what it did.
+	var body []byte
 	if resp != nil && resp.Body != nil {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, errorHandlerDrainLimit))
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, io.LimitReader(resp.Body, errorHandlerDrainLimit))
 		_ = resp.Body.Close()
+		body = buf.Bytes()
 	}
 
 	// Extract the operation ID up front so every exit path can name it. It
@@ -318,6 +368,7 @@ func (d *Sender) errorHandler(resp *http.Response, err error, numTries int) (*ht
 				StatusCode: resp.StatusCode,
 				Attempts:   numTries,
 				Err:        err,
+				Body:       body,
 			}
 		}
 		return nil, &RetriesExhaustedError{Attempts: numTries, Err: err}
@@ -332,6 +383,7 @@ func (d *Sender) errorHandler(resp *http.Response, err error, numTries int) (*ht
 		return nil, &RetriesExhaustedError{
 			StatusCode: resp.StatusCode,
 			Attempts:   numTries,
+			Body:       body,
 		}
 	}
 

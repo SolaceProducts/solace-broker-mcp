@@ -111,7 +111,7 @@ func (h *Handler) Metadata() tools.Metadata {
 			"errors, msg-too-big, TTL exceeded, transmit congestion, " +
 			"client-not-connected, etc.) plus the broker-wide spool-level " +
 			"discards. With vpnName: returns only client-level discards " +
-			"scoped to that VPN. Use this for broker-level health checks " +
+			"scoped to that VPN. Use this for broker-level status checks " +
 			"(\"are we dropping messages anywhere?\").",
 		InputSchema: map[string]any{
 			"type": "object",
