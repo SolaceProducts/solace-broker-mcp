@@ -256,15 +256,14 @@ The `audience` value must exactly match the value configured in step 1.2. Set `r
 
 ### Step 2b: Configure broker OAuth (Hop 2)
 
-This step is only needed if one or more brokers should use `auth.mode: oauth` instead of `basic`/`bearer`. Under this mode, the MCP server obtains each broker's token by exchanging the calling agent's Hop 1 token (RFC 8693 token exchange) against the identity provider.
+This step is only needed if one or more brokers should use `auth.mode: oauth` instead of `basic`/`bearer`. Under this mode, the MCP server obtains each broker's token by exchanging the calling agent's Hop 1 token (RFC 8693 token exchange) against the identity provider. `mcp_client_auth.mode: oauth` (Hop 1) is required first — RFC 8693 token exchange consumes the agent's Hop 1 JWT as its `subject_token`, so with `mode: static` or `mode: disabled` there is no agent token to exchange and Hop 2 has nothing to do.
 
-**Dependency: `mcp_client_auth.mode: oauth` (Hop 1) is required first.** RFC 8693 token exchange consumes the agent's Hop 1 JWT as its `subject_token` — with `mode: static` or `mode: disabled` there is no agent token to exchange, so Hop 2 has nothing to do. Configuring `auth.mode: oauth` on a broker while Hop 1 is `static`/`disabled` is rejected at startup with:
-
-```
-mcp_client_auth.mode is "static" but 1 broker has auth.mode: oauth; the MCP server
-needs the agent's token (received via mcp_client_auth) to obtain a broker token, so
-mcp_client_auth.mode must be oauth
-```
+> **Note:** Configuring `auth.mode: oauth` on a broker while Hop 1 is `static`/`disabled` is rejected at startup with:
+> ```
+> mcp_client_auth.mode is "static" but 1 broker has auth.mode: oauth; the MCP server
+> needs the agent's token (received via mcp_client_auth) to obtain a broker token, so
+> mcp_client_auth.mode must be oauth
+> ```
 
 Add the top-level `broker_oauth:` block with the IdP's token-exchange coordinates, and set `auth.mode: oauth` on each broker that should use it:
 
@@ -294,7 +293,7 @@ brokers:
 | `broker_oauth.grant_type` | The OAuth grant type used for the Hop 2 exchange — see [Grant type](#grant-type) below. |
 | `broker_oauth.audience_parameter_name` | Which request parameter carries the per-broker audience value — see [Audience parameter name](#audience-parameter-name) below. |
 | `brokers.<alias>.auth.mode` | Set to `oauth` to use token exchange for this broker. |
-| `brokers.<alias>.auth.audience` | Optional, even under `auth.mode: oauth` — omitting it does **not** fail startup. This broker's audience value, forwarded to the IdP during exchange using whichever request parameter `audience_parameter_name` selects; when omitted, the exchange request carries no audience parameter at all. Omit if the broker's OAuth profile does not validate audience; set it only if it does. If set, it must not be whitespace-only (a `${VAR}` resolving to blank fails config load). |
+| `brokers.<alias>.auth.audience` | Optional, even under `auth.mode: oauth` — omitting it does not fail startup. This broker's audience value, forwarded to the IdP during exchange using whichever request parameter `audience_parameter_name` selects; when omitted, the exchange request carries no audience parameter at all. Omit if the broker's OAuth profile does not validate audience; set it only if it does. If set, it must not be whitespace-only (a `${VAR}` resolving to blank fails config load). |
 
 The IdP needs a second client registration for the MCP server itself (distinct from the Hop 1 client in step 1.2) — a **confidential** client with a client secret, since the MCP server authenticates itself directly to the token endpoint rather than involving a browser. Grant it whatever token-exchange permissions your IdP requires (for Keycloak, enable the token-exchange feature for the client and permit it to exchange tokens for the target broker's audience).
 
@@ -318,13 +317,12 @@ This is the only grant type this version implements. The field exists (rather th
 | `scope` | Microsoft Entra On-Behalf-Of style (the audience is prefixed onto the `scope` value instead of a separate parameter). | Schema-accepted, **not yet implemented**. |
 | `resource` | RFC 8707 resource-indicator style. | Schema-accepted, **not yet implemented**. |
 
-**Only `audience` works today.** The other two values pass config-file validation at startup (the YAML schema accepts all three so configs targeting a future IdP integration can be staged in advance), but the token-exchange runtime itself rejects them when it is actually constructed — which only happens once Hop 1 is `oauth`, `broker_oauth:` is set, and at least one broker uses `auth.mode: oauth` together. The server fails to start with:
+Only `audience` works today. The other two values pass config-file validation at startup (the YAML schema accepts all three so configs targeting a future IdP integration can be staged in advance), but the token-exchange runtime itself rejects them when it is actually constructed — which only happens once Hop 1 is `oauth`, `broker_oauth:` is set, and at least one broker uses `auth.mode: oauth` together. If your IdP is Entra (or otherwise expects `scope`/`resource`), broker OAuth is not yet usable against it in this version.
 
-```
-tokenexchange: audience_parameter_name "scope" is schema-accepted but not yet implemented
-```
-
-If your IdP is Entra (or otherwise expects `scope`/`resource`), broker OAuth is not yet usable against it in this version.
+> **Note:** a schema-accepted but unimplemented value fails at server startup with:
+> ```
+> tokenexchange: audience_parameter_name "scope" is schema-accepted but not yet implemented
+> ```
 
 Two optional sub-blocks tune the runtime's resilience behavior — see [Configuration](configuration.md#broker-oauth-hop-2) for every field and its default:
 

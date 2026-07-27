@@ -80,7 +80,7 @@ Aliases must be 1–63 characters, contain only letters, digits, and hyphens, an
 | `auth.username` | — | Basic auth username. |
 | `auth.password` | — | Basic auth password. |
 | `auth.token` | — | Bearer token (used when `auth.mode: bearer`). |
-| `auth.audience` | — | Optional, even under `auth.mode: oauth` — omitting it does **not** fail config load or startup. RFC 8693 audience value for this broker, forwarded to the IdP during token exchange (requires the top-level `broker_oauth:` block — see [Broker OAuth (Hop 2)](#broker-oauth-hop-2) below). When omitted, the runtime sends the token-exchange request without an audience parameter at all. Omit when the broker's OAuth profile does not validate audience; set it only if the broker's OAuth profile does. If set, it must not be whitespace-only — a `${VAR}` that resolves to blank **does** fail config load. |
+| `auth.audience` | — | Optional, even under `auth.mode: oauth` — omitting it does not fail config load or startup. RFC 8693 audience value for this broker, forwarded to the IdP during token exchange (requires the top-level `broker_oauth:` block — see [Broker OAuth (Hop 2)](#broker-oauth-hop-2) below). When omitted, the runtime sends the token-exchange request without an audience parameter at all. Omit when the broker's OAuth profile does not validate audience; set it only if the broker's OAuth profile does. If set, it must not be whitespace-only — a `${VAR}` that resolves to blank does fail config load. |
 | `insecure_skip_verify` | `false` | Skip TLS certificate verification. Development only. Under `mcp_client_auth.mode: oauth` (production) it is **refused at startup** unless `allow_insecure_broker_tls: true` is also set (see below). |
 
 Solace recommends using `https://` event broker URLs in production environments.
@@ -99,12 +99,7 @@ brokers:
 
 Configured under the top-level `broker_oauth` key. Required when any broker uses `auth.mode: oauth` — obtains the broker-bound token by exchanging the calling agent's Hop 1 token (RFC 8693 token exchange) against an identity provider.
 
-**Dependencies and error conditions:**
-
-- **`mcp_client_auth.mode: oauth` (Hop 1) is required.** Token exchange consumes the agent's Hop 1 JWT as its `subject_token`; a broker with `auth.mode: oauth` while Hop 1 is `static`/`disabled` fails config load with an `mcp_client_auth.mode must be oauth` error naming the affected broker(s).
-- **`broker_oauth:` itself is required once any broker uses `auth.mode: oauth`.** Omitting it fails config load with `broker_oauth block is required when any broker uses auth.mode: "oauth"`.
-- **Every `broker_oauth` field above `circuit_breaker`/`retry_after` is required, non-optional.** An empty/missing field fails config load naming that field.
-- **`audience_parameter_name` has a schema/runtime gap** — see the field description below. A value that passes config load can still fail at server startup once the Hop 2 runtime is actually constructed.
+`mcp_client_auth.mode: oauth` (Hop 1) is required first: token exchange consumes the agent's Hop 1 JWT as its `subject_token`, so a broker with `auth.mode: oauth` while Hop 1 is `static`/`disabled` is **refused at config load** with an `mcp_client_auth.mode must be oauth` error naming the affected broker(s). The `broker_oauth:` block itself is likewise required once any broker uses `auth.mode: oauth` — omitting it fails config load with `broker_oauth block is required when any broker uses auth.mode: "oauth"`. Every field in the table below (other than `circuit_breaker`/`retry_after`) is required; an empty or missing one fails config load naming that field. `audience_parameter_name` has a schema/runtime gap worth calling out separately — see its row below: a value that passes config load can still fail at server startup once the Hop 2 runtime is actually constructed.
 
 | YAML field | Default | Description |
 |---|---|---|
@@ -114,7 +109,7 @@ Configured under the top-level `broker_oauth` key. Required when any broker uses
 | `mcp_server_client_auth.client_secret_basic.secret` | — | Client secret sent via HTTP Basic auth (RFC 6749 §2.3). |
 | `mcp_server_client_auth.client_secret_post.secret` | — | Client secret sent in the token-request form body (RFC 6749 §2.3). |
 | `grant_type` | — | **Required.** Selects the OAuth grant type for the Hop 2 exchange. Must be `"urn:ietf:params:oauth:grant-type:token-exchange"` (RFC 8693) — the only grant type this version implements; any other value is rejected at config load. |
-| `audience_parameter_name` | — | **Required.** Which request parameter carries each broker's `auth.audience` value: `audience` (RFC 8693 default — **the only value implemented today**), `scope` (Entra On-Behalf-Of style — schema-accepted, not yet implemented), or `resource` (RFC 8707 — schema-accepted, not yet implemented). `scope`/`resource` pass config-load validation but fail at server startup with `audience_parameter_name "…" is schema-accepted but not yet implemented` once the runtime is constructed (requires Hop 1 oauth + `broker_oauth:` + at least one oauth-mode broker, all present together). |
+| `audience_parameter_name` | — | **Required.** Which request parameter carries each broker's `auth.audience` value: `audience` (RFC 8693 default — the only value implemented today), `scope` (Entra On-Behalf-Of style — schema-accepted, not yet implemented), or `resource` (RFC 8707 — schema-accepted, not yet implemented). `scope`/`resource` pass config-load validation but fail at server startup with `audience_parameter_name "…" is schema-accepted but not yet implemented` once the runtime is constructed (requires Hop 1 oauth + `broker_oauth:` + at least one oauth-mode broker, all present together). |
 | `circuit_breaker` | omitted (all defaults, enabled) | Optional. See below. |
 | `retry_after` | omitted (default cap) | Optional. See below. |
 
