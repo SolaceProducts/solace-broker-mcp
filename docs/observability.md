@@ -237,9 +237,14 @@ flat-zero series is your evidence that no audit event was lost. Alert on any inc
 | `mcp_otel_metrics_exported_total` | Counter | none | Solace |
 | `mcp_otel_metrics_dropped_total` | Counter | `reason` | Solace |
 
-Self-observation for the two OTLP exporters: the span pair when tracing is enabled, the metric
-pair when OTLP metrics push is enabled. `reason` is a closed set on both: `queue_full`,
-`export_timeout`, `export_error`, `shutdown`.
+Self-observation for the two OTLP exporters: the span pair when tracing is enabled
+(`OBS_TRACING_ENABLED`), the metric pair when OTLP metrics push is enabled. `reason` is a
+closed set on both: `queue_full`, `export_timeout`, `export_error`, `shutdown`.
+
+**How OTLP metrics push is turned on is not settled** — see open item 7. `OBS_METRICS_ENABLED`
+governs the scrape surface, and there is no OBS_* flag for the push path today. Until that is
+decided, treat `mcp_otel_metrics_exported_total` and `mcp_otel_metrics_dropped_total` as
+present only once push ships.
 
 **These live on the scrape surface deliberately.** Diagnosing a broken push must not depend on
 the push working, so you can answer "is our OTLP export landing?" from Prometheus even when the
@@ -294,7 +299,7 @@ audit sub-stream to a dedicated SIEM index.
 | `event` | Routing tag, always `audit` | string |
 | `audit_event_type` | Which kind of audit record this is; discriminate on this, not on `event` | string (closed set, below) |
 | `timestamp_utc` | When the event was recorded | RFC 3339 UTC |
-| `started_at` | When the call began | RFC 3339 UTC |
+| `started_at_utc` | When the call began | RFC 3339 UTC |
 | `duration_ms` | How long the call took | integer (ms) |
 | `principal.sub` | The authenticated human user (the OIDC `sub` claim) | string |
 | `agent_client_id` | Which AI agent or client made the call, distinct from the human user | string |
@@ -314,7 +319,7 @@ audit sub-stream to a dedicated SIEM index.
 can tell record kinds apart from field presence alone. `event`, `audit_event_type`,
 `timestamp_utc`, `correlation_id`, and `audit_schema_version` are on all five.
 
-| `audit_event_type` | `outcome` | `error_type` | `reason` | `tool`, `arguments_hash`, `started_at`, `duration_ms` | `broker` | `principal.sub`, `agent_client_id` |
+| `audit_event_type` | `outcome` | `error_type` | `reason` | `tool`, `arguments_hash`, `started_at_utc`, `duration_ms` | `broker` | `principal.sub`, `agent_client_id` |
 |---|---|---|---|---|---|---|
 | `operation` | yes | on `error` only | — | yes | yes | yes |
 | `auth_success` | — | — | — | — | — | yes |
@@ -329,6 +334,10 @@ can tell record kinds apart from field presence alone. `event`, `audit_event_typ
   yield them: an expired or audience-mismatched token will, a malformed or absent one will not.
 - **`audit_drop` is a notice, not an outcome.** It reports that a record could not be written,
   and carries only the five common fields.
+
+**Time fields carry their zone or unit in the name:** `_utc` for an instant, `_ms` for a
+duration. Hence `timestamp_utc` and `started_at_utc` alongside `duration_ms`. Names freeze at
+GA, so the rule is stated here for any field added before then.
 
 **`principal` is a nested object, and `principal.sub` is a path into it** — not a literal key
 with a dot in it. A record carries `"principal": { "sub": "..." }`. It is the schema's only
@@ -585,6 +594,12 @@ this draft, resolving them is the point of the review.
    no `denied` outcome value and no authorization event type. Do your access reviews need
    "show me every denied privileged attempt" as a clean query? Adding a value now is cheap;
    adding one after the freeze is not.
+7. **How OTLP metrics push is enabled.** Tracing has `OBS_TRACING_ENABLED`; the push path for
+   metrics has no flag yet, and the scrape surface's `OBS_METRICS_ENABLED` is the wrong lever
+   since the two fail independently by design. Should push be its own OBS_* capability flag, or
+   should it follow the standard `OTEL_EXPORTER_OTLP_*` variables your collectors already set?
+   The second is less for us to document but puts one signal outside the OBS_* model the rest
+   of this page uses.
 
 ### Decided since the first draft
 
