@@ -122,8 +122,12 @@ func TestActionToolIsNotReplayedOnTransportError(t *testing.T) {
 			URL:  server.URL,
 			Auth: config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"},
 		}
+		// A per-test limiter is correct here: these fixtures build one protocol
+		// client, so there is no second Sender to share with. minInterval is 0,
+		// so it never paces and cannot skew the request counts these tests assert.
 		client, err := sempv2.NewHTTPClient(
 			brokerCfg, sempCfg, resilience.NewSemaphore(sempCfg.MaxConcurrentPerBroker),
+			resilience.NewRateLimiter(minInterval),
 			auth.NewBasicAuthenticator("admin", "secret", jar), jar,
 		)
 		if err != nil {
@@ -254,6 +258,7 @@ func TestActionToolNotRetried503IsNotReportedRetryable(t *testing.T) {
 	}
 	client, err := sempv2.NewHTTPClient(
 		brokerCfg, sempCfg, resilience.NewSemaphore(sempCfg.MaxConcurrentPerBroker),
+		resilience.NewRateLimiter(minInterval),
 		auth.NewBasicAuthenticator("admin", "secret", jar), jar,
 	)
 	if err != nil {

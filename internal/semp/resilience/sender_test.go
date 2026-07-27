@@ -79,7 +79,7 @@ func newTestSender(t *testing.T, httpClient *http.Client, authn auth.Authenticat
 		RetryMinInterval:       1 * time.Millisecond,
 		RetryMaxInterval:       10 * time.Millisecond,
 	}
-	return New(httpClient, sempCfg, authn, "http://test-broker", NewSemaphore(10))
+	return New(httpClient, sempCfg, authn, "http://test-broker", NewSemaphore(10), NewRateLimiter(0))
 }
 
 // newTestSenderBasic creates a Sender with a BasicAuthenticator sharing the
@@ -96,7 +96,7 @@ func newTestSenderBasic(t *testing.T, httpClient *http.Client, retries int) *Sen
 	}
 	jar := mustNewSafeCookieJar(t)
 	httpClient.Jar = jar
-	return New(httpClient, sempCfg, basicAuth(t, jar), "http://test-broker", NewSemaphore(10))
+	return New(httpClient, sempCfg, basicAuth(t, jar), "http://test-broker", NewSemaphore(10), NewRateLimiter(0))
 }
 
 // newTestSenderWithServer creates a test server and a Sender pointed at it.
@@ -169,7 +169,7 @@ func TestSender_Do_BoundsOverallRetryChainDeadline(t *testing.T) {
 	// No per-attempt Timeout, so only the overall retry-chain deadline can bound
 	// the call.
 	httpClient := &http.Client{Transport: server.Client().Transport}
-	d := New(httpClient, sempCfg, bearerAuth(t), server.URL, NewSemaphore(1))
+	d := New(httpClient, sempCfg, bearerAuth(t), server.URL, NewSemaphore(1), NewRateLimiter(0))
 
 	start := time.Now()
 	resp, err := d.Do(context.Background(), newGetRequest(t, server.URL))
@@ -229,7 +229,7 @@ func TestSender_Do_RetryBudgetBoundsMultiAttemptChain(t *testing.T) {
 		Timeout:   sempCfg.RequestTimeoutDuration,
 		Transport: server.Client().Transport,
 	}
-	d := New(httpClient, sempCfg, bearerAuth(t), server.URL, NewSemaphore(1))
+	d := New(httpClient, sempCfg, bearerAuth(t), server.URL, NewSemaphore(1), NewRateLimiter(0))
 
 	wantBudget := time.Duration(retries+1)*sempCfg.RequestTimeoutDuration + time.Duration(retries)*sempCfg.RetryMaxInterval
 	attemptFloor := time.Duration(retries+1) * sempCfg.RequestTimeoutDuration
@@ -294,7 +294,7 @@ func TestSender_Do_NoOverallDeadlineWhenPerAttemptTimeoutUnset(t *testing.T) {
 		RetryMaxInterval:       10 * time.Millisecond,
 	}
 	httpClient := &http.Client{Transport: server.Client().Transport}
-	d := New(httpClient, sempCfg, bearerAuth(t), server.URL, NewSemaphore(1))
+	d := New(httpClient, sempCfg, bearerAuth(t), server.URL, NewSemaphore(1), NewRateLimiter(0))
 
 	// Directly falsify the finding: no per-attempt timeout means no budget. The
 	// earlier math produced retryMax*RetryMaxInterval (30ms) here.
@@ -1092,7 +1092,7 @@ func TestSender_ErrorHandler_NetworkError_ProducesRetriesExhaustedError(t *testi
 		RetryMaxInterval:       10 * time.Millisecond,
 	}
 	jar := mustNewSafeCookieJar(t)
-	sender := New(&http.Client{Jar: jar}, sempCfg, basicAuth(t, jar), serverURL, NewSemaphore(10))
+	sender := New(&http.Client{Jar: jar}, sempCfg, basicAuth(t, jar), serverURL, NewSemaphore(10), NewRateLimiter(0))
 
 	req := newGetRequest(t, serverURL)
 	resp, err := sender.Do(context.Background(), req)
@@ -1238,7 +1238,7 @@ func TestSender_NoRetry_POST_ConnectionError(t *testing.T) {
 		RetryMaxInterval:       10 * time.Millisecond,
 	}
 	jar := mustNewSafeCookieJar(t)
-	sender := New(&http.Client{Jar: jar}, sempCfg, basicAuth(t, jar), serverURL, NewSemaphore(10))
+	sender := New(&http.Client{Jar: jar}, sempCfg, basicAuth(t, jar), serverURL, NewSemaphore(10), NewRateLimiter(0))
 
 	req := newMethodRequest(t, http.MethodPost, serverURL)
 	resp, err := sender.Do(context.Background(), req)
@@ -1278,7 +1278,7 @@ func TestSender_NoRetry_PATCH_ConnectionError(t *testing.T) {
 		RetryMaxInterval:       10 * time.Millisecond,
 	}
 	jar := mustNewSafeCookieJar(t)
-	sender := New(&http.Client{Jar: jar}, sempCfg, basicAuth(t, jar), serverURL, NewSemaphore(10))
+	sender := New(&http.Client{Jar: jar}, sempCfg, basicAuth(t, jar), serverURL, NewSemaphore(10), NewRateLimiter(0))
 
 	req := newMethodRequest(t, http.MethodPatch, serverURL)
 	resp, err := sender.Do(context.Background(), req)
@@ -1337,7 +1337,7 @@ func newTestSenderWithSem(t *testing.T, httpClient *http.Client, serverURL strin
 	}
 	jar := mustNewSafeCookieJar(t)
 	httpClient.Jar = jar
-	return New(httpClient, sempCfg, basicAuth(t, jar), serverURL, sem)
+	return New(httpClient, sempCfg, basicAuth(t, jar), serverURL, sem, NewRateLimiter(0))
 }
 
 // TestSenderDo_SharedSemaphoreEnforcesPerBrokerCap proves that two Senders
@@ -1367,8 +1367,6 @@ func TestSenderDo_SharedSemaphoreEnforcesPerBrokerCap(t *testing.T) {
 	sem := NewSemaphore(maxInFlight)
 	senderA := newTestSenderWithSem(t, server.Client(), server.URL, sem)
 	senderB := newTestSenderWithSem(t, server.Client(), server.URL, sem)
-	defer senderA.Close()
-	defer senderB.Close()
 
 	var wg sync.WaitGroup
 	errs := make(chan error, totalRequests)
@@ -1432,7 +1430,6 @@ func TestSenderDo_SemaphoreWaitRespectsContextCancel(t *testing.T) {
 
 	sem := NewSemaphore(1)
 	sender := newTestSenderWithSem(t, server.Client(), server.URL, sem)
-	defer sender.Close()
 
 	// First request occupies the only slot and blocks in the handler.
 	firstDone := make(chan struct{})
@@ -1495,5 +1492,51 @@ func TestNew_PanicsOnNilSemaphore(t *testing.T) {
 		RequestMinInterval: &minInterval,
 	}
 	jar := mustNewSafeCookieJar(t)
-	New(&http.Client{Jar: jar}, sempCfg, basicAuth(t, jar), "http://test-broker", nil)
+	New(&http.Client{Jar: jar}, sempCfg, basicAuth(t, jar), "http://test-broker", nil, NewRateLimiter(0))
+}
+
+// TestNew_PanicsOnNilRetries completes the constructor's guard set. Retries was
+// documented as required but only dereferenced, so a config that skipped
+// defaulting failed as a bare nil dereference partway through construction
+// rather than naming the contract it broke. Raised in review on #223.
+func TestNew_PanicsOnNilRetries(t *testing.T) {
+	jar := mustNewSafeCookieJar(t)
+	minInterval := time.Duration(0)
+
+	for _, tc := range []struct {
+		name    string
+		sempCfg *config.SEMPConfig
+	}{
+		{"nil Retries", &config.SEMPConfig{RequestMinInterval: &minInterval}},
+		{"nil sempCfg", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("New() with %s did not panic", tc.name)
+				}
+			}()
+			New(&http.Client{Jar: jar}, tc.sempCfg, basicAuth(t, jar), "http://test-broker",
+				NewSemaphore(1), NewRateLimiter(0))
+		})
+	}
+}
+
+// TestNew_PanicsOnNilRateLimiter is the sibling of the nil-semaphore contract.
+// A nil limiter would silently recreate the per-Sender 2× rate that SOL-152401
+// removed — each protocol client pacing only itself — so New refuses it too.
+func TestNew_PanicsOnNilRateLimiter(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("New() with nil limiter did not panic")
+		}
+	}()
+	retries := 1
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		Retries:            &retries,
+		RequestMinInterval: &minInterval,
+	}
+	jar := mustNewSafeCookieJar(t)
+	New(&http.Client{Jar: jar}, sempCfg, basicAuth(t, jar), "http://test-broker", NewSemaphore(1), nil)
 }

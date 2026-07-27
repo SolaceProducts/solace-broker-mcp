@@ -118,7 +118,7 @@ func TestSenderRetryStateIsolatedUnderConcurrency(t *testing.T) {
 	// into batches (the default production cap is smaller). Serialization would
 	// shrink the race window inside checkRetry and mask cross-request state
 	// leaks — the exact bug this test is designed to observe.
-	sender := resilience.New(httpClient, sempCfg, authn, server.URL, resilience.NewSemaphore(goroutines))
+	sender := resilience.New(httpClient, sempCfg, authn, server.URL, resilience.NewSemaphore(goroutines), resilience.NewRateLimiter(0))
 
 	// Starting gate: all goroutines block on start, then race into Do()
 	// simultaneously — maximizing the chance they overlap inside checkRetry.
