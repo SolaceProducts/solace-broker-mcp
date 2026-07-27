@@ -547,6 +547,53 @@ commit "$r" "add a thing"
 expect 1 "failure output names the fix commands" "$r" "git commit --amend -s --no-edit"
 expect 1 "failure output names the rebase fix" "$r" "git rebase --signoff"
 
+# --- 17. contributor-controlled commit text cannot fake the log -------------
+# The subject, author name, and email all come from the contributor on a fork
+# pull request. A CR makes everything before it vanish in any viewer that
+# honours it, so `real subject<CR>::notice::DCO check passed` renders as a
+# passing annotation on a commit that just failed. Backspace does the same by
+# erasing. Assert neither reaches the output.
+#
+# Display deception, not workflow-command injection: the Actions log parser
+# splits on newline, so a CR does not start a line as far as it is concerned,
+# and git forbids newlines in ident fields. The reader is the control here.
+r=$(new_repo crlf_injection)
+GIT_AUTHOR_NAME="Mallory$(printf '\010\010\010')Alice" \
+GIT_AUTHOR_EMAIL="mallory@example.com" \
+  git -C "$r" commit -q --allow-empty \
+    -m "$(printf 'subject\r::notice::DCO check passed')"
+
+out=$(
+  cd "$r" &&
+  BASE_SHA="$(git rev-parse refs/remotes/origin/main)" \
+  BASE_REF="main" \
+  HEAD_SHA="$(git rev-parse HEAD)" \
+  "$DCO_CHECK" 2>&1
+) || true
+if printf '%s' "$out" | grep -q "$(printf '\r')"; then
+  printf 'FAIL  carriage return survives into the log output\n'
+  fail_count=$((fail_count + 1))
+else
+  printf 'ok  carriage returns are stripped from commit text\n'
+  pass_count=$((pass_count + 1))
+fi
+if printf '%s' "$out" | grep -q "$(printf '\010')"; then
+  printf 'FAIL  backspace survives into the log output\n'
+  fail_count=$((fail_count + 1))
+else
+  printf 'ok  other C0 control characters are stripped\n'
+  pass_count=$((pass_count + 1))
+fi
+# The commit must still be reported as failing — sanitizing must not swallow it.
+if printf '%s' "$out" | grep -q 'missing a Developer Certificate of Origin sign-off'; then
+  printf 'ok  the offending commit is still reported\n'
+  pass_count=$((pass_count + 1))
+else
+  printf 'FAIL  sanitizing lost the failure report\n'
+  fail_count=$((fail_count + 1))
+fi
+unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL
+
 echo
 printf 'dco-check self-test: %d passed, %d failed\n' "$pass_count" "$fail_count"
 [ "$fail_count" -eq 0 ]

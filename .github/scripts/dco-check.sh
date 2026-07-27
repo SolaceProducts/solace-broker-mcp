@@ -172,8 +172,26 @@ fi
 # so a sign-off followed by prose still counts.
 signoff_lines() {
   git show -s --format='%B' "$1" |
+    tr -d '\r' |
     awk 'tolower($0) ~ /^[ \t]*signed-off-by:/ { print }'
 }
+
+# Strip carriage returns and other C0 control characters (tab kept) from git
+# output before it is echoed.
+#
+# Commit subjects, author names, and emails are contributor-controlled on a fork
+# pull request, and this script's output is read by a human deciding whether a
+# gate really failed. A subject like `real subject<CR>::notice::DCO check passed`
+# renders in any viewer that honours CR as just the tail — the text after the CR
+# overwrites what came before — so a failing commit can be made to look like a
+# passing annotation. Backspace does the same by erasing.
+#
+# This is display deception, not workflow-command injection: the Actions log
+# parser splits on newline, so a CR does not begin a new line as far as it is
+# concerned, and git forbids newlines in ident fields. Worth fixing anyway,
+# because the person reading the log is the control. None of these characters
+# belongs in a trailer or an identity, so dropping them loses nothing.
+sanitize() { tr -d '\r' | tr -d '\000-\010\013\014\016-\037'; }
 
 # Lowercased email from each sign-off line — the first <...> on the line, which
 # is the signer's own address.
@@ -216,9 +234,9 @@ echo "::error::${failed_count} of ${total} commit(s) in this pull request are mi
 echo
 while IFS= read -r sha; do
   [ -n "$sha" ] || continue
-  echo "  $(git show -s --format='%h %s' "$sha")"
-  echo "    author:    $(git show -s --format='%an <%ae>' "$sha")"
-  echo "    committer: $(git show -s --format='%cn <%ce>' "$sha")"
+  echo "  $(git show -s --format='%h %s' "$sha" | sanitize)"
+  echo "    author:    $(git show -s --format='%an <%ae>' "$sha" | sanitize)"
+  echo "    committer: $(git show -s --format='%cn <%ce>' "$sha" | sanitize)"
   reason=$(merge_content_reason "$sha")
   [ -z "$reason" ] || failed_merges=yes # decides which bulk fix is safe to print
   case "$reason" in

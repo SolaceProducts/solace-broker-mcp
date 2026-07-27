@@ -131,7 +131,7 @@ Navigate to: **Settings → Branches → Branch protection rules → Add rule**
   - Select required checks:
     - `build`
     - `lint`
-    - `e2e`
+    - `e2e-basic-mcp`
     - `e2e-oauth`
     - `DCO sign-off`
     - `DCO check self-test`
