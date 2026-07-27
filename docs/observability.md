@@ -5,12 +5,16 @@
 > freeze at GA. After GA we commit to only ever *adding* to this schema, never renaming, so
 > the time to change a name is now. See [How to give feedback](#how-to-give-feedback).
 >
-> **Nothing described here is emitted by the current build.** Only the feature flags exist
-> today: there is no `/metrics` handler, no audit emission, and no OTLP exporter. Every
-> section below is written in the present tense of the *proposed* design, because the design
-> is what you are being asked to review. Read it as a specification, not as a description of
-> a running system, and do not point a dashboard or SIEM query at it until the corresponding
-> signal ships.
+> **Metrics, audit, and tracing are not emitted by the current build.** Only their feature
+> flags exist today: there is no `/metrics` handler, no audit emission, and no OTLP
+> exporter. Those sections are written in the present tense of the *proposed* design,
+> because the design is what you are being asked to review. Read them as a specification,
+> not as a description of a running system, and do not point a dashboard or SIEM query at
+> them until the corresponding signal ships.
+>
+> **Correlation IDs are the exception: they are implemented and on by default.** The
+> [Correlation ID](#correlation-id) section describes shipped behaviour you can rely on
+> today.
 
 Once implemented, the Broker MCP Server will emit three observability signals:
 
@@ -341,15 +345,22 @@ pilot feedback.
 ## Correlation ID
 
 One ID threads a request from the AI agent, through the server and every retry, out to the
-broker, and back. It anchors your logs, traces, and audit records on the same call.
+broker, and back. Today it anchors your logs and the broker's own log entry on the same
+call; once traces and the audit trail ship, it is the key that joins those to them.
+
+This section describes behaviour that is implemented and on by default, unlike the metric,
+audit, and trace schemas above.
 
 - **Inbound**, in priority order: the W3C `traceparent` header (its trace-id is used); then
   a legacy `X-Correlation-ID` header; otherwise the server generates a time-sortable UUIDv7.
 - **Returned** to the caller on the response `X-Correlation-ID` header and in
   `CallToolResult.Meta["correlation_id"]`.
-- **Propagated** to the broker: every outbound SEMP request carries both `traceparent` and
-  `X-Correlation-ID`. On retry, the same ID is reused, so all attempts share one ID in the
-  broker's logs.
+- **Propagated** to the broker: every outbound SEMP request carries `X-Correlation-ID`.
+  `traceparent` is sent only when the ID is a valid W3C trace-id (32 lowercase hex, not
+  all-zero) — that is, when the caller supplied one inbound. A server-generated UUIDv7,
+  which is the default when no caller header arrives, is not a valid trace-id, so no
+  `traceparent` goes out rather than a malformed one. On retry the same ID is reused, so
+  all attempts share one ID in the broker's logs.
 - **Logged** as the `correlation_id` attribute on every log line within the request.
 
 ---
@@ -370,9 +381,15 @@ Notes:
 
 - The metric label is `outcome`, not `status`, precisely so metrics, audit, and spans share
   one join key.
-- **Authorization denials are not an `outcome` value.** They are a separate signal: the
-  `auth_failure` audit event and the `mcp_auth_failure_total` metric. This keeps security
-  queries clean.
+- **Failed authentication is not an `outcome` value.** It is a separate signal: the
+  `auth_failure` audit event and the `mcp_auth_failure_total` metric, whose closed `reason`
+  set (`invalid_token`, `expired`, `audience_mismatch`, `signature_invalid`, `missing`) is
+  authentication throughout. This keeps security queries clean.
+- **Authorization denials have no signal of their own yet.** A caller who authenticates and
+  is then refused a privileged operation currently lands in `outcome: error`, alongside
+  timeouts and malformed arguments. There is no `denied` value and no authorization event
+  type. See [Authentication events](#authentication-events); tell us if your access reviews
+  need this separated.
 - **Load-shedding / saturation is not an `outcome` value** either; it is planned as a
   separate metric in a later release (see below).
 
