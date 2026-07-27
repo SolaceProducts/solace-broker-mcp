@@ -159,8 +159,19 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 	// method guard above uses, leaves the original transport error as the
 	// caller-visible cause; returning a sentinel here would mask it, because
 	// retryablehttp prefers CheckRetry's error over the request's own.
+	//
+	// Logged, and at the same level as the status-code gate below: of the three
+	// suppressions this is the ambiguous one. A 503 is very probably a
+	// pre-execution rejection, but a mid-flight reset is exactly the case where
+	// the broker may already have purged the queue, and nothing downstream
+	// records it — errorHandler logs only when resp != nil. Without this line an
+	// operator asking "did the purge run?" gets evidence for the safe case and
+	// silence for the dangerous one.
 	if err != nil {
 		if state.retryUnsafe {
+			slog.Debug("not retrying: caller declared the request non-idempotent",
+				slog.String("broker", d.brokerURL),
+				slog.String("cause", "transport error"))
 			return false, nil
 		}
 		return retryablehttp.DefaultRetryPolicy(ctx, resp, err)
@@ -202,7 +213,13 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 	// request must fail visibly instead. This is the gate that stops an
 	// `idempotent: false` action tool — delete-queue-messages, whose purge takes
 	// no message-ID range — from destroying data the caller never authorized.
-	if state.retryUnsafe {
+	//
+	// Scoped to the statuses the switch below would actually replay. retryablehttp
+	// calls CheckRetry on every response, 2xx included, so an unscoped gate would
+	// claim "not retrying" on each successful action — suppression that never
+	// happened. Behaviour is unchanged: every other status falls through to a
+	// switch arm that returns false anyway.
+	if state.retryUnsafe && retryableStatus(resp.StatusCode) {
 		slog.Debug("not retrying: caller declared the request non-idempotent",
 			slog.String("broker", d.brokerURL),
 			slog.Int("status", resp.StatusCode))
@@ -251,4 +268,12 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 		// 4xx (except 401/429): client errors, no retry.
 		return false, nil
 	}
+}
+
+// retryableStatus reports whether the retry switch above would replay this
+// status for an idempotent request: 429 and 503 as transient, any other 5xx
+// once. Keep it in step with that switch — the non-idempotency gate uses it to
+// fire only on responses that were genuinely retry candidates.
+func retryableStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code >= 500
 }

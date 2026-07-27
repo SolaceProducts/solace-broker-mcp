@@ -15,8 +15,10 @@
 package resilience
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -129,6 +131,11 @@ func TestSender_RetryUnsafe_503_NotRetried(t *testing.T) {
 	}, "basic", 10)
 	defer server.Close()
 
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
 	resp, err := sender.Do(WithRetryUnsafe(context.Background()), newMethodRequest(t, http.MethodPut, server.URL))
 	if resp != nil {
 		resp.Body.Close()
@@ -138,6 +145,11 @@ func TestSender_RetryUnsafe_503_NotRetried(t *testing.T) {
 	}
 	if got := requestCount.Load(); got != 1 {
 		t.Errorf("retry-unsafe PUT reached the broker %d times on 503, want exactly 1", got)
+	}
+	// The suppression an operator needs to see: a retry was on the table and the
+	// gate took it away.
+	if !strings.Contains(buf.String(), gateLogPrefix) {
+		t.Errorf("gate suppressed a 503 retry without logging it:\n%s", buf.String())
 	}
 }
 
@@ -251,5 +263,91 @@ func TestSender_UnmarkedGET_TransportError_StillRetried(t *testing.T) {
 	}
 	if got := requestCount.Load(); got != 3 {
 		t.Errorf("GET reached the broker %d times, want 3 (original + 2 retries)", got)
+	}
+}
+
+// retryablehttp calls CheckRetry on every response, success included. The
+// non-idempotency gate therefore has to be scoped to statuses that were
+// genuinely retry candidates, or every successful action tool call emits a
+// "not retrying" line describing suppression that never happened — the noise
+// lands hardest on delete-queue-messages, the operation an operator is most
+// likely to be reading the logs for.
+func TestSender_RetryUnsafe_SuccessAndClientError_DoNotLogSuppression(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+	}{
+		{"200 OK", http.StatusOK},
+		{"400 Bad Request", http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+			}, "basic", 10)
+			defer server.Close()
+
+			resp, err := sender.Do(WithRetryUnsafe(context.Background()), newMethodRequest(t, http.MethodPut, server.URL))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			resp.Body.Close()
+
+			if strings.Contains(buf.String(), gateLogPrefix) {
+				t.Errorf("gate logged suppression on a %d, which was never a retry candidate:\n%s", tc.status, buf.String())
+			}
+		})
+	}
+}
+
+// gateLogPrefix is the non-idempotency gate's message, matched in full rather
+// than on the word "non-idempotent" alone: RetriesExhaustedError.Error() also
+// carries that word, so a bare substring match could pass for the wrong reason
+// if that error ever starts being logged on this path.
+const gateLogPrefix = "not retrying: caller declared the request non-idempotent"
+
+// TestCheckRetry_RetryUnsafe_NeverRetriesAnyStatus is the invariant behind
+// SOL-152400, and it is load-bearing in a way the per-status tests are not.
+//
+// The gate is scoped by retryableStatus, which restates the switch's
+// classification in a second place. That coupling fails OPEN: make the helper
+// broader than the switch and you get a stray log line, make it narrower — or
+// add a retryable arm to the switch and forget the helper — and the gate stops
+// firing, which replays a purge. A comment is not enough to hold that.
+//
+// Sweeping every status closes it at CI time, and doubles as the proof that
+// scoping the gate preserved behaviour for all of them.
+func TestCheckRetry_RetryUnsafe_NeverRetriesAnyStatus(t *testing.T) {
+	sender, server := newTestSenderWithServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}, "basic", 10)
+	defer server.Close()
+
+	for code := 100; code <= 599; code++ {
+		// 401 is the one deliberate exception: authentication is rejected before
+		// the broker acts, so re-auth cannot duplicate a side effect.
+		// TestSender_RetryUnsafe_401_StillReAuths pins that path.
+		if code == http.StatusUnauthorized {
+			continue
+		}
+		state := &retryState{method: http.MethodPut, retryUnsafe: true}
+		ctx := context.WithValue(context.Background(), retryStateKey{}, state)
+
+		retry, err := sender.checkRetry(ctx, &http.Response{StatusCode: code}, nil)
+		if retry || err != nil {
+			t.Errorf("status %d: got (retry=%v, err=%v), want (false, nil) — a declared non-idempotent request must never be replayed",
+				code, retry, err)
+		}
+		// The retry counters gate errTransientCapReached and the once-only 5xx
+		// replay. A marked request must never touch them, or a later attempt
+		// inherits a budget it never spent.
+		if state.transientRetried != 0 || state.other5xxRetried {
+			t.Errorf("status %d: gate mutated retry counters (transientRetried=%d, other5xxRetried=%v)",
+				code, state.transientRetried, state.other5xxRetried)
+		}
 	}
 }
