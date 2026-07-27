@@ -61,13 +61,21 @@ const dialKeepAlive = 30 * time.Second
 // Production cannot reach that state — config.Load substitutes
 // defaults.DefaultSEMPRequestTimeoutDuration when the field is unset and
 // validation rejects a non-positive value — but a directly constructed
-// SEMPConfig can, and there http.Client.Timeout is zero too, which makes this
-// the only bound in play. Zero would mean unbounded, which is the defect.
+// SEMPConfig can, and there http.Client.Timeout and ResponseHeaderTimeout are
+// zero too, leaving this the only bound on the TCP connect. (TLSHandshakeTimeout
+// and ExpectContinueTimeout are constants and still apply, but they bound later
+// stages, not connect.) Zero would mean unbounded, which is the defect.
+//
+// The result is never zero. Integer division truncates, so any requestTimeout
+// below 2ns would otherwise halve to zero — positive, so it clears validation,
+// yet producing exactly the unbounded dial this function exists to prevent.
+// A 1ns bound fails the dial immediately, which is the faithful reading of a
+// 1ns request budget and is in any case strictly better than waiting forever.
 func dialTimeout(requestTimeout time.Duration) time.Duration {
 	if requestTimeout <= 0 {
 		return dialTimeoutCeiling
 	}
-	return min(dialTimeoutCeiling, requestTimeout/2)
+	return max(1, min(dialTimeoutCeiling, requestTimeout/2))
 }
 
 // newSEMPDialer builds the transport's dialer. It exists so the dial bound is

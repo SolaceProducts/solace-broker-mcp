@@ -103,9 +103,11 @@ func TestResponseHeaderTimeout_TracksOperatorConfiguredRequestTimeout(t *testing
 // The zero case is not reachable in production — config.Load substitutes
 // DefaultSEMPRequestTimeoutDuration when the field is unset and validation
 // rejects a non-positive value — but a directly constructed SEMPConfig hits it
-// (see the TLS tests below), and there the dial bound is the only bound in play
-// because http.Client.Timeout is also zero. Falling back to the ceiling is
-// strictly safer than falling back to "unbounded".
+// (see the TLS tests below), and there the dial bound is the only bound on the
+// TCP connect, because http.Client.Timeout and ResponseHeaderTimeout are zero
+// too. TLSHandshakeTimeout and ExpectContinueTimeout are constants and still
+// apply, but they bound later stages. Falling back to the ceiling is strictly
+// safer than falling back to "unbounded".
 func TestDialTimeout_DerivedFromRequestTimeout(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -119,6 +121,12 @@ func TestDialTimeout_DerivedFromRequestTimeout(t *testing.T) {
 		{"very aggressive tuning derives further down", 5 * time.Second, 2500 * time.Millisecond},
 		{"unset falls back to the ceiling, not to unbounded", 0, dialTimeoutCeiling},
 		{"negative falls back to the ceiling", -1 * time.Second, dialTimeoutCeiling},
+		// Integer division truncates, so anything under 2ns halves to zero.
+		// Positive, so it clears validation, and zero on net.Dialer means
+		// unbounded — the precise defect this function exists to remove.
+		{"1ns does not truncate to unbounded", 1 * time.Nanosecond, 1 * time.Nanosecond},
+		{"2ns is the first value that halves cleanly", 2 * time.Nanosecond, 1 * time.Nanosecond},
+		{"3ns truncates down but stays positive", 3 * time.Nanosecond, 1 * time.Nanosecond},
 	}
 
 	for _, tt := range tests {
@@ -130,10 +138,20 @@ func TestDialTimeout_DerivedFromRequestTimeout(t *testing.T) {
 			if got <= 0 {
 				t.Errorf("dialTimeout(%s) = %s; a non-positive dial timeout means unbounded", tt.requestTimeout, got)
 			}
-			// The invariant that makes the bound useful at all.
-			if tt.requestTimeout > 0 && got >= tt.requestTimeout {
+			// The invariant that makes the bound useful at all — but only where
+			// it is satisfiable. At 1ns there is no smaller positive duration,
+			// so "strictly positive" and "strictly less than the outer timeout"
+			// cannot both hold. Boundedness wins: an equal bound fires at the
+			// same instant as the outer timeout, which is indistinguishable in
+			// practice, whereas a zero bound is unbounded and is the whole
+			// defect. Everything from 2ns up satisfies both.
+			if tt.requestTimeout >= 2 && got >= tt.requestTimeout {
 				t.Errorf("dialTimeout(%s) = %s must be strictly less than the outer request timeout, "+
 					"or the outer timeout wins and the dial bound never fires", tt.requestTimeout, got)
+			}
+			if tt.requestTimeout == 1 && got != tt.requestTimeout {
+				t.Errorf("dialTimeout(1ns) = %s, want 1ns: the degenerate case trades the "+
+					"strictly-less property for staying bounded", got)
 			}
 		})
 	}
