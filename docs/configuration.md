@@ -97,7 +97,14 @@ brokers:
 
 ## Broker OAuth (Hop 2)
 
-Configured under the top-level `broker_oauth` key. Required when any broker uses `auth.mode: oauth` — obtains the broker-bound token by exchanging the calling agent's Hop 1 token (RFC 8693 token exchange) against an identity provider. Requires `mcp_client_auth.mode: oauth` (see [Authentication](authentication.md) for the full Hop 1 / Hop 2 setup walkthrough).
+Configured under the top-level `broker_oauth` key. Required when any broker uses `auth.mode: oauth` — obtains the broker-bound token by exchanging the calling agent's Hop 1 token (RFC 8693 token exchange) against an identity provider.
+
+**Dependencies and error conditions:**
+
+- **`mcp_client_auth.mode: oauth` (Hop 1) is required.** Token exchange consumes the agent's Hop 1 JWT as its `subject_token`; a broker with `auth.mode: oauth` while Hop 1 is `static`/`disabled` fails config load with an `mcp_client_auth.mode must be oauth` error naming the affected broker(s).
+- **`broker_oauth:` itself is required once any broker uses `auth.mode: oauth`.** Omitting it fails config load with `broker_oauth block is required when any broker uses auth.mode: "oauth"`.
+- **Every `broker_oauth` field above `circuit_breaker`/`retry_after` is required, non-optional.** An empty/missing field fails config load naming that field.
+- **`audience_parameter_name` has a schema/runtime gap** — see the field description below. A value that passes config load can still fail at server startup once the Hop 2 runtime is actually constructed.
 
 | YAML field | Default | Description |
 |---|---|---|
@@ -106,8 +113,8 @@ Configured under the top-level `broker_oauth` key. Required when any broker uses
 | `mcp_server_client_auth` | — | **Required.** Discriminated union — exactly one of the sub-blocks below must be populated. |
 | `mcp_server_client_auth.client_secret_basic.secret` | — | Client secret sent via HTTP Basic auth (RFC 6749 §2.3). |
 | `mcp_server_client_auth.client_secret_post.secret` | — | Client secret sent in the token-request form body (RFC 6749 §2.3). |
-| `grant_type` | — | **Required.** Must be `"urn:ietf:params:oauth:grant-type:token-exchange"` (RFC 8693) — the only grant type this version implements. |
-| `audience_parameter_name` | — | **Required.** Which request parameter carries the per-broker audience value: `audience` (RFC 8693 default), `scope` (Entra On-Behalf-Of style), or `resource` (RFC 8707). |
+| `grant_type` | — | **Required.** Selects the OAuth grant type for the Hop 2 exchange. Must be `"urn:ietf:params:oauth:grant-type:token-exchange"` (RFC 8693) — the only grant type this version implements; any other value is rejected at config load. |
+| `audience_parameter_name` | — | **Required.** Which request parameter carries each broker's `auth.audience` value: `audience` (RFC 8693 default — **the only value implemented today**), `scope` (Entra On-Behalf-Of style — schema-accepted, not yet implemented), or `resource` (RFC 8707 — schema-accepted, not yet implemented). `scope`/`resource` pass config-load validation but fail at server startup with `audience_parameter_name "…" is schema-accepted but not yet implemented` once the runtime is constructed (requires Hop 1 oauth + `broker_oauth:` + at least one oauth-mode broker, all present together). |
 | `circuit_breaker` | omitted (all defaults, enabled) | Optional. See below. |
 | `retry_after` | omitted (default cap) | Optional. See below. |
 

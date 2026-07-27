@@ -133,7 +133,8 @@ mcp_client_auth:
 #     client_secret_basic:                 # or client_secret_post — exactly one
 #       secret: "${MCP_SERVER_CLIENT_SECRET}"
 #   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-#   audience_parameter_name: "audience"    # audience, scope, or resource
+#   audience_parameter_name: "audience"    # only "audience" works today; scope/resource
+#                                          # are schema-accepted but fail at startup
 
 # SEMP client settings — controls how the server talks to brokers.
 semp:

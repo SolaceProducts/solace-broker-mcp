@@ -256,7 +256,15 @@ The `audience` value must exactly match the value configured in step 1.2. Set `r
 
 ### Step 2b: Configure broker OAuth (Hop 2)
 
-This step is only needed if one or more brokers should use `auth.mode: oauth` instead of `basic`/`bearer`. Under this mode, the MCP server obtains each broker's token by exchanging the calling agent's Hop 1 token (RFC 8693 token exchange) against the identity provider — so Hop 1 above (`mcp_client_auth.mode: oauth`) is a prerequisite: without an agent token there is nothing to exchange.
+This step is only needed if one or more brokers should use `auth.mode: oauth` instead of `basic`/`bearer`. Under this mode, the MCP server obtains each broker's token by exchanging the calling agent's Hop 1 token (RFC 8693 token exchange) against the identity provider.
+
+**Dependency: `mcp_client_auth.mode: oauth` (Hop 1) is required first.** RFC 8693 token exchange consumes the agent's Hop 1 JWT as its `subject_token` — with `mode: static` or `mode: disabled` there is no agent token to exchange, so Hop 2 has nothing to do. Configuring `auth.mode: oauth` on a broker while Hop 1 is `static`/`disabled` is rejected at startup with:
+
+```
+mcp_client_auth.mode is "static" but 1 broker has auth.mode: oauth; the MCP server
+needs the agent's token (received via mcp_client_auth) to obtain a broker token, so
+mcp_client_auth.mode must be oauth
+```
 
 Add the top-level `broker_oauth:` block with the IdP's token-exchange coordinates, and set `auth.mode: oauth` on each broker that should use it:
 
@@ -283,12 +291,40 @@ brokers:
 | `broker_oauth.idp_token_endpoint` | The IdP's token endpoint — where the MCP server POSTs the token-exchange request. Must be `https://` in production. |
 | `broker_oauth.mcp_server_client_id` | The MCP server's own `client_id`, registered at the IdP (this is a separate client registration from the one used for Hop 1 in step 1.2). |
 | `broker_oauth.mcp_server_client_auth` | How the MCP server authenticates itself to the IdP's token endpoint — a discriminated union, exactly one sub-block populated: `client_secret_basic.secret` (sent via HTTP Basic auth) or `client_secret_post.secret` (sent in the form body). |
-| `broker_oauth.grant_type` | Must be `"urn:ietf:params:oauth:grant-type:token-exchange"` — the only grant type this version implements. |
-| `broker_oauth.audience_parameter_name` | Which request parameter carries the per-broker audience value: `audience` (RFC 8693 default), `scope` (Entra On-Behalf-Of style), or `resource` (RFC 8707). |
+| `broker_oauth.grant_type` | The OAuth grant type used for the Hop 2 exchange — see [Grant type](#grant-type) below. |
+| `broker_oauth.audience_parameter_name` | Which request parameter carries the per-broker audience value — see [Audience parameter name](#audience-parameter-name) below. |
 | `brokers.<alias>.auth.mode` | Set to `oauth` to use token exchange for this broker. |
-| `brokers.<alias>.auth.audience` | Optional. This broker's audience value, forwarded to the IdP during exchange. Omit if the broker's OAuth profile does not validate audience. |
+| `brokers.<alias>.auth.audience` | Optional. This broker's audience value, forwarded to the IdP during exchange using whichever request parameter `audience_parameter_name` selects. Omit if the broker's OAuth profile does not validate audience. |
 
 The IdP needs a second client registration for the MCP server itself (distinct from the Hop 1 client in step 1.2) — a **confidential** client with a client secret, since the MCP server authenticates itself directly to the token endpoint rather than involving a browser. Grant it whatever token-exchange permissions your IdP requires (for Keycloak, enable the token-exchange feature for the client and permit it to exchange tokens for the target broker's audience).
+
+#### Grant type
+
+`grant_type` tells the IdP which OAuth flow this request is: RFC 8693 token exchange trades one already-issued token (the agent's Hop 1 JWT) for another (a broker-bound token), rather than the IdP verifying a password or a client secret directly. Set it to the literal RFC 8693 grant-type URN:
+
+```yaml
+grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+```
+
+This is the only grant type this version implements. The field exists (rather than being hardcoded) so a future grant type can be added without a config schema change, but today any other value — including a value your IdP itself recognizes for some other flow — is rejected at startup with `broker_oauth.grant_type is required` (if empty) or an "unsupported grant_type" error (if set to anything else).
+
+#### Audience parameter name
+
+`audience_parameter_name` tells the runtime which OAuth request parameter should carry each broker's `auth.audience` value in the token-exchange POST. Different IdP families expect the audience on a different parameter:
+
+| Value | Style | Runtime support |
+|-------|-------|------------------|
+| `audience` | RFC 8693's own `audience` parameter — the default for Keycloak and most OIDC-compliant IdPs. | **Implemented.** |
+| `scope` | Microsoft Entra On-Behalf-Of style (the audience is prefixed onto the `scope` value instead of a separate parameter). | Schema-accepted, **not yet implemented**. |
+| `resource` | RFC 8707 resource-indicator style. | Schema-accepted, **not yet implemented**. |
+
+**Only `audience` works today.** The other two values pass config-file validation at startup (the YAML schema accepts all three so configs targeting a future IdP integration can be staged in advance), but the token-exchange runtime itself rejects them when it is actually constructed — which only happens once Hop 1 is `oauth`, `broker_oauth:` is set, and at least one broker uses `auth.mode: oauth` together. The server fails to start with:
+
+```
+tokenexchange: audience_parameter_name "scope" is schema-accepted but not yet implemented
+```
+
+If your IdP is Entra (or otherwise expects `scope`/`resource`), broker OAuth is not yet usable against it in this version.
 
 Two optional sub-blocks tune the runtime's resilience behavior — see [Configuration](configuration.md#broker-oauth-hop-2) for every field and its default:
 
