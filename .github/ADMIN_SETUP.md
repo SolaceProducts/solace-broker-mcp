@@ -288,7 +288,8 @@ GitHub Rulesets are the new way to configure branch protection (more flexible th
 - Bypass: Nobody (or specific users/teams)
 - Rules:
   - Require pull request with 1 approval
-  - Require status checks: build, lint, e2e, e2e-oauth, `DCO sign-off`, `DCO check self-test`
+  - Require status checks: `build`, `lint`, `e2e-basic-mcp`, `e2e-oauth`, `DCO sign-off`,
+    `DCO check self-test`
   - Block force pushes
   - Block deletions
 
