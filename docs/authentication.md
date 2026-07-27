@@ -10,6 +10,7 @@ The Solace Event Broker MCP Server supports three authentication modes for MCP c
   - [Choose a client registration method](#choose-a-client-registration-method)
   - [Step 1: Set up the identity provider](#step-1-set-up-the-identity-provider)
   - [Step 2: Configure the MCP server](#step-2-configure-the-mcp-server)
+  - [Step 2b: Configure broker OAuth (Hop 2)](#step-2b-configure-broker-oauth-hop-2)
   - [TLS for the MCP server's own listener](#tls-for-the-mcp-servers-own-listener)
   - [Tool authorization (claim-based RBAC)](#tool-authorization-claim-based-rbac)
   - [Step 3: Start the MCP server](#step-3-start-the-mcp-server)
@@ -253,6 +254,47 @@ The `audience` value must exactly match the value configured in step 1.2. Set `r
 
 > **Note:** Under `mode: oauth` the validator enforces `https://` on **both** the `issuer` and `resource_url` URLs (an `http://` value is rejected at startup). When running Keycloak locally for testing, terminate TLS in front of it (for example, via Caddy or a reverse proxy) or run Keycloak with a TLS cert. `resource_url` is the externally advertised identifier for OAuth discovery, so it must be `https://` even when the MCP server's own listener is plaintext behind an upstream terminator — see [TLS for the MCP server's own listener](#tls-for-the-mcp-servers-own-listener) below.
 
+### Step 2b: Configure broker OAuth (Hop 2)
+
+This step is only needed if one or more brokers should use `auth.mode: oauth` instead of `basic`/`bearer`. Under this mode, the MCP server obtains each broker's token by exchanging the calling agent's Hop 1 token (RFC 8693 token exchange) against the identity provider — so Hop 1 above (`mcp_client_auth.mode: oauth`) is a prerequisite: without an agent token there is nothing to exchange.
+
+Add the top-level `broker_oauth:` block with the IdP's token-exchange coordinates, and set `auth.mode: oauth` on each broker that should use it:
+
+```yaml
+broker_oauth:
+  idp_token_endpoint: "https://your-idp.example.com/realms/your-realm/protocol/openid-connect/token"
+  mcp_server_client_id: "mcp-server"
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: "${MCP_SERVER_CLIENT_SECRET}"
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: "audience"
+
+brokers:
+  prod:
+    url: "https://broker.example.com:943"
+    auth:
+      mode: oauth
+      audience: "solace-broker-prod"
+```
+
+| Field | Description |
+|-------|-------------|
+| `broker_oauth.idp_token_endpoint` | The IdP's token endpoint — where the MCP server POSTs the token-exchange request. Must be `https://` in production. |
+| `broker_oauth.mcp_server_client_id` | The MCP server's own `client_id`, registered at the IdP (this is a separate client registration from the one used for Hop 1 in step 1.2). |
+| `broker_oauth.mcp_server_client_auth` | How the MCP server authenticates itself to the IdP's token endpoint — a discriminated union, exactly one sub-block populated: `client_secret_basic.secret` (sent via HTTP Basic auth) or `client_secret_post.secret` (sent in the form body). |
+| `broker_oauth.grant_type` | Must be `"urn:ietf:params:oauth:grant-type:token-exchange"` — the only grant type this version implements. |
+| `broker_oauth.audience_parameter_name` | Which request parameter carries the per-broker audience value: `audience` (RFC 8693 default), `scope` (Entra On-Behalf-Of style), or `resource` (RFC 8707). |
+| `brokers.<alias>.auth.mode` | Set to `oauth` to use token exchange for this broker. |
+| `brokers.<alias>.auth.audience` | Optional. This broker's audience value, forwarded to the IdP during exchange. Omit if the broker's OAuth profile does not validate audience. |
+
+The IdP needs a second client registration for the MCP server itself (distinct from the Hop 1 client in step 1.2) — a **confidential** client with a client secret, since the MCP server authenticates itself directly to the token endpoint rather than involving a browser. Grant it whatever token-exchange permissions your IdP requires (for Keycloak, enable the token-exchange feature for the client and permit it to exchange tokens for the target broker's audience).
+
+Two optional sub-blocks tune the runtime's resilience behavior — see [Configuration](configuration.md#broker-oauth-hop-2) for every field and its default:
+
+- `broker_oauth.circuit_breaker` — fails token-exchange calls fast during a sustained IdP outage, instead of letting every broker's requests queue up against a dead IdP. On by default; every field optional.
+- `broker_oauth.retry_after` — shares a process-wide backoff across every broker when the IdP asks callers to slow down (HTTP 429 with `Retry-After`), so one throttled broker doesn't let every other broker keep hammering the same IdP.
+
 ### TLS for the MCP server's own listener
 
 `mode: oauth` is a production profile, so the server must not silently serve its
@@ -484,7 +526,7 @@ A browser window opens on first use for user login. The IdP must support anonymo
 > (`basic`, `bearer`, or `oauth`). Broker-bound OAuth via RFC 8693 token
 > exchange (the `broker_oauth:` config block) obtains a broker-bound token by
 > exchanging the client's Hop 1 token, and requires `mcp_client_auth.mode:
-> oauth` — see the [CHANGELOG](../CHANGELOG.md).
+> oauth` — see [Step 2b: Configure broker OAuth (Hop 2)](#step-2b-configure-broker-oauth-hop-2) below.
 
 The numbered steps in detail:
 
