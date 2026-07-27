@@ -67,7 +67,6 @@ func TestExecute_ShowCommand_RetriesOn503(t *testing.T) {
 	}))
 	defer srv.Close()
 	client := newTestClient(t, srv)
-	defer client.Close()
 
 	result, err := client.Execute(context.Background(), `<rpc><show><version/></show></rpc>`)
 	if err != nil {
@@ -89,7 +88,6 @@ func TestExecute_NonShowCommand_NotRetried(t *testing.T) {
 	}))
 	defer srv.Close()
 	client := newTestClient(t, srv)
-	defer client.Close()
 
 	_, err := client.Execute(context.Background(), `<rpc><admin><shutdown/></admin></rpc>`)
 	if err == nil {

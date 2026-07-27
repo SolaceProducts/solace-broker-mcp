@@ -349,8 +349,8 @@ func TestBrokerPool_Close_BeforeAnyAccess(t *testing.T) {
 
 // TestBrokerPool_Close_AfterLazyCreation exercises the production path that
 // matters for cmd/server/main.go's shutdown defer: lazily create a client
-// (which spins up a rate-limiter ticker inside the Sender), then Close the
-// pool. The ticker is internal, so we verify the observable contract: no
+// (whose BrokerClient owns the broker's shared rate limiter), then Close the
+// pool. The limiter is internal, so we verify the observable contract: no
 // panic, and Close is idempotent — calling it twice must remain safe.
 func TestBrokerPool_Close_AfterLazyCreation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -370,7 +370,7 @@ func TestBrokerPool_Close_AfterLazyCreation(t *testing.T) {
 	pool.Close()
 	// Second Close: must remain safe — main()'s defer fires once, but
 	// future call sites or test helpers may exercise multi-close. The
-	// per-broker Sender.Close is documented as safe to call multiple times.
+	// per-broker RateLimiter.Stop is documented as safe to call multiple times.
 	pool.Close()
 }
 
@@ -627,4 +627,3 @@ func TestBrokerPool_CredentialIsolation_SEMPv1(t *testing.T) {
 		t.Errorf("broker-a and broker-b saw the same Authorization header %q — credentials crossed brokers", authA)
 	}
 }
-

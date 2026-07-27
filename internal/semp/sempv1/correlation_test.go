@@ -35,7 +35,7 @@ func newTestClientWithRetries(t *testing.T, srv *httptest.Server, maxRetries int
 	if jarErr != nil {
 		t.Fatalf("NewSafeCookieJar: %v", jarErr)
 	}
-	client, err := NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("user", "pass", jar), jar)
+	client, err := NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), resilience.NewRateLimiter(0), auth.NewBasicAuthenticator("user", "pass", jar), jar)
 	if err != nil {
 		t.Fatalf("NewHTTPClient: %v", err)
 	}
@@ -69,7 +69,6 @@ func TestExecute_CorrelationHeaders_TraceID(t *testing.T) {
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 	client := newTestClient(t, srv)
-	defer client.Close()
 
 	ctx := correlation.With(context.Background(), traceID)
 	if _, err := client.Execute(ctx, "<rpc><show><version/></show></rpc>"); err != nil {
@@ -97,7 +96,6 @@ func TestExecute_CorrelationHeaders_Empty(t *testing.T) {
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 	client := newTestClient(t, srv)
-	defer client.Close()
 
 	if _, err := client.Execute(context.Background(), "<rpc><show><version/></show></rpc>"); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -119,7 +117,6 @@ func TestExecute_CorrelationHeaders_NonTraceID(t *testing.T) {
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 	client := newTestClient(t, srv)
-	defer client.Close()
 
 	ctx := correlation.With(context.Background(), id)
 	if _, err := client.Execute(ctx, "<rpc><show><version/></show></rpc>"); err != nil {
@@ -163,7 +160,6 @@ func TestExecute_CorrelationHeaders_PresentOnEveryRetryAttempt(t *testing.T) {
 	defer srv.Close()
 
 	client := newTestClientWithRetries(t, srv, 3)
-	defer client.Close()
 
 	ctx := correlation.With(context.Background(), traceID)
 	// Use a read-only <show> so the Sender marks the request retry-safe.

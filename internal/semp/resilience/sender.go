@@ -74,16 +74,15 @@ func (e *RetriesExhaustedError) Unwrap() error { return e.Err }
 type Sender struct {
 	retryClient   *retryablehttp.Client
 	authenticator auth.Authenticator // for 401 re-auth: delegates recovery to the auth mode
-	rateLimiter   <-chan time.Time
-	rateTicker    *time.Ticker  // non-nil when rate limiting enabled; stopped by Close()
-	sem           Semaphore     // bounds in-flight requests; shared per-broker across SEMPv1+v2
-	brokerURL     string        // for logging context
-	retryBudget   time.Duration // overall deadline for the whole retry chain; 0 disables
+	rateLimiter   <-chan time.Time   // from the broker's shared RateLimiter; not owned here
+	sem           Semaphore          // bounds in-flight requests; shared per-broker across SEMPv1+v2
+	brokerURL     string             // for logging context
+	retryBudget   time.Duration      // overall deadline for the whole retry chain; 0 disables
 }
 
-// New creates a Sender configured for a specific broker. It sets up retryablehttp
-// with the retry policy from SEMPConfig and a per-broker rate limiter.
-// sempCfg.Retries and sempCfg.RequestMinInterval must be non-nil.
+// New creates a Sender configured for a specific broker. It sets up
+// retryablehttp with the retry policy from SEMPConfig and reads pacing from the
+// supplied per-broker limiter. sempCfg.Retries must be non-nil.
 //
 // authn is the broker's Authenticator, used to delegate 401 recovery via
 // HandleAuthFailure. It must be non-nil.
@@ -96,16 +95,33 @@ type Sender struct {
 // contract violation that any test exercising the path catches immediately;
 // the only production wiring goes through semp.NewBrokerClient, which always
 // supplies one.
-func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authenticator, brokerURL string, sem Semaphore) *Sender {
+//
+// limiter paces requests and must be non-nil, for the same reason and with the
+// same sharing requirement: a Sender-private limiter admits up to 2× the
+// configured rate because each protocol client paces only itself (SOL-152401).
+// Its lifetime is owned by the caller — BrokerClient.Close() stops it.
+func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authenticator, brokerURL string, sem Semaphore, limiter *RateLimiter) *Sender {
 	if authn == nil {
 		panic("resilience.New: authn must be non-nil; construct via semp.newAuthenticator in semp.NewBrokerClient")
 	}
 	if sem == nil {
 		panic("resilience.New: sem must be non-nil; share one per broker via semp.NewBrokerClient")
 	}
+	if limiter == nil {
+		panic("resilience.New: limiter must be non-nil; share one per broker via semp.NewBrokerClient")
+	}
+	// Guarded for the same reason as the three above, and not merely documented:
+	// Retries is dereferenced here and again when sizing the retry-chain
+	// deadline, so a config that skipped defaulting would surface as a bare nil
+	// dereference somewhere inside construction rather than as the contract
+	// violation it is.
+	if sempCfg == nil || sempCfg.Retries == nil {
+		panic("resilience.New: sempCfg and sempCfg.Retries must be non-nil; apply config defaults before constructing a Sender")
+	}
 	d := &Sender{
 		authenticator: authn,
 		sem:           sem,
+		rateLimiter:   limiter.C(),
 		brokerURL:     brokerURL,
 	}
 
@@ -164,21 +180,6 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 		retryMax := *sempCfg.Retries
 		d.retryBudget = time.Duration(retryMax+1)*sempCfg.RequestTimeoutDuration +
 			time.Duration(retryMax)*sempCfg.RetryMaxInterval
-	}
-
-	// Per-broker rate limiter: ticker-based interval enforcement.
-	// When interval > 0, each Do() blocks until the ticker fires.
-	// The very first request per broker pays one interval of latency (the ticker
-	// doesn't fire immediately); this is a one-time cost at broker init and
-	// avoids the complexity of a seeded channel with goroutine forwarding.
-	// When interval == 0, the closed channel makes receives non-blocking (no rate limit).
-	if *sempCfg.RequestMinInterval > 0 {
-		d.rateTicker = time.NewTicker(*sempCfg.RequestMinInterval)
-		d.rateLimiter = d.rateTicker.C
-	} else {
-		ch := make(chan time.Time)
-		close(ch)
-		d.rateLimiter = ch
 	}
 
 	return d
@@ -304,14 +305,6 @@ func (d *Sender) prepareRetry(req *http.Request) error {
 		return d.authenticator.AddAuth(req.Context(), req)
 	}
 	return nil
-}
-
-// Close releases resources held by the Sender. Stops the rate limiter ticker
-// if one is running. Safe to call multiple times.
-func (d *Sender) Close() {
-	if d.rateTicker != nil {
-		d.rateTicker.Stop()
-	}
 }
 
 // errorHandlerDrainLimit bounds how much of the final response body the
