@@ -154,9 +154,15 @@ evidence without re-checking the live settings.
 | Release Process | 1/5 ❌ | **4/5 ✅** | 5/5 |
 | Discoverability | 0/5 ❌ | **3/5 ⚠️** | 5/5 |
 
-**Overall Score**: 31/35 (89%) - **Growth Stage** ✅
+**Overall Score at the time of PR #15**: 31/35 (89%) - **Growth Stage** ✅
 
-**Target Achieved**: Yes! Exceeded 80% threshold for public release.
+**Target Achieved at the time of PR #15**: Yes! Exceeded 80% threshold for
+public release.
+
+Both lines describe 2026-04-24 and are not a current assessment. The Security
+row they include has since been overtaken by the live settings noted above, so
+the real figure today is lower. Re-score against the live settings before
+treating the 80% threshold as met.
 
 ---
 

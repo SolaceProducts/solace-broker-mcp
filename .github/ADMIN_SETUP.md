@@ -179,9 +179,9 @@ PRs #213, #216, and #217:
 
 ⚠️ **Do not select `FOSSA Scan`.** It looks like the right entry and is not. A
 check by that exact name comes from `build-and-test.yml`, where the job carries
-`if: github.event_name == 'push' && github.ref_name == <default branch>`, so on
-every pull request it reports **skipped**, and GitHub counts a skipped check as
-passing. Requiring `FOSSA Scan` therefore enforces nothing. The context that
+`if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch`,
+so on every pull request it reports **skipped**, and GitHub counts a skipped
+check as passing. Requiring `FOSSA Scan` therefore enforces nothing. The context that
 gates is `FOSSA Scan / SCA Scan`: the `ci-pr.yaml` caller job (`name: FOSSA Scan`)
 plus the inner job of the reusable workflow it calls (`name: "SCA Scan"`), which
 exits non-zero on findings because `.github/workflow-config.json` sets both FOSSA
@@ -259,8 +259,8 @@ Navigate to: **Settings → Actions → General → Workflow permissions**
 **Workflow permissions:**
 - ⚪ Read and write permissions (needed for release workflow to create releases).
   Currently set.
-- 🚨 **Allow GitHub Actions to create and approve pull requests: turn this OFF.
-  It is currently ON.** With a write `GITHUB_TOKEN` and a `main` ruleset that
+- 🚨 **Allow GitHub Actions to create and approve pull requests: turn this OFF.**
+  It is currently ON. With a write `GITHUB_TOKEN` and a `main` ruleset that
   needs exactly one approval and has an empty bypass list, a workflow can approve
   a pull request and satisfy the only human gate on `main`.
 
