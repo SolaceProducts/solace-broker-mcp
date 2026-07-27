@@ -505,10 +505,12 @@ func TestExchange_ContextCancelledReturnsContextError(t *testing.T) {
 	}
 }
 
-// The caller's context deadline has already expired, but the IdP call
-// runs on a detached context (singleflight resilience), so the handler
-// still receives and responds. The caller gets context.DeadlineExceeded
-// from the post-Do check.
+// The caller's context deadline has already expired by the time Exchange is
+// called, so the entry guard returns context.DeadlineExceeded before the cache
+// lookup or any IdP work. The test server exists only so that a regression
+// removing the guard fails on the assertion below, having reached the IdP and
+// succeeded, rather than on a connection error that would pass for the wrong
+// reason.
 func TestExchange_ContextDeadlineExceededReturnsDeadlineError(t *testing.T) {
 	t.Parallel()
 
