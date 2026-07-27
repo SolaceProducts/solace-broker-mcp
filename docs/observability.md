@@ -13,7 +13,7 @@
 > them until the corresponding signal ships.
 >
 > **Correlation IDs are the exception: they are implemented and on by default.** The
-> [Correlation ID](#correlation-id) section describes shipped behaviour you can rely on
+> [Correlation ID](#correlation-id) section describes shipped behavior you can rely on
 > today.
 
 The Broker MCP Server is designed to emit three observability signals:
@@ -329,6 +329,13 @@ can tell record kinds apart from field presence alone. `event`, `audit_event_typ
 - **`audit_drop` is a notice, not an outcome.** It reports that a record could not be written,
   and carries only the five common fields.
 
+**`principal` is a nested object, and `principal.sub` is a path into it** — not a literal key
+with a dot in it. A record carries `"principal": { "sub": "..." }`. It is the schema's only
+nested field; every other field is flat and snake_case. The nesting is deliberate: it leaves
+room for a second member without renaming a field, which matters because `preferred_username`
+is under review below. Collectors that flatten nested objects will render it as
+`principal.sub` regardless, which is why the tables above use the dotted form.
+
 **`principal` identity.** The audit event records only `principal.sub`, the opaque OIDC
 subject of the human user. That subject is read once from the verified token and carried end
 to end through token exchange, so the broker's own SEMP log records the same user. The full
@@ -464,7 +471,7 @@ One ID threads a request from the AI agent, through the server and every retry, 
 broker, and back. Today it anchors your logs and the broker's own log entry on the same
 call; once traces and the audit trail ship, it is the key that joins those to them.
 
-This section describes behaviour that is implemented and on by default, unlike the metric,
+This section describes behavior that is implemented and on by default, unlike the metric,
 audit, and trace schemas above.
 
 - **Inbound**, in priority order: the W3C `traceparent` header (its trace-id is used); then
@@ -482,7 +489,7 @@ audit, and trace schemas above.
 - **Propagated** to the broker: every outbound SEMP request carries `X-Correlation-ID`. It
   also carries a `traceparent`, with a fresh child span-id, only when the ID is a valid W3C
   trace-id: 32 lowercase hex characters, not all-zero, which in practice means it arrived on
-  an inbound `traceparent`. A new child span per outbound hop is correct W3C behaviour. For a
+  an inbound `traceparent`. A new child span per outbound hop is correct W3C behavior. For a
   server-generated UUIDv7 or a legacy `X-Correlation-ID` value, no `traceparent` is sent,
   since a non-conformant trace-id would be worse than none. On retry, the same ID is reused,
   so all attempts share one ID in the broker's logs.
