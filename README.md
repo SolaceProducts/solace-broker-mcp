@@ -102,7 +102,7 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 ## Guides
 
 - [User Guide](docs/user-guide.md) — overview, tools reference, deployment, and troubleshooting
-- [Tools Reference](docs/tools-reference.md) — per-tool parameters, output schema, and example invocations for all 21 tools
+- [Tools Reference](docs/tools-reference.md) — per-tool parameters, output schema, and example invocations for all 39 tools
 - [Examples](docs/examples.md) — Claude Desktop config, natural-language queries, and multi-broker setup
 - [Configuration](docs/configuration.md) — server settings, event broker config, client auth, and rate-limit/retry settings
 - [Authentication](docs/authentication.md) — OAuth/OIDC and static token setup for MCP clients
