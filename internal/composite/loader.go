@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io/fs"
 	"slices"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -98,6 +99,23 @@ func validateTool(tool *CompositeTool) error {
 
 		if err := validateFanOut(step, stepIDs, stepSelects); err != nil {
 			return err
+		}
+	}
+
+	// A step in the action/ namespace invokes an RPC whose replay safety cannot
+	// be inferred from the HTTP method: SEMPv2 routes these over PUT, which
+	// RFC 9110 calls idempotent even though e.g. doMsgVpnQueueDeleteMsgs takes
+	// no message-ID range and so destroys anything spooled since the caller's
+	// request. The retry policy therefore keys off annotations.idempotent
+	// (see resilience.WithRetryUnsafe), which makes the declaration load-bearing
+	// for data integrity. An omitted annotation would silently fall back to
+	// "replay allowed", so require an explicit choice rather than trusting the
+	// author to remember. Either value is accepted — this forces a decision, it
+	// does not presume the answer.
+	for _, step := range tool.Steps {
+		if strings.HasPrefix(step.Operation, "action/") && tool.Annotations.Idempotent == nil {
+			return fmt.Errorf("step %s uses action operation %q, so annotations.idempotent "+
+				"must be declared explicitly (true or false)", step.ID, step.Operation)
 		}
 	}
 

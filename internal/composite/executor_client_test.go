@@ -537,6 +537,9 @@ func disconnectClientTool() CompositeTool {
 			{Name: "msgVpnName", Type: "string", Required: true},
 			{Name: "clientName", Type: "string", Required: true},
 		},
+		// See deleteQueueMessagesTool: annotations.idempotent drives the retry
+		// policy, so the fixture must carry it to mirror the shipped tool.
+		Annotations: ToolAnnotations{Idempotent: boolPtr(false)},
 		Steps: []Step{{
 			ID:        "disconnect",
 			Operation: "action/doMsgVpnClientDisconnect",
@@ -557,6 +560,7 @@ func clearClientStatsTool() CompositeTool {
 			{Name: "msgVpnName", Type: "string", Required: true},
 			{Name: "clientName", Type: "string", Required: true},
 		},
+		Annotations: ToolAnnotations{Idempotent: boolPtr(true)},
 		Steps: []Step{{
 			ID:        "clearStats",
 			Operation: "action/doMsgVpnClientClearStats",

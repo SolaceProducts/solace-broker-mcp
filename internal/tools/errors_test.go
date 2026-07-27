@@ -74,13 +74,21 @@ func TestIsRetryable(t *testing.T) {
 		input error
 		want  bool
 	}{
-		// RetriesExhaustedError is always retryable: the type alone
-		// qualifies regardless of its fields.
+		// RetriesExhaustedError is retryable by default: having exhausted the
+		// internal retry budget on a transient condition, the same request may
+		// well succeed later. The one exception is NonIdempotent (below).
 		{"retries exhausted, http status", &resilience.RetriesExhaustedError{StatusCode: 503, Attempts: 3}, true},
 		// A bare 500 is non-retryable (see sempv2/sempv1 cases below); a 500 that
 		// exhausted internal retries is trusted as transient.
 		{"retries exhausted, non-transient status still true", &resilience.RetriesExhaustedError{StatusCode: 500, Attempts: 3}, true},
 		{"wrapped retries exhausted (errors.As traversal)", fmt.Errorf("executing tool %q: %w", "list-queues", &resilience.RetriesExhaustedError{StatusCode: 503, Attempts: 3}), true},
+		// NonIdempotent means the retry policy deliberately did NOT replay the
+		// request, because the broker may already have carried it out. Reporting
+		// it retryable would invite the agent to repeat the exact side effect the
+		// policy refused to duplicate — for a queue purge, destroying everything
+		// spooled since the original call (SOL-152400).
+		{"non-idempotent, not replayed", &resilience.RetriesExhaustedError{Attempts: 1, NonIdempotent: true, Err: errors.New("EOF")}, false},
+		{"wrapped non-idempotent (errors.As traversal)", fmt.Errorf("executing tool %q: %w", "delete-queue-messages", &resilience.RetriesExhaustedError{Attempts: 1, NonIdempotent: true, Err: errors.New("EOF")}), false},
 
 		// SEMPv2: retryable on 429/503 or a retryable comRc_t code (229).
 		{"sempv2 429 (live, e.g. fronting proxy)", &sempv2.SEMPError{StatusCode: 429}, true},
@@ -209,6 +217,18 @@ func TestBuildErrorMessage(t *testing.T) {
 			&resilience.RetriesExhaustedError{StatusCode: 503, Attempts: 3},
 			"broker-eu-prod",
 			"Request failed after 3 attempts (HTTP 503). Internal retries exhausted; try again later.",
+			nil,
+		},
+		// A non-idempotent request that was deliberately not replayed must not be
+		// described as "try again later" — that text is what would drive an agent
+		// to re-issue a purge the broker may already have applied (SOL-152400).
+		{
+			"non-idempotent failure tells the agent to verify, not retry",
+			&resilience.RetriesExhaustedError{Attempts: 1, NonIdempotent: true, Err: errors.New("EOF")},
+			"broker-eu-prod",
+			"Request failed and was deliberately not retried, because repeating this " +
+				"operation is not safe: the broker may have already applied it. Check the " +
+				"current state before deciding whether to issue it again.",
 			nil,
 		},
 		// A known comRc_t code surfaces its curated hint alongside the message.

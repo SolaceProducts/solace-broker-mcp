@@ -298,7 +298,7 @@ sequenceDiagram
     Mgr->>Exec: Execute(ctx, tool, client, params)
     Note over Exec: single-step write<br/>fail-fast: on error return,<br/>NO compensation/rollback
     Exec->>Sender: POST createMsgVpnQueue
-    Note over Sender: POST/PATCH: NOT retried<br/>PUT/DELETE: retried (RFC-idempotent)
+    Note over Sender: POST/PATCH: NOT retried<br/>PUT/DELETE: retried (RFC-idempotent)<br/>idempotent:false tools: 401 re-auth only
     Sender->>Broker: PATCH/POST/PUT/DELETE /SEMP/v2/config/...
     Broker-->>Sender: 200 / 4xx / 5xx
     Sender-->>Exec: Result or error
@@ -314,13 +314,18 @@ sequenceDiagram
   **single-step**, so there is no *cross-step* partial state today — but that is
   a property of the current tool definitions, not a guarantee the engine
   provides. Adding a multi-step write reintroduces partial-state risk.
-- **Retries are decided by HTTP method, not by tool intent**
-  (`internal/semp/resilience/retry.go:89`): POST/PATCH (`create`/`update`) are
-  not retried; PUT/DELETE (`delete`, native actions) **are** retried on
-  transient failures, deliberately, on RFC 9110 §9.2.2 idempotency grounds
-  (`retry.go:84`). Note the mismatch: `delete-queue-messages` and
-  `disconnect-client` are annotated `Idempotent: false` (a client-facing hint)
-  yet travel over PUT and will be retried.
+- **Retries are decided by HTTP method, except where a tool declares
+  otherwise.** POST/PATCH (`create`/`update`) are not retried; PUT/DELETE are
+  retried on transient failures, on RFC 9110 §9.2.2 idempotency grounds. That
+  inference is wrong for the `action/` namespace, which routes non-idempotent
+  RPC over PUT, so a tool annotated `idempotent: false` now also suppresses
+  replay: `CompositeExecutor.Execute` marks the request via
+  `resilience.WithRetryUnsafe`, and the retry policy then permits only 401
+  re-auth (an auth rejection precedes execution) while refusing transport
+  errors, 429/503 and other 5xx. `delete-queue-messages` and
+  `disconnect-client` are the two tools this covers; the loader requires any
+  tool with an `action/` step to declare `idempotent` explicitly, so an
+  omission fails at load rather than silently allowing a replay. SOL-152400.
 - **Destructive confirmation is prompt-only.** Destructive handlers carry
   description text instructing the agent to obtain separate user confirmation;
   there is no server-side confirmation gate, token, two-phase step, or dry-run.
@@ -428,7 +433,7 @@ cap is per broker.
 | **Handler resolves broker, executor receives client** | Executor is pure orchestration — no knowledge of brokers, auth, or pools (`internal/composite/executor.go`) |
 | **Broker param is always required** | No default broker concept. The LLM always specifies which broker to target. |
 | **Write tools gated at registration** | A single `enable_write_tools` flag (default false) decides whether state-changing tools register at all (`internal/tools/register.go:149`); safest default surface |
-| **Retry policy keyed on HTTP method** | POST/PATCH never retried (unsafe double-write); PUT/DELETE retried as RFC-idempotent (`internal/semp/resilience/retry.go:84`) |
+| **Retry policy keyed on HTTP method, overridable per tool** | POST/PATCH never retried (unsafe double-write); PUT/DELETE retried as RFC-idempotent; a tool declaring `idempotent: false` suppresses replay entirely except 401 re-auth, via `resilience.WithRetryUnsafe` (`internal/semp/resilience/retry.go`) |
 | **Engine is fail-fast, no compensation** | Simpler engine; safe today only because writes are single-step. Multi-step writes await a compensating engine (SOL-148546). |
 | **Two-hop identity, token exchange over passthrough** | Broker stays the authz authority in oauth mode; hop-2 exchange (RFC 8693) is gated behind `Hop2OAuthActive()` (`internal/tokenexchange/`) |
 | **Correlation ID outside auth** | A rejected (401) request still gets a correlation ID for tracing (`cmd/server/main.go`, ADR-001) |

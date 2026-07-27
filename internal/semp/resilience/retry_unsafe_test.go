@@ -16,6 +16,7 @@ package resilience
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sync/atomic"
 	"testing"
@@ -61,6 +62,53 @@ func TestSender_RetryUnsafe_TransportError_NotReplayed(t *testing.T) {
 	if got := requestCount.Load(); got != 1 {
 		t.Errorf("retry-unsafe PUT reached the broker %d times, want exactly 1 — "+
 			"a replayed destructive action deletes messages the caller never authorized", got)
+	}
+}
+
+// TestSender_RetryUnsafe_TransportError_MarksErrorNonIdempotent pins the signal
+// the tools layer keys its agent-facing `retryable` flag off. Without it the
+// guard stops the machine replay but the tool result still tells the agent to
+// "try again later", which re-runs the very side effect that was refused.
+func TestSender_RetryUnsafe_TransportError_MarksErrorNonIdempotent(t *testing.T) {
+	var requestCount atomic.Int32
+	sender, server := newTestSenderWithServer(t, abortHandler(&requestCount), "basic", 10)
+	defer server.Close()
+
+	resp, err := sender.Do(WithRetryUnsafe(context.Background()), newMethodRequest(t, http.MethodPut, server.URL))
+	if resp != nil {
+		resp.Body.Close()
+	}
+	var exhausted *RetriesExhaustedError
+	if !errors.As(err, &exhausted) {
+		t.Fatalf("want *RetriesExhaustedError, got %T: %v", err, err)
+	}
+	if !exhausted.NonIdempotent {
+		t.Error("NonIdempotent is false; upper layers will report this failure as retryable " +
+			"and invite the agent to repeat a request the broker may already have applied")
+	}
+	if exhausted.Err == nil {
+		t.Error("underlying transport cause was dropped — returning a sentinel from checkRetry " +
+			"would mask it, which is why the guard returns (false, nil)")
+	}
+}
+
+// The marker must not leak onto ordinary failures, or every exhausted retry
+// chain would be reported as unsafe to repeat.
+func TestSender_Unmarked_TransportError_NotMarkedNonIdempotent(t *testing.T) {
+	var requestCount atomic.Int32
+	sender, server := newTestSenderWithServer(t, abortHandler(&requestCount), "basic", 1)
+	defer server.Close()
+
+	resp, err := sender.Do(context.Background(), newMethodRequest(t, http.MethodPut, server.URL))
+	if resp != nil {
+		resp.Body.Close()
+	}
+	var exhausted *RetriesExhaustedError
+	if !errors.As(err, &exhausted) {
+		t.Fatalf("want *RetriesExhaustedError, got %T: %v", err, err)
+	}
+	if exhausted.NonIdempotent {
+		t.Error("NonIdempotent set on an unmarked request")
 	}
 }
 

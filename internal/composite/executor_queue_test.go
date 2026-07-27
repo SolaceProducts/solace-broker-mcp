@@ -746,6 +746,11 @@ func deleteQueueMessagesTool() CompositeTool {
 			{Name: "msgVpnName", Type: "string", Required: true},
 			{Name: "queueName", Type: "string", Required: true},
 		},
+		// Annotations are part of what this fixture mirrors: annotations.idempotent
+		// is load-bearing for the retry policy (see resilience.WithRetryUnsafe),
+		// so a fixture that omitted it would exercise a different code path than
+		// the shipped tool.
+		Annotations: ToolAnnotations{Idempotent: boolPtr(false)},
 		Steps: []Step{{
 			ID:        "deleteMsgs",
 			Operation: "action/doMsgVpnQueueDeleteMsgs",
@@ -766,6 +771,7 @@ func clearQueueStatsTool() CompositeTool {
 			{Name: "msgVpnName", Type: "string", Required: true},
 			{Name: "queueName", Type: "string", Required: true},
 		},
+		Annotations: ToolAnnotations{Idempotent: boolPtr(true)},
 		Steps: []Step{{
 			ID:        "clearStats",
 			Operation: "action/doMsgVpnQueueClearStats",

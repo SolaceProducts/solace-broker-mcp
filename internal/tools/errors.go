@@ -184,6 +184,16 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 		// The underlying network error can contain a host or IP address, so
 		// don't show it. Just report how many attempts were made and the
 		// status. Retry-exhaustion carries no object-level suggestions.
+		if retriesErr.NonIdempotent {
+			// The request was deliberately not replayed because the broker may
+			// already have carried it out. Telling the agent to try again would
+			// re-run exactly the side effect the retry policy just refused to
+			// duplicate — for a queue purge, destroying everything spooled
+			// since the original call.
+			return "Request failed and was deliberately not retried, because repeating " +
+				"this operation is not safe: the broker may have already applied it. " +
+				"Check the current state before deciding whether to issue it again.", nil
+		}
 		return fmt.Sprintf(
 			"Request failed after %d attempts (HTTP %d). Internal retries exhausted; try again later.",
 			retriesErr.Attempts, retriesErr.StatusCode), nil
@@ -300,7 +310,11 @@ func isRetryable(err error) bool {
 	}
 	var retriesErr *resilience.RetriesExhaustedError
 	if errors.As(err, &retriesErr) {
-		return true
+		// A request the caller declared non-idempotent was not replayed at all,
+		// because the broker may already have carried it out. Reporting it as
+		// retryable would invite the agent to repeat the very side effect the
+		// retry policy refused to duplicate.
+		return !retriesErr.NonIdempotent
 	}
 	var sempv2Err *sempv2.SEMPError
 	if errors.As(err, &sempv2Err) {

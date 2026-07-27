@@ -2,6 +2,7 @@ package resilience
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -20,9 +21,21 @@ type RetriesExhaustedError struct {
 	StatusCode int   // HTTP status code (0 when failure is a network error)
 	Attempts   int   // total attempts made
 	Err        error // underlying cause (nil for HTTP-status exhaustion)
+
+	// NonIdempotent reports that the caller declared the request
+	// non-idempotent (WithRetryUnsafe), so the retry policy deliberately did
+	// not replay it. Callers must not present this failure as "try again":
+	// the broker may already have carried out the request, which is the whole
+	// reason no retry was attempted. Upper layers key their agent-facing
+	// retryable flag off this.
+	NonIdempotent bool
 }
 
 func (e *RetriesExhaustedError) Error() string {
+	if e.NonIdempotent {
+		return fmt.Sprintf("request failed after %d attempt(s) and was not retried "+
+			"because the caller declared it non-idempotent: %v", e.Attempts, e.Err)
+	}
 	if e.Err != nil {
 		return fmt.Sprintf("request failed after %d attempts: %v", e.Attempts, e.Err)
 	}
@@ -222,6 +235,17 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	if err != nil {
 		if cancel != nil {
 			cancel()
+		}
+		// Record that the non-idempotency guard was in force, so upper layers
+		// do not tell the agent to "try again later" on a request the broker
+		// may already have carried out. This is set here rather than in
+		// errorHandler because a connection error leaves resp nil, so
+		// errorHandler has no route back to the request context.
+		if isRetryUnsafe(ctx) {
+			var exhausted *RetriesExhaustedError
+			if errors.As(err, &exhausted) {
+				exhausted.NonIdempotent = true
+			}
 		}
 		return nil, err
 	}

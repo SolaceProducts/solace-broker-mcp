@@ -83,6 +83,12 @@ type retryUnsafeKey struct{}
 // This is the inverse of WithRetrySafe: that widens the policy for a request a
 // method-based check would wrongly deny, this narrows it for one a method-based
 // check would wrongly allow.
+//
+// Granularity: the composite executor sets this once per tool invocation, so
+// every step of a non-idempotent tool inherits it — a read-only lookup step
+// inside such a tool also loses its retries. That is safe but imprecise, and
+// harmless today because both marked tools are single-step. A multi-step write
+// tool would want this applied per operation instead.
 func WithRetryUnsafe(ctx context.Context) context.Context {
 	return context.WithValue(ctx, retryUnsafeKey{}, true)
 }
