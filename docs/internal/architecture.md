@@ -41,7 +41,7 @@ internal/
 ├── semp/                       BrokerPool + BrokerClient — lazy per-broker client creation, thread-safe (RWMutex)
 │   ├── auth/                   Broker (outbound) auth: basic / bearer / oauth Authenticator implementations
 │   ├── correlationhdr/         Writes correlation ID (X-Correlation-ID + traceparent) onto outbound SEMP requests
-│   ├── resilience/             Sender: rate limiting, method-aware retries, cookie jar, per-broker in-flight cap
+│   ├── resilience/             Sender: method-aware retries, cookie jar; reads the broker's shared rate limiter + in-flight cap
 │   ├── sempv1/                 SEMPv1 client — XML envelope protocol
 │   └── sempv2/                 SEMPv2 client — HTTP + embedded OpenAPI specs (private monitor + private config)
 │       └── specs/              Embedded Swagger JSON: private monitor (reads) + private config (writes)
@@ -364,7 +364,7 @@ sequenceDiagram
     participant HC as Sender + HTTPClient<br/>(prod-us)
     participant Broker as Solace Broker<br/>(prod-us)
 
-    Note over Pool,HC: Same BrokerClient instance<br/>Shared in-flight semaphore + TCP pool<br/>(created lazily on first call)
+    Note over Pool,HC: Same BrokerClient instance<br/>Shared in-flight semaphore + rate limiter + TCP pool<br/>(created lazily on first call)
 
     par User A tool call
         A->>Pool: GetSempV2("prod-us")
@@ -452,7 +452,7 @@ cap is per broker.
 | **Composite Executor** | Tool definitions, steps, templates, result strategies | Brokers, HTTP, auth | `internal/composite/executor.go` |
 | **postprocess handlers** | Step result maps → summary | HTTP, brokers, MCP protocol | `internal/composite/postprocess/` |
 | **BrokerPool** | Map of configs, lazy client creation, RWMutex | Tools, MCP protocol, HTTP details | `internal/semp/pool.go` |
-| **BrokerClient** | SEMPv1 + SEMPv2 clients, authenticator; wires the cookie jar (basic auth only) and the shared per-broker in-flight semaphore at construction, then hands them downstream | Tools, steps, MCP protocol | `internal/semp/broker.go:26` |
+| **BrokerClient** | SEMPv1 + SEMPv2 clients, authenticator; wires the cookie jar (basic auth only) and the shared per-broker in-flight semaphore and rate limiter at construction, then hands them downstream. Owns the rate limiter's lifetime — `Close()` is its single stop site | Tools, steps, MCP protocol | `internal/semp/broker.go:26` |
 | **resilience Sender** | Rate limiting, method-aware retry, in-flight cap, auth-failure re-auth | Tools, brokers by name, MCP protocol | `internal/semp/resilience/` |
 | **Broker Authenticator** | basic / bearer / oauth outbound auth | Tools, MCP protocol | `internal/semp/auth/` |
 | **sempv2.HTTPClient** | HTTP calls, auth headers, JSON parsing, correlation header | Tools, brokers, MCP protocol | `internal/semp/sempv2/client.go` |
