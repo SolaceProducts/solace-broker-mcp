@@ -145,11 +145,11 @@ func TestDialTimeout_DerivedFromRequestTimeout(t *testing.T) {
 			// same instant as the outer timeout, which is indistinguishable in
 			// practice, whereas a zero bound is unbounded and is the whole
 			// defect. Everything from 2ns up satisfies both.
-			if tt.requestTimeout >= 2 && got >= tt.requestTimeout {
+			if tt.requestTimeout >= 2*time.Nanosecond && got >= tt.requestTimeout {
 				t.Errorf("dialTimeout(%s) = %s must be strictly less than the outer request timeout, "+
 					"or the outer timeout wins and the dial bound never fires", tt.requestTimeout, got)
 			}
-			if tt.requestTimeout == 1 && got != tt.requestTimeout {
+			if tt.requestTimeout == time.Nanosecond && got != tt.requestTimeout {
 				t.Errorf("dialTimeout(1ns) = %s, want 1ns: the degenerate case trades the "+
 					"strictly-less property for staying bounded", got)
 			}

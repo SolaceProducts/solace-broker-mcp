@@ -69,13 +69,15 @@ const dialKeepAlive = 30 * time.Second
 // The result is never zero. Integer division truncates, so any requestTimeout
 // below 2ns would otherwise halve to zero — positive, so it clears validation,
 // yet producing exactly the unbounded dial this function exists to prevent.
-// A 1ns bound fails the dial immediately, which is the faithful reading of a
-// 1ns request budget and is in any case strictly better than waiting forever.
+// A time.Nanosecond bound fails the dial immediately, which is the faithful
+// reading of a 1ns request budget and is in any case strictly better than
+// waiting forever. Spelled with the unit rather than a bare 1, since a raw
+// literal in a duration context reads as easily as one second.
 func dialTimeout(requestTimeout time.Duration) time.Duration {
 	if requestTimeout <= 0 {
 		return dialTimeoutCeiling
 	}
-	return max(1, min(dialTimeoutCeiling, requestTimeout/2))
+	return max(time.Nanosecond, min(dialTimeoutCeiling, requestTimeout/2))
 }
 
 // newSEMPDialer builds the transport's dialer. It exists so the dial bound is
