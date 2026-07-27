@@ -535,6 +535,179 @@ func TestExchange_ContextDeadlineExceededReturnsDeadlineError(t *testing.T) {
 	}
 }
 
+// A follower that shares an in-flight exchange must bail out the moment its
+// own context is cancelled — it must NOT block until the leader's IdP call
+// completes. The IdP handler is held on a gate so the shared call stays in
+// flight; the follower is cancelled and must return context.Canceled while
+// the gate is still closed (leader not yet done). Under the old blocking
+// group.Do this test would hang until the timeout fires.
+//
+// callCount == 1 at the end proves the follower actually deduped into the
+// leader's call rather than starting its own; the leader-token assertion
+// proves the follower's cancellation did not corrupt the shared result.
+func TestExchange_CancelledFollowerBailsBeforeLeaderCompletes(t *testing.T) {
+	t.Parallel()
+
+	var callCount atomic.Int32
+	entered := make(chan struct{}) // signals the IdP handler is mid-flight
+	gate := make(chan struct{})    // releases the IdP response
+	var once sync.Once
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount.Add(1)
+		once.Do(func() { close(entered) })
+		<-gate
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("exchanged-token", 3600))
+	}))
+	defer srv.Close()
+
+	e := newTestExchanger(t, srv.URL)
+	e.nowFunc = func() time.Time { return pinnedNow() }
+
+	input := validInput()
+
+	// Leader on a background context keeps the shared IdP call in flight.
+	type result struct {
+		tok *Token
+		err error
+	}
+	leaderRes := make(chan result, 1)
+	go func() {
+		tok, err := e.Exchange(context.Background(), input)
+		leaderRes <- result{tok, err}
+	}()
+
+	// Wait until the IdP handler is actually blocked on the gate — the
+	// singleflight key is now registered, so a same-key caller will attach.
+	<-entered
+
+	// Follower with the same key. followerStarted ensures its goroutine is
+	// actually running before we cancel, so the cancel cannot land before the
+	// follower has begun (which would exercise nothing). Dedup determinism
+	// does NOT rely on timing: the leader is gated, so the key stays in flight
+	// and the follower attaches regardless of where the cancel lands — that is
+	// what the callCount == 1 assertion below verifies.
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	followerStarted := make(chan struct{})
+	followerErr := make(chan error, 1)
+	go func() {
+		close(followerStarted)
+		_, err := e.Exchange(cancelCtx, input)
+		followerErr <- err
+	}()
+	<-followerStarted
+	cancel()
+
+	// The follower must return promptly with context.Canceled, well before
+	// the gate is released.
+	select {
+	case err := <-followerErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("follower err = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("follower did not bail out early; still blocked on the leader")
+	}
+
+	// Prove the follower bailed while the leader was still in flight: the gate
+	// is still closed, so the leader must not have completed.
+	select {
+	case <-leaderRes:
+		t.Fatal("leader completed before gate released; cannot prove early bail-out")
+	default:
+	}
+
+	// Release the leader and confirm it still succeeds with the shared result.
+	close(gate)
+	got := <-leaderRes
+	if got.err != nil {
+		t.Fatalf("leader err = %v, want nil", got.err)
+	}
+	if got.tok == nil || got.tok.Value != "exchanged-token" {
+		t.Fatalf("leader token = %v, want Value=%q", got.tok, "exchanged-token")
+	}
+
+	// Exactly one IdP call: the follower deduped into the leader's in-flight
+	// call rather than starting a second round-trip.
+	if n := callCount.Load(); n != 1 {
+		t.Fatalf("IdP called %d times, want 1 (follower must dedupe into the leader)", n)
+	}
+}
+
+// The shared IdP call runs on singleflight's own goroutine, detached from any
+// caller's context, so it must run to completion and warm the cache even when
+// the ONLY caller cancels mid-flight. This pins the payoff the DoChan design
+// claims: a subsequent caller gets a cache hit instead of re-hitting the IdP.
+func TestExchange_DetachedCallWarmsCacheAfterCallerBails(t *testing.T) {
+	t.Parallel()
+
+	var callCount atomic.Int32
+	entered := make(chan struct{})
+	gate := make(chan struct{})
+	var once sync.Once
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount.Add(1)
+		once.Do(func() { close(entered) })
+		<-gate
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("warmed-token", 3600))
+	}))
+	defer srv.Close()
+
+	// Real clock: Otter compares ExpiresAt to time.Now(); a pinned past clock
+	// would make the Put look expired and be dropped (see CacheHitShortCircuitsIdP).
+	e := newTestExchanger(t, srv.URL)
+	input := validInput()
+
+	// One caller starts the exchange, then abandons it while the IdP call is gated.
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	bailed := make(chan error, 1)
+	go func() {
+		_, err := e.Exchange(cancelCtx, input)
+		bailed <- err
+	}()
+
+	<-entered // the detached IdP call is in flight
+	cancel()  // the only caller bails
+
+	if err := <-bailed; !errors.Is(err, context.Canceled) {
+		t.Fatalf("caller err = %v, want context.Canceled", err)
+	}
+
+	// Release the detached call. With no caller waiting, it must still complete
+	// and Put the token into the cache.
+	close(gate)
+
+	// The Put happens asynchronously on the detached goroutine after the gate.
+	// Poll the cache directly (not via Exchange, which would trigger a fetch on
+	// a miss and skew callCount) until the entry lands.
+	key := computeDeduplicationKey(DeduplicationKeyInput{
+		SubjectToken: input.SubjectToken,
+		BrokerAlias:  input.BrokerAlias,
+	})
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		gr, err := e.cache.Get(context.Background(), key)
+		if err == nil && gr.Status == cache.GetHit {
+			if gr.Entry.Value != "warmed-token" {
+				t.Fatalf("cached token = %q, want %q", gr.Entry.Value, "warmed-token")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("cache never warmed: the detached call's Put did not land within 2s")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Exactly one IdP call — the detached call, not a re-fetch.
+	if n := callCount.Load(); n != 1 {
+		t.Fatalf("IdP called %d times, want 1", n)
+	}
+}
+
 // ---------- B05: non-context errors are returned ----------
 
 func TestExchange_TransportErrorReturned(t *testing.T) {
@@ -845,11 +1018,15 @@ func TestExchange_SuccessLogsDebugWithBrokerAndElapsed(t *testing.T) {
 	}
 }
 
-// B04 (log aspect): context errors are NOT logged.
-// The caller's context is pre-cancelled, but the IdP call runs on a
-// detached context (singleflight resilience), so the handler still
-// receives and responds to the request. The caller gets context.Canceled
-// from the post-Do check, not from a failed HTTP call.
+// B04 (log aspect): a cancelled caller gets no success/error OUTCOME log.
+// The caller's context is pre-cancelled, but the IdP call runs on a detached
+// context (singleflight resilience), so the handler still receives and responds
+// to the request. The caller returns context.Canceled from the select's
+// ctx.Done branch, not from a failed HTTP call — and must not have "token
+// exchange succeeded" or an error attributed to it. A debug "token exchange
+// abandoned by caller" breadcrumb IS emitted on that branch (it makes a
+// cancellation storm visible now that the shared call runs detached) and is
+// the one allowed "token exchange" line.
 func TestExchange_ContextErrorNotLogged(t *testing.T) {
 	records, restore := captureLogs(t)
 	defer restore()
@@ -873,8 +1050,14 @@ func TestExchange_ContextErrorNotLogged(t *testing.T) {
 
 	recs := records()
 	for _, rec := range recs {
+		// The intentional cancel-branch breadcrumb is allowed; nothing else
+		// with "token exchange" (a success or error outcome) may be attributed
+		// to the cancelled caller.
+		if rec.Message == "token exchange abandoned by caller" {
+			continue
+		}
 		if strings.Contains(rec.Message, "token exchange") {
-			t.Errorf("context cancellation should not produce token exchange log, got: %q", rec.Message)
+			t.Errorf("context cancellation should not produce a token exchange outcome log, got: %q", rec.Message)
 		}
 	}
 }

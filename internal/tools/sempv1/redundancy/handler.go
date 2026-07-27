@@ -48,7 +48,7 @@ func (h *Handler) Metadata() tools.Metadata {
 		Description: "Returns the broker's redundancy and high-availability status, " +
 			"including config/operational status, active-standby role, mate router " +
 			"name, mate link state, and per-virtual-router activity. Use this tool " +
-			"to assess HA health during incident triage. Single SEMPv1 call.",
+			"to assess HA status during incident triage. Single SEMPv1 call.",
 		InputSchema:  tools.EmptyObjectSchema(),
 		OutputSchema: tools.StepKeyedEnvelopeSchema(),
 		Annotations:  tools.ReadOnlyAnnotations(),

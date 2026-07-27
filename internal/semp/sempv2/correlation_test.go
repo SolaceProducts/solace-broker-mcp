@@ -40,7 +40,7 @@ func newTestClientRetries(t *testing.T, maxRetries int, handler http.HandlerFunc
 	if jarErr != nil {
 		t.Fatalf("NewSafeCookieJar: %v", jarErr)
 	}
-	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("admin", "secret", jar), jar)
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), resilience.NewRateLimiter(0), auth.NewBasicAuthenticator("admin", "secret", jar), jar)
 	if err != nil {
 		t.Fatalf("NewHTTPClient: %v", err)
 	}
@@ -62,7 +62,6 @@ func TestExecute_CorrelationHeaders_TraceID(t *testing.T) {
 		_, _ = w.Write([]byte(okJSON))
 	})
 	defer srv.Close()
-	defer client.Close()
 
 	ctx := correlation.With(context.Background(), traceID)
 	op := testOp(http.MethodGet)
@@ -96,7 +95,6 @@ func TestExecute_CorrelationHeaders_Empty(t *testing.T) {
 		_, _ = w.Write([]byte(okJSON))
 	})
 	defer srv.Close()
-	defer client.Close()
 
 	op := testOp(http.MethodGet)
 	args := map[string]any{"msgVpnName": "default", "queueName": "q1"}
@@ -125,7 +123,6 @@ func TestExecute_CorrelationHeaders_NonTraceID(t *testing.T) {
 		_, _ = w.Write([]byte(okJSON))
 	})
 	defer srv.Close()
-	defer client.Close()
 
 	ctx := correlation.With(context.Background(), id)
 	op := testOp(http.MethodGet)
@@ -169,7 +166,6 @@ func TestExecute_CorrelationHeaders_PresentOnEveryRetryAttempt(t *testing.T) {
 		_, _ = w.Write([]byte(okJSON))
 	})
 	defer srv.Close()
-	defer client.Close()
 
 	ctx := correlation.With(context.Background(), traceID)
 	op := testOp(http.MethodGet)

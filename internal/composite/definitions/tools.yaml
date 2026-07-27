@@ -525,7 +525,7 @@ tools:
       unexpectedly-down receivers grouped by their failure reason;
       admin-disabled receivers and recovered receivers with stale reasons are
       excluded). For per-receiver connection details including the remote
-      Kafka bootstrap address and topic-binding health, use
+      Kafka bootstrap address and topic-binding status, use
       get-kafka-receiver-status.
     annotations:
       readOnly: true
@@ -567,9 +567,9 @@ tools:
     description: >
       Get the operational status of a Kafka Receiver including its enabled
       state, up/down status, last failure reason, uptime, and topic-binding
-      health (topicBindingUpCount out of topicBindingCount — how many of its
+      status (topicBindingUpCount out of topicBindingCount — how many of its
       configured Kafka-topic-to-Solace-destination bindings are actually
-      healthy). Use list-kafka-receivers first to discover which Kafka
+      up). Use list-kafka-receivers first to discover which Kafka
       Receivers exist and identify down ones.
     annotations:
       readOnly: true
@@ -604,7 +604,7 @@ tools:
       (counts of unexpectedly-down senders grouped by their failure reason;
       admin-disabled senders and recovered senders with stale reasons are
       excluded). For per-sender connection details including the remote Kafka
-      bootstrap address and queue-binding health, use get-kafka-sender-status.
+      bootstrap address and queue-binding status, use get-kafka-sender-status.
     annotations:
       readOnly: true
     parameters:
@@ -645,8 +645,8 @@ tools:
     description: >
       Get the operational status of a Kafka Sender including its enabled
       state, up/down status, last failure reason, uptime, and queue-binding
-      health (queueBindingUpCount out of queueBindingCount — how many of its
-      configured Solace-queue-to-Kafka-topic bindings are actually healthy).
+      status (queueBindingUpCount out of queueBindingCount — how many of its
+      configured Solace-queue-to-Kafka-topic bindings are actually up).
       Use list-kafka-senders first to discover which Kafka Senders exist and
       identify down ones.
     annotations:

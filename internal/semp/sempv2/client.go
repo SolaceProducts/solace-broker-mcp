@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -75,12 +76,6 @@ func (c *HTTPClient) LogValue() slog.Value {
 	)
 }
 
-// Close releases resources held by the HTTPClient (rate limiter ticker).
-// Safe to call multiple times.
-func (c *HTTPClient) Close() {
-	c.sender.Close()
-}
-
 // NewHTTPClient creates an HTTPClient configured for a specific broker.
 // It sets up a per-broker HTTP transport with TLS settings and connection pool
 // tuning appropriate for concurrent SEMP calls, and delegates retry and rate
@@ -95,7 +90,13 @@ func (c *HTTPClient) Close() {
 // sem is the broker's shared in-flight semaphore and must be non-nil
 // (resilience.New panics otherwise); see semp.NewBrokerClient, which shares
 // one semaphore across both protocol clients of a broker.
-func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, sem resilience.Semaphore, authn auth.Authenticator, jar *resilience.SafeCookieJar) (*HTTPClient, error) {
+//
+// limiter is the broker's shared rate limiter and must likewise be non-nil
+// (resilience.New panics otherwise). It carries the same sharing requirement:
+// one per broker, passed to both protocol clients, because a per-client limiter
+// admits up to 2x the configured rate (SOL-152401). Its lifetime belongs to the
+// caller — BrokerClient.Close() stops it, so this client must not.
+func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, sem resilience.Semaphore, limiter *resilience.RateLimiter, authn auth.Authenticator, jar *resilience.SafeCookieJar) (*HTTPClient, error) {
 	if authn == nil {
 		panic("sempv2.NewHTTPClient: nil authenticator")
 	}
@@ -117,7 +118,7 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, s
 	baseURL := strings.TrimSuffix(brokerCfg.URL, "/")
 
 	return &HTTPClient{
-		sender:        resilience.New(httpClient, sempCfg, authn, baseURL, sem),
+		sender:        resilience.New(httpClient, sempCfg, authn, baseURL, sem, limiter),
 		baseURL:       baseURL,
 		authenticator: authn,
 	}, nil
@@ -157,6 +158,19 @@ func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string
 
 	resp, err := c.sender.Do(ctx, req)
 	if err != nil {
+		// The Sender consumed the final response to release the connection, so
+		// the broker's own explanation only survives on the error. Parse it here,
+		// where SEMPv2 framing is understood, and hang the description off the
+		// error rather than replacing it: the RetriesExhaustedError identity is
+		// what carries NonIdempotent, which upper layers key their retryable flag
+		// off. Losing that to gain a description would trade a safety property
+		// for a diagnostic.
+		var exhausted *resilience.RetriesExhaustedError
+		if errors.As(err, &exhausted) && len(exhausted.Body) > 0 {
+			if sempErr := parseSEMPError(op.ID, exhausted.StatusCode, exhausted.Body); sempErr.Description != "" {
+				exhausted.Detail = sempErr.Description
+			}
+		}
 		return nil, fmt.Errorf("executing %s: %w", op.ID, err)
 	}
 	defer resp.Body.Close()
