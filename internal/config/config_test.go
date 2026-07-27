@@ -2733,19 +2733,11 @@ brokers:
 	}
 }
 
-// TestLoadConfig_BrokerOAuth covers the validator surface for the new
-// broker_oauth block. The schema is forward-compatible: it accepts the
-// fields and validates their shape. The client-auth method is chosen by the
-// populated sub-block under mcp_server_client_auth (discriminated union, no
-// separate discriminator field), and the V1 schema requires grant_type and
-// audience_parameter_name explicitly — no defaults. The OAuth runtime is not
-// wired in V1, so the validator additionally rejects any broker with
-// auth.mode: oauth at startup with an actionable error. The rejection runs
-// after schema validation, so per-broker oauth fields can be field-tested by
-// operators today even though the runtime is not yet available.
-//
-// See docs/superpowers/plans/oauth-token-exchange/SOL-150796-T2-config-schema.md
-// for the rationale (no feature flag, rejection removed when T6 lands).
+// TestLoadConfig_BrokerOAuth covers the validator surface for the
+// broker_oauth block. The client-auth method is chosen by the populated
+// sub-block under mcp_server_client_auth (discriminated union, no separate
+// discriminator field), and the schema requires grant_type and
+// audience_parameter_name explicitly — no defaults.
 func TestLoadConfig_BrokerOAuth(t *testing.T) {
 	// All cases run with mcp_client_auth.mode: static (so the deployment is in
 	// dev mode and http:// broker URLs are accepted). Production-mode
@@ -2769,8 +2761,6 @@ broker_oauth:
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
   audience_parameter_name: audience
 `
-	// The rejection error every oauth-mode-broker config surfaces in V1.
-	const notYetSupported = `auth.mode "oauth" is recognized but not yet supported in this version`
 
 	cases := []struct {
 		name             string
@@ -2779,8 +2769,10 @@ broker_oauth:
 		wantErrSubstring string
 	}{
 		{
-			// Schema is valid; the V1 runtime guard fires the rejection.
-			name: "schema-valid oauth broker config — rejected by V1 runtime guard",
+			// mcp_client_auth.mode: static + an oauth-mode broker violates the
+			// Hop1/Hop2 alignment invariant (see validateHop1Hop2Alignment) —
+			// the schema itself is valid.
+			name: "schema-valid oauth broker config without Hop1 oauth — rejected by alignment invariant",
 			yaml: clientAuthBlock + validBrokerOAuth + `
 brokers:
   prod:
@@ -2790,12 +2782,9 @@ brokers:
       audience: solace-broker-prod
 `,
 			wantErr:          true,
-			wantErrSubstring: notYetSupported,
+			wantErrSubstring: "mcp_client_auth.mode must be oauth",
 		},
 		{
-			// Schema validation fires before the runtime rejection — both
-			// errors surface via errors.Join, so the operator sees the
-			// configuration shape problem AND the V1 limit.
 			name: "broker uses oauth mode but no broker_oauth block — block-required error",
 			yaml: clientAuthBlock + `
 brokers:
@@ -2954,19 +2943,34 @@ brokers:
 			wantErrSubstring: "broker_oauth.idp_token_endpoint",
 		},
 		{
-			// Audience is optional in V1 — the broker's OAuth profile may have
-			// audience validation disabled. The schema accepts the omission;
-			// the V1 runtime guard still fires.
-			name: "per-broker audience omitted when mode is oauth — accepted by schema, rejected by V1 guard",
-			yaml: clientAuthBlock + validBrokerOAuth + `
+			// Audience is optional — the broker's OAuth profile may have
+			// audience validation disabled. The schema accepts the omission,
+			// and with Hop1 also set to oauth the config loads cleanly.
+			name: "per-broker audience omitted when mode is oauth — accepted",
+			yaml: `
+tls_terminated_upstream: true
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp-server"
+  resource_url: "https://mcp.example.com/mcp"
+  tool_authorization:
+    enabled: false
+broker_oauth:
+  idp_token_endpoint: "https://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: audience
 brokers:
   prod:
-    url: "http://broker.example.com:8080"
+    url: "https://broker.example.com:8080"
     auth:
       mode: oauth
 `,
-			wantErr:          true,
-			wantErrSubstring: notYetSupported,
+			wantErr: false,
 		},
 		{
 			// The removed per-broker auth.scopes field must stay removed:
@@ -3073,8 +3077,8 @@ brokers:
 		},
 		{
 			// Backwards-compatibility: a config without broker_oauth and no
-			// broker using oauth mode loads cleanly. This is the V1-V1 path
-			// every existing deployment is on today.
+			// broker using oauth mode loads cleanly. This is the path every
+			// basic/bearer-only deployment is on today.
 			name: "backwards-compat — no broker_oauth, no oauth-mode broker — loads cleanly",
 			yaml: clientAuthBlock + `
 brokers:
@@ -3109,8 +3113,8 @@ brokers:
 // TestLoadConfig_BrokerOAuth_MethodResolution verifies that a config with
 // exactly one client_auth sub-block populated parses correctly, with the
 // expected sub-block populated and the others nil. Uses a basic-mode broker
-// so the V1 oauth-runtime guard does not fire — this test is about the
-// discriminated-union parsing, not the runtime guard.
+// since this test is about the discriminated-union parsing of broker_oauth,
+// not per-broker auth modes.
 func TestLoadConfig_BrokerOAuth_MethodResolution(t *testing.T) {
 	t.Run("client_secret_basic sub-block parses correctly", func(t *testing.T) {
 		yaml := `
@@ -3204,9 +3208,9 @@ brokers:
 
 // TestLoadConfig_BrokerOAuth_ProductionMode_RequiresHTTPS verifies that when
 // the deployment is in production mode (mcp_client_auth.mode: oauth), the
-// broker_oauth.idp_token_endpoint must use https://. Uses a bearer-mode broker so the
-// V1 oauth-runtime guard does not fire — this test is about validating the
-// production-mode URL rule, not the runtime guard.
+// broker_oauth.idp_token_endpoint must use https://. Uses a bearer-mode
+// broker since this test is about the production-mode URL rule, not
+// per-broker auth modes.
 func TestLoadConfig_BrokerOAuth_ProductionMode_RequiresHTTPS(t *testing.T) {
 	yaml := `
 mcp_client_auth:
@@ -3240,9 +3244,8 @@ brokers:
 
 // TestLoadConfig_BrokerOAuth_ClientSecretFromEnvVar verifies that ${VAR}
 // substitution works for the secret field nested inside the client_auth
-// sub-block (the risk flagged in the ticket). Uses a basic-mode broker so
-// the V1 oauth-runtime guard does not fire; this test is about env-var
-// substitution, not the runtime guard.
+// sub-block (the risk flagged in the ticket). Uses a basic-mode broker
+// since this test is about env-var substitution, not per-broker auth modes.
 func TestLoadConfig_BrokerOAuth_ClientSecretFromEnvVar(t *testing.T) {
 	t.Setenv("MCP_TEST_OAUTH_CLIENT_SECRET", "the-real-secret")
 
@@ -3361,123 +3364,10 @@ brokers:
 	}
 }
 
-// TestLoadConfig_EmitsOAuthNotSupportedBanner verifies that when one or more
-// brokers are configured with auth.mode: oauth, the operator-facing banner
-// log line is emitted at ERROR level — separate from the joined config error.
-// The banner is the loud headline; the joined error carries broker names.
-func TestLoadConfig_EmitsOAuthNotSupportedBanner(t *testing.T) {
-	t.Run("single oauth broker — banner shows '1 broker'", func(t *testing.T) {
-		yaml := `
-mcp_client_auth:
-  mode: disabled
-broker_oauth:
-  idp_token_endpoint: "http://idp.example.com/token"
-  mcp_server_client_id: mcp-server
-  mcp_server_client_auth:
-    client_secret_basic:
-      secret: shhh
-  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
-brokers:
-  staging:
-    url: "https://broker.example.com:943"
-    auth:
-      mode: oauth
-      audience: "solace-broker-staging"
-`
-		var buf bytes.Buffer
-		old := slog.Default()
-		slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
-		defer slog.SetDefault(old)
-
-		_, err := LoadConfig(writeTemp(t, yaml))
-		if err == nil {
-			t.Fatal("expected error from V1 oauth guard")
-		}
-		out := buf.String()
-		// Banner contents — the loud signal that this is the load-bearing problem.
-		if !strings.Contains(out, "does not yet support") {
-			t.Errorf("expected banner headline in log output, got:\n%s", out)
-		}
-		// Pluralization — exactly one broker should use the singular form.
-		if !strings.Contains(out, "1 broker with auth.mode: oauth") {
-			t.Errorf("expected '1 broker' (singular) in banner, got:\n%s", out)
-		}
-	})
-
-	t.Run("three oauth brokers — banner shows '3 brokers'", func(t *testing.T) {
-		yaml := `
-mcp_client_auth:
-  mode: disabled
-broker_oauth:
-  idp_token_endpoint: "http://idp.example.com/token"
-  mcp_server_client_id: mcp-server
-  mcp_server_client_auth:
-    client_secret_basic:
-      secret: shhh
-  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
-brokers:
-  staging:
-    url: "https://broker.example.com:943"
-    auth: { mode: oauth, audience: "a" }
-  qa:
-    url: "https://qa.example.com:943"
-    auth: { mode: oauth, audience: "b" }
-  prod-east:
-    url: "https://prod.example.com:943"
-    auth: { mode: oauth, audience: "c" }
-`
-		var buf bytes.Buffer
-		old := slog.Default()
-		slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
-		defer slog.SetDefault(old)
-
-		_, err := LoadConfig(writeTemp(t, yaml))
-		if err == nil {
-			t.Fatal("expected error from V1 oauth guard")
-		}
-		out := buf.String()
-		if !strings.Contains(out, "3 brokers with auth.mode: oauth") {
-			t.Errorf("expected '3 brokers' (plural) in banner, got:\n%s", out)
-		}
-	})
-
-	t.Run("no oauth brokers — banner does NOT fire", func(t *testing.T) {
-		yaml := `
-mcp_client_auth:
-  mode: disabled
-brokers:
-  legacy:
-    url: "http://broker.example.com:8080"
-    auth:
-      mode: basic
-      username: admin
-      password: shhh
-`
-		var buf bytes.Buffer
-		old := slog.Default()
-		slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
-		defer slog.SetDefault(old)
-
-		_, err := LoadConfig(writeTemp(t, yaml))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if strings.Contains(buf.String(), "does not yet support") {
-			t.Errorf("banner should NOT fire when no broker uses oauth mode, got:\n%s", buf.String())
-		}
-	})
-}
-
 // TestValidateHop1Hop2Alignment_Direct exercises the alignment validator in
-// isolation, bypassing validate(). This is the test surface that keeps the
-// alignment logic from rotting while validate() does not surface it (the
-// alignment check is gated behind the OAuth-not-supported guard in
-// validate(); see config.go's validate() comment). When the OAuth-on-brokers
-// runtime ships and the guard is removed, validate() will start calling
-// the validator unconditionally — at which point the assertions here AND
-// the load-config integration tests both exercise the same code path.
+// isolation, with crafted configs that don't need a full LoadConfig round
+// trip. The same invariant is also exercised end-to-end via LoadConfig in
+// TestLoadConfig_Hop1Hop2Alignment.
 func TestValidateHop1Hop2Alignment_Direct(t *testing.T) {
 	hop2Broker := func() *BrokerConfig {
 		return &BrokerConfig{Auth: AuthConfig{Mode: AuthModeOAuth}}
@@ -3572,19 +3462,10 @@ func TestValidateHop1Hop2Alignment_Direct(t *testing.T) {
 	})
 }
 
-// TestLoadConfig_Hop1Hop2Alignment_SuppressedWhileNotSupportedGuardActive
-// verifies that, while the OAuth-not-supported guard is in effect, BOTH the
-// alignment validation error AND its banner are suppressed. Operators see a
-// single remediation path (the OAuth-not-supported guard) for the
-// misconfiguration; the alignment check is sleeping code that becomes
-// load-bearing only when the OAuth-on-brokers runtime ships and the guard
-// is removed.
-//
-// The alignment validator function itself is still exercised today by
-// TestValidateHop1Hop2Alignment_Direct, which calls it with crafted
-// configs that bypass validate(). That separation keeps the alignment
-// logic from rotting while it is not surfaced through validate().
-func TestLoadConfig_Hop1Hop2Alignment_SuppressedWhileNotSupportedGuardActive(t *testing.T) {
+// TestLoadConfig_Hop1Hop2Alignment verifies that LoadConfig surfaces both
+// the alignment validation error AND its banner when a broker uses
+// auth.mode: oauth but mcp_client_auth.mode does not.
+func TestLoadConfig_Hop1Hop2Alignment(t *testing.T) {
 	yaml := `
 mcp_client_auth:
   mode: static
@@ -3616,166 +3497,18 @@ brokers:
 	msg := err.Error()
 	out := buf.String()
 
-	// The OAuth-not-supported error MUST be the only oauth-related error
-	// the operator sees in the joined blob.
-	if !strings.Contains(msg, "not yet supported") {
-		t.Errorf("expected OAuth-not-supported error in joined blob, got: %s", msg)
-	}
-	// The alignment error must NOT appear in the joined blob — the
-	// not-yet-supported guard already explains the misconfiguration with
-	// one direction of remediation; surfacing the alignment error too
-	// would point at a second remediation path for a feature that does
-	// not yet run.
-	if strings.Contains(msg, "mcp_client_auth.mode must be oauth") {
-		t.Errorf("Hop1/Hop2 alignment error must be suppressed while the OAuth-not-supported guard is active, got: %s", msg)
-	}
-
-	// The OAuth-not-supported banner SHOULD fire.
-	if !strings.Contains(out, "does not yet support") {
-		t.Errorf("expected OAuth-not-supported banner to fire, got:\n%s", out)
-	}
-	// The alignment banner must NOT fire.
-	if strings.Contains(out, "OAuth broker authentication requires OAuth client") {
-		t.Errorf("Hop1/Hop2 alignment banner must be suppressed while the OAuth-not-supported guard is active, got:\n%s", out)
-	}
-}
-
-// TestLoadConfig_UnreleasedBrokerOAuth_BypassOff_DefaultGuardBehavior is a
-// paired regression guard for the ENABLE_UNRELEASED_BROKER_OAUTH bypass. It
-// confirms that when the bypass env var is unset (production default), the
-// guard, its banner, and the alignment suppression behave exactly as they
-// did before the bypass was introduced. Explicitly unsets the env var so an
-// operator's exported value in the test-runner shell does not silently
-// disable this regression.
-func TestLoadConfig_UnreleasedBrokerOAuth_BypassOff_DefaultGuardBehavior(t *testing.T) {
-	t.Setenv("ENABLE_UNRELEASED_BROKER_OAUTH", "false")
-
-	yaml := `
-mcp_client_auth:
-  mode: static
-  dev_token: t
-broker_oauth:
-  idp_token_endpoint: "http://idp.example.com/token"
-  mcp_server_client_id: mcp-server
-  mcp_server_client_auth:
-    client_secret_basic:
-      secret: shhh
-  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
-brokers:
-  staging:
-    url: "https://broker.example.com:943"
-    auth:
-      mode: oauth
-      audience: "solace-broker-staging"
-`
-	var buf bytes.Buffer
-	old := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	defer slog.SetDefault(old)
-
-	_, err := LoadConfig(writeTemp(t, yaml))
-	if err == nil {
-		t.Fatal("expected error (guard should fire when bypass is off)")
-	}
-	msg := err.Error()
-	out := buf.String()
-
-	if !strings.Contains(msg, "not yet supported") {
-		t.Errorf("expected OAuth-not-supported error, got: %s", msg)
-	}
-	if !strings.Contains(out, "does not yet support") {
-		t.Errorf("expected OAuth-not-supported banner to fire, got:\n%s", out)
-	}
-	if strings.Contains(out, "UNRELEASED FEATURE ENABLED") {
-		t.Errorf("bypass WARN must NOT fire when bypass is off, got:\n%s", out)
-	}
-}
-
-// TestLoadConfig_UnreleasedBrokerOAuth_BypassOn_GuardSkipped verifies the
-// bypass path: ENABLE_UNRELEASED_BROKER_OAUTH=true skips the guard, suppresses
-// the OAuth-not-supported banner, and lets the Hop 1 / Hop 2 alignment check
-// surface the real misconfiguration (Hop 1 is static, Hop 2 broker uses
-// oauth). This is the shape operators will see when the guard is removed for
-// real — the bypass is a preview of post-removal behavior.
-//
-// Also confirms the loud startup WARN fires so nobody accidentally leaves
-// this on in production.
-//
-// LIFECYCLE: delete this test alongside the guard, the bypass helper, and
-// the WARN when broker OAuth ships.
-func TestLoadConfig_UnreleasedBrokerOAuth_BypassOn_GuardSkipped(t *testing.T) {
-	t.Setenv("ENABLE_UNRELEASED_BROKER_OAUTH", "true")
-
-	yaml := `
-mcp_client_auth:
-  mode: static
-  dev_token: t
-broker_oauth:
-  idp_token_endpoint: "http://idp.example.com/token"
-  mcp_server_client_id: mcp-server
-  mcp_server_client_auth:
-    client_secret_basic:
-      secret: shhh
-  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: audience
-brokers:
-  staging:
-    url: "https://broker.example.com:943"
-    auth:
-      mode: oauth
-      audience: "solace-broker-staging"
-`
-	var buf bytes.Buffer
-	old := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	defer slog.SetDefault(old)
-
-	_, err := LoadConfig(writeTemp(t, yaml))
-	if err == nil {
-		t.Fatal("expected error (Hop1/Hop2 alignment mismatch: static Hop1 with oauth broker)")
-	}
-	msg := err.Error()
-	out := buf.String()
-
-	// The "not yet supported" guard error must NOT appear — the bypass skips
-	// it. Its presence would mean the bypass silently failed to take effect.
-	if strings.Contains(msg, "not yet supported") {
-		t.Errorf("guard error must NOT fire when bypass is on (bypass silently failed to take effect), got: %s", msg)
-	}
-	// The OAuth-not-supported banner must NOT fire — mirrors the guard being
-	// skipped. Its presence would confuse operators about whether the runtime
-	// is actually reachable.
-	if strings.Contains(out, "does not yet support") {
-		t.Errorf("OAuth-not-supported banner must NOT fire when bypass is on, got:\n%s", out)
-	}
-	// The alignment error MUST surface — this is what operators would see
-	// post-guard-removal, and the bypass previews that shape.
 	if !strings.Contains(msg, "mcp_client_auth.mode must be oauth") {
-		t.Errorf("expected Hop1/Hop2 alignment error to surface when bypass is on, got: %s", msg)
+		t.Errorf("expected Hop1/Hop2 alignment error, got: %s", msg)
 	}
-	// The loud WARN MUST fire — it's the honest counter-signal that stops
-	// this from silently living in production.
-	if !strings.Contains(out, "UNRELEASED FEATURE ENABLED") {
-		t.Errorf("expected UNRELEASED FEATURE ENABLED warning to fire when bypass is on, got:\n%s", out)
+	if !strings.Contains(out, "OAuth broker authentication requires OAuth client") {
+		t.Errorf("expected Hop1/Hop2 alignment banner to fire, got:\n%s", out)
 	}
 }
 
-// TestServerConfig_Hop2OAuthActive pins the four cases that define the
-// method's contract: all three preconditions true → returns true; and each
+// TestServerConfig_Hop2OAuthActive pins the two cases that define the
+// method's contract: both preconditions true → returns true; and each
 // precondition individually flipped false → returns false. Together these
-// four assertions prove each precondition is load-bearing — a future
-// refactor that silently drops one will fail its corresponding case.
-//
-// This test is deliberately behavioral, not exhaustive: covering all
-// 2×2×2 = 8 truth-table cells would add redundancy without adding signal
-// (once each precondition is shown to be load-bearing, the interaction
-// terms follow from AND semantics).
-//
-// LIFECYCLE: at ship time, when the flag portion of Hop2OAuthActive is
-// removed, the "flag off" subtest will need to be deleted along with the
-// flag check itself. The other three subtests remain valid — the two
-// structural preconditions survive the flag removal.
+// three assertions prove each precondition is load-bearing.
 func TestServerConfig_Hop2OAuthActive(t *testing.T) {
 	// Minimal valid broker_oauth block. Not validated here — Hop2OAuthActive
 	// only checks for non-nil, so field contents are irrelevant.
@@ -3792,30 +3525,17 @@ func TestServerConfig_Hop2OAuthActive(t *testing.T) {
 		return &BrokerConfig{Auth: AuthConfig{Mode: AuthModeBasic, Username: "u", Password: "p"}}
 	}
 
-	t.Run("all three preconditions true → active", func(t *testing.T) {
-		t.Setenv("ENABLE_UNRELEASED_BROKER_OAUTH", "true")
+	t.Run("both preconditions true → active", func(t *testing.T) {
 		cfg := &ServerConfig{
 			BrokerOAuth: validBrokerOAuth(),
 			brokers:     map[string]*BrokerConfig{"a": oauthBroker()},
 		}
 		if !cfg.Hop2OAuthActive() {
-			t.Fatal("expected Hop2OAuthActive to return true when flag is on, broker_oauth is set, and at least one broker uses oauth mode")
+			t.Fatal("expected Hop2OAuthActive to return true when broker_oauth is set and at least one broker uses oauth mode")
 		}
 	})
 
-	t.Run("flag off → inactive (even with other preconditions met)", func(t *testing.T) {
-		t.Setenv("ENABLE_UNRELEASED_BROKER_OAUTH", "false")
-		cfg := &ServerConfig{
-			BrokerOAuth: validBrokerOAuth(),
-			brokers:     map[string]*BrokerConfig{"a": oauthBroker()},
-		}
-		if cfg.Hop2OAuthActive() {
-			t.Fatal("expected Hop2OAuthActive to return false when flag is off — flag must be load-bearing")
-		}
-	})
-
-	t.Run("broker_oauth: nil → inactive (even with flag on and oauth broker)", func(t *testing.T) {
-		t.Setenv("ENABLE_UNRELEASED_BROKER_OAUTH", "true")
+	t.Run("broker_oauth: nil → inactive (even with an oauth broker)", func(t *testing.T) {
 		cfg := &ServerConfig{
 			BrokerOAuth: nil,
 			brokers:     map[string]*BrokerConfig{"a": oauthBroker()},
@@ -3825,8 +3545,7 @@ func TestServerConfig_Hop2OAuthActive(t *testing.T) {
 		}
 	})
 
-	t.Run("no broker uses oauth mode → inactive (even with flag on and broker_oauth set)", func(t *testing.T) {
-		t.Setenv("ENABLE_UNRELEASED_BROKER_OAUTH", "true")
+	t.Run("no broker uses oauth mode → inactive (even with broker_oauth set)", func(t *testing.T) {
 		cfg := &ServerConfig{
 			BrokerOAuth: validBrokerOAuth(),
 			brokers:     map[string]*BrokerConfig{"a": basicBroker()},
