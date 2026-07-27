@@ -41,6 +41,7 @@ type retryState struct {
 	transientRetried int    // count of 429/503 retries taken (capped at maxTransientRetries)
 	method           string // HTTP method captured at Do() time for idempotency check
 	retrySafe        bool   // caller-declared semantic idempotency (see WithRetrySafe)
+	retryUnsafe      bool   // caller-declared semantic NON-idempotency (see WithRetryUnsafe)
 	needsReauth      bool   // true when the next retry should re-run AddAuth (set on 401)
 }
 
@@ -64,6 +65,35 @@ func isRetrySafe(ctx context.Context) bool {
 	return v
 }
 
+// retryUnsafeKey is the context key for the caller-declared non-idempotent marker.
+type retryUnsafeKey struct{}
+
+// WithRetryUnsafe marks the request issued under this context as semantically
+// NON-idempotent, suppressing every retry path on which the broker may already
+// have acted on the request.
+//
+// The method-based guard in checkRetry cannot infer this. RFC 9110 idempotency
+// constrains a request's final state, not the set of side effects produced along
+// the way, and SEMPv2's action API routes destructive RPC over PUT: a replayed
+// doMsgVpnQueueDeleteMsgs takes no message-ID range, so it purges whatever has
+// been spooled since the caller's request. Callers that know an operation is
+// non-idempotent — the composite executor, from a tool's `idempotent: false`
+// annotation — declare it here.
+//
+// This is the inverse of WithRetrySafe: that widens the policy for a request a
+// method-based check would wrongly deny, this narrows it for one a method-based
+// check would wrongly allow.
+func WithRetryUnsafe(ctx context.Context) context.Context {
+	return context.WithValue(ctx, retryUnsafeKey{}, true)
+}
+
+// isRetryUnsafe reports whether the caller declared the request non-idempotent
+// via WithRetryUnsafe.
+func isRetryUnsafe(ctx context.Context) bool {
+	v, _ := ctx.Value(retryUnsafeKey{}).(bool)
+	return v
+}
+
 // OperationIDKey is the context key callers use to attach an operation
 // identifier for logging. The Sender reads it in errorHandler and checkRetry.
 type OperationIDKey struct{}
@@ -84,6 +114,8 @@ func getRetryState(ctx context.Context) *retryState {
 // checkRetry is the custom retry policy for retryablehttp. It implements:
 //   - POST and PATCH: never retried (non-idempotent — see guard below)
 //   - 401: delegate to Authenticator.HandleAuthFailure — retry once if it recovers
+//   - Caller-declared non-idempotent (WithRetryUnsafe): 401 re-auth only, never
+//     replayed on a transient status or a connection error
 //   - 429, 503: retry with exponential backoff, capped at maxTransientRetries
 //   - Other 5xx: retry once only (likely a bug, not transient)
 //   - Connection errors: delegate to retryablehttp's default policy
@@ -112,7 +144,19 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 
 	// Connection errors: delegate to retryablehttp's default policy which
 	// handles network errors, DNS failures, TLS handshake errors, etc.
+	//
+	// A caller-declared non-idempotent request is never replayed here. The
+	// broker may have received and executed it before the connection broke —
+	// a TCP reset, a broker restart mid-request, or a load-balancer idle drop
+	// all look identical to the client — so a retry can duplicate an
+	// irreversible side effect. Returning (false, nil), the same shape the
+	// method guard above uses, leaves the original transport error as the
+	// caller-visible cause; returning a sentinel here would mask it, because
+	// retryablehttp prefers CheckRetry's error over the request's own.
 	if err != nil {
+		if state.retryUnsafe {
+			return false, nil
+		}
 		return retryablehttp.DefaultRetryPolicy(ctx, resp, err)
 	}
 
@@ -120,8 +164,12 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 		return false, nil
 	}
 
-	switch {
-	case resp.StatusCode == http.StatusUnauthorized: // 401
+	// 401 is handled ahead of the non-idempotency gate below, and deliberately
+	// so: the broker issues an authentication rejection before acting on the
+	// request, so re-authenticating and retrying cannot duplicate a side effect.
+	// Gating it would turn a token expiring mid-request into a hard failure for
+	// exactly the write operations that most need to complete.
+	if resp.StatusCode == http.StatusUnauthorized { // 401
 		if !state.auth401Retried {
 			state.auth401Retried = true
 			// The authenticator decides both retry and re-auth; relay ReAuth
@@ -140,7 +188,22 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 		slog.Warn("auth failure: 401 persisted after recovery attempt",
 			slog.String("broker", d.brokerURL))
 		return false, nil
+	}
 
+	// Past 401, every remaining retry path replays a request the broker may
+	// already have acted on: a 5xx can follow partial execution, and a 504 can
+	// fire while the broker is still working. A caller-declared non-idempotent
+	// request must fail visibly instead. This is the gate that stops an
+	// `idempotent: false` action tool — delete-queue-messages, whose purge takes
+	// no message-ID range — from destroying data the caller never authorized.
+	if state.retryUnsafe {
+		slog.Debug("not retrying: caller declared the request non-idempotent",
+			slog.String("broker", d.brokerURL),
+			slog.Int("status", resp.StatusCode))
+		return false, nil
+	}
+
+	switch {
 	case resp.StatusCode == http.StatusTooManyRequests, // 429
 		resp.StatusCode == http.StatusServiceUnavailable: // 503
 		// Transient broker conditions: retry with exponential backoff, but only
