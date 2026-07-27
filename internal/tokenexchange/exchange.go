@@ -31,6 +31,23 @@ import (
 // (subjectToken, brokerAlias) pair are collapsed into a single IdP
 // round-trip via singleflight, and the result is cached for future calls.
 func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, error) {
+	// A caller who is already done gets its own error, never a token.
+	//
+	// The cache hit below returns without consulting ctx at all —
+	// otterTokenCache.Get takes `_ context.Context` — so a cancelled caller
+	// could be handed a live token. Guarding here rather than in the cache is
+	// deliberate: TokenCache reserves its error return for backend failures,
+	// and Exchange treats a Get error as a warning and falls through to a full
+	// IdP exchange, so a cache-level check would make a dead caller do *more*
+	// work, not less.
+	//
+	// This is a contract fix, not a flake fix. The intermittent failure in
+	// TestExchange_ContextDeadlineExceededReturnsDeadlineError was the test's
+	// own premise — see the note there.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	key := computeDeduplicationKey(DeduplicationKeyInput{
 		SubjectToken: input.SubjectToken,
 		BrokerAlias:  input.BrokerAlias,
@@ -103,6 +120,15 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 			slog.String("cause", ctx.Err().Error()))
 		return nil, ctx.Err()
 	case res := <-ch:
+		// Both cases can be ready at once — the shared exchange may complete
+		// while this caller is descheduled — and Go then picks between them
+		// uniformly at random. Re-check so cancellation wins deterministically
+		// instead of by coin flip. Rare in practice: it needs the caller to be
+		// off-CPU for a whole IdP round-trip. One load on the success path is
+		// cheaper than an outcome that depends on the scheduler.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		elapsed := e.nowFunc().Sub(start)
 		if res.Err != nil {
 			// Map the breaker's open-state rejection (returned by Execute

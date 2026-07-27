@@ -284,9 +284,9 @@ func TestExchange_SameTokenDifferentBrokersRunConcurrently(t *testing.T) {
 // requests that prove cancellation is scoped to the exact (user, broker)
 // pair and does not leak across singleflight keys.
 //
-//   Group 1: User A + Broker X — cancelled → all fail
-//   Group 2: User A + Broker Y — not cancelled → all succeed (same user, different broker)
-//   Group 3: User C + Broker X — not cancelled → all succeed (different user, same broker)
+//	Group 1: User A + Broker X — cancelled → all fail
+//	Group 2: User A + Broker Y — not cancelled → all succeed (same user, different broker)
+//	Group 3: User C + Broker X — not cancelled → all succeed (different user, same broker)
 func TestExchange_CancellationScopedToKeyBoundary(t *testing.T) {
 	t.Parallel()
 
@@ -524,7 +524,15 @@ func TestExchange_ContextDeadlineExceededReturnsDeadlineError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
 	defer cancel()
 
-	time.Sleep(5 * time.Millisecond)
+	// Wait on the context, not the clock. WithTimeout fires via time.AfterFunc,
+	// so ctx.Err() stays nil and Done() stays open until the runtime timer
+	// goroutine is actually scheduled. A sleep of 5x the deadline looks like
+	// ample margin and is not a guarantee: measured on a loaded machine, the
+	// context is still live 5ms after a 1ms deadline roughly 1 call in 700, and
+	// the timer has been seen firing as late as 16ms. Exchange then legitimately
+	// succeeds and this test legitimately fails. That is the whole of the
+	// intermittent CI failure here — not a defect in Exchange.
+	<-ctx.Done()
 	tok, err := e.Exchange(ctx, validInput())
 
 	if tok != nil {
@@ -533,6 +541,105 @@ func TestExchange_ContextDeadlineExceededReturnsDeadlineError(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("errors.Is(err, context.DeadlineExceeded) = false, want true; err = %v", err)
 	}
+}
+
+// TestExchange_ExpiredContextIsHonoredOnEveryPath pins the guarantee the
+// deadline test above depends on, across both paths that could return a token
+// without consulting the caller.
+//
+// The cache hit never looked at ctx: otterTokenCache.Get takes
+// `_ context.Context`, so a cancelled caller was handed a live token. The
+// singleflight select is a second, much narrower instance — ctx.Done() and the
+// result channel are sibling cases, and Go picks uniformly at random when both
+// are ready — now closed by a re-check on the success branch.
+//
+// Only the warm-cache subtest couples to the fix. A cache hit needs no
+// scheduling accident, so it returns a token on every run without the guard.
+// The cold-cache subtest documents the same contract for the singleflight path
+// but passes either way: making both select cases ready on demand requires the
+// caller to be off-CPU for an entire IdP round-trip, which a test cannot force.
+// It is a statement of intent, not proof.
+//
+// Neither of these is the cause of the intermittent CI failure in
+// TestExchange_ContextDeadlineExceededReturnsDeadlineError. That was the test's
+// own premise; see the note there.
+func TestExchange_ExpiredContextIsHonoredOnEveryPath(t *testing.T) {
+	t.Parallel()
+
+	newExchanger := func(t *testing.T) *Exchanger {
+		t.Helper()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, successJSON("exchanged-token", 3600))
+		}))
+		t.Cleanup(srv.Close)
+		e := newTestExchanger(t, srv.URL)
+		e.nowFunc = func() time.Time { return pinnedNow() }
+		return e
+	}
+
+	expired := func(t *testing.T) context.Context {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		return ctx
+	}
+
+	t.Run("cold cache", func(t *testing.T) {
+		t.Parallel()
+		e := newExchanger(t)
+
+		tok, err := e.Exchange(expired(t), validInput())
+		if tok != nil {
+			t.Errorf("tok = %v, want nil for an already-cancelled caller", tok)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("errors.Is(err, context.Canceled) = false, want true; err = %v", err)
+		}
+	})
+
+	t.Run("warm cache", func(t *testing.T) {
+		t.Parallel()
+		// Deliberately NOT pinning nowFunc here. The cache expires entries
+		// against the wall clock, so a token minted at the pinned 2026-01-01
+		// is already stale and every Get is a miss — which would quietly turn
+		// this into a second cold-cache test.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, successJSON("exchanged-token", 3600))
+		}))
+		t.Cleanup(srv.Close)
+		e := newTestExchanger(t, srv.URL)
+
+		// Populate the cache through a live call, so the second call takes the
+		// hit path rather than the singleflight path.
+		if _, err := e.Exchange(context.Background(), validInput()); err != nil {
+			t.Fatalf("priming exchange: %v", err)
+		}
+		// Confirm the fixture actually achieves a hit; otherwise the assertion
+		// below would pass for the wrong reason.
+		// cache.GetHit is the zero value of GetStatus, so a `!= GetHit` check
+		// would also pass on a zero-valued result. Assert the error first, then
+		// the status, so this cannot succeed for the wrong reason.
+		gr, err := e.cache.Get(context.Background(), computeDeduplicationKey(DeduplicationKeyInput{
+			SubjectToken: validInput().SubjectToken,
+			BrokerAlias:  validInput().BrokerAlias,
+		}))
+		if err != nil {
+			t.Fatalf("priming the cache: %v", err)
+		}
+		if gr.Status != cache.GetHit || gr.Entry.Value == "" {
+			t.Fatalf("fixture did not warm the cache: status=%v value_empty=%v", gr.Status, gr.Entry.Value == "")
+		}
+
+		tok, err := e.Exchange(expired(t), validInput())
+		if tok != nil {
+			t.Errorf("tok = %v, want nil: a cache hit must not outrank the caller's cancellation", tok)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("errors.Is(err, context.Canceled) = false, want true; err = %v", err)
+		}
+	})
 }
 
 // A follower that shares an in-flight exchange must bail out the moment its
@@ -1288,9 +1395,9 @@ func TestExchange_FourxxWithOAuthError(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		status     int
-		body       string
+		name         string
+		status       int
+		body         string
 		wantSentinel error
 	}{
 		{"401 invalid_token", 401, `{"error":"invalid_token"}`, ErrExchangeRejected},
