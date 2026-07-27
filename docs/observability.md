@@ -132,17 +132,22 @@ The core Rate / Errors / Duration signal for every tool the server exposes.
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
-| `mcp_tool_invocation_total` | Counter | `tool`, `broker`, `outcome` | Solace |
-| `mcp_tool_invocation_duration_seconds` | Histogram | `tool`, `broker`, `outcome` | Solace |
+| `mcp_tool_invocation_total` | Counter | `tool`, `broker`, `outcome`, `error_type` | Solace |
+| `mcp_tool_invocation_duration_seconds` | Histogram | `tool`, `broker`, `outcome`, `error_type` | Solace |
 
 - `tool`: the MCP tool name (kebab-case, for example `get-broker-status`). Bounded by the
   number of tools the server exposes.
 - `broker`: the broker alias from your configuration. Bounded by the number of configured
   brokers.
 - `outcome`: see [The outcome vocabulary](#the-outcome-vocabulary).
+- `error_type`: the failure cause, from the ten values in
+  [`error_type`](#error_type). Empty on any non-error outcome.
 - Histogram buckets (seconds): `0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10`.
 
-**Cardinality:** `|tool| x |broker| x |outcome|`. All three draw from finite domains (CI enforcement planned for GA).
+**Cardinality:** `error_type` is non-empty only on the error path, so the observed series per
+`tool` and `broker` is `success (1) + cancelled (1) + error x 10 = 12`, not the 33 a naive
+product of the two label domains would suggest. All domains are finite (CI enforcement planned
+for GA).
 
 ### SEMP requests (RED, per attempt)
 
@@ -152,7 +157,7 @@ recorded per retry attempt so you can see retry storms and per-broker latency.
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
 | `mcp_semp_request_total` | Counter | `http_request_method`, `http_response_status_code`, `server_address`, `broker`, `api`, `operation`, `attempt` | Mixed (see below) |
-| `mcp_semp_request_duration_seconds` *(name proposed, see open items)* | Histogram | same label set | Mixed |
+| `mcp_semp_request_duration_seconds` | Histogram | same label set | Mixed |
 
 - **OTel** labels (adopted from the OpenTelemetry HTTP semantic conventions,
   https://opentelemetry.io/docs/specs/semconv/http/http-spans/): `http_request_method`,
@@ -165,14 +170,17 @@ recorded per retry attempt so you can see retry storms and per-broker latency.
   attribute unset when there is no response, which in Prometheus surfaces as `""` rather
   than an absent label. Alert on `http_response_status_code=""` to catch a broker you
   cannot reach at all, which no status-code range would match.
+- Histogram buckets (seconds): `0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10`.
+  **Deliberately coarser at the low end than the tool histogram**, because a SEMP call is a
+  network round-trip to a broker and sub-millisecond resolution would buy nothing.
 
 **Cardinality:** bounded by the product of these finite sets. `attempt` is bounded by the
 retry cap, and the empty status adds one value to that dimension rather than an open set.
-See open items for three decisions we want your input on: the duration histogram buckets,
-whether `server_address` and `broker` are redundant for your queries, and whether a bare
-empty status is enough for the no-response case or you need the reason (DNS, TLS, timeout)
-as a label. `mcp_broker_unreachable_reason` carries a coarser version of that reason today,
-but only as broker state, not per attempt.
+See open items for the two decisions we want your input on here: whether the histogram bucket
+boundaries fit your brokers under stress, and whether a bare empty status is enough for the
+no-response case or you need the reason (DNS, TLS, timeout) as a label.
+`mcp_broker_unreachable_reason` carries a coarser version of that reason today, but only as
+broker state, not per attempt.
 
 ### Broker reachability
 
@@ -219,15 +227,41 @@ but only as broker state, not per attempt.
 Increments if an audit event cannot be written (see [Audit delivery](#audit-delivery)). A
 flat-zero series is your evidence that no audit event was lost. Alert on any increase.
 
-### Distributed tracing pipeline health
+### OTLP export health
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
 | `mcp_otel_spans_exported_total` | Counter | none | Solace |
 | `mcp_otel_spans_dropped_total` | Counter | `reason` | Solace |
+| `mcp_otel_metrics_exported_total` | Counter | none | Solace |
+| `mcp_otel_metrics_dropped_total` | Counter | `reason` | Solace |
 
-Self-observation for the trace exporter, exposed when both tracing and metrics are enabled.
-`reason` value domain is under review (see open items).
+Self-observation for the two OTLP exporters: the span pair when tracing is enabled, the metric
+pair when OTLP metrics push is enabled. `reason` is a closed set on both: `queue_full`,
+`export_timeout`, `export_error`, `shutdown`.
+
+**These live on the scrape surface deliberately.** Diagnosing a broken push must not depend on
+the push working, so you can answer "is our OTLP export landing?" from Prometheus even when the
+collector is the thing that is down. The scrape path and the push path fail independently by
+design.
+
+### Trace exemplars
+
+The two latency histograms (`mcp_tool_invocation_duration_seconds` and
+`mcp_semp_request_duration_seconds`) carry **trace exemplars** when both metrics and tracing are
+enabled, so a slow bucket on a Grafana panel links straight to the trace that produced it and
+you skip correlating by timestamp.
+
+Two things to know, because both look like bugs otherwise:
+
+- **Your Prometheus must negotiate OpenMetrics to receive them.** Exemplars are not part of the
+  older Prometheus text exposition format. Recent Prometheus versions request OpenMetrics by
+  default; if yours does not, exemplars will be silently absent from an otherwise healthy
+  scrape.
+- **An exemplar can only point at a *sampled* trace.** Under a low `OTEL_TRACES_SAMPLER_ARG`
+  most buckets carry no exemplar. That is expected, not a gap.
+
+Exemplars add no new label keys and no new series.
 
 ### Go runtime and process metrics
 
@@ -266,15 +300,34 @@ audit sub-stream to a dedicated SIEM index.
 | `tool` | The MCP tool invoked | string |
 | `broker` | The broker targeted | string |
 | `outcome` | The result; see [The outcome vocabulary](#the-outcome-vocabulary) | string |
+| `error_type` | Why an operation failed; present on `outcome: error` only | string (closed set) |
 | `arguments_hash` | SHA-256 over an RFC 8785 (JCS) canonicalization of the call arguments | hex string |
 | `correlation_id` | Join key to logs, traces, and the broker-side entry | string |
-| `reason` | Why the attempt failed; present on `auth_failure` only | string (closed set) |
+| `reason` | Why a credential was rejected; present on `auth_failure` only | string (closed set) |
 | `audit_schema_version` | The schema version, for query pinning | string (`1.0`) |
 
-**`audit_event_type`** is a closed set: `operation` (a state-changing tool call),
-`auth_success`, `auth_failure`, `broker_auth_retry`, and `audit_drop`. `tool`, `broker`,
-`outcome`, and `arguments_hash` are present on `operation` records; the authentication types
-carry the fields listed under [Authentication events](#authentication-events) instead.
+**`audit_event_type`** is a closed set of five: `operation` (a state-changing tool call),
+`auth_success`, `auth_failure`, `broker_auth_retry`, and `audit_drop`.
+
+**Which fields appear on which record.** Not every field is on every record, so a SIEM author
+can tell record kinds apart from field presence alone. `event`, `audit_event_type`,
+`timestamp_utc`, `correlation_id`, and `audit_schema_version` are on all five.
+
+| `audit_event_type` | `outcome` | `error_type` | `reason` | `tool`, `arguments_hash`, `started_at`, `duration_ms` | `broker` | `principal.sub`, `agent_client_id` |
+|---|---|---|---|---|---|---|
+| `operation` | yes | on `error` only | — | yes | yes | yes |
+| `auth_success` | — | — | — | — | — | yes |
+| `auth_failure` | — | — | yes | — | — | see below |
+| `broker_auth_retry` | `success` or `error` | — | — | — | yes | yes |
+| `audit_drop` | — | — | — | — | — | — |
+
+- **`auth_success` and `auth_failure` carry no `outcome`.** The record type already says what
+  happened, so one predicate does the job of two.
+- **On `auth_failure` the principal is unknown by definition**, since authentication is what
+  failed. `principal.sub` and `agent_client_id` appear only when the token parsed far enough to
+  yield them: an expired or audience-mismatched token will, a malformed or absent one will not.
+- **`audit_drop` is a notice, not an outcome.** It reports that a record could not be written,
+  and carries only the five common fields.
 
 **`principal` identity.** The audit event records only `principal.sub`, the opaque OIDC
 subject of the human user. That subject is read once from the verified token and carried end
@@ -372,11 +425,34 @@ names beyond `semp.attempt`, and span kinds, are open items in this review (see 
 
 ### Resource attributes
 
-Set on all spans from server configuration. `service.name`, `service.version`, and
-`deployment.environment` follow the OpenTelemetry resource semantic conventions
-(https://opentelemetry.io/docs/specs/semconv/resource/). `region` (when configured) is
-Solace-specific; OTel's convention is `cloud.region`, which we may adopt instead based on
-pilot feedback.
+Set from server configuration on **both** metrics and spans, so an aggregated dashboard can
+tell instances apart without a label duplicated onto every series. All five follow the
+OpenTelemetry resource semantic conventions
+(https://opentelemetry.io/docs/specs/semconv/resource/).
+
+| Attribute | Source |
+|---|---|
+| `service.name` | config |
+| `service.version` | build-time injection |
+| `service.instance.id` | config, or the pod name |
+| `deployment.environment` | config, when set |
+| `cloud.region` | config, when set |
+
+An earlier draft called this attribute `region` and flagged the OTel name as a possible
+change. **It is now `cloud.region`**: where OTel publishes a convention we adopt it, and
+`cloud.region` is what a multi-broker aggregator expects to pivot on.
+
+**How to query them, per egress.** These are resource attributes, not per-series labels, so
+they arrive differently on each of the two metric egresses:
+
+- **Prometheus scrape.** The exporter publishes them on the `target_info` series, with `.`
+  translated to `_`, so they read as `service_name`, `cloud_region`, and so on. Join to it,
+  for example
+  `mcp_tool_invocation_total * on (instance, job) group_left(service_name, cloud_region) target_info`.
+- **OTLP push.** Resource attributes are **not promoted to labels by default**. If you ingest
+  our OTLP metrics straight into Prometheus, set `promote_resource_attributes` to include
+  `service.name`, `service.instance.id`, `deployment.environment`, and `cloud.region`, or the
+  same dashboard will show empty variable dropdowns.
 
 ---
 
@@ -419,17 +495,41 @@ audit, and trace schemas above.
 A single `outcome` vocabulary is shared across metrics, the audit trail, and traces, so the
 same call reads the same way in all three and you can join on one key.
 
+`outcome` answers "what happened". A companion attribute, `error_type`, answers "why", and is
+present only when `outcome` is `error`. Splitting the two keeps `outcome` small enough to group
+by on a dashboard while still carrying the detail an investigation needs.
+
 | Value | Meaning |
 |---|---|
 | `success` | The call completed successfully. |
-| `error` | The call failed. A `context.DeadlineExceeded` timeout is classified here. |
-| `panic` | An unexpected failure was caught by the recovery layer and returned as a clean error. |
+| `error` | The call failed. The cause is in `error_type`. A `context.DeadlineExceeded` timeout is classified here. |
 | `cancelled` | The caller cancelled the request. **Reserved in the schema now; emitted from a later release.** |
+
+### `error_type`
+
+Present only on `outcome: error`, drawn from a closed set of ten values:
+
+| Value | Meaning |
+|---|---|
+| `panic` | An unexpected failure was caught by the recovery layer and returned as a clean error. |
+| `unknown_tool` | The requested tool is not registered. |
+| `missing_broker` | No broker was named on a call that requires one. |
+| `unknown_broker` | The named broker is not configured. |
+| `broker_init_error` | The broker is configured but could not be initialised. |
+| `validation_error` | The arguments failed input validation. |
+| `execution_error` | The tool ran and failed. |
+| `nil_result` | The tool returned no result. |
+| `output_validation_error` | The tool's output failed schema validation. |
+| `marshal_error` | The result could not be serialised. |
 
 Notes:
 
 - The metric label is `outcome`, not `status`, precisely so metrics, audit, and spans share
-  one join key.
+  one join key. `error_type` follows the OTel semantic-convention pattern of pairing a small
+  status with a separate `error.type` attribute, rendered `error_type` for Prometheus.
+- **`panic` is an `error_type`, not an `outcome`.** A recovered panic reads
+  `outcome=error`, `error_type=panic`. If you saw an earlier draft that listed `panic` as a
+  fourth `outcome` value, this supersedes it.
 - **Failed authentication is not an `outcome` value.** It is a separate signal: the
   `auth_failure` audit event and the `mcp_auth_failure_total` metric, whose closed `reason`
   set (`invalid_token`, `expired`, `audience_mismatch`, `signature_invalid`, `missing`) is
@@ -437,8 +537,8 @@ Notes:
 - **Authorization denials have no signal of their own yet.** A caller who authenticates and
   is then refused a privileged operation currently lands in `outcome: error`, alongside
   timeouts and malformed arguments. There is no `denied` value and no authorization event
-  type. See [Authentication events](#authentication-events); tell us if your access reviews
-  need this separated.
+  type. This is an open item below, and it is the one we would most like a compliance
+  reviewer's answer on.
 - **Load-shedding / saturation is not an `outcome` value** either; it is planned as a
   separate metric in a later release (see below).
 
@@ -449,27 +549,45 @@ Notes:
 These are the decisions we most want pilot input on. They are deliberately unresolved in
 this draft, resolving them is the point of the review.
 
-1. **SEMP duration histogram.** We propose the name `mcp_semp_request_duration_seconds` and
-   the same buckets as the tool histogram. Do those bucket boundaries fit your broker's
-   latency profile under stress? Bucket boundaries are effectively unchangeable after the
-   freeze, so this is the highest-value thing to check.
-2. **`server_address` vs `broker` on SEMP metrics.** We carry both: `server_address` is the
-   OTel-conventional host label, `broker` is your configured alias. Is carrying both useful,
-   or redundant for your dashboards?
-3. **The no-response case on SEMP metrics.** When an attempt fails before any response —
+1. **SEMP duration histogram buckets.** The name `mcp_semp_request_duration_seconds` is
+   settled. The buckets are `0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10` seconds,
+   deliberately coarser at the low end than the tool histogram because a SEMP call is a network
+   round-trip. Do those boundaries fit your broker's latency profile under stress? Bucket
+   boundaries are effectively unchangeable after the freeze, so this is the highest-value thing
+   to check.
+2. **The no-response case on SEMP metrics.** When an attempt fails before any response —
    DNS, connection refused, TLS, timeout — `http_response_status_code` is the empty string,
    following OTel. Is that enough to alert on, or do you need the reason as its own label?
    Splitting it out costs cardinality and would duplicate, per attempt, what
    `mcp_broker_unreachable_reason` already carries as broker state.
-4. **`principal.preferred_username`.** Should the audit event carry a human-readable
+3. **`principal.preferred_username`.** Should the audit event carry a human-readable
    username in addition to the opaque `sub`? It improves readability for access reviews but
    places PII in an immutable store. We currently omit it pending this decision.
-5. **Trace span names and span kinds.** Beyond `semp.attempt`, we intend to follow OTel HTTP
+4. **Trace span names and span kinds.** Beyond `semp.attempt`, we intend to follow OTel HTTP
    conventions. If your trace backend or trace-based SLOs key off specific span names or
    `SpanKind` values, tell us what you expect.
-6. **`outcome` vocabulary.** Does `success` / `error` / `panic` / `cancelled` cover what
-   your SIEM queries distinguish, or do you split these differently (for example a separate
-   `timeout`)?
+5. **The `outcome` / `error_type` split.** We have settled on three `outcome` values with the
+   cause in a separate `error_type` of ten values, rather than folding causes into `outcome`.
+   Does that split match how your SIEM queries distinguish failures, and do the ten
+   `error_type` values cover how you classify them? If you would separate something we have
+   merged — a `timeout` distinct from other errors, say — now is the time.
+6. **Authorization denials, which currently have no signal of their own.** A caller who
+   authenticates successfully and is then refused a privileged operation lands in
+   `outcome: error`, indistinguishable from a broker timeout or a malformed argument. There is
+   no `denied` outcome value and no authorization event type. Do your access reviews need
+   "show me every denied privileged attempt" as a clean query? Adding a value now is cheap;
+   adding one after the freeze is not.
+
+### Decided since the first draft
+
+Two items that appeared as open questions in the draft circulated on 2026-07-20 are now
+settled, so you do not need to spend review time on them:
+
+- **`server_address` and `broker` on SEMP metrics: we keep both.** They answer different
+  questions. `server_address` is the OTel-conventional host, which is what correlates this
+  service with everything else OTel-instrumented in your estate; `broker` is your configured
+  alias, which is what dashboards and alerts group by. Neither is redundant.
+- **`region` is now `cloud.region`.** See [Resource attributes](#resource-attributes).
 
 ---
 
