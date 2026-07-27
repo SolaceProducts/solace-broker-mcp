@@ -26,16 +26,21 @@ name: DCO
 # base ref's version runs. The change takes effect for pull requests opened
 # after it merges.
 #
-# Second consequence, and a useful one. When the repository requires approval
-# for fork pull request workflows ("Require approval for all outside
-# collaborators"), a `pull_request` run sits queued until a maintainer approves
-# it, so its checks show as *pending* rather than passing or failing. This gate
-# is exempt. Per GitHub's documentation: "Workflows triggered by
-# pull_request_target events are run in the context of the base branch. Since
-# the base branch is considered trusted, workflows triggered by these events
-# will always run, regardless of approval settings." So DCO reports a real
-# verdict on an outside contributor's first pull request without a maintainer
-# having to click anything, while the `pull_request` jobs in ci-pr.yaml wait.
+# Second consequence. When the repository requires approval for fork pull
+# request workflows ("Require approval for all outside collaborators"), this run
+# waits for a maintainer like any other. `pull_request_target` is NOT exempt —
+# checked against live data rather than the docs, which are ambiguous:
+# pulumi/examples and dotnet/runtime both have `pull_request_target` runs with
+# `conclusion=action_required`. That fails closed, since `action_required` is
+# not one of the conclusions GitHub counts as a passing required check, so the
+# gate still blocks. It does mean an outside contributor's first pull request
+# shows DCO as pending until a maintainer approves the run.
+#
+# Two properties keep attacker-controlled commit text in the log harmless, and a
+# change that breaks either one needs a fresh look: no later step consumes this
+# job's output, and the token stays `contents: read`. Given both, a commit
+# message that injects a workflow command can at worst print a misleading
+# annotation on its own pull request.
 
 on:
   pull_request_target:

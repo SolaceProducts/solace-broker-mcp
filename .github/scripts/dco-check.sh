@@ -28,12 +28,30 @@
 # Keeping a branch current with `git merge main` produces a commit git does not
 # sign off, and all of its content comes from commits checked in their own
 # right, so requiring a sign-off there would be friction with no control value.
-# A merge commit *can* carry content no parent has — conflict resolutions, and
-# an "evil merge" that simply adds files while merging. `git diff-tree --cc`
-# prints exactly those hunks, so a merge with a non-empty combined diff is
-# treated as a contribution and must be signed off (`git merge --signoff`).
-# Note that most DCO implementations, GitHub's DCO app included, exempt merges
-# unconditionally and are bypassable this way.
+# A merge commit *can* carry content no parent has — a conflict resolution, or an
+# "evil merge" that edits or adds files while merging. Those must be signed off
+# (`git merge --signoff`). Most DCO implementations, GitHub's DCO app included,
+# exempt merges unconditionally and are bypassable this way.
+#
+# The test is `git merge-tree`: recompute the merge of the two parents and
+# compare the resulting tree with the tree the merge commit actually recorded.
+# Equal means the committer added nothing the merge itself did not produce.
+#
+#   Rejected alternative: `git diff-tree --cc`. It is hunk-level with three lines
+#   of context, so two conflict-free changes landing two or three lines apart
+#   share a combined hunk and an ordinary `git merge main` gets flagged as
+#   merge-unique content. It also misses `git merge -s ours`, which discards the
+#   other parent's changes wholesale.
+#
+# Conservative in every uncertain case, because the cost of a false positive is
+# one `git merge --signoff` and the cost of a false negative is an uncovered
+# contribution: octopus merges (merge-tree takes exactly two parents), a
+# recomputation that conflicts, and git older than 2.38 all mean "sign it off".
+#
+# Explicit non-goal: a merge that only *removes* content another branch added
+# (`git merge -s ours` used as a revert) is a deletion, not a contribution. DCO
+# governs the right to contribute code, not the right to delete it. merge-tree
+# flags this case anyway, but do not read that as the control's purpose.
 #
 # Squash-merge safety: the repo's squash-message setting is COMMIT_MESSAGES, so
 # the individual commits' sign-off lines survive into the squashed commit on
@@ -85,12 +103,38 @@ fi
 # shellcheck disable=SC2086 # EXCLUDE_BASE_REF is a single rev or deliberately empty
 commits=$(git rev-list --no-merges "$HEAD_REV" "^${BASE_REV}" $EXCLUDE_BASE_REF)
 
+# `git merge-tree --write-tree` landed in git 2.38. Older git cannot recompute a
+# merge, so every merge is treated as content-bearing. Conservative on purpose.
+GIT_MAJOR=$(git --version | sed -E 's/[^0-9]*([0-9]+).*/\1/')
+GIT_MINOR=$(git --version | sed -E 's/[^0-9]*[0-9]+\.([0-9]+).*/\1/')
+if [ "$GIT_MAJOR" -gt 2 ] || { [ "$GIT_MAJOR" -eq 2 ] && [ "$GIT_MINOR" -ge 38 ]; }; then
+  CAN_RECOMPUTE_MERGES=yes
+else
+  CAN_RECOMPUTE_MERGES=no
+fi
+
+# True when the merge commit records a tree that recomputing the merge of its two
+# parents does not produce — i.e. the committer contributed something.
+merge_adds_content() {
+  local m="$1" parents recomputed
+  [ "$CAN_RECOMPUTE_MERGES" = yes ] || return 0
+
+  parents=$(git rev-list --parents -n1 "$m")
+  parents=${parents#* } # drop the commit's own sha, leaving its parents
+  [ "$(wc -w <<<"$parents")" -eq 2 ] || return 0
+
+  # A conflicted recomputation exits non-zero and tells us nothing about what the
+  # committer did by hand, so it counts as content.
+  recomputed=$(git merge-tree --write-tree "${m}^1" "${m}^2" 2>/dev/null) || return 0
+  [ "$recomputed" != "$(git rev-parse "${m}^{tree}")" ]
+}
+
 # Add back any merge commit that introduces content no parent has. Without this,
 # a PR consisting of a single merge commit that adds a file reports "nothing to
 # check" and passes with no sign-off anywhere in it.
 # shellcheck disable=SC2086 # as above
 for merge in $(git rev-list --merges "$HEAD_REV" "^${BASE_REV}" $EXCLUDE_BASE_REF); do
-  if [ -n "$(git diff-tree --cc --no-commit-id "$merge")" ]; then
+  if merge_adds_content "$merge"; then
     commits="${commits}"$'\n'"${merge}"
   fi
 done
@@ -103,7 +147,7 @@ if [ -z "${commits//[[:space:]]/}" ]; then
     exit 0
   fi
   if ! git diff --quiet "$BASE_REV" "$HEAD_REV"; then
-    echo "::error::This pull request changes files but contributes no commit that could carry a sign-off. Nothing here is covered by the Developer Certificate of Origin." >&2
+    echo "::error::This pull request changes files against '${BASE_REV}', but the only commits it adds are merge commits that carry no content of their own. Nothing in it is covered by a sign-off." >&2
     exit 1
   fi
   echo "No commits contributed by this PR — nothing to check."
@@ -163,8 +207,9 @@ while IFS= read -r sha; do
   echo "    author:    $(git show -s --format='%an <%ae>' "$sha")"
   echo "    committer: $(git show -s --format='%cn <%ce>' "$sha")"
   if [ "$(git rev-list --no-walk --count --merges "$sha")" -gt 0 ]; then
-    echo "    this is a merge commit that adds content no parent has, so it needs"
-    echo "    its own sign-off — redo it with \`git merge --signoff\`"
+    echo "    this merge records a result that re-merging its parents does not"
+    echo "    reproduce, so it contributes something of its own and needs a"
+    echo "    sign-off — redo it with \`git merge --signoff\`"
   fi
   found=$(signoff_lines "$sha")
   if [ -n "$found" ]; then

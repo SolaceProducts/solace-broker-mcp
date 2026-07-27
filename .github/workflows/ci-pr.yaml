@@ -29,6 +29,22 @@ jobs:
       # Vault address is injected from an org/repo secret, not committed to the repo.
       VAULT_URL: ${{ secrets.VAULT_URL }}
 
+  # The DCO gate itself runs from .github/workflows/dco.yaml on
+  # pull_request_target, which means it executes the *base ref's* script — so a
+  # PR that edits dco-check.sh never exercises its own version there. This job
+  # closes that gap: it is an ordinary `pull_request` test of the PR's copy. It
+  # enforces nothing (the gate does that); it catches a regression before merge.
+  dco_selftest:
+    name: DCO check self-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run the DCO check's self-test against this PR's version
+        run: .github/scripts/dco-check.test.sh
+
   changelog:
     name: CHANGELOG updated
     runs-on: ubuntu-latest

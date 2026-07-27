@@ -138,33 +138,36 @@ Navigate to: **Settings → Branches → Branch protection rules → Add rule**
 - ✅ **Do not allow bypassing the above settings** (enforces rules for admins too)
 - ⬜ Require signed commits (optional — GPG signing is separate from DCO)
 
-> **`DCO sign-off` is not optional.** It stands in for a contributor licence
-> agreement, so the repository is not covered until it is in the list above. A
-> check that is not required enforces nothing.
+> **`DCO sign-off` is not optional, and the exact string matters.** It stands in
+> for a contributor licence agreement, so the repository is not covered until it
+> is in the list above.
 >
-> Two distinct tampering routes, and what stops each:
+> Register the context exactly as **`DCO sign-off`** — the `name:` of the `dco`
+> job in `.github/workflows/dco.yaml`. It is a plain job, not a reusable-workflow
+> call, so it produces that one context with no ` / ` suffix. Verified from the
+> Checks API on this repo: the `changelog` job (id `changelog`, `name: CHANGELOG
+> updated`) surfaces as the context `CHANGELOG updated`, and the job id never
+> appears. Not yet verified on a live run of this workflow, because
+> `pull_request_target` runs the base ref's copy and the file is not on `main`
+> yet — **confirm the string against the first PR after it merges** with
+> `gh api repos/OWNER/REPO/commits/<head-sha>/check-runs --jq '.check_runs[].name'`.
 >
-> | Route | Defence |
-> |---|---|
-> | A pull request deletes the job | Required-status-check registration. The check never reports, and a required check that never reports blocks the merge. |
-> | A pull request edits the job (`if: false`, or `run: exit 0`) | The `pull_request_target` trigger on `.github/workflows/dco.yaml`. It runs the base ref's copy of the workflow and the script, so the pull request's version is never used. Without it, GitHub counts a conditionally skipped job as a *successful* required check. |
+> Why that paragraph is not pedantry: on this repo `FOSSA Scan` is required, but
+> the Checks API shows `FOSSA Scan` as *skipped* (the reusable-workflow caller)
+> while the real work reports as `FOSSA Scan / SCA Scan`, which is not required.
+> GitHub counts a skipped required check as satisfied, so that gate is decorative.
+> Requiring the wrong string here would do the same to DCO.
 >
-> Worth enabling alongside, though not a substitute for either: **Require review
-> from Code Owners** (see above), so a change to the gate itself cannot land
-> unreviewed.
+> **Rollout order: merge the PR first, then register the check.** Registering it
+> first deadlocks the PR that introduces it — `pull_request_target` runs the base
+> ref's workflows, so the check cannot report until the file is on `main`.
 >
-> **Interaction with fork workflow approval.** If you set *Require approval for
-> all outside collaborators* (Settings → Actions → General), the `pull_request`
-> jobs in `ci-pr.yaml` sit queued on an outside contributor's PR until a
-> maintainer approves the run, and their checks read **pending**, not failing.
-> `DCO sign-off` is exempt, because GitHub runs `pull_request_target` workflows
-> "in the context of the base branch … regardless of approval settings". It
-> reports a real verdict straight away.
->
-> The failure mode to avoid: seeing a *different* check stuck pending on a fork
-> PR, concluding the required-checks list is misconfigured, and dropping
-> `DCO sign-off` from it. That quietly removes the control. If a check is
-> pending on a fork PR, approve the workflow run; do not edit the required list.
+> If you set *Require approval for all outside collaborators* (Settings → Actions
+> → General), fork PR runs wait for a maintainer and their checks read **pending**
+> rather than failing. `pull_request_target` is not exempt from this. Pending
+> fails closed, so nothing slips through. The failure mode to avoid is concluding
+> the required-checks list is misconfigured and dropping `DCO sign-off` from it.
+> Approve the workflow run instead; do not edit the required list.
 
 **Rules applied to admins:**
 - ⬜ Allow admins to bypass (leave UNCHECKED - admins should follow same rules)

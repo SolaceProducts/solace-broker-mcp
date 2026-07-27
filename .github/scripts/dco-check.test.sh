@@ -230,7 +230,7 @@ r=$(evil_merge_repo evil_merge_alone)
 git -C "$r" merge -q --no-commit --no-ff main >/dev/null 2>&1 || true
 echo BACKDOOR >"$r/backdoor.txt"; git -C "$r" add backdoor.txt
 git -C "$r" commit -q -m "Merge branch 'main'"
-expect 1 "a merge commit cannot smuggle in unsigned content" "$r" "merge commit that adds content"
+expect 1 "a merge commit cannot smuggle in unsigned content" "$r" "re-merging its parents does not"
 
 r=$(evil_merge_repo evil_merge_beside_signed)
 content_commit "$r" g.txt "honest signed work
@@ -239,7 +239,7 @@ Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
 git -C "$r" merge -q --no-commit --no-ff main >/dev/null 2>&1 || true
 echo BACKDOOR >"$r/backdoor.txt"; git -C "$r" add backdoor.txt
 git -C "$r" commit -q -m "Merge branch 'main'"
-expect 1 "an evil merge beside a signed commit still fails" "$r" "merge commit that adds content"
+expect 1 "an evil merge beside a signed commit still fails" "$r" "re-merging its parents does not"
 
 r=$(evil_merge_repo evil_merge_signed)
 git -C "$r" merge -q --no-commit --no-ff main >/dev/null 2>&1 || true
@@ -292,6 +292,75 @@ commit "$r" "add a thing
 
 I keep forgetting the Signed-off-by: $ALICE_NAME <$ALICE_EMAIL> line."
 expect 1 "a sign-off mentioned mid-sentence does not count" "$r" "no Signed-off-by line found"
+
+# --- 13g. `git merge -s ours` is a contribution, not a free pass -------------
+# -s ours records the current branch's tree and discards the other parent's
+# changes. `git diff-tree --cc` reports nothing for it, which is why this check
+# recomputes the merge instead.
+r=$(evil_merge_repo ours_merge_alone)
+git -C "$r" merge -q -s ours --no-ff -m "Merge branch 'main' into feature" main
+expect 1 "a -s ours merge needs its own sign-off" "$r" "re-merging its parents does not"
+
+# --- 13h. an evil octopus merge fails ----------------------------------------
+# merge-tree takes exactly two parents, so octopus merges are always treated as
+# content-bearing rather than guessed at.
+r=$(new_repo octopus)
+base=$(git -C "$r" rev-parse HEAD)
+for b in oct1 oct2; do
+  git -C "$r" checkout -q -b "$b" "$base"
+  content_commit "$r" "$b.txt" "$b
+
+Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
+done
+git -C "$r" checkout -q main
+git -C "$r" merge -q --no-commit oct1 oct2 >/dev/null 2>&1 || true
+echo BACKDOOR >"$r/backdoor.txt"; git -C "$r" add backdoor.txt
+git -C "$r" commit -q -m "Octopus merge"
+expect 1 "an evil octopus merge fails" "$r" "1 of 3 commit(s)"
+
+# --- 13i. a head already contained in the base branch passes -----------------
+# Re-running the check after the PR merged must not turn red.
+r=$(new_repo already_merged)
+content_commit "$r" f.txt "landed work
+
+Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
+git -C "$r" update-ref refs/remotes/origin/main "$(git -C "$r" rev-parse HEAD)"
+expect 0 "a head already contained in the base branch passes" "$r" "already contained in the base branch"
+
+# --- 13j. an unresolvable BASE_SHA errors ------------------------------------
+r=$(new_repo bad_base)
+out=$(cd "$r" && BASE_SHA="0000000000000000000000000000000000000000" BASE_REF="main" \
+  HEAD_SHA="$(git rev-parse HEAD)" "$DCO_CHECK" 2>&1) && rc=0 || rc=$?
+if [ "$rc" -eq 1 ] && grep -qF "cannot resolve" <<<"$out"; then
+  printf 'ok  %s\n' "an unresolvable base errors instead of passing"
+  pass_count=$((pass_count + 1))
+else
+  printf '::error::SELF-TEST FAILED: an unresolvable base errors instead of passing (exit %s)\n' "$rc"
+  printf '%s\n' "$out" | sed 's/^/    | /'
+  fail_count=$((fail_count + 1))
+fi
+
+# --- 13k. the empty-range backstop fails closed ------------------------------
+# Range empty, no origin/<base> to fall back on, yet the head's tree differs from
+# the base. Contrived, because with merge-tree in place the earlier layers catch
+# the realistic cases — that is exactly why this last line of defence needs a
+# test of its own.
+r=$(new_repo empty_range_backstop)
+old=$(git -C "$r" rev-parse HEAD)
+content_commit "$r" f.txt "newer base commit
+
+Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
+newer=$(git -C "$r" rev-parse HEAD)
+out=$(cd "$r" && BASE_SHA="$newer" BASE_REF="no-such-branch" HEAD_SHA="$old" \
+  "$DCO_CHECK" 2>&1) && rc=0 || rc=$?
+if [ "$rc" -eq 1 ] && grep -qF "carry no content of their own" <<<"$out"; then
+  printf 'ok  %s\n' "the empty-range backstop fails closed"
+  pass_count=$((pass_count + 1))
+else
+  printf '::error::SELF-TEST FAILED: the empty-range backstop fails closed (exit %s)\n' "$rc"
+  printf '%s\n' "$out" | sed 's/^/    | /'
+  fail_count=$((fail_count + 1))
+fi
 
 # --- 14. an empty range passes -----------------------------------------------
 r=$(new_repo empty_range)

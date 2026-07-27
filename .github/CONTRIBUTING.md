@@ -262,10 +262,11 @@ checks, precisely:
   whose email matches that commit's own author or committer, compared
   case-insensitively. A sign-off copied along with someone else's commit does not
   count.
-- Merge commits are exempt while they only bring in existing commits, so
-  refreshing your branch with `git merge main` is fine. A merge that adds content
-  of its own — a conflict resolution, or files added during the merge — counts as
-  a contribution and needs its own sign-off (`git merge --signoff`).
+- Merge commits are exempt while re-merging their parents reproduces exactly what
+  they recorded, so refreshing your branch with `git merge main` is fine. A merge
+  that contributes something of its own — a conflict resolution, or files edited
+  or added during the merge — needs its own sign-off (`git merge --signoff`).
+  Octopus merges and merges the check cannot recompute always need one.
 - `Co-Authored-By:` trailers are ignored. Co-authors do not need their own
   sign-off.
 
@@ -273,10 +274,9 @@ The check reports the offending commits and the exact commands to fix them. Ther
 is no label or flag that skips it. Use your real name — no pseudonyms or
 anonymous contributions.
 
-If you are contributing from a fork, some of our CI jobs wait for a maintainer to
-approve the run and will show as **pending** on your first PR. That is normal and
-nothing for you to fix. `DCO sign-off` is not one of them: it runs straight away,
-so its result is always a real verdict on your commits.
+If you are contributing from a fork, our CI runs wait for a maintainer to approve
+them, so checks can sit **pending** on your first PR. That is normal and nothing
+for you to fix.
 
 ## Questions?
 
