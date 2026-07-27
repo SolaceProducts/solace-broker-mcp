@@ -88,7 +88,9 @@ not rename what is already there.
 Two independent versions are published, so your queries can pin to a version and detect drift:
 
 - `metrics_schema` (current: **1.0**), surfaced by the `mcp_schema_version` metric.
-- `audit_schema` (current: **1.0**), surfaced as the `audit_schema_version` field on every audit event.
+- `audit_schema` (current: **1.0**), surfaced as the `audit_schema_version` field on every audit
+  event **and** as a label on `mcp_schema_version`, so both versions are discoverable from a
+  scrape without ingesting audit events.
 
 Versioning is `MAJOR.MINOR`. A **minor** bump is additive and backward compatible (a new
 metric, a new audit field, a new `outcome` value). A **major** bump is reserved for a
@@ -102,7 +104,7 @@ avoid. Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_
 > _Status: **[Planned]**. The `/metrics` endpoint and instruments are not yet wired in the
 > build; the names, types, and labels below are the proposal under review._
 
-All metrics are served on the `/metrics` endpoint (Story 14) in Prometheus text exposition
+All metrics are served on the `/metrics` endpoint in Prometheus text exposition
 format, behind `OBS_METRICS_ENABLED`. One exception: the authentication-failure counter
 (`mcp_auth_failure_total`) has its own flag, `OBS_AUTH_FAILURE_COUNTER_ENABLED`. It defaults
 to whatever `OBS_METRICS_ENABLED` is, but can be set independently, so a security team can
