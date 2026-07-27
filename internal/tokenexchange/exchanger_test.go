@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache/cachetest"
 )
@@ -81,6 +82,44 @@ func TestNew_CacheNilRejected(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Cache") {
 		t.Errorf("error message should mention Cache, got: %v", err)
+	}
+}
+
+// TestNew_MaxHonoredRetryAfterNegativeRejected pins the runtime check that a
+// negative MaxHonoredRetryAfter is rejected outright rather than silently
+// absorbed as "use the default" — FromConfig's validateIdPRetryAfter already
+// rejects <= 0 at the YAML layer, so this guards direct Params construction
+// (tests, or any future caller bypassing FromConfig) from a value that
+// clampRetryAfter's own <= 0 fallback would otherwise mask.
+func TestNew_MaxHonoredRetryAfterNegativeRejected(t *testing.T) {
+	p := validParams(t)
+	p.MaxHonoredRetryAfter = -time.Second
+
+	ex, err := New(p)
+	if err == nil {
+		t.Fatal("expected error for negative MaxHonoredRetryAfter")
+	}
+	if ex != nil {
+		t.Errorf("expected nil Exchanger on error, got %#v", ex)
+	}
+	if !strings.Contains(err.Error(), "MaxHonoredRetryAfter") {
+		t.Errorf("error message should mention MaxHonoredRetryAfter, got: %v", err)
+	}
+}
+
+// TestNew_MaxHonoredRetryAfterZeroAccepted confirms zero is still legal —
+// it is the documented "use defaultMaxHonoredRetryAfter" sentinel, not an
+// error, only negative values are rejected.
+func TestNew_MaxHonoredRetryAfterZeroAccepted(t *testing.T) {
+	p := validParams(t)
+	p.MaxHonoredRetryAfter = 0
+
+	ex, err := New(p)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if ex == nil {
+		t.Fatal("expected non-nil Exchanger")
 	}
 }
 

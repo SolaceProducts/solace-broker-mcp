@@ -17,6 +17,7 @@ package tokenexchange
 import (
 	"errors"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
@@ -28,9 +29,9 @@ import (
 // instance per process, shared by all per-request goroutines.
 //
 // INVARIANT: every field is written once in New() and never mutated
-// afterward. Do not assign to any field from any method. Concurrency
-// safety depends on this — fields are read from hundreds of goroutines
-// without synchronization. The race detector enforces this at test time.
+// afterward, except gatedUntil (an atomic.Int64, safe by construction — see
+// raiseGate). Do not assign to any OTHER field from any method; the race
+// detector enforces this at test time.
 type Exchanger struct {
 	tokenURL         string
 	clientID         string
@@ -52,6 +53,15 @@ type Exchanger struct {
 	// for tests that don't opt in) — Exchange then calls the IdP directly
 	// while retries still apply.
 	breaker *gobreaker.CircuitBreaker[*Token]
+	// gatedUntil (nowFunc().UnixNano(); 0 = not gated) is a shared,
+	// process-wide backoff set on an exhausted 429 chain (see
+	// classifyRetryOutcome) and checked in runProtectedExchange. Deliberately
+	// NOT keyed per dedup-key or per-broker: it guards the same shared IdP
+	// the breaker does, so one broker's throttling paces back every other
+	// broker's calls too.
+	gatedUntil atomic.Int64
+	// maxHonoredRetryAfter caps the gate — see clampRetryAfter.
+	maxHonoredRetryAfter time.Duration
 }
 
 // New constructs an Exchanger from Params. The config validator
@@ -70,6 +80,15 @@ func New(p Params) (*Exchanger, error) {
 	}
 	if p.Cache == nil {
 		return nil, errors.New("tokenexchange: Cache is required")
+	}
+	// Zero is the documented "use defaultMaxHonoredRetryAfter" sentinel; a
+	// negative value has no meaning and would otherwise be silently absorbed
+	// by clampRetryAfter's <= 0 fallback, masking a caller bug (FromConfig's
+	// validateIdPRetryAfter already rejects <= 0 at the YAML layer, so this
+	// only guards direct Params construction — tests, or any future caller
+	// that bypasses FromConfig).
+	if p.MaxHonoredRetryAfter < 0 {
+		return nil, errors.New("tokenexchange: MaxHonoredRetryAfter must not be negative")
 	}
 
 	// Build the breaker up front so a bad config fails startup rather than
@@ -105,5 +124,7 @@ func New(p Params) (*Exchanger, error) {
 		cache:   p.Cache,
 		nowFunc: time.Now,
 		breaker: breaker,
+		// Zero resolves to the shipped default at the point of use (clampRetryAfter).
+		maxHonoredRetryAfter: p.MaxHonoredRetryAfter,
 	}, nil
 }

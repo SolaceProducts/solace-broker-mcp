@@ -19,7 +19,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -989,5 +991,167 @@ func TestParseSuccessBody_UnknownFieldsSilentlyIgnored(t *testing.T) {
 	}
 	if tok.Value != "tok" {
 		t.Errorf("tok.Value = %q, want %q", tok.Value, "tok")
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name      string
+		headers   []string
+		wantOK    bool
+		wantDelay time.Duration
+	}{
+		{
+			name:    "absent header",
+			headers: nil,
+			wantOK:  false,
+		},
+		{
+			name:    "empty header value",
+			headers: []string{""},
+			wantOK:  false,
+		},
+		{
+			name:      "delta-seconds",
+			headers:   []string{"120"},
+			wantOK:    true,
+			wantDelay: 120 * time.Second,
+		},
+		{
+			name:      "delta-seconds zero",
+			headers:   []string{"0"},
+			wantOK:    true,
+			wantDelay: 0,
+		},
+		{
+			name:      "delta-seconds negative floors to zero",
+			headers:   []string{"-30"},
+			wantOK:    true,
+			wantDelay: 0,
+		},
+		{
+			name:      "HTTP-date (RFC1123) in the future",
+			headers:   []string{now.Add(90 * time.Second).Format(http.TimeFormat)},
+			wantOK:    true,
+			wantDelay: 90 * time.Second,
+		},
+		{
+			name:      "HTTP-date in the past floors to zero",
+			headers:   []string{now.Add(-90 * time.Second).Format(http.TimeFormat)},
+			wantOK:    true,
+			wantDelay: 0,
+		},
+		{
+			name:      "HTTP-date exactly at now floors to zero",
+			headers:   []string{now.Format(http.TimeFormat)},
+			wantOK:    true,
+			wantDelay: 0,
+		},
+		{
+			name:    "unparseable garbage",
+			headers: []string{"not-a-number-or-a-date"},
+			wantOK:  false,
+		},
+		{
+			name:    "unparseable partial number",
+			headers: []string{"120s"},
+			wantOK:  false,
+		},
+		{
+			name:      "delta-seconds with surrounding whitespace",
+			headers:   []string{" 120 "},
+			wantOK:    true,
+			wantDelay: 120 * time.Second,
+		},
+		{
+			name:      "HTTP-date with surrounding whitespace",
+			headers:   []string{" " + now.Add(90*time.Second).Format(http.TimeFormat) + " "},
+			wantOK:    true,
+			wantDelay: 90 * time.Second,
+		},
+		{
+			name:      "delta-seconds at the overflow ceiling is still valid",
+			headers:   []string{strconv.FormatInt(maxExpiresInSeconds, 10)},
+			wantOK:    true,
+			wantDelay: time.Duration(maxExpiresInSeconds) * time.Second,
+		},
+		{
+			// A huge but syntactically valid int64 would overflow
+			// time.Duration(seconds)*time.Second and wrap to an arbitrary
+			// (possibly negative, possibly plausible-looking) duration if
+			// not bounded before the multiply. Must be rejected, not silently
+			// corrupted into a bogus delay.
+			name:    "delta-seconds beyond overflow ceiling is unparseable",
+			headers: []string{strconv.FormatInt(maxExpiresInSeconds+1, 10)},
+			wantOK:  false,
+		},
+		{
+			name:    "delta-seconds at math.MaxInt64 is unparseable, not a silent overflow",
+			headers: []string{strconv.FormatInt(math.MaxInt64, 10)},
+			wantOK:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := parseRetryAfter(tt.headers, now)
+			if got.ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v (result: %+v)", got.ok, tt.wantOK, got)
+			}
+			if !tt.wantOK {
+				return
+			}
+			if got.delay != tt.wantDelay {
+				t.Errorf("delay = %v, want %v", got.delay, tt.wantDelay)
+			}
+		})
+	}
+}
+
+func TestParseRetryAfter_RawPreservedForUnparseableHeader(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	got := parseRetryAfter([]string{"garbage-value"}, now)
+
+	if got.ok {
+		t.Fatalf("ok = true, want false for unparseable header")
+	}
+	if got.raw != "garbage-value" {
+		t.Errorf("raw = %q, want %q", got.raw, "garbage-value")
+	}
+}
+
+func TestParseRetryAfter_RawPreservesOriginalWhitespace(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	got := parseRetryAfter([]string{" 120 "}, now)
+
+	if !got.ok {
+		t.Fatalf("ok = false, want true")
+	}
+	if got.raw != " 120 " {
+		t.Errorf("raw = %q, want %q (untrimmed, for faithful logging)", got.raw, " 120 ")
+	}
+}
+
+// Matches go-retryablehttp's own parseRetryAfterHeader precedent of using headers[0].
+func TestParseRetryAfter_MultipleHeadersUsesFirst(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	got := parseRetryAfter([]string{"60", "120"}, now)
+
+	if !got.ok {
+		t.Fatalf("ok = false, want true")
+	}
+	if got.delay != 60*time.Second {
+		t.Errorf("delay = %v, want %v (first header value)", got.delay, 60*time.Second)
 	}
 }

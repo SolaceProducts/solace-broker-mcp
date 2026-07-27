@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/config"
 	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
@@ -61,16 +62,26 @@ func FromConfig(cfg *config.BrokerOAuthConfig, httpClient *http.Client, tokenCac
 	breakerCfg := resolveCircuitBreakerConfig(cfg.CircuitBreaker)
 
 	return New(Params{
-		TokenURL:         cfg.TokenURL,
-		ClientID:         cfg.ClientID,
-		ClientAuthMethod: authMethod,
-		ClientSecret:     secret,
-		GrantType:        grantType,
-		AudienceParam:    audienceParam,
-		HTTPClient:       httpClient,
-		Cache:            tokenCache,
-		CircuitBreaker:   breakerCfg,
+		TokenURL:             cfg.TokenURL,
+		ClientID:             cfg.ClientID,
+		ClientAuthMethod:     authMethod,
+		ClientSecret:         secret,
+		GrantType:            grantType,
+		AudienceParam:        audienceParam,
+		HTTPClient:           httpClient,
+		Cache:                tokenCache,
+		CircuitBreaker:       breakerCfg,
+		MaxHonoredRetryAfter: resolveMaxHonoredRetryAfter(cfg.RetryAfter),
 	})
+}
+
+// resolveMaxHonoredRetryAfter: omitted returns zero, which clampRetryAfter
+// reads as "use the shipped default".
+func resolveMaxHonoredRetryAfter(ra *config.IdPRetryAfterConfig) time.Duration {
+	if ra == nil || ra.MaxHonoredDuration == nil {
+		return 0
+	}
+	return *ra.MaxHonoredDuration
 }
 
 // resolveCircuitBreakerConfig overlays operator-set fields onto the shipped
