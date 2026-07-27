@@ -528,6 +528,73 @@ func TestRaiseGateOnExhaustedRateLimit_LogsGateClamped(t *testing.T) {
 	}
 }
 
+// TestRaiseGateOnExhaustedRateLimit_ZeroDelayLogsNothing covers a usable
+// Retry-After that floors to zero (e.g. "Retry-After: 0", or a past
+// HTTP-date already floored by parseRetryAfter) — raiseGate is a no-op for
+// delay <= 0, so logging "gate set"/"clamped" here would misrepresent a
+// gate that was never actually raised.
+func TestRaiseGateOnExhaustedRateLimit_ZeroDelayLogsNothing(t *testing.T) {
+	records, restore := captureLogs(t)
+	defer restore()
+
+	e, err := New(validParams(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	e.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	exchErr := &ExchangeError{
+		Sentinel:         ErrExchangeRetriesExhausted,
+		FailureClass:     FailureClassRateLimited,
+		RetryAfterResult: &retryAfterResult{delay: 0, ok: true},
+	}
+	e.raiseGateOnExhaustedRateLimit(exchErr, "broker-zero")
+
+	if e.gateCheck() {
+		t.Error("gateCheck() = true, want false — a zero delay must not raise the gate")
+	}
+	if rec := findLog(records(), "token exchange rate limited: honoring IdP Retry-After for all callers"); rec != nil {
+		t.Errorf("unexpectedly logged gate-set for a zero delay: %+v", rec)
+	}
+	if rec := findLog(records(), "token exchange Retry-After exceeded configured cap, clamping"); rec != nil {
+		t.Errorf("unexpectedly logged clamped for a zero delay: %+v", rec)
+	}
+}
+
+// TestRaiseGateOnExhaustedRateLimit_LosingCASLogsNothing covers a chain
+// whose Retry-After is genuinely positive but loses the CAS race to a
+// concurrent chain's already-later gatedUntil — raiseGate reports
+// raised=false in that case too, and must not log as if this chain's value
+// took effect.
+func TestRaiseGateOnExhaustedRateLimit_LosingCASLogsNothing(t *testing.T) {
+	records, restore := captureLogs(t)
+	defer restore()
+
+	e, err := New(validParams(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	e.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	// Pre-raise the gate further out than the chain below will request.
+	e.raiseGate(time.Hour)
+	preExistingUntil := e.gatedUntil.Load()
+
+	exchErr := &ExchangeError{
+		Sentinel:         ErrExchangeRetriesExhausted,
+		FailureClass:     FailureClassRateLimited,
+		RetryAfterResult: &retryAfterResult{delay: 5 * time.Second, ok: true},
+	}
+	e.raiseGateOnExhaustedRateLimit(exchErr, "broker-losing-cas")
+
+	if got := e.gatedUntil.Load(); got != preExistingUntil {
+		t.Errorf("gatedUntil = %d, want unchanged %d — a shorter delay must not shorten an already-later gate", got, preExistingUntil)
+	}
+	if rec := findLog(records(), "token exchange rate limited: honoring IdP Retry-After for all callers"); rec != nil {
+		t.Errorf("unexpectedly logged gate-set for a losing CAS: %+v", rec)
+	}
+}
+
 func TestRaiseGateOnExhaustedRateLimit_LogsGateNotSet_Absent(t *testing.T) {
 	records, restore := captureLogs(t)
 	defer restore()

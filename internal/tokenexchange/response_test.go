@@ -1059,6 +1059,18 @@ func TestParseRetryAfter(t *testing.T) {
 			headers: []string{"120s"},
 			wantOK:  false,
 		},
+		{
+			name:      "delta-seconds with surrounding whitespace",
+			headers:   []string{" 120 "},
+			wantOK:    true,
+			wantDelay: 120 * time.Second,
+		},
+		{
+			name:      "HTTP-date with surrounding whitespace",
+			headers:   []string{" " + now.Add(90*time.Second).Format(http.TimeFormat) + " "},
+			wantOK:    true,
+			wantDelay: 90 * time.Second,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1089,6 +1101,20 @@ func TestParseRetryAfter_RawPreservedForUnparseableHeader(t *testing.T) {
 	}
 	if got.raw != "garbage-value" {
 		t.Errorf("raw = %q, want %q", got.raw, "garbage-value")
+	}
+}
+
+func TestParseRetryAfter_RawPreservesOriginalWhitespace(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	got := parseRetryAfter([]string{" 120 "}, now)
+
+	if !got.ok {
+		t.Fatalf("ok = false, want true")
+	}
+	if got.raw != " 120 " {
+		t.Errorf("raw = %q, want %q (untrimmed, for faithful logging)", got.raw, " 120 ")
 	}
 }
 

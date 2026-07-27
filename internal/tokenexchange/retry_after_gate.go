@@ -46,19 +46,22 @@ func (e *Exchanger) clampRetryAfter(delay time.Duration) (clamped time.Duration,
 
 // raiseGate only ever extends the gate (CAS-max), never shortens it — a
 // shorter Retry-After from one chain must not clobber a longer one already
-// set by a concurrent chain.
-func (e *Exchanger) raiseGate(delay time.Duration) {
+// set by a concurrent chain. Returns the gate's actual resulting instant
+// and whether THIS call is what raised it (false if delay was non-positive,
+// or if a concurrent chain's later value already won) — callers use this
+// to avoid logging "gate set" when nothing was actually raised.
+func (e *Exchanger) raiseGate(delay time.Duration) (effectiveUntil time.Time, raised bool) {
 	if delay <= 0 {
-		return
+		return time.Time{}, false
 	}
 	newUntil := e.nowFunc().Add(delay).UnixNano()
 	for {
 		cur := e.gatedUntil.Load()
 		if newUntil <= cur {
-			return
+			return time.Unix(0, cur), false
 		}
 		if e.gatedUntil.CompareAndSwap(cur, newUntil) {
-			return
+			return time.Unix(0, newUntil), true
 		}
 	}
 }
@@ -85,8 +88,14 @@ func (e *Exchanger) raiseGateOnExhaustedRateLimit(err error, brokerAlias string)
 	}
 
 	delay, wasClamped := e.clampRetryAfter(exchErr.RetryAfterResult.delay)
-	e.raiseGate(delay)
-	until := e.nowFunc().Add(delay)
+	until, raised := e.raiseGate(delay)
+	if !raised {
+		// delay <= 0 (e.g. Retry-After: 0, or a past date parseRetryAfter
+		// already floored to zero) or a concurrent chain's later value
+		// already won — either way, nothing changed, so logging "gate set"
+		// or "clamped" here would be misleading.
+		return
+	}
 	if wasClamped {
 		logGateClamped(brokerAlias, exchErr.RetryAfterResult.delay, delay)
 	} else {

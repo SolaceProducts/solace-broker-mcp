@@ -613,3 +613,52 @@ first one in this area where the two zero-meanings actually collide, and
 it will collide again for any future config knob shaped the same way —
 worth checking explicitly next time rather than assuming the pointer
 pattern is automatically safe.
+
+### 9.6 Two bugs caught by Copilot's automated PR review — both real, both fixed
+
+Copilot's review of PR #221 flagged two issues, both confirmed by re-reading
+the actual code before fixing (not accepted on faith):
+
+**Whitespace not trimmed before parsing (`response.go`).** `parseRetryAfter`
+fed the raw header value directly to `strconv.ParseInt` and `http.ParseTime`
+without trimming. RFC 9110 §5.6.3 allows optional surrounding whitespace
+(OWS) around field values, and neither Go's header parsing nor
+`go-retryablehttp`'s own `parseRetryAfterHeader` (checked directly, no
+trimming there either) guarantees it's stripped before reaching us. A
+header like `"120 "` or `" Wed, 21 Oct ..."` would have been treated as
+unparseable, silently falling into the "gate not set" path — exactly the
+outcome the ticket says an IdP should NOT get punished with when it sent a
+perfectly valid header. Fixed by trimming into a separate `trimmed` local
+used only for the two parse attempts; `raw` (used for logging) stays
+untrimmed so the "gate not set — unparseable" log line still shows exactly
+what the IdP sent, unmodified.
+
+**`raiseGate` unconditionally logged "gate set"/"clamped" even when nothing
+was raised (`retry_after_gate.go`).** Two distinct ways this fired
+incorrectly: (1) a usable Retry-After that floors to a non-positive delay
+(`Retry-After: 0`, or a past HTTP-date `parseRetryAfter` already floored to
+zero) — `raiseGate`'s own `delay <= 0` guard made it a no-op, but
+`raiseGateOnExhaustedRateLimit` logged `logGateSet`/`logGateClamped`
+regardless; (2) a genuinely positive delay that loses the CAS-max race to a
+concurrent chain's already-later `gatedUntil` — the log line reported this
+chain's own (shorter, non-winning) delay and a locally recomputed
+`gated_until` as if it had taken effect, when the actual gate state came
+from the other chain. Both are logging-correctness bugs, not gating bugs —
+`raiseGate` itself was always doing the right thing; only the log calls sitting
+downstream of it were wrong. Fixed by changing `raiseGate`'s signature to
+return `(effectiveUntil time.Time, raised bool)` and gating the two log
+calls on `raised`, so "gate set"/"clamped" only ever fires when this call
+is what actually changed `gatedUntil`.
+
+Confirmed both fixes are covered by new tests, not just asserted: read
+every existing test in `retry_after_gate_test.go` and the `TestParseRetryAfter`
+table in `response_test.go` first to check none of them already exercised
+these paths (they didn't — the existing zero-delay test called `raiseGate`
+directly, never through `raiseGateOnExhaustedRateLimit`'s logging path, and
+no existing case combined a positive delay with a losing CAS). Added
+`TestParseRetryAfter_RawPreservesOriginalWhitespace` plus two new
+whitespace cases in the parsing table, and
+`TestRaiseGateOnExhaustedRateLimit_ZeroDelayLogsNothing` /
+`TestRaiseGateOnExhaustedRateLimit_LosingCASLogsNothing` for the logging fix
+— both fail against the pre-fix code (verified by reading the diff), so
+they're real regression guards, not vacuous additions.

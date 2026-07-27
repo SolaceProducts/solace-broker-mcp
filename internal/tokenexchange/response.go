@@ -195,15 +195,20 @@ func parseRetryAfter(headerValues []string, now time.Time) retryAfterResult {
 		return retryAfterResult{ok: false}
 	}
 	raw := headerValues[0]
+	// Field values may carry optional surrounding whitespace (RFC 9110
+	// §5.6.3); trim only for parsing so a proxy/library that fails to strip
+	// it doesn't make an otherwise-valid header look unparseable. raw itself
+	// stays untrimmed so logs faithfully reflect what the IdP actually sent.
+	trimmed := strings.TrimSpace(raw)
 
-	if seconds, err := strconv.ParseInt(raw, 10, 64); err == nil {
+	if seconds, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
 		if seconds < 0 {
 			return retryAfterResult{delay: 0, ok: true, raw: raw}
 		}
 		return retryAfterResult{delay: time.Duration(seconds) * time.Second, ok: true, raw: raw}
 	}
 
-	if when, err := http.ParseTime(raw); err == nil {
+	if when, err := http.ParseTime(trimmed); err == nil {
 		if delta := when.Sub(now); delta > 0 {
 			return retryAfterResult{delay: delta, ok: true, raw: raw}
 		}
