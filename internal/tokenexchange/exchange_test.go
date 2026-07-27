@@ -550,8 +550,9 @@ func TestExchange_ContextDeadlineExceededReturnsDeadlineError(t *testing.T) {
 // The cache hit never looked at ctx: otterTokenCache.Get takes
 // `_ context.Context`, so a cancelled caller was handed a live token. The
 // singleflight select is a second, much narrower instance — ctx.Done() and the
-// result channel are sibling cases, and Go picks uniformly at random when both
-// are ready — now closed by a re-check on the success branch.
+// result channel are sibling cases, which the Go spec resolves "via a uniform
+// pseudo-random selection" when both are ready — now closed by a re-check on
+// the success branch.
 //
 // Only the warm-cache subtest couples to the fix. A cache hit needs no
 // scheduling accident, so it returns a token on every run without the guard.
