@@ -93,6 +93,19 @@ expect 0 "signed commit passes" "$r" "signed off — OK"
 r=$(new_repo unsigned)
 commit "$r" "add a thing"
 expect 1 "unsigned commit fails" "$r" "no Signed-off-by line found"
+# A plain commit is not a merge, so none of the merge diagnostics may appear.
+# Weakening the not-a-merge guard in merge_content_reason otherwise tells someone
+# with an ordinary unsigned commit that re-merging its parents conflicts.
+out=$(cd "$r" && BASE_SHA="$(git rev-parse refs/remotes/origin/main)" BASE_REF=main \
+  HEAD_SHA="$(git rev-parse HEAD)" "$DCO_CHECK" 2>&1) || true
+if grep -qE "re-merging|octopus|merge --signoff" <<<"$out"; then
+  printf '::error::SELF-TEST FAILED: a plain commit was described with merge wording.\n'
+  printf '%s\n' "$out" | sed 's/^/    | /'
+  fail_count=$((fail_count + 1))
+else
+  printf 'ok  %s\n' "a plain commit is never described as a merge"
+  pass_count=$((pass_count + 1))
+fi
 
 # --- 3. one unsigned commit among signed ones fails --------------------------
 r=$(new_repo mixed)
@@ -382,6 +395,41 @@ r=$(conflict_merge_repo conflict_unsigned)
 git -C "$r" commit -q -m "Merge branch 'main' into feature"
 expect 1 "an unsigned conflict-resolution merge fails" "$r" "conflicts, so the check cannot tell"
 
+# The rebase advice must NOT be printed when a merge is among the offenders:
+# `git rebase --signoff` replays a merge's parents linearly and discards both the
+# merge and any conflict resolution in it.
+out=$(cd "$r" && BASE_SHA="$(git rev-parse refs/remotes/origin/main)" BASE_REF=main \
+  HEAD_SHA="$(git rev-parse HEAD)" "$DCO_CHECK" 2>&1) || true
+# Match the command block (indented, at line start), not the word "rebase" in the
+# warning prose that must also be present.
+if grep -qE '^[[:space:]]+git rebase --signoff' <<<"$out"; then
+  printf '::error::SELF-TEST FAILED: destructive rebase advice printed for a merge offender.\n'
+  printf '%s\n' "$out" | sed 's/^/    | /'
+  fail_count=$((fail_count + 1))
+elif ! grep -qF "Do NOT run" <<<"$out"; then
+  printf '::error::SELF-TEST FAILED: no warning against rebasing a branch containing merges.\n'
+  printf '%s\n' "$out" | sed 's/^/    | /'
+  fail_count=$((fail_count + 1))
+else
+  printf 'ok  %s\n' "no rebase advice when an offending commit is a merge"
+  pass_count=$((pass_count + 1))
+fi
+
+# ...and it must be printed, against the base rather than a HEAD~N the
+# contributor has to count, when every offender is an ordinary commit.
+r2=$(new_repo linear_rebase_advice)
+commit "$r2" "unsigned work"
+out=$(cd "$r2" && BASE_SHA="$(git rev-parse refs/remotes/origin/main)" BASE_REF=main \
+  HEAD_SHA="$(git rev-parse HEAD)" "$DCO_CHECK" 2>&1) || true
+if grep -qF "rebase --signoff $(git -C "$r2" rev-parse refs/remotes/origin/main)" <<<"$out"; then
+  printf 'ok  %s\n' "linear branches get rebase advice naming the base commit"
+  pass_count=$((pass_count + 1))
+else
+  printf '::error::SELF-TEST FAILED: linear branches get rebase advice naming the base commit.\n'
+  printf '%s\n' "$out" | sed 's/^/    | /'
+  fail_count=$((fail_count + 1))
+fi
+
 r=$(conflict_merge_repo conflict_signed)
 git -C "$r" commit -q -m "Merge branch 'main' into feature
 
@@ -497,7 +545,7 @@ fi
 r=$(new_repo actionable_message)
 commit "$r" "add a thing"
 expect 1 "failure output names the fix commands" "$r" "git commit --amend -s --no-edit"
-expect 1 "failure output names the rebase fix" "$r" "git rebase --signoff HEAD~N"
+expect 1 "failure output names the rebase fix" "$r" "git rebase --signoff"
 
 echo
 printf 'dco-check self-test: %d passed, %d failed\n' "$pass_count" "$fail_count"

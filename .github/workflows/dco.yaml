@@ -33,8 +33,10 @@ name: DCO
 # pulumi/examples and dotnet/runtime both have `pull_request_target` runs with
 # `conclusion=action_required`. That fails closed, since `action_required` is
 # not one of the conclusions GitHub counts as a passing required check, so the
-# gate still blocks. It does mean an outside contributor's first pull request
-# shows DCO as pending until a maintainer approves the run.
+# gate still blocks. It applies to *every* run from an outside collaborator, not
+# only their first, and `edited` above fires on title and body edits — so a
+# maintainer retitling a fork pull request flips DCO from green back to pending
+# until the new run is approved. That is expected, not a broken check.
 #
 # Two properties keep attacker-controlled commit text in the log harmless, and a
 # change that breaks either one needs a fresh look: no later step consumes this
@@ -52,6 +54,15 @@ on:
     # empty and DCO goes green, then retarget to main and merge unsigned
     # commits. Re-running on title and body edits is the cheap price.
     types: [opened, synchronize, reopened, edited]
+    # Scoped to main because check runs key on the head SHA, not the pull
+    # request. Two pull requests can share a head branch with different bases,
+    # so a green run from a PR targeting a throwaway branch would otherwise land
+    # on the SHA that a PR targeting main is judged by. Restricting the base
+    # removes that: no run is produced for the throwaway target at all. A PR
+    # against any other base gets no DCO report, so its required check never
+    # reports and the merge stays blocked — fail-closed. Add the branch here if
+    # the project starts taking pull requests against release branches.
+    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}

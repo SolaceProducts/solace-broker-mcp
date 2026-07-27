@@ -244,9 +244,15 @@ Signed-off-by: Your Name <your.email@example.com>
 # Amend the last commit
 git commit --amend -s --no-edit && git push --force-with-lease
 
-# Sign off all commits in your branch
-git rebase --signoff HEAD~N && git push --force-with-lease  # N = number of commits
+# Sign off all commits in your branch (main = the branch you opened the PR against)
+git rebase --signoff main && git push --force-with-lease
 ```
+
+**If your branch contains a merge commit, do not rebase.** `git rebase` replays a
+merge's parents as ordinary commits and throws the merge away, along with any
+conflict resolution in it. Amend the merge if it is at the tip
+(`git commit --amend -s --no-edit`), or re-create it with `git merge --signoff`.
+The CI output tells you which case you are in.
 
 `git commit -s` signs off with your `git config user.email`, which is also the
 address CI matches against, so make sure it is set to the one you mean to use.
@@ -274,9 +280,10 @@ The check reports the offending commits and the exact commands to fix them. Ther
 is no label or flag that skips it. Use your real name — no pseudonyms or
 anonymous contributions.
 
-If you are contributing from a fork, our CI runs wait for a maintainer to approve
-them, so checks can sit **pending** on your first PR. That is normal and nothing
-for you to fix.
+If you are contributing from a fork, every one of our CI runs waits for a
+maintainer to approve it, not just the one on your first push. So checks can sit
+**pending**, and a check that was green can go back to pending after the PR is
+retitled or edited. That is normal and nothing for you to fix.
 
 ## Questions?
 

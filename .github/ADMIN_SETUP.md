@@ -148,9 +148,12 @@ Navigate to: **Settings → Branches → Branch protection rules → Add rule**
 > | `DCO sign-off` | `dco.yaml` job `dco` | a sign-off on every commit the PR adds |
 > | `DCO check self-test` | `ci-pr.yaml` job `dco_selftest` | the gate's own logic still working |
 >
-> ⚠️ **If you rewrite this list, carry both rows over.** They are the whole
-> control. PR #220 replaces this section with a table of its own; whichever lands
-> second must keep these rows.
+> ⚠️ **If you rewrite this list, carry both rows over.** `DCO sign-off` *is* the
+> control; dropping it removes it. `DCO check self-test` is a regression guard for
+> trusted pull requests only — it runs on `pull_request`, so a fork can rewrite
+> the test in its own PR, which is exactly why the gate itself does not live
+> there. PR #220 replaces this section with a table of its own; whichever lands
+> second must keep both rows.
 >
 > Both strings are the jobs' `name:` values verbatim. They are plain jobs, not
 > reusable-workflow calls, so each produces exactly one context with no ` / `

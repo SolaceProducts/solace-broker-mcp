@@ -45,8 +45,10 @@
 #
 # Conservative in every uncertain case, because the cost of a false positive is
 # one `git merge --signoff` and the cost of a false negative is an uncovered
-# contribution: octopus merges (merge-tree takes exactly two parents), a
-# recomputation that conflicts, and git older than 2.38 all mean "sign it off".
+# contribution: octopus merges (merge-tree takes exactly two parents) and a
+# recomputation that conflicts both mean "sign it off". Git older than 2.38
+# cannot recompute a merge at all, and rather than silently weaken the test the
+# check refuses to run — see the version gate below.
 #
 # Explicit non-goal: a merge that only *removes* content another branch added
 # (`git merge -s ours` used as a revert) is a deletion, not a contribution. DCO
@@ -209,6 +211,7 @@ if [ -z "$failed" ]; then
 fi
 
 failed_count=$(grep -c . <<<"$failed")
+failed_merges=""
 echo "::error::${failed_count} of ${total} commit(s) in this pull request are missing a Developer Certificate of Origin sign-off."
 echo
 while IFS= read -r sha; do
@@ -216,7 +219,9 @@ while IFS= read -r sha; do
   echo "  $(git show -s --format='%h %s' "$sha")"
   echo "    author:    $(git show -s --format='%an <%ae>' "$sha")"
   echo "    committer: $(git show -s --format='%cn <%ce>' "$sha")"
-  case "$(merge_content_reason "$sha")" in
+  reason=$(merge_content_reason "$sha")
+  [ -z "$reason" ] || failed_merges=yes # decides which bulk fix is safe to print
+  case "$reason" in
     octopus)
       echo "    this is an octopus merge; the check cannot recompute a merge of more"
       echo "    than two parents, so it needs a sign-off of its own — redo it with"
@@ -252,9 +257,37 @@ Every commit needs a sign-off line carrying its own author (or committer) email:
 
   # only the most recent commit
   git commit --amend -s --no-edit && git push --force-with-lease
+EOF
 
-  # every commit this PR adds (N = the number of commits listed above)
-  git rebase --signoff HEAD~N && git push --force-with-lease
+# The bulk fix is `git rebase --signoff`, but rebase FLATTENS merge commits: it
+# replays their parents' commits linearly and throws the merge away, taking any
+# conflict resolution with it. Measured on a branch with one conflict-resolution
+# merge: 5 commits and the resolution before, 2 commits and conflict markers
+# after, worktree left mid-rebase. So the moment a merge is among the offenders,
+# that advice is destructive and must not be printed. Note this is true of any
+# upstream argument — `HEAD~N` and the base sha are equally unsafe here.
+if [ -n "$failed_merges" ]; then
+  cat <<EOF
+
+Do NOT run \`git rebase --signoff\` on this branch. Merge commits are among the
+commits listed above, and rebase would replay them as ordinary commits, throwing
+away the merge and any conflict resolution in it.
+
+  # a merge commit at the tip of your branch
+  git commit --amend -s --no-edit && git push --force-with-lease
+
+  # otherwise, re-create the merge so git signs it
+  git merge --signoff <the branch you merged>
+EOF
+else
+  cat <<EOF
+
+  # every commit this PR adds
+  git rebase --signoff ${BASE_REV} && git push --force-with-lease
+EOF
+fi
+
+cat <<'EOF'
 
 If the email above is not the one you meant to sign off with, set
 `git config user.email` first, then re-run. Adding the line certifies the
