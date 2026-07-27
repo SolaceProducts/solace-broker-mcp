@@ -144,10 +144,11 @@ The core Rate / Errors / Duration signal for every tool the server exposes.
   [`error_type`](#error_type). Empty on any non-error outcome.
 - Histogram buckets (seconds): `0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10`.
 
-**Cardinality:** `error_type` is non-empty only on the error path, so the observed series per
-`tool` and `broker` is `success (1) + cancelled (1) + error x 10 = 12`, not the 33 a naive
-product of the two label domains would suggest. All domains are finite (CI enforcement planned
-for GA).
+**Cardinality:** `error_type` is non-empty only on the error path, so the series per `tool` and
+`broker` is bounded at `success (1) + cancelled (1) + error x 10 = 12`, not the 33 a naive
+product of the two label domains would suggest. That 12 is the worst case once every outcome
+is emitted; until `cancelled` ships (see [The outcome vocabulary](#the-outcome-vocabulary)) you
+will observe 11. All domains are finite (CI enforcement planned for GA).
 
 ### SEMP requests (RED, per attempt)
 
