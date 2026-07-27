@@ -204,8 +204,8 @@ func allowedClientAuthMethods() []string {
 	}
 }
 
-// OAuth grant-type strings sent to the IdP token endpoint (Hop 2). V1 supports
-// only RFC 8693 token exchange; Entra OBO (jwt-bearer) is tracked as follow-up.
+// OAuth grant-type strings sent to the IdP token endpoint (Hop 2). Only
+// RFC 8693 token exchange is implemented.
 const (
 	// #nosec G101 -- public RFC 8693 grant-type URN, not a credential.
 	GrantTypeTokenExchange = "urn:ietf:params:oauth:grant-type:token-exchange" // RFC 8693
@@ -218,23 +218,26 @@ var validGrantTypes = []string{
 }
 
 // audience_param values: which OAuth request parameter carries the per-broker
-// audience value on the wire. The runtime uses this to drive its request-body
-// composition per IdP family (RFC 8693 / Entra OBO / RFC 8707). The schema
-// allowlist is open to all three even though V1 runtime support is limited;
-// see the decisions doc for why "schema-flexible, validator-strict" applies.
+// audience value on the wire. AudienceParamScope and AudienceParamResource
+// are declared for the tokenexchange package's resolveAudienceParam switch,
+// but are deliberately excluded from validAudienceParams below — see that
+// var's comment.
 const (
 	AudienceParamAudience = "audience" // RFC 8693 default
-	AudienceParamScope    = "scope"    // Entra OBO style (audience prefixed onto each scope)
-	AudienceParamResource = "resource" // RFC 8707 resource indicator style
+	AudienceParamScope    = "scope"
+	AudienceParamResource = "resource"
 )
 
 // validAudienceParams is the allowlist of audience-carrying parameter names
-// accepted by the schema. Membership here does not imply V1 runtime support
-// for that wire format — see the decisions doc.
+// accepted at config load. Only AudienceParamAudience — schema and runtime
+// support must land together: a value that validates here but isn't
+// implemented would move the failure from config load (joined with every
+// other broker_oauth error) to server startup once the Hop-2 runtime is
+// actually constructed, which only happens when Hop 1 is oauth AND
+// broker_oauth: is set AND a broker uses auth.mode: oauth — a worse and
+// later place for an operator to discover a typo-shaped mistake.
 var validAudienceParams = []string{
 	AudienceParamAudience,
-	AudienceParamScope,
-	AudienceParamResource,
 }
 
 // LogValue implements slog.LogValuer for BrokerOAuthConfig. It exposes the
@@ -1220,8 +1223,8 @@ func validateToolAuthorization(cfg *ServerConfig) []error {
 // the agent's Hop 1 token as the subject_token, so without Hop 1 OAuth
 // there is no subject_token to exchange and Hop 2 has nothing to do.
 //
-// Called unconditionally from validate() whenever any broker uses
-// auth.mode: oauth.
+// Called unconditionally from validate(); returns nil (no-op) unless at
+// least one broker uses auth.mode: oauth.
 func validateHop1Hop2Alignment(cfg *ServerConfig) error {
 	if cfg.MCPClientAuth.Mode == AuthModeOAuth {
 		return nil
@@ -1360,8 +1363,7 @@ func validateBrokerOAuthConfig(cfg *ServerConfig) []error {
 		errs = append(errs, fmt.Errorf("broker_oauth.grant_type is required (must be one of %v)", validGrantTypes))
 	} else if !slices.Contains(validGrantTypes, cfg.BrokerOAuth.GrantType) {
 		errs = append(errs, fmt.Errorf(
-			"broker_oauth.grant_type %q is not supported in this version (must be one of %v); "+
-				"other grant types (e.g. Entra OBO's jwt-bearer) are tracked as follow-up work",
+			"broker_oauth.grant_type %q is not supported in this version (must be one of %v)",
 			cfg.BrokerOAuth.GrantType, validGrantTypes))
 	}
 
@@ -1369,7 +1371,7 @@ func validateBrokerOAuthConfig(cfg *ServerConfig) []error {
 		errs = append(errs, fmt.Errorf("broker_oauth.audience_parameter_name is required (must be one of %v)", validAudienceParams))
 	} else if !slices.Contains(validAudienceParams, cfg.BrokerOAuth.AudienceParam) {
 		errs = append(errs, fmt.Errorf(
-			"broker_oauth.audience_parameter_name %q is invalid (must be one of %v)",
+			"broker_oauth.audience_parameter_name %q is not supported in this version (must be one of %v)",
 			cfg.BrokerOAuth.AudienceParam, validAudienceParams))
 	}
 

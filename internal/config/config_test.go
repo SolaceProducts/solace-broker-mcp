@@ -3076,6 +3076,54 @@ brokers:
 			wantErrSubstring: "broker_oauth.audience_parameter_name",
 		},
 		{
+			// scope (Entra OBO style) and resource (RFC 8707) are recognized
+			// concepts but not yet implemented at the wire-construction layer
+			// (internal/tokenexchange.resolveAudienceParam). Rejecting them
+			// here, at config load, means the failure is joined with every
+			// other broker_oauth error instead of only surfacing once the
+			// Hop-2 runtime is actually constructed at server startup.
+			name: "broker_oauth.audience_parameter_name scope — not yet implemented",
+			yaml: clientAuthBlock + `
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: scope
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: oauth
+      audience: solace-broker-prod
+`,
+			wantErr:          true,
+			wantErrSubstring: `broker_oauth.audience_parameter_name "scope" is not supported in this version`,
+		},
+		{
+			name: "broker_oauth.audience_parameter_name resource — not yet implemented",
+			yaml: clientAuthBlock + `
+broker_oauth:
+  idp_token_endpoint: "http://idp.example.com/token"
+  mcp_server_client_id: mcp-server
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: shhh
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: resource
+brokers:
+  prod:
+    url: "http://broker.example.com:8080"
+    auth:
+      mode: oauth
+      audience: solace-broker-prod
+`,
+			wantErr:          true,
+			wantErrSubstring: `broker_oauth.audience_parameter_name "resource" is not supported in this version`,
+		},
+		{
 			// Backwards-compatibility: a config without broker_oauth and no
 			// broker using oauth mode loads cleanly. This is the path every
 			// basic/bearer-only deployment is on today.
@@ -3175,7 +3223,7 @@ broker_oauth:
     client_secret_post:
       secret: shhh
   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
-  audience_parameter_name: scope
+  audience_parameter_name: audience
 brokers:
   prod:
     url: "http://broker.example.com:8080"
@@ -3200,8 +3248,8 @@ brokers:
 		if cfg.BrokerOAuth.ClientAuth.ClientSecretBasic != nil {
 			t.Error("expected ClientSecretBasic sub-block to be nil when post is configured")
 		}
-		if got, want := cfg.BrokerOAuth.AudienceParam, AudienceParamScope; got != want {
-			t.Errorf("AudienceParam = %q, want %q", got, want)
+		if got, want := cfg.BrokerOAuth.ClientAuth.ClientSecretPost.Secret, "shhh"; got != want {
+			t.Errorf("ClientSecretPost.Secret = %q, want %q", got, want)
 		}
 	})
 }
