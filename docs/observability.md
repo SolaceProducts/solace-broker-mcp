@@ -13,7 +13,7 @@
 > them until the corresponding signal ships.
 >
 > **Correlation IDs are the exception: they are implemented and on by default.** The
-> [Correlation ID](#correlation-id) section describes shipped behavior you can rely on
+> [Correlation ID](#correlation-id--implemented) section describes shipped behavior you can rely on
 > today.
 
 The Broker MCP Server is designed to emit three observability signals:
