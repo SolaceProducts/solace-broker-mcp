@@ -118,6 +118,23 @@ mcp_client_auth:
 # VPNs, queues, topic endpoints, REST delivery points) on the configured brokers.
 # enable_write_tools: false
 
+# Broker OAuth (Hop 2) — required only if one or more brokers below use
+# auth.mode: oauth instead of basic/bearer. The MCP server obtains each such
+# broker's token by exchanging the calling agent's Hop 1 token (RFC 8693
+# token exchange) against the identity provider, so this requires
+# mcp_client_auth.mode: oauth above. See docs/authentication.md's "Step 2b"
+# and docs/configuration.md's "Broker OAuth (Hop 2)" section for full details,
+# including the optional circuit_breaker and retry_after sub-blocks.
+#
+# broker_oauth:
+#   idp_token_endpoint: "https://idp.example.com/realms/your-realm/protocol/openid-connect/token"
+#   mcp_server_client_id: "mcp-server"     # separate client registration from Hop 1's issuer/audience above
+#   mcp_server_client_auth:
+#     client_secret_basic:                 # or client_secret_post — exactly one
+#       secret: "${MCP_SERVER_CLIENT_SECRET}"
+#   grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+#   audience_parameter_name: "audience"    # audience, scope, or resource
+
 # SEMP client settings — controls how the server talks to brokers.
 semp:
   max_concurrent_per_broker: 10
@@ -139,7 +156,9 @@ brokers:
     # you also set allow_insecure_broker_tls: true (top level) to accept the risk.
     insecure_skip_verify: false
     auth:
-      mode: basic           # basic or bearer
+      mode: basic           # basic, bearer, or oauth
       username: "${BROKER_USERNAME}"
       password: "${BROKER_PASSWORD}"
       # token: "${BROKER_TOKEN}"  # for bearer mode
+      # audience: "solace-broker-prod"  # for oauth mode; forwarded to the IdP during
+      #                                 # token exchange. Requires broker_oauth: above.
