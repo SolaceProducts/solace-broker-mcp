@@ -82,7 +82,7 @@ sam run
 
 ```
 Initialized MCPToolset for server: url='http://localhost:9090/mcp'
-Agent card tool manifest populated with 14 tools.
+Agent card tool manifest populated with 23 tools.
 Registered new agent 'SolaceBrokerAgent' in registry.
 ```
 
