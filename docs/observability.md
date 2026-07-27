@@ -4,8 +4,15 @@
 > trace schema for the Broker MCP Server. It is published for review **before** the names
 > freeze at GA. After GA we commit to only ever *adding* to this schema, never renaming, so
 > the time to change a name is now. See [How to give feedback](#how-to-give-feedback).
+>
+> **Nothing described here is emitted by the current build.** Only the feature flags exist
+> today: there is no `/metrics` handler, no audit emission, and no OTLP exporter. Every
+> section below is written in the present tense of the *proposed* design, because the design
+> is what you are being asked to review. Read it as a specification, not as a description of
+> a running system, and do not point a dashboard or SIEM query at it until the corresponding
+> signal ships.
 
-The Broker MCP Server emits three observability signals:
+Once implemented, the Broker MCP Server will emit three observability signals:
 
 - **Metrics**, on a Prometheus `/metrics` endpoint, for dashboards and alerts.
 - **An audit trail**, one JSON event per state-changing operation, for compliance evidence.
@@ -136,13 +143,21 @@ buckets, and whether `server_address` and `broker` are redundant for your querie
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
 | `mcp_broker_reachable` | Gauge (`1`/`0`) | `broker` | Solace |
-| `mcp_broker_unreachable_reason` | Gauge | `broker`, `reason` | Solace |
+| `mcp_broker_unreachable_reason` | Gauge (`1`/`0`) | `broker`, `reason` | Solace |
 
 - `mcp_broker_reachable` is set passively from the result of real calls; it is not a
   heartbeat. A broker is reported unreachable only after a real call fails, so a broker
   outage shows up here as a metric to alert on, not as a failed pod.
 - `reason` is a closed set: `credential_invalid` (a 401 from the broker), `unreachable`
   (connection refused, DNS failure, or I/O timeout), `broker_error` (any other non-2xx).
+- `mcp_broker_unreachable_reason` is **one-hot per broker**: at most one `reason` series
+  per broker is `1` at any moment, and every other `reason` for that broker is explicitly
+  `0`. All reasons for a broker are published once it has been seen, so a series never
+  disappears mid-incident and `max by (reason)` cannot straddle two causes. A broker that
+  is reachable has every `reason` at `0`.
+- Alert on `mcp_broker_reachable == 0` and use this gauge only to attribute the cause;
+  `mcp_broker_unreachable_reason == 1` is deliberately redundant with it rather than a
+  second, separately-timed source of truth.
 
 **Cardinality:** `|broker|` for the first metric; `|broker| x |reason|` for the second.
 
@@ -203,6 +218,7 @@ audit sub-stream to a dedicated SIEM index.
 | Field | Meaning | Type |
 |---|---|---|
 | `event` | Routing tag, always `audit` | string |
+| `audit_event_type` | Which kind of audit record this is; discriminate on this, not on `event` | string (closed set, below) |
 | `timestamp_utc` | When the event was recorded | RFC 3339 UTC |
 | `started_at` | When the call began | RFC 3339 UTC |
 | `duration_ms` | How long the call took | integer (ms) |
@@ -213,7 +229,13 @@ audit sub-stream to a dedicated SIEM index.
 | `outcome` | The result; see [The outcome vocabulary](#the-outcome-vocabulary) | string |
 | `arguments_hash` | SHA-256 over an RFC 8785 (JCS) canonicalization of the call arguments | hex string |
 | `correlation_id` | Join key to logs, traces, and the broker-side entry | string |
+| `reason` | Why the attempt failed; present on `auth_failure` only | string (closed set) |
 | `audit_schema_version` | The schema version, for query pinning | string (`1.0`) |
+
+**`audit_event_type`** is a closed set: `operation` (a state-changing tool call),
+`auth_success`, `auth_failure`, `broker_auth_retry`, and `audit_drop`. `tool`, `broker`,
+`outcome`, and `arguments_hash` are present on `operation` records; the authentication types
+carry the fields listed under [Authentication events](#authentication-events) instead.
 
 **`principal` identity.** The audit event records only `principal.sub`, the opaque OIDC
 subject of the human user. That subject is read once from the verified token and carried end
@@ -239,8 +261,17 @@ field:
 - `auth_failure`, carrying `reason` (same closed set as `mcp_auth_failure_total`).
 - `broker_auth_retry`, carrying `broker`, for a broker-side 401 and cookie-clear retry.
 
-This keeps authorization denials a distinct, queryable signal rather than folding them into
-a generic error, so a query like "show me every denied privileged attempt" stays clean.
+This keeps failed **authentication** a distinct, queryable signal rather than folding it
+into a generic error, so a query like "show me every rejected credential" stays clean.
+
+**Authorization is a different question, and the schema does not yet answer it.** These
+event types cover authentication only: who proved who they were, and who failed to. A
+caller who authenticates successfully and is then refused a privileged operation currently
+lands in an `operation` record with `outcome: error`, indistinguishable from a broker
+timeout or a malformed argument. There is no `denied` outcome and no authorization event
+type. If your access reviews need "show me every denied privileged attempt" as a clean
+query, say so in your feedback — this is the kind of gap the pilot is meant to catch, and
+it is cheaper to add a value now than after the GA freeze.
 
 ### Audit delivery
 
@@ -249,8 +280,14 @@ broker operation. The event rides the server's structured JSON log stream on std
 `"event": "audit"`; your log shipper filters on the tag and routes it.
 
 If the local sink backpressures, the event is **dropped rather than buffered**, and every
-drop is counted in `mcp_audit_events_dropped_total` and logged with `event=audit_drop`, so a
-gap is visible, never silent.
+drop is counted in `mcp_audit_events_dropped_total` and recorded as a JSON record carrying
+`"event": "audit"` and `"audit_event_type": "audit_drop"`, so a gap is visible, never
+silent.
+
+`"event"` stays constant at `"audit"` on every record, drops included, precisely so the one
+filter your shipper routes on cannot miss them — a drop notice that fell outside the audit
+stream would go unseen in exactly the situation it exists to report. Discriminate record
+kinds on `audit_event_type`, never on `event`.
 
 For guaranteed delivery, route the tagged stream to an acknowledged sink on your side (TCP
 syslog per RFC 5424, or a SIEM ingest endpoint such as Splunk HEC with indexer
