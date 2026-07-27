@@ -662,3 +662,32 @@ whitespace cases in the parsing table, and
 `TestRaiseGateOnExhaustedRateLimit_LosingCASLogsNothing` for the logging fix
 — both fail against the pre-fix code (verified by reading the diff), so
 they're real regression guards, not vacuous additions.
+
+### 9.7 A fourth review round found `New()` accepted a negative `MaxHonoredRetryAfter` unvalidated
+
+After the integer-overflow fix (§9.6) and a clean independent line-by-line
+review, a further review comment caught one more real gap: `New()`
+validates `HTTPClient`, `Cache`, and `CircuitBreaker`, but copied
+`Params.MaxHonoredRetryAfter` straight onto the `Exchanger` with no check
+at all. `clampRetryAfter`'s existing `ceiling <= 0` fallback (deliberately
+`<= 0`, not `== 0`, precisely because several existing tests construct
+`&Exchanger{...}` literals directly, bypassing `New()` entirely — checked
+via grep before deciding *not* to tighten it) means a negative value is
+silently treated the same as the documented "use the default" zero
+sentinel. The production config path can never produce this
+(`validateIdPRetryAfter` already rejects `<= 0` at the YAML layer,
+confirmed by re-reading it), so the actual exposure is narrower than it
+first sounds: a caller building `Params{}` directly — today, only tests;
+potentially a future non-config caller — could pass a negative value
+and never learn their input was nonsensical, because it would just quietly
+behave like zero.
+
+**Fix:** `New()` now rejects `MaxHonoredRetryAfter < 0` outright (zero
+still accepted, since it's the documented sentinel), mirroring the existing
+pattern of validating what the config layer's validator cannot see. Two new
+tests pin both sides: `TestNew_MaxHonoredRetryAfterNegativeRejected` and
+`TestNew_MaxHonoredRetryAfterZeroAccepted`, placed alongside the existing
+`TestNew_HTTPClientNilRejected`/`TestNew_CacheNilRejected` pair in
+`exchanger_test.go` rather than in the Retry-After-specific test files,
+since this is fundamentally a `New()` constructor-validation concern, not a
+gate-mechanism one.

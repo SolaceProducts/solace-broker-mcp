@@ -81,6 +81,15 @@ func New(p Params) (*Exchanger, error) {
 	if p.Cache == nil {
 		return nil, errors.New("tokenexchange: Cache is required")
 	}
+	// Zero is the documented "use defaultMaxHonoredRetryAfter" sentinel; a
+	// negative value has no meaning and would otherwise be silently absorbed
+	// by clampRetryAfter's <= 0 fallback, masking a caller bug (FromConfig's
+	// validateIdPRetryAfter already rejects <= 0 at the YAML layer, so this
+	// only guards direct Params construction — tests, or any future caller
+	// that bypasses FromConfig).
+	if p.MaxHonoredRetryAfter < 0 {
+		return nil, errors.New("tokenexchange: MaxHonoredRetryAfter must not be negative")
+	}
 
 	// Build the breaker up front so a bad config fails startup rather than
 	// surfacing on the first exchange. Nil config leaves breaker nil (disabled).
