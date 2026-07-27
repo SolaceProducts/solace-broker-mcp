@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -89,6 +90,12 @@ func TestSender_RetryUnsafe_TransportError_MarksErrorNonIdempotent(t *testing.T)
 	if exhausted.Err == nil {
 		t.Error("underlying transport cause was dropped — returning a sentinel from checkRetry " +
 			"would mask it, which is why the guard returns (false, nil)")
+	}
+	// The server-side log detail must not claim retries were exhausted when none
+	// were taken; Attempts is 1 here.
+	if msg := exhausted.Error(); strings.Contains(msg, "attempts:") {
+		t.Errorf("Error() still reports exhausted retries for a request that was never "+
+			"retried: %q", msg)
 	}
 }
 
