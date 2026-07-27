@@ -32,7 +32,7 @@ type redundancyResponse struct {
 	VirtualRouters                virtualRouters  `xml:"virtual-routers" json:"virtualRouters"`
 }
 
-// operStatus is the <oper-status> sub-element with mate-link health flags.
+// operStatus is the <oper-status> sub-element with mate-link status flags.
 type operStatus struct {
 	ADBLinkUp  bool `xml:"adb-link-up" json:"adbLinkUp"`
 	ADBHelloUp bool `xml:"adb-hello-up" json:"adbHelloUp"`
