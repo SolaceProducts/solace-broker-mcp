@@ -294,7 +294,7 @@ brokers:
 | `broker_oauth.grant_type` | The OAuth grant type used for the Hop 2 exchange — see [Grant type](#grant-type) below. |
 | `broker_oauth.audience_parameter_name` | Which request parameter carries the per-broker audience value — see [Audience parameter name](#audience-parameter-name) below. |
 | `brokers.<alias>.auth.mode` | Set to `oauth` to use token exchange for this broker. |
-| `brokers.<alias>.auth.audience` | Optional. This broker's audience value, forwarded to the IdP during exchange using whichever request parameter `audience_parameter_name` selects. Omit if the broker's OAuth profile does not validate audience. |
+| `brokers.<alias>.auth.audience` | Optional, even under `auth.mode: oauth` — omitting it does **not** fail startup. This broker's audience value, forwarded to the IdP during exchange using whichever request parameter `audience_parameter_name` selects; when omitted, the exchange request carries no audience parameter at all. Omit if the broker's OAuth profile does not validate audience; set it only if it does. If set, it must not be whitespace-only (a `${VAR}` resolving to blank fails config load). |
 
 The IdP needs a second client registration for the MCP server itself (distinct from the Hop 1 client in step 1.2) — a **confidential** client with a client secret, since the MCP server authenticates itself directly to the token endpoint rather than involving a browser. Grant it whatever token-exchange permissions your IdP requires (for Keycloak, enable the token-exchange feature for the client and permit it to exchange tokens for the target broker's audience).
 

@@ -80,7 +80,7 @@ Aliases must be 1–63 characters, contain only letters, digits, and hyphens, an
 | `auth.username` | — | Basic auth username. |
 | `auth.password` | — | Basic auth password. |
 | `auth.token` | — | Bearer token (used when `auth.mode: bearer`). |
-| `auth.audience` | — | Optional. RFC 8693 audience value for this broker, forwarded to the IdP during token exchange (used when `auth.mode: oauth`; requires the top-level `broker_oauth:` block — see [Broker OAuth (Hop 2)](#broker-oauth-hop-2) below). Omit when the broker's OAuth profile does not validate audience. |
+| `auth.audience` | — | Optional, even under `auth.mode: oauth` — omitting it does **not** fail config load or startup. RFC 8693 audience value for this broker, forwarded to the IdP during token exchange (requires the top-level `broker_oauth:` block — see [Broker OAuth (Hop 2)](#broker-oauth-hop-2) below). When omitted, the runtime sends the token-exchange request without an audience parameter at all. Omit when the broker's OAuth profile does not validate audience; set it only if the broker's OAuth profile does. If set, it must not be whitespace-only — a `${VAR}` that resolves to blank **does** fail config load. |
 | `insecure_skip_verify` | `false` | Skip TLS certificate verification. Development only. Under `mcp_client_auth.mode: oauth` (production) it is **refused at startup** unless `allow_insecure_broker_tls: true` is also set (see below). |
 
 Solace recommends using `https://` event broker URLs in production environments.
