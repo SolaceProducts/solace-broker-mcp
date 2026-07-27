@@ -164,10 +164,8 @@ start_oauth_server() {
         sleep 1
     fi
 
-    # ENABLE_UNRELEASED_BROKER_OAUTH gates broker-side OAuth support behind a
-    # feature flag. SSL_CERT_FILE is Go's stdlib override (crypto/x509, Linux)
-    # for the server's own outbound trust of Keycloak's self-signed cert.
-    ENABLE_UNRELEASED_BROKER_OAUTH=true \
+    # SSL_CERT_FILE is Go's stdlib override (crypto/x509, Linux) for the
+    # server's own outbound trust of Keycloak's self-signed cert.
     SSL_CERT_FILE="$KEYCLOAK_CERT" \
     CONFIG_FILE="$config_file" \
     ENV_FILE="$ENV_FILE" \
