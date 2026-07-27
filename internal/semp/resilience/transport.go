@@ -41,9 +41,14 @@ const expectContinueTimeout = 1 * time.Second
 // applied one layer down.
 const dialTimeoutCeiling = 10 * time.Second
 
-// dialKeepAlive matches http.DefaultTransport's dialer, enabling TCP keep-alive
-// probes on pooled connections so a silently dead peer is detected rather than
-// discovered on the next request.
+// dialKeepAlive matches http.DefaultTransport's dialer. Note what this does and
+// does not do: a zero-value net.Dialer already sends keep-alive probes, at Go's
+// 15s default (see net.Dialer.KeepAlive — only a negative value disables them),
+// so this does not turn anything on. It relaxes that idle interval to 30s. Both
+// values sit far inside idleConnTimeout, and on an active connection
+// ResponseHeaderTimeout bounds a stall long before probes conclude, so the
+// change is immaterial to pool hygiene; it is here for consistency with
+// DefaultTransport rather than for effect.
 const dialKeepAlive = 30 * time.Second
 
 // dialTimeout derives the TCP connect bound from the outer per-request timeout,
@@ -63,6 +68,22 @@ func dialTimeout(requestTimeout time.Duration) time.Duration {
 		return dialTimeoutCeiling
 	}
 	return min(dialTimeoutCeiling, requestTimeout/2)
+}
+
+// newSEMPDialer builds the transport's dialer. It exists so the dial bound is
+// observable at all: net.Dialer.Timeout cannot be read back off a DialContext
+// closure, so a test can otherwise only assert that DialContext is non-nil,
+// never what timeout it carries.
+//
+// This narrows the untested surface rather than eliminating it. A test can now
+// pin that a given requestTimeout yields a dialer with the derived Timeout, but
+// nothing can observe which argument NewTunedTransport actually passes — that
+// one expression stays guarded only by review.
+func newSEMPDialer(requestTimeout time.Duration) *net.Dialer {
+	return &net.Dialer{
+		Timeout:   dialTimeout(requestTimeout),
+		KeepAlive: dialKeepAlive,
+	}
 }
 
 // NewTunedTransport builds an *http.Transport sized for the per-broker
@@ -111,11 +132,8 @@ func dialTimeout(requestTimeout time.Duration) time.Duration {
 // TLSClientConfig.
 func NewTunedTransport(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig) *http.Transport {
 	return &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: brokerCfg.InsecureSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
-		DialContext: (&net.Dialer{
-			Timeout:   dialTimeout(sempCfg.RequestTimeoutDuration),
-			KeepAlive: dialKeepAlive,
-		}).DialContext,
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: brokerCfg.InsecureSkipVerify}, //nolint:gosec // G402 — user-configurable TLS skip for dev environments; defaults to false
+		DialContext:           newSEMPDialer(sempCfg.RequestTimeoutDuration).DialContext,
 		MaxConnsPerHost:       sempCfg.MaxConcurrentPerBroker,
 		MaxIdleConnsPerHost:   sempCfg.MaxConcurrentPerBroker,
 		MaxIdleConns:          sempCfg.MaxConcurrentPerBroker * 2,

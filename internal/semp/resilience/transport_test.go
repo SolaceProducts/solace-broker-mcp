@@ -139,6 +139,31 @@ func TestDialTimeout_DerivedFromRequestTimeout(t *testing.T) {
 	}
 }
 
+// TestNewSEMPDialer_CarriesTheDerivedBound asserts the derived value actually
+// reaches a dialer, which the table above cannot: net.Dialer.Timeout is not
+// readable back off a DialContext closure, so the transport-level tests can only
+// check that DialContext is non-nil.
+//
+// Honest limit: this pins the mapping from requestTimeout to dialer, not the
+// argument NewTunedTransport passes. Substituting a constant at that one call
+// site still passes this suite — verified by mutation — so that expression is
+// guarded by review, not by a test.
+func TestNewSEMPDialer_CarriesTheDerivedBound(t *testing.T) {
+	for _, requestTimeout := range []time.Duration{time.Minute, 10 * time.Second, 5 * time.Second, 0} {
+		d := newSEMPDialer(requestTimeout)
+		if want := dialTimeout(requestTimeout); d.Timeout != want {
+			t.Errorf("newSEMPDialer(%s).Timeout = %s, want the derived %s — the dialer must carry "+
+				"the value derived from the request timeout, not a constant", requestTimeout, d.Timeout, want)
+		}
+		if d.Timeout <= 0 {
+			t.Errorf("newSEMPDialer(%s).Timeout = %s; non-positive means an unbounded dial", requestTimeout, d.Timeout)
+		}
+		if d.KeepAlive != dialKeepAlive {
+			t.Errorf("newSEMPDialer(%s).KeepAlive = %s, want %s", requestTimeout, d.KeepAlive, dialKeepAlive)
+		}
+	}
+}
+
 // TestNewTunedTransport_DialContextHonorsCallerContext is the behavioural half:
 // it proves the wired dialer actually consults the caller's context, which is
 // what lets Sender.Do release its per-broker semaphore slot when the retry
