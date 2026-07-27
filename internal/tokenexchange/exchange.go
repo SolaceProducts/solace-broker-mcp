@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/idpclient"
 	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
@@ -55,44 +56,80 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	// return value). Doing Put outside would run it N times for N concurrent
 	// callers, producing N redundant writes and log lines.
 	//
-	// The success log stays OUTSIDE the func because it's per-caller
-	// observability: a caller that cancelled mid-exchange should not
-	// see "exchange succeeded" attributed to their request. The Put log
-	// is per-exchange and stays inside with the Put.
+	// DoChan (not Do) so each caller waits in its own select: a caller whose
+	// context is cancelled bails out immediately instead of blocking until
+	// the shared IdP round-trip finishes. DoChan also runs the func on a
+	// singleflight-owned goroutine, so the shared call — and its cache Put —
+	// completes independently of any caller's cancellation, warming the cache
+	// for the next caller even when every current caller has bailed.
+	//
+	// The success log stays on the result branch, not inside the func,
+	// because it's per-caller observability: a caller that cancelled
+	// mid-exchange must not see "exchange succeeded" attributed to its
+	// request. The Put log is per-exchange and stays inside with the Put.
 	start := e.nowFunc()
-	v, err, _ := e.group.Do(key, func() (interface{}, error) {
+	ch := e.group.DoChan(key, func() (_ interface{}, err error) {
+		// singleflight runs this on its OWN goroutine, which none of the
+		// request-path recover() nets cover — and DoChan re-raises an escaping
+		// panic via `go panic(e)`, which is unrecoverable and takes down the
+		// whole multi-session process. Recover here at the point of spawn, the
+		// same net safego.Go applies to errgroup workers (SOL-151514): convert
+		// a panic into an error so it flows back as res.Err. Log the panic's Go
+		// TYPE and stack, never its value, per the secure-logging rules.
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("recovered panic in token exchange",
+					slog.String("event", "panic_recovered"),
+					slog.String("broker", input.BrokerAlias),
+					slog.String("panic_type", fmt.Sprintf("%T", r)),
+					slog.String("stack", string(debug.Stack())))
+				err = fmt.Errorf("token exchange panicked (%T)", r)
+			}
+		}()
 		return e.runProtectedExchange(key, input)
 	})
-	elapsed := e.nowFunc().Sub(start)
 
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return nil, ctxErr
-	}
-	if err != nil {
-		// Map the breaker's open-state rejection (returned by Execute
-		// without the func running) onto our own sentinel before
-		// enrichment, so upper layers see ErrExchangeCircuitOpen rather
-		// than a raw gobreaker error.
-		err = mapCircuitOpen(err)
-		var exchErr *ExchangeError
-		if errors.As(err, &exchErr) {
-			enriched := *exchErr
-			enriched.BrokerAlias = input.BrokerAlias
-			enriched.Audience = input.Audience
-			enriched.TokenEndpoint = e.tokenURL
-			enriched.Elapsed = elapsed
-			return nil, &enriched
+	select {
+	case <-ctx.Done():
+		// The caller abandoned the exchange. The shared IdP call keeps running
+		// on singleflight's goroutine and will still warm the cache, so log
+		// here: a cancellation storm (callers bailing while detached calls keep
+		// hitting the IdP) is otherwise invisible, and this line correlates an
+		// abandoned caller with the later "token cache put" it leaves behind.
+		// broker alias and ctx.Err() text are safe to log; no token material.
+		slog.DebugContext(ctx, "token exchange abandoned by caller",
+			slog.String("broker", input.BrokerAlias),
+			slog.Duration("waited", e.nowFunc().Sub(start)),
+			slog.String("cause", ctx.Err().Error()))
+		return nil, ctx.Err()
+	case res := <-ch:
+		elapsed := e.nowFunc().Sub(start)
+		if res.Err != nil {
+			// Map the breaker's open-state rejection (returned by Execute
+			// without the func running) onto our own sentinel before
+			// enrichment, so upper layers see ErrExchangeCircuitOpen rather
+			// than a raw gobreaker error.
+			err := mapCircuitOpen(res.Err)
+			var exchErr *ExchangeError
+			if errors.As(err, &exchErr) {
+				enriched := *exchErr
+				enriched.BrokerAlias = input.BrokerAlias
+				enriched.Audience = input.Audience
+				enriched.TokenEndpoint = e.tokenURL
+				enriched.Elapsed = elapsed
+				return nil, &enriched
+			}
+			return nil, err
 		}
-		return nil, err
+
+		tok := res.Val.(*Token)
+
+		slog.DebugContext(ctx, "token exchange succeeded",
+			slog.String("broker", input.BrokerAlias),
+			slog.Duration("exchange_elapsed", elapsed))
+
+		return tok, nil
 	}
-
-	tok := v.(*Token)
-
-	slog.DebugContext(ctx, "token exchange succeeded",
-		slog.String("broker", input.BrokerAlias),
-		slog.Duration("exchange_elapsed", elapsed))
-
-	return tok, nil
 }
 
 // runProtectedExchange runs one logical exchange under the circuit breaker.
