@@ -567,40 +567,37 @@ A browser window opens on first use for user login. The IdP must support anonymo
 ```
  MCP Server     Cache          IdP            Broker
    │              │              │              │
-   │───── 9a ─────▶              │              │
-   ◀───── 9b ─────│              │              │
-   │──────────── 9c ─────────────▶              │
-   ◀──────────── 9d ─────────────│              │
-   │───── 9e ─────▶              │              │
-   │──────────────────── 10 ────────────────────▶
-   ◀──────────────────── 11 ────────────────────│
+   │───── 9a ─────▶              │              │       9a. Tool call arrives — look up a cached
+                                                            broker-bound token for this (agent,
+                                                            broker) pair
+   ◀───── 9b ─────│              │              │       9b. Cache miss
+   │──────────── 9c ─────────────▶              │       9c. RFC 8693 token exchange: subject_token
+                                                            = the agent's Hop 1 JWT, audience = this
+                                                            broker's configured auth.audience
+   ◀──────────── 9d ─────────────│              │       9d. Broker-bound access token
+   │───── 9e ─────▶              │              │       9e. Cache the access token just received
+                                                            from the IdP in 9d, keyed by (agent,
+                                                            broker), until it expires
+   │──────────────────── 10 ────────────────────▶       10. Tool call → SEMP with the broker-
+                                                            bound token as Authorization: Bearer
+   ◀──────────────────── 11 ────────────────────│       11. SEMP response
    │              │              │              │
 ```
-
-9a. Tool call arrives — look up a cached broker-bound token for this (agent, broker) pair
-9b. Cache miss
-9c. RFC 8693 token exchange: `subject_token` = the agent's Hop 1 JWT, audience = this broker's configured `auth.audience`
-9d. Broker-bound access token
-9e. Cache the token, keyed by (agent, broker), until it expires
-10. Tool call → SEMP with the broker-bound token as `Authorization: Bearer`
-11. SEMP response
 
 **Server→broker flow when `auth.mode: oauth` (Hop 2), cache hit:**
 
 ```
  MCP Server     Cache          Broker
    │              │              │
-   │───── 9a ─────▶              │
-   ◀───── 9b ─────│              │
-   │──────────── 10 ─────────────▶
-   ◀──────────── 11 ─────────────│
+   │───── 9a ─────▶              │                      9a. Tool call arrives — look up a cached
+                                                            broker-bound token for this (agent,
+                                                            broker) pair
+   ◀───── 9b ─────│              │                      9b. Cache hit — no IdP round-trip
+   │──────────── 10 ─────────────▶                      10. Tool call → SEMP with the cached
+                                                            token as Authorization: Bearer
+   ◀──────────── 11 ─────────────│                      11. SEMP response
    │              │              │
 ```
-
-9a. Tool call arrives — look up a cached broker-bound token for this (agent, broker) pair
-9b. Cache hit — no IdP round-trip
-10. Tool call → SEMP with the cached token as `Authorization: Bearer`
-11. SEMP response
 
 > **Cache key and lifetime.** The cache is keyed on the (agent identity, broker alias) pair, derived from the agent's Hop 1 `subject_token` — the same agent talking to two different brokers gets two independently cached tokens, and two different agents talking to the same broker never share one. An entry lives until the token it holds expires; there is no separate cache TTL setting. Concurrent tool calls that miss the cache for the same (agent, broker) pair at the same time are collapsed into a single IdP round-trip — only one exchange happens, and every caller shares its result. On a broker `401`, the SEMP transport evicts that pair's cached token and retries once with a freshly exchanged one (see [CHANGELOG](../CHANGELOG.md)); a persistently rejected credential still surfaces as a `401` after that single retry, not a loop.
 
