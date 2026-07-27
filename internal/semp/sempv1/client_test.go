@@ -40,7 +40,7 @@ func newTestClientWith(t *testing.T, srv *httptest.Server, authn auth.Authentica
 		RetryMaxInterval:       10 * time.Millisecond,
 	}
 
-	client, err := NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), authn, jar)
+	client, err := NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), resilience.NewRateLimiter(0), authn, jar)
 	if err != nil {
 		t.Fatalf("NewHTTPClient failed: %v", err)
 	}
@@ -520,7 +520,7 @@ func TestNewHTTPClient_TLSWiring(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewSafeCookieJar: %v", err)
 		}
-		client, err := NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), auth.NewBasicAuthenticator("user", "pass", jar), jar)
+		client, err := NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), resilience.NewRateLimiter(0), auth.NewBasicAuthenticator("user", "pass", jar), jar)
 		if err != nil {
 			t.Fatalf("NewHTTPClient: %v", err)
 		}
