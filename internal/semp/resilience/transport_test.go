@@ -15,6 +15,8 @@
 package resilience
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -23,15 +25,17 @@ import (
 )
 
 // TestNewTunedTransport_GranularTimeoutsAreSet locks in the production
-// timeout posture for outbound SEMP transports: TLSHandshakeTimeout,
-// ResponseHeaderTimeout, and ExpectContinueTimeout are all set, so a broker
-// stuck in handshake or one that accepts the connection then never sends
-// headers fails fast rather than holding a MaxConcurrentPerBroker semaphore
-// slot for the full client-level request timeout.
+// timeout posture for outbound SEMP transports: the TCP dial,
+// TLSHandshakeTimeout, ResponseHeaderTimeout, and ExpectContinueTimeout are
+// all bounded, so a broker that black-holes the connection attempt, stalls in
+// handshake, or accepts the connection then never sends headers fails fast
+// rather than holding a MaxConcurrentPerBroker semaphore slot for the full
+// client-level request timeout.
 //
-// ResponseHeaderTimeout is derived from sempCfg.RequestTimeoutDuration so the
-// "strictly less than the outer client timeout" relationship is preserved
-// even when an operator customizes request_timeout_duration in broker config.
+// The dial bound and ResponseHeaderTimeout are both derived from
+// sempCfg.RequestTimeoutDuration so the "strictly less than the outer client
+// timeout" relationship is preserved even when an operator customizes
+// request_timeout_duration in broker config.
 func TestNewTunedTransport_GranularTimeoutsAreSet(t *testing.T) {
 	brokerCfg := &config.BrokerConfig{
 		URL:                "https://broker.example.com:1943",
@@ -44,6 +48,15 @@ func TestNewTunedTransport_GranularTimeoutsAreSet(t *testing.T) {
 
 	tr := NewTunedTransport(brokerCfg, sempCfg)
 
+	// Without a DialContext the transport falls back to net/http's zeroDialer,
+	// which has no Timeout — so a broker whose network path silently drops SYNs
+	// stalls in connect() until the outer client timeout, holding its semaphore
+	// slot the whole time. That is the one connection phase the other granular
+	// timeouts below do not cover.
+	if tr.DialContext == nil {
+		t.Error("DialContext = nil; the transport falls back to net/http's unbounded zeroDialer, " +
+			"so a black-holed connection attempt holds a per-broker slot for the full request timeout")
+	}
 	if tr.TLSHandshakeTimeout != tlsHandshakeTimeout {
 		t.Errorf("TLSHandshakeTimeout = %s, want %s", tr.TLSHandshakeTimeout, tlsHandshakeTimeout)
 	}
@@ -78,6 +91,86 @@ func TestResponseHeaderTimeout_TracksOperatorConfiguredRequestTimeout(t *testing
 	}
 	if want := 5 * time.Second; tr.ResponseHeaderTimeout != want {
 		t.Errorf("ResponseHeaderTimeout = %s, want %s (half of operator-configured request timeout)", tr.ResponseHeaderTimeout, want)
+	}
+}
+
+// TestDialTimeout_DerivedFromRequestTimeout pins the derivation rather than a
+// hardcoded constant, for the same reason ResponseHeaderTimeout is derived: a
+// fixed 10s dial bound would never fire for an operator who sets
+// request_timeout_duration below it, silently restoring the unbounded-dial
+// exposure this fix removes.
+//
+// The zero case is not reachable in production — config.Load substitutes
+// DefaultSEMPRequestTimeoutDuration when the field is unset and validation
+// rejects a non-positive value — but a directly constructed SEMPConfig hits it
+// (see the TLS tests below), and there the dial bound is the only bound in play
+// because http.Client.Timeout is also zero. Falling back to the ceiling is
+// strictly safer than falling back to "unbounded".
+func TestDialTimeout_DerivedFromRequestTimeout(t *testing.T) {
+	tests := []struct {
+		name           string
+		requestTimeout time.Duration
+		want           time.Duration
+	}{
+		{"shipped default is capped by the ceiling", time.Minute, dialTimeoutCeiling},
+		{"well above the ceiling stays at the ceiling", 10 * time.Minute, dialTimeoutCeiling},
+		{"at twice the ceiling the halves meet", 20 * time.Second, dialTimeoutCeiling},
+		{"aggressive tuning derives below the ceiling", 10 * time.Second, 5 * time.Second},
+		{"very aggressive tuning derives further down", 5 * time.Second, 2500 * time.Millisecond},
+		{"unset falls back to the ceiling, not to unbounded", 0, dialTimeoutCeiling},
+		{"negative falls back to the ceiling", -1 * time.Second, dialTimeoutCeiling},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := dialTimeout(tt.requestTimeout)
+			if got != tt.want {
+				t.Errorf("dialTimeout(%s) = %s, want %s", tt.requestTimeout, got, tt.want)
+			}
+			if got <= 0 {
+				t.Errorf("dialTimeout(%s) = %s; a non-positive dial timeout means unbounded", tt.requestTimeout, got)
+			}
+			// The invariant that makes the bound useful at all.
+			if tt.requestTimeout > 0 && got >= tt.requestTimeout {
+				t.Errorf("dialTimeout(%s) = %s must be strictly less than the outer request timeout, "+
+					"or the outer timeout wins and the dial bound never fires", tt.requestTimeout, got)
+			}
+		})
+	}
+}
+
+// TestNewTunedTransport_DialContextHonorsCallerContext is the behavioural half:
+// it proves the wired dialer actually consults the caller's context, which is
+// what lets Sender.Do release its per-broker semaphore slot when the retry
+// budget or the caller's deadline fires mid-connect.
+//
+// An already-cancelled context is used deliberately. A real black-holed SYN is
+// not reproducible in a unit test, and probing a reserved address is
+// environment-dependent — an unroutable range may return ENETUNREACH promptly
+// on one machine and hang on another, which would make this test's outcome a
+// property of the network rather than of the code. Cancellation is exact.
+func TestNewTunedTransport_DialContextHonorsCallerContext(t *testing.T) {
+	tr := NewTunedTransport(&config.BrokerConfig{}, &config.SEMPConfig{
+		MaxConcurrentPerBroker: 10,
+		RequestTimeoutDuration: defaults.DefaultSEMPRequestTimeoutDuration,
+	})
+	if tr.DialContext == nil {
+		t.Fatal("DialContext = nil, want a bounded dialer")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// 192.0.2.1 is TEST-NET-1 (RFC 5737) and is never routed. With the context
+	// already cancelled the dialer must refuse before touching the network, so
+	// the address is never actually contacted and no timing assumption applies.
+	conn, err := tr.DialContext(ctx, "tcp", "192.0.2.1:1943")
+	if conn != nil {
+		conn.Close()
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("DialContext with a cancelled context returned %v, want context.Canceled — "+
+			"a dialer that ignores the caller's context would hold a per-broker slot past the deadline", err)
 	}
 }
 
