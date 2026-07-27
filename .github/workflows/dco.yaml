@@ -44,7 +44,14 @@ name: DCO
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened]
+    # `edited` is load-bearing, not padding. Retargeting a pull request's base
+    # branch fires `edited` (with `changes.base`), never `synchronize`, and the
+    # head sha does not move — so the check run produced against the OLD base
+    # survives, and branch protection judges by head sha. Without `edited`:
+    # open a pull request against a throwaway branch so the commit range is
+    # empty and DCO goes green, then retarget to main and merge unsigned
+    # commits. Re-running on title and body edits is the cheap price.
+    types: [opened, synchronize, reopened, edited]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
@@ -63,8 +70,10 @@ jobs:
       - name: Check out the base ref (this is what makes the gate untamperable)
         uses: actions/checkout@v4
         with:
-          # The check walks the pull request's commit range, so it needs real
-          # history rather than a shallow clone.
+          # fetch-depth: 0 does two load-bearing things: it gives the check real
+          # history instead of a shallow clone, and it fetches
+          # `+refs/heads/*:refs/remotes/origin/*`, which is where the script's
+          # `origin/<base>` exclusion comes from. Reducing this breaks both.
           fetch-depth: 0
       - name: Fetch the pull request's commits
         env:

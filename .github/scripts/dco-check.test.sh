@@ -301,31 +301,145 @@ r=$(evil_merge_repo ours_merge_alone)
 git -C "$r" merge -q -s ours --no-ff -m "Merge branch 'main' into feature" main
 expect 1 "a -s ours merge needs its own sign-off" "$r" "re-merging its parents does not"
 
-# --- 13h. an evil octopus merge fails ----------------------------------------
-# merge-tree takes exactly two parents, so octopus merges are always treated as
-# content-bearing rather than guessed at.
-r=$(new_repo octopus)
-base=$(git -C "$r" rev-parse HEAD)
-for b in oct1 oct2; do
-  git -C "$r" checkout -q -b "$b" "$base"
-  content_commit "$r" "$b.txt" "$b
+# --- 13h. a genuine octopus merge always needs a sign-off --------------------
+# merge-tree takes exactly two parents, so the check cannot recompute an octopus
+# and refuses to guess. The fixture asserts three parents: merging from `main`
+# would fast-forward to the first branch and quietly produce a 2-parent commit,
+# which would make this a duplicate of 13b rather than octopus coverage.
+octopus_repo() {
+  local r; r=$(new_repo "$1")
+  local base; base=$(git -C "$r" rev-parse HEAD)
+  local b
+  for b in oct1 oct2; do
+    git -C "$r" checkout -q -b "$b" "$base"
+    content_commit "$r" "$b.txt" "$b
 
 Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
-done
-git -C "$r" checkout -q main
-git -C "$r" merge -q --no-commit oct1 oct2 >/dev/null 2>&1 || true
-echo BACKDOOR >"$r/backdoor.txt"; git -C "$r" add backdoor.txt
-git -C "$r" commit -q -m "Octopus merge"
-expect 1 "an evil octopus merge fails" "$r" "1 of 3 commit(s)"
+  done
+  git -C "$r" checkout -q -b feature "$base"
+  content_commit "$r" feature.txt "feature work
+
+Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
+  printf '%s' "$r"
+}
+
+assert_parents() {
+  local r="$1" want="$2" got
+  got=$(git -C "$r" rev-list --parents -n1 HEAD | wc -w | tr -d ' ')
+  got=$((got - 1))
+  [ "$got" -eq "$want" ] && return 0
+  printf '::error::SELF-TEST FAILED: fixture built %s parents, expected %s — the case no longer tests what it claims.\n' "$got" "$want"
+  fail_count=$((fail_count + 1))
+  return 1
+}
+
+r=$(octopus_repo octopus_clean)
+git -C "$r" merge -q --no-ff -m "Octopus merge" oct1 oct2 >/dev/null 2>&1
+if assert_parents "$r" 3; then
+  expect 1 "an unsigned octopus merge fails even when clean" "$r" "octopus merge"
+fi
+
+r=$(octopus_repo octopus_signed)
+git -C "$r" merge -q --no-ff -m "Octopus merge
+
+Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>" oct1 oct2 >/dev/null 2>&1
+if assert_parents "$r" 3; then
+  expect 0 "a signed octopus merge passes" "$r" "signed off — OK"
+fi
+
+# --- 13h2. a conflict resolution is a contribution ---------------------------
+# The most-travelled path in practice: merge main, hit a conflict, resolve it.
+# Re-merging the parents conflicts, so the check cannot see what was resolved by
+# hand and must require a sign-off.
+conflict_merge_repo() {
+  local r; r=$(new_repo "$1")
+  local base; base=$(git -C "$r" rev-parse HEAD)
+  printf 'l1\nl2\nl3\n' >"$r/c.txt"
+  git -C "$r" add c.txt
+  git -C "$r" commit -q -m "seed c.txt
+
+Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
+  git -C "$r" update-ref refs/remotes/origin/main "$(git -C "$r" rev-parse HEAD)"
+  git -C "$r" checkout -q -b feature
+  printf 'l1\nFEATURE\nl3\n' >"$r/c.txt"
+  git -C "$r" commit -q -am "feature edit
+
+Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
+  git -C "$r" checkout -q main
+  printf 'l1\nMAIN\nl3\n' >"$r/c.txt"
+  git -C "$r" commit -q -am "main edit
+
+Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
+  git -C "$r" update-ref refs/remotes/origin/main "$(git -C "$r" rev-parse HEAD)"
+  git -C "$r" checkout -q feature
+  git -C "$r" merge --no-ff main >/dev/null 2>&1 || true
+  printf 'l1\nRESOLVED-BY-HAND\nl3\n' >"$r/c.txt"
+  git -C "$r" add c.txt
+  printf '%s' "$r"
+}
+
+r=$(conflict_merge_repo conflict_unsigned)
+git -C "$r" commit -q -m "Merge branch 'main' into feature"
+expect 1 "an unsigned conflict-resolution merge fails" "$r" "conflicts, so the check cannot tell"
+
+r=$(conflict_merge_repo conflict_signed)
+git -C "$r" commit -q -m "Merge branch 'main' into feature
+
+Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
+expect 0 "a signed conflict-resolution merge passes" "$r" "signed off — OK"
+
+# --- 13h3. base-branch merges are not attributed to the PR -------------------
+# main carries content-bearing merges of its own (this repo's main has 14 that
+# nobody signed off). BASE_SHA is a snapshot from when the event fired, so a
+# merge that landed on main afterwards is excluded only by origin/<base>. Drop
+# that exclusion from the merge re-add loop and every PR refreshing from main
+# fails, citing somebody else's merge commit. The base snapshot below is
+# deliberately older than the merge so origin/main is the only thing excluding it.
+r=$(conflict_merge_repo base_merge_not_attributed)
+git -C "$r" commit -q -m "Merge branch 'main' into feature"   # unsigned, on purpose
+merge_on_main=$(git -C "$r" rev-parse HEAD)
+snapshot=$(git -C "$r" rev-parse HEAD~1)                      # base.sha as captured earlier
+git -C "$r" checkout -q -B main "$merge_on_main"
+git -C "$r" update-ref refs/remotes/origin/main "$merge_on_main"
+git -C "$r" checkout -q -b later "$snapshot"
+content_commit "$r" mine.txt "my own signed work
+
+Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
+git -C "$r" merge -q --no-ff -m "Merge branch 'main' into later
+
+Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>" main >/dev/null 2>&1
+out=$(cd "$r" && BASE_SHA="$snapshot" BASE_REF="main" HEAD_SHA="$(git rev-parse HEAD)" \
+  "$DCO_CHECK" 2>&1) && rc=0 || rc=$?
+if [ "$rc" -eq 0 ]; then
+  printf 'ok  %s\n' "an unsigned content-bearing merge already on the base branch is not attributed to the PR"
+  pass_count=$((pass_count + 1))
+else
+  printf '::error::SELF-TEST FAILED: an unsigned content-bearing merge already on the base branch is not attributed to the PR (exit %s)\n' "$rc"
+  printf '%s\n' "$out" | sed 's/^/    | /'
+  fail_count=$((fail_count + 1))
+fi
 
 # --- 13i. a head already contained in the base branch passes -----------------
-# Re-running the check after the PR merged must not turn red.
+# Re-running the check after the PR merged must not turn red. The head is left
+# strictly BEHIND origin/main so the trees differ: with the head equal to the
+# base tip the diff would be empty and the backstop below would be satisfied
+# either way, which would stop this case from pinning the ancestry direction.
 r=$(new_repo already_merged)
+old=$(git -C "$r" rev-parse HEAD)
 content_commit "$r" f.txt "landed work
 
 Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
-git -C "$r" update-ref refs/remotes/origin/main "$(git -C "$r" rev-parse HEAD)"
-expect 0 "a head already contained in the base branch passes" "$r" "already contained in the base branch"
+newer=$(git -C "$r" rev-parse HEAD)
+git -C "$r" update-ref refs/remotes/origin/main "$newer"
+out=$(cd "$r" && BASE_SHA="$newer" BASE_REF="main" HEAD_SHA="$old" "$DCO_CHECK" 2>&1) && rc=0 || rc=$?
+if [ "$rc" -eq 0 ] && grep -qF "already contained in the base branch" <<<"$out"; then
+  printf 'ok  %s\n' "a head already contained in the base branch passes"
+  pass_count=$((pass_count + 1))
+else
+  printf '::error::SELF-TEST FAILED: a head already contained in the base branch passes (exit %s)\n' "$rc"
+  printf '%s\n' "$out" | sed 's/^/    | /'
+  fail_count=$((fail_count + 1))
+fi
 
 # --- 13j. an unresolvable BASE_SHA errors ------------------------------------
 r=$(new_repo bad_base)

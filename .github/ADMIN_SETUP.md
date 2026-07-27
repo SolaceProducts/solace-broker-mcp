@@ -134,39 +134,57 @@ Navigate to: **Settings → Branches → Branch protection rules → Add rule**
     - `e2e`
     - `e2e-oauth`
     - `DCO sign-off`
+    - `DCO check self-test`
 - ✅ **Require conversation resolution before merging**
 - ✅ **Do not allow bypassing the above settings** (enforces rules for admins too)
 - ⬜ Require signed commits (optional — GPG signing is separate from DCO)
 
-> **`DCO sign-off` is not optional, and the exact string matters.** It stands in
-> for a contributor licence agreement, so the repository is not covered until it
-> is in the list above.
+> **The two DCO contexts are not optional, and the exact strings matter.** DCO
+> stands in for a contributor licence agreement, so the repository is not covered
+> until both are registered. A check that is not required enforces nothing.
 >
-> Register the context exactly as **`DCO sign-off`** — the `name:` of the `dco`
-> job in `.github/workflows/dco.yaml`. It is a plain job, not a reusable-workflow
-> call, so it produces that one context with no ` / ` suffix. Verified from the
-> Checks API on this repo: the `changelog` job (id `changelog`, `name: CHANGELOG
-> updated`) surfaces as the context `CHANGELOG updated`, and the job id never
-> appears. Not yet verified on a live run of this workflow, because
-> `pull_request_target` runs the base ref's copy and the file is not on `main`
-> yet — **confirm the string against the first PR after it merges** with
-> `gh api repos/OWNER/REPO/commits/<head-sha>/check-runs --jq '.check_runs[].name'`.
+> | Check | Source | Gates on |
+> |-------|--------|----------|
+> | `DCO sign-off` | `dco.yaml` job `dco` | a sign-off on every commit the PR adds |
+> | `DCO check self-test` | `ci-pr.yaml` job `dco_selftest` | the gate's own logic still working |
 >
-> Why that paragraph is not pedantry: on this repo `FOSSA Scan` is required, but
-> the Checks API shows `FOSSA Scan` as *skipped* (the reusable-workflow caller)
-> while the real work reports as `FOSSA Scan / SCA Scan`, which is not required.
-> GitHub counts a skipped required check as satisfied, so that gate is decorative.
-> Requiring the wrong string here would do the same to DCO.
+> ⚠️ **If you rewrite this list, carry both rows over.** They are the whole
+> control. PR #220 replaces this section with a table of its own; whichever lands
+> second must keep these rows.
 >
-> **Rollout order: merge the PR first, then register the check.** Registering it
-> first deadlocks the PR that introduces it — `pull_request_target` runs the base
-> ref's workflows, so the check cannot report until the file is on `main`.
+> Both strings are the jobs' `name:` values verbatim. They are plain jobs, not
+> reusable-workflow calls, so each produces exactly one context with no ` / `
+> suffix. Verified from the Checks API on this repo: the `changelog` job (id
+> `changelog`, `name: CHANGELOG updated`) surfaces as the context `CHANGELOG
+> updated`, and the job id never appears. Not yet verified on a live run of
+> `dco.yaml`, because `pull_request_target` runs the base ref's copy and the file
+> is not on `main` yet — **confirm both strings against the first PR after it
+> merges**:
+> `gh api repos/OWNER/REPO/commits/<head-sha>/check-runs --jq '.check_runs[].name'`
+>
+> Why the exact string matters: `FOSSA Scan` is required today and enforces
+> nothing. Two different workflows name a job `FOSSA Scan`, and on a pull request
+> the one that reports is `build-and-test.yml`'s, which is gated on `push` to the
+> default branch and therefore reports **skipped**. GitHub counts a skipped
+> required check as satisfied. The scan that actually runs on pull requests
+> reports as `FOSSA Scan / SCA Scan` and is not required. Requiring the wrong
+> string would make DCO decorative in exactly the same way.
+>
+> `DCO check self-test` needs to be required for a different reason: the gate runs
+> the *base ref's* copy of the script, so a PR that breaks `dco-check.sh` shows the
+> self-test red and the gate green. Unless the self-test blocks, that PR merges and
+> the gate is broken for everything after it.
+>
+> **Rollout order: merge the PR first, then register the checks.** Registering
+> `DCO sign-off` first deadlocks the PR that introduces it —
+> `pull_request_target` runs the base ref's workflows, so the check cannot report
+> until the file is on `main`.
 >
 > If you set *Require approval for all outside collaborators* (Settings → Actions
 > → General), fork PR runs wait for a maintainer and their checks read **pending**
 > rather than failing. `pull_request_target` is not exempt from this. Pending
 > fails closed, so nothing slips through. The failure mode to avoid is concluding
-> the required-checks list is misconfigured and dropping `DCO sign-off` from it.
+> the required-checks list is misconfigured and dropping a DCO row from it.
 > Approve the workflow run instead; do not edit the required list.
 
 **Rules applied to admins:**
@@ -267,7 +285,7 @@ GitHub Rulesets are the new way to configure branch protection (more flexible th
 - Bypass: Nobody (or specific users/teams)
 - Rules:
   - Require pull request with 1 approval
-  - Require status checks: build, lint, e2e, e2e-oauth, `DCO sign-off`
+  - Require status checks: build, lint, e2e, e2e-oauth, `DCO sign-off`, `DCO check self-test`
   - Block force pushes
   - Block deletions
 

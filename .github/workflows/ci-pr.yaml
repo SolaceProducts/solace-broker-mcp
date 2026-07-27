@@ -32,8 +32,13 @@ jobs:
   # The DCO gate itself runs from .github/workflows/dco.yaml on
   # pull_request_target, which means it executes the *base ref's* script — so a
   # PR that edits dco-check.sh never exercises its own version there. This job
-  # closes that gap: it is an ordinary `pull_request` test of the PR's copy. It
-  # enforces nothing (the gate does that); it catches a regression before merge.
+  # closes that gap: it is an ordinary `pull_request` test of the PR's copy.
+  #
+  # It has to be a REQUIRED status check to do its job. Otherwise a PR that
+  # breaks dco-check.sh shows this job red and `DCO sign-off` green — the gate
+  # having passed on the base ref's still-working copy — merges anyway, and the
+  # gate is broken for every PR after it, with the only warning being a check
+  # nobody had to look at. See .github/ADMIN_SETUP.md.
   dco_selftest:
     name: DCO check self-test
     runs-on: ubuntu-latest

@@ -103,30 +103,40 @@ fi
 # shellcheck disable=SC2086 # EXCLUDE_BASE_REF is a single rev or deliberately empty
 commits=$(git rev-list --no-merges "$HEAD_REV" "^${BASE_REV}" $EXCLUDE_BASE_REF)
 
-# `git merge-tree --write-tree` landed in git 2.38. Older git cannot recompute a
-# merge, so every merge is treated as content-bearing. Conservative on purpose.
+# `git merge-tree --write-tree` landed in git 2.38. Refuse to run on anything
+# older rather than silently falling back to a weaker merge check: a hard, honest
+# failure beats a gate whose strictness depends on the runner image.
 GIT_MAJOR=$(git --version | sed -E 's/[^0-9]*([0-9]+).*/\1/')
 GIT_MINOR=$(git --version | sed -E 's/[^0-9]*[0-9]+\.([0-9]+).*/\1/')
-if [ "$GIT_MAJOR" -gt 2 ] || { [ "$GIT_MAJOR" -eq 2 ] && [ "$GIT_MINOR" -ge 38 ]; }; then
-  CAN_RECOMPUTE_MERGES=yes
-else
-  CAN_RECOMPUTE_MERGES=no
+if [ "$GIT_MAJOR" -lt 2 ] || { [ "$GIT_MAJOR" -eq 2 ] && [ "$GIT_MINOR" -lt 38 ]; }; then
+  echo "::error::DCO check needs git >= 2.38 for 'git merge-tree --write-tree' (found: $(git --version)). Refusing to run rather than weaken the merge check." >&2
+  exit 1
 fi
 
-# True when the merge commit records a tree that recomputing the merge of its two
-# parents does not produce — i.e. the committer contributed something.
-merge_adds_content() {
+# Echoes why a merge commit counts as a contribution, or nothing when it is
+# exempt. The reason is surfaced to the contributor, so it must be the real one.
+#   octopus  — more than two parents; merge-tree takes exactly two, so the check
+#              cannot recompute it and will not guess.
+#   conflict — recomputation conflicts, which says nothing about what the
+#              committer resolved by hand.
+#   differs  — recomputed cleanly, and the merge recorded something else.
+merge_content_reason() {
   local m="$1" parents recomputed
-  [ "$CAN_RECOMPUTE_MERGES" = yes ] || return 0
-
   parents=$(git rev-list --parents -n1 "$m")
   parents=${parents#* } # drop the commit's own sha, leaving its parents
-  [ "$(wc -w <<<"$parents")" -eq 2 ] || return 0
+  [ "$(wc -w <<<"$parents")" -gt 1 ] || return 0 # not a merge
 
-  # A conflicted recomputation exits non-zero and tells us nothing about what the
-  # committer did by hand, so it counts as content.
-  recomputed=$(git merge-tree --write-tree "${m}^1" "${m}^2" 2>/dev/null) || return 0
-  [ "$recomputed" != "$(git rev-parse "${m}^{tree}")" ]
+  if [ "$(wc -w <<<"$parents")" -gt 2 ]; then
+    echo octopus
+    return 0
+  fi
+  if ! recomputed=$(git merge-tree --write-tree "${m}^1" "${m}^2" 2>/dev/null); then
+    echo conflict
+    return 0
+  fi
+  if [ "$recomputed" != "$(git rev-parse "${m}^{tree}")" ]; then
+    echo differs
+  fi
 }
 
 # Add back any merge commit that introduces content no parent has. Without this,
@@ -134,7 +144,7 @@ merge_adds_content() {
 # check" and passes with no sign-off anywhere in it.
 # shellcheck disable=SC2086 # as above
 for merge in $(git rev-list --merges "$HEAD_REV" "^${BASE_REV}" $EXCLUDE_BASE_REF); do
-  if merge_adds_content "$merge"; then
+  if [ -n "$(merge_content_reason "$merge")" ]; then
     commits="${commits}"$'\n'"${merge}"
   fi
 done
@@ -206,11 +216,23 @@ while IFS= read -r sha; do
   echo "  $(git show -s --format='%h %s' "$sha")"
   echo "    author:    $(git show -s --format='%an <%ae>' "$sha")"
   echo "    committer: $(git show -s --format='%cn <%ce>' "$sha")"
-  if [ "$(git rev-list --no-walk --count --merges "$sha")" -gt 0 ]; then
-    echo "    this merge records a result that re-merging its parents does not"
-    echo "    reproduce, so it contributes something of its own and needs a"
-    echo "    sign-off — redo it with \`git merge --signoff\`"
-  fi
+  case "$(merge_content_reason "$sha")" in
+    octopus)
+      echo "    this is an octopus merge; the check cannot recompute a merge of more"
+      echo "    than two parents, so it needs a sign-off of its own — redo it with"
+      echo "    \`git merge --signoff\`"
+      ;;
+    conflict)
+      echo "    re-merging this commit's parents conflicts, so the check cannot tell"
+      echo "    what you resolved by hand. A resolution is a contribution — redo the"
+      echo "    merge with \`git merge --signoff\`"
+      ;;
+    differs)
+      echo "    this merge records a result that re-merging its parents does not"
+      echo "    reproduce, so it contributes something of its own and needs a"
+      echo "    sign-off — redo it with \`git merge --signoff\`"
+      ;;
+  esac
   found=$(signoff_lines "$sha")
   if [ -n "$found" ]; then
     echo "    sign-off present but no email matches the author or committer:"
