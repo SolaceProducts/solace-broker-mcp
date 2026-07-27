@@ -87,10 +87,6 @@ func (c *HTTPClient) LogValue() slog.Value {
 // jar is the per-broker cookie jar for session cookie management. Pass nil
 // for auth modes that don't use session cookies (bearer, OAuth).
 //
-// limiter is the broker's shared rate limiter and must be non-nil; like sem
-// it must be shared by both protocol clients, or the broker receives up to 2x
-// the configured rate (SOL-152401). resilience.New panics otherwise.
-//
 // sem is the broker's shared in-flight semaphore and must be non-nil
 // (resilience.New panics otherwise); see semp.NewBrokerClient, which shares
 // one semaphore across both protocol clients of a broker.
