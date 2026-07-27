@@ -101,10 +101,12 @@ Enable both secret-scanning settings, not just the first. Alerts find credential
 already committed; push protection rejects the next one before it lands. Both are
 free on public repositories.
 
-On CodeQL: a check named `Analyze (go)` runs and passes on every PR, produced by
-the code-scanning default setup, while the repository API reports Code Security as
-disabled. Confirm which configuration is producing it on the settings page before
-relying on it, and re-check after the visibility change.
+On CodeQL: a check named `Analyze (go)` runs and passes on every PR, and its
+workflow path points at the code-scanning default setup. Against that, the
+repository API reports Code Security as disabled and the default-setup endpoint
+returns 403. Something is producing this check and we cannot say from the API
+which configuration owns it. Confirm on the settings page before relying on it,
+and re-check after the visibility change.
 
 **Dependency updates use Renovate, not Dependabot.**
 
@@ -196,9 +198,10 @@ Four more notes on the list:
   `pull_request` events). It blocks on findings that are new relative to the base
   branch, not on the full dependency inventory. That is what keeps `main` from
   entering an irregular state; do not read a green PR as a clean full scan.
-- `Analyze (go)` (CodeQL) is available and passes on every PR. Add it if you want
-  code scanning to block merges; it is not in the list above because that is a
-  policy call, not a correctness fix.
+- `Analyze (go)` (CodeQL) passes on every PR. Add it if you want code scanning to
+  block merges, after settling the configuration question in the Security Settings
+  section. It is not in the list above because that is a policy call, not a
+  correctness fix.
 - Do **not** require `run-pull-request-checks / *`. Those come from
   `transition_on_merge.yaml`, which runs on `pull_request: closed`, and the check
   name varies with the Jira key (e.g. `... Vault and JIRA Operations (SOL-152328)`).
@@ -215,14 +218,35 @@ both of which need a CI change. Tracked separately.
    triggered by a fork, so the reusable workflow finds an empty Vault URL and
    exits 1. It runs, and it goes red.
 
-What about the rest? Nobody has ever opened a fork pull request against this
-repository, so none of this is observed. `CHANGELOG updated` should be fine:
-`ci-pr.yaml` gives that job only `contents: read` and it reads no secrets.
-`Analyze (go)` comes from CodeQL default setup, which is expected to run but has
-not been seen against a fork here. Copilot review is inconsistent even on
-same-repo pull requests, so do not count on it either way.
+Nobody has ever opened a fork pull request against this repository, so nothing
+below is observed. `CHANGELOG updated` should be fine: `ci-pr.yaml` gives that job
+only `contents: read` and it reads no secrets. `Analyze (go)` appears to come from
+CodeQL default setup, which the Security Settings section asks you to confirm.
+Copilot review is inconsistent even on same-repo pull requests, so do not count on
+it. Verify `CHANGELOG updated`, `Analyze (go)`, and `FOSSA Scan / SCA Scan`
+against a real fork pull request before you treat any of them as a gate.
 
-Confirm all three against a real fork pull request before you rely on any of them.
+**A third problem, and this one we create deliberately.** The GitHub Actions
+Permissions section below tells you to require approval for all external
+contributors. That holds the entire workflow run, not just one job, until a
+maintainer approves it.
+
+The consequence, in order: an external contributor opens their first pull request,
+and **no checks run at all**. Not `FOSSA Scan / SCA Scan`, not `CHANGELOG updated`,
+not the seven that were already broken. Every required context sits pending and the
+pull request reads as stuck rather than as rejected or passing.
+
+That is expected, not broken. Maintainers need to know it, or the first community
+contribution gets triaged as a CI outage. Two things follow:
+
+- Watch the Actions tab for runs awaiting approval, not just the pull request page.
+- Tell the contributor you are waiting on an approval click, rather than leaving
+  them looking at a grey check.
+
+This also constrains the required-check list. Every context you require is a
+context that reports only after a human approves the run, so requiring more of
+them lengthens the stall rather than tightening the gate.
+
 Until the CI fix lands, merge community contributions by pushing the branch into
 this repository yourself.
 
@@ -270,6 +294,12 @@ contributor is exempt permanently once any one of their contributions merges. Th
 repository allows all actions and does not require SHA pinning
 (`allowed_actions: all`, `sha_pinning_required: false`), so until that tightens, a
 human should look at every external workflow run before it executes.
+
+This has a cost worth knowing: until a maintainer approves the run, **no checks
+report at all** on an external contributor's pull request, so it shows pending
+required contexts rather than a verdict. That is expected behavior, not a CI
+failure. The fork-pull-request warning at the end of the Branch Protection section
+explains what maintainers should do about it.
 
 ---
 
@@ -344,11 +374,15 @@ Navigate to: **Settings → General → Pull Requests**
 leave it. GitHub only restricts the "Update branch" button when the base branch
 does *not* require branches to be up to date; the setting lifts that restriction.
 `main-protection` sets `strict_required_status_checks_policy: true`, so the button
-is already offered on every stale pull request to `main`. Turn the setting on only
-if you later add a protected branch without the up-to-date requirement.
+is already offered on every stale pull request to `main`.
 
-Note that "Update branch" needs write access to the head branch either way, so a
-fork contributor never gets the button and has to rebase locally.
+Turn the setting on if you want the button on pull requests targeting other
+branches. `main-protection` applies to `~DEFAULT_BRANCH` only, so any pull request
+against a non-default base already lacks it today. Nobody is asking for that, so
+leaving the setting off is fine.
+
+"Update branch" needs write access to the head branch either way, so a fork
+contributor never gets the button and has to rebase locally.
 
 **Default commit messages.** Live values, which differ from the labels in the UI:
 
