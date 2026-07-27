@@ -58,3 +58,17 @@ open-source.md
 .ua/diff-overlay.json
 .ua/.trash-*/
 .ua/tmp/
+
+# Session scratch from the PR-tending skills (/good:watch-my-prs,
+# /good:watch-for-prs, /good:review-balance). Local working notes that name
+# reviewers and internal process; they belong on disk, not in the repo.
+watch-my-prs-notes.md
+watch-for-prs-notes.md
+.claude/review-balance-history.tsv
+
+# Generated reports and captured transcripts. Never repo content.
+pr-activity-report.pdf
+product-chat.md
+
+# Built E2E agent binary.
+test/e2e/agent/agent
