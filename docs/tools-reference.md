@@ -599,9 +599,9 @@ fields per receiver: `kafkaReceiverName`, `clientName`, `enabled`, `up`,
 
 ### get-kafka-receiver-status
 
-Detailed status for a single Kafka Receiver, including topic-binding health
+Detailed status for a single Kafka Receiver, including topic-binding status
 (`topicBindingUpCount` out of `topicBindingCount` — how many of its configured
-Kafka-topic-to-Solace-destination bindings are actually healthy).
+Kafka-topic-to-Solace-destination bindings are actually up).
 
 **Parameters:**
 
@@ -651,9 +651,9 @@ fields per sender: `kafkaSenderName`, `clientName`, `enabled`, `up`,
 
 ### get-kafka-sender-status
 
-Detailed status for a single Kafka Sender, including queue-binding health
+Detailed status for a single Kafka Sender, including queue-binding status
 (`queueBindingUpCount` out of `queueBindingCount` — how many of its configured
-Solace-queue-to-Kafka-topic bindings are actually healthy).
+Solace-queue-to-Kafka-topic bindings are actually up).
 
 **Parameters:**
 
