@@ -137,10 +137,20 @@ recorded per retry attempt so you can see retry storms and per-broker latency.
   `http_response_status_code`, `server_address`.
 - **Solace** labels: `broker` (the configured alias), `api` (`v1` or `v2`), `operation`
   (the SEMP operation), `attempt` (the retry attempt as an integer string, `"1"`, `"2"`, ...).
+- **When no response arrives** — DNS failure, connection refused, TLS handshake failure,
+  or a timeout — `http_response_status_code` is the **empty string**. The attempt is still
+  counted; only the status is unknown. This follows the OTel convention of leaving the
+  attribute unset when there is no response, which in Prometheus surfaces as `""` rather
+  than an absent label. Alert on `http_response_status_code=""` to catch a broker you
+  cannot reach at all, which no status-code range would match.
 
 **Cardinality:** bounded by the product of these finite sets. `attempt` is bounded by the
-retry cap. See open items for two decisions we want your input on: the duration histogram
-buckets, and whether `server_address` and `broker` are redundant for your queries.
+retry cap, and the empty status adds one value to that dimension rather than an open set.
+See open items for three decisions we want your input on: the duration histogram buckets,
+whether `server_address` and `broker` are redundant for your queries, and whether a bare
+empty status is enough for the no-response case or you need the reason (DNS, TLS, timeout)
+as a label. `mcp_broker_unreachable_reason` carries a coarser version of that reason today,
+but only as broker state, not per attempt.
 
 ### Broker reachability
 
@@ -407,13 +417,18 @@ this draft, resolving them is the point of the review.
 2. **`server_address` vs `broker` on SEMP metrics.** We carry both: `server_address` is the
    OTel-conventional host label, `broker` is your configured alias. Is carrying both useful,
    or redundant for your dashboards?
-3. **`principal.preferred_username`.** Should the audit event carry a human-readable
+3. **The no-response case on SEMP metrics.** When an attempt fails before any response —
+   DNS, connection refused, TLS, timeout — `http_response_status_code` is the empty string,
+   following OTel. Is that enough to alert on, or do you need the reason as its own label?
+   Splitting it out costs cardinality and would duplicate, per attempt, what
+   `mcp_broker_unreachable_reason` already carries as broker state.
+4. **`principal.preferred_username`.** Should the audit event carry a human-readable
    username in addition to the opaque `sub`? It improves readability for access reviews but
    places PII in an immutable store. We currently omit it pending this decision.
-4. **Trace span names and span kinds.** Beyond `semp.attempt`, we intend to follow OTel HTTP
+5. **Trace span names and span kinds.** Beyond `semp.attempt`, we intend to follow OTel HTTP
    conventions. If your trace backend or trace-based SLOs key off specific span names or
    `SpanKind` values, tell us what you expect.
-5. **`outcome` vocabulary.** Does `success` / `error` / `panic` / `cancelled` cover what
+6. **`outcome` vocabulary.** Does `success` / `error` / `panic` / `cancelled` cover what
    your SIEM queries distinguish, or do you split these differently (for example a separate
    `timeout`)?
 
