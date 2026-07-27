@@ -33,7 +33,7 @@ import (
 func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, error) {
 	// A caller who is already done gets its own error, never a token.
 	//
-	// TokenCache.Get takes a context but does not promise to honour it, and
+	// TokenCache.Get takes a context but does not promise to honor it, and
 	// the in-memory implementation shipped today ignores it outright, so the
 	// cache hit below could hand a live token to a cancelled caller. Guarding
 	// here rather than pushing the check into the cache is deliberate on both
@@ -41,10 +41,6 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	// and Exchange treats a Get error as a warning and falls through to a full
 	// IdP exchange, so a cache-level rejection would make a dead caller do
 	// *more* work, not less.
-	//
-	// This is a contract fix, not a flake fix. The intermittent failure in
-	// TestExchange_ContextDeadlineExceededReturnsDeadlineError was the test's
-	// own premise — see the note there.
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
