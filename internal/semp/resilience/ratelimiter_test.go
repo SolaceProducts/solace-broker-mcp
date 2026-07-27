@@ -35,23 +35,31 @@ func TestNewRateLimiter_DisabledNeverBlocks(t *testing.T) {
 	}
 }
 
-// A configured interval must actually pace: the first receive waits, since a
-// ticker does not fire immediately.
+// A configured interval must actually pace: the ticker cannot produce its first
+// tick before one interval has passed.
+//
+// Asserted on the tick's own timestamp rather than on wall-clock elapsed time
+// around the receive. A ticker channel buffers, so a test goroutine descheduled
+// for longer than the interval finds a tick already waiting and measures an
+// elapsed time near zero — a correct limiter failing a racy assertion. The tick
+// carries the moment the ticker fired, which scheduling cannot move, so
+// comparing it against a timestamp taken before construction is exact however
+// the runtime behaves.
 func TestNewRateLimiter_PositiveIntervalPaces(t *testing.T) {
 	const interval = 50 * time.Millisecond
+	// Runtime timers may fire a hair early on some platforms. The slack is far
+	// smaller than the defect this guards — an unpaced limiter yields a gap of
+	// roughly zero, not one a millisecond short.
+	const slack = 2 * time.Millisecond
+
+	before := time.Now()
 	limiter := NewRateLimiter(interval)
 	defer limiter.Stop()
 
-	select {
-	case <-limiter.C():
-		t.Fatal("limiter admitted immediately; a configured interval must pace the first request")
-	default:
-	}
-
-	start := time.Now()
-	<-limiter.C()
-	if elapsed := time.Since(start); elapsed < interval/2 {
-		t.Errorf("first admission took %v, want at least ~%v", elapsed, interval)
+	tick := <-limiter.C()
+	if gap := tick.Sub(before); gap < interval-slack {
+		t.Errorf("first tick fired %v after construction, want at least %v — "+
+			"a configured interval must pace the first request", gap, interval)
 	}
 }
 

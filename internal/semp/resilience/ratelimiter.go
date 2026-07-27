@@ -34,9 +34,17 @@ type RateLimiter struct {
 
 // NewRateLimiter creates a limiter admitting at most one request per interval.
 //
-// The first request against a new limiter pays one interval of latency, since a
-// ticker does not fire immediately. That is a one-time cost at broker init and
-// avoids the complexity of a seeded channel with goroutine forwarding.
+// A request arriving within one interval of construction waits for the first
+// tick; one that arrives later finds a tick already buffered and is admitted
+// immediately. The ticker runs regardless of demand and its channel holds one
+// tick, so idle time is effectively credit. This is a deliberate trade: it
+// bounds the sustained rate, which is what request_min_interval is for, without
+// the complexity of a seeded channel and a forwarding goroutine. It does not
+// bound a burst after an idle period, and a single buffered tick caps that
+// burst at one request.
+//
+// The same buffering is why the limiter must be shared rather than per-Sender:
+// see the type comment above.
 //
 // A non-positive interval disables throttling: the limiter yields a closed
 // channel, so receives never block.
