@@ -309,20 +309,13 @@ This is the only grant type this version implements. The field exists (rather th
 
 #### Audience parameter name
 
-`audience_parameter_name` tells the runtime which OAuth request parameter should carry each broker's `auth.audience` value in the token-exchange POST. Different IdP families expect the audience on a different parameter:
+`audience_parameter_name` tells the runtime which OAuth request parameter should carry each broker's `auth.audience` value in the token-exchange POST. Different IdP families expect the audience on a different parameter, but this version implements only one:
 
-| Value | Style | Runtime support |
-|-------|-------|------------------|
-| `audience` | RFC 8693's own `audience` parameter — the default for Keycloak and most OIDC-compliant IdPs. | **Implemented.** |
-| `scope` | Microsoft Entra On-Behalf-Of style (the audience is prefixed onto the `scope` value instead of a separate parameter). | Schema-accepted, **not yet implemented**. |
-| `resource` | RFC 8707 resource-indicator style. | Schema-accepted, **not yet implemented**. |
+```yaml
+audience_parameter_name: "audience"
+```
 
-Only `audience` works today. The other two values pass config-file validation at startup (the YAML schema accepts all three so configs targeting a future IdP integration can be staged in advance), but the token-exchange runtime itself rejects them when it is actually constructed — which only happens once Hop 1 is `oauth`, `broker_oauth:` is set, and at least one broker uses `auth.mode: oauth` together. If your IdP is Entra (or otherwise expects `scope`/`resource`), broker OAuth is not yet usable against it in this version.
-
-> **Note:** a schema-accepted but unimplemented value fails at server startup with:
-> ```
-> tokenexchange: audience_parameter_name "scope" is schema-accepted but not yet implemented
-> ```
+`audience` is RFC 8693's own parameter — the default for Keycloak and most OIDC-compliant IdPs — and the only value this version accepts. Concepts like Microsoft Entra's On-Behalf-Of style (`scope`) or RFC 8707's resource-indicator style (`resource`) are not yet implemented; setting either is rejected at config load with `broker_oauth.audience_parameter_name "scope" is not supported in this version`. If your IdP requires one of those styles, broker OAuth is not yet usable against it in this version.
 
 Two optional sub-blocks tune the runtime's resilience behavior — see [Configuration](configuration.md#broker-oauth-hop-2) for every field and its default:
 

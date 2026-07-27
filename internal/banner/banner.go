@@ -178,9 +178,9 @@ const oauthPlaintextListenerBanner = `
 //
 // This banner is PERMANENT: it enforces an invariant that holds for every
 // release of the MCP server — Hop 2 OAuth structurally requires Hop 1 OAuth.
-// config.validate() calls validateHop1Hop2Alignment unconditionally whenever
-// any broker uses auth.mode: oauth, and this banner fires alongside the
-// validation error whenever the invariant is violated.
+// config.validate() calls validateHop1Hop2Alignment unconditionally; this
+// banner fires alongside the validation error when at least one broker uses
+// auth.mode: oauth and mcp_client_auth.mode is not "oauth".
 func LogHop2WithoutHop1(n int, hop1Mode string) {
 	noun := "1 broker"
 	if n != 1 {

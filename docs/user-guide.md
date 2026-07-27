@@ -220,11 +220,12 @@ The server supports open access, static token, and OAuth/OIDC authentication for
 - **Config file not found** — The server looks for the yaml configuration file in this order: `CONFIG_FILE` env var, `/etc/mcp-server/config.yaml`, then `./broker-config.yaml`. Set `CONFIG_FILE` explicitly if the file is in a non-standard location.
 - **TLS misconfiguration** — Both `tls_cert_file` and `tls_key_file` must be set together. Providing only one is a startup error.
 - **OAuth config missing** — When `mcp_client_auth.mode` is `oauth`, the `issuer`, `audience`, and `resource_url` fields are required. For local testing, set `mcp_client_auth.mode: disabled` or `static`.
+- **Broker OAuth (Hop 2) config rejected** — A broker with `auth.mode: oauth` requires `mcp_client_auth.mode: oauth` and a complete `broker_oauth:` block; missing or invalid fields are rejected at config load, before the server starts. See [Step 2b](authentication.md#step-2b-configure-broker-oauth-hop-2) for the full field reference, including `audience_parameter_name`, which only accepts `audience` in this version.
 
 ### Cannot Connect to Broker
 
 - **SEMP not enabled** — Verify the broker's SEMP management interface is accessible at the configured URL (for example, `http://broker:8080/SEMP`).
-- **Authentication failure** — Check that credentials in the `.env` file are correct. For basic auth, verify both `username` and `password`. For bearer mode, verify the `token`. For OAuth mode, verify the `broker_oauth:` block and see [Authentication](authentication.md#step-2b-configure-broker-oauth-hop-2) — a schema-valid `broker_oauth:` config can still fail at server startup if `mcp_client_auth.mode` isn't also `oauth`, or if `audience_parameter_name` is set to a value not yet implemented (only `audience` works today).
+- **Authentication failure** — Check that credentials in the `.env` file are correct. For basic auth, verify both `username` and `password`. For bearer mode, verify the `token`. For OAuth mode, verify the `broker_oauth:` block — see [Step 2b](authentication.md#step-2b-configure-broker-oauth-hop-2).
 - **TLS certificate errors** — If the event broker uses a self-signed certificate, enable `insecure_skip_verify` in the broker config. In production (`mcp_client_auth.mode: oauth`) this is refused at startup unless you also set `allow_insecure_broker_tls: true` to acknowledge the risk. See [Configuration](configuration.md) for details.
 
 ### Tool Returns an Error
