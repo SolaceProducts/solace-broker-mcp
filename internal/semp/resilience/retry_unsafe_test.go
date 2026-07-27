@@ -327,27 +327,44 @@ func TestCheckRetry_RetryUnsafe_NeverRetriesAnyStatus(t *testing.T) {
 	}, "basic", 10)
 	defer server.Close()
 
-	for code := 100; code <= 599; code++ {
-		// 401 is the one deliberate exception: authentication is rejected before
-		// the broker acts, so re-auth cannot duplicate a side effect.
-		// TestSender_RetryUnsafe_401_StillReAuths pins that path.
-		if code == http.StatusUnauthorized {
-			continue
-		}
-		state := &retryState{method: http.MethodPut, retryUnsafe: true}
-		ctx := context.WithValue(context.Background(), retryStateKey{}, state)
+	// Swept across methods, not just PUT. The POST/PATCH guard returns before the
+	// status gate, so a PUT-only sweep would read exhaustive while leaving the
+	// guarantee method-conditional: correct for today's action tools, which are
+	// all PUT, and silently absent for the first `idempotent: false` tool built
+	// on a POST config operation.
+	for _, method := range []string{http.MethodPut, http.MethodPost, http.MethodPatch, http.MethodDelete} {
+		for code := 100; code <= 599; code++ {
+			// 401 is the one deliberate exception: authentication is rejected
+			// before the broker acts, so re-auth cannot duplicate a side effect.
+			// TestSender_RetryUnsafe_401_StillReAuths pins that path.
+			if code == http.StatusUnauthorized {
+				continue
+			}
+			state := &retryState{method: method, retryUnsafe: true}
+			ctx := context.WithValue(context.Background(), retryStateKey{}, state)
 
-		retry, err := sender.checkRetry(ctx, &http.Response{StatusCode: code}, nil)
-		if retry || err != nil {
-			t.Errorf("status %d: got (retry=%v, err=%v), want (false, nil) — a declared non-idempotent request must never be replayed",
-				code, retry, err)
-		}
-		// The retry counters gate errTransientCapReached and the once-only 5xx
-		// replay. A marked request must never touch them, or a later attempt
-		// inherits a budget it never spent.
-		if state.transientRetried != 0 || state.other5xxRetried {
-			t.Errorf("status %d: gate mutated retry counters (transientRetried=%d, other5xxRetried=%v)",
-				code, state.transientRetried, state.other5xxRetried)
+			retry, err := sender.checkRetry(ctx, &http.Response{StatusCode: code}, nil)
+			if retry {
+				t.Errorf("%s %d: got retry=true — a declared non-idempotent request must never be replayed", method, code)
+			}
+			// An error is allowed, and on a retryable status it is required: it
+			// routes the request through errorHandler into a NonIdempotent
+			// *RetriesExhaustedError instead of handing the agent a raw 503 that
+			// the tools layer reports as retryable. Any other error is a bug.
+			if err != nil && !errors.Is(err, errNonIdempotentNotRetried) {
+				t.Errorf("%s %d: got unexpected err=%v, want nil or errNonIdempotentNotRetried", method, code, err)
+			}
+			if retryableStatus(code) && !errors.Is(err, errNonIdempotentNotRetried) {
+				t.Errorf("%s %d: gate returned err=%v; without errNonIdempotentNotRetried the raw status "+
+					"reaches the tools layer and is reported retryable", method, code, err)
+			}
+			// The retry counters gate errTransientCapReached and the once-only
+			// 5xx replay. A marked request must never touch them, or a later
+			// attempt inherits a budget it never spent.
+			if state.transientRetried != 0 || state.other5xxRetried {
+				t.Errorf("%s %d: gate mutated retry counters (transientRetried=%d, other5xxRetried=%v)",
+					method, code, state.transientRetried, state.other5xxRetried)
+			}
 		}
 	}
 }

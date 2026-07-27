@@ -190,9 +190,18 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 			// re-run exactly the side effect the retry policy just refused to
 			// duplicate — for a queue purge, destroying everything spooled
 			// since the original call.
-			return "Request failed and was deliberately not retried, because repeating " +
+			msg := "Request failed and was deliberately not retried, because repeating " +
 				"this operation is not safe: the broker may have already applied it. " +
-				"Check the current state before deciding whether to issue it again.", nil
+				"Check the current state before deciding whether to issue it again."
+			// The broker's own reason, when it gave one, is what narrows "may have
+			// applied it" down to an answer. A 503 saying "Replication Is Standby"
+			// or "VPN busy reconciling" is a pre-execution rejection: nothing ran.
+			// Withholding it leaves the agent guessing on the one operation where
+			// guessing is most expensive.
+			if retriesErr.Detail != "" {
+				msg += " The broker reported: " + sanitizeBrokerText(retriesErr.Detail)
+			}
+			return msg, nil
 		}
 		return fmt.Sprintf(
 			"Request failed after %d attempts (HTTP %d). Internal retries exhausted; try again later.",

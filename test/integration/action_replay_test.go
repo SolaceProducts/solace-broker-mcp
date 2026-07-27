@@ -16,6 +16,7 @@ package integration_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -169,4 +170,105 @@ func TestActionToolIsNotReplayedOnTransportError(t *testing.T) {
 				"narrow the retry policy", got, retries+1)
 		}
 	})
+}
+
+// TestActionToolNotRetried503IsNotReportedRetryable closes the other half of the
+// invariant. Suppressing the replay is only half the job: the agent also has to
+// be told not to reissue the call itself.
+//
+// On a 503 the retry policy returns "don't retry" with no error, so
+// retryablehttp hands the response straight back and Sender.Do takes its success
+// path — the NonIdempotent marking there only covers the connection-error case.
+// The 503 then becomes an ordinary *sempv2.SEMPError, and isRetryable reports
+// any 503 as retryable. The tool layer duly tells the agent "retryable": true
+// for a purge the broker may already have carried out, which is the exact
+// side-effect duplication the transport-error path refuses to allow.
+//
+// This tier is the only place the defect is observable: resilience sees a
+// correctly suppressed retry, and the tools layer sees a plain 503.
+func TestActionToolNotRetried503IsNotReportedRetryable(t *testing.T) {
+	operations := map[string]*sempv2.Operation{
+		"action/doTestAction": {
+			ID:     "doTestAction",
+			Method: http.MethodPut,
+			Path:   "/SEMP/v2/__private_action__/testAction",
+		},
+	}
+	falseVal := false
+	tool := composite.CompositeTool{
+		Name:        "test-action-tool",
+		Description: "fixture",
+		Steps:       []composite.Step{{ID: "act", Operation: "action/doTestAction"}},
+		Result:      composite.ResultStrategy{Strategy: "collect"},
+		Annotations: composite.ToolAnnotations{Idempotent: &falseVal},
+	}
+
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"meta":{"error":{"code":89,"description":"Replication Is Standby","status":"NOT_ALLOWED"}}}`))
+	}))
+	defer server.Close()
+
+	jar, err := resilience.NewSafeCookieJar()
+	if err != nil {
+		t.Fatalf("NewSafeCookieJar: %v", err)
+	}
+	attempts := 3
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		Retries:                &attempts,
+		RequestMinInterval:     &minInterval,
+		RequestTimeoutDuration: 30 * time.Second,
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
+		MaxConcurrentPerBroker: 4,
+	}
+	brokerCfg := &config.BrokerConfig{
+		URL:  server.URL,
+		Auth: config.AuthConfig{Mode: "basic", Username: "admin", Password: "secret"},
+	}
+	client, err := sempv2.NewHTTPClient(
+		brokerCfg, sempCfg, resilience.NewSemaphore(sempCfg.MaxConcurrentPerBroker),
+		auth.NewBasicAuthenticator("admin", "secret", jar), jar,
+	)
+	if err != nil {
+		t.Fatalf("sempv2.NewHTTPClient: %v", err)
+	}
+
+	executor := composite.NewCompositeExecutor(operations)
+	_, execErr := executor.Execute(context.Background(), tool, client, map[string]any{})
+	if execErr == nil {
+		t.Fatal("expected the 503 to surface as an error, got nil")
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("broker saw %d requests on 503, want exactly 1", got)
+	}
+
+	// NonIdempotent on a *RetriesExhaustedError is the exported contract the
+	// tools layer keys off: internal/tools.isRetryable returns !NonIdempotent for
+	// this error type, so the flag is what stops "retryable": true reaching the
+	// agent. A bare *sempv2.SEMPError carrying 503 takes the other branch and is
+	// reported retryable regardless of the annotation.
+	var exhausted *resilience.RetriesExhaustedError
+	if !errors.As(execErr, &exhausted) {
+		t.Fatalf("a deliberately un-retried non-idempotent action surfaced as %T, not "+
+			"*RetriesExhaustedError — the tools layer will read the raw 503 and report "+
+			"it retryable: %v", execErr, execErr)
+	}
+	if !exhausted.NonIdempotent {
+		t.Error("RetriesExhaustedError.NonIdempotent is false for an action the retry " +
+			"policy refused to replay, so the agent is told to retry a possibly-applied purge")
+	}
+	// Routing through errorHandler drains the body to release the connection,
+	// which would otherwise throw away the broker's account of what happened.
+	// "Replication Is Standby" is a pre-execution rejection: it is the difference
+	// between "the purge may have run" and "the purge definitely did not run",
+	// on the one operation where that distinction is most expensive to get wrong.
+	if exhausted.Detail != "Replication Is Standby" {
+		t.Errorf("broker reason lost in the error routing: Detail = %q, want %q",
+			exhausted.Detail, "Replication Is Standby")
+	}
 }

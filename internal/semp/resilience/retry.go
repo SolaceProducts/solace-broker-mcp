@@ -27,6 +27,19 @@ const maxTransientRetries = 3
 // *RetriesExhaustedError it already handles for RetryMax exhaustion.
 var errTransientCapReached = errors.New("transient-error (429/503) retry cap reached")
 
+// errNonIdempotentNotRetried is returned from checkRetry when the gate refuses
+// to replay a caller-declared non-idempotent request on a status that would
+// otherwise have been retried.
+//
+// Suppressing the replay is only half the job — the agent must not reissue the
+// call either. Returning an error routes the request through errorHandler, so
+// the caller gets a *RetriesExhaustedError that Do marks NonIdempotent and
+// internal/tools reports as non-retryable. Returning a bare "don't retry" hands
+// the raw 503 back instead, and a 503 is unconditionally retryable to the tools
+// layer: the agent would be told to repeat a purge the broker may already have
+// carried out. Same reasoning, and the same shape, as errTransientCapReached.
+var errNonIdempotentNotRetried = errors.New("request declared non-idempotent, not retried")
+
 // retryStateKey is the context key for per-request retry state.
 type retryStateKey struct{}
 
@@ -145,6 +158,19 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 	// would defeat the retry policy for legitimately transient failures.
 	state := getRetryState(ctx)
 	if (state.method == http.MethodPost || state.method == http.MethodPatch) && !state.retrySafe {
+		// A caller-declared non-idempotent request takes the same exit as it
+		// would below, sentinel and all. Both guards refuse the replay, but only
+		// the sentinel stops the tools layer reporting a 429/503 as retryable and
+		// inviting the agent to reissue by hand. Without this the guarantee would
+		// be method-conditional: it holds for the PUT-based action tools shipping
+		// today and would vanish, silently, for the first `idempotent: false`
+		// tool built on a POST config operation.
+		if state.retryUnsafe && resp != nil && err == nil && retryableStatus(resp.StatusCode) {
+			slog.Debug("not retrying: caller declared the request non-idempotent",
+				slog.String("broker", d.brokerURL),
+				slog.Int("status", resp.StatusCode))
+			return false, errNonIdempotentNotRetried
+		}
 		return false, nil
 	}
 
@@ -220,10 +246,13 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 	// happened. Behaviour is unchanged: every other status falls through to a
 	// switch arm that returns false anyway.
 	if state.retryUnsafe && retryableStatus(resp.StatusCode) {
+		// Downgraded to DEBUG for the same reason errTransientCapReached is:
+		// errorHandler logs an ERROR for this same terminal failure, so a higher
+		// level here would double-log every gated action.
 		slog.Debug("not retrying: caller declared the request non-idempotent",
 			slog.String("broker", d.brokerURL),
 			slog.Int("status", resp.StatusCode))
-		return false, nil
+		return false, errNonIdempotentNotRetried
 	}
 
 	switch {

@@ -1,6 +1,7 @@
 package resilience
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -29,6 +30,24 @@ type RetriesExhaustedError struct {
 	// reason no retry was attempted. Upper layers key their agent-facing
 	// retryable flag off this.
 	NonIdempotent bool
+
+	// Body is the final response body, truncated at errorHandlerDrainLimit and
+	// empty when the failure left no response. errorHandler has to drain the
+	// body to release the connection, which would otherwise destroy the only
+	// explanation the broker gave. That matters most on the NonIdempotent path:
+	// a 503 carries a reason (e.g. "Replication Is Standby") that often shows
+	// the operation was rejected before execution, which is exactly what tells
+	// an operator whether the purge they are worried about actually ran.
+	//
+	// Protocol-agnostic on purpose — this type is shared by SEMPv1 and SEMPv2,
+	// so the bytes are kept raw and each client parses them in its own terms.
+	Body []byte
+
+	// Detail is the broker's human-readable reason, parsed out of Body by the
+	// protocol client that understands the framing. Empty when the body carried
+	// none. Already broker-sourced text, so callers must sanitize before showing
+	// it to an agent.
+	Detail string
 }
 
 func (e *RetriesExhaustedError) Error() string {
@@ -310,9 +329,15 @@ const errorHandlerDrainLimit = 4096
 // and close here, then construct a RetriesExhaustedError from the status code
 // and attempt count.
 func (d *Sender) errorHandler(resp *http.Response, err error, numTries int) (*http.Response, error) {
+	// Capture the drained bytes rather than discarding them: the read has to
+	// happen either way to release the connection, and on the non-idempotency
+	// path these bytes are the broker's only account of what it did.
+	var body []byte
 	if resp != nil && resp.Body != nil {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, errorHandlerDrainLimit))
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, io.LimitReader(resp.Body, errorHandlerDrainLimit))
 		_ = resp.Body.Close()
+		body = buf.Bytes()
 	}
 
 	// Extract the operation ID up front so every exit path can name it. It
@@ -343,6 +368,7 @@ func (d *Sender) errorHandler(resp *http.Response, err error, numTries int) (*ht
 				StatusCode: resp.StatusCode,
 				Attempts:   numTries,
 				Err:        err,
+				Body:       body,
 			}
 		}
 		return nil, &RetriesExhaustedError{Attempts: numTries, Err: err}
@@ -357,6 +383,7 @@ func (d *Sender) errorHandler(resp *http.Response, err error, numTries int) (*ht
 		return nil, &RetriesExhaustedError{
 			StatusCode: resp.StatusCode,
 			Attempts:   numTries,
+			Body:       body,
 		}
 	}
 

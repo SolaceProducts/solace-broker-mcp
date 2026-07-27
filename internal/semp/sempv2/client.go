@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -157,6 +158,19 @@ func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string
 
 	resp, err := c.sender.Do(ctx, req)
 	if err != nil {
+		// The Sender consumed the final response to release the connection, so
+		// the broker's own explanation only survives on the error. Parse it here,
+		// where SEMPv2 framing is understood, and hang the description off the
+		// error rather than replacing it: the RetriesExhaustedError identity is
+		// what carries NonIdempotent, which upper layers key their retryable flag
+		// off. Losing that to gain a description would trade a safety property
+		// for a diagnostic.
+		var exhausted *resilience.RetriesExhaustedError
+		if errors.As(err, &exhausted) && len(exhausted.Body) > 0 {
+			if sempErr := parseSEMPError(op.ID, exhausted.StatusCode, exhausted.Body); sempErr.Description != "" {
+				exhausted.Detail = sempErr.Description
+			}
+		}
 		return nil, fmt.Errorf("executing %s: %w", op.ID, err)
 	}
 	defer resp.Body.Close()
