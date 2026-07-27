@@ -26,7 +26,8 @@ import "time"
 // itself: a ticker channel buffers one tick, so an idle protocol always has a
 // tick waiting and its next request is admitted with no spacing at all. That is
 // the same defect class the Semaphore contract guards against for the in-flight
-// cap (SOL-150116), and it is why New panics on a nil limiter.
+// cap (SOL-150116), and it is why the Sender constructor, resilience.New,
+// panics on a nil limiter.
 type RateLimiter struct {
 	c      <-chan time.Time
 	ticker *time.Ticker // nil when throttling is disabled

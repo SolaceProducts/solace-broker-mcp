@@ -110,6 +110,14 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 	if limiter == nil {
 		panic("resilience.New: limiter must be non-nil; share one per broker via semp.NewBrokerClient")
 	}
+	// Guarded for the same reason as the three above, and not merely documented:
+	// Retries is dereferenced here and again when sizing the retry-chain
+	// deadline, so a config that skipped defaulting would surface as a bare nil
+	// dereference somewhere inside construction rather than as the contract
+	// violation it is.
+	if sempCfg == nil || sempCfg.Retries == nil {
+		panic("resilience.New: sempCfg and sempCfg.Retries must be non-nil; apply config defaults before constructing a Sender")
+	}
 	d := &Sender{
 		authenticator: authn,
 		sem:           sem,

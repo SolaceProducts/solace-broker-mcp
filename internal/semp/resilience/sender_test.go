@@ -1495,6 +1495,33 @@ func TestNew_PanicsOnNilSemaphore(t *testing.T) {
 	New(&http.Client{Jar: jar}, sempCfg, basicAuth(t, jar), "http://test-broker", nil, NewRateLimiter(0))
 }
 
+// TestNew_PanicsOnNilRetries completes the constructor's guard set. Retries was
+// documented as required but only dereferenced, so a config that skipped
+// defaulting failed as a bare nil dereference partway through construction
+// rather than naming the contract it broke. Raised in review on #223.
+func TestNew_PanicsOnNilRetries(t *testing.T) {
+	jar := mustNewSafeCookieJar(t)
+	minInterval := time.Duration(0)
+
+	for _, tc := range []struct {
+		name    string
+		sempCfg *config.SEMPConfig
+	}{
+		{"nil Retries", &config.SEMPConfig{RequestMinInterval: &minInterval}},
+		{"nil sempCfg", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("New() with %s did not panic", tc.name)
+				}
+			}()
+			New(&http.Client{Jar: jar}, tc.sempCfg, basicAuth(t, jar), "http://test-broker",
+				NewSemaphore(1), NewRateLimiter(0))
+		})
+	}
+}
+
 // TestNew_PanicsOnNilRateLimiter is the sibling of the nil-semaphore contract.
 // A nil limiter would silently recreate the per-Sender 2× rate that SOL-152401
 // removed — each protocol client pacing only itself — so New refuses it too.

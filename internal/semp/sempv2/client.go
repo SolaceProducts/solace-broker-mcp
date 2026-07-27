@@ -94,6 +94,12 @@ func (c *HTTPClient) LogValue() slog.Value {
 // sem is the broker's shared in-flight semaphore and must be non-nil
 // (resilience.New panics otherwise); see semp.NewBrokerClient, which shares
 // one semaphore across both protocol clients of a broker.
+//
+// limiter is the broker's shared rate limiter and must likewise be non-nil
+// (resilience.New panics otherwise). It carries the same sharing requirement:
+// one per broker, passed to both protocol clients, because a per-client limiter
+// admits up to 2x the configured rate (SOL-152401). Its lifetime belongs to the
+// caller — BrokerClient.Close() stops it, so this client must not.
 func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, sem resilience.Semaphore, limiter *resilience.RateLimiter, authn auth.Authenticator, jar *resilience.SafeCookieJar) (*HTTPClient, error) {
 	if authn == nil {
 		panic("sempv2.NewHTTPClient: nil authenticator")
