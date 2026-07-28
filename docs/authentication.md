@@ -305,7 +305,7 @@ The IdP needs a second client registration for the MCP server itself (distinct f
 grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
 ```
 
-This is the only grant type this version implements. The field exists (rather than being hardcoded) so a future grant type can be added without a config schema change, but today any other value — including a value your IdP itself recognizes for some other flow — is rejected at startup with `broker_oauth.grant_type is required` (if empty) or an "unsupported grant_type" error (if set to anything else).
+This is the only grant type this version implements. The field exists (rather than being hardcoded) so a future grant type can be added without a config schema change, but today any other value — including a value your IdP itself recognizes for some other flow — is rejected at config load with `broker_oauth.grant_type is required` (if empty) or `broker_oauth.grant_type "…" is not supported in this version` (if set to anything else).
 
 #### Audience parameter name
 
@@ -315,7 +315,7 @@ This is the only grant type this version implements. The field exists (rather th
 audience_parameter_name: "audience"
 ```
 
-`audience` is RFC 8693's own parameter — the default for Keycloak and most OIDC-compliant IdPs — and the only value this version accepts. Concepts like Microsoft Entra's On-Behalf-Of style (`scope`) or RFC 8707's resource-indicator style (`resource`) are not yet implemented; setting either is rejected at config load with `broker_oauth.audience_parameter_name "scope" is not supported in this version`. If your IdP requires one of those styles, broker OAuth is not yet usable against it in this version.
+`audience` is RFC 8693's own parameter — the default for Keycloak and most OIDC-compliant IdPs — and the only value this version accepts. Concepts like Microsoft Entra's On-Behalf-Of style (`scope`) or RFC 8707's resource-indicator style (`resource`) are not yet implemented; setting either is rejected at config load with `broker_oauth.audience_parameter_name "scope" is not supported in this version (must be one of [audience])`. If your IdP requires one of those styles, broker OAuth is not yet usable against it in this version.
 
 Two optional sub-blocks tune the runtime's resilience behavior — see [Configuration](configuration.md#broker-oauth-hop-2) for every field and its default:
 
