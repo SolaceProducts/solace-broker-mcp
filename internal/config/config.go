@@ -217,16 +217,10 @@ var validGrantTypes = []string{
 	GrantTypeTokenExchange,
 }
 
-// audience_param values: which OAuth request parameter carries the per-broker
-// audience value on the wire. AudienceParamScope and AudienceParamResource
-// are declared for the tokenexchange package's resolveAudienceParam switch,
-// but are deliberately excluded from validAudienceParams below — see that
-// var's comment.
-const (
-	AudienceParamAudience = "audience" // RFC 8693 default
-	AudienceParamScope    = "scope"
-	AudienceParamResource = "resource"
-)
+// AudienceParamAudience is the only audience_param value this version
+// implements: which OAuth request parameter carries the per-broker audience
+// value on the wire (RFC 8693 default).
+const AudienceParamAudience = "audience"
 
 // validAudienceParams is the allowlist of audience-carrying parameter names
 // accepted at config load. Only AudienceParamAudience — schema and runtime
