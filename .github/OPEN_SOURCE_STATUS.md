@@ -1,7 +1,8 @@
 # Open Source Readiness Status
 
-**Last Updated**: 2026-04-24
-**PR**: #15 (aross/SOL-149029-open-source-compliance)
+**Last Updated**: 2026-07-27
+**Originating PR**: #15 (aross/SOL-149029-open-source-compliance), merged
+**Last revised by**: SOL-152405 (support-channel decision, admin-checklist accuracy)
 
 ---
 
@@ -32,10 +33,15 @@ These items are **documented** but require repository admin to configure:
 - [ ] **M1: Repository Metadata** - See ADMIN_SETUP.md section "Repository Settings"
   - Description, topics, website URL
   - Admin needed to configure in Settings → General → About
-- [ ] **M2: GitHub Discussions** - See ADMIN_SETUP.md section "Features"
-  - Enable Discussions feature
-  - Create categories (Q&A, Ideas, Announcements, etc.)
-  - Admin needed to configure in Settings → General → Features
+- [ ] **M2: Support channels** - See ADMIN_SETUP.md section "Features"
+  - GitHub Discussions is **not** being enabled. Support runs on two channels:
+    GitHub Issues for bugs and features, and a dedicated Solace Community
+    (Discourse) category for questions and discussion. Vulnerabilities go through
+    private disclosure per SECURITY.md.
+  - This supersedes the earlier plan in this file to open Discussions.
+  - Remaining work: stand up the Solace Community category and repoint the
+    `/discussions` links in `.github/CONTRIBUTING.md` and
+    `.github/ISSUE_TEMPLATE/config.yml`. Tracked separately.
 - [x] **M3: README Badges** - Already added in first commit (build, license, Go version, CoC)
 
 ---
@@ -94,10 +100,9 @@ These settings must be configured by repository admin:
 - Topics for discoverability
 - See: ADMIN_SETUP.md → "Repository Settings"
 
-### 2. GitHub Discussions (15 minutes)
-- Enable Discussions feature
-- Create categories (Q&A, Ideas, Announcements)
-- Post welcome message
+### 2. Support channels (5 minutes)
+- Leave GitHub Discussions **off**
+- Confirm Issues is on
 - See: ADMIN_SETUP.md → "Features"
 
 ### 3. Branch Protection (10 minutes)
@@ -110,26 +115,40 @@ These settings must be configured by repository admin:
   is done. `.github/ADMIN_SETUP.md` has the exact strings and the reason each is
   needed.
 - Prevent force pushes to main
-- See: ADMIN_SETUP.md → "Branch Protection Rules"
+- See: ADMIN_SETUP.md → "Branch Protection"
 
-### 4. Security Features (10 minutes)
-- Enable Dependabot alerts
-- Enable secret scanning
-- Optional: CodeQL analysis
+### 4. Security Features (5 minutes)
+- Enable secret scanning and secret-scanning push protection (both currently off)
+- Dependabot alerts and Dependabot security updates are already on
+- CodeQL runs on every PR, but the repository API reports Code Security as
+  disabled; confirm the configuration rather than assuming it
 - See: ADMIN_SETUP.md → "Security Settings"
 
-### 5. Make Repository Public (5 minutes)
+### 5. Actions Settings (5 minutes)
+- Turn off "Allow GitHub Actions to create and approve pull requests" (currently on)
+- Set fork pull request workflows to require approval for all external contributors
+- See: ADMIN_SETUP.md → "GitHub Actions Permissions"
+
+### 6. Make Repository Public (5 minutes)
 **ONLY AFTER:**
-- PR #15 is merged
 - Admin tasks above are complete
-- First release (v0.1.0) is created
+- A release has been cut that covers what is on `main`. The newest release is
+  v0.5.0 (tagged 2026-07-09), and `[Unreleased]` in `CHANGELOG.md` carries BREAKING
+  entries, so v0.5.0 does **not** describe `main` today. Cut one before the flip
+  or the first thing a new user downloads is behind the code they are reading.
 - See: ADMIN_SETUP.md → "Visibility Settings"
 
-**Total admin time**: ~1 hour
+**Total admin time**: ~45 minutes
 
 ---
 
 ## Open Source Maturity Progress
+
+This table is a historical record of PR #15 (2026-04-24), not current state. As of
+2026-07-27 the Security row overstates where we are: secret scanning and
+secret-scanning push protection are both off, and "Allow GitHub Actions to create
+and approve pull requests" is on. Do not cite the score below as go/no-go
+evidence without re-checking the live settings.
 
 | Category | Before PR #15 | After PR #15 | Target |
 |----------|---------------|--------------|--------|
@@ -141,9 +160,15 @@ These settings must be configured by repository admin:
 | Release Process | 1/5 ❌ | **4/5 ✅** | 5/5 |
 | Discoverability | 0/5 ❌ | **3/5 ⚠️** | 5/5 |
 
-**Overall Score**: 31/35 (89%) - **Growth Stage** ✅
+**Overall Score at the time of PR #15**: 31/35 (89%) - **Growth Stage** ✅
 
-**Target Achieved**: Yes! Exceeded 80% threshold for public release.
+**Target Achieved at the time of PR #15**: Yes! Exceeded 80% threshold for
+public release.
+
+Both lines describe 2026-04-24 and are not a current assessment. The Security
+row they include has since been overtaken by the live settings noted above, so
+the real figure today is lower. Re-score against the live settings before
+treating the 80% threshold as met.
 
 ---
 
@@ -151,22 +176,19 @@ These settings must be configured by repository admin:
 
 ### Immediate (Before Public Release)
 
-1. **Merge PR #15** - Get approval from reviewers
-2. **Admin configures repository** - See ADMIN_SETUP.md (requires ~1 hour)
-3. **Create v0.1.0 release** - See RELEASING.md (requires ~30 minutes)
-4. **Make repository public** - Settings → Danger Zone → Change visibility
+1. **Admin configures repository** - See ADMIN_SETUP.md (~45 minutes)
+2. **Cut a release** - `[Unreleased]` carries BREAKING entries, so v0.5.0 does not
+  describe `main`. See RELEASING.md.
+3. **Make repository public** - Settings → Danger Zone → Change visibility
 
 ### Post-Publication
 
 1. **Monitor community health** - Track issue/PR response times
 2. **Announce release** - Solace Community, social media, internal channels
-3. **Enable Dependabot** - Automated dependency updates
-4. **Submit to registries** - MCP server registry (if exists), Go package indexes
+3. **Submit to registries** - MCP server registry (if exists), Go package indexes
 
 ### Future Enhancements
 
-- Add Dependabot configuration (`.github/dependabot.yml`)
-- Consider CODEOWNERS file for automatic reviewer assignment
 - Add more badges (coverage, downloads, stars)
 - Create GitHub Project board for roadmap visibility
 - Set up GitHub Sponsors (if applicable)
