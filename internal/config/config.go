@@ -204,8 +204,8 @@ func allowedClientAuthMethods() []string {
 	}
 }
 
-// OAuth grant-type strings sent to the IdP token endpoint (Hop 2). V1 supports
-// only RFC 8693 token exchange; Entra OBO (jwt-bearer) is tracked as follow-up.
+// OAuth grant-type strings sent to the IdP token endpoint (Hop 2). Only
+// RFC 8693 token exchange is implemented.
 const (
 	// #nosec G101 -- public RFC 8693 grant-type URN, not a credential.
 	GrantTypeTokenExchange = "urn:ietf:params:oauth:grant-type:token-exchange" // RFC 8693
@@ -217,24 +217,21 @@ var validGrantTypes = []string{
 	GrantTypeTokenExchange,
 }
 
-// audience_param values: which OAuth request parameter carries the per-broker
-// audience value on the wire. The runtime uses this to drive its request-body
-// composition per IdP family (RFC 8693 / Entra OBO / RFC 8707). The schema
-// allowlist is open to all three even though V1 runtime support is limited;
-// see the decisions doc for why "schema-flexible, validator-strict" applies.
-const (
-	AudienceParamAudience = "audience" // RFC 8693 default
-	AudienceParamScope    = "scope"    // Entra OBO style (audience prefixed onto each scope)
-	AudienceParamResource = "resource" // RFC 8707 resource indicator style
-)
+// AudienceParamAudience is the only audience_param value this version
+// implements: which OAuth request parameter carries the per-broker audience
+// value on the wire (RFC 8693 default).
+const AudienceParamAudience = "audience"
 
 // validAudienceParams is the allowlist of audience-carrying parameter names
-// accepted by the schema. Membership here does not imply V1 runtime support
-// for that wire format — see the decisions doc.
+// accepted at config load. Only AudienceParamAudience — schema and runtime
+// support must land together: a value that validates here but isn't
+// implemented would move the failure from config load (joined with every
+// other broker_oauth error) to server startup once the Hop-2 runtime is
+// actually constructed, which only happens when Hop 1 is oauth AND
+// broker_oauth: is set AND a broker uses auth.mode: oauth — a worse and
+// later place for an operator to discover a typo-shaped mistake.
 var validAudienceParams = []string{
 	AudienceParamAudience,
-	AudienceParamScope,
-	AudienceParamResource,
 }
 
 // LogValue implements slog.LogValuer for BrokerOAuthConfig. It exposes the
@@ -296,29 +293,18 @@ func (c *ServerConfig) BrokerAliases() []string {
 
 // Hop2OAuthActive reports whether the Hop-2 (MCP server ↔ broker) OAuth
 // runtime should be constructed for this process. It is true only when
-// ALL THREE preconditions hold:
+// BOTH preconditions hold:
 //
-//  1. ENABLE_UNRELEASED_BROKER_OAUTH is set truthy (the operator has
-//     explicitly opted into the unreleased runtime for testing).
-//  2. The global broker_oauth: block is populated (IdP coordinates
+//  1. The global broker_oauth: block is populated (IdP coordinates
 //     exist for token exchange).
-//  3. At least one broker has auth.mode: oauth (there is actually
+//  2. At least one broker has auth.mode: oauth (there is actually
 //     something for the runtime to do).
 //
-// If any of the three is missing, cmd/server/main.go builds no Hop-2
-// resources — no IdP HTTP client, no token exchanger, no in-memory copy
-// of the client secret. This is what turns the flag's meaning from "the
-// runtime is compiled in" into "the runtime is live in this process."
-//
-// LIFECYCLE: at ship time, delete only the first precondition (the flag
-// check). The other two remain — they are the correct final gate for the
-// post-ship runtime, since building an exchanger for a config that
-// declares broker_oauth: but does not consume it would be wasteful even
-// then. See the LIFECYCLE comment on unreleasedBrokerOAuthEnabled.
+// If either is missing, cmd/server/main.go builds no Hop-2 resources — no
+// IdP HTTP client, no token exchanger, no in-memory copy of the client
+// secret. Building an exchanger for a config that declares broker_oauth:
+// but does not consume it would be wasteful.
 func (c *ServerConfig) Hop2OAuthActive() bool {
-	if !unreleasedBrokerOAuthEnabled() {
-		return false
-	}
 	if c.BrokerOAuth == nil {
 		return false
 	}
@@ -958,17 +944,9 @@ func validate(cfg *ServerConfig) error {
 	errs = append(errs, aliasErrs...)
 	cfg.brokers = canonical
 
-	// oauthBrokerCount tracks how many brokers were configured with the not-
-	// yet-supported oauth mode. Used at end of validate() to emit the loud
-	// operator-facing banner separately from the joined error.
-	oauthBrokerCount := 0
-
 	for _, lower := range slices.Sorted(maps.Keys(cfg.brokers)) {
 		broker := cfg.brokers[lower]
 		errs = append(errs, validateBroker(broker, cfg.IsProductionMode())...)
-		if broker.Auth.Mode == AuthModeOAuth {
-			oauthBrokerCount++
-		}
 		// In production (oauth) mode, https:// is enforced but a disabled cert
 		// check still exposes the broker admin credential to a MITM. Refuse it
 		// unless the operator explicitly accepts the risk (mirrors the
@@ -1115,42 +1093,10 @@ func validate(cfg *ServerConfig) error {
 	// block and its relationship with the brokers' auth modes.
 	errs = append(errs, validateBrokerOAuthConfig(cfg)...)
 
-	// OAuth-related operator-facing surface. Two invariants compete for the
-	// operator's attention when at least one broker uses auth.mode: oauth:
-	//
-	//   1) The OAuth-not-supported guard (temporary): while the OAuth
-	//      runtime is not yet wired, every oauth-mode broker is rejected at
-	//      startup. This is the ONLY message operators should see for that
-	//      config shape — clear, one direction of remediation ("use basic
-	//      or bearer until OAuth-on-brokers ships").
-	//
-	//   2) The Hop 1 / Hop 2 alignment invariant (permanent): when Hop 2
-	//      OAuth is in use, mcp_client_auth.mode must also be oauth so the
-	//      MCP server has an agent token to exchange for a broker token.
-	//
-	// Both error AND banner for the alignment invariant are gated behind
-	// "the OAuth-not-supported guard did NOT fire." While the guard is
-	// active, layering the alignment remediation on top would point
-	// operators at a second remediation path for a feature that does not
-	// yet run — noise. The validator function validateHop1Hop2Alignment
-	// stays callable and is exercised by TestValidateHop1Hop2Alignment_Direct
-	// so the invariant does not rot while it is sleeping in validate().
-	//
-	// FLAG CONTRACT: ENABLE_UNRELEASED_BROKER_OAUTH does not change
-	// schema/shape validation — malformed OAuth YAML is rejected either
-	// way. It only gates the temporary not-yet-supported guard and the
-	// banner branch below (see the if/else on unreleasedBrokerOAuthEnabled).
-	// Runtime construction is a separate concern; see ServerConfig.Hop2OAuthActive.
-	//
-	// LIFECYCLE: when the OAuth runtime ships (SOL-150070 follow-up sub-
-	// tickets), delete the whole `if oauthBrokerCount > 0` arm — the
-	// `else if` then runs unconditionally and the alignment check
-	// becomes the operator-facing surface for Hop 1 / Hop 2 mismatches.
-	// See banner.LogOAuthNotSupported doc-comment for the full removal
-	// checklist.
-	if oauthBrokerCount > 0 && !unreleasedBrokerOAuthEnabled() {
-		banner.LogOAuthNotSupported(oauthBrokerCount)
-	} else if err := validateHop1Hop2Alignment(cfg); err != nil {
+	// Hop 1 / Hop 2 alignment invariant (permanent): when Hop 2 OAuth is in
+	// use, mcp_client_auth.mode must also be oauth so the MCP server has an
+	// agent token to exchange for a broker token.
+	if err := validateHop1Hop2Alignment(cfg); err != nil {
 		errs = append(errs, err)
 		banner.LogHop2WithoutHop1(countHop2Brokers(cfg), cfg.MCPClientAuth.Mode)
 	}
@@ -1159,10 +1105,7 @@ func validate(cfg *ServerConfig) error {
 }
 
 // countHop2Brokers returns the number of brokers configured with
-// auth.mode: oauth. Identical, while the OAuth-not-supported guard is
-// active, to the oauthBrokerCount computed in validate(); kept as a
-// separate helper because the two counters diverge once the guard is
-// removed (oauthBrokerCount goes away; the Hop 2 count remains).
+// auth.mode: oauth.
 func countHop2Brokers(cfg *ServerConfig) int {
 	n := 0
 	for _, b := range cfg.brokers {
@@ -1270,17 +1213,12 @@ func validateToolAuthorization(cfg *ServerConfig) []error {
 
 // OAuth on any broker requires Hop 1 OAuth on the MCP client auth. Returns
 // nil when the invariant holds (no Hop 2 brokers, or Hop 1 mode is oauth)
-// and an operator-facing error otherwise.
+// and an operator-facing error otherwise. RFC 8693 token exchange consumes
+// the agent's Hop 1 token as the subject_token, so without Hop 1 OAuth
+// there is no subject_token to exchange and Hop 2 has nothing to do.
 //
-// This validator is a PURE function — it inspects the config and returns
-// an error or nil. Whether validate() actually calls it and surfaces the
-// error to operators is decided at the call site. While the
-// OAuth-not-supported guard is active, validate() does NOT call this
-// validator (the alignment branch is gated behind the guard so operators
-// get a single remediation path). The invariant is still exercised today
-// by TestValidateHop1Hop2Alignment_Direct, which calls this function
-// directly with crafted configs, so the alignment logic does not rot
-// while it is sleeping in validate().
+// Called unconditionally from validate(); returns nil (no-op) unless at
+// least one broker uses auth.mode: oauth.
 func validateHop1Hop2Alignment(cfg *ServerConfig) error {
 	if cfg.MCPClientAuth.Mode == AuthModeOAuth {
 		return nil
@@ -1353,27 +1291,6 @@ func validateBroker(broker *BrokerConfig, productionMode bool) []error {
 		if broker.Auth.Audience != "" && strings.TrimSpace(broker.Auth.Audience) == "" {
 			errs = append(errs, fmt.Errorf("broker %q: auth.audience is empty or whitespace-only", alias))
 		}
-
-		// RUNTIME GUARD: schema accepts oauth mode (and the OAuth fields
-		// above) so configs that target the eventual OAuth runtime can be
-		// staged and validated structurally today. The runtime itself is
-		// implemented (OAuthAuthenticator + Exchanger + broker wiring) but
-		// kept gated until end-to-end validation against real IdPs is done.
-		// Reject at startup with an actionable message rather than letting
-		// the failure land on the first SEMP request. This block will be
-		// removed by the sub-ticket that ships broker OAuth for real.
-		// See docs/superpowers/plans/oauth-token-exchange/SOL-150796-T2-config-schema.md
-		// for the rationale (no feature flag, removed when runtime lands).
-		//
-		// Bypass for manual E2E testing: ENABLE_UNRELEASED_BROKER_OAUTH=true
-		// skips this error. See unreleasedBrokerOAuthEnabled — the WARN it
-		// triggers at startup is the honest counter-signal.
-		if !unreleasedBrokerOAuthEnabled() {
-			errs = append(errs, fmt.Errorf(
-				"broker %q: auth.mode %q is recognized but not yet supported in this version; "+
-					"use basic or bearer for now",
-				alias, AuthModeOAuth))
-		}
 	}
 
 	return errs
@@ -1440,8 +1357,7 @@ func validateBrokerOAuthConfig(cfg *ServerConfig) []error {
 		errs = append(errs, fmt.Errorf("broker_oauth.grant_type is required (must be one of %v)", validGrantTypes))
 	} else if !slices.Contains(validGrantTypes, cfg.BrokerOAuth.GrantType) {
 		errs = append(errs, fmt.Errorf(
-			"broker_oauth.grant_type %q is not supported in this version (must be one of %v); "+
-				"other grant types (e.g. Entra OBO's jwt-bearer) are tracked as follow-up work",
+			"broker_oauth.grant_type %q is not supported in this version (must be one of %v)",
 			cfg.BrokerOAuth.GrantType, validGrantTypes))
 	}
 
@@ -1449,7 +1365,7 @@ func validateBrokerOAuthConfig(cfg *ServerConfig) []error {
 		errs = append(errs, fmt.Errorf("broker_oauth.audience_parameter_name is required (must be one of %v)", validAudienceParams))
 	} else if !slices.Contains(validAudienceParams, cfg.BrokerOAuth.AudienceParam) {
 		errs = append(errs, fmt.Errorf(
-			"broker_oauth.audience_parameter_name %q is invalid (must be one of %v)",
+			"broker_oauth.audience_parameter_name %q is not supported in this version (must be one of %v)",
 			cfg.BrokerOAuth.AudienceParam, validAudienceParams))
 	}
 
@@ -1701,43 +1617,7 @@ func applyEnvOverrides(cfg *ServerConfig) error {
 	// they load in the same phase as MCP_SERVER_PORT, before validate() runs.
 	applyObservabilityEnv(cfg)
 
-	// Unreleased broker-OAuth runtime opt-in — for manual end-to-end testing
-	// only. Emit a loud WARN so operators cannot accidentally leave this on
-	// in production; the WARN fires once at startup regardless of how many
-	// brokers use oauth mode. See unreleasedBrokerOAuthEnabled and the guard
-	// site in validateBroker for the full picture.
-	if unreleasedBrokerOAuthEnabled() {
-		slog.Warn("UNRELEASED FEATURE ENABLED: broker OAuth is bypassed for manual E2E testing; not for production use",
-			slog.String("env_var", envEnableUnreleasedBrokerOAuth))
-	}
-
 	return nil
-}
-
-// envEnableUnreleasedBrokerOAuth is the env var that opts into the unreleased
-// broker-OAuth runtime. Undocumented in operator-facing docs (broker-config.example.yaml,
-// docs/authentication.md, docs/configuration.md, CHANGELOG.md) by design —
-// this is a testing hatch, not a feature toggle. Remove alongside the guard
-// in validateBroker when broker OAuth ships.
-const envEnableUnreleasedBrokerOAuth = "ENABLE_UNRELEASED_BROKER_OAUTH"
-
-// unreleasedBrokerOAuthEnabled reports whether ENABLE_UNRELEASED_BROKER_OAUTH
-// is set truthy. Uses the same tolerant-parse behavior as the observability
-// flags (unparseable value → WARN + default of false) so a typo cannot
-// silently open the door.
-//
-// External callers (cmd/server/main.go) do not consult this directly — they
-// call ServerConfig.Hop2OAuthActive, which combines this flag with the
-// structural preconditions for the runtime.
-//
-// LIFECYCLE: this function, its constant, the WARN in applyEnvOverrides,
-// and the three call sites (validateBroker guard, LogOAuthNotSupported
-// banner branch, Hop2OAuthActive method) are one linked lifecycle. When
-// broker OAuth ships, delete the flag check from Hop2OAuthActive (the
-// structural preconditions remain), delete the validateBroker guard and
-// the banner branch, and then delete this function and its constant.
-func unreleasedBrokerOAuthEnabled() bool {
-	return envBool(envEnableUnreleasedBrokerOAuth, false, "broker OAuth")
 }
 
 // ToolAuthorizationEnabled reports whether tool authorization should be

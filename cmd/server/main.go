@@ -631,13 +631,12 @@ func main() {
 		slog.Int("operation_count", len(operations)))
 
 	// 3. Build token exchanger only when the Hop-2 OAuth runtime is fully
-	//    active — three preconditions must all hold: the unreleased-feature
-	//    flag is set, broker_oauth: is populated, AND at least one broker
-	//    uses auth.mode: oauth. When any is missing, exchanger stays nil;
-	//    the broker pool constructs basic/bearer authenticators only, and
-	//    no Hop-2 OAuth resources exist in this process. See
-	//    ServerConfig.Hop2OAuthActive for the full contract, including
-	//    lifecycle notes for ship time.
+	//    active — both preconditions must hold: broker_oauth: is populated
+	//    AND at least one broker uses auth.mode: oauth. When either is
+	//    missing, exchanger stays nil; the broker pool constructs
+	//    basic/bearer authenticators only, and no Hop-2 OAuth resources
+	//    exist in this process. See ServerConfig.Hop2OAuthActive for the
+	//    full contract.
 	var exchanger *tokenexchange.Exchanger
 	if cfg.Hop2OAuthActive() {
 		exchanger, err = newTokenExchanger(cfg.BrokerOAuth)

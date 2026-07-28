@@ -10,6 +10,7 @@ The Solace Event Broker MCP Server supports three authentication modes for MCP c
   - [Choose a client registration method](#choose-a-client-registration-method)
   - [Step 1: Set up the identity provider](#step-1-set-up-the-identity-provider)
   - [Step 2: Configure the MCP server](#step-2-configure-the-mcp-server)
+  - [Step 2b: Configure broker OAuth (Hop 2)](#step-2b-configure-broker-oauth-hop-2)
   - [TLS for the MCP server's own listener](#tls-for-the-mcp-servers-own-listener)
   - [Tool authorization (claim-based RBAC)](#tool-authorization-claim-based-rbac)
   - [Step 3: Start the MCP server](#step-3-start-the-mcp-server)
@@ -253,6 +254,74 @@ The `audience` value must exactly match the value configured in step 1.2. Set `r
 
 > **Note:** Under `mode: oauth` the validator enforces `https://` on **both** the `issuer` and `resource_url` URLs (an `http://` value is rejected at startup). When running Keycloak locally for testing, terminate TLS in front of it (for example, via Caddy or a reverse proxy) or run Keycloak with a TLS cert. `resource_url` is the externally advertised identifier for OAuth discovery, so it must be `https://` even when the MCP server's own listener is plaintext behind an upstream terminator — see [TLS for the MCP server's own listener](#tls-for-the-mcp-servers-own-listener) below.
 
+### Step 2b: Configure broker OAuth (Hop 2)
+
+This step is only needed if one or more brokers should use `auth.mode: oauth` instead of `basic`/`bearer`. Under this mode, the MCP server obtains each broker's token by exchanging the calling agent's Hop 1 token (RFC 8693 token exchange) against the identity provider. `mcp_client_auth.mode: oauth` (Hop 1) is required first — RFC 8693 token exchange consumes the agent's Hop 1 JWT as its `subject_token`, so with `mode: static` or `mode: disabled` there is no agent token to exchange and Hop 2 has nothing to do.
+
+> **Note:** Configuring `auth.mode: oauth` on a broker while Hop 1 is `static`/`disabled` is rejected at startup with:
+> ```
+> mcp_client_auth.mode is "static" but 1 broker has auth.mode: oauth; the MCP server
+> needs the agent's token (received via mcp_client_auth) to obtain a broker token, so
+> mcp_client_auth.mode must be oauth
+> ```
+
+Add the top-level `broker_oauth:` block with the IdP's token-exchange coordinates, and set `auth.mode: oauth` on each broker that should use it:
+
+```yaml
+broker_oauth:
+  idp_token_endpoint: "https://your-idp.example.com/realms/your-realm/protocol/openid-connect/token"
+  mcp_server_client_id: "mcp-server"
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: "${MCP_SERVER_CLIENT_SECRET}"
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: "audience"
+
+brokers:
+  prod:
+    url: "https://broker.example.com:943"
+    auth:
+      mode: oauth
+      audience: "solace-broker-prod"
+```
+
+| Field | Description |
+|-------|-------------|
+| `broker_oauth.idp_token_endpoint` | The IdP's token endpoint — where the MCP server POSTs the token-exchange request. Must be `https://` in production. |
+| `broker_oauth.mcp_server_client_id` | The MCP server's own `client_id`, registered at the IdP (this is a separate client registration from the one used for Hop 1 in step 1.2). |
+| `broker_oauth.mcp_server_client_auth` | How the MCP server authenticates itself to the IdP's token endpoint — a discriminated union, exactly one sub-block populated: `client_secret_basic.secret` (sent via HTTP Basic auth) or `client_secret_post.secret` (sent in the form body). |
+| `broker_oauth.grant_type` | The OAuth grant type used for the Hop 2 exchange — see [Grant type](#grant-type) below. |
+| `broker_oauth.audience_parameter_name` | Which request parameter carries the per-broker audience value — see [Audience parameter name](#audience-parameter-name) below. |
+| `brokers.<alias>.auth.mode` | Set to `oauth` to use token exchange for this broker. |
+| `brokers.<alias>.auth.audience` | Optional, even under `auth.mode: oauth` — omitting it does not fail startup. This broker's audience value, forwarded to the IdP during exchange using whichever request parameter `audience_parameter_name` selects; when omitted, the exchange request carries no audience parameter at all. Omit if the broker's OAuth profile does not validate audience; set it only if it does. If set, it must not be whitespace-only (a `${VAR}` resolving to blank fails config load). |
+
+The IdP needs a second client registration for the MCP server itself (distinct from the Hop 1 client in step 1.2) — a **confidential** client with a client secret, since the MCP server authenticates itself directly to the token endpoint rather than involving a browser. Grant it whatever token-exchange permissions your IdP requires (for Keycloak, enable the token-exchange feature for the client and permit it to exchange tokens for the target broker's audience).
+
+#### Grant type
+
+`grant_type` tells the IdP which OAuth flow this request is: RFC 8693 token exchange trades one already-issued token (the agent's Hop 1 JWT) for another (a broker-bound token), rather than the IdP verifying a password or a client secret directly. Set it to the literal RFC 8693 grant-type URN:
+
+```yaml
+grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+```
+
+This is the only grant type this version implements. The field exists (rather than being hardcoded) so a future grant type can be added without a config schema change, but today any other value — including a value your IdP itself recognizes for some other flow — is rejected at config load with `broker_oauth.grant_type is required` (if empty) or `broker_oauth.grant_type "…" is not supported in this version` (if set to anything else).
+
+#### Audience parameter name
+
+`audience_parameter_name` tells the runtime which OAuth request parameter should carry each broker's `auth.audience` value in the token-exchange POST. Different IdP families expect the audience on a different parameter, but this version implements only one:
+
+```yaml
+audience_parameter_name: "audience"
+```
+
+`audience` is RFC 8693's own parameter — the default for Keycloak and most OIDC-compliant IdPs — and the only value this version accepts. Concepts like Microsoft Entra's On-Behalf-Of style (`scope`) or RFC 8707's resource-indicator style (`resource`) are not yet implemented; setting either is rejected at config load with `broker_oauth.audience_parameter_name "scope" is not supported in this version (must be one of [audience])`. If your IdP requires one of those styles, broker OAuth is not yet usable against it in this version.
+
+Two optional sub-blocks tune the runtime's resilience behavior — see [Configuration](configuration.md#broker-oauth-hop-2) for every field and its default:
+
+- `broker_oauth.circuit_breaker` — fails token-exchange calls fast during a sustained IdP outage, instead of letting every broker's requests queue up against a dead IdP. On by default; every field optional.
+- `broker_oauth.retry_after` — shares a process-wide backoff across every broker when the IdP asks callers to slow down (HTTP 429 with `Retry-After`), so one throttled broker doesn't let every other broker keep hammering the same IdP.
+
 ### TLS for the MCP server's own listener
 
 `mode: oauth` is a production profile, so the server must not silently serve its
@@ -481,9 +550,51 @@ A browser window opens on first use for user login. The IdP must support anonymo
 > **Two independent auth legs.** Client→server auth (steps 1–8, the JWT above) is
 > distinct from server→broker auth (step 9 or 10 depending on whether tool
 > authorization is enabled), which uses each broker's configured `auth.mode`
-> (`basic` or `bearer`). Broker-bound OAuth via RFC 8693 token exchange (the
-> `broker_oauth:` config block) is **schema-only** in the current release and
-> not yet wired — see the [CHANGELOG](../CHANGELOG.md).
+> (`basic`, `bearer`, or `oauth`). Broker-bound OAuth via RFC 8693 token
+> exchange (the `broker_oauth:` config block) obtains a broker-bound token by
+> exchanging the client's Hop 1 token, and requires `mcp_client_auth.mode:
+> oauth` — see [Step 2b: Configure broker OAuth (Hop 2)](#step-2b-configure-broker-oauth-hop-2) below.
+
+**Server→broker flow when `auth.mode: oauth` (Hop 2), cache miss:**
+
+```
+ MCP Server     Cache          IdP            Broker
+   │              │              │              │
+   │───── 9a ─────▶              │              │       9a. Tool call arrives — look up a cached
+                                                            broker-bound token for this (agent,
+                                                            broker) pair
+   ◀───── 9b ─────│              │              │       9b. Cache miss
+   │──────────── 9c ─────────────▶              │       9c. RFC 8693 token exchange: subject_token
+                                                            = the agent's Hop 1 JWT, audience = this
+                                                            broker's configured auth.audience
+   ◀──────────── 9d ─────────────│              │       9d. Broker-bound access token
+   │───── 9e ─────▶              │              │       9e. Cache the access token just received
+                                                            from the IdP in 9d, keyed by (agent,
+                                                            broker), until it expires
+   │──────────────────── 10 ────────────────────▶       10. Tool call → SEMP with the broker-
+                                                            bound token as Authorization: Bearer
+   ◀──────────────────── 11 ────────────────────│       11. SEMP response
+   │              │              │              │
+```
+
+**Server→broker flow when `auth.mode: oauth` (Hop 2), cache hit:**
+
+```
+ MCP Server     Cache          Broker
+   │              │              │
+   │───── 9a ─────▶              │                      9a. Tool call arrives — look up a cached
+                                                            broker-bound token for this (agent,
+                                                            broker) pair
+   ◀───── 9b ─────│              │                      9b. Cache hit — no IdP round-trip
+   │──────────── 10 ─────────────▶                      10. Tool call → SEMP with the cached
+                                                            token as Authorization: Bearer
+   ◀──────────── 11 ─────────────│                      11. SEMP response
+   │              │              │
+```
+
+> **Cache key and lifetime.** The cache is keyed on the (agent identity, broker alias) pair, derived from the agent's Hop 1 `subject_token` — the same agent talking to two different brokers gets two independently cached tokens, and two different agents talking to the same broker never share one. An entry lives until the token it holds expires; there is no separate cache TTL setting. Concurrent tool calls that miss the cache for the same (agent, broker) pair at the same time are collapsed into a single IdP round-trip — only one exchange happens, and every caller shares its result. On a broker `401`, the SEMP transport evicts that pair's cached token and retries once with a freshly exchanged one (see [CHANGELOG](../CHANGELOG.md)); a persistently rejected credential still surfaces as a `401` after that single retry, not a loop.
+
+> **What a cache miss can fail with.** Step 9c is subject to the circuit breaker, the `Retry-After` gate, and the exchange retry loop described in [Step 2b](#step-2b-configure-broker-oauth-hop-2) — a sustained IdP outage or a still-throttling IdP fails the tool call immediately at 9c rather than reaching the broker at all, distinct from a broker-side `401`/`403`.
 
 The numbered steps in detail:
 
