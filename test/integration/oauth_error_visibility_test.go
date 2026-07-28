@@ -224,7 +224,6 @@ brokers:
       audience: "solace-broker"
 `, idpURL, brokerURL)
 
-	t.Setenv("ENABLE_UNRELEASED_BROKER_OAUTH", "true")
 	path := filepath.Join(t.TempDir(), "broker-config.yaml")
 	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatalf("writing config: %v", err)

@@ -156,51 +156,30 @@ func TestFromConfig_UnknownGrantTypeReturnsError(t *testing.T) {
 	}
 }
 
-func TestFromConfig_AudienceParamScopeNotYetImplemented(t *testing.T) {
-	t.Parallel()
-
-	cfg := validBrokerOAuthConfig()
-	cfg.AudienceParam = config.AudienceParamScope
-
-	_, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
-	if err == nil {
-		t.Fatal("FromConfig with audience_parameter_name=scope = nil error, want error")
-		return
-	}
-	if !strings.Contains(err.Error(), "not yet implemented") {
-		t.Errorf("error = %q, want it to mention not yet implemented", err.Error())
-	}
-}
-
-func TestFromConfig_AudienceParamResourceNotYetImplemented(t *testing.T) {
-	t.Parallel()
-
-	cfg := validBrokerOAuthConfig()
-	cfg.AudienceParam = config.AudienceParamResource
-
-	_, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
-	if err == nil {
-		t.Fatal("FromConfig with audience_parameter_name=resource = nil error, want error")
-		return
-	}
-	if !strings.Contains(err.Error(), "not yet implemented") {
-		t.Errorf("error = %q, want it to mention not yet implemented", err.Error())
-	}
-}
-
+// TestFromConfig_UnknownAudienceParamReturnsError covers every value other
+// than "audience", including "scope" and "resource" — internal/config.
+// validAudienceParams rejects all three at config load, before FromConfig is
+// ever reached in production, so at this layer they are equally unsupported
+// regardless of whether the string names a real (but unimplemented) OAuth
+// style or a typo.
 func TestFromConfig_UnknownAudienceParamReturnsError(t *testing.T) {
 	t.Parallel()
 
-	cfg := validBrokerOAuthConfig()
-	cfg.AudienceParam = "custom_param"
+	for _, param := range []string{"custom_param", "scope", "resource"} {
+		t.Run(param, func(t *testing.T) {
+			t.Parallel()
 
-	_, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
-	if err == nil {
-		t.Fatal("FromConfig with unknown audience param = nil error, want error")
-		return
-	}
-	if !strings.Contains(err.Error(), "custom_param") {
-		t.Errorf("error = %q, want it to mention the unsupported param name", err.Error())
+			cfg := validBrokerOAuthConfig()
+			cfg.AudienceParam = param
+
+			_, err := FromConfig(cfg, &http.Client{}, cachetest.Default(t))
+			if err == nil {
+				t.Fatal("FromConfig with unknown audience param = nil error, want error")
+			}
+			if !strings.Contains(err.Error(), param) {
+				t.Errorf("error = %q, want it to mention the unsupported param name", err.Error())
+			}
+		})
 	}
 }
 
