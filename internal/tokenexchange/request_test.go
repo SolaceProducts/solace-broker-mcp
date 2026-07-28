@@ -313,8 +313,7 @@ func TestBuildIdPRequest_UnknownAudienceFormat(t *testing.T) {
 		param AudienceFormat
 	}{
 		{"zero value", 0},
-		{"AudienceParamScope (unimplemented)", 2},
-		{"AudienceParamResource (unimplemented)", 3},
+		{"out of range positive", 2},
 		{"negative", -1},
 	}
 
