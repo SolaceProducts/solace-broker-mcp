@@ -108,6 +108,12 @@ These settings must be configured by repository admin:
 ### 3. Branch Protection (10 minutes)
 - Require PR reviews before merge
 - Require CI checks to pass
+- **Add `DCO sign-off` and `DCO check self-test` to the required status checks.**
+  These are not cosmetic. DCO is the control the project carries in place of a
+  contributor licence agreement. Both checks exist in CI, but until they are
+  *required* they enforce nothing, so the control is incomplete until this step
+  is done. `.github/ADMIN_SETUP.md` has the exact strings and the reason each is
+  needed.
 - Prevent force pushes to main
 - See: ADMIN_SETUP.md → "Branch Protection"
 

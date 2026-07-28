@@ -113,7 +113,7 @@ go run ./cmd/server
 
 ### PR Review Process
 
-1. **Automated checks** — CI must pass (build, lint, test, E2E)
+1. **Automated checks** — CI must pass (build, lint, test, E2E, DCO sign-off)
 2. **Maintainer review** — At least one maintainer approval required
 3. **Address feedback** — Respond to review comments and make requested changes
 4. **Squash or rebase** — Clean up commit history if requested
@@ -242,17 +242,48 @@ Signed-off-by: Your Name <your.email@example.com>
 
 ```bash
 # Amend the last commit
-git commit --amend -s
+git commit --amend -s --no-edit && git push --force-with-lease
 
-# Sign off all commits in your branch
-git rebase HEAD~N --signoff  # N = number of commits
+# Sign off all commits in your branch (main = the branch you opened the PR against)
+git rebase --signoff main && git push --force-with-lease
 ```
+
+**If your branch contains a merge commit, do not rebase.** `git rebase` replays a
+merge's parents as ordinary commits and throws the merge away, along with any
+conflict resolution in it. Amend the merge if it is at the tip
+(`git commit --amend -s --no-edit`), or re-create it with `git merge --signoff`.
+The CI output tells you which case you are in.
+
+`git commit -s` signs off with your `git config user.email`, which is also the
+address CI matches against, so make sure it is set to the one you mean to use.
 
 ### Enforcement
 
-- CI checks for DCO sign-off on all commits
-- PRs with unsigned commits will not be merged
-- Use your real name (no pseudonyms or anonymous contributions)
+The `DCO sign-off` check in CI blocks any PR that is missing a sign-off. What it
+checks, precisely:
+
+- Every commit your PR adds. Commits already on the branch you are targeting are
+  not re-checked.
+- Each of those commits needs a `Signed-off-by:` line, starting its own line,
+  whose email matches that commit's own author or committer, compared
+  case-insensitively. A sign-off copied along with someone else's commit does not
+  count.
+- Merge commits are exempt while re-merging their parents reproduces exactly what
+  they recorded, so refreshing your branch with `git merge main` is fine. A merge
+  that contributes something of its own — a conflict resolution, or files edited
+  or added during the merge — needs its own sign-off (`git merge --signoff`).
+  Octopus merges and merges the check cannot recompute always need one.
+- `Co-Authored-By:` trailers are ignored. Co-authors do not need their own
+  sign-off.
+
+The check reports the offending commits and the exact commands to fix them. There
+is no label or flag that skips it. Use your real name — no pseudonyms or
+anonymous contributions.
+
+If you are contributing from a fork, every one of our CI runs waits for a
+maintainer to approve it, not just the one on your first push. So checks can sit
+**pending**, and a check that was green can go back to pending after the PR is
+retitled or edited. That is normal and nothing for you to fix.
 
 ## Questions?
 

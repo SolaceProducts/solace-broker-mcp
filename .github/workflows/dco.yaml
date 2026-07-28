@@ -1,0 +1,103 @@
+name: DCO
+
+# WHY THIS IS NOT IN ci-pr.yaml, AND WHY THE TRIGGER IS pull_request_target
+#
+# This gate stands in for a contributor licence agreement, so a pull request
+# must not be able to switch it off. `pull_request` runs workflows from the
+# pull request's own ref, which means a fork can edit this file. Deleting the
+# job is harmless — a required status check that never reports blocks the merge
+# — but two edits would sail through: adding `if: false` to the job, because
+# GitHub counts a conditionally skipped job as a *successful* required check,
+# and replacing the script invocation with `exit 0`.
+#
+# `pull_request_target` runs the workflow definition and the checked-out files
+# from the BASE ref, so both this file and the script it runs are the reviewed
+# versions on `main` regardless of what the pull request contains.
+#
+# pull_request_target is dangerous when a workflow checks out and *executes*
+# pull-request code with the elevated token it grants. This one does not. It
+# checks out the base ref, fetches the pull request's commits as data, and
+# reads their metadata with git. No pull-request file is built, sourced, or
+# executed, no secrets are referenced, and the token is narrowed to
+# `contents: read` below.
+#
+# One consequence, stated so it is not mistaken for a failure: a pull request
+# that adds or edits this workflow does not exercise its own new version. The
+# base ref's version runs. The change takes effect for pull requests opened
+# after it merges.
+#
+# Second consequence. When the repository requires approval for fork pull
+# request workflows ("Require approval for all outside collaborators"), this run
+# waits for a maintainer like any other. `pull_request_target` is NOT exempt —
+# checked against live data rather than the docs, which are ambiguous:
+# pulumi/examples and dotnet/runtime both have `pull_request_target` runs with
+# `conclusion=action_required`. That fails closed, since `action_required` is
+# not one of the conclusions GitHub counts as a passing required check, so the
+# gate still blocks. It applies to *every* run from an outside collaborator, not
+# only their first, and `edited` above fires on title and body edits — so a
+# maintainer retitling a fork pull request flips DCO from green back to pending
+# until the new run is approved. That is expected, not a broken check.
+#
+# Two properties keep attacker-controlled commit text in the log harmless, and a
+# change that breaks either one needs a fresh look: no later step consumes this
+# job's output, and the token stays `contents: read`. Given both, a commit
+# message that injects a workflow command can at worst print a misleading
+# annotation on its own pull request.
+
+on:
+  pull_request_target:
+    # `edited` is load-bearing, not padding. Retargeting a pull request's base
+    # branch fires `edited` (with `changes.base`), never `synchronize`, and the
+    # head sha does not move — so the check run produced against the OLD base
+    # survives, and branch protection judges by head sha. Without `edited`:
+    # open a pull request against a throwaway branch so the commit range is
+    # empty and DCO goes green, then retarget to main and merge unsigned
+    # commits. Re-running on title and body edits is the cheap price.
+    types: [opened, synchronize, reopened, edited]
+    # Scoped to main because check runs key on the head SHA, not the pull
+    # request. Two pull requests can share a head branch with different bases,
+    # so a green run from a PR targeting a throwaway branch would otherwise land
+    # on the SHA that a PR targeting main is judged by. Restricting the base
+    # removes that: no run is produced for the throwaway target at all. A PR
+    # against any other base gets no DCO report, so its required check never
+    # reports and the merge stays blocked — fail-closed. Add the branch here if
+    # the project starts taking pull requests against release branches.
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    name: DCO sign-off
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the base ref (this is what makes the gate untamperable)
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth: 0 does two load-bearing things: it gives the check real
+          # history instead of a shallow clone, and it fetches
+          # `+refs/heads/*:refs/remotes/origin/*`, which is where the script's
+          # `origin/<base>` exclusion comes from. Reducing this breaks both.
+          fetch-depth: 0
+      - name: Fetch the pull request's commits
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        # Data, not code: the commits are read with `git`, never executed.
+        run: git fetch --no-tags --quiet origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/${PR_NUMBER}"
+      # The gate's own logic is verified on every run rather than trusted. Fails
+      # closed: a broken check blocks the merge instead of waving it through.
+      - name: Self-test the DCO check
+        run: .github/scripts/dco-check.test.sh
+      - name: Verify every commit contributed by this pull request is signed off
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: .github/scripts/dco-check.sh
