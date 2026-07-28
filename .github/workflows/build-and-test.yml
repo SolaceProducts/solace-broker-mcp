@@ -47,13 +47,12 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.11.4
-          # Disable the analysis cache. Its key is
-          # os + cwd + interval + go.mod hash, so it does not invalidate on
-          # source or .golangci.yml changes and can restore stale staticcheck
-          # facts that produce phantom diagnostics against current sources
-          # (seen as flaky SA5011 on PR #150). Trading ~30s per run for
-          # honest, reproducible lint results.
-          skip-cache: true
+          # The action's cache key hashes go.mod and this interval, not the
+          # source tree or .golangci.yml, so stale analysis facts can outlive a
+          # source change. Keep the window short (default is 7 days) so any
+          # staleness self-heals quickly. The flaky SA5011 that once made this
+          # dangerous (PR #150) is fixed at the source, so caching is safe again.
+          cache-invalidation-interval: 1
           # --verbose surfaces per-linter timing, active-linter list, and
           # package-load stats so a "0 issues" result can be verified as
           # full analysis rather than a silent skip.
