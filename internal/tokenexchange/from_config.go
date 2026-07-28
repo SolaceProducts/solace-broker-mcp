@@ -145,14 +145,14 @@ func resolveGrantType(gt string) (GrantType, error) {
 	}
 }
 
+// resolveAudienceParam accepts only "audience" — internal/config.validAudienceParams
+// rejects every other value at config load, before FromConfig is ever reached in
+// production, so any other string here is equally unsupported regardless of whether
+// it names a real (but unimplemented) OAuth style or a typo.
 func resolveAudienceParam(ap string) (AudienceFormat, error) {
 	switch ap {
 	case config.AudienceParamAudience:
 		return AudienceParamAudience, nil
-	case config.AudienceParamScope:
-		return 0, fmt.Errorf("tokenexchange: audience_parameter_name %q is schema-accepted but not yet implemented", ap)
-	case config.AudienceParamResource:
-		return 0, fmt.Errorf("tokenexchange: audience_parameter_name %q is schema-accepted but not yet implemented", ap)
 	default:
 		return 0, fmt.Errorf("tokenexchange: unsupported audience_parameter_name %q", ap)
 	}

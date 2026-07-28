@@ -68,17 +68,14 @@ type AudienceFormat int
 
 const (
 	// AudienceParamAudience uses the RFC 8693 "audience" parameter — the
-	// canonical token-exchange spelling. The only V1-implemented format.
+	// canonical token-exchange spelling. The only implemented format;
+	// internal/config.validAudienceParams rejects any other value before
+	// FromConfig is ever reached.
 	AudienceParamAudience AudienceFormat = iota + 1
-	// AudienceParamScope (Entra OBO style) and AudienceParamResource
-	// (RFC 8707) are schema-accepted in internal/config but not yet
-	// implemented at the wire-construction layer; FromConfig rejects
-	// them with a clear error pointing at this comment.
 )
 
 // GrantType identifies the OAuth grant-type URN sent in the form body.
-// V1 supports only RFC 8693 token exchange; Entra OBO's jwt-bearer is
-// tracked as follow-up work.
+// Only RFC 8693 token exchange is implemented.
 type GrantType int
 
 const (

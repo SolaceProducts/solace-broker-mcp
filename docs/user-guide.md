@@ -29,7 +29,7 @@ The Solace Event Broker MCP Server requires:
 |---|---|
 | **Solace event broker** | One or more brokers with SEMP management enabled. The server connects to the SEMP management API (typically port 8080 for HTTP or 1943 for HTTPS). |
 | **SEMPv1+v2 reachability** | The machine running the MCP server must have network access to both the SEMPv1 (`/SEMP`) and SEMPv2 (`/SEMP/v2`) endpoints on each broker's SEMP management port. |
-| **Broker credentials** | A SEMP username and password (basic auth) to access each broker. |
+| **Broker credentials** | Per-broker SEMP credentials: a username and password (basic auth), a static token (bearer auth), or an OAuth identity provider for token exchange (`auth.mode: oauth` — requires `mcp_client_auth.mode: oauth`; see [Authentication](authentication.md#step-2b-configure-broker-oauth-hop-2)). |
 | **Runtime environment** | One of: Docker, a supported OS/architecture for the binary (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64), or Kubernetes. |
 | **MCP client** | An MCP-compatible AI client such as Claude Code or Claude Desktop. |
 | **OAuth provider** (production only) | An OIDC-compliant identity provider (for example, Keycloak, Auth0, Okta) is required when `mcp_client_auth.mode` is `oauth`. An OAuth provider is not required when `mode` is `disabled` or `static` (local development). |
@@ -203,7 +203,7 @@ These tools create, update, and delete broker configuration objects via the SEMP
 
 ### Authentication
 
-The server supports open access, static token, and OAuth/OIDC authentication for MCP clients, and basic auth or bearer token for broker connections. Under OAuth mode, the server also supports claim-based tool authorization — gating individual MCP tools by the caller's group or role memberships — which must be opted in or out explicitly. See the [Authentication](authentication.md) guide for setup instructions and the [Tool Authorization](configuration.md#tool-authorization) reference for the policy schema and audit-log shape.
+The server supports open access, static token, and OAuth/OIDC authentication for MCP clients, and basic auth, bearer token, or OAuth (RFC 8693 token exchange) for broker connections. Under OAuth mode, the server also supports claim-based tool authorization — gating individual MCP tools by the caller's group or role memberships — which must be opted in or out explicitly. See the [Authentication](authentication.md) guide for setup instructions (including the broker OAuth walkthrough) and the [Tool Authorization](configuration.md#tool-authorization) reference for the policy schema and audit-log shape.
 
 ## Deployment Targets
 
@@ -220,11 +220,12 @@ The server supports open access, static token, and OAuth/OIDC authentication for
 - **Config file not found** — The server looks for the yaml configuration file in this order: `CONFIG_FILE` env var, `/etc/mcp-server/config.yaml`, then `./broker-config.yaml`. Set `CONFIG_FILE` explicitly if the file is in a non-standard location.
 - **TLS misconfiguration** — Both `tls_cert_file` and `tls_key_file` must be set together. Providing only one is a startup error.
 - **OAuth config missing** — When `mcp_client_auth.mode` is `oauth`, the `issuer`, `audience`, and `resource_url` fields are required. For local testing, set `mcp_client_auth.mode: disabled` or `static`.
+- **Broker OAuth (Hop 2) config rejected** — A broker with `auth.mode: oauth` requires `mcp_client_auth.mode: oauth` and a complete `broker_oauth:` block; missing or invalid fields are rejected at config load, before the server starts. See [Step 2b](authentication.md#step-2b-configure-broker-oauth-hop-2) for the full field reference, including `audience_parameter_name`, which only accepts `audience` in this version.
 
 ### Cannot Connect to Broker
 
 - **SEMP not enabled** — Verify the broker's SEMP management interface is accessible at the configured URL (for example, `http://broker:8080/SEMP`).
-- **Authentication failure** — Check that credentials in the `.env` file are correct. For basic auth, verify both `username` and `password`. For bearer mode, verify the `token`.
+- **Authentication failure** — Check that credentials in the `.env` file are correct. For basic auth, verify both `username` and `password`. For bearer mode, verify the `token`. For OAuth mode, verify the `broker_oauth:` block — see [Step 2b](authentication.md#step-2b-configure-broker-oauth-hop-2).
 - **TLS certificate errors** — If the event broker uses a self-signed certificate, enable `insecure_skip_verify` in the broker config. In production (`mcp_client_auth.mode: oauth`) this is refused at startup unless you also set `allow_insecure_broker_tls: true` to acknowledge the risk. See [Configuration](configuration.md) for details.
 
 ### Tool Returns an Error
