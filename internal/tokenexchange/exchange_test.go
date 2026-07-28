@@ -546,8 +546,9 @@ func TestExchange_ContextDeadlineExceededReturnsDeadlineError(t *testing.T) {
 }
 
 // TestExchange_ExpiredContextIsHonoredOnEveryPath pins the guarantee the
-// deadline test above depends on, across both paths that could return a token
-// without consulting the caller.
+// deadline test above depends on, across every path that could return a token
+// without consulting the caller: the singleflight result, the cache hit, and
+// the cache hit whose caller dies mid-lookup.
 //
 // The cache hit never looked at ctx: TokenCache.Get is not required to honor
 // it and the in-memory implementation shipped today ignores it outright, so a
@@ -557,14 +558,20 @@ func TestExchange_ContextDeadlineExceededReturnsDeadlineError(t *testing.T) {
 // selection" when both are ready — now closed by a re-check on the success
 // branch.
 //
-// Only the warm-cache subtest couples to the fix. A cache hit needs no
-// scheduling accident, so it returns a token on every run without the guard.
-// The cold-cache subtest documents the same contract for the singleflight path
-// but passes either way, because a real cancelled context is caught by the
-// entry guard long before the select. For deterministic proof that the select's
-// re-check fires, see TestExchange_AbandonedOnResultBranchLogsBreadcrumb, which
-// holds Done() open so the result branch is taken on purpose rather than by
-// winning a pseudo-random coin flip.
+// Three subtests, and they do not all carry equal weight:
+//
+//   - "cold cache" documents the contract for the singleflight path but passes
+//     either way, because a context cancelled up front is caught by the entry
+//     guard long before the select. For deterministic proof that the select's
+//     re-check fires, see TestExchange_AbandonedOnResultBranchLogsBreadcrumb,
+//     which holds Done() open so the result branch is taken on purpose rather
+//     than by winning a pseudo-random coin flip.
+//   - "warm cache" couples to the original fix: a cache hit needs no scheduling
+//     accident, so before the entry guard it returned a token on every run.
+//   - "warm cache, cancelled during the lookup" couples to the hit's own
+//     re-check. Both subtests above cancel before the call and so never get
+//     past the entry guard; this one cancels inside Get, which is the only
+//     window that reaches the hit's return with a dead caller.
 //
 // Neither of these is the cause of the intermittent CI failure in
 // TestExchange_ContextDeadlineExceededReturnsDeadlineError. That was the test's
@@ -646,7 +653,76 @@ func TestExchange_ExpiredContextIsHonoredOnEveryPath(t *testing.T) {
 			t.Errorf("errors.Is(err, context.Canceled) = false, want true; err = %v", err)
 		}
 	})
+
+	// The two subtests above both cancel BEFORE the call, so the entry guard
+	// catches them and neither reaches the hit's own return. This one cancels
+	// during the lookup, which is the window the entry guard cannot cover: it is
+	// point-in-time, and TokenCache.Get does not honor ctx. Without the re-check
+	// at the hit, a caller that has already gone away still leaves with a usable
+	// credential. Raised by @solace-awaheed in review on #227.
+	t.Run("warm cache, cancelled during the lookup", func(t *testing.T) {
+		t.Parallel()
+		// Not pinning nowFunc, for the same wall-clock reason as above.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, successJSON("exchanged-token", 3600))
+		}))
+		t.Cleanup(srv.Close)
+		e := newTestExchanger(t, srv.URL)
+
+		if _, err := e.Exchange(context.Background(), validInput()); err != nil {
+			t.Fatalf("priming exchange: %v", err)
+		}
+		gr, err := e.cache.Get(context.Background(), computeDeduplicationKey(DeduplicationKeyInput{
+			SubjectToken: validInput().SubjectToken,
+			BrokerAlias:  validInput().BrokerAlias,
+		}))
+		if err != nil {
+			t.Fatalf("priming the cache: %v", err)
+		}
+		if gr.Status != cache.GetHit || gr.Entry.Value == "" {
+			t.Fatalf("fixture did not warm the cache: status=%v value_empty=%v", gr.Status, gr.Entry.Value == "")
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		// Live through the entry guard, cancelled from inside Get.
+		e.cache = &cancelDuringGetCache{inner: e.cache, cancel: cancel}
+
+		tok, err := e.Exchange(ctx, validInput())
+		if tok != nil {
+			t.Errorf("tok = %v, want nil: cancelled during the lookup, so the hit must not be served", tok)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("errors.Is(err, context.Canceled) = false, want true; err = %v", err)
+		}
+	})
 }
+
+// cancelDuringGetCache cancels the caller's context from inside Get, then
+// returns what the real cache would have. It reproduces the one window the
+// entry guard cannot cover, deterministically: TokenCache.Get does not honor
+// ctx, so a caller cancelled mid-lookup still arrives at the hit's return.
+type cancelDuringGetCache struct {
+	inner  cache.TokenCache
+	cancel context.CancelFunc
+}
+
+func (c *cancelDuringGetCache) Get(ctx context.Context, key string) (cache.GetResult, error) {
+	res, err := c.inner.Get(ctx, key)
+	c.cancel()
+	return res, err
+}
+
+func (c *cancelDuringGetCache) Put(ctx context.Context, key string, entry cache.CachedCredential) (cache.PutResult, error) {
+	return c.inner.Put(ctx, key, entry)
+}
+
+func (c *cancelDuringGetCache) Delete(ctx context.Context, key string) (cache.DeleteResult, error) {
+	return c.inner.Delete(ctx, key)
+}
+
+func (c *cancelDuringGetCache) Close() error { return c.inner.Close() }
 
 // A follower that shares an in-flight exchange must bail out the moment its
 // own context is cancelled — it must NOT block until the leader's IdP call

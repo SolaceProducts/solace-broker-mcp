@@ -31,16 +31,20 @@ import (
 // (subjectToken, brokerAlias) pair are collapsed into a single IdP
 // round-trip via singleflight, and the result is cached for future calls.
 func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, error) {
-	// A caller who is already done gets its own error, never a token.
+	// A caller who is already done gets its own error, never a token. This is
+	// the cheap early exit: it skips the key hash and the cache round-trip for
+	// a caller that cannot use the answer.
 	//
-	// TokenCache.Get takes a context but does not promise to honor it, and
-	// the in-memory implementation shipped today ignores it outright, so the
-	// cache hit below could hand a live token to a cancelled caller. Guarding
-	// here rather than pushing the check into the cache is deliberate on both
-	// counts: the interface reserves its error return for backend failures,
-	// and Exchange treats a Get error as a warning and falls through to a full
-	// IdP exchange, so a cache-level rejection would make a dead caller do
-	// *more* work, not less.
+	// It is not on its own sufficient for the cache hit. TokenCache.Get takes a
+	// context but does not promise to honor it, and the in-memory implementation
+	// shipped today ignores it outright, so a hit is re-checked at its own
+	// return below — this guard is point-in-time, and a caller cancelled between
+	// the two would otherwise still be handed a live token.
+	//
+	// Pushing the check into the cache instead is wrong on two counts: the
+	// interface reserves its error return for backend failures, and Exchange
+	// treats a Get error as a warning and falls through to a full IdP exchange,
+	// so a cache-level rejection would make a dead caller do *more* work.
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -57,6 +61,14 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	} else {
 		slog.Log(ctx, gr.Status.Level(), "token cache get", "broker", input.BrokerAlias, "status", gr.Status)
 		if gr.Status == cache.GetHit {
+			// Re-check for the same reason the singleflight branch does below:
+			// the entry guard is point-in-time and Get ignores ctx, so without
+			// this a caller cancelled during the lookup still leaves with a
+			// usable credential. One load on the hit path is cheaper than
+			// handing a token to a caller that has already gone away.
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			return &Token{
 				Value:     gr.Entry.Value,
 				ExpiresAt: gr.Entry.ExpiresAt,
@@ -122,8 +134,9 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	// pseudo-random coin flip below, and on "result" the exchange may have
 	// finished with an error, having never reached its cache Put.
 	//
-	// The entry guard stays silent because it starts no IdP call at all, so it
-	// contributes nothing to the load such an investigation is trying to size.
+	// Two earlier exits stay silent, for the same reason as each other: the entry
+	// guard and the cache hit's own ctx re-check. Neither starts an IdP call, so
+	// neither contributes to the load such an investigation is trying to size.
 	//
 	// Broker alias and the ctx error text are safe to log; no token material.
 	abandonedByCaller := func(cause error, via string) (*Token, error) {
