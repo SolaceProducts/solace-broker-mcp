@@ -38,6 +38,20 @@ func validateTestManager(t *testing.T, toolNames ...string) *ToolManager {
 	return mgr
 }
 
+// validateTestManagerWithWriteTools builds a ToolManager holding read-only
+// stubs for readOnlyNames and write/action stubs for writeNames. Mirrors
+// startup, where mgr holds every tool regardless of enable_write_tools.
+func validateTestManagerWithWriteTools(t *testing.T, readOnlyNames, writeNames []string) *ToolManager {
+	t.Helper()
+	mgr := validateTestManager(t, readOnlyNames...)
+	for _, name := range writeNames {
+		h := newStubHandler(name)
+		h.annotations = Annotations{ReadOnly: false}
+		mgr.Register(h)
+	}
+	return mgr
+}
+
 // warnLinesMentioning returns every WARN JSON slog line containing substr.
 func warnLinesMentioning(t *testing.T, buf *bytes.Buffer, substr string) []map[string]any {
 	t.Helper()
@@ -81,7 +95,7 @@ func TestValidatePolicyToolNames_AllKnown_ReturnsNil(t *testing.T) {
 		},
 	}
 
-	if err := ValidatePolicyToolNames(cfg, mgr); err != nil {
+	if err := ValidatePolicyToolNames(cfg, mgr, true); err != nil {
 		t.Errorf("expected nil error for all-known config, got: %v", err)
 	}
 	if buf.Len() > 0 {
@@ -98,7 +112,7 @@ func TestValidatePolicyToolNames_OneUnknown_ReportsToolAndGroup(t *testing.T) {
 		},
 	}
 
-	err := ValidatePolicyToolNames(cfg, mgr)
+	err := ValidatePolicyToolNames(cfg, mgr, true)
 	if err == nil {
 		t.Fatal("expected error for unknown tool, got nil")
 	}
@@ -125,7 +139,7 @@ func TestValidatePolicyToolNames_SameUnknownAcrossGroups_DedupedToOneRow(t *test
 		},
 	}
 
-	err := ValidatePolicyToolNames(cfg, mgr)
+	err := ValidatePolicyToolNames(cfg, mgr, true)
 	if err == nil {
 		t.Fatal("expected error for unknown tool, got nil")
 	}
@@ -153,7 +167,7 @@ func TestValidatePolicyToolNames_MultipleUnknowns_AlphabeticalOrder(t *testing.T
 		},
 	}
 
-	err := ValidatePolicyToolNames(cfg, mgr)
+	err := ValidatePolicyToolNames(cfg, mgr, true)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -181,7 +195,7 @@ func TestValidatePolicyToolNames_ListBrokersGrant_WarnsNotError(t *testing.T) {
 		},
 	}
 
-	if err := ValidatePolicyToolNames(cfg, mgr); err != nil {
+	if err := ValidatePolicyToolNames(cfg, mgr, true); err != nil {
 		t.Errorf("list-brokers grant must not surface as an error; got: %v", err)
 	}
 
@@ -208,7 +222,7 @@ func TestValidatePolicyToolNames_UnknownsAndListBrokers_BothSurface(t *testing.T
 		},
 	}
 
-	err := ValidatePolicyToolNames(cfg, mgr)
+	err := ValidatePolicyToolNames(cfg, mgr, true)
 	if err == nil {
 		t.Fatal("expected error for typo, got nil")
 	}
@@ -234,7 +248,7 @@ func TestValidatePolicyToolNames_CaseMismatchIsUnknown(t *testing.T) {
 		},
 	}
 
-	err := ValidatePolicyToolNames(cfg, mgr)
+	err := ValidatePolicyToolNames(cfg, mgr, true)
 	if err == nil {
 		t.Fatal("expected error for case-mismatched list-brokers, got nil (silent case-folding would be a security drift)")
 	}
@@ -263,12 +277,135 @@ func TestValidatePolicyToolNames_EmptyAccessLevelGroups_ReturnsNil(t *testing.T)
 			defer cleanup()
 
 			cfg := config.ToolAuthorizationConfig{AccessLevelGroups: tc.alg}
-			if err := ValidatePolicyToolNames(cfg, mgr); err != nil {
+			if err := ValidatePolicyToolNames(cfg, mgr, true); err != nil {
 				t.Errorf("expected nil for %s, got: %v", tc.name, err)
 			}
 			if buf.Len() > 0 {
 				t.Errorf("expected no log output for %s, got: %s", tc.name, buf.String())
 			}
 		})
+	}
+}
+
+// Write-tool grant while enable_write_tools is false → WARN, not error. The
+// tool is in mgr but never registered with the MCP server (SOL-152508).
+func TestValidatePolicyToolNames_WriteToolGrantWhileWriteToolsDisabled_WarnsNotError(t *testing.T) {
+	buf, cleanup := captureSlog(t)
+	defer cleanup()
+
+	mgr := validateTestManagerWithWriteTools(t,
+		[]string{"get-broker-status"}, []string{"delete-queue-messages"})
+	cfg := config.ToolAuthorizationConfig{
+		AccessLevelGroups: map[string][]string{
+			"Ops": {"get-broker-status", "delete-queue-messages"},
+		},
+	}
+
+	if err := ValidatePolicyToolNames(cfg, mgr, false); err != nil {
+		t.Errorf("inert write-tool grant must not surface as an error; got: %v", err)
+	}
+
+	warns := warnLinesMentioning(t, buf, "delete-queue-messages")
+	if len(warns) != 1 {
+		t.Fatalf("expected exactly 1 WARN about delete-queue-messages, got %d: %s", len(warns), buf.String())
+	}
+	if got := warns[0]["gated_tool"]; got != "delete-queue-messages" {
+		t.Errorf("expected gated_tool=delete-queue-messages, got %v", got)
+	}
+	if got := warns[0]["referenced_by_groups"]; got != "Ops" {
+		t.Errorf("expected referenced_by_groups=Ops, got %v", got)
+	}
+	if !strings.Contains(buf.String(), "enable_write_tools") {
+		t.Errorf("WARN must name enable_write_tools so the admin knows the remedy: %s", buf.String())
+	}
+}
+
+// Same grant with enable_write_tools true → the tool is registered, so the
+// grant is live and the validator stays silent.
+func TestValidatePolicyToolNames_WriteToolGrantWithWriteToolsEnabled_Silent(t *testing.T) {
+	buf, cleanup := captureSlog(t)
+	defer cleanup()
+
+	mgr := validateTestManagerWithWriteTools(t,
+		[]string{"get-broker-status"}, []string{"delete-queue-messages"})
+	cfg := config.ToolAuthorizationConfig{
+		AccessLevelGroups: map[string][]string{
+			"Ops": {"get-broker-status", "delete-queue-messages"},
+		},
+	}
+
+	if err := ValidatePolicyToolNames(cfg, mgr, true); err != nil {
+		t.Errorf("expected nil error when write tools are enabled, got: %v", err)
+	}
+	if buf.Len() > 0 {
+		t.Errorf("expected zero log output when write tools are enabled; got: %s", buf.String())
+	}
+}
+
+// Several inert write-tool grants → one WARN per tool, tools alphabetized and
+// referencing groups deduped and alphabetized within the row.
+func TestValidatePolicyToolNames_MultipleWriteGated_DedupedPerToolAndAlphabetized(t *testing.T) {
+	buf, cleanup := captureSlog(t)
+	defer cleanup()
+
+	mgr := validateTestManagerWithWriteTools(t, nil,
+		[]string{"clear-queue-stats", "disconnect-client"})
+	cfg := config.ToolAuthorizationConfig{
+		AccessLevelGroups: map[string][]string{
+			"Zeta":  {"disconnect-client", "clear-queue-stats"},
+			"Alpha": {"disconnect-client"},
+		},
+	}
+
+	if err := ValidatePolicyToolNames(cfg, mgr, false); err != nil {
+		t.Errorf("inert write-tool grants must not surface as errors; got: %v", err)
+	}
+
+	warns := warnLinesMentioning(t, buf, "gated_tool")
+	if len(warns) != 2 {
+		t.Fatalf("expected 1 WARN per gated tool (2), got %d: %s", len(warns), buf.String())
+	}
+	if got := warns[0]["gated_tool"]; got != "clear-queue-stats" {
+		t.Errorf("expected clear-queue-stats first (alphabetized), got %v", got)
+	}
+	if got := warns[1]["gated_tool"]; got != "disconnect-client" {
+		t.Errorf("expected disconnect-client second (alphabetized), got %v", got)
+	}
+	if got := warns[1]["referenced_by_groups"]; got != "Alpha, Zeta" {
+		t.Errorf("expected referencing groups deduped and alphabetized as %q, got %v", "Alpha, Zeta", got)
+	}
+}
+
+// An inert write-tool grant alongside a typo → WARN and fatal error both fire,
+// independently: the gate must not mask an unknown name, or vice versa.
+func TestValidatePolicyToolNames_WriteGatedAndUnknown_BothSurface(t *testing.T) {
+	buf, cleanup := captureSlog(t)
+	defer cleanup()
+
+	mgr := validateTestManagerWithWriteTools(t,
+		[]string{"get-broker-status"}, []string{"delete-queue-messages"})
+	cfg := config.ToolAuthorizationConfig{
+		AccessLevelGroups: map[string][]string{
+			"Ops": {"delete-queue-messages", "delet-queue"},
+		},
+	}
+
+	err := ValidatePolicyToolNames(cfg, mgr, false)
+	if err == nil {
+		t.Fatal("expected error for the unknown tool, got nil")
+	}
+	if got := errorRowCount(err); got != 1 {
+		t.Errorf("expected exactly 1 error row (the gated tool is not an error), got %d: %s", got, err.Error())
+	}
+	if !strings.Contains(err.Error(), "delet-queue") {
+		t.Errorf("error missing typo name; got: %s", err.Error())
+	}
+	if strings.Contains(err.Error(), "delete-queue-messages") {
+		t.Errorf("gated tool must not be reported as unknown; got: %s", err.Error())
+	}
+
+	warns := warnLinesMentioning(t, buf, "gated_tool")
+	if len(warns) != 1 {
+		t.Fatalf("expected 1 gated-tool WARN even with a typo present, got %d: %s", len(warns), buf.String())
 	}
 }

@@ -159,16 +159,38 @@ func authzErrorResult(message string) *mcp.CallToolResult {
 //
 // Returns one error row per unknown tool (deduped on the tool name so one
 // typo is one report), alphabetized by tool then by referencing group, joined
-// via errors.Join. Grants of list-brokers are inert — emitted as a WARN, not
-// an error — because the tool is exempt from authorization.
-func ValidatePolicyToolNames(cfg config.ToolAuthorizationConfig, mgr *ToolManager) error {
+// via errors.Join.
+//
+// Two further grant shapes are inert but legitimate, so each is reported as a
+// WARN rather than an error:
+//
+//   - list-brokers, which is structurally exempt from authorization.
+//   - a write/action tool while enableWriteTools is false. mgr holds every
+//     tool unconditionally, but RegisterWithServer applies the same
+//     isWriteTool gate before server.AddTool — so such a tool is "known" here
+//     yet never reaches the MCP server, and the grant cannot take effect.
+//     Staging RBAC config ahead of enabling write tools is a supported
+//     workflow; it just must not be invisible.
+//
+// enableWriteTools must be the same value handed to RegisterWithServer, so
+// both sites agree on which tools the server actually exposes.
+func ValidatePolicyToolNames(cfg config.ToolAuthorizationConfig, mgr *ToolManager, enableWriteTools bool) error {
 	known := make(map[string]struct{})
+	// Tools present in mgr but gated out of the MCP server by the write-tool
+	// flag. Derived from the same isWriteTool predicate RegisterWithServer
+	// uses, so the two cannot drift.
+	writeGated := make(map[string]struct{})
 	for _, h := range mgr.Handlers() {
-		known[h.Metadata().Name] = struct{}{}
+		meta := h.Metadata()
+		known[meta.Name] = struct{}{}
+		if !enableWriteTools && isWriteTool(meta.Annotations) {
+			writeGated[meta.Name] = struct{}{}
+		}
 	}
 	known[listBrokersToolName] = struct{}{}
 
 	unknownToGroups := make(map[string]map[string]struct{})
+	writeGatedToGroups := make(map[string]map[string]struct{})
 	exemptToGroups := make(map[string]struct{})
 
 	for groupName, tools := range cfg.AccessLevelGroups {
@@ -177,15 +199,14 @@ func ValidatePolicyToolNames(cfg config.ToolAuthorizationConfig, mgr *ToolManage
 				exemptToGroups[groupName] = struct{}{}
 				continue
 			}
+			if _, ok := writeGated[tool]; ok {
+				addGroupForTool(writeGatedToGroups, tool, groupName)
+				continue
+			}
 			if _, ok := known[tool]; ok {
 				continue
 			}
-			groupsForTool, ok := unknownToGroups[tool]
-			if !ok {
-				groupsForTool = make(map[string]struct{})
-				unknownToGroups[tool] = groupsForTool
-			}
-			groupsForTool[groupName] = struct{}{}
+			addGroupForTool(unknownToGroups, tool, groupName)
 		}
 	}
 
@@ -196,16 +217,19 @@ func ValidatePolicyToolNames(cfg config.ToolAuthorizationConfig, mgr *ToolManage
 			slog.String("referenced_by_groups", strings.Join(sortedExempt, ", ")))
 	}
 
+	// One WARN per gated tool, alphabetized, groups deduped and alphabetized
+	// within the row — same shape as the unknown-tool error rows below.
+	for _, tool := range sortedToolNames(writeGatedToGroups) {
+		slog.Warn("tool authorization grant has no effect; tool is not registered because enable_write_tools is false",
+			slog.String("gated_tool", tool),
+			slog.String("referenced_by_groups", strings.Join(sortedKeys(writeGatedToGroups[tool]), ", ")))
+	}
+
 	if len(unknownToGroups) == 0 {
 		return nil
 	}
 
-	sortedTools := make([]string, 0, len(unknownToGroups))
-	for tool := range unknownToGroups {
-		sortedTools = append(sortedTools, tool)
-	}
-	sort.Strings(sortedTools)
-
+	sortedTools := sortedToolNames(unknownToGroups)
 	rowErrs := make([]error, 0, len(sortedTools))
 	for _, tool := range sortedTools {
 		sortedGroups := sortedKeys(unknownToGroups[tool])
@@ -216,6 +240,28 @@ func ValidatePolicyToolNames(cfg config.ToolAuthorizationConfig, mgr *ToolManage
 		))
 	}
 	return errors.Join(rowErrs...)
+}
+
+// addGroupForTool records that groupName references tool in a tool→groups
+// index, creating the inner set on first use.
+func addGroupForTool(index map[string]map[string]struct{}, tool, groupName string) {
+	groupsForTool, ok := index[tool]
+	if !ok {
+		groupsForTool = make(map[string]struct{})
+		index[tool] = groupsForTool
+	}
+	groupsForTool[groupName] = struct{}{}
+}
+
+// sortedToolNames returns the tool names of a tool→groups index in
+// alphabetical order, so reports are deterministic across restarts.
+func sortedToolNames(index map[string]map[string]struct{}) []string {
+	out := make([]string, 0, len(index))
+	for tool := range index {
+		out = append(out, tool)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // sortedKeys returns the keys of set in alphabetical order.
