@@ -17,6 +17,7 @@ package tools
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -183,29 +184,39 @@ func TestValidatePolicyToolNames_MultipleUnknowns_AlphabeticalOrder(t *testing.T
 	}
 }
 
-// list-brokers grant → WARN, not error; startup proceeds.
+// list-brokers grant → WARN, not error; startup proceeds. Covered under both
+// enable_write_tools values: list-brokers is read-only, so the write gate must
+// never reclassify it into the gated-tool WARN (or out of the exempt one).
 func TestValidatePolicyToolNames_ListBrokersGrant_WarnsNotError(t *testing.T) {
-	buf, cleanup := captureSlog(t)
-	defer cleanup()
+	for _, enableWriteTools := range []bool{true, false} {
+		t.Run(fmt.Sprintf("enable_write_tools=%t", enableWriteTools), func(t *testing.T) {
+			buf, cleanup := captureSlog(t)
+			defer cleanup()
 
-	mgr := validateTestManager(t, "get-broker-status")
-	cfg := config.ToolAuthorizationConfig{
-		AccessLevelGroups: map[string][]string{
-			"Ops": {"get-broker-status", "list-brokers"},
-		},
-	}
+			mgr := validateTestManager(t, "get-broker-status")
+			cfg := config.ToolAuthorizationConfig{
+				AccessLevelGroups: map[string][]string{
+					"Ops": {"get-broker-status", "list-brokers"},
+				},
+			}
 
-	if err := ValidatePolicyToolNames(cfg, mgr, true); err != nil {
-		t.Errorf("list-brokers grant must not surface as an error; got: %v", err)
-	}
+			if err := ValidatePolicyToolNames(cfg, mgr, enableWriteTools); err != nil {
+				t.Errorf("list-brokers grant must not surface as an error; got: %v", err)
+			}
 
-	warns := warnLinesMentioning(t, buf, "list-brokers")
-	if len(warns) != 1 {
-		t.Fatalf("expected exactly 1 WARN line about list-brokers, got %d: %s", len(warns), buf.String())
-	}
-	// WARN must name the referencing group so the admin can find it.
-	if !strings.Contains(buf.String(), "Ops") {
-		t.Errorf("WARN missing referencing group name Ops: %s", buf.String())
+			warns := warnLinesMentioning(t, buf, "list-brokers")
+			if len(warns) != 1 {
+				t.Fatalf("expected exactly 1 WARN line about list-brokers, got %d: %s", len(warns), buf.String())
+			}
+			// The one WARN must be the exempt-tool one, not the write-gate one.
+			if got := warns[0]["exempt_tool"]; got != listBrokersToolName {
+				t.Errorf("expected exempt_tool=%s, got %v", listBrokersToolName, got)
+			}
+			// WARN must name the referencing group so the admin can find it.
+			if !strings.Contains(buf.String(), "Ops") {
+				t.Errorf("WARN missing referencing group name Ops: %s", buf.String())
+			}
+		})
 	}
 }
 
