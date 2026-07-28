@@ -86,6 +86,9 @@ cd solace-broker-mcp
 # Install dependencies
 go mod download
 
+# Install the git hooks (adds the DCO sign-off) — once per clone
+make hooks
+
 # Create local config (see README for details)
 cp broker-config.example.yaml broker-config.yaml
 # Edit broker-config.yaml with your broker details
@@ -237,6 +240,41 @@ Add feature X
 
 Signed-off-by: Your Name <your.email@example.com>
 ```
+
+#### Sign off automatically
+
+To stop having to remember the `-s`, install the repo's git hook — once per clone:
+
+```bash
+make hooks
+```
+
+That copies `.githooks/prepare-commit-msg` into `.git/hooks/`, where it adds the
+`Signed-off-by` trailer to every commit message, including ones made by tools and
+editors that never pass `-s`. It signs off with the identity git would record —
+your `git config user.email`, or `GIT_COMMITTER_EMAIL` if you commit through
+tooling that sets it — which is the same address CI matches against. It does not
+duplicate the trailer if you also pass `-s`, and it never fails a commit.
+
+Verify it works:
+
+```bash
+git commit --allow-empty -m "hook check"
+git log -1 --format=%B     # expect a Signed-off-by line
+git reset --soft HEAD~1    # drop the test commit, keep your working tree
+```
+
+The hook is a convenience, not the control: the `DCO sign-off` CI check is the
+enforcement and re-verifies every commit regardless of what ran locally. Re-run
+`make hooks` after pulling a change to `.githooks/`; it upgrades its own copy but
+refuses to overwrite an unrelated `prepare-commit-msg` hook you already have, and
+refuses to install into a hooks directory inside the working tree.
+
+That last refusal is the point of installing by **copy**: activating the tracked
+directory with `core.hooksPath .githooks`, or symlinking into it, would make git
+run the hook from whatever branch is checked out — so reviewing a fork's pull
+request would execute that fork's hook on your machine. The full reasoning is in
+the header of `.githooks/prepare-commit-msg`.
 
 **All commits in a PR must be signed off.** If you forget, you can amend:
 

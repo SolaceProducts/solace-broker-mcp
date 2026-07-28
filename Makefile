@@ -28,6 +28,44 @@ COMPOSE_E2E_OAUTH := docker compose -f $(E2E_OAUTH_DIR)/docker-compose.yml
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
+# ── Git hooks ────────────────────────────────────────────────────────────────
+
+# Copies the hook rather than symlinking it or pointing core.hooksPath at the
+# tracked directory — rationale in the header of .githooks/prepare-commit-msg.
+# Hence the refusal below when the hooks directory sits inside the working tree.
+# `git rev-parse --git-path` honours a custom core.hooksPath and resolves the
+# shared hooks directory from a linked worktree, where .git is a file.
+# Overwrites only a hook carrying our own marker, so an unrelated
+# prepare-commit-msg (ticket prefixer, commit-lint) survives.
+HOOK_MARKER := solace-broker-mcp:prepare-commit-msg
+
+.PHONY: hooks
+hooks: ## Install the repo's git hooks (DCO sign-off); re-run after pulling hook changes
+	@set -e; \
+	hooks_dir="$$(git rev-parse --git-path hooks)"; \
+	mkdir -p "$$hooks_dir"; \
+	hooks_abs="$$(cd "$$hooks_dir" && pwd -P)"; \
+	git_dir="$$(cd "$$(git rev-parse --git-common-dir)" && pwd -P)"; \
+	top="$$(cd "$$(git rev-parse --show-toplevel)" && pwd -P)"; \
+	case "$$hooks_abs/" in \
+	  "$$git_dir"/*) ;; \
+	  "$$top"/*) \
+	    echo "refusing to install: core.hooksPath points inside the working tree ($$hooks_abs)." >&2; \
+	    echo "Hooks there run the version in whatever branch is checked out, including a fork's PR." >&2; \
+	    echo "See the header of .githooks/prepare-commit-msg. Fix with: git config --unset core.hooksPath" >&2; \
+	    exit 1;; \
+	esac; \
+	dest="$$hooks_dir/prepare-commit-msg"; \
+	if [ -e "$$dest" ] && ! grep -q "$(HOOK_MARKER)" "$$dest"; then \
+	  echo "refusing to overwrite $$dest — it is not this repo's hook." >&2; \
+	  echo "Move it aside and re-run make hooks. To keep both, install ours under another" >&2; \
+	  echo "name in the hooks directory and call THAT from yours — never .githooks/, which" >&2; \
+	  echo "is the checked-out tree (see the header of .githooks/prepare-commit-msg)." >&2; \
+	  exit 1; \
+	fi; \
+	install -m 755 .githooks/prepare-commit-msg "$$dest"; \
+	echo "installed $$dest"
+
 # ── Build ────────────────────────────────────────────────────────────────────
 
 .PHONY: build

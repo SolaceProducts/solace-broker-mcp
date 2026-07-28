@@ -50,6 +50,21 @@ jobs:
       - name: Run the DCO check's self-test against this PR's version
         run: .github/scripts/dco-check.test.sh
 
+  # The prepare-commit-msg hook rewrites every commit message on a contributor's
+  # machine, and its regressions are silent: the DCO gate accepts a sign-off
+  # anywhere in the message, so it does not notice a trailer welded onto the
+  # subject line. This job runs the hook's own self-test against the PR's copy.
+  hook_selftest:
+    name: Commit hook self-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run the prepare-commit-msg hook's self-test against this PR's version
+        run: .githooks/prepare-commit-msg.test.sh
+
   changelog:
     name: CHANGELOG updated
     runs-on: ubuntu-latest
