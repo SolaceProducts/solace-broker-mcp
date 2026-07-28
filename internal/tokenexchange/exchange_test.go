@@ -560,9 +560,11 @@ func TestExchange_ContextDeadlineExceededReturnsDeadlineError(t *testing.T) {
 // Only the warm-cache subtest couples to the fix. A cache hit needs no
 // scheduling accident, so it returns a token on every run without the guard.
 // The cold-cache subtest documents the same contract for the singleflight path
-// but passes either way: making both select cases ready on demand requires the
-// caller to be off-CPU for an entire IdP round-trip, which a test cannot force.
-// It is a statement of intent, not proof.
+// but passes either way, because a real cancelled context is caught by the
+// entry guard long before the select. For deterministic proof that the select's
+// re-check fires, see TestExchange_AbandonedOnResultBranchLogsBreadcrumb, which
+// holds Done() open so the result branch is taken on purpose rather than by
+// winning a pseudo-random coin flip.
 //
 // Neither of these is the cause of the intermittent CI failure in
 // TestExchange_ContextDeadlineExceededReturnsDeadlineError. That was the test's
@@ -1130,14 +1132,17 @@ func TestExchange_SuccessLogsDebugWithBrokerAndElapsed(t *testing.T) {
 }
 
 // B04 (log aspect): a cancelled caller gets no success/error OUTCOME log.
-// The caller's context is pre-cancelled, but the IdP call runs on a detached
-// context (singleflight resilience), so the handler still receives and responds
-// to the request. The caller returns context.Canceled from the select's
-// ctx.Done branch, not from a failed HTTP call — and must not have "token
-// exchange succeeded" or an error attributed to it. A debug "token exchange
-// abandoned by caller" breadcrumb IS emitted on that branch (it makes a
-// cancellation storm visible now that the shared call runs detached) and is
-// the one allowed "token exchange" line.
+//
+// This caller is cancelled before it ever calls Exchange, so it returns at the
+// entry guard — upstream of singleflight entirely. No IdP request is made, the
+// handler below is never invoked, and no abandonment breadcrumb is emitted
+// (the entry guard starts no exchange, so it has nothing to report). What this
+// test pins is the absence: nothing resembling a "token exchange" outcome may
+// be attributed to a caller that never ran one.
+//
+// The select's own two abandonment paths are pinned separately, by
+// TestExchange_AbandonedOnCtxDoneBranchLogsBreadcrumb and
+// TestExchange_AbandonedOnResultBranchLogsBreadcrumb.
 func TestExchange_ContextErrorNotLogged(t *testing.T) {
 	records, restore := captureLogs(t)
 	defer restore()
@@ -1170,6 +1175,158 @@ func TestExchange_ContextErrorNotLogged(t *testing.T) {
 		if strings.Contains(rec.Message, "token exchange") {
 			t.Errorf("context cancellation should not produce a token exchange outcome log, got: %q", rec.Message)
 		}
+	}
+}
+
+// lateCancelContext is a context whose Err() flips to context.Canceled on
+// demand while Done() never closes. It exists to make the singleflight select's
+// result branch reachable deliberately.
+//
+// The race the re-check guards is both select cases being ready at once, which
+// the Go spec resolves "via a uniform pseudo-random selection" — a coin flip no
+// test can win reliably. Holding Done() open forces the select to take the
+// result branch every run, and cancel() reproduces the state the re-check
+// actually reads: the caller is gone by the time the result arrives. Nothing
+// after the select reads Done(), so the open channel is faithful where it
+// matters.
+type lateCancelContext struct {
+	context.Context
+	done      chan struct{}
+	cancelled atomic.Bool
+}
+
+func newLateCancelContext() *lateCancelContext {
+	return &lateCancelContext{
+		Context: context.Background(),
+		done:    make(chan struct{}),
+	}
+}
+
+func (c *lateCancelContext) cancel()               { c.cancelled.Store(true) }
+func (c *lateCancelContext) Done() <-chan struct{} { return c.done }
+
+func (c *lateCancelContext) Err() error {
+	if c.cancelled.Load() {
+		return context.Canceled
+	}
+	return nil
+}
+
+// The ctx.Done() branch must emit the abandonment breadcrumb. Pinning it is the
+// point: before this test, deleting that log call broke nothing, because the
+// only other test on the cancellation path pre-cancels and never reaches the
+// select at all.
+//
+// Determinism comes from the handler, not from timing. It blocks until the test
+// has cancelled, so the result channel cannot be ready while ctx.Done() is —
+// no coin flip for the select to lose.
+func TestExchange_AbandonedOnCtxDoneBranchLogsBreadcrumb(t *testing.T) {
+	records, restore := captureLogs(t)
+	defer restore()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	finished := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("exchanged-token", 3600))
+		close(finished)
+	}))
+	// Ordering matters: unblock the handler before Close, which waits on
+	// outstanding requests. Defers run last-registered-first.
+	defer srv.Close()
+	defer func() {
+		close(release)
+		<-finished
+	}()
+
+	e := newTestExchanger(t, srv.URL)
+	e.nowFunc = func() time.Time { return pinnedNow() }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Live through the entry guard, cancelled only once the IdP call is in
+	// flight — so the select, not the guard, is what returns.
+	go func() {
+		<-started
+		cancel()
+	}()
+
+	tok, err := e.Exchange(ctx, validInput())
+	if tok != nil {
+		t.Errorf("tok = %v, want nil for a caller that cancelled mid-exchange", tok)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("errors.Is(err, context.Canceled) = false, want true; err = %v", err)
+	}
+
+	assertAbandonedBreadcrumb(t, records(), "ctx_done")
+}
+
+// The result branch's re-check must emit the same abandonment breadcrumb as its
+// ctx.Done() sibling. Both mean the caller left before taking a result, so both
+// carry the same message and are told apart by via. Before the shared log site
+// this branch returned silently.
+func TestExchange_AbandonedOnResultBranchLogsBreadcrumb(t *testing.T) {
+	records, restore := captureLogs(t)
+	defer restore()
+
+	ctx := newLateCancelContext()
+
+	// Cancel from inside the IdP handler: the caller is live through the entry
+	// guard and the cache miss, and gone by the time the result reaches the
+	// select. The ordering is guaranteed, not raced — the handler must return
+	// before singleflight can publish a result onto the channel.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		ctx.cancel()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("exchanged-token", 3600))
+	}))
+	defer srv.Close()
+
+	e := newTestExchanger(t, srv.URL)
+	e.nowFunc = func() time.Time { return pinnedNow() }
+
+	tok, err := e.Exchange(ctx, validInput())
+	if tok != nil {
+		t.Errorf("tok = %v, want nil for a caller that left before taking the result", tok)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("errors.Is(err, context.Canceled) = false, want true; err = %v", err)
+	}
+
+	assertAbandonedBreadcrumb(t, records(), "result")
+}
+
+// assertAbandonedBreadcrumb requires exactly one abandonment breadcrumb,
+// attributed to the given select branch. Both branch tests share it so the two
+// halves of the contract cannot drift in the tests either.
+func assertAbandonedBreadcrumb(t *testing.T, recs []logRecord, wantVia string) {
+	t.Helper()
+
+	var found int
+	for _, rec := range recs {
+		if rec.Message != "token exchange abandoned by caller" {
+			continue
+		}
+		found++
+		if rec.Level != slog.LevelDebug {
+			t.Errorf("level = %v, want Debug", rec.Level)
+		}
+		if got := rec.Attrs["via"]; got != wantVia {
+			t.Errorf("via = %q, want %q", got, wantVia)
+		}
+		for _, k := range []string{"broker", "waited", "cause"} {
+			if _, ok := rec.Attrs[k]; !ok {
+				t.Errorf("missing %q attr", k)
+			}
+		}
+	}
+	if found != 1 {
+		t.Errorf("got %d %q logs, want exactly 1 (via=%s)",
+			found, "token exchange abandoned by caller", wantVia)
 	}
 }
 
