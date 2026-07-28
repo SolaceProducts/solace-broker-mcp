@@ -418,9 +418,11 @@ OpenTelemetry spans at each hop of a request, exported over OTLP, enabled with
 - **Export protocol:** OTLP over gRPC. Endpoint set via the standard
   `OTEL_EXPORTER_OTLP_ENDPOINT`.
 - **Sampling:** honors the standard OpenTelemetry SDK environment contract,
-  `OTEL_TRACES_SAMPLER` (default `parentbased_traceidratio`) and `OTEL_TRACES_SAMPLER_ARG`.
-  A child of a sampled upstream span is sampled, so a trace started by your AI agent
-  continues unbroken through the server into the broker.
+  `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG`, and ships no default of its own. The
+  SDK's default is `parentbased_always_on`, which exports every trace — set
+  `parentbased_traceidratio` with a ratio in `OTEL_TRACES_SAMPLER_ARG` before pointing a busy
+  server at a collector. A child of a sampled upstream span is sampled, so a trace started by
+  your AI agent continues unbroken through the server into the broker.
 - **Propagation:** W3C Trace Context. When an inbound `traceparent` header is present, the
   server's entry span is a child of your agent's span; when absent, it starts a new root.
 
