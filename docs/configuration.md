@@ -76,10 +76,11 @@ Aliases must be 1–63 characters, contain only letters, digits, and hyphens, an
 | YAML field | Default | Description |
 |---|---|---|
 | `url` | — | SEMP management API base URL (for example, `https://broker:1943`). |
-| `auth.mode` | — | `basic` or `bearer`. |
+| `auth.mode` | — | `basic`, `bearer`, or `oauth`. |
 | `auth.username` | — | Basic auth username. |
 | `auth.password` | — | Basic auth password. |
 | `auth.token` | — | Bearer token (used when `auth.mode: bearer`). |
+| `auth.audience` | — | Optional, even under `auth.mode: oauth` — omitting it does not fail config load or startup. RFC 8693 audience value for this broker, forwarded to the IdP during token exchange (requires the top-level `broker_oauth:` block — see [Broker OAuth (Hop 2)](#broker-oauth-hop-2) below). When omitted, the runtime sends the token-exchange request without an audience parameter at all. Omit when the broker's OAuth profile does not validate audience; set it only if the broker's OAuth profile does. If set, it must not be whitespace-only — a `${VAR}` that resolves to blank does fail config load. |
 | `insecure_skip_verify` | `false` | Skip TLS certificate verification. Development only. Under `mcp_client_auth.mode: oauth` (production) it is **refused at startup** unless `allow_insecure_broker_tls: true` is also set (see below). |
 
 Solace recommends using `https://` event broker URLs in production environments.
@@ -93,6 +94,70 @@ brokers:
       username: "${BROKER_USERNAME}"
       password: "${BROKER_PASSWORD}"
 ```
+
+## Broker OAuth (Hop 2)
+
+Configured under the top-level `broker_oauth` key. Required when any broker uses `auth.mode: oauth` — obtains the broker-bound token by exchanging the calling agent's Hop 1 token (RFC 8693 token exchange) against an identity provider.
+
+`mcp_client_auth.mode: oauth` (Hop 1) is required first: token exchange consumes the agent's Hop 1 JWT as its `subject_token`, so a broker with `auth.mode: oauth` while Hop 1 is `static`/`disabled` is **refused at config load** with an `mcp_client_auth.mode must be oauth` error naming the affected broker(s). The `broker_oauth:` block itself is likewise required once any broker uses `auth.mode: oauth` — omitting it fails config load with `broker_oauth block is required when any broker uses auth.mode: "oauth"`. Every field in the table below (other than `circuit_breaker`/`retry_after`) is required; an empty or unsupported value fails config load naming that field.
+
+| YAML field | Default | Description |
+|---|---|---|
+| `idp_token_endpoint` | — | **Required.** The IdP's token endpoint URL (the token-exchange POST target). Must be `https://` in production. |
+| `mcp_server_client_id` | — | **Required.** The MCP server's own `client_id`, registered at the IdP. |
+| `mcp_server_client_auth` | — | **Required.** Discriminated union — exactly one of the sub-blocks below must be populated. |
+| `mcp_server_client_auth.client_secret_basic.secret` | — | Client secret sent via HTTP Basic auth (RFC 6749 §2.3). |
+| `mcp_server_client_auth.client_secret_post.secret` | — | Client secret sent in the token-request form body (RFC 6749 §2.3). |
+| `grant_type` | — | **Required.** Selects the OAuth grant type for the Hop 2 exchange. Must be `"urn:ietf:params:oauth:grant-type:token-exchange"` (RFC 8693) — the only grant type this version implements; any other value is rejected at config load. |
+| `audience_parameter_name` | — | **Required.** Which request parameter carries each broker's `auth.audience` value. Must be `audience` (RFC 8693 default) — the only value implemented in this version; any other value, including `scope` (Entra On-Behalf-Of style) or `resource` (RFC 8707), is rejected at config load. |
+| `circuit_breaker` | omitted (all defaults, enabled) | Optional. See below. |
+| `retry_after` | omitted (default cap) | Optional. See below. |
+
+```yaml
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://your-idp.example.com/realms/your-realm"
+  audience: "solace-mcp-server"
+  resource_url: "https://your-mcp-server.example.com/mcp"
+
+broker_oauth:
+  idp_token_endpoint: "https://your-idp.example.com/realms/your-realm/protocol/openid-connect/token"
+  mcp_server_client_id: "mcp-server"
+  mcp_server_client_auth:
+    client_secret_basic:
+      secret: "${MCP_SERVER_CLIENT_SECRET}"
+  grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
+  audience_parameter_name: "audience"
+
+brokers:
+  prod:
+    url: "https://broker.example.com:943"
+    auth:
+      mode: oauth
+      audience: "solace-broker-prod"
+```
+
+### Circuit breaker
+
+Nested under `broker_oauth.circuit_breaker`. Protects the shared IdP from a sustained outage by failing exchanges fast instead of driving every broker's requests into the full retry budget. Every field is optional; an omitted field falls back to its shipped default. Setting `circuit_breaker: {}` is equivalent to omitting the block entirely.
+
+| YAML field | Default | Description |
+|---|---|---|
+| `enabled` | `true` | Escape hatch — `false` disables the breaker while retries still run, and logs a startup WARN. Not recommended in production. |
+| `failure_rate_window` | `30s` | Rolling window over which the failure rate is measured. |
+| `minimum_requests` | `10` | Minimum classified exchanges in the window before the failure-rate rule can trip. |
+| `failure_rate_threshold_percent` | `50` | Percentage of counted (non-excluded) exchanges failing that trips the breaker. |
+| `consecutive_failure_threshold` | `5` | Consecutive failures that trip the breaker immediately, without waiting for the rate rule's sample. `0` disables this rule. |
+| `open_state_duration` | `30s` | How long the breaker stays open (rejecting exchanges immediately) before probing recovery. |
+| `half_open_probe_requests` | `2` | Consecutive successful probes required to close the breaker again. |
+
+### Retry-After gate
+
+Nested under `broker_oauth.retry_after`. Shares a process-wide backoff across every broker when an exhausted 429 retry chain to the IdP returns a `Retry-After` header, so one throttled broker doesn't let every other broker keep hammering the same IdP.
+
+| YAML field | Default | Description |
+|---|---|---|
+| `max_honored_duration` | `60s` | Ceiling on how long a `Retry-After` value is honored. An IdP-requested duration longer than this is clamped to the cap rather than honored uncapped. Must be a positive duration. |
 
 ## Client Authentication Settings
 
@@ -155,6 +220,8 @@ mcp_client_auth:
 | `access_level_groups` | Map from group name — as it appears in the caller's token — to the list of MCP tool names that group grants. Required when `enabled: true`. Union semantics: a caller is allowed to invoke a tool when at least one of their groups grants it. A tool that no group grants is unreachable by every caller. **No wildcard** — a group that should grant every tool must list every tool name explicitly. This is deliberate: an "all tools" glob would silently include every newly-added tool at upgrade time, without the operator noticing the surface expanded. |
 
 **`list-brokers` is structurally exempt.** Every authenticated caller can invoke `list-brokers` regardless of their groups; the tool is not composed with the authorization wrapper at all. A caller needs it to discover which broker aliases exist before invoking any other tool, so gating it would deadlock every session. Listing `list-brokers` in an `access_level_groups` entry is inert — the server emits a startup `WARN` naming the group but the grant has no effect.
+
+**Interaction with `enable_write_tools`.** The two controls are orthogonal — they answer different questions, and a caller reaches a tool only when both answers permit it. `enable_write_tools` decides which tools the server registers at all; `access_level_groups` decides which callers may invoke a registered tool. Granting a write/action tool (for example `delete-queue-messages`, `disconnect-client`, `clear-queue-stats`, `clear-client-stats`, or any of the Config-API management tools) while `enable_write_tools: false` is therefore inert — the tool never appears in `tools/list`, so the grant cannot take effect. This is a supported way to stage an RBAC policy ahead of enabling write tools, so it is not a startup error; the server emits one startup `WARN` per inert tool naming the tool and the referencing groups. Setting `enable_write_tools: true` activates those grants and silences the WARN. A grant naming a tool the server does not know at all remains a **fatal** startup error.
 
 **Group soft cap.** If a caller's claim carries more than 250 memberships, the server uses the first 250 in JWT-array order and emits a WARN carrying the total count and the cap (no caller identity, so as not to reveal group counts per user on the shared log stream). The cap sits above the ceilings of the major IdPs (Entra 200, Okta 100), so legitimate deployments never hit it — the WARN indicates either a claim mapper misconfiguration on the IdP or a caller belonging to unusually many groups.
 
