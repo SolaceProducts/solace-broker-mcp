@@ -738,9 +738,12 @@ func main() {
 	// Validate every configured tool name now that both registrations have
 	// populated mgr. An admin typo would silently produce a grant that never
 	// takes effect at request time; catching it at startup is fatal by
-	// design. Skipped when RBAC is off.
+	// design. EnableWriteTools is the same value RegisterWithServer was given
+	// above, so the validator sees the tool set the server actually exposes
+	// and can WARN on grants the write gate renders inert. Skipped when RBAC
+	// is off.
 	if policy != nil {
-		if err := tools.ValidatePolicyToolNames(*cfg.MCPClientAuth.ToolAuthorization, mgr); err != nil {
+		if err := tools.ValidatePolicyToolNames(*cfg.MCPClientAuth.ToolAuthorization, mgr, cfg.EnableWriteTools); err != nil {
 			slog.Error("tool authorization startup failed", slog.String("error", err.Error()))
 			os.Exit(1)
 		}
