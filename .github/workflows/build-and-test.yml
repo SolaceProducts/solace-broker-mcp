@@ -3,8 +3,7 @@ name: Build and Test
 on:
   push:
     branches:
-      - main
-      - DATAGO-145530-fossa-guardian-onboarding
+      - '**'
     tags-ignore:
       - 'v*'
   workflow_call:
@@ -23,6 +22,7 @@ permissions:
 
 jobs:
   fossa_scan:
+    if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
     name: FOSSA Scan
     uses: SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml@fc521b087f780457f92d4cb46038184e92ad2fbc # pinned 2026-05-12
     with:
