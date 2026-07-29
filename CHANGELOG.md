@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- E2E coverage (`test/e2e-monitoring`) for `list-kafka-receivers`, `get-kafka-receiver-status`, `list-kafka-senders`, and `get-kafka-sender-status` (added spec-derived in SOL-152328). Scope was cut short by a real infrastructure blocker discovered while implementing this story: creating a Kafka Receiver/Sender object at all requires Kafka Bridging to be licensed on the broker, and neither this suite's Docker image (`solace-pubsub-standard:latest`, `400 MAX_NUM_EXCEEDED: Kafka Bridge limit of 0 reached`) nor either lab appliance checked during scoping (`INVALID_PATH` — the SEMP paths aren't exposed at all) has it enabled, and no Kafka-Bridging-licensed image was available as a substitute. Coverage lands for what's actually exercisable without one: `list-kafka-receivers`/`list-kafka-senders` against an always-empty collection (empty `data`, zeroed summary), and `get-kafka-receiver-status`/`get-kafka-sender-status` against a nonexistent name (not-found error translation — isError, non-retryable, SEMP NOT_FOUND code/status preserved, actionable suggestion — mirroring the existing `get-rdp-status` not-found precedent). The enabled/up, disabled, and down-with-failure-reason scenarios remain untested, including whether `failureReason` actually populates on these objects — the same open question bridges' `inboundFailureReason` raised, still unresolved. See `test/e2e-monitoring/README.md`'s "Kafka Receivers/Senders — no-fixture note" for the full writeup. Tracked under SOL-152370.
+
 ## [0.6.0] - 2026-07-28
 
 ### Added

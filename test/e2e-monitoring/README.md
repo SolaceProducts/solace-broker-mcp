@@ -2,9 +2,10 @@
 
 End-to-end tests for the monitoring tools — `list-vpns`, `list-queues`, `list-clients`,
 `get-message-rates`, `list-slow-subscribers`, `list-queue-discards`, `get-discard-stats`,
-`get-broker-status`, `list-bridges`, `get-bridge-status`, and others. Runs two Solace
-brokers, provisions baseline + extended fixtures (F1–F8), and drives both SEMP-layer
-and messaging-layer broker state.
+`get-broker-status`, `list-bridges`, `get-bridge-status`, `list-kafka-receivers`,
+`get-kafka-receiver-status`, `list-kafka-senders`, `get-kafka-sender-status`, and others.
+Runs two Solace brokers, provisions baseline + extended fixtures (F1–F8), and drives
+both SEMP-layer and messaging-layer broker state.
 
 Builds on the shared scaffold in [`../e2e-common/`](../e2e-common/README.md).
 
@@ -60,6 +61,7 @@ client-bearing fixtures (F3–F7); F8 is one-shot SEMP only, like F1/F2.
 | F7-spool | Discards via spool quota | Queue `test-queue-discards-spool` with `maxMsgSpoolUsage=1 MB` + `egressEnabled=false`; one-shot publish ~2 MB. **Verification:** `maxMsgSpoolUsageExceededDiscardedMsgCount > 0` after one-shot publish. | one-shot SEMP + one-shot broker-driver publish | `list-queue-discards` (per-queue), `get-discard-stats` (broker-wide)               |
 | F7-ttl   | Discards via TTL expiry  | Queue `test-queue-discards-ttl` with `maxTtl=1 s` + no consumer; one-shot publish + 2 s wait. **Verification:** `maxTtlExpiredDiscardedMsgCount > 0` after one-shot publish. | one-shot SEMP + one-shot broker-driver publish | `list-queue-discards` (per-queue), `get-discard-stats` (broker-wide)               |
 | F8       | Bridges (SOL-152231)     | Three bridges per broker, each pointed at the *other* broker (the only fixture that's inherently cross-broker rather than independent per side): `test-bridge` (healthy, bidirectional once both sides exist), `test-bridge-failing` (enabled, remote location `127.0.0.1:1` — connection refused, never converges), `test-bridge-disabled` (`enabled=false`). **Verification:** `list-bridges`/`get-bridge-status` field values — see [F8 — bridge connection-state findings](#f8--bridge-connection-state-findings). | one-shot SEMP                      | `list-bridges` (`downCount`/`disabledCount` aggregation), `get-bridge-status` (compound-identifier lookup) |
+| None     | Kafka Receivers/Senders (SOL-152370) | **No fixture exists** — `solace/solace-pubsub-standard:latest` (this suite's broker image) rejects `POST .../kafkaReceivers`\|`kafkaSenders` with `400 MAX_NUM_EXCEEDED: Kafka Bridge limit of 0 reached`, a license/edition gate with no SEMP config to raise it. Coverage is limited to what an empty, object-less VPN can exercise. See [Kafka Receivers/Senders — no-fixture note](#kafka-receiverssenders--no-fixture-note). | none (no objects created) | `list-kafka-receivers`/`list-kafka-senders` (empty-collection + zeroed summary), `get-kafka-receiver-status`/`get-kafka-sender-status` (not-found error translation) |
 
 Activation order is deterministic: F1 and F2 (SEMP-only) before F3/F4
 (client-bearing). F5, F6, and F7 follow F3/F4 — each owns dedicated resources
@@ -294,6 +296,43 @@ real broker behavior first.
 - **The pre-provisioned `default` client-username** (empty password, already
   used by `connected_client.go` for F3/F4/F5) works for a bridge's remote
   authentication too — no new client-username fixture was needed.
+
+### Kafka Receivers/Senders — no-fixture note
+
+SOL-152328 added `list-kafka-receivers`, `get-kafka-receiver-status`,
+`list-kafka-senders`, and `get-kafka-sender-status` spec-derived, not
+lab-verified. SOL-152370 set out to close that gap the way SOL-152231 did for
+bridges above, but hit a hard blocker: creating a Kafka Receiver or Sender
+object at all is gated by license/edition, not by anything a SEMP call can
+change.
+
+- **`GET .../kafkaReceivers`/`kafkaSenders` work fine** on
+  `solace-pubsub-standard:latest` (this suite's image) — 200, empty list on a
+  VPN with none configured. This is actually better than the two lab
+  appliances checked during SOL-152328 scoping, which return `INVALID_PATH`
+  for these paths entirely (the feature isn't present at all on those
+  firmware/platform combinations).
+- **`POST .../kafkaReceivers` fails**: `400 MAX_NUM_EXCEEDED — "Kafka Bridge
+  limit of 0 reached."` Checked the embedded SEMP spec for a settable
+  per-VPN limit attribute (e.g. something like `maxKafkaReceiverCount`) —
+  none exists; the limit isn't config, it's baked into the broker's
+  license/scaling tier.
+- **No `solace-pubsub-evaluation` (or other Kafka-Bridging-licensed) image**
+  was pullable from the registry available to this suite as a substitute.
+
+Given that, this story's coverage is limited to what a permanently-empty,
+object-less VPN can exercise: `list-kafka-receivers`/`list-kafka-senders`
+against zero rows (empty `data`, zeroed summary), and
+`get-kafka-receiver-status`/`get-kafka-sender-status` against a nonexistent
+name (not-found error translation, mirroring the `get-rdp-status` precedent
+in `test/e2e-basic-mcp/test-standalone.sh`). The enabled/up, disabled, and
+down-with-failure-reason scenarios — including whether `failureReason`
+actually populates, the same open question bridges' `inboundFailureReason`
+raised — remain untested. Revisit once a broker with Kafka Bridging licensed
+is available; at that point this note and the corresponding tests in
+`test-monitoring-tools.sh` should be replaced with a real fixture triad
+(`create_kafka_receivers_on`/`create_kafka_senders_on` etc.), matching every
+other tool in this suite.
 
 ## Cleanup order
 
