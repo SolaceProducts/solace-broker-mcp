@@ -481,7 +481,7 @@ names beyond `semp.attempt`, and span kinds, are open items in this review (see 
 |---|---|---|
 | `correlation_id` | The shared request ID, joining the trace to logs and audit | Solace |
 | `outcome` | The result; the same three values used as a metric label and an audit field | Solace |
-| `error_type` | Why the call failed; present on `outcome: error` only, same ten values | OTel |
+| `error_type` | Why the call failed; present on `outcome: error` only, same ten values | Solace |
 | `retry.decision` | The retry decision on a SEMP attempt | Solace |
 | `retry.exhausted` | `true` on the final attempt when retries are exhausted | Solace |
 
@@ -489,6 +489,13 @@ names beyond `semp.attempt`, and span kinds, are open items in this review (see 
 audit record**, which is the point of a single vocabulary: filter a dashboard by
 `error_type="broker_init_error"` and you can carry that predicate into the trace backend and
 the SIEM unchanged, with no translation table.
+
+**On the span, the key is `error_type`, not the OTel-conventional `error.type`.** This is a
+deliberate exception to the naming rule above, taken so the key is identical across metrics,
+logs, audit, and spans and the four surfaces cannot disagree about why a call failed. The
+values match OTel's `error.type` semantics. If your trace backend or trace-based SLOs key off
+the dotted `error.type`, tell us in your feedback, because this is the kind of thing that is
+cheap to change now and expensive after the freeze.
 
 ### Resource attributes
 
