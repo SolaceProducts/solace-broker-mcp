@@ -330,7 +330,7 @@ audit sub-stream to a dedicated SIEM index.
 | `error_type` | Why an operation failed; present on `outcome: error` only | string (closed set) |
 | `arguments_hash` | SHA-256 over an RFC 8785 (JCS) canonicalization of the call arguments | hex string |
 | `correlation_id` | Join key to logs, traces, and the broker-side entry | string |
-| `reason` | Why a credential was rejected; present on `auth_failure` only | string (closed set) |
+| `reason` | Why authentication or authorization failed; present on `auth_failure` and `authz_denied` | string (closed set) |
 | `audit_schema_version` | The schema version, for query pinning | string (`1.0`) |
 
 **`audit_event_type`** is a closed set of six: `operation` (a state-changing tool call),
