@@ -96,19 +96,27 @@ Confirm that landed, or expect broken links from day one.
 
 Navigate to: **Settings → Security → Code security and analysis**
 
-Current state, read from the repository API:
+Current state, read from the repository API on 2026-07-29. These settings change
+outside this file, so re-read before acting on the table rather than trusting it:
+
+```bash
+gh api repos/OWNER/REPO --jq '.security_and_analysis'
+```
 
 | Setting | Now | Action |
 |---------|-----|--------|
 | Dependabot alerts | On | None |
 | Dependabot security updates | On | None |
-| Secret scanning | **Off** | **Enable** |
-| Secret scanning push protection | **Off** | **Enable** |
+| Secret scanning | On | None |
+| Secret scanning push protection | On | None |
+| Secret scanning validity checks | On | None |
+| Secret scanning non-provider patterns | On | None |
 | CodeQL | Running - `Analyze (go)` passes on every PR | Confirm on the settings page |
 
-Enable both secret-scanning settings, not just the first. Alerts find credentials
-already committed; push protection rejects the next one before it lands. Both are
-free on public repositories.
+Both secret-scanning settings are already on, so there is nothing to enable here.
+Confirm rather than change: alerts find credentials already committed, push
+protection rejects the next one before it lands, and losing either is a
+regression. Both stay free on public repositories.
 
 On CodeQL: a check named `Analyze (go)` runs and passes on every PR, and its
 workflow path points at the code-scanning default setup. Against that, the
@@ -214,15 +222,21 @@ until both are registered — an unrequired check enforces nothing, the same tra
 
 Both strings are the jobs' `name:` values verbatim. They are plain jobs, not
 reusable-workflow calls, so each produces exactly one context with no ` / `
-suffix. Not yet confirmed against a live run of `dco.yaml`, because
-`pull_request_target` runs the base ref's copy and the workflow was not on `main`
-when this was written. Confirm both on the first PR after it merges:
-`gh api repos/OWNER/REPO/commits/<head-sha>/check-runs --jq '.check_runs[].name'`
+suffix. Confirmed against a live run: `dco.yaml` is on `main` and both contexts
+report on same-repo pull requests. Verified on PR #232 (`29fe3ab`) with
 
-**Rollout order: merge the PR first, then register these two.** Registering
-`DCO sign-off` while the workflow is absent from `main` deadlocks the PR that
-introduces it, because `pull_request_target` runs the base ref's workflows and the
-check cannot report.
+```bash
+gh api repos/OWNER/REPO/commits/<head-sha>/check-runs --jq '.check_runs[].name'
+```
+
+which returned `DCO sign-off` and `DCO check self-test` alongside the other nine,
+and returned bare `FOSSA Scan` as `skipped` — the trap described above, observed
+rather than inferred.
+
+Both are ready to register now. The workflow is on `main`, so the deadlock that
+would follow from registering `DCO sign-off` while `dco.yaml` was still absent
+(`pull_request_target` runs the base ref's workflows, so the check could not
+report) no longer applies.
 
 If *Require approval for all outside collaborators* is on (Settings → Actions →
 General), fork PR runs wait for a maintainer and their checks read **pending**
@@ -269,8 +283,8 @@ it. Verify `CHANGELOG updated`, `Analyze (go)`, and `FOSSA Scan / SCA Scan`
 against a real fork pull request before you treat any of them as a gate.
 
 **A third problem, and this one we create deliberately.** The GitHub Actions
-Permissions section below tells you to require approval for all external
-contributors. That holds the entire workflow run, not just one job, until a
+Permissions section below tells you to require approval for all outside
+collaborators. That holds the entire workflow run, not just one job, until a
 maintainer approves it.
 
 The consequence, in order: an external contributor opens their first pull request,
@@ -328,7 +342,7 @@ options, and the default on a public repo is the middle one:
 
 1. Require approval for first-time contributors who are new to GitHub
 2. **Require approval for first-time contributors** (the default)
-3. Require approval for all external contributors
+3. Require approval for all outside collaborators
 
 Choose option 3. GitHub defines the default as "only users who have never had a
 commit or pull request merged into this repository will require approval", so a
@@ -364,14 +378,17 @@ writing; re-check, do not assume.
   list.
 - ⬜ **"Allow GitHub Actions to create and approve pull requests" turned off.**
   Still on.
-- ⬜ **Fork pull request workflows set to require approval for all external
-  contributors.** The default is weaker; see the GitHub Actions Permissions
+- ⬜ **Fork pull request workflows set to require approval for all outside
+  collaborators.** The default is weaker; see the GitHub Actions Permissions
   section.
-- ⬜ **Secret scanning and push protection enabled.** Both still off.
-- ⬜ **A release cut that covers `main`.** v0.1.0 through v0.5.0 are already tagged
-  and published (v0.5.0 tagged 2026-07-09), so this is not about a first release
-  existing. `[Unreleased]` in `CHANGELOG.md` carries BREAKING entries, so v0.5.0
-  does not describe `main`. Cut one before the flip.
+- ✅ **Secret scanning and push protection enabled.** Both on, along with validity
+  checks and non-provider patterns. Confirm, do not re-enable; see Security Settings.
+- ⬜ **A release cut that covers `main`.** v0.1.0 through v0.6.0 are already tagged
+  and published (v0.6.0 tagged 2026-07-28), so this is not about a first release
+  existing. `main` is 8 commits ahead of v0.6.0 and `[Unreleased]` in
+  `CHANGELOG.md` carries entries, so v0.6.0 does not describe `main`. Cut one
+  before the flip. Re-check both facts rather than trusting the counts here:
+  `git rev-list --count v0.6.0..origin/main` and the `[Unreleased]` block.
 - ⬜ **`/discussions` links repointed** (see the Features section)
 
 **When ready:**
