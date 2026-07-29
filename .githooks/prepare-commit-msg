@@ -61,9 +61,31 @@ signoff=$(printf '%s\n' "$ident" | sed -e 's/> [0-9]* [+-][0-9]*$/>/')
 
 trailer="Signed-off-by: $signoff"
 
+# `git merge` — unlike `git commit` — can hand the hook a message buffer whose
+# last line has no terminating newline, and git <= 2.39's interpret-trailers then
+# omits the blank separator. The trailer welds onto the subject:
+#   Merge branch 'side' Signed-off-by: Dev Example <dev@example.com>
+# One long subject, no trailer git parses, and a commit the DCO gate still passes
+# because it matches a sign-off anywhere in the message.
+#
+# Do NOT remove these three lines, and do not read a green test run as licence to:
+# the suite in .githooks/prepare-commit-msg.test.sh is 34/34 with or without them
+# on git 2.50.1, and 32/34 without them on git 2.39.5 (Debian bookworm, Ubuntu
+# 22.04 and RHEL 9 all ship that range). No CI job runs the suite, so neither CI
+# nor a local run on a modern git will tell you this regressed — the first report
+# comes from a contributor on an LTS distro, with a mangled merge commit.
+if [ -n "$(tail -c1 "$msg_file")" ]; then
+	printf '\n' >>"$msg_file"
+fi
+
+# stderr is discarded and a failure is treated as a no-op, because this hook runs
+# on every commit and must stay silent — it already cannot block one (`exit 0` at
+# the bottom), but it can still emit noise. The trade-off, chosen deliberately: if
+# interpret-trailers ever fails, you get no trailer AND no local warning. The
+# `DCO sign-off` CI check is what catches that.
 git interpret-trailers --if-exists addIfDifferent \
 	--trailer "$trailer" \
-	--in-place "$msg_file"
+	--in-place "$msg_file" 2>/dev/null || exit 0
 
 # In editor mode the message is still empty when this hook runs, so
 # interpret-trailers puts the trailer on line 2 — and the subject the user then

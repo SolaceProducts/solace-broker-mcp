@@ -52,7 +52,10 @@ hooks: ## Install the repo's git hooks (DCO sign-off); re-run after pulling hook
 	  "$$top"/*) \
 	    echo "refusing to install: core.hooksPath points inside the working tree ($$hooks_abs)." >&2; \
 	    echo "Hooks there run the version in whatever branch is checked out, including a fork's PR." >&2; \
-	    echo "See the header of .githooks/prepare-commit-msg. Fix with: git config --unset core.hooksPath" >&2; \
+	    echo "See the header of .githooks/prepare-commit-msg. Fix with:" >&2; \
+	    echo "  git config --unset core.hooksPath          # if it is set for this repo" >&2; \
+	    echo "  git config --global --unset core.hooksPath  # if it is set for your user" >&2; \
+	    echo "Check which with: git config --show-origin --get core.hooksPath" >&2; \
 	    exit 1;; \
 	esac; \
 	dest="$$hooks_dir/prepare-commit-msg"; \

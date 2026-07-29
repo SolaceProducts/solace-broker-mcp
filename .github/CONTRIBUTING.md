@@ -249,7 +249,8 @@ To stop having to remember the `-s`, install the repo's git hook — once per cl
 make hooks
 ```
 
-That copies `.githooks/prepare-commit-msg` into `.git/hooks/`, where it adds the
+That copies `.githooks/prepare-commit-msg` into the repository's hooks directory —
+usually `.git/hooks/`, or wherever `core.hooksPath` points — where it adds the
 `Signed-off-by` trailer to every commit message, including ones made by tools and
 editors that never pass `-s`. It signs off with the identity git would record —
 your `git config user.email`, or `GIT_COMMITTER_EMAIL` if you commit through
@@ -269,6 +270,17 @@ enforcement and re-verifies every commit regardless of what ran locally. Re-run
 `make hooks` after pulling a change to `.githooks/`; it upgrades its own copy but
 refuses to overwrite an unrelated `prepare-commit-msg` hook you already have, and
 refuses to install into a hooks directory inside the working tree.
+
+If you edit the hook, run its suite by hand — no CI job runs it:
+
+```bash
+.githooks/prepare-commit-msg.test.sh
+```
+
+Run it on the oldest git you expect contributors to have, not just yours. Two of
+the cases pass on git 2.50 but catch a real bug only on git 2.39 — the version
+Debian bookworm, Ubuntu 22.04 and RHEL 9 ship — so a green run on a current git
+proves less than it looks like it does.
 
 That last refusal is the point of installing by **copy**: activating the tracked
 directory with `core.hooksPath .githooks`, or symlinking into it, would make git
