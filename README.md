@@ -317,7 +317,7 @@ go mod download
 make hooks
 ```
 
-Once per clone. This copies `.githooks/prepare-commit-msg` into the repository's hooks directory (usually `.git/hooks/`, or wherever `core.hooksPath` points), where it adds the DCO `Signed-off-by` trailer that the `DCO sign-off` CI check requires — so you do not have to remember `git commit -s`. See [Sign off automatically](.github/CONTRIBUTING.md#sign-off-automatically), and the header of `.githooks/prepare-commit-msg` for why the hook is copied rather than activated with `core.hooksPath`.
+Once per clone. This installs `.githooks/prepare-commit-msg` into `.git/hooks/` — read out of `origin/main` rather than out of your working tree, so `git fetch` first on a fresh clone — where it adds the DCO `Signed-off-by` trailer that the `DCO sign-off` CI check requires, so you do not have to remember `git commit -s`. Use `HOOKS_REF=HEAD make hooks` when you are editing the hook itself. See [Sign off automatically](.github/CONTRIBUTING.md#sign-off-automatically), and the header of `.githooks/prepare-commit-msg` for why the hook is copied from a trusted ref rather than activated with `core.hooksPath`.
 
 ### 3. Create event broker config and credentials
 

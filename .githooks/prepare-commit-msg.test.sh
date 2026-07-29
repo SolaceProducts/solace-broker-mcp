@@ -5,11 +5,12 @@
 # contributor uses, and asserts what git ends up recording.
 #
 # Run manually:  .githooks/prepare-commit-msg.test.sh
-# Runs in CI as the `hook_selftest` job in .github/workflows/ci-pr.yaml, so a
-# change to the hook is verified rather than trusted. The hook rewrites every
-# commit message on a contributor's machine; regressions there are silent,
-# because the CI DCO gate accepts a sign-off anywhere in the message and so does
-# not notice a trailer that got welded onto the subject line.
+# No CI job runs it, so a change to the hook is only verified if you run this. The
+# hook rewrites every commit message on a contributor's machine; regressions there
+# are silent, because the CI DCO gate accepts a sign-off anywhere in the message
+# and so does not notice a trailer that got welded onto the subject line.
+# Run it on the oldest git you expect contributors to have: some cases pass on git
+# 2.50 and catch a real bug only on 2.39, the version bookworm/22.04/RHEL 9 ship.
 #
 set -euo pipefail
 
@@ -22,7 +23,13 @@ trap 'rm -rf "$WORK"' EXIT
 pass_count=0
 fail_count=0
 
-# Deterministic identities. Nothing here reads the developer's git config.
+# Deterministic identities. Nothing here may read the developer's git config OR
+# environment. The env vars matter as much as the config: identity from
+# GIT_AUTHOR_*/GIT_COMMITTER_* OUTRANKS config, so in a devcontainer, a corporate
+# CI image, or agent tooling that exports them, every assertion comparing against
+# $SIGNOFF goes red against a perfectly correct hook. Test 5 sets them per-command
+# for the one case that needs them, so unsetting here costs nothing.
+unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 DEV_NAME="Dev Example"; DEV_EMAIL="dev@example.com"
 SIGNOFF="Signed-off-by: $DEV_NAME <$DEV_EMAIL>"
@@ -96,11 +103,22 @@ editor_case() {
     git -C "$dir" config "${cfg[i]}" "${cfg[i + 1]}"
   done
   stage "$dir" one
-  GIT_EDITOR="$WORK/ed-subject" git -C "$dir" commit -q "${args[@]}"
+  # "${args[@]+...}" — a bare "${args[@]}" on an EMPTY array is an unbound-variable
+  # error under `set -u` on bash < 4.4, which is what /usr/bin/env bash resolves to
+  # on a stock macOS (3.2.57). That kills the whole script at the first case, so no
+  # case runs at all. Same idiom as the `extra` array below; keep them consistent.
+  GIT_EDITOR="$WORK/ed-subject" git -C "$dir" commit -q "${args[@]+"${args[@]}"}"
   expect_equal "editor mode, $name: subject keeps its own line" \
     "real subject" "$(git -C "$dir" log -1 --format=%s)"
+  # The READ side is pinned as well as the write side: `%(trailers)` re-renders the
+  # separator as trailer.separators[0], so with a hostile `trailer.separators` in
+  # this repo's config git echoes back `Signed-off-by=` for a message that on disk
+  # says `Signed-off-by:`. That is the reader's rendering, not what the hook wrote,
+  # and comparing against it would fail a correct hook. Asking with ':' pinned is
+  # the actual question: did git parse a `Signed-off-by:` trailer?
   expect_equal "editor mode, $name: trailer is parseable" \
-    "$SIGNOFF" "$(git -C "$dir" log -1 --format='%(trailers:only=true)' | tr -d '\n')"
+    "$SIGNOFF" \
+    "$(git -C "$dir" -c trailer.separators=: log -1 --format='%(trailers:only=true)' | tr -d '\n')"
 }
 
 editor_case "plain"
@@ -114,6 +132,17 @@ editor_case "--cleanup=scissors" -- --cleanup=scissors
 editor_case "core.commentChar=';'" core.commentChar ';' --
 editor_case "core.commentChar=auto" core.commentChar auto --
 editor_case "commit.template" commit.template "$WORK/tmpl" -- -t "$WORK/tmpl"
+# `trailer.*` in a developer's own config changes the form interpret-trailers
+# EMITS, while the hook's line-2 check compares against the form it ASKED for. One
+# config line — `trailer.separators='=:'` writes `Signed-off-by= Name <email>` —
+# is enough to defeat the check and bring the weld back, and the CI DCO gate does
+# not notice because it matches a sign-off anywhere in the message. These cases
+# only pass because the hook pins `trailer.*` on the interpret-trailers call; drop
+# the `-c` flags and the first of them welds.
+editor_case "trailer.separators='=:'" trailer.separators '=:' --
+editor_case "hostile trailer.* config" \
+  trailer.separators '=:' trailer.where start trailer.ifmissing doNothing \
+  trailer.ifexists doNothing --
 
 # --- 1a. CRLF buffer ----------------------------------------------------------
 # A CRLF template makes line 1 a bare carriage return rather than an empty line,
@@ -268,16 +297,44 @@ GIT_EDITOR=true git -C "$r" merge -q --no-ff --signoff side
 expect_equal "merge --signoff yields exactly one sign-off" \
   "1" "$(git -C "$r" log -1 --format=%B | grep -c '^Signed-off-by:')"
 
-# --- 9. the hook never blocks a commit ---------------------------------------
-# A non-zero prepare-commit-msg aborts the commit. Even with no resolvable
-# identity at all, the hook must exit 0 — git's own identity error is what should
-# surface, not a hook failure.
+# --- 9. no resolvable identity: no block, no corruption ----------------------
+# A non-zero prepare-commit-msg aborts the commit, so with no resolvable identity
+# the hook must exit 0 AND leave the message exactly as it found it — a
+# `Signed-off-by:` with nothing after it is worse than no trailer.
+#
+# `user.useConfigOnly` is what makes the state real: without it git derives
+# `user@host.local` from the hostname and `git var GIT_COMMITTER_IDENT` succeeds,
+# so the `|| exit 0` branch is never entered and this tests nothing.
+#
+# The hook is invoked directly rather than through `git commit` because git
+# resolves the committer ident BEFORE it runs prepare-commit-msg (verified on git
+# 2.39.5 and 2.50.1: the hook does not run at all, git just prints "Committer
+# identity unknown"). There is therefore no `git commit` that reaches the hook in
+# this state; driving one would assert git's behaviour, not the hook's.
+#
+# Both assertions are reachable: turn the `|| exit 0` into `|| exit 1` and the
+# first goes red; delete it and the hook signs off with an empty identity, which
+# fails the second.
 r=$(new_repo no_identity --no-identity)
+git -C "$r" config user.useConfigOnly true
+printf 'a subject\n' >"$r/msg"
 rc=0
-env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL \
-  EMAIL= GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
-  "$HOOK" /dev/null || rc=$?
-expect_equal "hook exits 0 with no resolvable identity" "0" "$rc"
+( cd "$r" && env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME \
+    -u GIT_COMMITTER_EMAIL EMAIL= GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+    "$HOOK" msg ) || rc=$?
+expect_equal "no resolvable identity: hook exits 0" "0" "$rc"
+expect_equal "no resolvable identity: message left untouched" \
+  "a subject" "$(cat "$r/msg")"
+# Guard the guard: if git ever resolves an identity here, the two assertions above
+# pass without exercising the branch they exist for.
+if ( cd "$r" && env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME \
+      -u GIT_COMMITTER_EMAIL EMAIL= GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+      git var GIT_COMMITTER_IDENT >/dev/null 2>&1 ); then
+  fail "no resolvable identity: git var really fails" \
+    "git var GIT_COMMITTER_IDENT succeeded, so the two cases above proved nothing"
+else
+  ok "no resolvable identity: git var really fails"
+fi
 
 echo
 printf 'prepare-commit-msg self-test: %d passed, %d failed\n' "$pass_count" "$fail_count"
