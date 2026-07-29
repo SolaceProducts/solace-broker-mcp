@@ -185,6 +185,8 @@ PRs #213, #216, and #217:
 | `e2e-action` | `build-and-test.yml` | E2E suite |
 | `FOSSA Scan / SCA Scan` | `ci-pr.yaml` job `fossa_scan` | Licensing policy and critical/high vulnerabilities, diffed against the base branch |
 | `CHANGELOG updated` | `ci-pr.yaml` job `changelog` | Advisory today; see note below |
+| `DCO sign-off` | `dco.yaml` job `dco` | a sign-off on every commit the PR adds |
+| `DCO check self-test` | `ci-pr.yaml` job `dco_selftest` | the gate's own logic still working |
 
 ⚠️ **Do not select `FOSSA Scan`.** It looks like the right entry and is not. A
 check by that exact name comes from `build-and-test.yml`, where the job carries
@@ -196,6 +198,37 @@ plus the inner job of the reusable workflow it calls (`name: "SCA Scan"`), which
 exits non-zero on findings because `.github/workflow-config.json` sets both FOSSA
 modes to `BLOCK`. Reusable-workflow jobs always surface as
 `<caller job name> / <inner job name>`, never as the caller name alone.
+
+⚠️ **Both DCO rows are required, and dropping either removes a control.** DCO
+stands in for a contributor licence agreement, so the repository is not covered
+until both are registered — an unrequired check enforces nothing, the same trap as
+`FOSSA Scan` above.
+
+- `DCO sign-off` *is* the control. Dropping the row removes it.
+- `DCO check self-test` blocks for a different reason: the gate runs the *base
+  ref's* copy of `dco-check.sh`, so a PR that breaks the script shows the
+  self-test red and the gate green. Unless the self-test blocks, that PR merges
+  and the gate stays broken for everything after it. It guards regressions on
+  trusted PRs only, since a fork can rewrite the test in its own PR — which is
+  exactly why the gate itself does not live there.
+
+Both strings are the jobs' `name:` values verbatim. They are plain jobs, not
+reusable-workflow calls, so each produces exactly one context with no ` / `
+suffix. Not yet confirmed against a live run of `dco.yaml`, because
+`pull_request_target` runs the base ref's copy and the workflow was not on `main`
+when this was written. Confirm both on the first PR after it merges:
+`gh api repos/OWNER/REPO/commits/<head-sha>/check-runs --jq '.check_runs[].name'`
+
+**Rollout order: merge the PR first, then register these two.** Registering
+`DCO sign-off` while the workflow is absent from `main` deadlocks the PR that
+introduces it, because `pull_request_target` runs the base ref's workflows and the
+check cannot report.
+
+If *Require approval for all outside collaborators* is on (Settings → Actions →
+General), fork PR runs wait for a maintainer and their checks read **pending**
+rather than failing; `pull_request_target` is not exempt. Pending fails closed, so
+nothing slips through. The failure mode to avoid is reading that as a misconfigured
+list and dropping a DCO row. Approve the workflow run instead.
 
 Four more notes on the list:
 

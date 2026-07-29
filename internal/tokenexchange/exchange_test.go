@@ -284,9 +284,9 @@ func TestExchange_SameTokenDifferentBrokersRunConcurrently(t *testing.T) {
 // requests that prove cancellation is scoped to the exact (user, broker)
 // pair and does not leak across singleflight keys.
 //
-//   Group 1: User A + Broker X — cancelled → all fail
-//   Group 2: User A + Broker Y — not cancelled → all succeed (same user, different broker)
-//   Group 3: User C + Broker X — not cancelled → all succeed (different user, same broker)
+//	Group 1: User A + Broker X — cancelled → all fail
+//	Group 2: User A + Broker Y — not cancelled → all succeed (same user, different broker)
+//	Group 3: User C + Broker X — not cancelled → all succeed (different user, same broker)
 func TestExchange_CancellationScopedToKeyBoundary(t *testing.T) {
 	t.Parallel()
 
@@ -505,10 +505,12 @@ func TestExchange_ContextCancelledReturnsContextError(t *testing.T) {
 	}
 }
 
-// The caller's context deadline has already expired, but the IdP call
-// runs on a detached context (singleflight resilience), so the handler
-// still receives and responds. The caller gets context.DeadlineExceeded
-// from the post-Do check.
+// The caller's context deadline has already expired by the time Exchange is
+// called, so the entry guard returns context.DeadlineExceeded before the cache
+// lookup or any IdP work. The test server exists only so that a regression
+// removing the guard fails on the assertion below, having reached the IdP and
+// succeeded, rather than on a connection error that would pass for the wrong
+// reason.
 func TestExchange_ContextDeadlineExceededReturnsDeadlineError(t *testing.T) {
 	t.Parallel()
 
@@ -524,7 +526,15 @@ func TestExchange_ContextDeadlineExceededReturnsDeadlineError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
 	defer cancel()
 
-	time.Sleep(5 * time.Millisecond)
+	// Wait on the context, not the clock. WithTimeout fires via time.AfterFunc,
+	// so ctx.Err() stays nil and Done() stays open until the runtime timer
+	// goroutine is actually scheduled. A sleep of 5x the deadline looks like
+	// ample margin and is not a guarantee: measured on a loaded machine, the
+	// context is still live 5ms after a 1ms deadline roughly 1 call in 700, and
+	// the timer has been seen firing as late as 16ms. Exchange then legitimately
+	// succeeds and this test legitimately fails. That is the whole of the
+	// intermittent CI failure here — not a defect in Exchange.
+	<-ctx.Done()
 	tok, err := e.Exchange(ctx, validInput())
 
 	if tok != nil {
@@ -534,6 +544,185 @@ func TestExchange_ContextDeadlineExceededReturnsDeadlineError(t *testing.T) {
 		t.Errorf("errors.Is(err, context.DeadlineExceeded) = false, want true; err = %v", err)
 	}
 }
+
+// TestExchange_ExpiredContextIsHonoredOnEveryPath pins the guarantee the
+// deadline test above depends on, across every path that could return a token
+// without consulting the caller: the singleflight result, the cache hit, and
+// the cache hit whose caller dies mid-lookup.
+//
+// The cache hit never looked at ctx: TokenCache.Get is not required to honor
+// it and the in-memory implementation shipped today ignores it outright, so a
+// cancelled caller was handed a live token. The singleflight select is a
+// second, much narrower instance — ctx.Done() and the result channel are
+// sibling cases, which the Go spec resolves "via a uniform pseudo-random
+// selection" when both are ready — now closed by a re-check on the success
+// branch.
+//
+// Three subtests, and they do not all carry equal weight:
+//
+//   - "cold cache" documents the contract for the singleflight path but passes
+//     either way, because a context cancelled up front is caught by the entry
+//     guard long before the select. For deterministic proof that the select's
+//     re-check fires, see TestExchange_AbandonedOnResultBranchLogsBreadcrumb,
+//     which holds Done() open so the result branch is taken on purpose rather
+//     than by winning a pseudo-random coin flip.
+//   - "warm cache" couples to the original fix: a cache hit needs no scheduling
+//     accident, so before the entry guard it returned a token on every run.
+//   - "warm cache, cancelled during the lookup" couples to the hit's own
+//     re-check. Both subtests above cancel before the call and so never get
+//     past the entry guard; this one cancels inside Get, which is the only
+//     window that reaches the hit's return with a dead caller.
+//
+// Neither of these is the cause of the intermittent CI failure in
+// TestExchange_ContextDeadlineExceededReturnsDeadlineError. That was the test's
+// own premise; see the note there.
+func TestExchange_ExpiredContextIsHonoredOnEveryPath(t *testing.T) {
+	t.Parallel()
+
+	newExchanger := func(t *testing.T) *Exchanger {
+		t.Helper()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, successJSON("exchanged-token", 3600))
+		}))
+		t.Cleanup(srv.Close)
+		e := newTestExchanger(t, srv.URL)
+		e.nowFunc = func() time.Time { return pinnedNow() }
+		return e
+	}
+
+	expired := func(t *testing.T) context.Context {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		return ctx
+	}
+
+	t.Run("cold cache", func(t *testing.T) {
+		t.Parallel()
+		e := newExchanger(t)
+
+		tok, err := e.Exchange(expired(t), validInput())
+		if tok != nil {
+			t.Errorf("tok = %v, want nil for an already-cancelled caller", tok)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("errors.Is(err, context.Canceled) = false, want true; err = %v", err)
+		}
+	})
+
+	t.Run("warm cache", func(t *testing.T) {
+		t.Parallel()
+		// Deliberately NOT pinning nowFunc here. The cache expires entries
+		// against the wall clock, so a token minted at the pinned 2026-01-01
+		// is already stale and every Get is a miss — which would quietly turn
+		// this into a second cold-cache test.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, successJSON("exchanged-token", 3600))
+		}))
+		t.Cleanup(srv.Close)
+		e := newTestExchanger(t, srv.URL)
+
+		// Populate the cache through a live call, so the second call takes the
+		// hit path rather than the singleflight path.
+		if _, err := e.Exchange(context.Background(), validInput()); err != nil {
+			t.Fatalf("priming exchange: %v", err)
+		}
+		// Confirm the fixture actually achieves a hit; otherwise the assertion
+		// below would pass for the wrong reason.
+		// cache.GetHit is the zero value of GetStatus, so a `!= GetHit` check
+		// would also pass on a zero-valued result. Assert the error first, then
+		// the status, so this cannot succeed for the wrong reason.
+		gr, err := e.cache.Get(context.Background(), computeDeduplicationKey(DeduplicationKeyInput{
+			SubjectToken: validInput().SubjectToken,
+			BrokerAlias:  validInput().BrokerAlias,
+		}))
+		if err != nil {
+			t.Fatalf("priming the cache: %v", err)
+		}
+		if gr.Status != cache.GetHit || gr.Entry.Value == "" {
+			t.Fatalf("fixture did not warm the cache: status=%v value_empty=%v", gr.Status, gr.Entry.Value == "")
+		}
+
+		tok, err := e.Exchange(expired(t), validInput())
+		if tok != nil {
+			t.Errorf("tok = %v, want nil: a cache hit must not outrank the caller's cancellation", tok)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("errors.Is(err, context.Canceled) = false, want true; err = %v", err)
+		}
+	})
+
+	// The two subtests above both cancel BEFORE the call, so the entry guard
+	// catches them and neither reaches the hit's own return. This one cancels
+	// during the lookup, which is the window the entry guard cannot cover: it is
+	// point-in-time, and TokenCache.Get does not honor ctx. Without the re-check
+	// at the hit, a caller that has already gone away still leaves with a usable
+	// credential. Raised by @solace-awaheed in review on #227.
+	t.Run("warm cache, cancelled during the lookup", func(t *testing.T) {
+		t.Parallel()
+		// Not pinning nowFunc, for the same wall-clock reason as above.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, successJSON("exchanged-token", 3600))
+		}))
+		t.Cleanup(srv.Close)
+		e := newTestExchanger(t, srv.URL)
+
+		if _, err := e.Exchange(context.Background(), validInput()); err != nil {
+			t.Fatalf("priming exchange: %v", err)
+		}
+		gr, err := e.cache.Get(context.Background(), computeDeduplicationKey(DeduplicationKeyInput{
+			SubjectToken: validInput().SubjectToken,
+			BrokerAlias:  validInput().BrokerAlias,
+		}))
+		if err != nil {
+			t.Fatalf("priming the cache: %v", err)
+		}
+		if gr.Status != cache.GetHit || gr.Entry.Value == "" {
+			t.Fatalf("fixture did not warm the cache: status=%v value_empty=%v", gr.Status, gr.Entry.Value == "")
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		// Live through the entry guard, cancelled from inside Get.
+		e.cache = &cancelDuringGetCache{inner: e.cache, cancel: cancel}
+
+		tok, err := e.Exchange(ctx, validInput())
+		if tok != nil {
+			t.Errorf("tok = %v, want nil: cancelled during the lookup, so the hit must not be served", tok)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("errors.Is(err, context.Canceled) = false, want true; err = %v", err)
+		}
+	})
+}
+
+// cancelDuringGetCache cancels the caller's context from inside Get, then
+// returns what the real cache would have. It reproduces the one window the
+// entry guard cannot cover, deterministically: TokenCache.Get does not honor
+// ctx, so a caller cancelled mid-lookup still arrives at the hit's return.
+type cancelDuringGetCache struct {
+	inner  cache.TokenCache
+	cancel context.CancelFunc
+}
+
+func (c *cancelDuringGetCache) Get(ctx context.Context, key string) (cache.GetResult, error) {
+	res, err := c.inner.Get(ctx, key)
+	c.cancel()
+	return res, err
+}
+
+func (c *cancelDuringGetCache) Put(ctx context.Context, key string, entry cache.CachedCredential) (cache.PutResult, error) {
+	return c.inner.Put(ctx, key, entry)
+}
+
+func (c *cancelDuringGetCache) Delete(ctx context.Context, key string) (cache.DeleteResult, error) {
+	return c.inner.Delete(ctx, key)
+}
+
+func (c *cancelDuringGetCache) Close() error { return c.inner.Close() }
 
 // A follower that shares an in-flight exchange must bail out the moment its
 // own context is cancelled — it must NOT block until the leader's IdP call
@@ -1019,14 +1208,17 @@ func TestExchange_SuccessLogsDebugWithBrokerAndElapsed(t *testing.T) {
 }
 
 // B04 (log aspect): a cancelled caller gets no success/error OUTCOME log.
-// The caller's context is pre-cancelled, but the IdP call runs on a detached
-// context (singleflight resilience), so the handler still receives and responds
-// to the request. The caller returns context.Canceled from the select's
-// ctx.Done branch, not from a failed HTTP call — and must not have "token
-// exchange succeeded" or an error attributed to it. A debug "token exchange
-// abandoned by caller" breadcrumb IS emitted on that branch (it makes a
-// cancellation storm visible now that the shared call runs detached) and is
-// the one allowed "token exchange" line.
+//
+// This caller is cancelled before it ever calls Exchange, so it returns at the
+// entry guard — upstream of singleflight entirely. No IdP request is made, the
+// handler below is never invoked, and no abandonment breadcrumb is emitted
+// (the entry guard starts no exchange, so it has nothing to report). What this
+// test pins is the absence: nothing resembling a "token exchange" outcome may
+// be attributed to a caller that never ran one.
+//
+// The select's own two abandonment paths are pinned separately, by
+// TestExchange_AbandonedOnCtxDoneBranchLogsBreadcrumb and
+// TestExchange_AbandonedOnResultBranchLogsBreadcrumb.
 func TestExchange_ContextErrorNotLogged(t *testing.T) {
 	records, restore := captureLogs(t)
 	defer restore()
@@ -1059,6 +1251,158 @@ func TestExchange_ContextErrorNotLogged(t *testing.T) {
 		if strings.Contains(rec.Message, "token exchange") {
 			t.Errorf("context cancellation should not produce a token exchange outcome log, got: %q", rec.Message)
 		}
+	}
+}
+
+// lateCancelContext is a context whose Err() flips to context.Canceled on
+// demand while Done() never closes. It exists to make the singleflight select's
+// result branch reachable deliberately.
+//
+// The race the re-check guards is both select cases being ready at once, which
+// the Go spec resolves "via a uniform pseudo-random selection" — a coin flip no
+// test can win reliably. Holding Done() open forces the select to take the
+// result branch every run, and cancel() reproduces the state the re-check
+// actually reads: the caller is gone by the time the result arrives. Nothing
+// after the select reads Done(), so the open channel is faithful where it
+// matters.
+type lateCancelContext struct {
+	context.Context
+	done      chan struct{}
+	cancelled atomic.Bool
+}
+
+func newLateCancelContext() *lateCancelContext {
+	return &lateCancelContext{
+		Context: context.Background(),
+		done:    make(chan struct{}),
+	}
+}
+
+func (c *lateCancelContext) cancel()               { c.cancelled.Store(true) }
+func (c *lateCancelContext) Done() <-chan struct{} { return c.done }
+
+func (c *lateCancelContext) Err() error {
+	if c.cancelled.Load() {
+		return context.Canceled
+	}
+	return nil
+}
+
+// The ctx.Done() branch must emit the abandonment breadcrumb. Pinning it is the
+// point: before this test, deleting that log call broke nothing, because the
+// only other test on the cancellation path pre-cancels and never reaches the
+// select at all.
+//
+// Determinism comes from the handler, not from timing. It blocks until the test
+// has cancelled, so the result channel cannot be ready while ctx.Done() is —
+// no coin flip for the select to lose.
+func TestExchange_AbandonedOnCtxDoneBranchLogsBreadcrumb(t *testing.T) {
+	records, restore := captureLogs(t)
+	defer restore()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	finished := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("exchanged-token", 3600))
+		close(finished)
+	}))
+	// Ordering matters: unblock the handler before Close, which waits on
+	// outstanding requests. Defers run last-registered-first.
+	defer srv.Close()
+	defer func() {
+		close(release)
+		<-finished
+	}()
+
+	e := newTestExchanger(t, srv.URL)
+	e.nowFunc = func() time.Time { return pinnedNow() }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Live through the entry guard, cancelled only once the IdP call is in
+	// flight — so the select, not the guard, is what returns.
+	go func() {
+		<-started
+		cancel()
+	}()
+
+	tok, err := e.Exchange(ctx, validInput())
+	if tok != nil {
+		t.Errorf("tok = %v, want nil for a caller that cancelled mid-exchange", tok)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("errors.Is(err, context.Canceled) = false, want true; err = %v", err)
+	}
+
+	assertAbandonedBreadcrumb(t, records(), "ctx_done")
+}
+
+// The result branch's re-check must emit the same abandonment breadcrumb as its
+// ctx.Done() sibling. Both mean the caller left before taking a result, so both
+// carry the same message and are told apart by via. Before the shared log site
+// this branch returned silently.
+func TestExchange_AbandonedOnResultBranchLogsBreadcrumb(t *testing.T) {
+	records, restore := captureLogs(t)
+	defer restore()
+
+	ctx := newLateCancelContext()
+
+	// Cancel from inside the IdP handler: the caller is live through the entry
+	// guard and the cache miss, and gone by the time the result reaches the
+	// select. The ordering is guaranteed, not raced — the handler must return
+	// before singleflight can publish a result onto the channel.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		ctx.cancel()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("exchanged-token", 3600))
+	}))
+	defer srv.Close()
+
+	e := newTestExchanger(t, srv.URL)
+	e.nowFunc = func() time.Time { return pinnedNow() }
+
+	tok, err := e.Exchange(ctx, validInput())
+	if tok != nil {
+		t.Errorf("tok = %v, want nil for a caller that left before taking the result", tok)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("errors.Is(err, context.Canceled) = false, want true; err = %v", err)
+	}
+
+	assertAbandonedBreadcrumb(t, records(), "result")
+}
+
+// assertAbandonedBreadcrumb requires exactly one abandonment breadcrumb,
+// attributed to the given select branch. Both branch tests share it so the two
+// halves of the contract cannot drift in the tests either.
+func assertAbandonedBreadcrumb(t *testing.T, recs []logRecord, wantVia string) {
+	t.Helper()
+
+	var found int
+	for _, rec := range recs {
+		if rec.Message != "token exchange abandoned by caller" {
+			continue
+		}
+		found++
+		if rec.Level != slog.LevelDebug {
+			t.Errorf("level = %v, want Debug", rec.Level)
+		}
+		if got := rec.Attrs["via"]; got != wantVia {
+			t.Errorf("via = %q, want %q", got, wantVia)
+		}
+		for _, k := range []string{"broker", "waited", "cause"} {
+			if _, ok := rec.Attrs[k]; !ok {
+				t.Errorf("missing %q attr", k)
+			}
+		}
+	}
+	if found != 1 {
+		t.Errorf("got %d %q logs, want exactly 1 (via=%s)",
+			found, "token exchange abandoned by caller", wantVia)
 	}
 }
 
@@ -1288,9 +1632,9 @@ func TestExchange_FourxxWithOAuthError(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		status     int
-		body       string
+		name         string
+		status       int
+		body         string
 		wantSentinel error
 	}{
 		{"401 invalid_token", 401, `{"error":"invalid_token"}`, ErrExchangeRejected},

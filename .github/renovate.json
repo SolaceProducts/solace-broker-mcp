@@ -1,12 +1,13 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:base"],
-  "description": "Tightly scoped: Renovate only watches the LLM e2e harness's pinned Claude Code CLI version. No other deps in this repo are managed here — Go modules and other manifests are explicitly ignored to prevent runaway PRs. Bumps follow npm's `stable` dist-tag (deliberately lagged from `latest`); see test/e2e-llm/README.md for the bump procedure.",
+  "description": "Tightly scoped: Renovate only watches the LLM e2e harness's pinned Claude Code CLI version. No other deps in this repo are managed here — Go modules and other manifests are explicitly ignored to prevent runaway PRs. Bumps follow npm's `stable` dist-tag (deliberately lagged from `latest`); see test/e2e-llm/README.md for the bump procedure. Top-level `commitBody` carries the DCO sign-off that the `DCO sign-off` CI gate requires, and is top-level rather than per-rule so it also covers lock-file maintenance and config-migration branches. The gate exempts nobody: an author-name exemption would be forgeable with `git commit --author`. The address must match the identity Renovate commits under (the hosted GitHub App uses this one), otherwise its PRs go red on the gate — the fix is to correct the address here, never to exempt the bot.",
   "enabledManagers": ["npm"],
   "ignorePaths": ["**/node_modules/**"],
   "labels": ["dependencies", "llm-eval"],
   "schedule": ["before 9am on monday"],
   "prHourlyLimit": 1,
+  "commitBody": "Signed-off-by: renovate[bot] <29139614+renovate[bot]@users.noreply.github.com>",
   "packageRules": [
     {
       "matchPackageNames": ["*"],

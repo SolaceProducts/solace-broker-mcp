@@ -31,6 +31,24 @@ import (
 // (subjectToken, brokerAlias) pair are collapsed into a single IdP
 // round-trip via singleflight, and the result is cached for future calls.
 func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, error) {
+	// A caller who is already done gets its own error, never a token. This is
+	// the cheap early exit: it skips the key hash and the cache round-trip for
+	// a caller that cannot use the answer.
+	//
+	// It is not on its own sufficient for the cache hit. TokenCache.Get takes a
+	// context but does not promise to honor it, and the in-memory implementation
+	// shipped today ignores it outright, so a hit is re-checked at its own
+	// return below — this guard is point-in-time, and a caller cancelled between
+	// the two would otherwise still be handed a live token.
+	//
+	// Pushing the check into the cache instead is wrong on two counts: the
+	// interface reserves its error return for backend failures, and Exchange
+	// treats a Get error as a warning and falls through to a full IdP exchange,
+	// so a cache-level rejection would make a dead caller do *more* work.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	key := computeDeduplicationKey(DeduplicationKeyInput{
 		SubjectToken: input.SubjectToken,
 		BrokerAlias:  input.BrokerAlias,
@@ -43,6 +61,14 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	} else {
 		slog.Log(ctx, gr.Status.Level(), "token cache get", "broker", input.BrokerAlias, "status", gr.Status)
 		if gr.Status == cache.GetHit {
+			// Re-check for the same reason the singleflight branch does below:
+			// the entry guard is point-in-time and Get ignores ctx, so without
+			// this a caller cancelled during the lookup still leaves with a
+			// usable credential. One load on the hit path is cheaper than
+			// handing a token to a caller that has already gone away.
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			return &Token{
 				Value:     gr.Entry.Value,
 				ExpiresAt: gr.Entry.ExpiresAt,
@@ -89,20 +115,53 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 		return e.runProtectedExchange(key, input)
 	})
 
-	select {
-	case <-ctx.Done():
-		// The caller abandoned the exchange. The shared IdP call keeps running
-		// on singleflight's goroutine and will still warm the cache, so log
-		// here: a cancellation storm (callers bailing while detached calls keep
-		// hitting the IdP) is otherwise invisible, and this line correlates an
-		// abandoned caller with the later "token cache put" it leaves behind.
-		// broker alias and ctx.Err() text are safe to log; no token material.
+	// abandonedByCaller records a caller that left before taking a result, and
+	// returns its context error. BOTH select branches below reach it: the
+	// ctx.Done() branch, and the result branch whose re-check finds the caller
+	// already gone. They are the same event, so both carry the same message, and
+	// one shared call site is what keeps them from drifting apart again.
+	//
+	// This is a breadcrumb for someone reading debug logs, not a production
+	// signal. Prod runs at INFO (see docs/internal/secure-logging-rules.md), so
+	// neither branch emits there, and abandonment is expected in normal
+	// operation besides. Counting it — to size a cancellation storm, where
+	// callers bail while detached calls keep hitting the IdP — needs a metric,
+	// not this line.
+	//
+	// via names the select branch that fired, which is all this code knows for
+	// certain. It deliberately claims nothing about the shared call's state:
+	// on "ctx_done" the result may already have been ready and lost the
+	// pseudo-random coin flip below, and on "result" the exchange may have
+	// finished with an error, having never reached its cache Put.
+	//
+	// Two earlier exits stay silent, for the same reason as each other: the entry
+	// guard and the cache hit's own ctx re-check. Neither starts an IdP call, so
+	// neither contributes to the load such an investigation is trying to size.
+	//
+	// Broker alias and the ctx error text are safe to log; no token material.
+	abandonedByCaller := func(cause error, via string) (*Token, error) {
 		slog.DebugContext(ctx, "token exchange abandoned by caller",
 			slog.String("broker", input.BrokerAlias),
 			slog.Duration("waited", e.nowFunc().Sub(start)),
-			slog.String("cause", ctx.Err().Error()))
-		return nil, ctx.Err()
+			slog.String("cause", cause.Error()),
+			slog.String("via", via))
+		return nil, cause
+	}
+
+	select {
+	case <-ctx.Done():
+		return abandonedByCaller(ctx.Err(), "ctx_done")
 	case res := <-ch:
+		// Both cases can be ready at once — the shared exchange may complete
+		// while this caller is descheduled — and the Go spec then resolves the
+		// select "via a uniform pseudo-random selection". Re-check so
+		// cancellation wins deterministically
+		// instead of by coin flip. Rare in practice: it needs the caller to be
+		// off-CPU for a whole IdP round-trip. One load on the success path is
+		// cheaper than an outcome that depends on the scheduler.
+		if err := ctx.Err(); err != nil {
+			return abandonedByCaller(err, "result")
+		}
 		elapsed := e.nowFunc().Sub(start)
 		if res.Err != nil {
 			// Map the breaker's open-state rejection (returned by Execute
