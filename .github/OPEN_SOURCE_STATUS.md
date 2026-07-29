@@ -118,24 +118,28 @@ These settings must be configured by repository admin:
 - See: ADMIN_SETUP.md → "Branch Protection"
 
 ### 4. Security Features (5 minutes)
-- Enable secret scanning and secret-scanning push protection (both currently off)
-- Dependabot alerts and Dependabot security updates are already on
+- Secret scanning and secret-scanning push protection are already on, as are
+  validity checks and non-provider patterns. Confirm, do not re-enable
+- Dependabot alerts and Dependabot security updates are already on. Dependency
+  updates themselves run on Renovate (`.github/renovate.json`), not Dependabot;
+  do not create a `dependabot.yml`
 - CodeQL runs on every PR, but the repository API reports Code Security as
   disabled; confirm the configuration rather than assuming it
 - See: ADMIN_SETUP.md → "Security Settings"
 
 ### 5. Actions Settings (5 minutes)
 - Turn off "Allow GitHub Actions to create and approve pull requests" (currently on)
-- Set fork pull request workflows to require approval for all external contributors
+- Set fork pull request workflows to require approval for all outside collaborators
 - See: ADMIN_SETUP.md → "GitHub Actions Permissions"
 
 ### 6. Make Repository Public (5 minutes)
 **ONLY AFTER:**
 - Admin tasks above are complete
 - A release has been cut that covers what is on `main`. The newest release is
-  v0.5.0 (tagged 2026-07-09), and `[Unreleased]` in `CHANGELOG.md` carries BREAKING
-  entries, so v0.5.0 does **not** describe `main` today. Cut one before the flip
-  or the first thing a new user downloads is behind the code they are reading.
+  v0.6.0 (tagged 2026-07-28), and `main` has moved on since with `[Unreleased]`
+  entries in `CHANGELOG.md`, so v0.6.0 does **not** describe `main` today. Cut one
+  before the flip or the first thing a new user downloads is behind the code they
+  are reading.
 - See: ADMIN_SETUP.md → "Visibility Settings"
 
 **Total admin time**: ~45 minutes
@@ -145,9 +149,9 @@ These settings must be configured by repository admin:
 ## Open Source Maturity Progress
 
 This table is a historical record of PR #15 (2026-04-24), not current state. As of
-2026-07-27 the Security row overstates where we are: secret scanning and
-secret-scanning push protection are both off, and "Allow GitHub Actions to create
-and approve pull requests" is on. Do not cite the score below as go/no-go
+2026-07-29 one gap remains behind the Security row: "Allow GitHub Actions to
+create and approve pull requests" is still on. Secret scanning and its push
+protection have since been enabled. Do not cite the score below as go/no-go
 evidence without re-checking the live settings.
 
 | Category | Before PR #15 | After PR #15 | Target |
@@ -177,8 +181,8 @@ treating the 80% threshold as met.
 ### Immediate (Before Public Release)
 
 1. **Admin configures repository** - See ADMIN_SETUP.md (~45 minutes)
-2. **Cut a release** - `[Unreleased]` carries BREAKING entries, so v0.5.0 does not
-  describe `main`. See RELEASING.md.
+2. **Cut a release** - `[Unreleased]` carries entries, so v0.6.0 does not describe
+  `main`. See RELEASING.md.
 3. **Make repository public** - Settings → Danger Zone → Change visibility
 
 ### Post-Publication
