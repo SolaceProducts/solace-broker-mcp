@@ -268,6 +268,203 @@ cleanup_bridges_on() {
     log_info "Bridge fixtures cleaned up on $label"
 }
 
+# F9/F10 Kafka Receivers/Senders — SOL-152370. Both brokers bridge to the
+# same real external broker: the "kafka" service in docker-compose.yml
+# (apache/kafka:3.7.0, KRaft mode, container hostname kafka-e2e-mon),
+# reachable from either Solace container the same way F8's sibling-broker
+# hostname is — over the compose network's default bridge.
+#
+# LAB-VERIFIED (SEMP 2.46, solace/solace-pubsub-standard:latest): creating a
+# Kafka Receiver/Sender at all is gated by two enum-restricted scaling
+# settings that default to 0 on this image — not a license restriction, as
+# SOL-152370 originally concluded before this was investigated further. The
+# confd env-backend keys are /system/scaling/maxkafkabridgecount (valid
+# values: 0, 10, 50, 200) and .../maxkafkabrokerconnectioncount (valid
+# values: 0, 300, 2000, 10000) — both enums, not free integers; other values
+# fail confd's config check and the container exits at boot. Set via
+# SYSTEM_SCALING_MAXKAFKABRIDGECOUNT/SYSTEM_SCALING_MAXKAFKABROKERCONNECTIONCOUNT
+# in docker-compose.yml (note the SYSTEM_ prefix, not SOLACE_ — an earlier,
+# wrong guess at the variable name silently no-ops instead of erroring, since
+# confd's env backend just falls through to the "0" default for an unknown
+# key rather than failing).
+#
+# Also LAB-VERIFIED: unlike bridges' inboundFailureReason (which never
+# populates for connection-level failures — see F8 above), Kafka Receiver/
+# Sender's failureReason DOES populate reliably: "Shutdown" for an
+# admin-disabled object, "No remote-broker in UP state" for an unreachable
+# bootstrap address — both stable across 45s of polling, not transient.
+# Deleting a Kafka Receiver/Sender does NOT cascade its topicBindings/
+# queueBindings sub-resource — unlike bridges, but like RDPs — so cleanup
+# below deletes bindings before the parent object.
+F9_KAFKA_TOPIC="e2e-monitoring-kafka-topic"
+F9_KAFKA_LOCAL_TOPIC="e2e/kafka/receiver"
+F10_KAFKA_QUEUE="test-queue-kafka-sender"
+F10_KAFKA_REMOTE_TOPIC="e2e-monitoring-kafka-sender-topic"
+
+# True when this suite's Kafka broker container is actually up. False when
+# create_fixtures is reused by a sibling suite whose own docker-compose.yml
+# has no "kafka" service — e2e-llm/helpers.sh reuses this file's F1-F8
+# fixture code wholesale (see its own header comment) against its own
+# brokers, which have no kafka-e2e-mon container in their network. Without
+# this guard, create_fixtures would call wait_for_kafka there, which would
+# spend up to a minute retrying a container that will never appear, then
+# return non-zero and (this file runs under `set -e`) abort the entire
+# fixture set for that suite, not just the Kafka piece. A fast existence
+# check avoids that regardless of how any one caller's fixtures are
+# assembled. Cleanup functions need no equivalent guard: they only issue
+# semp_delete against the Solace broker (safe/idempotent on a 404 regardless
+# of whether kafka-e2e-mon ever existed), never docker exec against Kafka
+# itself.
+kafka_broker_available() {
+    docker ps --filter "name=^kafka-e2e-mon$" --filter "status=running" -q 2>/dev/null | grep -q .
+}
+
+# Blocks until the Kafka broker's inter-broker protocol responds, so F9/F10
+# fixture creation doesn't race a still-starting KRaft node. Docker Compose's
+# healthcheck on the "kafka" service already gates this in practice (the
+# Solace containers wait on their own healthchecks the same way via
+# wait_for_all_brokers), but this is a direct, suite-owned check since Kafka
+# is unique to this suite (not part of the shared e2e-common scaffold).
+wait_for_kafka() {
+    local max_attempts="${1:-60}"
+    local attempt=0
+    log_info "Waiting for Kafka broker (kafka-e2e-mon) ..."
+    while [ $attempt -lt "$max_attempts" ]; do
+        if docker exec kafka-e2e-mon /opt/kafka/bin/kafka-broker-api-versions.sh \
+            --bootstrap-server localhost:9092 >/dev/null 2>&1; then
+            log_ok "Kafka broker ready after ${attempt}s"
+            return 0
+        fi
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+    log_warn "Kafka broker not ready after ${max_attempts}s — proceeding anyway"
+    return 1
+}
+
+# Creates the two topics F9/F10 fixtures bind to. Idempotent (--if-not-exists)
+# and safe to call on every run-all.sh invocation, including repeated runs
+# against an already-up broker during development (see README.md Quickstart).
+create_kafka_topics() {
+    log_info "Creating Kafka topics on kafka-e2e-mon ..."
+    docker exec kafka-e2e-mon /opt/kafka/bin/kafka-topics.sh --create --if-not-exists \
+        --topic "$F9_KAFKA_TOPIC" --bootstrap-server localhost:9092 \
+        --partitions 1 --replication-factor 1 >/dev/null
+    docker exec kafka-e2e-mon /opt/kafka/bin/kafka-topics.sh --create --if-not-exists \
+        --topic "$F10_KAFKA_REMOTE_TOPIC" --bootstrap-server localhost:9092 \
+        --partitions 1 --replication-factor 1 >/dev/null
+    log_info "Kafka topics ready"
+}
+
+# Creates three Kafka Receivers per broker, mirroring F8 bridges' three-state
+# pattern: healthy (bound to the real kafka-e2e-mon broker and topic),
+# failing (enabled, unreachable bootstrap address), disabled.
+create_kafka_receivers_on() {
+    local semp_config="$1"
+    local label="$2"
+    log_info "Creating Kafka Receiver fixtures on $label ..."
+
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/kafkaReceivers" \
+        '{"kafkaReceiverName":"test-kafka-receiver","enabled":true,"authenticationScheme":"none","bootstrapAddressList":"kafka-e2e-mon:9092"}' >/dev/null
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver/topicBindings" \
+        "$(jq -nc --arg t "$F9_KAFKA_TOPIC" --arg lt "$F9_KAFKA_LOCAL_TOPIC" \
+            '{topicName:$t,localTopic:$lt,enabled:true}')" >/dev/null
+
+    # test-kafka-receiver-failing: enabled, pointed at an address nothing
+    # listens on (immediate TCP refusal) so it settles into a down/retry
+    # state with failureReason populated (unlike bridges' equivalent case).
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/kafkaReceivers" \
+        '{"kafkaReceiverName":"test-kafka-receiver-failing","enabled":true,"authenticationScheme":"none","bootstrapAddressList":"127.0.0.1:1"}' >/dev/null
+
+    # test-kafka-receiver-disabled: enabled=false — feeds disabledCount and
+    # gives byFailureReason's admin-disabled exclusion something real to
+    # exclude (failureReason populates "Shutdown" here).
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/kafkaReceivers" \
+        '{"kafkaReceiverName":"test-kafka-receiver-disabled","enabled":false,"authenticationScheme":"none","bootstrapAddressList":"127.0.0.1:1"}' >/dev/null
+
+    log_info "Kafka Receiver fixtures created on $label"
+}
+
+verify_kafka_receivers_on() {
+    local broker_url="$1"
+    local label="$2"
+    log_info "Verifying Kafka Receiver fixtures visible on $label ..."
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver" \
+        60 '.data.up == true'
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver-failing" \
+        30 '.data.failureReason != ""'
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver-disabled" \
+        15 '.data.enabled == false'
+}
+
+# Bindings must be deleted before their parent Kafka Receiver — lab-verified:
+# unlike bridges' remoteMsgVpns, this object does NOT cascade-delete.
+cleanup_kafka_receivers_on() {
+    local semp_config="$1"
+    local label="$2"
+    log_info "Cleaning up Kafka Receiver fixtures on $label ..."
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver/topicBindings/$F9_KAFKA_TOPIC"
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver"
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver-failing"
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/kafkaReceivers/test-kafka-receiver-disabled"
+    log_info "Kafka Receiver fixtures cleaned up on $label"
+}
+
+# Creates three Kafka Senders per broker, same three-state pattern as
+# receivers above. The healthy sender needs a local queue to bind from (feeds
+# messages published to that queue out to the real kafka-e2e-mon broker's
+# topic) — separate from every other fixture's queue in this suite.
+create_kafka_senders_on() {
+    local semp_config="$1"
+    local label="$2"
+    log_info "Creating Kafka Sender fixtures on $label ..."
+
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/queues" \
+        "$(jq -nc --arg q "$F10_KAFKA_QUEUE" \
+            '{queueName:$q,accessType:"non-exclusive",permission:"consume",ingressEnabled:true,egressEnabled:true}')" >/dev/null
+
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/kafkaSenders" \
+        '{"kafkaSenderName":"test-kafka-sender","enabled":true,"authenticationScheme":"none","bootstrapAddressList":"kafka-e2e-mon:9092"}' >/dev/null
+    # queueBindings default to enabled=false regardless of the request body
+    # order — must be set explicitly, lab-verified (a binding created without
+    # it silently never carries traffic and the sender never reports up).
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender/queueBindings" \
+        "$(jq -nc --arg q "$F10_KAFKA_QUEUE" --arg t "$F10_KAFKA_REMOTE_TOPIC" \
+            '{queueName:$q,remoteTopic:$t,enabled:true}')" >/dev/null
+
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/kafkaSenders" \
+        '{"kafkaSenderName":"test-kafka-sender-failing","enabled":true,"authenticationScheme":"none","bootstrapAddressList":"127.0.0.1:1"}' >/dev/null
+
+    semp_post "$semp_config" "msgVpns/$BROKER_VPN/kafkaSenders" \
+        '{"kafkaSenderName":"test-kafka-sender-disabled","enabled":false,"authenticationScheme":"none","bootstrapAddressList":"127.0.0.1:1"}' >/dev/null
+
+    log_info "Kafka Sender fixtures created on $label"
+}
+
+verify_kafka_senders_on() {
+    local broker_url="$1"
+    local label="$2"
+    log_info "Verifying Kafka Sender fixtures visible on $label ..."
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender" \
+        60 '.data.up == true'
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender-failing" \
+        30 '.data.failureReason != ""'
+    verify_monitor_object "$broker_url" "$label" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender-disabled" \
+        15 '.data.enabled == false'
+}
+
+cleanup_kafka_senders_on() {
+    local semp_config="$1"
+    local label="$2"
+    log_info "Cleaning up Kafka Sender fixtures on $label ..."
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender/queueBindings/$F10_KAFKA_QUEUE"
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender"
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender-failing"
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/kafkaSenders/test-kafka-sender-disabled"
+    semp_delete "$semp_config" "msgVpns/$BROKER_VPN/queues/$F10_KAFKA_QUEUE"
+    log_info "Kafka Sender fixtures cleaned up on $label"
+}
+
 # F3 connected client — single source of truth for the fixture's identifiers,
 # referenced by both create_connected_client_on and verify-fixtures.sh.
 F3_CLIENT_NAME_A="e2e-monitoring-connected-a"
@@ -816,6 +1013,25 @@ create_fixtures() {
     # driver — the one-shot publish fills the queue and congestion holds.
     create_lowprio_congestion_on "$BROKER_A_SEMP_CONFIG" "broker-a" "$BROKER_A_URL" a
     create_lowprio_congestion_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL" b
+    # F9/F10 are independent of every fixture above — both wait on the
+    # Kafka broker rather than each other or any Solace-side state. Skipped
+    # when this suite's Kafka container isn't part of the current compose
+    # stack (see kafka_broker_available's comment) rather than reused as-is
+    # by a sibling suite without one.
+    if kafka_broker_available; then
+        wait_for_kafka
+        create_kafka_topics
+        create_kafka_receivers_on "$BROKER_A_SEMP_CONFIG" "broker-a"
+        create_kafka_receivers_on "$BROKER_B_SEMP_CONFIG" "broker-b"
+        verify_kafka_receivers_on "$BROKER_A_URL" "broker-a"
+        verify_kafka_receivers_on "$BROKER_B_URL" "broker-b"
+        create_kafka_senders_on "$BROKER_A_SEMP_CONFIG" "broker-a"
+        create_kafka_senders_on "$BROKER_B_SEMP_CONFIG" "broker-b"
+        verify_kafka_senders_on "$BROKER_A_URL" "broker-a"
+        verify_kafka_senders_on "$BROKER_B_URL" "broker-b"
+    else
+        log_warn "Kafka broker (kafka-e2e-mon) not present — skipping F9/F10 Kafka Receiver/Sender fixtures"
+    fi
 }
 
 cleanup_fixtures() {
@@ -843,6 +1059,10 @@ cleanup_fixtures() {
     cleanup_multi_vpn_on "$BROKER_B_SEMP_CONFIG" "broker-b"
     cleanup_bridges_on "$BROKER_A_SEMP_CONFIG" "broker-a"
     cleanup_bridges_on "$BROKER_B_SEMP_CONFIG" "broker-b"
+    cleanup_kafka_senders_on "$BROKER_A_SEMP_CONFIG" "broker-a"
+    cleanup_kafka_senders_on "$BROKER_B_SEMP_CONFIG" "broker-b"
+    cleanup_kafka_receivers_on "$BROKER_A_SEMP_CONFIG" "broker-a"
+    cleanup_kafka_receivers_on "$BROKER_B_SEMP_CONFIG" "broker-b"
     cleanup_multi_queue_on "$BROKER_A_SEMP_CONFIG" "broker-a"
     cleanup_multi_queue_on "$BROKER_B_SEMP_CONFIG" "broker-b"
     cleanup_fixtures_on "$BROKER_A_SEMP_CONFIG" "broker-a"

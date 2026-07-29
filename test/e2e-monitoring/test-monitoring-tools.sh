@@ -1137,68 +1137,110 @@ test_get_bridge_status_healthy_b() { test_get_bridge_status_healthy "broker-b"; 
 test_get_bridge_status_failing_a() { test_get_bridge_status_failing "broker-a"; }
 test_get_bridge_status_failing_b() { test_get_bridge_status_failing "broker-b"; }
 
-# ── Tool 16: list-kafka-receivers (no fixture; SOL-152370) ──────────────────
-# ── Tool 17: get-kafka-receiver-status (no fixture; SOL-152370) ─────────────
-# ── Tool 18: list-kafka-senders (no fixture; SOL-152370) ────────────────────
-# ── Tool 19: get-kafka-sender-status (no fixture; SOL-152370) ───────────────
-# No create_kafka_receivers_on/senders_on fixture: this broker image rejects
-# POST .../kafkaReceivers|kafkaSenders with 400 MAX_NUM_EXCEEDED ("Kafka
-# Bridge limit of 0 reached") — a license gate, not a SEMP config we can
-# raise. See README.md's "Kafka Receivers/Senders — no-fixture note" for the
-# full investigation.
+# ── Tool 16: list-kafka-receivers (F9 Kafka Receivers; SOL-152370) ──────────
+# Primary: the receiver collection includes all three F9 fixtures. Pagination:
+# maxResults=1 returns one entry and flags truncated. Summary: downCount
+# counts test-kafka-receiver-failing (test-kafka-receiver-disabled is
+# excluded, matching list-rdps/list-bridges' admin-disabled exclusion);
+# disabledCount counts test-kafka-receiver-disabled.
 #
-# Coverage is limited to what's achievable without an object: the
-# always-empty collection (zeroed summary) for list-kafka-receivers/-senders,
-# and a nonexistent-name lookup (error translation, live-verified) for
-# get-kafka-receiver-status/-sender-status, mirroring the get-rdp-status
-# not-found precedent in test/e2e-basic-mcp/test-standalone.sh. Enabled/up,
-# disabled, down-with-failureReason, and binding-health scenarios remain
-# untested pending a Kafka-Bridging-licensed broker.
+# Unlike bridges' inboundFailureReason (lab-verified to never populate for
+# connection-level failures — see F8 above), Kafka Receiver failureReason
+# DOES populate reliably: "No remote-broker in UP state" for the unreachable
+# fixture, stable across 45s of polling during fixture design. So
+# byFailureReason is asserted to have a real entry here, unlike list-bridges.
+# Envelope: {"kafkaReceivers":{"data":[...],"truncated":bool},"summary":{...}}.
 
-test_list_kafka_receivers_empty() {
+test_list_kafka_receivers() {
+    local broker="$1"
+    local response content name
+    response=$(mcp_call_tool "list-kafka-receivers" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
+    content=$(extract_content "$response")
+    for name in test-kafka-receiver test-kafka-receiver-failing test-kafka-receiver-disabled; do
+        assert_json_field "$content" \
+            "(.kafkaReceivers.data | map(.kafkaReceiverName) | index(\"$name\")) != null" "true" \
+            "list-kafka-receivers [$broker]: $name must be present" || return 1
+    done
+}
+
+test_list_kafka_receivers_pagination() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "list-kafka-receivers" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",maxResults:1}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '.kafkaReceivers.data | length' "1" \
+        "list-kafka-receivers [$broker]: maxResults=1 must return exactly 1 receiver" || return 1
+    assert_json_field "$content" '.kafkaReceivers.truncated' "true" \
+        "list-kafka-receivers [$broker]: maxResults=1 must flag truncated=true" || return 1
+    response=$(mcp_call_tool "list-kafka-receivers" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '(.kafkaReceivers.data | length) == 3' "true" \
+        "list-kafka-receivers [$broker]: uncapped call must return exactly the 3 F9 receivers" || return 1
+    assert_json_field "$content" '.kafkaReceivers.truncated' "false" \
+        "list-kafka-receivers [$broker]: uncapped call must not be truncated" || return 1
+}
+
+test_list_kafka_receivers_summary() {
     local broker="$1"
     local response content
     response=$(mcp_call_tool "list-kafka-receivers" \
         "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
     content=$(extract_content "$response")
-    assert_json_field "$content" '.kafkaReceivers.data' "[]" \
-        "list-kafka-receivers [$broker]: default VPN has no Kafka Receivers, data must be empty" || return 1
-    assert_json_field "$content" '.kafkaReceivers.truncated' "false" \
-        "list-kafka-receivers [$broker]: empty collection must not be truncated" || return 1
-    assert_json_field "$content" '.summary.scanned' "0" \
-        "list-kafka-receivers [$broker]: summary.scanned must be 0" || return 1
-    assert_json_field "$content" '.summary.downCount' "0" \
-        "list-kafka-receivers [$broker]: summary.downCount must be 0" || return 1
-    assert_json_field "$content" '.summary.disabledCount' "0" \
-        "list-kafka-receivers [$broker]: summary.disabledCount must be 0" || return 1
-    assert_json_field "$content" '.summary.byFailureReason' "{}" \
-        "list-kafka-receivers [$broker]: summary.byFailureReason must be empty" || return 1
+    assert_json_field "$content" '.summary.scanned' "3" \
+        "list-kafka-receivers [$broker]: summary.scanned must be 3 for the F9 fixture set" || return 1
+    assert_json_field "$content" '.summary.downCount' "1" \
+        "list-kafka-receivers [$broker]: downCount must be 1 (fixture: test-kafka-receiver-failing)" || return 1
+    assert_json_field "$content" '.summary.disabledCount' "1" \
+        "list-kafka-receivers [$broker]: disabledCount must be 1 (fixture: test-kafka-receiver-disabled)" || return 1
+    assert_json_field "$content" '(.summary.byFailureReason | add) // 0' "1" \
+        "list-kafka-receivers [$broker]: byFailureReason must have exactly one unexpected-failure entry (test-kafka-receiver-failing's reason)" || return 1
 }
 
-test_list_kafka_senders_empty() {
+test_list_kafka_receivers_a()            { test_list_kafka_receivers "broker-a"; }
+test_list_kafka_receivers_b()            { test_list_kafka_receivers "broker-b"; }
+test_list_kafka_receivers_pagination_a() { test_list_kafka_receivers_pagination "broker-a"; }
+test_list_kafka_receivers_pagination_b() { test_list_kafka_receivers_pagination "broker-b"; }
+test_list_kafka_receivers_summary_a()    { test_list_kafka_receivers_summary "broker-a"; }
+test_list_kafka_receivers_summary_b()    { test_list_kafka_receivers_summary "broker-b"; }
+
+# ── Tool 17: get-kafka-receiver-status (F9 Kafka Receivers; SOL-152370) ─────
+# Primary: the healthy fixture (bound to the real kafka-e2e-mon broker) shows
+# up=true. Down case: the failing fixture shows enabled=true, up=false, and a
+# real non-empty failureReason.
+
+test_get_kafka_receiver_status_healthy() {
     local broker="$1"
     local response content
-    response=$(mcp_call_tool "list-kafka-senders" \
-        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
+    response=$(mcp_call_tool "get-kafka-receiver-status" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",kafkaReceiverName:"test-kafka-receiver"}')") || return 1
     content=$(extract_content "$response")
-    assert_json_field "$content" '.kafkaSenders.data' "[]" \
-        "list-kafka-senders [$broker]: default VPN has no Kafka Senders, data must be empty" || return 1
-    assert_json_field "$content" '.kafkaSenders.truncated' "false" \
-        "list-kafka-senders [$broker]: empty collection must not be truncated" || return 1
-    assert_json_field "$content" '.summary.scanned' "0" \
-        "list-kafka-senders [$broker]: summary.scanned must be 0" || return 1
-    assert_json_field "$content" '.summary.downCount' "0" \
-        "list-kafka-senders [$broker]: summary.downCount must be 0" || return 1
-    assert_json_field "$content" '.summary.disabledCount' "0" \
-        "list-kafka-senders [$broker]: summary.disabledCount must be 0" || return 1
-    assert_json_field "$content" '.summary.byFailureReason' "{}" \
-        "list-kafka-senders [$broker]: summary.byFailureReason must be empty" || return 1
+    assert_json_field "$content" '.kafkaReceiverStatus.data.up' "true" \
+        "get-kafka-receiver-status [$broker]: test-kafka-receiver must be up" || return 1
+    assert_json_field "$content" '.kafkaReceiverStatus.data.enabled' "true" \
+        "get-kafka-receiver-status [$broker]: test-kafka-receiver must be enabled" || return 1
 }
 
-test_list_kafka_receivers_empty_a() { test_list_kafka_receivers_empty "broker-a"; }
-test_list_kafka_receivers_empty_b() { test_list_kafka_receivers_empty "broker-b"; }
-test_list_kafka_senders_empty_a()   { test_list_kafka_senders_empty "broker-a"; }
-test_list_kafka_senders_empty_b()   { test_list_kafka_senders_empty "broker-b"; }
+test_get_kafka_receiver_status_failing() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "get-kafka-receiver-status" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",kafkaReceiverName:"test-kafka-receiver-failing"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '.kafkaReceiverStatus.data.enabled' "true" \
+        "get-kafka-receiver-status [$broker]: test-kafka-receiver-failing must be enabled (down despite being enabled)" || return 1
+    assert_json_field "$content" '.kafkaReceiverStatus.data.up' "false" \
+        "get-kafka-receiver-status [$broker]: test-kafka-receiver-failing must not be up" || return 1
+    assert_json_field "$content" '.kafkaReceiverStatus.data.failureReason != ""' "true" \
+        "get-kafka-receiver-status [$broker]: test-kafka-receiver-failing must report a non-empty failureReason" || return 1
+}
+
+test_get_kafka_receiver_status_healthy_a() { test_get_kafka_receiver_status_healthy "broker-a"; }
+test_get_kafka_receiver_status_healthy_b() { test_get_kafka_receiver_status_healthy "broker-b"; }
+test_get_kafka_receiver_status_failing_a() { test_get_kafka_receiver_status_failing "broker-a"; }
+test_get_kafka_receiver_status_failing_b() { test_get_kafka_receiver_status_failing "broker-b"; }
 
 test_get_kafka_receiver_status_not_found() {
     local broker="$1"
@@ -1218,6 +1260,97 @@ test_get_kafka_receiver_status_not_found() {
     assert_contains "$response" "kafkaReceiver nonexistent-kafka-receiver" \
         "get-kafka-receiver-status [$broker]: translated message should name the object that was not found" || return 1
 }
+
+# ── Tool 18: list-kafka-senders (F10 Kafka Senders; SOL-152370) ─────────────
+# Same pattern as Tool 16/list-kafka-receivers above, mirrored for senders.
+
+test_list_kafka_senders() {
+    local broker="$1"
+    local response content name
+    response=$(mcp_call_tool "list-kafka-senders" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
+    content=$(extract_content "$response")
+    for name in test-kafka-sender test-kafka-sender-failing test-kafka-sender-disabled; do
+        assert_json_field "$content" \
+            "(.kafkaSenders.data | map(.kafkaSenderName) | index(\"$name\")) != null" "true" \
+            "list-kafka-senders [$broker]: $name must be present" || return 1
+    done
+}
+
+test_list_kafka_senders_pagination() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "list-kafka-senders" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",maxResults:1}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '.kafkaSenders.data | length' "1" \
+        "list-kafka-senders [$broker]: maxResults=1 must return exactly 1 sender" || return 1
+    assert_json_field "$content" '.kafkaSenders.truncated' "true" \
+        "list-kafka-senders [$broker]: maxResults=1 must flag truncated=true" || return 1
+    response=$(mcp_call_tool "list-kafka-senders" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '(.kafkaSenders.data | length) == 3' "true" \
+        "list-kafka-senders [$broker]: uncapped call must return exactly the 3 F10 senders" || return 1
+    assert_json_field "$content" '.kafkaSenders.truncated' "false" \
+        "list-kafka-senders [$broker]: uncapped call must not be truncated" || return 1
+}
+
+test_list_kafka_senders_summary() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "list-kafka-senders" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '.summary.scanned' "3" \
+        "list-kafka-senders [$broker]: summary.scanned must be 3 for the F10 fixture set" || return 1
+    assert_json_field "$content" '.summary.downCount' "1" \
+        "list-kafka-senders [$broker]: downCount must be 1 (fixture: test-kafka-sender-failing)" || return 1
+    assert_json_field "$content" '.summary.disabledCount' "1" \
+        "list-kafka-senders [$broker]: disabledCount must be 1 (fixture: test-kafka-sender-disabled)" || return 1
+    assert_json_field "$content" '(.summary.byFailureReason | add) // 0' "1" \
+        "list-kafka-senders [$broker]: byFailureReason must have exactly one unexpected-failure entry (test-kafka-sender-failing's reason)" || return 1
+}
+
+test_list_kafka_senders_a()            { test_list_kafka_senders "broker-a"; }
+test_list_kafka_senders_b()            { test_list_kafka_senders "broker-b"; }
+test_list_kafka_senders_pagination_a() { test_list_kafka_senders_pagination "broker-a"; }
+test_list_kafka_senders_pagination_b() { test_list_kafka_senders_pagination "broker-b"; }
+test_list_kafka_senders_summary_a()    { test_list_kafka_senders_summary "broker-a"; }
+test_list_kafka_senders_summary_b()    { test_list_kafka_senders_summary "broker-b"; }
+
+# ── Tool 19: get-kafka-sender-status (F10 Kafka Senders; SOL-152370) ────────
+
+test_get_kafka_sender_status_healthy() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "get-kafka-sender-status" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",kafkaSenderName:"test-kafka-sender"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '.kafkaSenderStatus.data.up' "true" \
+        "get-kafka-sender-status [$broker]: test-kafka-sender must be up" || return 1
+    assert_json_field "$content" '.kafkaSenderStatus.data.enabled' "true" \
+        "get-kafka-sender-status [$broker]: test-kafka-sender must be enabled" || return 1
+}
+
+test_get_kafka_sender_status_failing() {
+    local broker="$1"
+    local response content
+    response=$(mcp_call_tool "get-kafka-sender-status" \
+        "$(jq -nc --arg b "$broker" '{broker:$b,msgVpnName:"default",kafkaSenderName:"test-kafka-sender-failing"}')") || return 1
+    content=$(extract_content "$response")
+    assert_json_field "$content" '.kafkaSenderStatus.data.enabled' "true" \
+        "get-kafka-sender-status [$broker]: test-kafka-sender-failing must be enabled (down despite being enabled)" || return 1
+    assert_json_field "$content" '.kafkaSenderStatus.data.up' "false" \
+        "get-kafka-sender-status [$broker]: test-kafka-sender-failing must not be up" || return 1
+    assert_json_field "$content" '.kafkaSenderStatus.data.failureReason != ""' "true" \
+        "get-kafka-sender-status [$broker]: test-kafka-sender-failing must report a non-empty failureReason" || return 1
+}
+
+test_get_kafka_sender_status_healthy_a() { test_get_kafka_sender_status_healthy "broker-a"; }
+test_get_kafka_sender_status_healthy_b() { test_get_kafka_sender_status_healthy "broker-b"; }
+test_get_kafka_sender_status_failing_a() { test_get_kafka_sender_status_failing "broker-a"; }
+test_get_kafka_sender_status_failing_b() { test_get_kafka_sender_status_failing "broker-b"; }
 
 test_get_kafka_sender_status_not_found() {
     local broker="$1"
@@ -1326,15 +1459,31 @@ run_test "Tool 15 — get-bridge-status healthy (broker-b)"       test_get_bridg
 run_test "Tool 15 — get-bridge-status failing (broker-a)"       test_get_bridge_status_failing_a
 run_test "Tool 15 — get-bridge-status failing (broker-b)"       test_get_bridge_status_failing_b
 
-run_test "Tool 16 — list-kafka-receivers empty (broker-a)"          test_list_kafka_receivers_empty_a
-run_test "Tool 16 — list-kafka-receivers empty (broker-b)"          test_list_kafka_receivers_empty_b
+run_test "Tool 16 — list-kafka-receivers (broker-a)"                test_list_kafka_receivers_a
+run_test "Tool 16 — list-kafka-receivers (broker-b)"                test_list_kafka_receivers_b
+run_test "Tool 16 — list-kafka-receivers pagination (broker-a)"     test_list_kafka_receivers_pagination_a
+run_test "Tool 16 — list-kafka-receivers pagination (broker-b)"     test_list_kafka_receivers_pagination_b
+run_test "Tool 16 — list-kafka-receivers summary (broker-a)"        test_list_kafka_receivers_summary_a
+run_test "Tool 16 — list-kafka-receivers summary (broker-b)"        test_list_kafka_receivers_summary_b
 
+run_test "Tool 17 — get-kafka-receiver-status healthy (broker-a)"   test_get_kafka_receiver_status_healthy_a
+run_test "Tool 17 — get-kafka-receiver-status healthy (broker-b)"   test_get_kafka_receiver_status_healthy_b
+run_test "Tool 17 — get-kafka-receiver-status failing (broker-a)"   test_get_kafka_receiver_status_failing_a
+run_test "Tool 17 — get-kafka-receiver-status failing (broker-b)"   test_get_kafka_receiver_status_failing_b
 run_test "Tool 17 — get-kafka-receiver-status not found (broker-a)" test_get_kafka_receiver_status_not_found_a
 run_test "Tool 17 — get-kafka-receiver-status not found (broker-b)" test_get_kafka_receiver_status_not_found_b
 
-run_test "Tool 18 — list-kafka-senders empty (broker-a)"            test_list_kafka_senders_empty_a
-run_test "Tool 18 — list-kafka-senders empty (broker-b)"            test_list_kafka_senders_empty_b
+run_test "Tool 18 — list-kafka-senders (broker-a)"                  test_list_kafka_senders_a
+run_test "Tool 18 — list-kafka-senders (broker-b)"                  test_list_kafka_senders_b
+run_test "Tool 18 — list-kafka-senders pagination (broker-a)"       test_list_kafka_senders_pagination_a
+run_test "Tool 18 — list-kafka-senders pagination (broker-b)"       test_list_kafka_senders_pagination_b
+run_test "Tool 18 — list-kafka-senders summary (broker-a)"          test_list_kafka_senders_summary_a
+run_test "Tool 18 — list-kafka-senders summary (broker-b)"          test_list_kafka_senders_summary_b
 
+run_test "Tool 19 — get-kafka-sender-status healthy (broker-a)"     test_get_kafka_sender_status_healthy_a
+run_test "Tool 19 — get-kafka-sender-status healthy (broker-b)"     test_get_kafka_sender_status_healthy_b
+run_test "Tool 19 — get-kafka-sender-status failing (broker-a)"     test_get_kafka_sender_status_failing_a
+run_test "Tool 19 — get-kafka-sender-status failing (broker-b)"     test_get_kafka_sender_status_failing_b
 run_test "Tool 19 — get-kafka-sender-status not found (broker-a)"   test_get_kafka_sender_status_not_found_a
 run_test "Tool 19 — get-kafka-sender-status not found (broker-b)"   test_get_kafka_sender_status_not_found_b
 
