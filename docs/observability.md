@@ -218,8 +218,27 @@ broker state, not per attempt.
   `signature_invalid` (a token-signing or JWKS-rotation failure, distinct from a malformed
   token), `missing`.
 - The values are deliberately coarse so no token content is ever exposed as a label.
+- There is no `broker` label. Authentication happens at the HTTP boundary, before any broker
+  is selected, so there is no broker in scope to name. Use the resource attributes on
+  `target_info` to attribute failures to a server instance.
 
 **Cardinality:** `|reason|` (five values).
+
+### Authorization denials
+
+| Metric | Type | Labels | Basis |
+|---|---|---|---|
+| `mcp_authz_denied_total` | Counter | `tool`, `reason` | Solace |
+
+- `reason` is a closed set of two: `missing_claim`, `not_permitted`. Same values as the
+  `authz_denied` audit record, taken from the same decision, so the metric and the audit
+  stream cannot disagree.
+- `tool` **is** a label here, unlike on `mcp_auth_failure_total`. Authorization runs after the
+  tool is known, so the tool name is in scope and is the first thing you need on a denial.
+- Emitted only where tool authorization is enabled. With it off, the series is absent rather
+  than zero.
+
+**Cardinality:** `|tool| x 2`.
 
 ### Audit pipeline health
 
@@ -314,18 +333,19 @@ audit sub-stream to a dedicated SIEM index.
 | `reason` | Why a credential was rejected; present on `auth_failure` only | string (closed set) |
 | `audit_schema_version` | The schema version, for query pinning | string (`1.0`) |
 
-**`audit_event_type`** is a closed set of five: `operation` (a state-changing tool call),
-`auth_success`, `auth_failure`, `broker_auth_retry`, and `audit_drop`.
+**`audit_event_type`** is a closed set of six: `operation` (a state-changing tool call),
+`auth_success`, `auth_failure`, `authz_denied`, `broker_auth_retry`, and `audit_drop`.
 
 **Which fields appear on which record.** Not every field is on every record, so a SIEM author
 can tell record kinds apart from field presence alone. `event`, `audit_event_type`,
-`timestamp_utc`, `correlation_id`, and `audit_schema_version` are on all five.
+`timestamp_utc`, `correlation_id`, and `audit_schema_version` are on all six.
 
 | `audit_event_type` | `outcome` | `error_type` | `reason` | `tool`, `arguments_hash`, `started_at_utc`, `duration_ms` | `broker` | `principal.sub`, `agent_client_id` |
 |---|---|---|---|---|---|---|
 | `operation` | yes | on `error` only | — | yes | yes | yes |
 | `auth_success` | — | — | — | — | — | yes |
 | `auth_failure` | — | — | yes | — | — | see below |
+| `authz_denied` | — | — | yes | `tool` only | — | yes |
 | `broker_auth_retry` | `success` or `error` | — | — | — | yes | yes |
 | `audit_drop` | — | — | — | — | — | — |
 
@@ -344,17 +364,18 @@ GA, so the rule is stated here for any field added before then.
 **`principal` is a nested object, and `principal.sub` is a path into it** — not a literal key
 with a dot in it. A record carries `"principal": { "sub": "..." }`. It is the schema's only
 nested field; every other field is flat and snake_case. The nesting is deliberate: it leaves
-room for a second member without renaming a field, which matters because `preferred_username`
-is under review below. Collectors that flatten nested objects will render it as
-`principal.sub` regardless, which is why the tables above use the dotted form.
+room for a second member without renaming a field, which is what makes deferring
+`preferred_username` (open item 3) a reversible choice. Collectors that flatten nested
+objects will render it as `principal.sub` regardless, which is why the tables above use the
+dotted form.
 
 **`principal` identity.** The audit event records only `principal.sub`, the opaque OIDC
 subject of the human user. That subject is read once from the verified token and carried end
 to end through token exchange, so the broker's own SEMP log records the same user. The full
 claim set propagated for that exchange is `sub`, `scope`, `client_id`, `iss`, `jti`; of these,
 only `sub` is written to the audit event. A human-readable username (`preferred_username`) is
-**under review** as an open item, because it is PII that would land in an immutable audit
-store (see open items).
+**deliberately omitted in v1**: it is directly identifying PII that would land in an
+append-only store. Adding it later is a pure addition (see open item 3).
 
 **`arguments_hash`.** SHA-256 (FIPS 180-4) over an RFC 8785 JSON Canonicalization Scheme
 form of the arguments (keys sorted, insignificant whitespace removed, nulls preserved). The
@@ -375,14 +396,30 @@ field:
 This keeps failed **authentication** a distinct, queryable signal rather than folding it
 into a generic error, so a query like "show me every rejected credential" stays clean.
 
-**Authorization is a different question, and the schema does not yet answer it.** These
-event types cover authentication only: who proved who they were, and who failed to. A
-caller who authenticates successfully and is then refused a privileged operation currently
-lands in an `operation` record with `outcome: error`, indistinguishable from a broker
-timeout or a malformed argument. There is no `denied` outcome and no authorization event
-type. If your access reviews need "show me every denied privileged attempt" as a clean
-query, say so in your feedback — this is the kind of gap the pilot is meant to catch, and
-it is cheaper to add a value now than after the GA freeze.
+**Authorization has its own record type: `authz_denied`.** The three event types above cover
+authentication, meaning who proved who they were and who failed to. Authorization is the
+separate question of whether an authenticated caller was permitted the tool they asked for,
+and a denial emits `audit_event_type: authz_denied` carrying `tool`, the principal, and
+`reason`, drawn from a closed set of two:
+
+| `reason` | Meaning |
+|---|---|
+| `missing_claim` | The token carried no groups claim, so no grant could match. Usually an IdP-side misconfiguration. |
+| `not_permitted` | The caller's groups matched no grant for that tool. |
+
+Like `auth_failure`, an `authz_denied` record carries no `outcome`: the record type already
+says what happened. So "show me every denied privileged attempt" is a single predicate,
+`audit_event_type: authz_denied`, exactly parallel to the authentication case.
+
+**Two things to know when querying this.** A denied call produces **no `operation` record and
+no entry in the tool-invocation metrics** — authorization runs before the instrumented handler,
+so the attempt is recorded only as an `authz_denied` record. Do not read a missing `operation`
+record as "no attempt was made". And these records exist only where tool authorization is
+enabled; with it off, no authorization check runs and none are emitted.
+
+The caller's actual group memberships are deliberately **not** recorded on a denial, as a
+separation-of-duties measure. `reason` tells you why without disclosing the caller's
+entitlements to whoever reads the audit stream.
 
 ### Audit delivery
 
@@ -555,11 +592,10 @@ Notes:
   `auth_failure` audit event and the `mcp_auth_failure_total` metric, whose closed `reason`
   set (`invalid_token`, `expired`, `audience_mismatch`, `signature_invalid`, `missing`) is
   authentication throughout. This keeps security queries clean.
-- **Authorization denials have no signal of their own yet.** A caller who authenticates and
-  is then refused a privileged operation currently lands in `outcome: error`, alongside
-  timeouts and malformed arguments. There is no `denied` value and no authorization event
-  type. This is an open item below, and it is the one we would most like a compliance
-  reviewer's answer on.
+- **Authorization denial is not an `outcome` value.** Like failed authentication, it is a
+  separate signal: the `authz_denied` audit event and the `mcp_authz_denied_total` metric,
+  whose closed `reason` set (`missing_claim`, `not_permitted`) is authorization throughout.
+  A denied call produces no `operation` record at all.
 - **Load-shedding / saturation is not an `outcome` value** either; it is planned as a
   separate metric in a later release (see below).
 
@@ -567,8 +603,9 @@ Notes:
 
 ## Open items for this review
 
-These are the decisions we most want pilot input on. They are deliberately unresolved in
-this draft, resolving them is the point of the review.
+These are the decisions we most want pilot input on. Most are unresolved; where we have
+taken a position, we say so and name what would change it. Resolving them is the point of
+the review.
 
 1. **SEMP duration histogram buckets.** The name `mcp_semp_request_duration_seconds` is
    settled. The buckets are `0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10` seconds,
@@ -581,9 +618,14 @@ this draft, resolving them is the point of the review.
    following OTel. Is that enough to alert on, or do you need the reason as its own label?
    Splitting it out costs cardinality and would duplicate, per attempt, what
    `mcp_broker_unreachable_reason` already carries as broker state.
-3. **`principal.preferred_username`.** Should the audit event carry a human-readable
-   username in addition to the opaque `sub`? It improves readability for access reviews but
-   places PII in an immutable store. We currently omit it pending this decision.
+3. **`principal.preferred_username`.** **Decided for v1: we omit it.** The audit event carries
+   the opaque `sub` only. A readable username helps access reviews, but it places directly
+   identifying PII in an append-only store, which conflicts with erasure obligations under
+   GDPR and PIPL. Adding the field later is a pure addition this schema permits; removing it
+   later would need a major version. So we have taken the reversible option.
+   **What we still want from you:** can your access review resolve `sub` to a human at review
+   time, including for a deprovisioned user? If it cannot, say so and we will add
+   `principal.preferred_username` in a later minor.
 4. **Trace span names and span kinds.** Beyond `semp.attempt`, we intend to follow OTel HTTP
    conventions. If your trace backend or trace-based SLOs key off specific span names or
    `SpanKind` values, tell us what you expect.
@@ -592,12 +634,14 @@ this draft, resolving them is the point of the review.
    Does that split match how your SIEM queries distinguish failures, and do the ten
    `error_type` values cover how you classify them? If you would separate something we have
    merged — a `timeout` distinct from other errors, say — now is the time.
-6. **Authorization denials, which currently have no signal of their own.** A caller who
-   authenticates successfully and is then refused a privileged operation lands in
-   `outcome: error`, indistinguishable from a broker timeout or a malformed argument. There is
-   no `denied` outcome value and no authorization event type. Do your access reviews need
-   "show me every denied privileged attempt" as a clean query? Adding a value now is cheap;
-   adding one after the freeze is not.
+6. **Authorization denials — the signal is decided, the vocabulary is what we want checked.**
+   Denials get their own record, `audit_event_type: authz_denied`, with `reason` drawn
+   from `missing_claim` and `not_permitted`, plus a matching
+   `mcp_authz_denied_total{tool,reason}` counter. Does that two-value `reason` set match how
+   your access reviews classify a refusal, or do you distinguish cases we have merged? And is
+   the single-predicate query the shape you need? One caveat worth knowing: no shipped build
+   emits this record yet, so denial history begins at the release that first does and cannot
+   be back-filled.
 7. **How OTLP metrics push is enabled.** Tracing has `OBS_TRACING_ENABLED`; the push path for
    metrics has no flag yet, and the scrape surface's `OBS_METRICS_ENABLED` is the wrong lever
    since the two fail independently by design. Should push be its own OBS_* capability flag, or
