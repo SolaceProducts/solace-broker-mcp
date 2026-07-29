@@ -110,6 +110,15 @@ format, behind `OBS_METRICS_ENABLED`. One exception: the authentication-failure 
 to whatever `OBS_METRICS_ENABLED` is, but can be set independently, so a security team can
 collect auth-failure signal without turning on the full metrics surface.
 
+The same instruments can additionally be **pushed over OTLP**, behind its own flag,
+`OBS_METRICS_OTLP_ENABLED`. The endpoint comes from the standard
+`OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`. Push is off by
+default and does not activate merely because an endpoint variable is present in the
+environment; see [Decided since the first draft](#decided-since-the-first-draft) for why.
+Setting `OBS_METRICS_OTLP_ENABLED=true` while `OBS_METRICS_ENABLED` is false fails config
+load with an explicit error rather than emitting nothing quietly, because both egresses
+share one meter provider.
+
 ### Server and scrape health
 
 | Metric | Type | Labels | Basis |
@@ -658,23 +667,23 @@ the review.
    the single-predicate query the shape you need? One caveat worth knowing: no shipped build
    emits this record yet, so denial history begins at the release that first does and cannot
    be back-filled.
-7. **How OTLP metrics push is enabled.** Tracing has `OBS_TRACING_ENABLED`; the push path for
-   metrics has no flag yet, and the scrape surface's `OBS_METRICS_ENABLED` is the wrong lever
-   since the two fail independently by design. Should push be its own OBS_* capability flag, or
-   should it follow the standard `OTEL_EXPORTER_OTLP_*` variables your collectors already set?
-   The second is less for us to document but puts one signal outside the OBS_* model the rest
-   of this page uses.
-
 ### Decided since the first draft
 
-Two items that appeared as open questions in the draft circulated on 2026-07-20 are now
-settled, so you do not need to spend review time on them:
+Three items that appeared as open questions in earlier drafts are now settled, so you do not
+need to spend review time on them:
 
 - **`server_address` and `broker` on SEMP metrics: we keep both.** They answer different
   questions. `server_address` is the OTel-conventional host, which is what correlates this
   service with everything else OTel-instrumented in your estate; `broker` is your configured
   alias, which is what dashboards and alerts group by. Neither is redundant.
 - **`region` is now `cloud.region`.** See [Resource attributes](#resource-attributes).
+- **OTLP metrics push has its own flag, `OBS_METRICS_OTLP_ENABLED`.** We considered activating
+  push as soon as `OTEL_EXPORTER_OTLP_ENDPOINT` was set, which would be tidier and would match
+  what your collectors already configure. We rejected it: that variable is frequently set
+  cluster-wide for other services, so an upgrade could silently start egressing telemetry from
+  a Solace pod that nobody asked to export. An explicit capability flag keeps the decision
+  yours, and it keeps this signal inside the same `OBS_*` model as every other capability. See
+  [Metrics](#metrics--planned).
 
 ---
 
