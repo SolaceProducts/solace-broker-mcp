@@ -130,7 +130,9 @@ collect auth-failure signal without turning on the full metrics surface.
 
 ### Tool invocations (RED)
 
-The core Rate / Errors / Duration signal for every tool the server exposes.
+The core Rate / Errors / Duration signal for every tool call that reaches its handler. A call
+refused by tool authorization never reaches one, so it is absent here and counted by
+`mcp_authz_denied_total` instead.
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
