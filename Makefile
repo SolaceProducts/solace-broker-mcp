@@ -28,6 +28,84 @@ COMPOSE_E2E_OAUTH := docker compose -f $(E2E_OAUTH_DIR)/docker-compose.yml
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_-]+:.*?## / {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
+# ── Git hooks ────────────────────────────────────────────────────────────────
+
+# Installs the hook as an untracked copy under .git/, read out of a TRUSTED REF
+# (HOOKS_REF, default origin/main) rather than out of the working tree — rationale
+# in the header of .githooks/prepare-commit-msg. Reading the payload from the tree
+# would let a hostile branch have a reviewer install a persistent payload just by
+# re-running this target, which CONTRIBUTING.md tells them to do. Use
+# `HOOKS_REF=HEAD make hooks` when you are editing the hook itself — HEAD is a
+# commit, so commit the edit first; this target never reads the working tree.
+# Hence also the refusals below: a hooks directory anywhere but inside this repo's
+# git dir means git runs the hook either from the checked-out tree or from a
+# directory shared with every other repo on the machine. Fails closed.
+# `git rev-parse --git-path` honours a custom core.hooksPath and resolves the
+# shared hooks directory from a linked worktree, where .git is a file.
+# Overwrites only a hook carrying our own marker, so an unrelated
+# prepare-commit-msg (ticket prefixer, commit-lint) survives.
+HOOK_MARKER := solace-broker-mcp:prepare-commit-msg
+HOOK_SRC    := .githooks/prepare-commit-msg
+
+.PHONY: hooks
+hooks: ## Install the repo's git hooks (DCO sign-off) from a trusted ref — default origin/main, HOOKS_REF=HEAD for your own committed edit; re-run after pulling hook changes
+	@set -e; \
+	hooks_dir="$$(git rev-parse --git-path hooks)"; \
+	mkdir -p "$$hooks_dir"; \
+	hooks_abs="$$(cd "$$hooks_dir" && pwd -P)"; \
+	git_dir="$$(cd "$$(git rev-parse --git-common-dir)" && pwd -P)"; \
+	top="$$(cd "$$(git rev-parse --show-toplevel)" && pwd -P)"; \
+	case "$$hooks_abs/" in \
+	  "$$git_dir"/*) ;; \
+	  "$$top"/*) \
+	    echo "refusing to install: core.hooksPath points inside the working tree ($$hooks_abs)." >&2; \
+	    echo "Hooks there run the version in whatever branch is checked out, including a fork's PR." >&2; \
+	    echo "See the header of .githooks/prepare-commit-msg. Fix with:" >&2; \
+	    echo "  git config --unset core.hooksPath          # if it is set for this repo" >&2; \
+	    echo "  git config --global --unset core.hooksPath  # if it is set for your user" >&2; \
+	    echo "Check which with: git config --show-origin --get core.hooksPath" >&2; \
+	    exit 1;; \
+	  *) \
+	    echo "refusing to install: hooks dir ($$hooks_abs) is outside this repo's git dir." >&2; \
+	    echo "See the header of $(HOOK_SRC)." >&2; \
+	    echo "Check where it comes from with: git config --show-origin --get core.hooksPath" >&2; \
+	    exit 1;; \
+	esac; \
+	ref="$${HOOKS_REF:-origin/main}"; \
+	if ! git rev-parse --verify -q "$$ref^{commit}" >/dev/null; then \
+	  echo "refusing to install: cannot resolve HOOKS_REF ($$ref)." >&2; \
+	  echo "make hooks installs from a trusted ref, never from the checked-out tree" >&2; \
+	  echo "(see the header of $(HOOK_SRC)). Fetch that ref, or name another:" >&2; \
+	  echo "  git fetch origin main" >&2; \
+	  echo "  HOOKS_REF=upstream/main make hooks   # if your remote is not called origin" >&2; \
+	  echo "  HOOKS_REF=HEAD make hooks            # install YOUR commit; only when editing the hook" >&2; \
+	  exit 1; \
+	fi; \
+	if ! git cat-file -e "$$ref:$(HOOK_SRC)" 2>/dev/null; then \
+	  echo "refusing to install: $(HOOK_SRC) does not exist at $$ref." >&2; \
+	  echo "If you are on a branch that adds or changes it: HOOKS_REF=HEAD make hooks" >&2; \
+	  exit 1; \
+	fi; \
+	dest="$$hooks_dir/prepare-commit-msg"; \
+	if [ -e "$$dest" ] && ! grep -q "$(HOOK_MARKER)" "$$dest"; then \
+	  echo "refusing to overwrite $$dest — it is not this repo's hook." >&2; \
+	  echo "Move it aside and re-run make hooks. To keep both, install ours under another" >&2; \
+	  echo "name in the hooks directory and call THAT from yours — never .githooks/, which" >&2; \
+	  echo "is the checked-out tree (see the header of $(HOOK_SRC))." >&2; \
+	  exit 1; \
+	fi; \
+	tmp="$$dest.dco-install.$$$$"; \
+	trap 'rm -f "$$tmp"' EXIT HUP INT TERM; \
+	git cat-file blob "$$ref:$(HOOK_SRC)" >"$$tmp"; \
+	if ! grep -q "$(HOOK_MARKER)" "$$tmp"; then \
+	  echo "refusing to install: $$ref:$(HOOK_SRC) does not carry the marker" >&2; \
+	  echo "$(HOOK_MARKER), so it is not this repo's hook. Check what HOOKS_REF ($$ref) points at." >&2; \
+	  exit 1; \
+	fi; \
+	chmod 755 "$$tmp"; \
+	mv "$$tmp" "$$dest"; \
+	echo "installed $$dest (from $$ref)"
+
 # ── Build ────────────────────────────────────────────────────────────────────
 
 .PHONY: build
