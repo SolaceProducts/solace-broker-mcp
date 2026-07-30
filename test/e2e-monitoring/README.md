@@ -393,15 +393,24 @@ an attached client.
 
 ## Port allocation
 
-Distinct from `e2e-basic-mcp` so both suites can run concurrently:
+Distinct from `e2e-basic-mcp` and `e2e-llm` so all three suites can run
+concurrently. `e2e-llm` matters here specifically because it sources this
+suite's `helpers.sh` for its fixture code (see the Fixtures section above),
+so the two stacks are meant to coexist, not just avoid clashing by luck:
 
-| Resource       | e2e-basic-mcp | e2e-monitoring |
-| -------------- | ------------- | -------------- |
-| SEMP broker-a  | 8080          | 8090           |
-| SEMP broker-b  | 8082          | 8092           |
-| SMF broker-a   | (not exposed) | 55655          |
-| SMF broker-b   | (not exposed) | 55656          |
-| Kafka (F9/F10) | n/a           | 9094           |
+| Resource       | e2e-basic-mcp | e2e-monitoring | e2e-llm |
+| -------------- | ------------- | -------------- | ------- |
+| SEMP broker-a  | 8080          | 8090           | 8102    |
+| SEMP broker-b  | 8082          | 8092           | 8104    |
+| SMF broker-a   | (not exposed) | 55655          | 55661   |
+| SMF broker-b   | (not exposed) | 55656          | 55662   |
+| Kafka (F9/F10) | n/a           | 9096           | n/a     |
+| MCP server     | (varies)      | 9090           | 9094    |
+
+`KAFKA_PORT` defaults to 9096, not 9094 — 9094 is already claimed by
+`e2e-llm`'s MCP server (`test/e2e-llm/targets/local-docker.env`), and CI
+running the two suites as separate jobs on separate runners would not catch
+a collision that only bites on a local concurrent run.
 
 All override-able via `.env`: `BROKER_A_SEMP_PORT`, `BROKER_B_SEMP_PORT`,
 `BROKER_A_SMF_PORT`, `BROKER_B_SMF_PORT`, `KAFKA_PORT`.

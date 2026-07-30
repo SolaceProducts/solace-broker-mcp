@@ -301,22 +301,50 @@ F9_KAFKA_LOCAL_TOPIC="e2e/kafka/receiver"
 F10_KAFKA_QUEUE="test-queue-kafka-sender"
 F10_KAFKA_REMOTE_TOPIC="e2e-monitoring-kafka-sender-topic"
 
-# True when this suite's Kafka broker container is actually up. False when
-# create_fixtures is reused by a sibling suite whose own docker-compose.yml
-# has no "kafka" service — e2e-llm/helpers.sh reuses this file's F1-F8
-# fixture code wholesale (see its own header comment) against its own
-# brokers, which have no kafka-e2e-mon container in their network. Without
-# this guard, create_fixtures would call wait_for_kafka there, which would
-# spend up to a minute retrying a container that will never appear, then
-# return non-zero and (this file runs under `set -e`) abort the entire
-# fixture set for that suite, not just the Kafka piece. A fast existence
-# check avoids that regardless of how any one caller's fixtures are
-# assembled. Cleanup functions need no equivalent guard: they only issue
-# semp_delete against the Solace broker (safe/idempotent on a 404 regardless
-# of whether kafka-e2e-mon ever existed), never docker exec against Kafka
-# itself.
-kafka_broker_available() {
-    docker ps --filter "name=^kafka-e2e-mon$" --filter "status=running" -q 2>/dev/null | grep -q .
+# True when the current suite's compose stack declares a Kafka service at
+# all. Intent, not runtime state: this suite's docker-compose.yml always
+# declares "kafka", so this is always true here, and a declared-but-not-ready
+# Kafka is a real failure that should abort loudly (see wait_for_kafka).
+# e2e-llm/helpers.sh reuses this file's F1-F8 fixture code wholesale (see its
+# own header comment) against its own brokers, whose docker-compose.yml
+# declares no "kafka" service — SUITE_DIR there is the LLM suite's own
+# directory (the established contract, see this file's header comment), so
+# this correctly reads *its* compose file and returns false, a legitimate
+# skip rather than a failure.
+#
+# A prior version of this predicate checked `docker ps` for a running
+# kafka-e2e-mon container instead of declared intent — that conflated "no
+# Kafka by design" with "Kafka failed to start" for any ordinary reason
+# (image pull failure, a port clash, a healthcheck that never passes): in
+# this suite specifically, both cases produced a silent skip here, followed
+# by the Tool 16-19 tests failing on "test-kafka-receiver must be present"
+# with the real cause sitting in a log_warn far up the log. Gating on the
+# compose declaration instead means a real Kafka failure now aborts loudly at
+# wait_for_kafka, naming Kafka, rather than surfacing as two dozen downstream
+# assertion failures. Cleanup functions need no equivalent guard: they only
+# issue semp_delete against the Solace broker (safe/idempotent on a 404
+# regardless of whether kafka-e2e-mon ever existed), never docker exec
+# against Kafka itself.
+#
+# LAB-VERIFIED: `docker compose config --services` can itself fail
+# transiently under load (observed directly once during local testing, amid
+# the concurrent docker activity of brokers just having come up) — silently
+# treating that failure the same as "kafka legitimately not declared" would
+# reintroduce the exact silent-misclassification bug this predicate exists to
+# fix, just from a different cause. So the compose command's own exit status
+# is checked explicitly, with a couple of retries for the transient case,
+# rather than folding it into the same pipeline as the grep.
+kafka_expected() {
+    local services attempt
+    for attempt in 1 2 3; do
+        if services=$(docker compose -f "$SUITE_DIR/docker-compose.yml" config --services 2>&1); then
+            printf '%s\n' "$services" | grep -qx kafka
+            return $?
+        fi
+        sleep 1
+    done
+    log_warn "docker compose config failed after 3 attempts while checking Kafka expectations: $services"
+    return 1
 }
 
 # Blocks until the Kafka broker's inter-broker protocol responds, so F9/F10
@@ -338,7 +366,13 @@ wait_for_kafka() {
         sleep 1
         attempt=$((attempt + 1))
     done
-    log_warn "Kafka broker not ready after ${max_attempts}s — proceeding anyway"
+    # Called unguarded from create_fixtures under this file's `set -euo
+    # pipefail` (line 8) — returning non-zero here aborts the whole fixture
+    # set immediately, it does not "proceed anyway". Now that the caller
+    # gates on kafka_expected (declared intent, not runtime state), reaching
+    # here means Kafka was supposed to come up and didn't, so the abort is
+    # the correct behavior and the message says so.
+    log_warn "Kafka broker not ready after ${max_attempts}s — aborting F9/F10 setup"
     return 1
 }
 
@@ -1015,10 +1049,10 @@ create_fixtures() {
     create_lowprio_congestion_on "$BROKER_B_SEMP_CONFIG" "broker-b" "$BROKER_B_URL" b
     # F9/F10 are independent of every fixture above — both wait on the
     # Kafka broker rather than each other or any Solace-side state. Skipped
-    # when this suite's Kafka container isn't part of the current compose
-    # stack (see kafka_broker_available's comment) rather than reused as-is
-    # by a sibling suite without one.
-    if kafka_broker_available; then
+    # only when this suite's own compose stack declares no "kafka" service
+    # (see kafka_expected's comment) — a declared Kafka that fails to come up
+    # aborts loudly via wait_for_kafka instead of being silently skipped.
+    if kafka_expected; then
         wait_for_kafka
         create_kafka_topics
         create_kafka_receivers_on "$BROKER_A_SEMP_CONFIG" "broker-a"
@@ -1030,7 +1064,7 @@ create_fixtures() {
         verify_kafka_senders_on "$BROKER_A_URL" "broker-a"
         verify_kafka_senders_on "$BROKER_B_URL" "broker-b"
     else
-        log_warn "Kafka broker (kafka-e2e-mon) not present — skipping F9/F10 Kafka Receiver/Sender fixtures"
+        log_warn "Kafka service not declared in this compose stack — skipping F9/F10 Kafka Receiver/Sender fixtures"
     fi
 }
 
