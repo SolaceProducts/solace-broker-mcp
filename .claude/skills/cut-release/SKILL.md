@@ -74,19 +74,51 @@ gh pr list --base main --state merged --limit 500 \
 ```
 The explicit `--limit 500` is **required** — `gh`'s default is 30, and a release window wider than
 that would silently drop older merged PRs and miss their gaps (the exact failure this phase exists to
-catch). Keep those merged after `git log -1 --format=%cI vPREV`. If `gh` is unavailable, fall back to
-`git log vPREV..origin/main --format=%s%n%b` — this degrades gracefully but is less precise, so
-prefer the authenticated `gh` path (see Preconditions). Keep only PRs hitting **production surface**, filtered
+catch). Keep those merged after `vPREV`'s commit time, compared **in UTC** — `gh`'s `mergedAt` is
+UTC (`…Z`) but `git --format=%cI` carries a local offset (`-04:00`), so a raw lexical compare across
+the two is wrong. Get the cutoff as a UTC instant with
+`TZ=UTC0 git log -1 --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd vPREV` (portable — avoids
+BSD-vs-GNU `date(1)` parsing differences), then string-compare the two `…Z` timestamps. If `gh` is
+unavailable, fall back to `git log vPREV..origin/main --format=%s%n%b` — this degrades gracefully but
+is less precise, so prefer the authenticated `gh` path (see Preconditions). Keep only PRs hitting **production surface**, filtered
 with the single source of truth shared by the reminder hook and CI gate — source it, never re-embed
 the pattern:
 ```
 source .github/scripts/production-surface.sh
 grep -E "$SURFACE_RE" | grep -v "$SURFACE_TEST_EXCLUDE"
 ```
-Cross-check each qualifying PR's `SOL-XXXXX` against the `Tracked under SOL-…` trailers in
-`[Unreleased]`. For each gap, invoke the **`/changelog`** skill (Skill tool) with that PR's range to
-draft the missing entry into `[Unreleased]`. **Halt the whole flow if any draft left a `SOL-????`
-placeholder** — surface it for the human to resolve before anything is promoted or pushed.
+
+**Confirm a real gap before drafting — do not draft from SOL presence alone.** A surface-regex
+match is a *candidate*, not a gap; applied literally the naive "one `/changelog` per unmatched SOL"
+rule over-fires (on v0.6.0 it flagged 11 candidates for 1 true gap, and auto-drafting all 11 would
+have produced duplicate/garbage entries and 10 wasted `/changelog` runs). A **true gap** is *a
+production-surface PR whose user-facing contract change has no representation in `[Unreleased]`*.
+For each candidate, in order, and skip it (no `/changelog`) as soon as one applies:
+- **Umbrella entries.** A PR's `SOL-XXXXX` absent from the `Tracked under SOL-…` trailers is **not**
+  a gap if its effect is already captured under an umbrella entry (one `Added`/`Changed` bullet that
+  rolls up several sub-tickets of one feature and lists their SOLs). Match against the delivered
+  contract change, not a 1:1 SOL-to-bullet mapping.
+- **Delivered ticket, not follow-ups.** Match the ticket the PR *delivers*. SOLs also appear as
+  inline future-work references (e.g. `[Unreleased]` mentions a follow-up SOL) — a body-mention match
+  is a false signal; use the PR's own tracked ticket.
+- **`tools.yaml` prose-only edits.** A candidate that matches `SURFACE_RE` *only* through
+  `internal/composite/definitions/tools.yaml` needs a second gate: inspect the diff for a changed
+  tool **name / param / output / step-key**. If it changed only description or example prose (no
+  contract change), it is not a gap — skip it (it belongs to `no-changelog`).
+- **Diff, don't guess.** Before drafting, read the candidate PR's diff and confirm an actual
+  name/param/output/behavior change with no representation in `[Unreleased]`. Decide from the diff,
+  never from SOL presence alone.
+
+For each candidate that survives all four checks, invoke the **`/changelog`** skill (Skill tool)
+with that PR's range to draft the missing entry into `[Unreleased]`. **Halt the whole flow if any
+draft left a `SOL-????` placeholder** — surface it for the human to resolve before anything is
+promoted or pushed.
+
+**Nothing to release? Stop before promoting.** After gap detection and any drafting, if `[Unreleased]`
+still has no entry line (`^- `), there is nothing to ship since `vPREV`. Do not promote an empty block
+(it would only fail A5 and the release gate downstream). Report "nothing to release since vPREV" and
+stop — and because A1's clean-start path already created `release/vX.Y.Z` (with no commits yet), leave
+no litter behind: `git switch - && git branch -D release/vX.Y.Z`.
 
 **A3. Version.** If the version was passed, use it. Otherwise suggest a bump from the `[Unreleased]`
 contents per `RELEASING.md` (pre-1.0: any `- **BREAKING**:` → MINOR; new **Added** → MINOR; only
@@ -100,11 +132,12 @@ contents per `RELEASING.md` (pre-1.0: any `- **BREAKING**:` → MINOR; new **Add
 - Touch nothing else — no existing bullets, and not the bottom `## Release Process` / `##
   Versioning` sections.
 
-**A5. Verify the promotion.** The release gate only fails when the version *section is missing* — a
-heading-only block with no entries still passes it — so assert the rest by hand before proceeding:
-- `.github/scripts/extract-release-notes.sh vX.Y.Z /tmp/release-notes-dryrun.md` succeeds **and** the
-  extracted block contains at least one real entry (a line starting with `- `), not just the
-  `## [X.Y.Z]` heading.
+**A5. Verify the promotion.** The release gate now refuses both a *missing* section and a
+heading-only one (no `- ` entry), but it does not check the `[Unreleased]`/`## Links` structure — so
+assert the rest by hand before proceeding:
+- `.github/scripts/extract-release-notes.sh vX.Y.Z /tmp/release-notes-dryrun.md` succeeds (it fails
+  fast if the block is missing or entry-less) **and** the extracted notes contain at least one real
+  entry, not just the `## [X.Y.Z]` heading.
 - A fresh `## [Unreleased]` heading still exists above the dated block (dropping it silently breaks
   the next cycle's gap detection and the changelog hook).
 - The `## Links` block has a well-formed `[Unreleased]: …/compare/vX.Y.Z...HEAD` and a new
@@ -112,31 +145,56 @@ heading-only block with no entries still passes it — so assert the rest by han
 
 If any check fails, the promotion is malformed — fix before proceeding.
 
+**A6. Draft the human-readable release-notes summary.** The published GitHub Release should be
+*skimmable*, not the verbatim (deliberately verbose) CHANGELOG block. The pipeline runs on the tag
+with no LLM available, so the summary must be authored here and committed in the release PR:
+`.github/scripts/extract-release-notes.sh` publishes `.github/release-notes/vX.Y.Z.md` when present
+and otherwise falls back to the raw block. Write that file:
+- Draft **from the promoted `## [X.Y.Z]` block only** — condense each entry to 1–2 sentences,
+  grouped by the same categories (`Added`/`Changed`/`Fixed`/`Security`/…), dropping rationale and
+  implementation detail. The verbose CHANGELOG remains the source of truth.
+- Do not introduce facts absent from the block; do not restate the release gate — the script still
+  enforces "the CHANGELOG section exists and has real entries" independently of this file.
+
 ## Phase B — Open the prepare-release PR
 
 - The `release/vX.Y.Z` branch was already created from `origin/main` in A1 (never commit release
   changes on `main` itself) — confirm you're on it with the promotion staged.
-- Commit only `CHANGELOG.md`: `Prepare release vX.Y.Z`, ending the message with the
+- Commit `CHANGELOG.md` and the `.github/release-notes/vX.Y.Z.md` summary from A6 (nothing else):
+  `Prepare release vX.Y.Z`, ending the message with the
   `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>` trailer.
 - Push and open the PR with `gh pr create`, base `main`, body ending with the
   `🤖 Generated with [Claude Code](https://claude.com/claude-code)` trailer. Summarize the
   promotion (version, categories, any gap entries drafted), and **state explicitly that merging this
   PR automatically tags and publishes `vX.Y.Z`** — an immutable public GitHub Release + `ghcr.io`
-  image — so the reviewer knows the merge is the release go-ahead, not just a docs edit. Note the
-  reminder to regenerate `THIRD_PARTY_LICENSES.md` (`go-licenses report ./cmd/server`) if
-  dependencies changed.
+  image — so the reviewer knows the merge is the release go-ahead, not just a docs edit.
+- **`THIRD_PARTY_LICENSES.md` reminder — only when deps actually changed.** Detect with
+  `git diff --stat vPREV..HEAD -- go.mod go.sum`; if it reports changes, include the reminder to
+  regenerate via `go-licenses report ./cmd/server` and **name the changed modules** (from the
+  `go.mod` diff). If `go.mod`/`go.sum` are untouched, stay silent — do not emit the reminder.
 - Print the PR URL and tell the human: review + merge to make the changelog official; the release
   fires automatically on merge.
 
 ## Phase C — Watch for the merge
 
-- Poll the PR every ~30s: `gh pr view <n> --json state,mergedAt,mergeCommit`.
+This wait is gated on a human merging the PR, so it is unbounded from the skill's side — do **not**
+burn it in a foreground ~30s poll loop (each cycle reloads full context and is the bulk of the
+skill's own churn/latency). Run **one backgrounded watcher** that sleeps between checks and returns
+only on a terminal state, so the model is re-invoked once on completion rather than every cycle:
+```
+while :; do
+  s=$(gh pr view <n> --json state,mergedAt,mergeCommit)
+  echo "$s" | grep -q '"state":"MERGED"' && { echo "$s"; break; }
+  echo "$s" | grep -q '"state":"CLOSED"' && { echo "$s"; break; }
+  sleep 30
+done
+```
 - On `MERGED` → **record the `mergeCommit` SHA** and carry it into Phase D. That exact commit is what
   gets tagged — do not re-derive it from the branch tip.
 - On `CLOSED` (unmerged) → stop; the release is cancelled.
-- Bound the wait (e.g. ~30 min of polling). On timeout, stop and report: "PR #N is still open at
-  <url> — nothing was tagged; re-run `/cut-release <version>` to resume." A dropped session is safe:
-  the A1 remote-state check resumes cleanly (merged-but-untagged → Phase D).
+- Bound the wait (e.g. ~30 min). On timeout, stop and report: "PR #N is still open at <url> —
+  nothing was tagged; re-run `/cut-release <version>` to resume." A dropped session is safe: the A1
+  remote-state check resumes cleanly (merged-but-untagged → Phase D).
 
 ## Phase D — Cut the release (guarded auto-tag)
 
@@ -152,24 +210,30 @@ The merge is the go-ahead, but still verify the hard gates before pushing. `MERG
   the tag exists **locally only** (`git tag --list` matches but the remote does not) → a previous
   push failed *after* tagging; re-run `git push origin vX.Y.Z` to finish, then go to Phase E.
 - **Verify `origin/main` carries the dated block** — extract from the *remote* branch and refuse if
-  the block is empty **or contains no entry line (`^- `)**: a heading-only block still passes the
-  release gate but ships empty notes, and usually means the promotion did not actually merge.
-  Substitute the **bare** version for `v=` (e.g. `v="0.6.0"`, never `v0.6.0`):
+  the block is empty **or contains no entry line (`^- `)**. The CI release gate now rejects an
+  entry-less block too, but that fires only *after* the tag is pushed; catching it here — before an
+  immutable tag exists — avoids a doomed run, and an empty/entry-less block usually means the
+  promotion did not actually merge.
+  Substitute the **bare** version for `v=` (e.g. `v="0.6.0"`, never `v0.6.0`). The awk whole-record
+  reference is written `$(0)` — identical to `$0` in awk, but with no literal `$0` token for a
+  positional-argument substitution to turn into the version string, and without the `\$0` escaping
+  that awk itself rejects as a syntax error. Keep the parentheses:
   ```
   git show origin/main:CHANGELOG.md | awk -v v="0.6.0" '
     BEGIN { gsub(/\./, "\\.", v) }
-    $0 ~ ("^## \\[" v "\\]") { p = 1; print; next }
-    p && /^## \[/            { exit }
-    p                        { print }
+    $(0) ~ ("^## \\[" v "\\]") { p = 1; print; next }
+    p && /^## \[/              { exit }
+    p                          { print }
   '
   ```
 - **Confirm the tagged commit is releasable — scoped to the commit, not the branch.** Verify
   `MERGE_SHA` is contained in `origin/main` (`git merge-base --is-ancestor <MERGE_SHA> origin/main`),
   then check the `build-and-test` run for that exact commit:
-  `gh run list --workflow=build-and-test.yml --commit <MERGE_SHA> --json status,conclusion`. Treat
-  `in_progress`/`queued` as **wait and re-poll** — right after a merge the run is normally still
-  running, which is not a failure. Proceed only on `conclusion == success`; stop and surface only on
-  an actual failure conclusion.
+  `gh run list --workflow=build-and-test.yml --commit <MERGE_SHA> --json databaseId,status,conclusion`.
+  Right after a merge the run is normally still `in_progress`/`queued` — that is not a failure. Rather
+  than a foreground re-poll, **block on it once** with `gh run watch <databaseId> --exit-status` (run
+  backgrounded; it returns when the run finishes, exit 0 on success, non-zero on failure), expected
+  ~5–10 min. Proceed only on success; stop and surface only on an actual failure conclusion.
 - **Tag the exact merged commit** (not the branch tip — `origin/main` may have advanced since the
   merge) and push:
   ```
@@ -180,8 +244,14 @@ The merge is the go-ahead, but still verify the hard gates before pushing. `MERG
 ## Phase E — Report and hand off
 
 - **Confirm the release run actually started for this tag** — don't assume. Resolve the run for
-  `vX.Y.Z` (`gh run list --workflow=release.yml` filtered to the tag / `MERGE_SHA`); if none appears
-  shortly after the push, flag it — tag protection or a disabled workflow can swallow the trigger.
+  `vX.Y.Z` (`gh run list --workflow=release.yml` filtered to the tag / `MERGE_SHA`). Distinguish two
+  states so the check doesn't false-alarm: a run **record that exists but sits in `queued`** is
+  normal — it is waiting on a runner/environment, not swallowed, so wait on it. Only when **no run
+  record appears at all** within ~2 min of the push should you flag it — tag protection or a disabled
+  workflow can swallow the trigger.
+- Once a run exists, **block on it once** with `gh run watch <databaseId> --exit-status` (run
+  backgrounded) rather than a foreground poll loop; expected ~15–25 min end-to-end and it may sit in
+  `queued` before starting.
 - Report the run URL and its conclusion. **On failure**, point the operator at `RELEASING.md`
   Rollback and warn that the container image and its moving pointers (`:latest`, `{major}.{minor}`)
   may already be published on `ghcr.io` even though a later job failed — recovery is roll-forward to
@@ -189,6 +259,11 @@ The merge is the go-ahead, but still verify the hard gates before pushing. `MERG
 - **On success**, print the `RELEASING.md` "After pushing the tag" checklist: verify
   `gh release view vX.Y.Z` shows four archives + `checksums-sha256.txt` + the curated notes,
   spot-check a binary's `--version`, and announce once verified.
+- **Optional cleanup (offer, don't force).** After a successful release the local checkout is often
+  still on the merged `release/vX.Y.Z` branch and the remote branch lingers. Offer to tidy up:
+  `git switch main && git pull --ff-only origin main`, then delete the merged branch local + remote
+  (`git branch -d release/vX.Y.Z`; `git push origin --delete release/vX.Y.Z`). Skip silently if the
+  branch was already deleted on merge.
 - Stop. Do not retry the run or edit the Release.
 
 ## Rules
