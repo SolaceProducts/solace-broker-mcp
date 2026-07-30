@@ -1,0 +1,148 @@
+#!/bin/sh
+# solace-broker-mcp:prepare-commit-msg
+#
+# Adds the DCO `Signed-off-by` trailer to every commit message, so you do not
+# have to remember `git commit -s`. Install with `make hooks`. Tests:
+# .githooks/prepare-commit-msg.test.sh.
+#
+# This hook is a CONVENIENCE, never the control. The `DCO sign-off` check in CI
+# is the enforcement; it re-verifies every commit a PR adds regardless of what
+# ran locally. A contributor without the hook installed is not a gap — which is
+# also why this hook must never fail a commit. See `exit 0` at the bottom.
+#
+# The marker on line 2 is how `make hooks` recognises its own installed copy, so
+# that re-running it upgrades this hook but refuses to clobber an unrelated
+# prepare-commit-msg hook. Keep it.
+#
+# Three non-obvious decisions, all of which look like they could be simplified:
+#
+# 1. `git var GIT_COMMITTER_IDENT`, not `git config user.name/user.email`.
+#    git var resolves the identity git will actually record, which may come from
+#    the GIT_COMMITTER_* / GIT_AUTHOR_* environment rather than from config —
+#    that is how bots, CI, and agent tooling commit. Reading config there yields
+#    empty strings while git commits happily, so a config-based hook skips the
+#    sign-off in exactly the automated case that most needs it. git var fails
+#    only when no identity is resolvable at all, a state git itself refuses to
+#    commit in.
+#
+# 2. `--if-exists addIfDifferent`, NOT `doNothing`.
+#    addIfDifferent does not duplicate an identical trailer, so it is a no-op
+#    when you already passed `-s`, and stays a no-op across repeated
+#    `git commit --amend --no-edit`. What it does still do is add YOUR sign-off
+#    to a message that already carries a DIFFERENT one. That case is not
+#    hypothetical: quote a patch or a mailing-list message into your own commit
+#    text, or paste a colleague's sign-off along with code they handed you, and
+#    the message carries a `Signed-off-by:` line belonging to someone who is
+#    neither the author nor the committer. CI matches the sign-off email against
+#    the commit's own author or committer, so it rejects that commit. `doNothing`
+#    sees "a trailer exists" and skips, producing exactly the CI failure this
+#    hook exists to prevent; addIfDifferent adds the line that satisfies it.
+#    (It is also a strict superset: every message doNothing handles correctly,
+#    addIfDifferent handles identically.)
+#
+# 3. This file is installed as an untracked COPY under `.git/`, read out of a
+#    TRUSTED REF (`origin/main` by default) rather than out of the working tree.
+#    Never wire it up with `core.hooksPath .githooks`, and never symlink it from
+#    `.git/hooks/`: both make git execute the hook as it exists in the CHECKED-OUT
+#    TREE. This repo takes pull requests from public forks, so the tree under
+#    review is attacker-controlled: a PR that edits this file would then run its
+#    code on the reviewer's machine during an ordinary `git commit` or `git merge`
+#    — no build, no tests — and because linked worktrees share repo config, the
+#    project's worktree-based review flow is in scope too.
+#
+#    Reading the payload from the working tree is the same hole one step removed,
+#    which is why `make hooks` does not. A hostile branch that keeps the marker on
+#    line 2 satisfies the clobber guard, so a reviewer doing what CONTRIBUTING
+#    tells them to do — re-run `make hooks` after pulling hook changes — would
+#    install that branch's payload into `.git/hooks/`, where it OUTLIVES the
+#    branch and fires on every later commit, including on `main`. Installing from
+#    a trusted ref closes that path. `HOOKS_REF=HEAD make hooks` is the escape
+#    hatch for editing this hook, and is the one case where you are opting into
+#    running your own branch's copy. It installs a COMMIT, not the working tree.
+#
+#    The untracked copy under `.git/` cannot be altered by checking out a hostile
+#    branch, and still fires in linked worktrees. This paragraph is the canonical
+#    statement of that reasoning; the Makefile, CONTRIBUTING.md, and README.md
+#    point here rather than restating it.
+
+msg_file=$1
+
+ident=$(git var GIT_COMMITTER_IDENT 2>/dev/null) || exit 0
+# Git's ident sanitiser strips `\n`, `<` and `>` from the name and email, but not
+# `\r`. A CR from `git config user.name $'a\rb'` or from GIT_COMMITTER_NAME
+# therefore survives into $trailer, the line-2 comparison at the bottom never
+# matches, and the subject welds. Stripped here, once, rather than at each
+# comparison site — and on its own line, so the `|| exit 0` above still keys on
+# `git var` failing rather than on `tr`.
+ident=$(printf '%s' "$ident" | tr -d '\r')
+# "Name <email> 1750000000 +0200" -> "Name <email>"
+signoff=$(printf '%s\n' "$ident" | sed -e 's/> [0-9]* [+-][0-9]*$/>/')
+
+trailer="Signed-off-by: $signoff"
+
+# `git merge` — unlike `git commit` — can hand the hook a message buffer whose
+# last line has no terminating newline, and git <= 2.39's interpret-trailers then
+# omits the blank separator. The trailer welds onto the subject:
+#   Merge branch 'side' Signed-off-by: Dev Example <dev@example.com>
+# One long subject, no trailer git parses, and a commit the DCO gate still passes
+# because it matches a sign-off anywhere in the message.
+#
+# Do NOT remove these three lines, and do not read a green test run as licence to:
+# the suite in .githooks/prepare-commit-msg.test.sh is 40/40 with or without them
+# on git 2.50.1, and 38/40 without them on git 2.39.5 (Debian bookworm, Ubuntu
+# 22.04 and RHEL 9 all ship that range) — the two clean-merge cases. No CI job runs
+# the suite, so neither CI nor a local run on a modern git will tell you this
+# regressed — the first report comes from a contributor on an LTS distro, with a
+# mangled merge commit.
+if [ -n "$(tail -c1 "$msg_file")" ]; then
+	printf '\n' >>"$msg_file"
+fi
+
+# stderr is discarded and a failure is treated as a no-op, because this hook runs
+# on every commit and must stay silent — it already cannot block one (`exit 0` at
+# the bottom), but it can still emit noise. The trade-off, chosen deliberately: if
+# interpret-trailers ever fails, you get no trailer AND no local warning. The
+# `DCO sign-off` CI check is what catches that.
+#
+# The `git -c trailer.*` pins are load-bearing, not tidiness. The check below
+# compares line 2 against the trailer this hook ASKED for, so any config that
+# changes the form interpret-trailers actually WRITES silently defeats it and the
+# weld comes back. One line in a developer's own config is enough:
+# `trailer.separators='=:'` emits `Signed-off-by= Name <email>`, which no longer
+# equals "$trailer", so the separator line is never inserted and the subject welds.
+# Pinning the three settings on the call keeps the emitted trailer byte-identical
+# to "$trailer" whatever the user has configured. (`trailer.ifexists` is already
+# overridden by the `--if-exists` flag below.)
+git -c trailer.separators=: -c trailer.where=end -c trailer.ifmissing=add \
+	interpret-trailers --if-exists addIfDifferent \
+	--trailer "$trailer" \
+	--in-place "$msg_file" 2>/dev/null || exit 0
+
+# In editor mode the message is still empty when this hook runs, so
+# interpret-trailers puts the trailer on line 2 — and the subject the user then
+# types on line 1 welds onto it, leaving a long subject line and a trailer git no
+# longer parses as one. Insert the blank separator line that a written-out message
+# would already have.
+#
+# The test is deliberately structural — is line 1 blank with the trailer directly
+# under it? — and runs on the finished buffer, because everything about the buffer
+# ELSE is a moving target. "Is the message empty" cannot be answered by stripping
+# what we think git puts in there: comment lines (whose prefix is core.commentChar,
+# possibly `auto`), the un-prefixed diff below the `-v` scissors line, and whatever
+# a future git or --cleanup mode adds. This check is immune to all of them: it only
+# looks at the two lines whose contents would break. It is immune to `trailer.*`
+# config too, but only because the call above pins it — without those `-c` flags
+# the comparison is against a trailer git may not have written.
+if [ "$(sed -n 1p "$msg_file" | tr -d '\r')" = "" ] &&
+	[ "$(sed -n 2p "$msg_file" | tr -d '\r')" = "$trailer" ]; then
+	tmp="$msg_file.dco.$$"
+	if { printf '\n'; cat "$msg_file"; } >"$tmp" 2>/dev/null; then
+		mv "$tmp" "$msg_file"
+	fi
+	rm -f "$tmp"
+fi
+
+# A non-zero prepare-commit-msg aborts the commit. Nothing above is worth
+# blocking a commit over, so never report failure — a missing trailer is CI's
+# job to catch, not this hook's.
+exit 0

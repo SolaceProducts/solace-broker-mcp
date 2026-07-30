@@ -311,11 +311,19 @@ cd solace-broker-mcp
 go mod download
 ```
 
-### 2. Create event broker config and credentials
+### 2. Install the git hooks
+
+```bash
+make hooks
+```
+
+Once per clone. This installs `.githooks/prepare-commit-msg` into `.git/hooks/` — read out of `origin/main` rather than out of your working tree, so `git fetch` first on a fresh clone — where it adds the DCO `Signed-off-by` trailer that the `DCO sign-off` CI check requires, so you do not have to remember `git commit -s`. Use `HOOKS_REF=HEAD make hooks` when you are editing the hook itself. See [Sign off automatically](.github/CONTRIBUTING.md#sign-off-automatically), and the header of `.githooks/prepare-commit-msg` for why the hook is copied from a trusted ref rather than activated with `core.hooksPath`.
+
+### 3. Create event broker config and credentials
 
 Create `broker-config.yaml` and `.env` in the repo root (both are gitignored). See [Configuration](#configuration) for the file format and examples.
 
-### 3. Run the MCP server
+### 4. Run the MCP server
 
 ```bash
 go run ./cmd/server
@@ -367,7 +375,7 @@ brokers:
 
 When both are configured, the server starts with HTTPS. When neither is configured, plain HTTP. Providing only one is a startup error.
 
-### 4. Connect from Claude Code
+### 5. Connect from Claude Code
 
 See [Connect from Claude Code](#connect-from-claude-code) in the Quickstart section.
 
