@@ -179,8 +179,9 @@ and otherwise falls back to the raw block. Write that file:
 
 This wait is gated on a human merging the PR, so it is unbounded from the skill's side — do **not**
 burn it in a foreground ~30s poll loop (each cycle reloads full context and is the bulk of the
-skill's own churn/latency). Run **one backgrounded watcher** that sleeps between checks and returns
-only on a terminal state, so the model is re-invoked once on completion rather than every cycle:
+skill's own churn/latency). Instead launch **one blocking watch loop as a background command** — via
+your runner's background execution (e.g. the Bash tool's background mode), not a shell `&` inside the
+snippet — so it sleeps between checks and wakes the model once, on a terminal state, not every cycle:
 ```
 while :; do
   s=$(gh pr view <n> --json state,mergedAt,mergeCommit)

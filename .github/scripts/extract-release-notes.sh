@@ -55,11 +55,17 @@ if ! grep -q '^- ' <<<"$BLOCK"; then
 fi
 
 # Prefer the curated summary committed in the release PR; else the verbatim block.
-if [ -f "$SUMMARY" ]; then
+# A committed-but-empty summary would otherwise wipe the release body even though the
+# CHANGELOG gate passed, so treat empty as absent: fall back to the (already
+# gate-validated) verbatim block and warn, rather than shipping empty notes.
+if [ -s "$SUMMARY" ]; then
   cp "$SUMMARY" "$OUT"
   echo "Published curated release notes for ${VERSION} from ${SUMMARY} into ${OUT}." >&2
 else
+  if [ -e "$SUMMARY" ]; then
+    echo "::warning::Curated release notes ${SUMMARY} exist but are empty; falling back to the verbatim CHANGELOG block." >&2
+  fi
   printf '%s\n' "$BLOCK" > "$OUT"
-  echo "No ${SUMMARY}; published verbatim CHANGELOG block for ${VERSION} into ${OUT}." >&2
+  echo "Published verbatim CHANGELOG block for ${VERSION} into ${OUT}." >&2
 fi
 
