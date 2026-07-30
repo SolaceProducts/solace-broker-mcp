@@ -105,10 +105,13 @@ avoid. Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_
 > build; the names, types, and labels below are the proposal under review._
 
 All metrics are served on the `/metrics` endpoint in Prometheus text exposition
-format, behind `OBS_METRICS_ENABLED`. One exception: the authentication-failure counter
-(`mcp_auth_failure_total`) has its own flag, `OBS_AUTH_FAILURE_COUNTER_ENABLED`. It defaults
-to whatever `OBS_METRICS_ENABLED` is, but can be set independently, so a security team can
-collect auth-failure signal without turning on the full metrics surface.
+format, behind `OBS_METRICS_ENABLED`. One exception: whether the authentication-failure
+counter (`mcp_auth_failure_total`) is recorded has its own flag,
+`OBS_AUTH_FAILURE_COUNTER_ENABLED`. It defaults to whatever `OBS_METRICS_ENABLED` is, but an
+operator can set it independently, so the counter can be suppressed while the rest of the
+surface is on, or kept while the rest is off. The flag governs recording only. What is
+exposed when it is forced on while `OBS_METRICS_ENABLED` is false is a property of the
+`/metrics` endpoint and is settled when that endpoint is wired, not by this schema.
 
 The same instruments can additionally be **pushed over OTLP**, behind its own flag,
 `OBS_METRICS_OTLP_ENABLED`. The endpoint comes from the standard
@@ -270,13 +273,10 @@ flat-zero series is your evidence that no audit event was lost. Alert on any inc
 | `mcp_otel_metrics_dropped_total` | Counter | `reason` | Solace |
 
 Self-observation for the two OTLP exporters: the span pair when tracing is enabled
-(`OBS_TRACING_ENABLED`), the metric pair when OTLP metrics push is enabled. `reason` is a
-closed set on both: `queue_full`, `export_timeout`, `export_error`, `shutdown`.
-
-**How OTLP metrics push is turned on is not settled** — see open item 7. `OBS_METRICS_ENABLED`
-governs the scrape surface, and there is no OBS_* flag for the push path today. Until that is
-decided, treat `mcp_otel_metrics_exported_total` and `mcp_otel_metrics_dropped_total` as
-present only once push ships.
+(`OBS_TRACING_ENABLED`), the metric pair when OTLP metrics push is enabled
+(`OBS_METRICS_OTLP_ENABLED`, not `OBS_METRICS_ENABLED`, which governs the scrape surface
+alone; see [Metrics](#metrics--planned)). `reason` is a closed set on both: `queue_full`,
+`export_timeout`, `export_error`, `shutdown`.
 
 **These live on the scrape surface deliberately.** Diagnosing a broken push must not depend on
 the push working, so you can answer "is our OTLP export landing?" from Prometheus even when the
