@@ -598,12 +598,12 @@ Present only on `outcome: error`, drawn from a closed set of ten values:
 | `unknown_tool` | The requested tool is not registered. |
 | `missing_broker` | No broker was named on a call that requires one. |
 | `unknown_broker` | The named broker is not configured. |
-| `broker_init_error` | The broker is configured but could not be initialised. |
+| `broker_init_error` | The broker is configured but could not be initialized. |
 | `validation_error` | The arguments failed input validation. |
 | `execution_error` | The tool ran and failed. |
 | `nil_result` | The tool returned no result. |
 | `output_validation_error` | The tool's output failed schema validation. |
-| `marshal_error` | The result could not be serialised. |
+| `marshal_error` | The result could not be serialized. |
 
 Notes:
 
