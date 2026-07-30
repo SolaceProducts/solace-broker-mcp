@@ -796,14 +796,16 @@ tools:
 
   - name: create-message-vpn
     description: >
-      Create a Message VPN. Requires msgVpnName to name the new VPN; any
-      attribute omitted from msgVpnConfig is set to its broker default. Use this
-      to provision a new VPN. Fails if a VPN with the same name already exists.
       BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
       the target (broker, VPN name) and that a new VPN will be created on the
       broker. The confirmation MUST come as a separate user reply received AFTER
       you state the target and effect — do not treat the user's original request
       as a pre-confirmation, even if it implies intent.
+      Create a Message VPN. Requires msgVpnName to name the new VPN; any
+      attribute omitted from msgVpnConfig is set to its broker default. Use this
+      to provision a new VPN. Fails if a VPN with the same name already exists.
+      msgVpnConfig accepts more attributes than listed here; call describe-schema
+      (operation: config/createMsgVpn) if you need the full list.
     annotations:
       readOnly: false
       destructive: false
@@ -824,15 +826,17 @@ tools:
 
   - name: update-message-vpn
     description: >
-      Update an existing Message VPN. Requires msgVpnName to identify the VPN;
-      provide only the attributes you want to change in msgVpnConfig. Omitted
-      attributes are left unchanged. Use this to update VPN settings such as
-      enabled state, connection limits, or spool quotas.
       BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
       the target (broker, VPN name) and the attributes that will change. The
       confirmation MUST come as a separate user reply received AFTER you state
       the target and effect — do not treat the user's original request as a
       pre-confirmation, even if it implies intent.
+      Update an existing Message VPN. Requires msgVpnName to identify the VPN;
+      provide only the attributes you want to change in msgVpnConfig. Omitted
+      attributes are left unchanged. Use this to update VPN settings such as
+      enabled state, connection limits, or spool quotas.
+      msgVpnConfig accepts more attributes than listed here; call describe-schema
+      (operation: config/updateMsgVpn) if you need the full list.
     annotations:
       readOnly: false
       destructive: true
@@ -855,15 +859,15 @@ tools:
 
   - name: delete-message-vpn
     description: >
-      Delete a Message VPN. Requires msgVpnName to identify the VPN to delete.
-      This is a destructive operation that removes the VPN and all its
-      configuration. The VPN must have no active client connections before
-      deletion.
       BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
       the target (broker, VPN name) and that the VPN and all its configuration
       will be permanently removed. The confirmation MUST come as a separate user
       reply received AFTER you state the target and effect — do not treat the
       user's original request as a pre-confirmation, even if it implies intent.
+      Delete a Message VPN. Requires msgVpnName to identify the VPN to delete.
+      This is a destructive operation that removes the VPN and all its
+      configuration. The VPN must have no active client connections before
+      deletion.
     annotations:
       readOnly: false
       destructive: true
@@ -882,15 +886,17 @@ tools:
 
   - name: create-queue
     description: >
-      Create a queue in a Message VPN. Requires msgVpnName to identify the VPN
-      and queueName to name the new queue; any attribute omitted from queueConfig
-      is set to its broker default. Use this to provision a new queue. Fails if a
-      queue with the same name already exists in the VPN.
       BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
       the target (broker, VPN, queue name) and that a new queue will be created.
       The confirmation MUST come as a separate user reply received AFTER you
       state the target and effect — do not treat the user's original request as
       a pre-confirmation, even if it implies intent.
+      Create a queue in a Message VPN. Requires msgVpnName to identify the VPN
+      and queueName to name the new queue; any attribute omitted from queueConfig
+      is set to its broker default. Use this to provision a new queue. Fails if a
+      queue with the same name already exists in the VPN.
+      queueConfig accepts more attributes than listed here; call describe-schema
+      (operation: config/createMsgVpnQueue) if you need the full list.
     annotations:
       readOnly: false
       destructive: false
@@ -920,15 +926,17 @@ tools:
 
   - name: update-queue
     description: >
-      Update an existing queue. Requires msgVpnName and queueName to identify the
-      queue; provide only the attributes you want to change in queueConfig.
-      Omitted attributes are left unchanged. Use this to update queue settings
-      such as enabled state, access type, spool quota, or redelivery limits.
       BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
       the target (broker, VPN, queue name) and the attributes that will change.
       The confirmation MUST come as a separate user reply received AFTER you
       state the target and effect — do not treat the user's original request as
       a pre-confirmation, even if it implies intent.
+      Update an existing queue. Requires msgVpnName and queueName to identify the
+      queue; provide only the attributes you want to change in queueConfig.
+      Omitted attributes are left unchanged. Use this to update queue settings
+      such as enabled state, access type, spool quota, or redelivery limits.
+      queueConfig accepts more attributes than listed here; call describe-schema
+      (operation: config/updateMsgVpnQueue) if you need the full list.
     annotations:
       readOnly: false
       destructive: true
@@ -956,15 +964,15 @@ tools:
 
   - name: delete-queue
     description: >
-      Delete a queue from a Message VPN. Requires msgVpnName and queueName to
-      identify the queue to delete. This is a destructive operation that removes
-      the queue and discards any messages still spooled on it.
       BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
       the target (broker, VPN, queue name) and that the queue and any spooled
       messages will be permanently lost. The confirmation MUST come as a separate
       user reply received AFTER you state the target and effect — do not treat
       the user's original request as a pre-confirmation, even if it implies
       intent.
+      Delete a queue from a Message VPN. Requires msgVpnName and queueName to
+      identify the queue to delete. This is a destructive operation that removes
+      the queue and discards any messages still spooled on it.
     annotations:
       readOnly: false
       destructive: true
@@ -988,13 +996,13 @@ tools:
 
   - name: delete-queue-messages
     description: >
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, queue) and that all spooled messages will be
+      permanently lost. The confirmation MUST come as a separate user reply
+      received AFTER you state the target and effect — do not treat the user's
+      original request as a pre-confirmation, even if it implies intent.
       Permanently delete ALL spooled messages from a queue. This is irreversible
-      — the deleted messages cannot be recovered. BEFORE INVOKING THIS TOOL,
-      obtain explicit user confirmation, restating the target (broker, VPN,
-      queue) and that all spooled messages will be permanently lost. The
-      confirmation MUST come as a separate user reply received AFTER you state
-      the target and effect — do not treat the user's original request as a
-      pre-confirmation, even if it implies intent. Use after confirmed intent
+      — the deleted messages cannot be recovered. Use after confirmed intent
       to drain a queue (e.g. clearing a dead-letter backlog).
     annotations:
       readOnly: false
@@ -1048,16 +1056,18 @@ tools:
 
   - name: create-topic-endpoint
     description: >
-      Create a topic endpoint in a Message VPN. Requires msgVpnName to identify
-      the VPN and topicEndpointName to name the new topic endpoint; any attribute
-      omitted from topicEndpointConfig is set to its broker default. Use this to
-      provision a new topic endpoint. Fails if a topic endpoint with the same
-      name already exists in the VPN.
       BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
       the target (broker, VPN, topic endpoint name) and that a new topic endpoint
       will be created. The confirmation MUST come as a separate user reply
       received AFTER you state the target and effect — do not treat the user's
       original request as a pre-confirmation, even if it implies intent.
+      Create a topic endpoint in a Message VPN. Requires msgVpnName to identify
+      the VPN and topicEndpointName to name the new topic endpoint; any attribute
+      omitted from topicEndpointConfig is set to its broker default. Use this to
+      provision a new topic endpoint. Fails if a topic endpoint with the same
+      name already exists in the VPN.
+      topicEndpointConfig accepts more attributes than listed here; call describe-schema
+      (operation: config/createMsgVpnTopicEndpoint) if you need the full list.
     annotations:
       readOnly: false
       destructive: false
@@ -1088,16 +1098,18 @@ tools:
 
   - name: update-topic-endpoint
     description: >
-      Update an existing topic endpoint. Requires msgVpnName and
-      topicEndpointName to identify the topic endpoint; provide only the
-      attributes you want to change in topicEndpointConfig. Omitted attributes are
-      left unchanged. Use this to update topic endpoint settings such as enabled
-      state, access type, or spool quota.
       BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
       the target (broker, VPN, topic endpoint name) and the attributes that will
       change. The confirmation MUST come as a separate user reply received AFTER
       you state the target and effect — do not treat the user's original request
       as a pre-confirmation, even if it implies intent.
+      Update an existing topic endpoint. Requires msgVpnName and
+      topicEndpointName to identify the topic endpoint; provide only the
+      attributes you want to change in topicEndpointConfig. Omitted attributes are
+      left unchanged. Use this to update topic endpoint settings such as enabled
+      state, access type, or spool quota.
+      topicEndpointConfig accepts more attributes than listed here; call describe-schema
+      (operation: config/updateMsgVpnTopicEndpoint) if you need the full list.
     annotations:
       readOnly: false
       destructive: true
@@ -1125,16 +1137,16 @@ tools:
 
   - name: delete-topic-endpoint
     description: >
-      Delete a topic endpoint from a Message VPN. Requires msgVpnName and
-      topicEndpointName to identify the topic endpoint to delete. This is a
-      destructive operation that removes the topic endpoint and discards any
-      messages still spooled on it.
       BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
       the target (broker, VPN, topic endpoint name) and that the topic endpoint
       and any spooled messages will be permanently lost. The confirmation MUST
       come as a separate user reply received AFTER you state the target and
       effect — do not treat the user's original request as a pre-confirmation,
       even if it implies intent.
+      Delete a topic endpoint from a Message VPN. Requires msgVpnName and
+      topicEndpointName to identify the topic endpoint to delete. This is a
+      destructive operation that removes the topic endpoint and discards any
+      messages still spooled on it.
     annotations:
       readOnly: false
       destructive: true
@@ -1169,6 +1181,8 @@ tools:
       itself — REST consumers and queue bindings are separate resources not managed
       by this tool, so a new RDP is created disabled by default and delivers nothing
       until those are added. Fails if an RDP with the same name already exists.
+      rdpConfig accepts more attributes than listed here; call describe-schema
+      (operation: config/createMsgVpnRestDeliveryPoint) if you need the full list.
     annotations:
       readOnly: false
       destructive: false
@@ -1209,6 +1223,8 @@ tools:
       want to change in rdpConfig. Omitted attributes are left unchanged. Use this
       to update RDP settings such as enabled state or client profile — commonly to
       enable an RDP that was created disabled.
+      rdpConfig accepts more attributes than listed here; call describe-schema
+      (operation: config/updateMsgVpnRestDeliveryPoint) if you need the full list.
     annotations:
       readOnly: false
       destructive: true
@@ -1269,15 +1285,15 @@ tools:
 
   - name: disconnect-client
     description: >
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, client name) and the service interruption. The
+      confirmation MUST come as a separate user reply received AFTER you state
+      the target and effect — do not treat the user's original request as a
+      pre-confirmation, even if it implies intent.
       Forcibly disconnect a connected client. This is service-impacting and
       irreversible for the active session — it terminates the connection and
-      the client must reconnect to resume. BEFORE INVOKING THIS TOOL, obtain
-      explicit user confirmation, restating the target (broker, VPN, client
-      name) and the service interruption. The confirmation MUST come as a
-      separate user reply received AFTER you state the target and effect — do
-      not treat the user's original request as a pre-confirmation, even if it
-      implies intent. Common use: disconnect a slow subscriber identified via
-      list-slow-subscribers or get-client-details.
+      the client must reconnect to resume. Common use: disconnect a slow
+      subscriber identified via list-slow-subscribers or get-client-details.
     annotations:
       readOnly: false
       destructive: true
