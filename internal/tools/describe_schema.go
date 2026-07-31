@@ -239,8 +239,8 @@ target write tool wraps (see the write tool's description for the operation
 identifier, e.g. config/createMsgVpnQueue), then supply attributes that are
 writable for that operation. Response has two views: 'trimmed' (default;
 per-attribute {name, type, description, enum, default, writableOnCreate,
-writableOnUpdate, requiredForCreate, identifying, sensitive, deprecated,
-requiresDisable}) and 'raw' (the definition verbatim, larger).
+writableOnUpdate, requiredForCreate, identifying, writeOnly, sensitive,
+deprecated, requiresDisable}) and 'raw' (the definition verbatim, larger).
 `)
 
 	tool := &mcp.Tool{
