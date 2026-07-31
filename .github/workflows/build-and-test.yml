@@ -39,11 +39,27 @@ on:
   workflow_call:
 
 # Cancel superseded pull-request runs, never superseded pushes to main: every
-# commit on main must keep its own FOSSA verdict and e2e result. `github.ref` is
-# the fallback for the push and `workflow_call` (tag) paths, where
-# `pull_request.number` is empty.
+# commit on main must keep its own FOSSA verdict and e2e result.
+#
+# The non-pull-request fallback is `github.sha`, not `github.ref`, and the
+# difference is not cosmetic. Keying every push to main as `refs/heads/main` puts
+# them all in one group, and `cancel-in-progress: false` does not mean "let them
+# all run". GitHub holds at most one pending run per group, and per the
+# workflow-syntax reference, "any existing `pending` job or workflow in the same
+# concurrency group will be canceled and the new queued job or workflow will take
+# its place." So a burst of three merges runs the first, queues the second, then
+# drops the second when the third arrives. The middle commit lands on main with
+# no FOSSA verdict and no e2e result, the exact outcome the paragraph above
+# exists to prevent. `queue: max` would also fix it, at the cost of serializing
+# main behind the longest e2e run. Per-commit groups cost nothing and delay
+# nothing.
+#
+# Known and bounded: tagging a commit already running as a main push collides,
+# because both resolve to the same `github.sha`. That costs the release run a
+# wait, not a verdict. Two runs in a group means one runs and one pends, and
+# nothing is dropped until a third arrives.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Read-only by default. Every elevated scope this workflow needs belongs to
