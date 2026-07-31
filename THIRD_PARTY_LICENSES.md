@@ -58,7 +58,7 @@ under MPL-2.0.
 | `github.com/pmezard/go-difflib/difflib` | v1.0.0 | BSD-3-Clause | [license](https://github.com/pmezard/go-difflib/blob/v1.0.0/LICENSE) |
 | `github.com/segmentio/asm` | v1.1.3 | MIT | [license](https://github.com/segmentio/asm/blob/v1.1.3/LICENSE) |
 | `github.com/segmentio/encoding` | v0.5.4 | MIT | [license](https://github.com/segmentio/encoding/blob/v0.5.4/LICENSE) |
-| `github.com/sony/gobreaker/v2` | v2.4.0 | MIT | [license](https://github.com/sony/gobreaker/blob/v2.4.0/v2/LICENSE) |
+| `github.com/sony/gobreaker/v2` | v2.4.0 | MIT | [license](https://github.com/sony/gobreaker/blob/v2.4.0/LICENSE) |
 | `github.com/stretchr/testify` | v1.11.1 | MIT | [license](https://github.com/stretchr/testify/blob/v1.11.1/LICENSE) |
 | `github.com/woodsbury/decimal128` | v1.3.0 | 0BSD | [license](https://github.com/woodsbury/decimal128/blob/v1.3.0/LICENCE) |
 | `github.com/xeipuuv/gojsonpointer` | 4e3ac2762d5f | Apache-2.0 | [license](https://github.com/xeipuuv/gojsonpointer/blob/4e3ac2762d5f/LICENSE-APACHE-2.0.txt) |
