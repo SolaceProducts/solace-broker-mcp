@@ -182,20 +182,27 @@ burn it in a foreground ~30s poll loop (each cycle reloads full context and is t
 skill's own churn/latency). Instead launch **one blocking watch loop as a background command** — via
 your runner's background execution (e.g. the Bash tool's background mode), not a shell `&` inside the
 snippet — so it sleeps between checks and wakes the model once, on a terminal state, not every cycle:
+Extract the state with `--jq` (don't grep the raw JSON — `gh` only emits compact JSON when piped,
+so a literal `"state":"MERGED"` match is fragile), and bound the loop mechanically (~30 min at 30s):
 ```
+tries=0
 while :; do
-  s=$(gh pr view <n> --json state,mergedAt,mergeCommit)
-  echo "$s" | grep -q '"state":"MERGED"' && { echo "$s"; break; }
-  echo "$s" | grep -q '"state":"CLOSED"' && { echo "$s"; break; }
+  state=$(gh pr view <n> --json state --jq '.state')
+  if [ "$state" = "MERGED" ]; then
+    MERGE_SHA=$(gh pr view <n> --json mergeCommit --jq '.mergeCommit.oid'); break
+  fi
+  [ "$state" = "CLOSED" ] && { echo "closed unmerged — release cancelled"; break; }
+  tries=$((tries + 1))
+  [ "$tries" -ge 60 ] && { echo "PR #<n> still open after ~30 min — stop; re-run to resume"; break; }
   sleep 30
 done
 ```
-- On `MERGED` → **record the `mergeCommit` SHA** and carry it into Phase D. That exact commit is what
-  gets tagged — do not re-derive it from the branch tip.
+- On `MERGED` → `MERGE_SHA` holds the `mergeCommit` oid; carry it into Phase D. That exact commit is
+  what gets tagged — do not re-derive it from the branch tip.
 - On `CLOSED` (unmerged) → stop; the release is cancelled.
-- Bound the wait (e.g. ~30 min). On timeout, stop and report: "PR #N is still open at <url> —
-  nothing was tagged; re-run `/cut-release <version>` to resume." A dropped session is safe: the A1
-  remote-state check resumes cleanly (merged-but-untagged → Phase D).
+- On the ~30 min bound → stop and report: "PR #N is still open at <url> — nothing was tagged; re-run
+  `/cut-release <version>` to resume." A dropped session is safe: the A1 remote-state check resumes
+  cleanly (merged-but-untagged → Phase D).
 
 ## Phase D — Cut the release (guarded auto-tag)
 
@@ -229,12 +236,16 @@ The merge is the go-ahead, but still verify the hard gates before pushing. `MERG
   ```
 - **Confirm the tagged commit is releasable — scoped to the commit, not the branch.** Verify
   `MERGE_SHA` is contained in `origin/main` (`git merge-base --is-ancestor <MERGE_SHA> origin/main`),
-  then check the `build-and-test` run for that exact commit:
-  `gh run list --workflow=build-and-test.yml --commit <MERGE_SHA> --json databaseId,status,conclusion`.
-  Right after a merge the run is normally still `in_progress`/`queued` — that is not a failure. Rather
-  than a foreground re-poll, **block on it once** with `gh run watch <databaseId> --exit-status` (run
-  backgrounded; it returns when the run finishes, exit 0 on success, non-zero on failure), expected
-  ~5–10 min. Proceed only on success; stop and surface only on an actual failure conclusion.
+  then capture the `build-and-test` run id for that exact commit and block on it once (don't
+  foreground-poll):
+  ```
+  run_id=$(gh run list --workflow=build-and-test.yml --commit <MERGE_SHA> \
+             --json databaseId --jq '.[0].databaseId')
+  gh run watch "$run_id" --exit-status   # blocks to completion; exit 0 = success, non-zero = failure
+  ```
+  Right after a merge the run is normally still `in_progress`/`queued` — that is not a failure;
+  `gh run watch` blocks until it finishes (run it backgrounded), expected ~5–10 min. Proceed only on
+  a zero exit; stop and surface only on an actual failure.
 - **Tag the exact merged commit** (not the branch tip — `origin/main` may have advanced since the
   merge) and push:
   ```
@@ -250,9 +261,12 @@ The merge is the go-ahead, but still verify the hard gates before pushing. `MERG
   normal — it is waiting on a runner/environment, not swallowed, so wait on it. Only when **no run
   record appears at all** within ~2 min of the push should you flag it — tag protection or a disabled
   workflow can swallow the trigger.
-- Once a run exists, **block on it once** with `gh run watch <databaseId> --exit-status` (run
-  backgrounded) rather than a foreground poll loop; expected ~15–25 min end-to-end and it may sit in
-  `queued` before starting.
+- Once a run exists, capture its id and block on it once, rather than a foreground poll loop:
+  ```
+  run_id=$(gh run list --workflow=release.yml --commit <MERGE_SHA> --json databaseId --jq '.[0].databaseId')
+  gh run watch "$run_id" --exit-status
+  ```
+  Run it backgrounded; expected ~15–25 min end-to-end, and it may sit in `queued` before starting.
 - Report the run URL and its conclusion. **On failure**, point the operator at `RELEASING.md`
   Rollback and warn that the container image and its moving pointers (`:latest`, `{major}.{minor}`)
   may already be published on `ghcr.io` even though a later job failed — recovery is roll-forward to
