@@ -1,0 +1,16 @@
+<rpc-reply semp-version="app/100.0main.0.7305">
+  <rpc>
+    <show>
+      <system>
+        <system-uptime-seconds>718733</system-uptime-seconds>
+        <last-restart-reason>Unknown</last-restart-reason>
+        <max-connections>9000</max-connections>
+        <max-queue-messages>10000</max-queue-messages>
+        <subscription-exception-enable>Enabled</subscription-exception-enable>
+        <subscription-exception-enable-defer>Enabled</subscription-exception-enable-defer>
+        <acl-topic-matching-mode>enforce-for-queues</acl-topic-matching-mode>
+      </system>
+    </show>
+  </rpc>
+<execute-result code="ok"/>
+</rpc-reply>

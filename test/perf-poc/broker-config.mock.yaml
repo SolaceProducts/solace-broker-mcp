@@ -1,0 +1,93 @@
+# Perf PoC — MCP config pointing at mock-semp.
+#
+# Use with:
+#   MOCK_HOST=localhost CONFIG_FILE=./broker-config.mock.yaml go run ./cmd/mcp-server
+#
+# 50 aliases (broker-01..broker-50) fan out across mock ports 18081..18130,
+# matching the mock's `-listen-start 18081 -listen-count 50` layout. The
+# plan's demo step needs this fan-out — a single-alias config caps at ~3
+# tool/s because MCP's per-broker semaphore + request_min_interval throttle
+# every client onto one broker's queue.
+#
+# MOCK_HOST is required (MCP hard-fails on unset ${VAR}).
+#   - Single-host smoke: MOCK_HOST=localhost.
+#   - Split-host demo:   MOCK_HOST=<Box A LAN IP>, MCP runs on Box B.
+#
+# The mock accepts any credentials (it doesn't validate auth), so
+# BROKER_USERNAME / BROKER_PASSWORD can be set to any non-empty value —
+# MCP still requires them to build the basic-auth header.
+
+listen_address: 0.0.0.0
+allow_remote_unauthenticated: true
+port: 9090
+log_level: info
+
+tls_cert_file: ""
+tls_key_file: ""
+
+
+mcp_client_auth:
+  mode: disabled
+
+semp:
+  max_concurrent_per_broker: 10
+  request_timeout_duration: 1m
+  # PoC: pacer disabled so the load run measures MCP's real ceiling rather
+  # than the per-broker throttle. Production configs typically keep this
+  # around 100ms to be polite to real appliances.
+  request_min_interval: 1ms
+  retries: 10
+  retry_min_interval: 3s
+  retry_max_interval: 30s
+
+brokers:
+  broker-01: { url: "http://${MOCK_HOST}:18081", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-02: { url: "http://${MOCK_HOST}:18082", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-03: { url: "http://${MOCK_HOST}:18083", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-04: { url: "http://${MOCK_HOST}:18084", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-05: { url: "http://${MOCK_HOST}:18085", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-06: { url: "http://${MOCK_HOST}:18086", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-07: { url: "http://${MOCK_HOST}:18087", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-08: { url: "http://${MOCK_HOST}:18088", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-09: { url: "http://${MOCK_HOST}:18089", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-10: { url: "http://${MOCK_HOST}:18090", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-11: { url: "http://${MOCK_HOST}:18091", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-12: { url: "http://${MOCK_HOST}:18092", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-13: { url: "http://${MOCK_HOST}:18093", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-14: { url: "http://${MOCK_HOST}:18094", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-15: { url: "http://${MOCK_HOST}:18095", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-16: { url: "http://${MOCK_HOST}:18096", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-17: { url: "http://${MOCK_HOST}:18097", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-18: { url: "http://${MOCK_HOST}:18098", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-19: { url: "http://${MOCK_HOST}:18099", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-20: { url: "http://${MOCK_HOST}:18100", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-21: { url: "http://${MOCK_HOST}:18101", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-22: { url: "http://${MOCK_HOST}:18102", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-23: { url: "http://${MOCK_HOST}:18103", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-24: { url: "http://${MOCK_HOST}:18104", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-25: { url: "http://${MOCK_HOST}:18105", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-26: { url: "http://${MOCK_HOST}:18106", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-27: { url: "http://${MOCK_HOST}:18107", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-28: { url: "http://${MOCK_HOST}:18108", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-29: { url: "http://${MOCK_HOST}:18109", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-30: { url: "http://${MOCK_HOST}:18110", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-31: { url: "http://${MOCK_HOST}:18111", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-32: { url: "http://${MOCK_HOST}:18112", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-33: { url: "http://${MOCK_HOST}:18113", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-34: { url: "http://${MOCK_HOST}:18114", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-35: { url: "http://${MOCK_HOST}:18115", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-36: { url: "http://${MOCK_HOST}:18116", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-37: { url: "http://${MOCK_HOST}:18117", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-38: { url: "http://${MOCK_HOST}:18118", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-39: { url: "http://${MOCK_HOST}:18119", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-40: { url: "http://${MOCK_HOST}:18120", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-41: { url: "http://${MOCK_HOST}:18121", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-42: { url: "http://${MOCK_HOST}:18122", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-43: { url: "http://${MOCK_HOST}:18123", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-44: { url: "http://${MOCK_HOST}:18124", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-45: { url: "http://${MOCK_HOST}:18125", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-46: { url: "http://${MOCK_HOST}:18126", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-47: { url: "http://${MOCK_HOST}:18127", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-48: { url: "http://${MOCK_HOST}:18128", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-49: { url: "http://${MOCK_HOST}:18129", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }
+  broker-50: { url: "http://${MOCK_HOST}:18130", insecure_skip_verify: true, auth: { mode: basic, username: "${BROKER_USERNAME}", password: "${BROKER_PASSWORD}" } }

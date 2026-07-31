@@ -1,0 +1,28 @@
+{
+  "queues": {
+    "data": [
+      {
+        "accessType": "exclusive",
+        "bindCount": 0,
+        "egressEnabled": true,
+        "ingressEnabled": true,
+        "lowPriorityMsgCongestionState": "disabled",
+        "maxMsgSpoolUsage": 10000,
+        "msgSpoolUsage": 0,
+        "msgVpnName": "default",
+        "queueName": "awtest",
+        "rxMsgRate": 0,
+        "spooledMsgCount": 0,
+        "txMsgRate": 0,
+        "txUnackedMsgCount": 0
+      }
+    ],
+    "truncated": false
+  },
+  "summary": {
+    "congestedCount": 0,
+    "nearFullCount": 0,
+    "noConsumerCount": 1,
+    "scanned": 1
+  }
+}
