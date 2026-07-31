@@ -463,31 +463,60 @@ writing; re-check, do not assume.
   > today, which is the only reason a repo-wide FOSSA outage is not already
   > blocking everyone.
   >
-  > Check it, do not assume it. The scan runs almost entirely outside this
-  > repository: `ci-pr.yaml` calls
+  > Check it, do not assume it, and note that our SHA pin buys less than it looks
+  > like. `ci-pr.yaml` calls
   > `SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml`
-  > at a pinned SHA, and that workflow in turn pulls a nested action from `@main`
-  > and runs a container image by digest. Our pin does not freeze either of those,
-  > so the scan's behaviour can change without a single line changing here.
+  > at a pinned SHA, but that workflow references four nested actions at `@main`
+  > (`workflow-config-loader`, `sca-setup-deps`, `sca/sca-scan`, `fossa-guard`) and
+  > runs a container image by digest, where the registry namespace is derived from
+  > `github.repository_owner` at runtime. No SHA written here freezes any of that,
+  > so the scan's behaviour changes without a line changing in this repository.
+  > Repinning or bumping our reference is not a remedy.
   >
-  > Recent history, as evidence that this is not hypothetical. The move to the
-  > `SolaceProducts` org broke FOSSA twice in one afternoon on 2026-07-31, with
-  > two unrelated causes and a green window in between:
+  > Recent history, as evidence that this is not hypothetical. One root cause, the
+  > move to the `SolaceProducts` org, produced two different failures on
+  > 2026-07-31. **FOSSA did not go green at any point that day.**
   >
-  > | Time (UTC) | Symptom | Cause |
-  > |---|---|---|
-  > | until 07-30 ~20:48 | green | |
-  > | 07-31 14:46 to ~15:27 | fails in ~13s | Vault OIDC role `cicd-workflows-secret-read-role` binds on the `repository` claim, which the org rename changed. Token exchange rejected with `claim "repository" does not match any associated bound claim values`. Fixed org-side. |
-  > | 07-31 from ~15:41 | fails in ~50s | Vault now authenticates. The scan container cannot be pulled: `manifest unknown` for `ghcr.io/solaceproducts/maas-build-actions@sha256:14d7b08…`. Referenced by the shared workflow, not by this repository. |
+  > | When (UTC) | Symptom | Cause | Whose fix |
+  > |---|---|---|---|
+  > | last green: 07-30 21:28 | `Test passed! 0 issues found` against project `SolaceDev_solace-broker-mcp` | | |
+  > | 07-31 14:46 to 15:34 | fails in ~13s | Vault OIDC role `cicd-workflows-secret-read-role` binds on the `repository` claim, which the rename changed. Token exchange rejected: `claim "repository" does not match any associated bound claim values`. | infra, since fixed |
+  > | 07-31 from 15:38 | fails in ~50s | Vault authenticates. The scan container cannot be pulled: `manifest unknown` for `ghcr.io/solaceproducts/maas-build-actions@sha256:14d7b08…`. Same rename, via `github.repository_owner` in the nested `fossa-guard` action. | infra |
+  > | next, once the container is pullable | expect a licensing block | PR #243 repointed `project_id` to `SolaceProducts_solace-broker-mcp`, a **new** FOSSA project carrying none of the old project's policy waivers. | **this repository** |
   >
-  > Both were infra-side and neither was fixable from this repository. Expect more
-  > of the same until the org move settles, and re-verify before you flip the
-  > required-checks list.
+  > That last row is the one that matters for this checklist item, because it is
+  > ours and it is not visible yet. On `main` at `43a9a93`, `fossa test` already
+  > reports three findings:
   >
-  > One item to clear that is *not* a cause of either failure:
-  > `.github/workflow-config.json` has no `secrets.vault.url`, so the URL comes
-  > from the `VAULT_URL` repository secret. That fallback works (runs log
-  > `✅ Vault configuration validated`), so setting the config key is tidiness.
+  > ```
+  > ⚑ Denied by policy CC-BY-SA-4.0 on github.com/perimeterx/marshmallow@v1.1.5
+  > ⚑ MPL-2.0 license detected in github.com/hashicorp/go-cleanhttp@v0.5.2
+  > ⚑ MPL-2.0 license detected in github.com/hashicorp/go-retryablehttp@v0.7.8
+  > Error: The scan has revealed issues. Number of issues found: 3
+  > ```
+  >
+  > `block_on` includes `policy_conflict`, and the guard maps "Denied by Policy" to
+  > exactly that, so the `marshmallow` finding should block once the guard runs.
+  > It is invisible today only because the guard steps die on the container pull
+  > before they can report, and the job's verdict is read from those steps. So
+  > **`SCA gate` is not one infra fix away from green.** Either waive or resolve
+  > the findings on the new FOSSA project, or expect the gate to go red for a
+  > second, legitimate reason the moment the first one clears.
+  >
+  > A related trap worth knowing: the shared workflow cannot distinguish "the guard
+  > could not run" from "the guard found violations". Both guard steps are
+  > `continue-on-error`, and the summary reads their `failure` outcome as findings.
+  > That is why runs on 07-31 printed
+  > `critical,high severity vulnerabilities detected` when nothing had been scanned
+  > at all. Do not act on that message without reading the job log.
+  >
+  > **Do not add `secrets.vault.url` to `.github/workflow-config.json`.** Its
+  > absence is not a defect and not the cause of anything above. It held
+  > `https://vault.maas-vault-prod.solace.cloud:8200` and was removed deliberately
+  > in `2d46757` ("Vault URL hardening") while preparing this repository to go
+  > public. The URL now comes from the `VAULT_URL` repository secret and resolves
+  > fine (runs log `✅ Vault configuration validated`). Re-adding it would put an
+  > internal hostname back into a public repository.
   >
   > `sca_gate` going red through all of this is the gate working. Leaving
   > `FOSSA Scan / SCA Scan` unrequired is what had been hiding it.
