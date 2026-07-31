@@ -454,40 +454,43 @@ writing; re-check, do not assume.
   `FOSSA Scan / SCA Scan`, which never reports on a fork pull request and would
   leave every external contribution pending.
 
-  > **Precondition: fix FOSSA's Vault authentication before requiring `SCA gate`.**
+  > **Precondition: confirm `SCA gate` is green on a real pull request before
+  > registering it as required.**
   >
-  > FOSSA is currently failing on every pull request in this repository, for a
-  > reason unrelated to the checks themselves. The Vault OIDC role
-  > `cicd-workflows-secret-read-role` binds on the `repository` claim, and the
-  > move to the `SolaceProducts` org changed that claim, so the token exchange is
-  > rejected before any scan starts:
+  > `sca_gate` fails closed, by design. So if FOSSA is broken for any reason,
+  > making `SCA gate` required turns "FOSSA is broken" into "no pull request in
+  > this repository can merge". Branch protection holds zero required contexts
+  > today, which is the only reason a repo-wide FOSSA outage is not already
+  > blocking everyone.
   >
-  > ```
-  > failed to retrieve vault token. code: ERR_NON_2XX_3XX_RESPONSE,
-  > message: Response code 400 (Bad Request), vaultResponse:
-  > {"errors":["error validating claims: claim \"repository\" does not match
-  > any associated bound claim values"]}
-  > ```
+  > Check it, do not assume it. The scan runs almost entirely outside this
+  > repository: `ci-pr.yaml` calls
+  > `SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml`
+  > at a pinned SHA, and that workflow in turn pulls a nested action from `@main`
+  > and runs a container image by digest. Our pin does not freeze either of those,
+  > so the scan's behaviour can change without a single line changing here.
   >
-  > Every run from 2026-07-31 fails identically; runs from 2026-07-30 were green
-  > and the pinned shared-workflow SHA has not changed. Branch protection holds
-  > zero required contexts today, so nothing is blocked yet. Register `SCA gate`
-  > before the Vault role is fixed and every pull request in the repository
-  > becomes unmergeable, because `sca_gate` correctly fails a `failure` result.
+  > Recent history, as evidence that this is not hypothetical. The move to the
+  > `SolaceProducts` org broke FOSSA twice in one afternoon on 2026-07-31, with
+  > two unrelated causes and a green window in between:
   >
-  > Fix is Vault-side: add `SolaceProducts/solace-broker-mcp` to the role's bound
-  > claims. Two related items to clear at the same time, neither of which is the
-  > cause of the failure above:
-  > - `.github/workflow-config.json` still carries
-  >   `project_id: SolaceDev_solace-broker-mcp`, which will file scans under the
-  >   old org name once authentication works.
-  > - That file has no `secrets.vault.url`, so the URL comes from the `VAULT_URL`
-  >   repository secret. That fallback works today (the run logs
-  >   `✅ Vault configuration validated`), so setting the config key is tidiness,
-  >   not a fix.
+  > | Time (UTC) | Symptom | Cause |
+  > |---|---|---|
+  > | until 07-30 ~20:48 | green | |
+  > | 07-31 14:46 to ~15:27 | fails in ~13s | Vault OIDC role `cicd-workflows-secret-read-role` binds on the `repository` claim, which the org rename changed. Token exchange rejected with `claim "repository" does not match any associated bound claim values`. Fixed org-side. |
+  > | 07-31 from ~15:41 | fails in ~50s | Vault now authenticates. The scan container cannot be pulled: `manifest unknown` for `ghcr.io/solaceproducts/maas-build-actions@sha256:14d7b08…`. Referenced by the shared workflow, not by this repository. |
   >
-  > `sca_gate` failing here is the gate working. Leaving
-  > `FOSSA Scan / SCA Scan` unrequired is what had been hiding this.
+  > Both were infra-side and neither was fixable from this repository. Expect more
+  > of the same until the org move settles, and re-verify before you flip the
+  > required-checks list.
+  >
+  > One item to clear that is *not* a cause of either failure:
+  > `.github/workflow-config.json` has no `secrets.vault.url`, so the URL comes
+  > from the `VAULT_URL` repository secret. That fallback works (runs log
+  > `✅ Vault configuration validated`), so setting the config key is tidiness.
+  >
+  > `sca_gate` going red through all of this is the gate working. Leaving
+  > `FOSSA Scan / SCA Scan` unrequired is what had been hiding it.
 - ⬜ **"Allow GitHub Actions to create and approve pull requests" turned off.**
   Still on.
 - ⬜ **Fork pull request workflows set to require approval for all outside
