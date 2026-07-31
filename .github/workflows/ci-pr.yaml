@@ -50,6 +50,17 @@ jobs:
       - name: Run the DCO check's self-test against this PR's version
         run: .github/scripts/dco-check.test.sh
 
+  release_notes_selftest:
+    name: Release-notes extraction self-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run the release-notes extraction self-test against this PR's version
+        run: .github/scripts/extract-release-notes.test.sh
+
   changelog:
     name: CHANGELOG updated
     runs-on: ubuntu-latest
