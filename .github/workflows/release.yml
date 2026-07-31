@@ -5,19 +5,30 @@ on:
     tags:
       - 'v*'
 
+# Least privilege by default: every job below declares what it needs. This
+# matters most for `fossa_scan`, which hands its job token to a reusable
+# workflow in another repository — a broad top-level grant would travel with
+# it. (`test` also calls a reusable workflow, but a local one, and it scopes
+# its own jobs.)
 permissions:
-  contents: write
-  packages: write
-  id-token: write
-  attestations: write
-  pull-requests: write
-  actions: read
-  issues: write
-  checks: write
-  statuses: write
+  contents: read
 
 jobs:
   test:
+    # build-and-test.yml scopes permissions per job and defaults to
+    # `contents: read`; a caller can only downgrade what the called workflow
+    # asks for, never raise it. This mirrors the widest grant that workflow
+    # makes (its own `fossa_scan`) so nothing is silently stripped. That job is
+    # skipped on a tag push, but the grant costs nothing and keeps the two
+    # workflows from drifting into a hard-to-debug OIDC failure.
+    permissions:
+      contents: read
+      packages: read
+      pull-requests: write
+      id-token: write
+      actions: read
+      checks: write
+      statuses: write
     uses: ./.github/workflows/build-and-test.yml
 
   # Fail fast, before anything is published: a release must have a matching
@@ -67,6 +78,19 @@ jobs:
 
   fossa_scan:
     name: FOSSA Scan
+    # Same grant, and the same reasoning, as the `fossa_scan` job in
+    # build-and-test.yml: the scan authenticates to Vault by OIDC (`id-token`),
+    # reads the dependency graph and workflow metadata (`packages`, `actions`),
+    # and reports back on the commit (`pull-requests`, `statuses`, `checks`).
+    # Scoped to this job so it inherits nothing the release jobs hold.
+    permissions:
+      contents: read
+      packages: read
+      pull-requests: write
+      id-token: write
+      actions: read
+      checks: write
+      statuses: write
     uses: SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml@fc521b087f780457f92d4cb46038184e92ad2fbc # pinned 2026-05-12
     with:
       git_ref: ${{ github.ref_name }}
@@ -79,6 +103,12 @@ jobs:
   build-binaries:
     needs: [test, release-notes, licenses]
     runs-on: ubuntu-latest
+    # `id-token`/`attestations` for the provenance step below; nothing here
+    # writes to the repository or the registry.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       matrix:
         include:
@@ -128,9 +158,17 @@ jobs:
             THIRD_PARTY_LICENSES.md
           echo "ARCHIVE=${ARCHIVE}" >> "${GITHUB_ENV}"
 
-      # Attested here, per matrix leg, rather than in the release job: provenance
-      # records the workflow/job that produced the subject, so attesting after
-      # download would name the release job instead of the job that built it.
+      # Attested here, per matrix leg, rather than in the release job, for two
+      # reasons. The digest is bound to the archive before it round-trips
+      # through upload-artifact/download-artifact, so the attestation covers
+      # the bytes as built rather than the bytes as restored. And a failure to
+      # attest surfaces before anything is published, instead of after the
+      # image is already live on ghcr.io.
+      #
+      # It is *not* about naming the builder: the SLSA predicate records
+      # workflow_ref, job_workflow_ref, run_id and run_attempt — not the job
+      # name — and all of these jobs are inline in this file, so attesting from
+      # the release job would produce the same values.
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v4
         with:
@@ -145,6 +183,18 @@ jobs:
   build-docker:
     needs: [test, release-notes, licenses]
     runs-on: ubuntu-latest
+    # `packages` to push to ghcr.io, `id-token`/`attestations` for the
+    # provenance step. `artifact-metadata` is needed because
+    # attest-build-provenance defaults `create-storage-record: true`, and with
+    # `push-to-registry: true` under an organization account it creates a
+    # storage record for the pushed attestation; without the permission the
+    # action still succeeds but logs two warnings per run.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -188,8 +238,11 @@ jobs:
           cache-to: type=gha,mode=max
 
       # The digest covers the whole multi-arch index, so one attestation covers
-      # every tag pushed above. push-to-registry lets `gh attestation verify
-      # oci://…` (and cosign) resolve it from ghcr.io without the GitHub API.
+      # every tag pushed above. push-to-registry stores a second copy of the
+      # bundle next to the image, which cosign can verify straight from
+      # ghcr.io. `gh attestation verify oci://…` still queries the GitHub API
+      # by default — it only reads the registry copy when passed
+      # `--bundle-from-oci`.
       - name: Attest image provenance
         uses: actions/attest-build-provenance@v4
         with:
@@ -200,6 +253,9 @@ jobs:
   release:
     needs: [build-binaries, build-docker, fossa_scan]
     runs-on: ubuntu-latest
+    # Creates the GitHub Release and uploads the archives and checksums to it.
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -181,11 +181,15 @@ shasum -a 256 -c checksums-sha256.txt --ignore-missing
 tar xzf solace-broker-mcp-v*.tar.gz
 ```
 
-Every release archive also carries a build provenance attestation. Verifying it proves the archive was produced by this repository's release workflow from a specific commit, not rebuilt or replaced by someone else — a stronger guarantee than the checksum, which only proves the file matches the checksums list published beside it. Requires the [GitHub CLI](https://cli.github.com/):
+Every release archive also carries a build provenance attestation. Verifying it proves the archive was produced by this repository's `release.yml` workflow, not rebuilt or replaced by someone else — a stronger guarantee than the checksum, which only proves the file matches the checksums list published beside it. Requires the [GitHub CLI](https://cli.github.com/), authenticated with `gh auth login` (the attestation is fetched from the GitHub API, which needs a token even for a public repository):
 
 ```bash
-gh attestation verify solace-broker-mcp-v*.tar.gz --repo SolaceProducts/solace-broker-mcp
+gh attestation verify solace-broker-mcp-v1.2.0-linux-amd64.tar.gz \
+  --repo SolaceProducts/solace-broker-mcp \
+  --signer-workflow SolaceProducts/solace-broker-mcp/.github/workflows/release.yml
 ```
+
+Pass the exact archive filename — the command takes a single file, so a glob such as `solace-broker-mcp-v*.tar.gz` fails once you have more than one archive in the directory. `--signer-workflow` is what pins the attestation to the release workflow; `--repo` alone would accept an attestation minted by any workflow in this repository.
 
 The archive contains the binary, an example config (`broker-config.example.yaml`), and the license. Copy the example config to `broker-config.yaml` and modify as needed.
 
@@ -247,12 +251,15 @@ docker run -d \
 > gh auth token | docker login ghcr.io -u $(gh api user --jq .login) --password-stdin
 > ```
 
-The image carries a build provenance attestation, published to the registry alongside it. Verifying it proves the image was built by this repository's release workflow from a specific commit:
+The image carries a build provenance attestation, published to the registry alongside it. Verifying it proves the image was built by this repository's `release.yml` workflow:
 
 ```bash
 gh attestation verify oci://ghcr.io/solaceproducts/solace-broker-mcp:latest \
-  --repo SolaceProducts/solace-broker-mcp
+  --repo SolaceProducts/solace-broker-mcp \
+  --signer-workflow SolaceProducts/solace-broker-mcp/.github/workflows/release.yml
 ```
+
+As above, `--signer-workflow` is what pins the attestation to the release workflow rather than to the repository at large. By default the attestation is fetched from the GitHub API; add `--bundle-from-oci` to read the copy stored beside the image on `ghcr.io` instead, which is also the copy `cosign` verifies.
 
 The container reads config from `/etc/mcp-server/config.yaml` by default. Pass the credentials via `--env-file` or individual `-e` flags.
 

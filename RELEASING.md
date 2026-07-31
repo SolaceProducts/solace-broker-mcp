@@ -54,7 +54,7 @@ Moving pointers let consumers track a stream instead of a fixed version:
 - Release notes finalized **[Planned]**
 - Immutable tag **[Planned]** — convention today, not enforced
 - Git tag signed by the tagger **[Planned]** — a separate mechanism from artifact attestation below, and still unenforced
-- Artifacts attested **[Implemented]** — the release workflow attaches a GitHub build provenance attestation to each binary archive and to the container image, so a consumer can prove an artifact came from this repository's release pipeline at a specific commit
+- Artifacts attested **[Implemented]** — the release workflow attaches a GitHub build provenance attestation to each binary archive and to the container image. With `--signer-workflow` and `--source-digest` (see the runbook below) a consumer can prove the artifact was built by this repository's `release.yml` from a named commit. `--repo` on its own is weaker than it looks: it binds only the repository, so any workflow in it holding `id-token: write` and `attestations: write` could mint an attestation that passes
 
 Today a stable release clears the **Publish gate** only; the remaining Stable-gate criteria are **[Planned]**.
 
@@ -87,7 +87,7 @@ push v* tag
   └─> fossa_scan ─────────────────────────────────┘
 ```
 
-A failed job blocks the GitHub Release, binaries, and checksums. The container image is the exception: it is pushed as soon as build-and-test passes, in parallel with the FOSSA scan, so a FOSSA failure can leave the image and its moving pointers already published on `ghcr.io`. Gating the image push on every job is **[Planned]** — until then, if a release run fails partway, check `ghcr.io` and roll forward (see Rollback).
+A failed job blocks the GitHub Release, binaries, and checksums. The container image is the exception: it is pushed as soon as build-and-test passes, in parallel with the FOSSA scan, so a FOSSA failure can leave the image and its moving pointers already published on `ghcr.io`. The image is also pushed *before* it is attested, so a run that fails on the attest step leaves `latest` live but with no attestation — a consumer's `gh attestation verify` then fails because the release is incomplete, not because the image was tampered with. Gating the image push on every job is **[Planned]** — until then, if a release run fails partway, check `ghcr.io` and roll forward (see Rollback).
 
 Pre-release tags (`v0.4.0-beta.1`) and the `:edge`/`:alpha`/`:beta` pointers follow the same workflow once continuous pre-release publishing is wired up **[Planned]**.
 
@@ -111,11 +111,30 @@ After pushing the tag:
 1. Watch the run: `gh run list --workflow=release.yml --limit 1`; on failure, `gh run view <run-id> --log`.
 2. Verify the release: `gh release view <tag>` shows four binary archives, `checksums-sha256.txt`, and the curated CHANGELOG notes (with the PR list appended); the image tags are present on `ghcr.io/solaceproducts/solace-broker-mcp`.
 3. Spot-check a binary: download the archive for your platform, verify it (`shasum -a 256 -c checksums-sha256.txt --ignore-missing`), and run `./solace-broker-mcp --version` — it prints the tag.
-4. Verify the attestations on both artifact kinds — each should report the tagged commit as the source:
+4. Verify the attestations on both artifact kinds. `--signer-workflow` and `--source-digest` are what make this a check rather than a look: without them the command binds only the repository, and its output names the build and signer workflow but never prints a commit SHA, so there is nothing to eyeball. With them, a wrong builder or a wrong source commit fails the command.
+
+   Set `TAG` and `PLATFORM`, then paste the rest as-is. The image reference deliberately uses `VERSION`, not `TAG`: `docker/metadata-action`'s `{{version}}` pattern strips the leading `v`, so the image tags are `0.7.0`, `0.7`, `latest`, and `sha-<short-sha>` — there is no `v0.7.0` image tag.
+
    ```bash
-   gh attestation verify solace-broker-mcp-<tag>-linux-amd64.tar.gz --repo SolaceProducts/solace-broker-mcp
-   gh attestation verify oci://ghcr.io/solaceproducts/solace-broker-mcp:<tag> --repo SolaceProducts/solace-broker-mcp
+   TAG=v0.7.0                  # the tag you pushed
+   PLATFORM=linux-amd64        # the archive you downloaded in step 3
+   VERSION="${TAG#v}"          # image tag: the same, without the leading v
+   COMMIT="$(git rev-list -n1 "$TAG")"
+
+   gh attestation verify "solace-broker-mcp-${TAG}-${PLATFORM}.tar.gz" \
+     --repo SolaceProducts/solace-broker-mcp \
+     --signer-workflow SolaceProducts/solace-broker-mcp/.github/workflows/release.yml \
+     --source-digest "${COMMIT:?no commit resolved for $TAG - git fetch --tags, then check the tag name}"
+
+   gh attestation verify "oci://ghcr.io/solaceproducts/solace-broker-mcp:${VERSION}" \
+     --repo SolaceProducts/solace-broker-mcp \
+     --signer-workflow SolaceProducts/solace-broker-mcp/.github/workflows/release.yml \
+     --source-digest "${COMMIT:?no commit resolved for $TAG - git fetch --tags, then check the tag name}"
    ```
+
+   The `${COMMIT:?…}` guard is load-bearing, not decoration. `gh` accepts an empty `--source-digest` instead of rejecting it, so an unresolved `COMMIT` would silently drop the commit constraint and still print `✓ Verification succeeded!` — the guard aborts the `gh` command with a visible message instead. It does not close an interactive shell.
+
+   Both commands fetch the attestation from the GitHub API. To verify the copy stored beside the image on `ghcr.io` instead, add `--bundle-from-oci` to the second one.
 5. Announce once verified: internal channels, and the [Solace Community](https://solace.community/) for releases worth a wider note.
 
 If a job fails for environmental reasons, re-run it: `gh run rerun <run-id>`. Never delete and re-push a tag to retry — tags are immutable (see Versioning). If the build itself is bad, fix on `main` and tag the next PATCH (see Rollback).
