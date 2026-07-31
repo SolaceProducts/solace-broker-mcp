@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 )
 
 // idleConnTimeout is how long an idle keep-alive connection sits in the pool

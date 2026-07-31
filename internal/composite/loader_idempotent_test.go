@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/composite/definitions"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/definitions"
 )
 
 // annotations.idempotent stopped being a client-facing hint and became a

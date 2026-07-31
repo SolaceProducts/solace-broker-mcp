@@ -41,9 +41,9 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/safego"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
-	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/safego"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/tools"
 )
 
 // toolName is the on-the-wire MCP tool name and the prefix used for tool-side

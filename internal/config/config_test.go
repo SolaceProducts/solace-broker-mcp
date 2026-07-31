@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
 )
 
 // writeTemp creates a temporary YAML file and returns its path.

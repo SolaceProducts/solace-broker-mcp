@@ -19,10 +19,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/composite/definitions"
-	_ "github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess/handlers" // register handlers via init()
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2/specs"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/definitions"
+	_ "github.com/SolaceProducts/solace-broker-mcp/internal/composite/postprocess/handlers" // register handlers via init()
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
 )
 
 // kebabCaseRE matches valid kebab-case: lowercase letters/digits separated by single hyphens.

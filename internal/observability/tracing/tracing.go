@@ -18,7 +18,7 @@
 // is OFF (door-closing policy) — operators opt in.
 package tracing
 
-import "github.com/SolaceDev/solace-broker-mcp/internal/config"
+import "github.com/SolaceProducts/solace-broker-mcp/internal/config"
 
 // Enabled reports whether tracing is turned on, reading the OBS_TRACING_ENABLED
 // flag off the observability config. Later wiring consults this before

@@ -19,8 +19,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
-	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache/cachetest"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache/cachetest"
 )
 
 func validBrokerOAuthConfig() *config.BrokerOAuthConfig {

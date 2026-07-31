@@ -21,7 +21,7 @@ package postprocesstest
 import (
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/postprocess"
 )
 
 // Register installs a postprocessor for the duration of one test, removing

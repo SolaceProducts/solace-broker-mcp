@@ -19,8 +19,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/composite"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 )
 
 func boolPtr(b bool) *bool { return &b }

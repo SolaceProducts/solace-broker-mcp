@@ -21,9 +21,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
-	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv1"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/tools"
 )
 
 // mockV1 is a stub sempv1.Client. It returns the configured InnerXML (or err)

@@ -17,7 +17,7 @@ package main
 import (
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 )
 
 // These tests pin buildToolPolicy's postcondition: gate enabled ⟺ returned

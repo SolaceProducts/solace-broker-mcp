@@ -13,7 +13,7 @@ import (
 	"encoding/xml"
 	"fmt"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/tools"
 )
 
 // Compile-time check that Handler satisfies tools.ToolHandler.

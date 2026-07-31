@@ -13,8 +13,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
 )
 
 // TestCredentialsAreIsolatedPerBroker is the in-process integration test that

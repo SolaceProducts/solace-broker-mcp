@@ -162,7 +162,7 @@ Navigate to: **Settings → Rules → Rulesets → `main-protection`**
 | Require conversation resolution before merging | ✅ On | **Not set** |
 | Require signed commits | ⬜ Optional (DCO is sufficient) | Not set |
 
-`.github/CODEOWNERS` exists (`* @SolaceDev/dax-developers`), so Code Owners review
+`.github/CODEOWNERS` exists (`* @SolaceProducts/dax-developers`), so Code Owners review
 is available. Enabling it means every external contribution needs a dax-developers
 review.
 

@@ -22,9 +22,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 )
 
 // semp.request_min_interval is documented as "Minimum spacing between successive

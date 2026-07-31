@@ -19,10 +19,10 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
-	"github.com/SolaceDev/solace-broker-mcp/internal/tokenexchange"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv1"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

@@ -30,7 +30,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache"
 )
 
 // defaultTestConfig is the sensible starting point for most tokenexchange /

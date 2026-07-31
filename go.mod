@@ -1,4 +1,4 @@
-module github.com/SolaceDev/solace-broker-mcp
+module github.com/SolaceProducts/solace-broker-mcp
 
 go 1.25.0
 

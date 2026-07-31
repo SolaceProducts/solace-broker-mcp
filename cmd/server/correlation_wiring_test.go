@@ -20,8 +20,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
-	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
 )
 
 // correlationRecorder stands in for authedHandler (auth → SDK): it captures the

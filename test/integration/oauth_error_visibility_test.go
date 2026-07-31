@@ -32,12 +32,12 @@ import (
 	"sync"
 	"testing"
 
-	internalauth "github.com/SolaceDev/solace-broker-mcp/internal/auth"
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
-	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache/cachetest"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
-	"github.com/SolaceDev/solace-broker-mcp/internal/tokenexchange"
-	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
+	internalauth "github.com/SolaceProducts/solace-broker-mcp/internal/auth"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache/cachetest"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/tools"
 )
 
 func TestOAuthErrorVisibility(t *testing.T) {
