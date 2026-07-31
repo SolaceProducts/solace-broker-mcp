@@ -28,8 +28,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// Registered outside ToolManager like list-brokers — the embedded OpenAPI
-// spec is public documentation, so runtime authorization never wraps it.
+// Registered outside ToolManager like list-brokers — spec content only, no
+// broker state, so runtime authorization never wraps it.
 const describeSchemaToolName = "describe-schema"
 
 type schemaOpInfo struct {
@@ -145,7 +145,7 @@ func (r *sempSchemaMap) describe(operation, view string) (map[string]any, error)
 	if view == "raw" {
 		resp["schema"] = def
 	} else {
-		resp["attributes"] = trimAttributes(def)
+		resp["attributes"] = trimAttributes(def, defs)
 	}
 	return resp, nil
 }
@@ -164,9 +164,10 @@ var omitWhenFalse = []struct{ out, x string }{
 
 // trimAttributes flattens a definition's properties into a compact per-
 // attribute list carrying only the fields an agent needs to plan a
-// create/update: name, type, description, default, enum, and writability
-// flags derived from SEMP's x-* extensions.
-func trimAttributes(def map[string]any) []map[string]any {
+// create/update: name, type, description, default, enum, constraints, and
+// writability flags derived from SEMP's x-* extensions.
+// defs is the spec's top-level definitions map, used to resolve $ref properties.
+func trimAttributes(def map[string]any, defs map[string]any) []map[string]any {
 	props, _ := def["properties"].(map[string]any)
 	names := make([]string, 0, len(props))
 	for n := range props {
@@ -181,18 +182,42 @@ func trimAttributes(def map[string]any) []map[string]any {
 			continue
 		}
 		attr := map[string]any{"name": name}
+
+		// Bare $ref: resolve one level and inline the sub-definition's properties.
+		// The ref itself carries no x-* extensions, so fabricating writability
+		// flags from absent fields is wrong — surface the nested shape instead.
+		if ref, _ := prop["$ref"].(string); ref != "" {
+			attr["type"] = "object"
+			defName := strings.TrimPrefix(ref, "#/definitions/")
+			if resolvedDef, _ := defs[defName].(map[string]any); resolvedDef != nil {
+				if desc, _ := resolvedDef["description"].(string); desc != "" {
+					attr["description"] = strings.TrimSpace(desc)
+				}
+				attr["properties"] = trimAttributes(resolvedDef, defs)
+			}
+			out = append(out, attr)
+			continue
+		}
+
 		if t, ok := prop["type"].(string); ok {
 			attr["type"] = t
 		}
-		// The first paragraph is the meaning; the rest is uniform boilerplate
-		// (access-scope levels, config-sync notes, and the enum <pre> block
-		// already surfaced structurally).
+		// Keep the first paragraph (the semantic meaning) and the <pre> enum
+		// block (the per-value descriptions). The middle paragraphs — access
+		// scope levels and config-sync notes — are uniform boilerplate.
 		if s, _ := prop["description"].(string); s != "" {
+			desc := s
 			if i := strings.Index(s, "\n\n"); i != -1 {
-				s = s[:i]
+				first := s[:i]
+				if preStart := strings.Index(s, "<pre>"); preStart != -1 {
+					if preEnd := strings.LastIndex(s, "</pre>"); preEnd != -1 {
+						first = first + "\n\n" + strings.TrimSpace(s[preStart:preEnd+len("</pre>")])
+					}
+				}
+				desc = first
 			}
-			if s = strings.TrimSpace(s); s != "" {
-				attr["description"] = s
+			if desc = strings.TrimSpace(desc); desc != "" {
+				attr["description"] = desc
 			}
 		}
 		if e, ok := prop["enum"].([]any); ok && len(e) > 0 {
@@ -200,6 +225,18 @@ func trimAttributes(def map[string]any) []map[string]any {
 		}
 		if v, ok := prop["x-default"]; ok {
 			attr["default"] = v
+		}
+		if s, ok := prop["pattern"].(string); ok && s != "" {
+			attr["pattern"] = s
+		}
+		if v, ok := prop["maxLength"]; ok {
+			attr["maxLength"] = v
+		}
+		if v, ok := prop["minimum"]; ok {
+			attr["minimum"] = v
+		}
+		if v, ok := prop["maximum"]; ok {
+			attr["maximum"] = v
 		}
 		// writableOnCreate/writableOnUpdate are always emitted, even when false —
 		// their negative value is the signal the caller asked for, so omitting
@@ -215,6 +252,12 @@ func trimAttributes(def map[string]any) []map[string]any {
 		}
 		if rd, ok := prop["x-requiresDisable"].([]any); ok && len(rd) > 0 {
 			attr["requiresDisable"] = rd
+		}
+		// x-autoDisable lists attributes that are temporarily set to false when
+		// this attribute changes on a live object (e.g. egressEnabled on permission
+		// change). An agent must surface this to the user before invoking update.
+		if ad, ok := prop["x-autoDisable"].([]any); ok && len(ad) > 0 {
+			attr["autoDisable"] = ad
 		}
 		out = append(out, attr)
 	}
@@ -238,9 +281,11 @@ Use this to plan a write: call describe-schema first with the operation the
 target write tool wraps (see the write tool's description for the operation
 identifier, e.g. config/createMsgVpnQueue), then supply attributes that are
 writable for that operation. Response has two views: 'trimmed' (default;
-per-attribute {name, type, description, enum, default, writableOnCreate,
-writableOnUpdate, requiredForCreate, identifying, writeOnly, sensitive,
-deprecated, requiresDisable}) and 'raw' (the definition verbatim, larger).
+per-attribute {name, type, description, enum, default, pattern, maxLength,
+minimum, maximum, writableOnCreate, writableOnUpdate, requiredForCreate,
+identifying, writeOnly, sensitive, deprecated, autoDisable, requiresDisable};
+object-typed attributes that are $ref-backed carry a nested properties list
+instead of writability flags) and 'raw' (the definition verbatim, larger).
 `)
 
 	tool := &mcp.Tool{

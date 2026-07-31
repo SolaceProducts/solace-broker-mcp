@@ -21,7 +21,7 @@ These apply to every tool unless noted otherwise.
 
 ### The `broker` parameter
 
-Every tool **except `list-brokers`** takes a required `broker` parameter
+Every tool **except `list-brokers` and `describe-schema`** takes a required `broker` parameter
 identifying which configured broker to query. It is injected automatically into
 each tool's input schema at registration (`injectBrokerParam` in
 `internal/tools/register.go`), so it is not declared in any tool definition:
@@ -121,8 +121,7 @@ request. A full request wraps it: `{"method":"tools/call","params":{"name":"<too
 ### list-brokers
 
 List all configured broker aliases. Use one of the returned names as the
-`broker` parameter on any other tool. This is the only tool with **no `broker`
-parameter**.
+`broker` parameter on any other tool. No `broker` parameter.
 
 **Parameters:** none.
 
@@ -138,6 +137,27 @@ parameter**.
 ```
 
 **Example request:** "What brokers are configured?"
+
+---
+
+### describe-schema
+
+Return the SEMPv2 schema slice for a given operation's request-body definition.
+Use this before invoking a `create-*` or `update-*` tool to enumerate every
+configurable attribute with types, defaults, enum values, and writability flags.
+No `broker` parameter — the response is derived from the embedded OpenAPI specs
+and does not contact any broker.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `operation` | string | yes | SEMPv2 operation identifier in `<specType>/<operationId>` form, e.g. `config/createMsgVpnQueue`. Take the value from the target write tool's description. |
+| `view` | string | no | `trimmed` (default) — compact per-attribute list. `raw` — full OpenAPI definition verbatim. |
+
+**Returns (`trimmed`):** `{ "operation", "method", "definition", "attributes": [...] }` where each attribute carries `name`, `type`, `description`, `enum`, `default`, `pattern`, `maxLength`, `minimum`, `maximum`, `writableOnCreate`, `writableOnUpdate`, and any applicable flags (`requiredForCreate`, `identifying`, `writeOnly`, `sensitive`, `deprecated`, `autoDisable`, `requiresDisable`). Object-typed attributes backed by a `$ref` carry a nested `properties` list instead of writability flags.
+
+**Example request:** "What attributes can I set when creating a queue?"
 
 ---
 

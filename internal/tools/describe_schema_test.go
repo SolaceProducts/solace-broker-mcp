@@ -15,10 +15,14 @@
 package tools
 
 import (
+	"bytes"
+	"context"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2/specs"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // Smoke tests against the embedded specs: trimmed POST, trimmed PATCH,
@@ -72,8 +76,7 @@ func TestSempSchemaMap_TrimmedView_CreateQueue(t *testing.T) {
 		byName[a["name"].(string)] = a
 	}
 
-	// queueName is the identifying path param: required on create,
-	// read-only on update.
+	// queueName is the identifying path param: required on create, read-only on update.
 	qn := byName["queueName"]
 	if qn["identifying"] != true || qn["requiredForCreate"] != true {
 		t.Errorf("queueName should be identifying + requiredForCreate: %+v", qn)
@@ -82,8 +85,13 @@ func TestSempSchemaMap_TrimmedView_CreateQueue(t *testing.T) {
 		t.Errorf("queueName should be read-only on update: %+v", qn)
 	}
 
-	// permission carries the enum + default the trimmed view is meant to
-	// surface. If either drops out we lose the whole point of the tool.
+	// msgVpnName is read-only on create (injected from the path, not the request body).
+	mvn := byName["msgVpnName"]
+	if mvn["writableOnCreate"] != false {
+		t.Errorf("msgVpnName should have writableOnCreate=false: %+v", mvn)
+	}
+
+	// permission carries the enum + default the trimmed view is meant to surface.
 	perm := byName["permission"]
 	if perm["default"] != "no-access" {
 		t.Errorf("permission default: got %v want no-access", perm["default"])
@@ -92,9 +100,83 @@ func TestSempSchemaMap_TrimmedView_CreateQueue(t *testing.T) {
 	if !ok || len(enum) == 0 {
 		t.Errorf("permission enum missing or empty: %+v", perm["enum"])
 	}
-	// Trimmed description drops the "minimum access scope" boilerplate.
-	if desc, _ := perm["description"].(string); strings.Contains(desc, "minimum access scope") {
+	// Trimmed description drops the "minimum access scope" boilerplate but keeps
+	// the <pre> enum block so callers know what each enum value means.
+	desc, _ := perm["description"].(string)
+	if strings.Contains(desc, "minimum access scope") {
 		t.Errorf("trimmed description should not contain access-scope boilerplate; got: %q", desc)
+	}
+	if !strings.Contains(desc, "<pre>") {
+		t.Errorf("trimmed description should include <pre> enum block; got: %q", desc)
+	}
+
+	// permission.x-autoDisable is non-empty: changing permission on a live queue
+	// briefly sets egressEnabled=false. An agent must see this before invoking update.
+	if perm["autoDisable"] == nil {
+		t.Errorf("permission should have autoDisable field: %+v", perm)
+	}
+
+	// eventBindCountThreshold is a bare $ref — must resolve to nested properties,
+	// not fabricate writability flags from absent extensions.
+	thresh := byName["eventBindCountThreshold"]
+	if thresh == nil {
+		t.Fatalf("eventBindCountThreshold missing from trimmed output")
+	}
+	if thresh["type"] != "object" {
+		t.Errorf("$ref property should have type=object: %+v", thresh)
+	}
+	if _, hasWritable := thresh["writableOnCreate"]; hasWritable {
+		t.Errorf("$ref property must not carry fabricated writableOnCreate: %+v", thresh)
+	}
+	nestedProps, ok := thresh["properties"].([]map[string]any)
+	if !ok || len(nestedProps) == 0 {
+		t.Errorf("$ref property should have resolved nested properties: %+v", thresh)
+	}
+}
+
+func TestDescribeSchema_EmitsAuditLog(t *testing.T) {
+	var logBuf bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(oldLogger)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+	if err := RegisterDescribeSchema(server, specs.FS); err != nil {
+		t.Fatalf("RegisterDescribeSchema: %v", err)
+	}
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go func() { _ = server.Run(ctx, serverTransport) }()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1.0"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer session.Close()
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "describe-schema",
+		Arguments: map[string]any{"operation": "config/createMsgVpnQueue"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("describe-schema returned IsError: %v", res.Content)
+	}
+
+	audits := auditLines(t, &logBuf, "describe-schema")
+	if len(audits) != 1 {
+		t.Fatalf("expected exactly 1 audit line for describe-schema, got %d: %s", len(audits), logBuf.String())
+	}
+	if got := audits[0]["status"]; got != "success" {
+		t.Errorf("audit status = %v, want %q", got, "success")
+	}
+	// describe-schema resolves no broker; the audit line must omit the field.
+	if _, present := audits[0]["broker"]; present {
+		t.Errorf("audit line carries broker field for brokerless tool: %v", audits[0])
 	}
 }
 

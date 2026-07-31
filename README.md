@@ -75,7 +75,7 @@ The server implements the MCP HTTP transport specification and exposes event bro
 
 ## Tools
 
-The server exposes read-only tools grouped by what they inspect, plus write tools for operational actions and configuration management. Every tool except `list-brokers` takes a `broker` parameter naming a configured broker alias. See the [Tools Reference](docs/tools-reference.md) for full per-tool parameters, output shape, and example invocations; the [user guide](docs/user-guide.md#tools-reference) has the narrative overview.
+The server exposes read-only tools grouped by what they inspect, plus write tools for operational actions and configuration management. Every tool except `list-brokers` and `describe-schema` takes a `broker` parameter naming a configured broker alias. See the [Tools Reference](docs/tools-reference.md) for full per-tool parameters, output shape, and example invocations; the [user guide](docs/user-guide.md#tools-reference) has the narrative overview.
 
 > **Note:** Results are interpreted and acted on by an AI assistant. Treat tool output as input to a human decision, not as verified fact, and confirm any write or destructive action before allowing it. See the [Disclaimer](#disclaimer).
 

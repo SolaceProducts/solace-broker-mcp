@@ -247,6 +247,38 @@ func TestValidatePolicyToolNames_UnknownsAndListBrokers_BothSurface(t *testing.T
 	}
 }
 
+// describe-schema grant — same shape as list-brokers: WARN, not error.
+func TestValidatePolicyToolNames_DescribeSchemaGrant_WarnsNotError(t *testing.T) {
+	for _, enableWriteTools := range []bool{true, false} {
+		t.Run(fmt.Sprintf("enable_write_tools=%t", enableWriteTools), func(t *testing.T) {
+			buf, cleanup := captureSlog(t)
+			defer cleanup()
+
+			mgr := validateTestManager(t, "get-broker-status")
+			cfg := config.ToolAuthorizationConfig{
+				AccessLevelGroups: map[string][]string{
+					"ReadOnly": {"get-broker-status", "describe-schema"},
+				},
+			}
+
+			if err := ValidatePolicyToolNames(cfg, mgr, enableWriteTools); err != nil {
+				t.Errorf("describe-schema grant must not surface as an error; got: %v", err)
+			}
+
+			warns := warnLinesMentioning(t, buf, "describe-schema")
+			if len(warns) != 1 {
+				t.Fatalf("expected exactly 1 WARN line about describe-schema, got %d: %s", len(warns), buf.String())
+			}
+			if got := warns[0]["exempt_tool"]; got != describeSchemaToolName {
+				t.Errorf("expected exempt_tool=%s, got %v", describeSchemaToolName, got)
+			}
+			if !strings.Contains(buf.String(), "ReadOnly") {
+				t.Errorf("WARN missing referencing group name ReadOnly: %s", buf.String())
+			}
+		})
+	}
+}
+
 // Case-mismatched "List-Brokers" is unknown (not exempt) — no silent case-folding.
 func TestValidatePolicyToolNames_CaseMismatchIsUnknown(t *testing.T) {
 	buf, cleanup := captureSlog(t)

@@ -154,8 +154,8 @@ func authzErrorResult(message string) *mcp.CallToolResult {
 }
 
 // ValidatePolicyToolNames checks every tool name in cfg.AccessLevelGroups
-// against the union of mgr.Handlers() and list-brokers. Call after both
-// registrations have populated mgr.
+// against the union of mgr.Handlers(), list-brokers, and describe-schema.
+// Call after both registrations have populated mgr.
 //
 // Returns one error row per unknown tool (deduped on the tool name so one
 // typo is one report), alphabetized by tool then by referencing group, joined
@@ -164,7 +164,7 @@ func authzErrorResult(message string) *mcp.CallToolResult {
 // Two further grant shapes are inert but legitimate, so each is reported as a
 // WARN rather than an error:
 //
-//   - list-brokers, which is structurally exempt from authorization.
+//   - list-brokers and describe-schema, which are structurally exempt from authorization.
 //   - a write/action tool while enableWriteTools is false. mgr holds every
 //     tool unconditionally, but RegisterWithServer applies the same
 //     isWriteTool gate before server.AddTool — so such a tool is "known" here
@@ -188,15 +188,21 @@ func ValidatePolicyToolNames(cfg config.ToolAuthorizationConfig, mgr *ToolManage
 		}
 	}
 	known[listBrokersToolName] = struct{}{}
+	known[describeSchemaToolName] = struct{}{}
 
 	unknownToGroups := make(map[string]map[string]struct{})
 	writeGatedToGroups := make(map[string]map[string]struct{})
 	exemptToGroups := make(map[string]struct{})
+	describeExemptToGroups := make(map[string]struct{})
 
 	for groupName, tools := range cfg.AccessLevelGroups {
 		for _, tool := range tools {
 			if tool == listBrokersToolName {
 				exemptToGroups[groupName] = struct{}{}
+				continue
+			}
+			if tool == describeSchemaToolName {
+				describeExemptToGroups[groupName] = struct{}{}
 				continue
 			}
 			if _, ok := writeGated[tool]; ok {
@@ -214,6 +220,12 @@ func ValidatePolicyToolNames(cfg config.ToolAuthorizationConfig, mgr *ToolManage
 		sortedExempt := sortedKeys(exemptToGroups)
 		slog.Warn("tool authorization grant has no effect; tool is exempt and always available to authenticated callers",
 			slog.String("exempt_tool", listBrokersToolName),
+			slog.String("referenced_by_groups", strings.Join(sortedExempt, ", ")))
+	}
+	if len(describeExemptToGroups) > 0 {
+		sortedExempt := sortedKeys(describeExemptToGroups)
+		slog.Warn("tool authorization grant has no effect; tool is exempt and always available to authenticated callers",
+			slog.String("exempt_tool", describeSchemaToolName),
 			slog.String("referenced_by_groups", strings.Join(sortedExempt, ", ")))
 	}
 

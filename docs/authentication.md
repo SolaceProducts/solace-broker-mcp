@@ -422,9 +422,8 @@ mcp_client_auth:
     enabled: false
 ```
 
-`list-brokers` is structurally exempt — every authenticated caller can invoke it
-regardless of their groups, so a caller can always discover which broker aliases
-exist. See [Tool authorization](configuration.md#tool-authorization) in the
+`list-brokers` and `describe-schema` are structurally exempt — every authenticated
+caller can invoke them regardless of their groups. See [Tool authorization](configuration.md#tool-authorization) in the
 configuration reference for the full field description, the audit-log shape
 emitted on each decision, and the meaning of the `decision_reason` codes
 (`missing_claim`, `not_permitted`).
