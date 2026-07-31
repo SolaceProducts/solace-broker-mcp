@@ -106,7 +106,7 @@ Each tagged release produces the following artifacts:
 | `solace-broker-mcp-v0.1.0-darwin-amd64.tar.gz` | GitHub Release |
 | `solace-broker-mcp-v0.1.0-darwin-arm64.tar.gz` | GitHub Release |
 | `checksums-sha256.txt` | GitHub Release |
-| Docker image | `ghcr.io/solacedev/solace-broker-mcp` |
+| Docker image | `ghcr.io/solaceproducts/solace-broker-mcp` |
 | Example K8s manifests | In-repo at `deploy/kubernetes/` |
 
 ### Docker image tags
@@ -139,7 +139,7 @@ docker run -d \
   -v /path/to/config.yaml:/etc/mcp-server/config.yaml:ro \
   -e BROKER_USERNAME=admin \
   -e BROKER_PASSWORD=changeme \
-  ghcr.io/solacedev/solace-broker-mcp:latest
+  ghcr.io/solaceproducts/solace-broker-mcp:latest
 ```
 
 Verify the server is running:
@@ -154,7 +154,7 @@ curl http://localhost:9090/livez
 ```yaml
 services:
   solace-broker-mcp:
-    image: ghcr.io/solacedev/solace-broker-mcp:latest
+    image: ghcr.io/solaceproducts/solace-broker-mcp:latest
     ports:
       - "9090:9090"
     volumes:

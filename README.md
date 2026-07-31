@@ -181,6 +181,12 @@ shasum -a 256 -c checksums-sha256.txt --ignore-missing
 tar xzf solace-broker-mcp-v*.tar.gz
 ```
 
+Every release archive also carries a build provenance attestation. Verifying it proves the archive was produced by this repository's release workflow from a specific commit, not rebuilt or replaced by someone else — a stronger guarantee than the checksum, which only proves the file matches the checksums list published beside it. Requires the [GitHub CLI](https://cli.github.com/):
+
+```bash
+gh attestation verify solace-broker-mcp-v*.tar.gz --repo SolaceProducts/solace-broker-mcp
+```
+
 The archive contains the binary, an example config (`broker-config.example.yaml`), and the license. Copy the example config to `broker-config.yaml` and modify as needed.
 
 Run the MCP server with the config file:
@@ -233,13 +239,20 @@ docker run -d \
   -p 9090:9090 \
   -v /path/to/config.yaml:/etc/mcp-server/config.yaml:ro \
   --env-file /path/to/.env \
-  ghcr.io/solacedev/solace-broker-mcp:latest
+  ghcr.io/solaceproducts/solace-broker-mcp:latest
 ```
 
 > **Note:** If the repository is private, authenticate with GHCR before pulling:
 > ```bash
 > gh auth token | docker login ghcr.io -u $(gh api user --jq .login) --password-stdin
 > ```
+
+The image carries a build provenance attestation, published to the registry alongside it. Verifying it proves the image was built by this repository's release workflow from a specific commit:
+
+```bash
+gh attestation verify oci://ghcr.io/solaceproducts/solace-broker-mcp:latest \
+  --repo SolaceProducts/solace-broker-mcp
+```
 
 The container reads config from `/etc/mcp-server/config.yaml` by default. Pass the credentials via `--env-file` or individual `-e` flags.
 
@@ -257,7 +270,7 @@ The image includes a built-in Docker health check using the binary's `--health` 
 ```yaml
 services:
   solace-broker-mcp:
-    image: ghcr.io/solacedev/solace-broker-mcp:latest
+    image: ghcr.io/solaceproducts/solace-broker-mcp:latest
     ports:
       - "9090:9090"
     volumes:

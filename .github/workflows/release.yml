@@ -9,6 +9,7 @@ permissions:
   contents: write
   packages: write
   id-token: write
+  attestations: write
   pull-requests: write
   actions: read
   issues: write
@@ -127,6 +128,14 @@ jobs:
             THIRD_PARTY_LICENSES.md
           echo "ARCHIVE=${ARCHIVE}" >> "${GITHUB_ENV}"
 
+      # Attested here, per matrix leg, rather than in the release job: provenance
+      # records the workflow/job that produced the subject, so attesting after
+      # download would name the release job instead of the job that built it.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: ${{ env.ARCHIVE }}
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -157,7 +166,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/solacedev/solace-broker-mcp
+          images: ghcr.io/solaceproducts/solace-broker-mcp
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -165,6 +174,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -176,6 +186,16 @@ jobs:
             VERSION=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # The digest covers the whole multi-arch index, so one attestation covers
+      # every tag pushed above. push-to-registry lets `gh attestation verify
+      # oci://…` (and cosign) resolve it from ghcr.io without the GitHub API.
+      - name: Attest image provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/solaceproducts/solace-broker-mcp
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
 
   release:
     needs: [build-binaries, build-docker, fossa_scan]
