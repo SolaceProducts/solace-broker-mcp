@@ -118,7 +118,7 @@ func captureGoldens(ctx context.Context, mcpURL, broker, vpn, goldenDir string) 
 		if err != nil {
 			return fmt.Errorf("%s: marshaling: %w", c.tool, err)
 		}
-		if err := os.WriteFile(c.goldenFile, data, 0o644); err != nil {
+		if err := os.WriteFile(c.goldenFile, data, 0o600); err != nil {
 			return fmt.Errorf("%s: writing %s: %w", c.tool, c.goldenFile, err)
 		}
 		fmt.Printf("  wrote %s (%d bytes)\n", c.goldenFile, len(data))

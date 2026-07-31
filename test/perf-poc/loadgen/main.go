@@ -132,7 +132,7 @@ func run(ctx context.Context, cfg runConfig) error {
 	}
 	defer func() {
 		for _, s := range sessions {
-			s.Close()
+			_ = s.Close()
 		}
 	}()
 	fmt.Printf("connected %d sessions.\n", len(sessions))
@@ -356,7 +356,7 @@ func dialAll(ctx context.Context, cfg runConfig) ([]*mcp.ClientSession, error) {
 		if err != nil {
 			for _, s := range out {
 				if s != nil {
-					s.Close()
+					_ = s.Close()
 				}
 			}
 			return nil, fmt.Errorf("client %d: connect: %w", i, err)

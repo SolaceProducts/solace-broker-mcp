@@ -7,15 +7,36 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"embed"
+	"encoding/binary"
 	"io"
 	"log"
-	"math/rand/v2"
+	"math/big"
 	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
 )
+
+// randFloat64 returns a uniformly distributed float64 in [0, 1) using
+// crypto/rand. Used for error-injection sampling — not perf-critical
+// because it fires at most once per mock request.
+func randFloat64() float64 {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return float64(binary.LittleEndian.Uint64(b[:])>>11) / (1 << 53)
+}
+
+// randIntN returns a uniformly distributed int in [0, n) using crypto/rand.
+// Panics if n <= 0, matching math/rand/v2.IntN.
+func randIntN(n int) int {
+	if n <= 0 {
+		panic("randIntN: n must be > 0")
+	}
+	v, _ := rand.Int(rand.Reader, big.NewInt(int64(n)))
+	return int(v.Int64())
+}
 
 // canned holds the hand-authored SEMP response bodies embedded at build
 // time. Real captures will replace these once lab access is available.
@@ -59,7 +80,7 @@ func (h *handler) withInjection(port int) http.Handler {
 		if override.latencyMs > 0 {
 			time.Sleep(time.Duration(override.latencyMs) * time.Millisecond)
 		}
-		if override.errorRate > 0 && rand.Float64() < override.errorRate {
+		if override.errorRate > 0 && randFloat64() < override.errorRate {
 			// Enforce the total-error budget: decrement first, and only
 			// inject when the pre-decrement value was positive. Using
 			// Add(-1) >= 0 keeps concurrent callers honest without a lock.
@@ -226,7 +247,7 @@ func pickErrorStatus(pool []weightedStatus) int {
 	for _, s := range pool {
 		total += s.weight
 	}
-	pick := rand.IntN(total)
+	pick := randIntN(total)
 	for _, s := range pool {
 		if pick < s.weight {
 			return s.code

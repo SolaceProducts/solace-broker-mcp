@@ -199,7 +199,7 @@ func openCSV(path string) (*csv.Writer, func(), error) {
 	w := csv.NewWriter(f)
 	return w, func() {
 		w.Flush()
-		f.Close()
+		_ = f.Close()
 	}, nil
 }
 
