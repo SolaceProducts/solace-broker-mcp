@@ -133,6 +133,36 @@ jobs:
       - name: Run the release-notes extraction self-test against this PR's version
         run: .github/scripts/extract-release-notes.test.sh
 
+  # THIRD_PARTY_LICENSES.md is the OSS compliance artifact that ships with the
+  # release. It carried the sentence "Regenerate before each release" and drifted
+  # anyway, in both directions (SOL-152414). This is the gate that sentence was
+  # not.
+  #
+  # It reads no secrets and needs no credential, so unlike the FOSSA scan it gives
+  # a real verdict on a fork pull request — which is where an unreviewed
+  # dependency is most likely to arrive.
+  #
+  # The self-test runs first, and it is not decoration: the failure mode that
+  # matters here is a vacuous pass, where a reformatted table stops parsing and
+  # the check goes green forever while the inventory rots. Same reasoning as
+  # dco_selftest above.
+  licenses:
+    name: Third-party licenses current
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+      - name: Self-test the licence check
+        run: .github/scripts/licenses-check.test.sh
+      - name: Verify THIRD_PARTY_LICENSES.md matches the binary
+        run: .github/scripts/licenses-check.sh
+
   changelog:
     name: CHANGELOG updated
     runs-on: ubuntu-latest

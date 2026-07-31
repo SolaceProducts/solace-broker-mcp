@@ -38,6 +38,32 @@ jobs:
           name: release-notes
           path: release-notes.md
 
+  # Same fail-fast reasoning as release-notes above, for the other artifact that
+  # ships with the release. THIRD_PARTY_LICENSES.md satisfies a Legal release
+  # condition, so a tag must not be publishable while it misstates the binary.
+  #
+  # The same check runs on every pull request, which is what normally keeps `main`
+  # clean. This job is what makes that a guarantee rather than a dependency on the
+  # branch-protection configuration being correct: until `Third-party licenses
+  # current` is registered as a required status check, a pull request can merge
+  # with it red. Verifying again at the tag closes that window, and costs seconds.
+  licenses:
+    name: Third-party licenses current
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+      - name: Self-test the licence check
+        run: .github/scripts/licenses-check.test.sh
+      - name: Verify THIRD_PARTY_LICENSES.md and NOTICE match the binary
+        run: .github/scripts/licenses-check.sh
+
   fossa_scan:
     name: FOSSA Scan
     uses: SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml@fc521b087f780457f92d4cb46038184e92ad2fbc # pinned 2026-05-12
@@ -50,7 +76,7 @@ jobs:
       VAULT_URL: ${{ secrets.VAULT_URL }}
 
   build-binaries:
-    needs: [test, release-notes]
+    needs: [test, release-notes, licenses]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -88,10 +114,17 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME}"
           ARCHIVE="solace-broker-mcp-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+          # NOTICE and THIRD_PARTY_LICENSES.md ship alongside LICENSE, not just in
+          # the repository. Apache-2.0 section 4(d) requires the attribution
+          # notices to travel with the derivative work, and THIRD_PARTY_LICENSES.md
+          # describes itself as accompanying the release — which was not true of
+          # this archive until SOL-152414.
           tar czf "${ARCHIVE}" \
             solace-broker-mcp \
             broker-config.example.yaml \
-            LICENSE
+            LICENSE \
+            NOTICE \
+            THIRD_PARTY_LICENSES.md
           echo "ARCHIVE=${ARCHIVE}" >> "${GITHUB_ENV}"
 
       - name: Upload artifact
@@ -101,7 +134,7 @@ jobs:
           path: ${{ env.ARCHIVE }}
 
   build-docker:
-    needs: [test, release-notes]
+    needs: [test, release-notes, licenses]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
