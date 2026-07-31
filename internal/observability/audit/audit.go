@@ -19,7 +19,7 @@
 // schema.AuditSchemaVersion.
 package audit
 
-import "github.com/SolaceDev/solace-broker-mcp/internal/config"
+import "github.com/SolaceProducts/solace-broker-mcp/internal/config"
 
 // Enabled reports whether the audit log is turned on, reading the
 // OBS_AUDIT_LOG_ENABLED flag off the observability config. Later wiring

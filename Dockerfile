@@ -9,14 +9,14 @@ RUN go mod download
 COPY . .
 
 RUN CGO_ENABLED=0 go build \
-    -ldflags "-s -w -X github.com/SolaceDev/solace-broker-mcp/internal/version.version=${VERSION}" \
+    -ldflags "-s -w -X github.com/SolaceProducts/solace-broker-mcp/internal/version.version=${VERSION}" \
     -o /solace-broker-mcp \
     ./cmd/server
 
 # Stage 2: Runtime
 FROM gcr.io/distroless/static-debian12:nonroot
 
-LABEL org.opencontainers.image.source=https://github.com/SolaceDev/solace-broker-mcp
+LABEL org.opencontainers.image.source=https://github.com/SolaceProducts/solace-broker-mcp
 
 COPY --from=builder /solace-broker-mcp /solace-broker-mcp
 

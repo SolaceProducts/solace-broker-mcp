@@ -13,12 +13,12 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
-	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/correlationhdr"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
-	"github.com/SolaceDev/solace-broker-mcp/internal/version"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/auth"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/correlationhdr"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/version"
 )
 
 // Client executes operations against a Solace broker's SEMPv2 API.

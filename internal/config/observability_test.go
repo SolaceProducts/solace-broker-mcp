@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
 )
 
 // clearObsEnv unsets every OBS_* capability flag for the duration of the test so

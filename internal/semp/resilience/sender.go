@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/auth"
 	"github.com/hashicorp/go-retryablehttp"
 )
 

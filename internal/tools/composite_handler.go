@@ -17,7 +17,7 @@ package tools
 import (
 	"context"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/composite"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
 )
 
 // CompositeToolHandler adapts a YAML-driven composite tool definition to the

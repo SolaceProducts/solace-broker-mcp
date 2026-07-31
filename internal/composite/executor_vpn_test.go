@@ -22,7 +22,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 )
 
 // getVPNStatusTool returns the get-vpn-status tool definition for tests.

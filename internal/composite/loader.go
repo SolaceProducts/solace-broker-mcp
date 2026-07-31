@@ -23,7 +23,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/postprocess"
 )
 
 // LoadTools reads a YAML file from the given filesystem, parses it into

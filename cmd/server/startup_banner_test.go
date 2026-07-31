@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 )
 
 // TestLogStartupBanners_NoCredentialLeak drives the same helper main() uses to

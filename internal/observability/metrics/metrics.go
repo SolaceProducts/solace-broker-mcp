@@ -19,7 +19,7 @@
 // schema.MetricsSchemaVersion.
 package metrics
 
-import "github.com/SolaceDev/solace-broker-mcp/internal/config"
+import "github.com/SolaceProducts/solace-broker-mcp/internal/config"
 
 // Enabled reports whether metrics emission is turned on, reading the
 // OBS_METRICS_ENABLED flag off the observability config. Later wiring consults
