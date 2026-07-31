@@ -180,9 +180,9 @@ review.
 list is not: it currently holds `lint`, `build`, and `FOSSA Scan`, the last of
 which enforces nothing (see the warning below). Replace it with the following.
 These names are what GitHub actually reports, confirmed against the check runs on
-PRs #213, #216, and #217 — except `SCA gate`, which SOL-152411 added and which has
-no live run behind it yet. Confirm that one against a real pull request before
-you rely on it:
+PRs #213, #216, and #217 — except `SCA gate` (SOL-152411) and
+`Third-party licenses current` (SOL-152414), which are new. Confirm those two
+against a real pull request before you rely on them:
 
 | Check | Source | Gates on |
 |-------|--------|----------|
@@ -194,6 +194,7 @@ you rely on it:
 | `e2e-management` | `build-and-test.yml` | E2E suite |
 | `e2e-action` | `build-and-test.yml` | E2E suite |
 | `SCA gate` | `ci-pr.yaml` job `sca_gate` | The FOSSA verdict, or an accounted-for reason there is none. **Not** `FOSSA Scan / SCA Scan`; see the warning below |
+| `Third-party licenses current` | `ci-pr.yaml` job `licenses` | `THIRD_PARTY_LICENSES.md` still matching `go list -deps ./cmd/server`. Needs no secret, so it reports on fork pull requests too |
 | `CHANGELOG updated` | `ci-pr.yaml` job `changelog` | Advisory today; see note below |
 | `DCO sign-off` | `dco.yaml` job `dco` | a sign-off on every commit the PR adds |
 | `DCO check self-test` | `ci-pr.yaml` job `dco_selftest` | the gate's own logic still working |

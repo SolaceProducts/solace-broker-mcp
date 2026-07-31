@@ -4,10 +4,18 @@ This file lists the third-party components compiled into the `solace-broker-mcp`
 binary, with their versions and licenses. It is the human-readable OSS compliance
 inventory that accompanies the release.
 
-**Generated** 2026-07-17 with
-[`go-licenses`](https://github.com/google/go-licenses) against
-`./cmd/server`. Regenerate before each release. The FOSSA scan in CI is the
-authoritative automated check; this file complements it.
+**Generated** 2026-07-31 with
+[`go-licenses`](https://github.com/google/go-licenses) against `./cmd/server`:
+
+```bash
+go run github.com/google/go-licenses@v1.6.0 csv ./cmd/server
+```
+
+Regenerate on any `go.mod` change, not only before a release. Between 2026-07-17
+and 2026-07-31 this file drifted from the binary in both directions, so
+`.github/scripts/licenses-check.sh` now fails CI when the inventory stops
+matching `go list -deps ./cmd/server`. The FOSSA scan remains the authoritative
+automated check for licence *policy*; this file is the human-readable inventory.
 
 All components are compatible with distribution under the Apache License 2.0.
 No strong-copyleft licenses (GPL, LGPL, AGPL, EPL, CDDL) are linked into the
@@ -32,8 +40,7 @@ under MPL-2.0.
 | Component | Version | License | License text |
 |---|---|---|---|
 | `github.com/coreos/go-oidc/v3/oidc` | v3.18.0 | Apache-2.0 | [license](https://github.com/coreos/go-oidc/blob/v3.18.0/LICENSE) |
-| `github.com/dolthub/maphash` | v0.1.0 | Apache-2.0 | [license](https://github.com/dolthub/maphash/blob/v0.1.0/LICENSE) |
-| `github.com/gammazero/deque` | v0.2.1 | MIT | [license](https://github.com/gammazero/deque/blob/v0.2.1/LICENSE) |
+| `github.com/davecgh/go-spew/spew` | v1.1.1 | ISC | [license](https://github.com/davecgh/go-spew/blob/v1.1.1/LICENSE) |
 | `github.com/getkin/kin-openapi` | v0.134.0 | MIT | [license](https://github.com/getkin/kin-openapi/blob/v0.134.0/LICENSE) |
 | `github.com/go-jose/go-jose/v4` | v4.1.4 | Apache-2.0 | [license](https://github.com/go-jose/go-jose/blob/v4.1.4/LICENSE) |
 | `github.com/go-jose/go-jose/v4/json` | v4.1.4 | BSD-3-Clause | [license](https://github.com/go-jose/go-jose/blob/v4.1.4/json/LICENSE) |
@@ -42,14 +49,17 @@ under MPL-2.0.
 | `github.com/google/jsonschema-go/jsonschema` | v0.4.2 | MIT | [license](https://github.com/google/jsonschema-go/blob/v0.4.2/LICENSE) |
 | `github.com/josharian/intern` | v1.0.0 | MIT | [license](https://github.com/josharian/intern/blob/v1.0.0/license.md) |
 | `github.com/mailru/easyjson` | v0.7.7 | MIT | [license](https://github.com/mailru/easyjson/blob/v0.7.7/LICENSE) |
-| `github.com/maypok86/otter` | v1.2.4 | Apache-2.0 | [license](https://github.com/maypok86/otter/blob/v1.2.4/LICENSE) |
+| `github.com/maypok86/otter/v2` | v2.3.0 | Apache-2.0 | [license](https://github.com/maypok86/otter/blob/v2.3.0/LICENSE) |
 | `github.com/modelcontextprotocol/go-sdk` | v1.5.0 | Apache-2.0 | [license](https://github.com/modelcontextprotocol/go-sdk/blob/v1.5.0/LICENSE) |
 | `github.com/mohae/deepcopy` | c48cc78d4826 | MIT | [license](https://github.com/mohae/deepcopy/blob/c48cc78d4826/LICENSE) |
 | `github.com/oasdiff/yaml` | a3ea61cb4d4c | MIT | [license](https://github.com/oasdiff/yaml/blob/a3ea61cb4d4c/LICENSE) |
 | `github.com/oasdiff/yaml3` | 61cd415a242b | MIT | [license](https://github.com/oasdiff/yaml3/blob/61cd415a242b/LICENSE) |
 | `github.com/perimeterx/marshmallow` | v1.1.5 | MIT | [license](https://github.com/perimeterx/marshmallow/blob/v1.1.5/LICENSE) |
+| `github.com/pmezard/go-difflib/difflib` | v1.0.0 | BSD-3-Clause | [license](https://github.com/pmezard/go-difflib/blob/v1.0.0/LICENSE) |
 | `github.com/segmentio/asm` | v1.1.3 | MIT | [license](https://github.com/segmentio/asm/blob/v1.1.3/LICENSE) |
 | `github.com/segmentio/encoding` | v0.5.4 | MIT | [license](https://github.com/segmentio/encoding/blob/v0.5.4/LICENSE) |
+| `github.com/sony/gobreaker/v2` | v2.4.0 | MIT | [license](https://github.com/sony/gobreaker/blob/v2.4.0/v2/LICENSE) |
+| `github.com/stretchr/testify` | v1.11.1 | MIT | [license](https://github.com/stretchr/testify/blob/v1.11.1/LICENSE) |
 | `github.com/woodsbury/decimal128` | v1.3.0 | 0BSD | [license](https://github.com/woodsbury/decimal128/blob/v1.3.0/LICENCE) |
 | `github.com/xeipuuv/gojsonpointer` | 4e3ac2762d5f | Apache-2.0 | [license](https://github.com/xeipuuv/gojsonpointer/blob/4e3ac2762d5f/LICENSE-APACHE-2.0.txt) |
 | `github.com/xeipuuv/gojsonreference` | bd5ef7bd5415 | Apache-2.0 | [license](https://github.com/xeipuuv/gojsonreference/blob/bd5ef7bd5415/LICENSE-APACHE-2.0.txt) |
@@ -62,11 +72,26 @@ under MPL-2.0.
 
 ## Notes
 
+- **`stretchr/testify`, `davecgh/go-spew`, and `pmezard/go-difflib` are here on
+  purpose. Do not remove them as "test-only".** They are in the binary's
+  dependency closure because `github.com/maypok86/otter/v2` v2.3.0 imports
+  `testify/require` from a file named `issue_test_1.25.go`. That name does not end
+  in `_test.go`, so Go compiles it as ordinary package code rather than treating it
+  as a test, and testify plus its two dependencies come with it. Confirmed from
+  both `go-licenses` and `go list -deps ./cmd/server`. All three are permissive
+  (MIT, ISC, BSD-3-Clause), so this is an accuracy matter, not a licence problem.
+  If a later Otter release renames that file, these three drop out and
+  `.github/scripts/licenses-check.sh` will say so.
 - `github.com/go-jose/go-jose/v4` bundles a `json` subpackage under BSD-3-Clause
   (a copy of the Go standard library's encoding/json); both are permissive.
 - `github.com/modelcontextprotocol/go-sdk` is mid-transition from MIT to
   Apache 2.0; un-relicensed files may remain MIT. Both are permissive.
 - `gopkg.in/yaml.v3` ships a NOTICE (Apache 2.0) alongside MIT-licensed
   libyaml-derived files; its required attribution is reproduced in `NOTICE`.
+- `github.com/oasdiff/yaml3` is a fork of `gopkg.in/yaml.v3` and carries the same
+  dual MIT / Apache-2.0 split and the same Canonical NOTICE. The generator
+  resolves it to MIT, which is what the table records; `NOTICE` now names it
+  alongside `gopkg.in/yaml.v3` so the Apache-2.0 attribution is propagated for
+  both. It was previously missing.
 - Commit-pinned modules (`mohae/deepcopy`, `oasdiff/*`, `xeipuuv/*`) carry a
   clear license at the pinned commit.
