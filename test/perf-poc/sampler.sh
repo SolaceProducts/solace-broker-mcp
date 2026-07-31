@@ -33,10 +33,10 @@ MOCK_ONLY="${MOCK_ONLY:-0}"
 mcp_pid=""
 mock_pid=""
 if [[ "$MOCK_ONLY" != "1" ]]; then
-  mcp_pid="$(pgrep -f 'go-build.*server' || true)"
+  mcp_pid="$(pgrep -n -f 'go-build.*server' || true)"
 fi
 if [[ "$MCP_ONLY" != "1" ]]; then
-  mock_pid="$(pgrep -f 'mock-semp -listen-start' || true)"
+  mock_pid="$(pgrep -n -f 'mock-semp -listen-start' || true)"
 fi
 
 if [[ "$MCP_ONLY" == "1" && -z "$mcp_pid" ]]; then

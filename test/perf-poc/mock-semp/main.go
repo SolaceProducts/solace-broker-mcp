@@ -70,14 +70,18 @@ func main() {
 		log.Fatalf("default-latency-ms must be >= 0")
 	}
 
-	cfg := newConfigStore()
+	ports := make([]int, *listenCount)
+	for i := 0; i < *listenCount; i++ {
+		ports[i] = *listenStart + i
+	}
+	cfg := newConfigStore(ports)
 	// Seed every broker port with the flag's latency. Individual ports can
 	// still be overridden later via POST /_mock/config; the flag just spares
 	// the caller from a curl on startup when a uniform latency is all they
 	// need (the common PoC case — see run.sh LATENCY_MS).
 	if *defaultLatencyMs > 0 {
-		for i := 0; i < *listenCount; i++ {
-			cfg.set(*listenStart+i, portOverride{latencyMs: *defaultLatencyMs})
+		for _, p := range ports {
+			cfg.set(p, portOverride{latencyMs: *defaultLatencyMs})
 		}
 	}
 	handler := newHandler(cfg)

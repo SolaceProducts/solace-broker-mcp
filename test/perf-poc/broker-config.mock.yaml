@@ -1,7 +1,7 @@
 # Perf PoC — MCP config pointing at mock-semp.
 #
 # Use with:
-#   MOCK_HOST=localhost CONFIG_FILE=./broker-config.mock.yaml go run ./cmd/mcp-server
+#   MOCK_HOST=localhost CONFIG_FILE=./broker-config.mock.yaml go run ./cmd/server
 #
 # 50 aliases (broker-01..broker-50) fan out across mock ports 18081..18130,
 # matching the mock's `-listen-start 18081 -listen-count 50` layout. The

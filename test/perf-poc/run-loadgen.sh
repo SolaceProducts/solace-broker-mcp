@@ -167,9 +167,9 @@ mcp_port="${mcp_hostport##*:}"
 [[ "$mcp_port" == "$mcp_hostport" ]] && mcp_port=80
 
 if [[ "$NO_MOCK" != "1" ]]; then
-  echo "== 1. mock-semp on 0.0.0.0:18081..18130 (config: :19000, default-latency-ms=$LATENCY_MS)"
+  echo "== 1. mock-semp on 0.0.0.0:18081..$((18081 + BROKERS - 1)) (config: :19000, default-latency-ms=$LATENCY_MS)"
   # Bind all interfaces so Box B can reach us over the LAN.
-  setsid "$bin/mock-semp" -listen-addr 0.0.0.0 -listen-start 18081 -listen-count 50 -config-port 19000 \
+  setsid "$bin/mock-semp" -listen-addr 0.0.0.0 -listen-start 18081 -listen-count "$BROKERS" -config-port 19000 \
     -default-latency-ms "$LATENCY_MS" \
     >"$runs/mock.log" 2>&1 &
   mock_pid=$!

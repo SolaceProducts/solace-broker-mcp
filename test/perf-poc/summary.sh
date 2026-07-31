@@ -21,10 +21,12 @@ runs="${1:?usage: $0 <runs-dir>}"
 # 13 loadavg1 14 sys_mem_used_kb
 
 # Roll one process's columns into a one-line summary.
-#   csv=path  label="mcp"/"mock"  cpu_col=<idx>  box_col=<idx>  rss_col=<idx>
+#   csv=path  label="mcp"/"mock"  box_col=<idx>  rss_col=<idx>
 #   mem_total_kb=<from info>
+# We report CPU as % of the whole box (box_col) rather than the raw
+# per-core column (cpu_col in sampler.csv), so cpu_col is not needed here.
 roll() {
-  local csv=$1 label=$2 cpu_col=$3 box_col=$4 rss_col=$5 mem_total=$6
+  local csv=$1 label=$2 box_col=$3 rss_col=$4 mem_total=$5
   [[ -r "$csv" ]] || return 0
   awk -F, -v bc="$box_col" -v rc="$rss_col" -v mem="$mem_total" -v L="$label" '
     NR==1 { next }
@@ -77,17 +79,17 @@ lg_csv="$runs/loadgen-metrics.csv"
 if [[ -r "$main_csv" ]]; then
   mem=$(info_mem "$main_csv.info")
   echo "-- sampler.csv --"
-  roll "$main_csv" "mcp"  3 4 5  "$mem"
+  roll "$main_csv" "mcp"  4 5  "$mem"
   # mock columns exist in single-host runs; in split-host mcp runs they're all NA
   # and roll() prints "(no samples)" — that's fine.
-  roll "$main_csv" "mock" 8 9 10 "$mem"
+  roll "$main_csv" "mock" 9 10 "$mem"
   echo
 fi
 
 if [[ -r "$mock_only_csv" ]]; then
   mem=$(info_mem "$mock_only_csv.info")
   echo "-- mock-sampler.csv --"
-  roll "$mock_only_csv" "mock" 8 9 10 "$mem"
+  roll "$mock_only_csv" "mock" 9 10 "$mem"
   echo
 fi
 

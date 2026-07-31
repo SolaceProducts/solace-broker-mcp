@@ -292,10 +292,11 @@ func diffJSON(path string, golden, actual any, shape bool) string {
 		}
 		if shape {
 			// Shape mode: don't require matching length (real broker may have
-			// N entries, mock may have M). Build a template from the golden
-			// array by unioning all element shapes — heterogeneous element
-			// arrays (e.g. some slots carry `operationalState`, others don't)
-			// pass as long as actual elements are a subset of the union.
+			// N entries, mock may have M). Use the first golden element as the
+			// template every actual element must match. Assumes the golden
+			// array is homogeneous — if the SEMP response ever surfaces
+			// heterogeneous elements (e.g. some slots carry `operationalState`,
+			// others don't), switch to a unioned template.
 			// Empty arrays on either side pass — nothing to compare.
 			if len(g) == 0 || len(a) == 0 {
 				return ""

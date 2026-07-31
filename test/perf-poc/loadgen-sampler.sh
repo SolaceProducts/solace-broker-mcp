@@ -13,7 +13,7 @@ interval="${2:-5}"
 duration="${3:-90}"
 
 # Find loadgen — pattern matches ./bin/loadgen or ./loadgen/loadgen invocations.
-lg_pid="$(pgrep -f 'loadgen -mcp-url' || pgrep -f 'bin/loadgen' || true)"
+lg_pid="$(pgrep -n -f 'loadgen -mcp-url' || pgrep -n -f 'bin/loadgen' || true)"
 
 if [[ -z "$lg_pid" ]]; then
   echo "could not find loadgen — is it running yet? Start loadgen first, then this sampler." >&2
