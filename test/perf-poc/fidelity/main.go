@@ -118,12 +118,36 @@ func captureGoldens(ctx context.Context, mcpURL, broker, vpn, goldenDir string) 
 		if err != nil {
 			return fmt.Errorf("%s: marshaling: %w", c.tool, err)
 		}
-		if err := os.WriteFile(c.goldenFile, data, 0o600); err != nil {
+		if err := writeFileAtomic(c.goldenFile, data, 0o600); err != nil {
 			return fmt.Errorf("%s: writing %s: %w", c.tool, c.goldenFile, err)
 		}
 		fmt.Printf("  wrote %s (%d bytes)\n", c.goldenFile, len(data))
 	}
 	return nil
+}
+
+// writeFileAtomic writes to a temp file in the same directory then renames
+// into place, so a mid-recapture failure can't leave one golden updated and
+// another stale — the pair either both change or neither does.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".golden-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp) // no-op if the rename succeeded
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func run(ctx context.Context, mcpURL, broker, vpn, goldenDir string, shape bool) error {
@@ -266,10 +290,16 @@ func diffJSON(path string, golden, actual any, shape bool) string {
 			gv, gok := g[k]
 			av, aok := a[k]
 			if shape {
-				// Shape mode: only compare the key intersection. Missing keys
-				// on either side are treated as optional fields, not diffs.
-				if !gok || !aok {
+				// Shape mode: extra keys in actual are OK (schemas grow over
+				// time — additive fields must not fail the gate). But a key
+				// present in golden and missing in actual IS a diff — that's
+				// the mock dropping a field the real broker returns, which is
+				// exactly what fidelity is meant to catch.
+				if !gok {
 					continue
+				}
+				if !aok {
+					return fmt.Sprintf("%s: missing key %q in actual (golden=%v)", path, k, gv)
 				}
 			} else {
 				switch {

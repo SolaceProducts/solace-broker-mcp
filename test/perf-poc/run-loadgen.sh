@@ -76,6 +76,9 @@ sample_secs=$(awk -v d="$DURATION" 'BEGIN {
 sample_secs=$(( sample_secs + 10 ))
 
 mock_pid= lg_pid= sampler_pid= mock_top_pid=
+# kill_tree signals a pid (and its process group if reachable) and returns.
+# It does NOT `wait` inside — callers that need the child's exit code
+# (e.g. mock-semp's hard-gate exit-nonzero-on-miss) must wait separately.
 kill_tree() {
   local pid=$1
   [[ -z "$pid" ]] && return
@@ -88,18 +91,20 @@ kill_tree() {
   else
     kill -TERM "$pid" 2>/dev/null || true
   fi
-  wait "$pid" 2>/dev/null || true
 }
 cleanup() {
   local rc=$?
   set +e
-  kill_tree "$sampler_pid"
-  kill_tree "$mock_top_pid"
-  kill_tree "$lg_pid"
+  kill_tree "$sampler_pid";  wait "$sampler_pid" 2>/dev/null
+  kill_tree "$mock_top_pid"; wait "$mock_top_pid" 2>/dev/null
+  kill_tree "$lg_pid";       wait "$lg_pid" 2>/dev/null
   if [[ -n "$mock_pid" ]]; then
     kill_tree "$mock_pid"
+    wait "$mock_pid"
     local mock_rc=$?
-    if (( mock_rc != 0 )); then
+    # SIGTERM (128+15=143) and SIGKILL (128+9=137) are expected shutdown paths.
+    # Anything else means mock-semp's hard gate (unmatched request) fired.
+    if (( mock_rc != 0 && mock_rc != 143 && mock_rc != 137 )); then
       echo "!! mock-semp exited $mock_rc — a request 404'd (missing canned response). See $runs/mock.log"
       (( rc == 0 )) && rc=$mock_rc
     fi

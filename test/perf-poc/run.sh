@@ -64,6 +64,9 @@ if ss -tln 2>/dev/null | grep -q ":9090 "; then
 fi
 
 mock_pid= mcp_pid= mem_pid= top_pid=
+# kill_tree signals a pid (and its process group if reachable) and waits for
+# it. It does NOT `wait` inside — callers that need the child's exit code
+# (e.g. mock-semp's hard-gate exit-nonzero-on-miss) must wait separately.
 kill_tree() {
   local pid=$1
   [[ -z "$pid" ]] && return
@@ -76,18 +79,20 @@ kill_tree() {
   else
     kill -TERM "$pid" 2>/dev/null || true
   fi
-  wait "$pid" 2>/dev/null || true
 }
 cleanup() {
   local rc=$?
   set +e
-  kill_tree "$top_pid"
-  kill_tree "$mem_pid"
-  kill_tree "$mcp_pid"
+  kill_tree "$top_pid";  wait "$top_pid" 2>/dev/null
+  kill_tree "$mem_pid";  wait "$mem_pid" 2>/dev/null
+  kill_tree "$mcp_pid";  wait "$mcp_pid" 2>/dev/null
   if [[ -n "$mock_pid" ]]; then
     kill_tree "$mock_pid"
+    wait "$mock_pid"
     local mock_rc=$?
-    if (( mock_rc != 0 )); then
+    # SIGTERM (128+15=143) and SIGKILL (128+9=137) are expected shutdown paths.
+    # Anything else means mock-semp's hard gate (unmatched request) fired.
+    if (( mock_rc != 0 && mock_rc != 143 && mock_rc != 137 )); then
       echo "!! mock-semp exited $mock_rc — a request 404'd (missing canned response). See $runs/mock.log"
       (( rc == 0 )) && rc=$mock_rc
     fi

@@ -191,7 +191,10 @@ func run(ctx context.Context, cfg runConfig) error {
 
 	// Non-zero exit if we blew the error-rate bar; the plan's demo pass/fail
 	// bar is 0.5%. Callers can grep exit code without parsing stdout.
-	if summary.errorRate > 0.005 {
+	// Match print()'s PASS boundary (`< 0.005`): exactly 0.5% is a FAIL. Prior
+	// to this, run() used `> 0.005` and print() used `< 0.005`, so at exactly
+	// 0.005 stdout said "FAIL" but the process exited 0.
+	if summary.errorRate >= 0.005 {
 		return fmt.Errorf("error rate %.2f%% exceeds 0.5%% budget", summary.errorRate*100)
 	}
 	return nil

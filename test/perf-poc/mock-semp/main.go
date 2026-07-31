@@ -10,9 +10,12 @@
 //
 // Flags:
 //
-//	-listen-addr         interface to bind (localhost or 0.0.0.0)   default localhost
+//	-listen-addr         interface to bind for broker ports (localhost or 0.0.0.0)  default localhost
 //	-listen-start        first broker port (inclusive)             default 8081
 //	-listen-count        number of broker ports to bind             default 50
+//	-config-listen-addr  interface to bind for /_mock/config        default localhost
+//	                     (kept separate from -listen-addr so opening broker ports
+//	                     to the LAN doesn't also expose the injection knob).
 //	-config-port         /_mock/config endpoint port                default 9000
 //	-default-latency-ms  fixed sleep before every response, all ports (default 0).
 //	                     Overridden per-port by POST /_mock/config.
@@ -56,9 +59,10 @@ import (
 )
 
 func main() {
-	listenAddr := flag.String("listen-addr", "localhost", "interface to bind (e.g. localhost or 0.0.0.0)")
+	listenAddr := flag.String("listen-addr", "localhost", "interface to bind broker ports (e.g. localhost or 0.0.0.0)")
 	listenStart := flag.Int("listen-start", 8081, "first broker port (inclusive)")
 	listenCount := flag.Int("listen-count", 50, "number of broker ports to bind")
+	configListenAddr := flag.String("config-listen-addr", "localhost", "interface to bind /_mock/config; keep on localhost even when -listen-addr is 0.0.0.0 so LAN peers can't inject errors")
 	configPort := flag.Int("config-port", 9000, "port for /_mock/config")
 	defaultLatencyMs := flag.Int("default-latency-ms", 0, "fixed sleep before every response (all ports); overridden per-port by /_mock/config")
 	flag.Parse()
@@ -104,28 +108,27 @@ func main() {
 	configMux := http.NewServeMux()
 	configMux.Handle("/_mock/config", cfg.handler())
 	configSrv := &http.Server{
-		Addr:              net.JoinHostPort(*listenAddr, strconv.Itoa(*configPort)),
+		Addr:              net.JoinHostPort(*configListenAddr, strconv.Itoa(*configPort)),
 		Handler:           configMux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	var wg sync.WaitGroup
 	startServer := func(srv *http.Server, label string) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Fatalf("%s: %v", label, err)
 			}
-		}()
+		})
 	}
 	for _, srv := range brokerServers {
 		startServer(srv, "broker "+srv.Addr)
 	}
 	startServer(configSrv, "config "+configSrv.Addr)
 
-	log.Printf("mock-semp: %d broker ports %d..%d, config on :%d, default-latency-ms=%d",
-		*listenCount, *listenStart, *listenStart+*listenCount-1, *configPort, *defaultLatencyMs)
+	log.Printf("mock-semp: %d broker ports %s:%d..%d, config on %s:%d, default-latency-ms=%d",
+		*listenCount, *listenAddr, *listenStart, *listenStart+*listenCount-1,
+		*configListenAddr, *configPort, *defaultLatencyMs)
 
 	// Wait for shutdown signal, then let in-flight requests drain.
 	sigCh := make(chan os.Signal, 1)
