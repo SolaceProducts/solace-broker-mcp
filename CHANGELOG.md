@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING:** Go module path changed from `github.com/SolaceDev/solace-broker-mcp` to `github.com/SolaceProducts/solace-broker-mcp`, following the repository's move to the SolaceProducts GitHub org ahead of going public. Anyone importing this module needs to update their import path to match; the old path is no longer valid. No functional or behavioral change — every internal import was updated to match, and the two e2e test submodules' own module declarations were updated for consistency.
+
 ### Fixed
 
 - A `tool_authorization.access_level_groups` grant of a write/action tool (for example `delete-queue-messages`, `disconnect-client`, `clear-queue-stats`, `clear-client-stats`, or any Config-API management tool) while `enable_write_tools: false` is now reported at startup with a `WARN` naming the inert tool and the groups that reference it. Previously such a grant was accepted in silence even though it could never take effect — the tool is skipped at registration and never appears in `tools/list` — so an operator had no signal distinguishing "the policy is live" from "the policy is inert." The startup validator built its known-tool set from the tool manager, which holds every tool unconditionally, while the write gate is applied later at MCP-server registration; the validator now applies the same gate predicate and reports the difference. Staging an RBAC policy ahead of enabling write tools stays supported, so this is a WARN and not a startup failure: one line per inert tool, tools alphabetized and referencing groups deduped within each line, matching the existing `list-brokers` inert-grant WARN. Setting `enable_write_tools: true` activates the grants and silences the WARN. Grants naming a tool the server does not know at all remain a fatal startup error, and `list-brokers` grants keep their existing WARN. Tracked under SOL-152508.
