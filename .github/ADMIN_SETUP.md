@@ -180,7 +180,9 @@ review.
 list is not: it currently holds `lint`, `build`, and `FOSSA Scan`, the last of
 which enforces nothing (see the warning below). Replace it with the following.
 These names are what GitHub actually reports, confirmed against the check runs on
-PRs #213, #216, and #217:
+PRs #213, #216, and #217 — except `SCA gate`, which SOL-152411 added and which has
+no live run behind it yet. Confirm that one against a real pull request before
+you rely on it:
 
 | Check | Source | Gates on |
 |-------|--------|----------|
@@ -191,21 +193,38 @@ PRs #213, #216, and #217:
 | `e2e-monitoring` | `build-and-test.yml` | E2E suite (known flaky fixture; rerun the job before investigating) |
 | `e2e-management` | `build-and-test.yml` | E2E suite |
 | `e2e-action` | `build-and-test.yml` | E2E suite |
-| `FOSSA Scan / SCA Scan` | `ci-pr.yaml` job `fossa_scan` | Licensing policy and critical/high vulnerabilities, diffed against the base branch |
+| `SCA gate` | `ci-pr.yaml` job `sca_gate` | The FOSSA verdict, or an accounted-for reason there is none. **Not** `FOSSA Scan / SCA Scan`; see the warning below |
 | `CHANGELOG updated` | `ci-pr.yaml` job `changelog` | Advisory today; see note below |
 | `DCO sign-off` | `dco.yaml` job `dco` | a sign-off on every commit the PR adds |
 | `DCO check self-test` | `ci-pr.yaml` job `dco_selftest` | the gate's own logic still working |
 
-⚠️ **Do not select `FOSSA Scan`.** It looks like the right entry and is not. A
-check by that exact name comes from `build-and-test.yml`, where the job carries
-`if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch`,
-so on every pull request it reports **skipped**, and GitHub counts a skipped
-check as passing. Requiring `FOSSA Scan` therefore enforces nothing. The context that
-gates is `FOSSA Scan / SCA Scan`: the `ci-pr.yaml` caller job (`name: FOSSA Scan`)
-plus the inner job of the reusable workflow it calls (`name: "SCA Scan"`), which
-exits non-zero on findings because `.github/workflow-config.json` sets both FOSSA
-modes to `BLOCK`. Reusable-workflow jobs always surface as
-`<caller job name> / <inner job name>`, never as the caller name alone.
+⚠️ **Two FOSSA-shaped entries are wrong, and the right one is neither.** Pick
+`SCA gate`.
+
+- **`FOSSA Scan` enforces nothing.** A check by that exact name comes from
+  `build-and-test.yml`, where the job carries
+  `if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch`,
+  so on every pull request it reports **skipped**, and GitHub counts a skipped
+  check as passing.
+- **`FOSSA Scan / SCA Scan` deadlocks fork pull requests.** It is the real
+  scanning context on a same-repo pull request: the `ci-pr.yaml` caller job
+  (`name: FOSSA Scan`) plus the inner job of the reusable workflow it calls
+  (`name: "SCA Scan"`), which exits non-zero on findings because
+  `.github/workflow-config.json` sets both FOSSA modes to `BLOCK`. But that caller
+  is now skipped for fork pull requests, because a fork gets no repository
+  secrets and the Vault-backed scan cannot run. A skipped *plain* job still
+  reports `skipped`; a skipped reusable-workflow *caller* never creates the
+  ` / SCA Scan` context at all. Required contexts that are never created stay
+  pending forever, so requiring this one makes every external contribution
+  unmergeable.
+- **`SCA gate` is the one to require.** `ci-pr.yaml` job `sca_gate` always
+  reports. It passes on a FOSSA success, fails on a FOSSA failure, and passes a
+  fork's skip with a logged reason. It re-derives the fork condition itself and
+  **fails** a skip it cannot account for, so narrowing `fossa_scan`'s `if` later
+  cannot quietly switch the gate off on same-repo pull requests.
+
+Reusable-workflow jobs always surface as `<caller job name> / <inner job name>`,
+never as the caller name alone.
 
 ⚠️ **Both DCO rows are required, and dropping either removes a control.** DCO
 stands in for a contributor licence agreement, so the repository is not covered
@@ -250,10 +269,11 @@ Four more notes on the list:
   `CHANGELOG_GATE_MODE: advisory`, so the script warns and exits 0. Requiring it
   makes the check's presence a merge precondition now, so flipping the mode to
   `blocking` later needs no ruleset change.
-- On a pull request, FOSSA runs in diff mode (`enable_diff_mode` is true for
-  `pull_request` events). It blocks on findings that are new relative to the base
-  branch, not on the full dependency inventory. That is what keeps `main` from
-  entering an irregular state; do not read a green PR as a clean full scan.
+- On a **same-repo** pull request, FOSSA runs in diff mode (`enable_diff_mode` is
+  true for `pull_request` events). It blocks on findings that are new relative to
+  the base branch, not on the full dependency inventory. That is what keeps `main`
+  from entering an irregular state; do not read a green PR as a clean full scan.
+  On a fork pull request it does not run at all — see the fork section below.
 - `Analyze (go)` (CodeQL) passes on every PR. Add it if you want code scanning to
   block merges, after settling the configuration question in the Security Settings
   section. It is not in the list above because that is a policy call, not a
@@ -262,25 +282,47 @@ Four more notes on the list:
   `transition_on_merge.yaml`, which runs on `pull_request: closed`, and the check
   name varies with the Jira key (e.g. `... Vault and JIRA Operations (SOL-152328)`).
 
-🚨 **CI cannot currently green-light a fork pull request.** Two separate problems,
-both of which need a CI change. Tracked separately.
+**How a fork pull request gets a verdict.** SOL-152411 fixed the two problems that
+made this impossible. What it changed, and what it deliberately did not:
 
-1. **Seven checks never appear.** `build-and-test.yml` triggers on `push`, not
-   `pull_request`. A fork contributor's push fires in their fork, so `lint`,
-   `build`, and the five `e2e-*` checks never report on this repository's commit.
-   Those required contexts stay pending forever.
-2. **`FOSSA Scan / SCA Scan` fails.** `ci-pr.yaml` passes `use_vault: true` and
-   `secrets.VAULT_URL`. GitHub withholds secrets from `pull_request` runs
-   triggered by a fork, so the reusable workflow finds an empty Vault URL and
-   exits 1. It runs, and it goes red.
+1. **The seven `build-and-test.yml` checks now report.** That workflow used to
+   trigger on `push` only, so a fork contributor's push fired in their fork and
+   `lint`, `build`, and the five `e2e-*` checks never reported on this
+   repository's commit — required contexts pending forever. It now also triggers
+   on `pull_request`. None of those jobs reads a secret: the e2e suites pull
+   public images (`solace/solace-pubsub-standard`, `quay.io/keycloak/keycloak`),
+   take their broker credentials from committed `.env` files, and generate their
+   own self-signed TLS certs with `openssl`. A read-only `GITHUB_TOKEN` is enough.
+2. **FOSSA no longer goes red for a missing secret.** `ci-pr.yaml` passes
+   `use_vault: true` and `secrets.VAULT_URL`, and GitHub withholds secrets from a
+   fork-triggered `pull_request` run, so the reusable workflow used to find an
+   empty Vault URL and exit 1 on every external contribution. The `fossa_scan`
+   job is now skipped for fork pull requests, and the always-reporting `SCA gate`
+   job is the required context instead.
+3. **`pull_request_target` was not introduced**, and neither was a `workflow_run`
+   follow-up. Both would run untrusted code with an elevated token to buy a
+   pre-merge scan on a path that already requires a maintainer to approve the
+   workflow run and a code owner to approve the pull request.
 
-Nobody has ever opened a fork pull request against this repository, so nothing
-below is observed. `CHANGELOG updated` should be fine: `ci-pr.yaml` gives that job
-only `contents: read` and it reads no secrets. `Analyze (go)` appears to come from
-CodeQL default setup, which the Security Settings section asks you to confirm.
-Copilot review is inconsistent even on same-repo pull requests, so do not count on
-it. Verify `CHANGELOG updated`, `Analyze (go)`, and `FOSSA Scan / SCA Scan`
-against a real fork pull request before you treat any of them as a gate.
+**The residual gap, stated so nobody assumes otherwise.** A fork pull request gets
+no pre-merge FOSSA verdict. A contributor who adds a dependency with a licensing
+conflict or a critical/high vulnerability is caught by the full scan on push to
+`main`, which is detection after merge, not prevention before it. Two things close
+that gap and both are human: read `go.mod` and `go.sum` in any fork pull request
+that touches them, and treat a red FOSSA on `main` as a revert, not a backlog item.
+
+Also worth knowing: on a same-repo pull request FOSSA runs in diff mode, so a green
+`SCA gate` there is not a clean full scan either — see the diff-mode note above.
+
+Nobody has ever opened a fork pull request against this repository, so none of the
+above is observed on a real external contribution. `CHANGELOG updated` should be
+fine: `ci-pr.yaml` gives that job only `contents: read` and it reads no secrets.
+`Analyze (go)` appears to come from CodeQL default setup, which the Security
+Settings section asks you to confirm. Copilot review is inconsistent even on
+same-repo pull requests, so do not count on it. Verify `SCA gate`,
+`CHANGELOG updated`, `Analyze (go)`, and the `lint` job's annotation behavior on a
+read-only token against a real fork pull request before treating any of them as a
+gate.
 
 **A third problem, and this one we create deliberately.** The GitHub Actions
 Permissions section below tells you to require approval for all outside
@@ -288,9 +330,11 @@ collaborators. That holds the entire workflow run, not just one job, until a
 maintainer approves it.
 
 The consequence, in order: an external contributor opens their first pull request,
-and **no checks run at all**. Not `FOSSA Scan / SCA Scan`, not `CHANGELOG updated`,
-not the seven that were already broken. Every required context sits pending and the
-pull request reads as stuck rather than as rejected or passing.
+and **no checks run at all**. Not `SCA gate`, not `CHANGELOG updated`, not the seven
+from `build-and-test.yml`. Every required context sits pending and the pull request
+reads as stuck rather than as rejected or passing. This is independent of the
+SOL-152411 fix: that made the checks *capable* of reporting on a fork pull request,
+and this setting decides *when* they are allowed to start.
 
 That is expected, not broken. Maintainers need to know it, or the first community
 contribution gets triaged as a CI outage. Two things follow:
@@ -303,8 +347,10 @@ This also constrains the required-check list. Every context you require is a
 context that reports only after a human approves the run, so requiring more of
 them lengthens the stall rather than tightening the gate.
 
-Until the CI fix lands, merge community contributions by pushing the branch into
-this repository yourself.
+Copying a community branch into this repository to test it is no longer necessary,
+and is now the worse option: a same-repo branch is a trusted context, so doing it
+runs the contributor's code with this repository's secrets. Approve the fork run
+instead.
 
 ---
 
@@ -373,9 +419,11 @@ writing; re-check, do not assume.
 - ✅ All secrets removed from git history (`git log --all -S "password"`)
 - ✅ `.gitignore` properly configured (`.env`, `broker-config.yaml`)
 - ✅ No sensitive data in issues or PRs
-- ⬜ **Required status checks corrected** per the Branch Protection section above,
-  including the `FOSSA Scan / SCA Scan` swap. The ruleset still holds the old
-  list.
+- ⬜ **Required status checks corrected** per the Branch Protection section above.
+  The ruleset still holds the old list. The supply-chain context to register is
+  `SCA gate` — not `FOSSA Scan`, which enforces nothing, and not
+  `FOSSA Scan / SCA Scan`, which never reports on a fork pull request and would
+  leave every external contribution pending.
 - ⬜ **"Allow GitHub Actions to create and approve pull requests" turned off.**
   Still on.
 - ⬜ **Fork pull request workflows set to require approval for all outside

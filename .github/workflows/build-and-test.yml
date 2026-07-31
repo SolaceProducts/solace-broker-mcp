@@ -1,12 +1,44 @@
 name: Build and Test
 
+# WHY `push` IS SCOPED TO main AND `pull_request` CARRIES FEATURE BRANCHES
+#
+# These seven jobs are required status checks. A check that never reports on a
+# pull request leaves the required context pending forever, which is how a fork
+# contribution used to become unmergeable: `push` fires in the contributor's
+# fork, never against this repository's commit.
+#
+# `pull_request` fixes that, but keeping `push: '**'` alongside it would run
+# every check twice on same-repo pull requests — including five Dockerized e2e
+# suites. The alternative considered was keeping `push: '**'` and gating each job
+# on `github.event_name == 'pull_request' || github.ref_name == <default>`. That
+# is strictly worse: it still cannot run CI for a branch with no pull request
+# (the condition is false there), and it adds an all-skipped workflow run to
+# every branch push. Deciding whether a push has an open pull request needs an
+# API call, so no declarative trigger preserves pre-pull-request branch CI.
+#
+# The cost, stated plainly: pushing a feature branch no longer runs CI on its
+# own. Open the pull request — a draft is enough, `opened` and `synchronize` both
+# fire for drafts — and every check runs.
+#
+# `workflow_call` stays because release.yml calls this workflow on a `v*` tag
+# push. A `push` filter that names `branches` never matches a tag, so the
+# `tags-ignore: ['v*']` that used to sit here was already dead config and is
+# gone rather than left to imply it does something.
 on:
   push:
     branches:
-      - '**'
-    tags-ignore:
-      - 'v*'
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
   workflow_call:
+
+# Cancel superseded pull-request runs, never superseded pushes to main: every
+# commit on main must keep its own FOSSA verdict and e2e result. `github.ref` is
+# the fallback for the push and `workflow_call` (tag) paths, where
+# `pull_request.number` is empty.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Minimal token permissions — read-only access to repo contents.
 # golangci-lint-action uses checks: write to post inline annotations on PRs.

@@ -19,8 +19,22 @@ permissions:
   statuses: write
 
 jobs:
+  # Skipped for fork pull requests, and it has to be. GitHub withholds repository
+  # secrets from a `pull_request` run triggered by a fork, so `secrets.VAULT_URL`
+  # arrives empty and the shared workflow exits 1 on its own input validation —
+  # red on every external contribution, for a secret the contributor cannot have.
+  #
+  # The two ways to scan a fork's code with real credentials both run untrusted
+  # code with an elevated token: `pull_request_target`, and a `workflow_run`
+  # follow-up that checks out the head ref. Neither is worth a pre-merge scan on a
+  # path that already needs a maintainer to approve the workflow run and a code
+  # owner to approve the pull request. The backstop is the full FOSSA scan on push
+  # to `main` in build-and-test.yml, plus a reviewer reading `go.mod`.
+  #
+  # Do not make this the required status check — see `sca_gate` below.
   fossa_scan:
     name: FOSSA Scan
+    if: github.event.pull_request.head.repo.full_name == github.repository
     uses: SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml@fc521b087f780457f92d4cb46038184e92ad2fbc # pinned 2026-05-12
     with:
       use_vault: true
@@ -28,6 +42,54 @@ jobs:
     secrets:
       # Vault address is injected from an org/repo secret, not committed to the repo.
       VAULT_URL: ${{ secrets.VAULT_URL }}
+
+  # THIS is the required status check for supply-chain scanning, not
+  # `FOSSA Scan / SCA Scan`.
+  #
+  # A skipped *plain* job reports `skipped`, which GitHub counts as a passing
+  # required check. A skipped *reusable-workflow caller* is different: the inner
+  # job never runs, so the `FOSSA Scan / SCA Scan` context is never created at
+  # all. Requiring a context that is never created leaves it pending forever and
+  # the pull request unmergeable — trading a red check for a stuck one. Observed
+  # on PR #232, where the already-gated caller in build-and-test.yml produced
+  # bare `FOSSA Scan` as `skipped` and no ` / SCA Scan` context.
+  #
+  # This job always reports, so it is safe to require. It does not blindly trust
+  # `skipped`: it re-derives the fork condition itself and fails a skip it cannot
+  # account for. Without that, narrowing `fossa_scan`'s `if` later — or an
+  # upstream change that skips the caller for some other reason — would silently
+  # turn the gate off on same-repo pull requests, which is the exact trap the
+  # `FOSSA Scan` warning in ADMIN_SETUP.md documents.
+  sca_gate:
+    name: SCA gate
+    needs: fossa_scan
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require a FOSSA verdict, or a reason there cannot be one
+        env:
+          SCAN_RESULT: ${{ needs.fossa_scan.result }}
+          IS_FORK_PR: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          set -euo pipefail
+          case "$SCAN_RESULT" in
+            success)
+              echo "FOSSA scan passed."
+              ;;
+            skipped)
+              if [ "$IS_FORK_PR" != "true" ]; then
+                echo "::error::FOSSA scan was skipped on a same-repo pull request, where it should always run. Treating an unexplained skip as a failure rather than passing the gate. Check the 'if' condition on the fossa_scan job."
+                exit 1
+              fi
+              echo "::notice::FOSSA scan skipped: a fork pull request gets no repository secrets, so the Vault-backed scan cannot run. Supply-chain review for this pull request is the full scan on push to main plus a reviewer reading go.mod. See .github/ADMIN_SETUP.md."
+              ;;
+            *)
+              echo "::error::FOSSA scan reported '${SCAN_RESULT}'."
+              exit 1
+              ;;
+          esac
 
   # The DCO gate itself runs from .github/workflows/dco.yaml on
   # pull_request_target, which means it executes the *base ref's* script — so a
