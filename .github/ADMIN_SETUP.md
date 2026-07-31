@@ -453,6 +453,41 @@ writing; re-check, do not assume.
   `SCA gate` — not `FOSSA Scan`, which enforces nothing, and not
   `FOSSA Scan / SCA Scan`, which never reports on a fork pull request and would
   leave every external contribution pending.
+
+  > **Precondition: fix FOSSA's Vault authentication before requiring `SCA gate`.**
+  >
+  > FOSSA is currently failing on every pull request in this repository, for a
+  > reason unrelated to the checks themselves. The Vault OIDC role
+  > `cicd-workflows-secret-read-role` binds on the `repository` claim, and the
+  > move to the `SolaceProducts` org changed that claim, so the token exchange is
+  > rejected before any scan starts:
+  >
+  > ```
+  > failed to retrieve vault token. code: ERR_NON_2XX_3XX_RESPONSE,
+  > message: Response code 400 (Bad Request), vaultResponse:
+  > {"errors":["error validating claims: claim \"repository\" does not match
+  > any associated bound claim values"]}
+  > ```
+  >
+  > Every run from 2026-07-31 fails identically; runs from 2026-07-30 were green
+  > and the pinned shared-workflow SHA has not changed. Branch protection holds
+  > zero required contexts today, so nothing is blocked yet. Register `SCA gate`
+  > before the Vault role is fixed and every pull request in the repository
+  > becomes unmergeable, because `sca_gate` correctly fails a `failure` result.
+  >
+  > Fix is Vault-side: add `SolaceProducts/solace-broker-mcp` to the role's bound
+  > claims. Two related items to clear at the same time, neither of which is the
+  > cause of the failure above:
+  > - `.github/workflow-config.json` still carries
+  >   `project_id: SolaceDev_solace-broker-mcp`, which will file scans under the
+  >   old org name once authentication works.
+  > - That file has no `secrets.vault.url`, so the URL comes from the `VAULT_URL`
+  >   repository secret. That fallback works today (the run logs
+  >   `✅ Vault configuration validated`), so setting the config key is tidiness,
+  >   not a fix.
+  >
+  > `sca_gate` failing here is the gate working. Leaving
+  > `FOSSA Scan / SCA Scan` unrequired is what had been hiding this.
 - ⬜ **"Allow GitHub Actions to create and approve pull requests" turned off.**
   Still on.
 - ⬜ **Fork pull request workflows set to require approval for all outside
