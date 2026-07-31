@@ -23,7 +23,7 @@ This project adheres to the [Contributor Covenant Code of Conduct](CODE_OF_CONDU
 
 ### Reporting Bugs
 
-Before creating a bug report, please check the [existing issues](https://github.com/SolaceDev/solace-broker-mcp/issues) to avoid duplicates.
+Before creating a bug report, please check the [existing issues](https://github.com/SolaceProducts/solace-broker-mcp/issues) to avoid duplicates.
 
 When reporting a bug, please include:
 
@@ -46,7 +46,7 @@ When reporting a bug, please include:
 
 We welcome feature requests! Before submitting:
 
-1. Check [existing issues](https://github.com/SolaceDev/solace-broker-mcp/issues?q=label%3Aenhancement) and [discussions](https://github.com/SolaceDev/solace-broker-mcp/discussions) for similar ideas
+1. Check [existing issues](https://github.com/SolaceProducts/solace-broker-mcp/issues?q=label%3Aenhancement) and [discussions](https://github.com/SolaceProducts/solace-broker-mcp/discussions) for similar ideas
 2. Consider if the feature aligns with the project's goals (SEMP API management via MCP)
 3. Think about how it would benefit the broader community
 
@@ -355,8 +355,8 @@ retitled or edited. That is normal and nothing for you to fix.
 
 ## Questions?
 
-- **General questions:** Start a [GitHub Discussion](https://github.com/SolaceDev/solace-broker-mcp/discussions)
-- **Bugs or features:** Open a [GitHub Issue](https://github.com/SolaceDev/solace-broker-mcp/issues/new/choose)
+- **General questions:** Start a [GitHub Discussion](https://github.com/SolaceProducts/solace-broker-mcp/discussions)
+- **Bugs or features:** Open a [GitHub Issue](https://github.com/SolaceProducts/solace-broker-mcp/issues/new/choose)
 - **Security issues:** Email [andrea.ross@solace.com](mailto:andrea.ross@solace.com)
 - **Community chat:** Visit [Solace Community](https://solace.community/)
 

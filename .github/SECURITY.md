@@ -62,7 +62,7 @@ When you report a security vulnerability, here's what you can expect from us:
 
 Security fixes are released as:
 - **Patch versions** (e.g., v0.1.1 → v0.1.2)
-- **GitHub Security Advisories** at https://github.com/SolaceDev/solace-broker-mcp/security/advisories
+- **GitHub Security Advisories** at https://github.com/SolaceProducts/solace-broker-mcp/security/advisories
 - **CHANGELOG** entries with `[SECURITY]` prefix
 
 Subscribe to releases on GitHub to be notified of security updates.
@@ -196,4 +196,4 @@ Format:
 
 If you have questions about this security policy, contact [andrea.ross@solace.com](mailto:andrea.ross@solace.com).
 
-For non-security bugs and feature requests, please use [GitHub Issues](https://github.com/SolaceDev/solace-broker-mcp/issues).
+For non-security bugs and feature requests, please use [GitHub Issues](https://github.com/SolaceProducts/solace-broker-mcp/issues).
