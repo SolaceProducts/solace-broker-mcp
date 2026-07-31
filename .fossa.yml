@@ -1,8 +1,8 @@
 version: 3
 
 project:
-  locator: SolaceDev_solace-broker-mcp
-  id: SolaceDev_solace-broker-mcp
+  locator: SolaceProducts_solace-broker-mcp
+  id: SolaceProducts_solace-broker-mcp
   name: solace-broker-mcp
   teams: []
   labels:
