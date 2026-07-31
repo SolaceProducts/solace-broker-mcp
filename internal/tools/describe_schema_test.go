@@ -21,7 +21,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2/specs"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
