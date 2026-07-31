@@ -80,7 +80,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME}"
           go build \
-            -ldflags "-s -w -X github.com/SolaceDev/solace-broker-mcp/internal/version.version=${VERSION}" \
+            -ldflags "-s -w -X github.com/SolaceProducts/solace-broker-mcp/internal/version.version=${VERSION}" \
             -o solace-broker-mcp \
             ./cmd/server
 
