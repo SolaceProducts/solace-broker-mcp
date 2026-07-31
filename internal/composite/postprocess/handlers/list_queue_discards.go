@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/postprocess"
 )
 
 // listQueueDiscardsStepID is the step ID this handler keys into. Kept const so

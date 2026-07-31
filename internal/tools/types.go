@@ -27,8 +27,8 @@ package tools
 import (
 	"context"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv1"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 )
 
 // ToolContext holds request-scoped state for tool execution. The resolved SEMP

@@ -27,10 +27,10 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess"
-	"github.com/SolaceDev/solace-broker-mcp/internal/safego"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/postprocess"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/safego"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 )
 
 // ExecuteContext holds state during composite tool execution. Each tool

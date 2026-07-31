@@ -17,7 +17,7 @@ package config
 import (
 	"os"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
 )
 
 // ObservabilityConfig holds the feature flags and tunables for the

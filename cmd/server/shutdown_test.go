@@ -27,7 +27,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/observability/health"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 )
 
 // TestDrainDelayForSignal proves the SIGINT-vs-SIGTERM drain policy (reviewer

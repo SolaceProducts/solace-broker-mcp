@@ -24,8 +24,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/observability/health"
-	"github.com/SolaceDev/solace-broker-mcp/internal/version"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
