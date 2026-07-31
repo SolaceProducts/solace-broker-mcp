@@ -20,7 +20,7 @@ import (
 	"encoding/hex"
 	"net/http"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
 )
 
 // randRead is the entropy source for span-ids. It is a package var (not a direct

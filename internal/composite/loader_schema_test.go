@@ -6,8 +6,8 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess"
-	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess/postprocesstest"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/postprocess"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/postprocess/postprocesstest"
 )
 
 func TestLoadTools_Valid(t *testing.T) {

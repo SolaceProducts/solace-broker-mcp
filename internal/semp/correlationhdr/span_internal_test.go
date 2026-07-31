@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
 )
 
 // newReqInternal builds a throwaway request to receive headers; the URL is

@@ -4,7 +4,7 @@ package version
 
 // version is set at build time via:
 //
-//	go build -ldflags "-X github.com/SolaceDev/solace-broker-mcp/internal/version.version=X.Y.Z" ./cmd/server
+//	go build -ldflags "-X github.com/SolaceProducts/solace-broker-mcp/internal/version.version=X.Y.Z" ./cmd/server
 var version = "dev"
 
 // Version returns the server version string.

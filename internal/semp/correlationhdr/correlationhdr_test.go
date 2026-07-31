@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/correlationhdr"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/correlationhdr"
 )
 
 // newReq builds a throwaway request to receive headers; the URL is irrelevant.

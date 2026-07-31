@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
 )
 
 const maxResponseBody = 1 << 20 // 1 MiB

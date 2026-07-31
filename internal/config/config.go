@@ -34,8 +34,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/banner"
-	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/banner"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
 	"gopkg.in/yaml.v3"
 )
 

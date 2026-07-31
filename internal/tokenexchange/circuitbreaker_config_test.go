@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 )
 
 // TestDefaultCircuitBreakerConfig_Values pins the shipped defaults. A change

@@ -1,7 +1,7 @@
 package resilience
 
 import (
-	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
 )
 
 // Semaphore bounds in-flight SEMP requests for a single broker. One instance

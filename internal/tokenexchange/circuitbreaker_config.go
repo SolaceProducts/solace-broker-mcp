@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 )
 
 // CircuitBreakerConfig is the breaker's tuning surface. The breaker is always

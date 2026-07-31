@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	internalauth "github.com/SolaceDev/solace-broker-mcp/internal/auth"
-	"github.com/SolaceDev/solace-broker-mcp/internal/tokenexchange"
+	internalauth "github.com/SolaceProducts/solace-broker-mcp/internal/auth"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
 )
 
 // tokenExchanger is the capability OAuthAuthenticator needs from the token
