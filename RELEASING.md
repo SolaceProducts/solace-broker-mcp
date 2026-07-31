@@ -38,8 +38,8 @@ Moving pointers let consumers track a stream instead of a fixed version:
 
 **Publish gate** — automated. Clearing it makes the build publishable as a pre-release:
 
-- CI green — lint, build, `go vet`, `go test -race`, three E2E suites (basic MCP, OAuth, monitoring); runs on every branch push **[Implemented]**
-- Security scans clean — FOSSA SCA (dependencies, licenses); runs on PRs, default-branch pushes, and release tags **[Implemented]**
+- CI green — lint, build, `go vet`, `go test -race`, five E2E suites (basic MCP, OAuth, monitoring, management, action); runs on pull requests and on pushes to `main`, not on every branch push **[Implemented]**
+- Security scans clean — FOSSA SCA (dependencies, licenses); runs on same-repo pull requests, default-branch pushes, and release tags. A fork pull request gets no scan, because GitHub withholds the credential — see `.github/ADMIN_SETUP.md` **[Implemented]**
 - No open P0/P1 bugs **[Planned]**
 - Eval harness passes **[Planned]**
 - Coverage threshold met **[Planned]**

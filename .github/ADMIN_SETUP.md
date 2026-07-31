@@ -223,8 +223,11 @@ you rely on it:
   **fails** a skip it cannot account for, so narrowing `fossa_scan`'s `if` later
   cannot quietly switch the gate off on same-repo pull requests.
 
-Reusable-workflow jobs always surface as `<caller job name> / <inner job name>`,
-never as the caller name alone.
+The naming rule behind all three bullets: a reusable-workflow caller that **runs**
+surfaces as `<caller job name> / <inner job name>`, never as the caller name alone.
+A caller that is **skipped** does the opposite — its inner job never runs, so the
+only context produced is the bare caller name, reported as `skipped`. That
+asymmetry is why one FOSSA entry enforces nothing and the other deadlocks.
 
 ⚠️ **Both DCO rows are required, and dropping either removes a control.** DCO
 stands in for a contributor licence agreement, so the repository is not covered
@@ -281,6 +284,11 @@ Four more notes on the list:
 - Do **not** require `run-pull-request-checks / *`. Those come from
   `transition_on_merge.yaml`, which runs on `pull_request: closed`, and the check
   name varies with the Jira key (e.g. `... Vault and JIRA Operations (SOL-152328)`).
+  That workflow is now skipped for fork pull requests: it authenticates to Vault by
+  OIDC, which a fork run cannot do, so it could only ever go red — on an
+  already-merged external contribution, for a credential the contributor was never
+  eligible to hold. It also has nothing to transition, since an external
+  contribution has no SOL ticket.
 
 **How a fork pull request gets a verdict.** SOL-152411 fixed the two problems that
 made this impossible. What it changed, and what it deliberately did not:
@@ -307,9 +315,30 @@ made this impossible. What it changed, and what it deliberately did not:
 **The residual gap, stated so nobody assumes otherwise.** A fork pull request gets
 no pre-merge FOSSA verdict. A contributor who adds a dependency with a licensing
 conflict or a critical/high vulnerability is caught by the full scan on push to
-`main`, which is detection after merge, not prevention before it. Two things close
-that gap and both are human: read `go.mod` and `go.sum` in any fork pull request
-that touches them, and treat a red FOSSA on `main` as a revert, not a backlog item.
+`main`, which is detection after merge, not prevention before it. Until that
+changes, two human controls stand in, and both need someone to actually do them:
+
+- **Read `go.mod` and `go.sum`** in any fork pull request that touches them.
+- **Read the `.github/` diff too.** Moving to `pull_request` means a fork pull
+  request supplies the workflow definitions that run for it. It cannot reach a
+  secret and its token is read-only, so this is not a credential-theft path, but a
+  pull request can still weaken its own checks — including `SCA gate`, which runs
+  from the pull request's own ref. `DCO sign-off` is the exception, deliberately:
+  `dco.yaml` runs on `pull_request_target` so a pull request cannot edit the copy
+  that judges it.
+- **A red FOSSA on `main` needs an owner.** Nothing routes it today: the failure
+  lands on an already-merged commit, and no alert or assignee follows from it.
+  Whoever merges a dependency-touching fork pull request should watch the next
+  `main` run themselves.
+
+**Worth closing properly.** The vulnerability half of this gap does not actually
+need a credential. `govulncheck` (or `osv-scanner` over `go.mod`) needs no secret,
+no Vault, and no elevated token, so it would run fine as an eighth job in
+`build-and-test.yml` on a fork pull request — restoring *prevention* for
+critical/high vulnerabilities instead of leaving both halves to a human. Licensing
+is the harder half; `go-licenses` covers some of it. This was left out of
+SOL-152411 to keep that change to the trigger and gate problem, not because it is
+unavailable. It is the obvious follow-up.
 
 Also worth knowing: on a same-repo pull request FOSSA runs in diff mode, so a green
 `SCA gate` there is not a clean full scan either — see the diff-mode note above.

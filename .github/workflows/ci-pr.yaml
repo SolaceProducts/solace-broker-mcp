@@ -60,6 +60,16 @@ jobs:
   # upstream change that skips the caller for some other reason — would silently
   # turn the gate off on same-repo pull requests, which is the exact trap the
   # `FOSSA Scan` warning in ADMIN_SETUP.md documents.
+  #
+  # What that does NOT buy, stated so nobody reads more into it: this workflow
+  # runs on `pull_request`, so it runs from the pull request's own ref. A pull
+  # request that edits this job — `exit 0`, or dropping `needs: fossa_scan` —
+  # still reports `SCA gate` as green. That is the tamper hole `dco.yaml` avoids
+  # by living on `pull_request_target`, and it is not worth the same treatment
+  # here: on a fork pull request the gate passes anyway, so tampering gains
+  # nothing, which leaves only a collaborator editing it on a same-repo pull
+  # request. The control for that is review, not the trigger. Read `.github/`
+  # diffs.
   sca_gate:
     name: SCA gate
     needs: fossa_scan

@@ -9,5 +9,21 @@ permissions:
   id-token: write
 
 jobs:
+  # Same-repo pull requests only, for two reasons that point the same way.
+  #
+  # Mechanically: the shared workflow authenticates to Vault via OIDC, and GitHub
+  # gives a fork-triggered `pull_request` run a read-only token, no repository
+  # secrets, and no `id-token: write` however this file asks for it. On a fork
+  # pull request it can only fail, and it fails *after* close or merge — so the
+  # first community contributor would watch a red X appear on their just-merged
+  # contribution, for a credential they were never eligible to hold.
+  #
+  # Semantically: this transitions the Jira ticket named in the branch or title.
+  # An external contribution has no SOL ticket to transition, so there is nothing
+  # for it to do even if it could authenticate.
+  #
+  # These checks must not be required — see .github/ADMIN_SETUP.md, which also
+  # explains why the context name is unstable.
   run-pull-request-checks:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     uses: SolaceDev/re-workflows/.github/workflows/transition-pr-on-merge.yaml@release/v3
