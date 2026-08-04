@@ -65,15 +65,30 @@ func TestWriteToolObjectNamesHaveMinLength(t *testing.T) {
 			continue
 		}
 		for _, p := range params {
-			if got := props[p].MinLength; got == nil || *got != 1 {
-				t.Errorf("%s.%s minLength = %v, want 1", name, p, got)
+			prop, ok := props[p]
+			if !ok {
+				t.Errorf("%s.%s not in schema", name, p)
+				continue
+			}
+			if prop.MinLength == nil || *prop.MinLength != 1 {
+				t.Errorf("%s.%s minLength = %v, want 1", name, p, prop.MinLength)
 			}
 		}
 	}
 
 	for name, param := range wantNoMinLength {
-		if got := schemas[name][param].MinLength; got != nil {
-			t.Errorf("%s.%s minLength = %v, want unset", name, param, *got)
+		props, ok := schemas[name]
+		if !ok {
+			t.Errorf("write tool %q not registered", name)
+			continue
+		}
+		prop, ok := props[param]
+		if !ok {
+			t.Errorf("%s.%s not in schema", name, param)
+			continue
+		}
+		if prop.MinLength != nil {
+			t.Errorf("%s.%s minLength = %d, want unset", name, param, *prop.MinLength)
 		}
 	}
 }

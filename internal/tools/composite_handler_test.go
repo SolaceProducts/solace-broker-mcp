@@ -285,16 +285,23 @@ func TestCompositeToolHandler_SchemaMinLength(t *testing.T) {
 	if !ok {
 		t.Fatal("expected properties map")
 	}
+	prop := func(name string) map[string]any {
+		p, ok := props[name].(map[string]any)
+		if !ok {
+			t.Fatalf("property %q missing or not an object", name)
+		}
+		return p
+	}
 
 	for _, name := range []string{"msgVpnName", "queueName"} {
-		if got := props[name].(map[string]any)["minLength"]; got != 1 {
+		if got := prop(name)["minLength"]; got != 1 {
 			t.Errorf("%s minLength = %v, want 1", name, got)
 		}
 	}
-	if _, ok := props["filterText"].(map[string]any)["minLength"]; ok {
+	if _, ok := prop("filterText")["minLength"]; ok {
 		t.Error("optional string filterText should not have minLength")
 	}
-	if _, ok := props["maxResults"].(map[string]any)["minLength"]; ok {
+	if _, ok := prop("maxResults")["minLength"]; ok {
 		t.Error("required integer maxResults should not have minLength")
 	}
 }

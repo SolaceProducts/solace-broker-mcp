@@ -84,9 +84,10 @@ func buildCompositeInputSchema(params []composite.ParameterDef) map[string]any {
 		if p.Description != "" {
 			prop["description"] = p.Description
 		}
-		// A required string is an object identifier (VPN/queue/client name);
-		// empty is never valid, so reject it at schema validation rather than
-		// let it template into a malformed SEMPv2 URL.
+		// Empty is never valid for a required string — in this catalog they are
+		// all object identifiers (VPN/queue/client names). Reject it at schema
+		// validation rather than let it reach the broker, e.g. templated into a
+		// malformed SEMPv2 path.
 		if p.Type == "string" && p.Required {
 			prop["minLength"] = 1
 		}
