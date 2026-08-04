@@ -852,6 +852,10 @@ F_LOWPRIO_TOPIC="e2e-monitoring/lowprio/topic"
 F_LOWPRIO_LIMIT=5     # rejectLowPriorityMsgLimit; must be exceeded to flip state
 F_LOWPRIO_RATE=50     # msg/s; 50/s × 2s = 100 msgs (well past the limit)
 F_LOWPRIO_DURATION="2s"
+# Counter jq expression used by e2e-llm/read-list-queue-discards to poll the
+# fixture's readiness. Kept next to F_LOWPRIO_QUEUE so a broker-side field
+# rename or a fixture-name change only requires editing this one block.
+F_LOWPRIO_DISCARD_JQ='.data.lowPriorityMsgCongestionDiscardedMsgCount // 0'
 
 # Provisions F_LOWPRIO_QUEUE and runs a one-shot broker-driver publisher with
 # --priority=0 --duration=2s. The queue's rejectLowPriorityMsgLimit gates the
@@ -906,6 +910,10 @@ F7_SPOOL_TOPIC="e2e-monitoring/discards/spool"
 F7_SPOOL_COUNT=8000   # × 256 B ≈ 2 MB; overflows the 1 MB spool quota
 F7_SPOOL_SIZE=256
 F7_SPOOL_MAX_MB=1     # maxMsgSpoolUsage in MB
+# Counter jq expression shared by verify-fixtures.sh (AC 8 assertion) and
+# e2e-llm/read-list-queue-discards (readiness poll). Single source of truth
+# for the SEMP field name.
+F7_SPOOL_DISCARD_JQ='.data.maxMsgSpoolUsageExceededDiscardedMsgCount // 0'
 
 # Provisions test-queue-discards-spool with a 1 MB spool cap and
 # egressEnabled=false, then runs a one-shot publish-batch that fills ~2 MB
@@ -949,6 +957,14 @@ F7_TTL_COUNT=200     # small batch; messages expire by TTL, not spool
 F7_TTL_SIZE=256
 F7_TTL_MAX_TTL_S=1   # maxTtl in seconds
 F7_TTL_WAIT_S=2      # sleep after publish to let the 1 s TTL expire
+# TTL discards land on one of three counters depending on DMQ resolution;
+# sum all three so "expiry happened" is what we assert on. The per-field
+# constants are also consumed individually by verify-fixtures.sh's AC 9
+# diagnostic so a broker-side rename flips assertion and diagnostic together.
+F7_TTL_DISCARDED_JQ='.data.maxTtlExpiredDiscardedMsgCount // 0'
+F7_TTL_TO_DMQ_JQ='.data.maxTtlExpiredToDmqMsgCount // 0'
+F7_TTL_TO_DMQ_FAILED_JQ='.data.maxTtlExpiredToDmqFailedMsgCount // 0'
+F7_TTL_DISCARD_JQ="($F7_TTL_DISCARDED_JQ) + ($F7_TTL_TO_DMQ_JQ) + ($F7_TTL_TO_DMQ_FAILED_JQ)"
 
 # Provisions test-queue-discards-ttl with a 1 s TTL and no consumer, publishes
 # a one-shot batch with --dmq-eligible=false so the broker increments
