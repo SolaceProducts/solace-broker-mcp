@@ -51,12 +51,12 @@
     "systemMemoryGiB": 32
   },
   "memory": {
-    "physicalMemoryUsagePercent": 31.9957,
+    "physicalMemoryUsagePercent": 32.0222,
     "subscriptionMemoryUsagePercent": 0.0434041
   },
   "spool": {
     "messageSpoolInfo": {
-      "activeDiskPartitionUsage": "67.96",
+      "activeDiskPartitionUsage": "67.89",
       "configStatus": "Enabled (Primary)",
       "datapathUp": "true",
       "defragEstFragmentationPercentage": 0,
@@ -77,12 +77,12 @@
     "lastRestartReason": "Unknown",
     "maxConnections": 9000,
     "maxQueueMessages": 10000,
-    "systemUptimeSeconds": 1150317
+    "systemUptimeSeconds": 1838478
   },
   "version": {
     "description": "Solace Event Broker 3560 Version 100.0main.0.7305",
     "uptime": {
-      "totalSecs": 1150317
+      "totalSecs": 1838478
     }
   }
 }

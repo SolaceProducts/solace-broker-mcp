@@ -33,6 +33,14 @@ regen-golden.sh   re-capture fidelity/golden/*.json from the real broker
 
 Artifacts land in `bin/runs/<timestamp>[-<tag>]/`.
 
+## Ports
+
+| port | who | notes |
+|---|---|---|
+| `9090` | MCP server | health at `/health`; `run.sh` refuses to start if occupied |
+| `18081..18081+N-1` | mock-semp broker ports | one per fake broker; default N=50 → `18081..18130`. In split-host mode Box A binds `0.0.0.0` so Box B can reach these over the LAN |
+| `19000` | mock-semp config endpoint | `POST /_mock/config` for per-port latency / error injection. Bound to localhost by default (separate from `-listen-addr`) so opening broker ports to the LAN doesn't also expose the injection knob |
+
 ## Quick start (single host)
 
 ```
@@ -79,6 +87,22 @@ listening. Once Box A is past the mock startup and waiting for MCP, bring up
 Box B; `run-loadgen.sh` then waits up to 5 min for MCP to appear before
 firing loadgen.
 
+`run-loadgen.sh` env knobs (full contract in the script header):
+
+| var | default | note |
+|---|---|---|
+| `CLIENTS` | 200 | `loadgen -clients` — MCP sessions in parallel |
+| `DURATION` | 60s | `loadgen -duration` |
+| `TOOLS` | `get-broker-status,list-queues` | `loadgen -tools` — subset of tools the mock can answer |
+| `BROKERS` | 50 | `loadgen -broker-count` |
+| `TOTAL_RPS` | 0 | `loadgen -total-rps` (0 = unlimited); paces aggregate req/s to break the release-barrier convoy |
+| `LATENCY_MS` | 0 | `mock-semp -default-latency-ms`; >0 piles requests on MCP's per-broker semaphore |
+| `RUN_TAG` | `${CLIENTS}c` | tag appended to the runs dir |
+| `NO_MOCK` | 0 | `1` skips starting `mock-semp` (already running elsewhere); error injection is not auto-armed — POST `/_mock/config` yourself |
+| `ERROR_RATE` | 0 | probability [0,1] a broker response is injected as an error |
+| `ERROR_COUNT` | 0 | cap on injected errors per broker port (0 = unlimited) |
+| `ERROR_STATUSES` | `503:70,429:20,500:10` | weighted status pool; only 429/500/502/503/504 accepted |
+
 ## Fidelity gate
 
 `fidelity` invokes each tool over MCP and deep-equals the result against
@@ -87,12 +111,27 @@ firing loadgen.
 Regenerate goldens after a legitimate tool-shape change:
 
 ```
-BROKER_USERNAME=... BROKER_PASSWORD=... ./regen-golden.sh
+CONFIG_FILE=./broker-config.real.yaml ./regen-golden.sh
 ```
 
-This starts MCP against the real broker (`broker-config.real.yaml` or your
-`broker-config.yaml`), captures fresh JSON, then tears down. Review the diff
-before committing.
+Overrides: `BROKER_ALIAS` (default `my-broker`), `VPN` (default `default`).
+For example, to capture from a non-default VPN:
+
+```
+VPN=my-vpn CONFIG_FILE=./broker-config.real.yaml ./regen-golden.sh
+```
+
+Credentials come from the repo-root `.env` (sourced by the script) via
+`${BROKER_USERNAME}`/`${BROKER_PASSWORD}` expansion in the config; override
+inline if `.env` is absent:
+
+```
+BROKER_USERNAME=... BROKER_PASSWORD=... \
+  CONFIG_FILE=./broker-config.real.yaml ./regen-golden.sh
+```
+
+This starts MCP against the real broker, captures fresh JSON, then tears
+down. Review the diff before committing.
 
 ## Injecting errors
 

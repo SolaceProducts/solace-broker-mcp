@@ -11,7 +11,8 @@ repo_root="$(cd "$here/../.." && pwd)"
 bin="$here/bin"
 config="${CONFIG_FILE:-$repo_root/broker-config.yaml}"
 broker_alias="${BROKER_ALIAS:-my-broker}"
-runs="$here/runs/$(date +%Y%m%d-%H%M%S)-regen"
+vpn="${VPN:-default}"
+runs="$bin/runs/$(date +%Y%m%d-%H%M%S)-regen"
 mkdir -p "$runs"
 
 # Resolve config path: try as-given, then relative to CWD, then performance dir,
@@ -97,8 +98,8 @@ wait_for_http "http://localhost:9090/health" mcp-server
 echo "== 2. broker aliases MCP loaded from $config"
 grep -E '^[[:space:]]{2}[A-Za-z0-9_-]+:$' "$config" | sed -E 's/^[[:space:]]+/    /; s/:$//'
 
-echo "== 3. fidelity -capture (alias=$broker_alias)"
-"$bin/fidelity" -mcp-url http://localhost:9090 -broker "$broker_alias" -vpn default \
+echo "== 3. fidelity -capture (alias=$broker_alias vpn=$vpn)"
+"$bin/fidelity" -mcp-url http://localhost:9090 -broker "$broker_alias" -vpn "$vpn" \
   -golden-dir "$here/fidelity/golden" -capture 2>&1 | tee "$runs/regen.log"
 
 echo "== goldens regenerated at $here/fidelity/golden"
