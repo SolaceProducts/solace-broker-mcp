@@ -126,7 +126,7 @@ wait_for_discard_fixtures() {
         local queue="$1" jq_expr="$2" v
         v=$(semp_curl --connect-timeout 3 --max-time 5 -sf \
             "$BROKER_URL/SEMP/v2/__private_monitor__/msgVpns/$BROKER_VPN/queues/$queue" 2>/dev/null \
-            | jq -r "$jq_expr" 2>/dev/null)
+            | jq -r "$jq_expr" 2>/dev/null || true)
         [ -n "$v" ] && [ "$v" != "null" ] && [ "$v" -gt 0 ] 2>/dev/null
     }
 
