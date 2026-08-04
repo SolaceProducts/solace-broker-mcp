@@ -146,13 +146,15 @@ Return the SEMPv2 schema slice for a given operation's request-body definition.
 Use this before invoking a `create-*` or `update-*` tool to enumerate every
 configurable attribute with types, defaults, enum values, and writability flags.
 No `broker` parameter — the response is derived from the embedded OpenAPI specs
-and does not contact any broker.
+and does not contact any broker. Scoped to the **config** and **action** SEMPv2
+APIs; the monitor API is read-only (GET-only, no request bodies) and is not
+indexed here — a `monitor/...` operation returns `unknown operation`.
 
 **Parameters:**
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `operation` | string | yes | SEMPv2 operation identifier in `<specType>/<operationId>` form, e.g. `config/createMsgVpnQueue`. Take the value from the target write tool's description. |
+| `operation` | string | yes | SEMPv2 operation identifier in `<specType>/<operationId>` form, e.g. `config/createMsgVpnQueue`. `specType` must be `config` or `action`. Take the value from the target write tool's description. |
 | `view` | string | no | `trimmed` (default) — compact per-attribute list. `raw` — full OpenAPI definition verbatim. |
 
 **Returns (`trimmed`):** `{ "operation", "method", "definition", "attributes": [...] }` where each attribute carries `name`, `type`, `description`, `enum`, `default`, `pattern`, `maxLength`, `minimum`, `maximum`, `writableOnCreate`, `writableOnUpdate`, and any applicable flags (`requiredForCreate`, `identifying`, `writeOnly`, `sensitive`, `deprecated`, `autoDisable`, `requiresDisable`). Object-typed attributes backed by a `$ref` carry a nested `properties` list instead of writability flags.

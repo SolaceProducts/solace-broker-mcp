@@ -74,6 +74,12 @@ func buildSempSchemaMap(fsys fs.FS) (*sempSchemaMap, error) {
 		if err != nil {
 			return nil, fmt.Errorf("spec file %q: %w", entry.Name(), err)
 		}
+		// Monitor operations are all GETs with no request bodies, so they have
+		// no configurable attributes to describe. Skip the spec entirely rather
+		// than indexing operations that would only ever return an empty result.
+		if specType == "monitor" {
+			continue
+		}
 		reg.specs[specType] = spec
 
 		paths, _ := spec["paths"].(map[string]any)
@@ -275,7 +281,12 @@ func RegisterDescribeSempSchema(server *mcp.Server, fsys fs.FS) error {
 	description := strings.TrimSpace(`
 Return the SEMPv2 schema slice for a given operation's request-body definition,
 so the caller can enumerate every configurable attribute (with types, defaults,
-enum values, and writability flags) before invoking a create or update tool.
+enum values, and writability flags) before invoking a create, update, or action
+tool.
+
+Scope: request-body definitions across the config and action SEMPv2 APIs. It
+does not describe response payloads, monitor-API objects, message/topic
+schemas, or SEMPv1.
 
 Use this to plan a write: call describe-semp-schema first with the operation the
 target write tool wraps (see the write tool's description for the operation
@@ -296,7 +307,7 @@ instead of writability flags) and 'raw' (the definition verbatim, larger).
 			"properties": map[string]any{
 				"operation": map[string]any{
 					"type":        "string",
-					"description": "The SEMPv2 operation identifier in the form '<specType>/<operationId>', e.g. 'config/createMsgVpnQueue'. Take the value from the description of the write tool you're planning to call.",
+					"description": "The SEMPv2 operation identifier in the form '<specType>/<operationId>', e.g. 'config/createMsgVpnQueue'. specType must be 'config' or 'action' — monitor operations are not indexed. Take the value from the description of the write tool you're planning to call.",
 				},
 				"view": map[string]any{
 					"type":        "string",

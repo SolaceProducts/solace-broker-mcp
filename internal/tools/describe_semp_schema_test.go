@@ -57,6 +57,25 @@ func TestSempSchemaMap_BuildsFromEmbeddedSpecs(t *testing.T) {
 	}
 }
 
+// The tool describes writable request bodies; the monitor API is all GETs with
+// no bodies. Loading it would just add empty entries and mislead agents into
+// thinking monitor operations are queryable here.
+func TestSempSchemaMap_ExcludesMonitorSpec(t *testing.T) {
+	t.Parallel()
+	reg, err := buildSempSchemaMap(specs.FS)
+	if err != nil {
+		t.Fatalf("buildSempSchemaMap: %v", err)
+	}
+	if _, ok := reg.specs["monitor"]; ok {
+		t.Errorf("monitor spec should not be loaded")
+	}
+	for key := range reg.ops {
+		if strings.HasPrefix(key, "monitor/") {
+			t.Errorf("monitor operation indexed: %q", key)
+		}
+	}
+}
+
 func TestSempSchemaMap_TrimmedView_CreateQueue(t *testing.T) {
 	t.Parallel()
 	reg, err := buildSempSchemaMap(specs.FS)
