@@ -334,9 +334,9 @@ verify_discard_spool_state() {
         return 1
     }
     local count
-    count=$(echo "$body" | jq -r '.data.maxMsgSpoolUsageExceededDiscardedMsgCount')
+    count=$(echo "$body" | jq -r "$F7_SPOOL_DISCARD_JQ")
     assert_json_field "$body" \
-        ".data.maxMsgSpoolUsageExceededDiscardedMsgCount > 0" "true" \
+        "($F7_SPOOL_DISCARD_JQ) > 0" "true" \
         "F7-spool [$label]: maxMsgSpoolUsageExceededDiscardedMsgCount must be > 0 (got $count)" || return 1
 }
 
@@ -357,11 +357,11 @@ verify_discard_ttl_state() {
     # Discarded, ToDmq, or ToDmqFailed (DMQ resolution failed). We only care
     # that expiry happened, not which path the broker took.
     local discarded to_dmq to_dmq_failed
-    discarded=$(echo "$body" | jq -r '.data.maxTtlExpiredDiscardedMsgCount')
-    to_dmq=$(echo "$body" | jq -r '.data.maxTtlExpiredToDmqMsgCount')
-    to_dmq_failed=$(echo "$body" | jq -r '.data.maxTtlExpiredToDmqFailedMsgCount')
+    discarded=$(echo "$body" | jq -r "$F7_TTL_DISCARDED_JQ")
+    to_dmq=$(echo "$body" | jq -r "$F7_TTL_TO_DMQ_JQ")
+    to_dmq_failed=$(echo "$body" | jq -r "$F7_TTL_TO_DMQ_FAILED_JQ")
     assert_json_field "$body" \
-        "(.data.maxTtlExpiredDiscardedMsgCount + .data.maxTtlExpiredToDmqMsgCount + .data.maxTtlExpiredToDmqFailedMsgCount) > 0" "true" \
+        "($F7_TTL_DISCARD_JQ) > 0" "true" \
         "F7-ttl [$label]: total TTL-expired count must be > 0 (discarded=$discarded toDmq=$to_dmq toDmqFailed=$to_dmq_failed)" || return 1
 }
 
