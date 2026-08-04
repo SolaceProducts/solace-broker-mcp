@@ -1,7 +1,6 @@
 # solace-broker-mcp
 
 [![Build Status](https://github.com/SolaceProducts/solace-broker-mcp/workflows/Build%20and%20Test/badge.svg)](https://github.com/SolaceProducts/solace-broker-mcp/actions)
-[![Go Report Card](https://goreportcard.com/badge/github.com/SolaceProducts/solace-broker-mcp)](https://goreportcard.com/report/github.com/SolaceProducts/solace-broker-mcp)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/SolaceProducts/solace-broker-mcp)](go.mod)
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](.github/CODE_OF_CONDUCT.md)
