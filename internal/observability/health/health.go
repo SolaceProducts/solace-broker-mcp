@@ -41,7 +41,7 @@ package health
 import (
 	"net/http"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 )
 
 // livenessBody is the exact response body served by the liveness probe. It is a

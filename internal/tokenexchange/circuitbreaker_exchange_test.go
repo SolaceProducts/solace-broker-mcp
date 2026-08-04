@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/idpclient"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/idpclient"
 	"github.com/sony/gobreaker/v2"
 )
 

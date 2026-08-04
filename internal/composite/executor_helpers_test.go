@@ -18,7 +18,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 )
 
 // boolPtr returns a pointer to v, for the *bool annotation fields that

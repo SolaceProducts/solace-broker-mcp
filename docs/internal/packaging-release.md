@@ -27,7 +27,7 @@ Local builds use the fallback value. No action required — see
 
 ldflags is a **compile-time string substitution** mechanism. It does not fetch
 anything from a remote repository. The long module path
-(`github.com/SolaceDev/solace-broker-mcp/internal/version.version`) is the
+(`github.com/SolaceProducts/solace-broker-mcp/internal/version.version`) is the
 same path used in Go `import` statements — the compiler resolves it against
 whatever source is on disk and replaces the variable's initial value in the
 compiled binary.
@@ -45,7 +45,7 @@ The version value itself comes from whatever string you pass. Common sources:
 Pass the fully-qualified variable path via `-ldflags -X`:
 
 ```bash
-go build -ldflags "-X github.com/SolaceDev/solace-broker-mcp/internal/version.version=0.1.0" ./cmd/server
+go build -ldflags "-X github.com/SolaceProducts/solace-broker-mcp/internal/version.version=0.1.0" ./cmd/server
 ```
 
 ## Building
@@ -64,7 +64,7 @@ Strip debug symbols with `-s -w` for a smaller binary and inject the version:
 ```bash
 VERSION=$(git describe --tags --always)
 CGO_ENABLED=0 go build \
-  -ldflags "-s -w -X github.com/SolaceDev/solace-broker-mcp/internal/version.version=${VERSION}" \
+  -ldflags "-s -w -X github.com/SolaceProducts/solace-broker-mcp/internal/version.version=${VERSION}" \
   -o solace-broker-mcp \
   ./cmd/server
 ```

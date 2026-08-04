@@ -25,9 +25,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/authz"
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
-	"github.com/SolaceDev/solace-broker-mcp/internal/idpclient"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/idpclient"
 	"github.com/coreos/go-oidc/v3/oidc"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"

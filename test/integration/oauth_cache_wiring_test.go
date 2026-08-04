@@ -31,9 +31,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache/cachetest"
-	"github.com/SolaceDev/solace-broker-mcp/internal/tokenexchange"
-	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache/cachetest"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/tools"
 )
 
 // idpHitCounter installs a JSON handler that increments callCount on each

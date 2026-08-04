@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 )
 
 func TestBrokerClient_V2_ReturnsClient(t *testing.T) {

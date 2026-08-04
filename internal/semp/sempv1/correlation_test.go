@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
-	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/auth"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 )
 
 // newTestClientWithRetries builds a client whose Sender allows up to maxRetries

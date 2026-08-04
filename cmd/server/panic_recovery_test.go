@@ -20,9 +20,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
-	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
-	"github.com/SolaceDev/solace-broker-mcp/internal/observability/health"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 )
 
 // obsConfig builds an ObservabilityConfig with the correlation flag this story

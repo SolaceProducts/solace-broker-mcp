@@ -20,7 +20,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 )
 
 // TestLivezHandler_GET pins the liveness contract: GET returns 200 with the

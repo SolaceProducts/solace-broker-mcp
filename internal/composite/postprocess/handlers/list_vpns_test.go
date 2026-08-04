@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/postprocess"
 )
 
 // vpn builds a VPN row with the three fields the handler reads. Older tests

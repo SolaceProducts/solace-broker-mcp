@@ -1,8 +1,8 @@
 # See https://docs.github.com/en/repositories/managing-your-repositories-settings-and-security/customizing-your-repository/about-code-owners
 
-* @SolaceDev/dax-developers
+* @SolaceProducts/dax-developers
 
 # Already covered by the catch-all above; listed explicitly because these files
 # are installed into .git/hooks/ and run on a contributor's machine, so a diff
 # here is a code-execution surface and warrants reading as one.
-/.githooks/ @SolaceDev/dax-developers
+/.githooks/ @SolaceProducts/dax-developers

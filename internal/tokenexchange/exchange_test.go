@@ -28,10 +28,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
-	"github.com/SolaceDev/solace-broker-mcp/internal/idpclient"
-	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
-	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache/cachetest"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/idpclient"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache/cachetest"
 )
 
 // newTestExchanger builds an Exchanger pointing at the given httptest server

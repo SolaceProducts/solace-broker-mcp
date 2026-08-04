@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"sort"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 )
 
 // TokenInfoExtraKeyGroups is the TokenInfo.Extra map key under which the

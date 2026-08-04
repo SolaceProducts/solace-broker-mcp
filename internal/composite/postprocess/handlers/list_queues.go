@@ -20,7 +20,7 @@ package handlers
 import (
 	"fmt"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/postprocess"
 )
 
 // nearFullThreshold is the spool-usage fill ratio at or above which a queue is

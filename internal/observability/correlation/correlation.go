@@ -18,7 +18,7 @@
 // default is ON (door-closing policy).
 package correlation
 
-import "github.com/SolaceDev/solace-broker-mcp/internal/config"
+import "github.com/SolaceProducts/solace-broker-mcp/internal/config"
 
 // Enabled reports whether correlation-ID propagation is turned on, reading the
 // OBS_CORRELATION_ID_ENABLED flag off the observability config. Later wiring

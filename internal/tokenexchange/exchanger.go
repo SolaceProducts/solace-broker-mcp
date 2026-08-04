@@ -20,7 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache"
 	"github.com/sony/gobreaker/v2"
 	"golang.org/x/sync/singleflight"
 )

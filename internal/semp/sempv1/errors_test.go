@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv1"
 )
 
 func TestError_Error(t *testing.T) {

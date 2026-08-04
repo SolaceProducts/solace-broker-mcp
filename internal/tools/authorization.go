@@ -22,9 +22,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/authz"
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
-	"github.com/SolaceDev/solace-broker-mcp/internal/observability/logging/sanitize"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/logging/sanitize"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )

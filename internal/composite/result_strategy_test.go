@@ -19,9 +19,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/composite"
-	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess"
-	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess/postprocesstest"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/postprocess"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/postprocess/postprocesstest"
 )
 
 func TestApplyResultStrategy_Collect(t *testing.T) {
