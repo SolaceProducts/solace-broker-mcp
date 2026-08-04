@@ -735,11 +735,11 @@ func main() {
 	// API surface.
 	tools.RegisterListBrokers(server, pool)
 
-	// describe-schema is a discovery tool over the embedded SEMPv2 OpenAPI
+	// describe-semp-schema is a discovery tool over the embedded SEMPv2 OpenAPI
 	// spec. Registered outside mgr like list-brokers — no broker resolution,
 	// no policy wrapping.
-	if err := tools.RegisterDescribeSchema(server, specs.FS); err != nil {
-		slog.Error("failed to register describe-schema tool",
+	if err := tools.RegisterDescribeSempSchema(server, specs.FS); err != nil {
+		slog.Error("failed to register describe-semp-schema tool",
 			slog.String("error", err.Error()))
 		os.Exit(1)
 	}

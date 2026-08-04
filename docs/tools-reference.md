@@ -21,7 +21,7 @@ These apply to every tool unless noted otherwise.
 
 ### The `broker` parameter
 
-Every tool **except `list-brokers` and `describe-schema`** takes a required `broker` parameter
+Every tool **except `list-brokers` and `describe-semp-schema`** takes a required `broker` parameter
 identifying which configured broker to query. It is injected automatically into
 each tool's input schema at registration (`injectBrokerParam` in
 `internal/tools/register.go`), so it is not declared in any tool definition:
@@ -140,7 +140,7 @@ List all configured broker aliases. Use one of the returned names as the
 
 ---
 
-### describe-schema
+### describe-semp-schema
 
 Return the SEMPv2 schema slice for a given operation's request-body definition.
 Use this before invoking a `create-*` or `update-*` tool to enumerate every

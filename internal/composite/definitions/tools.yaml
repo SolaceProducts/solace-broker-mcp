@@ -804,7 +804,7 @@ tools:
       Create a Message VPN. Requires msgVpnName to name the new VPN; any
       attribute omitted from msgVpnConfig is set to its broker default. Use this
       to provision a new VPN. Fails if a VPN with the same name already exists.
-      msgVpnConfig accepts more attributes than listed here; call describe-schema
+      msgVpnConfig accepts more attributes than listed here; call describe-semp-schema
       (operation: config/createMsgVpn) if you need the full list.
     annotations:
       readOnly: false
@@ -835,7 +835,7 @@ tools:
       provide only the attributes you want to change in msgVpnConfig. Omitted
       attributes are left unchanged. Use this to update VPN settings such as
       enabled state, connection limits, or spool quotas.
-      msgVpnConfig accepts more attributes than listed here; call describe-schema
+      msgVpnConfig accepts more attributes than listed here; call describe-semp-schema
       (operation: config/updateMsgVpn) if you need the full list.
     annotations:
       readOnly: false
@@ -895,7 +895,7 @@ tools:
       and queueName to name the new queue; any attribute omitted from queueConfig
       is set to its broker default. Use this to provision a new queue. Fails if a
       queue with the same name already exists in the VPN.
-      queueConfig accepts more attributes than listed here; call describe-schema
+      queueConfig accepts more attributes than listed here; call describe-semp-schema
       (operation: config/createMsgVpnQueue) if you need the full list.
     annotations:
       readOnly: false
@@ -935,7 +935,7 @@ tools:
       queue; provide only the attributes you want to change in queueConfig.
       Omitted attributes are left unchanged. Use this to update queue settings
       such as enabled state, access type, spool quota, or redelivery limits.
-      queueConfig accepts more attributes than listed here; call describe-schema
+      queueConfig accepts more attributes than listed here; call describe-semp-schema
       (operation: config/updateMsgVpnQueue) if you need the full list.
     annotations:
       readOnly: false
@@ -1066,7 +1066,7 @@ tools:
       omitted from topicEndpointConfig is set to its broker default. Use this to
       provision a new topic endpoint. Fails if a topic endpoint with the same
       name already exists in the VPN.
-      topicEndpointConfig accepts more attributes than listed here; call describe-schema
+      topicEndpointConfig accepts more attributes than listed here; call describe-semp-schema
       (operation: config/createMsgVpnTopicEndpoint) if you need the full list.
     annotations:
       readOnly: false
@@ -1108,7 +1108,7 @@ tools:
       attributes you want to change in topicEndpointConfig. Omitted attributes are
       left unchanged. Use this to update topic endpoint settings such as enabled
       state, access type, or spool quota.
-      topicEndpointConfig accepts more attributes than listed here; call describe-schema
+      topicEndpointConfig accepts more attributes than listed here; call describe-semp-schema
       (operation: config/updateMsgVpnTopicEndpoint) if you need the full list.
     annotations:
       readOnly: false
@@ -1181,7 +1181,7 @@ tools:
       itself — REST consumers and queue bindings are separate resources not managed
       by this tool, so a new RDP is created disabled by default and delivers nothing
       until those are added. Fails if an RDP with the same name already exists.
-      rdpConfig accepts more attributes than listed here; call describe-schema
+      rdpConfig accepts more attributes than listed here; call describe-semp-schema
       (operation: config/createMsgVpnRestDeliveryPoint) if you need the full list.
     annotations:
       readOnly: false
@@ -1223,7 +1223,7 @@ tools:
       want to change in rdpConfig. Omitted attributes are left unchanged. Use this
       to update RDP settings such as enabled state or client profile — commonly to
       enable an RDP that was created disabled.
-      rdpConfig accepts more attributes than listed here; call describe-schema
+      rdpConfig accepts more attributes than listed here; call describe-semp-schema
       (operation: config/updateMsgVpnRestDeliveryPoint) if you need the full list.
     annotations:
       readOnly: false

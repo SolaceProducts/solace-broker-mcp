@@ -134,15 +134,15 @@ func TestSempSchemaMap_TrimmedView_CreateQueue(t *testing.T) {
 	}
 }
 
-func TestDescribeSchema_EmitsAuditLog(t *testing.T) {
+func TestDescribeSempSchema_EmitsAuditLog(t *testing.T) {
 	var logBuf bytes.Buffer
 	oldLogger := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	defer slog.SetDefault(oldLogger)
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	if err := RegisterDescribeSchema(server, specs.FS); err != nil {
-		t.Fatalf("RegisterDescribeSchema: %v", err)
+	if err := RegisterDescribeSempSchema(server, specs.FS); err != nil {
+		t.Fatalf("RegisterDescribeSempSchema: %v", err)
 	}
 
 	ctx := context.Background()
@@ -157,24 +157,24 @@ func TestDescribeSchema_EmitsAuditLog(t *testing.T) {
 	defer session.Close()
 
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{
-		Name:      "describe-schema",
+		Name:      "describe-semp-schema",
 		Arguments: map[string]any{"operation": "config/createMsgVpnQueue"},
 	})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
 	}
 	if res.IsError {
-		t.Fatalf("describe-schema returned IsError: %v", res.Content)
+		t.Fatalf("describe-semp-schema returned IsError: %v", res.Content)
 	}
 
-	audits := auditLines(t, &logBuf, "describe-schema")
+	audits := auditLines(t, &logBuf, "describe-semp-schema")
 	if len(audits) != 1 {
-		t.Fatalf("expected exactly 1 audit line for describe-schema, got %d: %s", len(audits), logBuf.String())
+		t.Fatalf("expected exactly 1 audit line for describe-semp-schema, got %d: %s", len(audits), logBuf.String())
 	}
 	if got := audits[0]["status"]; got != "success" {
 		t.Errorf("audit status = %v, want %q", got, "success")
 	}
-	// describe-schema resolves no broker; the audit line must omit the field.
+	// describe-semp-schema resolves no broker; the audit line must omit the field.
 	if _, present := audits[0]["broker"]; present {
 		t.Errorf("audit line carries broker field for brokerless tool: %v", audits[0])
 	}

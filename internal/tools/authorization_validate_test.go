@@ -247,8 +247,8 @@ func TestValidatePolicyToolNames_UnknownsAndListBrokers_BothSurface(t *testing.T
 	}
 }
 
-// describe-schema grant — same shape as list-brokers: WARN, not error.
-func TestValidatePolicyToolNames_DescribeSchemaGrant_WarnsNotError(t *testing.T) {
+// describe-semp-schema grant — same shape as list-brokers: WARN, not error.
+func TestValidatePolicyToolNames_DescribeSempSchemaGrant_WarnsNotError(t *testing.T) {
 	for _, enableWriteTools := range []bool{true, false} {
 		t.Run(fmt.Sprintf("enable_write_tools=%t", enableWriteTools), func(t *testing.T) {
 			buf, cleanup := captureSlog(t)
@@ -257,20 +257,20 @@ func TestValidatePolicyToolNames_DescribeSchemaGrant_WarnsNotError(t *testing.T)
 			mgr := validateTestManager(t, "get-broker-status")
 			cfg := config.ToolAuthorizationConfig{
 				AccessLevelGroups: map[string][]string{
-					"ReadOnly": {"get-broker-status", "describe-schema"},
+					"ReadOnly": {"get-broker-status", "describe-semp-schema"},
 				},
 			}
 
 			if err := ValidatePolicyToolNames(cfg, mgr, enableWriteTools); err != nil {
-				t.Errorf("describe-schema grant must not surface as an error; got: %v", err)
+				t.Errorf("describe-semp-schema grant must not surface as an error; got: %v", err)
 			}
 
-			warns := warnLinesMentioning(t, buf, "describe-schema")
+			warns := warnLinesMentioning(t, buf, "describe-semp-schema")
 			if len(warns) != 1 {
-				t.Fatalf("expected exactly 1 WARN line about describe-schema, got %d: %s", len(warns), buf.String())
+				t.Fatalf("expected exactly 1 WARN line about describe-semp-schema, got %d: %s", len(warns), buf.String())
 			}
-			if got := warns[0]["exempt_tool"]; got != describeSchemaToolName {
-				t.Errorf("expected exempt_tool=%s, got %v", describeSchemaToolName, got)
+			if got := warns[0]["exempt_tool"]; got != describeSempSchemaToolName {
+				t.Errorf("expected exempt_tool=%s, got %v", describeSempSchemaToolName, got)
 			}
 			if !strings.Contains(buf.String(), "ReadOnly") {
 				t.Errorf("WARN missing referencing group name ReadOnly: %s", buf.String())

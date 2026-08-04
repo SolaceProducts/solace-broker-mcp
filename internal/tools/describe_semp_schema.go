@@ -30,7 +30,7 @@ import (
 
 // Registered outside ToolManager like list-brokers — spec content only, no
 // broker state, so runtime authorization never wraps it.
-const describeSchemaToolName = "describe-schema"
+const describeSempSchemaToolName = "describe-semp-schema"
 
 type schemaOpInfo struct {
 	specType string // "config" | "monitor" | "action"
@@ -264,9 +264,9 @@ func trimAttributes(def map[string]any, defs map[string]any) []map[string]any {
 	return out
 }
 
-// RegisterDescribeSchema registers describe-schema as a standalone tool —
+// RegisterDescribeSempSchema registers describe-semp-schema as a standalone tool —
 // same shape as RegisterListBrokers, no broker resolution, no policy wrapping.
-func RegisterDescribeSchema(server *mcp.Server, fsys fs.FS) error {
+func RegisterDescribeSempSchema(server *mcp.Server, fsys fs.FS) error {
 	reg, err := buildSempSchemaMap(fsys)
 	if err != nil {
 		return fmt.Errorf("building semp schema map: %w", err)
@@ -277,7 +277,7 @@ Return the SEMPv2 schema slice for a given operation's request-body definition,
 so the caller can enumerate every configurable attribute (with types, defaults,
 enum values, and writability flags) before invoking a create or update tool.
 
-Use this to plan a write: call describe-schema first with the operation the
+Use this to plan a write: call describe-semp-schema first with the operation the
 target write tool wraps (see the write tool's description for the operation
 identifier, e.g. config/createMsgVpnQueue), then supply attributes that are
 writable for that operation. Response has two views: 'trimmed' (default;
@@ -289,7 +289,7 @@ instead of writability flags) and 'raw' (the definition verbatim, larger).
 `)
 
 	tool := &mcp.Tool{
-		Name:        describeSchemaToolName,
+		Name:        describeSempSchemaToolName,
 		Description: description,
 		InputSchema: map[string]any{
 			"type": "object",
@@ -312,7 +312,7 @@ instead of writability flags) and 'raw' (the definition verbatim, larger).
 		},
 	}
 
-	server.AddTool(tool, withRecovery(describeSchemaToolName, func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+	server.AddTool(tool, withRecovery(describeSempSchemaToolName, func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
 		// This handler bypasses ToolManager.CallTool, so it emits its own
 		// audit line. Panic contract: both result and toolErr nil at defer
 		// time means a panic is unwinding.
@@ -329,7 +329,7 @@ instead of writability flags) and 'raw' (the definition verbatim, larger).
 				errorType = "panic"
 				toolErr = panicError{}
 			}
-			logToolResult(ctx, describeSchemaToolName, &brokerAlias, start, &errorType, &toolErr, id)
+			logToolResult(ctx, describeSempSchemaToolName, &brokerAlias, start, &errorType, &toolErr, id)
 		}()
 
 		var args map[string]any

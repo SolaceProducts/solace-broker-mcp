@@ -80,8 +80,8 @@ func registeredServer(t *testing.T, enableWriteTools bool) *mcp.Server {
 	registerMixedTools(mgr)
 	tools.RegisterWithServer(mgr, server, pool, enableWriteTools, nil, "")
 	tools.RegisterListBrokers(server, pool)
-	if err := tools.RegisterDescribeSchema(server, specs.FS); err != nil {
-		t.Fatalf("RegisterDescribeSchema: %v", err)
+	if err := tools.RegisterDescribeSempSchema(server, specs.FS); err != nil {
+		t.Fatalf("RegisterDescribeSempSchema: %v", err)
 	}
 	return server
 }

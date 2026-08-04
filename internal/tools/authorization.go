@@ -154,7 +154,7 @@ func authzErrorResult(message string) *mcp.CallToolResult {
 }
 
 // ValidatePolicyToolNames checks every tool name in cfg.AccessLevelGroups
-// against the union of mgr.Handlers(), list-brokers, and describe-schema.
+// against the union of mgr.Handlers(), list-brokers, and describe-semp-schema.
 // Call after both registrations have populated mgr.
 //
 // Returns one error row per unknown tool (deduped on the tool name so one
@@ -164,7 +164,7 @@ func authzErrorResult(message string) *mcp.CallToolResult {
 // Two further grant shapes are inert but legitimate, so each is reported as a
 // WARN rather than an error:
 //
-//   - list-brokers and describe-schema, which are structurally exempt from authorization.
+//   - list-brokers and describe-semp-schema, which are structurally exempt from authorization.
 //   - a write/action tool while enableWriteTools is false. mgr holds every
 //     tool unconditionally, but RegisterWithServer applies the same
 //     isWriteTool gate before server.AddTool — so such a tool is "known" here
@@ -188,7 +188,7 @@ func ValidatePolicyToolNames(cfg config.ToolAuthorizationConfig, mgr *ToolManage
 		}
 	}
 	known[listBrokersToolName] = struct{}{}
-	known[describeSchemaToolName] = struct{}{}
+	known[describeSempSchemaToolName] = struct{}{}
 
 	unknownToGroups := make(map[string]map[string]struct{})
 	writeGatedToGroups := make(map[string]map[string]struct{})
@@ -201,7 +201,7 @@ func ValidatePolicyToolNames(cfg config.ToolAuthorizationConfig, mgr *ToolManage
 				exemptToGroups[groupName] = struct{}{}
 				continue
 			}
-			if tool == describeSchemaToolName {
+			if tool == describeSempSchemaToolName {
 				describeExemptToGroups[groupName] = struct{}{}
 				continue
 			}
@@ -225,7 +225,7 @@ func ValidatePolicyToolNames(cfg config.ToolAuthorizationConfig, mgr *ToolManage
 	if len(describeExemptToGroups) > 0 {
 		sortedExempt := sortedKeys(describeExemptToGroups)
 		slog.Warn("tool authorization grant has no effect; tool is exempt and always available to authenticated callers",
-			slog.String("exempt_tool", describeSchemaToolName),
+			slog.String("exempt_tool", describeSempSchemaToolName),
 			slog.String("referenced_by_groups", strings.Join(sortedExempt, ", ")))
 	}
 
