@@ -18,7 +18,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/observability/correlation"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

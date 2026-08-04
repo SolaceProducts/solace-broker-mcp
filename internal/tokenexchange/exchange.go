@@ -21,8 +21,8 @@ import (
 	"log/slog"
 	"runtime/debug"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/idpclient"
-	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/idpclient"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache"
 	"github.com/sony/gobreaker/v2"
 )
 

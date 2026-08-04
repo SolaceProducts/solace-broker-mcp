@@ -31,9 +31,9 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/safego"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
-	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/safego"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv1"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/tools"
 	"golang.org/x/sync/errgroup"
 )
 

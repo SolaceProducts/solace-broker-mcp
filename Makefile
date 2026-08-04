@@ -8,7 +8,7 @@ PKG         := ./cmd/server
 # inject shell when spliced into -ldflags or docker build-args.
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null | grep -E '^[A-Za-z0-9._+-]+$$' || echo dev)
 # Deferred (=) so $(shell git describe) only runs for targets that actually use LDFLAGS.
-LDFLAGS      = -s -w -X github.com/SolaceDev/solace-broker-mcp/internal/version.version=$(VERSION)
+LDFLAGS      = -s -w -X github.com/SolaceProducts/solace-broker-mcp/internal/version.version=$(VERSION)
 IMAGE       ?= solace-broker-mcp
 IMAGE_TAG   ?= dev
 E2E_DIR     := test/e2e-basic-mcp

@@ -17,7 +17,7 @@ package metrics
 import (
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 )
 
 // TestEnabled pins that Enabled reflects the MetricsEnabled flag rather than a

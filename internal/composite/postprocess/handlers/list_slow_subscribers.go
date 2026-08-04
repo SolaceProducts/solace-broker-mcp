@@ -17,7 +17,7 @@ package handlers
 import (
 	"fmt"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/postprocess"
 )
 
 // listSlowSubscribersStepID is the step ID this handler keys into. Declared as

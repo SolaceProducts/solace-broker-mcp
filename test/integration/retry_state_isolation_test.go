@@ -24,9 +24,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/auth"
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/resilience"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/auth"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 )
 
 // TestSenderRetryStateIsolatedUnderConcurrency composes resilience.Sender with

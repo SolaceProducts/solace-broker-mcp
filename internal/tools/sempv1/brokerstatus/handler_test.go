@@ -23,8 +23,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv1"
-	"github.com/SolaceDev/solace-broker-mcp/internal/tools"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv1"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/tools"
 )
 
 // fixtureClient routes incoming SEMPv1 requests by their XML body to the

@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/composite/definitions"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/definitions"
 )
 
 // TestListTools_ReferenceTheirDetailTool pins SOL-152122: every list-X tool's

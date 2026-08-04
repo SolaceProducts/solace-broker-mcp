@@ -14,13 +14,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Security
+### Changed
 
-- Bumped `github.com/getkin/kin-openapi` from `v0.134.0` to `v0.145.0`, closing 2 Dependabot alerts against `openapi3filter`: a critical fail-open authentication bypass in `ValidationHandler.Load()` (GHSA-r277-6w6q-xmqw) and a medium nil-pointer panic validating a schema-less `content` parameter (GHSA-jpcw-4wr7-c3vq). Neither vulnerable path was reachable in this codebase — the only usage is the `openapi2` subpackage (`internal/semp/sempv2/operation.go`), parsing our own embedded, trusted SEMP specs, never `openapi3filter` — but the bump closes the alerts and keeps the dependency current. No code changes required. Tracked under SOL-152553.
+- **BREAKING:** Go module path changed from `github.com/SolaceDev/solace-broker-mcp` to `github.com/SolaceProducts/solace-broker-mcp`, following the repository's move to the SolaceProducts GitHub org ahead of going public. Anyone importing this module needs to update their import path to match; the old path is no longer valid. No functional or behavioral change — every internal import was updated to match, and the two e2e test submodules' own module declarations were updated for consistency.
 
 ### Fixed
 
+- `THIRD_PARTY_LICENSES.md` now matches the binary it describes, `NOTICE` propagates every dependency attribution it is obliged to, and both files now actually ship with the release. The inventory had drifted in both directions since it was generated on 2026-07-17: it listed `github.com/maypok86/otter` v1.2.4, `github.com/dolthub/maphash`, and `github.com/gammazero/deque`, none of which are in the binary any more, and omitted five components that are — `github.com/sony/gobreaker/v2` v2.4.0 (MIT), `github.com/maypok86/otter/v2` v2.3.0 (Apache-2.0), and, less obviously, `github.com/stretchr/testify` v1.11.1 (MIT), `github.com/davecgh/go-spew` v1.1.1 (ISC) and `github.com/pmezard/go-difflib` v1.0.0 (BSD-3-Clause). The last three are genuinely linked: `otter/v2` v2.3.0 ships a file named `issue_test_1.25.go`, and because that name does not end in `_test.go` Go compiles it as ordinary package code, so its `testify/require` import pulls all three into the binary. Every component remains permissively licensed, so this was an accuracy defect rather than a licensing one, and consumers of **0.6.0 and earlier should treat their copy of the inventory as inaccurate** — the otter v1 to v2 swap landed in 0.6.0 without a regeneration. `NOTICE` separately failed to name `github.com/oasdiff/yaml3`, a fork of `gopkg.in/yaml.v3` carrying the same Canonical attribution, and paraphrased rather than reproduced the CoreOS attribution that Apache-2.0 section 4(d) requires be carried verbatim. Independently of accuracy, neither `NOTICE` nor `THIRD_PARTY_LICENSES.md` was included in the release tarball (which shipped only `LICENSE`) or in the container image (which shipped neither), so the section 4(d) obligation was unmet for every published artifact despite the files existing in the repository; the tarball now carries all three and the image carries them under `/licenses/`. Drift is now gated rather than trusted to a "regenerate before each release" sentence: `.github/scripts/licenses-check.sh` fails when the inventory stops matching `go list -deps ./cmd/server` or when a dependency's NOTICE goes unpropagated, and it runs both on every pull request and at tag time as a prerequisite of the build jobs. Tracked under SOL-152414.
+
 - A `tool_authorization.access_level_groups` grant of a write/action tool (for example `delete-queue-messages`, `disconnect-client`, `clear-queue-stats`, `clear-client-stats`, or any Config-API management tool) while `enable_write_tools: false` is now reported at startup with a `WARN` naming the inert tool and the groups that reference it. Previously such a grant was accepted in silence even though it could never take effect — the tool is skipped at registration and never appears in `tools/list` — so an operator had no signal distinguishing "the policy is live" from "the policy is inert." The startup validator built its known-tool set from the tool manager, which holds every tool unconditionally, while the write gate is applied later at MCP-server registration; the validator now applies the same gate predicate and reports the difference. Staging an RBAC policy ahead of enabling write tools stays supported, so this is a WARN and not a startup failure: one line per inert tool, tools alphabetized and referencing groups deduped within each line, matching the existing `list-brokers` inert-grant WARN. Setting `enable_write_tools: true` activates the grants and silences the WARN. Grants naming a tool the server does not know at all remain a fatal startup error, and `list-brokers` grants keep their existing WARN. Tracked under SOL-152508.
+
+### Security
+
+- Bumped `github.com/getkin/kin-openapi` from `v0.134.0` to `v0.145.0`, closing 2 Dependabot alerts against `openapi3filter`: a critical fail-open authentication bypass in `ValidationHandler.Load()` (GHSA-r277-6w6q-xmqw) and a medium nil-pointer panic validating a schema-less `content` parameter (GHSA-jpcw-4wr7-c3vq). Neither vulnerable path was reachable in this codebase — the only usage is the `openapi2` subpackage (`internal/semp/sempv2/operation.go`), parsing our own embedded, trusted SEMP specs, never `openapi3filter` — but the bump closes the alerts and keeps the dependency current. No code changes required. Tracked under SOL-152553.
 
 ## [0.6.0] - 2026-07-28
 
@@ -321,11 +327,11 @@ This project uses [Semantic Versioning](https://semver.org/):
 
 ## Links
 
-- [Unreleased]: https://github.com/SolaceDev/solace-broker-mcp/compare/v0.6.0...HEAD
-- [0.6.0]: https://github.com/SolaceDev/solace-broker-mcp/compare/v0.5.0...v0.6.0
-- [0.5.0]: https://github.com/SolaceDev/solace-broker-mcp/compare/v0.4.0...v0.5.0
-- [0.4.0]: https://github.com/SolaceDev/solace-broker-mcp/compare/v0.3.0...v0.4.0
-- [0.3.0]: https://github.com/SolaceDev/solace-broker-mcp/compare/v0.2.0...v0.3.0
-- [0.2.0]: https://github.com/SolaceDev/solace-broker-mcp/compare/v0.1.0...v0.2.0
-- [0.1.0]: https://github.com/SolaceDev/solace-broker-mcp/compare/v0.0.1...v0.1.0
-- [0.0.1]: https://github.com/SolaceDev/solace-broker-mcp/releases/tag/v0.0.1
+- [Unreleased]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.6.0...HEAD
+- [0.6.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.5.0...v0.6.0
+- [0.5.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.4.0...v0.5.0
+- [0.4.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.3.0...v0.4.0
+- [0.3.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.2.0...v0.3.0
+- [0.2.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.1.0...v0.2.0
+- [0.1.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.0.1...v0.1.0
+- [0.0.1]: https://github.com/SolaceProducts/solace-broker-mcp/releases/tag/v0.0.1

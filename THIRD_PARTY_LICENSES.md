@@ -4,10 +4,18 @@ This file lists the third-party components compiled into the `solace-broker-mcp`
 binary, with their versions and licenses. It is the human-readable OSS compliance
 inventory that accompanies the release.
 
-**Generated** 2026-07-30 with
-[`go-licenses`](https://github.com/google/go-licenses) against
-`./cmd/server`. Regenerate before each release. The FOSSA scan in CI is the
-authoritative automated check; this file complements it.
+**Generated** 2026-08-04 with
+[`go-licenses`](https://github.com/google/go-licenses) against `./cmd/server`:
+
+```bash
+go run github.com/google/go-licenses@v1.6.0 csv ./cmd/server
+```
+
+Regenerate on any `go.mod` change, not only before a release. Between 2026-07-17
+and 2026-07-31 this file drifted from the binary in both directions, so
+`.github/scripts/licenses-check.sh` now fails CI when the inventory stops
+matching `go list -deps ./cmd/server`. The FOSSA scan remains the authoritative
+automated check for licence *policy*; this file is the human-readable inventory.
 
 All components are compatible with distribution under the Apache License 2.0.
 No strong-copyleft licenses (GPL, LGPL, AGPL, EPL, CDDL) are linked into the
@@ -37,7 +45,7 @@ under MPL-2.0.
 | `github.com/go-jose/go-jose/v4` | v4.1.4 | Apache-2.0 | [license](https://github.com/go-jose/go-jose/blob/v4.1.4/LICENSE) |
 | `github.com/go-jose/go-jose/v4/json` | v4.1.4 | BSD-3-Clause | [license](https://github.com/go-jose/go-jose/blob/v4.1.4/json/LICENSE) |
 | `github.com/go-openapi/jsonpointer` | v0.22.5 | Apache-2.0 | [license](https://github.com/go-openapi/jsonpointer/blob/v0.22.5/LICENSE) |
-| `github.com/go-openapi/swag/jsonname` | jsonname/v0.25.5 | Apache-2.0 | [license](https://github.com/go-openapi/swag/blob/jsonname/v0.25.5/jsonname/LICENSE) |
+| `github.com/go-openapi/swag/jsonname` | v0.25.5 | Apache-2.0 | [license](https://github.com/go-openapi/swag/blob/jsonname/v0.25.5/jsonname/LICENSE) |
 | `github.com/google/jsonschema-go/jsonschema` | v0.4.2 | MIT | [license](https://github.com/google/jsonschema-go/blob/v0.4.2/LICENSE) |
 | `github.com/maypok86/otter/v2` | v2.3.0 | Apache-2.0 | [license](https://github.com/maypok86/otter/blob/v2.3.0/LICENSE) |
 | `github.com/modelcontextprotocol/go-sdk` | v1.5.0 | Apache-2.0 | [license](https://github.com/modelcontextprotocol/go-sdk/blob/v1.5.0/LICENSE) |
@@ -47,7 +55,7 @@ under MPL-2.0.
 | `github.com/santhosh-tekuri/jsonschema/v6` | v6.0.2 | Apache-2.0 | [license](https://github.com/santhosh-tekuri/jsonschema/blob/v6.0.2/LICENSE) |
 | `github.com/segmentio/asm` | v1.1.3 | MIT | [license](https://github.com/segmentio/asm/blob/v1.1.3/LICENSE) |
 | `github.com/segmentio/encoding` | v0.5.4 | MIT | [license](https://github.com/segmentio/encoding/blob/v0.5.4/LICENSE) |
-| `github.com/sony/gobreaker/v2` | v2.4.0 | MIT | [license](https://github.com/sony/gobreaker/blob/v2.4.0/v2/LICENSE) |
+| `github.com/sony/gobreaker/v2` | v2.4.0 | MIT | [license](https://github.com/sony/gobreaker/blob/v2.4.0/LICENSE) |
 | `github.com/stretchr/testify` | v1.11.1 | MIT | [license](https://github.com/stretchr/testify/blob/v1.11.1/LICENSE) |
 | `github.com/xeipuuv/gojsonpointer` | 4e3ac2762d5f | Apache-2.0 | [license](https://github.com/xeipuuv/gojsonpointer/blob/4e3ac2762d5f/LICENSE-APACHE-2.0.txt) |
 | `github.com/xeipuuv/gojsonreference` | bd5ef7bd5415 | Apache-2.0 | [license](https://github.com/xeipuuv/gojsonreference/blob/bd5ef7bd5415/LICENSE-APACHE-2.0.txt) |
@@ -61,26 +69,46 @@ under MPL-2.0.
 
 ## Notes
 
+- **`stretchr/testify`, `davecgh/go-spew`, and `pmezard/go-difflib` are here on
+  purpose. Do not remove them as "test-only".** They are in the binary's
+  dependency closure because `github.com/maypok86/otter/v2` v2.3.0 imports
+  `testify/require` from a file named `issue_test_1.25.go`. That name does not end
+  in `_test.go`, so Go compiles it as ordinary package code rather than treating it
+  as a test, and testify plus its two dependencies come with it. Confirmed from
+  both `go-licenses` and `go list -deps ./cmd/server`. All three are permissive
+  (MIT, ISC, BSD-3-Clause), so this is an accuracy matter, not a licence problem.
+  If a later Otter release renames that file, these three drop out and
+  `.github/scripts/licenses-check.sh` will say so.
 - `github.com/go-jose/go-jose/v4` bundles a `json` subpackage under BSD-3-Clause
   (a copy of the Go standard library's encoding/json); both are permissive.
 - `github.com/modelcontextprotocol/go-sdk` is mid-transition from MIT to
   Apache 2.0; un-relicensed files may remain MIT. Both are permissive.
 - `gopkg.in/yaml.v3` ships a NOTICE (Apache 2.0) alongside MIT-licensed
   libyaml-derived files; its required attribution is reproduced in `NOTICE`.
-- Commit-pinned modules (`xeipuuv/*`) carry a clear license at the pinned
-  commit.
+- `github.com/oasdiff/yaml3` is a fork of `gopkg.in/yaml.v3` and carries the same
+  dual MIT / Apache-2.0 split and the same Canonical NOTICE. The generator
+  resolves it to MIT, which is what the table records; `NOTICE` now names it
+  alongside `gopkg.in/yaml.v3` so the Apache-2.0 attribution is propagated for
+  both.
+- `github.com/go-openapi/jsonpointer` ships its own NOTICE file (Apache-2.0,
+  go-swagger maintainers plus the original sigu-399 attribution); reproduced in
+  `NOTICE`.
 - `github.com/go-openapi/swag/jsonname` is a nested sub-module of the `swag`
-  repository (versioned independently under its own `jsonname/vX.Y.Z` tags),
-  not the `swag` root module — both are Apache-2.0.
+  repository, versioned independently under its own `jsonname/vX.Y.Z` tags rather
+  than `swag`'s own tags — both are Apache-2.0. The Version column above records
+  the plain semver (`v0.25.5`) to match how every other row reads; only the
+  license URL needs the `jsonname/` tag prefix, since that is where the tag
+  actually lives in the upstream repository.
 - `golang.org/x/text`'s declared module license is BSD-3-Clause (above). FOSSA
   additionally reports CC-BY-SA as "discovered" for this dependency; that
   content is Creative Commons license text quoted in several languages, used
-  only as sample Unicode test data inside `x/text`'s own test suite
-  (`_test.go` files and an `internal/testtext` test-only package) — confirmed
-  absent from this project's actual compiled dependency graph
-  (`go list -deps ./...`). Under review with FOSSA/Legal as of this writing;
-  update this note once resolved.
-- `github.com/stretchr/testify`, `github.com/davecgh/go-spew`, and
-  `github.com/pmezard/go-difflib` are pulled in transitively via
-  `github.com/maypok86/otter/v2` (used by `internal/oauth/cache`), not test
-  code of ours — confirmed via `go mod why -m`.
+  only as sample Unicode test data in three files in `x/text`'s own test suite:
+  `unicode/norm/normalize_test.go`, `cases/map_test.go`, and
+  `internal/testtext/text.go`. `x/text` is reachable in the compiled dependency
+  graph via `openapi2` → `openapi3` → `santhosh-tekuri/jsonschema/v6` →
+  `x/text/language` — 12 packages in total — and none of those three files is
+  among them. Bumping `x/text` does not clear this finding: v0.40.0 carries the
+  same three files. Under review with FOSSA/Legal as of this writing; update
+  this note once resolved.
+- Commit-pinned modules (`xeipuuv/*`) carry a clear license at the pinned
+  commit.

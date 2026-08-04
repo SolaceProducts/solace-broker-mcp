@@ -42,7 +42,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache"
 )
 
 // ClientAuthMethod identifies the OAuth client-authentication method the

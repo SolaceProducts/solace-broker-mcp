@@ -1,9 +1,9 @@
 # solace-broker-mcp
 
-[![Build Status](https://github.com/SolaceDev/solace-broker-mcp/workflows/Build%20and%20Test/badge.svg)](https://github.com/SolaceDev/solace-broker-mcp/actions)
-[![Go Report Card](https://goreportcard.com/badge/github.com/SolaceDev/solace-broker-mcp)](https://goreportcard.com/report/github.com/SolaceDev/solace-broker-mcp)
+[![Build Status](https://github.com/SolaceProducts/solace-broker-mcp/workflows/Build%20and%20Test/badge.svg)](https://github.com/SolaceProducts/solace-broker-mcp/actions)
+[![Go Report Card](https://goreportcard.com/badge/github.com/SolaceProducts/solace-broker-mcp)](https://goreportcard.com/report/github.com/SolaceProducts/solace-broker-mcp)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/SolaceDev/solace-broker-mcp)](go.mod)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/SolaceProducts/solace-broker-mcp)](go.mod)
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](.github/CODE_OF_CONDUCT.md)
 
 An MCP (Model Context Protocol) server for Solace event brokers, built with Go using the official [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk).
@@ -170,7 +170,7 @@ For contributors running from source, see [Development Setup](#development-setup
 
 ### Binary Deployment
 
-Download the archive for your platform from the [latest release](https://github.com/SolaceDev/solace-broker-mcp/releases/latest). Available platforms: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64.
+Download the archive for your platform from the [latest release](https://github.com/SolaceProducts/solace-broker-mcp/releases/latest). Available platforms: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64.
 
 Download the checksums file, verify the checksum, and extract:
 
@@ -206,7 +206,7 @@ The binary is statically linked with no external dependencies. It handles `SIGTE
 If you have the Go toolchain installed ([Go 1.25+](https://go.dev/dl/)), install the server directly from source:
 
 ```bash
-go install github.com/SolaceDev/solace-broker-mcp/cmd/server@latest
+go install github.com/SolaceProducts/solace-broker-mcp/cmd/server@latest
 ```
 
 This builds the latest tagged release and places a `server` binary in `$(go env GOBIN)` (or `$(go env GOPATH)/bin`). Ensure that directory is on your `PATH`. Pin a specific version by replacing `@latest` with a tag, for example `@v1.2.0`.
@@ -306,7 +306,7 @@ List the queues on event-broker-one's default VPN.
 ### 1. Clone and install dependencies
 
 ```bash
-git clone https://github.com/SolaceDev/solace-broker-mcp.git
+git clone https://github.com/SolaceProducts/solace-broker-mcp.git
 cd solace-broker-mcp
 go mod download
 ```

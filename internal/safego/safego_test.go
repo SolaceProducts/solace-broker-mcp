@@ -21,7 +21,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/safego"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/safego"
 )
 
 // TestGo_ConvertsPanicToError is the core guarantee: a panic in a worker
