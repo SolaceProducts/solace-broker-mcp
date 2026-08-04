@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# Samples loadgen CPU/RES every N seconds via top and appends CSV.
-# Runs on the load-generator box (Box A). Mirrors sampler.sh from the server
-# side so both halves of a split-host run produce comparable CSVs.
+# Samples loadgen CPU/RES every N seconds and appends CSV. Runs on the
+# load-generator box (Box A). Mirrors sampler.sh from the server side so
+# both halves of a split-host run produce comparable CSVs.
+#
+# CPU comes from top (aggregate box + per-process); memory comes from
+# /proc/<pid>/status VmRSS to avoid top's shifting unit suffixes
+# (`1234m`, `2.1g`, …) which downstream summary.sh treats as raw kB.
 #
 # Usage: ./loadgen-sampler.sh <out.csv> [interval_sec] [duration_sec]
 #   interval defaults to 5s, duration to 90s.
@@ -57,14 +61,16 @@ while (( SECONDS - start < duration )); do
   snap=$(top -b -n 1 -p "$lg_pid")
   sys_cpu=$(awk '/^%Cpu\(s\)/ {for (i=1; i<=NF; i++) if ($i ~ /id,/) {gsub(",", "", $(i-1)); printf "%.1f", 100 - $(i-1); exit}}' <<<"$snap")
 
-  proc_line=$(tail -n +8 <<<"$snap")
-  lg_cpu=$(awk -v p="$lg_pid" '$1==p {print $9}' <<<"$proc_line")
-  lg_res=$(awk -v p="$lg_pid" '$1==p {print $6}' <<<"$proc_line")
+  # Match on PID rather than a fixed row index — top's header height varies
+  # by version. Grab CPU (col 9) from top and RSS from /proc, in kB.
+  lg_cpu=$(awk -v p="$lg_pid" '$1==p {print $9; exit}' <<<"$snap")
+  lg_res=$(awk '/^VmRSS:/ {print $2; exit}' "/proc/$lg_pid/status" 2>/dev/null)
 
-  # TCP-side signals — high TIME_WAIT means loadgen isn't reusing sockets, which
-  # was the fix that made the split-host run work end-to-end.
-  tcp_est=$(ss -tan state established 2>/dev/null | wc -l)
-  tcp_tw=$(ss -tan state time-wait 2>/dev/null | wc -l)
+  # TCP-side signals — high TIME_WAIT means loadgen isn't reusing sockets,
+  # which was the fix that made the split-host run work end-to-end. `-H`
+  # suppresses the header row so wc -l reflects true connection counts.
+  tcp_est=$(ss -H -tan state established 2>/dev/null | wc -l)
+  tcp_tw=$(ss -H -tan state time-wait 2>/dev/null | wc -l)
 
   echo "$t,$wall,${lg_cpu:-NA},${lg_res:-NA},$loadavg,${sys_cpu:-NA},${sys_mem},${tcp_est},${tcp_tw}" | tee -a "$out"
   sleep "$interval"

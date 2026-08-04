@@ -125,8 +125,10 @@ wait_for_tcp() {
   return 1
 }
 
-echo "== 1. mock-semp on :18081..18130 (default-latency-ms=$LATENCY_MS)"
-setsid "$bin/mock-semp" -listen-start 18081 -listen-count 50 -config-port 19000 \
+mock_start=18081
+mock_count=50
+echo "== 1. mock-semp on :$mock_start..$((mock_start + mock_count - 1)) (default-latency-ms=$LATENCY_MS)"
+setsid "$bin/mock-semp" -listen-start "$mock_start" -listen-count "$mock_count" -config-port 19000 \
   -default-latency-ms "$LATENCY_MS" \
   >"$runs/mock.log" 2>&1 &
 mock_pid=$!
@@ -148,14 +150,18 @@ arm_injection() {
     }
     printf "]"
   }')
-  ports_json=$(awk -v start=18081 -v count=50 \
+  # Preserve LATENCY_MS in the payload — configStore.set replaces the whole
+  # portOverride, so omitting it would zero out the seeded per-port latency
+  # and defeat the LATENCY_MS + ERROR_RATE combination.
+  ports_json=$(awk -v start="$mock_start" -v count="$mock_count" \
+                   -v lat="$LATENCY_MS" \
                    -v rate="$ERROR_RATE" -v cnt="$ERROR_COUNT" -v st="$statuses_json" '
     BEGIN {
       printf "{"
       for (i = 0; i < count; i++) {
         p = start + i
         if (i > 0) printf ","
-        printf "\"%d\":{\"latency_ms\":0,\"error_rate\":%s,\"error_count\":%d,\"error_statuses\":%s}", p, rate, cnt, st
+        printf "\"%d\":{\"latency_ms\":%d,\"error_rate\":%s,\"error_count\":%d,\"error_statuses\":%s}", p, lat+0, rate, cnt, st
       }
       printf "}"
     }')

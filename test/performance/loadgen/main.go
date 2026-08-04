@@ -29,6 +29,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -121,9 +122,18 @@ func run(ctx context.Context, cfg runConfig) error {
 	fmt.Printf("loadgen: %d clients, %s duration (%s warmup), tools=%v, brokers=%v\n",
 		cfg.clients, cfg.duration, cfg.warmup, cfg.tools, cfg.brokers)
 
+	// One shared Transport across all sessions so connection pools aren't
+	// fragmented per-client and the idle-conn table isn't allocated N times
+	// at high -clients. Safe for concurrent use per net/http docs.
+	transport := &http.Transport{
+		MaxIdleConns:        4096,
+		MaxIdleConnsPerHost: 512,
+		IdleConnTimeout:     90 * time.Second,
+	}
+
 	// Phase 1: dial all sessions before starting the clock. If MCP can't accept
 	// N sessions, we want to fail loudly here rather than during timing.
-	sessions, err := dialAll(ctx, cfg)
+	sessions, err := dialAll(ctx, cfg, transport)
 	if err != nil {
 		return err
 	}
@@ -245,17 +255,27 @@ func clientLoop(ctx context.Context, session *mcp.ClientSession, j clientJob) []
 		if !now.Before(deadline) {
 			return out
 		}
-		if j.rps > 0 && now.Before(nextFire) {
-			// Sleep on a timer so ctx cancellation unblocks us; time.Sleep
-			// would ignore ctx.
-			t := time.NewTimer(nextFire.Sub(now))
-			select {
-			case <-ctx.Done():
-				t.Stop()
-				return out
-			case <-t.C:
+		if j.rps > 0 {
+			if now.Before(nextFire) {
+				// Sleep on a timer so ctx cancellation unblocks us;
+				// time.Sleep would ignore ctx.
+				t := time.NewTimer(nextFire.Sub(now))
+				select {
+				case <-ctx.Done():
+					t.Stop()
+					return out
+				case <-t.C:
+				}
 			}
+			// Advance every iteration, even when the call took longer than
+			// gap. Otherwise nextFire silently freezes in the past and
+			// subsequent fast calls run unpaced. If we've fallen far behind,
+			// snap nextFire forward to now so we don't dump a burst catching
+			// up.
 			nextFire = nextFire.Add(gap)
+			if nextFire.Before(now) {
+				nextFire = now.Add(gap)
+			}
 		}
 
 		tool := j.tools[callIdx%len(j.tools)]
@@ -333,7 +353,7 @@ func classifyErr(err error) string {
 
 // dialAll opens `clients` MCP sessions in parallel. If any fail we close the
 // ones that succeeded and return — no point starting a partial run.
-func dialAll(ctx context.Context, cfg runConfig) ([]*mcp.ClientSession, error) {
+func dialAll(ctx context.Context, cfg runConfig, transport http.RoundTripper) ([]*mcp.ClientSession, error) {
 	dialCtx, cancel := context.WithTimeout(ctx, cfg.connectTimeout)
 	defer cancel()
 
@@ -342,7 +362,7 @@ func dialAll(ctx context.Context, cfg runConfig) ([]*mcp.ClientSession, error) {
 	var wg sync.WaitGroup
 	for i := 0; i < cfg.clients; i++ {
 		wg.Go(func() {
-			s, err := connect(dialCtx, cfg.mcpURL, i)
+			s, err := connect(dialCtx, cfg.mcpURL, i, transport)
 			if err != nil {
 				errs[i] = err
 				return
@@ -450,17 +470,14 @@ func summarize(samples []sample, duration time.Duration) summaryStats {
 }
 
 // pctIdx returns the index into a sorted slice of length n for percentile p
-// (0.0..1.0). Uses nearest-rank so p95 of 20 samples is samples[18], which
-// is the classic pick for load-test reporting.
+// (0.0..1.0). Uses nearest-rank (ceil(p*n) - 1) so p95 of 20 samples is
+// samples[18], the classic pick for load-test reporting.
 func pctIdx(n int, p float64) int {
 	if n == 0 {
 		return 0
 	}
-	idx := int(float64(n) * p)
-	if idx >= n {
-		idx = n - 1
-	}
-	return idx
+	idx := int(math.Ceil(p*float64(n))) - 1
+	return min(max(idx, 0), n-1)
 }
 
 func (s summaryStats) print(cfg runConfig) {
@@ -578,17 +595,11 @@ func splitCSV(s string) []string {
 // connect opens one MCP session over the streamable HTTP transport. Mirrors
 // test/performance/fidelity so both performance tools consume MCP the same way. The
 // clientIdx is only used to disambiguate the session name in server logs.
-func connect(ctx context.Context, url string, clientIdx int) (*mcp.ClientSession, error) {
-	// Bump the pool from the stdlib default (MaxIdleConnsPerHost=2) so tool
-	// calls reuse TCP connections instead of opening a fresh socket each time.
-	// Over loopback the default is invisible; over real TCP it exhausts the
-	// ephemeral port range in ~30s at 200+ clients as sockets pile up in
-	// TIME_WAIT.
-	transport := &http.Transport{
-		MaxIdleConns:        4096,
-		MaxIdleConnsPerHost: 512,
-		IdleConnTimeout:     90 * time.Second,
-	}
+func connect(ctx context.Context, url string, clientIdx int, transport http.RoundTripper) (*mcp.ClientSession, error) {
+	// Shared transport across all sessions — caller sets up pool sizing
+	// (MaxIdleConnsPerHost, etc.). Over real TCP the stdlib default of 2
+	// idle conns per host exhausts the ephemeral port range in ~30s at 200+
+	// clients as sockets pile up in TIME_WAIT.
 	httpClient := &http.Client{Transport: transport}
 	if tok := os.Getenv("MCP_DEV_TOKEN"); tok != "" {
 		httpClient.Transport = &bearer{token: tok, next: transport}

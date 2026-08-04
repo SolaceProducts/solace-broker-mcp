@@ -21,7 +21,9 @@ import (
 
 // randFloat64 returns a uniformly distributed float64 in [0, 1) using
 // crypto/rand. Used for error-injection sampling — not perf-critical
-// because it fires at most once per mock request.
+// because it fires at most once per mock request. On a rand.Read error
+// (should be impossible on Linux) the zero buffer yields 0.0, which
+// keeps the sample well-defined instead of returning NaN.
 func randFloat64() float64 {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
@@ -29,12 +31,17 @@ func randFloat64() float64 {
 }
 
 // randIntN returns a uniformly distributed int in [0, n) using crypto/rand.
-// Panics if n <= 0, matching math/rand/v2.IntN.
+// Panics if n <= 0, matching math/rand/v2.IntN. On a rand.Int error the
+// fallback is 0 rather than a nil-deref panic on v.Int64() — an errored
+// sample shouldn't take down the mock mid-run when injecting errors.
 func randIntN(n int) int {
 	if n <= 0 {
 		panic("randIntN: n must be > 0")
 	}
-	v, _ := rand.Int(rand.Reader, big.NewInt(int64(n)))
+	v, err := rand.Int(rand.Reader, big.NewInt(int64(n)))
+	if err != nil || v == nil {
+		return 0
+	}
 	return int(v.Int64())
 }
 

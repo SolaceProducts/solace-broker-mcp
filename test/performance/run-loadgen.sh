@@ -131,14 +131,18 @@ arm_injection() {
     }
     printf "]"
   }')
+  # Preserve LATENCY_MS in the payload — configStore.set replaces the whole
+  # portOverride, so omitting it would zero out the seeded per-port latency
+  # and defeat the LATENCY_MS + ERROR_RATE combination.
   ports_json=$(awk -v start=18081 -v count="$BROKERS" \
+                   -v lat="$LATENCY_MS" \
                    -v rate="$ERROR_RATE" -v cnt="$ERROR_COUNT" -v st="$statuses_json" '
     BEGIN {
       printf "{"
       for (i = 0; i < count; i++) {
         p = start + i
         if (i > 0) printf ","
-        printf "\"%d\":{\"latency_ms\":0,\"error_rate\":%s,\"error_count\":%d,\"error_statuses\":%s}", p, rate, cnt, st
+        printf "\"%d\":{\"latency_ms\":%d,\"error_rate\":%s,\"error_count\":%d,\"error_statuses\":%s}", p, lat+0, rate, cnt, st
       }
       printf "}"
     }')

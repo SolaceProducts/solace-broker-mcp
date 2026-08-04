@@ -36,7 +36,10 @@ if [[ "$MOCK_ONLY" != "1" ]]; then
   mcp_pid="$(pgrep -n -f 'go-build.*server' || true)"
 fi
 if [[ "$MCP_ONLY" != "1" ]]; then
-  mock_pid="$(pgrep -n -f 'mock-semp -listen-start' || true)"
+  # Match on the binary name only — run-loadgen.sh launches with
+  # `-listen-addr 0.0.0.0 -listen-start ...`, so an exact-order pattern
+  # against the args misses that layout.
+  mock_pid="$(pgrep -n -f 'bin/mock-semp' || pgrep -n -x mock-semp || true)"
 fi
 
 if [[ "$MCP_ONLY" == "1" && -z "$mcp_pid" ]]; then
