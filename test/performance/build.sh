@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Build all perf-poc binaries into test/perf-poc/bin/.
-# See docs/plans/2026-07-22-semp-mock-perf-poc.md.
+# Build all performance binaries into test/performance/bin/.
 
 set -euo pipefail
 

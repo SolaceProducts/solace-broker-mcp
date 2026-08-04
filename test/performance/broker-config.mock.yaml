@@ -1,4 +1,6 @@
-# Perf PoC — MCP config pointing at mock-semp.
+# This is to be used in LAB ONLY.  
+#
+# Performance — MCP config pointing at mock-semp.
 #
 # Use with:
 #   MOCK_HOST=localhost CONFIG_FILE=./broker-config.mock.yaml go run ./cmd/server
@@ -32,7 +34,7 @@ mcp_client_auth:
 semp:
   max_concurrent_per_broker: 10
   request_timeout_duration: 1m
-  # PoC: pacer disabled so the load run measures MCP's real ceiling rather
+  # Pacer disabled so the load run measures MCP's real ceiling rather
   # than the per-broker throttle. Production configs typically keep this
   # around 100ms to be polite to real appliances.
   request_min_interval: 1ms

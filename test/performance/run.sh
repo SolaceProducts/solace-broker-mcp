@@ -2,7 +2,7 @@
 # Single-host smoke run: mock-semp + MCP + fidelity + loadgen + samplers on
 # one box. Convenient for local dev / cold fidelity. For the split-host demo
 # (Box A: loadgen+mock, Box B: MCP), use run-mcp.sh on B and run-loadgen.sh
-# on A instead. See docs/plans/2026-07-22-semp-mock-perf-poc.md.
+# on A instead.
 #
 # Usage:
 #   ./run.sh                       # 32 clients, 60s, default tools
@@ -26,7 +26,7 @@
 #                   Default: "503:70,429:20,500:10" — mirrors realistic broker
 #                   overload signals and exercises the MCP retry chain.
 #                   Only 429/500/502/503/504 are accepted (retryable codes).
-#   BROKER_USERNAME / BROKER_PASSWORD  (default poc/poc; mock accepts anything non-empty)
+#   BROKER_USERNAME / BROKER_PASSWORD  (default perf/perf; mock accepts anything non-empty)
 
 set -euo pipefail
 
@@ -43,8 +43,8 @@ LATENCY_MS="${LATENCY_MS:-0}"
 ERROR_RATE="${ERROR_RATE:-0}"
 ERROR_COUNT="${ERROR_COUNT:-0}"
 ERROR_STATUSES="${ERROR_STATUSES:-503:70,429:20,500:10}"
-export BROKER_USERNAME="${BROKER_USERNAME:-poc}"
-export BROKER_PASSWORD="${BROKER_PASSWORD:-poc}"
+export BROKER_USERNAME="${BROKER_USERNAME:-perf}"
+export BROKER_PASSWORD="${BROKER_PASSWORD:-perf}"
 # Single-host: MCP reaches the mock over loopback.
 export MOCK_HOST="${MOCK_HOST:-localhost}"
 

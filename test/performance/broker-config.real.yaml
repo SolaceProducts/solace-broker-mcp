@@ -1,4 +1,4 @@
-# Perf PoC — MCP config pointing at the real lab broker.
+# Performance — MCP config pointing at the real lab broker.
 #
 # Use with:
 #   CONFIG_FILE=./broker-config.real.yaml \
@@ -27,7 +27,7 @@ semp:
 
 brokers:
   my-broker:
-    url: "http://192.168.129.78:80"
+    url: "https://broker.example.com:943"
     insecure_skip_verify: true
     auth:
       mode: basic

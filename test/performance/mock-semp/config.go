@@ -102,7 +102,7 @@ type weightedStatusJSON struct {
 
 // retryableStatuses are the HTTP codes the MCP resilience layer treats as
 // retryable. Any other code short-circuits the retry chain, so injecting
-// it wouldn't exercise the code path this PoC cares about.
+// it wouldn't exercise the code path this suite cares about.
 var retryableStatuses = map[int]bool{
 	429: true, // full backoff chain, honors Retry-After
 	500: true, // one retry
@@ -113,8 +113,8 @@ var retryableStatuses = map[int]bool{
 
 // handler returns the HTTP handler for POST /_mock/config. GET returns
 // 405 — the endpoint is write-only, and a GET response would need to
-// snapshot every port's config, which is more machinery than the PoC
-// needs.
+// snapshot every port's config, which is more machinery than this
+// suite needs.
 func (s *configStore) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

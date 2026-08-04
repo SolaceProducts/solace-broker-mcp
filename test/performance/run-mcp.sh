@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Split-host: Box B — runs MCP + memsampler + sampler.sh (MCP-only).
 # mock-semp and loadgen live on Box A (see run-loadgen.sh).
-# See docs/plans/2026-07-22-semp-mock-perf-poc.md.
 #
 # Usage:
 #   MOCK_HOST=<box-a-ip> ./run-mcp.sh
@@ -11,7 +10,7 @@
 #   MOCK_HOST      required — LAN address of Box A running mock-semp
 #   DURATION       how long to hold MCP up for the loadgen run (default 90s;
 #                  should exceed the loadgen -duration you use on Box A)
-#   BROKER_USERNAME / BROKER_PASSWORD   (default poc/poc; mock accepts anything)
+#   BROKER_USERNAME / BROKER_PASSWORD   (default perf/perf; mock accepts anything)
 
 set -euo pipefail
 
@@ -23,8 +22,8 @@ mkdir -p "$runs"
 
 : "${MOCK_HOST:?MOCK_HOST unset — set to the Box A LAN IP, e.g. MOCK_HOST=192.168.2.180}"
 export MOCK_HOST
-export BROKER_USERNAME="${BROKER_USERNAME:-poc}"
-export BROKER_PASSWORD="${BROKER_PASSWORD:-poc}"
+export BROKER_USERNAME="${BROKER_USERNAME:-perf}"
+export BROKER_PASSWORD="${BROKER_PASSWORD:-perf}"
 DURATION="${DURATION:-90s}"
 
 for b in memsampler; do

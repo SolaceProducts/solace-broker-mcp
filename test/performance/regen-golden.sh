@@ -14,7 +14,7 @@ broker_alias="${BROKER_ALIAS:-my-broker}"
 runs="$here/runs/$(date +%Y%m%d-%H%M%S)-regen"
 mkdir -p "$runs"
 
-# Resolve config path: try as-given, then relative to CWD, then perf-poc dir,
+# Resolve config path: try as-given, then relative to CWD, then performance dir,
 # then repo root. Makes `./regen-golden.sh` work from anywhere.
 resolve_config() {
   local c=$1
@@ -79,7 +79,7 @@ wait_for_http() {
 }
 
 # MCP auto-loads .env from the config file's directory. When the config is
-# test/perf-poc/broker-config.real.yaml there's no .env alongside it, so pull
+# test/performance/broker-config.real.yaml there's no .env alongside it, so pull
 # credentials from the repo-root .env (or the caller's env) and export them.
 if [[ -f "$repo_root/.env" ]]; then
   set -a; . "$repo_root/.env"; set +a

@@ -3,12 +3,10 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 
-// Command fidelity is the hard gate before any perf-PoC load run. It
+// Command fidelity is the hard gate before any performance load run. It
 // connects to a live MCP server, invokes get-broker-status and list-queues,
 // and deep-equals the tool output against golden JSON captured earlier
 // (with MCP pointed at the real broker).
-//
-// See docs/plans/2026-07-22-semp-mock-perf-poc.md step 5.
 //
 // Exit codes:
 //
@@ -17,7 +15,7 @@
 //
 // A divergent field is printed as "path: golden=<x> actual=<y>" so the
 // caller can grep out exactly what drifted. No wiggle room; the plan says
-// non-empty diff stops the PoC.
+// non-empty diff stops the run.
 //
 // Usage:
 //
@@ -25,7 +23,7 @@
 //	  -mcp-url http://localhost:9090 \
 //	  -broker  my-broker \
 //	  -vpn     default \
-//	  -golden-dir test/perf-poc/fidelity/golden
+//	  -golden-dir test/performance/fidelity/golden
 //
 // Auth: reads MCP_DEV_TOKEN from env and sends it as Bearer if set. Leave
 // unset when MCP is configured with mcp_client_auth.mode=disabled.
@@ -52,7 +50,7 @@ func main() {
 	mcpURL := flag.String("mcp-url", "http://localhost:9090", "MCP server URL")
 	broker := flag.String("broker", "", "broker alias to invoke tools against (required)")
 	vpn := flag.String("vpn", "default", "msgVpnName for list-queues")
-	goldenDir := flag.String("golden-dir", "test/perf-poc/fidelity/golden", "directory containing golden JSON files")
+	goldenDir := flag.String("golden-dir", "test/performance/fidelity/golden", "directory containing golden JSON files")
 	capture := flag.Bool("capture", false, "capture mode: overwrite golden files with the tools' current output instead of comparing (use when MCP is pointed at the real broker)")
 	shape := flag.Bool("shape", false, "compare shape only (same keys, same types, same array lengths) — ignore scalar values. Use when you want structural fidelity without brittle drift on live metrics.")
 	timeout := flag.Duration("timeout", 30*time.Second, "overall deadline")
@@ -217,7 +215,7 @@ func verify(ctx context.Context, session *mcp.ClientSession, c toolCheck, shape 
 }
 
 // callTool invokes an MCP tool and returns its structured content as a
-// parsed map. MCP tool responses can carry text content; the perf-PoC
+// parsed map. MCP tool responses can carry text content; the performance
 // tools emit a single JSON blob, so we take the first text part and
 // decode it. This matches how the e2e agent consumes tool output.
 func callTool(ctx context.Context, session *mcp.ClientSession, name string, args map[string]any) (map[string]any, error) {

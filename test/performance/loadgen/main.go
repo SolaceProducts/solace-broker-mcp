@@ -6,14 +6,11 @@
 // Command loadgen drives concurrent MCP tool calls at a configured MCP
 // server for a fixed duration, then reports throughput, error rate, and
 // latency percentiles. Companion to the mock-semp and fidelity commands
-// in test/perf-poc/.
-//
-// See docs/plans/2026-07-22-semp-mock-perf-poc.md step 7. Pass/fail bar
-// for the PoC demo run: >=300 req/s at 32 clients, <0.5% errors, over 60s.
+// in test/performance/.
 //
 // Each -clients unit is a distinct MCP session so the load pattern mirrors
 // realistic multi-agent usage (one session per agent), matching the client
-// pattern used by test/e2e-basic-mcp/agent and test/perf-poc/fidelity.
+// pattern used by test/e2e-basic-mcp/agent and test/performance/fidelity.
 //
 // Usage:
 //
@@ -579,7 +576,7 @@ func splitCSV(s string) []string {
 }
 
 // connect opens one MCP session over the streamable HTTP transport. Mirrors
-// test/perf-poc/fidelity so both PoC tools consume MCP the same way. The
+// test/performance/fidelity so both performance tools consume MCP the same way. The
 // clientIdx is only used to disambiguate the session name in server logs.
 func connect(ctx context.Context, url string, clientIdx int) (*mcp.ClientSession, error) {
 	// Bump the pool from the stdlib default (MaxIdleConnsPerHost=2) so tool

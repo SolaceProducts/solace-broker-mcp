@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 
 // Command memsampler polls /proc/<pid>/status at a fixed interval and
-// writes a CSV row per sample. Meant to run alongside test/perf-poc/loadgen
+// writes a CSV row per sample. Meant to run alongside test/performance/loadgen
 // so a plot of RSS vs. wall-clock during a load run reveals whether MCP's
 // footprint climbs (leak) or holds steady (per plan step 8's <10% drift
 // over 30s bar).
@@ -138,7 +138,7 @@ type procSample struct {
 }
 
 // sampleProc parses the handful of fields we care about out of
-// /proc/<pid>/status. Not using gopsutil to keep the PoC dependency-free.
+// /proc/<pid>/status. Not using gopsutil to keep this tool dependency-free.
 func sampleProc(pid int) (procSample, error) {
 	path := fmt.Sprintf("/proc/%d/status", pid)
 	data, err := os.ReadFile(path)

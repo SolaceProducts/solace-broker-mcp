@@ -3,10 +3,8 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 
-// Command mock-semp is a throwaway PoC replayer that pretends to be N Solace
-// brokers, so MCP can be load-tested without spinning up real brokers.
-//
-// See docs/plans/2026-07-22-semp-mock-perf-poc.md.
+// Command mock-semp is a replayer that pretends to be N Solace brokers, so
+// MCP can be load-tested without spinning up real brokers.
 //
 // Flags:
 //
@@ -28,7 +26,7 @@
 // inside MCP even under heavy load. Setting a latency here holds each slot
 // for that duration, so once the loadgen sends more than N concurrent
 // calls to the same broker, the extra callers park inside MCP waiting to
-// acquire a slot. That parked-goroutine queue is the thing this PoC is
+// acquire a slot. That parked-goroutine queue is the thing this suite is
 // built to observe (backpressure behavior, timeout handling, memory under
 // contention) — the flag is how you make it appear on demand.
 //
@@ -82,7 +80,7 @@ func main() {
 	// Seed every broker port with the flag's latency. Individual ports can
 	// still be overridden later via POST /_mock/config; the flag just spares
 	// the caller from a curl on startup when a uniform latency is all they
-	// need (the common PoC case — see run.sh LATENCY_MS).
+	// need (the common case — see run.sh LATENCY_MS).
 	if *defaultLatencyMs > 0 {
 		for _, p := range ports {
 			cfg.set(p, portOverride{latencyMs: *defaultLatencyMs})
