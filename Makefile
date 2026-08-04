@@ -134,12 +134,15 @@ test: ## Run unit tests
 test-race: ## Run unit tests with the race detector (matches CI)
 	go test -race -v ./...
 
+# If go tool cover ever emits nothing (coverage.out missing/empty), $total below
+# is empty and `t+0` evaluates to 0 in awk, so this fails closed by design — not
+# a bug to "fix" with a pass-on-empty guard.
 .PHONY: test-cover
-test-cover: ## Run unit tests with coverage; fails if aggregate coverage drops below 80% (matches CI; see docs/internal/unit-test-coverage.md)
+test-cover: ## Run unit tests with coverage; fails if aggregate coverage drops below 85% (matches CI; see docs/internal/unit-test-coverage.md)
 	go test -race -v -coverprofile=coverage.out ./...
-	@total=$$(go tool cover -func=coverage.out | tail -1 | awk '{print $$3}' | tr -d '%'); \
+	@total=$$(go tool cover -func=coverage.out | tail -n 1 | awk '{print $$3}' | tr -d '%'); \
 	echo "Total coverage: $$total%"; \
-	awk -v t="$$total" 'BEGIN { if (t+0 < 80.0) { print "FAIL: coverage " t "% is below the 80% floor"; exit 1 } else { print "OK: coverage " t "% meets the 80% floor" } }'
+	awk -v t="$$total" 'BEGIN { if (t+0 < 85.0) { print "FAIL: coverage " t "% is below the 85% floor"; exit 1 } else { print "OK: coverage " t "% meets the 85% floor" } }'
 
 .PHONY: bench
 bench: ## Run benchmarks repo-wide (matches CI; -run=^$ skips regular tests so only Benchmark* funcs execute)

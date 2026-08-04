@@ -5,7 +5,7 @@ Architecture and diagrams: `docs/internal/architecture.md`.
 
 ## Commands
 
-- `make check` — build, vet, lint, race-enabled tests with the 80% coverage gate
+- `make check` — build, vet, lint, race-enabled tests with the 85% coverage gate
   (`docs/internal/unit-test-coverage.md`). Matches CI's build/lint/test jobs (CI
   additionally runs the E2E jobs below); run before pushing.
 - `make test` — unit tests. Single test: `go test ./internal/<pkg>/ -run TestName -v`

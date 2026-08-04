@@ -383,13 +383,18 @@ func TestListBrokers_ResponseContainsOnlyAliases(t *testing.T) {
 		t.Fatalf("brokers field is not an array: %s", rawJSON)
 	}
 	wantAliases := map[string]bool{"broker-a": true, "broker-b": true}
-	if len(brokers) != len(wantAliases) {
-		t.Errorf("brokers = %v, want exactly %v", brokers, wantAliases)
-	}
+	seen := map[string]int{}
 	for _, b := range brokers {
 		s, ok := b.(string)
 		if !ok || !wantAliases[s] {
 			t.Errorf("unexpected broker entry %v (not a plain known alias)", b)
+			continue
+		}
+		seen[s]++
+	}
+	for alias := range wantAliases {
+		if seen[alias] != 1 {
+			t.Errorf("alias %q appeared %d times in %v, want exactly once", alias, seen[alias], brokers)
 		}
 	}
 
