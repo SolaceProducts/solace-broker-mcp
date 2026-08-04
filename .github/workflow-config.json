@@ -10,7 +10,7 @@
         "mode": "BLOCK",
         "block_on": ["critical", "high"]
       },
-      "project_id": "SolaceDev_solace-broker-mcp",
+      "project_id": "SolaceProducts_solace-broker-mcp",
       "team": null,
       "labels": ["broker"]
     },

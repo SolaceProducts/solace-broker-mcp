@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	internalauth "github.com/SolaceDev/solace-broker-mcp/internal/auth"
-	"github.com/SolaceDev/solace-broker-mcp/internal/tokenexchange"
+	internalauth "github.com/SolaceProducts/solace-broker-mcp/internal/auth"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
 )
 
 type fakeExchanger struct {

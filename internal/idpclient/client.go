@@ -33,7 +33,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
 )
 
 // config holds the per-call configuration applied by NewHTTPClient.

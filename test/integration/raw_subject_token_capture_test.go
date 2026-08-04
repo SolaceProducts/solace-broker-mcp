@@ -22,8 +22,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/auth"
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 )

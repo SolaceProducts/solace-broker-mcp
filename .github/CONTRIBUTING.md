@@ -23,7 +23,7 @@ This project adheres to the [Contributor Covenant Code of Conduct](CODE_OF_CONDU
 
 ### Reporting Bugs
 
-Before creating a bug report, please check the [existing issues](https://github.com/SolaceDev/solace-broker-mcp/issues) to avoid duplicates.
+Before creating a bug report, please check the [existing issues](https://github.com/SolaceProducts/solace-broker-mcp/issues) to avoid duplicates.
 
 When reporting a bug, please include:
 
@@ -46,7 +46,7 @@ When reporting a bug, please include:
 
 We welcome feature requests! Before submitting:
 
-1. Check [existing issues](https://github.com/SolaceDev/solace-broker-mcp/issues?q=label%3Aenhancement) and [discussions](https://github.com/SolaceDev/solace-broker-mcp/discussions) for similar ideas
+1. Check [existing issues](https://github.com/SolaceProducts/solace-broker-mcp/issues?q=label%3Aenhancement) and [discussions](https://github.com/SolaceProducts/solace-broker-mcp/discussions) for similar ideas
 2. Consider if the feature aligns with the project's goals (SEMP API management via MCP)
 3. Think about how it would benefit the broader community
 
@@ -113,6 +113,42 @@ go run ./cmd/server
 - [ ] Documentation updated (README, godoc, docs/)
 - [ ] Commits are signed off (DCO)
 - [ ] PR description follows the template
+
+### Getting CI to run on a branch
+
+**Pushing a branch no longer runs CI on its own.** `build-and-test.yml` triggers on
+pull requests against `main` and on pushes to `main`, not on every branch push.
+Three ways to get a verdict, cheapest first:
+
+1. **Locally**, which is the fastest loop and needs no CI at all:
+
+   ```bash
+   make check          # build, vet, lint, race tests
+   make e2e-all        # the basic-mcp E2E suite against Dockerized brokers
+   ```
+
+2. **Run the full suite on your branch without a pull request**, via
+   `workflow_dispatch`:
+
+   ```bash
+   gh workflow run build-and-test.yml --ref my-branch
+   gh run watch        # or: gh run list --workflow build-and-test.yml
+   ```
+
+   This needs write access, so it is for maintainers rather than fork
+   contributors.
+
+3. **Open the pull request.** A draft is enough; `opened` and `synchronize` both
+   fire for drafts, so every check runs and keeps running as you push.
+
+Why it changed: those seven jobs are required status checks, and a check that never
+reports leaves a required context pending forever. That is how a fork contribution
+used to become unmergeable, because a fork's push fires in the fork and never
+against this repository's commit. Moving to `pull_request` fixes that, and keeping
+`push: '**'` alongside it would run every check twice on same-repo pull requests,
+including five Dockerized E2E suites. The header comment in
+`.github/workflows/build-and-test.yml` records the alternatives that were
+considered and why they lose.
 
 ### PR Review Process
 
@@ -353,10 +389,17 @@ maintainer to approve it, not just the one on your first push. So checks can sit
 **pending**, and a check that was green can go back to pending after the PR is
 retitled or edited. That is normal and nothing for you to fix.
 
+You will also see the `FOSSA Scan` check report as **skipped**. Our licence and
+vulnerability scan authenticates against an internal service, and GitHub correctly
+withholds those credentials from a fork's workflow run, so the scan cannot run on
+your pull request. The `SCA gate` check accounts for that and passes. If your
+change adds or updates a dependency, expect a reviewer to look at `go.mod` and
+`go.sum` closely, since the automated scan is not there to do it.
+
 ## Questions?
 
-- **General questions:** Start a [GitHub Discussion](https://github.com/SolaceDev/solace-broker-mcp/discussions)
-- **Bugs or features:** Open a [GitHub Issue](https://github.com/SolaceDev/solace-broker-mcp/issues/new/choose)
+- **General questions:** Start a [GitHub Discussion](https://github.com/SolaceProducts/solace-broker-mcp/discussions)
+- **Bugs or features:** Open a [GitHub Issue](https://github.com/SolaceProducts/solace-broker-mcp/issues/new/choose)
 - **Security issues:** Email [andrea.ross@solace.com](mailto:andrea.ross@solace.com)
 - **Community chat:** Visit [Solace Community](https://solace.community/)
 

@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/composite/postprocess"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/postprocess"
 )
 
 // row builds a queueBinding/restConsumer item with the two required fields.

@@ -20,7 +20,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 )
 
 // threeStepTool returns the queue-replay-recovery tool definition for tests.

@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/oauth/cache/cachetest"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache/cachetest"
 )
 
 // validParams returns a Params struct with every field set to a value

@@ -22,7 +22,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/SolaceDev/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 )
 
 // --- helpers ----------------------------------------------------------------
