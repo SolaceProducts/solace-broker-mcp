@@ -86,13 +86,6 @@ func NewCompositeExecutor(operations map[string]*sempv2.Operation) *CompositeExe
 	}
 }
 
-// Operation looks up a catalog operation by prefixed ID (matching
-// Step.Operation). Exposed for schema-building without leaking the catalog map.
-func (ce *CompositeExecutor) Operation(prefixedID string) (*sempv2.Operation, bool) {
-	op, ok := ce.operations[prefixedID]
-	return op, ok
-}
-
 // Execute runs all steps of a composite tool against the given client and
 // returns the combined result. The client is resolved per-call by the registry
 // handler — the executor does not know about brokers or pools.

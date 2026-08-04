@@ -44,7 +44,6 @@ type ParameterDef struct {
 	Type        string `yaml:"type"`
 	Required    bool   `yaml:"required"`
 	Description string `yaml:"description"`
-	IsPathParam bool   `yaml:"-"`
 }
 
 // Step defines a single operation in a composite tool. Each step references a
