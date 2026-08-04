@@ -22,10 +22,11 @@ updates:
     groups:
       go-minor-patch:
         update-types: ["minor", "patch"]
-    # Root module has ~10 direct deps; a busy week of individual majors plus
-    # the grouped minor/patch PR can still approach the default cap of 5. Set
-    # explicitly rather than left at the default so a full week reads as a
-    # deliberate choice, not an unnoticed ceiling.
+      go-major:
+        update-types: ["major"]
+    # Grouping caps this directory at 2 open PRs per run (minor/patch, major),
+    # so the default cap of 5 was never actually at risk. Set explicitly anyway
+    # so the choice reads as deliberate rather than an unnoticed default.
     open-pull-requests-limit: 10
 
   - package-ecosystem: "gomod"
@@ -35,6 +36,8 @@ updates:
     groups:
       go-minor-patch:
         update-types: ["minor", "patch"]
+      go-major:
+        update-types: ["major"]
     open-pull-requests-limit: 10
 
   - package-ecosystem: "gomod"
@@ -44,6 +47,8 @@ updates:
     groups:
       go-minor-patch:
         update-types: ["minor", "patch"]
+      go-major:
+        update-types: ["major"]
     open-pull-requests-limit: 10
 
   - package-ecosystem: "github-actions"
