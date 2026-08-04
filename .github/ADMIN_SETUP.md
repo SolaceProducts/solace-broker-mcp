@@ -127,11 +127,15 @@ and re-check after the visibility change.
 
 **Dependency updates use Renovate, not Dependabot.**
 
-`.github/renovate.json` scopes Renovate to exactly one dependency: the pinned
-Claude Code CLI version in the LLM e2e harness. Go modules are deliberately
-excluded to prevent runaway PRs, and are bumped by hand.
+`.github/renovate.json` covers three scoped jobs: the pinned Claude Code CLI
+version in the LLM e2e harness, Go module updates across all three `go.mod`
+files (root, `test/e2e-common/broker-driver`, `test/e2e-basic-mcp/agent`), and
+GitHub Actions version updates — each grouped into one PR to keep volume down.
 
-- Do **not** create `.github/dependabot.yml`. It would contradict that scoping.
+- Do **not** create `.github/dependabot.yml`. Beyond contradicting this
+  scoping, Dependabot's `commit-message` config has no field for a commit
+  trailer, so its PRs could never carry the `Signed-off-by` line the `DCO
+  sign-off` required check needs — they would go red on every PR.
 - Dependabot's role here is alerts and security-only updates. Those do not
   conflict with Renovate and are already on.
 
