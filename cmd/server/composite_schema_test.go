@@ -45,11 +45,13 @@ func TestWriteToolObjectNamesHaveMinLength(t *testing.T) {
 		"disconnect-client":     {"msgVpnName", "clientName"},
 		"clear-client-stats":    {"msgVpnName", "clientName"},
 	}
-	// Optional *Config bodies must stay unconstrained.
+	// *Config bodies are objects, never strings. update-message-vpn's is
+	// required:true, isolating the type gate from the optional create-* ones.
 	wantNoMinLength := map[string]string{
 		"create-message-vpn": "msgVpnConfig",
 		"create-queue":       "queueConfig",
 		"create-rdp":         "rdpConfig",
+		"update-message-vpn": "msgVpnConfig",
 	}
 
 	server := registeredServer(t, true)
