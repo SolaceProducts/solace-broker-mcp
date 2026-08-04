@@ -130,7 +130,8 @@ and re-check after the visibility change.
 `.github/renovate.json` covers three scoped jobs: the pinned Claude Code CLI
 version in the LLM e2e harness, Go module updates across all three `go.mod`
 files (root, `test/e2e-common/broker-driver`, `test/e2e-basic-mcp/agent`), and
-GitHub Actions version updates — each grouped into one PR to keep volume down.
+GitHub Actions version updates — grouped to keep volume down: one PR for Go
+minor/patch, one for Go major, one for GitHub Actions.
 
 - Do **not** create `.github/dependabot.yml`. Beyond contradicting this
   scoping, Dependabot's `commit-message` config has no field for a commit
