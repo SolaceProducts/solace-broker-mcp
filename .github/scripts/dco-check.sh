@@ -59,11 +59,22 @@
 # the individual commits' sign-off lines survive into the squashed commit on
 # main. Merge-commit merges preserve them directly.
 #
-# Bots are not exempt. An author-name exemption would be trivially forgeable
-# (`git commit --author='renovate[bot] <...>'`), which is exactly the bypass this
-# gate must not have. Renovate signs off its own commits instead, via the
-# `commitBody` setting in .github/renovate.json — keep that address in step with
-# the identity Renovate actually commits under.
+# Bots are not exempt *by this script*. An author-name exemption in this logic
+# would be trivially forgeable (`git commit --author='renovate[bot] <...>'`),
+# which is exactly the bypass this gate must not have. Renovate signs off its
+# own commits instead, via the `commitBody` setting in .github/renovate.json —
+# keep that address in step with the identity Renovate actually commits under.
+#
+# Dependabot is the one deliberate exception, and it is not implemented here.
+# Its commit-message config has no field for a trailer, so it cannot sign off
+# no matter what — there is no "correct address" fix like Renovate's. Rather
+# than add an author-name check to this script (the forgeable shape the
+# paragraph above rejects), .github/workflows/dco.yaml skips the whole job when
+# `github.event.pull_request.user.login == 'dependabot[bot]'`: a field GitHub
+# itself asserts about who opened the PR, which a PR's contents cannot forge,
+# and which only a reviewed change on main (not a PR) can add or widen. See
+# that file for the full reasoning. Decided under SOL-152808, after confirming
+# Renovate cannot be enrolled for this repo once it is public.
 #
 # Fork PRs: needs only a checkout and read-only `contents: read`. No secrets, no
 # API token. A PR cannot switch the gate off, because .github/workflows/dco.yaml

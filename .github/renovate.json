@@ -1,10 +1,10 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:base"],
-  "description": "Renovate is the only dependency updater in this repo (see .github/ADMIN_SETUP.md — Dependabot stays alerts/security-only). Three scoped jobs, each carved out of the blanket `enabled: false` default below: (1) the LLM e2e harness's pinned Claude Code CLI version, tracking npm's `stable` dist-tag, deliberately lagged from `latest` — see test/e2e-llm/README.md for the bump procedure; (2) Go module updates across every go.mod in the repo (root, test/e2e-common/broker-driver, test/e2e-basic-mcp/agent — Renovate finds all three on its own, no per-directory config needed), grouped into one minor/patch PR and one major PR to keep volume down. That auto-discovery depends on the top-level `ignorePaths` below: config:base resolves to config:recommended, which folds in :ignoreModulesAndTests and its own ignorePaths covering `**/test/**` and `**/tests/**` among others; the `ignorePaths` here replaces that list rather than extending it, and this narrower list is the only reason the two nested test go.mod files stay in scope. Do not drop it as apparent redundancy — the two test modules would silently fall out of Renovate's scope with no signal; (3) GitHub Actions version updates across all workflow files, grouped into a single PR. Top-level `commitBody` carries the DCO sign-off that the `DCO sign-off` CI gate requires — this is why Renovate covers Go and Actions too rather than a second updater (Dependabot) being added: its commit-message config has no field for a trailer, so its commits can never satisfy that gate. `commitBody` is top-level rather than per-rule so it also covers lock-file maintenance and config-migration branches. The gate exempts nobody: an author-name exemption would be forgeable with `git commit --author`. The address must match the identity Renovate commits under (the hosted GitHub App uses this one), otherwise its PRs go red on the gate — the fix is to correct the address here, never to exempt the bot.",
-  "enabledManagers": ["npm", "gomod", "github-actions"],
+  "description": "Tightly scoped: Renovate only watches the LLM e2e harness's pinned Claude Code CLI version. No other deps in this repo are managed here. SOL-152586 briefly extended this to also cover Go modules and GitHub Actions instead of using Dependabot, since Dependabot cannot satisfy the DCO sign-off gate on its own — but Renovate cannot be enrolled for a public repository under the org's current system, so that extension was reverted (SOL-152808) before this repo goes public. Go modules and GitHub Actions are covered by .github/dependabot.yml instead, with Dependabot's PRs exempted from the DCO gate at the workflow level (.github/workflows/dco.yaml) rather than via a sign-off Renovate can attach and Dependabot cannot. Bumps here follow npm's `stable` dist-tag (deliberately lagged from `latest`); see test/e2e-llm/README.md for the bump procedure. Top-level `commitBody` carries the DCO sign-off that the `DCO sign-off` CI gate requires, and is top-level rather than per-rule so it also covers lock-file maintenance and config-migration branches. The gate exempts nobody *by forging a commit's author field*: an author-name exemption would be forgeable with `git commit --author`. The address must match the identity Renovate commits under (the hosted GitHub App uses this one), otherwise its PRs go red on the gate — the fix is to correct the address here, never to exempt the bot.",
+  "enabledManagers": ["npm"],
   "ignorePaths": ["**/node_modules/**"],
-  "labels": ["dependencies"],
+  "labels": ["dependencies", "llm-eval"],
   "schedule": ["before 9am on monday"],
   "prHourlyLimit": 1,
   "commitBody": "Signed-off-by: renovate[bot] <29139614+renovate[bot]@users.noreply.github.com>",
@@ -21,33 +21,9 @@
       "automerge": false,
       "rangeStrategy": "pin",
       "commitMessageTopic": "Claude Code CLI pin",
-      "labels": ["dependencies", "llm-eval"],
       "prBodyNotes": [
         "Before merging: run `./run-all.sh` twice from `test/e2e-llm/` against the candidate version, confirm 16/16 pass both times. See the README's bump procedure."
       ]
-    },
-    {
-      "matchManagers": ["gomod"],
-      "matchUpdateTypes": ["patch", "minor"],
-      "enabled": true,
-      "schedule": ["at any time"],
-      "groupName": "Go dependencies (minor/patch)",
-      "labels": ["dependencies", "go"]
-    },
-    {
-      "matchManagers": ["gomod"],
-      "matchUpdateTypes": ["major"],
-      "enabled": true,
-      "schedule": ["at any time"],
-      "groupName": "Go dependencies (major)",
-      "labels": ["dependencies", "go"]
-    },
-    {
-      "matchManagers": ["github-actions"],
-      "enabled": true,
-      "schedule": ["at any time"],
-      "groupName": "GitHub Actions",
-      "labels": ["dependencies", "github-actions"]
     }
   ]
 }

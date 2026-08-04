@@ -125,20 +125,27 @@ returns 403. Something is producing this check and we cannot say from the API
 which configuration owns it. Confirm on the settings page before relying on it,
 and re-check after the visibility change.
 
-**Dependency updates use Renovate, not Dependabot.**
+**Dependency updates split between Renovate and Dependabot.**
 
-`.github/renovate.json` covers three scoped jobs: the pinned Claude Code CLI
-version in the LLM e2e harness, Go module updates across all three `go.mod`
-files (root, `test/e2e-common/broker-driver`, `test/e2e-basic-mcp/agent`), and
-GitHub Actions version updates — grouped to keep volume down: one PR for Go
-minor/patch, one for Go major, one for GitHub Actions.
+`.github/renovate.json` covers exactly one job: the pinned Claude Code CLI
+version in the LLM e2e harness. `.github/dependabot.yml` covers scheduled
+version updates for Go modules across all three `go.mod` files (root,
+`test/e2e-common/broker-driver`, `test/e2e-basic-mcp/agent`) and GitHub
+Actions — grouped to keep volume down: one PR per Go module for minor/patch,
+one per module for major, one for GitHub Actions. Dependabot also still
+handles alerts and security-only updates, as before; those run independently
+of `dependabot.yml` and are already on.
 
-- Do **not** create `.github/dependabot.yml`. Beyond contradicting this
-  scoping, Dependabot's `commit-message` config has no field for a commit
-  trailer, so its PRs could never carry the `Signed-off-by` line the `DCO
-  sign-off` required check needs — they would go red on every PR.
-- Dependabot's role here is alerts and security-only updates. Those do not
-  conflict with Renovate and are already on.
+- Renovate does not cover Go modules or GitHub Actions here. SOL-152586
+  briefly extended it to do so instead of adding a Dependabot config, but
+  Renovate cannot be enrolled for a public repository under the org's current
+  system — reverted under SOL-152808 ahead of this repo going public.
+- Dependabot's `commit-message` config has no field for a commit trailer, so
+  its PRs can never carry the `Signed-off-by` line the `DCO sign-off` required
+  check normally needs. Rather than leave every one of its PRs permanently red,
+  `.github/workflows/dco.yaml` skips that check specifically for PRs GitHub
+  itself records as opened by `dependabot[bot]` — see that file and
+  `.github/scripts/dco-check.sh` for why this is safe from PR-side forgery.
 
 ---
 
@@ -201,7 +208,7 @@ against a real pull request before you rely on them:
 | `SCA gate` | `ci-pr.yaml` job `sca_gate` | The FOSSA verdict, or an accounted-for reason there is none. **Not** `FOSSA Scan / SCA Scan`; see the warning below |
 | `Third-party licenses current` | `ci-pr.yaml` job `licenses` | `THIRD_PARTY_LICENSES.md` still matching `go list -deps ./cmd/server`. Needs no secret, so it reports on fork pull requests too |
 | `CHANGELOG updated` | `ci-pr.yaml` job `changelog` | Advisory today; see note below |
-| `DCO sign-off` | `dco.yaml` job `dco` | a sign-off on every commit the PR adds |
+| `DCO sign-off` | `dco.yaml` job `dco` | a sign-off on every commit the PR adds, except a PR GitHub records as opened by `dependabot[bot]` (SOL-152808) |
 | `DCO check self-test` | `ci-pr.yaml` job `dco_selftest` | the gate's own logic still working |
 
 ⚠️ **Two FOSSA-shaped entries are wrong, and the right one is neither.** Pick
