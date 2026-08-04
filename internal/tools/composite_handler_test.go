@@ -268,6 +268,76 @@ func TestCompositeToolHandler_Metadata_FreshPointersAcrossCalls(t *testing.T) {
 
 // TestCloneBoolPtr exercises cloneBoolPtr directly: nil-passes-through, and
 // non-nil produces a fresh allocation with the same value.
+func TestPathParamNames(t *testing.T) {
+	ops := map[string]*sempv2.Operation{
+		"config/createMsgVpnQueue": {Parameters: []sempv2.Parameter{
+			{Name: "msgVpnName", In: "path"},
+			{Name: "queueName", In: "path"},
+			{Name: "select", In: "query"},
+			{Name: "body", In: "body"},
+		}},
+		"action/clearStats": {Parameters: []sempv2.Parameter{
+			{Name: "msgVpnName", In: "path"},
+		}},
+	}
+	lookup := func(id string) (*sempv2.Operation, bool) { op, ok := ops[id]; return op, ok }
+
+	tool := composite.CompositeTool{
+		Steps: []composite.Step{
+			{ID: "create", Operation: "config/createMsgVpnQueue"},
+			{ID: "clear", Operation: "action/clearStats"},
+			{ID: "missing", Operation: "config/doesNotExist"},
+		},
+	}
+
+	got := pathParamNames(tool, lookup)
+	want := map[string]bool{"msgVpnName": true, "queueName": true}
+	if len(got) != len(want) {
+		t.Fatalf("pathParamNames = %v, want %v", got, want)
+	}
+	for name := range want {
+		if !got[name] {
+			t.Errorf("missing path param %q in %v", name, got)
+		}
+	}
+}
+
+func TestCompositeToolHandler_SchemaMinLength(t *testing.T) {
+	ops := map[string]*sempv2.Operation{
+		"config/createMsgVpnQueue": {Parameters: []sempv2.Parameter{
+			{Name: "msgVpnName", In: "path"},
+			{Name: "pageSize", In: "path"},
+		}},
+	}
+	tool := composite.CompositeTool{
+		Name:        "create-queue",
+		Description: "Create a queue.",
+		Parameters: []composite.ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "filterText", Type: "string"},
+			{Name: "pageSize", Type: "integer"},
+		},
+		Steps: []composite.Step{{ID: "create", Operation: "config/createMsgVpnQueue"}},
+	}
+
+	executor := composite.NewCompositeExecutor(ops)
+	handler := NewCompositeToolHandler(tool, executor)
+	props, ok := handler.Metadata().InputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("expected properties map")
+	}
+
+	if got := props["msgVpnName"].(map[string]any)["minLength"]; got != 1 {
+		t.Errorf("msgVpnName minLength = %v, want 1", got)
+	}
+	if _, ok := props["filterText"].(map[string]any)["minLength"]; ok {
+		t.Error("non-path param filterText should not have minLength")
+	}
+	if _, ok := props["pageSize"].(map[string]any)["minLength"]; ok {
+		t.Error("integer path param pageSize should not have minLength")
+	}
+}
+
 func TestCloneBoolPtr(t *testing.T) {
 	if got := cloneBoolPtr(nil); got != nil {
 		t.Errorf("cloneBoolPtr(nil) = %v, want nil", got)

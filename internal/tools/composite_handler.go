@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 )
 
 // CompositeToolHandler adapts a YAML-driven composite tool definition to the
@@ -39,16 +40,41 @@ func NewCompositeToolHandler(tool composite.CompositeTool, executor *composite.C
 	}
 }
 
+// pathParamNames returns the set of parameter names that are In:"path" on at
+// least one of the tool's steps' operations. Missing operations are skipped —
+// the executor surfaces those at run time.
+func pathParamNames(tool composite.CompositeTool, lookup func(string) (*sempv2.Operation, bool)) map[string]bool {
+	names := make(map[string]bool)
+	for _, step := range tool.Steps {
+		op, ok := lookup(step.Operation)
+		if !ok {
+			continue
+		}
+		for _, p := range op.Parameters {
+			if p.In == "path" {
+				names[p.Name] = true
+			}
+		}
+	}
+	return names
+}
+
 // Metadata returns a fresh Metadata value built from the YAML-loaded composite
 // tool definition. The input schema is computed from the tool's Parameters; the
 // output schema is the generic step-keyed envelope shared by every composite
 // tool's collect strategy. Each call returns a freshly allocated value with
 // fresh maps inside, so callers cannot mutate shared state.
 func (h *CompositeToolHandler) Metadata() Metadata {
+	pathParams := pathParamNames(h.tool, h.executor.Operation)
+	params := make([]composite.ParameterDef, len(h.tool.Parameters))
+	copy(params, h.tool.Parameters)
+	for i := range params {
+		params[i].IsPathParam = pathParams[params[i].Name]
+	}
 	return Metadata{
 		Name:         h.tool.Name,
 		Description:  h.tool.Description,
-		InputSchema:  buildCompositeInputSchema(h.tool.Parameters),
+		InputSchema:  buildCompositeInputSchema(params),
 		OutputSchema: StepKeyedEnvelopeSchema(),
 		Annotations:  toolAnnotations(h.tool.Annotations),
 	}
@@ -83,6 +109,9 @@ func buildCompositeInputSchema(params []composite.ParameterDef) map[string]any {
 		}
 		if p.Description != "" {
 			prop["description"] = p.Description
+		}
+		if p.Type == "string" && p.IsPathParam {
+			prop["minLength"] = 1
 		}
 		properties[p.Name] = prop
 		if p.Required {
