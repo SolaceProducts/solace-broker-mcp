@@ -253,6 +253,46 @@ func TestCompositeToolHandler_Metadata_FreshPointersAcrossCalls(t *testing.T) {
 	}
 }
 
+// TestCompositeToolHandler_SchemaMinLength: only required string params carry
+// minLength:1; optional strings and required non-strings do not.
+func TestCompositeToolHandler_SchemaMinLength(t *testing.T) {
+	tool := composite.CompositeTool{
+		Name:        "create-queue",
+		Description: "Create a queue.",
+		Parameters: []composite.ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "queueName", Type: "string", Required: true},
+			{Name: "filterText", Type: "string"},
+			{Name: "maxResults", Type: "integer", Required: true},
+		},
+	}
+
+	handler := NewCompositeToolHandler(tool, composite.NewCompositeExecutor(nil))
+	props, ok := handler.Metadata().InputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("expected properties map")
+	}
+	prop := func(name string) map[string]any {
+		p, ok := props[name].(map[string]any)
+		if !ok {
+			t.Fatalf("property %q missing or not an object", name)
+		}
+		return p
+	}
+
+	for _, name := range []string{"msgVpnName", "queueName"} {
+		if got := prop(name)["minLength"]; got != 1 {
+			t.Errorf("%s minLength = %v, want 1", name, got)
+		}
+	}
+	if _, ok := prop("filterText")["minLength"]; ok {
+		t.Error("optional string filterText should not have minLength")
+	}
+	if _, ok := prop("maxResults")["minLength"]; ok {
+		t.Error("required integer maxResults should not have minLength")
+	}
+}
+
 // TestCloneBoolPtr exercises cloneBoolPtr directly: nil-passes-through, and
 // non-nil produces a fresh allocation with the same value.
 func TestCloneBoolPtr(t *testing.T) {

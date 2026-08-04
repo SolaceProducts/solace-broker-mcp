@@ -75,6 +75,38 @@ jobs:
   dco:
     name: DCO sign-off
     runs-on: ubuntu-latest
+    # Dependabot is exempt from this gate. Its commit-message schema has no
+    # field for a Signed-off-by trailer — only prefix, prefix-development, and
+    # include: scope — so it can never satisfy dco-check.sh no matter what this
+    # repo's dependabot.yml says, and every Dependabot PR would otherwise be
+    # permanently red on a required check. Decided under SOL-152808, after
+    # confirming Renovate (which does sign off via commitBody, see
+    # .github/renovate.json) cannot be enrolled for this repo once it is public.
+    #
+    # Keyed on github.event.pull_request.user.login: GitHub's own record,
+    # asserted via its API, of which account opened the pull request. This is
+    # not a commit author/committer field — those are exactly the forgeable
+    # shape dco-check.sh's "bots are not exempt" design refuses to trust,
+    # because any contributor can set one locally
+    # (`git commit --author='dependabot[bot] <...>'`). A pull request's
+    # contents cannot influence who GitHub recorded as having opened it.
+    #
+    # This SKIPS the job rather than passing it, which is the same mechanic the
+    # top-of-file comment warns is forgeable by a fork adding `if: false` to a
+    # `pull_request`-triggered job. That forgery is unavailable here for the
+    # same base-ref reason `pull_request_target` exists in the first place: this
+    # workflow always runs the version committed on main, so only a reviewed
+    # change there can add or widen this condition — a pull request cannot
+    # grant itself the exemption by claiming to be Dependabot.
+    #
+    # Residual gap, stated so it is not mistaken for an oversight: this keys on
+    # who opened the PR, not on who authored each commit in it. A maintainer
+    # who pushes an extra commit of their own onto an open Dependabot branch —
+    # rather than letting Dependabot manage it — gets that commit skipped too,
+    # since the whole job is skipped for the PR. Narrow in practice (Dependabot
+    # PRs are normally left for Dependabot to update), but real: do not use this
+    # PR as a place to hand-carry unrelated changes past the sign-off gate.
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
     permissions:
       contents: read
     steps:

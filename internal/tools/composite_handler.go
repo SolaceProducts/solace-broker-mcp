@@ -84,6 +84,12 @@ func buildCompositeInputSchema(params []composite.ParameterDef) map[string]any {
 		if p.Description != "" {
 			prop["description"] = p.Description
 		}
+		// Every required string in this catalog is an identifier or selector
+		// where empty is never valid (and, as a path segment, produces a
+		// malformed SEMPv2 URL). Reject it at schema validation.
+		if p.Type == "string" && p.Required {
+			prop["minLength"] = 1
+		}
 		properties[p.Name] = prop
 		if p.Required {
 			required = append(required, p.Name)
