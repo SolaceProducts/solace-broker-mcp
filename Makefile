@@ -134,6 +134,13 @@ test: ## Run unit tests
 test-race: ## Run unit tests with the race detector (matches CI)
 	go test -race -v ./...
 
+.PHONY: test-cover
+test-cover: ## Run unit tests with coverage; fails if aggregate coverage drops below 80% (matches CI; see docs/internal/unit-test-coverage.md)
+	go test -race -v -coverprofile=coverage.out ./...
+	@total=$$(go tool cover -func=coverage.out | tail -1 | awk '{print $$3}' | tr -d '%'); \
+	echo "Total coverage: $$total%"; \
+	awk -v t="$$total" 'BEGIN { if (t+0 < 80.0) { print "FAIL: coverage " t "% is below the 80% floor"; exit 1 } else { print "OK: coverage " t "% meets the 80% floor" } }'
+
 .PHONY: bench
 bench: ## Run benchmarks repo-wide (matches CI; -run=^$ skips regular tests so only Benchmark* funcs execute)
 	go test -run=^$$ -bench=. -benchmem ./...
@@ -147,7 +154,7 @@ lint: ## golangci-lint (CI pins v2.11.4)
 	golangci-lint run
 
 .PHONY: check
-check: build-all vet lint test-race ## Run build, vet, lint, and race-enabled tests (matches CI build/lint/test jobs; E2E runs separately)
+check: build-all vet lint test-cover ## Run build, vet, lint, and race-enabled tests with the coverage gate (matches CI build/lint/test jobs; E2E runs separately)
 
 # ── E2E ──────────────────────────────────────────────────────────────────────
 

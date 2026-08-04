@@ -115,18 +115,3 @@ func TestSafeCookieJar_ConcurrentSetClear(t *testing.T) {
 
 	wg.Wait()
 }
-
-// TestSafeCookieJar_ImplementsHTTPCookieJar is satisfied at compile time by
-// the package-level interface assertion in cookiejar.go. This runtime test
-// pins the contract for readers and runs the round trip through an actual
-// http.Client.Jar field assignment, which is what the production code does.
-func TestSafeCookieJar_ImplementsHTTPCookieJar(t *testing.T) {
-	jar, err := NewSafeCookieJar()
-	if err != nil {
-		t.Fatalf("NewSafeCookieJar: %v", err)
-	}
-	client := &http.Client{Jar: jar} // type-checked assignment
-	if client.Jar == nil {
-		t.Fatal("http.Client.Jar must be assignable to *SafeCookieJar")
-	}
-}

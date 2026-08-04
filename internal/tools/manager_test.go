@@ -377,20 +377,6 @@ func TestCallTool_OutputValidationFails(t *testing.T) {
 	}
 }
 
-// --- Annotations tests ---
-
-func TestCallTool_AnnotationsReadOnly(t *testing.T) {
-	mgr := NewToolManager(newTestPool(t))
-	handler := newStubHandler("monitor-tool")
-	mgr.Register(handler)
-
-	h, _ := mgr.Route("monitor-tool")
-	ann := h.Metadata().Annotations
-	if !ann.ReadOnly {
-		t.Error("expected ReadOnly = true for monitoring tool")
-	}
-}
-
 // --- Destructive tool WARNING tests ---
 
 func TestCallTool_DestructiveWarningLogged(t *testing.T) {

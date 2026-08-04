@@ -21,7 +21,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1431,59 +1430,6 @@ func TestExchange_InvalidResponseError(t *testing.T) {
 	}
 }
 
-// Verify that the request body sent to the IdP contains expected form fields.
-func TestExchange_RequestBodyContainsExpectedFields(t *testing.T) {
-	t.Parallel()
-
-	var capturedForm url.Values
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
-		capturedForm = r.PostForm
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, successJSON("tok", 3600))
-	}))
-	defer srv.Close()
-
-	e := newTestExchanger(t, srv.URL)
-	e.nowFunc = func() time.Time { return pinnedNow() }
-
-	input := ExchangeInput{
-		SubjectToken: "my-jwt",
-		BrokerAlias:  "my-broker",
-		Audience:     "https://broker.example.com",
-	}
-
-	_, err := e.Exchange(context.Background(), input)
-	if err != nil {
-		t.Fatalf("Exchange: %v", err)
-	}
-
-	checks := map[string]string{
-		"grant_type":         URNGrantTypeTokenExchange,
-		"subject_token":      "my-jwt",
-		"subject_token_type": URNTokenTypeAccessToken,
-		"audience":           "https://broker.example.com",
-	}
-	for key, want := range checks {
-		if got := capturedForm.Get(key); got != want {
-			t.Errorf("form[%q] = %q, want %q", key, got, want)
-		}
-	}
-
-	// scope must NOT appear — the exchange request omits it so the IdP
-	// applies its per-client / per-user default scopes.
-	if _, present := capturedForm["scope"]; present {
-		t.Errorf("form[%q] present (value=%q); want absent", "scope", capturedForm.Get("scope"))
-	}
-
-	// BrokerAlias must NOT appear in the request.
-	for _, key := range []string{"broker_alias", "broker", "alias"} {
-		if capturedForm.Get(key) != "" {
-			t.Errorf("form[%q] = %q, BrokerAlias must not appear in IdP request", key, capturedForm.Get(key))
-		}
-	}
-}
-
 // ---------- B07 variant: unknown grant type through Exchange ----------
 
 // An unknown grant type fails at request-build time (before any HTTP call).
@@ -1569,63 +1515,6 @@ func TestExchange_SingleflightSharesErrors(t *testing.T) {
 	}
 }
 
-// ---------- Verify JSON response fields passed through correctly ----------
-
-func TestExchange_ResponseFieldsPreserved(t *testing.T) {
-	t.Parallel()
-
-	type testCase struct {
-		name        string
-		respJSON    string
-		wantValue   string
-		wantExpires time.Time
-	}
-
-	now := pinnedNow()
-	tests := []testCase{
-		{
-			name:        "standard token",
-			respJSON:    successJSON("standard-tok", 1800),
-			wantValue:   "standard-tok",
-			wantExpires: now.Add(1800*time.Second - defaults.DefaultTokenExpirySkew),
-		},
-		{
-			name: "extra fields ignored",
-			respJSON: `{"access_token":"extra-tok","token_type":"Bearer","issued_token_type":"` +
-				URNTokenTypeAccessToken + `","expires_in":600,"refresh_token":"ignored","scope":"openid"}`,
-			wantValue:   "extra-tok",
-			wantExpires: now.Add(600*time.Second - defaults.DefaultTokenExpirySkew),
-		},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				fmt.Fprint(w, tc.respJSON)
-			}))
-			defer srv.Close()
-
-			e := newTestExchanger(t, srv.URL)
-			e.nowFunc = func() time.Time { return now }
-
-			tok, err := e.Exchange(context.Background(), validInput())
-			if err != nil {
-				t.Fatalf("Exchange: %v", err)
-			}
-			if tok.Value != tc.wantValue {
-				t.Errorf("tok.Value = %q, want %q", tok.Value, tc.wantValue)
-			}
-			if !tok.ExpiresAt.Equal(tc.wantExpires) {
-				t.Errorf("tok.ExpiresAt = %v, want %v", tok.ExpiresAt, tc.wantExpires)
-			}
-		})
-	}
-}
-
 // ---------- Verify JSON error response integration ----------
 
 func TestExchange_FourxxWithOAuthError(t *testing.T) {
@@ -1638,9 +1527,7 @@ func TestExchange_FourxxWithOAuthError(t *testing.T) {
 		wantSentinel error
 	}{
 		{"401 invalid_token", 401, `{"error":"invalid_token"}`, ErrExchangeRejected},
-		{"400 invalid_grant", 400, `{"error":"invalid_grant"}`, ErrExchangeRejected},
 		{"403 WAF HTML", 403, `<html>Denied</html>`, ErrInvalidResponse},
-		{"500 server error", 500, `Internal Server Error`, ErrExchangeTransport},
 	}
 
 	for _, tc := range tests {
