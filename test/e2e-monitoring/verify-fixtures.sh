@@ -336,7 +336,7 @@ verify_discard_spool_state() {
     local count
     count=$(echo "$body" | jq -r '.data.maxMsgSpoolUsageExceededDiscardedMsgCount')
     assert_json_field "$body" \
-        ".data.maxMsgSpoolUsageExceededDiscardedMsgCount > 0" "true" \
+        "($F7_SPOOL_DISCARD_JQ) > 0" "true" \
         "F7-spool [$label]: maxMsgSpoolUsageExceededDiscardedMsgCount must be > 0 (got $count)" || return 1
 }
 
@@ -361,7 +361,7 @@ verify_discard_ttl_state() {
     to_dmq=$(echo "$body" | jq -r '.data.maxTtlExpiredToDmqMsgCount')
     to_dmq_failed=$(echo "$body" | jq -r '.data.maxTtlExpiredToDmqFailedMsgCount')
     assert_json_field "$body" \
-        "(.data.maxTtlExpiredDiscardedMsgCount + .data.maxTtlExpiredToDmqMsgCount + .data.maxTtlExpiredToDmqFailedMsgCount) > 0" "true" \
+        "($F7_TTL_DISCARD_JQ) > 0" "true" \
         "F7-ttl [$label]: total TTL-expired count must be > 0 (discarded=$discarded toDmq=$to_dmq toDmqFailed=$to_dmq_failed)" || return 1
 }
 

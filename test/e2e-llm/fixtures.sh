@@ -102,6 +102,46 @@ delete_queue_on_current_broker() {
 }
 export -f delete_queue_on_current_broker
 
+# Poll the three F7/lowprio discard counters on the current $BROKER_URL
+# until each is non-zero, up to a wall-clock timeout. Bridges the boundary
+# between the monitoring suite (which owns the fixture identities — queue
+# names and SEMP field paths) and the read-list-queue-discards scenario,
+# whose topOffenderQueues[] assertion otherwise races the fixture warm-up.
+#
+# Reads F7_SPOOL_QUEUE / F7_TTL_QUEUE / F_LOWPRIO_QUEUE and the matching
+# *_DISCARD_JQ constants from monitoring/helpers.sh, so a rename there
+# propagates here.
+#
+# Args: [timeout_s]   wall-clock ceiling, default 30
+# Env:  BROKER_URL, BROKER_VPN, semp_curl (all exported by run-scenario.sh)
+# Exit: 0 on all-non-zero; 1 on timeout with a message naming which counters
+#       are still zero and the BROKER_URL for unreachable-broker diagnosis.
+wait_for_discard_fixtures() {
+    local timeout_s="${1:-30}"
+    local deadline=$((SECONDS + timeout_s))
+    local spool=0 ttl=0 lowprio=0
+
+    # nested so it does not leak into the surrounding namespace when exported.
+    _wfd_nonzero() {
+        local queue="$1" jq_expr="$2" v
+        v=$(semp_curl --connect-timeout 3 --max-time 5 -sf \
+            "$BROKER_URL/SEMP/v2/__private_monitor__/msgVpns/$BROKER_VPN/queues/$queue" 2>/dev/null \
+            | jq -r "$jq_expr" 2>/dev/null)
+        [ -n "$v" ] && [ "$v" != "null" ] && [ "$v" -gt 0 ] 2>/dev/null
+    }
+
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        _wfd_nonzero "$F7_SPOOL_QUEUE"   "$F7_SPOOL_DISCARD_JQ"   && spool=1
+        _wfd_nonzero "$F7_TTL_QUEUE"     "$F7_TTL_DISCARD_JQ"     && ttl=1
+        _wfd_nonzero "$F_LOWPRIO_QUEUE"  "$F_LOWPRIO_DISCARD_JQ"  && lowprio=1
+        [ "$spool" = 1 ] && [ "$ttl" = 1 ] && [ "$lowprio" = 1 ] && return 0
+        sleep 1
+    done
+    echo "wait_for_discard_fixtures: F7 discard counters did not accumulate within ${timeout_s}s wall-clock (spool=$spool ttl=$ttl lowprio=$lowprio; 1=non-zero, 0=still-zero-or-unreachable) — verify broker reachable at $BROKER_URL and setup-fixtures.sh ran" >&2
+    return 1
+}
+export -f wait_for_discard_fixtures
+
 # Long-lived connected-client bound to a dedicated queue on one broker.
 # Modelled on e2e-action/helpers.sh:spawn_action_client but uses the
 # monitoring suite's BIN_DIR so the driver co-locates with F3/F4/F5 and
