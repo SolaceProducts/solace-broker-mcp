@@ -24,8 +24,8 @@ Two mechanisms — prefer the first:
 
 Never declare a `broker` parameter — it is auto-injected at registration into
 the schema of every tool defined through either mechanism (`injectBrokerParam`
-in `internal/tools/register.go`). The built-in `list-brokers` is the one
-exception: registered separately, no `broker` parameter.
+in `internal/tools/register.go`). `list-brokers` and `describe-semp-schema` are the
+exceptions: registered separately, no `broker` parameter.
 
 ## Tool naming
 
