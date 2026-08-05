@@ -12,10 +12,19 @@
 # It is a separate script rather than another section of licenses-check.sh
 # because the two answer different questions against different inputs.
 # licenses-check.sh reasons about the dependency closure of a single main package
-# and the Apache-2.0 4(d) NOTICE obligation. This one reasons about four
-# unrelated sources, none of which has a NOTICE obligation because none of them
-# is redistributed by us. Both run as steps of the same CI job, each with
-# `if: always()`, so a failure in one does not hide the other.
+# and the Apache-2.0 4(d) NOTICE obligation. This one reasons about four unrelated
+# sources and asserts no NOTICE obligation over them.
+#
+# One exception, stated because the tidy version of this sentence is false and a
+# future reader must not draw a compliance conclusion from it:
+# gcr.io/distroless/static-debian12 IS redistributed, as the runtime base layer
+# of the container image we publish. Its layers are not enumerated by this script
+# or by THIRD_PARTY_LICENSES.md — see the Scope section of
+# THIRD_PARTY_BUILD_TEST.md. Everything else here is a tool we run, not something
+# we ship.
+#
+# Both run as steps of the same CI job, each with `if: always()`, so a failure in
+# one does not hide the other.
 #
 # WHAT IT CHECKS
 #
@@ -208,9 +217,21 @@ done < <(
 # --- check 4: container images ----------------------------------------------
 while read -r ref; do
     [ -n "$ref" ] || continue
-    image="${ref%:*}"
-    tag="${ref##*:}"
-    [ "$image" = "$ref" ] && tag="(untagged)"
+    # Split on the LAST path segment only. A colon before the final `/` is a
+    # registry port (`localhost:5000/foo`), not a tag separator, and treating it
+    # as one silently renames the component to `localhost` — a compliance gate
+    # checking a name nothing uses. A digest pin splits on `@` instead.
+    last_segment="${ref##*/}"
+    if [[ "$last_segment" == *"@"* ]]; then
+        image="${ref%@*}"
+        tag="${ref##*@}"
+    elif [[ "$last_segment" == *":"* ]]; then
+        image="${ref%:*}"
+        tag="${ref##*:}"
+    else
+        image="$ref"
+        tag="(untagged)"
+    fi
     [[ "$image" =~ $IMAGE_EXCLUDE_RE ]] && continue
     [[ "$image" =~ $IMAGE_OURS_RE ]] && continue
     expect "$image" "$tag" "Container image" "Name the licence of the project that publishes it."

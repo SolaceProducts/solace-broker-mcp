@@ -89,6 +89,14 @@ add_second_dockerfile() { # <tmp> — discovery must be derived, not hardcoded
     printf 'FROM python:3.12\n' >"$1/Dockerfile.tools"
 }
 
+add_port_registry_image() { # <tmp> — a colon before the last '/' is a registry
+    # port, not a tag. Splitting on the last colon renames the component to
+    # `localhost`, and the gate then reports a name nothing uses while the real
+    # image goes undocumented.
+    unlink_workflows "$1"
+    printf '\n# fixture\n    image: localhost:5000/testonly/thing\n' >>"$1/.github/workflows/dco.yaml"
+}
+
 # --- harness ---------------------------------------------------------------
 
 # assert_check <description> <expected exit code> [mutation function + args]
@@ -229,6 +237,15 @@ assert_check "an action written in the '- uses:' step form is still seen" 1 \
     add_dash_uses_action
 assert_check "a second Dockerfile is discovered" 1 \
     add_second_dockerfile
+
+# --- image reference parsing -------------------------------------------------
+# Assert on the message, not just the exit code: the bug renames the component
+# rather than dropping it, so it fails either way and only the name distinguishes
+# a correct gate from a broken one.
+EXPECT_STDERR="localhost:5000/testonly/thing" \
+    assert_check "a registry port is not mistaken for a tag" 1 \
+    add_port_registry_image
+unset EXPECT_STDERR
 
 # --- parser integrity --------------------------------------------------------
 # The silent-pass shapes. A row the parser skips must not simply disappear: it
