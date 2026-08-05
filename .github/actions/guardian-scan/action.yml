@@ -1,0 +1,206 @@
+name: "Guardian Scan"
+description: "FOSSA + Prisma scanning that reports to Guardian and blocks on its verdict."
+
+# A composite action (not a reusable workflow) so the caller can declare
+# `environment: guardian` and pass its Environment secrets in as inputs — a
+# reusable-workflow caller cannot set an environment.
+
+inputs:
+  mode:
+    description: "'pr' (report/diff, no upload/gate) or 'trunk' (upload + gate + block)."
+    required: true
+  fossa-api-key:
+    required: true
+  guardian-url:
+    required: true
+  guardian-token:
+    required: true
+  prisma-console-url:
+    required: true
+  prisma-user:
+    required: true
+  prisma-pass:
+    required: true
+  product-name:
+    required: false
+    default: "solace-broker-mcp"
+  fossa-project-id:
+    required: false
+    default: "SolaceProducts_solace-broker-mcp"
+  image-registry:
+    required: false
+    default: "ghcr.io"
+  image-repo:
+    required: false
+    default: "solacedev/solace-broker-mcp"
+  fossa-branch:
+    required: true
+  fossa-revision:
+    required: true
+  product-version:
+    required: false
+    default: "main"
+  product-full-version:
+    required: true
+  fail-on-blocked:
+    description: "'false' for an admin-authorised release bypass."
+    required: false
+    default: "true"
+  github-token:
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+    - name: Resolve local image ref
+      id: image
+      shell: bash
+      env:
+        IMAGE_REGISTRY: ${{ inputs.image-registry }}
+        IMAGE_REPO: ${{ inputs.image-repo }}
+        RUN_ID: ${{ github.run_id }}
+      run: |
+        set -euo pipefail
+        {
+          echo "tag=scan-${RUN_ID}"
+          echo "name=${IMAGE_REGISTRY}/${IMAGE_REPO}:scan-${RUN_ID}"
+        } >> "$GITHUB_OUTPUT"
+
+    # Built locally and scanned in place (skip_image_pull); never pushed.
+    - name: Build image for scanning
+      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+      with:
+        context: .
+        platforms: linux/amd64
+        load: true
+        push: false
+        tags: ${{ steps.image.outputs.name }}
+        build-args: |
+          VERSION=${{ inputs.product-full-version }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: FOSSA analyze and test
+      id: fossa_scan
+      continue-on-error: true
+      uses: SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan@2bb76658deba3a34d90bfb1d6837de1b13996192
+      with:
+        scanners: "fossa"
+        additional_scan_params: |
+          fossa.branch=${{ inputs.fossa-branch }}
+          fossa.revision=${{ inputs.fossa-revision }}
+        fossa_api_key: ${{ inputs.fossa-api-key }}
+        guardian_url: ${{ inputs.mode == 'trunk' && inputs.guardian-url || '' }}
+        guardian_token: ${{ inputs.mode == 'trunk' && inputs.guardian-token || '' }}
+        pr_scan_upload: "false"
+
+    # Licensing: BLOCK on trunk, REPORT/diff on PR. continue-on-error so it is
+    # aggregated in the final step rather than short-circuiting the upload.
+    - name: FOSSA guard - licensing
+      id: fossa_license
+      continue-on-error: true
+      uses: SolaceDev/solace-public-workflows/.github/actions/fossa-guard@2bb76658deba3a34d90bfb1d6837de1b13996192
+      with:
+        fossa_api_key: ${{ inputs.fossa-api-key }}
+        fossa_project_id: ${{ inputs.fossa-project-id }}
+        fossa_branch: ${{ inputs.fossa-branch }}
+        fossa_revision: ${{ inputs.fossa-revision }}
+        fossa_category: licensing
+        fossa_mode: ${{ inputs.mode == 'trunk' && 'BLOCK' || 'REPORT' }}
+        block_on: policy_conflict
+        enable_diff_mode: ${{ inputs.mode == 'pr' }}
+        enable_pr_comment: ${{ inputs.mode == 'pr' }}
+        enable_status_check: ${{ inputs.mode == 'pr' }}
+        enable_privacy_mode: ${{ inputs.mode == 'pr' }}
+        github_token: ${{ inputs.github-token }}
+
+    # Vulnerabilities are REPORT-only; the SLA-aware Guardian gate is the vuln blocker.
+    - name: FOSSA guard - vulnerabilities
+      id: fossa_vuln
+      continue-on-error: true
+      uses: SolaceDev/solace-public-workflows/.github/actions/fossa-guard@2bb76658deba3a34d90bfb1d6837de1b13996192
+      with:
+        fossa_api_key: ${{ inputs.fossa-api-key }}
+        fossa_project_id: ${{ inputs.fossa-project-id }}
+        fossa_branch: ${{ inputs.fossa-branch }}
+        fossa_revision: ${{ inputs.fossa-revision }}
+        fossa_category: vulnerability
+        fossa_mode: REPORT
+        block_on: critical,high
+        enable_diff_mode: ${{ inputs.mode == 'pr' }}
+        enable_pr_comment: ${{ inputs.mode == 'pr' }}
+        enable_status_check: ${{ inputs.mode == 'pr' }}
+        enable_privacy_mode: ${{ inputs.mode == 'pr' }}
+        github_token: ${{ inputs.github-token }}
+
+    # bypass_blocking: Guardian owns the vuln verdict, so never fail here.
+    - name: Prisma Cloud scan
+      id: prisma
+      continue-on-error: true
+      uses: SolaceDev/solace-public-workflows/prisma-cloud-scan@2bb76658deba3a34d90bfb1d6837de1b13996192
+      with:
+        image_registry: ${{ inputs.image-registry }}
+        image_repo: ${{ inputs.image-repo }}
+        image_tag: ${{ steps.image.outputs.tag }}
+        skip_image_pull: "true"
+        pcc_console_url: ${{ inputs.prisma-console-url }}
+        pcc_user: ${{ inputs.prisma-user }}
+        pcc_pass: ${{ inputs.prisma-pass }}
+        bypass_blocking: "true"
+        guardian_url: ${{ inputs.mode == 'trunk' && inputs.guardian-url || '' }}
+        guardian_key: ${{ inputs.mode == 'trunk' && inputs.guardian-token || '' }}
+        guardian_product_name: ${{ inputs.product-name }}
+        guardian_product_version: ${{ inputs.product-version }}
+        guardian_product_full_version: ${{ inputs.product-full-version }}
+
+    - name: Guardian vulnerability diff (PR)
+      if: ${{ inputs.mode == 'pr' }}
+      continue-on-error: true
+      uses: SolaceDev/solace-public-workflows/guardian-vulnerability-diff@2bb76658deba3a34d90bfb1d6837de1b13996192
+      with:
+        guardian-url: ${{ inputs.guardian-url }}
+        guardian-key: ${{ inputs.guardian-token }}
+        prisma-scan-path: prisma_scan.json
+        product-name: ${{ inputs.product-name }}
+        github-token: ${{ inputs.github-token }}
+
+    - name: Guardian DB sync and Jira report
+      if: ${{ inputs.mode == 'trunk' }}
+      uses: SolaceDev/solace-public-workflows/guardian-db-sync@2bb76658deba3a34d90bfb1d6837de1b13996192
+      with:
+        guardian-url: ${{ inputs.guardian-url }}
+        guardian-key: ${{ inputs.guardian-token }}
+        product-name: ${{ inputs.product-name }}
+        product-full-version: ${{ inputs.product-full-version }}
+        unifiers: "fossa,prisma"
+        upload-logs: "true"
+
+    - name: Guardian vulnerability gate
+      id: gate
+      if: ${{ inputs.mode == 'trunk' }}
+      uses: SolaceDev/solace-public-workflows/guardian-vulnerability-gate@2bb76658deba3a34d90bfb1d6837de1b13996192
+      with:
+        guardian-url: ${{ inputs.guardian-url }}
+        guardian-key: ${{ inputs.guardian-token }}
+        product-name: ${{ inputs.product-name }}
+        product-version: ${{ inputs.product-full-version }}
+        fail-on-blocked: ${{ inputs.fail-on-blocked }}
+        upload-logs: "true"
+
+    # The gate fails on a Guardian block; this adds the FOSSA licensing block.
+    - name: Enforce FOSSA licensing verdict
+      if: ${{ always() && inputs.mode == 'trunk' && inputs.fail-on-blocked == 'true' }}
+      shell: bash
+      env:
+        LICENSE_OUTCOME: ${{ steps.fossa_license.outcome }}
+        FOSSA_PROJECT_ID: ${{ inputs.fossa-project-id }}
+      run: |
+        set -euo pipefail
+        if [ "$LICENSE_OUTCOME" = "failure" ]; then
+          echo "::error::FOSSA licensing gate found a blocking policy conflict on '${FOSSA_PROJECT_ID}'."
+          exit 1
+        fi

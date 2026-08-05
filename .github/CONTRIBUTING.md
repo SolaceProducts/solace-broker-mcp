@@ -389,12 +389,12 @@ maintainer to approve it, not just the one on your first push. So checks can sit
 **pending**, and a check that was green can go back to pending after the PR is
 retitled or edited. That is normal and nothing for you to fix.
 
-You will also see the `FOSSA Scan` check report as **skipped**. Our licence and
-vulnerability scan authenticates against an internal service, and GitHub correctly
-withholds those credentials from a fork's workflow run, so the scan cannot run on
-your pull request. The `SCA gate` check accounts for that and passes. If your
-change adds or updates a dependency, expect a reviewer to look at `go.mod` and
-`go.sum` closely, since the automated scan is not there to do it.
+You will also see the `Guardian scan` check report as **skipped**. Our licence,
+vulnerability, and container scan reports to an internal service, and GitHub
+correctly withholds those credentials from a fork's workflow run, so the scan
+cannot run on your pull request. The `Guardian scan gate` check accounts for that
+and passes. If your change adds or updates a dependency, expect a reviewer to look
+at `go.mod` and `go.sum` closely, since the automated scan is not there to do it.
 
 ## Questions?
 

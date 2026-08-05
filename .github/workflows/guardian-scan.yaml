@@ -1,0 +1,142 @@
+name: Guardian Scan
+
+# FOSSA + Prisma scanning that reports to Guardian. PR = report/diff only;
+# push to main / release = upload + block on Guardian's verdict. Secrets come
+# from the `guardian` Environment (no Vault). `Guardian scan gate` is the
+# required status check; see .github/ADMIN_SETUP.md.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: "Git ref to scan (branch, tag, or SHA). Empty = current ref."
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      git_ref:
+        required: false
+        type: string
+        default: ""
+      product_full_version:
+        required: false
+        type: string
+        default: ""
+      fail_on_blocked:
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  security-scan:
+    name: Guardian scan
+    # Skip on fork PRs: they get no Environment secrets. The gate below accounts
+    # for the skip.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    # `guardian` must have no required reviewers and no branch restriction.
+    environment: guardian
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+      statuses: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.git_ref || github.ref }}
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Resolve scan context
+        id: ctx
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          COMMIT_SHA: ${{ github.sha }}
+          GIT_REF_INPUT: ${{ inputs.git_ref }}
+          FULL_VERSION_INPUT: ${{ inputs.product_full_version }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            MODE="pr"
+            FOSSA_BRANCH="PR"
+            FOSSA_REVISION="$HEAD_REF"
+          else
+            MODE="trunk"
+            FOSSA_BRANCH="main"
+            FOSSA_REVISION="${GIT_REF_INPUT:-$COMMIT_SHA}"
+          fi
+          if [ -n "$FULL_VERSION_INPUT" ]; then
+            FULL_VERSION="$FULL_VERSION_INPUT"
+          else
+            FULL_VERSION="$(git describe --tags --always)"
+          fi
+          {
+            echo "mode=$MODE"
+            echo "fossa_branch=$FOSSA_BRANCH"
+            echo "fossa_revision=$FOSSA_REVISION"
+            echo "full_version=$FULL_VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Guardian scan
+        uses: ./.github/actions/guardian-scan
+        with:
+          mode: ${{ steps.ctx.outputs.mode }}
+          fossa-api-key: ${{ secrets.FOSSA_API_KEY }}
+          guardian-url: ${{ secrets.GUARDIAN_URL }}
+          guardian-token: ${{ secrets.GUARDIAN_API_TOKEN }}
+          prisma-console-url: ${{ secrets.PRISMACLOUD_CONSOLE_URL }}
+          prisma-user: ${{ secrets.PRISMACLOUD_ACCESS_KEY_ID }}
+          prisma-pass: ${{ secrets.PRISMACLOUD_SECRET_KEY }}
+          fossa-branch: ${{ steps.ctx.outputs.fossa_branch }}
+          fossa-revision: ${{ steps.ctx.outputs.fossa_revision }}
+          product-full-version: ${{ steps.ctx.outputs.full_version }}
+          fail-on-blocked: ${{ inputs.fail_on_blocked == false && 'false' || 'true' }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Always reports, so it is safe to require. Passes a scan success, fails a scan
+  # failure, and passes a fork PR's skip (re-deriving the fork condition itself).
+  guardian-scan-gate:
+    name: Guardian scan gate
+    needs: security-scan
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require a scan verdict, or an accounted-for reason there is none
+        env:
+          SCAN_RESULT: ${{ needs.security-scan.result }}
+          IS_FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          set -euo pipefail
+          case "$SCAN_RESULT" in
+            success) echo "Guardian scan passed." ;;
+            skipped)
+              if [ "$IS_FORK_PR" != "true" ]; then
+                echo "::error::Guardian scan was skipped where it should have run."
+                exit 1
+              fi
+              echo "::notice::Guardian scan skipped on a fork PR (no Environment secrets)." ;;
+            *) echo "::error::Guardian scan reported '${SCAN_RESULT}'."; exit 1 ;;
+          esac
