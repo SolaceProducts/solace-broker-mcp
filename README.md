@@ -233,7 +233,7 @@ docker run -d \
   -p 9090:9090 \
   -v /path/to/config.yaml:/etc/mcp-server/config.yaml:ro \
   --env-file /path/to/.env \
-  ghcr.io/solacedev/solace-broker-mcp:latest
+  ghcr.io/solaceproducts/solace-broker-mcp:latest
 ```
 
 > **Note:** If the repository is private, authenticate with GHCR before pulling:
@@ -257,7 +257,7 @@ The image includes a built-in Docker health check using the binary's `--health` 
 ```yaml
 services:
   solace-broker-mcp:
-    image: ghcr.io/solacedev/solace-broker-mcp:latest
+    image: ghcr.io/solaceproducts/solace-broker-mcp:latest
     ports:
       - "9090:9090"
     volumes:

@@ -70,7 +70,7 @@ Pushing the tag runs `.github/workflows/release.yml`, which:
 1. Re-runs the full build-and-test suite.
 2. Runs the FOSSA scan against the tag.
 3. Builds binaries for `linux` and `darwin` × `amd64` and `arm64`.
-4. Builds and pushes a multi-arch image to `ghcr.io/solacedev/solace-broker-mcp` (`{version}`, `{major}.{minor}`, `latest`, `sha-<short-sha>` tags).
+4. Builds and pushes a multi-arch image to `ghcr.io/solaceproducts/solace-broker-mcp` (`{version}`, `{major}.{minor}`, `latest`, `sha-<short-sha>` tags).
 5. Publishes a GitHub Release whose notes are the tagged version's `CHANGELOG.md` block (with the auto-generated PR list appended beneath), plus the binary archives and SHA-256 checksums. If no `## [X.Y.Z]` block exists for the tag, the release fails rather than falling back to auto-only notes.
 
 Anyone with permission to push tags can cut a release.
@@ -107,7 +107,7 @@ Before tagging:
 After pushing the tag:
 
 1. Watch the run: `gh run list --workflow=release.yml --limit 1`; on failure, `gh run view <run-id> --log`.
-2. Verify the release: `gh release view <tag>` shows four binary archives, `checksums-sha256.txt`, and the curated CHANGELOG notes (with the PR list appended); the image tags are present on `ghcr.io/solacedev/solace-broker-mcp`.
+2. Verify the release: `gh release view <tag>` shows four binary archives, `checksums-sha256.txt`, and the curated CHANGELOG notes (with the PR list appended); the image tags are present on `ghcr.io/solaceproducts/solace-broker-mcp`.
 3. Spot-check a binary: download the archive for your platform, verify it (`shasum -a 256 -c checksums-sha256.txt --ignore-missing`), and run `./solace-broker-mcp --version` — it prints the tag.
 4. Announce once verified: internal channels, and the [Solace Community](https://solace.community/) for releases worth a wider note.
 

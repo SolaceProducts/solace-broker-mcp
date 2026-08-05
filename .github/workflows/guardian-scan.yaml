@@ -44,7 +44,7 @@ permissions:
   contents: read
 
 env:
-  IMAGE_REPO: solacedev/solace-broker-mcp
+  IMAGE_REPO: solaceproducts/solace-broker-mcp
   IMAGE_REGISTRY: ghcr.io
   PRODUCT_NAME: solace-broker-mcp
   FOSSA_PROJECT_ID: SolaceProducts_solace-broker-mcp

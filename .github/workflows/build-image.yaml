@@ -26,7 +26,7 @@ on:
       image_name:
         required: false
         type: string
-        default: "ghcr.io/solacedev/solace-broker-mcp"
+        default: "ghcr.io/solaceproducts/solace-broker-mcp"
       scan_tag:
         description: "Local tag for the scan image (push=false)."
         required: false
