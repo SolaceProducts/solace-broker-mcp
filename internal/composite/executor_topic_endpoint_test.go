@@ -20,16 +20,17 @@ import (
 	"testing"
 )
 
-// These three tests are deliberately kept even though constructRequestBody's
-// path-param-exclusion mechanism is already exhaustively tested via VPN's
-// canonical tests (executor_vpn_test.go) — that mechanism is generic, but it
-// stays correct regardless of resource name. What isn't generic is whether
-// THIS tool's own YAML-mirroring field names (topicEndpointName,
-// topicEndpointConfig) are wired to the right path/body split. A rename typo
-// in tools.yaml's create/update/delete-topic-endpoint definitions would pass
-// every other test in this package and only show up here, fast, without a
-// Docker broker — test/e2e-management proves the same thing but in minutes,
-// not milliseconds, and isn't part of `make check`.
+// These tests build CompositeTool Go literals directly — they never load
+// tools.yaml, so they exercise constructRequestBody's generic mechanism, not
+// tools.yaml wiring. A wiring bug in the real YAML is caught instead by
+// TestLoadTools_EmbeddedDefinitions/path-params-wired (loader_embedded_test.go).
+//
+// Still worth keeping: create-topic-endpoint's shape (one path param, one
+// scalar + one object spread into the body) is one VPN's create never
+// exercises (VPN has zero path params). create-rdp is the identical shape.
+//
+// TestExecute_UpdateTopicEndpoint_BodyExcludesPathParams is new — main never
+// had an update-topic-endpoint test at all.
 
 // createTopicEndpointTool returns the create-topic-endpoint tool definition for
 // tests. Like create-queue, msgVpnName is the only path param; topicEndpointName

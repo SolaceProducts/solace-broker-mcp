@@ -45,16 +45,17 @@ func listRDPsTool() CompositeTool {
 	}
 }
 
-// The three tests below are deliberately kept even though
-// constructRequestBody's path-param-exclusion mechanism is already
-// exhaustively tested via VPN's canonical tests (executor_vpn_test.go) — that
-// mechanism is generic, but it stays correct regardless of resource name.
-// What isn't generic is whether THIS tool's own YAML-mirroring field names
-// (restDeliveryPointName, rdpConfig) are wired to the right path/body split.
-// A rename typo in tools.yaml's create/update/delete-rdp definitions would
-// pass every other test in this package and only show up here, fast, without
-// a Docker broker — test/e2e-management proves the same thing but in
-// minutes, not milliseconds, and isn't part of `make check`.
+// These tests build CompositeTool Go literals directly — they never load
+// tools.yaml, so they exercise constructRequestBody's generic mechanism, not
+// tools.yaml wiring. A wiring bug in the real YAML is caught instead by
+// TestLoadTools_EmbeddedDefinitions/path-params-wired (loader_embedded_test.go).
+// create-rdp's shape is identical to create-topic-endpoint's.
+//
+// Restore is intentionally partial: TestExecute_ListRDPs_SinglePage and
+// TestExecute_CreateRDP_AlreadyExists did not come back — both confirmed
+// duplicates (of executor_queue_test.go's pagination canonical and
+// executor_vpn_test.go's SEMPError-propagation coverage) during the original
+// audit, verified by per-package coverage delta, not assumed.
 
 // createRDPTool returns the create-rdp tool definition for tests. Like
 // create-queue, msgVpnName is the only path param; restDeliveryPointName and
@@ -299,4 +300,3 @@ func TestExecute_DeleteRDP_NoBodyConstructed(t *testing.T) {
 		t.Error("expected deleteRdp result to be collected")
 	}
 }
-

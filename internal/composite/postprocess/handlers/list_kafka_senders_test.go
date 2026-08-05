@@ -35,6 +35,7 @@ func TestListKafkaSenders_Counts(t *testing.T) {
 		kafkaSender(false, false, "Kafka Sender Shutdown"), // disabled only — NOT down (admin-disabled excluded), NOT bucketed
 		kafkaSender(true, false, ""),                       // disabled only
 		kafkaSender(false, true, "connection refused"),     // down (enabled && !up) + same bucket
+		kafkaSender(true, true, "connection refused"),      // recovered, stale reason — must NOT bucket
 	}
 	got, err := ListKafkaSenders(map[string]map[string]any{"kafkaSenders": {"data": items}})
 	if err != nil {
@@ -43,7 +44,7 @@ func TestListKafkaSenders_Counts(t *testing.T) {
 	checks := map[string]int{
 		"downCount":     2,
 		"disabledCount": 2,
-		"scanned":       5,
+		"scanned":       6,
 	}
 	for k, want := range checks {
 		if got[k] != want {
@@ -54,6 +55,8 @@ func TestListKafkaSenders_Counts(t *testing.T) {
 	if !ok {
 		t.Fatalf("byFailureReason: wrong type %T", got["byFailureReason"])
 	}
+	// If bucketing weren't gated on !up, the recovered row above would push
+	// this to 3.
 	if byReason["connection refused"] != 2 || len(byReason) != 1 {
 		t.Errorf("byFailureReason: got %v, want {connection refused:2}", byReason)
 	}
