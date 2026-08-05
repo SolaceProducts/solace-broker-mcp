@@ -302,15 +302,19 @@ invoke_claude() {
     local claude_args=(
         --mcp-config "$MCP_CONFIG"
         --strict-mcp-config
-        # `--tools ""` disables Claude's built-in tools (Bash, Read, WebSearch, …)
-        # so the agent can only reach for MCP tools.
-        --tools ""
         # `--allowed-tools` IS load-bearing in --print mode — it's the
         # auto-approve list. Without it, every MCP tool call gets denied with
         # "I need permission to run X — please approve and I'll retry." Wildcard
         # auto-approves every tool from our MCP server (the only one loaded,
         # thanks to --strict-mcp-config), so the list stays maintenance-free
         # as the server adds tools. Assertion logic catches wrong tool choices.
+        # Built-in tools (Bash, Read, WebSearch, …) are NOT on this allow-list,
+        # so in --print mode they can't run — the auto-approve gate keeps the
+        # agent effectively confined to MCP tools without a `--tools ""` flag.
+        # A prior version of this argv did pass `--tools ""` to disable built-
+        # ins explicitly; CLI 2.1.181 reinterprets that as "disable ALL tools
+        # including MCP", so the agent had no tools and answered every
+        # scenario "I don't have the Solace MCP tools available" (SOL-152862).
         --allowed-tools "mcp__solace-broker__*"
         --output-format stream-json
         --verbose
