@@ -165,9 +165,16 @@ jobs:
       # The second of the two lists the Solace public-repository Legal checklist
       # requires. Same job rather than a new one: they are one obligation split
       # by what ships, and a reviewer should see both verdicts in one place.
+      # `if: always()` is load-bearing. GitHub skips later steps once one fails,
+      # so without it a red licenses-check.sh would stop these from running at
+      # all — one gate masking the other, which is the exact coupling the
+      # separate script exists to avoid. Same job, because both verdicts belong
+      # under the one `Third-party licenses current` required check.
       - name: Self-test the build/test licence check
+        if: always()
         run: .github/scripts/build-test-licenses-check.test.sh
       - name: Verify THIRD_PARTY_BUILD_TEST.md matches the build and test inputs
+        if: always()
         run: .github/scripts/build-test-licenses-check.sh
 
   changelog:

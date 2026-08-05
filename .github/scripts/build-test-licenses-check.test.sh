@@ -64,6 +64,31 @@ break_table_format() { # <tmp> — make every row unparseable
     sed 's/^| `/X `/' "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC"
 }
 
+# The inputs are symlinked, so a case that needs to mutate one must first replace
+# the symlink with a real copy. Mutating through it would corrupt the repository.
+unlink_workflows() { # <tmp>
+    rm "$1/.github/workflows"
+    cp -R "$REPO_ROOT/.github/workflows" "$1/.github/workflows"
+}
+
+add_dash_uses_action() { # <tmp> — the `- uses:` step form, which an anchor
+    # without the `-` alternative silently misses. A new third-party action
+    # entering CI must not report green.
+    unlink_workflows "$1"
+    printf '        - uses: example/sneaky-action@v1\n' >>"$1/.github/workflows/dco.yaml"
+}
+
+bump_action_version() { # <tmp> — Dependabot bumps actions daily; a version
+    # column nothing defends is decoration.
+    unlink_workflows "$1"
+    sed -i.bak 's|actions/checkout@v4|actions/checkout@v5|g' "$1/.github/workflows/"*.y*ml
+    rm -f "$1/.github/workflows/"*.bak
+}
+
+add_second_dockerfile() { # <tmp> — discovery must be derived, not hardcoded
+    printf 'FROM python:3.12\n' >"$1/Dockerfile.tools"
+}
+
 # --- harness ---------------------------------------------------------------
 
 # assert_check <description> <expected exit code> [mutation function + args]
@@ -96,7 +121,23 @@ assert_check() {
     fi
 
     local got=0
-    (cd "$tmp" && "$CHECK" >/dev/null 2>&1) || got=$?
+    # Combined, not stderr alone: err() writes `::error::` annotations to stdout,
+    # because that is where GitHub Actions reads them, and only the closing
+    # verdict goes to stderr. Asserting on one stream would miss the other.
+    local out_file="$tmp/output.txt"
+    (cd "$tmp" && "$CHECK" >"$out_file" 2>&1) || got=$?
+    local captured
+    captured=$(cat "$out_file" 2>/dev/null || true)
+
+    # An exit code alone cannot tell "failed loudly" from "died silently", which
+    # is exactly the M1-style bug (a dropped `|| true`) that the parser cases
+    # exist to catch. When a case supplies an expected message, assert on it.
+    if [ -n "${EXPECT_STDERR:-}" ] && ! grep -qF "$EXPECT_STDERR" <<<"$captured"; then
+        echo "  NOT OK   $desc (exit $got as expected, but the output lacked \"$EXPECT_STDERR\" — a silent death is indistinguishable from a real verdict)"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
 
     if [ "$got" -eq "$want" ]; then
         echo "  ok       $desc (exit $got)"
@@ -145,14 +186,45 @@ assert_check "missing container image row fails" 1 \
 assert_check "image row for an unreferenced image fails" 1 \
     add_row "example/never-pulled-image" "v1"
 
+# --- npm packages ------------------------------------------------------------
+# The one source here whose licences are not permissive. Omitting it silently is
+# what made the first version of this file assert a verdict its scope did not
+# support, so it gets a case in both directions.
+assert_check "missing npm package row fails" 1 \
+    drop_row "@anthropic-ai/claude-code-linux-x64"
+assert_check "wrong npm package version fails" 1 \
+    change_version "@anthropic-ai/claude-code" "9.9.9"
+
+# --- versions on actions and images ------------------------------------------
+# Both were unchecked in the first version. Dependabot bumps GitHub Actions
+# daily, so this is the highest-frequency drift source in the repository.
+assert_check "bumped action version with a stale row fails" 1 \
+    bump_action_version
+assert_check "wrong container image tag fails" 1 \
+    change_version "apache/kafka" "4.1.0"
+
+# --- discovery is derived, not hardcoded -------------------------------------
+# A hand-maintained input list fails open as the repository grows, which is the
+# worst direction for a compliance gate.
+assert_check "an action written in the '- uses:' step form is still seen" 1 \
+    add_dash_uses_action
+assert_check "a second Dockerfile is discovered" 1 \
+    add_second_dockerfile
+
 # --- parser integrity --------------------------------------------------------
 # The silent-pass shapes. A row the parser skips must not simply disappear: it
 # becomes invisible to the inventory checks, so the gate has to notice the skip
 # itself.
 assert_check "a row the strict parser skips is reported, not ignored" 1 \
     add_unparseable_row "github.com/example/unparseable"
-assert_check "a fully unparseable table fails loudly" 1 \
+# "Loudly" is the whole assertion. Dropping a `|| true` makes the script die at
+# an assignment under `pipefail` — still exit 1, but with no output, which in CI
+# is indistinguishable from a real verdict. Asserting the exit code alone passes
+# against that bug, so this case asserts the message.
+EXPECT_STDERR="Parsed no component rows at all" \
+    assert_check "a fully unparseable table fails loudly, with a message" 1 \
     break_table_format
+unset EXPECT_STDERR
 
 # --- verdict ----------------------------------------------------------------
 echo
