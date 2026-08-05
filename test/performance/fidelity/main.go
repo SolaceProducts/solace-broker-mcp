@@ -171,45 +171,79 @@ func captureGoldens(ctx context.Context, mcpURL, broker, vpn, goldenDir string) 
 		},
 	}
 
+	// Two-phase write so a mid-recapture failure never leaves one golden
+	// updated and another stale: first collect every tool's output and stage
+	// it as a temp file next to its final path; only after every temp is on
+	// disk do we rename them into place. A tool call or marshal failure
+	// aborts before any rename, so the on-disk goldens are unchanged.
+	type staged struct {
+		tmp, final string
+		size       int
+	}
+	var stagedFiles []staged
+	cleanupTemps := func() {
+		for _, s := range stagedFiles {
+			_ = os.Remove(s.tmp)
+		}
+	}
 	for _, c := range checks {
 		out, err := callTool(ctx, session, c.tool, c.args)
 		if err != nil {
+			cleanupTemps()
 			return fmt.Errorf("%s: %w", c.tool, err)
 		}
 		data, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {
+			cleanupTemps()
 			return fmt.Errorf("%s: marshaling: %w", c.tool, err)
 		}
-		if err := writeFileAtomic(c.goldenFile, data, 0o600); err != nil {
-			return fmt.Errorf("%s: writing %s: %w", c.tool, c.goldenFile, err)
+		tmp, err := stageTemp(c.goldenFile, data, 0o600)
+		if err != nil {
+			cleanupTemps()
+			return fmt.Errorf("%s: staging %s: %w", c.tool, c.goldenFile, err)
 		}
-		fmt.Printf("  wrote %s (%d bytes)\n", c.goldenFile, len(data))
+		stagedFiles = append(stagedFiles, staged{tmp: tmp, final: c.goldenFile, size: len(data)})
+	}
+	// All temps written; commit phase. Rename on the same directory is
+	// atomic per-file on POSIX; a failure here after prior renames succeeded
+	// would still leave a partial update, but at that point the filesystem
+	// itself is in trouble.
+	for _, s := range stagedFiles {
+		if err := os.Rename(s.tmp, s.final); err != nil {
+			cleanupTemps()
+			return fmt.Errorf("renaming %s: %w", s.final, err)
+		}
+		fmt.Printf("  wrote %s (%d bytes)\n", s.final, s.size)
 	}
 	return nil
 }
 
-// writeFileAtomic writes to a temp file in the same directory then renames
-// into place, so a mid-recapture failure can't leave one golden updated and
-// another stale — the pair either both change or neither does.
-func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	dir := filepath.Dir(path)
+// stageTemp writes data to a fresh temp file in the same directory as the
+// final path and returns the temp path. Caller is responsible for renaming
+// it into place (or removing it on abort). Split from the rename step so
+// captureGoldens can stage every file before committing any, keeping the
+// on-disk set of goldens consistent across a partial failure.
+func stageTemp(finalPath string, data []byte, perm os.FileMode) (string, error) {
+	dir := filepath.Dir(finalPath)
 	f, err := os.CreateTemp(dir, ".golden-*.tmp")
 	if err != nil {
-		return err
+		return "", err
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp) // no-op if the rename succeeded
 	if _, err := f.Write(data); err != nil {
 		_ = f.Close()
-		return err
+		_ = os.Remove(tmp)
+		return "", err
 	}
 	if err := f.Close(); err != nil {
-		return err
+		_ = os.Remove(tmp)
+		return "", err
 	}
 	if err := os.Chmod(tmp, perm); err != nil {
-		return err
+		_ = os.Remove(tmp)
+		return "", err
 	}
-	return os.Rename(tmp, path)
+	return tmp, nil
 }
 
 func run(ctx context.Context, mcpURL, broker, vpn, goldenDir string, shape bool, exclusions map[string]bool) error {
@@ -397,9 +431,16 @@ func diffJSON(path string, golden, actual any, shape bool, exclusions map[string
 			// array is homogeneous — if the SEMP response ever surfaces
 			// heterogeneous elements (e.g. some slots carry `operationalState`,
 			// others don't), switch to a unioned template.
-			// Empty arrays on either side pass — nothing to compare.
-			if len(g) == 0 || len(a) == 0 {
+			//
+			// Empty-golden passes (schema may have grown additively). But if
+			// golden has entries and actual is empty, that's the mock dropping
+			// data the real broker returns — exactly what shape mode should
+			// catch, so surface it as a diff.
+			if len(g) == 0 {
 				return ""
+			}
+			if len(a) == 0 {
+				return fmt.Sprintf("%s: actual array is empty (golden has %d entries)", path, len(g))
 			}
 			template := g[0]
 			for i, av := range a {

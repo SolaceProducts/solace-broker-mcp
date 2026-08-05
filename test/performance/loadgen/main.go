@@ -196,14 +196,11 @@ func run(ctx context.Context, cfg runConfig) error {
 	summary := summarize(all, cfg.duration)
 	summary.print(cfg)
 
-	// Non-zero exit if we blew the error-rate bar; the plan's demo pass/fail
-	// bar is 0.5%. Callers can grep exit code without parsing stdout.
-	// Match print()'s PASS boundary (`< 0.005`): exactly 0.5% is a FAIL. Prior
-	// to this, run() used `> 0.005` and print() used `< 0.005`, so at exactly
-	// 0.005 stdout said "FAIL" but the process exited 0.
-	if summary.errorRate >= 0.005 {
-		return fmt.Errorf("error rate %.2f%% exceeds 0.5%% budget", summary.errorRate*100)
-	}
+	// No hard pass/fail on error rate. Fidelity is the correctness gate
+	// (runs before the load, deep-equals tool output vs golden); loadgen
+	// numbers are observations for the operator. A bar here would either
+	// fire spuriously (Ctrl-C mid-run tags in-flight calls as canceled) or
+	// contradict itself (ERROR_RATE injection guarantees a "failure").
 	return nil
 }
 
@@ -287,6 +284,17 @@ func clientLoop(ctx context.Context, session *mcp.ClientSession, j clientJob) []
 		latency := time.Since(t0)
 		cancel()
 
+		// If our parent ctx has been canceled (Ctrl-C / SIGTERM), any error
+		// from this call is almost certainly our own doing — dropping the
+		// tool call because we're shutting down. Recording it would inflate
+		// the error rate for a reason that has nothing to do with the system
+		// under test. Return without recording; the next-iteration ctx.Err()
+		// check would exit anyway. Deadlines from callCtx's own 30s timeout
+		// still get recorded (parent ctx.Err() is nil in that case).
+		if ctx.Err() != nil {
+			return out
+		}
+
 		// Discard samples during warmup, but still count them in the live
 		// counters so the progress ticker's early rate is meaningful.
 		if t0.Before(warmupEnd) {
@@ -307,8 +315,9 @@ func clientLoop(ctx context.Context, session *mcp.ClientSession, j clientJob) []
 // callOnce invokes one tool and reports the first error encountered. It
 // intentionally does not read/parse the tool result body — this is a load
 // test, not a fidelity check; that's what fidelity/main.go is for. Tool
-// error responses (IsError=true) still count as errors so the error-rate
-// gate catches broker unavailability, timeouts, MCP-side rate limits, etc.
+// error responses (IsError=true) surface as errors in the reported error
+// rate so the operator can see broker unavailability, timeouts, MCP-side
+// rate limits, etc. — but the number is observational, not a gate.
 func callOnce(ctx context.Context, session *mcp.ClientSession, tool, broker, vpn string) error {
 	args := map[string]any{"broker": broker}
 	if tool == "list-queues" {
@@ -434,8 +443,9 @@ type summaryStats struct {
 
 func summarize(samples []sample, duration time.Duration) summaryStats {
 	// Errors don't contribute to latency percentiles — a fast failure would
-	// otherwise pull p50 down and paint an optimistic picture. Keep them in
-	// the count/rate for the pass/fail bar; strip them from the histogram.
+	// otherwise pull p50 down and paint an optimistic picture. Still counted
+	// in the reported error rate so the operator can see them; just kept out
+	// of the latency histogram.
 	lat := make([]time.Duration, 0, len(samples))
 	errs := 0
 	errBreak := make(map[string]int)
@@ -509,18 +519,10 @@ func (s summaryStats) print(cfg runConfig) {
 	fmt.Printf("  p95               : %s   -- 95%% of requests finished under this\n", fmtLatency(s.p95))
 	fmt.Printf("  p99 (tail)        : %s   -- 99%% of requests finished under this\n", fmtLatency(s.p99))
 	fmt.Printf("  max (worst)       : %s   -- single slowest request\n", fmtLatency(s.pMax))
-
-	// Behavioural verdict: error rate only. Throughput is an observation, not
-	// a bar — injecting latency or adding brokers legitimately drops req/s
-	// while MCP is behaving correctly (it's just waiting on the broker). The
-	// 0.5% figure comes from the plan's pass/fail bar; adjust there, not here.
-	pass := s.errorRate < 0.005
 	fmt.Println()
-	if pass {
-		fmt.Println("Verdict     : PASS  (bar: <0.5% errors; req/s is observational)")
-	} else {
-		fmt.Println("Verdict     : FAIL  (bar: <0.5% errors; req/s is observational)")
-	}
+	fmt.Println("Note: all numbers above are observations, not pass/fail bars.")
+	fmt.Println("Correctness is gated up front by the fidelity check; latency,")
+	fmt.Println("throughput, and error rate are for the operator to interpret.")
 	fmt.Println("===================================================================")
 }
 

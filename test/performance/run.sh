@@ -134,12 +134,11 @@ wait_for_tcp() {
 mock_start=18081
 mock_count=50
 echo "== 1. mock-semp on :$mock_start..$((mock_start + mock_count - 1)) (default-latency-ms=$LATENCY_MS)"
-# -canned-src arms the staleness check: mock-semp fatals at startup if any
-# on-disk canned/* differs from its embedded copy — catches "edited canned/
-# but forgot to rebuild" which would otherwise silently replay stale data.
+# mock-semp's staleness check is on by default and auto-locates the source
+# canned/ next to the binary, so "edited canned/ but forgot to rebuild"
+# fatals at startup instead of silently replaying stale data.
 setsid "$bin/mock-semp" -listen-start "$mock_start" -listen-count "$mock_count" -config-port 19000 \
   -default-latency-ms "$LATENCY_MS" \
-  -canned-src "$here/mock-semp/canned" \
   >"$runs/mock.log" 2>&1 &
 mock_pid=$!
 wait_for_tcp localhost 18081 mock-semp

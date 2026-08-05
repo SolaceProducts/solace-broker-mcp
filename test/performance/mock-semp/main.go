@@ -17,6 +17,10 @@
 //	-config-port         /_mock/config endpoint port                default 9000
 //	-default-latency-ms  fixed sleep before every response, all ports (default 0).
 //	                     Overridden per-port by POST /_mock/config.
+//	-no-canned-check     skip the canned staleness check (default: on, resolves
+//	                     source canned/ at <exe-dir>/../mock-semp/canned). Use
+//	                     when the source tree isn't reachable — go install,
+//	                     copied binary, etc.
 //
 // About the latency knob: MCP caps in-flight SEMP calls per broker via a
 // semaphore sized by `semp.max_concurrent_per_broker` (see
@@ -65,7 +69,7 @@ func main() {
 	configListenAddr := flag.String("config-listen-addr", "localhost", "interface to bind /_mock/config; keep on localhost even when -listen-addr is 0.0.0.0 so LAN peers can't inject errors")
 	configPort := flag.Int("config-port", 9000, "port for /_mock/config")
 	defaultLatencyMs := flag.Int("default-latency-ms", 0, "fixed sleep before every response (all ports); overridden per-port by /_mock/config")
-	cannedSrc := flag.String("canned-src", "", "path to the source canned/ directory. If set, every embedded canned file is compared against its on-disk counterpart at startup and the process fatals on mismatch — a workflow guard for `edited canned/* but forgot to rebuild`. Leave empty for production use.")
+	noCannedCheck := flag.Bool("no-canned-check", false, "skip the canned staleness check (default: on, resolves source canned/ at <exe-dir>/../mock-semp/canned). Use when the source tree isn't reachable — go install, copied binary, etc.")
 	flag.Parse()
 
 	if *listenCount < 1 {
@@ -75,8 +79,12 @@ func main() {
 		log.Fatalf("default-latency-ms must be >= 0")
 	}
 
-	if *cannedSrc != "" {
-		if err := checkCannedStaleness(*cannedSrc); err != nil {
+	if !*noCannedCheck {
+		src, err := resolveCannedSrc()
+		if err != nil {
+			log.Fatalf("mock-semp: %v", err)
+		}
+		if err := checkCannedStaleness(src); err != nil {
 			log.Fatalf("mock-semp: %v", err)
 		}
 	}
@@ -161,13 +169,31 @@ func main() {
 	}
 }
 
+// resolveCannedSrc locates the source canned/ directory the staleness
+// check should compare against, relative to the running binary. build.sh
+// drops the binary at bin/mock-semp with source at ../mock-semp/canned,
+// so that's what we look for. If it isn't there, returns an error telling
+// the caller to opt out with -no-canned-check — silently skipping would
+// defeat the point of the check (catching stale embedded canned/*).
+func resolveCannedSrc() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("resolving executable path for canned staleness check: %w (pass -no-canned-check to skip)", err)
+	}
+	guess := filepath.Join(filepath.Dir(exe), "..", "mock-semp", "canned")
+	if _, err := os.Stat(guess); err != nil {
+		return "", fmt.Errorf("canned staleness check enabled but source canned/ not found at %s (pass -no-canned-check to skip)", guess)
+	}
+	return guess, nil
+}
+
 // checkCannedStaleness compares every file in the embedded canned/ tree
 // against its on-disk counterpart in srcDir. It fatals on the first
 // mismatch. The failure mode this catches: someone re-runs capture.sh
 // (or edits a canned file by hand) but skips the mock rebuild, so go:embed
 // still holds the old bytes and the mock silently replays yesterday's
-// broker. Enabled per-invocation via -canned-src, so production
-// deployments with no source tree next to them still work.
+// broker. Runs by default; disable with -no-canned-check when the source
+// tree isn't reachable (e.g. after `go install` or a copied binary).
 //
 // Bytes-equal rather than mtime-equal — git checkout resets mtimes on
 // clean working trees and would fire false alarms.
