@@ -105,7 +105,7 @@ parsed_rows=$(grep -cE '^\| `[^`]+` \| [^ |]+ \|' "$DOC" || true)
 if [ "$candidate_rows" -eq 0 ]; then
     err "$DOC" "Parsed no component rows at all. The table format changed; this script needs updating to match it."
 elif [ "$parsed_rows" -ne "$candidate_rows" ]; then
-    err "$DOC" "$((candidate_rows - parsed_rows)) of $candidate_rows table row(s) did not parse, so they are invisible to this check. Expected format: | \`<name>\` | <version> | <license> | <link> |"
+    err "$DOC" "$((candidate_rows - parsed_rows)) of $candidate_rows table row(s) did not parse, so they are invisible to this check. Only the first two columns are read: a row must start | \`<name>\` | <version> | and <version> must contain no spaces. Columns after that are free-form, and the tables here legitimately carry three or four."
     { grep -nE '^\| `' "$DOC" || true; } | { grep -vE '^[0-9]+:\| `[^`]+` \| [^ |]+ \|' || true; } >&2
 fi
 
@@ -121,8 +121,11 @@ doc_version_of() { # <name>
 }
 
 # Compare a documented version against the one in use. A 40-character SHA pin is
-# satisfied by any prefix of it, so the tables can carry a readable short SHA
-# without the check going blind to a re-pin.
+# satisfied by a prefix of it of at least 7 characters, so the tables can carry a
+# readable short SHA without the check going blind to a re-pin. The 7-character
+# floor is deliberate: shorter prefixes collide often enough that a stale row
+# could match a new pin by accident, which is the failure this comparison exists
+# to prevent.
 version_matches() { # <documented> <actual>
     local doc="$1" actual="$2"
     [ "$doc" = "$actual" ] && return 0
@@ -206,7 +209,12 @@ while read -r ref; do
     action="${ref%@*}"
     version="${ref##*@}"
     [ "$action" = "$ref" ] && version="(unpinned)"
-    expect "$action" "$version" "Action" "Read its licence from 'gh api repos/${action%%/*}/$(basename "${action}") --jq .license.spdx_id'."
+    # Owner/repo is the first two path segments, not the basename. A reusable
+    # workflow is referenced as OWNER/REPO/.github/workflows/file.yaml@ref, so
+    # basename would name the workflow file and send the reader to a repository
+    # that does not exist.
+    action_repo=$(cut -d/ -f1,2 <<<"$action")
+    expect "$action" "$version" "Action" "Read its licence from 'gh api repos/${action_repo} --jq .license.spdx_id'."
 done < <(
     { grep -rhoE '^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*[^[:space:]]+' .github/workflows/ || true; } |
         sed -E 's/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*//' |

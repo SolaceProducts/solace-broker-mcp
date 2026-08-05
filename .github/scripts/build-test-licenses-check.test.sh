@@ -238,6 +238,16 @@ assert_check "an action written in the '- uses:' step form is still seen" 1 \
 assert_check "a second Dockerfile is discovered" 1 \
     add_second_dockerfile
 
+# --- remediation hints are actionable ----------------------------------------
+# A hint that names a repository which does not exist costs the reader a
+# detour and teaches them to distrust the message. Reusable workflows are
+# referenced as OWNER/REPO/.github/workflows/file.yaml@ref, so deriving the repo
+# with `basename` names the workflow file instead.
+EXPECT_STDERR="gh api repos/SolaceDev/solace-public-workflows" \
+    assert_check "the licence hint names the repo, not the workflow file" 1 \
+    drop_row "SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml"
+unset EXPECT_STDERR
+
 # --- image reference parsing -------------------------------------------------
 # Assert on the message, not just the exit code: the bug renames the component
 # rather than dropping it, so it fails either way and only the name distinguishes
