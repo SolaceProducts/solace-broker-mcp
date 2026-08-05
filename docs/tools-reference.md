@@ -159,7 +159,18 @@ indexed here — a `monitor/...` operation returns `unknown operation`.
 
 **Returns (`trimmed`):** `{ "operation", "method", "definition", "attributes": [...] }` where each attribute carries `name`, `type`, `description`, `enum`, `default`, `pattern`, `maxLength`, `minimum`, `maximum`, `writableOnCreate`, `writableOnUpdate`, and any applicable flags (`requiredForCreate`, `identifying`, `writeOnly`, `sensitive`, `deprecated`, `autoDisable`, `requiresDisable`). Object-typed attributes backed by a `$ref` carry a nested `properties` list instead of writability flags.
 
-**Example request:** "What attributes can I set when creating a queue?"
+**Typical invocation.** Most calls happen unprompted. The eight
+`create-*`/`update-*` write tool descriptions each point at
+`describe-semp-schema` with the relevant operation, so an agent planning a
+write will call this tool without the user asking for it — an ordinary request
+like *"Create a queue named orders with a spool quota of 500 MB"* is what
+triggers it in practice. If you are watching a trace and see
+`describe-semp-schema` fire immediately before a `create-*` or `update-*`
+call, that is the expected path. Direct invocation is supported but uncommon.
+
+**Example requests:**
+- *"Create a queue named orders with a spool quota of 500 MB"* — the agent calls `describe-semp-schema` (operation `config/createMsgVpnQueue`) before `create-queue`. This is the common path.
+- *"What attributes can I set when creating a queue?"* — direct call, less common.
 
 ---
 
