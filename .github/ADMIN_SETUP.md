@@ -225,7 +225,7 @@ against a real pull request before you rely on them:
   (`name: "SCA Scan"`), which exits non-zero on findings because
   `.github/workflow-config.json` sets both FOSSA modes to `BLOCK`. But that caller
   is now skipped for fork pull requests, because a fork gets no repository
-  secrets and the Vault-backed scan cannot run. A skipped *plain* job still
+  secrets and the credentialed scan cannot run. A skipped *plain* job still
   reports `skipped`; a skipped reusable-workflow *caller* never creates the
   ` / SCA Scan` context at all. Required contexts that are never created stay
   pending forever, so requiring this one makes every external contribution
@@ -315,11 +315,13 @@ made this impossible. What it changed, and what it deliberately did not:
    take their broker credentials from committed `.env` files, and generate their
    own self-signed TLS certs with `openssl`. A read-only `GITHUB_TOKEN` is enough.
 2. **FOSSA no longer goes red for a missing secret.** `ci-pr.yaml` passes
-   `use_vault: true` and `secrets.VAULT_URL`, and GitHub withholds secrets from a
-   fork-triggered `pull_request` run, so the reusable workflow used to find an
-   empty Vault URL and exit 1 on every external contribution. The `fossa_scan`
+   `use_vault: false` and `secrets.FOSSA_API_KEY`, and GitHub withholds secrets
+   from a fork-triggered `pull_request` run, so the reusable workflow used to find
+   an empty credential and exit 1 on every external contribution. The `fossa_scan`
    job is now skipped for fork pull requests, and the always-reporting `SCA gate`
-   job is the required context instead.
+   job is the required context instead. Moving the key off Vault onto an Actions
+   secret did not close this gap: GitHub withholds every repository secret from a
+   fork run, whatever its source.
 3. **`pull_request_target` was not introduced**, and neither was a `workflow_run`
    follow-up. Both would run untrusted code with an elevated token to buy a
    pre-merge scan on a path that already requires a maintainer to approve the
@@ -345,8 +347,8 @@ changes, two human controls stand in, and both need someone to actually do them:
   `main` run themselves.
 
 **Worth closing properly.** The vulnerability half of this gap does not actually
-need a credential. `govulncheck` (or `osv-scanner` over `go.mod`) needs no secret,
-no Vault, and no elevated token, so it would run fine as an eighth job in
+need a credential. `govulncheck` (or `osv-scanner` over `go.mod`) needs no secret
+and no elevated token, so it would run fine as an eighth job in
 `build-and-test.yml` on a fork pull request — restoring *prevention* for
 critical/high vulnerabilities instead of leaving both halves to a human. Licensing
 is the harder half; `go-licenses` covers some of it. This was left out of
@@ -493,7 +495,7 @@ writing; re-check, do not assume.
   > | When (UTC) | Symptom | Cause | Whose fix |
   > |---|---|---|---|
   > | last green: 07-30 21:28 | `Test passed! 0 issues found` against project `SolaceDev_solace-broker-mcp` | | |
-  > | 07-31 14:46 to 15:34 | fails in ~13s | Vault OIDC role `cicd-workflows-secret-read-role` binds on the `repository` claim, which the rename changed. Token exchange rejected: `claim "repository" does not match any associated bound claim values`. | infra, since fixed |
+  > | 07-31 14:46 to 15:34 | fails in ~13s | Vault OIDC role `cicd-workflows-secret-read-role` binds on the `repository` claim, which the rename changed. Token exchange rejected: `claim "repository" does not match any associated bound claim values`. | infra, since fixed — and now unreachable: FOSSA authenticates with the `FOSSA_API_KEY` secret, not a Vault OIDC role |
   > | 07-31 from 15:38 | fails in ~50s | Vault authenticates. The scan container cannot be pulled: `manifest unknown` for `ghcr.io/solaceproducts/maas-build-actions@sha256:14d7b08…`. Same rename, via `github.repository_owner` in the nested `fossa-guard` action. | infra |
   > | next, once the container is pullable | expect a licensing block | PR #243 repointed `project_id` to `SolaceProducts_solace-broker-mcp`, a **new** FOSSA project carrying none of the old project's policy waivers. | **this repository** |
   >
@@ -523,13 +525,11 @@ writing; re-check, do not assume.
   > `critical,high severity vulnerabilities detected` when nothing had been scanned
   > at all. Do not act on that message without reading the job log.
   >
-  > **Do not add `secrets.vault.url` to `.github/workflow-config.json`.** Its
-  > absence is not a defect and not the cause of anything above. It held
-  > `https://vault.maas-vault-prod.solace.cloud:8200` and was removed deliberately
-  > in `2d46757` ("Vault URL hardening") while preparing this repository to go
-  > public. The URL now comes from the `VAULT_URL` repository secret and resolves
-  > fine (runs log `✅ Vault configuration validated`). Re-adding it would put an
-  > internal hostname back into a public repository.
+  > **Never put a credential or an internal hostname in
+  > `.github/workflow-config.json`.** It is committed in a repository that is going
+  > public, and it holds scan *policy* only. FOSSA's credential is the
+  > `FOSSA_API_KEY` Actions secret. The old `secrets.vault` block went with the move
+  > off Vault; no `secrets` key should reappear here.
   >
   > `sca_gate` going red through all of this is the gate working. Leaving
   > `FOSSA Scan / SCA Scan` unrequired is what had been hiding it.

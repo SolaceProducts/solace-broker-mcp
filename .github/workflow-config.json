@@ -13,12 +13,6 @@
       "project_id": "SolaceProducts_solace-broker-mcp",
       "team": null,
       "labels": ["broker"]
-    },
-    "secrets": {
-      "vault": {
-        "secret_path": "secret/data/tools/githubactions",
-        "role": "cicd-workflows-secret-read-role"
-      }
     }
   }
 }

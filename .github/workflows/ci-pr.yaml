@@ -20,9 +20,10 @@ permissions:
 
 jobs:
   # Skipped for fork pull requests, and it has to be. GitHub withholds repository
-  # secrets from a `pull_request` run triggered by a fork, so `secrets.VAULT_URL`
-  # arrives empty and the shared workflow exits 1 on its own input validation —
-  # red on every external contribution, for a secret the contributor cannot have.
+  # secrets from a `pull_request` run triggered by a fork — every secret, whatever
+  # its source — so `secrets.FOSSA_API_KEY` arrives empty and the shared workflow
+  # exits 1 on its own validation: red on every external contribution, for a secret
+  # the contributor cannot have.
   #
   # The two ways to scan a fork's code with real credentials both run untrusted
   # code with an elevated token: `pull_request_target`, and a `workflow_run`
@@ -37,11 +38,12 @@ jobs:
     if: github.event.pull_request.head.repo.full_name == github.repository
     uses: SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml@fc521b087f780457f92d4cb46038184e92ad2fbc # pinned 2026-05-12
     with:
-      use_vault: true
+      use_vault: false
       config_file: '.github/workflow-config.json'
     secrets:
-      # Vault address is injected from an org/repo secret, not committed to the repo.
-      VAULT_URL: ${{ secrets.VAULT_URL }}
+      # Org-level Actions secret, not Vault. The workflow-level `id-token: write` is
+      # still required — see the note in build-and-test.yml.
+      FOSSA_API_KEY: ${{ secrets.FOSSA_API_KEY }}
 
   # THIS is the required status check for supply-chain scanning, not
   # `FOSSA Scan / SCA Scan`.
@@ -93,7 +95,7 @@ jobs:
                 echo "::error::FOSSA scan was skipped on a same-repo pull request, where it should always run. Treating an unexplained skip as a failure rather than passing the gate. Check the 'if' condition on the fossa_scan job."
                 exit 1
               fi
-              echo "::notice::FOSSA scan skipped: a fork pull request gets no repository secrets, so the Vault-backed scan cannot run. Supply-chain review for this pull request is the full scan on push to main plus a reviewer reading go.mod. See .github/ADMIN_SETUP.md."
+              echo "::notice::FOSSA scan skipped: a fork pull request gets no repository secrets, so the credentialed scan cannot run. Supply-chain review for this pull request is the full scan on push to main plus a reviewer reading go.mod. See .github/ADMIN_SETUP.md."
               ;;
             *)
               echo "::error::FOSSA scan reported '${SCAN_RESULT}'."

@@ -114,10 +114,15 @@ jobs:
   fossa_scan:
     if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
     name: FOSSA Scan
-    # The scan authenticates to Vault by OIDC (`id-token`), reads the dependency
-    # graph and workflow metadata (`packages`, `actions`), and reports back on the
-    # commit (`pull-requests`, `statuses`, `checks`). Scoped to this job so no
-    # other job inherits any of it.
+    # The scan reads the dependency graph and workflow metadata (`packages`,
+    # `actions`) and reports back on the commit (`pull-requests`, `statuses`,
+    # `checks`). Scoped to this job so no other job inherits any of it.
+    #
+    # `id-token: write` is unused since FOSSA moved off Vault, but do not remove it.
+    # The shared workflow declares these scopes at workflow level and its `sca_scan`
+    # job declares none of its own, and a called workflow cannot request more than
+    # its caller grants — so a caller granting less fails at job-creation time,
+    # before any step runs. Grant the union it declares.
     permissions:
       contents: read
       packages: read
@@ -128,11 +133,11 @@ jobs:
       statuses: write
     uses: SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml@fc521b087f780457f92d4cb46038184e92ad2fbc # pinned 2026-05-12
     with:
-      use_vault: true
+      use_vault: false
       config_file: '.github/workflow-config.json'
     secrets:
-      # Vault address is injected from an org/repo secret, not committed to the repo.
-      VAULT_URL: ${{ secrets.VAULT_URL }}
+      # Org-level Actions secret, not Vault.
+      FOSSA_API_KEY: ${{ secrets.FOSSA_API_KEY }}
 
   lint:
     runs-on: ubuntu-latest

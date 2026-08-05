@@ -23,8 +23,9 @@ jobs:
     uses: SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml@fc521b087f780457f92d4cb46038184e92ad2fbc # pinned 2026-05-12
     with:
       git_ref: ${{ inputs.git_ref }}
-      use_vault: true
+      use_vault: false
       config_file: '.github/workflow-config.json'
     secrets:
-      # Vault address is injected from an org/repo secret, not committed to the repo.
-      VAULT_URL: ${{ secrets.VAULT_URL }}
+      # Org-level Actions secret, not Vault. `id-token: write` above is still
+      # required — see the note in build-and-test.yml.
+      FOSSA_API_KEY: ${{ secrets.FOSSA_API_KEY }}
