@@ -75,6 +75,12 @@ jobs:
         run: .github/scripts/licenses-check.test.sh
       - name: Verify THIRD_PARTY_LICENSES.md and NOTICE match the binary
         run: .github/scripts/licenses-check.sh
+      # Verified at the tag for the same reason as the check above it: a pull
+      # request can merge with this red until it is a required status check.
+      - name: Self-test the build/test licence check
+        run: .github/scripts/build-test-licenses-check.test.sh
+      - name: Verify THIRD_PARTY_BUILD_TEST.md matches the build and test inputs
+        run: .github/scripts/build-test-licenses-check.sh
 
   fossa_scan:
     name: FOSSA Scan
