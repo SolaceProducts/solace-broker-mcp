@@ -478,7 +478,7 @@ verify_monitor_object() {
         sleep 1
         attempt=$((attempt + 1))
     done
-    log_warn "  monitor NOT visible: $description on $label after ${max_attempts}s — proceeding anyway"
+    log_warn "  monitor NOT visible: $description on $label after ${max_attempts}s"
     return 1
 }
 
