@@ -181,7 +181,13 @@ jobs:
           path: ${{ env.ARCHIVE }}
 
   build-docker:
-    needs: [test, release-notes, licenses]
+    # `fossa_scan` is a prerequisite here, not just of `release`: this job pushes
+    # unconditionally, and a push cannot be undone. Without it a failing SCA gate
+    # still publishes the image and moves `latest`, and only the GitHub Release
+    # waits — leaving a live image the release never vouched for. The two jobs ran
+    # in parallel before, so on a clean run this costs the longer of the two, not
+    # the sum.
+    needs: [test, release-notes, licenses, fossa_scan]
     runs-on: ubuntu-latest
     # `packages` to push to ghcr.io, `id-token`/`attestations` for the
     # provenance step. `artifact-metadata` is needed because

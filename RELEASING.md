@@ -81,13 +81,20 @@ The jobs are not fully serialized:
 
 ```
 push v* tag
-  ├─> test (reuses build-and-test.yml)
-  │     ├─> build-binaries (matrix: 4 OS/arch) ──┐
-  │     └─> build-docker (pushes the image) ─────┼─> release (GitHub Release)
-  └─> fossa_scan ─────────────────────────────────┘
+  ├─> test           (reuses build-and-test.yml)
+  ├─> release-notes  (CHANGELOG block must exist)
+  ├─> licenses       (inventory must match the binary)
+  └─> fossa_scan     (SCA gate)
+
+waits on
+  build-binaries   test, release-notes, licenses
+  build-docker     test, release-notes, licenses, fossa_scan   ← pushes the image
+  release          build-binaries, build-docker, fossa_scan
 ```
 
-A failed job blocks the GitHub Release, binaries, and checksums. The container image is the exception: it is pushed as soon as build-and-test passes, in parallel with the FOSSA scan, so a FOSSA failure can leave the image and its moving pointers already published on `ghcr.io`. The image is also pushed *before* it is attested, so a run that fails on the attest step leaves `latest` live but with no attestation — a consumer's `gh attestation verify` then fails because the release is incomplete, not because the image was tampered with. Gating the image push on every job is **[Planned]** — until then, if a release run fails partway, check `ghcr.io` and roll forward (see Rollback).
+A failed job blocks the GitHub Release, binaries, checksums, and the container image: `build-docker` waits on the FOSSA scan as well as the build, so a failing SCA gate publishes nothing. That matters because a registry push cannot be withdrawn — the binaries are only artifacts until `release` publishes them, but the image is live the moment it is pushed.
+
+One window remains: the image is pushed *before* it is attested, so a run that fails on the attest step leaves `latest` live with no attestation — a consumer's `gh attestation verify` then fails because the release is incomplete, not because the image was tampered with. That ordering is unavoidable, since attesting a registry digest requires the digest to exist. If a release run fails partway, check `ghcr.io` and roll forward (see Rollback).
 
 Pre-release tags (`v0.4.0-beta.1`) and the `:edge`/`:alpha`/`:beta` pointers follow the same workflow once continuous pre-release publishing is wired up **[Planned]**.
 
