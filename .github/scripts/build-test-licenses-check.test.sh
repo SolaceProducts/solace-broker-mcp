@@ -144,11 +144,30 @@ assert_check() {
         pass=$((pass + 1))
     else
         echo "  NOT OK   $desc (expected exit $want, got $got)"
+        # Show why. Without this a failing baseline says nothing, and every
+        # mutation case expecting exit 1 would pass on the wrong exit 1 —
+        # a whole suite green for the wrong reason.
+        sed 's/^/           | /' <<<"$captured" | head -15
         fail=$((fail + 1))
     fi
 
     rm -rf "$tmp"
 }
+
+# `go list -deps -test` needs every submodule's dependencies resolvable. On a
+# cold cache — a fresh CI runner — it fails, the gate correctly reports that it
+# cannot determine the closure, and every case expecting exit 1 then passes for
+# entirely the wrong reason while the baseline is the only one that tells the
+# truth. Warm the cache once, up front, and fail loudly if that is not possible.
+while read -r gomod; do
+    [ -n "$gomod" ] || continue
+    sub=$(dirname "$gomod")
+    if ! (cd "$sub" && go mod download all >/dev/null 2>&1); then
+        echo "FATAL: could not download modules for $sub. Every case below would"
+        echo "       pass for the wrong reason, so refusing to run them."
+        exit 1
+    fi
+done < <(find -L "$REPO_ROOT/test" -name go.mod -type f 2>/dev/null | sort)
 
 echo "build-test-licenses-check.sh self-test"
 
