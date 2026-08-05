@@ -6,10 +6,10 @@
           <memory-info>
             <type>Memory</type>
             <total-in-kb>31816236</total-in-kb>
-            <used-in-kb>24659596</used-in-kb>
-            <free-in-kb>7156640</free-in-kb>
-            <buffers-in-kb>401148</buffers-in-kb>
-            <cached-in-kb>14490252</cached-in-kb>
+            <used-in-kb>24569612</used-in-kb>
+            <free-in-kb>7246624</free-in-kb>
+            <buffers-in-kb>401260</buffers-in-kb>
+            <cached-in-kb>14361916</cached-in-kb>
           </memory-info>
           <memory-info>
             <type>Swap</type>
@@ -22,8 +22,8 @@
           <memory-info>
             <type>Memory</type>
             <total-in-kb>1966080</total-in-kb>
-            <used-in-kb>854</used-in-kb>
-            <free-in-kb>1965226</free-in-kb>
+            <used-in-kb>885</used-in-kb>
+            <free-in-kb>1965195</free-in-kb>
           </memory-info>
         </subscriptions-memory>
         <ipc-buffers>
@@ -88,8 +88,8 @@
             <free-memory-in-kb>10240</free-memory-in-kb>
           </buffer-info>
         </ipc-buffers>
-        <physical-memory-usage-percent>31.9628</physical-memory-usage-percent>
-        <subscription-memory-usage-percent>0.0434041</subscription-memory-usage-percent>
+        <physical-memory-usage-percent>32.0833</physical-memory-usage-percent>
+        <subscription-memory-usage-percent>0.0449936</subscription-memory-usage-percent>
         <subscriptions-load-factor-percent>0</subscriptions-load-factor-percent>
         <subscriptions-load-factor-highest-contributor>???</subscriptions-load-factor-highest-contributor>
         <slot-infos>

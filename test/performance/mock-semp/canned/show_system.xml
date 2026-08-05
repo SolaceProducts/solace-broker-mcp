@@ -2,7 +2,7 @@
   <rpc>
     <show>
       <system>
-        <system-uptime-seconds>718733</system-uptime-seconds>
+        <system-uptime-seconds>1923994</system-uptime-seconds>
         <last-restart-reason>Unknown</last-restart-reason>
         <max-connections>9000</max-connections>
         <max-queue-messages>10000</max-queue-messages>

@@ -1,0 +1,26 @@
+# Exact-mode fidelity exclusions.
+#
+# Each non-empty, non-comment line names a path in the tool output that
+# drifts between the canned SEMP capture and the golden capture even when
+# both are taken seconds apart (see regen-golden.sh — it drives both
+# captures in one pass). Uptime advances between the two curl calls;
+# memory percentages jitter at the sub-percent level. Neither of these is
+# a real fidelity signal.
+#
+# Path syntax matches what fidelity's diff already prints:
+#   parent.child        for object keys
+#   parent[N].child     for the N-th array element
+# A path also excludes everything under it, so listing "memory" would skip
+# the whole memory subtree — prefer leaf paths so unrelated regressions
+# under the same parent still fail the gate.
+#
+# Excluded paths are logged at run start; if a name here doesn't appear in
+# any tool output the gate does NOT fail on that alone (an unused
+# exclusion is a review issue, not a runtime one).
+
+# Uptime — two names for the same seconds counter.
+system.systemUptimeSeconds
+version.uptime.totalSecs
+
+# Memory usage sample.
+memory.physicalMemoryUsagePercent

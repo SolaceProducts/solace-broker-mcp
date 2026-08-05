@@ -41,9 +41,19 @@ curl_semp() {
 }
 
 curl_get() {
-  local out="$1" path="$2"
+  local out="$1" ref="$2" url
+  # $ref may be an absolute URL (broker often returns absolute nextPageUri
+  # whose scheme/host/port don't line up with $BROKER_URL) or a root-relative
+  # path. Blindly concatenating "$BROKER_URL$ref" corrupts the URL in the
+  # absolute case ("https://host:943https://host:943/..."), which curl
+  # rejects with "Port number was not a decimal number".
+  case "$ref" in
+    http://*|https://*) url="$ref" ;;
+    /*)                 url="$BROKER_URL$ref" ;;
+    *)                  url="$BROKER_URL/$ref" ;;
+  esac
   curl -fsS -u "$BROKER_USERNAME:$BROKER_PASSWORD" \
-    "$BROKER_URL$path" \
+    "$url" \
     -o "$out"
   echo "wrote $out ($(wc -c < "$out") bytes)"
 }
@@ -79,8 +89,7 @@ while [[ -n "$next" ]]; do
   else
     next=$(grep -oE '"nextPageUri"[[:space:]]*:[[:space:]]*"[^"]*"' "$out" | sed -E 's/.*"([^"]+)"$/\1/' || true)
   fi
-  # SEMPv2 returns an absolute or root-relative path; strip base URL if present.
-  next="${next#$BROKER_URL}"
+  # SEMPv2's nextPageUri may be absolute or root-relative; curl_get handles both.
   page=$((page + 1))
   if [[ $page -gt 20 ]]; then
     echo "aborting: >20 pages, likely a bug" >&2

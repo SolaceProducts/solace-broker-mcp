@@ -1,8 +1,20 @@
 #!/usr/bin/env bash
-# Regenerate fidelity/golden/*.json from the real lab broker.
-# Starts MCP with broker-config.yaml (the local dev config that reads
-# credentials from .env via ${BROKER_USERNAME}/${BROKER_PASSWORD}), invokes
-# each tool via `fidelity -capture`, tears down.
+# Regenerate the mock's canned SEMP responses and fidelity/golden/*.json in
+# a single coordinated capture against the real lab broker.
+#
+# The two capture paths must hit the same broker within seconds of each
+# other, otherwise self-changing fields (uptime, memory %, disk usage) drift
+# far enough apart to defeat exact-mode fidelity comparison even when the
+# mock is replaying the "same" data. This script drives both back-to-back:
+#
+#   1. Start MCP against the real broker (broker-config.real.yaml).
+#   2. Wait for MCP /health.
+#   3. mock-semp/canned/capture.sh — direct SEMP curls, writes canned/*.
+#   4. fidelity -capture — through MCP, writes fidelity/golden/*.
+#   5. Rebuild mock-semp so go:embed picks up the fresh canned files.
+#
+# After this, run exact-mode fidelity (no -shape) to see the residual diff:
+# that diff is the ground truth for what genuinely needs an exception list.
 
 set -euo pipefail
 
@@ -79,6 +91,28 @@ wait_for_http() {
   return 1
 }
 
+# broker_url_from_config extracts the `url:` field for $broker_alias from a
+# broker-config.*.yaml. Uses awk (rather than yq) to keep the script's
+# dependency footprint identical to what it already needs. Fails loudly if
+# the alias or url is missing — silently defaulting would send capture.sh
+# at the wrong broker and hide a config typo.
+broker_url_from_config() {
+  local cfg=$1 alias=$2
+  awk -v alias="$alias" '
+    # Match the alias line, e.g. "  my-broker:"
+    match($0, "^[[:space:]]{2}" alias ":[[:space:]]*$") { in_block=1; next }
+    # Any subsequent line at the same 2-space indent that is an alias header
+    # ends the block. Guards against reading a url from a later broker.
+    in_block && /^[[:space:]]{2}[A-Za-z0-9_-]+:[[:space:]]*$/ { in_block=0 }
+    in_block && match($0, /^[[:space:]]+url:[[:space:]]*/) {
+      v = substr($0, RSTART + RLENGTH)
+      gsub(/^["'\'']|["'\'']$/, "", v)
+      print v
+      exit
+    }
+  ' "$cfg"
+}
+
 # MCP auto-loads .env from the config file's directory. When the config is
 # test/performance/broker-config.real.yaml there's no .env alongside it, so pull
 # credentials from the repo-root .env (or the caller's env) and export them.
@@ -98,8 +132,26 @@ wait_for_http "http://localhost:9090/health" mcp-server
 echo "== 2. broker aliases MCP loaded from $config"
 grep -E '^[[:space:]]{2}[A-Za-z0-9_-]+:$' "$config" | sed -E 's/^[[:space:]]+/    /; s/:$//'
 
-echo "== 3. fidelity -capture (alias=$broker_alias vpn=$vpn)"
+broker_url="$(broker_url_from_config "$config" "$broker_alias")"
+if [[ -z "$broker_url" ]]; then
+  echo "could not find brokers.$broker_alias.url in $config" >&2
+  exit 2
+fi
+
+echo "== 3. canned/*: direct SEMP capture from $broker_url (vpn=$vpn)"
+BROKER_URL="$broker_url" \
+  BROKER_USERNAME="$BROKER_USERNAME" \
+  BROKER_PASSWORD="$BROKER_PASSWORD" \
+  MSG_VPN="$vpn" \
+  "$here/mock-semp/canned/capture.sh" 2>&1 | tee "$runs/canned.log"
+
+echo "== 4. fidelity -capture (alias=$broker_alias vpn=$vpn)"
 "$bin/fidelity" -mcp-url http://localhost:9090 -broker "$broker_alias" -vpn "$vpn" \
   -golden-dir "$here/fidelity/golden" -capture 2>&1 | tee "$runs/regen.log"
 
+echo "== 5. rebuild mock-semp so go:embed picks up the new canned files"
+( cd "$here/mock-semp" && go build -o "$bin/mock-semp" . )
+
+echo "== canned regenerated at $here/mock-semp/canned"
 echo "== goldens regenerated at $here/fidelity/golden"
+echo "== mock rebuilt at $bin/mock-semp"

@@ -41,6 +41,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -50,6 +51,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"syscall"
@@ -63,6 +65,7 @@ func main() {
 	configListenAddr := flag.String("config-listen-addr", "localhost", "interface to bind /_mock/config; keep on localhost even when -listen-addr is 0.0.0.0 so LAN peers can't inject errors")
 	configPort := flag.Int("config-port", 9000, "port for /_mock/config")
 	defaultLatencyMs := flag.Int("default-latency-ms", 0, "fixed sleep before every response (all ports); overridden per-port by /_mock/config")
+	cannedSrc := flag.String("canned-src", "", "path to the source canned/ directory. If set, every embedded canned file is compared against its on-disk counterpart at startup and the process fatals on mismatch — a workflow guard for `edited canned/* but forgot to rebuild`. Leave empty for production use.")
 	flag.Parse()
 
 	if *listenCount < 1 {
@@ -70,6 +73,12 @@ func main() {
 	}
 	if *defaultLatencyMs < 0 {
 		log.Fatalf("default-latency-ms must be >= 0")
+	}
+
+	if *cannedSrc != "" {
+		if err := checkCannedStaleness(*cannedSrc); err != nil {
+			log.Fatalf("mock-semp: %v", err)
+		}
 	}
 
 	ports := make([]int, *listenCount)
@@ -150,4 +159,40 @@ func main() {
 		fmt.Fprintf(os.Stderr, "mock-semp: %d unmatched requests during run — see logs\n", misses)
 		os.Exit(1)
 	}
+}
+
+// checkCannedStaleness compares every file in the embedded canned/ tree
+// against its on-disk counterpart in srcDir. It fatals on the first
+// mismatch. The failure mode this catches: someone re-runs capture.sh
+// (or edits a canned file by hand) but skips the mock rebuild, so go:embed
+// still holds the old bytes and the mock silently replays yesterday's
+// broker. Enabled per-invocation via -canned-src, so production
+// deployments with no source tree next to them still work.
+//
+// Bytes-equal rather than mtime-equal — git checkout resets mtimes on
+// clean working trees and would fire false alarms.
+func checkCannedStaleness(srcDir string) error {
+	entries, err := canned.ReadDir("canned")
+	if err != nil {
+		return fmt.Errorf("reading embedded canned/: %w", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		embedded, err := canned.ReadFile("canned/" + name)
+		if err != nil {
+			return fmt.Errorf("reading embedded canned/%s: %w", name, err)
+		}
+		srcPath := filepath.Join(srcDir, name)
+		onDisk, err := os.ReadFile(srcPath)
+		if err != nil {
+			return fmt.Errorf("canned staleness check: reading %s: %w", srcPath, err)
+		}
+		if !bytes.Equal(embedded, onDisk) {
+			return fmt.Errorf("canned/%s: embedded copy differs from %s — rebuild mock-semp (go build ./mock-semp) so go:embed picks up the fresh capture", name, srcPath)
+		}
+	}
+	return nil
 }

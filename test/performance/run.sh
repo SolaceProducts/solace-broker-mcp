@@ -26,6 +26,8 @@
 #                   Default: "503:70,429:20,500:10" — mirrors realistic broker
 #                   overload signals and exercises the MCP retry chain.
 #                   Only 429/500/502/503/504 are accepted (retryable codes).
+#   BROKER_ALIAS fidelity -broker  (default broker-01; must exist in broker-config.mock.yaml)
+#   VPN          fidelity -vpn     (default vpn_1; must match how goldens were captured)
 #   BROKER_USERNAME / BROKER_PASSWORD  (default perf/perf; mock accepts anything non-empty)
 
 set -euo pipefail
@@ -43,6 +45,10 @@ LATENCY_MS="${LATENCY_MS:-0}"
 ERROR_RATE="${ERROR_RATE:-0}"
 ERROR_COUNT="${ERROR_COUNT:-0}"
 ERROR_STATUSES="${ERROR_STATUSES:-503:70,429:20,500:10}"
+# Fidelity gate targets — must match how the goldens were captured (see
+# regen-golden.sh). Defaults track the current fidelity/golden/*.json.
+BROKER_ALIAS="${BROKER_ALIAS:-broker-01}"
+VPN="${VPN:-vpn_1}"
 export BROKER_USERNAME="${BROKER_USERNAME:-perf}"
 export BROKER_PASSWORD="${BROKER_PASSWORD:-perf}"
 # Single-host: MCP reaches the mock over loopback.
@@ -128,8 +134,12 @@ wait_for_tcp() {
 mock_start=18081
 mock_count=50
 echo "== 1. mock-semp on :$mock_start..$((mock_start + mock_count - 1)) (default-latency-ms=$LATENCY_MS)"
+# -canned-src arms the staleness check: mock-semp fatals at startup if any
+# on-disk canned/* differs from its embedded copy — catches "edited canned/
+# but forgot to rebuild" which would otherwise silently replay stale data.
 setsid "$bin/mock-semp" -listen-start "$mock_start" -listen-count "$mock_count" -config-port 19000 \
   -default-latency-ms "$LATENCY_MS" \
+  -canned-src "$here/mock-semp/canned" \
   >"$runs/mock.log" 2>&1 &
 mock_pid=$!
 wait_for_tcp localhost 18081 mock-semp
@@ -176,9 +186,12 @@ setsid bash -c "cd '$repo_root' && CONFIG_FILE='$here/broker-config.mock.yaml' e
 mcp_pid=$!
 wait_for_http "http://localhost:9090/health" mcp-server
 
-echo "== 3. fidelity gate"
-if ! "$bin/fidelity" -mcp-url http://localhost:9090 -broker broker-01 -vpn default \
-      -golden-dir "$here/fidelity/golden" -shape | tee "$runs/fidelity.log"; then
+echo "== 3. fidelity gate (exact mode; broker=$BROKER_ALIAS vpn=$VPN; exclusions in fidelity/exclusions.txt)"
+# BROKER_ALIAS + VPN must match how the goldens were captured; the mock
+# replays canned bytes regardless of the alias in the request path, so
+# BROKER_ALIAS just picks which mock broker MCP dials.
+if ! "$bin/fidelity" -mcp-url http://localhost:9090 -broker "$BROKER_ALIAS" -vpn "$VPN" \
+      -golden-dir "$here/fidelity/golden" | tee "$runs/fidelity.log"; then
   echo "!! fidelity FAILED — aborting before load run" >&2
   exit 1
 fi

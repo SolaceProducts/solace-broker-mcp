@@ -64,6 +64,8 @@ Key env knobs (full list in `run.sh` header):
 | `ERROR_RATE` | 0 | probability each broker response is injected as an error |
 | `ERROR_COUNT` | 0 | cap on injected errors per broker port (0 = unlimited) |
 | `ERROR_STATUSES` | `503:70,429:20,500:10` | weighted status pool; only 429/500/502/503/504 accepted |
+| `BROKER_ALIAS` | `broker-01` | fidelity `-broker`; must exist in `broker-config.mock.yaml` |
+| `VPN` | `vpn_1` | fidelity `-vpn`; must match how the goldens were captured (see `regen-golden.sh`) |
 
 ## Split-host run
 
@@ -102,13 +104,31 @@ firing loadgen.
 | `ERROR_RATE` | 0 | probability [0,1] a broker response is injected as an error |
 | `ERROR_COUNT` | 0 | cap on injected errors per broker port (0 = unlimited) |
 | `ERROR_STATUSES` | `503:70,429:20,500:10` | weighted status pool; only 429/500/502/503/504 accepted |
+| `BROKER_ALIAS` | `broker-01` | fidelity `-broker`; must exist in `broker-config.mock.yaml` |
+| `VPN` | `vpn_1` | fidelity `-vpn`; must match how the goldens were captured (see `regen-golden.sh`) |
 
 ## Fidelity gate
 
 `fidelity` invokes each tool over MCP and deep-equals the result against
-`fidelity/golden/*.json`. Non-empty diff → exit 1, load run aborted.
+`fidelity/golden/*.json` in exact mode. Non-empty diff → exit 1, load run
+aborted. The gate runs from both `run.sh` (single-host) and
+`run-loadgen.sh` (split-host, on Box A) before error injection is armed,
+so a 1% error roll can't flake the pre-run check.
 
-Regenerate goldens after a legitimate tool-shape change:
+Values in `fidelity/exclusions.txt` (dotted paths, `#` comments) are
+skipped by exact-mode diff — currently three fields that advance or
+jitter between the canned and golden captures (broker uptime, memory
+usage percent). Everything else must match byte-for-byte. Add a path
+here only when regen-golden.sh's coordinated recapture shows it truly
+drifts within the sub-second window between the two captures.
+
+`regen-golden.sh` re-captures both the mock's canned SEMP responses AND the
+goldens in one pass against the real broker. Doing them together matters:
+self-changing fields (uptime, memory percentages, disk usage) drift with
+wall-clock time, so canned and goldens taken hours apart cannot match
+exact-mode comparison even when replaying the same data. The script also
+rebuilds `mock-semp` so `go:embed` picks up the fresh canned files —
+recapturing without rebuilding silently keeps the old data compiled in.
 
 ```
 CONFIG_FILE=./broker-config.real.yaml ./regen-golden.sh
@@ -130,8 +150,8 @@ BROKER_USERNAME=... BROKER_PASSWORD=... \
   CONFIG_FILE=./broker-config.real.yaml ./regen-golden.sh
 ```
 
-This starts MCP against the real broker, captures fresh JSON, then tears
-down. Review the diff before committing.
+Review the diff on both `mock-semp/canned/` and `fidelity/golden/` before
+committing.
 
 ## Injecting errors
 

@@ -10,10 +10,15 @@ import (
 	"crypto/rand"
 	"embed"
 	"encoding/binary"
+	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"math/big"
 	"net/http"
+	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -132,11 +137,12 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 // to answer. Ordering matters: first match wins, so more specific rules
 // (e.g. queues pagination cursor) come before broader ones.
 //
-// Page-2 for list-queues is only registered if canned/queues_page2.json
-// exists in the embed. Small broker captures (queue count <= page size)
-// produce only page 1; forcing a page-2 file in that case would either
-// leave stale placeholder data lying around or fail startup. Bigger
-// captures re-enable the rule automatically.
+// list-queues pagination auto-discovers pages: any canned/queues_page<N>.json
+// present in the embed becomes a rule keyed on the cursor value MCP will
+// send to reach that page (extracted from page N-1's meta.paging.nextPageUri).
+// So a fresh capture with more pages Just Works — no matching handler edit
+// needed. A capture with only page 1 (queue count <= page size) works too:
+// no cursor rules registered, just the page-1 rule.
 func (h *handler) buildRules() []rule {
 	rules := []rule{
 		// SEMPv1 — get-broker-status issues four <show> commands in
@@ -172,22 +178,100 @@ func (h *handler) buildRules() []rule {
 		},
 	}
 
-	// SEMPv2 queues page 2 — optional. Registered BEFORE page 1 so a
-	// cursor-bearing request is matched here first (page 1's predicate
-	// checks the same path prefix).
-	if _, err := canned.ReadFile("canned/queues_page2.json"); err == nil {
-		rules = append(rules, rule{
-			name:    "sempv2 queues page 2 (cursor)",
-			match:   sempv2QueuesWithCursor,
-			respond: staticFile("canned/queues_page2.json", "application/json"),
+	rules = append(rules, buildQueuesRules()...)
+	return rules
+}
+
+// buildQueuesRules discovers canned/queues_page<N>.json files and returns
+// one rule per page. Pages 2..N are matched by the cursor MCP will send,
+// which is the cursor embedded in page N-1's nextPageUri (MCP passes the
+// URI back verbatim). Cursor rules are registered before the page-1 rule
+// so a cursor-bearing request is matched specifically.
+func buildQueuesRules() []rule {
+	entries, err := canned.ReadDir("canned")
+	if err != nil {
+		log.Fatalf("mock-semp: reading canned dir: %v", err)
+	}
+	type page struct {
+		num  int
+		file string
+	}
+	var pages []page
+	for _, e := range entries {
+		n := e.Name()
+		if e.IsDir() || !strings.HasPrefix(n, "queues_page") || !strings.HasSuffix(n, ".json") {
+			continue
+		}
+		numStr := strings.TrimSuffix(strings.TrimPrefix(n, "queues_page"), ".json")
+		num, err := strconv.Atoi(numStr)
+		if err != nil {
+			log.Fatalf("mock-semp: canned/%s: cannot parse page number: %v", n, err)
+		}
+		pages = append(pages, page{num: num, file: "canned/" + n})
+	}
+	if len(pages) == 0 {
+		log.Fatalf("mock-semp: no canned/queues_page*.json found — list-queues cannot be served")
+	}
+	sort.Slice(pages, func(i, j int) bool { return pages[i].num < pages[j].num })
+	// Require contiguous 1..N. A gap means the recapture failed partway
+	// through (or someone hand-edited canned/) and the pagination chain
+	// would break silently at runtime — fail fast at startup instead.
+	for i, p := range pages {
+		if p.num != i+1 {
+			log.Fatalf("mock-semp: canned/queues_page*.json not contiguous: expected page %d, got %d", i+1, p.num)
+		}
+	}
+
+	var out []rule
+	// Pages 2..N — cursor match. The cursor MCP sends for page N is the one
+	// baked into page (N-1)'s nextPageUri.
+	for i := 1; i < len(pages); i++ {
+		cursor := cursorFromNextPageURI(pages[i-1].file)
+		if cursor == "" {
+			log.Fatalf("mock-semp: %s has no nextPageUri cursor but %s exists", pages[i-1].file, pages[i].file)
+		}
+		out = append(out, rule{
+			name:    fmt.Sprintf("sempv2 queues page %d (cursor)", pages[i].num),
+			match:   sempv2QueuesCursorEquals(cursor),
+			respond: staticFile(pages[i].file, "application/json"),
 		})
 	}
-	rules = append(rules, rule{
+	// Page 1 — no cursor.
+	out = append(out, rule{
 		name:    "sempv2 queues page 1",
 		match:   sempv2QueuesFirstPage,
-		respond: staticFile("canned/queues_page1.json", "application/json"),
+		respond: staticFile(pages[0].file, "application/json"),
 	})
-	return rules
+	return out
+}
+
+// cursorFromNextPageURI returns the cursor query parameter embedded in the
+// given canned page's meta.paging.nextPageUri, or "" if the page has no
+// nextPageUri (i.e. it is the last page). Fatals on a malformed page: a
+// broken canned file is a build mistake, not runtime.
+func cursorFromNextPageURI(embeddedPath string) string {
+	data, err := canned.ReadFile(embeddedPath)
+	if err != nil {
+		log.Fatalf("mock-semp: reading %s: %v", embeddedPath, err)
+	}
+	var parsed struct {
+		Meta struct {
+			Paging struct {
+				NextPageURI string `json:"nextPageUri"`
+			} `json:"paging"`
+		} `json:"meta"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		log.Fatalf("mock-semp: %s: bad JSON: %v", embeddedPath, err)
+	}
+	if parsed.Meta.Paging.NextPageURI == "" {
+		return ""
+	}
+	u, err := url.Parse(parsed.Meta.Paging.NextPageURI)
+	if err != nil {
+		log.Fatalf("mock-semp: %s: bad nextPageUri: %v", embeddedPath, err)
+	}
+	return u.Query().Get("cursor")
 }
 
 // sempv1Body returns a match predicate that fires when the request is a
@@ -222,10 +306,16 @@ func sempv2QueuesFirstPage(r *http.Request, _ []byte) bool {
 		r.URL.Query().Get("cursor") == ""
 }
 
-func sempv2QueuesWithCursor(r *http.Request, _ []byte) bool {
-	return r.Method == http.MethodGet &&
-		isQueuesListPath(r.URL.Path) &&
-		r.URL.Query().Get("cursor") != ""
+// sempv2QueuesCursorEquals returns a predicate that fires when the request
+// is a list-queues GET whose cursor query parameter matches exactly. Cursor
+// values are opaque broker state (URL-encoded XML), so exact match is the
+// only correct comparison.
+func sempv2QueuesCursorEquals(want string) func(*http.Request, []byte) bool {
+	return func(r *http.Request, _ []byte) bool {
+		return r.Method == http.MethodGet &&
+			isQueuesListPath(r.URL.Path) &&
+			r.URL.Query().Get("cursor") == want
+	}
 }
 
 // staticFile returns a responder that serves the given embedded file with

@@ -27,7 +27,7 @@ semp:
 
 brokers:
   my-broker:
-    url: "https://broker.example.com:943"
+    url: "http://192.168.129.78:80"
     insecure_skip_verify: true
     auth:
       mode: basic

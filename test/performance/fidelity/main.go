@@ -30,6 +30,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -41,6 +42,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -51,6 +53,7 @@ func main() {
 	broker := flag.String("broker", "", "broker alias to invoke tools against (required)")
 	vpn := flag.String("vpn", "default", "msgVpnName for list-queues")
 	goldenDir := flag.String("golden-dir", "test/performance/fidelity/golden", "directory containing golden JSON files")
+	exclusionsPath := flag.String("exclusions", "", "path to a plain-text file of dotted paths (one per line, # comments allowed) that exact-mode diff should skip — e.g. broker uptime, which advances between the canned and golden captures. Default: <golden-dir>/../exclusions.txt if it exists.")
 	capture := flag.Bool("capture", false, "capture mode: overwrite golden files with the tools' current output instead of comparing (use when MCP is pointed at the real broker)")
 	shape := flag.Bool("shape", false, "compare shape only (same keys, same types, same array lengths) — ignore scalar values. Use when you want structural fidelity without brittle drift on live metrics.")
 	timeout := flag.Duration("timeout", 30*time.Second, "overall deadline")
@@ -73,11 +76,72 @@ func main() {
 		return
 	}
 
-	if err := run(ctx, *mcpURL, *broker, *vpn, *goldenDir, *shape); err != nil {
+	exclusions, err := loadExclusions(*exclusionsPath, *goldenDir, *shape)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "FAIL: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := run(ctx, *mcpURL, *broker, *vpn, *goldenDir, *shape, exclusions); err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println("PASS: all tools matched their golden")
+}
+
+// loadExclusions reads a plain-text exclusions file — one dotted path per
+// line, "#" comments and blank lines ignored — and returns the set of
+// paths whose diff should be skipped. If explicit is empty, tries
+// "<goldenDir>/../exclusions.txt" and treats absence as an empty set (so
+// hand-authored fixtures without a real-broker capture keep working).
+//
+// In shape mode the exclusions have no effect: shape mode doesn't compare
+// scalar values, so there's nothing to exclude. Loaded paths are logged so
+// a reviewer sees what the gate is ignoring — a silent exclusion is a
+// worse failure mode than a diff.
+func loadExclusions(explicit, goldenDir string, shape bool) (map[string]bool, error) {
+	path := explicit
+	if path == "" {
+		path = filepath.Join(filepath.Dir(goldenDir), "exclusions.txt")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) && explicit == "" {
+			return map[string]bool{}, nil
+		}
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	out := map[string]bool{}
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		out[line] = true
+	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	if len(out) == 0 {
+		return out, nil
+	}
+	if shape {
+		fmt.Fprintf(os.Stderr, "note: %d exclusion(s) in %s ignored in -shape mode\n", len(out), path)
+		return map[string]bool{}, nil
+	}
+	fmt.Printf("exclusions loaded from %s:\n", path)
+	sorted := make([]string, 0, len(out))
+	for p := range out {
+		sorted = append(sorted, p)
+	}
+	sort.Strings(sorted)
+	for _, p := range sorted {
+		fmt.Printf("  - %s\n", p)
+	}
+	return out, nil
 }
 
 // captureGoldens invokes the same tools the fidelity check runs, but
@@ -148,7 +212,7 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	return os.Rename(tmp, path)
 }
 
-func run(ctx context.Context, mcpURL, broker, vpn, goldenDir string, shape bool) error {
+func run(ctx context.Context, mcpURL, broker, vpn, goldenDir string, shape bool, exclusions map[string]bool) error {
 	session, err := connect(ctx, mcpURL)
 	if err != nil {
 		return fmt.Errorf("connecting to MCP: %w", err)
@@ -171,7 +235,7 @@ func run(ctx context.Context, mcpURL, broker, vpn, goldenDir string, shape bool)
 	var firstErr error
 	for _, c := range checks {
 		fmt.Printf("--- %s ---\n", c.tool)
-		if err := verify(ctx, session, c, shape); err != nil {
+		if err := verify(ctx, session, c, shape, exclusions); err != nil {
 			fmt.Printf("  DIFF: %v\n", err)
 			if firstErr == nil {
 				firstErr = fmt.Errorf("%s diverged", c.tool)
@@ -193,7 +257,7 @@ type toolCheck struct {
 // verify calls one tool, unmarshals the golden and the actual output as
 // generic JSON, and returns a description of the first divergent field
 // (or nil if the two match).
-func verify(ctx context.Context, session *mcp.ClientSession, c toolCheck, shape bool) error {
+func verify(ctx context.Context, session *mcp.ClientSession, c toolCheck, shape bool, exclusions map[string]bool) error {
 	goldenBytes, err := os.ReadFile(c.goldenFile)
 	if err != nil {
 		return fmt.Errorf("reading golden: %w", err)
@@ -208,7 +272,7 @@ func verify(ctx context.Context, session *mcp.ClientSession, c toolCheck, shape 
 		return fmt.Errorf("invoking tool: %w", err)
 	}
 
-	if diff := diffJSON("", golden, actual, shape); diff != "" {
+	if diff := diffJSON("", golden, actual, shape, exclusions); diff != "" {
 		return errors.New(diff)
 	}
 	return nil
@@ -267,7 +331,15 @@ func extractText(content []mcp.Content) string {
 // slices in index order, so re-running against the same inputs always
 // surfaces the same first divergence — no flaky "sometimes different
 // field wins" behaviour if there are multiple diffs.
-func diffJSON(path string, golden, actual any, shape bool) string {
+//
+// A path listed in exclusions (and everything under it) is skipped. The
+// check fires at entry so the whole subtree short-circuits — cheaper than
+// descending and filtering leaf by leaf, and it makes "exclude memory"
+// mean the same thing as "exclude every descendant of memory".
+func diffJSON(path string, golden, actual any, shape bool, exclusions map[string]bool) string {
+	if exclusions[path] {
+		return ""
+	}
 	switch g := golden.(type) {
 	case map[string]any:
 		a, ok := actual.(map[string]any)
@@ -307,7 +379,7 @@ func diffJSON(path string, golden, actual any, shape bool) string {
 					return fmt.Sprintf("%s: missing key %q in actual (golden=%v)", path, k, gv)
 				}
 			}
-			if d := diffJSON(joinPath(path, k), gv, av, shape); d != "" {
+			if d := diffJSON(joinPath(path, k), gv, av, shape, exclusions); d != "" {
 				return d
 			}
 		}
@@ -331,7 +403,7 @@ func diffJSON(path string, golden, actual any, shape bool) string {
 			}
 			template := g[0]
 			for i, av := range a {
-				if d := diffJSON(joinPath(path, "["+strconv.Itoa(i)+"]"), template, av, shape); d != "" {
+				if d := diffJSON(joinPath(path, "["+strconv.Itoa(i)+"]"), template, av, shape, exclusions); d != "" {
 					return d
 				}
 			}
@@ -341,7 +413,7 @@ func diffJSON(path string, golden, actual any, shape bool) string {
 			return fmt.Sprintf("%s: length mismatch (golden=%d actual=%d)", path, len(g), len(a))
 		}
 		for i := range g {
-			if d := diffJSON(joinPath(path, "["+strconv.Itoa(i)+"]"), g[i], a[i], shape); d != "" {
+			if d := diffJSON(joinPath(path, "["+strconv.Itoa(i)+"]"), g[i], a[i], shape, exclusions); d != "" {
 				return d
 			}
 		}

@@ -28,6 +28,8 @@
 #   ERROR_COUNT    cap on injected errors per broker port (default 0 = unlimited)
 #   ERROR_STATUSES weighted status pool "code:w,code:w,..."
 #                  (default "503:70,429:20,500:10")
+#   BROKER_ALIAS   fidelity -broker  (default broker-01; must exist in broker-config.mock.yaml)
+#   VPN            fidelity -vpn     (default vpn_1; must match how goldens were captured)
 
 set -euo pipefail
 
@@ -46,10 +48,14 @@ NO_MOCK="${NO_MOCK:-0}"
 ERROR_RATE="${ERROR_RATE:-0}"
 ERROR_COUNT="${ERROR_COUNT:-0}"
 ERROR_STATUSES="${ERROR_STATUSES:-503:70,429:20,500:10}"
+# Fidelity gate targets — must match how the goldens were captured (see
+# regen-golden.sh). Defaults track the current fidelity/golden/*.json.
+BROKER_ALIAS="${BROKER_ALIAS:-broker-01}"
+VPN="${VPN:-vpn_1}"
 runs="$bin/runs/$(date +%Y%m%d-%H%M%S)-loadgen-$RUN_TAG"
 mkdir -p "$runs"
 
-required_bins=(loadgen)
+required_bins=(loadgen fidelity)
 [[ "$NO_MOCK" != "1" ]] && required_bins+=(mock-semp)
 for b in "${required_bins[@]}"; do
   if [[ ! -x "$bin/$b" ]]; then
@@ -165,6 +171,21 @@ wait_for_tcp() {
   return 1
 }
 
+wait_for_http() {
+  local url=$1 name=$2 timeout_s=${3:-12}
+  local end=$((SECONDS + timeout_s))
+  # -fs (not -fsS): silence per-retry connection errors during the poll.
+  # Box B often takes tens of seconds to bring MCP up; a chatty poll would
+  # spew hundreds of "Failed to connect" lines before success. A real
+  # network problem still surfaces as the timeout below.
+  while (( SECONDS < end )); do
+    if curl -fs -o /dev/null "$url"; then return 0; fi
+    sleep 0.5
+  done
+  echo "timed out after ${timeout_s}s waiting for $name at $url" >&2
+  return 1
+}
+
 # Parse host:port out of the MCP URL so we can wait for Box B to come up
 # before firing loadgen. Otherwise mock-semp starts, loadgen fires
 # immediately, and Box B's run-mcp.sh (which itself waits for our mock)
@@ -177,9 +198,13 @@ mcp_port="${mcp_hostport##*:}"
 
 if [[ "$NO_MOCK" != "1" ]]; then
   echo "== 1. mock-semp on 0.0.0.0:18081..$((18081 + BROKERS - 1)) (config: :19000, default-latency-ms=$LATENCY_MS)"
-  # Bind all interfaces so Box B can reach us over the LAN.
+  # Bind all interfaces so Box B can reach us over the LAN. -canned-src arms
+  # the staleness check: if any on-disk canned/* differs from the embedded
+  # copy, mock-semp fatals at startup — catches "edited canned/ but forgot
+  # to rebuild" before Box A starts injecting stale data into the run.
   setsid "$bin/mock-semp" -listen-addr 0.0.0.0 -listen-start 18081 -listen-count "$BROKERS" -config-port 19000 \
     -default-latency-ms "$LATENCY_MS" \
+    -canned-src "$here/mock-semp/canned" \
     >"$runs/mock.log" 2>&1 &
   mock_pid=$!
   wait_for_tcp localhost 18081 mock-semp
@@ -190,10 +215,24 @@ MOCK_ONLY=1 "$here/sampler.sh" "$runs/mock-sampler.csv" 5 "$sample_secs" \
   >"$runs/mock-sampler.log" 2>&1 &
 mock_top_pid=$!
 
-echo "== 3. waiting for MCP at $mcp_host:$mcp_port (start run-mcp.sh on Box B now if you haven't — up to 5 min)"
-if ! wait_for_tcp "$mcp_host" "$mcp_port" mcp-server 300; then
+echo "== 3. waiting for MCP at $mcp_url/health (start run-mcp.sh on Box B now if you haven't — up to 5 min)"
+# HTTP-readiness (not TCP): a TCP-listening port is not the same as a
+# serving MCP — the socket accepts before `go run` finishes compiling and
+# streamable-HTTP is registered, so a TCP-only wait can let loadgen fire
+# into 400s. Poll /health until it returns 200.
+if ! wait_for_http "$mcp_url/health" mcp-server 300; then
   my_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
   echo "!! MCP never came up — is Box B running:  MOCK_HOST=${my_ip:-<box-a-ip>} ./run-mcp.sh ?" >&2
+  exit 1
+fi
+
+# Fidelity gate: exact-mode diff of MCP tool output vs golden captures.
+# Runs BEFORE arm_injection so the check isn't flaked by a 1% error roll.
+# BROKER_ALIAS + VPN must match how the goldens were captured; see run.sh.
+echo "== 3b. fidelity gate (exact mode; broker=$BROKER_ALIAS vpn=$VPN; exclusions in fidelity/exclusions.txt)"
+if ! "$bin/fidelity" -mcp-url "$mcp_url" -broker "$BROKER_ALIAS" -vpn "$VPN" \
+      -golden-dir "$here/fidelity/golden" | tee "$runs/fidelity.log"; then
+  echo "!! fidelity FAILED — aborting before load run" >&2
   exit 1
 fi
 
@@ -201,7 +240,7 @@ extra_args=()
 [[ "$TOTAL_RPS" != "0" ]] && extra_args+=(-total-rps "$TOTAL_RPS")
 
 if awk -v r="$ERROR_RATE" 'BEGIN { exit !(r+0 > 0) }'; then
-  echo "== 3b. arming error injection (rate=$ERROR_RATE count=$ERROR_COUNT/port statuses=$ERROR_STATUSES)"
+  echo "== 3c. arming error injection (rate=$ERROR_RATE count=$ERROR_COUNT/port statuses=$ERROR_STATUSES)"
   arm_injection
   inject_note="inject rate=$ERROR_RATE count=$ERROR_COUNT/port statuses=$ERROR_STATUSES"
 else

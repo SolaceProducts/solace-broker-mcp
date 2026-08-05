@@ -23,7 +23,7 @@
           <transacted-session-count-utilization-percentage>0.00</transacted-session-count-utilization-percentage>
           <delivered-unacked-msgs-utilization-percentage>0.00</delivered-unacked-msgs-utilization-percentage>
           <spool-files-utilization-percentage>0.00</spool-files-utilization-percentage>
-          <active-disk-partition-usage>67.99</active-disk-partition-usage>
+          <active-disk-partition-usage>67.88</active-disk-partition-usage>
           <next-message-id>12794374</next-message-id>
           <defrag-status-state>Idle</defrag-status-state>
           <defrag-status>Idle</defrag-status>
@@ -39,7 +39,7 @@
           <num-delete-in-progress>0</num-delete-in-progress>
           <max-message-spool-entities>16000</max-message-spool-entities>
           <message-spool-entities-allowed-by-qendpt>16000</message-spool-entities-allowed-by-qendpt>
-          <message-spool-entities-used-by-queue>5004</message-spool-entities-used-by-queue>
+          <message-spool-entities-used-by-queue>5204</message-spool-entities-used-by-queue>
           <message-spool-entities-used-by-dte>5000</message-spool-entities-used-by-dte>
           <transacted-sessions-used>0</transacted-sessions-used>
           <max-transacted-sessions>16000</max-transacted-sessions>
@@ -86,8 +86,8 @@
             <disk-info>
               <partition>Active</partition>
               <blocks>62027884</blocks>
-              <used>27356616</used>
-              <available>12877647</available>
+              <used>27312440</used>
+              <available>12921823</available>
               <use>67</use>
               <mounted-on>/usr/sw</mounted-on>
             </disk-info>
