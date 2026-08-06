@@ -15,7 +15,12 @@ on:
         required: false
         type: string
         default: ""
+      # Typed boolean: GitHub rejects any non-boolean a caller passes, so
+      # `${{ inputs.push }}` is already type-safe in conditions (no string-
+      # truthiness bug, and fromJSON would error on a real boolean). fromJSON is
+      # for string values — see the job outputs in guardian-scan.yaml.
       push:
+        description: "true = build+push multi-arch to the registry; false = save a scan tar."
         required: false
         type: boolean
         default: false

@@ -1,13 +1,17 @@
 name: Guardian Scan
 
-# FOSSA + Prisma scanning that reports to Guardian. PR = report/diff only;
-# push to main / release = upload + block on Guardian's verdict. Secrets come
-# from the `guardian` Environment (no Vault). `Guardian scan gate` is the
-# required status check; see .github/ADMIN_SETUP.md.
+# FOSSA + Prisma scanning that reports to Guardian. PR = report only; push to
+# main / release = upload + block on Guardian's verdict. Secrets come from the
+# `guardian` Environment (no Vault). `Guardian scan gate` is the required status
+# check.
 #
 # DAG: build (image) and the two FOSSA jobs run in parallel; prisma runs after
 # build; guardian-gate runs after fossa-vuln + prisma (trunk only); gate
 # aggregates everything.
+#
+# Convention: `setup` computes every derived value as a string output; each job
+# maps the ones it needs into `env:` and references `${{ env.* }}` rather than
+# re-interpolating expressions inline, and boolean conditions use fromJSON().
 
 on:
   pull_request:
@@ -62,7 +66,10 @@ jobs:
       fossa_revision: ${{ steps.ctx.outputs.fossa_revision }}
       full_version: ${{ steps.ctx.outputs.full_version }}
       is_fork: ${{ steps.ctx.outputs.is_fork }}
+      is_pr: ${{ steps.ctx.outputs.is_pr }}
+      is_trunk: ${{ steps.ctx.outputs.is_trunk }}
       enforce: ${{ steps.ctx.outputs.enforce }}
+      fossa_mode: ${{ steps.ctx.outputs.fossa_mode }}
       scan_tag: scan-${{ github.run_id }}
     steps:
       - name: Checkout
@@ -86,17 +93,22 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "pull_request" ]; then
-            MODE="pr"; FOSSA_BRANCH="PR"; FOSSA_REVISION="$HEAD_REF"
+            MODE="pr"; IS_PR="true"; IS_TRUNK="false"
+            FOSSA_BRANCH="PR"; FOSSA_REVISION="$HEAD_REF"
           else
-            MODE="trunk"; FOSSA_BRANCH="main"; FOSSA_REVISION="${GIT_REF_INPUT:-$COMMIT_SHA}"
+            MODE="trunk"; IS_PR="false"; IS_TRUNK="true"
+            FOSSA_BRANCH="main"; FOSSA_REVISION="${GIT_REF_INPUT:-$COMMIT_SHA}"
           fi
           if [ -n "$FULL_VERSION_INPUT" ]; then
             FULL_VERSION="$FULL_VERSION_INPUT"
           else
             FULL_VERSION="$(git describe --tags --always)"
           fi
+          # Enforce (block) only on trunk and only when not bypassed.
           ENFORCE="false"
-          if [ "$MODE" = "trunk" ] && [ "$FAIL_ON_BLOCKED" != "false" ]; then ENFORCE="true"; fi
+          if [ "$IS_TRUNK" = "true" ] && [ "$FAIL_ON_BLOCKED" != "false" ]; then ENFORCE="true"; fi
+          # FOSSA licensing guard: BLOCK when enforcing, else REPORT.
+          if [ "$ENFORCE" = "true" ]; then FOSSA_MODE="BLOCK"; else FOSSA_MODE="REPORT"; fi
           {
             echo "mode=$MODE"
             echo "ref=${GIT_REF_INPUT:-$GITHUB_REF}"
@@ -104,13 +116,16 @@ jobs:
             echo "fossa_revision=$FOSSA_REVISION"
             echo "full_version=$FULL_VERSION"
             echo "is_fork=$IS_FORK"
+            echo "is_pr=$IS_PR"
+            echo "is_trunk=$IS_TRUNK"
             echo "enforce=$ENFORCE"
+            echo "fossa_mode=$FOSSA_MODE"
           } >> "$GITHUB_OUTPUT"
 
   build:
     name: Build image
     needs: setup
-    if: ${{ needs.setup.outputs.is_fork != 'true' }}
+    if: ${{ !fromJSON(needs.setup.outputs.is_fork) }}
     permissions:
       contents: read
     uses: ./.github/workflows/build-image.yaml
@@ -124,7 +139,7 @@ jobs:
   fossa-license:
     name: FOSSA licensing
     needs: setup
-    if: ${{ needs.setup.outputs.is_fork != 'true' }}
+    if: ${{ !fromJSON(needs.setup.outputs.is_fork) }}
     runs-on: ubuntu-latest
     environment: guardian
     permissions:
@@ -132,6 +147,11 @@ jobs:
       pull-requests: write
       checks: write
       statuses: write
+    env:
+      IS_PR: ${{ needs.setup.outputs.is_pr }}
+      FOSSA_MODE: ${{ needs.setup.outputs.fossa_mode }}
+      FOSSA_BRANCH: ${{ needs.setup.outputs.fossa_branch }}
+      FOSSA_REVISION: ${{ needs.setup.outputs.fossa_revision }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -148,29 +168,29 @@ jobs:
         with:
           scanners: "fossa"
           additional_scan_params: |
-            fossa.branch=${{ needs.setup.outputs.fossa_branch }}
-            fossa.revision=${{ needs.setup.outputs.fossa_revision }}
+            fossa.branch=${{ env.FOSSA_BRANCH }}
+            fossa.revision=${{ env.FOSSA_REVISION }}
           fossa_api_key: ${{ secrets.FOSSA_API_KEY }}
       - name: FOSSA licensing guard
         uses: SolaceDev/solace-public-workflows/.github/actions/fossa-guard@2bb76658deba3a34d90bfb1d6837de1b13996192
         with:
           fossa_api_key: ${{ secrets.FOSSA_API_KEY }}
           fossa_project_id: ${{ env.FOSSA_PROJECT_ID }}
-          fossa_branch: ${{ needs.setup.outputs.fossa_branch }}
-          fossa_revision: ${{ needs.setup.outputs.fossa_revision }}
+          fossa_branch: ${{ env.FOSSA_BRANCH }}
+          fossa_revision: ${{ env.FOSSA_REVISION }}
           fossa_category: licensing
-          fossa_mode: ${{ needs.setup.outputs.enforce == 'true' && 'BLOCK' || 'REPORT' }}
+          fossa_mode: ${{ env.FOSSA_MODE }}
           block_on: policy_conflict
-          enable_diff_mode: ${{ needs.setup.outputs.mode == 'pr' }}
-          enable_pr_comment: ${{ needs.setup.outputs.mode == 'pr' }}
-          enable_status_check: ${{ needs.setup.outputs.mode == 'pr' }}
-          enable_privacy_mode: ${{ needs.setup.outputs.mode == 'pr' }}
+          enable_diff_mode: ${{ env.IS_PR }}
+          enable_pr_comment: ${{ env.IS_PR }}
+          enable_status_check: ${{ env.IS_PR }}
+          enable_privacy_mode: ${{ env.IS_PR }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
   fossa-vuln:
     name: FOSSA vulnerability
     needs: setup
-    if: ${{ needs.setup.outputs.is_fork != 'true' }}
+    if: ${{ !fromJSON(needs.setup.outputs.is_fork) }}
     runs-on: ubuntu-latest
     environment: guardian
     permissions:
@@ -178,6 +198,11 @@ jobs:
       pull-requests: write
       checks: write
       statuses: write
+    env:
+      IS_PR: ${{ needs.setup.outputs.is_pr }}
+      IS_TRUNK: ${{ needs.setup.outputs.is_trunk }}
+      FOSSA_BRANCH: ${{ needs.setup.outputs.fossa_branch }}
+      FOSSA_REVISION: ${{ needs.setup.outputs.fossa_revision }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -194,36 +219,40 @@ jobs:
         with:
           scanners: "fossa"
           additional_scan_params: |
-            fossa.branch=${{ needs.setup.outputs.fossa_branch }}
-            fossa.revision=${{ needs.setup.outputs.fossa_revision }}
+            fossa.branch=${{ env.FOSSA_BRANCH }}
+            fossa.revision=${{ env.FOSSA_REVISION }}
           fossa_api_key: ${{ secrets.FOSSA_API_KEY }}
-          guardian_url: ${{ needs.setup.outputs.mode == 'trunk' && secrets.GUARDIAN_URL || '' }}
-          guardian_token: ${{ needs.setup.outputs.mode == 'trunk' && secrets.GUARDIAN_API_TOKEN || '' }}
+          # Upload only on trunk (env flag), never on a PR.
+          guardian_url: ${{ fromJSON(env.IS_TRUNK) && secrets.GUARDIAN_URL || '' }}
+          guardian_token: ${{ fromJSON(env.IS_TRUNK) && secrets.GUARDIAN_API_TOKEN || '' }}
       - name: FOSSA vulnerability guard
         uses: SolaceDev/solace-public-workflows/.github/actions/fossa-guard@2bb76658deba3a34d90bfb1d6837de1b13996192
         with:
           fossa_api_key: ${{ secrets.FOSSA_API_KEY }}
           fossa_project_id: ${{ env.FOSSA_PROJECT_ID }}
-          fossa_branch: ${{ needs.setup.outputs.fossa_branch }}
-          fossa_revision: ${{ needs.setup.outputs.fossa_revision }}
+          fossa_branch: ${{ env.FOSSA_BRANCH }}
+          fossa_revision: ${{ env.FOSSA_REVISION }}
           fossa_category: vulnerability
           fossa_mode: REPORT
           block_on: critical,high
-          enable_diff_mode: ${{ needs.setup.outputs.mode == 'pr' }}
-          enable_pr_comment: ${{ needs.setup.outputs.mode == 'pr' }}
-          enable_status_check: ${{ needs.setup.outputs.mode == 'pr' }}
-          enable_privacy_mode: ${{ needs.setup.outputs.mode == 'pr' }}
+          enable_diff_mode: ${{ env.IS_PR }}
+          enable_pr_comment: ${{ env.IS_PR }}
+          enable_status_check: ${{ env.IS_PR }}
+          enable_privacy_mode: ${{ env.IS_PR }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
   prisma:
     name: Prisma scan
     needs: [setup, build]
-    if: ${{ needs.setup.outputs.is_fork != 'true' }}
+    if: ${{ !fromJSON(needs.setup.outputs.is_fork) }}
     runs-on: ubuntu-latest
     environment: guardian
     permissions:
       contents: read
-      pull-requests: write
+    env:
+      IS_TRUNK: ${{ needs.setup.outputs.is_trunk }}
+      SCAN_TAG: ${{ needs.setup.outputs.scan_tag }}
+      FULL_VERSION: ${{ needs.setup.outputs.full_version }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -236,41 +265,37 @@ jobs:
           name: guardian-scan-image
       - name: Load image
         run: docker load -i image.tar
+      # No guardian-vulnerability-diff step: the CVE-diff PR comment it posts is
+      # not wanted on a public repo. The Prisma verdict is enforced by the
+      # Guardian gate on trunk, not on PRs.
       - name: Prisma Cloud scan
         uses: SolaceDev/solace-public-workflows/prisma-cloud-scan@2bb76658deba3a34d90bfb1d6837de1b13996192
         with:
           image_registry: ${{ env.IMAGE_REGISTRY }}
           image_repo: ${{ env.IMAGE_REPO }}
-          image_tag: ${{ needs.setup.outputs.scan_tag }}
+          image_tag: ${{ env.SCAN_TAG }}
           skip_image_pull: "true"
           pcc_console_url: ${{ secrets.PRISMACLOUD_CONSOLE_URL }}
           pcc_user: ${{ secrets.PRISMACLOUD_ACCESS_KEY_ID }}
           pcc_pass: ${{ secrets.PRISMACLOUD_SECRET_KEY }}
           bypass_blocking: "true"
-          guardian_url: ${{ needs.setup.outputs.mode == 'trunk' && secrets.GUARDIAN_URL || '' }}
-          guardian_key: ${{ needs.setup.outputs.mode == 'trunk' && secrets.GUARDIAN_API_TOKEN || '' }}
+          guardian_url: ${{ fromJSON(env.IS_TRUNK) && secrets.GUARDIAN_URL || '' }}
+          guardian_key: ${{ fromJSON(env.IS_TRUNK) && secrets.GUARDIAN_API_TOKEN || '' }}
           guardian_product_name: ${{ env.PRODUCT_NAME }}
           guardian_product_version: main
-          guardian_product_full_version: ${{ needs.setup.outputs.full_version }}
-      - name: Guardian vulnerability diff (PR)
-        if: ${{ needs.setup.outputs.mode == 'pr' }}
-        continue-on-error: true
-        uses: SolaceDev/solace-public-workflows/guardian-vulnerability-diff@2bb76658deba3a34d90bfb1d6837de1b13996192
-        with:
-          guardian-url: ${{ secrets.GUARDIAN_URL }}
-          guardian-key: ${{ secrets.GUARDIAN_API_TOKEN }}
-          prisma-scan-path: prisma_scan.json
-          product-name: ${{ env.PRODUCT_NAME }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          guardian_product_full_version: ${{ env.FULL_VERSION }}
 
   guardian-gate:
     name: Guardian gate
     needs: [setup, fossa-vuln, prisma]
-    if: ${{ !cancelled() && needs.setup.outputs.is_fork != 'true' && needs.setup.outputs.mode == 'trunk' }}
+    if: ${{ !cancelled() && !fromJSON(needs.setup.outputs.is_fork) && fromJSON(needs.setup.outputs.is_trunk) }}
     runs-on: ubuntu-latest
     environment: guardian
     permissions:
       contents: read
+    env:
+      FULL_VERSION: ${{ needs.setup.outputs.full_version }}
+      ENFORCE: ${{ needs.setup.outputs.enforce }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -283,7 +308,7 @@ jobs:
           guardian-url: ${{ secrets.GUARDIAN_URL }}
           guardian-key: ${{ secrets.GUARDIAN_API_TOKEN }}
           product-name: ${{ env.PRODUCT_NAME }}
-          product-full-version: ${{ needs.setup.outputs.full_version }}
+          product-full-version: ${{ env.FULL_VERSION }}
           unifiers: "fossa,prisma"
           upload-logs: "true"
       - name: Guardian vulnerability gate
@@ -292,8 +317,8 @@ jobs:
           guardian-url: ${{ secrets.GUARDIAN_URL }}
           guardian-key: ${{ secrets.GUARDIAN_API_TOKEN }}
           product-name: ${{ env.PRODUCT_NAME }}
-          product-version: ${{ needs.setup.outputs.full_version }}
-          fail-on-blocked: ${{ needs.setup.outputs.enforce }}
+          product-version: ${{ env.FULL_VERSION }}
+          fail-on-blocked: ${{ env.ENFORCE }}
           upload-logs: "true"
 
   gate:
@@ -307,7 +332,7 @@ jobs:
       - name: Aggregate verdict
         env:
           IS_FORK: ${{ needs.setup.outputs.is_fork }}
-          MODE: ${{ needs.setup.outputs.mode }}
+          IS_TRUNK: ${{ needs.setup.outputs.is_trunk }}
           R_BUILD: ${{ needs.build.result }}
           R_LICENSE: ${{ needs.fossa-license.result }}
           R_VULN: ${{ needs.fossa-vuln.result }}
@@ -324,7 +349,7 @@ jobs:
             name="${pair%%:*}"; res="${pair#*:}"
             if [ "$res" != "success" ]; then echo "::error::$name = $res"; fail=1; fi
           done
-          if [ "$MODE" = "trunk" ] && [ "$R_GATE" != "success" ]; then
+          if [ "$IS_TRUNK" = "true" ] && [ "$R_GATE" != "success" ]; then
             echo "::error::guardian-gate = $R_GATE"; fail=1
           fi
           [ "$fail" -eq 0 ] && echo "Guardian scan passed." || exit 1

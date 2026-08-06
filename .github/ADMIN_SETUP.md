@@ -149,53 +149,6 @@ of `dependabot.yml` and are already on.
 
 ---
 
-## Guardian Scanning Setup
-
-Supply-chain (FOSSA) and container (Prisma Cloud) scanning runs in
-`.github/workflows/guardian-scan.yaml` and reports to
-[Guardian](https://guardian.solacedev.ca). Because this repository is public, it
-uses **native GitHub secrets in a GitHub Environment**, not Vault — a job that
-reaches Vault by OIDC cannot run here, and internal hostnames must not appear in a
-public repo.
-
-### Create the `guardian` Environment
-
-Navigate to: **Settings → Environments → New environment**, name it `guardian`.
-
-- **Do not add required reviewers.** An Environment that requires approval pauses
-  every pull request and every push to `main` waiting for a click. This is a
-  secret scope, not a deployment gate.
-- **Do not restrict deployment branches.** The scan runs on pull-request branches
-  and on `main`; a branch restriction would deny those runs the secrets. Leave
-  deployment branches set to `All branches`.
-
-### Add these secrets to the `guardian` Environment
-
-| Secret | What it is |
-|--------|-----------|
-| `FOSSA_API_KEY` | FOSSA API token (was Vault `FOSSA_FULL_API_TOKEN`) |
-| `GUARDIAN_URL` | Guardian API base URL — held as a **secret**, not a variable |
-| `GUARDIAN_API_TOKEN` | Guardian API bearer token |
-| `PRISMACLOUD_ACCESS_KEY_ID` | Prisma Cloud access key id |
-| `PRISMACLOUD_SECRET_KEY` | Prisma Cloud secret key |
-| `PRISMACLOUD_CONSOLE_URL` | Prisma Cloud Console URL |
-
-A fork pull request gets none of these — GitHub withholds Environment secrets from
-a fork-triggered run — so the scan jobs (build, FOSSA licensing/vulnerability,
-Prisma, Guardian gate) skip on a fork PR and the always-reporting `Guardian scan
-gate` job accounts for the skip. The old
-`VAULT_URL` repository secret is no longer read by any scanning workflow; it can
-be removed once `transition_on_merge.yaml` (Jira transitions, still on Vault) is
-also migrated.
-
-### Product registration
-
-`solace-broker-mcp` is registered in Guardian under squad `broker`
-(`POST /api/v1/products`), so the squad-level gate thresholds apply. Registration
-must exist before the first push to `main` runs the Guardian DB sync and gate.
-
----
-
 ## Branch Protection
 
 `main` is protected by two overlapping mechanisms. Both are live, and GitHub
