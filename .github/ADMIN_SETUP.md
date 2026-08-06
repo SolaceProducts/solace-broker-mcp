@@ -279,7 +279,7 @@ rather than failing; `pull_request_target` is not exempt. Pending fails closed, 
 nothing slips through. The failure mode to avoid is reading that as a misconfigured
 list and dropping a DCO row. Approve the workflow run instead.
 
-Four more notes on the list:
+Three more notes on the list:
 
 - `CHANGELOG updated` cannot fail today. `ci-pr.yaml` sets
   `CHANGELOG_GATE_MODE: advisory`, so the script warns and exits 0. Requiring it
@@ -294,14 +294,6 @@ Four more notes on the list:
   block merges, after settling the configuration question in the Security Settings
   section. It is not in the list above because that is a policy call, not a
   correctness fix.
-- Do **not** require `run-pull-request-checks / *`. Those come from
-  `transition_on_merge.yaml`, which runs on `pull_request: closed`, and the check
-  name varies with the Jira key (e.g. `... Vault and JIRA Operations (SOL-152328)`).
-  That workflow is now skipped for fork pull requests: it authenticates to Vault by
-  OIDC, which a fork run cannot do, so it could only ever go red — on an
-  already-merged external contribution, for a credential the contributor was never
-  eligible to hold. It also has nothing to transition, since an external
-  contribution has no SOL ticket.
 
 **How a fork pull request gets a verdict.** SOL-152411 fixed the two problems that
 made this impossible. What it changed, and what it deliberately did not:

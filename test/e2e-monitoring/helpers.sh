@@ -133,8 +133,12 @@ cleanup_multi_queue_on() {
 # .env-configurable like the host-mapped ports — reachable from the sibling
 # container over the compose network's default bridge on 55555, the SMF
 # plaintext listener's *internal* container port).
-F8_REMOTE_HOST_FROM_A="solace-e2e-mon-b"
-F8_REMOTE_HOST_FROM_B="solace-e2e-mon-a"
+# Overridable via each suite's .env (same SUITE_DIR/.env indirection lib.sh
+# uses for ports/creds) so the LLM suite — which sources this file for its
+# F1–F8 fixture code — can point bridges at solace-e2e-llm-* instead of
+# monitoring's containers. Defaults preserve monitoring's original wiring.
+F8_REMOTE_HOST_FROM_A="${F8_REMOTE_HOST_FROM_A:-solace-e2e-mon-b}"
+F8_REMOTE_HOST_FROM_B="${F8_REMOTE_HOST_FROM_B:-solace-e2e-mon-a}"
 F8_SMF_PORT=55555
 
 # Bridge health-state constants and predicate, mirroring bridgeInboundUpStates

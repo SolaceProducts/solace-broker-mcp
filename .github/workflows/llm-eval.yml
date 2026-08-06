@@ -108,15 +108,15 @@ jobs:
       - name: Broker logs (on failure)
         if: failure() && inputs.broker_target == 'local-docker'
         run: |
-          echo "=== solace-e2e-mon-a ==="
-          docker logs solace-e2e-mon-a 2>&1 | tail -100 || true
-          echo "=== solace-e2e-mon-b ==="
-          docker logs solace-e2e-mon-b 2>&1 | tail -100 || true
+          echo "=== solace-e2e-llm-a ==="
+          docker logs solace-e2e-llm-a 2>&1 | tail -100 || true
+          echo "=== solace-e2e-llm-b ==="
+          docker logs solace-e2e-llm-b 2>&1 | tail -100 || true
 
       - name: MCP server log (on failure)
         if: failure() && inputs.broker_target == 'local-docker'
-        run: cat test/e2e-monitoring/bin/mcp-server.log 2>/dev/null || echo "(no server log)"
+        run: cat test/e2e-llm/bin/mcp-server.log 2>/dev/null || echo "(no server log)"
 
       - name: Tear down local brokers
         if: always() && inputs.broker_target == 'local-docker'
-        run: docker compose -f test/e2e-monitoring/docker-compose.yml down -v
+        run: docker compose -f test/e2e-llm/docker-compose.yml down -v

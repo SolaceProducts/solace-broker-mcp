@@ -50,7 +50,7 @@ The server can be deployed in three ways. See the [README](../README.md#quicksta
 | Environment | Notes |
 |---|---|
 | **Binary** | Single executable with no dependencies; suitable for local development and VM deployment |
-| **Docker** | Multi-platform images available at `ghcr.io/solacedev/solace-broker-mcp`; built-in health check |
+| **Docker** | Multi-platform images available at `ghcr.io/solaceproducts/solace-broker-mcp`; built-in health check |
 | **Development** | Run from source with Go for development and testing |
 
 All methods use the same YAML configuration file and `.env` credentials. Configuration must be completed before starting the server.
@@ -210,7 +210,7 @@ The server supports open access, static token, and OAuth/OIDC authentication for
 | Environment | Notes |
 |---|---|
 | **Local / laptop** | Run the binary directly or via Docker. Use `mcp_client_auth.mode: disabled` (no auth) or `static` (with a dev token) to skip OAuth setup. |
-| **Docker / Docker Compose** | Multi-platform images available at `ghcr.io/solacedev/solace-broker-mcp`. Built-in health check. |
+| **Docker / Docker Compose** | Multi-platform images available at `ghcr.io/solaceproducts/solace-broker-mcp`. Built-in health check. |
 | **Bare metal / VM** | Statically-linked binary with no external dependencies. Handles SIGTERM/SIGINT for graceful shutdown. |
 
 ## Troubleshooting

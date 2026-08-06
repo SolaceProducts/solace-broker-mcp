@@ -170,8 +170,13 @@ _spawn_llm_kick_client_on() {
 
 # Provision both brokers' LLM fixtures + prime the action queues.
 # Called from setup-fixtures.sh AFTER create_fixtures (so BIN_DIR/broker-driver
-# is built and monitoring fixtures are up first).
+# is built and monitoring fixtures are up first). Starts with a cleanup pass
+# to match the "safe to re-run" contract in setup-fixtures.sh's header:
+# without it, a second setup on a live suite hits ALREADY_EXISTS on the
+# LLM standing queues/kick-targets (monitoring's create_fixtures cleans its
+# own fixtures but has no knowledge of these).
 create_llm_standing_fixtures() {
+    cleanup_llm_standing_fixtures
     _create_e2e_llm_action_queue_on "$BROKER_A_SEMP_CONFIG" a "$E2E_LLM_ACTION_QUEUE_A"
     _create_e2e_llm_action_queue_on "$BROKER_B_SEMP_CONFIG" b "$E2E_LLM_ACTION_QUEUE_B"
     # Prime both brokers so A1/A2/B1 pass regardless of which run-scenario.sh
