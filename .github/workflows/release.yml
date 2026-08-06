@@ -135,8 +135,11 @@ jobs:
           name: binary-${{ matrix.goos }}-${{ matrix.goarch }}
           path: ${{ env.ARCHIVE }}
 
+  # Gated on release-readiness: a registry push is irreversible (and moves
+  # `latest`), so it must wait for the Guardian gate. An admin can still publish
+  # over a block via release-readiness-check's skip_security_checks escape hatch.
   build-docker:
-    needs: [test, release-notes, licenses]
+    needs: [test, release-notes, licenses, release-readiness]
     permissions:
       contents: read
       packages: write
