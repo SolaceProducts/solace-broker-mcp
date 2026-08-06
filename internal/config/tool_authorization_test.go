@@ -697,3 +697,47 @@ mcp_client_auth:
 		t.Errorf("expected error %q, got: %v", wantErr, err)
 	}
 }
+
+// This test pins the behaviour of the FilterToolsListEnabled handler
+// for 3 cases: FilterToolsList field set to true, false and field omitted from config
+func TestToolAuthorization_FilterToolsListEnabled(t *testing.T) {
+	trueVal := true
+	falseVal := false
+
+	cases := []struct {
+		name string
+		cfg  *ToolAuthorizationConfig
+		want bool
+	}{
+		{
+			name: "FilterToolsList set to true",
+			cfg: &ToolAuthorizationConfig{
+				FilterToolsList: &trueVal,
+			},
+			want: true,
+		},
+		{
+			name: "FilterToolsList set to false",
+			cfg: &ToolAuthorizationConfig{
+				FilterToolsList: &falseVal,
+			},
+			want: false,
+		},
+		{
+			name: "FilterToolsList is omitted",
+			cfg: &ToolAuthorizationConfig{
+				FilterToolsList: nil,
+			},
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := FilterToolsListEnabled(tc.cfg)
+			if got != tc.want {
+				t.Errorf("FilterToolsListEnabled() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
