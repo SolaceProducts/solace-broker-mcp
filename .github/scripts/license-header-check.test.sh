@@ -4,7 +4,7 @@
 # licenses-check.test.sh and dco-check.test.sh.
 #
 # A gate that cannot fail is not a gate. The dangerous failure mode for a licence
-# header check is not a false alarm — it is a *silent pass*, and there are four
+# header check is not a false alarm — it is a *silent pass*, and there are five
 # plausible ones, each of which a reasonable implementation gets wrong:
 #
 #   - `grep -L "Licensed under the Apache License"` over whole files passes a
@@ -13,6 +13,8 @@
 #   - a substring match passes a reworded or half-copied header;
 #   - a check for the 13 header lines alone passes a file with no blank line
 #     after them, where Go then treats the licence as the package doc comment;
+#   - a walk that does not descend reports success over a subtree it never
+#     visited, which is where an unheadered file is most likely to hide;
 #   - a walk that finds nothing reports success over an empty set.
 #
 # Every case below asserts on an exit code, so each must be a shape where the
@@ -121,15 +123,19 @@ assert_check() {
     tmp=$(mktemp -d)
     base_fixture "$tmp"
 
-    if [ "$#" -gt 0 ]; then
+    # Every fixture is applied, in order. Applying only the first would let a
+    # case that composes two fixtures assert against a tree it never built —
+    # a silent pass of exactly the kind this suite exists to catch.
+    local fixture
+    for fixture in "$@"; do
         # A fixture helper that silently fails makes the case vacuous. Surface it.
-        if ! "$1" "$tmp"; then
-            echo "  ERROR    $desc (the test's own fixture '$1' failed to build)"
+        if ! "$fixture" "$tmp"; then
+            echo "  ERROR    $desc (the test's own fixture '$fixture' failed to build)"
             fail=$((fail + 1))
             rm -rf "$tmp"
             return
         fi
-    fi
+    done
 
     local got=0 output
     output=$(cd "$tmp" && "$CHECK" 2>&1) || got=$?
@@ -222,6 +228,13 @@ assert_check "a file with no header fails" 1 \
 # passes. This case is the only thing standing between that edit and a green run.
 assert_check "a file with no header in a subdirectory fails" 1 \
     nested_no_header
+
+# Excluding vendor/ must not blind the walk to everything else. This is also the
+# only case that composes two fixtures, so it pins the harness contract itself:
+# apply only the first and the tree is merely a conforming one plus an excluded
+# vendor file, which passes, and the case goes green while asserting nothing.
+assert_check "an excluded vendor file does not mask a real one elsewhere" 1 \
+    unheadered_vendor_file nested_no_header
 
 # The copyright line is header line 1, and no other fixture varies it — the
 # reworded-header case below changes the licence URL on line 7. Relaxing the
