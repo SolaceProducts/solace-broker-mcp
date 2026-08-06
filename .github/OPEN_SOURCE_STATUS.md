@@ -46,6 +46,63 @@ These items are **documented** but require repository admin to configure:
 
 ---
 
+## Exceptions
+
+Items where the checklist calls for a control this repository does not fully
+meet, recorded per section 5 of the Open Source Solace Software Checklist. Each
+row needs four approvers named before the repository goes public.
+
+### E1: Non-routable author addresses in seven pre-existing commits
+
+**Ticket:** SOL-152902
+**Recorded:** 2026-08-06
+**Approvers:** `<APPROVER 1>`, `<APPROVER 2>`, `<APPROVER 3>`, `<APPROVER 4>` — TO FILL BEFORE PUBLIC RELEASE
+
+Seven commits already on `main` carry author emails whose domain is a
+developer-machine name rather than a routable address:
+
+| SHA | Author | Date |
+|---|---|---|
+| `27b3393` | `Helen Zhu <hzhu@dev2-194.sol-local>` | 2026-07-07 |
+| `f85a6b5` | `Helen Zhu <hzhu@dev2-194.sol-local>` | 2026-07-07 |
+| `962d5fd` | `Helen Zhu <hzhu@dev2-194.sol-local>` | 2026-07-07 |
+| `b6e63be` | `Helen Zhu <hzhu@dev2-194.sol-local>` | 2026-07-07 |
+| `2fbf4e9` | `Helen Zhu <hzhu@dev2-194.sol-local>` | 2026-07-06 |
+| `015626a` | `Helen Zhu <hzhu@dev2-194.sol-local>` | 2026-07-06 |
+| `f379474` | `Wajiha Maryam <wajihamaryam@WajihaMaryam-2.local>` | 2026-05-06 |
+
+Every other commit on `main` uses `@solace.com` or `@users.noreply.github.com`.
+Verify at any time with:
+
+```bash
+git log --format='%h %an <%ae> %ad' --date=short | grep -E '\.sol-local>|\.local>'
+```
+
+**Decision:** accept, do not rewrite.
+
+Rewriting these seven commits would change the SHA of every commit after them —
+close to the whole history — and break every existing reference to a commit SHA
+in Jira, PR discussions, and the CHANGELOG. The exposure is one internal dev
+hostname (`dev2-194.sol-local`) and one contributor's laptop name
+(`WajihaMaryam-2.local`), both already attached to those contributors' own
+commits and already visible to anyone with access to the repository today. The
+cost-to-value ratio favours accepting.
+
+**What we do instead:**
+
+- `.github/scripts/dco-check.sh` fails any future PR whose commits carry an
+  author or committer email on a non-routable domain (`.local`, `.sol-local`,
+  `.internal`, `.lan`, or a bare hostname). Denylist rather than allowlist so
+  outside contributors with ordinary addresses are not blocked. The gate is
+  forward-only — it walks the PR's commits, not the history already on `main`.
+- `.github/scripts/dco-check.test.sh` covers the pass and fail paths, so the
+  gate is verified on every PR rather than trusted.
+- `.github/CONTRIBUTING.md` states the identity requirement and the fix
+  commands, next to the DCO enforcement section it already describes.
+- Both affected contributors are notified before the repository flips public.
+
+---
+
 ## What's in PR #15
 
 ### New Files Created

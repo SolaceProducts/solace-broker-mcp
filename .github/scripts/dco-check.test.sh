@@ -594,6 +594,104 @@ else
 fi
 unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL
 
+# --- 18. author-identity denylist --------------------------------------------
+# Second control on the same walk: reject the non-routable email shapes a
+# developer machine invents when `git config user.email` is unset — bare
+# hostnames, `.local`, `.sol-local`, `.internal`, `.lan`. A denylist rather than
+# an allowlist so ordinary external addresses can still contribute. See the
+# script header for the reasoning.
+
+# .sol-local author fails — the exact shape SOL-152902 caught in this repo
+r=$(new_repo identity_sol_local_fails)
+GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@dev2-194.sol-local" \
+  git -C "$r" commit -q --allow-empty -m "add a thing
+
+Signed-off-by: $ALICE_NAME <alice@dev2-194.sol-local>"
+expect 1 "sol-local author identity fails" "$r" "not routable"
+
+# .local author fails — matches the machine-name pattern that leaked a person's name
+r=$(new_repo identity_dotlocal_fails)
+GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@WajihaMaryam-2.local" \
+  git -C "$r" commit -q --allow-empty -m "add a thing
+
+Signed-off-by: $ALICE_NAME <alice@WajihaMaryam-2.local>"
+expect 1 "local author identity fails" "$r" "not routable"
+
+# .internal and .lan also fail
+r=$(new_repo identity_internal_fails)
+GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@host.internal" \
+  git -C "$r" commit -q --allow-empty -m "add a thing
+
+Signed-off-by: $ALICE_NAME <alice@host.internal>"
+expect 1 "internal author identity fails" "$r" "not routable"
+
+r=$(new_repo identity_lan_fails)
+GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@host.lan" \
+  git -C "$r" commit -q --allow-empty -m "add a thing
+
+Signed-off-by: $ALICE_NAME <alice@host.lan>"
+expect 1 "lan author identity fails" "$r" "not routable"
+
+# no-dot domain (bare hostname) fails
+r=$(new_repo identity_no_dot_fails)
+GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@dev2-194" \
+  git -C "$r" commit -q --allow-empty -m "add a thing
+
+Signed-off-by: $ALICE_NAME <alice@dev2-194>"
+expect 1 "bare-hostname author identity fails" "$r" "not routable"
+
+# outside domain passes — this is what denylist buys us over allowlist
+r=$(new_repo identity_outside_ok)
+commit "$r" "add a thing
+
+Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
+expect 0 "external routable domain (example.com) passes" "$r" "signed off — OK"
+
+# users.noreply.github.com passes — the shape outside contributors and bots use
+r=$(new_repo identity_ghnoreply_ok)
+GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="12345+alice@users.noreply.github.com" \
+  git -C "$r" commit -q --allow-empty -m "add a thing
+
+Signed-off-by: $ALICE_NAME <12345+alice@users.noreply.github.com>"
+expect 0 "users.noreply.github.com passes" "$r" "signed off — OK"
+
+# committer domain also checked: author is routable, committer is .local
+r=$(new_repo identity_committer_checked)
+GIT_COMMITTER_NAME="$BOB_NAME" GIT_COMMITTER_EMAIL="bob@laptop.local" \
+GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="$ALICE_EMAIL" \
+  git -C "$r" commit -q --allow-empty -m "forwarded work
+
+Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
+expect 1 "bad committer identity fails even with a clean author" "$r" "not routable"
+unset GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
+
+# fix advice appears in the failure output
+r=$(new_repo identity_fix_advice)
+GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@dev2-194.sol-local" \
+  git -C "$r" commit -q --allow-empty -m "add a thing
+
+Signed-off-by: $ALICE_NAME <alice@dev2-194.sol-local>"
+expect 1 "identity failure output names the fix commands" "$r" 'git config user.email "you@solace.com"'
+expect 1 "identity failure output names --reset-author" "$r" "git commit --amend --reset-author"
+
+# an identity-only failure (sign-off is fine) still fails, and does NOT print
+# the DCO header (which would mislead the contributor about what is wrong).
+r=$(new_repo identity_only_no_dco_header)
+GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@dev2-194.sol-local" \
+  git -C "$r" commit -q --allow-empty -m "add a thing
+
+Signed-off-by: $ALICE_NAME <alice@dev2-194.sol-local>"
+out=$(cd "$r" && BASE_SHA="$(git rev-parse refs/remotes/origin/main)" BASE_REF=main \
+  HEAD_SHA="$(git rev-parse HEAD)" "$DCO_CHECK" 2>&1) || true
+if grep -qF "missing a Developer Certificate of Origin sign-off" <<<"$out"; then
+  printf '::error::SELF-TEST FAILED: identity-only failure printed the DCO-missing header.\n'
+  printf '%s\n' "$out" | sed 's/^/    | /'
+  fail_count=$((fail_count + 1))
+else
+  printf 'ok  identity-only failure does not print the DCO header\n'
+  pass_count=$((pass_count + 1))
+fi
+
 echo
 printf 'dco-check self-test: %d passed, %d failed\n' "$pass_count" "$fail_count"
 [ "$fail_count" -eq 0 ]

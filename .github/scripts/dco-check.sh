@@ -5,6 +5,22 @@
 # project relies on instead of a contributor licence agreement, so it BLOCKS —
 # there is deliberately no label, flag, or env var that skips it.
 #
+# A second, narrower control also runs here: the author and committer email on
+# every PR commit must not use a non-routable domain — one ending in `.local`,
+# `.sol-local`, `.internal`, or `.lan`, or a bare hostname with no dot at all.
+# These are the shapes a developer machine invents when `git config user.email`
+# is unset. Author email is not stored in any file, so no secret scan finds it,
+# but it publishes permanently with the git history when the repo goes public.
+# Enforcing this at PR time is cheap; catching it after publication is not — a
+# fork keeps the leaked address forever.
+#
+# The check is a denylist rather than an allowlist so an outside contributor
+# with an ordinary personal or corporate address can still open a PR. It runs
+# alongside DCO because both walk the same commit range and read the same
+# identity fields; keeping it in one job means one clear failure surface for
+# the contributor. Non-routable addresses already on `main` are covered by an
+# exception in .github/OPEN_SOURCE_STATUS.md; this gate is forward-only.
+#
 # A commit passes when its message contains a `Signed-off-by:` line whose email
 # matches the commit's author or committer, case-insensitively.
 #
@@ -213,7 +229,30 @@ signoff_emails() {
 
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
+# Author-identity check. Rejects the shapes a developer machine invents when
+# `git config user.email` is unset — a bare hostname (`hzhu@dev2-194`), an
+# mDNS domain (`.local`), or an internal-only TLD (`.sol-local`, `.internal`,
+# `.lan`). A denylist rather than an allowlist so ordinary external addresses
+# can still contribute; a typo like `.locol` slips through, and that is the
+# accepted trade-off.
+identity_domain_ok() {
+  local email="$1" domain
+  domain="${email##*@}"
+  # reject empty-domain and no-`@` inputs
+  [ "$domain" != "$email" ] && [ -n "$domain" ] || return 1
+  domain=$(lower "$domain")
+  case "$domain" in
+    *.local|*.sol-local|*.internal|*.lan) return 1 ;;
+  esac
+  # bare hostname (no dot at all in the domain part)
+  case "$domain" in
+    *.*) return 0 ;;
+    *)   return 1 ;;
+  esac
+}
+
 failed=""
+failed_identity=""
 total=0
 for sha in $commits; do
   total=$((total + 1))
@@ -232,12 +271,22 @@ for sha in $commits; do
   if [ "$matched" = no ]; then
     failed="${failed}${sha}"$'\n'
   fi
+
+  if ! identity_domain_ok "$author_email" || ! identity_domain_ok "$committer_email"; then
+    failed_identity="${failed_identity}${sha}"$'\n'
+  fi
 done
 
-if [ -z "$failed" ]; then
+if [ -z "$failed" ] && [ -z "$failed_identity" ]; then
   echo "DCO: all ${total} commit(s) contributed by this PR are signed off — OK."
   exit 0
 fi
+
+# Guard the DCO block so an identity-only failure does not print a misleading
+# "0 of N commit(s) are missing a Developer Certificate of Origin sign-off".
+if [ -z "$failed" ]; then
+  failed_merges=""
+else
 
 failed_count=$(grep -c . <<<"$failed")
 failed_merges=""
@@ -323,4 +372,35 @@ If the email above is not the one you meant to sign off with, set
 Developer Certificate of Origin: https://developercertificate.org/ — see
 .github/CONTRIBUTING.md#developer-certificate-of-origin.
 EOF
+
+fi # end of DCO failure block
+
+if [ -n "$failed_identity" ]; then
+  identity_failed_count=$(grep -c . <<<"$failed_identity")
+  # Extra blank line only when a DCO block preceded this one, so an
+  # identity-only failure doesn't start with a stray blank line.
+  [ -z "$failed" ] || echo
+  echo "::error::${identity_failed_count} of ${total} commit(s) in this pull request use an author or committer email whose domain is not routable (.local, .sol-local, .internal, .lan, or a bare hostname). These publish permanently with the git history."
+  echo
+  while IFS= read -r sha; do
+    [ -n "$sha" ] || continue
+    echo "  $(git show -s --format='%h %s' "$sha" | sanitize)"
+    echo "    author:    $(git show -s --format='%an <%ae>' "$sha" | sanitize)"
+    echo "    committer: $(git show -s --format='%cn <%ce>' "$sha" | sanitize)"
+    echo
+  done <<<"$failed_identity"
+
+  cat <<'EOF'
+Set your commit identity to a routable address and rewrite the offending
+commits:
+
+  git config user.email "you@solace.com"
+  git commit --amend --reset-author
+
+For a whole branch's history, use `git rebase --exec 'git commit --amend
+--reset-author --no-edit' <base>` after setting `user.email`. See
+.github/CONTRIBUTING.md#author-identity for the requirement and the reasoning.
+EOF
+fi
+
 exit 1

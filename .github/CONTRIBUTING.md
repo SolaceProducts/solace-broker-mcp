@@ -384,6 +384,28 @@ The check reports the offending commits and the exact commands to fix them. Ther
 is no label or flag that skips it. Use your real name — no pseudonyms or
 anonymous contributions.
 
+### Author identity
+
+The same CI check also rejects commits whose author or committer email uses a
+non-routable domain — one ending in `.local`, `.sol-local`, `.internal`, or
+`.lan`, or a bare hostname with no dot. These are the addresses a developer
+machine invents when `git config user.email` is unset, and they publish
+permanently with the git history when the repository is public. `git commit -s`
+signs off with your `user.email`, so a bad address fails both this check and DCO.
+
+If CI flags this, set your address and rewrite the offending commits:
+
+```bash
+git config user.email "you@your-domain.example"
+git commit --amend --reset-author
+```
+
+For a whole branch, once `user.email` is set:
+
+```bash
+git rebase --exec 'git commit --amend --reset-author --no-edit' main
+```
+
 If you are contributing from a fork, every one of our CI runs waits for a
 maintainer to approve it, not just the one on your first push. So checks can sit
 **pending**, and a check that was green can go back to pending after the PR is
