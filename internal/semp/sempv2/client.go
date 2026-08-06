@@ -231,6 +231,35 @@ func (c *HTTPClient) buildURL(op *Operation, args map[string]any) (string, error
 	return c.baseURL + "/" + strings.TrimPrefix(path, "/"), nil
 }
 
+// PathParamNames returns the de-duplicated list of path-parameter names
+// (without braces) declared in an operation's path template — e.g.
+// "msgVpnName" and "topicEndpointName" for
+// "/msgVpns/{msgVpnName}/topicEndpoints/{topicEndpointName}". Exported so
+// callers outside this package (e.g. the composite loader's catalog tests)
+// can verify every declared path parameter is actually supplied by a tool's
+// step args, without duplicating this scan.
+func PathParamNames(path string) []string {
+	var names []string
+	seen := make(map[string]struct{})
+	for rest := path; len(rest) > 0; {
+		start := strings.Index(rest, "{")
+		if start < 0 {
+			break
+		}
+		end := strings.Index(rest[start:], "}")
+		if end < 0 {
+			break
+		}
+		name := rest[start+1 : start+end]
+		if _, dup := seen[name]; !dup {
+			seen[name] = struct{}{}
+			names = append(names, name)
+		}
+		rest = rest[start+end+1:]
+	}
+	return names
+}
+
 // unfilledPlaceholders returns the de-duplicated list of "{name}" tokens
 // remaining in path after argument substitution. Each placeholder is reported
 // once even if it appears multiple times in the template.

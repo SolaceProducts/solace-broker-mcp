@@ -20,9 +20,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -307,6 +310,105 @@ func TestListBrokersEmitsAuditLog(t *testing.T) {
 	// rather than carry an empty value.
 	if _, present := audits[0]["broker"]; present {
 		t.Errorf("audit line carries broker field for brokerless tool: %v", audits[0])
+	}
+}
+
+// TestListBrokers_ResponseContainsOnlyAliases closes a Quality Plan gap
+// (SOL-147161 §3.3): list-brokers is the one tool response an MCP client
+// sees before it has picked a broker, so it's the one place a future change
+// (e.g. "let's also return the URL for convenience") could leak credentials
+// or broker addresses to the calling LLM/client with no per-tool review to
+// catch it. TestCredentialsAreIsolatedPerBroker (test/integration) guards the
+// outbound-wire side of this; this test guards the inbound tool-response side.
+//
+// Today RegisterListBrokers only ever marshals pool.Aliases() (see
+// register.go), so this can't fail yet — it's a regression guard, not a
+// currently-failing gap.
+func TestListBrokers_ResponseContainsOnlyAliases(t *testing.T) {
+	cfgYAML := "mcp_client_auth:\n  mode: disabled\nbrokers:\n" +
+		"  broker-a:\n    url: https://broker-a.example.com:8443\n    auth:\n      mode: basic\n      username: alice\n      password: super-secret-passA\n" +
+		"  broker-b:\n    url: https://broker-b.example.com:8443\n    auth:\n      mode: bearer\n      token: super-secret-token-B\n"
+	cfgPath := filepath.Join(t.TempDir(), "broker-config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0o600); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+	cfg, err := config.LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	pool := semp.NewBrokerPool(cfg, nil)
+	defer pool.Close()
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+	RegisterListBrokers(server, pool)
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go func() {
+		_ = server.Run(ctx, serverTransport)
+	}()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1.0"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer session.Close()
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "list-brokers", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("list-brokers returned IsError: %v", res.Content)
+	}
+
+	raw := res.StructuredContent
+	rawJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal structured content: %v", err)
+	}
+
+	// Shape check: the response is exactly {"brokers": [...alias strings...]},
+	// nothing else.
+	var decoded map[string]any
+	if err := json.Unmarshal(rawJSON, &decoded); err != nil {
+		t.Fatalf("unmarshal structured content: %v", err)
+	}
+	if len(decoded) != 1 {
+		t.Errorf("response has %d top-level keys, want exactly 1 (\"brokers\"): %s", len(decoded), rawJSON)
+	}
+	brokers, ok := decoded["brokers"].([]any)
+	if !ok {
+		t.Fatalf("brokers field is not an array: %s", rawJSON)
+	}
+	wantAliases := map[string]bool{"broker-a": true, "broker-b": true}
+	seen := map[string]int{}
+	for _, b := range brokers {
+		s, ok := b.(string)
+		if !ok || !wantAliases[s] {
+			t.Errorf("unexpected broker entry %v (not a plain known alias)", b)
+			continue
+		}
+		seen[s]++
+	}
+	for alias := range wantAliases {
+		if seen[alias] != 1 {
+			t.Errorf("alias %q appeared %d times in %v, want exactly once", alias, seen[alias], brokers)
+		}
+	}
+
+	// Leakage check: none of the configured secrets, hostnames, or
+	// credentials appear anywhere in the raw response bytes, regardless of
+	// where in a future response shape they might get added.
+	leaked := []string{
+		"super-secret-passA", "super-secret-token-B", "alice",
+		"broker-a.example.com", "broker-b.example.com", "https://",
+	}
+	for _, s := range leaked {
+		if strings.Contains(string(rawJSON), s) {
+			t.Errorf("list-brokers response leaked %q: %s", s, rawJSON)
+		}
 	}
 }
 

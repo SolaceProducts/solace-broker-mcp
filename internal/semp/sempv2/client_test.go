@@ -315,6 +315,47 @@ func TestClient_Execute_PathParams(t *testing.T) {
 	}
 }
 
+// TestPathParamNames covers the extraction PathParamNames does for callers
+// outside this package (the composite loader's catalog tests use it to
+// verify every declared path parameter is actually wired in a tool's step
+// args) — dedup, multiple placeholders, and no placeholders at all.
+func TestPathParamNames(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want []string
+	}{
+		{
+			name: "two distinct placeholders",
+			path: "/msgVpns/{msgVpnName}/topicEndpoints/{topicEndpointName}",
+			want: []string{"msgVpnName", "topicEndpointName"},
+		},
+		{
+			name: "no placeholders",
+			path: "/msgVpns",
+			want: nil,
+		},
+		{
+			name: "repeated placeholder deduplicated",
+			path: "/msgVpns/{msgVpnName}/queues/{queueName}/bindCount/{msgVpnName}",
+			want: []string{"msgVpnName", "queueName"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sempv2.PathParamNames(tc.path)
+			if len(got) != len(tc.want) {
+				t.Fatalf("PathParamNames(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Errorf("PathParamNames(%q)[%d] = %q, want %q", tc.path, i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestClient_Execute_QueryParams(t *testing.T) {
 	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("select") != "queueName,spoolUsage" {

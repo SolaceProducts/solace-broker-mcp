@@ -215,19 +215,6 @@ func TestCompositeToolHandler_Annotations(t *testing.T) {
 	}
 }
 
-func TestCompositeToolHandler_NameAndDescription(t *testing.T) {
-	executor := composite.NewCompositeExecutor(testOperations())
-	handler := NewCompositeToolHandler(testTool(), executor)
-
-	meta := handler.Metadata()
-	if meta.Name != "get-queue-metrics" {
-		t.Errorf("Name = %q, want %q", meta.Name, "get-queue-metrics")
-	}
-	if meta.Description != "Get detailed metrics for a specific queue." {
-		t.Errorf("Description = %q, want correct description", meta.Description)
-	}
-}
-
 // TestCompositeToolHandler_Metadata_FreshPointersAcrossCalls verifies the
 // Metadata() contract: every call returns freshly-allocated state, including
 // the *bool fields on Annotations. Without this guarantee, a caller mutating

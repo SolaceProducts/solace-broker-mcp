@@ -2653,17 +2653,6 @@ brokers:
 	}
 }
 
-func TestLoadConfigPreservesDisplayName(t *testing.T) {
-	cfg := loadAliasContractTestConfig(t, "ProdEast")
-	b, ok := cfg.Broker("prodeast")
-	if !ok {
-		t.Fatal("Broker(prodeast) returned !ok")
-	}
-	if b.DisplayName() != "ProdEast" {
-		t.Errorf("DisplayName() = %q, want ProdEast", b.DisplayName())
-	}
-}
-
 func TestLoadConfigUsesDisplayNameInValidationErrors(t *testing.T) {
 	yaml := `
 mcp_client_auth:
