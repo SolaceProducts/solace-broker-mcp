@@ -248,6 +248,9 @@ jobs:
     environment: guardian
     permissions:
       contents: read
+      pull-requests: write
+      checks: write      # prisma-cloud-scan creates a check run
+      statuses: write
     env:
       IS_TRUNK: ${{ needs.setup.outputs.is_trunk }}
       SCAN_TAG: ${{ needs.setup.outputs.scan_tag }}
