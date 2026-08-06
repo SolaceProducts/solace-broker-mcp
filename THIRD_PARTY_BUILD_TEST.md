@@ -172,11 +172,12 @@ repository rather than silently skipping the ones that did not fit the table.
 | Workflow | Ref | Owner |
 |---|---|---|
 | `SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml` | `fc521b0` | Solace |
-| `SolaceDev/re-workflows/.github/workflows/transition-pr-on-merge.yaml` | `release/v3` | Solace |
 
-`re-workflows` is scheduled for removal under SOL-152855, because a public
+A second entry, `SolaceDev/re-workflows/.github/workflows/transition-pr-on-merge.yaml`,
+was dropped when SOL-152855 removed the workflow that called it: a public
 repository cannot resolve a reusable workflow from an internal repository in
-another organisation. Whichever of the two changes lands second drops this row.
+another organisation. The drift check flagged the stale row on the first build
+after that landed, which is the reverse direction working as intended.
 
 ## Container images
 
