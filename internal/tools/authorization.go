@@ -80,7 +80,7 @@ func withAuthorization(policy *authz.Policy, toolName string, configuredGroupsCl
 		}
 		id := NewIdentityFromTokenInfo(info)
 
-		groups, present := requestGroups(req)
+		groups, present := requestGroups(info)
 		if !present {
 			// No matched_groups* fields on missing-claim — the caller had
 			// no groups slice, so emitting empty ones would blur the deny
