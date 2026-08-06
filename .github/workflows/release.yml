@@ -5,18 +5,16 @@ on:
     tags:
       - 'v*'
 
+# Least privilege by default: every job declares what it needs.
 permissions:
-  contents: write
-  packages: write
-  id-token: write
-  pull-requests: write
-  actions: read
-  issues: write
-  checks: write
-  statuses: write
+  contents: read
 
 jobs:
   test:
+    # build-and-test.yml is lint/build/e2e only (scanning moved to
+    # guardian-scan.yaml) and scopes its own jobs to contents: read.
+    permissions:
+      contents: read
     uses: ./.github/workflows/build-and-test.yml
 
   # Fail fast, before anything is published: a release must have a matching
@@ -38,15 +36,7 @@ jobs:
           name: release-notes
           path: release-notes.md
 
-  # Same fail-fast reasoning as release-notes above, for the other artifact that
-  # ships with the release. THIRD_PARTY_LICENSES.md satisfies a Legal release
-  # condition, so a tag must not be publishable while it misstates the binary.
-  #
-  # The same check runs on every pull request, which is what normally keeps `main`
-  # clean. This job is what makes that a guarantee rather than a dependency on the
-  # branch-protection configuration being correct: until `Third-party licenses
-  # current` is registered as a required status check, a pull request can merge
-  # with it red. Verifying again at the tag closes that window, and costs seconds.
+  # Same fail-fast reasoning as release-notes, for the other release artifact.
   licenses:
     name: Third-party licenses current
     runs-on: ubuntu-latest
@@ -64,22 +54,29 @@ jobs:
       - name: Verify THIRD_PARTY_LICENSES.md and NOTICE match the binary
         run: .github/scripts/licenses-check.sh
 
-  # Release gate: re-scans the tag, uploads to Guardian, and fails the release if
-  # Guardian blocks. `release` depends on it. Replaces the Vault-backed FOSSA scan.
+  # Release gate: re-scans the tag, uploads to Guardian, and fails the release
+  # if Guardian blocks (admin skip_security_checks is the escape hatch).
+  # Replaces the Vault-backed FOSSA scan.
   release-readiness:
     name: Release Readiness Check
-    uses: ./.github/workflows/release-readiness-check.yaml
     permissions:
       contents: read
       pull-requests: write
       checks: write
       statuses: write
+    uses: ./.github/workflows/release-readiness-check.yaml
     with:
       version: ${{ github.ref_name }}
 
   build-binaries:
     needs: [test, release-notes, licenses]
     runs-on: ubuntu-latest
+    # id-token/attestations for the provenance step below; nothing here writes
+    # to the repository or the registry.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       matrix:
         include:
@@ -116,11 +113,8 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME}"
           ARCHIVE="solace-broker-mcp-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
-          # NOTICE and THIRD_PARTY_LICENSES.md ship alongside LICENSE, not just in
-          # the repository. Apache-2.0 section 4(d) requires the attribution
-          # notices to travel with the derivative work, and THIRD_PARTY_LICENSES.md
-          # describes itself as accompanying the release — which was not true of
-          # this archive until SOL-152414.
+          # NOTICE and THIRD_PARTY_LICENSES.md ship alongside LICENSE (Apache-2.0
+          # section 4(d)), per SOL-152414.
           tar czf "${ARCHIVE}" \
             solace-broker-mcp \
             broker-config.example.yaml \
@@ -129,20 +123,32 @@ jobs:
             THIRD_PARTY_LICENSES.md
           echo "ARCHIVE=${ARCHIVE}" >> "${GITHUB_ENV}"
 
+      # Attested per matrix leg so the digest is bound before the archive
+      # round-trips through upload-artifact, and a failure surfaces pre-publish.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: ${{ env.ARCHIVE }}
+
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: binary-${{ matrix.goos }}-${{ matrix.goarch }}
           path: ${{ env.ARCHIVE }}
 
-  # Gated on release-readiness: a registry push is irreversible (and moves
-  # `latest`), so it must wait for the Guardian gate. An admin can still publish
-  # over a block via release-readiness-check's skip_security_checks escape hatch.
+  # Multi-arch build + push, delegated to the reusable build-image workflow
+  # (which also emits the image build-provenance attestation). Gated on
+  # release-readiness: a registry push is irreversible and moves `latest`, so
+  # it must wait for the Guardian gate. Admin skip_security_checks can publish
+  # over a block via release-readiness-check.
   build-docker:
     needs: [test, release-notes, licenses, release-readiness]
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     uses: ./.github/workflows/build-image.yaml
     with:
       git_ref: ${{ github.ref_name }}
@@ -153,6 +159,9 @@ jobs:
   release:
     needs: [build-binaries, build-docker, release-readiness]
     runs-on: ubuntu-latest
+    # Creates the GitHub Release and uploads the archives and checksums to it.
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

@@ -14,7 +14,7 @@ One axis describes a release: its **version**. We use [SemVer 2.0.0](https://sem
 | `0.4.0-beta.N` | feature-complete, stabilizing | clears the Stable gate (soaked on beta, no new P0/P1) |
 | `0.4.0` | stable, supported | — |
 
-A new release line starts at `alpha`. Promotion drops or advances the pre-release identifier; the `MAJOR.MINOR.PATCH` core only changes when the change itself warrants it. Pre-1.0, breaking changes bump MINOR. Tags are immutable by convention; CI enforcement is **[Planned]** — today nothing prevents retagging, and a force-updated tag would simply re-run the release workflow. Signed tags are **[Planned]**.
+A new release line starts at `alpha`. Promotion drops or advances the pre-release identifier; the `MAJOR.MINOR.PATCH` core only changes when the change itself warrants it. Pre-1.0, breaking changes bump MINOR. Tags are immutable by convention; CI enforcement is **[Planned]** — today nothing prevents retagging, and a force-updated tag would simply re-run the release workflow. Signed *git tags* are **[Planned]** — distinct from the published artifacts, which do carry build provenance attestations **[Implemented]** (see Gates).
 
 ## Distribution pointers
 
@@ -52,7 +52,9 @@ Moving pointers let consumers track a stream instead of a fixed version:
 - Publish gate re-verified on the candidate **[Planned]**
 - No new P0/P1 found since the candidate **[Planned]**
 - Release notes finalized **[Planned]**
-- Immutable tag **[Planned]** — convention today, not enforced — signed **[Planned]**
+- Immutable tag **[Planned]** — convention today, not enforced
+- Git tag signed by the tagger **[Planned]** — a separate mechanism from artifact attestation below, and still unenforced
+- Artifacts attested **[Implemented]** — the release workflow attaches a GitHub build provenance attestation to each binary archive and to the container image. With `--signer-workflow` and `--source-digest` (see the runbook below) a consumer can prove the artifact was built by this repository's `release.yml` from a named commit. `--repo` on its own is weaker than it looks: it binds only the repository, so any workflow in it holding `id-token: write` and `attestations: write` could mint an attestation that passes
 
 Today a stable release clears the **Publish gate** only; the remaining Stable-gate criteria are **[Planned]**.
 
@@ -69,8 +71,8 @@ Pushing the tag runs `.github/workflows/release.yml`, which:
 
 1. Re-runs the full build-and-test suite.
 2. Runs the FOSSA scan against the tag.
-3. Builds binaries for `linux` and `darwin` × `amd64` and `arm64`.
-4. Builds and pushes a multi-arch image to `ghcr.io/solaceproducts/solace-broker-mcp` (`{version}`, `{major}.{minor}`, `latest`, `sha-<short-sha>` tags).
+3. Builds binaries for `linux` and `darwin` × `amd64` and `arm64`, attesting each archive's build provenance in the job that built it.
+4. Builds and pushes a multi-arch image to `ghcr.io/solaceproducts/solace-broker-mcp` (`{version}`, `{major}.{minor}`, `latest`, `sha-<short-sha>` tags), and attests the image digest, pushing the attestation to the registry alongside it.
 5. Publishes a GitHub Release whose notes are the tagged version's `CHANGELOG.md` block (with the auto-generated PR list appended beneath), plus the binary archives and SHA-256 checksums. If no `## [X.Y.Z]` block exists for the tag, the release fails rather than falling back to auto-only notes.
 
 Anyone with permission to push tags can cut a release.
@@ -79,13 +81,20 @@ The jobs are not fully serialized:
 
 ```
 push v* tag
-  ├─> test (reuses build-and-test.yml)
-  │     ├─> build-binaries (matrix: 4 OS/arch) ──┐
-  │     └─> build-docker (pushes the image) ─────┼─> release (GitHub Release)
-  └─> fossa_scan ─────────────────────────────────┘
+  ├─> test           (reuses build-and-test.yml)
+  ├─> release-notes  (CHANGELOG block must exist)
+  ├─> licenses       (inventory must match the binary)
+  └─> fossa_scan     (SCA gate)
+
+waits on
+  build-binaries   test, release-notes, licenses
+  build-docker     test, release-notes, licenses, fossa_scan   ← pushes the image
+  release          build-binaries, build-docker, fossa_scan
 ```
 
-A failed job blocks the GitHub Release, binaries, and checksums. The container image is the exception: it is pushed as soon as build-and-test passes, in parallel with the FOSSA scan, so a FOSSA failure can leave the image and its moving pointers already published on `ghcr.io`. Gating the image push on every job is **[Planned]** — until then, if a release run fails partway, check `ghcr.io` and roll forward (see Rollback).
+A failed job blocks the GitHub Release, binaries, checksums, and the container image: `build-docker` waits on the FOSSA scan as well as the build, so a failing SCA gate publishes nothing. That matters because a registry push cannot be withdrawn — the binaries are only artifacts until `release` publishes them, but the image is live the moment it is pushed.
+
+One window remains: the image is pushed *before* it is attested, so a run that fails on the attest step leaves `latest` live with no attestation — a consumer's `gh attestation verify` then fails because the release is incomplete, not because the image was tampered with. That ordering is unavoidable, since attesting a registry digest requires the digest to exist. If a release run fails partway, check `ghcr.io` and roll forward (see Rollback).
 
 Pre-release tags (`v0.4.0-beta.1`) and the `:edge`/`:alpha`/`:beta` pointers follow the same workflow once continuous pre-release publishing is wired up **[Planned]**.
 
@@ -109,7 +118,31 @@ After pushing the tag:
 1. Watch the run: `gh run list --workflow=release.yml --limit 1`; on failure, `gh run view <run-id> --log`.
 2. Verify the release: `gh release view <tag>` shows four binary archives, `checksums-sha256.txt`, and the curated CHANGELOG notes (with the PR list appended); the image tags are present on `ghcr.io/solaceproducts/solace-broker-mcp`.
 3. Spot-check a binary: download the archive for your platform, verify it (`shasum -a 256 -c checksums-sha256.txt --ignore-missing`), and run `./solace-broker-mcp --version` — it prints the tag.
-4. Announce once verified: internal channels, and the [Solace Community](https://solace.community/) for releases worth a wider note.
+4. Verify the attestations on both artifact kinds. `--signer-workflow` and `--source-digest` are what make this a check rather than a look: without them the command binds only the repository, and its output names the build and signer workflow but never prints a commit SHA, so there is nothing to eyeball. With them, a wrong builder or a wrong source commit fails the command.
+
+   Set `TAG` and `PLATFORM`, then paste the rest as-is. The image reference deliberately uses `VERSION`, not `TAG`: `docker/metadata-action`'s `{{version}}` pattern strips the leading `v`, so the image tags are `0.7.0`, `0.7`, `latest`, and `sha-<short-sha>` — there is no `v0.7.0` image tag.
+
+   ```bash
+   TAG=v0.7.0                  # the tag you pushed
+   PLATFORM=linux-amd64        # the archive you downloaded in step 3
+   VERSION="${TAG#v}"          # image tag: the same, without the leading v
+   COMMIT="$(git rev-list -n1 "$TAG")"
+
+   gh attestation verify "solace-broker-mcp-${TAG}-${PLATFORM}.tar.gz" \
+     --repo SolaceProducts/solace-broker-mcp \
+     --signer-workflow SolaceProducts/solace-broker-mcp/.github/workflows/release.yml \
+     --source-digest "${COMMIT:?no commit resolved for $TAG - git fetch --tags, then check the tag name}"
+
+   gh attestation verify "oci://ghcr.io/solaceproducts/solace-broker-mcp:${VERSION}" \
+     --repo SolaceProducts/solace-broker-mcp \
+     --signer-workflow SolaceProducts/solace-broker-mcp/.github/workflows/release.yml \
+     --source-digest "${COMMIT:?no commit resolved for $TAG - git fetch --tags, then check the tag name}"
+   ```
+
+   The `${COMMIT:?…}` guard is load-bearing, not decoration. `gh` accepts an empty `--source-digest` instead of rejecting it, so an unresolved `COMMIT` would silently drop the commit constraint and still print `✓ Verification succeeded!` — the guard aborts the `gh` command with a visible message instead. It does not close an interactive shell.
+
+   Both commands fetch the attestation from the GitHub API. To verify the copy stored beside the image on `ghcr.io` instead, add `--bundle-from-oci` to the second one.
+5. Announce once verified: internal channels, and the [Solace Community](https://solace.community/) for releases worth a wider note.
 
 If a job fails for environmental reasons, re-run it: `gh run rerun <run-id>`. Never delete and re-push a tag to retry — tags are immutable (see Versioning). If the build itself is bad, fix on `main` and tag the next PATCH (see Rollback).
 

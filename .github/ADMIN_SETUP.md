@@ -181,8 +181,9 @@ Navigate to: **Settings → Environments → New environment**, name it `guardia
 | `PRISMACLOUD_CONSOLE_URL` | Prisma Cloud Console URL |
 
 A fork pull request gets none of these — GitHub withholds Environment secrets from
-a fork-triggered run — so the `Guardian scan` job skips on a fork PR and the
-always-reporting `Guardian scan gate` job accounts for the skip. The old
+a fork-triggered run — so the scan jobs (build, FOSSA licensing/vulnerability,
+Prisma, Guardian gate) skip on a fork PR and the always-reporting `Guardian scan
+gate` job accounts for the skip. The old
 `VAULT_URL` repository secret is no longer read by any scanning workflow; it can
 be removed once `transition_on_merge.yaml` (Jira transitions, still on Vault) is
 also migrated.
@@ -251,7 +252,7 @@ against a real pull request before you rely on them:
 | `e2e-monitoring` | `build-and-test.yml` | E2E suite (known flaky fixture; rerun the job before investigating) |
 | `e2e-management` | `build-and-test.yml` | E2E suite |
 | `e2e-action` | `build-and-test.yml` | E2E suite |
-| `Guardian scan gate` | `guardian-scan.yaml` job `guardian-scan-gate` | The Guardian scan verdict, or an accounted-for reason there is none (fork PR). Replaces `SCA gate`; see the warning below |
+| `Guardian scan gate` | `guardian-scan.yaml` job `gate` | The Guardian scan verdict, or an accounted-for reason there is none (fork PR). Replaces `SCA gate`; see the warning below |
 | `Third-party licenses current` | `ci-pr.yaml` job `licenses` | `THIRD_PARTY_LICENSES.md` still matching `go list -deps ./cmd/server`. Needs no secret, so it reports on fork pull requests too |
 | `CHANGELOG updated` | `ci-pr.yaml` job `changelog` | Advisory today; see note below |
 | `DCO sign-off` | `dco.yaml` job `dco` | a sign-off on every commit the PR adds, except a PR GitHub records as opened by `dependabot[bot]` (SOL-152808) |
@@ -262,18 +263,18 @@ against a real pull request before you rely on them:
 Vault-backed FOSSA jobs were removed from `ci-pr.yaml`, `build-and-test.yml`, and
 `fossa-scan.yaml` (deleted). Scanning now runs in `guardian-scan.yaml`, which
 triggers on `pull_request` and `push` directly, so its jobs surface under their
-plain names (`Guardian scan`, `Guardian scan gate`) with no `caller / inner`
-suffix.
+plain names with no `caller / inner` suffix.
 
-- **`Guardian scan gate` is the one to require.** `guardian-scan.yaml` job
-  `guardian-scan-gate` always reports. It passes on a scan success, fails on a
-  scan failure, and passes a fork PR's skip with a logged reason — re-deriving the
-  fork condition itself and **failing** a skip it cannot account for, so narrowing
-  the scan job's `if` later cannot quietly switch the gate off on same-repo pull
-  requests. Same design as the `SCA gate` it replaced.
-- **Do not require `Guardian scan`.** The scan job is skipped on a fork PR (no
-  Environment secrets); a skipped plain job counts as passing, but only the gate
-  fails closed on an *unexplained* same-repo skip. Require the gate, not the scan.
+- **`Guardian scan gate` is the one to require.** `guardian-scan.yaml` job `gate`
+  always reports. It passes on a scan success, fails on a scan failure, and passes
+  a fork PR's skip with a logged reason — re-deriving the fork condition itself and
+  **failing** a skip it cannot account for, so narrowing the scan jobs' `if` later
+  cannot quietly switch the gate off on same-repo pull requests. Same design as the
+  `SCA gate` it replaced.
+- **Do not require the individual scan jobs.** `build`, `fossa-license`,
+  `fossa-vuln`, `prisma`, and `guardian-gate` all skip on a fork PR (no Environment
+  secrets); a skipped plain job counts as passing, and only `gate` fails closed on
+  an *unexplained* same-repo skip. Require `Guardian scan gate`, not the scans.
 
 The naming rule still holds: a reusable-workflow caller that **runs** surfaces as
 `<caller job name> / <inner job name>`; a caller that is **skipped** produces only
@@ -318,7 +319,7 @@ rather than failing; `pull_request_target` is not exempt. Pending fails closed, 
 nothing slips through. The failure mode to avoid is reading that as a misconfigured
 list and dropping a DCO row. Approve the workflow run instead.
 
-Four more notes on the list:
+Three more notes on the list:
 
 - `CHANGELOG updated` cannot fail today. `ci-pr.yaml` sets
   `CHANGELOG_GATE_MODE: advisory`, so the script warns and exits 0. Requiring it
@@ -333,14 +334,6 @@ Four more notes on the list:
   block merges, after settling the configuration question in the Security Settings
   section. It is not in the list above because that is a policy call, not a
   correctness fix.
-- Do **not** require `run-pull-request-checks / *`. Those come from
-  `transition_on_merge.yaml`, which runs on `pull_request: closed`, and the check
-  name varies with the Jira key (e.g. `... Vault and JIRA Operations (SOL-152328)`).
-  That workflow is now skipped for fork pull requests: it authenticates to Vault by
-  OIDC, which a fork run cannot do, so it could only ever go red — on an
-  already-merged external contribution, for a credential the contributor was never
-  eligible to hold. It also has nothing to transition, since an external
-  contribution has no SOL ticket.
 
 **How a fork pull request gets a verdict.** SOL-152411 fixed the two problems that
 made this impossible. What it changed, and what it deliberately did not:
@@ -364,11 +357,17 @@ made this impossible. What it changed, and what it deliberately did not:
    pre-merge scan on a path that already requires a maintainer to approve the
    workflow run and a code owner to approve the pull request.
 
-**The residual gap, stated so nobody assumes otherwise.** A fork pull request gets
-no pre-merge FOSSA verdict. A contributor who adds a dependency with a licensing
-conflict or a critical/high vulnerability is caught by the full scan on push to
-`main`, which is detection after merge, not prevention before it. Until that
-changes, two human controls stand in, and both need someone to actually do them:
+**The residual gap — get an owner before the repo flips public.** A fork pull
+request gets no pre-merge Guardian/SCA verdict: the scan jobs need Environment
+secrets, forks don't get them, so each fork PR merges unscanned and is only caught
+by the scan on push to `main` — detection after merge, not prevention. Today
+almost every PR is same-repo so the carve-out rarely fires; once the repo is
+public, fork PRs become the normal contribution path and this becomes the common
+case, not the edge one. Note that "require approval for outside collaborators"
+(GitHub Actions Permissions section) protects the *secrets*, not the *verdict* —
+an approved fork run still can't scan. **This is a decision for a repo owner to
+make deliberately before going public, not a default to inherit.** Until it's
+closed, two human controls stand in, and both need someone to actually do them:
 
 - **Read `go.mod` and `go.sum`** in any fork pull request that touches them.
 - **Read the `.github/` diff too.** Moving to `pull_request` means a fork pull
@@ -509,7 +508,7 @@ writing; re-check, do not assume.
   > **Precondition: confirm `Guardian scan gate` is green on a real pull request
   > before requiring it.**
   >
-  > `guardian-scan-gate` fails closed, by design. So if the scan is broken for any
+  > The `gate` job fails closed, by design. So if the scan is broken for any
   > reason, requiring it turns "scanning is broken" into "no pull request can
   > merge". Branch protection holds zero required contexts today, which is the only
   > reason a scan outage is not already blocking everyone.
@@ -537,7 +536,7 @@ writing; re-check, do not assume.
   > findings before relying on the gate, or expect `main` to go red for a
   > legitimate reason.
   >
-  > `guardian-scan-gate` going red through all of this is the gate working.
+  > The `gate` job going red through all of this is the gate working.
 - ⬜ **"Allow GitHub Actions to create and approve pull requests" turned off.**
   Still on.
 - ⬜ **Fork pull request workflows set to require approval for all outside
