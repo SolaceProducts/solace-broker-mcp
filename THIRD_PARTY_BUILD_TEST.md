@@ -148,21 +148,29 @@ listed.
 Actions run on GitHub's runners during CI. They are not distributed with the
 product and never enter the binary.
 
-| Action | Version | License | License text |
-|---|---|---|---|
-| `actions/attest-build-provenance` | v4 | MIT | [license](https://github.com/actions/attest-build-provenance/blob/main/LICENSE) |
-| `actions/checkout` | v4 | MIT | [license](https://github.com/actions/checkout/blob/main/LICENSE) |
-| `actions/download-artifact` | v4 | MIT | [license](https://github.com/actions/download-artifact/blob/main/LICENSE) |
-| `actions/setup-go` | v5 | MIT | [license](https://github.com/actions/setup-go/blob/main/LICENSE) |
-| `actions/setup-node` | v4 | MIT | [license](https://github.com/actions/setup-node/blob/main/LICENSE) |
-| `actions/upload-artifact` | v4 | MIT | [license](https://github.com/actions/upload-artifact/blob/main/LICENSE) |
-| `docker/build-push-action` | v6 | Apache-2.0 | [license](https://github.com/docker/build-push-action/blob/master/LICENSE) |
-| `docker/login-action` | v3 | Apache-2.0 | [license](https://github.com/docker/login-action/blob/master/LICENSE) |
-| `docker/metadata-action` | v5 | Apache-2.0 | [license](https://github.com/docker/metadata-action/blob/master/LICENSE) |
-| `docker/setup-buildx-action` | v3 | Apache-2.0 | [license](https://github.com/docker/setup-buildx-action/blob/master/LICENSE) |
-| `docker/setup-qemu-action` | v3 | Apache-2.0 | [license](https://github.com/docker/setup-qemu-action/blob/master/LICENSE) |
-| `golangci/golangci-lint-action` | v7 | MIT | [license](https://github.com/golangci/golangci-lint-action/blob/master/LICENSE) |
-| `softprops/action-gh-release` | v2 | MIT | [license](https://github.com/softprops/action-gh-release/blob/master/LICENSE) |
+Every action is pinned to a commit SHA, because a tag is mutable and the owner of
+`v4` can move it. The Pin column is the short form of that SHA and is the field the
+drift check compares; the workflow file carries the full SHA with the same version
+beside it as a comment, and Dependabot maintains the two together. Licence links
+resolve at the pinned SHA rather than the default branch, for the same reason the
+Go module rows link to their tag: the licence that applies is the one in the tree
+that actually ran.
+
+| Action | Pin | Version | License | License text |
+|---|---|---|---|---|
+| `actions/attest-build-provenance` | `0f67c3f` | v4.1.1 | MIT | [license](https://github.com/actions/attest-build-provenance/blob/0f67c3f4856b2e3261c31976d6725780e5e4c373/LICENSE) |
+| `actions/checkout` | `11d5960` | v4.4.0 | MIT | [license](https://github.com/actions/checkout/blob/11d5960a326750d5838078e36cf38b85af677262/LICENSE) |
+| `actions/download-artifact` | `d3f86a1` | v4.3.0 | MIT | [license](https://github.com/actions/download-artifact/blob/d3f86a106a0bac45b974a628896c90dbdf5c8093/LICENSE) |
+| `actions/setup-go` | `40f1582` | v5.6.0 | MIT | [license](https://github.com/actions/setup-go/blob/40f1582b2485089dde7abd97c1529aa768e1baff/LICENSE) |
+| `actions/setup-node` | `49933ea` | v4.4.0 | MIT | [license](https://github.com/actions/setup-node/blob/49933ea5288caeca8642d1e84afbd3f7d6820020/LICENSE) |
+| `actions/upload-artifact` | `ea165f8` | v4.6.2 | MIT | [license](https://github.com/actions/upload-artifact/blob/ea165f8d65b6e75b540449e92b4886f43607fa02/LICENSE) |
+| `docker/build-push-action` | `10e90e3` | v6.19.2 | Apache-2.0 | [license](https://github.com/docker/build-push-action/blob/10e90e3645eae34f1e60eeb005ba3a3d33f178e8/LICENSE) |
+| `docker/login-action` | `c94ce9f` | v3.7.0 | Apache-2.0 | [license](https://github.com/docker/login-action/blob/c94ce9fb468520275223c153574b00df6fe4bcc9/LICENSE) |
+| `docker/metadata-action` | `c299e40` | v5.10.0 | Apache-2.0 | [license](https://github.com/docker/metadata-action/blob/c299e40c65443455700f0fdfc63efafe5b349051/LICENSE) |
+| `docker/setup-buildx-action` | `8d2750c` | v3.12.0 | Apache-2.0 | [license](https://github.com/docker/setup-buildx-action/blob/8d2750c68a42422c14e847fe6c8ac0403b4cbd6f/LICENSE) |
+| `docker/setup-qemu-action` | `c7c5346` | v3.7.0 | Apache-2.0 | [license](https://github.com/docker/setup-qemu-action/blob/c7c53464625b32c7a7e944ae62b3e17d2b600130/LICENSE) |
+| `golangci/golangci-lint-action` | `9fae48a` | v7.0.1 | MIT | [license](https://github.com/golangci/golangci-lint-action/blob/9fae48acfc02a90574d7c304a1758ef9895495fa/LICENSE) |
+| `softprops/action-gh-release` | `3bb1273` | v2.6.2 | MIT | [license](https://github.com/softprops/action-gh-release/blob/3bb12739c298aeb8a4eeaf626c5b8d85266b0e65/LICENSE) |
 
 ### Solace-internal reusable workflows
 

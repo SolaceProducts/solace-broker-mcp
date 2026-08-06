@@ -39,6 +39,12 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 CHECK="$REPO_ROOT/.github/scripts/build-test-licenses-check.sh"
 DOC="THIRD_PARTY_BUILD_TEST.md"
 
+# A well-formed but unmistakably synthetic 40-character SHA, used as the "re-pinned
+# to something else" value. It has to be 40 hex characters or the subject's
+# short-SHA prefix comparison never engages and the action cases stop testing the
+# path they exist to test.
+FAKE_PIN="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+
 pass=0
 fail=0
 
@@ -68,17 +74,21 @@ add_duplicate_row() { # <tmp> <name> <version> — a second row for a component 
 }
 
 change_version() { # <tmp> <name> <new version>
-    awk -v comp="\`$2\`" -v ver="$3" -F' \\| ' '
-        index($0, comp) && /^\| `/ { $2 = ver; print $1 " | " $2 " | " $3 " | " $4; next }
+    # Assigning a field makes awk rebuild the whole record with OFS, so this
+    # round-trips a row of any width. An earlier version printed `$1 " | " ... $4`
+    # explicitly, which silently truncated anything wider than four columns and
+    # forced a separate helper for the three-column reusable-workflow row.
+    awk -v comp="\`$2\`" -v ver="$3" -F' \\| ' -v OFS=' | ' '
+        index($0, comp) && /^\| `/ { $2 = ver; print; next }
         { print }
     ' "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC"
 }
 
 set_sca_workflow_ref() { # <tmp> <new ref> — rewrite the short SHA on the
-    # reusable-workflow row. That row has three columns, so change_version, which
-    # rebuilds four, would malform it and the case would then fail on the parse
-    # check instead of the comparison it is meant to test. Target the ref field
-    # and keep the row's shape.
+    # reusable-workflow row. change_version can now rebuild a row of any width, so
+    # this no longer exists out of necessity; it is kept because it addresses the
+    # row by its distinguishing content rather than by a component name that is a
+    # 76-character workflow path, which keeps the length cases below readable.
     # Addressed to the row, then replacing the backticked hex run. Matching the
     # whole row instead would need escaped `|` inside an ERE, which BSD sed reads
     # as an empty alternation and rejects. The workflow path in the same row is
@@ -108,26 +118,46 @@ add_dash_uses_action() { # <tmp> — the `- uses:` step form, which an anchor
     printf '        - uses: example/sneaky-action@v1\n' >>"$1/.github/workflows/dco.yaml"
 }
 
-bump_action_version() { # <tmp> — Dependabot bumps actions daily; a version
-    # column nothing defends is decoration.
+bump_action_version() { # <tmp> — Dependabot re-pins actions daily; a pin column
+    # nothing defends is decoration.
+    #
+    # The pin in use is read out of the workflows rather than written here. An
+    # earlier version of this mutation hardcoded `actions/checkout@v4`, and when
+    # the actions were pinned to SHAs it matched nothing: the mutation became a
+    # no-op, the gate correctly reported green, and the case failed. Failing was
+    # the good outcome, but it only worked because this case expects exit 1. The
+    # same staleness in a case expecting exit 0 would have passed for the wrong
+    # reason and gone unnoticed. Deriving the pin removes the trap for both.
     unlink_workflows "$1"
-    sed -i.bak 's|actions/checkout@v4|actions/checkout@v5|g' "$1/.github/workflows/"*.y*ml
+    local cur
+    cur=$({ grep -rhoE 'actions/checkout@[0-9a-f]{40}' "$1/.github/workflows/" || true; } |
+        head -1 | cut -d@ -f2)
+    if [ -z "$cur" ]; then
+        echo "bump_action_version: no SHA-pinned actions/checkout in the workflows;" \
+             "this mutation would be vacuous" >&2
+        return 1
+    fi
+    sed -i.bak "s|actions/checkout@${cur}|actions/checkout@${FAKE_PIN}|g" \
+        "$1/.github/workflows/"*.y*ml
     rm -f "$1/.github/workflows/"*.bak
+    # A sed that matched nothing exits 0. Confirm the tree actually changed.
+    grep -rqF "actions/checkout@${FAKE_PIN}" "$1/.github/workflows/"
 }
 
 bump_action_version_and_row() { # <tmp> — the same bump, with the row updated to
     # match: valid to valid, the maintainer's most common edit.
     #
     # Honest about what this adds. It buys no new coverage of version comparison
-    # itself — the baseline already exercises the exact-match branch on every
-    # action row. What it does buy is a control over the workflow-copy mutations:
+    # itself — every action row is a SHA pin and so takes the prefix branch, which
+    # the length cases below already cover, and the Go module, npm and image rows
+    # cover exact match. What it does buy is a control over the workflow-copy mutations:
     # it is the only case that replaces the symlinked workflows and still expects
     # exit 0, so a corrupted or truncated `unlink_workflows` shows up here and
     # nowhere else. The three cases that mutate workflows all expect exit 1, and
     # they stay green against a copy that lost a file, passing for the wrong
     # reason. Verified by deleting a file inside unlink_workflows: only this case
     # noticed.
-    bump_action_version "$1" && change_version "$1" "actions/checkout" "v5"
+    bump_action_version "$1" && change_version "$1" "actions/checkout" "\`${FAKE_PIN:0:7}\`"
 }
 
 add_second_dockerfile() { # <tmp> — discovery must be derived, not hardcoded
