@@ -55,6 +55,10 @@
 # symlinked directory. That is a fail-*open* discovery bug, and it is exactly the
 # shape that made two self-test cases pass vacuously before it was caught.
 #
+# Separately from `-L`, discovery must *prune* excluded subtrees rather than
+# filter them out of the results: see discover() below. The two properties are
+# independent and defeating either one reintroduces a bug.
+#
 # WHAT IT DELIBERATELY DOES NOT CHECK
 #
 # Licence *names*. Detecting that a component relicensed between versions needs
@@ -91,6 +95,36 @@ failures=0
 err() {
     echo "::error file=$1::$2"
     failures=$((failures + 1))
+}
+
+# Every discovery goes through here, pruning rather than filtering.
+#
+# `-not -path` removes a path from the *results* but still lets `find` descend
+# into it. So it walks gitignored trees holding other branches' checkouts —
+# `.gitignore` ignores `.worktrees/` and `.claude/worktrees/` precisely because
+# they are separate worktrees — and any local `node_modules`. Each yields phantom
+# components: another branch's Dockerfile, or a transitive `package-lock.json`
+# left by a local `npm install`. The gate then fails on rows the repository does
+# not actually need.
+#
+# This has nothing to do with the `-L` above, and conflating the two is the
+# mistake to avoid: `find` descends into a real subdirectory it merely excludes
+# from the results whether or not `-L` is given, so dropping `-L` does not fix it
+# and would reintroduce the fail-open that `-L` is there to prevent. `-L` is for
+# reaching symlinked *inputs*; `-prune` is for not reaching excluded *subtrees*.
+#
+# Do not simplify `-prune` back to `-not -path`: the results look identical in
+# CI, where neither directory exists, and only a local run reveals the difference.
+#
+# The root stays a parameter rather than always being `.`. The `test` searches are
+# rooted there on purpose: a repository-wide `-name go.mod` would pick up the root
+# module, whose dependencies are the release inventory's subject, not this file's.
+discover() { # <root> <find expression...>   e.g. discover test -name go.mod
+    local root="$1"
+    shift
+    find -L "$root" \
+        \( -name .git -o -name .claude -o -name .worktrees -o -name node_modules \) -prune \
+        -o "$@" -type f -print 2>/dev/null | sort || true
 }
 
 # --- check 6, first: every candidate row parses ------------------------------
@@ -181,7 +215,7 @@ while read -r gomod; do
         case "$mod_path" in github.com/SolaceProducts/solace-broker-mcp*) continue ;; esac
         expect "$mod_path" "$mod_version" "Go module" "Read its licence from the module's own LICENSE file."
     done < <(grep -v '^$' <<<"$list_out" | sort -u || true)
-done < <(find -L test -name go.mod -type f 2>/dev/null | sort || true)
+done < <(discover test -name go.mod)
 
 # --- check 2: npm packages ---------------------------------------------------
 # The LLM eval suite installs the Claude Code CLI with `npm ci`. These are test
@@ -197,7 +231,7 @@ while read -r lockfile; do
         [ -n "$pkg_name" ] || continue
         expect "$pkg_name" "$pkg_version" "npm package" "Read its licence from the package's own LICENSE/README, not from the npm registry summary."
     done < <(jq -r '.packages | to_entries[] | select(.key != "") | "\(.key | sub("^node_modules/"; "")) \(.value.version // "?")"' "$lockfile" 2>/dev/null | sort -u || true)
-done < <(find -L test -name package-lock.json -type f 2>/dev/null | sort || true)
+done < <(discover test -name package-lock.json)
 
 # --- check 3: GitHub Actions -------------------------------------------------
 # The `-` alternative is load-bearing: `- uses: foo@v1` is the idiomatic step
@@ -249,7 +283,7 @@ done < <(
             [ -n "$df" ] || continue
             # `FROM x AS y` — keep the image, drop the stage alias.
             { grep -hoE '^FROM[[:space:]]+[^[:space:]]+' "$df" || true; } | sed -E 's/^FROM[[:space:]]+//'
-        done < <(find -L . -name 'Dockerfile*' -type f -not -path './.git/*' 2>/dev/null | sort || true)
+        done < <(discover . -name 'Dockerfile*')
         { grep -rhoE '^[[:space:]]*image:[[:space:]]*[^[:space:]]+' test/ .github/workflows/ 2>/dev/null || true; } |
             sed -E 's/^[[:space:]]*image:[[:space:]]*//'
     } | tr -d '"'"'" | sort -u
@@ -279,17 +313,15 @@ If an error says a row is unused, check that the corresponding check above did
 not fail first: a broken 'go list' empties a whole closure and every row it
 covers then looks unused. Fix the upstream error before deleting any row.
 
-To rebuild the expected sets by hand:
+To rebuild the expected sets by hand, follow the "Rebuilding this file" section
+of THIRD_PARTY_BUILD_TEST.md. The commands live there rather than here so that
+someone rebuilding the inventory for an audit finds them by opening the document,
+without having to fail this gate first.
 
-    find test -name go.mod   -exec dirname {} \; | while read -r m; do \
-        (cd "$m" && go list -deps -test -f '{{with .Module}}{{.Path}} {{.Version}}{{end}}' ./...); done | sort -u
-    find test -name package-lock.json -exec jq -r '.packages | keys[]' {} \;
-    grep -rhoE '(-[[:space:]]+)?uses: [^ ]+' .github/workflows/ | sort -u
-    find . -name 'Dockerfile*' -not -path './.git/*' -exec grep -hE '^FROM' {} \;
-
-Read each new component's licence from its own LICENSE file, or from
-'gh api repos/OWNER/REPO --jq .license.spdx_id' for an action. Do not infer it
-from a package name or copy it from a neighbouring row.
+Whatever you add, read its licence from the component's own LICENSE file, or from
+'gh api repos/OWNER/REPO --jq .license.spdx_id' for an action. Never infer it from
+a package name and never copy it from a neighbouring row. This script cannot check
+licence names, so that rule is the only thing keeping them true.
 EOF
     exit 1
 fi

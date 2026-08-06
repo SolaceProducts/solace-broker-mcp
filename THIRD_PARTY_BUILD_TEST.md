@@ -14,7 +14,8 @@ itself**, and which are **not compiled into the shipped binary**.
 
 **Generated** 2026-08-05. Every licence below was read from the component's own
 licence file or from the GitHub API for its source repository. None was inferred
-from a package name or carried over from another row.
+from a package name or carried over from another row. See
+[Rebuilding this file](#rebuilding-this-file) for how to regenerate it.
 
 Kept honest by `.github/scripts/build-test-licenses-check.sh`, which fails CI
 when this file stops matching what the repository actually uses. See
@@ -76,13 +77,23 @@ A standalone module. It builds the MCP client that drives the end-to-end suite.
 | `golang.org/x/oauth2` | v0.35.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/oauth2/+/master:LICENSE) |
 | `golang.org/x/sys` | v0.41.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sys/+/master:LICENSE) |
 
-Two notes a reader should not have to discover themselves.
+Three notes a reader should not have to discover themselves.
 
 **`golang.org/x/oauth2` is pinned here at v0.35.0 and at v0.36.0 in the root
 module.** Two versions of one module live in this repository. Both are
 BSD-3-Clause, so there is no licensing consequence, but the divergence is real
 and recorded rather than smoothed over. It is a separate module with its own
 `go.mod`, so nothing forces them to agree.
+
+**`github.com/segmentio/asm` relicensed after the version we consume.** v1.1.3 is
+MIT. Upstream moved to MIT-0 ("MIT No Attribution") in v1.2.1 on 2023-11-07, so
+the default branch — and therefore a bare
+`gh api repos/segmentio/asm --jq .license.spdx_id` — reports MIT-0. That query
+answers for the default branch, never for the pinned tag. Read the licence at the
+tag instead: `gh api repos/OWNER/REPO/license?ref=<tag>` accepts a ref, and
+returns MIT here. This row is worth the paragraph because the drift check compares
+names and versions and never licences, so a future bump past v1.2.0 changes the
+correct value in this column without turning CI red.
 
 **The MCP Go SDK is mid-relicence.** Its licence file states that the project is
 transitioning from MIT to Apache-2.0, that contributions whose authors have
@@ -139,6 +150,7 @@ product and never enter the binary.
 
 | Action | Version | License | License text |
 |---|---|---|---|
+| `actions/attest-build-provenance` | v4 | MIT | [license](https://github.com/actions/attest-build-provenance/blob/main/LICENSE) |
 | `actions/checkout` | v4 | MIT | [license](https://github.com/actions/checkout/blob/main/LICENSE) |
 | `actions/download-artifact` | v4 | MIT | [license](https://github.com/actions/download-artifact/blob/main/LICENSE) |
 | `actions/setup-go` | v5 | MIT | [license](https://github.com/actions/setup-go/blob/main/LICENSE) |
@@ -201,6 +213,51 @@ container-image side of the compliance artifacts.
 
 **Broker and IdP fixture images are test infrastructure.** They run beside the
 tests, are never linked, and are never redistributed by us.
+
+## Rebuilding this file
+
+These four commands print what the tables above must contain, one per source.
+`.github/scripts/build-test-licenses-check.sh` derives the same sets and points
+here when it fails, so this is the single copy of the procedure.
+
+```bash
+# Go modules — every external module in every test submodule's closure.
+# The grep drops this repository's own module paths, including each submodule's,
+# which are not third-party components. The check applies the same exclusion.
+find test -name go.mod -exec dirname {} \; | while read -r m; do \
+    (cd "$m" && go list -deps -test -f '{{with .Module}}{{.Path}} {{.Version}}{{end}}' ./...); done \
+    | grep -v '^github\.com/SolaceProducts/solace-broker-mcp' | sort -u
+
+# npm packages
+find test -name package-lock.json -exec jq -r \
+    '.packages | to_entries[] | select(.key != "") | "\(.key | sub("^node_modules/"; "")) \(.value.version)"' {} \; | sort -u
+
+# GitHub Actions and reusable workflows.
+# The `grep -v '^\./'` drops this repository's own workflows, called as
+# `uses: ./.github/workflows/...`. They are not third-party and have no row.
+grep -rhoE '^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*[^[:space:]]+' .github/workflows/ \
+    | sed -E 's/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*//' | grep -v '^\./' | sort -u
+
+# Container images. The prune is deliberate — see below.
+find -L . \( -name .git -o -name .claude -o -name .worktrees -o -name node_modules \) -prune \
+    -o -name 'Dockerfile*' -type f -exec grep -hE '^FROM' {} \;
+grep -rhoE '^[[:space:]]*image:[[:space:]]*[^[:space:]]+' test/ .github/workflows/
+```
+
+`FROM x AS builder` prints the stage alias too; the build stages, `scratch`, and
+images we publish ourselves are not components and have no rows.
+
+Two things the commands cannot do for you.
+
+**Licences are read, never inferred.** Open the component's own LICENSE file, or
+run `gh api repos/OWNER/REPO --jq .license.spdx_id` for an action. Do not copy a
+licence from a neighbouring row and do not guess it from a package name. The
+check enforces names and versions but never licences — see [Drift](#drift) — so
+this rule is the only thing keeping that column true.
+
+**The prune is deliberate.** `find` follows symlinks here, so without `-prune` it
+descends into `.claude/worktrees/` and `.worktrees/` and reports another branch's
+`Dockerfile` as a component of this one.
 
 ## Drift
 

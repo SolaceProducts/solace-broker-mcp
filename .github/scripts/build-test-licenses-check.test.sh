@@ -14,10 +14,15 @@
 #   - a single row in a form the strict parser skips vanishing from the checks;
 #   - drift in the reverse direction, where a row outlives the thing it describes.
 #
-# This subject reasons about three unrelated input sources, so each gets its own
-# case in both directions. A case that only proves "Go modules are checked" would
-# leave the actions and images paths untested, and those are the ones a reader is
-# most likely to forget to update.
+# This subject reasons about four unrelated input sources — Go modules, npm
+# packages, GitHub Actions, container images — so each gets its own case in both
+# directions. A case that only proves "Go modules are checked" would leave the
+# actions and images paths untested, and those are the ones a reader is most
+# likely to forget to update.
+#
+# One case asserts exit 0 on a *changed* tree rather than on the committed one, so
+# the suite covers the gate staying quiet on a legitimate edit and not only the
+# gate firing on a broken one.
 #
 # Every case asserts on an exit code, so each must be a shape where the correct
 # implementation and a plausibly broken one differ.
@@ -60,6 +65,22 @@ change_version() { # <tmp> <name> <new version>
     ' "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC"
 }
 
+set_sca_workflow_ref() { # <tmp> <new ref> — rewrite the short SHA on the
+    # reusable-workflow row. That row has three columns, so change_version, which
+    # rebuilds four, would malform it and the case would then fail on the parse
+    # check instead of the comparison it is meant to test. Target the ref field
+    # and keep the row's shape.
+    # Addressed to the row, then replacing the backticked hex run. Matching the
+    # whole row instead would need escaped `|` inside an ERE, which BSD sed reads
+    # as an empty alternation and rejects. The workflow path in the same row is
+    # backticked too but is not all hex, so it cannot match.
+    sed -E "/sca-scan-and-guard\.yaml/ s#\`[0-9a-f]+\`#\`$2\`#" \
+        "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC"
+    # A sed that matched nothing exits 0, which would make every case using this
+    # mutation vacuous. Confirm the row actually changed.
+    grep -qF "\`$2\`" "$1/$DOC"
+}
+
 break_table_format() { # <tmp> — make every row unparseable
     sed 's/^| `/X `/' "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC"
 }
@@ -85,8 +106,34 @@ bump_action_version() { # <tmp> — Dependabot bumps actions daily; a version
     rm -f "$1/.github/workflows/"*.bak
 }
 
+bump_action_version_and_row() { # <tmp> — the same bump, with the row updated to
+    # match: valid to valid, the maintainer's most common edit.
+    #
+    # Honest about what this adds. It buys no new coverage of version comparison
+    # itself — the baseline already exercises the exact-match branch on every
+    # action row. What it does buy is a control over the workflow-copy mutations:
+    # it is the only case that replaces the symlinked workflows and still expects
+    # exit 0, so a corrupted or truncated `unlink_workflows` shows up here and
+    # nowhere else. The three cases that mutate workflows all expect exit 1, and
+    # they stay green against a copy that lost a file, passing for the wrong
+    # reason. Verified by deleting a file inside unlink_workflows: only this case
+    # noticed.
+    bump_action_version "$1" && change_version "$1" "actions/checkout" "v5"
+}
+
 add_second_dockerfile() { # <tmp> — discovery must be derived, not hardcoded
     printf 'FROM python:3.12\n' >"$1/Dockerfile.tools"
+}
+
+add_sibling_worktree_dockerfile() { # <tmp> — a checked-out worktree is not an
+    # input to *this* tree. `.gitignore` ignores .worktrees/ and
+    # .claude/worktrees/ for that reason, and discovery must prune them rather
+    # than filter them out afterwards: `find` descends into a directory it merely
+    # excludes from the results, so another branch's Dockerfile arrives as a
+    # phantom component of this one. Pairs with the case above — one asserts a
+    # real second Dockerfile is found, this one asserts a sibling's is not.
+    mkdir -p "$1/.claude/worktrees/other-branch"
+    printf 'FROM python:3.12\n' >"$1/.claude/worktrees/other-branch/Dockerfile"
 }
 
 add_port_registry_image() { # <tmp> — a colon before the last '/' is a registry
@@ -227,8 +274,25 @@ assert_check "wrong npm package version fails" 1 \
 # daily, so this is the highest-frequency drift source in the repository.
 assert_check "bumped action version with a stale row fails" 1 \
     bump_action_version
+assert_check "bumped action version with its row updated passes" 0 \
+    bump_action_version_and_row
 assert_check "wrong container image tag fails" 1 \
     change_version "apache/kafka" "4.1.0"
+
+# --- short-SHA comparison, both directions ------------------------------------
+# A reusable workflow is pinned to a 40-character SHA and documented by a short
+# prefix, so version_matches() accepts a prefix of at least 7 characters. All
+# three properties of that rule need a case: a longer prefix must still pass, a
+# prefix below the floor must not, and a prefix that is merely the right length
+# must still have to be correct. Without the middle case the floor can be
+# weakened to 1 with the whole suite staying green, which is a fail-open — a
+# one-character stale row would then satisfy any future re-pin.
+assert_check "a longer correct short SHA still passes" 0 \
+    set_sca_workflow_ref "fc521b087f"
+assert_check "a correct short SHA below the 7-character floor fails" 1 \
+    set_sca_workflow_ref "fc521"
+assert_check "a wrong SHA of acceptable length fails" 1 \
+    set_sca_workflow_ref "fc521b9"
 
 # --- discovery is derived, not hardcoded -------------------------------------
 # A hand-maintained input list fails open as the repository grows, which is the
@@ -237,6 +301,8 @@ assert_check "an action written in the '- uses:' step form is still seen" 1 \
     add_dash_uses_action
 assert_check "a second Dockerfile is discovered" 1 \
     add_second_dockerfile
+assert_check "a sibling worktree's Dockerfile is not mistaken for an input" 0 \
+    add_sibling_worktree_dockerfile
 
 # --- remediation hints are actionable ----------------------------------------
 # A hint that names a repository which does not exist costs the reader a
