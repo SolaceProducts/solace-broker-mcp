@@ -150,6 +150,20 @@ documented=$(
 )
 documented_names=$(awk '{print $1}' <<<"$documented" | sort -u)
 
+# --- check 6b: one row per component -----------------------------------------
+# Also before the inventory checks, and for the same reason. `documented` is
+# unique by name *and* version, so a name appearing twice means two rows disagree
+# about one component. doc_version_of() returns the first match and stops, so
+# whichever version sorts first wins and every other row for that name becomes
+# invisible: a stale row can sit beside a correct one with the gate staying green,
+# and the reverse-direction check cannot see it either because it compares names
+# and the name is legitimately in use. That is a silent pass, which is the failure
+# this script exists to prevent, so it is caught before anything reads a version.
+while read -r dupe; do
+    [ -n "$dupe" ] || continue
+    err "$DOC" "\`$dupe\` has more than one row, at versions: $({ awk -v n="$dupe" '$1 == n { printf "%s ", $2 }' <<<"$documented" || true; }). Only the first is checked, so the rest are invisible. Keep one row per component. If two modules genuinely require different versions of it, this check needs extending rather than the table duplicating."
+done <<<"$({ awk '{print $1}' <<<"$documented" | sort | uniq -d || true; })"
+
 doc_version_of() { # <name>
     awk -v n="$1" '$1 == n { print $2; exit }' <<<"$documented"
 }

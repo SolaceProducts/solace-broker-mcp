@@ -58,6 +58,15 @@ add_unparseable_row() { # <tmp> <name> — a row the strict parser skips
     printf '| `%s` | v0.1.0 (vendored) | Apache-2.0 | [license](x) |\n' "$2" >>"$1/$DOC"
 }
 
+add_duplicate_row() { # <tmp> <name> <version> — a second row for a component that
+    # already has one. doc_version_of() returns the first match and stops, so
+    # only one of the two rows is ever compared and the other is invisible. Both
+    # sort directions get a case: the bug is asymmetric, because whether the
+    # stale row wins depends on how its version sorts against the real one, and a
+    # case in only one direction passes against a still-broken gate.
+    printf '| `%s` | %s | Bogus | [license](https://example.invalid/LICENSE) |\n' "$2" "$3" >>"$1/$DOC"
+}
+
 change_version() { # <tmp> <name> <new version>
     awk -v comp="\`$2\`" -v ver="$3" -F' \\| ' '
         index($0, comp) && /^\| `/ { $2 = ver; print $1 " | " $2 " | " $3 " | " $4; next }
@@ -329,6 +338,14 @@ unset EXPECT_STDERR
 # itself.
 assert_check "a row the strict parser skips is reported, not ignored" 1 \
     add_unparseable_row "github.com/example/unparseable"
+
+# A duplicate row is the same silent-pass shape as an unparseable one: the row is
+# present, wrong, and invisible. Only the version-sorts-after case actually failed
+# open, which is precisely why both directions are asserted.
+assert_check "a duplicate row whose version sorts after the real one fails" 1 \
+    add_duplicate_row "apache/kafka" "4.9.9"
+assert_check "a duplicate row whose version sorts before the real one fails" 1 \
+    add_duplicate_row "apache/kafka" "0.0.1"
 # "Loudly" is the whole assertion. Dropping a `|| true` makes the script die at
 # an assignment under `pipefail` — still exit 1, but with no output, which in CI
 # is indistinguishable from a real verdict. Asserting the exit code alone passes

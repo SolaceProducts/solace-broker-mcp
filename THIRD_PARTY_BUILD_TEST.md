@@ -239,14 +239,17 @@ find test -name package-lock.json -exec jq -r \
 grep -rhoE '^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*[^[:space:]]+' .github/workflows/ \
     | sed -E 's/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*//' | grep -v '^\./' | sort -u
 
-# Container images. The prune is deliberate — see below.
+# Container images. The prune is deliberate, see below. The `-o` on grep drops the
+# `AS <stage>` alias, matching how the check reads a FROM line.
 find -L . \( -name .git -o -name .claude -o -name .worktrees -o -name node_modules \) -prune \
-    -o -name 'Dockerfile*' -type f -exec grep -hE '^FROM' {} \;
-grep -rhoE '^[[:space:]]*image:[[:space:]]*[^[:space:]]+' test/ .github/workflows/
+    -o -name 'Dockerfile*' -type f -exec grep -hoE '^FROM[[:space:]]+[^[:space:]]+' {} \; \
+    | sed -E 's/^FROM[[:space:]]+//'
+grep -rhoE '^[[:space:]]*image:[[:space:]]*[^[:space:]]+' test/ .github/workflows/ \
+    | sed -E 's/^[[:space:]]*image:[[:space:]]*//'
 ```
 
-`FROM x AS builder` prints the stage alias too; the build stages, `scratch`, and
-images we publish ourselves are not components and have no rows.
+Build-stage aliases, `scratch`, and images we publish ourselves are not
+components and have no rows.
 
 Two things the commands cannot do for you.
 
