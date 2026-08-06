@@ -143,6 +143,7 @@ jobs:
     environment: guardian
     permissions:
       contents: read
+      packages: read     # pull the private maas-build-actions scan container
       pull-requests: write
       checks: write
       statuses: write
@@ -194,6 +195,7 @@ jobs:
     environment: guardian
     permissions:
       contents: read
+      packages: read     # pull the private maas-build-actions scan container
       pull-requests: write
       checks: write
       statuses: write

@@ -61,6 +61,7 @@ jobs:
     name: Release Readiness Check
     permissions:
       contents: read
+      packages: read     # ceiling for guardian-scan's FOSSA jobs (private scan container)
       pull-requests: write
       checks: write
       statuses: write

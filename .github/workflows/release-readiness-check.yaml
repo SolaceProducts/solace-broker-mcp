@@ -69,6 +69,7 @@ jobs:
     uses: ./.github/workflows/guardian-scan.yaml
     permissions:
       contents: read
+      packages: read     # ceiling for guardian-scan's FOSSA jobs (private scan container)
       pull-requests: write
       checks: write
       statuses: write
