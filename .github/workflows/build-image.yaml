@@ -44,9 +44,15 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # push mode needs packages (push) + id-token/attestations/artifact-metadata
+    # for the provenance attestation. Callers cap these: the scan caller grants
+    # only contents:read, so the attest step (push only) never runs there.
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -83,6 +89,7 @@ jobs:
 
       - name: Build and push
         if: ${{ inputs.push }}
+        id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
@@ -94,6 +101,16 @@ jobs:
             VERSION=${{ inputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # One attestation covers the whole multi-arch index (all tags pushed
+      # above). push-to-registry stores a copy beside the image for cosign.
+      - name: Attest image provenance
+        if: ${{ inputs.push }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ inputs.image_name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
 
       - name: Build and save for scanning
         if: ${{ !inputs.push }}

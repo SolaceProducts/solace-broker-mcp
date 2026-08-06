@@ -41,9 +41,13 @@ jobs:
       - name: Resolve bypass authorisation
         id: decide
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          # Pass the input through env, never interpolated into the script body:
+          # this is the one control between a Guardian block and a publish.
+          SKIP_SECURITY_CHECKS: ${{ inputs.skip_security_checks }}
         with:
           script: |
-            const skip = ${{ inputs.skip_security_checks }};
+            const skip = process.env.SKIP_SECURITY_CHECKS === 'true';
             if (!skip) {
               core.setOutput('fail_on_blocked', 'true');
               return;
