@@ -132,7 +132,6 @@ jobs:
     with:
       git_ref: ${{ needs.setup.outputs.ref }}
       version: ${{ needs.setup.outputs.full_version }}
-      push: false
       scan_tag: ${{ needs.setup.outputs.scan_tag }}
       artifact_name: guardian-scan-image
 

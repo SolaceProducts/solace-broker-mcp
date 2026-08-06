@@ -1,8 +1,17 @@
-name: Build Image
+name: Build Scan Image
 
-# Reusable image build. Two modes:
-#   push=true  -> multi-arch build pushed to the registry (release).
-#   push=false -> single-arch build saved as a tar artifact for a scan job to load.
+# Reusable build for the SCAN pipeline only: builds the image single-arch and
+# saves it as a tar artifact for a downstream job to load and scan. It never
+# pushes and needs only `contents: read` — so guardian-scan's build job, and the
+# release-readiness → guardian-scan gate chain that calls it, don't have to
+# grant registry/attestation scopes they never use. A reusable-workflow caller
+# must grant AT LEAST the permissions this workflow's jobs declare (under-
+# granting fails at run creation, it is not silently capped), so keeping this at
+# contents: read keeps every caller minimal.
+#
+# The released multi-arch image is built, pushed, and attested inline in
+# release.yml, which legitimately holds packages/id-token/attestations scopes
+# without forcing them onto the scan path.
 
 on:
   workflow_call:
@@ -15,33 +24,22 @@ on:
         required: false
         type: string
         default: ""
-      # Typed boolean: GitHub rejects any non-boolean a caller passes, so
-      # `${{ inputs.push }}` is already type-safe in conditions (no string-
-      # truthiness bug, and fromJSON would error on a real boolean). fromJSON is
-      # for string values — see the job outputs in guardian-scan.yaml.
-      push:
-        description: "true = build+push multi-arch to the registry; false = save a scan tar."
-        required: false
-        type: boolean
-        default: false
-      platforms:
-        required: false
-        type: string
-        default: "linux/amd64"
       image_name:
         required: false
         type: string
         default: "ghcr.io/solaceproducts/solace-broker-mcp"
       scan_tag:
-        description: "Local tag for the scan image (push=false)."
         required: false
         type: string
         default: "scan"
       artifact_name:
-        description: "Artifact name for the saved scan image tar (push=false)."
         required: false
         type: string
         default: "guardian-scan-image"
+      platforms:
+        required: false
+        type: string
+        default: "linux/amd64"
 
 permissions:
   contents: read
@@ -49,15 +47,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # push mode needs packages (push) + id-token/attestations/artifact-metadata
-    # for the provenance attestation. Callers cap these: the scan caller grants
-    # only contents:read, so the attest step (push only) never runs there.
     permissions:
       contents: read
-      packages: write
-      id-token: write
-      attestations: write
-      artifact-metadata: write
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -65,60 +56,10 @@ jobs:
           ref: ${{ inputs.git_ref }}
           persist-credentials: false
 
-      - name: Set up QEMU
-        if: ${{ contains(inputs.platforms, 'arm64') }}
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      - name: Log in to GHCR
-        if: ${{ inputs.push }}
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Docker metadata
-        if: ${{ inputs.push }}
-        id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
-        with:
-          images: ${{ inputs.image_name }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha
-            type=raw,value=latest
-
-      - name: Build and push
-        if: ${{ inputs.push }}
-        id: build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: .
-          platforms: ${{ inputs.platforms }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ inputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # One attestation covers the whole multi-arch index (all tags pushed
-      # above). push-to-registry stores a copy beside the image for cosign.
-      - name: Attest image provenance
-        if: ${{ inputs.push }}
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
-        with:
-          subject-name: ${{ inputs.image_name }}
-          subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
-
       - name: Build and save for scanning
-        if: ${{ !inputs.push }}
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
@@ -131,7 +72,6 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Upload scan image artifact
-        if: ${{ !inputs.push }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ inputs.artifact_name }}
