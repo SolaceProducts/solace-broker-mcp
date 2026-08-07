@@ -101,6 +101,71 @@ func TestParseSpecs_BodyFields(t *testing.T) {
 	}
 }
 
+// TestParseSpecs_ResponseFields covers extractResponseFields — SOL-150785's
+// foundation for schema-generated output validation. Response schemas were
+// parsed by the underlying library but never surfaced before this; these
+// assertions are load-bearing for that new surface, not incidental.
+func TestParseSpecs_ResponseFields(t *testing.T) {
+	ops, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatalf("ParseSpecs() error: %v", err)
+	}
+
+	// Single-object GET: data is a $ref straight to the item schema (MsgVpnQueue).
+	get, ok := ops["monitor/getMsgVpnQueue"]
+	if !ok {
+		t.Fatal("expected operation monitor/getMsgVpnQueue not found")
+	}
+	if get.ResponseFields == nil {
+		t.Fatal("monitor/getMsgVpnQueue.ResponseFields should be populated from the MsgVpnQueue schema")
+	}
+	wantTypes := map[string]string{
+		"bindCount":     "integer",
+		"msgSpoolUsage": "integer",
+		"accessType":    "string",
+		"durable":       "boolean",
+	}
+	for field, wantType := range wantTypes {
+		gotType, present := get.ResponseFields[field]
+		if !present {
+			t.Errorf("monitor/getMsgVpnQueue.ResponseFields missing expected field %q", field)
+			continue
+		}
+		if gotType != wantType {
+			t.Errorf("monitor/getMsgVpnQueue.ResponseFields[%q] = %q, want %q", field, gotType, wantType)
+		}
+	}
+
+	// List GET: data is an array whose items $ref the same item schema. Must
+	// resolve to the identical field set as the single-object GET above —
+	// this is the array-unwrap path extractResponseFields adds on top of the
+	// single-object path.
+	list, ok := ops["monitor/getMsgVpnQueues"]
+	if !ok {
+		t.Fatal("expected operation monitor/getMsgVpnQueues not found")
+	}
+	if list.ResponseFields == nil {
+		t.Fatal("monitor/getMsgVpnQueues.ResponseFields should be populated by unwrapping the array item schema")
+	}
+	for field, wantType := range wantTypes {
+		if gotType := list.ResponseFields[field]; gotType != wantType {
+			t.Errorf("monitor/getMsgVpnQueues.ResponseFields[%q] = %q, want %q", field, gotType, wantType)
+		}
+	}
+
+	// A delete op's 200 response is SempMetaOnlyResponse — meta only, no
+	// "data" property. ResponseFields must be nil (unknown), not an empty
+	// map or a crash, so callers correctly skip response-shape validation
+	// rather than treating "no fields" as "reject everything."
+	del, ok := ops["config/deleteMsgVpnQueue"]
+	if !ok {
+		t.Fatal("expected operation config/deleteMsgVpnQueue not found")
+	}
+	if del.ResponseFields != nil {
+		t.Errorf("config/deleteMsgVpnQueue.ResponseFields = %v, want nil for a data-less response", del.ResponseFields)
+	}
+}
+
 func TestParseSpecs_RefParametersResolved(t *testing.T) {
 	ops, err := sempv2.ParseSpecs(specs.FS)
 	if err != nil {
