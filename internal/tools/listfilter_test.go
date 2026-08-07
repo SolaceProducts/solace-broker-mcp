@@ -74,7 +74,7 @@ func listFilterLogLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
 func listFilterErrorLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	t.Helper()
 	return logLinesWithMsg(t, buf,
-		"internal: tools/list result contained nil tools — SDK contract violation")
+		"internal: nil tools in tools/list result")
 }
 
 // listToolsRequest builds a tools/list request carrying groups under the Extra

@@ -135,7 +135,7 @@ func WithListFiltering(policy *authz.Policy) mcp.Middleware {
 
 			if nilTools > 0 {
 				slog.LogAttrs(ctx, slog.LevelError,
-					"internal: tools/list result contained nil tools — SDK contract violation",
+					"internal: nil tools in tools/list result",
 					slog.String("event", eventToolListFilter),
 					slog.Int("nil_tools", nilTools),
 					slog.Int("tools_before", toolsBefore))

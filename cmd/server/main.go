@@ -511,6 +511,44 @@ func buildToolPolicy(cfg *config.ServerConfig) (*authz.Policy, error) {
 	return authz.NewPolicy(*cfg.MCPClientAuth.ToolAuthorization)
 }
 
+// installToolListFiltering installs the tools/list filter when a policy exists
+// and filter_tools_list is on, and states the posture in every case.
+//
+// Gating on the policy rather than on ToolAuthorizationEnabled checks the thing
+// the filter actually needs, and buildToolPolicy already folded the enabled
+// check into it.
+//
+// Flag on with no policy is a WARN, not a fatal: the state is inert, and it is
+// what flipping the master switch during an incident produces.
+func installToolListFiltering(server *mcp.Server, cfg *config.ServerConfig, policy *authz.Policy) {
+	// The whole tool_authorization block is absent in non-oauth mode, so the
+	// flag is unreadable rather than false. Same thing here: filtering off.
+	var flagSet bool
+	if cfg.MCPClientAuth.ToolAuthorization != nil {
+		flagSet = config.FilterToolsListEnabled(cfg.MCPClientAuth.ToolAuthorization)
+	}
+
+	if policy == nil {
+		if flagSet {
+			slog.Warn("tools/list filtering is disabled",
+				slog.String("reason", "tool_authorization.enabled is false"))
+		} else {
+			slog.Info("tools/list filtering is disabled",
+				slog.String("reason", "filter_tools_list not set"))
+		}
+		return
+	}
+
+	if !flagSet {
+		slog.Info("tools/list filtering is disabled",
+			slog.String("reason", "filter_tools_list not set"))
+		return
+	}
+
+	server.AddReceivingMiddleware(tools.WithListFiltering(policy))
+	slog.Info("tools/list filtering is enabled")
+}
+
 // logStartupBanners emits the boot-time WARN banners: auth-mode signal,
 // static-cleartext exposure, and OAuth plaintext-listener acknowledgement.
 func logStartupBanners(cfg *config.ServerConfig) {
@@ -770,6 +808,10 @@ func main() {
 				slog.String("auth_mode", cfg.MCPClientAuth.Mode))
 		}
 	}
+
+	// Narrow tools/list to what each caller may invoke. Off by default; when
+	// off, AddReceivingMiddleware is never called and dispatch is unchanged.
+	installToolListFiltering(server, cfg, policy)
 
 	slog.Info("all tools registered")
 
