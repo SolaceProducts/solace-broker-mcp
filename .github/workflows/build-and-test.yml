@@ -231,6 +231,10 @@ jobs:
   e2e-oauth:
     runs-on: ubuntu-latest
     needs: build
+    # The suite's curls into Keycloak/broker/MCP are individually bounded, but
+    # a dependency that accepts TCP and never answers would otherwise sit on
+    # GitHub's 360-minute default. The full cycle runs in ~1 minute warm.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -274,7 +278,23 @@ jobs:
 
       - name: MCP server log (on failure)
         if: failure()
-        run: cat test/e2e-oauth/bin/mcp-server.log 2>/dev/null || echo "No server log found"
+        # The suite restarts the server between phases and rotates the previous
+        # phase's log to mcp-server.log.N, so collect every one — the failing
+        # phase is often not the last. Rotated files first, since they are the
+        # earlier phases and a later failure is often a cascade from them.
+        run: |
+          shopt -s nullglob
+          logs=(test/e2e-oauth/bin/mcp-server.log.[0-9]* test/e2e-oauth/bin/mcp-server.log)
+          if [ ${#logs[@]} -eq 0 ]; then echo "No server log found"; fi
+          for f in "${logs[@]}"; do echo "=== $f ==="; cat "$f"; done
+
+      - name: Generated MCP server configs (on failure)
+        if: failure()
+        # Each phase's meaning lives in its tool_authorization block; without
+        # these, a CI-only failure gives no way to see what the server ran with.
+        run: |
+          shopt -s nullglob
+          for f in test/e2e-oauth/bin/mcp-config-*.yaml; do echo "=== $f ==="; cat "$f"; done
 
       - name: Broker OAuth profile snapshot (on failure)
         if: failure()
