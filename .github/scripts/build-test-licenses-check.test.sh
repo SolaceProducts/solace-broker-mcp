@@ -39,6 +39,11 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 CHECK="$REPO_ROOT/.github/scripts/build-test-licenses-check.sh"
 DOC="THIRD_PARTY_BUILD_TEST.md"
 
+# A syntactically valid 40-character SHA that no action is pinned to, used by the
+# version-bump cases. A constant rather than a literal at each use site, so the
+# mutation and the row it expects cannot drift apart.
+BUMPED_SHA="0123456789abcdef0123456789abcdef01234567"
+
 pass=0
 fail=0
 
@@ -47,7 +52,16 @@ fail=0
 # sed delimiters a source of bugs in the test itself.
 
 drop_row() { # <tmp> <name>
+    # Confirm a row actually went. `grep -v` that matches nothing exits 0 and
+    # copies the file unchanged, so a case naming a row that has been renamed or
+    # deleted would assert against a pristine tree. That is not hypothetical: the
+    # licence-hint case below named the SCA reusable workflow, and when
+    # DATAGO-147232 removed it the mutation quietly became a no-op.
+    local before after
+    before=$(wc -l <"$1/$DOC")
     grep -vF "\`$2\`" "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC"
+    after=$(wc -l <"$1/$DOC")
+    [ "$after" -lt "$before" ]
 }
 
 add_row() { # <tmp> <name> <version>
@@ -68,22 +82,41 @@ add_duplicate_row() { # <tmp> <name> <version> — a second row for a component 
 }
 
 change_version() { # <tmp> <name> <new version>
+    # Rebuild from NF rather than from a fixed four columns. The tables here
+    # carry three, four, or five: the actions table gained a "Release" column
+    # when every action moved to a SHA pin, and a hardcoded rebuild silently
+    # truncated its last column — leaving a row that still parsed, so nothing
+    # complained, but that no longer matched what the file was supposed to say.
+    #
+    # `END { exit !hit }` makes a mutation that matched no row fail the case
+    # loudly instead of asserting against an unchanged document.
     awk -v comp="\`$2\`" -v ver="$3" -F' \\| ' '
-        index($0, comp) && /^\| `/ { $2 = ver; print $1 " | " $2 " | " $3 " | " $4; next }
+        index($0, comp) && /^\| `/ {
+            $2 = ver
+            row = $1
+            for (i = 2; i <= NF; i++) row = row " | " $i
+            print row
+            hit = 1
+            next
+        }
         { print }
+        END { exit !hit }
     ' "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC"
 }
 
-set_sca_workflow_ref() { # <tmp> <new ref> — rewrite the short SHA on the
-    # reusable-workflow row. That row has three columns, so change_version, which
-    # rebuilds four, would malform it and the case would then fail on the parse
-    # check instead of the comparison it is meant to test. Target the ref field
-    # and keep the row's shape.
+set_solace_action_ref() { # <tmp> <new ref> — rewrite the short SHA on one
+    # Solace composite-action row. Those rows have three columns and carry the
+    # only short-SHA refs left in the file, so they are what exercises
+    # version_matches()'s prefix branch.
+    #
     # Addressed to the row, then replacing the backticked hex run. Matching the
     # whole row instead would need escaped `|` inside an ERE, which BSD sed reads
-    # as an empty alternation and rejects. The workflow path in the same row is
+    # as an empty alternation and rejects. The action path in the same row is
     # backticked too but is not all hex, so it cannot match.
-    sed -E "/sca-scan-and-guard\.yaml/ s#\`[0-9a-f]+\`#\`$2\`#" \
+    #
+    # `guardian-db-sync` is an arbitrary but stable pick among the five. The
+    # other four keep the correct ref, so each case isolates one wrong row.
+    sed -E "/guardian-db-sync/ s#\`[0-9a-f]+\`#\`$2\`#" \
         "$1/$DOC" >"$1/t" && mv "$1/t" "$1/$DOC"
     # A sed that matched nothing exits 0, which would make every case using this
     # mutation vacuous. Confirm the row actually changed.
@@ -110,9 +143,18 @@ add_dash_uses_action() { # <tmp> — the `- uses:` step form, which an anchor
 
 bump_action_version() { # <tmp> — Dependabot bumps actions daily; a version
     # column nothing defends is decoration.
+    #
+    # Matches the pin by shape rather than by value. This mutation used to
+    # rewrite the literal `actions/checkout@v4`, and when DATAGO-147232 SHA-pinned
+    # every action it matched nothing: the bump case asserted exit 1 against an
+    # untouched tree, and its paired case asserted exit 0 against a row change
+    # with no workflow change behind it. Naming today's SHA would reintroduce the
+    # same rot on the next Dependabot re-pin.
     unlink_workflows "$1"
-    sed -i.bak 's|actions/checkout@v4|actions/checkout@v5|g' "$1/.github/workflows/"*.y*ml
+    sed -i.bak -E "s|(actions/checkout@)[0-9a-f]{40}|\1$BUMPED_SHA|g" "$1/.github/workflows/"*.y*ml
     rm -f "$1/.github/workflows/"*.bak
+    # sed exits 0 whether or not it substituted, so prove the workflows changed.
+    grep -rqF "$BUMPED_SHA" "$1/.github/workflows/"
 }
 
 bump_action_version_and_row() { # <tmp> — the same bump, with the row updated to
@@ -127,7 +169,7 @@ bump_action_version_and_row() { # <tmp> — the same bump, with the row updated 
     # they stay green against a copy that lost a file, passing for the wrong
     # reason. Verified by deleting a file inside unlink_workflows: only this case
     # noticed.
-    bump_action_version "$1" && change_version "$1" "actions/checkout" "v5"
+    bump_action_version "$1" && change_version "$1" "actions/checkout" "${BUMPED_SHA:0:7}"
 }
 
 add_second_dockerfile() { # <tmp> — discovery must be derived, not hardcoded
@@ -289,19 +331,19 @@ assert_check "wrong container image tag fails" 1 \
     change_version "apache/kafka" "4.1.0"
 
 # --- short-SHA comparison, both directions ------------------------------------
-# A reusable workflow is pinned to a 40-character SHA and documented by a short
-# prefix, so version_matches() accepts a prefix of at least 7 characters. All
-# three properties of that rule need a case: a longer prefix must still pass, a
-# prefix below the floor must not, and a prefix that is merely the right length
+# The Solace composite actions are pinned to a 40-character SHA and documented by
+# a short prefix, so version_matches() accepts a prefix of at least 7 characters.
+# All three properties of that rule need a case: a longer prefix must still pass,
+# a prefix below the floor must not, and a prefix that is merely the right length
 # must still have to be correct. Without the middle case the floor can be
 # weakened to 1 with the whole suite staying green, which is a fail-open — a
 # one-character stale row would then satisfy any future re-pin.
 assert_check "a longer correct short SHA still passes" 0 \
-    set_sca_workflow_ref "fc521b087f"
+    set_solace_action_ref "2bb76658de"
 assert_check "a correct short SHA below the 7-character floor fails" 1 \
-    set_sca_workflow_ref "fc521"
+    set_solace_action_ref "2bb76"
 assert_check "a wrong SHA of acceptable length fails" 1 \
-    set_sca_workflow_ref "fc521b9"
+    set_solace_action_ref "2bb7669"
 
 # --- discovery is derived, not hardcoded -------------------------------------
 # A hand-maintained input list fails open as the repository grows, which is the
@@ -315,12 +357,14 @@ assert_check "a sibling worktree's Dockerfile is not mistaken for an input" 0 \
 
 # --- remediation hints are actionable ----------------------------------------
 # A hint that names a repository which does not exist costs the reader a
-# detour and teaches them to distrust the message. Reusable workflows are
-# referenced as OWNER/REPO/.github/workflows/file.yaml@ref, so deriving the repo
-# with `basename` names the workflow file instead.
+# detour and teaches them to distrust the message. An action inside another
+# repository is referenced as OWNER/REPO/path/to/action@ref, so deriving the repo
+# with `basename` names the action's directory instead. `sca/sca-scan` is the
+# deepest such path in the repository, and the one where basename is furthest
+# from the right answer.
 EXPECT_STDERR="gh api repos/SolaceDev/solace-public-workflows" \
-    assert_check "the licence hint names the repo, not the workflow file" 1 \
-    drop_row "SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml"
+    assert_check "the licence hint names the repo, not the action subpath" 1 \
+    drop_row "SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan"
 unset EXPECT_STDERR
 
 # --- image reference parsing -------------------------------------------------
