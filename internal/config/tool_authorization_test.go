@@ -698,8 +698,9 @@ mcp_client_auth:
 	}
 }
 
-// This test pins the behaviour of the FilterToolsListEnabled handler
-// for 3 cases: FilterToolsList field set to true, false and field omitted from config
+// TestToolAuthorization_FilterToolsListEnabled pins every input shape the helper
+// can see: the flag true, false, omitted, and the whole block nil. Only an
+// explicit true reads as on.
 func TestToolAuthorization_FilterToolsListEnabled(t *testing.T) {
 	trueVal := true
 	falseVal := false
@@ -728,6 +729,13 @@ func TestToolAuthorization_FilterToolsListEnabled(t *testing.T) {
 			cfg: &ToolAuthorizationConfig{
 				FilterToolsList: nil,
 			},
+			want: false,
+		},
+		{
+			// The shape in every non-oauth deployment, where the whole
+			// tool_authorization block is absent.
+			name: "whole block is nil",
+			cfg:  nil,
 			want: false,
 		},
 	}

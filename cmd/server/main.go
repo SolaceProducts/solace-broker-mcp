@@ -521,12 +521,8 @@ func buildToolPolicy(cfg *config.ServerConfig) (*authz.Policy, error) {
 // Flag on with no policy is a WARN, not a fatal: the state is inert, and it is
 // what flipping the master switch during an incident produces.
 func installToolListFiltering(server *mcp.Server, cfg *config.ServerConfig, policy *authz.Policy) {
-	// The whole tool_authorization block is absent in non-oauth mode, so the
-	// flag is unreadable rather than false. Same thing here: filtering off.
-	var flagSet bool
-	if cfg.MCPClientAuth.ToolAuthorization != nil {
-		flagSet = config.FilterToolsListEnabled(cfg.MCPClientAuth.ToolAuthorization)
-	}
+	// Nil block in non-oauth mode reads as off; the helper is nil-safe.
+	flagSet := config.FilterToolsListEnabled(cfg.MCPClientAuth.ToolAuthorization)
 
 	if policy == nil {
 		if flagSet {

@@ -1641,11 +1641,15 @@ func ToolAuthorizationEnabled(cfg *ServerConfig) bool {
 	return *cfg.MCPClientAuth.ToolAuthorization.Enabled
 }
 
-// FilterToolsListEnabled returns whether tools list filtering is enabled;
-// nil means absent which is treated as off; and this only considers the state of the
-// flag and does not check whether tool authorization is on, thats the responsibilty of the caller
+// FilterToolsListEnabled returns whether tools/list filtering is enabled.
+//
+// Nil-safe in both directions: a nil block (the shape in every non-oauth
+// deployment) and a nil flag within a present block both read as off.
+//
+// Reports the flag only. Whether a policy exists to filter against is the
+// caller's to check — filtering cannot run without one.
 func FilterToolsListEnabled(cfg *ToolAuthorizationConfig) bool {
-	if cfg.FilterToolsList == nil {
+	if cfg == nil || cfg.FilterToolsList == nil {
 		return false
 	}
 	return *cfg.FilterToolsList
