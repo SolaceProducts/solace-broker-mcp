@@ -230,7 +230,7 @@ signoff_emails() {
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 # Author-identity check. Rejects the shapes a developer machine invents when
-# `git config user.email` is unset — a bare hostname (`hzhu@dev2-194`), an
+# `git config user.email` is unset — a bare hostname (`alice@buildbox`), an
 # mDNS domain (`.local`), or an internal-only TLD (`.sol-local`, `.internal`,
 # `.lan`). A denylist rather than an allowlist so ordinary external addresses
 # can still contribute; a typo like `.locol` slips through, and that is the
@@ -394,12 +394,15 @@ if [ -n "$failed_identity" ]; then
 Set your commit identity to a routable address and rewrite the offending
 commits:
 
-  git config user.email "you@solace.com"
+  git config user.email "you@your-domain.example"
   git commit --amend --reset-author
 
-For a whole branch's history, use `git rebase --exec 'git commit --amend
---reset-author --no-edit' <base>` after setting `user.email`. See
-.github/CONTRIBUTING.md#author-identity for the requirement and the reasoning.
+For a whole branch's history, once `user.email` is set:
+
+  git rebase --exec 'git commit --amend --reset-author --no-edit' <base>
+
+See .github/CONTRIBUTING.md#author-identity for the requirement and the
+reasoning.
 EOF
 fi
 

@@ -603,18 +603,18 @@ unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL
 
 # .sol-local author fails — the exact shape SOL-152902 caught in this repo
 r=$(new_repo identity_sol_local_fails)
-GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@dev2-194.sol-local" \
+GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@buildbox.sol-local" \
   git -C "$r" commit -q --allow-empty -m "add a thing
 
-Signed-off-by: $ALICE_NAME <alice@dev2-194.sol-local>"
+Signed-off-by: $ALICE_NAME <alice@buildbox.sol-local>"
 expect 1 "sol-local author identity fails" "$r" "not routable"
 
 # .local author fails — matches the machine-name pattern that leaked a person's name
 r=$(new_repo identity_dotlocal_fails)
-GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@WajihaMaryam-2.local" \
+GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@alices-laptop.local" \
   git -C "$r" commit -q --allow-empty -m "add a thing
 
-Signed-off-by: $ALICE_NAME <alice@WajihaMaryam-2.local>"
+Signed-off-by: $ALICE_NAME <alice@alices-laptop.local>"
 expect 1 "local author identity fails" "$r" "not routable"
 
 # .internal and .lan also fail
@@ -634,10 +634,10 @@ expect 1 "lan author identity fails" "$r" "not routable"
 
 # no-dot domain (bare hostname) fails
 r=$(new_repo identity_no_dot_fails)
-GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@dev2-194" \
+GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@buildbox" \
   git -C "$r" commit -q --allow-empty -m "add a thing
 
-Signed-off-by: $ALICE_NAME <alice@dev2-194>"
+Signed-off-by: $ALICE_NAME <alice@buildbox>"
 expect 1 "bare-hostname author identity fails" "$r" "not routable"
 
 # outside domain passes — this is what denylist buys us over allowlist
@@ -667,20 +667,20 @@ unset GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
 
 # fix advice appears in the failure output
 r=$(new_repo identity_fix_advice)
-GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@dev2-194.sol-local" \
+GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@buildbox.sol-local" \
   git -C "$r" commit -q --allow-empty -m "add a thing
 
-Signed-off-by: $ALICE_NAME <alice@dev2-194.sol-local>"
-expect 1 "identity failure output names the fix commands" "$r" 'git config user.email "you@solace.com"'
+Signed-off-by: $ALICE_NAME <alice@buildbox.sol-local>"
+expect 1 "identity failure output names the fix commands" "$r" 'git config user.email "you@your-domain.example"'
 expect 1 "identity failure output names --reset-author" "$r" "git commit --amend --reset-author"
 
 # an identity-only failure (sign-off is fine) still fails, and does NOT print
 # the DCO header (which would mislead the contributor about what is wrong).
 r=$(new_repo identity_only_no_dco_header)
-GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@dev2-194.sol-local" \
+GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@buildbox.sol-local" \
   git -C "$r" commit -q --allow-empty -m "add a thing
 
-Signed-off-by: $ALICE_NAME <alice@dev2-194.sol-local>"
+Signed-off-by: $ALICE_NAME <alice@buildbox.sol-local>"
 out=$(cd "$r" && BASE_SHA="$(git rev-parse refs/remotes/origin/main)" BASE_REF=main \
   HEAD_SHA="$(git rev-parse HEAD)" "$DCO_CHECK" 2>&1) || true
 if grep -qF "missing a Developer Certificate of Origin sign-off" <<<"$out"; then
@@ -691,6 +691,46 @@ else
   printf 'ok  identity-only failure does not print the DCO header\n'
   pass_count=$((pass_count + 1))
 fi
+
+# --- 19. the denylist and the message it prints cannot drift apart -----------
+# The suffix set is written twice in dco-check.sh: once as the `case` pattern
+# that decides, once as prose in the ::error:: line a blocked contributor reads.
+# Rather than collapse them into a shared variable (bash `case` cannot take
+# alternation from one), read the deciding pattern out of the script and assert
+# the message keeps up. Adding a suffix to the `case` and forgetting the message
+# fails here instead of in a contributor's CI log, where it would list the
+# suffixes they were NOT rejected on.
+denylist_line=$(grep -m1 -E '^[[:space:]]*\*\.[a-z-]+(\|\*\.[a-z-]+)*\)[[:space:]]*return 1' "$DCO_CHECK" || true)
+denylist_line=${denylist_line%%)*}
+IFS='|' read -r -a denylist_pats <<<"$(tr -d '[:space:]' <<<"$denylist_line")"
+
+if [ -z "$denylist_line" ] || [ "${#denylist_pats[@]}" -eq 0 ]; then
+  printf '::error::SELF-TEST FAILED: could not read the suffix denylist out of %s. If the `case` pattern was reformatted, update this test to match.\n' "$DCO_CHECK"
+  fail_count=$((fail_count + 1))
+fi
+
+for pat in "${denylist_pats[@]}"; do
+  suffix=${pat#\*}   # `*.sol-local` -> `.sol-local`
+  r=$(new_repo "identity_denylist${suffix//./_}")
+  GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@buildbox${suffix}" \
+    git -C "$r" commit -q --allow-empty -m "add a thing
+
+Signed-off-by: $ALICE_NAME <alice@buildbox${suffix}>"
+  expect 1 "denylisted suffix ${suffix} is rejected" "$r" "not routable"
+
+  # Match on a boundary, not a substring: a plain search for `.local` would be
+  # satisfied by `.sol-local` alone and miss its removal from the message.
+  out=$(cd "$r" && BASE_SHA="$(git rev-parse refs/remotes/origin/main)" BASE_REF=main \
+    HEAD_SHA="$(git rev-parse HEAD)" "$DCO_CHECK" 2>&1) || true
+  if grep -qE "(^|[^a-z.-])${suffix//./\\.}([^a-z.-]|$)" <<<"$out"; then
+    printf 'ok  failure output names the %s suffix\n' "$suffix"
+    pass_count=$((pass_count + 1))
+  else
+    printf '::error::SELF-TEST FAILED: `%s` is in the denylist `case` but the failure output never names it.\n' "$suffix"
+    printf '%s\n' "$out" | sed 's/^/    | /'
+    fail_count=$((fail_count + 1))
+  fi
+done
 
 echo
 printf 'dco-check self-test: %d passed, %d failed\n' "$pass_count" "$fail_count"

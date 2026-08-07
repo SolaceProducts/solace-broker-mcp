@@ -390,8 +390,12 @@ The same CI check also rejects commits whose author or committer email uses a
 non-routable domain — one ending in `.local`, `.sol-local`, `.internal`, or
 `.lan`, or a bare hostname with no dot. These are the addresses a developer
 machine invents when `git config user.email` is unset, and they publish
-permanently with the git history when the repository is public. `git commit -s`
-signs off with your `user.email`, so a bad address fails both this check and DCO.
+permanently with the git history when the repository is public.
+
+This is a separate control from DCO, not a stricter form of it. `git commit -s`
+signs off with your `user.email`, the same value git puts in the author field —
+so a bad address still produces a sign-off that matches its author, and DCO
+passes. Only this check catches it.
 
 If CI flags this, set your address and rewrite the offending commits:
 

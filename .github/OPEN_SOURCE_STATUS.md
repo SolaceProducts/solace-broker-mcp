@@ -59,20 +59,14 @@ row needs four approvers named before the repository goes public.
 **Approvers:** `<APPROVER 1>`, `<APPROVER 2>`, `<APPROVER 3>`, `<APPROVER 4>` — TO FILL BEFORE PUBLIC RELEASE
 
 Seven commits already on `main` carry author emails whose domain is a
-developer-machine name rather than a routable address:
+developer-machine name rather than a routable address: two contributors, two
+machines, dated 2026-05-06 through 2026-07-07. Every other commit on `main` uses
+`@solace.com` or `@users.noreply.github.com`.
 
-| SHA | Author | Date |
-|---|---|---|
-| `27b3393` | `Helen Zhu <hzhu@dev2-194.sol-local>` | 2026-07-07 |
-| `f85a6b5` | `Helen Zhu <hzhu@dev2-194.sol-local>` | 2026-07-07 |
-| `962d5fd` | `Helen Zhu <hzhu@dev2-194.sol-local>` | 2026-07-07 |
-| `b6e63be` | `Helen Zhu <hzhu@dev2-194.sol-local>` | 2026-07-07 |
-| `2fbf4e9` | `Helen Zhu <hzhu@dev2-194.sol-local>` | 2026-07-06 |
-| `015626a` | `Helen Zhu <hzhu@dev2-194.sol-local>` | 2026-07-06 |
-| `f379474` | `Wajiha Maryam <wajihamaryam@WajihaMaryam-2.local>` | 2026-05-06 |
-
-Every other commit on `main` uses `@solace.com` or `@users.noreply.github.com`.
-Verify at any time with:
+The per-commit list of SHAs and addresses lives on SOL-152902, not here. This
+file is written to be published, so reproducing the addresses in it would copy
+the exposure it records out of commit metadata and into a tracked, indexable,
+code-searchable file. Read the current state from the history itself:
 
 ```bash
 git log --format='%h %an <%ae> %ad' --date=short | grep -E '\.sol-local>|\.local>'
@@ -83,10 +77,9 @@ git log --format='%h %an <%ae> %ad' --date=short | grep -E '\.sol-local>|\.local
 Rewriting these seven commits would change the SHA of every commit after them —
 close to the whole history — and break every existing reference to a commit SHA
 in Jira, PR discussions, and the CHANGELOG. The exposure is one internal dev
-hostname (`dev2-194.sol-local`) and one contributor's laptop name
-(`WajihaMaryam-2.local`), both already attached to those contributors' own
-commits and already visible to anyone with access to the repository today. The
-cost-to-value ratio favours accepting.
+hostname and one contributor's laptop name, both already attached to those
+contributors' own commits and already visible to anyone with access to the
+repository today. The cost-to-value ratio favours accepting.
 
 **What we do instead:**
 
