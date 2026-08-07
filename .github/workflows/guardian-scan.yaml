@@ -1,0 +1,359 @@
+name: Guardian Scan
+
+# FOSSA + Prisma scanning that reports to Guardian. PR = report only; push to
+# main / release = upload + block on Guardian's verdict. Secrets come from the
+# `guardian` Environment (no Vault). `Guardian scan gate` is the required status
+# check.
+#
+# DAG: build (image) and the two FOSSA jobs run in parallel; prisma runs after
+# build; guardian-gate runs after fossa-vuln + prisma (trunk only); gate
+# aggregates everything.
+#
+# Convention: `setup` computes every derived value as a string output; each job
+# maps the ones it needs into `env:` and references `${{ env.* }}` rather than
+# re-interpolating expressions inline, and boolean conditions use fromJSON().
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: "Git ref to scan (branch, tag, or SHA). Empty = current ref."
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      git_ref:
+        required: false
+        type: string
+        default: ""
+      product_full_version:
+        required: false
+        type: string
+        default: ""
+      fail_on_blocked:
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_REPO: solaceproducts/solace-broker-mcp
+  IMAGE_REGISTRY: ghcr.io
+  PRODUCT_NAME: solace-broker-mcp
+  FOSSA_PROJECT_ID: SolaceProducts_solace-broker-mcp
+
+jobs:
+  setup:
+    name: Resolve context
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.ctx.outputs.mode }}
+      ref: ${{ steps.ctx.outputs.ref }}
+      fossa_branch: ${{ steps.ctx.outputs.fossa_branch }}
+      fossa_revision: ${{ steps.ctx.outputs.fossa_revision }}
+      full_version: ${{ steps.ctx.outputs.full_version }}
+      is_fork: ${{ steps.ctx.outputs.is_fork }}
+      is_pr: ${{ steps.ctx.outputs.is_pr }}
+      is_trunk: ${{ steps.ctx.outputs.is_trunk }}
+      enforce: ${{ steps.ctx.outputs.enforce }}
+      fossa_mode: ${{ steps.ctx.outputs.fossa_mode }}
+      scan_tag: scan-${{ github.run_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.git_ref || github.ref }}
+          persist-credentials: false
+      - name: Resolve
+        id: ctx
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          COMMIT_SHA: ${{ github.sha }}
+          GITHUB_REF: ${{ github.ref }}
+          GIT_REF_INPUT: ${{ inputs.git_ref }}
+          FULL_VERSION_INPUT: ${{ inputs.product_full_version }}
+          FAIL_ON_BLOCKED: ${{ inputs.fail_on_blocked }}
+          IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            MODE="pr"; IS_PR="true"; IS_TRUNK="false"
+            FOSSA_BRANCH="PR"; FOSSA_REVISION="$HEAD_REF"
+          else
+            MODE="trunk"; IS_PR="false"; IS_TRUNK="true"
+            FOSSA_BRANCH="main"; FOSSA_REVISION="${GIT_REF_INPUT:-$COMMIT_SHA}"
+          fi
+          if [ -n "$FULL_VERSION_INPUT" ]; then
+            FULL_VERSION="$FULL_VERSION_INPUT"
+          else
+            FULL_VERSION="$(git describe --tags --always)"
+          fi
+          # Enforce (block) only on trunk and only when not bypassed.
+          ENFORCE="false"
+          if [ "$IS_TRUNK" = "true" ] && [ "$FAIL_ON_BLOCKED" != "false" ]; then ENFORCE="true"; fi
+          # FOSSA licensing guard: BLOCK when enforcing, else REPORT.
+          if [ "$ENFORCE" = "true" ]; then FOSSA_MODE="BLOCK"; else FOSSA_MODE="REPORT"; fi
+          {
+            echo "mode=$MODE"
+            echo "ref=${GIT_REF_INPUT:-$GITHUB_REF}"
+            echo "fossa_branch=$FOSSA_BRANCH"
+            echo "fossa_revision=$FOSSA_REVISION"
+            echo "full_version=$FULL_VERSION"
+            echo "is_fork=$IS_FORK"
+            echo "is_pr=$IS_PR"
+            echo "is_trunk=$IS_TRUNK"
+            echo "enforce=$ENFORCE"
+            echo "fossa_mode=$FOSSA_MODE"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build image
+    needs: setup
+    if: ${{ !fromJSON(needs.setup.outputs.is_fork) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-image.yaml
+    with:
+      git_ref: ${{ needs.setup.outputs.ref }}
+      version: ${{ needs.setup.outputs.full_version }}
+      scan_tag: ${{ needs.setup.outputs.scan_tag }}
+      artifact_name: guardian-scan-image
+
+  fossa-license:
+    name: FOSSA licensing
+    needs: setup
+    if: ${{ !fromJSON(needs.setup.outputs.is_fork) }}
+    runs-on: ubuntu-latest
+    environment: guardian
+    permissions:
+      contents: read
+      packages: read     # pull the private maas-build-actions scan container
+      pull-requests: write
+      checks: write
+      statuses: write
+    env:
+      IS_PR: ${{ needs.setup.outputs.is_pr }}
+      FOSSA_MODE: ${{ needs.setup.outputs.fossa_mode }}
+      FOSSA_BRANCH: ${{ needs.setup.outputs.fossa_branch }}
+      FOSSA_REVISION: ${{ needs.setup.outputs.fossa_revision }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.setup.outputs.ref }}
+          persist-credentials: false
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: 'go.mod'
+      - name: FOSSA analyze
+        uses: SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan@2bb76658deba3a34d90bfb1d6837de1b13996192
+        with:
+          scanners: "fossa"
+          additional_scan_params: |
+            fossa.branch=${{ env.FOSSA_BRANCH }}
+            fossa.revision=${{ env.FOSSA_REVISION }}
+          fossa_api_key: ${{ secrets.FOSSA_API_KEY }}
+      - name: FOSSA licensing guard
+        uses: SolaceDev/solace-public-workflows/.github/actions/fossa-guard@2bb76658deba3a34d90bfb1d6837de1b13996192
+        with:
+          fossa_api_key: ${{ secrets.FOSSA_API_KEY }}
+          fossa_project_id: ${{ env.FOSSA_PROJECT_ID }}
+          fossa_branch: ${{ env.FOSSA_BRANCH }}
+          fossa_revision: ${{ env.FOSSA_REVISION }}
+          fossa_category: licensing
+          fossa_mode: ${{ env.FOSSA_MODE }}
+          block_on: policy_conflict
+          enable_diff_mode: ${{ env.IS_PR }}
+          enable_pr_comment: ${{ env.IS_PR }}
+          enable_status_check: ${{ env.IS_PR }}
+          enable_privacy_mode: ${{ env.IS_PR }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+  fossa-vuln:
+    name: FOSSA vulnerability
+    needs: setup
+    if: ${{ !fromJSON(needs.setup.outputs.is_fork) }}
+    runs-on: ubuntu-latest
+    environment: guardian
+    permissions:
+      contents: read
+      packages: read     # pull the private maas-build-actions scan container
+      pull-requests: write
+      checks: write
+      statuses: write
+    env:
+      IS_PR: ${{ needs.setup.outputs.is_pr }}
+      IS_TRUNK: ${{ needs.setup.outputs.is_trunk }}
+      FOSSA_BRANCH: ${{ needs.setup.outputs.fossa_branch }}
+      FOSSA_REVISION: ${{ needs.setup.outputs.fossa_revision }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.setup.outputs.ref }}
+          persist-credentials: false
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: 'go.mod'
+      - name: FOSSA analyze and upload
+        uses: SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan@2bb76658deba3a34d90bfb1d6837de1b13996192
+        with:
+          scanners: "fossa"
+          additional_scan_params: |
+            fossa.branch=${{ env.FOSSA_BRANCH }}
+            fossa.revision=${{ env.FOSSA_REVISION }}
+          fossa_api_key: ${{ secrets.FOSSA_API_KEY }}
+          # Upload only on trunk (env flag), never on a PR.
+          guardian_url: ${{ fromJSON(env.IS_TRUNK) && secrets.GUARDIAN_URL || '' }}
+          guardian_token: ${{ fromJSON(env.IS_TRUNK) && secrets.GUARDIAN_API_TOKEN || '' }}
+      - name: FOSSA vulnerability guard
+        uses: SolaceDev/solace-public-workflows/.github/actions/fossa-guard@2bb76658deba3a34d90bfb1d6837de1b13996192
+        with:
+          fossa_api_key: ${{ secrets.FOSSA_API_KEY }}
+          fossa_project_id: ${{ env.FOSSA_PROJECT_ID }}
+          fossa_branch: ${{ env.FOSSA_BRANCH }}
+          fossa_revision: ${{ env.FOSSA_REVISION }}
+          fossa_category: vulnerability
+          fossa_mode: REPORT
+          block_on: critical,high
+          enable_diff_mode: ${{ env.IS_PR }}
+          enable_pr_comment: ${{ env.IS_PR }}
+          enable_status_check: ${{ env.IS_PR }}
+          enable_privacy_mode: ${{ env.IS_PR }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+  prisma:
+    name: Prisma scan
+    needs: [setup, build]
+    if: ${{ !fromJSON(needs.setup.outputs.is_fork) }}
+    runs-on: ubuntu-latest
+    environment: guardian
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write      # prisma-cloud-scan creates a check run
+      statuses: write
+    env:
+      IS_TRUNK: ${{ needs.setup.outputs.is_trunk }}
+      SCAN_TAG: ${{ needs.setup.outputs.scan_tag }}
+      FULL_VERSION: ${{ needs.setup.outputs.full_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.setup.outputs.ref }}
+          persist-credentials: false
+      - name: Download scan image
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: guardian-scan-image
+      - name: Load image
+        run: docker load -i image.tar
+      # No guardian-vulnerability-diff step: the CVE-diff PR comment it posts is
+      # not wanted on a public repo. The Prisma verdict is enforced by the
+      # Guardian gate on trunk, not on PRs.
+      - name: Prisma Cloud scan
+        uses: SolaceDev/solace-public-workflows/prisma-cloud-scan@2bb76658deba3a34d90bfb1d6837de1b13996192
+        with:
+          image_registry: ${{ env.IMAGE_REGISTRY }}
+          image_repo: ${{ env.IMAGE_REPO }}
+          image_tag: ${{ env.SCAN_TAG }}
+          skip_image_pull: "true"
+          pcc_console_url: ${{ secrets.PRISMACLOUD_CONSOLE_URL }}
+          pcc_user: ${{ secrets.PRISMACLOUD_ACCESS_KEY_ID }}
+          pcc_pass: ${{ secrets.PRISMACLOUD_SECRET_KEY }}
+          bypass_blocking: "true"
+          guardian_url: ${{ fromJSON(env.IS_TRUNK) && secrets.GUARDIAN_URL || '' }}
+          guardian_key: ${{ fromJSON(env.IS_TRUNK) && secrets.GUARDIAN_API_TOKEN || '' }}
+          guardian_product_name: ${{ env.PRODUCT_NAME }}
+          guardian_product_version: main
+          guardian_product_full_version: ${{ env.FULL_VERSION }}
+
+  guardian-gate:
+    name: Guardian gate
+    needs: [setup, fossa-vuln, prisma]
+    if: ${{ !cancelled() && !fromJSON(needs.setup.outputs.is_fork) && fromJSON(needs.setup.outputs.is_trunk) }}
+    runs-on: ubuntu-latest
+    environment: guardian
+    permissions:
+      contents: read
+    env:
+      FULL_VERSION: ${{ needs.setup.outputs.full_version }}
+      ENFORCE: ${{ needs.setup.outputs.enforce }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.setup.outputs.ref }}
+          persist-credentials: false
+      - name: Guardian DB sync and Jira report
+        uses: SolaceDev/solace-public-workflows/guardian-db-sync@2bb76658deba3a34d90bfb1d6837de1b13996192
+        with:
+          guardian-url: ${{ secrets.GUARDIAN_URL }}
+          guardian-key: ${{ secrets.GUARDIAN_API_TOKEN }}
+          product-name: ${{ env.PRODUCT_NAME }}
+          product-full-version: ${{ env.FULL_VERSION }}
+          unifiers: "fossa,prisma"
+          upload-logs: "true"
+      - name: Guardian vulnerability gate
+        uses: SolaceDev/solace-public-workflows/guardian-vulnerability-gate@2bb76658deba3a34d90bfb1d6837de1b13996192
+        with:
+          guardian-url: ${{ secrets.GUARDIAN_URL }}
+          guardian-key: ${{ secrets.GUARDIAN_API_TOKEN }}
+          product-name: ${{ env.PRODUCT_NAME }}
+          product-version: ${{ env.FULL_VERSION }}
+          fail-on-blocked: ${{ env.ENFORCE }}
+          upload-logs: "true"
+
+  gate:
+    name: Guardian scan gate
+    needs: [setup, build, fossa-license, fossa-vuln, prisma, guardian-gate]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Aggregate verdict
+        env:
+          IS_FORK: ${{ needs.setup.outputs.is_fork }}
+          IS_TRUNK: ${{ needs.setup.outputs.is_trunk }}
+          R_BUILD: ${{ needs.build.result }}
+          R_LICENSE: ${{ needs.fossa-license.result }}
+          R_VULN: ${{ needs.fossa-vuln.result }}
+          R_PRISMA: ${{ needs.prisma.result }}
+          R_GATE: ${{ needs.guardian-gate.result }}
+        run: |
+          set -euo pipefail
+          if [ "$IS_FORK" = "true" ]; then
+            echo "::notice::Fork PR — scans skipped (no Environment secrets)."
+            exit 0
+          fi
+          fail=0
+          for pair in "build:$R_BUILD" "fossa-license:$R_LICENSE" "fossa-vuln:$R_VULN" "prisma:$R_PRISMA"; do
+            name="${pair%%:*}"; res="${pair#*:}"
+            if [ "$res" != "success" ]; then echo "::error::$name = $res"; fail=1; fi
+          done
+          if [ "$IS_TRUNK" = "true" ] && [ "$R_GATE" != "success" ]; then
+            echo "::error::guardian-gate = $R_GATE"; fail=1
+          fi
+          [ "$fail" -eq 0 ] && echo "Guardian scan passed." || exit 1
