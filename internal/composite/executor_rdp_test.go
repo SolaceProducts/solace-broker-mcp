@@ -16,12 +16,9 @@ package composite
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"testing"
-
-	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 )
 
 // listRDPsTool returns the list-rdps tool definition for tests.
@@ -47,6 +44,18 @@ func listRDPsTool() CompositeTool {
 		Result: ResultStrategy{Strategy: "collect"},
 	}
 }
+
+// These tests build CompositeTool Go literals directly — they never load
+// tools.yaml, so they exercise constructRequestBody's generic mechanism, not
+// tools.yaml wiring. A wiring bug in the real YAML is caught instead by
+// TestLoadTools_EmbeddedDefinitions/path-params-wired (loader_embedded_test.go).
+// create-rdp's shape is identical to create-topic-endpoint's.
+//
+// Restore is intentionally partial: TestExecute_ListRDPs_SinglePage and
+// TestExecute_CreateRDP_AlreadyExists did not come back — both confirmed
+// duplicates (of executor_queue_test.go's pagination canonical and
+// executor_vpn_test.go's SEMPError-propagation coverage) during the original
+// audit, verified by per-package coverage delta, not assumed.
 
 // createRDPTool returns the create-rdp tool definition for tests. Like
 // create-queue, msgVpnName is the only path param; restDeliveryPointName and
@@ -132,42 +141,6 @@ func makeRDPItems(n int) []any {
 	return items
 }
 
-func TestExecute_ListRDPs_SinglePage(t *testing.T) {
-	rdpItems := []any{
-		map[string]any{"restDeliveryPointName": "rdp-1", "enabled": true, "up": true},
-		map[string]any{"restDeliveryPointName": "rdp-2", "enabled": true, "up": false},
-	}
-	client := newSeqMockClient()
-	client.addResponses("getMsgVpnRestDeliveryPoints", pageResult(rdpItems, ""))
-
-	executor := NewCompositeExecutor(testOperations())
-
-	result, err := executor.Execute(context.Background(), listRDPsTool(), client, map[string]any{
-		"msgVpnName": "default",
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	rdps, ok := result["rdps"].(map[string]any)
-	if !ok {
-		t.Fatal("expected rdps key containing a map")
-	}
-	items, ok := rdps["data"].([]any)
-	if !ok {
-		t.Fatal("expected rdps.data to be a slice")
-	}
-	if len(items) != 2 {
-		t.Errorf("len(items) = %d, want 2", len(items))
-	}
-	if rdps["truncated"] != false {
-		t.Errorf("truncated = %v, want false", rdps["truncated"])
-	}
-	if len(client.calls) != 1 {
-		t.Errorf("expected 1 SEMP call, got %d", len(client.calls))
-	}
-}
-
 func TestExecute_ListRDPs_TruncatesAtMaxResults(t *testing.T) {
 	// Page has 100 RDPs but maxResults=50, paginator should stop and set truncated.
 	client := newSeqMockClient()
@@ -250,35 +223,6 @@ func TestExecute_CreateRDP_ConstructsBody(t *testing.T) {
 
 	if result["createRdp"] == nil {
 		t.Error("expected createRdp result to be collected")
-	}
-}
-
-func TestExecute_CreateRDP_AlreadyExists(t *testing.T) {
-	client := newMockClient()
-	client.errors["createMsgVpnRestDeliveryPoint"] = &sempv2.SEMPError{
-		Operation:   "createMsgVpnRestDeliveryPoint",
-		StatusCode:  400,
-		SEMPCode:    10,
-		SEMPStatus:  "ALREADY_EXISTS",
-		Description: "REST Delivery Point already exists",
-		Body:        `{"meta":{"error":{"code":10,"description":"REST Delivery Point already exists","status":"ALREADY_EXISTS"}}}`,
-	}
-
-	executor := NewCompositeExecutor(testOperations())
-
-	_, err := executor.Execute(context.Background(), createRDPTool(), client, map[string]any{
-		"msgVpnName":            "vpn-a",
-		"restDeliveryPointName": "rdp-1",
-	})
-	if err == nil {
-		t.Fatal("expected error when RDP already exists, got nil")
-	}
-
-	var sempErr *sempv2.SEMPError
-	if !errors.As(err, &sempErr) {
-		t.Errorf("expected SEMPError in error chain, got: %v", err)
-	} else if sempErr.SEMPCode != 10 {
-		t.Errorf("SEMPCode = %d, want 10 (already exists)", sempErr.SEMPCode)
 	}
 }
 
