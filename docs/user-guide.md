@@ -170,9 +170,9 @@ The server exposes 24 read-only tools plus 16 write tools (40 total when write t
 
 These tools modify broker state via the SEMPv2 action API. There is **one tool per action** so each tool's behavior is unambiguous: the destructive tools carry the MCP `destructiveHint` annotation and a description that instructs the calling LLM to obtain explicit user confirmation — restating the target (broker, VPN, queue or client) and the effect — before invocation; the non-destructive stats-reset tools do not. The tool manager logs a WARNING line on every destructive invocation for audit.
 
-**Naming convention.** Action-API tools use `<verb>-<resource>-<object>` (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`). The Config-API management tools ([below](#management-config-api)) use `<verb>-<object>` — a `create-`, `update-`, or `delete-` prefix on `message-vpn`, `queue`, or `topic-endpoint`. Action tools run an operational action against a live object; management tools change configuration.
+**Naming convention.** Action-API tools use `<verb>-<resource>-<object>` (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`). The Config-API management tools ([below](#management-config-api)) use `<verb>-<object>` — a `create-`, `update-`, or `delete-` prefix on `message-vpn`, `queue`, `topic-endpoint`, or `rdp`. Action tools run an operational action against a live object; management tools change configuration.
 
-**Disabled by default.** These four action tools — together with the nine Config-API management tools below — are write tools (they change broker state) and are gated behind the server-level `enable_write_tools` flag. With the default (`false`) they are not registered with the MCP server and do not appear in `tools/list` — clients see only the read-only tool set. Set `enable_write_tools: true` in the YAML config to expose them. This is independent of `mcp_client_auth.mode`: an authenticated client still cannot invoke these tools when the flag is off, because the server never registers them.
+**Disabled by default.** These four action tools — together with the 12 Config-API management tools below — are write tools (they change broker state) and are gated behind the server-level `enable_write_tools` flag. With the default (`false`) they are not registered with the MCP server and do not appear in `tools/list` — clients see only the read-only tool set. Set `enable_write_tools: true` in the YAML config to expose them. This is independent of `mcp_client_auth.mode`: an authenticated client still cannot invoke these tools when the flag is off, because the server never registers them.
 
 `enable_write_tools` is the only enforced control. `destructiveHint` and the confirmation text in tool descriptions are hints, not enforced by the MCP protocol — whether the user is actually prompted depends on the client and the model.
 
@@ -187,7 +187,7 @@ These tools modify broker state via the SEMPv2 action API. There is **one tool p
 
 ### Management (Config API)
 
-These tools create, update, and delete broker configuration objects via the SEMPv2 config API, and are gated behind `enable_write_tools` alongside the action tools above. `create-*` is additive; `update-*` applies a partial (PATCH) update, changing only the fields supplied; `delete-*` removes the object. `update-*` and `delete-*` can be service-affecting (for example, disabling a VPN drops its client connections) and both carry the `destructiveHint` annotation; `create-*` does not. Every tool's description instructs the calling LLM to obtain explicit user confirmation — restating the target and effect — before invocation. Create and update tools accept a config object (`msgVpnConfig`, `queueConfig`, `topicEndpointConfig`); any attribute omitted takes the broker default.
+These tools create, update, and delete broker configuration objects via the SEMPv2 config API, and are gated behind `enable_write_tools` alongside the action tools above. `create-*` is additive; `update-*` applies a partial (PATCH) update, changing only the fields supplied; `delete-*` removes the object. `update-*` and `delete-*` can be service-affecting (for example, disabling a VPN drops its client connections) and both carry the `destructiveHint` annotation; `create-*` does not. Every tool's description instructs the calling LLM to obtain explicit user confirmation — restating the target and effect — before invocation. Create and update tools accept a config object (`msgVpnConfig`, `queueConfig`, `topicEndpointConfig`, `rdpConfig`); any attribute omitted takes the broker default.
 
 | Tool | Destructive | Description |
 |---|---|---|
@@ -200,6 +200,9 @@ These tools create, update, and delete broker configuration objects via the SEMP
 | `create-topic-endpoint` | No | Create a topic endpoint in a VPN. |
 | `update-topic-endpoint` | **Yes** | Partially update a topic endpoint's attributes. Service-affecting: disabling egress halts delivery; lowering a spool quota can evict messages. |
 | `delete-topic-endpoint` | **Yes** | Delete a topic endpoint and discard any messages still spooled on it. |
+| `create-rdp` | No | Create a REST Delivery Point in a VPN. Created disabled by default; REST consumers and queue bindings are added separately. |
+| `update-rdp` | **Yes** | Partially update an RDP's attributes (for example, `enabled`, `clientProfileName`). Commonly used to enable an RDP created disabled. |
+| `delete-rdp` | **Yes** | Delete an RDP, along with its REST consumers and queue bindings. |
 
 ## Recommended Environments
 

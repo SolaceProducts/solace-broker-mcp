@@ -9,7 +9,7 @@ narrative overview see the [User Guide](user-guide.md).
 > output as input to a human decision, not as verified fact, and confirm any
 > write or destructive action before allowing it.
 
-The server exposes **23 read-only tools** plus **16 write tools** — 4 action
+The server exposes **24 read-only tools** plus **16 write tools** — 4 action
 tools and 12 Config-API management tools. The write tools are gated behind
 `enable_write_tools` (off by default) and are not registered with the MCP server
 when disabled — see
@@ -90,15 +90,15 @@ annotation, instruct the calling LLM to obtain explicit user confirmation before
 invocation, and cause the server to log a WARNING audit line on every call. The
 two `clear-*-stats` tools are writes but non-destructive (counters only).
 
-The nine Config-API management tools (create/update/delete for Message VPNs,
-queues, and topic endpoints) are gated behind the same flag and documented under
-[Management](#management-config-api).
+The 12 Config-API management tools (create/update/delete for Message VPNs,
+queues, topic endpoints, and REST delivery points) are gated behind the same
+flag and documented under [Management](#management-config-api).
 
 ## Tool index
 
 | Category | Tool | Write? |
 |---|---|---|
-| Discovery | [`list-brokers`](#list-brokers) | — |
+| Discovery | [`list-brokers`](#list-brokers), [`describe-semp-schema`](#describe-semp-schema) | — |
 | Broker Status | [`get-broker-status`](#get-broker-status), [`get-redundancy-status`](#get-redundancy-status) | — |
 | Replication | [`get-replication-status`](#get-replication-status) | — |
 | Message VPN | [`list-vpns`](#list-vpns), [`get-vpn-status`](#get-vpn-status), [`get-message-rates`](#get-message-rates) | — |
@@ -109,7 +109,7 @@ queues, and topic endpoints) are gated behind the same flag and documented under
 | Kafka | [`list-kafka-receivers`](#list-kafka-receivers), [`get-kafka-receiver-status`](#get-kafka-receiver-status), [`list-kafka-senders`](#list-kafka-senders), [`get-kafka-sender-status`](#get-kafka-sender-status) | — |
 | Discards | [`get-discard-stats`](#get-discard-stats), [`list-queue-discards`](#list-queue-discards) | — |
 | Actions | [`disconnect-client`](#disconnect-client), [`clear-client-stats`](#clear-client-stats), [`delete-queue-messages`](#delete-queue-messages), [`clear-queue-stats`](#clear-queue-stats) | write |
-| Management | [`create-message-vpn`](#create-message-vpn), [`update-message-vpn`](#update-message-vpn), [`delete-message-vpn`](#delete-message-vpn), [`create-queue`](#create-queue), [`update-queue`](#update-queue), [`delete-queue`](#delete-queue), [`create-topic-endpoint`](#create-topic-endpoint), [`update-topic-endpoint`](#update-topic-endpoint), [`delete-topic-endpoint`](#delete-topic-endpoint) | write |
+| Management | [`create-message-vpn`](#create-message-vpn), [`update-message-vpn`](#update-message-vpn), [`delete-message-vpn`](#delete-message-vpn), [`create-queue`](#create-queue), [`update-queue`](#update-queue), [`delete-queue`](#delete-queue), [`create-topic-endpoint`](#create-topic-endpoint), [`update-topic-endpoint`](#update-topic-endpoint), [`delete-topic-endpoint`](#delete-topic-endpoint), [`create-rdp`](#create-rdp), [`update-rdp`](#update-rdp), [`delete-rdp`](#delete-rdp) | write |
 
 Example invocations below show the `arguments` object of an MCP `tools/call`
 request. A full request wraps it: `{"method":"tools/call","params":{"name":"<tool>","arguments":{...}}}`.
@@ -883,9 +883,9 @@ Annotations: `readOnly: false`, `destructiveHint: false`, `idempotentHint: true`
 
 ## Management (Config API)
 
-Create, update, and delete SEMPv2 **config** objects — Message VPNs, queues, and
-topic endpoints. Gated behind `enable_write_tools` (off by default), the same as
-the action tools above.
+Create, update, and delete SEMPv2 **config** objects — Message VPNs, queues,
+topic endpoints, and REST delivery points. Gated behind `enable_write_tools`
+(off by default), the same as the action tools above.
 
 - `create-*` is **additive** (not destructive); config attributes you omit take
   the broker default.
@@ -896,14 +896,14 @@ the action tools above.
   endpoint) and is **destructive**.
 
 Create and update tools take a config object (`msgVpnConfig`, `queueConfig`,
-`topicEndpointConfig`) whose attributes are spread into the SEMPv2 request body.
-Do **not** put the object's own name (`msgVpnName`, `queueName`,
-`topicEndpointName`) inside the config object — the name comes from its dedicated
-parameter. A reserved name, or any attribute the object's schema doesn't define,
-placed inside the config object is rejected before the broker call rather than
-sent on. Every management tool's description instructs the LLM to obtain explicit
-user confirmation — restating the target and effect — as a separate reply before
-invoking.
+`topicEndpointConfig`, `rdpConfig`) whose attributes are spread into the SEMPv2
+request body. Do **not** put the object's own name (`msgVpnName`, `queueName`,
+`topicEndpointName`, `restDeliveryPointName`) inside the config object — the
+name comes from its dedicated parameter. A reserved name, or any attribute the
+object's schema doesn't define, placed inside the config object is rejected
+before the broker call rather than sent on. Every management tool's description
+instructs the LLM to obtain explicit user confirmation — restating the target
+and effect — as a separate reply before invoking.
 
 All management tools return a step-keyed envelope whose single key maps to the
 SEMPv2 response: the created or updated object for `create-*`/`update-*`, and an
@@ -1100,3 +1100,70 @@ Annotations: `readOnly: false`, `destructive: true`.
 ```
 
 **Example request:** "Delete the orders.te topic endpoint from the default VPN." (The agent will ask you to confirm before acting.)
+
+### create-rdp
+
+Create a REST Delivery Point (RDP) in a Message VPN. Creates only the RDP
+itself — REST consumers and queue bindings are separate resources not managed
+by this tool, so a new RDP is created disabled by default and delivers nothing
+until those are added. Fails if an RDP with the same name already exists.
+
+Annotations: `readOnly: false`, `destructiveHint: false`.
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target broker alias. |
+| `msgVpnName` | string | yes | The Message VPN to create the RDP in. |
+| `restDeliveryPointName` | string | yes | Name of the RDP to create. |
+| `rdpConfig` | object | no | RestDeliveryPoint attributes (e.g. `enabled`, `clientProfileName`, `service`, `vendor`). Omitted attributes take broker defaults. |
+
+**Returns:** step-keyed envelope, step `createRdp`.
+
+```json
+{ "broker": "prod-broker", "msgVpnName": "default", "restDeliveryPointName": "webhook-rdp", "rdpConfig": { "clientProfileName": "default" } }
+```
+
+**Example request:** "Create an RDP called webhook-rdp in the default VPN on prod-broker." (The agent will ask you to confirm before acting.)
+
+### update-rdp
+
+**Destructive.** Partially update a REST Delivery Point — only the supplied
+attributes change. Commonly used to enable an RDP that was created disabled.
+
+Annotations: `readOnly: false`, `destructiveHint: true`.
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target broker alias. |
+| `msgVpnName` | string | yes | The Message VPN containing the RDP. |
+| `restDeliveryPointName` | string | yes | The RDP to modify. |
+| `rdpConfig` | object | yes | RestDeliveryPoint attributes to change. Do not include `msgVpnName` or `restDeliveryPointName`. |
+
+**Returns:** step-keyed envelope, step `updateRdp`.
+
+```json
+{ "broker": "prod-broker", "msgVpnName": "default", "restDeliveryPointName": "webhook-rdp", "rdpConfig": { "enabled": true } }
+```
+
+**Example request:** "Enable the webhook-rdp RDP on the default VPN." (The agent will ask you to confirm before acting.)
+
+### delete-rdp
+
+**Destructive.** Delete a REST Delivery Point. Permanently removes the RDP
+along with its REST consumers and queue bindings.
+
+Annotations: `readOnly: false`, `destructiveHint: true`.
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target broker alias. |
+| `msgVpnName` | string | yes | The Message VPN containing the RDP. |
+| `restDeliveryPointName` | string | yes | The RDP to delete. |
+
+**Returns:** step-keyed envelope, step `deleteRdp`.
+
+```json
+{ "broker": "prod-broker", "msgVpnName": "default", "restDeliveryPointName": "webhook-rdp" }
+```
+
+**Example request:** "Delete the webhook-rdp RDP from the default VPN on prod-broker." (The agent will ask you to confirm before acting.)
