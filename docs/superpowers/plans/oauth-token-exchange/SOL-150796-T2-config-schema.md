@@ -17,7 +17,7 @@ This file records decisions made *during implementation* of T2. It complements �
 
 ### The starting point — what the MCP server already does today
 
-Hop 1 (`mcp_client_auth.mode: oauth`) shipped in SOL-149989. At startup, the MCP server calls `oidc.NewProvider(ctx, cfg.MCPClientAuth.Issuer)` ([internal/auth/middleware.go:127](../../../internal/auth/middleware.go)). `go-oidc` reaches out to the IdP and fetches `<issuer>/.well-known/openid-configuration` — the OIDC Discovery document. From that document it learns the JWKS URL (needed to verify inbound agent tokens), the token endpoint, and other coordinates. **The MCP server already does live OIDC Discovery at startup today.** It is not a future capability.
+Hop 1 (`mcp_client_auth.mode: oauth`) shipped in SOL-149989. At startup, the MCP server calls `oidc.NewProvider(ctx, cfg.MCPClientAuth.Issuer)` ([internal/auth/middleware.go:127](../../../../internal/auth/middleware.go)). `go-oidc` reaches out to the IdP and fetches `<issuer>/.well-known/openid-configuration` — the OIDC Discovery document. From that document it learns the JWKS URL (needed to verify inbound agent tokens), the token endpoint, and other coordinates. **The MCP server already does live OIDC Discovery at startup today.** It is not a future capability.
 
 That changes the framing of every "should the Hop 2 schema have an issuer-URL field?" question. The Discovery doc — including `token_endpoint` — is already sitting in process memory after Hop 1 boots. Any future Hop 2 runtime can read it directly from there. No second Discovery fetch, no second HTTP round trip, no new field.
 
