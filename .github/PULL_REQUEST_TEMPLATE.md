@@ -69,7 +69,7 @@ Fixes #(issue number)
 
 ### Security
 - [ ] **No credentials in code** (checked all files, commits, and logs)
-- [ ] Followed [secure logging rules](../docs/secure-logging-rules.md)
+- [ ] Followed [secure logging rules](../docs/internal/secure-logging-rules.md)
 - [ ] Credential-carrying types implement `slog.LogValuer`
 - [ ] No security vulnerabilities introduced (checked with golangci-lint/gosec)
 

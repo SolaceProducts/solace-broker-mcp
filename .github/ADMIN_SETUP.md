@@ -170,8 +170,8 @@ Navigate to: **Settings → Rules → Rulesets → `main-protection`**
 |---------|--------|----------|
 | Required approvals | ✅ 1 | Set |
 | Dismiss stale approvals on new commits | ✅ On | Set |
-| Require review from Code Owners | ✅ On | **Not set** |
-| Require conversation resolution before merging | ✅ On | **Not set** |
+| Require review from Code Owners | ✅ On | Set |
+| Require conversation resolution before merging | ✅ On | Set |
 | Require signed commits | ⬜ Optional (DCO is sufficient) | Not set |
 
 `.github/CODEOWNERS` exists (`* @SolaceProducts/dax-developers`), so Code Owners review
@@ -393,20 +393,26 @@ instead.
 Navigate to: **Settings → Actions → General → Workflow permissions**
 
 **Workflow permissions:**
-- ⚪ Read and write permissions (needed for release workflow to create releases).
-  Currently set.
-- 🚨 **Allow GitHub Actions to create and approve pull requests: turn this OFF.**
-  It is currently ON. With a write `GITHUB_TOKEN` and a `main` ruleset that
-  needs exactly one approval and has an empty bypass list, a workflow can approve
-  a pull request and satisfy the only human gate on `main`.
+- ✅ **Read repository contents permission: set.** The default is now read-only
+  (SOL-152959). The old "Read and write" default was never actually needed —
+  every job that writes (`release.yml`'s `release`/`build-docker`/`build-binaries`
+  jobs) already declares its own explicit `contents: write` /
+  `packages: write` / etc., which overrides the repo default regardless of what
+  it is. `make check` passes on this change; the release path itself is only
+  exercised by an actual tag push, which has not happened since — watch the
+  next one.
+- ✅ **"Allow GitHub Actions to create and approve pull requests" turned off**
+  (SOL-152958). With a write `GITHUB_TOKEN` and a `main` ruleset that needs
+  exactly one approval and has an empty bypass list, a workflow could otherwise
+  approve a pull request and satisfy the only human gate on `main`.
 
-  The exposure is not a fork contributor. On a public repo a fork PR's
-  `GITHUB_TOKEN` is read-only. It is a workflow running on a branch *inside* this
+  The exposure was not a fork contributor. On a public repo a fork PR's
+  `GITHUB_TOKEN` is read-only. It was a workflow running on a branch *inside* this
   repository, and this repository allows all actions with no SHA pinning required
   (see "Fork pull request workflows" below), so a compromised third-party action
-  inherits that ability. Nothing here needs the setting: Renovate opens PRs with
-  its own GitHub App installation token, and no workflow in this repository opens
-  or approves PRs.
+  would have inherited that ability. Nothing here needed the setting: Renovate opens
+  PRs with its own GitHub App installation token, and no workflow in this
+  repository opens or approves PRs.
 
 **Alternative (more restrictive):**
 - ⚪ Read repository contents and packages permissions
@@ -490,11 +496,12 @@ writing; re-check, do not assume.
   > legitimate reason.
   >
   > The `gate` job going red through all of this is the gate working.
-- ⬜ **"Allow GitHub Actions to create and approve pull requests" turned off.**
-  Still on.
+- ✅ **"Allow GitHub Actions to create and approve pull requests" turned off.**
+  (SOL-152958)
 - ⬜ **Fork pull request workflows set to require approval for all outside
   collaborators.** The default is weaker; see the GitHub Actions Permissions
-  section.
+  section. No GitHub REST API exposes this setting, so it has to be flipped by
+  hand in the UI by someone with org-admin access — tracked under SOL-152960.
 - ✅ **Secret scanning and push protection enabled.** Both on, along with validity
   checks and non-provider patterns. Confirm, do not re-enable; see Security Settings.
 - ⬜ **A release cut that covers `main`.** v0.1.0 through v0.6.0 are already tagged
