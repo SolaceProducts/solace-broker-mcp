@@ -26,7 +26,16 @@ sweep_oauth_fixtures() {
     # broker A — so a stranded poisoned audience would turn one hop-2 defect
     # into a wall of unrelated RBAC failures. Restoring here makes "the phases
     # are independent" true rather than assumed.
-    upsert_profile "$BROKER_A_SEMP_PORT" "$BROKER_A_AUDIENCE" >/dev/null 2>&1 || true
+    # Non-fatal — this runs in a trap, and failing here would mask whatever
+    # caused the exit. But it must not be silent: a failed restore leaves
+    # broker A on the poisoned audience, and every tool-RBAC scenario in the
+    # later phases targets that broker. Warning loudly is the difference
+    # between one diagnosable line and a wall of unrelated red.
+    if ! upsert_profile "$BROKER_A_SEMP_PORT" "$BROKER_A_AUDIENCE" >/dev/null 2>&1; then
+        log_warn "FAILED to restore broker A's required audience to '$BROKER_A_AUDIENCE'"
+        log_warn "  broker A may still be on 'poisoned-audience-temp'; later phases target it"
+        log_warn "  if the RBAC phases now fail, fix this first — they are downstream of it"
+    fi
 }
 trap sweep_oauth_fixtures EXIT
 sweep_oauth_fixtures

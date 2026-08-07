@@ -112,6 +112,34 @@ RBAC_GRANTED_TOOL="list-vpns"
 # the config — it is referenced only by the scenario, never by the policy.
 RBAC_UNGRANTED_TOOL="list-queues"
 
+# ── Structurally exempt tools ────────────────────────────────────────────────
+# Tools registered outside RegisterWithServer's policy-wrapping path in
+# cmd/server/main.go, and therefore never wrapped by withAuthorization at all.
+#
+# There is no runtime predicate to query: exemption is expressed structurally at
+# the registration API (RegisterListBrokers and RegisterDescribeSempSchema take
+# no policy argument), not by a function the suite could call. So the set is
+# derived from the tool-name constants instead — see
+# exempt_tool_names_from_source — and the scenario fails if this table does not
+# cover exactly what the source declares. Adding a third exempt tool therefore
+# breaks the suite loudly rather than going silently uncovered.
+#
+# Each entry: <tool-name>|<args-json>|<jq predicate over the success payload>
+RBAC_EXEMPT_TOOLS=(
+    'list-brokers|{}|(.brokers | length) > 0'
+    'describe-semp-schema|{"operation":"config/createMsgVpnQueue"}|.operation == "config/createMsgVpnQueue"'
+)
+
+# Emits, one per line and sorted, the tool names declared by the `*ToolName`
+# constants under internal/tools. Both exempt tools follow that convention and
+# no other constant does, which is what makes it a usable anchor. If a future
+# refactor changes the convention this over-reports rather than under-reports —
+# the safe direction, since the scenario then fails and a human looks.
+exempt_tool_names_from_source() {
+    grep -rhoE 'ToolName[[:space:]]*=[[:space:]]*"[^"]+"' "$SUITE_DIR/../../internal/tools/" 2>/dev/null \
+        | sed -E 's/.*"([^"]+)"/\1/' | sort -u
+}
+
 # The tool-RBAC policy applied by test-rbac-scenarios.sh.
 #
 # The grant is deliberately on RBAC_GRANT_GROUP — a group the MCP server knows
@@ -284,11 +312,17 @@ start_oauth_server() {
 # scenario. See test/e2e-oauth/README.md.
 mint_token() {
     local username="$1" password="$2" client_id="${3:-$HOP1_CLIENT_ID}"
-    local response token
+    local response token curl_status=0
     # No -f: on a 4xx, curl -f discards the body, and Keycloak puts the actual
     # reason there ("invalid_client" when the realm fixture is stale, for
     # instance). Losing it turns a one-line diagnosis into a CI archaeology
     # session. --max-time bounds a Keycloak that accepts TCP but never answers.
+    #
+    # The transport status is captured rather than left to errexit. A DNS
+    # failure, TLS error, connection reset or --max-time expiry makes the
+    # assignment non-zero, and under `set -e` that would abort before any of the
+    # diagnostics below ran — the caller would see the function's exit status
+    # and nothing about why.
     #
     # password@- reads that field's value from stdin instead of argv, keeping
     # it out of `ps`/`/proc` — same off-argv convention as semp_curl.
@@ -297,7 +331,18 @@ mint_token() {
         -d "grant_type=password" \
         -d "client_id=${client_id}" \
         -d "username=${username}" \
-        --data-urlencode "password@-")
+        --data-urlencode "password@-") || curl_status=$?
+
+    if [ "$curl_status" -ne 0 ]; then
+        log_fail "mint_token($username via $client_id): curl exited $curl_status reaching $KEYCLOAK_TOKEN_ENDPOINT"
+        case "$curl_status" in
+            28) log_fail "  timed out after 15s — Keycloak accepted the connection but did not answer" ;;
+            7)  log_fail "  connection refused — is the Keycloak container up?" ;;
+            60|77) log_fail "  TLS verification failed — check $KEYCLOAK_CERT matches the running Keycloak" ;;
+        esac
+        return 1
+    fi
+
     token=$(jq -r '.access_token // empty' <<<"$response" 2>/dev/null)
     if [ -z "$token" ]; then
         log_fail "mint_token($username via $client_id): no access_token"

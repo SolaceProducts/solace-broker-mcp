@@ -282,28 +282,53 @@ test_deny_reasons_indistinguishable_to_caller() {
     return 0
 }
 
-# ── Scenario: list-brokers is structurally exempt ───────────────────────────
-# The policy grants test-readonly-user nothing, and list-brokers is not in the
-# policy at all — yet it must still work. Exemption is structural, not a rule:
-# RegisterListBrokers takes no policy argument, so the gate is never wrapped
-# around it and never runs. Hence the second assertion: no audit record.
-test_list_brokers_exempt() {
-    local token mark resp content records
-    token=$(mint_token "$TEST_READONLY_USER" "$TEST_USER_PASSWORD") || return 1
+# ── Scenario: every structurally exempt tool bypasses the gate ──────────────
+# The policy grants test-readonly-user nothing, and none of these tools appear
+# in the policy at all — yet each must still work. Exemption is structural, not
+# a rule: RegisterListBrokers and RegisterDescribeSempSchema take no policy
+# argument, so the gate is never wrapped around them and never runs. Hence the
+# second assertion per tool: no audit record.
+#
+# The set is checked against the source rather than hand-listed here. Both
+# exempt tools reach exemption by the same mechanism, so covering only one would
+# let the other be moved inside the wrapped registration path while this
+# scenario stayed green — and it would start denying every caller the policy
+# grants nothing.
+test_exempt_tools_bypass_the_gate() {
+    local token entry name args predicate mark resp content records
+    local covered source_set
 
-    mark=$(log_mark)
-    resp=$(mcp_call_tool_as "$token" "list-brokers" '{}') \
-        || { log_fail "list-brokers call transport failure"; return 1; }
-
-    content=$(extract_content "$resp")
-    assert_json_field "$content" '(.brokers | length) > 0' "true" \
-        "list-brokers must stay available to any authenticated caller, including one the policy grants nothing" || return 1
-
-    records=$(authz_records_since "$mark" "list-brokers")
-    if [ -n "$records" ]; then
-        log_fail "list-brokers emitted a tool authorization record; it should never reach the gate: $records"
+    # Coverage guard first. If the source declares an exempt tool this table
+    # does not cover, fail here rather than silently testing a subset.
+    covered=$(printf '%s\n' "${RBAC_EXEMPT_TOOLS[@]}" | cut -d'|' -f1 | sort -u)
+    source_set=$(exempt_tool_names_from_source)
+    if [ "$covered" != "$source_set" ]; then
+        log_fail "the exempt-tool table and the source disagree — a tool that never reaches the gate would go untested"
+        log_fail "  covered here:      $(tr '\n' ' ' <<<"$covered")"
+        log_fail "  declared in source: $(tr '\n' ' ' <<<"$source_set")"
+        log_fail "  add the missing tool to RBAC_EXEMPT_TOOLS in helpers.sh"
         return 1
     fi
+
+    token=$(mint_token "$TEST_READONLY_USER" "$TEST_USER_PASSWORD") || return 1
+
+    for entry in "${RBAC_EXEMPT_TOOLS[@]}"; do
+        IFS='|' read -r name args predicate <<<"$entry"
+
+        mark=$(log_mark)
+        resp=$(mcp_call_tool_as "$token" "$name" "$args") \
+            || { log_fail "$name call transport failure"; return 1; }
+
+        content=$(extract_content "$resp")
+        assert_json_field "$content" "$predicate" "true" \
+            "$name must stay available to any authenticated caller, including one the policy grants nothing" || return 1
+
+        records=$(authz_records_since "$mark" "$name")
+        if [ -n "$records" ]; then
+            log_fail "$name emitted a tool authorization record; an exempt tool should never reach the gate: $records"
+            return 1
+        fi
+    done
     return 0
 }
 
@@ -358,6 +383,6 @@ else
     run_test "Deny: no groups claim at all"              test_deny_missing_claim
     run_test "Deny reasons indistinguishable to caller"  test_deny_reasons_indistinguishable_to_caller
     run_test "Deny short-circuits before the broker"     test_deny_short_circuits_before_broker
-    run_test "list-brokers is structurally exempt"       test_list_brokers_exempt
+    run_test "Exempt tools bypass the gate"              test_exempt_tools_bypass_the_gate
     print_summary "Tool RBAC tests (enabled)"
 fi
