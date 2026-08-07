@@ -111,18 +111,39 @@ jobs:
       contents: read
     steps:
       - name: Check out the base ref (this is what makes the gate untamperable)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # fetch-depth: 0 does two load-bearing things: it gives the check real
           # history instead of a shallow clone, and it fetches
           # `+refs/heads/*:refs/remotes/origin/*`, which is where the script's
           # `origin/<base>` exclusion comes from. Reducing this breaks both.
           fetch-depth: 0
+          # The next step still needs to `git fetch` from origin (this repo is
+          # internal, not public, so that requires auth) — it passes its own
+          # short-lived header instead of relying on checkout's persisted one,
+          # so the token isn't left in .git/config for every later step in the
+          # job to pick up.
+          persist-credentials: false
       - name: Fetch the pull request's commits
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
         # Data, not code: the commits are read with `git`, never executed.
-        run: git fetch --no-tags --quiet origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/${PR_NUMBER}"
+        #
+        # GitHub's git-over-HTTPS frontend accepts HTTP Basic only — a Bearer
+        # (or "token") Authorization header 401s even though it is valid for
+        # the REST API. actions/checkout's own git-auth-helper authenticates
+        # the same way: Basic with `x-access-token` as the username and the
+        # token as the password. This reproduces that for one command instead
+        # of persisting it in .git/config, using GIT_CONFIG_* env vars rather
+        # than `git -c` so the token never appears in argv (readable from
+        # /proc by any other process in the job — this repo allows unpinned
+        # third-party actions).
+        run: |
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+          git fetch --no-tags --quiet origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/${PR_NUMBER}"
       # The gate's own logic is verified on every run rather than trusted. Fails
       # closed: a broken check blocks the merge instead of waving it through.
       - name: Self-test the DCO check

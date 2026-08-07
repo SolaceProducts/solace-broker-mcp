@@ -96,6 +96,15 @@
         "attributes": {}
       },
       {
+        "id": "58e5da30-2748-4481-81cb-7d3c2d4da6a2",
+        "name": "Ops",
+        "description": "MCP-server-only group. Deliberately NOT configured as an access-level group on any broker (see configure-oauth-profiles.sh) so tool-RBAC scenarios granting on it cannot be satisfied by broker-side authorization.",
+        "composite": false,
+        "clientRole": false,
+        "containerId": "c1ce931d-f823-4535-aed5-817b12242b8e",
+        "attributes": {}
+      },
+      {
         "id": "826d4fec-d738-46b4-b575-47a4cb0bcd43",
         "name": "uma_authorization",
         "description": "${role_uma_authorization}",
@@ -501,7 +510,8 @@
       "disableableCredentialTypes": [],
       "requiredActions": [],
       "realmRoles": [
-        "solace-admins"
+        "solace-admins",
+        "Ops"
       ],
       "notBefore": 0,
       "groups": []
@@ -753,6 +763,103 @@
       "protocolMappers": [
         {
           "id": "d7c46277-e559-41de-aa77-f243b3ff5d54",
+          "name": "mcp-server-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "mcp-server-client",
+            "id.token.claim": "false",
+            "lightweight.claim": "false",
+            "introspection.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        },
+        {
+          "id": "b5ffd7f2-fd71-4934-a0ae-17c38736de52",
+          "name": "realm-roles-to-groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "introspection.token.claim": "true",
+            "multivalued": "true",
+            "userinfo.token.claim": "false",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "claim.name": "groups",
+            "jsonType.label": "String"
+          }
+        }
+      ],
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "roles",
+        "profile",
+        "basic",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "organization",
+        "offline_access",
+        "microprofile-jwt"
+      ]
+    },
+    {
+      "id": "1aeddb8d-3bca-4786-b19b-90e660fb3ae9",
+      "clientId": "agentic-app-client-nogroups",
+      "name": "",
+      "description": "Like agentic-app-client but without the realm-roles-to-groups mapper, so its tokens carry no groups claim. For the tool-RBAC missing-claim scenario. See README.md.",
+      "rootUrl": "",
+      "adminUrl": "",
+      "baseUrl": "",
+      "surrogateAuthRequired": false,
+      "enabled": true,
+      "alwaysDisplayInConsole": false,
+      "clientAuthenticatorType": "client-secret",
+      "redirectUris": [
+        "https://localhost/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*",
+        "https://127.0.0.1/*"
+      ],
+      "webOrigins": [
+        "https://localhost",
+        "http://127.0.0.1",
+        "https://127.0.0.1",
+        "http://localhost"
+      ],
+      "notBefore": 0,
+      "bearerOnly": false,
+      "consentRequired": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "publicClient": true,
+      "frontchannelLogout": true,
+      "protocol": "openid-connect",
+      "attributes": {
+        "realm_client": "false",
+        "oidc.ciba.grant.enabled": "false",
+        "backchannel.logout.session.required": "true",
+        "standard.token.exchange.enabled": "false",
+        "frontchannel.logout.session.required": "true",
+        "post.logout.redirect.uris": "+",
+        "oauth2.device.authorization.grant.enabled": "false",
+        "display.on.consent.screen": "false",
+        "backchannel.logout.revoke.offline.tokens": "false"
+      },
+      "authenticationFlowBindingOverrides": {},
+      "fullScopeAllowed": true,
+      "nodeReRegistrationTimeout": -1,
+      "protocolMappers": [
+        {
+          "id": "7b54ff9e-b78a-435e-9bcd-c9f2e4c386b8",
           "name": "mcp-server-audience",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-audience-mapper",
