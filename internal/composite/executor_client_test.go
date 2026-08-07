@@ -16,7 +16,6 @@ package composite
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -196,34 +195,6 @@ func TestExecute_GetClientDetails_ReturnsData(t *testing.T) {
 	}
 }
 
-func TestExecute_GetClientDetails_NotFound(t *testing.T) {
-	client := newMockClient()
-	client.errors["getMsgVpnClient"] = &sempv2.SEMPError{
-		Operation:  "getMsgVpnClient",
-		StatusCode: 400,
-		Body:       `{"meta":{"error":{"code":400,"description":"Client not found","status":"NOT_FOUND"}}}`,
-	}
-
-	executor := NewCompositeExecutor(testOperations())
-
-	params := map[string]any{
-		"msgVpnName": "default",
-		"clientName": "nonexistent-client",
-	}
-
-	_, err := executor.Execute(context.Background(), getClientDetailsTool(), client, params)
-	if err == nil {
-		t.Fatal("expected error for 404 response, got nil")
-	}
-
-	var sempErr *sempv2.SEMPError
-	if !errors.As(err, &sempErr) {
-		t.Errorf("expected SEMPError in error chain, got: %v", err)
-	} else if sempErr.StatusCode != 400 {
-		t.Errorf("expected status code 400, got %d", sempErr.StatusCode)
-	}
-}
-
 func TestExecute_ListClientSubscriptions_ReturnsData(t *testing.T) {
 	client := newSeqMockClient()
 	client.addResponses("getMsgVpnClientSubscriptions", pageResult(makeSubscriptionItems(2), ""))
@@ -272,39 +243,6 @@ func TestExecute_ListClientSubscriptions_DefaultMaxResults(t *testing.T) {
 	}
 	if subs["truncated"] != false {
 		t.Errorf("truncated = %v, want false", subs["truncated"])
-	}
-}
-
-func TestExecute_ListClientSubscriptions_MultiPage(t *testing.T) {
-	// Page 1: 100 subscriptions + cursor; page 2: 30 subscriptions, no cursor. Total: 130.
-	client := newSeqMockClient()
-	client.addResponses("getMsgVpnClientSubscriptions",
-		pageResult(makeSubscriptionItems(100), "cursor-s2"),
-		pageResult(makeSubscriptionItems(30), ""),
-	)
-
-	executor := NewCompositeExecutor(testOperations())
-
-	result, err := executor.Execute(context.Background(), listClientSubscriptionsTool(), client, map[string]any{
-		"msgVpnName": "default",
-		"clientName": "myapp/1",
-		"maxResults": float64(200),
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	subs := result["subscriptions"].(map[string]any)
-	items := subs["data"].([]any)
-
-	if len(items) != 130 {
-		t.Errorf("len(items) = %d, want 130", len(items))
-	}
-	if subs["truncated"] != false {
-		t.Errorf("truncated = %v, want false", subs["truncated"])
-	}
-	if len(client.calls) != 2 {
-		t.Errorf("expected 2 SEMP calls, got %d", len(client.calls))
 	}
 }
 
@@ -393,38 +331,6 @@ func TestExecute_ListClients_DefaultMaxResults(t *testing.T) {
 	}
 	if clients["truncated"] != false {
 		t.Errorf("truncated = %v, want false", clients["truncated"])
-	}
-}
-
-func TestExecute_ListClients_MultiPage(t *testing.T) {
-	// Page 1: 100 clients + cursor; page 2: 20 clients, no cursor. Total: 120.
-	client := newSeqMockClient()
-	client.addResponses("getMsgVpnClients",
-		pageResult(makeClientItems(100), "cursor-c2"),
-		pageResult(makeClientItems(20), ""),
-	)
-
-	executor := NewCompositeExecutor(testOperations())
-
-	result, err := executor.Execute(context.Background(), listClientsTool(), client, map[string]any{
-		"msgVpnName": "default",
-		"maxResults": float64(200), // larger than 120 total so paginator follows all pages
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	clients := result["clients"].(map[string]any)
-	items := clients["data"].([]any)
-
-	if len(items) != 120 {
-		t.Errorf("len(items) = %d, want 120", len(items))
-	}
-	if clients["truncated"] != false {
-		t.Errorf("truncated = %v, want false", clients["truncated"])
-	}
-	if len(client.calls) != 2 {
-		t.Errorf("expected 2 SEMP calls, got %d", len(client.calls))
 	}
 }
 

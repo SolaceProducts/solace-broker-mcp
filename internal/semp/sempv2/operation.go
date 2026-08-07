@@ -77,7 +77,7 @@ func ParseSpecs(fsys fs.FS) (map[string]*Operation, error) {
 			return nil, fmt.Errorf("parsing spec file %q: %w", entry.Name(), err)
 		}
 
-		specType, err := deriveSpecType(spec.BasePath)
+		specType, err := DeriveSpecType(spec.BasePath)
 		if err != nil {
 			return nil, fmt.Errorf("spec file %q: %w", entry.Name(), err)
 		}
@@ -128,9 +128,9 @@ func ParseSpecs(fsys fs.FS) (map[string]*Operation, error) {
 	return operations, nil
 }
 
-// deriveSpecType extracts the SEMP API type from a spec's basePath and normalizes
+// DeriveSpecType extracts the SEMP API type from a spec's basePath and normalizes
 // private variants to their public equivalents (e.g. "__private_monitor__" → "monitor").
-func deriveSpecType(basePath string) (string, error) {
+func DeriveSpecType(basePath string) (string, error) {
 	parts := strings.Split(strings.TrimSuffix(basePath, "/"), "/")
 	if len(parts) == 0 {
 		return "", fmt.Errorf("empty basePath")

@@ -2,9 +2,10 @@
 
 End-to-end tests for the monitoring tools — `list-vpns`, `list-queues`, `list-clients`,
 `get-message-rates`, `list-slow-subscribers`, `list-queue-discards`, `get-discard-stats`,
-`get-broker-status`, `list-bridges`, `get-bridge-status`, and others. Runs two Solace
-brokers, provisions baseline + extended fixtures (F1–F8), and drives both SEMP-layer
-and messaging-layer broker state.
+`get-broker-status`, `list-bridges`, `get-bridge-status`, `list-kafka-receivers`,
+`get-kafka-receiver-status`, `list-kafka-senders`, `get-kafka-sender-status`, and others.
+Runs two Solace brokers, provisions baseline + extended fixtures (F1–F8), and drives
+both SEMP-layer and messaging-layer broker state.
 
 Builds on the shared scaffold in [`../e2e-common/`](../e2e-common/README.md).
 
@@ -45,8 +46,11 @@ existing RDP/queue tools run against the base fixture copied from
 utilization), so the default Dockerized broker state already populates every
 curated field.
 
-F1–F8 are implemented today, driven by the `broker-driver` binary for the
-client-bearing fixtures (F3–F7); F8 is one-shot SEMP only, like F1/F2.
+F1–F10 are implemented today, driven by the `broker-driver` binary for the
+client-bearing fixtures (F3–F7); F8 is one-shot SEMP only, like F1/F2. F9/F10
+are one-shot SEMP too, but unlike every other fixture here they also depend
+on a real external Kafka broker (the `kafka` service in docker-compose.yml)
+being up first — see `wait_for_kafka` in helpers.sh.
 
 | ID       | Fixture                  | Required broker state                                                                                                                                  | Lifecycle                          | MCP tools supported                                                                |
 | -------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------- | ---------------------------------------------------------------------------------- |
@@ -60,6 +64,8 @@ client-bearing fixtures (F3–F7); F8 is one-shot SEMP only, like F1/F2.
 | F7-spool | Discards via spool quota | Queue `test-queue-discards-spool` with `maxMsgSpoolUsage=1 MB` + `egressEnabled=false`; one-shot publish ~2 MB. **Verification:** `maxMsgSpoolUsageExceededDiscardedMsgCount > 0` after one-shot publish. | one-shot SEMP + one-shot broker-driver publish | `list-queue-discards` (per-queue), `get-discard-stats` (broker-wide)               |
 | F7-ttl   | Discards via TTL expiry  | Queue `test-queue-discards-ttl` with `maxTtl=1 s` + no consumer; one-shot publish + 2 s wait. **Verification:** `maxTtlExpiredDiscardedMsgCount > 0` after one-shot publish. | one-shot SEMP + one-shot broker-driver publish | `list-queue-discards` (per-queue), `get-discard-stats` (broker-wide)               |
 | F8       | Bridges (SOL-152231)     | Three bridges per broker, each pointed at the *other* broker (the only fixture that's inherently cross-broker rather than independent per side): `test-bridge` (healthy, bidirectional once both sides exist), `test-bridge-failing` (enabled, remote location `127.0.0.1:1` — connection refused, never converges), `test-bridge-disabled` (`enabled=false`). **Verification:** `list-bridges`/`get-bridge-status` field values — see [F8 — bridge connection-state findings](#f8--bridge-connection-state-findings). | one-shot SEMP                      | `list-bridges` (`downCount`/`disabledCount` aggregation), `get-bridge-status` (compound-identifier lookup) |
+| F9       | Kafka Receivers (SOL-152370) | Three Kafka Receivers per broker, all bridging to the real `kafka` service (apache/kafka:3.7.0, KRaft mode) in this compose file: `test-kafka-receiver` (healthy, topic-bound to a real Kafka topic), `test-kafka-receiver-failing` (enabled, unreachable bootstrap address `127.0.0.1:1`), `test-kafka-receiver-disabled` (`enabled=false`). **Verification:** `list-kafka-receivers`/`get-kafka-receiver-status` field values — see [F9/F10 — Kafka Receiver/Sender findings](#f9f10--kafka-receiversender-findings). | one-shot SEMP (+ real Kafka broker) | `list-kafka-receivers` (`downCount`/`disabledCount`/`byFailureReason` aggregation), `get-kafka-receiver-status` (healthy + down detail) |
+| F10      | Kafka Senders (SOL-152370)   | Three Kafka Senders per broker, same pattern as F9: `test-kafka-sender` (healthy, queue-bound to a real Kafka topic), `test-kafka-sender-failing` (unreachable), `test-kafka-sender-disabled` (`enabled=false`). **Verification:** `list-kafka-senders`/`get-kafka-sender-status` field values — see [F9/F10 — Kafka Receiver/Sender findings](#f9f10--kafka-receiversender-findings). | one-shot SEMP (+ real Kafka broker) | `list-kafka-senders` (`downCount`/`disabledCount`/`byFailureReason` aggregation), `get-kafka-sender-status` (healthy + down detail) |
 
 Activation order is deterministic: F1 and F2 (SEMP-only) before F3/F4
 (client-bearing). F5, F6, and F7 follow F3/F4 — each owns dedicated resources
@@ -295,6 +301,73 @@ real broker behavior first.
   used by `connected_client.go` for F3/F4/F5) works for a bridge's remote
   authentication too — no new client-username fixture was needed.
 
+### F9/F10 — Kafka Receiver/Sender findings
+
+SOL-152328 added `list-kafka-receivers`, `get-kafka-receiver-status`,
+`list-kafka-senders`, and `get-kafka-sender-status` spec-derived, not
+lab-verified. SOL-152370 initially concluded live verification was blocked
+by a license/edition gate with no way around it; further investigation
+during the same story found that conclusion was wrong — it's a scaling
+default, not a license restriction, and is fully unlockable. These findings
+are load-bearing for `docker-compose.yml`'s `SYSTEM_SCALING_*` env vars and
+for how the F9/F10 fixtures/assertions are built.
+
+- **Creating a Kafka Receiver/Sender at all is gated by two scaling
+  settings that default to 0** on `solace/solace-pubsub-standard:latest`:
+  `POST .../kafkaReceivers` initially failed with `400 MAX_NUM_EXCEEDED:
+  "Kafka Bridge limit of 0 reached."` The confd env-backend keys are
+  `/system/scaling/maxkafkabridgecount` and
+  `/system/scaling/maxkafkabrokerconnectioncount` — set via
+  `SYSTEM_SCALING_MAXKAFKABRIDGECOUNT`/
+  `SYSTEM_SCALING_MAXKAFKABROKERCONNECTIONCOUNT` (note the `SYSTEM_` prefix,
+  not `SOLACE_` — an initial wrong guess at the variable name silently
+  no-ops instead of erroring, since confd's env backend just falls through
+  to the default for an unrecognized key rather than failing). **Both are
+  enums, not free integers** — confirmed against the broker's own SEMP RPC
+  schema (`consolidated-semp-rpc-soltr.xsd`): bridge count must be one of
+  `0, 10, 50, 200`; broker-connection count must be one of `0, 300, 2000,
+  10000`. Any other value fails confd's config check and the container
+  exits at boot (`ERROR "Invalid max kafka broker connections config key
+  value 100"` — a value we tried before finding the real enum). This suite
+  uses `10`/`300`.
+- **`failureReason` DOES populate reliably**, unlike bridges'
+  `inboundFailureReason` above (which never populates for connection-level
+  failures). Lab-verified stable across 45s of polling: `"Shutdown"` for an
+  admin-disabled Kafka Receiver/Sender, `"No remote-broker in UP state"` for
+  one pointed at an unreachable bootstrap address. This is why
+  `byFailureReason` is asserted to have a real entry in
+  `test_list_kafka_receivers_summary`/`test_list_kafka_senders_summary`,
+  unlike the equivalent bridges assertion.
+- **A healthy Kafka Receiver/Sender converges to `up: true` quickly**
+  (5–7s observed) once it can actually reach a real Kafka broker and has at
+  least one enabled topic/queue binding — confirmed against
+  `apache/kafka:3.7.0` in KRaft mode (the `kafka` service in
+  `docker-compose.yml`). A **queue binding's `enabled` field defaults to
+  `false`** regardless of the rest of the request body — a binding created
+  without explicitly setting it never carries traffic and the sender never
+  reports up; `create_kafka_senders_on` sets it explicitly in the same POST
+  that creates the binding (config field names: `topicName`/`localTopic`
+  for a receiver's topic binding, `queueName`/`remoteTopic` for a sender's
+  queue binding).
+- **Deleting a Kafka Receiver/Sender does NOT cascade its
+  topicBindings/queueBindings sub-resource** — unlike bridges'
+  `remoteMsgVpns`, but like RDPs' `queueBindings`/`restConsumers`.
+  `cleanup_kafka_receivers_on`/`cleanup_kafka_senders_on` delete the binding
+  before the parent object.
+- **`get-kafka-receiver-status`/`get-kafka-sender-status`'s `select` clause
+  (`topicBindingCount`, `topicBindingUpCount`, `queueBindingCount`,
+  `queueBindingUpCount`) initially looked broken** — those exact field
+  names 400 with `select query error: 'topicBindingCount' not a valid
+  attribute` against the broker's *public* `/SEMP/v2/monitor` API. That was
+  a red herring from testing the wrong API by hand: this server's composite
+  executor has always called the *private* `/SEMP/v2/__private_monitor__`
+  API instead (the embedded spec's actual `basePath` — an existing,
+  deliberate pattern in this codebase, see
+  `internal/tools/queuemetrics/handler.go`), where these fields work
+  correctly. No code change was needed; this is a note for the next person
+  who reaches for `curl` to spot-check a Kafka tool's fields by hand against
+  the public API and gets confused by a mismatch that isn't real.
+
 ## Cleanup order
 
 `test-monitoring-tools.sh` runs the following cleanup steps, in this order,
@@ -320,14 +393,24 @@ an attached client.
 
 ## Port allocation
 
-Distinct from `e2e-basic-mcp` so both suites can run concurrently:
+Distinct from `e2e-basic-mcp` and `e2e-llm` so all three suites can run
+concurrently. `e2e-llm` matters here specifically because it sources this
+suite's `helpers.sh` for its fixture code (see the Fixtures section above),
+so the two stacks are meant to coexist, not just avoid clashing by luck:
 
-| Resource       | e2e-basic-mcp | e2e-monitoring |
-| -------------- | ------------- | -------------- |
-| SEMP broker-a  | 8080          | 8090           |
-| SEMP broker-b  | 8082          | 8092           |
-| SMF broker-a   | (not exposed) | 55655          |
-| SMF broker-b   | (not exposed) | 55656          |
+| Resource       | e2e-basic-mcp | e2e-monitoring | e2e-llm |
+| -------------- | ------------- | -------------- | ------- |
+| SEMP broker-a  | 8080          | 8090           | 8102    |
+| SEMP broker-b  | 8082          | 8092           | 8104    |
+| SMF broker-a   | (not exposed) | 55655          | 55661   |
+| SMF broker-b   | (not exposed) | 55656          | 55662   |
+| Kafka (F9/F10) | n/a           | 9096           | n/a     |
+| MCP server     | (varies)      | 9090           | 9094    |
+
+`KAFKA_PORT` defaults to 9096, not 9094 — 9094 is already claimed by
+`e2e-llm`'s MCP server (`test/e2e-llm/targets/local-docker.env`), and CI
+running the two suites as separate jobs on separate runners would not catch
+a collision that only bites on a local concurrent run.
 
 All override-able via `.env`: `BROKER_A_SEMP_PORT`, `BROKER_B_SEMP_PORT`,
-`BROKER_A_SMF_PORT`, `BROKER_B_SMF_PORT`.
+`BROKER_A_SMF_PORT`, `BROKER_B_SMF_PORT`, `KAFKA_PORT`.

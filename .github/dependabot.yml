@@ -1,0 +1,64 @@
+version: 2
+
+# Scheduled version-drift updates for Go modules and GitHub Actions, separate
+# from the Dependabot security alerts/updates already active on this repo
+# (those fire on a published CVE regardless of this file).
+#
+# Not Renovate: Renovate cannot be enrolled for a public repository under the
+# org's current system, so it stays scoped to the one thing it already covers,
+# the pinned Claude Code CLI version (.github/renovate.json). Dependabot's own
+# commit-message config has no field for a DCO Signed-off-by trailer, so its
+# PRs are exempted from that check instead — see .github/workflows/dco.yaml
+# and .github/scripts/dco-check.sh. Tracked under SOL-152808.
+updates:
+  # Three go.mod files exist in this repo; each needs its own entry because
+  # Dependabot's `directory` matches exactly one path per ecosystem entry.
+  # Leaving out either test module would silently under-cover it, which is
+  # worse than an explicit, visible entry that does nothing most weeks.
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    groups:
+      go-minor-patch:
+        update-types: ["minor", "patch"]
+      go-major:
+        update-types: ["major"]
+    # Grouping caps this directory at 2 open PRs per run (minor/patch, major),
+    # so the default cap of 5 was never actually at risk. Set explicitly anyway
+    # so the choice reads as deliberate rather than an unnoticed default.
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: "gomod"
+    directory: "/test/e2e-common/broker-driver"
+    schedule:
+      interval: "daily"
+    groups:
+      go-minor-patch:
+        update-types: ["minor", "patch"]
+      go-major:
+        update-types: ["major"]
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: "gomod"
+    directory: "/test/e2e-basic-mcp/agent"
+    schedule:
+      interval: "daily"
+    groups:
+      go-minor-patch:
+        update-types: ["minor", "patch"]
+      go-major:
+        update-types: ["major"]
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: "github-actions"
+    # Actions ecosystem always resolves workflow files under .github/workflows
+    # regardless of `directory`; "/" is the only sensible value and is not a
+    # per-module path the way it is for the gomod entries above.
+    directory: "/"
+    schedule:
+      interval: "daily"
+    groups:
+      github-actions:
+        patterns: ["*"]
+    open-pull-requests-limit: 10

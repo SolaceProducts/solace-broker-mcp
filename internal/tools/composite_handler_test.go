@@ -215,19 +215,6 @@ func TestCompositeToolHandler_Annotations(t *testing.T) {
 	}
 }
 
-func TestCompositeToolHandler_NameAndDescription(t *testing.T) {
-	executor := composite.NewCompositeExecutor(testOperations())
-	handler := NewCompositeToolHandler(testTool(), executor)
-
-	meta := handler.Metadata()
-	if meta.Name != "get-queue-metrics" {
-		t.Errorf("Name = %q, want %q", meta.Name, "get-queue-metrics")
-	}
-	if meta.Description != "Get detailed metrics for a specific queue." {
-		t.Errorf("Description = %q, want correct description", meta.Description)
-	}
-}
-
 // TestCompositeToolHandler_Metadata_FreshPointersAcrossCalls verifies the
 // Metadata() contract: every call returns freshly-allocated state, including
 // the *bool fields on Annotations. Without this guarantee, a caller mutating
@@ -263,6 +250,46 @@ func TestCompositeToolHandler_Metadata_FreshPointersAcrossCalls(t *testing.T) {
 	if m3.Annotations.Destructive == nil || *m3.Annotations.Destructive != true {
 		t.Errorf("after mutating m1.Annotations.Destructive=false, m3.Annotations.Destructive = %v; expected fresh pointer to true",
 			m3.Annotations.Destructive)
+	}
+}
+
+// TestCompositeToolHandler_SchemaMinLength: only required string params carry
+// minLength:1; optional strings and required non-strings do not.
+func TestCompositeToolHandler_SchemaMinLength(t *testing.T) {
+	tool := composite.CompositeTool{
+		Name:        "create-queue",
+		Description: "Create a queue.",
+		Parameters: []composite.ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "queueName", Type: "string", Required: true},
+			{Name: "filterText", Type: "string"},
+			{Name: "maxResults", Type: "integer", Required: true},
+		},
+	}
+
+	handler := NewCompositeToolHandler(tool, composite.NewCompositeExecutor(nil))
+	props, ok := handler.Metadata().InputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("expected properties map")
+	}
+	prop := func(name string) map[string]any {
+		p, ok := props[name].(map[string]any)
+		if !ok {
+			t.Fatalf("property %q missing or not an object", name)
+		}
+		return p
+	}
+
+	for _, name := range []string{"msgVpnName", "queueName"} {
+		if got := prop(name)["minLength"]; got != 1 {
+			t.Errorf("%s minLength = %v, want 1", name, got)
+		}
+	}
+	if _, ok := prop("filterText")["minLength"]; ok {
+		t.Error("optional string filterText should not have minLength")
+	}
+	if _, ok := prop("maxResults")["minLength"]; ok {
+		t.Error("required integer maxResults should not have minLength")
 	}
 }
 

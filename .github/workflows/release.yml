@@ -5,18 +5,30 @@ on:
     tags:
       - 'v*'
 
+# Least privilege by default: every job below declares what it needs. This
+# matters most for `fossa_scan`, which hands its job token to a reusable
+# workflow in another repository — a broad top-level grant would travel with
+# it. (`test` also calls a reusable workflow, but a local one, and it scopes
+# its own jobs.)
 permissions:
-  contents: write
-  packages: write
-  id-token: write
-  pull-requests: write
-  actions: read
-  issues: write
-  checks: write
-  statuses: write
+  contents: read
 
 jobs:
   test:
+    # build-and-test.yml scopes permissions per job and defaults to
+    # `contents: read`; a caller can only downgrade what the called workflow
+    # asks for, never raise it. This mirrors the widest grant that workflow
+    # makes (its own `fossa_scan`) so nothing is silently stripped. That job is
+    # skipped on a tag push, but the grant costs nothing and keeps the two
+    # workflows from drifting into a hard-to-debug OIDC failure.
+    permissions:
+      contents: read
+      packages: read
+      pull-requests: write
+      id-token: write
+      actions: read
+      checks: write
+      statuses: write
     uses: ./.github/workflows/build-and-test.yml
 
   # Fail fast, before anything is published: a release must have a matching
@@ -63,9 +75,35 @@ jobs:
         run: .github/scripts/licenses-check.test.sh
       - name: Verify THIRD_PARTY_LICENSES.md and NOTICE match the binary
         run: .github/scripts/licenses-check.sh
+      # Verified at the tag for the same reason as the check above it: a pull
+      # request can merge with this red until it is a required status check.
+      # `if: always()` is load-bearing. GitHub skips later steps once one fails,
+      # so without it a red licenses-check.sh would stop these from running at
+      # all — one gate masking the other, which is the exact coupling the
+      # separate script exists to avoid. Same job, because both verdicts belong
+      # under the one `Third-party licenses current` required check.
+      - name: Self-test the build/test licence check
+        if: always()
+        run: .github/scripts/build-test-licenses-check.test.sh
+      - name: Verify THIRD_PARTY_BUILD_TEST.md matches the build and test inputs
+        if: always()
+        run: .github/scripts/build-test-licenses-check.sh
 
   fossa_scan:
     name: FOSSA Scan
+    # Same grant, and the same reasoning, as the `fossa_scan` job in
+    # build-and-test.yml: the scan authenticates to Vault by OIDC (`id-token`),
+    # reads the dependency graph and workflow metadata (`packages`, `actions`),
+    # and reports back on the commit (`pull-requests`, `statuses`, `checks`).
+    # Scoped to this job so it inherits nothing the release jobs hold.
+    permissions:
+      contents: read
+      packages: read
+      pull-requests: write
+      id-token: write
+      actions: read
+      checks: write
+      statuses: write
     uses: SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml@fc521b087f780457f92d4cb46038184e92ad2fbc # pinned 2026-05-12
     with:
       git_ref: ${{ github.ref_name }}
@@ -78,6 +116,12 @@ jobs:
   build-binaries:
     needs: [test, release-notes, licenses]
     runs-on: ubuntu-latest
+    # `id-token`/`attestations` for the provenance step below; nothing here
+    # writes to the repository or the registry.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       matrix:
         include:
@@ -127,6 +171,22 @@ jobs:
             THIRD_PARTY_LICENSES.md
           echo "ARCHIVE=${ARCHIVE}" >> "${GITHUB_ENV}"
 
+      # Attested here, per matrix leg, rather than in the release job, for two
+      # reasons. The digest is bound to the archive before it round-trips
+      # through upload-artifact/download-artifact, so the attestation covers
+      # the bytes as built rather than the bytes as restored. And a failure to
+      # attest surfaces before anything is published, instead of after the
+      # image is already live on ghcr.io.
+      #
+      # It is *not* about naming the builder: the SLSA predicate records
+      # workflow_ref, job_workflow_ref, run_id and run_attempt — not the job
+      # name — and all of these jobs are inline in this file, so attesting from
+      # the release job would produce the same values.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: ${{ env.ARCHIVE }}
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -134,8 +194,26 @@ jobs:
           path: ${{ env.ARCHIVE }}
 
   build-docker:
-    needs: [test, release-notes, licenses]
+    # `fossa_scan` is a prerequisite here, not just of `release`: this job pushes
+    # unconditionally, and a push cannot be undone. Without it a failing SCA gate
+    # still publishes the image and moves `latest`, and only the GitHub Release
+    # waits — leaving a live image the release never vouched for. The two jobs ran
+    # in parallel before, so on a clean run this costs the longer of the two, not
+    # the sum.
+    needs: [test, release-notes, licenses, fossa_scan]
     runs-on: ubuntu-latest
+    # `packages` to push to ghcr.io, `id-token`/`attestations` for the
+    # provenance step. `artifact-metadata` is needed because
+    # attest-build-provenance defaults `create-storage-record: true`, and with
+    # `push-to-registry: true` under an organization account it creates a
+    # storage record for the pushed attestation; without the permission the
+    # action still succeeds but logs two warnings per run.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -157,7 +235,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/solacedev/solace-broker-mcp
+          images: ghcr.io/solaceproducts/solace-broker-mcp
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -165,6 +243,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -177,9 +256,25 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # The digest covers the whole multi-arch index, so one attestation covers
+      # every tag pushed above. push-to-registry stores a second copy of the
+      # bundle next to the image, which cosign can verify straight from
+      # ghcr.io. `gh attestation verify oci://…` still queries the GitHub API
+      # by default — it only reads the registry copy when passed
+      # `--bundle-from-oci`.
+      - name: Attest image provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/solaceproducts/solace-broker-mcp
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
   release:
     needs: [build-binaries, build-docker, fossa_scan]
     runs-on: ubuntu-latest
+    # Creates the GitHub Release and uploads the archives and checksums to it.
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4

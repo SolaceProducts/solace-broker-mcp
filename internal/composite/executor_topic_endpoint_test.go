@@ -20,6 +20,18 @@ import (
 	"testing"
 )
 
+// These tests build CompositeTool Go literals directly — they never load
+// tools.yaml, so they exercise constructRequestBody's generic mechanism, not
+// tools.yaml wiring. A wiring bug in the real YAML is caught instead by
+// TestLoadTools_EmbeddedDefinitions/path-params-wired (loader_embedded_test.go).
+//
+// Still worth keeping: create-topic-endpoint's shape (one path param, one
+// scalar + one object spread into the body) is one VPN's create never
+// exercises (VPN has zero path params). create-rdp is the identical shape.
+//
+// TestExecute_UpdateTopicEndpoint_BodyExcludesPathParams is new — main never
+// had an update-topic-endpoint test at all.
+
 // createTopicEndpointTool returns the create-topic-endpoint tool definition for
 // tests. Like create-queue, msgVpnName is the only path param; topicEndpointName
 // and topicEndpointConfig are assembled into the body.
@@ -38,6 +50,32 @@ func createTopicEndpointTool() CompositeTool {
 				Operation: "config/createMsgVpnTopicEndpoint",
 				Args: map[string]string{
 					"msgVpnName": "{{.Params.msgVpnName}}",
+				},
+			},
+		},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// updateTopicEndpointTool returns the update-topic-endpoint tool definition for
+// tests. Both msgVpnName and topicEndpointName are path params (passed as step
+// args); only topicEndpointConfig is spread into the PATCH body.
+func updateTopicEndpointTool() CompositeTool {
+	return CompositeTool{
+		Name:        "update-topic-endpoint",
+		Description: "Update an existing topic endpoint",
+		Parameters: []ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "topicEndpointName", Type: "string", Required: true},
+			{Name: "topicEndpointConfig", Type: "object", Required: true},
+		},
+		Steps: []Step{
+			{
+				ID:        "updateTopicEndpoint",
+				Operation: "config/updateMsgVpnTopicEndpoint",
+				Args: map[string]string{
+					"msgVpnName":        "{{.Params.msgVpnName}}",
+					"topicEndpointName": "{{.Params.topicEndpointName}}",
 				},
 			},
 		},
@@ -106,6 +144,49 @@ func TestExecute_CreateTopicEndpoint_ConstructsBody(t *testing.T) {
 	}
 	if _, leaked := body["msgVpnName"]; leaked {
 		t.Error("msgVpnName is a path param and must not appear in the create body")
+	}
+}
+
+func TestExecute_UpdateTopicEndpoint_BodyExcludesPathParams(t *testing.T) {
+	var recorded []callRecord
+	var mu sync.Mutex
+	capture := &argCapturingClient{inner: newMockClient(), recorded: &recorded, mu: &mu}
+
+	executor := NewCompositeExecutor(testOperations())
+
+	_, err := executor.Execute(context.Background(), updateTopicEndpointTool(), capture, map[string]any{
+		"msgVpnName":        "vpn-a",
+		"topicEndpointName": "te-1",
+		"topicEndpointConfig": map[string]any{
+			"egressEnabled": false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if recorded[0].opID != "updateMsgVpnTopicEndpoint" {
+		t.Errorf("opID = %q, want updateMsgVpnTopicEndpoint", recorded[0].opID)
+	}
+	if recorded[0].args["msgVpnName"] != "vpn-a" {
+		t.Errorf("args[msgVpnName] = %v, want vpn-a", recorded[0].args["msgVpnName"])
+	}
+	if recorded[0].args["topicEndpointName"] != "te-1" {
+		t.Errorf("args[topicEndpointName] = %v, want te-1", recorded[0].args["topicEndpointName"])
+	}
+
+	body, ok := recorded[0].args["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected body to be a map, got %T", recorded[0].args["body"])
+	}
+	if _, leaked := body["msgVpnName"]; leaked {
+		t.Error("msgVpnName is a path param and must not appear in the PATCH body")
+	}
+	if _, leaked := body["topicEndpointName"]; leaked {
+		t.Error("topicEndpointName is a path param and must not appear in the PATCH body")
+	}
+	if body["egressEnabled"] != false {
+		t.Errorf("body[egressEnabled] = %v, want false", body["egressEnabled"])
 	}
 }
 

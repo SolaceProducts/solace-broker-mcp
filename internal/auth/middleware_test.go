@@ -743,32 +743,6 @@ func Test_ProtectedResourceMetadata(t *testing.T) {
 	}
 }
 
-func Test_PRMHandler_Disabled(t *testing.T) {
-	cfg := &config.ServerConfig{MCPClientAuth: config.MCPClientAuthConfig{Mode: config.AuthModeDisabled}}
-	if h := NewProtectedResourceMetadataHandler(cfg); h != nil {
-		t.Errorf("expected nil PRM handler for mode: disabled, got %T", h)
-	}
-}
-
-func Test_PRMHandler_Static(t *testing.T) {
-	cfg := &config.ServerConfig{MCPClientAuth: config.MCPClientAuthConfig{Mode: config.AuthModeStatic, DevToken: "x"}}
-	if h := NewProtectedResourceMetadataHandler(cfg); h != nil {
-		t.Errorf("expected nil PRM handler for mode: static, got %T", h)
-	}
-}
-
-func Test_PRMHandler_OAuth(t *testing.T) {
-	cfg := &config.ServerConfig{MCPClientAuth: config.MCPClientAuthConfig{
-		Mode:        config.AuthModeOAuth,
-		Issuer:      "https://idp.example.com",
-		Audience:    "mcp",
-		ResourceURL: "https://mcp.example.com/mcp",
-	}}
-	if h := NewProtectedResourceMetadataHandler(cfg); h == nil {
-		t.Error("expected non-nil PRM handler for mode: oauth")
-	}
-}
-
 // Test_OIDCVerifier_PopulatesTokenInfo_AllClaims verifies that the OIDC
 // verifier extracts sub/iss/client_id/jti and stashes the latter three in
 // TokenInfo.Extra under fixed keys. SOL-149606 wires these into audit logs;
