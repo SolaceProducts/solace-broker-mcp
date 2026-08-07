@@ -18,6 +18,24 @@ FIXTURE_QUEUE="e2e-oauth-queue"
 
 sweep_oauth_fixtures() {
     semp_delete "$BROKER_A_SEMP_CONFIG" "msgVpns/$BROKER_VPN/queues/$FIXTURE_QUEUE"
+    # Unconditionally restore broker A's required audience. The cache-
+    # invalidation scenario poisons it and restores it on its own success path,
+    # but that restore can lose (SEMP commit lag) or be skipped entirely if the
+    # scenario dies between poison and restore. Later phases in run-all.sh no
+    # longer abort when this script fails, and every tool-RBAC scenario calls
+    # broker A — so a stranded poisoned audience would turn one hop-2 defect
+    # into a wall of unrelated RBAC failures. Restoring here makes "the phases
+    # are independent" true rather than assumed.
+    # Non-fatal — this runs in a trap, and failing here would mask whatever
+    # caused the exit. But it must not be silent: a failed restore leaves
+    # broker A on the poisoned audience, and every tool-RBAC scenario in the
+    # later phases targets that broker. Warning loudly is the difference
+    # between one diagnosable line and a wall of unrelated red.
+    if ! upsert_profile "$BROKER_A_SEMP_PORT" "$BROKER_A_AUDIENCE" >/dev/null 2>&1; then
+        log_warn "FAILED to restore broker A's required audience to '$BROKER_A_AUDIENCE'"
+        log_warn "  broker A may still be on 'poisoned-audience-temp'; later phases target it"
+        log_warn "  if the RBAC phases now fail, fix this first — they are downstream of it"
+    fi
 }
 trap sweep_oauth_fixtures EXIT
 sweep_oauth_fixtures

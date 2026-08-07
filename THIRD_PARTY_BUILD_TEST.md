@@ -71,13 +71,15 @@ A standalone module. It builds the MCP client that drives the end-to-end suite.
 
 | Component | Version | License | License text |
 |---|---|---|---|
-| `github.com/google/jsonschema-go` | v0.4.2 | MIT | [license](https://github.com/google/jsonschema-go/blob/v0.4.2/LICENSE) |
-| `github.com/modelcontextprotocol/go-sdk` | v1.5.0 | Apache-2.0 | [license](https://github.com/modelcontextprotocol/go-sdk/blob/v1.5.0/LICENSE) |
+| `github.com/google/jsonschema-go` | v0.4.3 | MIT | [license](https://github.com/google/jsonschema-go/blob/v0.4.3/LICENSE) |
+| `github.com/modelcontextprotocol/go-sdk` | v1.7.0 | Apache-2.0 | [license](https://github.com/modelcontextprotocol/go-sdk/blob/v1.7.0/LICENSE) |
 | `github.com/segmentio/asm` | v1.1.3 | MIT | [license](https://github.com/segmentio/asm/blob/v1.1.3/LICENSE) |
 | `github.com/segmentio/encoding` | v0.5.4 | MIT | [license](https://github.com/segmentio/encoding/blob/v0.5.4/LICENSE) |
 | `github.com/yosida95/uritemplate/v3` | v3.0.2 | BSD-3-Clause | [license](https://github.com/yosida95/uritemplate/blob/v3.0.2/LICENSE) |
 | `golang.org/x/oauth2` | v0.35.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/oauth2/+/master:LICENSE) |
+| `golang.org/x/sync` | v0.20.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sync/+/master:LICENSE) |
 | `golang.org/x/sys` | v0.41.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sys/+/master:LICENSE) |
+| `golang.org/x/time` | v0.15.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/time/+/master:LICENSE) |
 
 Three notes a reader should not have to discover themselves.
 
@@ -160,19 +162,19 @@ below spells out.
 | Action | Pinned ref | Release | License | License text |
 |---|---|---|---|---|
 | `actions/attest-build-provenance` | `0f67c3f` | v4.1.1 | MIT | [license](https://github.com/actions/attest-build-provenance/blob/v4.1.1/LICENSE) |
-| `actions/checkout` | `11d5960` | v4.4.0 | MIT | [license](https://github.com/actions/checkout/blob/v4.4.0/LICENSE) |
-| `actions/download-artifact` | `d3f86a1` | v4.3.0 | MIT | [license](https://github.com/actions/download-artifact/blob/v4.3.0/LICENSE) |
-| `actions/github-script` | `f28e40c` | v7.1.0 | MIT | [license](https://github.com/actions/github-script/blob/v7.1.0/LICENSE.md) |
-| `actions/setup-go` | `40f1582` | v5.6.0 | MIT | [license](https://github.com/actions/setup-go/blob/v5.6.0/LICENSE) |
-| `actions/setup-node` | `49933ea` | v4.4.0 | MIT | [license](https://github.com/actions/setup-node/blob/v4.4.0/LICENSE) |
-| `actions/upload-artifact` | `ea165f8` | v4.6.2 | MIT | [license](https://github.com/actions/upload-artifact/blob/v4.6.2/LICENSE) |
-| `docker/build-push-action` | `10e90e3` | v6.19.2 | Apache-2.0 | [license](https://github.com/docker/build-push-action/blob/v6.19.2/LICENSE) |
-| `docker/login-action` | `c94ce9f` | v3.7.0 | Apache-2.0 | [license](https://github.com/docker/login-action/blob/v3.7.0/LICENSE) |
-| `docker/metadata-action` | `c299e40` | v5.10.0 | Apache-2.0 | [license](https://github.com/docker/metadata-action/blob/v5.10.0/LICENSE) |
-| `docker/setup-buildx-action` | `8d2750c` | v3.12.0 | Apache-2.0 | [license](https://github.com/docker/setup-buildx-action/blob/v3.12.0/LICENSE) |
-| `docker/setup-qemu-action` | `c7c5346` | v3.7.0 | Apache-2.0 | [license](https://github.com/docker/setup-qemu-action/blob/v3.7.0/LICENSE) |
-| `golangci/golangci-lint-action` | `9fae48a` | v7.0.1 | MIT | [license](https://github.com/golangci/golangci-lint-action/blob/v7.0.1/LICENSE) |
-| `softprops/action-gh-release` | `3bb1273` | v2.6.2 | MIT | [license](https://github.com/softprops/action-gh-release/blob/v2.6.2/LICENSE) |
+| `actions/checkout` | `3d3c42e` | v7.0.1 | MIT | [license](https://github.com/actions/checkout/blob/v7.0.1/LICENSE) |
+| `actions/download-artifact` | `3e5f45b` | v8.0.1 | MIT | [license](https://github.com/actions/download-artifact/blob/v8.0.1/LICENSE) |
+| `actions/github-script` | `3a2844b` | v9.0.0 | MIT | [license](https://github.com/actions/github-script/blob/v9.0.0/LICENSE.md) |
+| `actions/setup-go` | `b7ad1da` | v7.0.0 | MIT | [license](https://github.com/actions/setup-go/blob/v7.0.0/LICENSE) |
+| `actions/setup-node` | `8207627` | v7.0.0 | MIT | [license](https://github.com/actions/setup-node/blob/v7.0.0/LICENSE) |
+| `actions/upload-artifact` | `043fb46` | v7.0.1 | MIT | [license](https://github.com/actions/upload-artifact/blob/v7.0.1/LICENSE) |
+| `docker/build-push-action` | `53b7df9` | v7.3.0 | Apache-2.0 | [license](https://github.com/docker/build-push-action/blob/v7.3.0/LICENSE) |
+| `docker/login-action` | `dbcb813` | v4.6.0 | Apache-2.0 | [license](https://github.com/docker/login-action/blob/v4.6.0/LICENSE) |
+| `docker/metadata-action` | `dc80280` | v6.2.0 | Apache-2.0 | [license](https://github.com/docker/metadata-action/blob/v6.2.0/LICENSE) |
+| `docker/setup-buildx-action` | `bb05f3f` | v4.2.0 | Apache-2.0 | [license](https://github.com/docker/setup-buildx-action/blob/v4.2.0/LICENSE) |
+| `docker/setup-qemu-action` | `96fe6ef` | v4.2.0 | Apache-2.0 | [license](https://github.com/docker/setup-qemu-action/blob/v4.2.0/LICENSE) |
+| `golangci/golangci-lint-action` | `ba0d7d2` | v9.3.0 | MIT | [license](https://github.com/golangci/golangci-lint-action/blob/v9.3.0/LICENSE) |
+| `softprops/action-gh-release` | `3d0d988` | v3.0.2 | MIT | [license](https://github.com/softprops/action-gh-release/blob/v3.0.2/LICENSE) |
 
 `actions/github-script` names its licence file `LICENSE.md` rather than
 `LICENSE`. Worth the sentence only because the obvious URL 404s, and a reader who
@@ -187,13 +189,13 @@ All five come from one repository, pinned to a single commit.
 
 | Action | Ref | Owner |
 |---|---|---|
-| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `2bb7665` | Solace |
-| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `2bb7665` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-db-sync` | `2bb7665` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `2bb7665` | Solace |
-| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `2bb7665` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `4c3adb2` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `4c3adb2` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-db-sync` | `4c3adb2` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `4c3adb2` | Solace |
+| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `4c3adb2` | Solace |
 
-`2bb7665` is a branch commit, not a tag, so there is no release to record beside
+`4c3adb2` is a branch commit, not a tag, so there is no release to record beside
 it. The repository itself is Apache-2.0.
 
 Two entries have been dropped from this table, both by the reverse-direction
