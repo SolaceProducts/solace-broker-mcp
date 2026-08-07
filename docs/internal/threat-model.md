@@ -14,9 +14,8 @@ or an explicit **"No mitigation — accepted risk"** statement. Nothing here is
 a design proposal; it describes the system as it exists.
 
 **Read live against commit `158af9f` (main, 7 August 2026).** Re-run this
-analysis before the SolaceProducts flip and whenever a boundary listed below
-changes materially — configuration drifts and this document does not update
-itself.
+analysis whenever a boundary listed below changes materially — configuration
+drifts and this document does not update itself.
 
 **Consolidated accepted risks** are collected in [§8](#8-consolidated-accepted-risks)
 for exception sign-off. Everything else here has a working mitigation.

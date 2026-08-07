@@ -1,16 +1,20 @@
 # Open Source Readiness Status
 
-**Last Updated**: 2026-07-27
+**Last Updated**: 2026-08-07
 **Originating PR**: #15 (aross/SOL-149029-open-source-compliance), merged
-**Last revised by**: SOL-152405 (support-channel decision, admin-checklist accuracy)
+**Last revised by**: SOL-152412 (reconciled against the live repository settings)
+
+This repository is public. What follows is partly a historical record of the
+open-source readiness work (PR #15, clearly marked where it is historical) and
+partly a pointer to `.github/ADMIN_SETUP.md`, which is the current source of truth
+for how the repository is configured and what is outstanding. Where the two
+disagree, ADMIN_SETUP.md wins — it is re-read against the API.
 
 ---
 
 ## Completion Status
 
 ### ✅ CRITICAL (All Complete)
-
-All blocking issues for public release are resolved:
 
 - [x] **C1: LICENSE file** - Apache 2.0 license in place
 - [x] **C2: CONTRIBUTING.md** - Comprehensive contribution guidelines with DCO
@@ -34,14 +38,14 @@ These items are **documented** but require repository admin to configure:
   - Description, topics, website URL
   - Admin needed to configure in Settings → General → About
 - [ ] **M2: Support channels** - See ADMIN_SETUP.md section "Features"
-  - GitHub Discussions is **not** being enabled. Support runs on two channels:
+  - GitHub Discussions is **not** enabled. Support runs on two channels:
     GitHub Issues for bugs and features, and a dedicated Solace Community
     (Discourse) category for questions and discussion. Vulnerabilities go through
     private disclosure per SECURITY.md.
   - This supersedes the earlier plan in this file to open Discussions.
-  - Remaining work: stand up the Solace Community category and repoint the
-    `/discussions` links in `.github/CONTRIBUTING.md` and
-    `.github/ISSUE_TEMPLATE/config.yml`. Tracked separately.
+  - No file links to `/discussions` any more; PR #272 (SOL-152946) repointed them
+    at `https://solace.community/`. Remaining work: stand up the project's own
+    Solace Community category and point the links at it — SOL-152413.
 - [x] **M3: README Badges** - Already added in first commit (build, license, Go version, CoC)
 
 ---
@@ -85,7 +89,7 @@ These items are **documented** but require repository admin to configure:
 ## What Works Without Admin
 
 ✅ **All files created** - No admin access needed
-✅ **Templates will work** - GitHub automatically recognizes them
+✅ **Templates work** - GitHub automatically recognizes them
 ✅ **SECURITY.md visible** - GitHub shows in Security tab
 ✅ **COC and Contributing** - GitHub shows in sidebar
 ✅ **PR template active** - Applies to all new PRs
@@ -93,74 +97,75 @@ These items are **documented** but require repository admin to configure:
 
 ## What Requires Admin
 
-These settings must be configured by repository admin:
+These are the settings only a repository admin can touch. Each one now has a
+section in `.github/ADMIN_SETUP.md` recording its live value and the reasoning;
+this list is a map to those sections, not a second copy of the state.
 
-### 1. Repository Metadata (15 minutes)
+### 1. Repository Metadata
 - Description and website URL
 - Topics for discoverability
 - See: ADMIN_SETUP.md → "Repository Settings"
 
-### 2. Support channels (5 minutes)
-- Leave GitHub Discussions **off**
-- Confirm Issues is on
+### 2. Support channels
+- GitHub Discussions stays **off**; Issues is on
 - See: ADMIN_SETUP.md → "Features"
 
-### 3. Branch Protection (10 minutes)
-- Require PR reviews before merge
-- Require CI checks to pass
-- **Add `Guardian scan gate` to the required status checks** (from
-  `guardian-scan.yaml`) — the always-reporting supply-chain gate. Not
-  `Guardian scan` itself, which is skipped on fork pull requests.
-  `.github/ADMIN_SETUP.md` explains why the gate is the safe context to require.
-- **Add `DCO sign-off` and `DCO check self-test` to the required status checks.**
-  These are not cosmetic. DCO is the control the project carries in place of a
-  contributor licence agreement. Both checks exist in CI, but until they are
-  *required* they enforce nothing, so the control is incomplete until this step
-  is done. `.github/ADMIN_SETUP.md` has the exact strings and the reason each is
-  needed.
-- Prevent force pushes to main
-- See: ADMIN_SETUP.md → "Branch Protection"
+### 3. Branch Protection
+- The `main-protection` ruleset requires a Code Owners approval, resolved
+  conversation threads, and 13 status checks; it blocks force pushes and deletions
+- **`Guardian scan gate`** (from `guardian-scan.yaml` job `gate`) is the
+  supply-chain context. It is the *only* safe one to require: it always reports.
+  Neither `Guardian scan` — which is the workflow's name and has never been a check
+  at all — nor `Guardian gate`, which is skipped on every pull request, belongs in
+  the list. ADMIN_SETUP.md explains both failure modes; they are easy to get wrong
+  and one of them blocks all merges
+- **`DCO sign-off` and `DCO check self-test`** are both required. DCO is the
+  control this project carries in place of a contributor licence agreement, and an
+  unrequired check enforces nothing
+- See: ADMIN_SETUP.md → "Branch Protection" for the authoritative 13-context list
 
-### 4. Security Features (5 minutes)
-- Secret scanning and secret-scanning push protection are already on, as are
-  validity checks and non-provider patterns. Confirm, do not re-enable
-- Dependabot alerts and Dependabot security updates are already on. Scheduled
-  Go module and GitHub Actions updates run on Dependabot too
-  (`.github/dependabot.yml`) — Renovate can't be enrolled for a public repo
-  under the org's current system, so it stays scoped to just the pinned Claude
-  Code CLI version (`.github/renovate.json`). Dependabot's PRs are exempted
-  from the `DCO sign-off` check rather than expected to satisfy it; see
-  `.github/workflows/dco.yaml`
-- CodeQL runs on every PR, but the repository API reports Code Security as
-  disabled; confirm the configuration rather than assuming it
+### 4. Security Features
+- Secret scanning and secret-scanning push protection are on, as are validity
+  checks, non-provider patterns, and AI detection. Confirm, do not re-enable
+- Dependabot alerts and Dependabot security updates are on. Scheduled Go module and
+  GitHub Actions updates run on Dependabot too (`.github/dependabot.yml`) —
+  Renovate can't be enrolled for a public repo under the org's current system, so
+  it stays scoped to just the pinned Claude Code CLI version
+  (`.github/renovate.json`). Dependabot's PRs are exempted from the `DCO sign-off`
+  check rather than expected to satisfy it; see `.github/workflows/dco.yaml`
+- CodeQL runs on every PR but is **not** a required check, so a finding does not
+  block a merge, and the repository API reports Code Security as disabled so we
+  cannot say which configuration owns it. Outstanding under SOL-152858
+- Private vulnerability reporting is **not** enabled. Outstanding under SOL-152967
 - See: ADMIN_SETUP.md → "Security Settings"
 
-### 5. Actions Settings (5 minutes)
-- Turn off "Allow GitHub Actions to create and approve pull requests" (currently on)
-- Set fork pull request workflows to require approval for all outside collaborators
+### 5. Actions Settings
+- "Allow GitHub Actions to create and approve pull requests" is off, and the
+  default workflow token permission is read-only
+- Fork pull request workflows should require approval for all outside
+  collaborators. **No REST API exposes this setting**, so it cannot be verified by
+  tooling — someone with org-admin access has to read the radio button.
+  Outstanding under SOL-152960
 - See: ADMIN_SETUP.md → "GitHub Actions Permissions"
 
-### 6. Make Repository Public (5 minutes)
-**ONLY AFTER:**
-- Admin tasks above are complete
-- A release has been cut that covers what is on `main`. The newest release is
-  v0.6.0 (tagged 2026-07-28), and `main` has moved on since with `[Unreleased]`
-  entries in `CHANGELOG.md`, so v0.6.0 does **not** describe `main` today. Cut one
-  before the flip or the first thing a new user downloads is behind the code they
-  are reading.
-- See: ADMIN_SETUP.md → "Visibility Settings"
-
-**Total admin time**: ~45 minutes
+### 6. Releases
+- The newest release is v0.6.0 (tagged 2026-07-28) and `main` has moved a long way
+  past it, with `[Unreleased]` entries in `CHANGELOG.md` including two BREAKING
+  ones. v0.6.0 does **not** describe `main`, so someone downloading the latest
+  release gets something behind the code they are reading. Cut one
+- See: ADMIN_SETUP.md → "Releases"
 
 ---
 
 ## Open Source Maturity Progress
 
-This table is a historical record of PR #15 (2026-04-24), not current state. As of
-2026-07-29 one gap remains behind the Security row: "Allow GitHub Actions to
-create and approve pull requests" is still on. Secret scanning and its push
-protection have since been enabled. Do not cite the score below as go/no-go
-evidence without re-checking the live settings.
+This table is a historical record of PR #15 (2026-04-24), not current state. The
+Security row in particular has been overtaken in both directions since: secret
+scanning and push protection were enabled, "Allow GitHub Actions to create and
+approve pull requests" was turned off, and the required-status-check list was
+corrected — while CodeQL enforcement and private vulnerability reporting remain
+open. Do not cite the score below as evidence of anything; re-read the live
+settings through `.github/ADMIN_SETUP.md`.
 
 | Category | Before PR #15 | After PR #15 | Target |
 |----------|---------------|--------------|--------|
@@ -174,29 +179,24 @@ evidence without re-checking the live settings.
 
 **Overall Score at the time of PR #15**: 31/35 (89%) - **Growth Stage** ✅
 
-**Target Achieved at the time of PR #15**: Yes! Exceeded 80% threshold for
-public release.
-
-Both lines describe 2026-04-24 and are not a current assessment. The Security
-row they include has since been overtaken by the live settings noted above, so
-the real figure today is lower. Re-score against the live settings before
-treating the 80% threshold as met.
+Both lines describe 2026-04-24 and are not a current assessment. Re-score against
+the live settings rather than quoting them.
 
 ---
 
 ## Next Steps
 
-### Immediate (Before Public Release)
+### Open
 
-1. **Admin configures repository** - See ADMIN_SETUP.md (~45 minutes)
-2. **Cut a release** - `[Unreleased]` carries entries, so v0.6.0 does not describe
-  `main`. See RELEASING.md.
-3. **Make repository public** - Settings → Danger Zone → Change visibility
+1. **Close the outstanding admin items** - the authoritative list is the
+   "Outstanding actions" table at the top of `.github/ADMIN_SETUP.md`
+2. **Cut a release** - `[Unreleased]` carries entries, including two BREAKING ones,
+   so v0.6.0 does not describe `main`. See RELEASING.md.
 
-### Post-Publication
+### Ongoing
 
 1. **Monitor community health** - Track issue/PR response times
-2. **Announce release** - Solace Community, social media, internal channels
+2. **Announce releases** - Solace Community, social media, internal channels
 3. **Submit to registries** - MCP server registry (if exists), Go package indexes
 
 ### Future Enhancements
