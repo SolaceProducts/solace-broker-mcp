@@ -71,6 +71,19 @@ if [[ "$NO_MOCK" != "1" ]] && ss -tln 2>/dev/null | grep -q ":18081 "; then
   exit 2
 fi
 
+# Fixture preflight. The canned responses and goldens are lab captures kept
+# out of git, so "absent" is the normal state of a fresh clone — fail here
+# with a pointer to regen-golden.sh rather than 404ing mid-run or failing the
+# fidelity gate in a way that reads like a regression. Under NO_MOCK=1 the
+# mock (and its canned/) belongs to another host, so only the goldens this
+# box feeds to the fidelity gate are checked.
+echo "== 0. fixture preflight"
+if [[ "$NO_MOCK" == "1" ]]; then
+  "$here/fixtures-manifest.sh" check --no-canned
+else
+  "$here/fixtures-manifest.sh" check
+fi
+
 # Convert Go duration to seconds for the sampler's -duration arg.
 sample_secs=$(awk -v d="$DURATION" 'BEGIN {
   if (match(d, /^([0-9.]+)s$/, m)) { print int(m[1]); exit }
@@ -198,10 +211,10 @@ mcp_port="${mcp_hostport##*:}"
 
 if [[ "$NO_MOCK" != "1" ]]; then
   echo "== 1. mock-semp on 0.0.0.0:18081..$((18081 + BROKERS - 1)) (config: :19000, default-latency-ms=$LATENCY_MS)"
-  # Bind all interfaces so Box B can reach us over the LAN. mock-semp's
-  # staleness check is on by default and auto-locates the source canned/
-  # next to the binary — "edited canned/ but forgot to rebuild" fatals at
-  # startup instead of silently replaying stale data.
+  # Bind all interfaces so Box B can reach us over the LAN. mock-semp reads
+  # canned/ from disk at startup (auto-located next to the binary), so it
+  # replays whatever the last capture produced — no rebuild needed, and a
+  # missing or empty canned/ is a startup fatal.
   setsid "$bin/mock-semp" -listen-addr 0.0.0.0 -listen-start 18081 -listen-count "$BROKERS" -config-port 19000 \
     -default-latency-ms "$LATENCY_MS" \
     >"$runs/mock.log" 2>&1 &

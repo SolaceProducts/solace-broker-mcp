@@ -17,10 +17,11 @@
 //	-config-port         /_mock/config endpoint port                default 9000
 //	-default-latency-ms  fixed sleep before every response, all ports (default 0).
 //	                     Overridden per-port by POST /_mock/config.
-//	-no-canned-check     skip the canned staleness check (default: on, resolves
-//	                     source canned/ at <exe-dir>/../mock-semp/canned). Use
-//	                     when the source tree isn't reachable — go install,
-//	                     copied binary, etc.
+//	-canned-dir          directory of captured SEMP responses to replay.
+//	                     Default: <exe-dir>/../mock-semp/canned, which is where
+//	                     build.sh + regen-golden.sh put them. The captures are
+//	                     lab data and are not in git — an empty or missing dir
+//	                     is a startup fatal pointing at regen-golden.sh.
 //
 // About the latency knob: MCP caps in-flight SEMP calls per broker via a
 // semaphore sized by `semp.max_concurrent_per_broker` (see
@@ -45,7 +46,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -69,7 +69,7 @@ func main() {
 	configListenAddr := flag.String("config-listen-addr", "localhost", "interface to bind /_mock/config; keep on localhost even when -listen-addr is 0.0.0.0 so LAN peers can't inject errors")
 	configPort := flag.Int("config-port", 9000, "port for /_mock/config")
 	defaultLatencyMs := flag.Int("default-latency-ms", 0, "fixed sleep before every response (all ports); overridden per-port by /_mock/config")
-	noCannedCheck := flag.Bool("no-canned-check", false, "skip the canned staleness check (default: on, resolves source canned/ at <exe-dir>/../mock-semp/canned). Use when the source tree isn't reachable — go install, copied binary, etc.")
+	cannedDir := flag.String("canned-dir", "", "directory of captured SEMP responses to replay (default <exe-dir>/../mock-semp/canned)")
 	flag.Parse()
 
 	if *listenCount < 1 {
@@ -79,15 +79,14 @@ func main() {
 		log.Fatalf("default-latency-ms must be >= 0")
 	}
 
-	if !*noCannedCheck {
-		src, err := resolveCannedSrc()
-		if err != nil {
-			log.Fatalf("mock-semp: %v", err)
-		}
-		if err := checkCannedStaleness(src); err != nil {
-			log.Fatalf("mock-semp: %v", err)
-		}
+	// Load the captured responses before anything binds a port: newHandler
+	// reads every fixture up front, so a bad or absent capture fails here
+	// rather than as a 404 in the middle of a load run.
+	dir, err := openCanned(*cannedDir)
+	if err != nil {
+		log.Fatalf("mock-semp: %v", err)
 	}
+	log.Printf("mock-semp: replaying canned responses from %s", dir)
 
 	ports := make([]int, *listenCount)
 	for i := 0; i < *listenCount; i++ {
@@ -169,56 +168,40 @@ func main() {
 	}
 }
 
-// resolveCannedSrc locates the source canned/ directory the staleness
-// check should compare against, relative to the running binary. build.sh
-// drops the binary at bin/mock-semp with source at ../mock-semp/canned,
-// so that's what we look for. If it isn't there, returns an error telling
-// the caller to opt out with -no-canned-check — silently skipping would
-// defeat the point of the check (catching stale embedded canned/*).
-func resolveCannedSrc() (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("resolving executable path for canned staleness check: %w (pass -no-canned-check to skip)", err)
-	}
-	guess := filepath.Join(filepath.Dir(exe), "..", "mock-semp", "canned")
-	if _, err := os.Stat(guess); err != nil {
-		return "", fmt.Errorf("canned staleness check enabled but source canned/ not found at %s (pass -no-canned-check to skip)", guess)
-	}
-	return guess, nil
-}
-
-// checkCannedStaleness compares every file in the embedded canned/ tree
-// against its on-disk counterpart in srcDir. It fatals on the first
-// mismatch. The failure mode this catches: someone re-runs capture.sh
-// (or edits a canned file by hand) but skips the mock rebuild, so go:embed
-// still holds the old bytes and the mock silently replays yesterday's
-// broker. Runs by default; disable with -no-canned-check when the source
-// tree isn't reachable (e.g. after `go install` or a copied binary).
+// openCanned points the package-level canned FS at a directory of captured
+// SEMP responses and returns the resolved path. An empty dir argument
+// resolves to <exe-dir>/../mock-semp/canned — build.sh drops the binary at
+// bin/mock-semp, so that lands on the source canned/.
 //
-// Bytes-equal rather than mtime-equal — git checkout resets mtimes on
-// clean working trees and would fire false alarms.
-func checkCannedStaleness(srcDir string) error {
-	entries, err := canned.ReadDir("canned")
-	if err != nil {
-		return fmt.Errorf("reading embedded canned/: %w", err)
+// The captures are lab data and deliberately untracked (see
+// mock-semp/canned/README.md), so "directory has no fixtures" is the normal
+// state of a fresh clone rather than a corrupted install. Both that and a
+// missing directory return an error naming regen-golden.sh — the only
+// supported way to produce them.
+func openCanned(dir string) (string, error) {
+	if dir == "" {
+		exe, err := os.Executable()
+		if err != nil {
+			return "", fmt.Errorf("resolving executable path to locate canned/: %w (pass -canned-dir)", err)
+		}
+		dir = filepath.Join(filepath.Dir(exe), "..", "mock-semp", "canned")
 	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", fmt.Errorf("reading canned dir %s: %w — capture fixtures with ./regen-golden.sh", dir, err)
+	}
+	fixtures := 0
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		name := e.Name()
-		embedded, err := canned.ReadFile("canned/" + name)
-		if err != nil {
-			return fmt.Errorf("reading embedded canned/%s: %w", name, err)
-		}
-		srcPath := filepath.Join(srcDir, name)
-		onDisk, err := os.ReadFile(srcPath)
-		if err != nil {
-			return fmt.Errorf("canned staleness check: reading %s: %w", srcPath, err)
-		}
-		if !bytes.Equal(embedded, onDisk) {
-			return fmt.Errorf("canned/%s: embedded copy differs from %s — rebuild mock-semp (go build ./mock-semp) so go:embed picks up the fresh capture", name, srcPath)
+		if ext := filepath.Ext(e.Name()); ext == ".json" || ext == ".xml" {
+			fixtures++
 		}
 	}
-	return nil
+	if fixtures == 0 {
+		return "", fmt.Errorf("no .json/.xml fixtures in %s — these are captures from a real broker and are not in git; run ./regen-golden.sh against a lab broker first", dir)
+	}
+	canned = os.DirFS(dir)
+	return dir, nil
 }

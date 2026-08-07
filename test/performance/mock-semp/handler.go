@@ -8,11 +8,11 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
-	"embed"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"math/big"
 	"net/http"
@@ -50,11 +50,13 @@ func randIntN(n int) int {
 	return int(v.Int64())
 }
 
-// canned holds the hand-authored SEMP response bodies embedded at build
-// time. Real captures will replace these once lab access is available.
-//
-//go:embed canned/*
-var canned embed.FS
+// canned holds the SEMP response bodies captured from a real broker. Loaded
+// from disk at startup by openCanned rather than go:embed: the captures are
+// lab data, deliberately untracked, so a repo checkout has none of them and
+// an embed pattern matching zero files would fail the build. Reading from
+// disk also means a fresh capture takes effect on the next mock start with
+// no rebuild step to forget.
+var canned fs.FS
 
 // handler routes incoming broker-port requests to a canned response based on
 // a small set of hard-coded rules — one per SEMP request MCP is known to
@@ -138,7 +140,7 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request) {
 // (e.g. queues pagination cursor) come before broader ones.
 //
 // list-queues pagination auto-discovers pages: any canned/queues_page<N>.json
-// present in the embed becomes a rule keyed on the cursor value MCP will
+// present on disk becomes a rule keyed on the cursor value MCP will
 // send to reach that page (extracted from page N-1's meta.paging.nextPageUri).
 // So a fresh capture with more pages Just Works — no matching handler edit
 // needed. A capture with only page 1 (queue count <= page size) works too:
@@ -150,22 +152,22 @@ func (h *handler) buildRules() []rule {
 		{
 			name:    "sempv1 show version",
 			match:   sempv1Body("<version"),
-			respond: staticFile("canned/show_version.xml", "application/xml"),
+			respond: staticFile("show_version.xml", "application/xml"),
 		},
 		{
 			name:    "sempv1 show system",
 			match:   sempv1Body("<system"),
-			respond: staticFile("canned/show_system.xml", "application/xml"),
+			respond: staticFile("show_system.xml", "application/xml"),
 		},
 		{
 			name:    "sempv1 show memory",
 			match:   sempv1Body("<memory"),
-			respond: staticFile("canned/show_memory.xml", "application/xml"),
+			respond: staticFile("show_memory.xml", "application/xml"),
 		},
 		{
 			name:    "sempv1 show message-spool",
 			match:   sempv1Body("<message-spool"),
-			respond: staticFile("canned/show_message_spool.xml", "application/xml"),
+			respond: staticFile("show_message_spool.xml", "application/xml"),
 		},
 		// Appliance-only: fires when the show-version description identifies
 		// the broker as an appliance (see brokerstatus/handler.go). Rule
@@ -174,7 +176,7 @@ func (h *handler) buildRules() []rule {
 		{
 			name:    "sempv1 show hardware details",
 			match:   sempv1Body("<hardware"),
-			respond: staticFile("canned/show_hardware_details.xml", "application/xml"),
+			respond: staticFile("show_hardware_details.xml", "application/xml"),
 		},
 	}
 
@@ -188,7 +190,7 @@ func (h *handler) buildRules() []rule {
 // URI back verbatim). Cursor rules are registered before the page-1 rule
 // so a cursor-bearing request is matched specifically.
 func buildQueuesRules() []rule {
-	entries, err := canned.ReadDir("canned")
+	entries, err := fs.ReadDir(canned, ".")
 	if err != nil {
 		log.Fatalf("mock-semp: reading canned dir: %v", err)
 	}
@@ -207,10 +209,10 @@ func buildQueuesRules() []rule {
 		if err != nil {
 			log.Fatalf("mock-semp: canned/%s: cannot parse page number: %v", n, err)
 		}
-		pages = append(pages, page{num: num, file: "canned/" + n})
+		pages = append(pages, page{num: num, file: n})
 	}
 	if len(pages) == 0 {
-		log.Fatalf("mock-semp: no canned/queues_page*.json found — list-queues cannot be served")
+		log.Fatalf("mock-semp: no queues_page*.json in the canned dir — list-queues cannot be served; capture fixtures with ./regen-golden.sh")
 	}
 	sort.Slice(pages, func(i, j int) bool { return pages[i].num < pages[j].num })
 	// Require contiguous 1..N. A gap means the recapture failed partway
@@ -245,14 +247,15 @@ func buildQueuesRules() []rule {
 	return out
 }
 
-// cursorFromNextPageURI returns the cursor query parameter embedded in the
+// cursorFromNextPageURI returns the cursor query parameter carried in the
 // given canned page's meta.paging.nextPageUri, or "" if the page has no
 // nextPageUri (i.e. it is the last page). Fatals on a malformed page: a
-// broken canned file is a build mistake, not runtime.
-func cursorFromNextPageURI(embeddedPath string) string {
-	data, err := canned.ReadFile(embeddedPath)
+// broken canned file is a bad capture, caught at startup rather than
+// mid-run.
+func cursorFromNextPageURI(name string) string {
+	data, err := fs.ReadFile(canned, name)
 	if err != nil {
-		log.Fatalf("mock-semp: reading %s: %v", embeddedPath, err)
+		log.Fatalf("mock-semp: reading %s: %v", name, err)
 	}
 	var parsed struct {
 		Meta struct {
@@ -262,14 +265,14 @@ func cursorFromNextPageURI(embeddedPath string) string {
 		} `json:"meta"`
 	}
 	if err := json.Unmarshal(data, &parsed); err != nil {
-		log.Fatalf("mock-semp: %s: bad JSON: %v", embeddedPath, err)
+		log.Fatalf("mock-semp: %s: bad JSON: %v", name, err)
 	}
 	if parsed.Meta.Paging.NextPageURI == "" {
 		return ""
 	}
 	u, err := url.Parse(parsed.Meta.Paging.NextPageURI)
 	if err != nil {
-		log.Fatalf("mock-semp: %s: bad nextPageUri: %v", embeddedPath, err)
+		log.Fatalf("mock-semp: %s: bad nextPageUri: %v", name, err)
 	}
 	return u.Query().Get("cursor")
 }
@@ -318,14 +321,14 @@ func sempv2QueuesCursorEquals(want string) func(*http.Request, []byte) bool {
 	}
 }
 
-// staticFile returns a responder that serves the given embedded file with
-// the given content-type. Errors reading the embedded fs are fatal at
-// startup — canned is baked into the binary, so a miss here is a build
-// mistake, not runtime.
-func staticFile(path, contentType string) func(http.ResponseWriter, *http.Request, []byte) {
-	data, err := canned.ReadFile(path)
+// staticFile returns a responder that serves the given canned file with the
+// given content-type. The file is read once at startup and a read error is
+// fatal there — a fixture that's missing or unreadable means the capture is
+// incomplete, and failing at startup beats 404ing mid-run.
+func staticFile(name, contentType string) func(http.ResponseWriter, *http.Request, []byte) {
+	data, err := fs.ReadFile(canned, name)
 	if err != nil {
-		log.Fatalf("mock-semp: missing canned file %q: %v", path, err)
+		log.Fatalf("mock-semp: missing canned file %q: %v; capture fixtures with ./regen-golden.sh", name, err)
 	}
 	return func(w http.ResponseWriter, _ *http.Request, _ []byte) {
 		w.Header().Set("Content-Type", contentType)

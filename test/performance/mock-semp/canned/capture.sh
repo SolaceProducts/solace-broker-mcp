@@ -5,8 +5,12 @@
 #
 # Fires the exact SEMP requests MCP would send for get-broker-status and
 # list-queues, and saves the raw response bodies alongside this script.
-# Overwrites any existing files. Run once, commit or gitignore, and the
-# mock replays from these files.
+# Overwrites any existing files, which are gitignored — see README.md in this
+# directory. mock-semp replays them straight from disk.
+#
+# Prefer ../../regen-golden.sh: it drives this script AND the golden capture in
+# one pass, so the two fixture sets describe the same instant. Running this
+# alone leaves the goldens behind and fails the exact-mode fidelity gate.
 #
 # Usage:
 #   BROKER_URL=http://198.51.100.20:80 \

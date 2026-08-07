@@ -69,6 +69,13 @@ if ss -tln 2>/dev/null | grep -q ":9090 "; then
   exit 2
 fi
 
+# Fixture preflight. The canned responses and goldens are lab captures kept
+# out of git, so "absent" is the normal state of a fresh clone — fail here
+# with a pointer to regen-golden.sh rather than 404ing mid-run or failing the
+# fidelity gate in a way that reads like a regression.
+echo "== 0. fixture preflight"
+"$here/fixtures-manifest.sh" check
+
 mock_pid= mcp_pid= mem_pid= top_pid=
 # kill_tree signals a pid (and its process group if reachable) and waits for
 # it. It does NOT `wait` inside — callers that need the child's exit code
@@ -134,9 +141,9 @@ wait_for_tcp() {
 mock_start=18081
 mock_count=50
 echo "== 1. mock-semp on :$mock_start..$((mock_start + mock_count - 1)) (default-latency-ms=$LATENCY_MS)"
-# mock-semp's staleness check is on by default and auto-locates the source
-# canned/ next to the binary, so "edited canned/ but forgot to rebuild"
-# fatals at startup instead of silently replaying stale data.
+# mock-semp reads canned/ from disk at startup (auto-located next to the
+# binary), so it replays whatever the last capture produced — no rebuild
+# needed, and a missing or empty canned/ is a startup fatal.
 setsid "$bin/mock-semp" -listen-start "$mock_start" -listen-count "$mock_count" -config-port 19000 \
   -default-latency-ms "$LATENCY_MS" \
   >"$runs/mock.log" 2>&1 &

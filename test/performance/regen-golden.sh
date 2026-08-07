@@ -12,7 +12,12 @@
 #   3. mock-semp/canned/capture.sh — direct SEMP curls, writes canned/*.
 #   4. fidelity -capture — through MCP, writes fidelity/golden/*.
 #   5. sanitize.sh — scrub lab-identifying values from both sides.
-#   6. Rebuild mock-semp so go:embed picks up the fresh canned files.
+#   6. fixtures-manifest.sh write — record hashes + capture time for both sets.
+#
+# Neither fixture set is in git (they are lab captures); this script is the
+# only supported way to produce them. mock-semp reads canned/ from disk at
+# startup, so there is no rebuild step — a fresh capture takes effect on the
+# next mock start.
 #
 # After this, run exact-mode fidelity (no -shape) to see the residual diff:
 # that diff is the ground truth for what genuinely needs an exception list.
@@ -169,13 +174,18 @@ echo "== 4. fidelity -capture (alias=$broker_alias vpn=$vpn)"
   -golden-dir "$here/fidelity/golden" -capture 2>&1 | tee "$runs/regen.log"
 
 echo "== 5. sanitize canned and golden — strip lab-identifying values"
-# Runs before the rebuild so go:embed picks up the scrubbed bytes. Idempotent,
-# so recaptures that happen to be already-clean pass through as a no-op.
+# Runs before the manifest so the recorded hashes are of the scrubbed bytes —
+# otherwise every later check would flag sanitization as a hand-edit.
+# Idempotent, so recaptures that happen to be already-clean pass through as
+# a no-op.
 "$here/mock-semp/canned/sanitize.sh" 2>&1 | tee "$runs/sanitize.log"
 
-echo "== 6. rebuild mock-semp so go:embed picks up the new canned files"
-( cd "$here/mock-semp" && go build -o "$bin/mock-semp" . )
+echo "== 6. record fixtures.manifest (hashes + capture time for both sets)"
+# One manifest per capture is what lets run.sh prove canned and golden came
+# from the same pass. Written last, after sanitization, so it describes
+# exactly the bytes the mock will replay.
+BROKER_ALIAS="$broker_alias" VPN="$vpn" "$here/fixtures-manifest.sh" write
 
 echo "== canned regenerated at $here/mock-semp/canned"
 echo "== goldens regenerated at $here/fidelity/golden"
-echo "== mock rebuilt at $bin/mock-semp"
+echo "== manifest at $here/fixtures.manifest (local only — both sets are gitignored)"

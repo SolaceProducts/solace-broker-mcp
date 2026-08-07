@@ -19,10 +19,11 @@
 # recapture without diffing the world.
 #
 # Usage:
-#   ./sanitize.sh                      # scrub the checked-in fixtures in place
+#   ./sanitize.sh                      # scrub the local fixtures in place
 #
-# Invoked automatically from ../../regen-golden.sh between the capture and
-# the mock rebuild — a fresh recapture never reaches go:embed unscrubbed.
+# Invoked automatically from ../../regen-golden.sh between the capture and the
+# manifest write, so a fresh capture is scrubbed before anything reads it and
+# the recorded hashes describe the scrubbed bytes.
 
 set -euo pipefail
 
