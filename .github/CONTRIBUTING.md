@@ -397,18 +397,44 @@ signs off with your `user.email`, the same value git puts in the author field �
 so a bad address still produces a sign-off that matches its author, and DCO
 passes. Only this check catches it.
 
-If CI flags this, set your address and rewrite the offending commits:
+If CI flags this, first set your address:
 
 ```bash
 git config user.email "you@your-domain.example"
-git commit --amend --reset-author
 ```
 
-For a whole branch, once `user.email` is set:
+The bad address sits in two places — the author/committer fields and the
+`Signed-off-by:` trailer — and rewriting only the first leaves it published in
+the trailer, and leaves DCO failing, because the trailer then matches neither
+the author nor the committer. Substitute the address CI listed for `BAD`:
 
 ```bash
-git rebase --exec 'git commit --amend --reset-author --no-edit' main
+# only the most recent commit
+export BAD="the.address@ci.listed"
+git log -1 --format=%B | grep -vi "signed-off-by:.*<$BAD>" |
+  git commit --amend --reset-author -s --file=-
 ```
+
+This works on a merge commit too — `--amend` keeps its parents.
+
+For a whole branch, the guard matters: `--exec` runs after every commit rebase
+replays, so an unguarded `git commit --amend --reset-author` would rewrite
+other people's commits on the branch to be authored by you. This rewrites only
+the commits carrying the bad address:
+
+The `--exec` argument must stay on one line — git rejects a newline inside it.
+
+```bash
+export BAD="the.address@ci.listed"
+git rebase --exec 'git log -1 --format="%ae %ce" | grep -qiF "$BAD" || exit 0; git log -1 --format=%B | grep -vi "signed-off-by:.*<$BAD>" | git commit --amend --reset-author -s --file=-' main
+```
+
+Do not rebase a branch that contains merge commits — rebase replays them as
+ordinary commits and drops any conflict resolution with them. Fix a merge that
+is not at the tip by re-creating it: reset to before it, then redo the merge
+with your corrected identity.
+
+Then `git push --force-with-lease`.
 
 If you are contributing from a fork, every one of our CI runs waits for a
 maintainer to approve it, not just the one on your first push. So checks can sit
