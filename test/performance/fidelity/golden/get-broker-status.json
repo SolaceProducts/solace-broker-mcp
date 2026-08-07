@@ -1,19 +1,19 @@
 {
   "hardwareDetails": {
     "biosVersion": "SE5C600.86B.02.05.0004.051120151007",
-    "chassisSerial": "S009001344",
+    "chassisSerial": "TESTSERIAL-CHASSIS-01",
     "cpuCount": 2,
     "cpuModel": "Intel(R) Xeon(R) CPU E5-2630 v2 @ 2.60GHz",
     "disks": [
       {
         "deviceModel": "INTEL SSDSC2BB120G4",
         "id": 1,
-        "serial": "PHWL701000HH120LGN"
+        "serial": "TESTSERIAL-DISK-01"
       },
       {
         "deviceModel": "INTEL SSDSC2BB120G4",
         "id": 2,
-        "serial": "PHWL70100090120LGN"
+        "serial": "TESTSERIAL-DISK-02"
       }
     ],
     "platform": "Solace Event Broker 3560",
@@ -26,25 +26,25 @@
         "blade": "Assured Delivery Blade",
         "operationalState": "up",
         "productNumber": "ADB-04210M-01-A",
-        "serial": "P004045330",
+        "serial": "TESTSERIAL-BLADE-13",
         "slot": "1/3"
       },
       {
         "blade": "Topic Routing Blade",
         "productNumber": "TRB-000000-02-A",
-        "serial": "P004048935",
+        "serial": "TESTSERIAL-BLADE-14",
         "slot": "1/4"
       },
       {
         "blade": "Network Acceleration Blade",
         "productNumber": "NAB-0210EM-04-A",
-        "serial": "P004047778",
+        "serial": "TESTSERIAL-BLADE-16",
         "slot": "1/6"
       },
       {
         "blade": "Host Bus Adapter Blade",
         "productNumber": "HBA-0208FC-02-A",
-        "serial": "BFD1450B68835",
+        "serial": "TESTSERIAL-BLADE-17",
         "slot": "1/7"
       }
     ],
@@ -80,7 +80,7 @@
     "systemUptimeSeconds": 1923997
   },
   "version": {
-    "description": "Solace Event Broker 3560 Version 100.0main.0.7305",
+    "description": "Solace Event Broker 3560 Version 10.25.1.10",
     "uptime": {
       "totalSecs": 1923997
     }

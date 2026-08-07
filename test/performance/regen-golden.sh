@@ -11,7 +11,8 @@
 #   2. Wait for MCP /health.
 #   3. mock-semp/canned/capture.sh — direct SEMP curls, writes canned/*.
 #   4. fidelity -capture — through MCP, writes fidelity/golden/*.
-#   5. Rebuild mock-semp so go:embed picks up the fresh canned files.
+#   5. sanitize.sh — scrub lab-identifying values from both sides.
+#   6. Rebuild mock-semp so go:embed picks up the fresh canned files.
 #
 # After this, run exact-mode fidelity (no -shape) to see the residual diff:
 # that diff is the ground truth for what genuinely needs an exception list.
@@ -96,9 +97,15 @@ wait_for_http() {
 # dependency footprint identical to what it already needs. Fails loudly if
 # the alias or url is missing — silently defaulting would send capture.sh
 # at the wrong broker and hide a config typo.
+#
+# If the extracted value is a ${NAME} env-var reference (broker-config.real.yaml
+# uses ${BROKER_URL} so no real lab IP lands in the repo), it is resolved from
+# the current environment. An unresolved reference returns empty so the caller
+# fails loud instead of shipping the literal string to curl.
 broker_url_from_config() {
   local cfg=$1 alias=$2
-  awk -v alias="$alias" '
+  local raw
+  raw="$(awk -v alias="$alias" '
     # Match the alias line, e.g. "  my-broker:"
     match($0, "^[[:space:]]{2}" alias ":[[:space:]]*$") { in_block=1; next }
     # Any subsequent line at the same 2-space indent that is an alias header
@@ -110,18 +117,30 @@ broker_url_from_config() {
       print v
       exit
     }
-  ' "$cfg"
+  ' "$cfg")"
+  # Resolve a lone ${NAME} reference via bash indirect expansion. Only the
+  # single-token form is handled; a mixed value like "http://${HOST}:80" would
+  # need envsubst — not a shape this repo uses, so we don't pull in the dep.
+  if [[ "$raw" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$ ]]; then
+    printf '%s\n' "${!BASH_REMATCH[1]-}"
+    return
+  fi
+  printf '%s\n' "$raw"
 }
 
 # MCP auto-loads .env from the config file's directory. When the config is
 # test/performance/broker-config.real.yaml there's no .env alongside it, so pull
-# credentials from the repo-root .env (or the caller's env) and export them.
+# credentials + broker URL from the repo-root .env (or the caller's env) and
+# export them. broker-config.real.yaml references ${BROKER_URL} so no lab IP
+# lives in the repo — that means BROKER_URL must be present in the env before
+# MCP starts, alongside the credentials.
 if [[ -f "$repo_root/.env" ]]; then
   set -a; . "$repo_root/.env"; set +a
 fi
+: "${BROKER_URL:?BROKER_URL unset (missing from $repo_root/.env and shell env)}"
 : "${BROKER_USERNAME:?BROKER_USERNAME unset (missing from $repo_root/.env and shell env)}"
 : "${BROKER_PASSWORD:?BROKER_PASSWORD unset (missing from $repo_root/.env and shell env)}"
-export BROKER_USERNAME BROKER_PASSWORD
+export BROKER_URL BROKER_USERNAME BROKER_PASSWORD
 
 echo "== 1. MCP server on :9090 (config: $config)"
 setsid bash -c "cd '$repo_root' && CONFIG_FILE='$config' exec go run ./cmd/server" \
@@ -149,7 +168,12 @@ echo "== 4. fidelity -capture (alias=$broker_alias vpn=$vpn)"
 "$bin/fidelity" -mcp-url http://localhost:9090 -broker "$broker_alias" -vpn "$vpn" \
   -golden-dir "$here/fidelity/golden" -capture 2>&1 | tee "$runs/regen.log"
 
-echo "== 5. rebuild mock-semp so go:embed picks up the new canned files"
+echo "== 5. sanitize canned and golden — strip lab-identifying values"
+# Runs before the rebuild so go:embed picks up the scrubbed bytes. Idempotent,
+# so recaptures that happen to be already-clean pass through as a no-op.
+"$here/mock-semp/canned/sanitize.sh" 2>&1 | tee "$runs/sanitize.log"
+
+echo "== 6. rebuild mock-semp so go:embed picks up the new canned files"
 ( cd "$here/mock-semp" && go build -o "$bin/mock-semp" . )
 
 echo "== canned regenerated at $here/mock-semp/canned"

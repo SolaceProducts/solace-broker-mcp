@@ -4,7 +4,7 @@
 #
 # Usage:
 #   ./run-loadgen.sh <mcp-url>
-#   CLIENTS=2000 DURATION=60s ./run-loadgen.sh http://192.168.2.194:9090
+#   CLIENTS=2000 DURATION=60s ./run-loadgen.sh http://198.51.100.31:9090
 #
 # Env overrides (same names as run.sh so the two scripts share vocabulary):
 #   CLIENTS      loadgen -clients                (default 200)
@@ -33,7 +33,7 @@
 
 set -euo pipefail
 
-mcp_url="${1:?usage: $0 <mcp-url>   e.g.  $0 http://192.168.2.194:9090}"
+mcp_url="${1:?usage: $0 <mcp-url>   e.g.  $0 http://198.51.100.31:9090}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bin="$here/bin"
 

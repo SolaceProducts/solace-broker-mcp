@@ -1,33 +1,33 @@
-<rpc-reply semp-version="app/100.0main.0.7305">
+<rpc-reply semp-version="app/10.25.1.10">
   <rpc>
     <show>
       <version>
-        <description>Solace Event Broker 3560 Version 100.0main.0.7305</description>
+        <description>Solace Event Broker 3560 Version 10.25.1.10</description>
         <executables>
           <executable>
             <name>CLI</name>
-            <release>100.0main.0.7305</release>
-            <build-date>2026-05-01T21:25:17-04:00</build-date>
+            <release>10.25.1.10</release>
+            <build-date>2026-03-15T12:00:00+00:00</build-date>
           </executable>
         </executables>
-        <current-load>soltr_100.0main.0.7305</current-load>
+        <current-load>soltr_10.25.1.10</current-load>
         <backout-load-not-existant></backout-load-not-existant>
         <loads>
           <load>
             <index>1</index>
-            <version>soltr_10.4.1+lo.485</version>
+            <version>soltr_10.24.0.5</version>
             <solbase-version>4.2.160.1</solbase-version>
             <is-solbase-present>1</is-solbase-present>
           </load>
           <load>
             <index>2</index>
-            <version>soltr_10.8.1+lo.456</version>
+            <version>soltr_10.24.1.3</version>
             <solbase-version>4.3.160.1</solbase-version>
             <is-solbase-present>1</is-solbase-present>
           </load>
           <load>
             <index>3</index>
-            <version>soltr_100.0main.0.7305</version>
+            <version>soltr_10.25.1.10</version>
             <solbase-version>4.5.158.38</solbase-version>
             <is-solbase-present>1</is-solbase-present>
           </load>

@@ -1,4 +1,4 @@
-<rpc-reply semp-version="app/100.0main.0.7305">
+<rpc-reply semp-version="app/10.25.1.10">
   <rpc>
     <show>
       <message-spool>
@@ -68,12 +68,12 @@
           <flash-module-ready>true</flash-module-ready>
           <power-module-ready>true</power-module-ready>
           <card-contents-ready>true</card-contents-ready>
-          <local-contents-key>192.168.164.178:7,1</local-contents-key>
+          <local-contents-key>198.51.100.10:7,1</local-contents-key>
           <router-schema-match>true</router-schema-match>
           <disk-ready>true</disk-ready>
           <disk-contents-status>Ready</disk-contents-status>
-          <disk-key-primary>192.168.164.178:7,1</disk-key-primary>
-          <disk-key-backup>192.168.164.178:7,1</disk-key-backup>
+          <disk-key-primary>198.51.100.10:7,1</disk-key-primary>
+          <disk-key-backup>198.51.100.10:7,1</disk-key-backup>
           <last-failure-reason>Power Module Charging</last-failure-reason>
           <last-failure-time>Jul 14 2026 02:42:48 EDT</last-failure-time>
           <current-rfad-usage>0</current-rfad-usage>

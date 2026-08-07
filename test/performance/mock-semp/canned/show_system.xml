@@ -1,4 +1,4 @@
-<rpc-reply semp-version="app/100.0main.0.7305">
+<rpc-reply semp-version="app/10.25.1.10">
   <rpc>
     <show>
       <system>

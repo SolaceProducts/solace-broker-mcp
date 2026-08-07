@@ -141,17 +141,42 @@ For example, to capture from a non-default VPN:
 VPN=my-vpn CONFIG_FILE=./broker-config.real.yaml ./regen-golden.sh
 ```
 
-Credentials come from the repo-root `.env` (sourced by the script) via
-`${BROKER_USERNAME}`/`${BROKER_PASSWORD}` expansion in the config; override
-inline if `.env` is absent:
+Credentials and the broker URL come from the repo-root `.env` (sourced by
+the script) via `${BROKER_URL}`, `${BROKER_USERNAME}`, `${BROKER_PASSWORD}`
+expansion in the config; override inline if `.env` is absent:
 
 ```
-BROKER_USERNAME=... BROKER_PASSWORD=... \
+BROKER_URL=http://<lab-host>:80 \
+  BROKER_USERNAME=... BROKER_PASSWORD=... \
   CONFIG_FILE=./broker-config.real.yaml ./regen-golden.sh
 ```
 
 Review the diff on both `mock-semp/canned/` and `fidelity/golden/` before
 committing.
+
+## Sanitization
+
+The repo ships with no real lab-appliance identifiers. Every capture from a
+real broker is scrubbed by `mock-semp/canned/sanitize.sh` before it lands
+in git — chassis/board/disk/blade serials, MAC addresses, WWPN/WWNN pairs,
+lab IPs, and the non-GA build string are replaced with synthetic
+placeholders (`TESTSERIAL-*`, RFC 7042 documentation MACs, TEST-NET-2 IPs
+from RFC 5737, a plausible GA-form version string).
+
+`regen-golden.sh` invokes `sanitize.sh` between the fidelity `-capture` step
+and the mock rebuild, so `go:embed` never sees the raw bytes. The script is
+idempotent — an already-scrubbed tree passes through as a no-op — and drives
+from a single literal-value → replacement table so canned and golden stay
+consistent by construction (an inconsistent substitution would make the
+exact-mode gate fail).
+
+Editing the placeholder set: update the `subs` array at the top of
+`sanitize.sh`, re-run it against the current fixtures, then rebuild
+`mock-semp` and rerun `./run.sh` to confirm the fidelity gate still passes.
+
+`broker-config.real.yaml` references `${BROKER_URL}` for the same reason —
+no lab address lives in the repo. Set `BROKER_URL` in the environment (or
+`.env`) alongside credentials before running `regen-golden.sh`.
 
 ## Injecting errors
 

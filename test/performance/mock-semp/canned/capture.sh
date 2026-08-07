@@ -9,7 +9,7 @@
 # mock replays from these files.
 #
 # Usage:
-#   BROKER_URL=http://192.168.129.78:80 \
+#   BROKER_URL=http://198.51.100.20:80 \
 #   BROKER_USERNAME=... \
 #   BROKER_PASSWORD=... \
 #   MSG_VPN=default \
@@ -19,7 +19,7 @@
 # mistake, not a runtime one.
 set -euo pipefail
 
-: "${BROKER_URL:?BROKER_URL is required (e.g. http://192.168.129.78:80)}"
+: "${BROKER_URL:?BROKER_URL is required (e.g. http://198.51.100.20:80)}"
 : "${BROKER_USERNAME:?BROKER_USERNAME is required}"
 : "${BROKER_PASSWORD:?BROKER_PASSWORD is required}"
 MSG_VPN="${MSG_VPN:-default}"
@@ -27,16 +27,29 @@ MSG_VPN="${MSG_VPN:-default}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
 
+# curl_esc quotes a value for curl's config-file syntax. Backslash and
+# double-quote are the only characters interpreted inside a "quoted" value
+# (see curl(1) "Config File"); everything else passes through literally.
+curl_esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
+# Build the `user = "..."` stanza once and pipe it to each curl call via
+# --config on stdin. -u puts credentials in argv where any user on a shared
+# host can read them from /proc/<pid>/cmdline; a here-string keeps the
+# password in an unreadable pipe.
+_curl_user_cfg="$(printf 'user = "%s:%s"\n' \
+  "$(curl_esc "$BROKER_USERNAME")" \
+  "$(curl_esc "$BROKER_PASSWORD")")"
+
 curl_semp() {
   local out="$1" body="$2"
   # -f: fail on 4xx/5xx so the script aborts loudly
   # -sS: quiet but show errors
-  # -u user:pass: basic auth (matches broker-config.yaml)
-  curl -fsS -u "$BROKER_USERNAME:$BROKER_PASSWORD" \
+  # --config -: read auth options from stdin (see _curl_user_cfg above)
+  curl -fsS --config - \
     -H "Content-Type: application/xml" \
     --data-raw "$body" \
     "$BROKER_URL/SEMP" \
-    -o "$out"
+    -o "$out" <<<"$_curl_user_cfg"
   echo "wrote $out ($(wc -c < "$out") bytes)"
 }
 
@@ -52,9 +65,9 @@ curl_get() {
     /*)                 url="$BROKER_URL$ref" ;;
     *)                  url="$BROKER_URL/$ref" ;;
   esac
-  curl -fsS -u "$BROKER_USERNAME:$BROKER_PASSWORD" \
+  curl -fsS --config - \
     "$url" \
-    -o "$out"
+    -o "$out" <<<"$_curl_user_cfg"
   echo "wrote $out ($(wc -c < "$out") bytes)"
 }
 

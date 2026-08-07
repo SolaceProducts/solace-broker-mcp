@@ -2,6 +2,7 @@
 #
 # Use with:
 #   CONFIG_FILE=./broker-config.real.yaml \
+#   BROKER_URL=http://<lab-host>:80 \
 #   BROKER_USERNAME=... BROKER_PASSWORD=... \
 #   go run ./cmd/server
 #
@@ -27,7 +28,7 @@ semp:
 
 brokers:
   my-broker:
-    url: "http://192.168.129.78:80"
+    url: "${BROKER_URL}"
     insecure_skip_verify: true
     auth:
       mode: basic

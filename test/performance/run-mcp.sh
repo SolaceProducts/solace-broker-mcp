@@ -4,7 +4,7 @@
 #
 # Usage:
 #   MOCK_HOST=<box-a-ip> ./run-mcp.sh
-#   MOCK_HOST=192.168.2.180 DURATION=90s ./run-mcp.sh
+#   MOCK_HOST=198.51.100.30 DURATION=90s ./run-mcp.sh
 #
 # Env:
 #   MOCK_HOST      required — LAN address of Box A running mock-semp
@@ -20,7 +20,7 @@ bin="$here/bin"
 runs="$bin/runs/$(date +%Y%m%d-%H%M%S)-mcp"
 mkdir -p "$runs"
 
-: "${MOCK_HOST:?MOCK_HOST unset — set to the Box A LAN IP, e.g. MOCK_HOST=192.168.2.180}"
+: "${MOCK_HOST:?MOCK_HOST unset — set to the Box A LAN IP, e.g. MOCK_HOST=198.51.100.30}"
 export MOCK_HOST
 export BROKER_USERNAME="${BROKER_USERNAME:-perf}"
 export BROKER_PASSWORD="${BROKER_PASSWORD:-perf}"
