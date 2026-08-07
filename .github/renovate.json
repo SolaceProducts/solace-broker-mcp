@@ -6,6 +6,7 @@
   "ignorePaths": ["**/node_modules/**"],
   "labels": ["dependencies", "llm-eval"],
   "schedule": ["before 9am on monday"],
+  "minimumReleaseAge": "14 days",
   "prHourlyLimit": 1,
   "commitBody": "Signed-off-by: renovate[bot] <29139614+renovate[bot]@users.noreply.github.com>",
   "packageRules": [
