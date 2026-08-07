@@ -86,7 +86,7 @@ Then `/reload-plugins` (or restart Claude Code) so the `/understand` skill loads
   agent uses (for Claude Code, that's Anthropic — the same trust boundary you already
   accept by using Claude Code on this repo). The tool itself is local: no telemetry, no
   phone-home. For a more sensitive repo you can point the agent at a local model
-  (e.g. Ollama).
+  (for example, Ollama).
 
 ---
 

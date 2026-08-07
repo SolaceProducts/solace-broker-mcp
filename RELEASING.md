@@ -22,14 +22,14 @@ Fixed tags name one exact build and never move:
 
 | Tag | Resolves to | Status |
 |-----|-------------|--------|
-| `{version}` | the exact version, e.g. `0.4.0` or `0.4.0-beta.1` | [Implemented] |
-| `sha-<short-sha>` | the commit the build came from, e.g. `sha-860c190` | [Implemented] |
+| `{version}` | the exact version, for example, `0.4.0` or `0.4.0-beta.1` | [Implemented] |
+| `sha-<short-sha>` | the commit the build came from, for example, `sha-860c190` | [Implemented] |
 
 Moving pointers let consumers track a stream instead of a fixed version:
 
 | Pointer | Resolves to | Status |
 |---------|-------------|--------|
-| `{major}.{minor}` | newest stable patch of that minor, e.g. `0.4` | [Implemented] |
+| `{major}.{minor}` | newest stable patch of that minor, for example, `0.4` | [Implemented] |
 | `:latest` | newest **stable** version | [Planned] — today `:latest` moves to the newest tag of *any* maturity, including pre-releases |
 | `:edge` | newest tag of any maturity (release-on-green) | [Planned] |
 | `:alpha`, `:beta` | newest tag at that stage | [Planned] |
@@ -94,7 +94,7 @@ waits on
 
 A failed job blocks the GitHub Release, binaries, checksums, and the container image: `build-docker` waits on the FOSSA scan as well as the build, so a failing SCA gate publishes nothing. That matters because a registry push cannot be withdrawn — the binaries are only artifacts until `release` publishes them, but the image is live the moment it is pushed.
 
-One window remains: the image is pushed *before* it is attested, so a run that fails on the attest step leaves `latest` live with no attestation — a consumer's `gh attestation verify` then fails because the release is incomplete, not because the image was tampered with. That ordering is unavoidable, since attesting a registry digest requires the digest to exist. If a release run fails partway, check `ghcr.io` and roll forward (see Rollback).
+One window remains: the image is pushed *before* it is attested, so a run that fails on the attest step leaves `latest` live with no attestation — a consumer's `gh attestation verify` then fails because the release is incomplete, not because the image was tampered with. That ordering is unavoidable, because attesting a registry digest requires the digest to exist. If a release run fails partway, check `ghcr.io` and roll forward (see Rollback).
 
 Pre-release tags (`v0.4.0-beta.1`) and the `:edge`/`:alpha`/`:beta` pointers follow the same workflow once continuous pre-release publishing is wired up **[Planned]**.
 
@@ -110,7 +110,7 @@ The manual steps around the automated workflow.
 Before tagging:
 
 1. Confirm `main` is green: `gh run list --branch main --limit 1`.
-2. Update `CHANGELOG.md` on `main`: move the `[Unreleased]` items into a new dated `## [X.Y.Z]` version section and update the comparison links at the bottom. This is **required** — the release workflow extracts that block as the Release body and fails the release if the dated block is absent. Do it in a "prepare release" PR *before* tagging, so the block lives in the tagged commit.
+2. Update `CHANGELOG.md` on `main`: move the `[Unreleased]` items into a new dated `## [X.Y.Z]` version section and update the comparison links at the bottom. This step is **required** — the release workflow extracts that block as the Release body and fails the release if the dated block is absent. Do it in a "prepare release" PR *before* tagging, so the block lives in the tagged commit.
 3. Regenerate the third-party license inventory from the toolchain: `go-licenses report ./cmd/server` supplies the module, version, and license data for `THIRD_PARTY_LICENSES.md`. Reconcile it against the FOSSA scan, which remains the authoritative check.
 
 After pushing the tag:
@@ -150,7 +150,7 @@ If a job fails for environmental reasons, re-run it: `gh run rerun <run-id>`. Ne
 
 Tags are never reused — we roll forward, not back.
 
-- **Bad release:** fix on the default branch, then tag the next PATCH (e.g. `v0.4.1`). The fix follows the same gates, and the new tag moves the moving pointers forward to the good build.
+- **Bad release:** fix on the default branch, then tag the next PATCH (for example, `v0.4.1`). The fix follows the same gates, and the new tag moves the moving pointers forward to the good build.
 - **Steer users away:** mark the bad GitHub Release as a pre-release or delete it. The tag and artifacts remain for auditability; pin-by-version and pin-by-digest consumers are unaffected.
 
 ## DORA metrics **[Planned]**

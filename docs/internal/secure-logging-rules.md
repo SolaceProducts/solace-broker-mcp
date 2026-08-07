@@ -10,9 +10,9 @@ These must never appear in log output, in any environment:
 
 | Item | Where it lives in our code |
 |---|---|
-| SEMP passwords | `AuthConfig.Password`, `HTTPClient.password` |
-| SEMP usernames | `AuthConfig.Username`, `HTTPClient.username` |
-| SEMP bearer tokens | `AuthConfig.Token`, `HTTPClient.token` |
+| SEMP passwords | `AuthConfig.Password`, `auth.BasicAuthenticator.password` |
+| SEMP usernames | `AuthConfig.Username`, `auth.BasicAuthenticator.username` |
+| SEMP bearer tokens | `AuthConfig.Token`, `auth.BearerAuthenticator.token` |
 | Raw `Authorization` header values | Built in `HTTPClient.Execute()` |
 | TLS private keys | If we ever load them |
 | URLs with embedded credentials | `http://user:pass@host` patterns |
@@ -48,7 +48,8 @@ Never `fmt.Sprintf` into the message string with external data. Always `slog.Str
 - `AuthConfig` — expose only `Mode`
 - `BrokerConfig` — expose `URL`, `InsecureSkipVerify`, `Auth.Mode`
 - `HTTPClient` — lower risk (unexported fields) but should still get `LogValuer` for defense in depth
-- When Story 1B adds OAuth config, that struct gets `LogValuer` too
+- OAuth config types (`BrokerOAuthConfig`, `BrokerClientAuth`, `ClientSecretAuth`) also implement `LogValuer`, excluding secret material
+- Any new credential-carrying type follows the same pattern
 
 ### Rule 3: `ReplaceAttr` safety net on the handler
 

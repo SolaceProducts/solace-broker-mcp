@@ -27,7 +27,7 @@ The Solace Event Broker MCP Server requires:
 
 | Requirement | Details |
 |---|---|
-| **Solace event broker** | One or more brokers with SEMP management enabled. The server connects to the SEMP management API (typically port 8080 for HTTP or 1943 for HTTPS). |
+| **Solace event broker** | One or more brokers with Solace Element Management Protocol (SEMP) management enabled. The server connects to the SEMP management API (typically port 8080 for HTTP or 1943 for HTTPS). |
 | **SEMPv1+v2 reachability** | The machine running the MCP server must have network access to both the SEMPv1 (`/SEMP`) and SEMPv2 (`/SEMP/v2`) endpoints on each broker's SEMP management port. |
 | **Broker credentials** | Per-broker SEMP credentials: a username and password (basic auth), a static token (bearer auth), or an OAuth identity provider for token exchange (`auth.mode: oauth` — requires `mcp_client_auth.mode: oauth`; see [Authentication](authentication.md#step-2b-configure-broker-oauth-hop-2)). |
 | **Runtime environment** | One of: Docker, a supported OS/architecture for the binary (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64), or Kubernetes. |
@@ -57,7 +57,7 @@ All methods use the same YAML configuration file and `.env` credentials. Configu
 
 ### Connecting an MCP Client
 
-Once the server is running, connect Claude Code to it:
+After the server is running, connect Claude Code to it:
 
 ```bash
 claude mcp add solace-broker --transport http http://localhost:9090/mcp
@@ -172,7 +172,7 @@ These tools modify broker state via the SEMPv2 action API. There is **one tool p
 
 **Naming convention.** Action-API tools use `<verb>-<resource>-<object>` (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`). The Config-API management tools ([below](#management-config-api)) use `<verb>-<object>` — a `create-`, `update-`, or `delete-` prefix on `message-vpn`, `queue`, `topic-endpoint`, or `rdp`. Action tools run an operational action against a live object; management tools change configuration.
 
-**Disabled by default.** These four action tools — together with the 12 Config-API management tools below — are write tools (they change broker state) and are gated behind the server-level `enable_write_tools` flag. With the default (`false`) they are not registered with the MCP server and do not appear in `tools/list` — clients see only the read-only tool set. Set `enable_write_tools: true` in the YAML config to expose them. This is independent of `mcp_client_auth.mode`: an authenticated client still cannot invoke these tools when the flag is off, because the server never registers them.
+**Disabled by default.** These four action tools — together with the 12 Config-API management tools below — are write tools (they change broker state) and are gated behind the server-level `enable_write_tools` flag. With the default (`false`) they are not registered with the MCP server and do not appear in `tools/list` — clients see only the read-only tool set. Set `enable_write_tools: true` in the YAML config to expose them. This gating is independent of `mcp_client_auth.mode`: an authenticated client still cannot invoke these tools when the flag is off, because the server never registers them.
 
 `enable_write_tools` is the only enforced control. `destructiveHint` and the confirmation text in tool descriptions are hints, not enforced by the MCP protocol — whether the user is actually prompted depends on the client and the model.
 
@@ -180,7 +180,7 @@ These tools modify broker state via the SEMPv2 action API. There is **one tool p
 
 | Tool | Destructive | Description |
 |---|---|---|
-| `delete-queue-messages` | **Yes** | Permanently delete all spooled messages from a queue. Irreversible — deleted messages cannot be recovered. Requires user confirmation before invocation. Use after confirmed intent to drain a queue (e.g. clearing a dead-letter backlog). |
+| `delete-queue-messages` | **Yes** | Permanently delete all spooled messages from a queue. Irreversible — deleted messages cannot be recovered. Requires user confirmation before invocation. Use after confirmed intent to drain a queue (for example, clearing a dead-letter backlog). |
 | `clear-queue-stats` | No | Reset a queue's statistics counters. Non-destructive: affects monitoring counters only, not spooled messages or delivery. |
 | `disconnect-client` | **Yes** | Forcibly disconnect a connected client. Service-impacting — terminates the session; the client must reconnect. Requires user confirmation before invocation. Common use: disconnect a slow subscriber identified via `list-slow-subscribers` or `get-client-details`. |
 | `clear-client-stats` | No | Reset a client's per-connection statistics counters. Non-destructive: affects monitoring counters only, does not disconnect the client. |

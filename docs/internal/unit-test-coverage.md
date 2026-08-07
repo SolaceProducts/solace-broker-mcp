@@ -90,8 +90,8 @@ never in `./...` to begin with; CI vets it in its own step.
 real coverage climbs, raise the floor to stay a few points under it — the
 gate is only as useful as the gap between it and reality is small. Don't
 raise it to sit flush against actual; a small buffer avoids CI going red on
-an incidental, defensible dip (e.g. a legitimately hard-to-unit-test error
-branch) that isn't the kind of collapse this gate exists to catch.
+an incidental, defensible dip (for example, a legitimately hard-to-unit-test
+error branch) that isn't the kind of collapse this gate exists to catch.
 
 ## Running locally
 

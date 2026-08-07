@@ -18,8 +18,8 @@ Tracked gaps from Jira stories that are deferred or pending further discussion.
 - Session cookies handled automatically (verified via integration test)
 
 **Reason deferred:** Requires a test broker environment and decision on test
-gating strategy (env-var skip vs. build tags). To be implemented when CI broker
-infrastructure is ready.
+gating strategy (env-var skip versus build tags). To be implemented when CI
+broker infrastructure is ready.
 
 ## SOL-148427 — Implement Tool Manager Foundation
 
@@ -67,7 +67,7 @@ launchd plist for macOS) when operators request it.
 **Status:** Deferred (future enhancement)
 
 **Motivation:** Streamable HTTP requires the server to be running before the
-MCP client connects. For laptop users (e.g., Claude Desktop), stdio transport
+MCP client connects. For laptop users (for example, Claude Desktop), stdio transport
 enables auto-start — the client spawns the server as a subprocess on launch,
 removing the need for manual startup or OS-level service configuration.
 

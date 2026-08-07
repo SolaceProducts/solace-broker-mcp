@@ -34,14 +34,14 @@ An MCP (Model Context Protocol) server for Solace event brokers, built with Go u
 
 ## Overview
 
-An HTTP service that exposes Solace event broker management and monitoring to AI assistants through the Model Context Protocol (MCP). The server provides 40 tools: 24 read-only tools that query event broker status, inspect queues, diagnose client issues, and monitor message traffic, plus 16 optional write and action tools (off by default) for operational actions and configuration. It uses SEMP v1 and v2 API calls.
+An HTTP service that exposes Solace event broker management and monitoring to AI assistants through the Model Context Protocol (MCP). The server provides 40 tools: 24 read-only tools that query event broker status, inspect queues, diagnose client issues, and monitor message traffic, plus 16 optional write and action tools (off by default) for operational actions and configuration. It uses the Solace Element Management Protocol (SEMP) v1 and v2 APIs.
 
-MCP-compatible clients, for example Claude Code, invoke these tools using natural language. The AI assistant translates requests into tool calls. The server handles authentication, rate limiting, retries, and response formatting.
+MCP-compatible clients, for example, Claude Code, invoke these tools using natural language. The AI assistant translates requests into tool calls. The server handles authentication, rate limiting, retries, and response formatting.
 
 ## Features
 
-- **24 read-only monitoring tools** — Event broker status, message VPNs, queues, clients, REST delivery points, bridges, Kafka receivers/senders, and SEMPv2 schema introspection
-- **16 optional write and action tools** — Disconnect clients, delete queued messages, reset statistics, and create, update, or delete message VPNs, queues, topic endpoints, and REST delivery points; gated behind `enable_write_tools` (off by default)
+- **24 read-only monitoring tools** — Event broker status, Message VPNs, queues, clients, REST delivery points, bridges, Kafka receivers/senders, and SEMPv2 schema introspection
+- **16 optional write and action tools** — Disconnect clients, delete queued messages, reset statistics, and create, update, or delete Message VPNs, queues, topic endpoints, and REST delivery points; gated behind `enable_write_tools` (off by default)
 - **Client authentication** — Development mode (no auth), static bearer tokens, or OAuth 2.1/OIDC with JWT validation
 - **Claim-based tool authorization** — Under OAuth mode, gate individual MCP tools by a configurable OIDC claim carrying the caller's group or role memberships (`groups` by default); `list-brokers` stays exempt so callers can always discover configured brokers
 - **Multi-broker configuration** — Connect to multiple brokers and address them by configured alias
@@ -95,7 +95,7 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 | Actions | `delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats` | One tool per operational action. Destructive tools (`delete-queue-messages`, `disconnect-client`) are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; the `clear-*-stats` tools are non-destructive. |
 | Management | `create-message-vpn`, `update-message-vpn`, `delete-message-vpn`, `create-queue`, `update-queue`, `delete-queue`, `create-topic-endpoint`, `update-topic-endpoint`, `delete-topic-endpoint`, `create-rdp`, `update-rdp`, `delete-rdp` | Create, update, and delete Config-API objects (Message VPNs, queues, topic endpoints, REST delivery points). `delete-*` and the service-affecting `update-*` tools are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; `create-*` is additive and not annotated. |
 
-**The action and management tools are write tools, gated behind `enable_write_tools: true` in the config — default off; not registered in `tools/list` when disabled.** That's 16 write tools in total (4 action, 12 management), on top of the 24 read-only tools.
+**The action and management tools are write tools, gated behind `enable_write_tools: true` in the config — default off; not registered in `tools/list` when disabled.** That's 16 write tools in total (four action, 12 management), on top of the 24 read-only tools.
 
 > **Confirmation is not enforced.** `enable_write_tools` is the only enforced control. `destructiveHint` and the confirmation text in tool descriptions are hints, not enforced by the MCP protocol — whether the user is actually prompted depends on the client and the model.
 
@@ -150,7 +150,7 @@ Each event broker needs:
 - `auth.mode` — `basic`, `bearer`, or `oauth` (examples below use basic auth; for bearer token authentication, set `auth.mode: bearer` and provide `auth.token` instead; for OAuth token exchange, see [Step 2b: Configure broker OAuth (Hop 2)](docs/authentication.md#step-2b-configure-broker-oauth-hop-2))
 - `auth.username` / `auth.password` — credentials (use `${VAR_NAME}` to reference environment variables)
 
-**Broker alias contract.** The map key under `brokers:` (e.g. `my-broker`) is the alias that appears in tool inputs (`broker="my-broker"`), logs, and `list-brokers` output. Aliases must be 1–63 characters, contain only letters, digits, and hyphens, and start and end with an alphanumeric character. Comparison is case-insensitive — `Prod` and `prod` collide and the server will refuse to start. Original casing is preserved in all user-facing output.
+**Broker alias contract.** The map key under `brokers:` (for example, `my-broker`) is the alias that appears in tool inputs (`broker="my-broker"`), logs, and `list-brokers` output. Aliases must be 1–63 characters, contain only letters, digits, and hyphens, and start and end with an alphanumeric character. Comparison is case-insensitive — `Prod` and `prod` collide and the server will refuse to start. Original casing is preserved in all user-facing output.
 
 **2. Create a `.env` file** next to the config file:
 
@@ -221,7 +221,7 @@ If you have the Go toolchain installed ([Go 1.25+](https://go.dev/dl/)), install
 go install github.com/SolaceProducts/solace-broker-mcp/cmd/server@latest
 ```
 
-This builds the latest tagged release and places a `server` binary in `$(go env GOBIN)` (or `$(go env GOPATH)/bin`). Ensure that directory is on your `PATH`. Pin a specific version by replacing `@latest` with a tag, for example `@v1.2.0`.
+This builds the latest tagged release and places a `server` binary in `$(go env GOBIN)` (or `$(go env GOPATH)/bin`). Ensure that directory is on your `PATH`. Pin a specific version by replacing `@latest` with a tag, for example, `@v1.2.0`.
 
 Run it the same way as the downloaded binary, pointing `CONFIG_FILE` at your config:
 
@@ -291,7 +291,7 @@ services:
 
 ### Connect from Claude Code
 
-Once the MCP server is running (via binary, Docker, or `go run`), add it as an MCP server:
+After the MCP server is running (via binary, Docker, or `go run`), add it as an MCP server:
 
 ```bash
 claude mcp add solace-broker --transport http http://localhost:9090/mcp
@@ -305,7 +305,7 @@ List queues in the default VPN on the dev broker
 
 ### Connect from Solace Agent Mesh (SAM)
 
-Once the MCP server is running, configure it to accept a static dev token (local development only). For production, use `mcp_client_auth.mode: oauth` — see [Authentication](docs/authentication.md).
+After the MCP server is running, configure it to accept a static dev token (local development only). For production, use `mcp_client_auth.mode: oauth` — see [Authentication](docs/authentication.md).
 
 ```yaml
 # broker-config.yaml
@@ -448,7 +448,7 @@ See [SUPPORT.md](.github/SUPPORT.md) for details.
 
 ## Security
 
-For security vulnerability reporting, please see [SECURITY.md](.github/SECURITY.md).
+For security vulnerability reporting, see [SECURITY.md](.github/SECURITY.md).
 
 ## Disclaimer
 

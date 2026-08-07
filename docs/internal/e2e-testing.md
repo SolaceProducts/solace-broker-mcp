@@ -73,7 +73,7 @@ All test configuration lives in a single file: `test/e2e-basic-mcp/.env`. This f
 
 - **docker-compose.yml** — broker port mappings and admin password
 - **helpers.sh** — broker URLs, SEMP auth, fixture management
-- **MCP server** — credential resolution via `ENV_FILE` (reads `E2E_A_USERNAME`, etc.)
+- **MCP server** — credential resolution via `ENV_FILE` (reads `E2E_A_USERNAME` and so on)
 
 ```bash
 # Broker SEMP ports (host-side)
@@ -283,7 +283,7 @@ Phase 2:        add go-openai client → point at LiteLLM endpoint
                 → feed results back → agentic loop
 ```
 
-Because LiteLLM exposes an OpenAI-compatible API, a Go OpenAI client (e.g. `github.com/sashabaranov/go-openai`) can target it with no MCP changes. The agent's `session.ListTools()` output maps directly to OpenAI function definitions.
+Because LiteLLM exposes an OpenAI-compatible API, a Go OpenAI client (for example, `github.com/sashabaranov/go-openai`) can target it with no MCP changes. The agent's `session.ListTools()` output maps directly to OpenAI function definitions.
 
 ---
 

@@ -18,9 +18,9 @@ and if so where?". Returning all of them would bloat LLM context and bury
 the operational signal.
 
 This tool keeps only the fields that directly answer "where did messages
-go?" — every other class of stat belongs in a different tool
-(`get-broker-status` for capacity/uptime, `get-replication-status` for
-replication, etc.).
+go?" — every other class of stat belongs in a different tool, for example
+`get-broker-status` for capacity/uptime or `get-replication-status` for
+replication.
 
 ## Decision — protocol
 

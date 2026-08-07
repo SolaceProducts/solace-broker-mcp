@@ -12,7 +12,7 @@ This document captures the curated field set the `get-broker-status` MCP tool wi
 The four SEMPv1 commands underpinning this tool return ~462 fields total in the XSD-aligned response structs. Returning all of them would:
 - bloat LLM context windows for every invocation,
 - bury the operationally meaningful signals,
-- mix configuration facts (e.g., `cpu-cores`) with health indicators (e.g., `physical-memory-usage-percent`).
+- mix configuration facts (for example, `cpu-cores`) with health indicators (for example, `physical-memory-usage-percent`).
 
 Research across Solace public docs, internal Confluence runbooks, and the Solace Community forum identified a much smaller set of fields that operators *actually* check when assessing broker health. That set is what this tool returns.
 
@@ -36,7 +36,7 @@ Research across Solace public docs, internal Confluence runbooks, and the Solace
 
 | XML field | JSON key (camelCase) | Operational meaning |
 |---|---|---|
-| `description` | `description` | Broker version (e.g. `"Solace PubSub+ Software Enterprise Version 10.25.0.217"`) — support-lifecycle check, every operator runbook starts here. The string is also inspected by the platform-detection helper that gates the appliance-only hardware step (see "show hardware details" below). |
+| `description` | `description` | Broker version (for example, `"Solace PubSub+ Software Enterprise Version 10.25.0.217"`) — support-lifecycle check, every operator runbook starts here. The string is also inspected by the platform-detection helper that gates the appliance-only hardware step (see "show hardware details" below). |
 | `uptime/total-secs` | `uptime.totalSecs` | Broker uptime in seconds — surfaces unexpected reboots |
 
 ### `show system` → 17 fields
@@ -84,7 +84,7 @@ Two groups: uptime/restart context, plus scaling/capacity (added per reviewer fe
 | `physical-memory-usage-percent` | `physicalMemoryUsagePercent` | Headline memory pressure indicator — Datadog alarms on this |
 | `subscription-memory-usage-percent` | `subscriptionMemoryUsagePercent` | Subscription-table memory pressure |
 
-### `show message-spool detail` → 15 fields
+### `show message-spool detail` → 16 fields
 
 All under `<message-spool-info>`.
 
@@ -127,13 +127,13 @@ The full broker reply is wide (~30 elements per slot, plus dynamic telemetry: SF
 
 | XML path | JSON key | Operational meaning |
 |---|---|---|
-| `platform` | `platform` | Chassis model name (e.g. `"Solace Event Broker 3560"`) |
+| `platform` | `platform` | Chassis model name (for example, `"Solace Event Broker 3560"`) |
 | `mainboard/chassis-serial` | `chassisSerial` | Chassis serial number — primary support identifier |
 | `mainboard/bios-version` | `biosVersion` | Mainboard BIOS version |
 | derived from `mainboard/cpus/cpu` count | `cpuCount` | Number of populated CPU sockets |
 | `mainboard/cpus/cpu[0]` | `cpuModel` | First-socket CPU model string |
 | parsed from `mainboard/memory` | `systemMemoryGiB` | System memory in GiB (the broker emits a unit-qualified string like `"32.0 GiB"`; the value is parsed to a numeric and dropped if the unit isn't `GiB`) |
-| `power-redundancy/power-redundancy-config` | `power.redundancyConfiguration` | Power redundancy mode (e.g. `"1+1"`) |
+| `power-redundancy/power-redundancy-config` | `power.redundancyConfiguration` | Power redundancy mode (for example, `"1+1"`) |
 | `power-redundancy/operational-power-supplies` | `power.operationalCount` | Operational PSU count (parsed to int) |
 | `disks/disk[*]` | `disks[]` | One entry per populated disk: `{ id, deviceModel, serial }` |
 | `fabric[*]/slot[*]` | `slots[]` | One entry per populated blade slot: `{ slot, blade, productNumber, serial, operationalState }`. Empty slots and `"in use by slot N/M"` placeholders are filtered out — operators want the inventory, not gaps. `operationalState` maps the ADB-only `operational-state-up` boolean to `"up"`/`"down"`; absent on blades that don't emit it. |
@@ -218,7 +218,7 @@ On an appliance, the same envelope additionally carries:
 }
 ```
 
-## Excluded fields — Story 8 vs. operator reality
+## Excluded fields — Story 8 versus operator reality
 
 Story 8's acceptance criteria listed 11 specific output fields. Comparing them against the curated set:
 

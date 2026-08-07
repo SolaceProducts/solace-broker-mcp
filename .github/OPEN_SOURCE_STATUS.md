@@ -149,7 +149,7 @@ These settings must be configured by repository admin:
 - Topics for discoverability
 - See: ADMIN_SETUP.md → "Repository Settings"
 
-### 2. Support channels (5 minutes)
+### 2. Support Channels (5 minutes)
 - Leave GitHub Discussions **off**
 - Confirm Issues is on
 - See: ADMIN_SETUP.md → "Features"
@@ -158,12 +158,12 @@ These settings must be configured by repository admin:
 - Require PR reviews before merge
 - Require CI checks to pass
 - **Add `Guardian scan gate` to the required status checks** (from
-  `guardian-scan.yaml`) — the always-reporting supply-chain gate. Not
+  `guardian-scan.yaml`), the always-reporting supply-chain gate — not
   `Guardian scan` itself, which is skipped on fork pull requests.
   `.github/ADMIN_SETUP.md` explains why the gate is the safe context to require.
 - **Add `DCO sign-off` and `DCO check self-test` to the required status checks.**
-  These are not cosmetic. DCO is the control the project carries in place of a
-  contributor licence agreement. Both checks exist in CI, but until they are
+  These checks are not cosmetic. DCO is the control the project carries in place of a
+  contributor license agreement. Both checks exist in CI, but until they are
   *required* they enforce nothing, so the control is incomplete until this step
   is done. `.github/ADMIN_SETUP.md` has the exact strings and the reason each is
   needed.
@@ -175,7 +175,7 @@ These settings must be configured by repository admin:
   validity checks and non-provider patterns. Confirm, do not re-enable
 - Dependabot alerts and Dependabot security updates are already on. Scheduled
   Go module and GitHub Actions updates run on Dependabot too
-  (`.github/dependabot.yml`) — Renovate can't be enrolled for a public repo
+  (`.github/dependabot.yml`). Renovate can't be enrolled for a public repo
   under the org's current system, so it stays scoped to just the pinned Claude
   Code CLI version (`.github/renovate.json`). Dependabot's PRs are exempted
   from the `DCO sign-off` check rather than expected to satisfy it; see
@@ -191,7 +191,7 @@ These settings must be configured by repository admin:
 
 ### 6. Make Repository Public (5 minutes)
 **ONLY AFTER:**
-- Admin tasks above are complete
+- Admin tasks in the preceding sections are complete
 - A release has been cut that covers what is on `main`. The newest release is
   v0.6.0 (tagged 2026-07-28), and `main` has moved on since with `[Unreleased]`
   entries in `CHANGELOG.md`, so v0.6.0 does **not** describe `main` today. Cut one
@@ -208,7 +208,7 @@ These settings must be configured by repository admin:
 This table is a historical record of PR #15 (2026-04-24), not current state. As of
 2026-07-29 one gap remains behind the Security row: "Allow GitHub Actions to
 create and approve pull requests" is still on. Secret scanning and its push
-protection have since been enabled. Do not cite the score below as go/no-go
+protection have since been enabled. Do not cite the following score as go/no-go
 evidence without re-checking the live settings.
 
 | Category | Before PR #15 | After PR #15 | Target |
@@ -227,8 +227,8 @@ evidence without re-checking the live settings.
 public release.
 
 Both lines describe 2026-04-24 and are not a current assessment. The Security
-row they include has since been overtaken by the live settings noted above, so
-the real figure today is lower. Re-score against the live settings before
+row they include has since been overtaken by the live settings noted in the
+preceding paragraph, so the real figure today is lower. Re-score against the live settings before
 treating the 80% threshold as met.
 
 ---
@@ -259,7 +259,7 @@ treating the 80% threshold as met.
 ## Contact
 
 For questions about open source readiness:
-- support@solace.com
+- [support@solace.com](mailto:support@solace.com)
 - See CONTRIBUTING.md for contribution process
 - See SECURITY.md for security concerns
 
