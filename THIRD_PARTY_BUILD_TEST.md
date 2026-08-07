@@ -71,13 +71,15 @@ A standalone module. It builds the MCP client that drives the end-to-end suite.
 
 | Component | Version | License | License text |
 |---|---|---|---|
-| `github.com/google/jsonschema-go` | v0.4.2 | MIT | [license](https://github.com/google/jsonschema-go/blob/v0.4.2/LICENSE) |
-| `github.com/modelcontextprotocol/go-sdk` | v1.5.0 | Apache-2.0 | [license](https://github.com/modelcontextprotocol/go-sdk/blob/v1.5.0/LICENSE) |
+| `github.com/google/jsonschema-go` | v0.4.3 | MIT | [license](https://github.com/google/jsonschema-go/blob/v0.4.3/LICENSE) |
+| `github.com/modelcontextprotocol/go-sdk` | v1.7.0 | Apache-2.0 | [license](https://github.com/modelcontextprotocol/go-sdk/blob/v1.7.0/LICENSE) |
 | `github.com/segmentio/asm` | v1.1.3 | MIT | [license](https://github.com/segmentio/asm/blob/v1.1.3/LICENSE) |
 | `github.com/segmentio/encoding` | v0.5.4 | MIT | [license](https://github.com/segmentio/encoding/blob/v0.5.4/LICENSE) |
 | `github.com/yosida95/uritemplate/v3` | v3.0.2 | BSD-3-Clause | [license](https://github.com/yosida95/uritemplate/blob/v3.0.2/LICENSE) |
 | `golang.org/x/oauth2` | v0.35.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/oauth2/+/master:LICENSE) |
+| `golang.org/x/sync` | v0.20.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sync/+/master:LICENSE) |
 | `golang.org/x/sys` | v0.41.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sys/+/master:LICENSE) |
+| `golang.org/x/time` | v0.15.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/time/+/master:LICENSE) |
 
 Three notes a reader should not have to discover themselves.
 
