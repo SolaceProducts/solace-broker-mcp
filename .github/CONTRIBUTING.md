@@ -17,7 +17,7 @@ Thank you for your interest in contributing to the Solace Broker MCP Server! Thi
 
 ## Code of Conduct
 
-This project adheres to the [Contributor Covenant Code of Conduct](/.github/CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code. Please report unacceptable behavior to [andrea.ross@solace.com](mailto:andrea.ross@solace.com).
+This project adheres to the [Contributor Covenant Code of Conduct](/.github/CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code. Please report unacceptable behavior to [support@solace.com](mailto:support@solace.com).
 
 ## How Can I Contribute?
 
@@ -40,13 +40,13 @@ When reporting a bug, please include:
 - **Logs** — Relevant log output with structured fields (redact credentials!)
 - **Screenshots** — If applicable
 
-**Security vulnerabilities:** Do NOT report security issues via public GitHub issues. See [SECURITY.md](/.github/SECURITY.md) for the responsible disclosure process.
+**Security vulnerabilities:** Do NOT report security issues via public GitHub issues. See [SECURITY.md](SECURITY.md) for the responsible disclosure process.
 
 ### Suggesting Features
 
 We welcome feature requests! Before submitting:
 
-1. Check [existing issues](https://github.com/SolaceProducts/solace-broker-mcp/issues?q=label%3Aenhancement) and [discussions](https://github.com/SolaceProducts/solace-broker-mcp/discussions) for similar ideas
+1. Check [existing issues](https://github.com/SolaceProducts/solace-broker-mcp/issues?q=label%3Aenhancement) for similar ideas, or ask in the [Solace Community](https://solace.community/)
 2. Consider if the feature aligns with the project's goals (SEMP API management via MCP)
 3. Think about how it would benefit the broader community
 
@@ -61,7 +61,7 @@ When suggesting a feature, please include:
 
 We love pull requests! Here's the workflow:
 
-1. **Discuss first** — For large changes, open an issue or discussion first to align on approach
+1. **Discuss first** — For large changes, open an [issue](https://github.com/SolaceProducts/solace-broker-mcp/issues) or ask in the [Solace Community](https://solace.community/) first to align on approach
 2. **Fork and clone** — Fork the repo and clone your fork locally
 3. **Create a branch** — Branch from `main`: `git checkout -b feature/your-feature`
 4. **Make changes** — Follow our [coding standards](#coding-standards)
@@ -398,10 +398,11 @@ at `go.mod` and `go.sum` closely, since the automated scan is not there to do it
 
 ## Questions?
 
-- **General questions:** Start a [GitHub Discussion](https://github.com/SolaceProducts/solace-broker-mcp/discussions)
+- **General questions and community chat:** Visit the [Solace Community](https://solace.community/)
 - **Bugs or features:** Open a [GitHub Issue](https://github.com/SolaceProducts/solace-broker-mcp/issues/new/choose)
-- **Security issues:** Email [andrea.ross@solace.com](mailto:andrea.ross@solace.com)
-- **Community chat:** Visit [Solace Community](https://solace.community/)
+- **Security issues:** Email [support@solace.com](mailto:support@solace.com); Support routes real vulnerabilities to our security team
+
+See [SUPPORT.md](SUPPORT.md) for the full picture, including what to do if you have a Solace support contract.
 
 ## License
 

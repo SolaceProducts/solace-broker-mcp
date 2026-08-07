@@ -1,8 +1,5 @@
 blank_issues_enabled: false
 contact_links:
-  - name: 💬 Questions & Discussions
-    url: https://github.com/SolaceProducts/solace-broker-mcp/discussions
-    about: Ask questions, share ideas, and discuss with the community
   - name: 🏢 Solace Community
     url: https://solace.community/
     about: Get help from the broader Solace community
