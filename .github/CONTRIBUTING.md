@@ -17,7 +17,7 @@ Thank you for your interest in contributing to the Solace Broker MCP Server! Thi
 
 ## Code of Conduct
 
-This project adheres to the [Contributor Covenant Code of Conduct](/.github/CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code. Please report unacceptable behavior to [andrea.ross@solace.com](mailto:andrea.ross@solace.com).
+This project adheres to the [Contributor Covenant Code of Conduct](/.github/CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code. Please report unacceptable behavior to [support@solace.com](mailto:support@solace.com).
 
 ## How Can I Contribute?
 
