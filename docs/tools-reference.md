@@ -1108,7 +1108,7 @@ itself — REST consumers and queue bindings are separate resources not managed
 by this tool, so a new RDP is created disabled by default and delivers nothing
 until those are added. Fails if an RDP with the same name already exists.
 
-Annotations: `readOnly: false`, `destructive: false`.
+Annotations: `readOnly: false`, `destructiveHint: false`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
@@ -1130,7 +1130,7 @@ Annotations: `readOnly: false`, `destructive: false`.
 **Destructive.** Partially update a REST Delivery Point — only the supplied
 attributes change. Commonly used to enable an RDP that was created disabled.
 
-Annotations: `readOnly: false`, `destructive: true`.
+Annotations: `readOnly: false`, `destructiveHint: true`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
@@ -1152,7 +1152,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 **Destructive.** Delete a REST Delivery Point. Permanently removes the RDP
 along with its REST consumers and queue bindings.
 
-Annotations: `readOnly: false`, `destructive: true`.
+Annotations: `readOnly: false`, `destructiveHint: true`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
