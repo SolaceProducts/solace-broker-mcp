@@ -84,7 +84,6 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          COMMIT_SHA: ${{ github.sha }}
           GITHUB_REF: ${{ github.ref }}
           GIT_REF_INPUT: ${{ inputs.git_ref }}
           FULL_VERSION_INPUT: ${{ inputs.product_full_version }}
@@ -92,17 +91,18 @@ jobs:
           IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
           set -euo pipefail
+          # FOSSA, Prisma, and db-sync must share one version prefix (DATAGO-147232).
+          if [ -n "$FULL_VERSION_INPUT" ]; then
+            FULL_VERSION="$FULL_VERSION_INPUT"
+          else
+            FULL_VERSION="$(git describe --tags --always)"
+          fi
           if [ "$EVENT_NAME" = "pull_request" ]; then
             MODE="pr"; IS_PR="true"; IS_TRUNK="false"
             FOSSA_BRANCH="PR"; FOSSA_REVISION="$HEAD_REF"
           else
             MODE="trunk"; IS_PR="false"; IS_TRUNK="true"
-            FOSSA_BRANCH="main"; FOSSA_REVISION="${GIT_REF_INPUT:-$COMMIT_SHA}"
-          fi
-          if [ -n "$FULL_VERSION_INPUT" ]; then
-            FULL_VERSION="$FULL_VERSION_INPUT"
-          else
-            FULL_VERSION="$(git describe --tags --always)"
+            FOSSA_BRANCH="main"; FOSSA_REVISION="$FULL_VERSION"
           fi
           # Enforce (block) only on trunk and only when not bypassed.
           ENFORCE="false"
