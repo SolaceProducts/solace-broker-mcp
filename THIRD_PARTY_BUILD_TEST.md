@@ -12,9 +12,11 @@ itself**, and which are **not compiled into the shipped binary**.
 > Legal checklist, which asks for a "list of all used 3rd party products used at
 > build and test time" alongside the release list.
 
-**Generated** 2026-08-05. Every licence below was read from the component's own
-licence file or from the GitHub API for its source repository. None was inferred
-from a package name or carried over from another row. See
+**Generated** 2026-08-05; the GitHub Actions section was refreshed 2026-08-07
+when Guardian enrollment re-pinned every action to a commit SHA. Every licence
+below was read from the component's own licence file or from the GitHub API for
+its source repository, at the ref in use rather than at the default branch. None
+was inferred from a package name or carried over from another row. See
 [Rebuilding this file](#rebuilding-this-file) for how to regenerate it.
 
 Kept honest by `.github/scripts/build-test-licenses-check.sh`, which fails CI
@@ -69,13 +71,15 @@ A standalone module. It builds the MCP client that drives the end-to-end suite.
 
 | Component | Version | License | License text |
 |---|---|---|---|
-| `github.com/google/jsonschema-go` | v0.4.2 | MIT | [license](https://github.com/google/jsonschema-go/blob/v0.4.2/LICENSE) |
-| `github.com/modelcontextprotocol/go-sdk` | v1.5.0 | Apache-2.0 | [license](https://github.com/modelcontextprotocol/go-sdk/blob/v1.5.0/LICENSE) |
+| `github.com/google/jsonschema-go` | v0.4.3 | MIT | [license](https://github.com/google/jsonschema-go/blob/v0.4.3/LICENSE) |
+| `github.com/modelcontextprotocol/go-sdk` | v1.7.0 | Apache-2.0 | [license](https://github.com/modelcontextprotocol/go-sdk/blob/v1.7.0/LICENSE) |
 | `github.com/segmentio/asm` | v1.1.3 | MIT | [license](https://github.com/segmentio/asm/blob/v1.1.3/LICENSE) |
 | `github.com/segmentio/encoding` | v0.5.4 | MIT | [license](https://github.com/segmentio/encoding/blob/v0.5.4/LICENSE) |
 | `github.com/yosida95/uritemplate/v3` | v3.0.2 | BSD-3-Clause | [license](https://github.com/yosida95/uritemplate/blob/v3.0.2/LICENSE) |
 | `golang.org/x/oauth2` | v0.35.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/oauth2/+/master:LICENSE) |
+| `golang.org/x/sync` | v0.20.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sync/+/master:LICENSE) |
 | `golang.org/x/sys` | v0.41.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sys/+/master:LICENSE) |
+| `golang.org/x/time` | v0.15.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/time/+/master:LICENSE) |
 
 Three notes a reader should not have to discover themselves.
 
@@ -148,36 +152,65 @@ listed.
 Actions run on GitHub's runners during CI. They are not distributed with the
 product and never enter the binary.
 
-| Action | Version | License | License text |
-|---|---|---|---|
-| `actions/attest-build-provenance` | v4 | MIT | [license](https://github.com/actions/attest-build-provenance/blob/main/LICENSE) |
-| `actions/checkout` | v4 | MIT | [license](https://github.com/actions/checkout/blob/main/LICENSE) |
-| `actions/download-artifact` | v4 | MIT | [license](https://github.com/actions/download-artifact/blob/main/LICENSE) |
-| `actions/setup-go` | v5 | MIT | [license](https://github.com/actions/setup-go/blob/main/LICENSE) |
-| `actions/setup-node` | v4 | MIT | [license](https://github.com/actions/setup-node/blob/main/LICENSE) |
-| `actions/upload-artifact` | v4 | MIT | [license](https://github.com/actions/upload-artifact/blob/main/LICENSE) |
-| `docker/build-push-action` | v6 | Apache-2.0 | [license](https://github.com/docker/build-push-action/blob/master/LICENSE) |
-| `docker/login-action` | v3 | Apache-2.0 | [license](https://github.com/docker/login-action/blob/master/LICENSE) |
-| `docker/metadata-action` | v5 | Apache-2.0 | [license](https://github.com/docker/metadata-action/blob/master/LICENSE) |
-| `docker/setup-buildx-action` | v3 | Apache-2.0 | [license](https://github.com/docker/setup-buildx-action/blob/master/LICENSE) |
-| `docker/setup-qemu-action` | v3 | Apache-2.0 | [license](https://github.com/docker/setup-qemu-action/blob/master/LICENSE) |
-| `golangci/golangci-lint-action` | v7 | MIT | [license](https://github.com/golangci/golangci-lint-action/blob/master/LICENSE) |
-| `softprops/action-gh-release` | v2 | MIT | [license](https://github.com/softprops/action-gh-release/blob/master/LICENSE) |
+Every action is pinned to a commit SHA rather than a moving tag, so the "Pinned
+ref" column carries a short SHA and is what the drift check compares. "Release"
+is the tag that commit corresponds to, recorded because a SHA alone tells a
+reader nothing about which version they are auditing. Licence links resolve at
+that tag, not at the default branch, for the reason the `segmentio/asm` note
+below spells out.
 
-### Solace-internal reusable workflows
+| Action | Pinned ref | Release | License | License text |
+|---|---|---|---|---|
+| `actions/attest-build-provenance` | `0f67c3f` | v4.1.1 | MIT | [license](https://github.com/actions/attest-build-provenance/blob/v4.1.1/LICENSE) |
+| `actions/checkout` | `11d5960` | v4.4.0 | MIT | [license](https://github.com/actions/checkout/blob/v4.4.0/LICENSE) |
+| `actions/download-artifact` | `d3f86a1` | v4.3.0 | MIT | [license](https://github.com/actions/download-artifact/blob/v4.3.0/LICENSE) |
+| `actions/github-script` | `f28e40c` | v7.1.0 | MIT | [license](https://github.com/actions/github-script/blob/v7.1.0/LICENSE.md) |
+| `actions/setup-go` | `40f1582` | v5.6.0 | MIT | [license](https://github.com/actions/setup-go/blob/v5.6.0/LICENSE) |
+| `actions/setup-node` | `49933ea` | v4.4.0 | MIT | [license](https://github.com/actions/setup-node/blob/v4.4.0/LICENSE) |
+| `actions/upload-artifact` | `ea165f8` | v4.6.2 | MIT | [license](https://github.com/actions/upload-artifact/blob/v4.6.2/LICENSE) |
+| `docker/build-push-action` | `10e90e3` | v6.19.2 | Apache-2.0 | [license](https://github.com/docker/build-push-action/blob/v6.19.2/LICENSE) |
+| `docker/login-action` | `c94ce9f` | v3.7.0 | Apache-2.0 | [license](https://github.com/docker/login-action/blob/v3.7.0/LICENSE) |
+| `docker/metadata-action` | `c299e40` | v5.10.0 | Apache-2.0 | [license](https://github.com/docker/metadata-action/blob/v5.10.0/LICENSE) |
+| `docker/setup-buildx-action` | `8d2750c` | v3.12.0 | Apache-2.0 | [license](https://github.com/docker/setup-buildx-action/blob/v3.12.0/LICENSE) |
+| `docker/setup-qemu-action` | `c7c5346` | v3.7.0 | Apache-2.0 | [license](https://github.com/docker/setup-qemu-action/blob/v3.7.0/LICENSE) |
+| `golangci/golangci-lint-action` | `9fae48a` | v7.0.1 | MIT | [license](https://github.com/golangci/golangci-lint-action/blob/v7.0.1/LICENSE) |
+| `softprops/action-gh-release` | `3bb1273` | v2.6.2 | MIT | [license](https://github.com/softprops/action-gh-release/blob/v2.6.2/LICENSE) |
+
+`actions/github-script` names its licence file `LICENSE.md` rather than
+`LICENSE`. Worth the sentence only because the obvious URL 404s, and a reader who
+hits that is likely to assume the row is wrong rather than that the filename is
+unusual.
+
+### Solace-internal composite actions
 
 Not third-party. Listed so the inventory accounts for every `uses:` in the
 repository rather than silently skipping the ones that did not fit the table.
+All five come from one repository, pinned to a single commit.
 
-| Workflow | Ref | Owner |
+| Action | Ref | Owner |
 |---|---|---|
-| `SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml` | `fc521b0` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `2bb7665` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `2bb7665` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-db-sync` | `2bb7665` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `2bb7665` | Solace |
+| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `2bb7665` | Solace |
 
-A second entry, `SolaceDev/re-workflows/.github/workflows/transition-pr-on-merge.yaml`,
-was dropped when SOL-152855 removed the workflow that called it: a public
-repository cannot resolve a reusable workflow from an internal repository in
-another organisation. The drift check flagged the stale row on the first build
-after that landed, which is the reverse direction working as intended.
+`2bb7665` is a branch commit, not a tag, so there is no release to record beside
+it. The repository itself is Apache-2.0.
+
+Two entries have been dropped from this table, both by the reverse-direction
+check rather than by anyone remembering to look.
+
+`SolaceDev/re-workflows/.github/workflows/transition-pr-on-merge.yaml` went when
+SOL-152855 removed the workflow that called it: a public repository cannot
+resolve a reusable workflow from an internal repository in another organisation.
+
+`SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml`
+went when DATAGO-147232 moved FOSSA and Prisma scanning off the Vault-backed
+reusable workflow onto the composite actions above. This table previously held
+that one row; it now holds five, and the whole third-party table above changed
+from tags to SHA pins in the same change. None of it was reflected here until
+this update, which is what SOL-152951 is about.
 
 ## Container images
 
