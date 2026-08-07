@@ -35,9 +35,8 @@ name: Build and Test
 #
 #   1. `workflow_dispatch` runs the full suite on any ref, no pull request
 #      needed: `gh workflow run build-and-test.yml --ref my-branch`. Dispatch
-#      requires write access, so it adds no fork exposure, and `fossa_scan`'s
-#      `if` correctly evaluates false on a dispatch. Same pattern as
-#      `fossa-scan.yaml` and `llm-eval.yml`.
+#      requires write access, so it adds no fork exposure. Same
+#      `workflow_dispatch` pattern as `guardian-scan.yaml` and `llm-eval.yml`.
 #   2. Open the pull request. A draft is enough; `opened` and `synchronize` both
 #      fire for drafts.
 #
@@ -88,8 +87,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Read-only by default. Every elevated scope this workflow needs belongs to
-# `fossa_scan` alone, so it is granted there and nowhere else.
+# Read-only for every job; scanning and its elevated scopes moved to
+# guardian-scan.yaml.
 #
 # This used to be one workflow-level block granting `pull-requests: write`,
 # `id-token: write`, `checks: write`, and `statuses: write` to every job. That
@@ -110,43 +109,22 @@ concurrency:
 permissions:
   contents: read
 
+# Supply-chain scanning moved to guardian-scan.yaml; this workflow is now
+# lint/build/e2e only.
 jobs:
-  fossa_scan:
-    if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
-    name: FOSSA Scan
-    # The scan authenticates to Vault by OIDC (`id-token`), reads the dependency
-    # graph and workflow metadata (`packages`, `actions`), and reports back on the
-    # commit (`pull-requests`, `statuses`, `checks`). Scoped to this job so no
-    # other job inherits any of it.
-    permissions:
-      contents: read
-      packages: read
-      pull-requests: write
-      id-token: write
-      actions: read
-      checks: write
-      statuses: write
-    uses: SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml@fc521b087f780457f92d4cb46038184e92ad2fbc # pinned 2026-05-12
-    with:
-      use_vault: true
-      config_file: '.github/workflow-config.json'
-    secrets:
-      # Vault address is injected from an org/repo secret, not committed to the repo.
-      VAULT_URL: ${{ secrets.VAULT_URL }}
-
   lint:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: 'go.mod'
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
         with:
           version: v2.11.4
           # The action's fallback restore key is prefixed on OS + workdir +
@@ -168,10 +146,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: 'go.mod'
 
@@ -225,10 +203,10 @@ jobs:
     needs: build
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: 'go.mod'
 
@@ -255,10 +233,10 @@ jobs:
     needs: build
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: 'go.mod'
 
@@ -317,10 +295,10 @@ jobs:
     needs: build
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: 'go.mod'
 
@@ -351,10 +329,10 @@ jobs:
     needs: build
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: 'go.mod'
 
@@ -385,10 +363,10 @@ jobs:
     needs: build
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: 'go.mod'
 

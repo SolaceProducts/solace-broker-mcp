@@ -1,0 +1,81 @@
+name: Release Readiness Check
+
+# Re-runs the Guardian scan (trunk mode) against a ref and blocks on the gate.
+# Run on demand before tagging; release.yml also calls it on the tag.
+# skip_security_checks lets a repo admin (only) publish over a Guardian block.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version / ref to check (branch, tag, or SHA)."
+        required: true
+        type: string
+      skip_security_checks:
+        description: "Admin-only: continue even if Guardian blocks."
+        required: false
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      skip_security_checks:
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  authorize:
+    name: Authorize security bypass
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      fail_on_blocked: ${{ steps.decide.outputs.fail_on_blocked }}
+    steps:
+      - name: Resolve bypass authorisation
+        id: decide
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          # Pass the input through env, never interpolated into the script body:
+          # this is the one control between a Guardian block and a publish.
+          SKIP_SECURITY_CHECKS: ${{ inputs.skip_security_checks }}
+        with:
+          script: |
+            const skip = process.env.SKIP_SECURITY_CHECKS === 'true';
+            if (!skip) {
+              core.setOutput('fail_on_blocked', 'true');
+              return;
+            }
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              username: context.actor,
+            });
+            const admin = data.permission === 'admin';
+            core.setOutput('fail_on_blocked', admin ? 'false' : 'true');
+            core.warning(admin
+              ? `Security bypass authorised for admin ${context.actor}.`
+              : `${context.actor} is not an admin (${data.permission}); bypass denied.`);
+
+  guardian:
+    name: Guardian gate
+    needs: authorize
+    uses: ./.github/workflows/guardian-scan.yaml
+    permissions:
+      contents: read
+      packages: read     # ceiling for guardian-scan's FOSSA jobs (private scan container)
+      pull-requests: write
+      checks: write
+      statuses: write
+    # No `secrets: inherit`: guardian-scan.yaml reads its secrets from the
+    # `guardian` Environment, which resolves independently of the caller.
+    with:
+      git_ref: ${{ inputs.version }}
+      product_full_version: ${{ inputs.version }}
+      fail_on_blocked: ${{ needs.authorize.outputs.fail_on_blocked == 'true' }}

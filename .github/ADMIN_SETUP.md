@@ -192,8 +192,8 @@ review.
 list is not: it currently holds `lint`, `build`, and `FOSSA Scan`, the last of
 which enforces nothing (see the warning below). Replace it with the following.
 These names are what GitHub actually reports, confirmed against the check runs on
-PRs #213, #216, and #217 — except `SCA gate` (SOL-152411) and
-`Third-party licenses current` (SOL-152414), which are new. Confirm those two
+PRs #213, #216, and #217 — except `Guardian scan gate` (new, replaces `SCA gate`)
+and `Third-party licenses current` (SOL-152414), which are new. Confirm those two
 against a real pull request before you rely on them:
 
 | Check | Source | Gates on |
@@ -205,47 +205,40 @@ against a real pull request before you rely on them:
 | `e2e-monitoring` | `build-and-test.yml` | E2E suite (known flaky fixture; rerun the job before investigating) |
 | `e2e-management` | `build-and-test.yml` | E2E suite |
 | `e2e-action` | `build-and-test.yml` | E2E suite |
-| `SCA gate` | `ci-pr.yaml` job `sca_gate` | The FOSSA verdict, or an accounted-for reason there is none. **Not** `FOSSA Scan / SCA Scan`; see the warning below |
+| `Guardian scan gate` | `guardian-scan.yaml` job `gate` | The Guardian scan verdict, or an accounted-for reason there is none (fork PR). Replaces `SCA gate`; see the warning below |
 | `Third-party licenses current` | `ci-pr.yaml` job `licenses` | `THIRD_PARTY_LICENSES.md` still matching `go list -deps ./cmd/server`. Needs no secret, so it reports on fork pull requests too |
 | `CHANGELOG updated` | `ci-pr.yaml` job `changelog` | Advisory today; see note below |
 | `DCO sign-off` | `dco.yaml` job `dco` | a sign-off on every commit the PR adds, except a PR GitHub records as opened by `dependabot[bot]` (SOL-152808) |
 | `DCO check self-test` | `ci-pr.yaml` job `dco_selftest` | the gate's own logic still working |
 
-⚠️ **Two FOSSA-shaped entries are wrong, and the right one is neither.** Pick
-`SCA gate`.
+⚠️ **Require `Guardian scan gate`, and nothing FOSSA-shaped.** The old
+`FOSSA Scan` and `FOSSA Scan / SCA Scan` contexts no longer exist — the
+Vault-backed FOSSA jobs were removed from `ci-pr.yaml`, `build-and-test.yml`, and
+`fossa-scan.yaml` (deleted). Scanning now runs in `guardian-scan.yaml`, which
+triggers on `pull_request` and `push` directly, so its jobs surface under their
+plain names with no `caller / inner` suffix.
 
-- **`FOSSA Scan` enforces nothing.** A check by that exact name comes from
-  `build-and-test.yml`, where the job carries
-  `if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch`,
-  so on every pull request it reports **skipped**, and GitHub counts a skipped
-  check as passing.
-- **`FOSSA Scan / SCA Scan` deadlocks fork pull requests.** It is the real
-  scanning context on a same-repo pull request: the `ci-pr.yaml` caller job
-  (`name: FOSSA Scan`) plus the inner job of the reusable workflow it calls
-  (`name: "SCA Scan"`), which exits non-zero on findings because
-  `.github/workflow-config.json` sets both FOSSA modes to `BLOCK`. But that caller
-  is now skipped for fork pull requests, because a fork gets no repository
-  secrets and the Vault-backed scan cannot run. A skipped *plain* job still
-  reports `skipped`; a skipped reusable-workflow *caller* never creates the
-  ` / SCA Scan` context at all. Required contexts that are never created stay
-  pending forever, so requiring this one makes every external contribution
-  unmergeable.
-- **`SCA gate` is the one to require.** `ci-pr.yaml` job `sca_gate` always
-  reports. It passes on a FOSSA success, fails on a FOSSA failure, and passes a
-  fork's skip with a logged reason. It re-derives the fork condition itself and
-  **fails** a skip it cannot account for, so narrowing `fossa_scan`'s `if` later
-  cannot quietly switch the gate off on same-repo pull requests.
+- **`Guardian scan gate` is the one to require.** `guardian-scan.yaml` job `gate`
+  always reports. It passes on a scan success, fails on a scan failure, and passes
+  a fork PR's skip with a logged reason — re-deriving the fork condition itself and
+  **failing** a skip it cannot account for, so narrowing the scan jobs' `if` later
+  cannot quietly switch the gate off on same-repo pull requests. Same design as the
+  `SCA gate` it replaced.
+- **Do not require the individual scan jobs.** `build`, `fossa-license`,
+  `fossa-vuln`, `prisma`, and `guardian-gate` all skip on a fork PR (no Environment
+  secrets); a skipped plain job counts as passing, and only `gate` fails closed on
+  an *unexplained* same-repo skip. Require `Guardian scan gate`, not the scans.
 
-The naming rule behind all three bullets: a reusable-workflow caller that **runs**
-surfaces as `<caller job name> / <inner job name>`, never as the caller name alone.
-A caller that is **skipped** does the opposite — its inner job never runs, so the
-only context produced is the bare caller name, reported as `skipped`. That
-asymmetry is why one FOSSA entry enforces nothing and the other deadlocks.
+The naming rule still holds: a reusable-workflow caller that **runs** surfaces as
+`<caller job name> / <inner job name>`; a caller that is **skipped** produces only
+the bare caller name. `guardian-scan.yaml` sidesteps it by triggering directly
+rather than being called, so its contexts are plain job names.
 
 ⚠️ **Both DCO rows are required, and dropping either removes a control.** DCO
 stands in for a contributor licence agreement, so the repository is not covered
-until both are registered — an unrequired check enforces nothing, the same trap as
-`FOSSA Scan` above.
+until both are registered — an unrequired check enforces nothing, the same trap the
+old `FOSSA Scan` context was (a required-looking check that only ever reported
+skipped).
 
 - `DCO sign-off` *is* the control. Dropping the row removes it.
 - `DCO check self-test` blocks for a different reason: the gate runs the *base
@@ -285,11 +278,11 @@ Three more notes on the list:
   `CHANGELOG_GATE_MODE: advisory`, so the script warns and exits 0. Requiring it
   makes the check's presence a merge precondition now, so flipping the mode to
   `blocking` later needs no ruleset change.
-- On a **same-repo** pull request, FOSSA runs in diff mode (`enable_diff_mode` is
-  true for `pull_request` events). It blocks on findings that are new relative to
-  the base branch, not on the full dependency inventory. That is what keeps `main`
-  from entering an irregular state; do not read a green PR as a clean full scan.
-  On a fork pull request it does not run at all — see the fork section below.
+- On a **same-repo** pull request, FOSSA runs in diff mode (only issues new
+  relative to the base branch) and in REPORT, not BLOCK. So the PR surfaces new
+  findings without blocking on them; the hard gate is on push to `main` and at the
+  release tag. Do not read a green PR as a clean full scan. On a fork pull request
+  the scan does not run at all — see the fork section below.
 - `Analyze (go)` (CodeQL) passes on every PR. Add it if you want code scanning to
   block merges, after settling the configuration question in the Security Settings
   section. It is not in the list above because that is a policy call, not a
@@ -306,29 +299,35 @@ made this impossible. What it changed, and what it deliberately did not:
    public images (`solace/solace-pubsub-standard`, `quay.io/keycloak/keycloak`),
    take their broker credentials from committed `.env` files, and generate their
    own self-signed TLS certs with `openssl`. A read-only `GITHUB_TOKEN` is enough.
-2. **FOSSA no longer goes red for a missing secret.** `ci-pr.yaml` passes
-   `use_vault: true` and `secrets.VAULT_URL`, and GitHub withholds secrets from a
-   fork-triggered `pull_request` run, so the reusable workflow used to find an
-   empty Vault URL and exit 1 on every external contribution. The `fossa_scan`
-   job is now skipped for fork pull requests, and the always-reporting `SCA gate`
-   job is the required context instead.
+2. **Scanning no longer goes red for a missing secret.** GitHub withholds
+   Environment secrets from a fork-triggered `pull_request` run, so the
+   `guardian-scan.yaml` `Guardian scan` job is skipped for fork pull requests, and
+   the always-reporting `Guardian scan gate` job is the required context instead.
+   (Before the move off Vault this was `fossa_scan` finding an empty `VAULT_URL`
+   and exiting 1 on every external contribution.)
 3. **`pull_request_target` was not introduced**, and neither was a `workflow_run`
    follow-up. Both would run untrusted code with an elevated token to buy a
    pre-merge scan on a path that already requires a maintainer to approve the
    workflow run and a code owner to approve the pull request.
 
-**The residual gap, stated so nobody assumes otherwise.** A fork pull request gets
-no pre-merge FOSSA verdict. A contributor who adds a dependency with a licensing
-conflict or a critical/high vulnerability is caught by the full scan on push to
-`main`, which is detection after merge, not prevention before it. Until that
-changes, two human controls stand in, and both need someone to actually do them:
+**The residual gap — get an owner before the repo flips public.** A fork pull
+request gets no pre-merge Guardian/SCA verdict: the scan jobs need Environment
+secrets, forks don't get them, so each fork PR merges unscanned and is only caught
+by the scan on push to `main` — detection after merge, not prevention. Today
+almost every PR is same-repo so the carve-out rarely fires; once the repo is
+public, fork PRs become the normal contribution path and this becomes the common
+case, not the edge one. Note that "require approval for outside collaborators"
+(GitHub Actions Permissions section) protects the *secrets*, not the *verdict* —
+an approved fork run still can't scan. **This is a decision for a repo owner to
+make deliberately before going public, not a default to inherit.** Until it's
+closed, two human controls stand in, and both need someone to actually do them:
 
 - **Read `go.mod` and `go.sum`** in any fork pull request that touches them.
 - **Read the `.github/` diff too.** Moving to `pull_request` means a fork pull
   request supplies the workflow definitions that run for it. It cannot reach a
   secret and its token is read-only, so this is not a credential-theft path, but a
-  pull request can still weaken its own checks — including `SCA gate`, which runs
-  from the pull request's own ref. `DCO sign-off` is the exception, deliberately:
+  pull request can still weaken its own checks — including `Guardian scan gate`,
+  which runs from the pull request's own ref. `DCO sign-off` is the exception:
   `dco.yaml` runs on `pull_request_target` so a pull request cannot edit the copy
   that judges it.
 - **A red FOSSA on `main` needs an owner.** Nothing routes it today: the failure
@@ -345,15 +344,16 @@ is the harder half; `go-licenses` covers some of it. This was left out of
 SOL-152411 to keep that change to the trigger and gate problem, not because it is
 unavailable. It is the obvious follow-up.
 
-Also worth knowing: on a same-repo pull request FOSSA runs in diff mode, so a green
-`SCA gate` there is not a clean full scan either — see the diff-mode note above.
+Also worth knowing: on a same-repo pull request FOSSA runs in diff mode and in
+REPORT (not BLOCK), so a green `Guardian scan gate` there is not a clean full scan
+— the hard gate is on push to `main` and at the release tag.
 
 Nobody has ever opened a fork pull request against this repository, so none of the
 above is observed on a real external contribution. `CHANGELOG updated` should be
 fine: `ci-pr.yaml` gives that job only `contents: read` and it reads no secrets.
 `Analyze (go)` appears to come from CodeQL default setup, which the Security
 Settings section asks you to confirm. Copilot review is inconsistent even on
-same-repo pull requests, so do not count on it. Verify `SCA gate`,
+same-repo pull requests, so do not count on it. Verify `Guardian scan gate`,
 `CHANGELOG updated`, `Analyze (go)`, and the `lint` job's annotation behavior on a
 read-only token against a real fork pull request before treating any of them as a
 gate.
@@ -364,8 +364,8 @@ collaborators. That holds the entire workflow run, not just one job, until a
 maintainer approves it.
 
 The consequence, in order: an external contributor opens their first pull request,
-and **no checks run at all**. Not `SCA gate`, not `CHANGELOG updated`, not the seven
-from `build-and-test.yml`. Every required context sits pending and the pull request
+and **no checks run at all**. Not `Guardian scan gate`, not `CHANGELOG updated`, not
+the seven from `build-and-test.yml`. Every required context sits pending and the pull request
 reads as stuck rather than as rejected or passing. This is independent of the
 SOL-152411 fix: that made the checks *capable* of reporting on a fork pull request,
 and this setting decides *when* they are allowed to start.
@@ -455,76 +455,41 @@ writing; re-check, do not assume.
 - ✅ No sensitive data in issues or PRs
 - ⬜ **Required status checks corrected** per the Branch Protection section above.
   The ruleset still holds the old list. The supply-chain context to register is
-  `SCA gate` — not `FOSSA Scan`, which enforces nothing, and not
-  `FOSSA Scan / SCA Scan`, which never reports on a fork pull request and would
-  leave every external contribution pending.
+  `Guardian scan gate` (from `guardian-scan.yaml`) — not `FOSSA Scan` and not
+  `FOSSA Scan / SCA Scan`, both removed with the Vault-backed jobs.
 
-  > **Precondition: confirm `SCA gate` is green on a real pull request before
-  > registering it as required.**
+  > **Precondition: confirm `Guardian scan gate` is green on a real pull request
+  > before requiring it.**
   >
-  > `sca_gate` fails closed, by design. So if FOSSA is broken for any reason,
-  > making `SCA gate` required turns "FOSSA is broken" into "no pull request in
-  > this repository can merge". Branch protection holds zero required contexts
-  > today, which is the only reason a repo-wide FOSSA outage is not already
-  > blocking everyone.
+  > The `gate` job fails closed, by design. So if the scan is broken for any
+  > reason, requiring it turns "scanning is broken" into "no pull request can
+  > merge". Branch protection holds zero required contexts today, which is the only
+  > reason a scan outage is not already blocking everyone.
   >
-  > Check it, do not assume it, and note that our SHA pin buys less than it looks
-  > like. `ci-pr.yaml` calls
-  > `SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml`
-  > at a pinned SHA, but that workflow references four nested actions at `@main`
-  > (`workflow-config-loader`, `sca-setup-deps`, `sca/sca-scan`, `fossa-guard`) and
-  > runs a container image by digest, where the registry namespace is derived from
-  > `github.repository_owner` at runtime. No SHA written here freezes any of that,
-  > so the scan's behaviour changes without a line changing in this repository.
-  > Repinning or bumping our reference is not a remedy.
+  > Note that the SHA pin buys less than it looks like: `guardian-scan` pins the
+  > `SolaceDev/solace-public-workflows` actions, but those actions run container
+  > images and can reference nested logic that changes without a line changing
+  > here. Repinning is not a substitute for watching a run.
   >
-  > Recent history, as evidence that this is not hypothetical. One root cause, the
-  > move to the `SolaceProducts` org, produced two different failures on
-  > 2026-07-31. **FOSSA did not go green at any point that day.**
-  >
-  > | When (UTC) | Symptom | Cause | Whose fix |
-  > |---|---|---|---|
-  > | last green: 07-30 21:28 | `Test passed! 0 issues found` against project `SolaceDev_solace-broker-mcp` | | |
-  > | 07-31 14:46 to 15:34 | fails in ~13s | Vault OIDC role `cicd-workflows-secret-read-role` binds on the `repository` claim, which the rename changed. Token exchange rejected: `claim "repository" does not match any associated bound claim values`. | infra, since fixed |
-  > | 07-31 from 15:38 | fails in ~50s | Vault authenticates. The scan container cannot be pulled: `manifest unknown` for `ghcr.io/solaceproducts/maas-build-actions@sha256:14d7b08…`. Same rename, via `github.repository_owner` in the nested `fossa-guard` action. | infra |
-  > | next, once the container is pullable | expect a licensing block | PR #243 repointed `project_id` to `SolaceProducts_solace-broker-mcp`, a **new** FOSSA project carrying none of the old project's policy waivers. | **this repository** |
-  >
-  > That last row is the one that matters for this checklist item, because it is
-  > ours and it is not visible yet. On `main` at `43a9a93`, `fossa test` already
-  > reports three findings:
+  > **Expect a licensing block on `main` until the FOSSA findings are waived.** The
+  > FOSSA project `SolaceProducts_solace-broker-mcp` (new since PR #243, carrying
+  > none of the old project's policy waivers) reports three policy findings:
   >
   > ```
   > ⚑ Denied by policy CC-BY-SA-4.0 on github.com/perimeterx/marshmallow@v1.1.5
   > ⚑ MPL-2.0 license detected in github.com/hashicorp/go-cleanhttp@v0.5.2
   > ⚑ MPL-2.0 license detected in github.com/hashicorp/go-retryablehttp@v0.7.8
-  > Error: The scan has revealed issues. Number of issues found: 3
   > ```
   >
-  > `block_on` includes `policy_conflict`, and the guard maps "Denied by Policy" to
-  > exactly that, so the `marshmallow` finding should block once the guard runs.
-  > It is invisible today only because the guard steps die on the container pull
-  > before they can report, and the job's verdict is read from those steps. So
-  > **`SCA gate` is not one infra fix away from green.** Either waive or resolve
-  > the findings on the new FOSSA project, or expect the gate to go red for a
-  > second, legitimate reason the moment the first one clears.
+  > `guardian-scan.yaml` runs the FOSSA licensing guard in `BLOCK` mode on `main`
+  > (`block_on: policy_conflict`), and the guard maps "Denied by Policy" to
+  > `policy_conflict`, so the `marshmallow` finding will block a push to `main`
+  > until it is waived or resolved on the FOSSA project. Vulnerability blocking is
+  > separate — it is the SLA-aware Guardian gate, not FOSSA. Settle the license
+  > findings before relying on the gate, or expect `main` to go red for a
+  > legitimate reason.
   >
-  > A related trap worth knowing: the shared workflow cannot distinguish "the guard
-  > could not run" from "the guard found violations". Both guard steps are
-  > `continue-on-error`, and the summary reads their `failure` outcome as findings.
-  > That is why runs on 07-31 printed
-  > `critical,high severity vulnerabilities detected` when nothing had been scanned
-  > at all. Do not act on that message without reading the job log.
-  >
-  > **Do not add `secrets.vault.url` to `.github/workflow-config.json`.** Its
-  > absence is not a defect and not the cause of anything above. It held
-  > `https://vault.maas-vault-prod.solace.cloud:8200` and was removed deliberately
-  > in `2d46757` ("Vault URL hardening") while preparing this repository to go
-  > public. The URL now comes from the `VAULT_URL` repository secret and resolves
-  > fine (runs log `✅ Vault configuration validated`). Re-adding it would put an
-  > internal hostname back into a public repository.
-  >
-  > `sca_gate` going red through all of this is the gate working. Leaving
-  > `FOSSA Scan / SCA Scan` unrequired is what had been hiding it.
+  > The `gate` job going red through all of this is the gate working.
 - ⬜ **"Allow GitHub Actions to create and approve pull requests" turned off.**
   Still on.
 - ⬜ **Fork pull request workflows set to require approval for all outside
