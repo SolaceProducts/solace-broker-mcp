@@ -21,7 +21,7 @@ An MCP (Model Context Protocol) server for Solace event brokers, built with Go u
   - [Install with go install](#install-with-go-install)
   - [Docker Deployment](#docker-deployment)
   - [Connect from Claude Code](#connect-from-claude-code)
-  - [Connect from Solace Agent Mesh (SAM)](#connect-from-solace-agent-mesh-sam)
+  - [Connect from Solace Agent Mesh](#connect-from-solace-agent-mesh)
 - [Development Setup](#development-setup)
   - [Configuration Options](#configuration-options)
 - [Project Structure](#project-structure)
@@ -106,7 +106,7 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 - [Examples](docs/examples.md) — Claude Desktop config, natural-language queries, and multi-broker setup
 - [Configuration](docs/configuration.md) — server settings, event broker config, client auth, and rate-limit/retry settings
 - [Authentication](docs/authentication.md) — OAuth/OIDC and static token setup for MCP clients
-- [SAM Integration](docs/sam-integration.md) — wire this MCP server into a Solace Agent Mesh project as an agent
+- [Agent Mesh Integration](docs/sam-integration.md) — wire this MCP server into an Agent Mesh project as an agent
 
 ## Prerequisites
 
@@ -303,7 +303,7 @@ Example query:
 List queues in the default VPN on the dev broker
 ```
 
-### Connect from Solace Agent Mesh (SAM)
+### Connect from Solace Agent Mesh
 
 After the MCP server is running, configure it to accept a static dev token (local development only). For production, use `mcp_client_auth.mode: oauth` — see [Authentication](docs/authentication.md).
 
@@ -314,9 +314,9 @@ mcp_client_auth:
   dev_token: "sam-mcp-dev-token-local-only"
 ```
 
-Then in your SAM project, add an MCP-tooled agent that points at this server with the matching bearer token. For complete setup instructions, see: [SAM Integration](docs/sam-integration.md).
+Then in your Agent Mesh project, add an MCP-tooled agent that points at this server with the matching bearer token. For complete setup instructions, see: [Agent Mesh Integration](docs/sam-integration.md).
 
-Example queries through the SAM web UI:
+Example queries through the Agent Mesh web UI:
 
 ```
 What event brokers are configured?
