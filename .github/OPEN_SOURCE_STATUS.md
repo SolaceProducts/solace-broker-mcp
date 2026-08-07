@@ -125,9 +125,13 @@ These settings must be configured by repository admin:
 ### 4. Security Features (5 minutes)
 - Secret scanning and secret-scanning push protection are already on, as are
   validity checks and non-provider patterns. Confirm, do not re-enable
-- Dependabot alerts and Dependabot security updates are already on. Dependency
-  updates themselves run on Renovate (`.github/renovate.json`), not Dependabot;
-  do not create a `dependabot.yml`
+- Dependabot alerts and Dependabot security updates are already on. Scheduled
+  Go module and GitHub Actions updates run on Dependabot too
+  (`.github/dependabot.yml`) — Renovate can't be enrolled for a public repo
+  under the org's current system, so it stays scoped to just the pinned Claude
+  Code CLI version (`.github/renovate.json`). Dependabot's PRs are exempted
+  from the `DCO sign-off` check rather than expected to satisfy it; see
+  `.github/workflows/dco.yaml`
 - CodeQL runs on every PR, but the repository API reports Code Security as
   disabled; confirm the configuration rather than assuming it
 - See: ADMIN_SETUP.md → "Security Settings"

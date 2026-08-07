@@ -21,7 +21,7 @@ These apply to every tool unless noted otherwise.
 
 ### The `broker` parameter
 
-Every tool **except `list-brokers`** takes a required `broker` parameter
+Every tool **except `list-brokers` and `describe-semp-schema`** takes a required `broker` parameter
 identifying which configured broker to query. It is injected automatically into
 each tool's input schema at registration (`injectBrokerParam` in
 `internal/tools/register.go`), so it is not declared in any tool definition:
@@ -121,8 +121,7 @@ request. A full request wraps it: `{"method":"tools/call","params":{"name":"<too
 ### list-brokers
 
 List all configured broker aliases. Use one of the returned names as the
-`broker` parameter on any other tool. This is the only tool with **no `broker`
-parameter**.
+`broker` parameter on any other tool. No `broker` parameter.
 
 **Parameters:** none.
 
@@ -138,6 +137,40 @@ parameter**.
 ```
 
 **Example request:** "What brokers are configured?"
+
+---
+
+### describe-semp-schema
+
+Return the SEMPv2 schema slice for a given operation's request-body definition.
+Use this before invoking a `create-*` or `update-*` tool to enumerate every
+configurable attribute with types, defaults, enum values, and writability flags.
+No `broker` parameter — the response is derived from the embedded OpenAPI specs
+and does not contact any broker. Scoped to the **config** and **action** SEMPv2
+APIs; the monitor API is read-only (GET-only, no request bodies) and is not
+indexed here — a `monitor/...` operation returns `unknown operation`.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `operation` | string | yes | SEMPv2 operation identifier in `<specType>/<operationId>` form, e.g. `config/createMsgVpnQueue`. `specType` must be `config` or `action`. Take the value from the target write tool's description. |
+| `view` | string | no | `trimmed` (default) — compact per-attribute list. `raw` — full OpenAPI definition verbatim. |
+
+**Returns (`trimmed`):** `{ "operation", "method", "definition", "attributes": [...] }` where each attribute carries `name`, `type`, `description`, `enum`, `default`, `pattern`, `maxLength`, `minimum`, `maximum`, `writableOnCreate`, `writableOnUpdate`, and any applicable flags (`requiredForCreate`, `identifying`, `writeOnly`, `sensitive`, `deprecated`, `autoDisable`, `requiresDisable`). Object-typed attributes backed by a `$ref` carry a nested `properties` list instead of writability flags.
+
+**Typical invocation.** Most calls happen unprompted. The eight
+`create-*`/`update-*` write tool descriptions each point at
+`describe-semp-schema` with the relevant operation, so an agent planning a
+write will call this tool without the user asking for it — an ordinary request
+like *"Create a queue named orders with a spool quota of 500 MB"* is what
+triggers it in practice. If you are watching a trace and see
+`describe-semp-schema` fire immediately before a `create-*` or `update-*`
+call, that is the expected path. Direct invocation is supported but uncommon.
+
+**Example requests:**
+- *"Create a queue named orders with a spool quota of 500 MB"* — the agent calls `describe-semp-schema` (operation `config/createMsgVpnQueue`) before `create-queue`. This is the common path.
+- *"What attributes can I set when creating a queue?"* — direct call, less common.
 
 ---
 

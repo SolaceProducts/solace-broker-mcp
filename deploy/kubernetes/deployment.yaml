@@ -37,7 +37,7 @@ spec:
         runAsUser: 65532  # distroless nonroot UID (gcr.io/distroless/static-debian12:nonroot)
       containers:
         - name: solace-broker-mcp
-          image: ghcr.io/solacedev/solace-broker-mcp:latest
+          image: ghcr.io/solaceproducts/solace-broker-mcp:latest
           ports:
             - name: http
               containerPort: 9090

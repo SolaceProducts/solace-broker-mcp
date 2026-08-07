@@ -190,7 +190,12 @@ jobs:
         # -race enables the Go race detector to catch data races on shared state (e.g. BrokerPool).
         # This adds ~2-3x overhead to test execution. Acceptable now given the small test suite,
         # but worth revisiting if test times become a problem as the suite grows.
-        run: go test -race -v ./...
+        #
+        # `make test-cover` also enforces the 85% aggregate coverage floor from the same run
+        # (no separate test pass) — see docs/internal/unit-test-coverage.md for the policy
+        # and what this floor can/can't catch (it's a backstop, not a regression detector —
+        # per-package coverage deltas in review are what catch a small localized regression).
+        run: make test-cover
 
       - name: Benchmark
         # Informational, not a pass/fail gate — wall-clock timing is too CI-noisy to

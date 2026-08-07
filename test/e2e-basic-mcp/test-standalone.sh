@@ -36,6 +36,7 @@ test_list_tools() {
 
     assert_contains "$response" "get-rdp-status" "tools/list should include get-rdp-status" || return 1
     assert_contains "$response" "list-brokers" "tools/list should include list-brokers" || return 1
+    assert_contains "$response" "describe-semp-schema" "tools/list should include describe-semp-schema" || return 1
     assert_contains "$response" "get-queue-metrics" "tools/list should include get-queue-metrics" || return 1
     assert_contains "$response" "get-client-details" "tools/list should include get-client-details" || return 1
     assert_contains "$response" "list-client-subscriptions" "tools/list should include list-client-subscriptions" || return 1
@@ -58,6 +59,35 @@ test_list_brokers() {
 
     assert_contains "$response" "broker-a" "list-brokers should include 'broker-a'" || return 1
     assert_contains "$response" "broker-b" "list-brokers should include 'broker-b'" || return 1
+}
+
+test_describe_semp_schema_create_queue() {
+    local response content
+    response=$(mcp_call_tool "describe-semp-schema" \
+        '{"operation":"config/createMsgVpnQueue"}') || return 1
+    content=$(extract_content "$response")
+
+    assert_json_field "$content" '.operation' "config/createMsgVpnQueue" \
+        "response should echo the requested operation" || return 1
+    assert_json_field "$content" '.method' "POST" \
+        "createMsgVpnQueue is a POST" || return 1
+    assert_json_field "$content" '(.attributes | length) > 0' "true" \
+        "trimmed view must carry a non-empty attributes array" || return 1
+    # queueName is the identifying attribute on this op; if it disappears the
+    # trimmed view is broken in a way the unit tests wouldn't catch.
+    assert_json_field "$content" '[.attributes[].name] | index("queueName") != null' "true" \
+        "attributes must include queueName" || return 1
+}
+
+test_describe_semp_schema_monitor_rejected() {
+    # Monitor operations are not indexed (config/action only). Locks in the
+    # scope guarantee documented in tools-reference.md and the CHANGELOG.
+    local response
+    response=$(mcp_call_tool "describe-semp-schema" \
+        '{"operation":"monitor/getMsgVpn"}') || return 1
+
+    assert_contains "$response" "unknown operation" \
+        "monitor/... operations must surface 'unknown operation'" || return 1
 }
 
 # ── Broker A tests ───────────────────────────────────────────────────────────
@@ -263,16 +293,18 @@ test_get_rdp_status_summary_b() { test_get_rdp_status_summary "broker-b"; }
 
 # ── Run ──────────────────────────────────────────────────────────────────────
 
-run_test "Health endpoint"                    test_health_endpoint
-run_test "MCP initialize"                    test_initialize
-run_test "List tools"                        test_list_tools
-run_test "List brokers (both)"               test_list_brokers
-run_test "Get RDP status (broker-a)"         test_get_rdp_status_broker_a
-run_test "Get RDP status not found"          test_get_rdp_status_not_found
-run_test "Get queue metrics (broker-a)"      test_get_queue_metrics_broker_a
-run_test "Get RDP status (broker-b)"         test_get_rdp_status_broker_b
-run_test "Get queue metrics (broker-b)"      test_get_queue_metrics_broker_b
-run_test "Get RDP status summary (broker-a)" test_get_rdp_status_summary_a
-run_test "Get RDP status summary (broker-b)" test_get_rdp_status_summary_b
+run_test "Health endpoint"                         test_health_endpoint
+run_test "MCP initialize"                          test_initialize
+run_test "List tools"                              test_list_tools
+run_test "List brokers (both)"                     test_list_brokers
+run_test "describe-semp-schema create queue"       test_describe_semp_schema_create_queue
+run_test "describe-semp-schema monitor rejected"   test_describe_semp_schema_monitor_rejected
+run_test "Get RDP status (broker-a)"               test_get_rdp_status_broker_a
+run_test "Get RDP status not found"                test_get_rdp_status_not_found
+run_test "Get queue metrics (broker-a)"            test_get_queue_metrics_broker_a
+run_test "Get RDP status (broker-b)"               test_get_rdp_status_broker_b
+run_test "Get queue metrics (broker-b)"            test_get_queue_metrics_broker_b
+run_test "Get RDP status summary (broker-a)"       test_get_rdp_status_summary_a
+run_test "Get RDP status summary (broker-b)"       test_get_rdp_status_summary_b
 
 print_summary "Standalone tests"

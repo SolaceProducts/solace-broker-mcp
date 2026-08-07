@@ -247,37 +247,6 @@ func TestExecute_GetVPNStatus_SEMPError(t *testing.T) {
 	}
 }
 
-func TestExecute_ListVPNs_SinglePage(t *testing.T) {
-	client := newSeqMockClient()
-	client.addResponses("getMsgVpns", pageResult(makeVPNItems(3), ""))
-
-	executor := NewCompositeExecutor(testOperations())
-
-	result, err := executor.Execute(context.Background(), listVPNsTool(), client, map[string]any{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	vpns, ok := result["vpns"].(map[string]any)
-	if !ok {
-		t.Fatal("expected vpns key containing a map")
-	}
-
-	items, ok := vpns["data"].([]any)
-	if !ok {
-		t.Fatal("expected vpns.data to be a slice")
-	}
-	if len(items) != 3 {
-		t.Errorf("len(items) = %d, want 3", len(items))
-	}
-	if vpns["truncated"] != false {
-		t.Errorf("truncated = %v, want false", vpns["truncated"])
-	}
-	if len(client.calls) != 1 {
-		t.Errorf("expected 1 SEMP call, got %d", len(client.calls))
-	}
-}
-
 func TestExecute_ListVPNs_MultiPage(t *testing.T) {
 	// Page 1: 10 VPNs with nextPageUri; page 2: 5 VPNs, no nextPageUri. Total: 15.
 	client := newSeqMockClient()

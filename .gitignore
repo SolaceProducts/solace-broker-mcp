@@ -21,6 +21,10 @@ go.work.sum
 # Dependency directory
 vendor/
 
+# Node.js dependencies — only test/e2e-llm installs any (pinned Claude CLI).
+# npm ci restores from the checked-in package-lock.json on every run.
+node_modules/
+
 # IDE files
 .idea/
 .vscode/
@@ -47,6 +51,7 @@ broker-config.yaml
 !test/e2e-management/.env
 !test/e2e-action/.env
 !test/e2e-oauth/.env
+!test/e2e-llm/.env
 
 # Working documents that must not be committed (see OPEN_SOURCE_STATUS.md)
 Mark2-report.md

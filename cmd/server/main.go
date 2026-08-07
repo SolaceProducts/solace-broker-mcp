@@ -735,6 +735,15 @@ func main() {
 	// API surface.
 	tools.RegisterListBrokers(server, pool)
 
+	// describe-semp-schema is a discovery tool over the embedded SEMPv2 OpenAPI
+	// spec. Registered outside mgr like list-brokers — no broker resolution,
+	// no policy wrapping.
+	if err := tools.RegisterDescribeSempSchema(server, specs.FS); err != nil {
+		slog.Error("failed to register describe-semp-schema tool",
+			slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
 	// Validate every configured tool name now that both registrations have
 	// populated mgr. An admin typo would silently produce a grant that never
 	// takes effect at request time; catching it at startup is fatal by

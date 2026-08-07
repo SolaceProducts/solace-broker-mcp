@@ -80,15 +80,40 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 		}
 	})
 
+	operations, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatalf("ParseSpecs: %v", err)
+	}
+
 	t.Run("operations", func(t *testing.T) {
-		operations, err := sempv2.ParseSpecs(specs.FS)
-		if err != nil {
-			t.Fatalf("ParseSpecs: %v", err)
-		}
 		for _, tool := range tools {
 			for _, step := range tool.Steps {
 				if _, exists := operations[step.Operation]; !exists {
 					t.Errorf("tool %q step %q: operation %q not found in spec", tool.Name, step.ID, step.Operation)
+				}
+			}
+		}
+	})
+
+	// Catches a wiring bug executor_*_test.go can't: those tests build
+	// CompositeTool literals by hand and never load tools.yaml, so a real
+	// path-param bug in the shipped YAML passes them untouched (confirmed by
+	// injecting one). Checked here against the real embedded catalog instead.
+	//
+	// Fan-out steps still supply path params via step.Args today (list-vpns
+	// templates msgVpnName from .Item). If a future fan-out step relies on
+	// ForEachKey alone, update this check rather than deleting it.
+	t.Run("path-params-wired", func(t *testing.T) {
+		for _, tool := range tools {
+			for _, step := range tool.Steps {
+				op, ok := operations[step.Operation]
+				if !ok {
+					continue // already reported by the "operations" subtest above
+				}
+				for _, param := range sempv2.PathParamNames(op.Path) {
+					if _, wired := step.Args[param]; !wired {
+						t.Errorf("tool %q step %q (%s): path param %q not wired in args", tool.Name, step.ID, op.Path, param)
+					}
 				}
 			}
 		}

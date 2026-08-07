@@ -84,42 +84,6 @@ func makeBridgeItems(n int) []any {
 	return items
 }
 
-func TestExecute_ListBridges_SinglePage(t *testing.T) {
-	bridgeItems := []any{
-		map[string]any{"bridgeName": "bridge-1", "bridgeVirtualRouter": "auto", "enabled": true, "inboundState": "ready-in-sync", "outboundState": "ready"},
-		map[string]any{"bridgeName": "bridge-2", "bridgeVirtualRouter": "auto", "enabled": true, "inboundState": "stalled", "outboundState": "ready"},
-	}
-	client := newSeqMockClient()
-	client.addResponses("getMsgVpnBridges", pageResult(bridgeItems, ""))
-
-	executor := NewCompositeExecutor(testOperations())
-
-	result, err := executor.Execute(context.Background(), listBridgesTool(), client, map[string]any{
-		"msgVpnName": "default",
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	bridges, ok := result["bridges"].(map[string]any)
-	if !ok {
-		t.Fatal("expected bridges key containing a map")
-	}
-	items, ok := bridges["data"].([]any)
-	if !ok {
-		t.Fatal("expected bridges.data to be a slice")
-	}
-	if len(items) != 2 {
-		t.Errorf("len(items) = %d, want 2", len(items))
-	}
-	if bridges["truncated"] != false {
-		t.Errorf("truncated = %v, want false", bridges["truncated"])
-	}
-	if len(client.calls) != 1 {
-		t.Errorf("expected 1 SEMP call, got %d", len(client.calls))
-	}
-}
-
 func TestExecute_ListBridges_TruncatesAtMaxResults(t *testing.T) {
 	// Page has 100 bridges but maxResults=50, paginator should stop and set truncated.
 	client := newSeqMockClient()

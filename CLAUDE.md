@@ -5,9 +5,11 @@ Architecture and diagrams: `docs/internal/architecture.md`.
 
 ## Commands
 
-- `make check` — build, vet, lint, race-enabled tests. Matches CI's build/lint/test
-  jobs (CI additionally runs the E2E jobs below); run before pushing.
+- `make check` — build, vet, lint, race-enabled tests with the 85% coverage gate
+  (`docs/internal/unit-test-coverage.md`). Matches CI's build/lint/test jobs (CI
+  additionally runs the E2E jobs below); run before pushing.
 - `make test` — unit tests. Single test: `go test ./internal/<pkg>/ -run TestName -v`
+- `make test-cover` — unit tests + coverage gate only (no vet/lint)
 - `make e2e-all` — the `test/e2e-basic-mcp` suite against Dockerized brokers, full
   lifecycle (up, run, teardown). CI also runs the oauth and monitoring E2E suites
   (`docs/internal/e2e-testing.md`).
@@ -24,8 +26,8 @@ Two mechanisms — prefer the first:
 
 Never declare a `broker` parameter — it is auto-injected at registration into
 the schema of every tool defined through either mechanism (`injectBrokerParam`
-in `internal/tools/register.go`). The built-in `list-brokers` is the one
-exception: registered separately, no `broker` parameter.
+in `internal/tools/register.go`). `list-brokers` and `describe-semp-schema` are the
+exceptions: registered separately, no `broker` parameter.
 
 ## Tool naming
 
