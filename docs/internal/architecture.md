@@ -6,6 +6,10 @@ is called out inline (e.g. _skeleton_, _gated_) so the doc never implies a
 subsystem is live when the code is a stub. Component claims carry `file:line`
 references so a reviewer can verify each one against the code.
 
+For the trust boundaries implied by this design — what crosses them, what
+mitigates each threat, and what's an explicit accepted risk — see
+[`threat-model.md`](threat-model.md).
+
 ---
 
 ## Package Structure
