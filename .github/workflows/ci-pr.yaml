@@ -35,7 +35,7 @@ jobs:
   fossa_scan:
     name: FOSSA Scan
     if: github.event.pull_request.head.repo.full_name == github.repository
-    uses: SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml@fc521b087f780457f92d4cb46038184e92ad2fbc # pinned 2026-05-12
+    uses: SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml@4c3adb2cd19a3de38abe3b9ac4a7a066a97ed526 # pinned 2026-05-12
     with:
       use_vault: true
       config_file: '.github/workflow-config.json'
@@ -118,7 +118,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Run the DCO check's self-test against this PR's version
         run: .github/scripts/dco-check.test.sh
 
@@ -129,7 +129,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Run the release-notes extraction self-test against this PR's version
         run: .github/scripts/extract-release-notes.test.sh
 
@@ -153,9 +153,9 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
       - name: Self-test the licence check
@@ -184,7 +184,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Advise on a missing [Unreleased] entry for behavior-changing PRs
