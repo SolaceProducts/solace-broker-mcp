@@ -452,7 +452,7 @@ For security vulnerability reporting, please see [SECURITY.md](.github/SECURITY.
 
 This software is provided under the Apache License 2.0 on an "AS IS" basis, without warranties or conditions of any kind. See the [LICENSE](LICENSE) file for the full terms. Use it at your own risk.
 
-This is a community-supported open-source project. It is provided on a best-effort basis with no service-level commitment, and it is not a supported Solace product.
+If you have a Solace support contract, this project is covered through the usual [support@solace.com](mailto:support@solace.com) channel. Everyone else gets community support on a best-effort basis with no service-level commitment. See [Support](#support) for details.
 
 You are responsible for ensuring your use of this server complies with the terms governing your brokers and any laws, regulations, or policies that apply to you.
 
