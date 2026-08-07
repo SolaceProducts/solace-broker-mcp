@@ -43,6 +43,18 @@ const (
 // exists so a grep finds every exempt-name touchpoint at once.
 const listBrokersToolName = "list-brokers"
 
+// isExemptFromToolAuthorization reports whether a tool is registered without a
+// policy wrapper and is therefore always available to an authenticated caller.
+//
+// Exemption is structural: these tools are registered outside the manager, so
+// no wrapper ever gates them and Policy.Authorize has no entry for them —
+// asking it returns a zero-value deny. Any code that reasons about the tool set
+// must go through this predicate rather than comparing against one name, or it
+// will silently disagree with what tools/call actually permits.
+func isExemptFromToolAuthorization(toolName string) bool {
+	return toolName == listBrokersToolName || toolName == describeSempSchemaToolName
+}
+
 // matchedGroupsBound caps how many matched group names the audit event
 // carries on allow. 32 covers the largest realistic caller-group membership
 // without truncation while keeping single log records readable. When a

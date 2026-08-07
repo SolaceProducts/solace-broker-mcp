@@ -118,7 +118,7 @@ func WithListFiltering(policy *authz.Policy) mcp.Middleware {
 					continue
 				}
 				// Exempt before the policy check, which would deny it.
-				if t.Name == listBrokersToolName {
+				if isExemptFromToolAuthorization(t.Name) {
 					kept = append(kept, t)
 					continue
 				}

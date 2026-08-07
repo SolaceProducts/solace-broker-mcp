@@ -633,8 +633,12 @@ func TestWithListFiltering_ListedImpliesCallable(t *testing.T) {
 	_, cleanup := captureSlog(t)
 	defer cleanup()
 
+	// Every exempt tool is included, not just list-brokers. An earlier version
+	// of this test hardcoded one name and so missed describe-semp-schema being
+	// filtered out while remaining callable.
 	allTools := []string{
 		listBrokersToolName,
+		describeSempSchemaToolName,
 		"get-broker-status",
 		"list-queues",
 		"delete-queue",
@@ -669,10 +673,10 @@ func TestWithListFiltering_ListedImpliesCallable(t *testing.T) {
 			}
 
 			for _, tool := range allTools {
-				// list-brokers is exempt from both paths: registered without a
-				// policy, so it is never gated on call and never filtered on
-				// list. Its agreement is structural, not a policy verdict.
-				if tool == listBrokersToolName {
+				// An exempt tool is registered without a policy, so it is
+				// never gated on call and must never be filtered on list. Its
+				// agreement is structural, not a policy verdict.
+				if isExemptFromToolAuthorization(tool) {
 					if !listed[tool] {
 						t.Errorf("groups %v: exempt tool %q was filtered out", groups, tool)
 					}
@@ -685,6 +689,37 @@ func TestWithListFiltering_ListedImpliesCallable(t *testing.T) {
 						groups, tool, listed[tool], callable)
 				}
 			}
+		}
+	}
+}
+
+// isExemptFromToolAuthorization is the single point of truth for which tools
+// bypass the policy, which means the invariant test above cannot catch the
+// predicate itself being wrong — filter and test would agree while both were
+// incorrect. That is not hypothetical: describe-semp-schema was missing from
+// the filter's exemption for exactly this reason.
+//
+// This test closes that gap by pinning the predicate against the registration
+// sites rather than against itself. Every tool registered outside the manager
+// takes no policy argument and so is structurally exempt; if a future tool
+// joins them in main.go, or one of these gains a policy, this fails.
+func TestIsExemptFromToolAuthorization_MatchesUnpolicedRegistrations(t *testing.T) {
+	// Registered directly on the server in main.go, each without a policy:
+	// RegisterListBrokers and RegisterDescribeSempSchema.
+	unpoliced := []string{listBrokersToolName, describeSempSchemaToolName}
+
+	for _, name := range unpoliced {
+		if !isExemptFromToolAuthorization(name) {
+			t.Errorf("%q is registered without a policy but is not exempt — "+
+				"tools/list would filter a tool that tools/call permits", name)
+		}
+	}
+
+	// Anything registered through the manager IS policy-wrapped, so exempting
+	// it would list a tool the call path denies.
+	for _, name := range []string{"get-broker-status", "list-queues", "delete-queue"} {
+		if isExemptFromToolAuthorization(name) {
+			t.Errorf("%q is policy-wrapped but claims exemption", name)
 		}
 	}
 }
