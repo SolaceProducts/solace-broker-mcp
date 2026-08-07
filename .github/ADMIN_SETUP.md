@@ -646,5 +646,5 @@ After repository is made public:
 ## Questions?
 
 If you need help with any of these admin tasks, contact:
-- Andrea Ross (andrea.ross@solace.com)
+- support@solace.com
 - Solace DevRel team

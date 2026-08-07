@@ -210,7 +210,7 @@ treating the 80% threshold as met.
 ## Contact
 
 For questions about open source readiness:
-- Andrea Ross (andrea.ross@solace.com)
+- support@solace.com
 - See CONTRIBUTING.md for contribution process
 - See SECURITY.md for security concerns
 
