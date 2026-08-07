@@ -73,7 +73,7 @@ jobs:
       scan_tag: scan-${{ github.run_id }}
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ inputs.git_ref || github.ref }}
@@ -84,7 +84,6 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          COMMIT_SHA: ${{ github.sha }}
           GITHUB_REF: ${{ github.ref }}
           GIT_REF_INPUT: ${{ inputs.git_ref }}
           FULL_VERSION_INPUT: ${{ inputs.product_full_version }}
@@ -92,17 +91,18 @@ jobs:
           IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
           set -euo pipefail
+          # FOSSA, Prisma, and db-sync must share one version prefix (DATAGO-147232).
+          if [ -n "$FULL_VERSION_INPUT" ]; then
+            FULL_VERSION="$FULL_VERSION_INPUT"
+          else
+            FULL_VERSION="$(git describe --tags --always)"
+          fi
           if [ "$EVENT_NAME" = "pull_request" ]; then
             MODE="pr"; IS_PR="true"; IS_TRUNK="false"
             FOSSA_BRANCH="PR"; FOSSA_REVISION="$HEAD_REF"
           else
             MODE="trunk"; IS_PR="false"; IS_TRUNK="true"
-            FOSSA_BRANCH="main"; FOSSA_REVISION="${GIT_REF_INPUT:-$COMMIT_SHA}"
-          fi
-          if [ -n "$FULL_VERSION_INPUT" ]; then
-            FULL_VERSION="$FULL_VERSION_INPUT"
-          else
-            FULL_VERSION="$(git describe --tags --always)"
+            FOSSA_BRANCH="main"; FOSSA_REVISION="$FULL_VERSION"
           fi
           # Enforce (block) only on trunk and only when not bypassed.
           ENFORCE="false"
@@ -154,17 +154,17 @@ jobs:
       FOSSA_REVISION: ${{ needs.setup.outputs.fossa_revision }}
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ needs.setup.outputs.ref }}
           persist-credentials: false
       - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: 'go.mod'
       - name: FOSSA analyze
-        uses: SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan@2bb76658deba3a34d90bfb1d6837de1b13996192
+        uses: SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan@4c3adb2cd19a3de38abe3b9ac4a7a066a97ed526
         with:
           scanners: "fossa"
           additional_scan_params: |
@@ -172,7 +172,7 @@ jobs:
             fossa.revision=${{ env.FOSSA_REVISION }}
           fossa_api_key: ${{ secrets.FOSSA_API_KEY }}
       - name: FOSSA licensing guard
-        uses: SolaceDev/solace-public-workflows/.github/actions/fossa-guard@2bb76658deba3a34d90bfb1d6837de1b13996192
+        uses: SolaceDev/solace-public-workflows/.github/actions/fossa-guard@4c3adb2cd19a3de38abe3b9ac4a7a066a97ed526
         with:
           fossa_api_key: ${{ secrets.FOSSA_API_KEY }}
           fossa_project_id: ${{ env.FOSSA_PROJECT_ID }}
@@ -206,17 +206,17 @@ jobs:
       FOSSA_REVISION: ${{ needs.setup.outputs.fossa_revision }}
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ needs.setup.outputs.ref }}
           persist-credentials: false
       - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: 'go.mod'
       - name: FOSSA analyze and upload
-        uses: SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan@2bb76658deba3a34d90bfb1d6837de1b13996192
+        uses: SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan@4c3adb2cd19a3de38abe3b9ac4a7a066a97ed526
         with:
           scanners: "fossa"
           additional_scan_params: |
@@ -227,7 +227,7 @@ jobs:
           guardian_url: ${{ fromJSON(env.IS_TRUNK) && secrets.GUARDIAN_URL || '' }}
           guardian_token: ${{ fromJSON(env.IS_TRUNK) && secrets.GUARDIAN_API_TOKEN || '' }}
       - name: FOSSA vulnerability guard
-        uses: SolaceDev/solace-public-workflows/.github/actions/fossa-guard@2bb76658deba3a34d90bfb1d6837de1b13996192
+        uses: SolaceDev/solace-public-workflows/.github/actions/fossa-guard@4c3adb2cd19a3de38abe3b9ac4a7a066a97ed526
         with:
           fossa_api_key: ${{ secrets.FOSSA_API_KEY }}
           fossa_project_id: ${{ env.FOSSA_PROJECT_ID }}
@@ -259,12 +259,12 @@ jobs:
       FULL_VERSION: ${{ needs.setup.outputs.full_version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.setup.outputs.ref }}
           persist-credentials: false
       - name: Download scan image
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: guardian-scan-image
       - name: Load image
@@ -273,7 +273,7 @@ jobs:
       # not wanted on a public repo. The Prisma verdict is enforced by the
       # Guardian gate on trunk, not on PRs.
       - name: Prisma Cloud scan
-        uses: SolaceDev/solace-public-workflows/prisma-cloud-scan@2bb76658deba3a34d90bfb1d6837de1b13996192
+        uses: SolaceDev/solace-public-workflows/prisma-cloud-scan@4c3adb2cd19a3de38abe3b9ac4a7a066a97ed526
         with:
           image_registry: ${{ env.IMAGE_REGISTRY }}
           image_repo: ${{ env.IMAGE_REPO }}
@@ -302,12 +302,12 @@ jobs:
       ENFORCE: ${{ needs.setup.outputs.enforce }}
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.setup.outputs.ref }}
           persist-credentials: false
       - name: Guardian DB sync and Jira report
-        uses: SolaceDev/solace-public-workflows/guardian-db-sync@2bb76658deba3a34d90bfb1d6837de1b13996192
+        uses: SolaceDev/solace-public-workflows/guardian-db-sync@4c3adb2cd19a3de38abe3b9ac4a7a066a97ed526
         with:
           guardian-url: ${{ secrets.GUARDIAN_URL }}
           guardian-key: ${{ secrets.GUARDIAN_API_TOKEN }}
@@ -316,7 +316,7 @@ jobs:
           unifiers: "fossa,prisma"
           upload-logs: "true"
       - name: Guardian vulnerability gate
-        uses: SolaceDev/solace-public-workflows/guardian-vulnerability-gate@2bb76658deba3a34d90bfb1d6837de1b13996192
+        uses: SolaceDev/solace-public-workflows/guardian-vulnerability-gate@4c3adb2cd19a3de38abe3b9ac4a7a066a97ed526
         with:
           guardian-url: ${{ secrets.GUARDIAN_URL }}
           guardian-key: ${{ secrets.GUARDIAN_API_TOKEN }}
