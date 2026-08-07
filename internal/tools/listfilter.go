@@ -19,6 +19,7 @@ import (
 	"log/slog"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/logging/sanitize"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -65,18 +66,22 @@ const (
 // vary per-connection" but MAY vary by "the authorization presented on the
 // request", so this reads only the current token.
 //
-// list-brokers is exempt because it is registered without a policy, making
-// Policy.Authorize return a zero-value deny for it. Filtering blindly would
-// break broker discovery for every caller, including admins.
+// Exempt tools (IsExemptFromToolAuthorization) are registered without a policy,
+// so Policy.Authorize returns a zero-value deny for them. Filtering blindly
+// would hide tools every caller can still invoke.
 //
 // The caller is told nothing about what was removed — no protocol channel
 // reaches the model, and a zero-result list is a normal 200. The audit event
 // below is the only diagnostic this feature has, which is why it fires on
 // every filtered list rather than only when something changed.
 //
+// configuredGroupsClaimName is reported as expected_claim on the missing-claim
+// record, so an operator with a non-default groups_claim_name need not
+// cross-reference config. Same field withAuthorization emits.
+//
 // Correlation ID is stamped on by the correlation slog handler reading it from
 // ctx — do NOT add correlation_id here, or the record will carry two.
-func WithListFiltering(policy *authz.Policy) mcp.Middleware {
+func WithListFiltering(policy *authz.Policy, configuredGroupsClaimName string) mcp.Middleware {
 	// Fail at wiring time rather than on the first request: a nil policy means
 	// the composition-site guard was dropped, and every list would silently go
 	// out unfiltered.
@@ -118,7 +123,7 @@ func WithListFiltering(policy *authz.Policy) mcp.Middleware {
 					continue
 				}
 				// Exempt before the policy check, which would deny it.
-				if isExemptFromToolAuthorization(t.Name) {
+				if IsExemptFromToolAuthorization(t.Name) {
 					kept = append(kept, t)
 					continue
 				}
@@ -146,13 +151,22 @@ func WithListFiltering(policy *authz.Policy) mcp.Middleware {
 			// The caller's groups are deliberately not logged: counts and the
 			// reason diagnose the request without disclosing one caller's
 			// group membership to everyone who can read the log.
-			slog.LogAttrs(ctx, level, "tool list filter",
+			attrs := []slog.Attr{
 				slog.String("event", eventToolListFilter),
 				slog.String("decision_reason", reason),
 				slog.Bool("groups_present", present),
 				slog.Int("tools_before", toolsBefore),
 				slog.Int("tools_after", len(kept)),
-				slog.Any("", id))
+			}
+			// Only on missing_claim: elsewhere the claim was read fine, so naming
+			// it would suggest a fault that is not there.
+			if !present {
+				attrs = append(attrs,
+					slog.String("expected_claim", sanitize.Claim(configuredGroupsClaimName)))
+			}
+			attrs = append(attrs, slog.Any("", id))
+
+			slog.LogAttrs(ctx, level, "tool list filter", attrs...)
 
 			// Copy rather than assigning into ltr: the result belongs to the
 			// SDK. Sharing the *mcp.Tool pointers is fine — tools are immutable

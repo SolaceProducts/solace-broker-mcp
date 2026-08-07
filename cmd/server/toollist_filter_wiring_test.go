@@ -124,7 +124,7 @@ func TestInstallToolListFiltering_PolicyAndFlagOn_Enabled(t *testing.T) {
 	on := true
 	cfg.MCPClientAuth.ToolAuthorization.FilterToolsList = &on
 
-	installToolListFiltering(newTestServer(), cfg, policyFrom(t, cfg))
+	installToolListFiltering(newTestServer(), cfg, policyFrom(t, cfg), "groups")
 
 	assertPosture(t, findPostureLine(t, buf), postureEnabled, "INFO")
 }
@@ -137,7 +137,7 @@ func TestInstallToolListFiltering_FlagAbsent_DisabledAtInfo(t *testing.T) {
 
 	cfg := makeEnabledConfig() // FilterToolsList left nil
 
-	installToolListFiltering(newTestServer(), cfg, policyFrom(t, cfg))
+	installToolListFiltering(newTestServer(), cfg, policyFrom(t, cfg), "groups")
 
 	rec := findPostureLine(t, buf)
 	assertPosture(t, rec, postureDisabled, "INFO")
@@ -154,7 +154,7 @@ func TestInstallToolListFiltering_FlagExplicitlyFalse_DisabledAtInfo(t *testing.
 	off := false
 	cfg.MCPClientAuth.ToolAuthorization.FilterToolsList = &off
 
-	installToolListFiltering(newTestServer(), cfg, policyFrom(t, cfg))
+	installToolListFiltering(newTestServer(), cfg, policyFrom(t, cfg), "groups")
 
 	assertPosture(t, findPostureLine(t, buf), postureDisabled, "INFO")
 }
@@ -180,7 +180,7 @@ func TestInstallToolListFiltering_FlagOnAuthzOff_WarnsAndContinues(t *testing.T)
 
 	// Reaching the assertions at all is half the test: installation must not
 	// panic or exit when the flag is set with no policy behind it.
-	installToolListFiltering(newTestServer(), cfg, policy)
+	installToolListFiltering(newTestServer(), cfg, policy, "groups")
 
 	rec := findPostureLine(t, buf)
 	assertPosture(t, rec, postureDisabled, "WARN")
@@ -198,7 +198,7 @@ func TestInstallToolListFiltering_AuthzOffFlagAbsent_DisabledAtInfo(t *testing.T
 	authzOff := false
 	cfg.MCPClientAuth.ToolAuthorization.Enabled = &authzOff
 
-	installToolListFiltering(newTestServer(), cfg, policyFrom(t, cfg))
+	installToolListFiltering(newTestServer(), cfg, policyFrom(t, cfg), "groups")
 
 	rec := findPostureLine(t, buf)
 	assertPosture(t, rec, postureDisabled, "INFO")
@@ -216,7 +216,7 @@ func TestInstallToolListFiltering_NoToolAuthorizationBlock_DisabledAtInfo(t *tes
 		MCPClientAuth: config.MCPClientAuthConfig{Mode: config.AuthModeDisabled},
 	}
 
-	installToolListFiltering(newTestServer(), cfg, policyFrom(t, cfg))
+	installToolListFiltering(newTestServer(), cfg, policyFrom(t, cfg), "groups")
 
 	assertPosture(t, findPostureLine(t, buf), postureDisabled, "INFO")
 }

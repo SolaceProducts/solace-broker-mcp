@@ -271,6 +271,7 @@ A caller whose groups grant nothing receives a normal response containing only t
 | `decision_reason` | `"filtered"` — groups matched some grants and at least one tool was removed. `"unfiltered"` — the caller's grants cover every registered tool. `"not_permitted"` — the claim was present but matched no grants, so only the exempt tools remain. `"missing_claim"` — the token carried no claim under the configured `groups_claim_name`; the filter failed closed. |
 | `groups_present` | Whether the token carried the groups claim at all. |
 | `tools_before` / `tools_after` | Tool counts entering and leaving the filter. |
+| `expected_claim` | The configured `groups_claim_name`. Present on `missing_claim` only, so a deployment using a non-default claim name can be triaged from the record without cross-referencing config. |
 
 `missing_claim` is logged at **`WARN`**; every other outcome at `INFO`. The distinction matters: `not_permitted` is the policy working as configured, while `missing_claim` means the token could not answer the authorization question at all — typically an IdP claim-mapper misconfiguration, which affects every caller of that deployment rather than one user. The same reasons appear on the `tool authorization` call-path line, so filter both by `event` to tell the two paths apart.
 

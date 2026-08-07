@@ -196,7 +196,7 @@ func TestWithListFiltering_GrantingGroup_KeepsGrantedPlusExempt(t *testing.T) {
 		toolsResult(listBrokersToolName, "get-broker-status", "list-queues", "delete-queue"), nil)
 	wrapped := WithListFiltering(
 		policyGranting(t, []string{"Ops"}, "get-broker-status", "list-queues"),
-	)(next)
+		"groups")(next)
 
 	res, err := wrapped(context.Background(), methodToolsList, listToolsRequest([]string{"Ops"}))
 	if err != nil {
@@ -221,7 +221,7 @@ func TestWithListFiltering_NoMatchingGrants_KeepsExemptOnly(t *testing.T) {
 		toolsResult(listBrokersToolName, "get-broker-status", "list-queues"), nil)
 	wrapped := WithListFiltering(
 		policyGranting(t, []string{"Ops"}, "get-broker-status"),
-	)(next)
+		"groups")(next)
 
 	res, err := wrapped(context.Background(), methodToolsList,
 		listToolsRequest([]string{"Marketing"}))
@@ -244,7 +244,7 @@ func TestWithListFiltering_MissingGroupsClaim_FailsClosedAndWarns(t *testing.T) 
 		toolsResult(listBrokersToolName, "get-broker-status", "list-queues"), nil)
 	wrapped := WithListFiltering(
 		policyGranting(t, []string{"Ops"}, "get-broker-status"),
-	)(next)
+		"groups")(next)
 
 	res, err := wrapped(context.Background(), methodToolsList, listToolsRequestMissingClaim())
 	if err != nil {
@@ -286,7 +286,7 @@ func TestWithListFiltering_NilExtraAndNilTokenInfo_FailClosedWithoutPanic(t *tes
 				toolsResult(listBrokersToolName, "get-broker-status"), nil)
 			wrapped := WithListFiltering(
 				policyGranting(t, []string{"Ops"}, "get-broker-status"),
-			)(next)
+				"groups")(next)
 
 			res, err := wrapped(context.Background(), methodToolsList, tc.req)
 			if err != nil {
@@ -310,7 +310,7 @@ func TestWithListFiltering_GrantsCoverEverything_ReturnsFullList(t *testing.T) {
 		toolsResult(listBrokersToolName, "get-broker-status", "list-queues"), nil)
 	wrapped := WithListFiltering(
 		policyGranting(t, []string{"Ops"}, "get-broker-status", "list-queues"),
-	)(next)
+		"groups")(next)
 
 	res, err := wrapped(context.Background(), methodToolsList, listToolsRequest([]string{"Ops"}))
 	if err != nil {
@@ -332,7 +332,7 @@ func TestWithListFiltering_TwoCallers_GetDifferentLists(t *testing.T) {
 	all := []string{listBrokersToolName, "get-broker-status", "list-queues"}
 
 	nextOps, _ := listHandler(toolsResult(all...), nil)
-	wrappedOps := WithListFiltering(policy)(nextOps)
+	wrappedOps := WithListFiltering(policy, "groups")(nextOps)
 	resOps, err := wrappedOps(context.Background(), methodToolsList,
 		listToolsRequest([]string{"Ops"}))
 	if err != nil {
@@ -340,7 +340,7 @@ func TestWithListFiltering_TwoCallers_GetDifferentLists(t *testing.T) {
 	}
 
 	nextMkt, _ := listHandler(toolsResult(all...), nil)
-	wrappedMkt := WithListFiltering(policy)(nextMkt)
+	wrappedMkt := WithListFiltering(policy, "groups")(nextMkt)
 	resMkt, err := wrappedMkt(context.Background(), methodToolsList,
 		listToolsRequest([]string{"Marketing"}))
 	if err != nil {
@@ -377,7 +377,7 @@ func TestWithListFiltering_OtherMethods_PassThroughSilently(t *testing.T) {
 
 			sentinel := toolsResult(listBrokersToolName, "get-broker-status")
 			next, calls := listHandler(sentinel, nil)
-			wrapped := WithListFiltering(emptyPolicy(t))(next)
+			wrapped := WithListFiltering(emptyPolicy(t), "groups")(next)
 
 			res, err := wrapped(context.Background(), method, listToolsRequest([]string{"Ops"}))
 			if err != nil {
@@ -406,7 +406,7 @@ func TestWithListFiltering_NextErrors_PropagatesSilently(t *testing.T) {
 
 	wantErr := errors.New("upstream failure")
 	next, _ := listHandler(nil, wantErr)
-	wrapped := WithListFiltering(emptyPolicy(t))(next)
+	wrapped := WithListFiltering(emptyPolicy(t), "groups")(next)
 
 	res, err := wrapped(context.Background(), methodToolsList, listToolsRequest([]string{"Ops"}))
 	if !errors.Is(err, wantErr) {
@@ -435,7 +435,7 @@ func TestWithListFiltering_DoesNotMutateSDKResult(t *testing.T) {
 	next, _ := listHandler(original, nil)
 	wrapped := WithListFiltering(
 		policyGranting(t, []string{"Ops"}, "get-broker-status"),
-	)(next)
+		"groups")(next)
 
 	res, err := wrapped(context.Background(), methodToolsList, listToolsRequest([]string{"Ops"}))
 	if err != nil {
@@ -475,7 +475,7 @@ func TestWithListFiltering_NeverLogsCallerGroups(t *testing.T) {
 		toolsResult(listBrokersToolName, "get-broker-status"), nil)
 	wrapped := WithListFiltering(
 		policyGranting(t, []string{secretGroup}, "get-broker-status"),
-	)(next)
+		"groups")(next)
 
 	if _, err := wrapped(context.Background(), methodToolsList,
 		listToolsRequest([]string{secretGroup})); err != nil {
@@ -499,7 +499,7 @@ func TestWithListFiltering_NilTool_ReportsContractViolationAndContinues(t *testi
 	next, _ := listHandler(res, nil)
 	wrapped := WithListFiltering(
 		policyGranting(t, []string{"Ops"}, "get-broker-status"),
-	)(next)
+		"groups")(next)
 
 	got, err := wrapped(context.Background(), methodToolsList, listToolsRequest([]string{"Ops"}))
 	if err != nil {
@@ -532,6 +532,52 @@ func TestWithListFiltering_NilTool_ReportsContractViolationAndContinues(t *testi
 	}
 }
 
+// expected_claim names the claim the server looked for, so an operator with a
+// non-default groups_claim_name can triage a claim-mapper misconfiguration from
+// the record alone. Only on missing_claim: elsewhere the claim read fine, and
+// naming it would imply a fault.
+func TestWithListFiltering_ExpectedClaimOnMissingClaimOnly(t *testing.T) {
+	const claimName = "custom_group_claim"
+
+	t.Run("present on missing_claim", func(t *testing.T) {
+		buf, cleanup := captureSlog(t)
+		defer cleanup()
+
+		next, _ := listHandler(toolsResult(listBrokersToolName, "get-broker-status"), nil)
+		wrapped := WithListFiltering(
+			policyGranting(t, []string{"Ops"}, "get-broker-status"), claimName)(next)
+
+		if _, err := wrapped(context.Background(), methodToolsList,
+			listToolsRequestMissingClaim()); err != nil {
+			t.Fatalf("middleware returned error: %v", err)
+		}
+
+		rec := assertOneRecord(t, buf)
+		if got := rec["expected_claim"]; got != claimName {
+			t.Errorf("expected_claim = %v, want %q", got, claimName)
+		}
+	})
+
+	t.Run("absent when the claim was read", func(t *testing.T) {
+		buf, cleanup := captureSlog(t)
+		defer cleanup()
+
+		next, _ := listHandler(toolsResult(listBrokersToolName, "get-broker-status"), nil)
+		wrapped := WithListFiltering(
+			policyGranting(t, []string{"Ops"}, "get-broker-status"), claimName)(next)
+
+		if _, err := wrapped(context.Background(), methodToolsList,
+			listToolsRequest([]string{"Ops"})); err != nil {
+			t.Fatalf("middleware returned error: %v", err)
+		}
+
+		rec := assertOneRecord(t, buf)
+		if _, ok := rec["expected_claim"]; ok {
+			t.Errorf("expected_claim present on a successful read: %v", rec["expected_claim"])
+		}
+	})
+}
+
 // --- Composition-site invariant ---
 
 // A nil policy means the install guard in main.go was dropped. Panic at wiring
@@ -539,10 +585,10 @@ func TestWithListFiltering_NilTool_ReportsContractViolationAndContinues(t *testi
 func TestWithListFiltering_NilPolicy_Panics(t *testing.T) {
 	defer func() {
 		if recover() == nil {
-			t.Fatal("WithListFiltering(nil) did not panic")
+			t.Fatal("WithListFiltering with a nil policy did not panic")
 		}
 	}()
-	_ = WithListFiltering(nil)
+	_ = WithListFiltering(nil, "groups")
 }
 
 // --- Outcome classification ---
@@ -660,7 +706,7 @@ func TestWithListFiltering_ListedImpliesCallable(t *testing.T) {
 	for _, policyUnderTest := range []*authz.Policy{policy, policy2} {
 		for _, groups := range groupSets {
 			next, _ := listHandler(toolsResult(allTools...), nil)
-			wrapped := WithListFiltering(policyUnderTest)(next)
+			wrapped := WithListFiltering(policyUnderTest, "groups")(next)
 
 			res, err := wrapped(context.Background(), methodToolsList, listToolsRequest(groups))
 			if err != nil {
@@ -676,7 +722,7 @@ func TestWithListFiltering_ListedImpliesCallable(t *testing.T) {
 				// An exempt tool is registered without a policy, so it is
 				// never gated on call and must never be filtered on list. Its
 				// agreement is structural, not a policy verdict.
-				if isExemptFromToolAuthorization(tool) {
+				if IsExemptFromToolAuthorization(tool) {
 					if !listed[tool] {
 						t.Errorf("groups %v: exempt tool %q was filtered out", groups, tool)
 					}
@@ -693,36 +739,14 @@ func TestWithListFiltering_ListedImpliesCallable(t *testing.T) {
 	}
 }
 
-// isExemptFromToolAuthorization is the single point of truth for which tools
-// bypass the policy, which means the invariant test above cannot catch the
-// predicate itself being wrong — filter and test would agree while both were
-// incorrect. That is not hypothetical: describe-semp-schema was missing from
-// the filter's exemption for exactly this reason.
+// The predicate cannot be pinned from this package. IsExemptFromToolAuthorization
+// enumerates names, and the property that matters is whether those names match
+// what main.go registers without a policy — which internal/tools cannot see. A
+// test here can only restate the predicate to itself and pass while the predicate
+// is wrong, which is how describe-semp-schema stayed missing from it.
 //
-// This test closes that gap by pinning the predicate against the registration
-// sites rather than against itself. Every tool registered outside the manager
-// takes no policy argument and so is structurally exempt; if a future tool
-// joins them in main.go, or one of these gains a policy, this fails.
-func TestIsExemptFromToolAuthorization_MatchesUnpolicedRegistrations(t *testing.T) {
-	// Registered directly on the server in main.go, each without a policy:
-	// RegisterListBrokers and RegisterDescribeSempSchema.
-	unpoliced := []string{listBrokersToolName, describeSempSchemaToolName}
-
-	for _, name := range unpoliced {
-		if !isExemptFromToolAuthorization(name) {
-			t.Errorf("%q is registered without a policy but is not exempt — "+
-				"tools/list would filter a tool that tools/call permits", name)
-		}
-	}
-
-	// Anything registered through the manager IS policy-wrapped, so exempting
-	// it would list a tool the call path denies.
-	for _, name := range []string{"get-broker-status", "list-queues", "delete-queue"} {
-		if isExemptFromToolAuthorization(name) {
-			t.Errorf("%q is policy-wrapped but claims exemption", name)
-		}
-	}
-}
+// That invariant is asserted in cmd/server, against a real registered server:
+// TestEveryRegisteredToolIsGatedOrExempt.
 
 // callableUnderAuthorization reports whether withAuthorization would dispatch
 // this tool for this caller. Determined by running the real wrapper and

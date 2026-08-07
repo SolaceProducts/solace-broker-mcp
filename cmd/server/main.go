@@ -520,7 +520,7 @@ func buildToolPolicy(cfg *config.ServerConfig) (*authz.Policy, error) {
 //
 // Flag on with no policy is a WARN, not a fatal: the state is inert, and it is
 // what flipping the master switch during an incident produces.
-func installToolListFiltering(server *mcp.Server, cfg *config.ServerConfig, policy *authz.Policy) {
+func installToolListFiltering(server *mcp.Server, cfg *config.ServerConfig, policy *authz.Policy, groupsClaimName string) {
 	// Nil block in non-oauth mode reads as off; the helper is nil-safe.
 	flagSet := config.FilterToolsListEnabled(cfg.MCPClientAuth.ToolAuthorization)
 
@@ -541,7 +541,7 @@ func installToolListFiltering(server *mcp.Server, cfg *config.ServerConfig, poli
 		return
 	}
 
-	server.AddReceivingMiddleware(tools.WithListFiltering(policy))
+	server.AddReceivingMiddleware(tools.WithListFiltering(policy, groupsClaimName))
 	slog.Info("tools/list filtering is enabled")
 }
 
@@ -807,7 +807,7 @@ func main() {
 
 	// Narrow tools/list to what each caller may invoke. Off by default; when
 	// off, AddReceivingMiddleware is never called and dispatch is unchanged.
-	installToolListFiltering(server, cfg, policy)
+	installToolListFiltering(server, cfg, policy, groupsClaimName)
 
 	slog.Info("all tools registered")
 
