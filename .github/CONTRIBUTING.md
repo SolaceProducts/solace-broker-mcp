@@ -400,7 +400,7 @@ at `go.mod` and `go.sum` closely, since the automated scan is not there to do it
 
 - **General questions and community chat:** Visit the [Solace Community](https://solace.community/)
 - **Bugs or features:** Open a [GitHub Issue](https://github.com/SolaceProducts/solace-broker-mcp/issues/new/choose)
-- **Security issues:** Email [security@solace.com](mailto:security@solace.com)
+- **Security issues:** Email [support@solace.com](mailto:support@solace.com); Support routes real vulnerabilities to our security team
 
 See [SUPPORT.md](SUPPORT.md) for the full picture, including what to do if you have a Solace support contract.
 

@@ -19,7 +19,9 @@ We take security seriously. If you discover a security vulnerability in the Sola
 
 ### How to Report
 
-**Email**: [security@solace.com](mailto:security@solace.com)
+**Email**: [support@solace.com](mailto:support@solace.com)
+
+Support triages every report and escalates anything describing a concrete, exploitable vulnerability directly to our security team.
 
 Please include the following in your report:
 
@@ -194,6 +196,6 @@ Format:
 
 ## Questions?
 
-If you have questions about this security policy, contact [security@solace.com](mailto:security@solace.com).
+If you have questions about this security policy, contact [support@solace.com](mailto:support@solace.com).
 
 For non-security bugs and feature requests, please use [GitHub Issues](https://github.com/SolaceProducts/solace-broker-mcp/issues). For everything else, see [SUPPORT.md](SUPPORT.md).
