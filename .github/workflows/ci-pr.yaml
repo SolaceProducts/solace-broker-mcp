@@ -134,13 +134,18 @@ jobs:
   # the enforcing DCO gate runs on `pull_request_target` against the *base ref's*
   # script, so the self-test is the only place the PR's own copy is exercised.
   # Here the gate and its self-test both run from the PR's ref, so the self-test
-  # closes no such gap — a pull request that adds `exit 0` to the script turns
-  # this check green with its own suite validating the neutered copy.
+  # closes no such gap; it only narrows the shape of the tamper. A blunt `exit 0`
+  # in the script is caught — ten negative cases then exit 0 where they expect 1
+  # — but the suite asserts over fixed fixtures, so an edit outside their shape
+  # survives it. Adding `-o -name gen` to the prune list keeps the suite at 24/24
+  # (its only nesting fixture is `internal/deep/pkg`) while every `.go` file under
+  # a `gen/` directory silently stops being checked.
   #
-  # That tamper hole is real, and unlike `sca_gate` above it is not self-limiting:
-  # sca_gate dismisses tampering on the grounds that a fork PR passes anyway,
-  # whereas this check gives fork PRs a real verdict, so there is something to
-  # gain. It is accepted rather than closed, on the same terms as `licenses`: the
+  # That tamper hole is real, and unlike the Guardian scan gate in
+  # guardian-scan.yaml it is not self-limiting: that gate dismisses tampering on
+  # the grounds that a fork PR passes anyway, whereas this check gives fork PRs a
+  # real verdict, so there is something to gain. It is accepted rather than
+  # closed, on the same terms as `licenses`: the
   # control is a human reading the `.github/` diff, not the trigger. Note that
   # today that is ordinary review — `.github/CODEOWNERS` maps `*` to
   # dax-developers, but "Require review from Code Owners" is not enabled on the
