@@ -10,6 +10,11 @@ version: 2
 # commit-message config has no field for a DCO Signed-off-by trailer, so its
 # PRs are exempted from that check instead — see .github/workflows/dco.yaml
 # and .github/scripts/dco-check.sh. Tracked under SOL-152808.
+#
+# `cooldown` holds every update back until the release is at least 14 days old,
+# so a freshly-published (and possibly yanked or compromised) version is not
+# proposed the moment it lands. Renovate applies the same 14-day window via
+# `minimumReleaseAge` in .github/renovate.json.
 updates:
   # Three go.mod files exist in this repo; each needs its own entry because
   # Dependabot's `directory` matches exactly one path per ecosystem entry.
@@ -19,6 +24,8 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    cooldown:
+      default-days: 14
     groups:
       go-minor-patch:
         update-types: ["minor", "patch"]
@@ -33,6 +40,8 @@ updates:
     directory: "/test/e2e-common/broker-driver"
     schedule:
       interval: "daily"
+    cooldown:
+      default-days: 14
     groups:
       go-minor-patch:
         update-types: ["minor", "patch"]
@@ -44,6 +53,8 @@ updates:
     directory: "/test/e2e-basic-mcp/agent"
     schedule:
       interval: "daily"
+    cooldown:
+      default-days: 14
     groups:
       go-minor-patch:
         update-types: ["minor", "patch"]
@@ -58,6 +69,8 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    cooldown:
+      default-days: 14
     groups:
       github-actions:
         patterns: ["*"]
