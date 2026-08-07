@@ -786,8 +786,15 @@ func main() {
 		return server
 	}, nil)
 
+	// Cross-origin protection. Since go-sdk v1.6.0 the handler no longer
+	// applies default Origin/Sec-Fetch-Site checks when opts is nil, and the
+	// StreamableHTTPOptions.CrossOriginProtection field is deprecated in
+	// favour of wrapping with net/http.CrossOriginProtection. Preserves the
+	// browser attack-surface posture we had on v1.5.x.
+	protectedMCPHandler := http.NewCrossOriginProtection().Handler(mcpHandler)
+
 	// Wrap MCP handler with auth middleware
-	authedHandler, err := auth.NewAuthMiddleware(cfg, nil, mcpHandler)
+	authedHandler, err := auth.NewAuthMiddleware(cfg, nil, protectedMCPHandler)
 	if err != nil {
 		slog.Error("failed to create auth middleware", slog.String("error", err.Error()))
 		os.Exit(1)
