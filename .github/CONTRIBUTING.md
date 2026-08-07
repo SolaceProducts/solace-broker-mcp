@@ -61,7 +61,7 @@ When suggesting a feature, please include:
 
 We love pull requests! Here's the workflow:
 
-1. **Discuss first** — For large changes, open an issue or discussion first to align on approach
+1. **Discuss first** — For large changes, open an [issue](https://github.com/SolaceProducts/solace-broker-mcp/issues) or ask in the [Solace Community](https://solace.community/) first to align on approach
 2. **Fork and clone** — Fork the repo and clone your fork locally
 3. **Create a branch** — Branch from `main`: `git checkout -b feature/your-feature`
 4. **Make changes** — Follow our [coding standards](#coding-standards)
