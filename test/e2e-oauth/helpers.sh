@@ -86,8 +86,111 @@ wait_for_keycloak() {
 # (test-us-wrong-audience) for the wrong-audience scenario — same URL/port as
 # broker B but with broker A's audience, so a well-formed exchanged token
 # reaches broker B with the wrong required audience and gets rejected.
+
+# Default tool_authorization block: RBAC off. The token-exchange scenarios
+# (test-oauth-scenarios.sh) exercise hop 2, not tool RBAC, and oauth mode
+# requires an explicit opt-out. The RBAC suite passes its own block instead.
+# Indentation is significant — these lines sit under mcp_client_auth: at two
+# spaces, so the block is interpolated already-indented rather than being
+# re-indented at the call site.
+TOOL_AUTHZ_DISABLED='  tool_authorization:
+    enabled: false'
+
+# The group the RBAC policy grants on, and the single tool it grants.
+#
+# Single-sourced because three places must agree: the policy below, the
+# allow scenario's matched_groups assertion, and the broker-isolation
+# scenario's absence check. If they were separate literals, renaming the group
+# in the policy would leave the isolation scenario asserting the absence of a
+# group nobody grants on any more — passing forever while proving nothing,
+# which is precisely the decay this suite exists to prevent.
+RBAC_GRANT_GROUP="Ops"
+RBAC_GRANTED_TOOL="list-vpns"
+
+# A tool the policy does NOT grant, used to prove the grant is tool-scoped.
+# Must be a real registered read tool, or ValidatePolicyToolNames would reject
+# the config — it is referenced only by the scenario, never by the policy.
+RBAC_UNGRANTED_TOOL="list-queues"
+
+# ── Structurally exempt tools ────────────────────────────────────────────────
+# Tools registered outside RegisterWithServer's policy-wrapping path in
+# cmd/server/main.go, and therefore never wrapped by withAuthorization at all.
+#
+# There is no runtime predicate to query: exemption is expressed structurally at
+# the registration API (RegisterListBrokers and RegisterDescribeSempSchema take
+# no policy argument), not by a function the suite could call. So the set is
+# derived from the tool-name constants instead — see
+# exempt_tool_names_from_source — and the scenario fails if this table does not
+# cover exactly what the source declares. Adding a third exempt tool therefore
+# breaks the suite loudly rather than going silently uncovered.
+#
+# Each entry: <tool-name>|<args-json>|<jq predicate over the success payload>
+RBAC_EXEMPT_TOOLS=(
+    'list-brokers|{}|(.brokers | length) > 0'
+    'describe-semp-schema|{"operation":"config/createMsgVpnQueue"}|.operation == "config/createMsgVpnQueue"'
+)
+
+# Emits, one per line and sorted, the tool names declared by the `*ToolName`
+# constants under internal/tools. Both exempt tools follow that convention and
+# no other constant does, which is what makes it a usable anchor. If a future
+# refactor changes the convention this over-reports rather than under-reports —
+# the safe direction, since the scenario then fails and a human looks.
+exempt_tool_names_from_source() {
+    grep -rhoE 'ToolName[[:space:]]*=[[:space:]]*"[^"]+"' "$SUITE_DIR/../../internal/tools/" 2>/dev/null \
+        | sed -E 's/.*"([^"]+)"/\1/' | sort -u
+}
+
+# The tool-RBAC policy applied by test-rbac-scenarios.sh.
+#
+# The grant is deliberately on RBAC_GRANT_GROUP — a group the MCP server knows
+# and that NO broker maps to an access level (configure-oauth-profiles.sh
+# configures only solace-admins and solace-readonly). Granting on solace-admins
+# instead would make a passing test meaningless: it could not distinguish "the
+# MCP server authorized this call" from "the broker would have allowed it
+# anyway", and would keep passing with the RBAC layer removed entirely.
+#
+# Note the group DOES travel to the broker in the exchanged token —
+# mcp-server-client carries its own realm-roles-to-groups mapper — it is simply
+# unmapped there. "MCP-only" means "no broker grants anything for it", not
+# "the broker never sees it".
+#
+# test-admin-user holds BOTH solace-admins and Ops, so an allow whose
+# matched_groups is exactly ["Ops"] proves the grant came from the MCP-only
+# group rather than the broker-shared one.
+#
+# list-brokers is deliberately absent: it is structurally exempt
+# (RegisterListBrokers takes no policy), and one scenario proves it stays
+# callable by a caller this policy grants nothing to.
+TOOL_AUTHZ_RBAC="  tool_authorization:
+    enabled: true
+    groups_claim_name: groups
+    access_level_groups:
+      ${RBAC_GRANT_GROUP}:
+        - ${RBAC_GRANTED_TOOL}"
+
+# The SAME policy with the feature flag off, used by the disabled phase.
+#
+# Deliberately not TOOL_AUTHZ_DISABLED (which has no access_level_groups at
+# all): with an empty policy, a bug where `enabled: false` is ignored but the
+# policy map is still consulted would be invisible, because there would be
+# nothing to consult. Carrying the real grants here isolates the flag itself.
+# config.validate only rejects enabled:true with an empty map, so enabled:false
+# with grants is legal config.
+TOOL_AUTHZ_RBAC_OFF="  tool_authorization:
+    enabled: false
+    groups_claim_name: groups
+    access_level_groups:
+      ${RBAC_GRANT_GROUP}:
+        - ${RBAC_GRANTED_TOOL}"
+
+# write_oauth_config <config_file> [tool_authorization_block]
+#
+# The optional second argument replaces the mcp_client_auth.tool_authorization
+# block verbatim and must already carry the two-space indentation shown in
+# TOOL_AUTHZ_DISABLED above. Omitted → RBAC off.
 write_oauth_config() {
     local config_file="$1"
+    local tool_authz="${2:-$TOOL_AUTHZ_DISABLED}"
     cat > "$config_file" <<EOF
 port: ${MCP_PORT}
 log_level: debug
@@ -103,10 +206,7 @@ mcp_client_auth:
   issuer: "${KEYCLOAK_ISSUER}"
   audience: "${HOP1_AUDIENCE}"
   resource_url: "https://localhost:${MCP_PORT}/mcp"
-  # This suite tests broker OAuth (hop 2), not tool authorization.
-  # Explicit opt-out is required in oauth mode.
-  tool_authorization:
-    enabled: false
+${tool_authz}
 
 broker_oauth:
   idp_token_endpoint: "${KEYCLOAK_TOKEN_ENDPOINT}"
@@ -174,7 +274,18 @@ start_oauth_server() {
 
     local attempt=0
     while [ $attempt -lt 30 ]; do
-        if curl -sf --cacert "$MCP_SERVER_CERT" "$MCP_URL/health" >/dev/null 2>&1; then
+        # Liveness before readiness. /health alone is not proof that OUR server
+        # came up: if a previous server still holds MCP_PORT, the one just
+        # started fails to bind and exits, while the old one keeps answering
+        # /health — reporting "ready" for a dead PID and running the phase
+        # against the wrong config. Since stop_server SIGKILLs without
+        # confirming exit, that race is reachable across a restart.
+        if ! kill -0 "$MCP_SERVER_PID" 2>/dev/null; then
+            log_fail "MCP server process exited during startup (PID=$MCP_SERVER_PID); last 50 lines of $MCP_SERVER_LOG:"
+            tail -n 50 "$MCP_SERVER_LOG" >&2 2>/dev/null || true
+            return 1
+        fi
+        if curl -sf --max-time 5 --cacert "$MCP_SERVER_CERT" "$MCP_URL/health" >/dev/null 2>&1; then
             log_info "MCP server ready (PID=$MCP_SERVER_PID)"
             return 0
         fi
@@ -190,23 +301,233 @@ start_oauth_server() {
 # Direct password grant against agentic-app-client (public,
 # directAccessGrantsEnabled: true in realm-export.json) — bypasses the
 # browser-based Authorization Code + PKCE flow.
+#
+# mint_token <username> <password> [client_id]
+#
+# client_id defaults to HOP1_CLIENT_ID (agentic-app-client), whose
+# realm-roles-to-groups mapper puts the caller's realm roles into a `groups`
+# claim. Pass HOP1_CLIENT_ID_NOGROUPS to mint an otherwise-identical token that
+# carries no `groups` claim at all — which claims a token gets depends on which
+# client requested it, and that is the whole point of the missing-claim
+# scenario. See test/e2e-oauth/README.md.
 mint_token() {
-    local username="$1" password="$2"
-    local response token
+    local username="$1" password="$2" client_id="${3:-$HOP1_CLIENT_ID}"
+    local response token curl_status=0
+    # No -f: on a 4xx, curl -f discards the body, and Keycloak puts the actual
+    # reason there ("invalid_client" when the realm fixture is stale, for
+    # instance). Losing it turns a one-line diagnosis into a CI archaeology
+    # session. --max-time bounds a Keycloak that accepts TCP but never answers.
+    #
+    # The transport status is captured rather than left to errexit. A DNS
+    # failure, TLS error, connection reset or --max-time expiry makes the
+    # assignment non-zero, and under `set -e` that would abort before any of the
+    # diagnostics below ran — the caller would see the function's exit status
+    # and nothing about why.
+    #
     # password@- reads that field's value from stdin instead of argv, keeping
     # it out of `ps`/`/proc` — same off-argv convention as semp_curl.
-    response=$(printf '%s' "$password" | curl -sf --cacert "$KEYCLOAK_CERT" -X POST "$KEYCLOAK_TOKEN_ENDPOINT" \
+    response=$(printf '%s' "$password" | curl -s --max-time 15 --cacert "$KEYCLOAK_CERT" -X POST "$KEYCLOAK_TOKEN_ENDPOINT" \
         -H "Content-Type: application/x-www-form-urlencoded" \
         -d "grant_type=password" \
-        -d "client_id=${HOP1_CLIENT_ID}" \
+        -d "client_id=${client_id}" \
         -d "username=${username}" \
-        --data-urlencode "password@-")
-    token=$(jq -r '.access_token // empty' <<<"$response")
+        --data-urlencode "password@-") || curl_status=$?
+
+    if [ "$curl_status" -ne 0 ]; then
+        log_fail "mint_token($username via $client_id): curl exited $curl_status reaching $KEYCLOAK_TOKEN_ENDPOINT"
+        case "$curl_status" in
+            28) log_fail "  timed out after 15s — Keycloak accepted the connection but did not answer" ;;
+            7)  log_fail "  connection refused — is the Keycloak container up?" ;;
+            60|77) log_fail "  TLS verification failed — check $KEYCLOAK_CERT matches the running Keycloak" ;;
+        esac
+        return 1
+    fi
+
+    token=$(jq -r '.access_token // empty' <<<"$response" 2>/dev/null)
     if [ -z "$token" ]; then
-        log_fail "mint_token($username): no access_token in response: $response"
+        log_fail "mint_token($username via $client_id): no access_token"
+        log_fail "  Keycloak said: ${response:-<empty response>}"
+        # The overwhelmingly common cause locally: a Keycloak container created
+        # before this realm fixture changed. --import-realm only imports on
+        # container creation, so `up -d` on an existing container keeps the old
+        # realm and the new clients/roles simply do not exist.
+        if grep -q "invalid_client\|unauthorized_client" <<<"$response" 2>/dev/null; then
+            log_fail "  hint: realm fixture may be stale — run 'make e2e-oauth-down' (down -v) then 'make e2e-oauth-up'"
+        fi
         return 1
     fi
     echo "$token"
+}
+
+# ── Server audit log (tool-RBAC assertions) ─────────────────────────────────
+# A tool-authorization denial is NOT an HTTP 401 and NOT a JSON-RPC error —
+# authentication failures are handled well before the tool layer. It is an
+# ordinary 200 carrying a tool-level error result, and the two deny reasons
+# are deliberately indistinguishable to the caller (see the message constants
+# in internal/tools/authorization.go). The server-side audit event is the only
+# place that separates them, so RBAC assertions read the log, not the wire.
+#
+# The server writes JSON slog records to $MCP_SERVER_LOG synchronously (Go's
+# os.File writes are unbuffered syscalls) and withAuthorization logs *before*
+# returning, so a record is on disk by the time curl sees the response — no
+# polling needed here, unlike count_token_exchanges' docker-log round trip.
+
+# Records the current end of the server log. Pair with authz_records_since so
+# an assertion only considers records appended by the call under test.
+#
+# The fallback is on wc, not on the pipeline: `wc | tr || echo 0` never fires
+# the fallback because tr is the last element and always succeeds, which would
+# silently yield an empty mark and widen every subsequent window to the whole
+# file.
+log_mark() {
+    local n
+    n=$(wc -l < "$MCP_SERVER_LOG" 2>/dev/null) || n=0
+    echo "${n// /}"
+}
+
+# ── RBAC mode positive control ──────────────────────────────────────────────
+# Several scenarios assert the ABSENCE of audit records. Absence assertions are
+# unfalsifiable on their own: rename the slog message, break the log path, or
+# point a phase at the wrong server, and they pass forever while proving
+# nothing. assert_server_rbac_mode is the positive control — it confirms the
+# server under test really is in the mode the phase expects, by reading the
+# startup config record that ToolAuthorizationConfig.LogValue emits.
+#
+# cmd/server/main.go announces the RBAC posture at startup with one of:
+#   "tool authorization is enabled"                        (+ policy counts)
+#   "tool authorization is disabled (enabled=false in config)"
+#   "tool authorization is disabled"                       (+ auth_mode)
+# Matching the "is enabled"/"is disabled" prefix covers all three without
+# depending on the parenthetical.
+#
+# assert_server_rbac_mode <enabled|disabled>
+assert_server_rbac_mode() {
+    local want="$1" record actual
+    case "$want" in
+        enabled|disabled) ;;
+        *) log_fail "assert_server_rbac_mode: bad mode '$want'"; return 1 ;;
+    esac
+
+    # Last occurrence wins. start_oauth_server truncates the log per start, so
+    # there is normally exactly one, but be explicit rather than rely on it.
+    record=$(jq -c -R 'fromjson? | select(.msg | startswith("tool authorization is "))' \
+        "$MCP_SERVER_LOG" 2>/dev/null | tail -n 1)
+
+    if [ -z "$record" ]; then
+        log_fail "no 'tool authorization is ...' startup record in $MCP_SERVER_LOG"
+        log_fail "  that record is the positive control for every absence assertion in this phase; without it they prove nothing"
+        return 1
+    fi
+
+    case "$(jq -r '.msg' <<<"$record")" in
+        "tool authorization is enabled"*)  actual=enabled ;;
+        "tool authorization is disabled"*) actual=disabled ;;
+        *) log_fail "unrecognised startup record: $record"; return 1 ;;
+    esac
+
+    if [ "$actual" != "$want" ]; then
+        log_fail "server reports tool authorization $actual, but this phase expects $want"
+        log_fail "  the phase is pointed at the wrong server config — its results would be meaningless"
+        log_fail "  record: $record"
+        return 1
+    fi
+
+    # On the enabled path the record also carries the compiled policy shape, so
+    # confirm the grants actually made it in. A policy that compiled to zero
+    # grants would deny everything and make the deny scenarios pass for the
+    # wrong reason.
+    if [ "$want" = "enabled" ]; then
+        local grants
+        grants=$(jq -r '.policy.tool_grant_count // 0' <<<"$record")
+        if [ "$grants" -lt 1 ]; then
+            log_fail "policy compiled with $grants tool grants; the deny scenarios would pass for the wrong reason"
+            log_fail "  record: $record"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# authz_records_since <mark> [tool]
+# Emits, one JSON object per line, the "tool authorization" audit records
+# appended after <mark>, optionally filtered to a single tool name.
+# fromjson? skips any non-JSON line (e.g. a Go panic trace) rather than
+# aborting the whole read.
+authz_records_since() {
+    local mark="$1" tool="${2:-}"
+    tail -n +"$((mark + 1))" "$MCP_SERVER_LOG" 2>/dev/null \
+        | jq -c -R --arg t "$tool" '
+            fromjson?
+            | select(.msg == "tool authorization")
+            | select($t == "" or .tool == $t)'
+}
+
+# assert_authz_decision <mark> <tool> <decision> [decision_reason] [msg]
+# Asserts exactly one audit record for <tool> since <mark>, with the given
+# decision and (when supplied) decision_reason.
+assert_authz_decision() {
+    local mark="$1" tool="$2" want_decision="$3" want_reason="${4:-}" msg="${5:-}"
+    local records count actual_decision actual_reason
+    records=$(authz_records_since "$mark" "$tool")
+    count=$(grep -c . <<<"$records" || true)
+    if [ "$count" -ne 1 ]; then
+        log_fail "${msg:-authz audit}: expected exactly 1 audit record for $tool, saw $count"
+        [ -n "$records" ] && log_fail "  records: $records"
+        return 1
+    fi
+    actual_decision=$(jq -r '.decision' <<<"$records")
+    if [ "$actual_decision" != "$want_decision" ]; then
+        log_fail "${msg:-authz audit}: $tool decision=$actual_decision, want $want_decision"
+        log_fail "  record: $records"
+        return 1
+    fi
+    if [ -n "$want_reason" ]; then
+        actual_reason=$(jq -r '.decision_reason // "<none>"' <<<"$records")
+        if [ "$actual_reason" != "$want_reason" ]; then
+            log_fail "${msg:-authz audit}: $tool decision_reason=$actual_reason, want $want_reason"
+            log_fail "  record: $records"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# ── Server restart (config-swap scenarios) ──────────────────────────────────
+# The tool-RBAC phase needs the same calls run against a differently configured
+# server. Restarting in place keeps one MCP_PORT and one log path.
+#
+# start_oauth_server truncates $MCP_SERVER_LOG, so the outgoing phase's log is
+# rotated aside first — otherwise a phase-1 failure would have its evidence
+# erased by the phase-2 restart before CI ever uploaded it. Rotated logs are
+# named mcp-server.log.1, .2, ... in restart order; CI's failure step collects
+# mcp-server.log*.
+#
+# Take a fresh log_mark after calling this.
+restart_oauth_server() {
+    local config_file="$1"
+    stop_server
+
+    # stop_server SIGKILLs and returns without confirming the port was
+    # released. Wait for it here rather than relying on start_oauth_server's
+    # one-second sleep: if the old process still holds MCP_PORT, the new one
+    # cannot bind, and the old server would go on answering /health.
+    local waited=0
+    while [ -n "$(lsof -ti:"$MCP_PORT" 2>/dev/null || true)" ]; do
+        if [ "$waited" -ge 20 ]; then
+            log_warn "port $MCP_PORT still held after 10s; start_oauth_server will try to clear it"
+            break
+        fi
+        sleep 0.5
+        waited=$((waited + 1))
+    done
+
+    if [ -f "$MCP_SERVER_LOG" ]; then
+        local n=1
+        while [ -f "$MCP_SERVER_LOG.$n" ]; do n=$((n + 1)); done
+        mv "$MCP_SERVER_LOG" "$MCP_SERVER_LOG.$n"
+        log_info "Previous server log rotated to $(basename "$MCP_SERVER_LOG").$n"
+    fi
+    start_oauth_server "$config_file"
 }
 
 # ── MCP wire (token-parameterized) ──────────────────────────────────────────
