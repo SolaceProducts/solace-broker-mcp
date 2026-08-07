@@ -36,8 +36,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Run the DCO check's self-test against this PR's version
         run: .github/scripts/dco-check.test.sh
+      # dco.yaml runs pull_request_target (base ref), so a PR that breaks the
+      # authenticated-fetch scheme it depends on never exercises its own
+      # change there — this job exists precisely to close that gap for
+      # dco-check.sh, and the same reasoning applies to the fetch's auth.
+      # A same-repo pull_request run gets a real (if read-only-on-forks)
+      # GITHUB_TOKEN, so this ls-remote is a faithful probe of the exact
+      # mechanism, without touching any ref.
+      - name: Verify the authenticated-fetch scheme dco.yaml relies on still works
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+          git ls-remote origin HEAD
 
   release_notes_selftest:
     name: Release-notes extraction self-test
@@ -47,6 +64,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Run the release-notes extraction self-test against this PR's version
         run: .github/scripts/extract-release-notes.test.sh
 
@@ -71,6 +90,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -104,6 +125,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Advise on a missing [Unreleased] entry for behavior-changing PRs
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
