@@ -176,6 +176,8 @@ These tools modify broker state via the SEMPv2 action API. There is **one tool p
 
 `enable_write_tools` is the only enforced control. `destructiveHint` and the confirmation text in tool descriptions are hints, not enforced by the MCP protocol — whether the user is actually prompted depends on the client and the model.
 
+**A second reason a tool may be missing from `tools/list`.** Under `mcp_client_auth.mode: oauth` with both `tool_authorization.enabled: true` and `tool_authorization.filter_tools_list: true`, the list is narrowed to the tools the calling identity's groups grant — so two users of the same server can see different tool sets. That is a per-caller view, unlike `enable_write_tools`, which removes tools for everyone. See [Filtering `tools/list`](configuration.md#filtering-toolslist).
+
 | Tool | Destructive | Description |
 |---|---|---|
 | `delete-queue-messages` | **Yes** | Permanently delete all spooled messages from a queue. Irreversible — deleted messages cannot be recovered. Requires user confirmation before invocation. Use after confirmed intent to drain a queue (e.g. clearing a dead-letter backlog). |

@@ -697,3 +697,55 @@ mcp_client_auth:
 		t.Errorf("expected error %q, got: %v", wantErr, err)
 	}
 }
+
+// TestToolAuthorization_FilterToolsListEnabled pins every input shape the helper
+// can see: the flag true, false, omitted, and the whole block nil. Only an
+// explicit true reads as on.
+func TestToolAuthorization_FilterToolsListEnabled(t *testing.T) {
+	trueVal := true
+	falseVal := false
+
+	cases := []struct {
+		name string
+		cfg  *ToolAuthorizationConfig
+		want bool
+	}{
+		{
+			name: "FilterToolsList set to true",
+			cfg: &ToolAuthorizationConfig{
+				FilterToolsList: &trueVal,
+			},
+			want: true,
+		},
+		{
+			name: "FilterToolsList set to false",
+			cfg: &ToolAuthorizationConfig{
+				FilterToolsList: &falseVal,
+			},
+			want: false,
+		},
+		{
+			name: "FilterToolsList is omitted",
+			cfg: &ToolAuthorizationConfig{
+				FilterToolsList: nil,
+			},
+			want: false,
+		},
+		{
+			// The shape in every non-oauth deployment, where the whole
+			// tool_authorization block is absent.
+			name: "whole block is nil",
+			cfg:  nil,
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := FilterToolsListEnabled(tc.cfg)
+			if got != tc.want {
+				t.Errorf("FilterToolsListEnabled() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

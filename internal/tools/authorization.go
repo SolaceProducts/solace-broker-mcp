@@ -37,11 +37,28 @@ const (
 	authzMissingClaimMessage = "You are not authorized to use this tool."
 )
 
-// listBrokersToolName is the discovery tool that is structurally exempt from
-// tool authorization. Exemption lives at the registration API
-// (RegisterListBrokers takes no policy argument), not here — this constant
-// exists so a grep finds every exempt-name touchpoint at once.
+// listBrokersToolName is one of two tools exempt from tool authorization; see
+// IsExemptFromToolAuthorization for the full set and why.
 const listBrokersToolName = "list-brokers"
+
+// IsExemptFromToolAuthorization reports whether a tool is registered without a
+// policy wrapper and is therefore always available to an authenticated caller.
+//
+// Exemption is structural: these tools are registered outside the manager
+// (RegisterListBrokers and RegisterDescribeSempSchema take no policy argument),
+// so no wrapper ever gates them and Policy.Authorize has no entry for them —
+// asking it returns a zero-value deny. Any code that reasons about the tool set
+// must go through this predicate rather than comparing against one name, or it
+// will silently disagree with what tools/call actually permits.
+//
+// The names are enumerated rather than derived from registration, so nothing at
+// compile time forces a new unpoliced registration to appear here. Exported so
+// cmd/server's TestEveryRegisteredToolIsGatedOrExempt can close that gap by
+// checking this against a real registered server. Making exemption a property of
+// registration instead is tracked separately.
+func IsExemptFromToolAuthorization(toolName string) bool {
+	return toolName == listBrokersToolName || toolName == describeSempSchemaToolName
+}
 
 // matchedGroupsBound caps how many matched group names the audit event
 // carries on allow. 32 covers the largest realistic caller-group membership
@@ -80,7 +97,7 @@ func withAuthorization(policy *authz.Policy, toolName string, configuredGroupsCl
 		}
 		id := NewIdentityFromTokenInfo(info)
 
-		groups, present := requestGroups(req)
+		groups, present := requestGroups(info)
 		if !present {
 			// No matched_groups* fields on missing-claim — the caller had
 			// no groups slice, so emitting empty ones would blur the deny

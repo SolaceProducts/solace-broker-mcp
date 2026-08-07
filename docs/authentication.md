@@ -409,6 +409,11 @@ mcp_client_auth:
         - delete-queue-messages
 ```
 
+By default callers still see every registered tool in `tools/list` — the policy is
+enforced when they invoke one. Add `filter_tools_list: true` to the same block to
+also narrow the list to what each caller may invoke; see
+[Filtering `tools/list`](configuration.md#filtering-toolslist).
+
 To turn the feature OFF (every authenticated caller can invoke any tool), the
 block still has to be present — set only `enabled: false` and omit the rest:
 
