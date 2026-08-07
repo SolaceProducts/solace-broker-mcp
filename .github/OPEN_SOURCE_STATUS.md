@@ -56,7 +56,6 @@ row needs four approvers named before the repository goes public.
 
 **Ticket:** SOL-152902
 **Recorded:** 2026-08-06
-**Approvers:** `<APPROVER 1>`, `<APPROVER 2>`, `<APPROVER 3>`, `<APPROVER 4>` — TO FILL BEFORE PUBLIC RELEASE
 
 Seven commits already on `main` carry author emails whose domain is a
 developer-machine name rather than a routable address: two contributors, two
