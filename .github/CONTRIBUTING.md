@@ -40,13 +40,13 @@ When reporting a bug, please include:
 - **Logs** — Relevant log output with structured fields (redact credentials!)
 - **Screenshots** — If applicable
 
-**Security vulnerabilities:** Do NOT report security issues via public GitHub issues. See [SECURITY.md](/.github/SECURITY.md) for the responsible disclosure process.
+**Security vulnerabilities:** Do NOT report security issues via public GitHub issues. See [SECURITY.md](SECURITY.md) for the responsible disclosure process.
 
 ### Suggesting Features
 
 We welcome feature requests! Before submitting:
 
-1. Check [existing issues](https://github.com/SolaceProducts/solace-broker-mcp/issues?q=label%3Aenhancement) and [discussions](https://github.com/SolaceProducts/solace-broker-mcp/discussions) for similar ideas
+1. Check [existing issues](https://github.com/SolaceProducts/solace-broker-mcp/issues?q=label%3Aenhancement) for similar ideas, or ask in the [Solace Community](https://solace.community/)
 2. Consider if the feature aligns with the project's goals (SEMP API management via MCP)
 3. Think about how it would benefit the broader community
 
@@ -398,10 +398,11 @@ at `go.mod` and `go.sum` closely, since the automated scan is not there to do it
 
 ## Questions?
 
-- **General questions:** Start a [GitHub Discussion](https://github.com/SolaceProducts/solace-broker-mcp/discussions)
+- **General questions and community chat:** Visit the [Solace Community](https://solace.community/)
 - **Bugs or features:** Open a [GitHub Issue](https://github.com/SolaceProducts/solace-broker-mcp/issues/new/choose)
-- **Security issues:** Email [andrea.ross@solace.com](mailto:andrea.ross@solace.com)
-- **Community chat:** Visit [Solace Community](https://solace.community/)
+- **Security issues:** Email [security@solace.com](mailto:security@solace.com)
+
+See [SUPPORT.md](SUPPORT.md) for the full picture, including what to do if you have a Solace support contract.
 
 ## License
 

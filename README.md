@@ -27,6 +27,7 @@ An MCP (Model Context Protocol) server for Solace event brokers, built with Go u
 - [Project Structure](#project-structure)
 - [CI](#ci)
 - [Contributing](#contributing)
+- [Support](#support)
 - [Security](#security)
 - [Disclaimer](#disclaimer)
 - [License](#license)
@@ -435,6 +436,13 @@ We welcome contributions! Please see our [Contributing Guidelines](.github/CONTR
 - Pull request process
 
 Please read our [Code of Conduct](.github/CODE_OF_CONDUCT.md) before participating.
+
+## Support
+
+- **Solace support contract:** Contact support@solace.com.
+- **Everyone else:** Ask in the [Solace Community](https://solace.community/).
+
+See [SUPPORT.md](.github/SUPPORT.md) for details.
 
 ## Security
 

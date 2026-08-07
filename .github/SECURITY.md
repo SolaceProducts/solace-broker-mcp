@@ -19,7 +19,7 @@ We take security seriously. If you discover a security vulnerability in the Sola
 
 ### How to Report
 
-**Email**: [andrea.ross@solace.com](mailto:andrea.ross@solace.com)
+**Email**: [security@solace.com](mailto:security@solace.com)
 
 Please include the following in your report:
 
@@ -194,6 +194,6 @@ Format:
 
 ## Questions?
 
-If you have questions about this security policy, contact [andrea.ross@solace.com](mailto:andrea.ross@solace.com).
+If you have questions about this security policy, contact [security@solace.com](mailto:security@solace.com).
 
-For non-security bugs and feature requests, please use [GitHub Issues](https://github.com/SolaceProducts/solace-broker-mcp/issues).
+For non-security bugs and feature requests, please use [GitHub Issues](https://github.com/SolaceProducts/solace-broker-mcp/issues). For everything else, see [SUPPORT.md](SUPPORT.md).
