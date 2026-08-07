@@ -142,6 +142,8 @@ brokers:
 
 Under `oauth` mode with a `tool_authorization` policy configured, each gated tool call also emits a `"tool authorization"` audit line at the same `correlation_id` — logged at `INFO` on allow and `WARN` on deny, with a `decision_reason` code operators can filter and alert on. See [Tool authorization](docs/configuration.md#tool-authorization) for the full schema.
 
+The same policy can also narrow `tools/list` to the tools each caller may invoke, so an agent is not handed tools it will be denied. Off by default; opt in with `filter_tools_list: true` and see [Filtering `tools/list`](docs/configuration.md#filtering-toolslist). This is discovery hygiene rather than access control — `tools/call` remains the enforcement point either way.
+
 Each event broker needs:
 - `url` — the SEMP management API base URL
 - `auth.mode` — `basic`, `bearer`, or `oauth` (examples below use basic auth; for bearer token authentication, set `auth.mode: bearer` and provide `auth.token` instead; for OAuth token exchange, see [Step 2b: Configure broker OAuth (Hop 2)](docs/authentication.md#step-2b-configure-broker-oauth-hop-2))
