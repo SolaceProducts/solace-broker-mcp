@@ -126,9 +126,14 @@ func (p *BrokerPool) getOrCreate(alias string) (*BrokerClient, error) {
 		return nil, err
 	}
 	p.clients[canonical] = client
+	// url goes through config.SanitizeURLString rather than cfg.URL directly —
+	// same defense-in-depth reasoning as BrokerConfig.LogValue: validation
+	// already rejects credentialed URLs, but this keeps that guarantee from
+	// being the only thing standing between a broker URL and the log stream
+	// (SOL-152979).
 	slog.Info("broker connection created",
 		slog.String("broker", cfg.DisplayName()),
-		slog.String("url", cfg.URL),
+		slog.String("url", config.SanitizeURLString(cfg.URL)),
 		slog.String("auth_mode", cfg.Auth.Mode))
 	return client, nil
 }
