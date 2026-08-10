@@ -36,15 +36,18 @@ import (
 // and silently fails to evict the token it meant to (SOL-152981).
 type DeduplicationKeyInput struct {
 	SubjectToken string
-	BrokerAlias  string
-	// Audience is the per-broker audience requested from the IdP
-	// (brokers.<alias>.auth.oauth.audience), empty when V1's audience
-	// parameter was omitted. Not currently load-bearing in production —
-	// audience is fixed per broker alias at construction, so BrokerAlias
-	// alone already determines it today — but included per this struct's
-	// own contract above, and so a future multi-audience-per-broker
-	// capability doesn't silently serve a wrong-audience cached token.
-	Audience string
+	// BrokerAlias was already in this key before Audience joined it, despite
+	// ExchangeInput documenting BrokerAlias as a logging label that "does not
+	// appear in the IdP request body" — it doesn't determine what gets
+	// exchanged for. Audience, by contrast, is sent to the IdP and does
+	// determine that (via Params.AudienceParam), yet wasn't here until now.
+	// This key was correct only by the accident that BrokerAlias happens to
+	// determine Audience 1:1 today (one audience per broker alias, fixed at
+	// construction) — not because the key was self-sufficient. Adding
+	// Audience makes that true by construction instead of by coincidence
+	// (SOL-152981).
+	BrokerAlias string
+	Audience    string
 }
 
 // String, GoString, and LogValue redact SubjectToken so

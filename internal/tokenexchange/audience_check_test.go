@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // fakeJWT builds a JWT-shaped (but unsigned) token carrying claims as its
@@ -184,6 +185,52 @@ func TestWarnIfAudienceMismatch_OpaqueTokenSkipsCheck(t *testing.T) {
 	})
 	if out != "" {
 		t.Errorf("expected no log output for a non-JWT access token, got: %q", out)
+	}
+}
+
+func TestBoundedAudienceList_CapsCountAndLength(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("a", auditLogAudienceMaxLen+50)
+	aud := make(jwtAudience, auditLogAudienceCap+3)
+	for i := range aud {
+		aud[i] = long
+	}
+
+	out := boundedAudienceList(aud)
+	if len(out) != auditLogAudienceCap {
+		t.Fatalf("len(out) = %d, want %d", len(out), auditLogAudienceCap)
+	}
+	for _, v := range out {
+		if n := len([]rune(v)); n != auditLogAudienceMaxLen {
+			t.Errorf("truncated value has %d runes, want exactly %d (cap must include the ellipsis, not sit alongside it): %q", n, auditLogAudienceMaxLen, v)
+		}
+		if !strings.HasSuffix(v, "…") {
+			t.Errorf("expected truncated value to end in an ellipsis, got: %q", v)
+		}
+	}
+}
+
+// TestBoundedAudienceList_TruncatesByRuneNotByte pins that truncation counts
+// runes, not bytes — a byte-based slice on a multi-byte-heavy string can
+// split a rune mid-character (producing invalid UTF-8) and, since a
+// multi-byte rune's byte count exceeds its rune count, can overshoot
+// auditLogAudienceMaxLen when the length check itself was byte-based.
+func TestBoundedAudienceList_TruncatesByRuneNotByte(t *testing.T) {
+	t.Parallel()
+	// Each "€" is 3 bytes / 1 rune, so this string is well under the rune cap
+	// but over what a byte-based cap of the same number would allow.
+	short := strings.Repeat("€", auditLogAudienceMaxLen-10)
+	if out := boundedAudienceList(jwtAudience{short}); out[0] != short {
+		t.Errorf("a value under the rune cap should pass through unchanged, got: %q", out[0])
+	}
+
+	over := strings.Repeat("€", auditLogAudienceMaxLen+10)
+	got := boundedAudienceList(jwtAudience{over})[0]
+	if n := len([]rune(got)); n != auditLogAudienceMaxLen {
+		t.Errorf("truncated rune count = %d, want %d", n, auditLogAudienceMaxLen)
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("truncated value is not valid UTF-8 — a multi-byte rune was split: %q", got)
 	}
 }
 

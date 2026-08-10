@@ -87,35 +87,43 @@ func decodeJWTClaimsUnverified(token string) (jwtClaims, bool) {
 }
 
 // warnIfAudienceMismatch logs a WARN when accessToken is a JWT whose "aud"
-// claim does not include requestedAudience — defense in depth alongside
-// (never a replacement for) the broker's own resource-server audience
-// validation, which is configured on the broker's SEMP OAuth profile and is
-// optional there (SOL-152981).
+// claim does not include requestedAudience. This is a diagnostic, not a
+// security control: RFC 6750 treats a bearer token as opaque to the party
+// relaying it, and this process is that party — the broker is the resource
+// server, and its own resource-server audience validation is the actual
+// enforcement point. But the broker checks the token against its own
+// configured required-audience; it never sees what this process asked the
+// IdP for. If an IdP canonicalizes or ignores the requested audience (e.g.
+// Entra's "api://" resource-URI prefixing) and happens to issue a value the
+// broker still accepts, nothing else in this call chain would ever surface
+// that the per-broker audience config is inert. This WARN is that surfacing
+// — "did the IdP give us what we asked for", not "is this token valid" — and
+// it changes no outcome: the token is returned unconditionally either way
+// (SOL-152981).
 //
-// Deliberately WARN, never a failure: this codebase supports multiple IdP
-// families (Entra, Okta, Keycloak, Auth0, ...), some of which canonicalize a
-// requested audience into a different representation in the issued token
-// (e.g. Entra's "api://" resource-URI prefixing). A strict equality check
-// here would risk failing a legitimately-configured IdP integration this
-// project has not been tested against — trading a defense-in-depth gap for
-// an availability regression, which is worse. This was an explicit product
-// decision (not a default this code invented): if a deployment wants the
-// exchange to hard-fail on a real mismatch, that belongs behind a new
-// per-broker config flag, not unconditional behavior here.
+// Deliberately WARN, never a failure, for the same canonicalization reason:
+// a strict equality check would risk failing a legitimately-configured IdP
+// integration this project hasn't tested against, trading a diagnostic gap
+// for an availability regression. If a deployment wants a hard failure on
+// mismatch, that belongs behind a new per-broker config flag, not
+// unconditional behavior here.
 //
 // Silently no-ops (no WARN either way) when:
 //   - requestedAudience is empty: V1 makes the audience parameter optional,
 //     and without a request there is nothing to check the token against.
 //   - accessToken is not JWT-shaped or its payload doesn't decode: RFC 8693
 //     access tokens may legitimately be opaque, and an opaque token's claims
-//     cannot be inspected client-side at all — expected, not suspicious.
+//     cannot be inspected client-side at all — expected, not suspicious. The
+//     broker's own audience validation has the identical blind spot when its
+//     access-token-parsing option is off, so this isn't a regression against
+//     the backstop it's diagnosing gaps around.
 //
 // The token itself is never logged. The claimed audiences are logged bounded
 // (auditLogAudienceCap values, auditLogAudienceMaxLen chars each) under the
-// key "aud_claim" rather than anything containing "token" or "audience" —
-// cmd/server's ReplaceAttr redaction net matches on key substrings including
-// "token", and would blank a differently-named field, defeating the point of
-// logging it. "aud_claim" doesn't match any entry in that list.
+// key "aud_claim" — cmd/server's ReplaceAttr redaction net matches on key
+// substrings including "token", which "aud_claim" doesn't. ("audience" isn't
+// in that redaction list; requested_audience two lines below is already
+// logged unredacted.)
 func warnIfAudienceMismatch(brokerAlias, requestedAudience, accessToken string) {
 	if requestedAudience == "" {
 		return
@@ -144,11 +152,21 @@ func boundedAudienceList(aud jwtAudience) []string {
 	}
 	out := make([]string, n)
 	for i := 0; i < n; i++ {
-		v := aud[i]
-		if len(v) > auditLogAudienceMaxLen {
-			v = v[:auditLogAudienceMaxLen] + "…"
-		}
-		out[i] = v
+		out[i] = truncateRunes(aud[i], auditLogAudienceMaxLen)
 	}
 	return out
+}
+
+// truncateRunes caps s at max runes, truncating by rune rather than byte so
+// a multi-byte character is never split, and folding the ellipsis into the
+// cap rather than appending after it so the result never exceeds max runes.
+func truncateRunes(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	if max == 0 {
+		return ""
+	}
+	return string(r[:max-1]) + "…"
 }
