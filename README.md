@@ -468,4 +468,5 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 Attribution and third-party components are listed in [NOTICE](NOTICE) and [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
+
 Copyright 2024-2026 Solace Corporation. All rights reserved.
