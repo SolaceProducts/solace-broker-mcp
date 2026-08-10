@@ -20,7 +20,7 @@ use both.
 
 ---
 
-## 2. Goals & Non-Goals
+## 2. Goals and Non-Goals
 
 ### Goals
 - Loosely coupled to the rest of the codebase (tools choose v1 or v2 independently)
@@ -70,7 +70,7 @@ from failure.
 |---|---|---|
 | `<parse-error>msg</parse-error>` | text only | Unknown command, malformed XML, schema validation failure |
 | `<permission-error>msg</permission-error>` | text only | User role lacks privilege for the command |
-| `<limit-error>msg</limit-error>` | text only | Response exceeds broker buffer (e.g. "response too big: use sequenced get") |
+| `<limit-error>msg</limit-error>` | text only | Response exceeds broker buffer (for example, "response too big: use sequenced get") |
 | `<execute-result code="fail" reason="..." reasonCode="..."/>` | attributes | Config/admin command passed parse but failed execution |
 
 Successful commands always include `<execute-result code="ok"/>` at the tail
@@ -558,7 +558,7 @@ acceptance criteria should read this section first.
 
 | # | Story 4 literal text | Spec position | Reason for drift | Spec ref |
 |---|---|---|---|---|
-| D1 | `Execute(request string) (string, error)` (line 1112) | `Execute(ctx context.Context, xml string) (*Result, error)` | (a) Matches existing v2 client's `Execute` shape for consistent mental model. (b) `*Result` leaves room to add fields (e.g. `SEMPVersion`) without breaking callers. (c) Bytes represent XML naturally. | §6.1, §6.2 |
+| D1 | `Execute(request string) (string, error)` (line 1112) | `Execute(ctx context.Context, xml string) (*Result, error)` | (a) Matches existing v2 client's `Execute` shape for consistent mental model. (b) `*Result` leaves room to add fields (for example, `SEMPVersion`) without breaking callers. (c) Bytes represent XML naturally. | §6.1, §6.2 |
 | D2 | No `context.Context` in v1 signature (line 1112) | `ctx` is required | (a) Standard Go idiom. (b) Matches v2 client. (c) Needed for per-call timeout + cancellation. | §6.3 |
 | D3 | `SEMPClient { v1, v2 }` container struct (line 1113–1119) | Peer fields `sempV1` + `sempV2` directly on existing `BrokerClient` | (a) The proposed wrapper has no behavior — just groups two pointers. (b) Peer pattern matches the current codebase (zero refactor churn). (c) Story itself says v1/v2 are used "simultaneously, not swappable" — no cross-protocol logic needs a shared home. (d) YAGNI: if orchestration becomes a thing, add a wrapper then. | §10.1 |
 | D4 | Interface file at `internal/semp/v1executor.go` (line 1111) | Interface in `internal/semp/sempv1/client.go` | Mirrors the existing `sempv2/` package layout. Minor file-layout choice, same effective public surface. | §4 |
@@ -601,7 +601,7 @@ drifts, not gaps:
 | # | Question | Current plan |
 |---|---|---|
 | Rate limit | Where does the retry decorator live? | Story 5; leave TODO comment |
-| Pilot choice | `get-redundancy-status` vs. `get-broker-status`? | Decide after Phase 1 |
+| Pilot choice | `get-redundancy-status` versus `get-broker-status`? | Decide after Phase 1 |
 | Integration tests | Build tag + skip, or always-on with Docker? | Parked |
 
 ---

@@ -180,7 +180,7 @@ Most IdPs organize clients and users into an isolated namespace — called a rea
 >   -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
 >   quay.io/keycloak/keycloak:latest start-dev
 > ```
-> Then open the Admin Console at `http://localhost:8080/admin`, log in with `admin` / `admin`, click the realm dropdown in the top-left → **Create realm** → set a **Realm name** → **Create**. The built-in `master` realm can be used for quick local testing, but a dedicated realm is recommended.
+> Then open the Admin Console at `http://localhost:8080/admin`, log in with `admin` / `admin`, click the realm drop-down list in the top-left → **Create realm** → set a **Realm name** → **Create**. The built-in `master` realm can be used for quick local testing, but a dedicated realm is recommended.
 >
 > **Reference:** [`test/e2e-oauth/realm-export.json`](../test/e2e-oauth/realm-export.json) is a concrete, working example of this shape (realm, audience mappers, OAuth clients, test users) — test-only, not a production template, but useful to see the pieces fit together.
 
@@ -204,13 +204,13 @@ Skip this step when using Option B (Dynamic Client Registration).
 
 Create a client in the IdP with the following settings:
 
-- **Client ID:** any name (e.g. `mcp-client`) — pass this as `--client-id` in step 4
+- **Client ID:** any name (for example, `mcp-client`) — pass this as `--client-id` in step 4
 - **Flow:** Authorization Code with PKCE
 - **PKCE challenge method:** `S256`
-- **Client type:** Public (no secret) or Confidential (with secret) — a public client is recommended for MCP clients like Claude Code and Claude Desktop, since they run on a user's machine where a client secret cannot be stored securely. For Option B (Dynamic Client Registration), the MCP client should always be registered as public.
+- **Client type:** Public (no secret) or Confidential (with secret) — a public client is recommended for MCP clients like Claude Code and Claude Desktop, since they run on a user's machine where a client secret cannot be stored securely. For Option B (Dynamic Client Registration), always register the MCP client as public.
 - **Redirect URI:** `http://localhost:<port>/callback`, where `<port>` matches the `--callback-port` used when adding the server to Claude Code
 
-> **Keycloak:** **Clients** → **Create client** → set a **Client ID** (e.g. `mcp-client`) → click **Next**.
+> **Keycloak:** **Clients** → **Create client** → set a **Client ID** (for example, `mcp-client`) → click **Next**.
 > - **Client authentication:** leave **OFF** for a public client (no secret required); turn **ON** for a confidential client (requires `--client-secret`)
 >
 > Enable **Standard flow** and disable all other flows. Enable **Require PKCE** and set the **PKCE Method** to `S256` → click **Next**. Under **Login settings**, set **Valid redirect URIs** to `http://localhost:*` → **Save**.
@@ -233,7 +233,7 @@ mcp_client_auth:
   resource_url: "https://your-mcp-server.example.com/mcp"
 ```
 
-See the Keycloak configuration below for an example.
+See the following Keycloak configuration for an example.
 
 The `audience` value must exactly match the value configured in step 1.2. Set `resource_url` to the externally reachable URL of the MCP endpoint — this is advertised to clients for OAuth discovery, so it must be the public-facing URL, not the server's internal bind address (these differ when running behind a reverse proxy or ingress).
 
@@ -252,11 +252,11 @@ The `audience` value must exactly match the value configured in step 1.2. Set `r
 >   resource_url: "https://localhost:9090/mcp"
 > ```
 
-> **Note:** Under `mode: oauth` the validator enforces `https://` on **both** the `issuer` and `resource_url` URLs (an `http://` value is rejected at startup). When running Keycloak locally for testing, terminate TLS in front of it (for example, via Caddy or a reverse proxy) or run Keycloak with a TLS cert. `resource_url` is the externally advertised identifier for OAuth discovery, so it must be `https://` even when the MCP server's own listener is plaintext behind an upstream terminator — see [TLS for the MCP server's own listener](#tls-for-the-mcp-servers-own-listener) below.
+> **Note:** Under `mode: oauth` the validator enforces `https://` on **both** the `issuer` and `resource_url` URLs (an `http://` value is rejected at startup). When running Keycloak locally for testing, terminate TLS in front of it (for example, via Caddy or a reverse proxy) or run Keycloak with a TLS cert. `resource_url` is the externally advertised identifier for OAuth discovery, so it must be `https://` even when the MCP server's own listener is plaintext behind an upstream terminator — see [TLS for the MCP server's own listener](#tls-for-the-mcp-servers-own-listener).
 
 ### Step 2b: Configure broker OAuth (Hop 2)
 
-This step is only needed if one or more brokers should use `auth.mode: oauth` instead of `basic`/`bearer`. Under this mode, the MCP server obtains each broker's token by exchanging the calling agent's Hop 1 token (RFC 8693 token exchange) against the identity provider. `mcp_client_auth.mode: oauth` (Hop 1) is required first — RFC 8693 token exchange consumes the agent's Hop 1 JWT as its `subject_token`, so with `mode: static` or `mode: disabled` there is no agent token to exchange and Hop 2 has nothing to do.
+This step is only needed if one or more brokers use `auth.mode: oauth` instead of `basic`/`bearer`. Under this mode, the MCP server obtains each broker's token by exchanging the calling agent's Hop 1 token (RFC 8693 token exchange) against the identity provider. `mcp_client_auth.mode: oauth` (Hop 1) is required first — RFC 8693 token exchange consumes the agent's Hop 1 JWT as its `subject_token`, so with `mode: static` or `mode: disabled` there is no agent token to exchange and Hop 2 has nothing to do.
 
 > **Note:** Configuring `auth.mode: oauth` on a broker while Hop 1 is `static`/`disabled` is rejected at startup with:
 > ```
@@ -265,7 +265,7 @@ This step is only needed if one or more brokers should use `auth.mode: oauth` in
 > mcp_client_auth.mode must be oauth
 > ```
 
-Add the top-level `broker_oauth:` block with the IdP's token-exchange coordinates, and set `auth.mode: oauth` on each broker that should use it:
+Add the top-level `broker_oauth:` block with the IdP's token-exchange coordinates, and set `auth.mode: oauth` on each broker that uses it:
 
 ```yaml
 broker_oauth:
@@ -290,8 +290,8 @@ brokers:
 | `broker_oauth.idp_token_endpoint` | The IdP's token endpoint — where the MCP server POSTs the token-exchange request. Must be `https://` in production. |
 | `broker_oauth.mcp_server_client_id` | The MCP server's own `client_id`, registered at the IdP (this is a separate client registration from the one used for Hop 1 in step 1.2). |
 | `broker_oauth.mcp_server_client_auth` | How the MCP server authenticates itself to the IdP's token endpoint — a discriminated union, exactly one sub-block populated: `client_secret_basic.secret` (sent via HTTP Basic auth) or `client_secret_post.secret` (sent in the form body). |
-| `broker_oauth.grant_type` | The OAuth grant type used for the Hop 2 exchange — see [Grant type](#grant-type) below. |
-| `broker_oauth.audience_parameter_name` | Which request parameter carries the per-broker audience value — see [Audience parameter name](#audience-parameter-name) below. |
+| `broker_oauth.grant_type` | The OAuth grant type used for the Hop 2 exchange — see [Grant type](#grant-type). |
+| `broker_oauth.audience_parameter_name` | Which request parameter carries the per-broker audience value — see [Audience parameter name](#audience-parameter-name). |
 | `brokers.<alias>.auth.mode` | Set to `oauth` to use token exchange for this broker. |
 | `brokers.<alias>.auth.audience` | Optional, even under `auth.mode: oauth` — omitting it does not fail startup. This broker's audience value, forwarded to the IdP during exchange using whichever request parameter `audience_parameter_name` selects; when omitted, the exchange request carries no audience parameter at all. Omit if the broker's OAuth profile does not validate audience; set it only if it does. If set, it must not be whitespace-only (a `${VAR}` resolving to blank fails config load). |
 
@@ -309,7 +309,7 @@ This is the only grant type this version implements. The field exists (rather th
 
 #### Audience parameter name
 
-`audience_parameter_name` tells the runtime which OAuth request parameter should carry each broker's `auth.audience` value in the token-exchange POST. Different IdP families expect the audience on a different parameter, but this version implements only one:
+`audience_parameter_name` tells the runtime which OAuth request parameter carries each broker's `auth.audience` value in the token-exchange POST. Different IdP families expect the audience on a different parameter, but this version implements only one:
 
 ```yaml
 audience_parameter_name: "audience"
@@ -551,13 +551,14 @@ A browser window opens on first use for user login. The IdP must support anonymo
 > is emitted. This lets a caller always discover configured broker aliases
 > before invoking any other tool.
 
-> **Two independent auth legs.** Client→server auth (steps 1–8, the JWT above) is
-> distinct from server→broker auth (step 9 or 10 depending on whether tool
-> authorization is enabled), which uses each broker's configured `auth.mode`
-> (`basic`, `bearer`, or `oauth`). Broker-bound OAuth via RFC 8693 token
-> exchange (the `broker_oauth:` config block) obtains a broker-bound token by
-> exchanging the client's Hop 1 token, and requires `mcp_client_auth.mode:
-> oauth` — see [Step 2b: Configure broker OAuth (Hop 2)](#step-2b-configure-broker-oauth-hop-2) below.
+> **Two independent auth legs.** Client→server auth (steps 1–8, the JWT shown
+> in the preceding diagram) is distinct from server→broker auth (step 9 or 10
+> depending on whether tool authorization is enabled), which uses each
+> broker's configured `auth.mode` (`basic`, `bearer`, or `oauth`).
+> Broker-bound OAuth via RFC 8693 token exchange (the `broker_oauth:` config
+> block) obtains a broker-bound token by exchanging the client's Hop 1 token,
+> and requires `mcp_client_auth.mode: oauth` — see
+> [Step 2b: Configure broker OAuth (Hop 2)](#step-2b-configure-broker-oauth-hop-2).
 
 **Server→broker flow when `auth.mode: oauth` (Hop 2), cache miss:**
 
@@ -693,7 +694,7 @@ This error occurs during Dynamic Client Registration when the IdP rejects the re
 
 This is a tool-authorization denial. The token authenticated successfully, but the server's claim-based policy did not grant the tool. The caller-facing message is deliberately generic — grep the server logs for a `msg: "tool authorization"` line at the same `correlation_id` to see why:
 
-- `decision_reason: "missing_claim"` with `expected_claim: "<name>"` — the token had no claim by that name at the top level of the JWT. Common causes, in order of likelihood: (a) the IdP's memberships mapper is not applied to the caller's client scope (fix at the IdP); (b) `groups_claim_name` in the server config does not match the claim the IdP actually emits (fix at the server); (c) the IdP emits memberships inside a nested object (e.g. `authorization.roles`) — the server only reads top-level claims, so flatten the memberships into a top-level claim with an IdP mapper.
+- `decision_reason: "missing_claim"` with `expected_claim: "<name>"` — the token had no claim by that name at the top level of the JWT. Common causes, in order of likelihood: (a) the IdP's memberships mapper is not applied to the caller's client scope (fix at the IdP); (b) `groups_claim_name` in the server config does not match the claim the IdP actually emits (fix at the server); (c) the IdP emits memberships inside a nested object (for example, `authorization.roles`) — the server only reads top-level claims, so flatten the memberships into a top-level claim with an IdP mapper.
 - `decision_reason: "not_permitted"` with `matched_groups: []` — the claim was present but none of the caller's memberships grant the tool. Fix by adding the tool to a group the caller is a member of, or adding the caller to a group that already grants it.
 
-`list-brokers` is exempt and will always succeed for any authenticated caller — a successful `list-brokers` call in the same session as a denied tool call confirms the token itself is valid and it is the tool-authorization policy that is denying. See [Tool authorization](configuration.md#tool-authorization) for the full audit-line schema.
+`list-brokers` is exempt and always succeeds for any authenticated caller — a successful `list-brokers` call in the same session as a denied tool call confirms the token itself is valid and it is the tool-authorization policy that is denying. See [Tool authorization](configuration.md#tool-authorization) for the full audit-line schema.

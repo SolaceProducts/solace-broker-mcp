@@ -16,7 +16,7 @@ var Version = "dev"
 ```
 
 `Version` is a package-level variable imported wherever the version string is
-needed (MCP server metadata, User-Agent header, health endpoints, etc.).
+needed (MCP server metadata, User-Agent header, health endpoints, and so on).
 
 ### Local development
 
@@ -230,7 +230,7 @@ The binary is statically linked with no external dependencies.
 
 The server handles `SIGTERM` and `SIGINT` for graceful shutdown (120s timeout).
 To run as a background service with auto-restart, use your platform's process
-manager (systemd, supervisord, launchd, etc.).
+manager (systemd, supervisord, launchd, and so on).
 
 > **Future:** Pre-built service templates (systemd unit, launchd plist) are
 > planned for a future release. See `docs/todo-gaps.md` for details.
@@ -274,7 +274,7 @@ path specified by `ENV_FILE`) and from the process environment.
 
 ## Health Checks
 
-The server exposes a liveness probe at `GET /livez` which returns:
+The server exposes a liveness probe at `GET /livez`, which returns:
 
 ```json
 {"status":"alive"}
@@ -295,7 +295,7 @@ which has no shell, curl, or wget.
 | Docker | `HEALTHCHECK CMD ["/solace-broker-mcp", "--health"]` (built into image) |
 | Docker (external) | `curl http://localhost:9090/health` from host |
 | Kubernetes | `httpGet` liveness/readiness probe on `/health` port 9090 |
-| Bare metal | `curl http://localhost:9090/health` (cron, monitoring agent, etc.) |
+| Bare metal | `curl http://localhost:9090/health` (cron, monitoring agent, and so on) |
 
 ## Security Considerations
 

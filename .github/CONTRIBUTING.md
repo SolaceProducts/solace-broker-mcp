@@ -40,7 +40,7 @@ When reporting a bug, please include:
 - **Logs** — Relevant log output with structured fields (redact credentials!)
 - **Screenshots** — If applicable
 
-**Security vulnerabilities:** Do NOT report security issues via public GitHub issues. See [SECURITY.md](SECURITY.md) for the responsible disclosure process.
+**Security vulnerabilities:** Don't report security issues in public GitHub issues. See [SECURITY.md](SECURITY.md) for the responsible disclosure process.
 
 ### Suggesting Features
 
@@ -114,7 +114,7 @@ go run ./cmd/server
 - [ ] Commits are signed off (DCO)
 - [ ] PR description follows the template
 
-### Getting CI to run on a branch
+### Getting CI to Run on a Branch
 
 **Pushing a branch no longer runs CI on its own.** `build-and-test.yml` triggers on
 pull requests against `main` and on pushes to `main`, not on every branch push.
@@ -173,17 +173,17 @@ This project follows standard Go coding principles. Key guidelines:
 
 ### Naming Conventions
 
-- **Package names:** Short, lowercase, singular (e.g., `config`, `semp`, `tools`)
-- **Variables:** Descriptive, camelCase (e.g., `brokerPool`, `httpClient`)
-- **Functions:** Verb-first, descriptive (e.g., `GetSempV2`, `ValidateParams`)
-- **Interfaces:** `-er` suffix when applicable (e.g., `Client`, `Handler`)
+- **Package names:** Short, lowercase, singular (for example, `config`, `semp`, `tools`)
+- **Variables:** Descriptive, camelCase (for example, `brokerPool`, `httpClient`)
+- **Functions:** Verb-first, descriptive (for example, `GetSempV2`, `ValidateParams`)
+- **Interfaces:** `-er` suffix when applicable (for example, `Client`, `Handler`)
 
 ### Error Handling
 
 - Always check errors — do not use `_` to discard
 - Wrap errors with context: `fmt.Errorf("reading config: %w", err)`
 - Return errors; do not log and continue (except in deferred cleanup)
-- Use structured errors for API errors (e.g., `sempv2.SEMPError`)
+- Use structured errors for API errors (for example, `sempv2.SEMPError`)
 
 ### Security — Credential Handling
 
@@ -277,23 +277,23 @@ Add feature X
 Signed-off-by: Your Name <your.email@example.com>
 ```
 
-#### Sign off automatically
+#### Sign Off Automatically
 
-To stop having to remember the `-s`, install the repo's git hook — once per clone:
+To stop having to remember the `-s`, install the repo's git hook, once per clone:
 
 ```bash
 make hooks
 ```
 
 That installs `.githooks/prepare-commit-msg` into the repository's hooks directory
-— `.git/hooks/` — where it adds the `Signed-off-by` trailer to every commit
+(`.git/hooks/`), where it adds the `Signed-off-by` trailer to every commit
 message, including ones made by tools and editors that never pass `-s`. The copy
 is read out of `origin/main`, **not** out of your working tree, so `git fetch`
 before your first `make hooks` on a fresh clone. It signs off with the identity
-git would record —
-your `git config user.email`, or `GIT_COMMITTER_EMAIL` if you commit through
-tooling that sets it — which is the same address CI matches against. It does not
-duplicate the trailer if you also pass `-s`, and it never fails a commit.
+git would record: your `git config user.email`, or `GIT_COMMITTER_EMAIL` if you
+commit through tooling that sets it. That's the same address CI matches against.
+It does not duplicate the trailer if you also pass `-s`, and it never fails a
+commit.
 
 Verify it works:
 
@@ -307,11 +307,11 @@ The hook is a convenience, not the control: the `DCO sign-off` CI check is the
 enforcement and re-verifies every commit regardless of what ran locally. Re-run
 `make hooks` after a change to `.githooks/` lands on `main`; it upgrades its own
 copy but refuses to overwrite an unrelated `prepare-commit-msg` hook you already
-have, and refuses to install anywhere but inside this repository's git directory —
-a `core.hooksPath` pointing into the working tree, or into a shared hooks directory
+have, and refuses to install anywhere but inside this repository's git directory.
+A `core.hooksPath` pointing into the working tree, or into a shared hooks directory
 outside the repo, is a refusal, not a warning.
 
-If you edit the hook, run its suite by hand — no CI job runs it:
+If you edit the hook, run its suite by hand. No CI job runs it:
 
 ```bash
 .githooks/prepare-commit-msg.test.sh
@@ -325,21 +325,21 @@ HOOKS_REF=HEAD make hooks
 
 `HEAD` is a commit, not your working tree, so an uncommitted edit installs nothing
 new. That is the one case where you are opting into running your own branch; the
-default `origin/main` is what keeps a branch you have checked out — a fork's pull
-request, say — from installing itself into `.git/hooks/`, where it would outlive
+default `origin/main` is what keeps a branch you have checked out (a fork's pull
+request, say) from installing itself into `.git/hooks/`, where it would outlive
 the branch. Any ref works: `HOOKS_REF=upstream/main make hooks` if your remote is
 not called `origin`.
 
 Run it on the oldest git you expect contributors to have, not just yours. Two of
-the cases pass on git 2.50 but catch a real bug only on git 2.39 — the version
-Debian bookworm, Ubuntu 22.04 and RHEL 9 ship — so a green run on a current git
+the cases pass on git 2.50 but catch a real bug only on git 2.39 (the version
+Debian bookworm, Ubuntu 22.04, and RHEL 9 ship), so a green run on a current git
 proves less than it looks like it does.
 
 Those refusals, and the trusted ref, are all the same point: nothing about a
 checked-out branch should decide what code runs on your machine during an ordinary
 `git commit`. Activating the tracked directory with `core.hooksPath .githooks`, or
-symlinking into it, would make git run the hook from whatever branch is checked out
-— so reviewing a fork's pull request would execute that fork's hook. The full
+symlinking into it, would make git run the hook from whatever branch is checked out,
+so reviewing a fork's pull request would execute that fork's hook. The full
 reasoning is in the header of `.githooks/prepare-commit-msg`.
 
 **All commits in a PR must be signed off.** If you forget, you can amend:
@@ -374,15 +374,15 @@ checks, precisely:
   count.
 - Merge commits are exempt while re-merging their parents reproduces exactly what
   they recorded, so refreshing your branch with `git merge main` is fine. A merge
-  that contributes something of its own — a conflict resolution, or files edited
-  or added during the merge — needs its own sign-off (`git merge --signoff`).
+  that contributes something of its own, such as a conflict resolution or files
+  edited or added during the merge, needs its own sign-off (`git merge --signoff`).
   Octopus merges and merges the check cannot recompute always need one.
 - `Co-Authored-By:` trailers are ignored. Co-authors do not need their own
   sign-off.
 
 The check reports the offending commits and the exact commands to fix them. There
-is no label or flag that skips it. Use your real name — no pseudonyms or
-anonymous contributions.
+is no label or flag that skips it. Use your real name. Pseudonyms and
+anonymous contributions aren't accepted.
 
 ### Author identity
 
@@ -441,7 +441,7 @@ maintainer to approve it, not just the one on your first push. So checks can sit
 **pending**, and a check that was green can go back to pending after the PR is
 retitled or edited. That is normal and nothing for you to fix.
 
-You will also see the `Guardian scan` check report as **skipped**. Our licence,
+You will also see the `Guardian scan` check report as **skipped**. Our license,
 vulnerability, and container scan reports to an internal service, and GitHub
 correctly withholds those credentials from a fork's workflow run, so the scan
 cannot run on your pull request. The `Guardian scan gate` check accounts for that

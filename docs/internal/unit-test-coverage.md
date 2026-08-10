@@ -50,7 +50,7 @@ tests, 37.2%) and the test-helper packages consumed only by other packages'
 tests (`internal/oauth/cache/cachetest`,
 `internal/composite/postprocess/postprocesstest`, 0%, ~110 lines combined).
 
-The line is **shipped code vs. the apparatus that tests it**, not "hard to
+The line is **shipped code versus the apparatus that tests it**, not "hard to
 test." `test/performance/` holds standalone binaries — a load generator, a
 mock SEMP server, a fidelity differ, a memory sampler — that exist only to
 drive a perf harness and never enter a release artifact. They are explicitly
@@ -90,8 +90,8 @@ never in `./...` to begin with; CI vets it in its own step.
 real coverage climbs, raise the floor to stay a few points under it — the
 gate is only as useful as the gap between it and reality is small. Don't
 raise it to sit flush against actual; a small buffer avoids CI going red on
-an incidental, defensible dip (e.g. a legitimately hard-to-unit-test error
-branch) that isn't the kind of collapse this gate exists to catch.
+an incidental, defensible dip (for example, a legitimately hard-to-unit-test
+error branch) that isn't the kind of collapse this gate exists to catch.
 
 ## Running locally
 
