@@ -51,10 +51,12 @@ if ! config="$(resolve_config "$config")"; then
   exit 2
 fi
 
-if [[ ! -x "$bin/fidelity" ]]; then
-  echo "missing $bin/fidelity — run ./build.sh first" >&2
-  exit 2
-fi
+for b in fidelity mcp-server; do
+  if [[ ! -x "$bin/$b" ]]; then
+    echo "missing $bin/$b — run ./build.sh first" >&2
+    exit 2
+  fi
+done
 
 if ss -tln 2>/dev/null | grep -q ":9090 "; then
   echo "port 9090 already in use — another MCP is running:" >&2
@@ -148,7 +150,7 @@ fi
 export BROKER_URL BROKER_USERNAME BROKER_PASSWORD
 
 echo "== 1. MCP server on :9090 (config: $config)"
-setsid bash -c "cd '$repo_root' && CONFIG_FILE='$config' exec go run ./cmd/server" \
+setsid bash -c "cd '$repo_root' && CONFIG_FILE='$config' exec '$bin/mcp-server'" \
   >"$runs/mcp.log" 2>&1 &
 mcp_pid=$!
 wait_for_http "http://localhost:9090/health" mcp-server

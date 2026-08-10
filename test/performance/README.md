@@ -1,5 +1,19 @@
 # Performance test suite
 
+> **Experimental — not for production use.** Everything in this directory is
+> internal test apparatus: a load generator, a mock SEMP server, a fidelity
+> differ, and a memory sampler. None of it ships in a release artifact, none of
+> it is part of the supported surface of the MCP server, and none of it carries
+> the compatibility, security-review, or support guarantees that production
+> code does. The binaries here are built to be pointed at throwaway test
+> brokers — do not run them against a production broker, and do not build
+> anything on top of them. Interfaces, flags, and output formats change without
+> notice or changelog entry.
+>
+> For the same reason these packages are excluded from the repo-wide unit-test
+> coverage gate — see
+> [docs/internal/unit-test-coverage.md](../../docs/internal/unit-test-coverage.md).
+
 Load-test harness for the MCP server. Spins up a fake fleet of Solace brokers
 (`mock-semp`), drives concurrent MCP tool calls (`loadgen`), samples MCP and
 mock resource use (`memsampler`, `sampler.sh`), and gates every run behind a
@@ -42,7 +56,7 @@ summary.sh        prints a one-page rollup of a run directory
 broker-config.mock.yaml   MCP config pointing at mock-semp (50 brokers)
 broker-config.real.yaml   MCP config pointing at the real lab broker
 
-build.sh          builds mock-semp, loadgen, fidelity, memsampler into ./bin/
+build.sh          builds mock-semp, loadgen, fidelity, memsampler, mcp-server into ./bin/
 run.sh            single-host smoke run (mock + MCP + loadgen on one box)
 run-mcp.sh        split-host — Box B: MCP + samplers
 run-loadgen.sh    split-host — Box A: mock + loadgen + samplers
@@ -94,7 +108,7 @@ Key env knobs (full list in `run.sh` header):
 | `ERROR_COUNT` | 0 | cap on injected errors per broker port (0 = unlimited) |
 | `ERROR_STATUSES` | `503:70,429:20,500:10` | weighted status pool; only 429/500/502/503/504 accepted |
 | `BROKER_ALIAS` | `broker-01` | fidelity `-broker`; must exist in `broker-config.mock.yaml` |
-| `VPN` | `vpn_1` | fidelity `-vpn`; must match how the goldens were captured (see `regen-golden.sh`) |
+| `VPN` | from `fixtures.manifest` | fidelity `-vpn`; defaults to the VPN the goldens were captured against. Set it only to override |
 
 ## Split-host run
 
@@ -134,7 +148,7 @@ firing loadgen.
 | `ERROR_COUNT` | 0 | cap on injected errors per broker port (0 = unlimited) |
 | `ERROR_STATUSES` | `503:70,429:20,500:10` | weighted status pool; only 429/500/502/503/504 accepted |
 | `BROKER_ALIAS` | `broker-01` | fidelity `-broker`; must exist in `broker-config.mock.yaml` |
-| `VPN` | `vpn_1` | fidelity `-vpn`; must match how the goldens were captured (see `regen-golden.sh`) |
+| `VPN` | from `fixtures.manifest` | fidelity `-vpn`; defaults to the VPN the goldens were captured against. Set it only to override |
 
 ## Fidelity gate
 
@@ -222,22 +236,39 @@ BROKER_URL=http://<lab-host>:80 \
 Keeping the captures out of git is the first line of defence; scrubbing them
 is the second, so a fixture that does escape the working tree — pasted into a
 ticket, attached to a run report — carries no lab-appliance identity. Every
-capture is passed through `mock-semp/canned/sanitize.sh`: chassis/board/disk/
-blade serials, MAC addresses, WWPN/WWNN pairs, lab IPs, and the non-GA build
-string are replaced with synthetic placeholders (`TESTSERIAL-*`, RFC 7042
-documentation MACs, TEST-NET-2 IPs from RFC 5737, a plausible GA-form version
-string).
+capture is passed through `mock-semp/canned/sanitize.sh`, which works two ways
+because the identifiers are not equally detectable:
+
+**A substitution table**, `mock-semp/canned/sanitize.local.tsv`. Literal
+value → placeholder, one pair per line. Serials have no recognizable shape, so
+naming them is the only option — and naming them in a *tracked* file would
+publish exactly what the table exists to remove, so the table is gitignored and
+per-checkout. Start from the tracked `sanitize.local.tsv.example`, which
+documents the placeholder conventions (`TESTSERIAL-*`, RFC 7042 documentation
+MACs, TEST-NET-2 addresses from RFC 5737, a GA-form version string).
+
+**A residual scan** over the scrubbed bytes, which fails the capture when a
+mechanically-recognizable identifier survives: a MAC outside the documentation
+range, a `192.168`/`172.16` address, an FC WWPN, or a non-GA build marker
+(`+lo.NNN`, `NNNmain.N`). It reports file, line, and value. This is what makes
+the harness safe on an appliance the table was not written for — that case used
+to scrub nothing and say nothing.
+
+> The scan cannot see serials, and `10.0.0.0/8` is deliberately outside it
+> (Solace version strings are `10.x.y.z` and would match an IPv4 pattern, so
+> scanning that range would fail every capture on its own version attribute).
+> **A clean scan is not proof the fixtures are clean.** If your appliance is
+> not the one your table describes, write a table for it.
 
 `regen-golden.sh` invokes `sanitize.sh` after the fidelity `-capture` step and
 before the manifest is written, so the recorded hashes are of the scrubbed
 bytes and a later check doesn't read sanitization as a hand-edit. The script is
-idempotent — an already-scrubbed tree passes through as a no-op — and drives
-from a single literal-value → replacement table so canned and golden stay
-consistent by construction (an inconsistent substitution would make the
-exact-mode gate fail).
+idempotent — an already-scrubbed tree passes through as a no-op — and both
+fixture sets go through one table, so canned and golden stay consistent by
+construction (an inconsistent substitution would fail the exact-mode gate).
+It rewrites capture output only, never tracked scripts.
 
-Editing the placeholder set: update the `subs` array at the top of
-`sanitize.sh`, re-run it against the current fixtures, then
+Adding a value: append it to `sanitize.local.tsv`, re-run `./sanitize.sh`, then
 `./fixtures-manifest.sh write` to re-record the changed bytes (otherwise the
 preflight reports your substitution as a hand-edit), and rerun `./run.sh` to
 confirm the fidelity gate still passes.

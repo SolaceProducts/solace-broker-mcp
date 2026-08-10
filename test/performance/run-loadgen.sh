@@ -29,7 +29,8 @@
 #   ERROR_STATUSES weighted status pool "code:w,code:w,..."
 #                  (default "503:70,429:20,500:10")
 #   BROKER_ALIAS   fidelity -broker  (default broker-01; must exist in broker-config.mock.yaml)
-#   VPN            fidelity -vpn     (default vpn_1; must match how goldens were captured)
+#   VPN            fidelity -vpn   (default: the VPN recorded in fixtures.manifest
+#                  at capture time — set this only to override that)
 
 set -euo pipefail
 
@@ -48,10 +49,12 @@ NO_MOCK="${NO_MOCK:-0}"
 ERROR_RATE="${ERROR_RATE:-0}"
 ERROR_COUNT="${ERROR_COUNT:-0}"
 ERROR_STATUSES="${ERROR_STATUSES:-503:70,429:20,500:10}"
-# Fidelity gate targets — must match how the goldens were captured (see
-# regen-golden.sh). Defaults track the current fidelity/golden/*.json.
+# Fidelity gate targets. BROKER_ALIAS only picks which mock broker MCP dials
+# (the mock replays the same canned bytes on every port), so it defaults to a
+# mock alias. VPN must match the capture and is resolved from
+# fixtures.manifest after the preflight below — hardcoding a default here is
+# how it drifted from regen-golden.sh's.
 BROKER_ALIAS="${BROKER_ALIAS:-broker-01}"
-VPN="${VPN:-vpn_1}"
 runs="$bin/runs/$(date +%Y%m%d-%H%M%S)-loadgen-$RUN_TAG"
 mkdir -p "$runs"
 
@@ -82,6 +85,15 @@ if [[ "$NO_MOCK" == "1" ]]; then
   "$here/fixtures-manifest.sh" check --no-canned
 else
   "$here/fixtures-manifest.sh" check
+fi
+
+# Resolve the fidelity VPN from the capture's own provenance so the gate can't
+# ask for a VPN the goldens were never captured against. An explicit VPN= in
+# the environment still wins.
+VPN="${VPN:-$("$here/fixtures-manifest.sh" vpn)}"
+if [[ -z "$VPN" || "$VPN" == "unknown" ]]; then
+  echo "fixtures.manifest records no VPN — recapture with ./regen-golden.sh, or pass VPN=<name> explicitly." >&2
+  exit 2
 fi
 
 # Convert Go duration to seconds for the sampler's -duration arg.

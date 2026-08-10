@@ -33,7 +33,10 @@ MOCK_ONLY="${MOCK_ONLY:-0}"
 mcp_pid=""
 mock_pid=""
 if [[ "$MOCK_ONLY" != "1" ]]; then
-  mcp_pid="$(pgrep -n -f 'go-build.*server' || true)"
+  # The run scripts exec bin/mcp-server directly. The go-build fallback
+  # catches a server someone started by hand with `go run ./cmd/server`,
+  # where the real process is the toolchain's child under a go-build temp dir.
+  mcp_pid="$(pgrep -n -f 'bin/mcp-server' || pgrep -n -f 'go-build.*server' || true)"
 fi
 if [[ "$MCP_ONLY" != "1" ]]; then
   # Match on the binary name only — run-loadgen.sh launches with

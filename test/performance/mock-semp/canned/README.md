@@ -3,7 +3,10 @@
 `mock-semp` replays the files in this directory to impersonate a Solace
 broker. They are raw response bodies captured from a **real lab broker**, so
 they are deliberately untracked: `.gitignore` excludes every `*.json` and
-`*.xml` here, and this README is the only file the repo carries.
+`*.xml` here. The repo carries only the scripts (`capture.sh`, `sanitize.sh`),
+this README, and `sanitize.local.tsv.example` — your own
+`sanitize.local.tsv`, which names your appliance's identifiers, is gitignored
+too.
 
 A fresh clone therefore has no fixtures, and `mock-semp` refuses to start
 until you capture some. That is intended — see
@@ -34,7 +37,7 @@ why you want just one side.
 |---|---|
 | `show_version.xml`, `show_system.xml`, `show_memory.xml`, `show_message_spool.xml` | SEMPv1 `<show>` commands behind `get-broker-status` |
 | `show_hardware_details.xml` | SEMPv1, appliance-only path of `get-broker-status` |
-| `queues_page<N>.json` | SEMPv2 `list-queues`, one file per page; pages must be contiguous from 1 |
+| `queues_page<N>.json` | SEMPv2 `list-queues`, one file per page; pages must be contiguous from 1. However many the broker's queue count produces — `sanitize.sh` globs them |
 
 `mock-semp` reads them from disk at startup — no `go:embed`, no rebuild
 after a recapture. Anything unmatched is a logged miss and a non-zero exit.

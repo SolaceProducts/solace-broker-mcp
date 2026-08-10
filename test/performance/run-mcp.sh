@@ -26,7 +26,7 @@ export BROKER_USERNAME="${BROKER_USERNAME:-perf}"
 export BROKER_PASSWORD="${BROKER_PASSWORD:-perf}"
 DURATION="${DURATION:-90s}"
 
-for b in memsampler; do
+for b in memsampler mcp-server; do
   if [[ ! -x "$bin/$b" ]]; then
     echo "missing $bin/$b — run ./build.sh first" >&2
     exit 2
@@ -86,7 +86,10 @@ wait_for_http() {
 }
 
 echo "== 1. MCP server on :9090 (config: broker-config.mock.yaml, MOCK_HOST=$MOCK_HOST)"
-setsid bash -c "cd '$repo_root' && CONFIG_FILE='$here/broker-config.mock.yaml' exec go run ./cmd/server" \
+# Exec the prebuilt binary, not `go run`: `go run` runs the compiled program
+# as a child process, so $mcp_pid would be the toolchain wrapper and the
+# memsampler in step 2 would sample that instead of MCP.
+setsid bash -c "cd '$repo_root' && CONFIG_FILE='$here/broker-config.mock.yaml' exec '$bin/mcp-server'" \
   >"$runs/mcp.log" 2>&1 &
 mcp_pid=$!
 wait_for_http "http://localhost:9090/health" mcp-server

@@ -1,0 +1,37 @@
+# sanitize.sh substitution table — copy to sanitize.local.tsv and fill in the
+# values your appliance actually returns. That file is gitignored: it names
+# real identifiers, which is exactly what must not be committed to a public
+# repo.
+#
+# Format: value<TAB>replacement, one per line. "#" comments and blank lines
+# are ignored. Matching is literal (no regex), applied across both
+# mock-semp/canned/ and fidelity/golden/ so the two sides stay consistent —
+# an inconsistent substitution fails the exact-mode fidelity gate.
+#
+# Find the values to list by running ./sanitize.sh once: its residual scan
+# names every MAC, lab IP, WWPN, and non-GA build marker still present.
+# Serials it cannot find — those you read out of show_hardware_details.xml
+# yourself (chassis, board, disk, blade, flash, SFP).
+#
+# Placeholder conventions, so fixtures stay readable and obviously synthetic:
+#
+#   TESTSERIAL-<PART>-NN   serials. Keep the original field width where the
+#                          wire format is space-padded (SFP serials are
+#                          16 chars including trailing spaces).
+#   00:00:5E:00:53:xx      MACs. RFC 7042 documentation range.
+#   198.51.100.x           IPs. TEST-NET-2, RFC 5737.
+#   0x2100000000000001     WWPN / 0x2000000000000001 WWNN. Keep the low-nibble
+#     pairing of the originals: real FC addressing shares it, and preserving
+#     that keeps the fixture recognizable to someone who knows the format.
+#   10.25.1.10             build strings. Any plausible GA form; must not
+#                          carry a "+lo.NNN" or "NNNmain.N" marker, which the
+#                          residual scan rejects.
+#
+# Example shape (values here are already synthetic — replace them):
+
+S000000000	TESTSERIAL-CHASSIS-01
+AA00000000	TESTSERIAL-BOARD-01
+192.168.0.10	198.51.100.10
+aa:bb:cc:dd:ee:ff	00:00:5E:00:53:01
+0x2100000000000000	0x2100000000000001
+100.0main.0.0000	10.25.1.10

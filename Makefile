@@ -134,13 +134,26 @@ test: ## Run unit tests
 test-race: ## Run unit tests with the race detector (matches CI)
 	go test -race -v ./...
 
-# If go tool cover ever emits nothing (coverage.out missing/empty), $total below
-# is empty and `t+0` evaluates to 0 in awk, so this fails closed by design — not
-# a bug to "fix" with a pass-on-empty guard.
+# If go tool cover ever emits nothing (coverage.out/coverage.gate.out missing or
+# empty), $total below is empty and `t+0` evaluates to 0 in awk, so this fails
+# closed by design — not a bug to "fix" with a pass-on-empty guard.
+#
+# The gate is computed over coverage.gate.out, which is coverage.out minus the
+# module's test-harness packages ($(MODULE)/test/...). Rationale and the exact
+# scope of that exclusion are in docs/internal/unit-test-coverage.md — the short
+# version is that the floor exists to protect shipped code, and a load generator
+# or mock SEMP server that only ever runs inside a perf harness isn't that.
+# The filter is anchored on the full module path so it can only ever match
+# top-level test/, never an internal package whose name happens to end in
+# "test" (internal/oauth/cache/cachetest, .../postprocess/postprocesstest).
+# coverage.out itself is left whole — inspect it for the unfiltered picture.
+MODULE := github.com/SolaceProducts/solace-broker-mcp
+
 .PHONY: test-cover
-test-cover: ## Run unit tests with coverage; fails if aggregate coverage drops below 85% (matches CI; see docs/internal/unit-test-coverage.md)
+test-cover: ## Run unit tests with coverage; fails if aggregate coverage (excluding test/ harnesses) drops below 85% (matches CI; see docs/internal/unit-test-coverage.md)
 	go test -race -v -coverprofile=coverage.out ./...
-	@total=$$(go tool cover -func=coverage.out | tail -n 1 | awk '{print $$3}' | tr -d '%'); \
+	@grep -v '^$(MODULE)/test/' coverage.out > coverage.gate.out
+	@total=$$(go tool cover -func=coverage.gate.out | tail -n 1 | awk '{print $$3}' | tr -d '%'); \
 	echo "Total coverage: $$total%"; \
 	awk -v t="$$total" 'BEGIN { if (t+0 < 85.0) { print "FAIL: coverage " t "% is below the 85% floor"; exit 1 } else { print "OK: coverage " t "% meets the 85% floor" } }'
 

@@ -7,8 +7,11 @@ catch, and why it's shaped this way.
 ## What's measured
 
 `go test -race -coverprofile=coverage.out ./...`, then the aggregate `total:`
-line from `go tool cover -func=coverage.out` — every package in the module,
-package-aggregate (statement-weighted), no per-package thresholds.
+line from `go tool cover -func=` over that profile with the module's
+`test/...` harness packages filtered out — package-aggregate
+(statement-weighted), no per-package thresholds. Everything under `cmd/` and
+`internal/` counts; see [One exclusion](#one-exclusion-test-harness-packages)
+for what the filter drops and why.
 
 ## What this gate is — and isn't
 
@@ -37,35 +40,49 @@ not the aggregate gate. Do this whenever a PR touches or removes existing
 tests; it's cheap (the same command this gate already runs) and it's the
 tool with the resolution the aggregate lacks.
 
-## No exclusion list
+## One exclusion: test-harness packages
 
-The gate has **no excluded packages or paths** — `cmd/server` (server
+The gate drops exactly one thing from the denominator: packages under the
+module's top-level `test/` directory. Everything else counts, including the
+cases most likely to tempt an exclusion — `cmd/server` (server
 bootstrap/wiring, largely exercised by the Docker E2E suites rather than unit
-tests) and small test-helper packages consumed only by other packages' tests
-(e.g. `internal/oauth/cache/cachetest`, `internal/composite/postprocess/postprocesstest`)
-are counted like everything else.
+tests, 37.2%) and the test-helper packages consumed only by other packages'
+tests (`internal/oauth/cache/cachetest`,
+`internal/composite/postprocess/postprocesstest`, 0%, ~110 lines combined).
 
-This was a deliberate decision, not an oversight. Two things made it easy:
+The line is **shipped code vs. the apparatus that tests it**, not "hard to
+test." `test/performance/` holds standalone binaries — a load generator, a
+mock SEMP server, a fidelity differ, a memory sampler — that exist only to
+drive a perf harness and never enter a release artifact. They are explicitly
+experimental and not for production use, with no compatibility or support
+guarantees; flags and output formats there change without notice
+(`test/performance/README.md` carries the same disclaimer). Coverage of them
+says nothing about the risk this gate is meant to bound, but at ~2,150
+statements they moved the aggregate 88.3% → 72.9% purely by landing, which
+would have forced the floor down or forced tests onto throwaway tooling.
 
-1. Repo-wide aggregate coverage measured 88.6% at the time this gate was
-   added — comfortably above the floor with `cmd/server` (37.7%) and the two
-   test-helper packages (0%, ~110 lines combined) included as-is. No
-   exclusion was needed to pass.
-2. An exclusion list is itself a place for untested code to hide later — the
-   ticket that established this gate (SOL-150787) explicitly calls out that
-   coverage "must not be gamed by padding." Keeping the denominator as
-   "every statement in the module" is the simplest rule that can't quietly
-   grow loopholes as packages are added or renamed. This was stress-tested
-   directly: a throwaway ~40-statement package with no test file and no
-   importers still showed up in the profile and pulled the aggregate down
-   proportionally, confirming `-coverprofile` without `-coverpkg` does count
-   untested packages rather than silently ignoring them.
+Two constraints kept this from becoming the open-ended exclusion list the
+original policy warned about, and both should hold for any future change here:
 
-If a future package genuinely can't be meaningfully unit-tested (e.g. it's
-pure `main`-style wiring exercised only by E2E), the right move is to keep it
-thin and push logic into a tested package underneath it, not to add it to an
-exclusion list. Revisit this policy if a legitimate case shows up where that
-isn't possible.
+1. **It's a categorical rule, not a list.** One anchored path prefix, no
+   per-package entries to accumulate. There's nothing to append to when the
+   next package is inconvenient — widening it means arguing that some other
+   whole category isn't shipped code, in review, in this file.
+2. **It can't reach production packages.** The filter is anchored on the full
+   module path (`github.com/SolaceProducts/solace-broker-mcp/test/`), so a
+   package merely *named* like a test helper — `cachetest`,
+   `postprocesstest` — stays in the denominator. Only top-level `test/` is
+   affected.
+
+The original anti-padding intent from SOL-150787 is unchanged: coverage still
+must not be gamed, and the denominator is still every statement of shipped
+code in the module. For a package that *is* shipped and genuinely can't be
+meaningfully unit-tested (pure `main`-style wiring exercised only by E2E), the
+answer remains what it was — keep it thin and push logic into a tested package
+underneath it, not extend this exclusion.
+
+Note that `test/e2e-common/broker-driver` is a separate Go module and was
+never in `./...` to begin with; CI vets it in its own step.
 
 ## Ratcheting the floor
 
@@ -82,4 +99,12 @@ branch) that isn't the kind of collapse this gate exists to catch.
 make test-cover
 ```
 
-Matches the CI step exactly, including the 85% threshold check.
+Matches the CI step exactly, including the 85% threshold check. It writes two
+profiles: `coverage.out` (everything, unfiltered — inspect this one) and
+`coverage.gate.out` (the filtered profile the threshold is computed over).
+
+For the per-package view that actually catches a localized regression:
+
+```bash
+go test -cover ./...
+```

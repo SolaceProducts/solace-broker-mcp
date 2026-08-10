@@ -16,6 +16,7 @@
 # Usage:
 #   ./fixtures-manifest.sh write              # after a capture (regen-golden.sh)
 #   ./fixtures-manifest.sh check [--no-canned]  # preflight (run.sh, run-loadgen.sh)
+#   ./fixtures-manifest.sh vpn                # print the VPN the capture used
 #
 # check fails when:
 #   - the manifest is absent          → nothing has been captured here
@@ -175,8 +176,20 @@ EOF
   return 0
 }
 
+# cmd_vpn prints the VPN recorded at capture time. The run scripts use it as
+# the fidelity gate's default so the gate asks for the VPN the goldens were
+# actually captured against, instead of each script carrying its own literal
+# default and drifting from regen-golden.sh's. Silent on a missing or
+# provenance-less manifest — the caller falls back to its own default and the
+# preflight check reports the missing manifest properly.
+cmd_vpn() {
+  [[ -f "$manifest" ]] || return 0
+  sed -n 's/^# vpn: //p' "$manifest" | head -1
+}
+
 case "${1:-}" in
   write) shift; cmd_write "$@" ;;
   check) shift; cmd_check "$@" ;;
-  *) echo "usage: $0 {write|check [--no-canned]}" >&2; exit 2 ;;
+  vpn)   shift; cmd_vpn "$@" ;;
+  *) echo "usage: $0 {write|check [--no-canned]|vpn}" >&2; exit 2 ;;
 esac

@@ -2,6 +2,15 @@
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 // Command loadgen drives concurrent MCP tool calls at a configured MCP
 // server for a fixed duration, then reports throughput, error rate, and
@@ -228,10 +237,16 @@ func clientLoop(ctx context.Context, session *mcp.ClientSession, j clientJob) []
 	warmupEnd := loopStart.Add(j.warmup)
 	deadline := warmupEnd.Add(j.duration)
 
-	// Estimate sample count so we don't repeatedly resize the slice. Assume
-	// ~1ms per call as an optimistic upper bound on cardinality; over-alloc
-	// is cheap, mid-run realloc is not.
-	estimate := int(j.duration.Seconds()*1000) + 64
+	// Pre-size the sample slice so the steady state isn't punctuated by
+	// reallocs. Assume ~1ms per call as an optimistic upper bound on
+	// cardinality, then cap it: the estimate scales with -duration but the
+	// allocation is paid per client, so an uncapped 60s run at the -clients
+	// 2000 this suite advertises would reserve ~2.9 GB before the first call
+	// fires. Past the cap, append's doubling costs a handful of copies —
+	// cheaper than an OOM in the process that is supposed to be measuring
+	// someone else's memory.
+	const maxPrealloc = 4096
+	estimate := min(int(j.duration.Seconds()*1000)+64, maxPrealloc)
 	out := make([]sample, 0, estimate)
 
 	var (

@@ -27,7 +27,8 @@
 #                   overload signals and exercises the MCP retry chain.
 #                   Only 429/500/502/503/504 are accepted (retryable codes).
 #   BROKER_ALIAS fidelity -broker  (default broker-01; must exist in broker-config.mock.yaml)
-#   VPN          fidelity -vpn     (default vpn_1; must match how goldens were captured)
+#   VPN          fidelity -vpn     (default: the VPN recorded in fixtures.manifest
+#                at capture time — set this only to override that)
 #   BROKER_USERNAME / BROKER_PASSWORD  (default perf/perf; mock accepts anything non-empty)
 
 set -euo pipefail
@@ -45,16 +46,18 @@ LATENCY_MS="${LATENCY_MS:-0}"
 ERROR_RATE="${ERROR_RATE:-0}"
 ERROR_COUNT="${ERROR_COUNT:-0}"
 ERROR_STATUSES="${ERROR_STATUSES:-503:70,429:20,500:10}"
-# Fidelity gate targets — must match how the goldens were captured (see
-# regen-golden.sh). Defaults track the current fidelity/golden/*.json.
+# Fidelity gate targets. BROKER_ALIAS only picks which mock broker MCP dials
+# (the mock replays the same canned bytes on every port), so it defaults to a
+# mock alias. VPN must match the capture and is resolved from
+# fixtures.manifest after the preflight below — hardcoding a default here is
+# how it drifted from regen-golden.sh's.
 BROKER_ALIAS="${BROKER_ALIAS:-broker-01}"
-VPN="${VPN:-vpn_1}"
 export BROKER_USERNAME="${BROKER_USERNAME:-perf}"
 export BROKER_PASSWORD="${BROKER_PASSWORD:-perf}"
 # Single-host: MCP reaches the mock over loopback.
 export MOCK_HOST="${MOCK_HOST:-localhost}"
 
-required_bins=(mock-semp fidelity memsampler loadgen)
+required_bins=(mock-semp fidelity memsampler loadgen mcp-server)
 for b in "${required_bins[@]}"; do
   if [[ ! -x "$bin/$b" ]]; then
     echo "missing $bin/$b — run ./build.sh first" >&2
@@ -75,6 +78,15 @@ fi
 # fidelity gate in a way that reads like a regression.
 echo "== 0. fixture preflight"
 "$here/fixtures-manifest.sh" check
+
+# Resolve the fidelity VPN from the capture's own provenance so the gate can't
+# ask for a VPN the goldens were never captured against. An explicit VPN= in
+# the environment still wins.
+VPN="${VPN:-$("$here/fixtures-manifest.sh" vpn)}"
+if [[ -z "$VPN" || "$VPN" == "unknown" ]]; then
+  echo "fixtures.manifest records no VPN — recapture with ./regen-golden.sh, or pass VPN=<name> explicitly." >&2
+  exit 2
+fi
 
 mock_pid= mcp_pid= mem_pid= top_pid=
 # kill_tree signals a pid (and its process group if reachable) and waits for
@@ -187,7 +199,10 @@ arm_injection() {
 }
 
 echo "== 2. MCP server on :9090 (config: broker-config.mock.yaml)"
-setsid bash -c "cd '$repo_root' && CONFIG_FILE='$here/broker-config.mock.yaml' exec go run ./cmd/server" \
+# Exec the prebuilt binary, not `go run`: `go run` runs the compiled program
+# as a child process, so $mcp_pid would be the toolchain wrapper and the
+# memsampler in step 4 would sample that instead of MCP.
+setsid bash -c "cd '$repo_root' && CONFIG_FILE='$here/broker-config.mock.yaml' exec '$bin/mcp-server'" \
   >"$runs/mcp.log" 2>&1 &
 mcp_pid=$!
 wait_for_http "http://localhost:9090/health" mcp-server
