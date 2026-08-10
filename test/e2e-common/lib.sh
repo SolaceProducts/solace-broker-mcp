@@ -671,12 +671,17 @@ assert_contains() {
     local msg="${3:-Response should contain '$needle'}"
     # -F: treat needle as a fixed string, not a regex. Without this, metacharacters
     # (. * [ ] etc.) in tool responses or expected values silently change matching.
-    if echo "$haystack" | grep -qF "$needle"; then
+    # Herestring, not `echo … | grep -qF`: echo emits one write() per line, so on a
+    # multi-line or >64KB haystack grep -q can match and exit with writes still
+    # pending, and the writer's SIGPIPE (141) becomes the pipeline's status under
+    # pipefail — inverting the result. Here that would be a spurious failure; in
+    # assert_not_contains below, a silent pass.
+    if grep -qF "$needle" <<<"$haystack"; then
         return 0
     else
         log_fail "$msg"
         log_fail "  Expected to find: $needle"
-        log_fail "  In: $(echo "$haystack" | head -5)"
+        log_fail "  In: $(head -5 <<<"$haystack")"
         return 1
     fi
 }
@@ -685,7 +690,9 @@ assert_not_contains() {
     local haystack="$1"
     local needle="$2"
     local msg="${3:-Response should NOT contain '$needle'}"
-    if echo "$haystack" | grep -qF "$needle"; then
+    # Herestring for the reason given in assert_contains above — load-bearing here,
+    # since the inverted result is a silent pass on a guard (e.g. credential leak).
+    if grep -qF "$needle" <<<"$haystack"; then
         log_fail "$msg"
         return 1
     fi
