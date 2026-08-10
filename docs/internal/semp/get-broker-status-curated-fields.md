@@ -195,7 +195,7 @@ On an appliance, the same envelope additionally carries:
 {
   "hardwareDetails": {
     "platform": "Solace Event Broker 3560",
-    "chassisSerial": "S009001344",
+    "chassisSerial": "TESTSERIAL-CHASSIS-01",
     "biosVersion": "SE5C600.86B.02.05.0004.051120151007",
     "cpuCount": 2,
     "cpuModel": "Intel(R) Xeon(R) CPU E5-2630 v2 @ 2.60GHz",
@@ -205,14 +205,14 @@ On an appliance, the same envelope additionally carries:
       "operationalCount": 2
     },
     "disks": [
-      { "id": 1, "deviceModel": "INTEL SSDSC2BB120G4", "serial": "PHWL701000HH120LGN" },
-      { "id": 2, "deviceModel": "INTEL SSDSC2BB120G4", "serial": "PHWL70100090120LGN" }
+      { "id": 1, "deviceModel": "INTEL SSDSC2BB120G4", "serial": "TESTSERIAL-DISK-01" },
+      { "id": 2, "deviceModel": "INTEL SSDSC2BB120G4", "serial": "TESTSERIAL-DISK-02" }
     ],
     "slots": [
-      { "slot": "1/3", "blade": "Assured Delivery Blade", "productNumber": "ADB-04210M-01-A", "serial": "P004045330", "operationalState": "up" },
-      { "slot": "1/4", "blade": "Topic Routing Blade",     "productNumber": "TRB-000000-02-A", "serial": "P004048935" },
-      { "slot": "1/6", "blade": "Network Acceleration Blade", "productNumber": "NAB-0210EM-04-A", "serial": "P004047778" },
-      { "slot": "1/7", "blade": "Host Bus Adapter Blade",  "productNumber": "HBA-0208FC-02-A", "serial": "BFD1450B68835" }
+      { "slot": "1/3", "blade": "Assured Delivery Blade", "productNumber": "ADB-04210M-01-A", "serial": "TESTSERIAL-ADB-01", "operationalState": "up" },
+      { "slot": "1/4", "blade": "Topic Routing Blade",     "productNumber": "TRB-000000-02-A", "serial": "TESTSERIAL-TRB-01" },
+      { "slot": "1/6", "blade": "Network Acceleration Blade", "productNumber": "NAB-0210EM-04-A", "serial": "TESTSERIAL-NAB-01" },
+      { "slot": "1/7", "blade": "Host Bus Adapter Blade",  "productNumber": "HBA-0208FC-02-A", "serial": "TESTSERIAL-HBA-01" }
     ]
   }
 }

@@ -58,7 +58,7 @@ func TestHardwareResponse_RoundTrip(t *testing.T) {
 	// envelope.
 	wantStr := map[string]string{
 		"platform":      "Solace Event Broker 3560",
-		"chassisSerial": "S009001344",
+		"chassisSerial": "TESTSERIAL-CHASSIS-01",
 		"biosVersion":   "SE5C600.86B.02.05.0004.051120151007",
 	}
 	for k, want := range wantStr {
@@ -154,9 +154,9 @@ func TestIsApplianceFromDescription(t *testing.T) {
 		// the heuristic's generation-agnostic property — any non-software
 		// description should classify as appliance regardless of the model
 		// number, so a future SKU works without code changes.
-		{"appliance 3560", "Solace Event Broker 3560 Version 100.0main.0.7305", true},
-		{"appliance generic placeholder SKU", "Solace Event Broker XXXX Version 100.0main.0.7305", true},
-		{"software enterprise", "Solace Event Broker Software Enterprise Version 100.0main.0.8344", false},
+		{"appliance 3560", "Solace Event Broker 3560 Version 10.25.1.10", true},
+		{"appliance generic placeholder SKU", "Solace Event Broker XXXX Version 10.25.1.10", true},
+		{"software enterprise", "Solace Event Broker Software Enterprise Version 10.25.1.20", false},
 		{"pubsub software standard", "Solace PubSub+ Software Standard Version 10.25.0.217", false},
 		// Defensive: an empty/whitespace-only description must skip the
 		// hardware call rather than guess.
