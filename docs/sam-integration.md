@@ -1,10 +1,10 @@
-# Connecting solace-broker-mcp to Solace Agent Mesh (SAM)
+# Connecting solace-broker-mcp to Solace Agent Mesh
 
-This guide shows how to integrate this MCP server with SAM. For general MCP support in SAM — connection types, tool filtering, TLS/SSL config, environment variable passing — see the upstream [MCP Integration tutorial](https://github.com/SolaceLabs/solace-agent-mesh/blob/main/docs/docs/documentation/developing/tutorials/mcp-integration.md).
+This guide shows how to integrate this MCP server with Agent Mesh. For general MCP support in Agent Mesh — connection types, tool filtering, TLS/SSL config, environment variable passing — see the upstream [MCP Integration tutorial](https://github.com/SolaceLabs/solace-agent-mesh/blob/main/docs/docs/documentation/developing/tutorials/mcp-integration.md).
 
 ## Prerequisites
 
-- A working SAM project (`sam init` complete, agents start cleanly)
+- A working Agent Mesh project (`sam init` complete, agents start cleanly)
 - Ability to run this MCP server locally with configured `broker-config.yaml` and `.env` files. For instructions, see [Quickstart](../README.md#quickstart)
 
 ## Steps
@@ -19,7 +19,7 @@ mcp_client_auth:
 
 For production, use `mode: oauth` instead — see [authentication.md](authentication.md).
 
-**2. Create the SAM agent** — `<sam-project>/configs/agents/solace_broker_agent.yaml`:
+**2. Create the Agent Mesh agent** — `<sam-project>/configs/agents/solace_broker_agent.yaml`:
 
 ```yaml
 !include ../shared_config.yaml
@@ -61,7 +61,7 @@ apps:
         request_timeout_seconds: 60
 ```
 
-**3. Add the matching token to the SAM `.env` file**:
+**3. Add the matching token to the Agent Mesh `.env` file**:
 
 ```env
 SOLACE_BROKER_MCP_URL="http://localhost:9090/mcp"
@@ -78,15 +78,15 @@ go run ./cmd/server
 sam run
 ```
 
-**5. Verify** — the SAM logs should include:
+**5. Verify** — the Agent Mesh logs should include:
 
 ```
 Initialized MCPToolset for server: url='http://localhost:9090/mcp'
-Agent card tool manifest populated with 23 tools.
+Agent card tool manifest populated with 24 tools.
 Registered new agent 'SolaceBrokerAgent' in registry.
 ```
 
-Open the SAM web UI (`http://localhost:8000`) and ask the orchestrator a broker-related question — the orchestrator delegates to the `SolaceBrokerAgent`, which calls the MCP tools.
+Open the Agent Mesh web UI (`http://localhost:8000`) and ask the orchestrator a broker-related question — the orchestrator delegates to the `SolaceBrokerAgent`, which calls the MCP tools.
 
 ## Authentication Chain
 
@@ -94,11 +94,11 @@ Open the SAM web UI (`http://localhost:8000`) and ask the orchestrator a broker-
 SAM agent ─(Bearer SOLACE_BROKER_MCP_TOKEN)→ MCP server ─(basic BROKER_USERNAME/PASSWORD)→ Solace event broker
 ```
 
-The bearer token in the SAM `.env` and the `dev_token` in the MCP server configuration must be identical.
+The bearer token in the Agent Mesh `.env` and the `dev_token` in the MCP server configuration must be identical.
 
-## Additional SAM MCP Configuration
+## Additional Agent Mesh MCP Configuration
 
-The following topics are covered in the [SAM MCP Integration tutorial](https://github.com/SolaceLabs/solace-agent-mesh/blob/main/docs/docs/documentation/developing/tutorials/mcp-integration.md):
+The following topics are covered in the [Agent Mesh MCP Integration tutorial](https://github.com/SolaceLabs/solace-agent-mesh/blob/main/docs/docs/documentation/developing/tutorials/mcp-integration.md):
 
 - Other connection types (`stdio`, `sse`, Docker)
 - Tool filtering (`tool_name`, `allow_list`, `deny_list`)

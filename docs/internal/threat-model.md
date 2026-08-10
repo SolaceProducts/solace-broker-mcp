@@ -1,7 +1,7 @@
 # Threat Model — Solace Broker MCP Server
 
-This is a STRIDE threat model over the trust boundaries in
-[`architecture.md`](architecture.md). It exists because threat-modelling a
+This document applies STRIDE to the trust boundaries in
+[`architecture.md`](architecture.md). It exists because threat-modeling a
 design and recording it is a PRODUCTS-tier requirement on the
 [Open Source Solace Software Checklist](https://sol-jira.atlassian.net/wiki/spaces/DC/pages/6616154181/Open+Source+Solace+Software+Checklist),
 and this repository is a SolaceProducts repo. SOL-152900.
@@ -101,7 +101,7 @@ circuit breaker on that path.
 | Threat (STRIDE) | Mitigation | Status |
 |---|---|---|
 | Plaintext secret typed directly into the YAML config, no `${VAR}` indirection (Info Disclosure) | None — `${VAR}` substitution is a documented convention, not enforced by `validate()` (`internal/config/config.go:1240-1297`) | **No mitigation — accepted risk** |
-| Config-level credential structs (`AuthConfig`, `BrokerConfig`, etc.) logged raw (Info Disclosure) | `LogValue()` implemented on every credential-bearing config type, pinned by CI unit tests (`internal/config/config.go:429,441,457,272,245,263`; tests at `config_test.go:1360,1388,1419`) | Mitigated |
+| Config-level credential structs (`AuthConfig`, `BrokerConfig`, and so on) logged raw (Info Disclosure) | `LogValue()` implemented on every credential-bearing config type, pinned by CI unit tests (`internal/config/config.go:429,441,457,272,245,263`; tests at `config_test.go:1360,1388,1419`) | Mitigated |
 | `BasicAuthenticator`/`BearerAuthenticator` logged raw (Info Disclosure) | Documented rule (secure-logging-rules.md), not implemented as `LogValuer` on these two types (`internal/semp/auth/basic.go:13-17`, `bearer.go:12-14`) | Partial — backstop only, see next row |
 | Same, as a backstop | Global `ReplaceAttr` redacts any attr key matching `password/token/secret/authorization/credential/api_key/private_key` (`cmd/server/main.go:58-90`) | Mitigated as defense-in-depth, not as the documented control |
 | A newly-added credential-bearing struct ships with no `LogValuer` and no test (Info Disclosure) | No linter or CI gate enforces the secure-logging rules generally — only `/check-logs`, a manual developer skill | **No mitigation — accepted risk, developer-discipline-dependent** |

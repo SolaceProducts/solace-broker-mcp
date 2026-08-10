@@ -1,8 +1,8 @@
 # Tools
 
 The complete tools reference lives in **[docs/tools-reference.md](docs/tools-reference.md)** —
-per-tool parameters, output schema, and example invocations for all 21 tools
-(17 read-only + 4 action tools).
+per-tool parameters, output schema, and example invocations for all 40 tools
+(24 read-only + 16 write tools).
 
 Quick links:
 

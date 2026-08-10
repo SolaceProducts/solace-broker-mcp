@@ -34,8 +34,8 @@ each name means.
 ### Implementation status
 
 This schema is published **ahead of the code** so the names can be reviewed before they
-freeze at GA. Each capability is tagged with its status as of this draft, and the capability
-headings below carry the same tag:
+freeze at GA. Each capability is tagged with its status as of this draft, and the following
+capability headings carry the same tag:
 
 | Capability | Status | Notes |
 |---|---|---|
@@ -79,7 +79,7 @@ not rename what is already there.
 | Metric units | Base units, per Prometheus convention. Durations are in **seconds** (`_seconds`); counters end in `_total`. |
 | Audit units | Durations are in **milliseconds** (`duration_ms`). This differs from metrics on purpose: metrics follow Prometheus base units, audit follows common SIEM JSON convention. |
 | Timestamps | RFC 3339, UTC. |
-| Naming basis | Where OpenTelemetry publishes a semantic convention, we adopt it and translate `.` to `_` for Prometheus (for example `http.request.method` becomes `http_request_method`). Where OTel has no convention, we use a documented Solace-specific name. Each name below is tagged **OTel** or **Solace**. |
+| Naming basis | Where OpenTelemetry publishes a semantic convention, we adopt it and translate `.` to `_` for Prometheus (for example `http.request.method` becomes `http_request_method`). Where OTel has no convention, we use a documented Solace-specific name. Each name in this document is tagged **OTel** or **Solace**. |
 | Cardinality | Every metric name and label key is documented here. A CI check that fails the build on any undocumented name or label key is planned for GA; today the catalog is maintained by review. Label values are drawn from finite domains (configured brokers, SEMP operations, HTTP status codes, the retry cap), so series cardinality stays bounded. No label carries a free-text or unbounded value. |
 | Redaction | Credentials, tokens, and raw tool arguments are never written to any signal. |
 
@@ -102,7 +102,7 @@ avoid. Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_
 ## Metrics — [Planned]
 
 > _Status: **[Planned]**. The `/metrics` endpoint and instruments are not yet wired in the
-> build; the names, types, and labels below are the proposal under review._
+> build; the following names, types, and labels are the proposal under review._
 
 All metrics are served on the `/metrics` endpoint in Prometheus text exposition
 format, behind `OBS_METRICS_ENABLED`. One exception: whether the authentication-failure
@@ -173,7 +173,7 @@ recorded per retry attempt so you can see retry storms and per-broker latency.
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
-| `mcp_semp_request_total` | Counter | `http_request_method`, `http_response_status_code`, `server_address`, `broker`, `api`, `operation`, `attempt` | Mixed (see below) |
+| `mcp_semp_request_total` | Counter | `http_request_method`, `http_response_status_code`, `server_address`, `broker`, `api`, `operation`, `attempt` | Mixed (see the following list) |
 | `mcp_semp_request_duration_seconds` | Histogram | same label set | Mixed |
 
 - **OTel** labels (adopted from the OpenTelemetry HTTP semantic conventions,
@@ -314,11 +314,11 @@ present, once the metrics endpoint is wired, for diagnosing memory pressure and 
 ## Audit trail — [Planned]
 
 > _Status: **[Planned]**. Only the capability gate exists today; audit-event emission lands in
-> a later story. The fields and delivery behavior below are the proposed schema._
+> a later story. The following fields and delivery behavior are the proposed schema._
 
 One JSON event is emitted per **state-changing** operation (for example `disconnect-client`,
 `delete-queue`, broker shutdown), at completion, with the outcome known. Read-only calls are
-not audited. Authentication lifecycle events are also emitted (see below). The stream is
+not audited. Authentication lifecycle events are also emitted (see [Authentication events](#authentication-events)). The stream is
 enabled with `OBS_AUDIT_LOG_ENABLED`.
 
 Every event carries a top-level `"event": "audit"` tag so your log shipper can route the
@@ -329,7 +329,7 @@ audit sub-stream to a dedicated SIEM index.
 | Field | Meaning | Type |
 |---|---|---|
 | `event` | Routing tag, always `audit` | string |
-| `audit_event_type` | Which kind of audit record this is; discriminate on this, not on `event` | string (closed set, below) |
+| `audit_event_type` | Which kind of audit record this is; discriminate on this, not on `event` | string (closed set; see following paragraph) |
 | `timestamp_utc` | When the event was recorded | RFC 3339 UTC |
 | `started_at_utc` | When the call began | RFC 3339 UTC |
 | `duration_ms` | How long the call took | integer (ms) |
@@ -355,7 +355,7 @@ can tell record kinds apart from field presence alone. `event`, `audit_event_typ
 |---|---|---|---|---|---|---|
 | `operation` | yes | on `error` only | — | yes | yes | yes |
 | `auth_success` | — | — | — | — | — | yes |
-| `auth_failure` | — | — | yes | — | — | see below |
+| `auth_failure` | — | — | yes | — | — | see following note |
 | `authz_denied` | — | — | yes | `tool` only | — | yes |
 | `broker_auth_retry` | `success` or `error` | — | — | — | yes | yes |
 | `audit_drop` | — | — | — | — | — | — |
@@ -364,7 +364,7 @@ can tell record kinds apart from field presence alone. `event`, `audit_event_typ
   happened, so one predicate does the job of two.
 - **On `auth_failure` the principal is unknown by definition**, since authentication is what
   failed. `principal.sub` and `agent_client_id` appear only when the token parsed far enough to
-  yield them: an expired or audience-mismatched token will, a malformed or absent one will not.
+  yield them: an expired or audience-mismatched token does, a malformed or absent one does not.
 - **`audit_drop` is a notice, not an outcome.** It reports that a record could not be written,
   and carries only the five common fields.
 
@@ -377,7 +377,7 @@ with a dot in it. A record carries `"principal": { "sub": "..." }`. It is the sc
 nested field; every other field is flat and snake_case. The nesting is deliberate: it leaves
 room for a second member without renaming a field, which is what makes deferring
 `preferred_username` (open item 3) a reversible choice. Collectors that flatten nested
-objects will render it as `principal.sub` regardless, which is why the tables above use the
+objects render it as `principal.sub` regardless, which is why the preceding tables use the
 dotted form.
 
 **`principal` identity.** The audit event records only `principal.sub`, the opaque OIDC
@@ -397,7 +397,7 @@ stored.
 ### Authentication events
 
 Alongside destructive-operation events, the audit stream records authentication lifecycle
-events. The names below are distinct **event types**, not values of the shared `outcome`
+events. The following names are distinct **event types**, not values of the shared `outcome`
 field:
 
 - `auth_success`, carrying `principal` and `agent_client_id`.
@@ -407,7 +407,7 @@ field:
 This keeps failed **authentication** a distinct, queryable signal rather than folding it
 into a generic error, so a query like "show me every rejected credential" stays clean.
 
-**Authorization has its own record type: `authz_denied`.** The three event types above cover
+**Authorization has its own record type: `authz_denied`.** The three preceding event types cover
 authentication, meaning who proved who they were and who failed to. Authorization is the
 separate question of whether an authenticated caller was permitted the tool they asked for,
 and a denial emits `audit_event_type: authz_denied` carrying `tool`, the principal, and
@@ -457,8 +457,8 @@ which you own.** The server does not itself persist or sign events.
 
 ## Distributed tracing — [Planned]
 
-> _Status: **[Planned]**. OTLP export is not yet wired; the spans, attributes, and export
-> protocol below are the proposed design._
+> _Status: **[Planned]**. OTLP export is not yet wired; the following spans, attributes, and
+> export protocol are the proposed design._
 
 OpenTelemetry spans at each hop of a request, exported over OTLP, enabled with
 `OBS_TRACING_ENABLED` (never automatic; you opt in after deploying a collector).
@@ -482,7 +482,8 @@ composite executor, and each SEMP attempt. Named spans:
 - `semp.attempt`: one per SEMP request attempt.
 
 Other span names follow the OpenTelemetry HTTP semantic conventions where applicable. Span
-names beyond `semp.attempt`, and span kinds, are open items in this review (see below).
+names beyond `semp.attempt`, and span kinds, are open items in this review (see
+[Open items for this review](#open-items-for-this-review), item 4).
 
 ### Span attributes
 
@@ -500,7 +501,7 @@ audit record**, which is the point of a single vocabulary: filter a dashboard by
 the SIEM unchanged, with no translation table.
 
 **On the span, the key is `error_type`, not the OTel-conventional `error.type`.** This is a
-deliberate exception to the naming rule above, taken so the key is identical across metrics,
+deliberate exception to the preceding naming rule, taken so the key is identical across metrics,
 logs, audit, and spans and the four surfaces cannot disagree about why a call failed. The
 values match OTel's `error.type` semantics. If your trace backend or trace-based SLOs key off
 the dotted `error.type`, tell us in your feedback, because this is the kind of thing that is
@@ -535,7 +536,7 @@ they arrive differently on each of the two metric egresses:
 - **OTLP push.** Resource attributes are **not promoted to labels by default**. If you ingest
   our OTLP metrics straight into Prometheus, set `promote_resource_attributes` to include
   `service.name`, `service.instance.id`, `deployment.environment`, and `cloud.region`, or the
-  same dashboard will show empty variable dropdowns.
+  same dashboard will show empty variable drop-down lists.
 
 ---
 
@@ -547,8 +548,8 @@ One ID threads a request from the AI agent, through the server and every retry, 
 broker, and back. Today it anchors your logs and the broker's own log entry on the same
 call; once traces and the audit trail ship, it is the key that joins those to them.
 
-This section describes behavior that is implemented and on by default, unlike the metric,
-audit, and trace schemas above.
+This section describes behavior that is implemented and on by default, unlike the preceding
+metric, audit, and trace schemas.
 
 - **Inbound**, in priority order: the W3C `traceparent` header (its trace-id is used); then
   a legacy `X-Correlation-ID` header; otherwise the server generates a time-sortable UUIDv7.
@@ -622,7 +623,8 @@ Notes:
   whose closed `reason` set (`missing_claim`, `not_permitted`) is authorization throughout.
   A denied call produces no `operation` record at all.
 - **Load-shedding / saturation is not an `outcome` value** either; it is planned as a
-  separate metric in a later release (see below).
+  separate metric in a later release (see
+  [Planned for a later release](#planned-for-a-later-release-not-frozen-in-this-review)).
 
 ---
 

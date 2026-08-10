@@ -63,7 +63,7 @@ enumerate inner fields — the authoritative field list per tool is the `select`
 set documented under each tool's **Returns**.
 
 Five tools depart from the generic envelope with a strict, field-level output
-schema: `get-discard-stats` and the four action tools (documented inline below).
+schema: `get-discard-stats` and the four action tools (documented inline in this reference).
 
 ### Errors
 
@@ -111,7 +111,7 @@ flag and documented under [Management](#management-config-api).
 | Actions | [`disconnect-client`](#disconnect-client), [`clear-client-stats`](#clear-client-stats), [`delete-queue-messages`](#delete-queue-messages), [`clear-queue-stats`](#clear-queue-stats) | write |
 | Management | [`create-message-vpn`](#create-message-vpn), [`update-message-vpn`](#update-message-vpn), [`delete-message-vpn`](#delete-message-vpn), [`create-queue`](#create-queue), [`update-queue`](#update-queue), [`delete-queue`](#delete-queue), [`create-topic-endpoint`](#create-topic-endpoint), [`update-topic-endpoint`](#update-topic-endpoint), [`delete-topic-endpoint`](#delete-topic-endpoint), [`create-rdp`](#create-rdp), [`update-rdp`](#update-rdp), [`delete-rdp`](#delete-rdp) | write |
 
-Example invocations below show the `arguments` object of an MCP `tools/call`
+The following example invocations show the `arguments` object of an MCP `tools/call`
 request. A full request wraps it: `{"method":"tools/call","params":{"name":"<tool>","arguments":{...}}}`.
 
 ---
@@ -154,7 +154,7 @@ indexed here — a `monitor/...` operation returns `unknown operation`.
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `operation` | string | yes | SEMPv2 operation identifier in `<specType>/<operationId>` form, e.g. `config/createMsgVpnQueue`. `specType` must be `config` or `action`. Take the value from the target write tool's description. |
+| `operation` | string | yes | SEMPv2 operation identifier in `<specType>/<operationId>` form, for example `config/createMsgVpnQueue`. `specType` must be `config` or `action`. Take the value from the target write tool's description. |
 | `view` | string | no | `trimmed` (default) — compact per-attribute list. `raw` — full OpenAPI definition verbatim. |
 
 **Returns (`trimmed`):** `{ "operation", "method", "definition", "attributes": [...] }` where each attribute carries `name`, `type`, `description`, `enum`, `default`, `pattern`, `maxLength`, `minimum`, `maximum`, `writableOnCreate`, `writableOnUpdate`, and any applicable flags (`requiredForCreate`, `identifying`, `writeOnly`, `sensitive`, `deprecated`, `autoDisable`, `requiresDisable`). Object-typed attributes backed by a `$ref` carry a nested `properties` list instead of writability flags.
@@ -162,7 +162,7 @@ indexed here — a `monitor/...` operation returns `unknown operation`.
 **Typical invocation.** Most calls happen unprompted. The eight
 `create-*`/`update-*` write tool descriptions each point at
 `describe-semp-schema` with the relevant operation, so an agent planning a
-write will call this tool without the user asking for it — an ordinary request
+write operation calls this tool without the user asking for it — an ordinary request
 like *"Create a queue named orders with a spool quota of 500 MB"* is what
 triggers it in practice. If you are watching a trace and see
 `describe-semp-schema` fire immediately before a `create-*` or `update-*`
@@ -815,8 +815,7 @@ Annotations: `readOnly: false`, `destructiveHint: true`, `idempotentHint: false`
 { "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" }
 ```
 
-**Example request:** "Disconnect consumer-7 on the default VPN." (The agent will
-ask you to confirm before acting.)
+**Example request:** "Disconnect consumer-7 on the default VPN." (The tool description instructs the agent to confirm before acting.)
 
 ### clear-client-stats
 
@@ -858,8 +857,7 @@ Annotations: `readOnly: false`, `destructiveHint: true`, `idempotentHint: false`
 { "broker": "prod-broker", "msgVpnName": "default", "queueName": "dead-letter.q" }
 ```
 
-**Example request:** "Drain dead-letter.q on the default VPN." (The agent will ask
-you to confirm before acting.)
+**Example request:** "Drain dead-letter.q on the default VPN." (The tool description instructs the agent to confirm before acting.)
 
 ### clear-queue-stats
 
@@ -885,7 +883,7 @@ Annotations: `readOnly: false`, `destructiveHint: false`, `idempotentHint: true`
 
 Create, update, and delete SEMPv2 **config** objects — Message VPNs, queues,
 topic endpoints, and REST delivery points. Gated behind `enable_write_tools`
-(off by default), the same as the action tools above.
+(off by default), the same as the preceding action tools.
 
 - `create-*` is **additive** (not destructive); config attributes you omit take
   the broker default.
@@ -919,7 +917,7 @@ Annotations: `readOnly: false`, `destructive: false`.
 |---|---|---|---|
 | `broker` | string | yes | Target broker alias. |
 | `msgVpnName` | string | yes | Name of the VPN to create. |
-| `msgVpnConfig` | object | no | MsgVpn attributes (e.g. `enabled`, `maxConnectionCount`, `maxMsgSpoolUsage`). Omitted attributes take broker defaults. |
+| `msgVpnConfig` | object | no | MsgVpn attributes (for example, `enabled`, `maxConnectionCount`, `maxMsgSpoolUsage`). Omitted attributes take broker defaults. |
 
 **Returns:** step-keyed envelope, step `createVpn`.
 
@@ -927,7 +925,7 @@ Annotations: `readOnly: false`, `destructive: false`.
 { "broker": "prod-broker", "msgVpnName": "orders-vpn", "msgVpnConfig": { "enabled": true, "maxConnectionCount": 100 } }
 ```
 
-**Example request:** "Create a VPN called orders-vpn on prod-broker, enabled, with 100 max connections." (The agent will ask you to confirm before acting.)
+**Example request:** "Create a VPN called orders-vpn on prod-broker, enabled, with 100 max connections." (The tool description instructs the agent to confirm before acting.)
 
 ### update-message-vpn
 
@@ -948,7 +946,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 { "broker": "prod-broker", "msgVpnName": "orders-vpn", "msgVpnConfig": { "enabled": false } }
 ```
 
-**Example request:** "Disable the orders-vpn VPN on prod-broker." (The agent will ask you to confirm before acting.)
+**Example request:** "Disable the orders-vpn VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### delete-message-vpn
 
@@ -968,7 +966,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 { "broker": "prod-broker", "msgVpnName": "orders-vpn" }
 ```
 
-**Example request:** "Delete the orders-vpn VPN on prod-broker." (The agent will ask you to confirm before acting.)
+**Example request:** "Delete the orders-vpn VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### create-queue
 
@@ -982,7 +980,7 @@ Annotations: `readOnly: false`, `destructive: false`.
 | `broker` | string | yes | Target broker alias. |
 | `msgVpnName` | string | yes | The VPN to create the queue in. |
 | `queueName` | string | yes | Name of the queue to create. |
-| `queueConfig` | object | no | Queue attributes (e.g. `accessType`, `egressEnabled`, `ingressEnabled`, `maxMsgSpoolUsage`, `permission`). Omitted attributes take broker defaults. |
+| `queueConfig` | object | no | Queue attributes (for example, `accessType`, `egressEnabled`, `ingressEnabled`, `maxMsgSpoolUsage`, `permission`). Omitted attributes take broker defaults. |
 
 **Returns:** step-keyed envelope, step `createQueue`.
 
@@ -990,7 +988,7 @@ Annotations: `readOnly: false`, `destructive: false`.
 { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "queueConfig": { "ingressEnabled": true, "egressEnabled": true } }
 ```
 
-**Example request:** "Create a queue orders.q in the default VPN on prod-broker." (The agent will ask you to confirm before acting.)
+**Example request:** "Create a queue orders.q in the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### update-queue
 
@@ -1013,7 +1011,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "queueConfig": { "egressEnabled": false } }
 ```
 
-**Example request:** "Turn off egress on orders.q in the default VPN." (The agent will ask you to confirm before acting.)
+**Example request:** "Turn off egress on orders.q in the default VPN." (The tool description instructs the agent to confirm before acting.)
 
 ### delete-queue
 
@@ -1033,7 +1031,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q" }
 ```
 
-**Example request:** "Delete orders.q from the default VPN on prod-broker." (The agent will ask you to confirm before acting.)
+**Example request:** "Delete orders.q from the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### create-topic-endpoint
 
@@ -1047,7 +1045,7 @@ Annotations: `readOnly: false`, `destructive: false`.
 | `broker` | string | yes | Target broker alias. |
 | `msgVpnName` | string | yes | The VPN to create the topic endpoint in. |
 | `topicEndpointName` | string | yes | Name of the topic endpoint to create. |
-| `topicEndpointConfig` | object | no | TopicEndpoint attributes (e.g. `accessType`, `egressEnabled`, `ingressEnabled`, `maxMsgSpoolUsage`, `permission`). Omitted attributes take broker defaults. |
+| `topicEndpointConfig` | object | no | TopicEndpoint attributes (for example, `accessType`, `egressEnabled`, `ingressEnabled`, `maxMsgSpoolUsage`, `permission`). Omitted attributes take broker defaults. |
 
 **Returns:** step-keyed envelope, step `createTopicEndpoint`.
 
@@ -1055,7 +1053,7 @@ Annotations: `readOnly: false`, `destructive: false`.
 { "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te", "topicEndpointConfig": { "ingressEnabled": true, "egressEnabled": true } }
 ```
 
-**Example request:** "Create a topic endpoint orders.te in the default VPN on prod-broker." (The agent will ask you to confirm before acting.)
+**Example request:** "Create a topic endpoint orders.te in the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### update-topic-endpoint
 
@@ -1078,7 +1076,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 { "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te", "topicEndpointConfig": { "egressEnabled": false } }
 ```
 
-**Example request:** "Turn off egress on the orders.te topic endpoint in the default VPN." (The agent will ask you to confirm before acting.)
+**Example request:** "Turn off egress on the orders.te topic endpoint in the default VPN." (The tool description instructs the agent to confirm before acting.)
 
 ### delete-topic-endpoint
 
@@ -1099,7 +1097,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 { "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te" }
 ```
 
-**Example request:** "Delete the orders.te topic endpoint from the default VPN." (The agent will ask you to confirm before acting.)
+**Example request:** "Delete the orders.te topic endpoint from the default VPN." (The tool description instructs the agent to confirm before acting.)
 
 ### create-rdp
 
@@ -1115,7 +1113,7 @@ Annotations: `readOnly: false`, `destructiveHint: false`.
 | `broker` | string | yes | Target broker alias. |
 | `msgVpnName` | string | yes | The Message VPN to create the RDP in. |
 | `restDeliveryPointName` | string | yes | Name of the RDP to create. |
-| `rdpConfig` | object | no | RestDeliveryPoint attributes (e.g. `enabled`, `clientProfileName`, `service`, `vendor`). Omitted attributes take broker defaults. |
+| `rdpConfig` | object | no | RestDeliveryPoint attributes (for example, `enabled`, `clientProfileName`, `service`, `vendor`). Omitted attributes take broker defaults. |
 
 **Returns:** step-keyed envelope, step `createRdp`.
 
@@ -1123,7 +1121,7 @@ Annotations: `readOnly: false`, `destructiveHint: false`.
 { "broker": "prod-broker", "msgVpnName": "default", "restDeliveryPointName": "webhook-rdp", "rdpConfig": { "clientProfileName": "default" } }
 ```
 
-**Example request:** "Create an RDP called webhook-rdp in the default VPN on prod-broker." (The agent will ask you to confirm before acting.)
+**Example request:** "Create an RDP called webhook-rdp in the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### update-rdp
 
@@ -1145,7 +1143,7 @@ Annotations: `readOnly: false`, `destructiveHint: true`.
 { "broker": "prod-broker", "msgVpnName": "default", "restDeliveryPointName": "webhook-rdp", "rdpConfig": { "enabled": true } }
 ```
 
-**Example request:** "Enable the webhook-rdp RDP on the default VPN." (The agent will ask you to confirm before acting.)
+**Example request:** "Enable the webhook-rdp RDP on the default VPN." (The tool description instructs the agent to confirm before acting.)
 
 ### delete-rdp
 
@@ -1166,4 +1164,4 @@ Annotations: `readOnly: false`, `destructiveHint: true`.
 { "broker": "prod-broker", "msgVpnName": "default", "restDeliveryPointName": "webhook-rdp" }
 ```
 
-**Example request:** "Delete the webhook-rdp RDP from the default VPN on prod-broker." (The agent will ask you to confirm before acting.)
+**Example request:** "Delete the webhook-rdp RDP from the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
