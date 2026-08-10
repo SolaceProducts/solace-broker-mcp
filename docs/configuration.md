@@ -35,14 +35,14 @@ The server resolves variables at startup. The `.env` file loads automatically be
 | YAML field | Env var | Default | Description |
 |---|---|---|---|
 | `port` | `MCP_SERVER_PORT` | `9090` | Port the MCP server listens on. |
-| `listen_address` | — | see below | Host the server binds to. Empty binds all interfaces; the default depends on the client auth mode. |
+| `listen_address` | — | see Bind address | Host the server binds to. Empty binds all interfaces; the default depends on the client auth mode. |
 | `allow_remote_unauthenticated` | — | `false` | Opt-in to a non-loopback `listen_address` while `mcp_client_auth.mode: disabled`. Acknowledges that the listener has no client authentication. |
 | `allow_insecure_broker_tls` | — | `false` | Opt-in to a broker with `insecure_skip_verify: true` while `mcp_client_auth.mode: oauth`. Acknowledges that disabling broker certificate verification exposes the broker admin credential to a man-in-the-middle. |
 | `tls_cert_file` | — | none | Path to TLS certificate (PEM). |
 | `tls_key_file` | — | none | Path to TLS private key (PEM). |
 | `tls_terminated_upstream` | — | `false` | Opt-in to a plaintext listener while `mcp_client_auth.mode: oauth`. Acknowledges that TLS is terminated by an upstream proxy/ingress. Ignored in the dev modes. |
 | `log_level` | — | `info` | Log verbosity: `debug`, `info`, `warn`, `error`. |
-| `enable_write_tools` | — | `false` | When `true`, register every tool that is not read-only (16 in total): the four action-API tools (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`) plus the 12 Config-API management tools (`create`/`update`/`delete` for `message-vpn`, `queue`, `topic-endpoint`, and `rdp`). This includes the non-destructive stats-reset tools (which still mutate broker state) and provisioning tools such as `delete-message-vpn`. When `false`, those tools are skipped at registration and never appear in `tools/list`. Secure-by-default for trial / dev deployments. |
+| `enable_write_tools` | — | `false` | When `true`, register every tool that is not read-only (16 in total): the four action-API tools (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`) plus the twelve Config-API management tools (`create`/`update`/`delete` for `message-vpn`, `queue`, `topic-endpoint`, and `rdp`). This includes the non-destructive stats-reset tools (which still mutate broker state) and provisioning tools such as `delete-message-vpn`. When `false`, those tools are skipped at registration and never appear in `tools/list`. Secure-by-default for trial / dev deployments. |
 
 **TLS:** Provide both `tls_cert_file` and `tls_key_file` together — providing only one is a startup error. When both are set, the server starts with HTTPS; when neither is set, plain HTTP.
 
@@ -52,7 +52,7 @@ tls_cert_file: "/etc/certs/server.pem"
 tls_key_file: "/etc/certs/server-key.pem"
 ```
 
-Under `mode: oauth` (production) a plaintext listener would carry client bearer tokens and tool results in cleartext, so it is **refused at startup** unless either TLS certs are set (above) or `tls_terminated_upstream: true` acknowledges that an upstream proxy/ingress terminates TLS. With the acknowledgment the server serves plaintext and logs a startup `WARN`. The dev modes (`static`/`disabled`) are unaffected. See [Authentication](authentication.md) for the two deployment patterns.
+Under `mode: oauth` (production) a plaintext listener would carry client bearer tokens and tool results in cleartext, so it is **refused at startup** unless either TLS certs are set (see TLS) or `tls_terminated_upstream: true` acknowledges that an upstream proxy/ingress terminates TLS. With the acknowledgment the server serves plaintext and logs a startup `WARN`. The dev modes (`static`/`disabled`) are unaffected. See [Authentication](authentication.md) for the two deployment patterns.
 
 **Bind address:** When `listen_address` is unset, the effective bind depends on `mcp_client_auth.mode` so the dev modes are safe by default — they are not reachable from the network unless an operator opts in:
 
@@ -71,7 +71,7 @@ An explicit `listen_address` must be an IP address or `localhost`. Under `mode: 
 
 Configured under the `brokers` map. Each key defines an event broker alias for the `broker` parameter in MCP tools.
 
-Aliases must be 1–63 characters, contain only letters, digits, and hyphens, and start and end with an alphanumeric character. Comparison is case-insensitive — `Prod` and `prod` collide and the server will refuse to start. Original casing is preserved in all user-facing output.
+Aliases must be 1–63 characters, contain only letters, digits, and hyphens, and start and end with an alphanumeric character. Comparison is case-insensitive — `Prod` and `prod` collide and the server refuses to start. Original casing is preserved in all user-facing output.
 
 | YAML field | Default | Description |
 |---|---|---|
@@ -80,8 +80,8 @@ Aliases must be 1–63 characters, contain only letters, digits, and hyphens, an
 | `auth.username` | — | Basic auth username. |
 | `auth.password` | — | Basic auth password. |
 | `auth.token` | — | Bearer token (used when `auth.mode: bearer`). |
-| `auth.audience` | — | Optional, even under `auth.mode: oauth` — omitting it does not fail config load or startup. RFC 8693 audience value for this broker, forwarded to the IdP during token exchange (requires the top-level `broker_oauth:` block — see [Broker OAuth (Hop 2)](#broker-oauth-hop-2) below). When omitted, the runtime sends the token-exchange request without an audience parameter at all. Omit when the broker's OAuth profile does not validate audience; set it only if the broker's OAuth profile does. If set, it must not be whitespace-only — a `${VAR}` that resolves to blank does fail config load. |
-| `insecure_skip_verify` | `false` | Skip TLS certificate verification. Development only. Under `mcp_client_auth.mode: oauth` (production) it is **refused at startup** unless `allow_insecure_broker_tls: true` is also set (see below). |
+| `auth.audience` | — | Optional, even under `auth.mode: oauth` — omitting it does not fail config load or startup. RFC 8693 audience value for this broker, forwarded to the IdP during token exchange (requires the top-level `broker_oauth:` block — see [Broker OAuth (Hop 2)](#broker-oauth-hop-2)). When omitted, the runtime sends the token-exchange request without an audience parameter at all. Omit when the broker's OAuth profile does not validate audience; set it only if the broker's OAuth profile does. If set, it must not be whitespace-only — a `${VAR}` that resolves to blank does fail config load. |
+| `insecure_skip_verify` | `false` | Skip TLS certificate verification. Development only. Under `mcp_client_auth.mode: oauth` (production) it is **refused at startup** unless `allow_insecure_broker_tls: true` is also set (see Broker TLS in production). |
 
 Solace recommends using `https://` event broker URLs in production environments.
 
@@ -99,19 +99,19 @@ brokers:
 
 Configured under the top-level `broker_oauth` key. Required when any broker uses `auth.mode: oauth` — obtains the broker-bound token by exchanging the calling agent's Hop 1 token (RFC 8693 token exchange) against an identity provider.
 
-`mcp_client_auth.mode: oauth` (Hop 1) is required first: token exchange consumes the agent's Hop 1 JWT as its `subject_token`, so a broker with `auth.mode: oauth` while Hop 1 is `static`/`disabled` is **refused at config load** with an `mcp_client_auth.mode must be oauth` error naming the affected broker(s). The `broker_oauth:` block itself is likewise required once any broker uses `auth.mode: oauth` — omitting it fails config load with `broker_oauth block is required when any broker uses auth.mode: "oauth"`. Every field in the table below (other than `circuit_breaker`/`retry_after`) is required; an empty or unsupported value fails config load naming that field.
+`mcp_client_auth.mode: oauth` (Hop 1) is required first: token exchange consumes the agent's Hop 1 JWT as its `subject_token`, so a broker with `auth.mode: oauth` while Hop 1 is `static`/`disabled` is **refused at config load** with an `mcp_client_auth.mode must be oauth` error naming the affected broker(s). The `broker_oauth:` block itself is likewise required once any broker uses `auth.mode: oauth` — omitting it fails config load with `broker_oauth block is required when any broker uses auth.mode: "oauth"`. Every field in the following table (other than `circuit_breaker`/`retry_after`) is required; an empty or unsupported value fails config load naming that field.
 
 | YAML field | Default | Description |
 |---|---|---|
 | `idp_token_endpoint` | — | **Required.** The IdP's token endpoint URL (the token-exchange POST target). Must be `https://` in production. |
 | `mcp_server_client_id` | — | **Required.** The MCP server's own `client_id`, registered at the IdP. |
-| `mcp_server_client_auth` | — | **Required.** Discriminated union — exactly one of the sub-blocks below must be populated. |
+| `mcp_server_client_auth` | — | **Required.** Discriminated union — exactly one of the following sub-blocks must be populated. |
 | `mcp_server_client_auth.client_secret_basic.secret` | — | Client secret sent via HTTP Basic auth (RFC 6749 §2.3). |
 | `mcp_server_client_auth.client_secret_post.secret` | — | Client secret sent in the token-request form body (RFC 6749 §2.3). |
 | `grant_type` | — | **Required.** Selects the OAuth grant type for the Hop 2 exchange. Must be `"urn:ietf:params:oauth:grant-type:token-exchange"` (RFC 8693) — the only grant type this version implements; any other value is rejected at config load. |
 | `audience_parameter_name` | — | **Required.** Which request parameter carries each broker's `auth.audience` value. Must be `audience` (RFC 8693 default) — the only value implemented in this version; any other value, including `scope` (Entra On-Behalf-Of style) or `resource` (RFC 8707), is rejected at config load. |
-| `circuit_breaker` | omitted (all defaults, enabled) | Optional. See below. |
-| `retry_after` | omitted (default cap) | Optional. See below. |
+| `circuit_breaker` | omitted (all defaults, enabled) | Optional. See [Circuit breaker](#circuit-breaker). |
+| `retry_after` | omitted (default cap) | Optional. See [Retry-After gate](#retry-after-gate). |
 
 ```yaml
 mcp_client_auth:
@@ -165,12 +165,12 @@ Configured under the `mcp_client_auth` key. The `mode` field is required and sel
 
 | YAML field | Description |
 |---|---|
-| `mcp_client_auth.mode` | **Required.** One of `disabled`, `static`, or `oauth`. Selects the client auth backend and the operational profile (dev vs. production). |
+| `mcp_client_auth.mode` | **Required.** One of `disabled`, `static`, or `oauth`. Selects the client auth backend and the operational profile (dev versus production). |
 | `mcp_client_auth.dev_token` | Static bearer token. Required when `mcp_client_auth.mode` is `static`. |
 | `mcp_client_auth.issuer` | IdP issuer URL. Required when `mcp_client_auth.mode` is `oauth`. |
 | `mcp_client_auth.audience` | Expected `aud` claim value. Required when `mcp_client_auth.mode` is `oauth`. |
 | `mcp_client_auth.resource_url` | OAuth resource URL (for example, `https://mcp.example.com/mcp`). Required when `mcp_client_auth.mode` is `oauth`. |
-| `mcp_client_auth.tool_authorization` | Claim-based tool authorization block. Required under `mcp_client_auth.mode: oauth` — the `enabled` field must be set explicitly to `true` or `false`; omitting the block, or omitting `enabled` from it, is a startup error. Not legal under `static` or `disabled`. See [Tool authorization](#tool-authorization) below. |
+| `mcp_client_auth.tool_authorization` | Claim-based tool authorization block. Required under `mcp_client_auth.mode: oauth` — the `enabled` field must be set explicitly to `true` or `false`; omitting the block, or omitting `enabled` from it, is a startup error. Not legal under `static` or `disabled`. See [Tool authorization](#tool-authorization). |
 
 ## Tool Authorization
 
@@ -217,8 +217,8 @@ mcp_client_auth:
 |---|---|
 | `enabled` | Required. `true` turns tool authorization on; `false` turns it off. There is no default — the field must be present under `mode: oauth`. |
 | `filter_tools_list` | Optional, defaults to `false`. When `true`, `tools/list` returns only the tools the caller's groups grant, instead of every registered tool. Only meaningful when tool authorization is on (`enabled: true` in this same block) — setting it while `enabled: false` logs a startup `WARN` and leaves filtering off, since there is no policy to filter against. See [Filtering `tools/list`](#filtering-toolslist) below. |
-| `groups_claim_name` | Name of the OIDC claim in the caller's JWT that carries their group or role memberships. Optional; defaults to `"groups"`. Must match the claim your IdP emits (see [Authentication](authentication.md) for setting this up on the IdP side). Only meaningful when `enabled: true`. **Top-level lookup only** — the value is read from the top of the JWT claims object; nested paths (e.g. `authorization.roles`) are not supported. If your IdP emits memberships inside a nested object, flatten them into a top-level claim with an IdP mapper before the token is issued. |
-| `access_level_groups` | Map from group name — as it appears in the caller's token — to the list of MCP tool names that group grants. Required when `enabled: true`. Union semantics: a caller is allowed to invoke a tool when at least one of their groups grants it. A tool that no group grants is unreachable by every caller. **No wildcard** — a group that should grant every tool must list every tool name explicitly. This is deliberate: an "all tools" glob would silently include every newly-added tool at upgrade time, without the operator noticing the surface expanded. |
+| `groups_claim_name` | Name of the OIDC claim in the caller's JWT that carries their group or role memberships. Optional; defaults to `"groups"`. Must match the claim your IdP emits (see [Authentication](authentication.md) for setting this up on the IdP side). Only meaningful when `enabled: true`. **Top-level lookup only** — the value is read from the top of the JWT claims object; nested paths (for example, `authorization.roles`) are not supported. If your IdP emits memberships inside a nested object, flatten them into a top-level claim with an IdP mapper before the token is issued. |
+| `access_level_groups` | Map from group name — as it appears in the caller's token — to the list of MCP tool names that group grants. Required when `enabled: true`. Union semantics: a caller is allowed to invoke a tool when at least one of their groups grants it. A tool that no group grants is unreachable by every caller. **No wildcard** — a group intended to grant every tool must list every tool name explicitly. This is deliberate: an "all tools" glob would silently include every newly-added tool at upgrade time, without the operator noticing the surface expanded. |
 
 **`list-brokers` and `describe-semp-schema` are structurally exempt.** Every authenticated caller can invoke these tools regardless of their groups; neither is composed with the authorization wrapper. `list-brokers` lets callers discover which broker aliases exist; `describe-semp-schema` lets callers inspect the SEMPv2 schema for any operation (spec content only, no broker state). Listing either tool in an `access_level_groups` entry is inert — the server emits a startup `WARN` naming the group but the grant has no effect.
 

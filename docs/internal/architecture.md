@@ -2,7 +2,7 @@
 
 This document describes the architecture **as implemented**. Where a package
 exists only as a capability gate or is wired behind a feature flag, that status
-is called out inline (e.g. _skeleton_, _gated_) so the doc never implies a
+is called out inline (for example, _skeleton_, _gated_) so the doc never implies a
 subsystem is live when the code is a stub. Component claims carry `file:line`
 references so a reviewer can verify each one against the code.
 
