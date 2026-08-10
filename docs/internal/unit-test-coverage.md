@@ -50,7 +50,7 @@ tests, 37.2%) and the test-helper packages consumed only by other packages'
 tests (`internal/oauth/cache/cachetest`,
 `internal/composite/postprocess/postprocesstest`, 0%, ~110 lines combined).
 
-The line is **shipped code vs. the apparatus that tests it**, not "hard to
+The line is **shipped code versus the apparatus that tests it**, not "hard to
 test." `test/performance/` holds standalone binaries — a load generator, a
 mock SEMP server, a fidelity differ, a memory sampler — that exist only to
 drive a perf harness and never enter a release artifact. They are explicitly
