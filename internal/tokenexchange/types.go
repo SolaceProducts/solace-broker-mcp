@@ -197,6 +197,21 @@ func (i ExchangeInput) String() string {
 	return fmt.Sprintf("ExchangeInput{BrokerAlias: %q, Audience: %q}", i.BrokerAlias, i.Audience)
 }
 
+// DedupKeyInput converts to the fields that determine cache/singleflight
+// identity. Every field that determines a logical exchange must also
+// determine cache identity — that's DeduplicationKeyInput's own documented
+// contract — so this is a plain Go type conversion, not a field-by-field
+// literal: it requires ExchangeInput and DeduplicationKeyInput to declare
+// the same fields, in the same order, so a future field added to one without
+// the other fails to compile here instead of silently drifting the two
+// structs apart, the way this call site and Invalidate's did before
+// SOL-152981 (the Exchange call at exchange.go and the Invalidate call in
+// internal/semp/auth/oauth.go now both build an ExchangeInput and call this,
+// rather than each independently re-listing the same three fields).
+func (i ExchangeInput) DedupKeyInput() DeduplicationKeyInput {
+	return DeduplicationKeyInput(i)
+}
+
 func (i ExchangeInput) GoString() string {
 	return i.String()
 }

@@ -97,9 +97,14 @@ func (a *OAuthAuthenticator) HandleAuthFailure(ctx context.Context, _ http.Heade
 	if !ok {
 		return AuthFailureResult{}
 	}
-	a.exchanger.Invalidate(ctx, tokenexchange.DeduplicationKeyInput{
+	// Building the same ExchangeInput shape AddAuth does above, then
+	// converting via DedupKeyInput, keeps this structurally unable to drift
+	// from Exchange's own key for the same logical call — a field added to
+	// one without updating the other fails to compile (SOL-152981).
+	a.exchanger.Invalidate(ctx, tokenexchange.ExchangeInput{
 		SubjectToken: subjectToken,
 		BrokerAlias:  a.brokerAlias,
-	})
+		Audience:     a.audience,
+	}.DedupKeyInput())
 	return AuthFailureResult{Retry: true, ReAuth: true}
 }

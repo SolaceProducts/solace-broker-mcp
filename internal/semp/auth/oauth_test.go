@@ -180,6 +180,11 @@ func TestOAuthAuthenticator_HandleAuthFailure_WithSubjectToken(t *testing.T) {
 	if exchg.invalidateCalls[0].SubjectToken != "agent-jwt" {
 		t.Errorf("subject token = %q, want %q", exchg.invalidateCalls[0].SubjectToken, "agent-jwt")
 	}
+	// Regression guard for SOL-152981: Invalidate's key must include every
+	// field Exchange's own key does, or it evicts the wrong cache entry.
+	if exchg.invalidateCalls[0].Audience != "aud" {
+		t.Errorf("audience = %q, want %q", exchg.invalidateCalls[0].Audience, "aud")
+	}
 }
 
 // TestOAuthAuthenticator_ConcurrentAddAuth exercises concurrent safety:
