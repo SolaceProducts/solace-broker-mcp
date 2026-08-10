@@ -338,11 +338,17 @@ F10_KAFKA_REMOTE_TOPIC="e2e-monitoring-kafka-sender-topic"
 # fix, just from a different cause. So the compose command's own exit status
 # is checked explicitly, with a couple of retries for the transient case,
 # rather than folding it into the same pipeline as the grep.
+#
+# The match is a herestring for the same reason. As `printf … | grep -qx` it
+# hit the misclassification above from a third cause: printf emits one write()
+# per line and "kafka" is compose's first, so grep matched and exited with two
+# writes left, and the resulting SIGPIPE (141) became the pipeline's status
+# under pipefail. A herestring returns grep's own status.
 kafka_expected() {
     local services attempt
     for attempt in 1 2 3; do
         if services=$(docker compose -f "$SUITE_DIR/docker-compose.yml" config --services 2>&1); then
-            printf '%s\n' "$services" | grep -qx kafka
+            grep -qx kafka <<<"$services"
             return $?
         fi
         sleep 1
