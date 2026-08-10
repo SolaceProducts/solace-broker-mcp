@@ -46,6 +46,55 @@ These items are **documented** but require repository admin to configure:
 
 ---
 
+## Exceptions
+
+Items where the checklist calls for a control this repository does not fully
+meet, recorded per section 5 of the Open Source Solace Software Checklist. Each
+row needs four approvers named before the repository goes public.
+
+### E1: Non-routable author addresses in seven pre-existing commits
+
+**Ticket:** SOL-152902
+**Recorded:** 2026-08-06
+
+Seven commits already on `main` carry author emails whose domain is a
+developer-machine name rather than a routable address: two contributors, two
+machines, dated 2026-05-06 through 2026-07-07. Every other commit on `main` uses
+`@solace.com` or `@users.noreply.github.com`.
+
+The per-commit list of SHAs and addresses lives on SOL-152902, not here. This
+file is written to be published, so reproducing the addresses in it would copy
+the exposure it records out of commit metadata and into a tracked, indexable,
+code-searchable file. Read the current state from the history itself:
+
+```bash
+git log --format='%h %an <%ae> %ad' --date=short | grep -E '\.sol-local>|\.local>'
+```
+
+**Decision:** accept, do not rewrite.
+
+Rewriting these seven commits would change the SHA of every commit after them —
+close to the whole history — and break every existing reference to a commit SHA
+in Jira, PR discussions, and the CHANGELOG. The exposure is one internal dev
+hostname and one contributor's laptop name, both already attached to those
+contributors' own commits and already visible to anyone with access to the
+repository today. The cost-to-value ratio favours accepting.
+
+**What we do instead:**
+
+- `.github/scripts/dco-check.sh` fails any future PR whose commits carry an
+  author or committer email on a non-routable domain (`.local`, `.sol-local`,
+  `.internal`, `.lan`, or a bare hostname). Denylist rather than allowlist so
+  outside contributors with ordinary addresses are not blocked. The gate is
+  forward-only — it walks the PR's commits, not the history already on `main`.
+- `.github/scripts/dco-check.test.sh` covers the pass and fail paths, so the
+  gate is verified on every PR rather than trusted.
+- `.github/CONTRIBUTING.md` states the identity requirement and the fix
+  commands, next to the DCO enforcement section it already describes.
+- Both affected contributors are notified before the repository flips public.
+
+---
+
 ## What's in PR #15
 
 ### New Files Created

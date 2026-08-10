@@ -384,6 +384,58 @@ The check reports the offending commits and the exact commands to fix them. Ther
 is no label or flag that skips it. Use your real name — no pseudonyms or
 anonymous contributions.
 
+### Author identity
+
+The same CI check also rejects commits whose author or committer email uses a
+non-routable domain — one ending in `.local`, `.sol-local`, `.internal`, or
+`.lan`, or a bare hostname with no dot. These are the addresses a developer
+machine invents when `git config user.email` is unset, and they publish
+permanently with the git history when the repository is public.
+
+This is a separate control from DCO, not a stricter form of it. `git commit -s`
+signs off with your `user.email`, the same value git puts in the author field —
+so a bad address still produces a sign-off that matches its author, and DCO
+passes. Only this check catches it.
+
+If CI flags this, first set your address:
+
+```bash
+git config user.email "you@your-domain.example"
+```
+
+The bad address sits in two places — the author/committer fields and the
+`Signed-off-by:` trailer — and rewriting only the first leaves it published in
+the trailer, and leaves DCO failing, because the trailer then matches neither
+the author nor the committer. Substitute the address CI listed for `BAD`:
+
+```bash
+# only the most recent commit
+export BAD="the.address@ci.listed"
+git log -1 --format=%B | grep -vi "signed-off-by:.*<$BAD>" |
+  git commit --amend --reset-author -s --file=-
+```
+
+This works on a merge commit too — `--amend` keeps its parents.
+
+For a whole branch, the guard matters: `--exec` runs after every commit rebase
+replays, so an unguarded `git commit --amend --reset-author` would rewrite
+other people's commits on the branch to be authored by you. This rewrites only
+the commits carrying the bad address:
+
+The `--exec` argument must stay on one line — git rejects a newline inside it.
+
+```bash
+export BAD="the.address@ci.listed"
+git rebase --exec 'git log -1 --format="%ae %ce" | grep -qiF "$BAD" || exit 0; git log -1 --format=%B | grep -vi "signed-off-by:.*<$BAD>" | git commit --amend --reset-author -s --file=-' main
+```
+
+Do not rebase a branch that contains merge commits — rebase replays them as
+ordinary commits and drops any conflict resolution with them. Fix a merge that
+is not at the tip by re-creating it: reset to before it, then redo the merge
+with your corrected identity.
+
+Then `git push --force-with-lease`.
+
 If you are contributing from a fork, every one of our CI runs waits for a
 maintainer to approve it, not just the one on your first push. So checks can sit
 **pending**, and a check that was green can go back to pending after the PR is
