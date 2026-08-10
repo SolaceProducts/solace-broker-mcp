@@ -405,11 +405,12 @@ Developer Certificate of Origin: https://developercertificate.org/ — see
 EOF
 }
 
-# Guarded so an identity-only failure does not print a misleading
-# "0 of N commit(s) are missing a Developer Certificate of Origin sign-off".
-[ -z "$failed" ] || report_dco_failures
+# Reports the identity failures in $failed_identity. Extracted for the same two
+# reasons as report_dco_failures above: the caller stays a one-line guard rather
+# than a long indented block, and the locals cannot leak.
+report_identity_failures() {
+  local identity_failed_count sha identity_failed_merges=""
 
-if [ -n "$failed_identity" ]; then
   identity_failed_count=$(grep -c . <<<"$failed_identity")
   # Extra blank line only when a DCO block preceded this one, so an
   # identity-only failure doesn't start with a stray blank line.
@@ -445,7 +446,6 @@ EOF
   # Same hazard as the DCO bulk fix: rebase replays merges as ordinary commits
   # and drops any conflict resolution with them. Withhold the branch-wide
   # command when a merge is among the offenders.
-  identity_failed_merges=""
   while IFS= read -r sha; do
     [ -n "$sha" ] || continue
     [ "$(git rev-list --parents -n1 "$sha" | wc -w)" -le 2 ] || identity_failed_merges=yes
@@ -480,6 +480,12 @@ Then `git push --force-with-lease`.
 See .github/CONTRIBUTING.md#author-identity for the requirement and the
 reasoning.
 EOF
-fi
+}
+
+# Both guarded: an identity-only failure must not print a misleading "0 of N
+# commit(s) are missing a Developer Certificate of Origin sign-off", and a
+# DCO-only failure must not print an empty identity block.
+[ -z "$failed" ] || report_dco_failures
+[ -z "$failed_identity" ] || report_identity_failures
 
 exit 1

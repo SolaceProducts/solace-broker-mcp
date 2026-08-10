@@ -692,6 +692,30 @@ else
   pass_count=$((pass_count + 1))
 fi
 
+# --- 18b. the DCO merge exemption does not extend to the identity check ------
+# A content-free merge is exempt from needing a sign-off, but it still carries
+# author and committer fields and still publishes them. `git merge main` is the
+# one merge shape CONTRIBUTING.md tells contributors to use, so a leak riding in
+# on it would slip through the gate entirely. Pins the separate `identity_commits`
+# range in dco-check.sh: recouple it to `$commits` and this case fails.
+r=$(new_repo identity_merge_not_exempt)
+git -C "$r" checkout -q -b feature
+content_commit "$r" feat.txt "feature work
+
+Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
+git -C "$r" checkout -q main
+content_commit "$r" main.txt "main work
+
+Signed-off-by: $ALICE_NAME <$ALICE_EMAIL>"
+git -C "$r" update-ref refs/remotes/origin/main "$(git -C "$r" rev-parse HEAD)"
+git -C "$r" checkout -q feature
+GIT_AUTHOR_NAME="$ALICE_NAME"    GIT_AUTHOR_EMAIL="alice@laptop.local" \
+GIT_COMMITTER_NAME="$ALICE_NAME" GIT_COMMITTER_EMAIL="alice@laptop.local" \
+  git -C "$r" merge -q --no-ff -m "Merge branch 'main' into feature" main
+if assert_parents "$r" 2; then
+  expect 1 "a content-free merge's identity is still checked" "$r" "not routable"
+fi
+
 # --- 19. the denylist and the message it prints cannot drift apart -----------
 # The suffix set is written twice in dco-check.sh: once as the `case` pattern
 # that decides, once as prose in the ::error:: line a blocked contributor reads.
