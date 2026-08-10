@@ -1,0 +1,15 @@
+# Fixtures captured from a real lab broker. Never committed — this suite is
+# open source and the captures are lab data. Regenerate with ./regen-golden.sh;
+# see README.md "Regenerating the fixtures".
+mock-semp/canned/*.json
+mock-semp/canned/*.xml
+fidelity/golden/*.json
+
+# Provenance record written by regen-golden.sh, verified by the run scripts.
+# Describes the local capture, so it is local-only too.
+fixtures.manifest
+
+# sanitize.sh's substitution table. Names the real identifiers of the appliance
+# this checkout captures from — publishing it would defeat the scrubbing it
+# drives. Start from sanitize.local.tsv.example, which is tracked.
+mock-semp/canned/sanitize.local.tsv

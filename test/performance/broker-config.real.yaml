@@ -1,0 +1,36 @@
+# Performance — MCP config pointing at the real lab broker.
+#
+# Use with:
+#   CONFIG_FILE=./broker-config.real.yaml \
+#   BROKER_URL=http://<lab-host>:80 \
+#   BROKER_USERNAME=... BROKER_PASSWORD=... \
+#   go run ./cmd/server
+#
+# Alias matches broker-config.mock.yaml so fidelity's -broker my-broker
+# works against either.
+
+port: 9090
+log_level: info
+
+tls_cert_file: ""
+tls_key_file: ""
+
+mcp_client_auth:
+  mode: disabled
+
+semp:
+  max_concurrent_per_broker: 100
+  request_timeout_duration: 1m
+  request_min_interval: 100ms
+  retries: 10
+  retry_min_interval: 3s
+  retry_max_interval: 30s
+
+brokers:
+  my-broker:
+    url: "${BROKER_URL}"
+    insecure_skip_verify: true
+    auth:
+      mode: basic
+      username: "${BROKER_USERNAME}"
+      password: "${BROKER_PASSWORD}"
