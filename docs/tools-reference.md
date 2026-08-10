@@ -162,7 +162,7 @@ indexed here — a `monitor/...` operation returns `unknown operation`.
 **Typical invocation.** Most calls happen unprompted. The eight
 `create-*`/`update-*` write tool descriptions each point at
 `describe-semp-schema` with the relevant operation, so an agent planning a
-write calls this tool without the user asking for it — an ordinary request
+write operation calls this tool without the user asking for it — an ordinary request
 like *"Create a queue named orders with a spool quota of 500 MB"* is what
 triggers it in practice. If you are watching a trace and see
 `describe-semp-schema` fire immediately before a `create-*` or `update-*`
@@ -815,8 +815,7 @@ Annotations: `readOnly: false`, `destructiveHint: true`, `idempotentHint: false`
 { "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" }
 ```
 
-**Example request:** "Disconnect consumer-7 on the default VPN." (The agent asks
-you to confirm before acting.)
+**Example request:** "Disconnect consumer-7 on the default VPN." (The tool description instructs the agent to confirm before acting.)
 
 ### clear-client-stats
 
@@ -858,8 +857,7 @@ Annotations: `readOnly: false`, `destructiveHint: true`, `idempotentHint: false`
 { "broker": "prod-broker", "msgVpnName": "default", "queueName": "dead-letter.q" }
 ```
 
-**Example request:** "Drain dead-letter.q on the default VPN." (The agent asks
-you to confirm before acting.)
+**Example request:** "Drain dead-letter.q on the default VPN." (The tool description instructs the agent to confirm before acting.)
 
 ### clear-queue-stats
 
@@ -927,7 +925,7 @@ Annotations: `readOnly: false`, `destructive: false`.
 { "broker": "prod-broker", "msgVpnName": "orders-vpn", "msgVpnConfig": { "enabled": true, "maxConnectionCount": 100 } }
 ```
 
-**Example request:** "Create a VPN called orders-vpn on prod-broker, enabled, with 100 max connections." (The agent asks you to confirm before acting.)
+**Example request:** "Create a VPN called orders-vpn on prod-broker, enabled, with 100 max connections." (The tool description instructs the agent to confirm before acting.)
 
 ### update-message-vpn
 
@@ -948,7 +946,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 { "broker": "prod-broker", "msgVpnName": "orders-vpn", "msgVpnConfig": { "enabled": false } }
 ```
 
-**Example request:** "Disable the orders-vpn VPN on prod-broker." (The agent asks you to confirm before acting.)
+**Example request:** "Disable the orders-vpn VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### delete-message-vpn
 
@@ -968,7 +966,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 { "broker": "prod-broker", "msgVpnName": "orders-vpn" }
 ```
 
-**Example request:** "Delete the orders-vpn VPN on prod-broker." (The agent asks you to confirm before acting.)
+**Example request:** "Delete the orders-vpn VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### create-queue
 
@@ -990,7 +988,7 @@ Annotations: `readOnly: false`, `destructive: false`.
 { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "queueConfig": { "ingressEnabled": true, "egressEnabled": true } }
 ```
 
-**Example request:** "Create a queue orders.q in the default VPN on prod-broker." (The agent asks you to confirm before acting.)
+**Example request:** "Create a queue orders.q in the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### update-queue
 
@@ -1013,7 +1011,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "queueConfig": { "egressEnabled": false } }
 ```
 
-**Example request:** "Turn off egress on orders.q in the default VPN." (The agent asks you to confirm before acting.)
+**Example request:** "Turn off egress on orders.q in the default VPN." (The tool description instructs the agent to confirm before acting.)
 
 ### delete-queue
 
@@ -1033,7 +1031,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q" }
 ```
 
-**Example request:** "Delete orders.q from the default VPN on prod-broker." (The agent asks you to confirm before acting.)
+**Example request:** "Delete orders.q from the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### create-topic-endpoint
 
@@ -1055,7 +1053,7 @@ Annotations: `readOnly: false`, `destructive: false`.
 { "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te", "topicEndpointConfig": { "ingressEnabled": true, "egressEnabled": true } }
 ```
 
-**Example request:** "Create a topic endpoint orders.te in the default VPN on prod-broker." (The agent asks you to confirm before acting.)
+**Example request:** "Create a topic endpoint orders.te in the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### update-topic-endpoint
 
@@ -1078,7 +1076,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 { "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te", "topicEndpointConfig": { "egressEnabled": false } }
 ```
 
-**Example request:** "Turn off egress on the orders.te topic endpoint in the default VPN." (The agent asks you to confirm before acting.)
+**Example request:** "Turn off egress on the orders.te topic endpoint in the default VPN." (The tool description instructs the agent to confirm before acting.)
 
 ### delete-topic-endpoint
 
@@ -1099,7 +1097,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 { "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te" }
 ```
 
-**Example request:** "Delete the orders.te topic endpoint from the default VPN." (The agent asks you to confirm before acting.)
+**Example request:** "Delete the orders.te topic endpoint from the default VPN." (The tool description instructs the agent to confirm before acting.)
 
 ### create-rdp
 
@@ -1123,7 +1121,7 @@ Annotations: `readOnly: false`, `destructiveHint: false`.
 { "broker": "prod-broker", "msgVpnName": "default", "restDeliveryPointName": "webhook-rdp", "rdpConfig": { "clientProfileName": "default" } }
 ```
 
-**Example request:** "Create an RDP called webhook-rdp in the default VPN on prod-broker." (The agent asks you to confirm before acting.)
+**Example request:** "Create an RDP called webhook-rdp in the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### update-rdp
 
@@ -1145,7 +1143,7 @@ Annotations: `readOnly: false`, `destructiveHint: true`.
 { "broker": "prod-broker", "msgVpnName": "default", "restDeliveryPointName": "webhook-rdp", "rdpConfig": { "enabled": true } }
 ```
 
-**Example request:** "Enable the webhook-rdp RDP on the default VPN." (The agent asks you to confirm before acting.)
+**Example request:** "Enable the webhook-rdp RDP on the default VPN." (The tool description instructs the agent to confirm before acting.)
 
 ### delete-rdp
 
@@ -1166,4 +1164,4 @@ Annotations: `readOnly: false`, `destructiveHint: true`.
 { "broker": "prod-broker", "msgVpnName": "default", "restDeliveryPointName": "webhook-rdp" }
 ```
 
-**Example request:** "Delete the webhook-rdp RDP from the default VPN on prod-broker." (The agent asks you to confirm before acting.)
+**Example request:** "Delete the webhook-rdp RDP from the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
