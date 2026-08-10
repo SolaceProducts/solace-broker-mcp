@@ -337,6 +337,7 @@ type MCPClientAuthConfig struct {
 type ToolAuthorizationConfig struct {
 	// *bool so presence-in-YAML is distinguishable from default.
 	Enabled           *bool               `yaml:"enabled"`
+	FilterToolsList   *bool               `yaml:"filter_tools_list"`
 	GroupsClaimName   *string             `yaml:"groups_claim_name"`
 	AccessLevelGroups map[string][]string `yaml:"access_level_groups"`
 }
@@ -1118,6 +1119,8 @@ func countHop2Brokers(cfg *ServerConfig) int {
 
 // applyToolAuthorizationDefaults applies defaults for the tool_authorization
 // block.
+// FilterToolsList is deliberately not defaulted: nil means absent, which
+// behaves as off
 func applyToolAuthorizationDefaults(cfg *ServerConfig) {
 	// Synthesize an empty ToolAuthorizationConfig when the block is omitted
 	// in oauth mode, so the validator always sees a non-nil pointer.
@@ -1636,4 +1639,18 @@ func ToolAuthorizationEnabled(cfg *ServerConfig) bool {
 		return false
 	}
 	return *cfg.MCPClientAuth.ToolAuthorization.Enabled
+}
+
+// FilterToolsListEnabled returns whether tools/list filtering is enabled.
+//
+// Nil-safe in both directions: a nil block (the shape in every non-oauth
+// deployment) and a nil flag within a present block both read as off.
+//
+// Reports the flag only. Whether a policy exists to filter against is the
+// caller's to check — filtering cannot run without one.
+func FilterToolsListEnabled(cfg *ToolAuthorizationConfig) bool {
+	if cfg == nil || cfg.FilterToolsList == nil {
+		return false
+	}
+	return *cfg.FilterToolsList
 }

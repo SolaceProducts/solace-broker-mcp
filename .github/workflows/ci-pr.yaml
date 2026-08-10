@@ -115,6 +115,57 @@ jobs:
         if: always()
         run: .github/scripts/build-test-licenses-check.sh
 
+  # Apache 2.0 works best when the grant travels with the file. The headers were
+  # applied once, by hand, and the codebase then grew past them: 53 of 260 Go
+  # files had none by August 2026 (SOL-152896). This is the gate that stops the
+  # same clock restarting, and the reason the 53-file fix was worth doing at all.
+  #
+  # Needs no secret and no Go toolchain, so it gives a real verdict on a fork
+  # pull request — which is exactly where an unheadered new file arrives.
+  #
+  # The self-test runs first because a vacuous pass is this check's dangerous
+  # failure mode, not a false alarm. It has five plausible ones: a header below
+  # the package clause, a reworded header, a missing blank line before `package`,
+  # a walk that silently stops descending into a subtree, and a walk that matches
+  # nothing at all. The suite pins each, and is kept honest by mutation — every
+  # one of those five, applied to a copy of the script, turns it red.
+  #
+  # Do NOT read dco_selftest's rationale onto this job. That one exists because
+  # the enforcing DCO gate runs on `pull_request_target` against the *base ref's*
+  # script, so the self-test is the only place the PR's own copy is exercised.
+  # Here the gate and its self-test both run from the PR's ref, so the self-test
+  # closes no such gap; it only narrows the shape of the tamper. A blunt `exit 0`
+  # in the script is caught — ten negative cases then exit 0 where they expect 1
+  # — but the suite asserts over fixed fixtures, so an edit outside their shape
+  # survives it. Adding `-o -name gen` to the prune list keeps the suite at 24/24
+  # (its only nesting fixture is `internal/deep/pkg`) while every `.go` file under
+  # a `gen/` directory silently stops being checked.
+  #
+  # That tamper hole is real, and unlike the Guardian scan gate in
+  # guardian-scan.yaml it is not self-limiting: that gate dismisses tampering on
+  # the grounds that a fork PR passes anyway, whereas this check gives fork PRs a
+  # real verdict, so there is something to gain. It is accepted rather than
+  # closed, on the same terms as `licenses`: the
+  # control is a human reading the `.github/` diff, not the trigger. Note that
+  # today that is ordinary review — `.github/CODEOWNERS` maps `*` to
+  # dax-developers, but "Require review from Code Owners" is not enabled on the
+  # `main-protection` ruleset yet (SOL-152412), so no reviewer is *compelled* by
+  # the ruleset. Moving this job to `pull_request_target` to close the hole would
+  # run untrusted code with an elevated token, which is a worse trade for a
+  # licence-header check.
+  license_headers:
+    name: Licence headers present
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Self-test the licence-header check
+        run: .github/scripts/license-header-check.test.sh
+      - name: Verify every Go file carries the Apache-2.0 header
+        run: .github/scripts/license-header-check.sh
+
   changelog:
     name: CHANGELOG updated
     runs-on: ubuntu-latest

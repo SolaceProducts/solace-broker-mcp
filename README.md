@@ -27,19 +27,20 @@ An MCP (Model Context Protocol) server for Solace event brokers, built with Go u
 - [Project Structure](#project-structure)
 - [CI](#ci)
 - [Contributing](#contributing)
+- [Support](#support)
 - [Security](#security)
 - [Disclaimer](#disclaimer)
 - [License](#license)
 
 ## Overview
 
-An HTTP service that exposes Solace event broker management and monitoring to AI assistants through the Model Context Protocol (MCP). The server provides 39 tools: 23 read-only tools that query event broker status, inspect queues, diagnose client issues, and monitor message traffic, plus 16 optional write and action tools (off by default) for operational actions and configuration. It uses SEMP v1 and v2 API calls.
+An HTTP service that exposes Solace event broker management and monitoring to AI assistants through the Model Context Protocol (MCP). The server provides 40 tools: 24 read-only tools that query event broker status, inspect queues, diagnose client issues, and monitor message traffic, plus 16 optional write and action tools (off by default) for operational actions and configuration. It uses SEMP v1 and v2 API calls.
 
 MCP-compatible clients, for example Claude Code, invoke these tools using natural language. The AI assistant translates requests into tool calls. The server handles authentication, rate limiting, retries, and response formatting.
 
 ## Features
 
-- **23 read-only monitoring tools** — Event broker status, message VPNs, queues, clients, REST delivery points, bridges, and Kafka receivers/senders
+- **24 read-only monitoring tools** — Event broker status, message VPNs, queues, clients, REST delivery points, bridges, Kafka receivers/senders, and SEMPv2 schema introspection
 - **16 optional write and action tools** — Disconnect clients, delete queued messages, reset statistics, and create, update, or delete message VPNs, queues, topic endpoints, and REST delivery points; gated behind `enable_write_tools` (off by default)
 - **Client authentication** — Development mode (no auth), static bearer tokens, or OAuth 2.1/OIDC with JWT validation
 - **Claim-based tool authorization** — Under OAuth mode, gate individual MCP tools by a configurable OIDC claim carrying the caller's group or role memberships (`groups` by default); `list-brokers` stays exempt so callers can always discover configured brokers
@@ -67,7 +68,7 @@ The server implements the MCP HTTP transport specification and exposes event bro
 │                  │                    │   Broker MCP Server      │                      │                  │
 │   AI Agent       │ ────────────────▶ │                          │  ──────────────────▶ │  Solace          │
 │  (Claude Code,   │   JSON-RPC         │  • Auth (OAuth / token)  │   HTTP(S) /SEMP      │  Event           │
-│  Claude Desktop) │   + Bearer JWT     │  • 23 read + 16 write    │                      │  Broker(s)       │
+│  Claude Desktop) │   + Bearer JWT     │  • 24 read + 16 write    │                      │  Broker(s)       │
 │                  │                    │  • Rate-limit + retry    │                      │                  │
 │                  │ ◀──────────────── │  • SEMP client pool      │ ◀──────────────────  │                  │
 └──────────────────┘                    └──────────────────────────┘  basic/bearer/oauth  └──────────────────┘
@@ -81,7 +82,7 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 
 | Category | Tools | Description |
 |---|---|---|
-| Discovery | `list-brokers` | List configured broker aliases for use as the `broker` parameter |
+| Discovery | `list-brokers`, `describe-semp-schema` | List configured broker aliases for use as the `broker` parameter; look up a SEMPv2 operation's request-body schema before calling a write tool |
 | Broker status | `get-broker-status`, `get-redundancy-status` | Snapshot of version, uptime, resources, spool, and HA and mate-link state |
 | Replication | `get-replication-status` | Replication role, sync eligibility, bridge status, transaction mode, and queued-message counts |
 | Message VPN | `list-vpns`, `get-vpn-status`, `get-message-rates` | List VPNs, check per-VPN service status, read message and byte rates |
@@ -94,14 +95,14 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 | Actions | `delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats` | One tool per operational action. Destructive tools (`delete-queue-messages`, `disconnect-client`) are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; the `clear-*-stats` tools are non-destructive. |
 | Management | `create-message-vpn`, `update-message-vpn`, `delete-message-vpn`, `create-queue`, `update-queue`, `delete-queue`, `create-topic-endpoint`, `update-topic-endpoint`, `delete-topic-endpoint`, `create-rdp`, `update-rdp`, `delete-rdp` | Create, update, and delete Config-API objects (Message VPNs, queues, topic endpoints, REST delivery points). `delete-*` and the service-affecting `update-*` tools are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; `create-*` is additive and not annotated. |
 
-**The action and management tools are write tools, gated behind `enable_write_tools: true` in the config — default off; not registered in `tools/list` when disabled.** That's 16 write tools in total (4 action, 12 management), on top of the 23 read-only tools.
+**The action and management tools are write tools, gated behind `enable_write_tools: true` in the config — default off; not registered in `tools/list` when disabled.** That's 16 write tools in total (4 action, 12 management), on top of the 24 read-only tools.
 
 > **Confirmation is not enforced.** `enable_write_tools` is the only enforced control. `destructiveHint` and the confirmation text in tool descriptions are hints, not enforced by the MCP protocol — whether the user is actually prompted depends on the client and the model.
 
 ## Guides
 
 - [User Guide](docs/user-guide.md) — overview, tools reference, deployment, and troubleshooting
-- [Tools Reference](docs/tools-reference.md) — per-tool parameters, output schema, and example invocations for all 39 tools
+- [Tools Reference](docs/tools-reference.md) — per-tool parameters, output schema, and example invocations for all 40 tools
 - [Examples](docs/examples.md) — Claude Desktop config, natural-language queries, and multi-broker setup
 - [Configuration](docs/configuration.md) — server settings, event broker config, client auth, and rate-limit/retry settings
 - [Authentication](docs/authentication.md) — OAuth/OIDC and static token setup for MCP clients
@@ -141,6 +142,8 @@ brokers:
 **Audit-log identity.** In `oauth` and `static` modes, every tool-invocation log line carries the caller's `sub`, `iss`, `client_id`, and `jti` claims (the latter three appear as `<absent>` when the IdP does not issue them). A separate sentinel `<verifier-bug>` is reserved for an internal coding error — it should never appear in production, and its presence indicates a bug in the server's claim-extraction code, not in the caller's token; alert on it. The request still completes and the audit line is still written. In `disabled` mode no client auth runs, so log lines carry no identity fields at all. **`disabled` and `static` modes are not real audit trails**: `disabled` lines have no attribution, and `static` lines attribute every invocation to the hardcoded `dev-user`. Use `oauth` mode for any deployment whose audit logs need to answer "who ran what tool against which broker?"
 
 Under `oauth` mode with a `tool_authorization` policy configured, each gated tool call also emits a `"tool authorization"` audit line at the same `correlation_id` — logged at `INFO` on allow and `WARN` on deny, with a `decision_reason` code operators can filter and alert on. See [Tool authorization](docs/configuration.md#tool-authorization) for the full schema.
+
+The same policy can also narrow `tools/list` to the tools each caller may invoke, so an agent is not handed tools it will be denied. Off by default; opt in with `filter_tools_list: true` and see [Filtering `tools/list`](docs/configuration.md#filtering-toolslist). This is discovery hygiene rather than access control — `tools/call` remains the enforcement point either way.
 
 Each event broker needs:
 - `url` — the SEMP management API base URL
@@ -436,6 +439,13 @@ We welcome contributions! Please see our [Contributing Guidelines](.github/CONTR
 
 Please read our [Code of Conduct](.github/CODE_OF_CONDUCT.md) before participating.
 
+## Support
+
+- **Solace support contract:** Contact support@solace.com.
+- **Everyone else:** Ask in the [Solace Community](https://solace.community/).
+
+See [SUPPORT.md](.github/SUPPORT.md) for details.
+
 ## Security
 
 For security vulnerability reporting, please see [SECURITY.md](.github/SECURITY.md).
@@ -444,7 +454,7 @@ For security vulnerability reporting, please see [SECURITY.md](.github/SECURITY.
 
 This software is provided under the Apache License 2.0 on an "AS IS" basis, without warranties or conditions of any kind. See the [LICENSE](LICENSE) file for the full terms. Use it at your own risk.
 
-This is a community-supported open-source project. It is provided on a best-effort basis with no service-level commitment, and it is not a supported Solace product.
+If you have a Solace support contract, this project is covered through the usual [support@solace.com](mailto:support@solace.com) channel. Everyone else gets community support on a best-effort basis with no service-level commitment. See [Support](#support) for details.
 
 You are responsible for ensuring your use of this server complies with the terms governing your brokers and any laws, regulations, or policies that apply to you.
 

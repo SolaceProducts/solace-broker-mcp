@@ -19,7 +19,9 @@ We take security seriously. If you discover a security vulnerability in the Sola
 
 ### How to Report
 
-**Email**: [andrea.ross@solace.com](mailto:andrea.ross@solace.com)
+**Email**: [support@solace.com](mailto:support@solace.com)
+
+Support triages every report and escalates anything describing a concrete, exploitable vulnerability directly to our security team.
 
 Please include the following in your report:
 
@@ -34,9 +36,9 @@ Please include the following in your report:
 
 When you report a security vulnerability, here's what you can expect from us:
 
-**Initial Response**: Within **48 hours** (business days), we will acknowledge receipt of your report.
+**Initial Response**: Support acknowledges every report within **1 business day**, matching our standard support SLA.
 
-**Assessment**: Within **1 week**, we will provide an initial assessment of the vulnerability including:
+**Assessment**: If your report describes a concrete, exploitable vulnerability, our security team provides an initial assessment within **1 week** of escalation, including:
 - Confirmation that we can reproduce the issue
 - Severity classification (Critical, High, Medium, Low)
 - Expected timeline for a fix
@@ -194,6 +196,6 @@ Format:
 
 ## Questions?
 
-If you have questions about this security policy, contact [andrea.ross@solace.com](mailto:andrea.ross@solace.com).
+If you have questions about this security policy, contact [support@solace.com](mailto:support@solace.com).
 
-For non-security bugs and feature requests, please use [GitHub Issues](https://github.com/SolaceProducts/solace-broker-mcp/issues).
+For non-security bugs and feature requests, please use [GitHub Issues](https://github.com/SolaceProducts/solace-broker-mcp/issues). For everything else, see [SUPPORT.md](SUPPORT.md).

@@ -192,9 +192,10 @@ review.
 list is not: it currently holds `lint`, `build`, and `FOSSA Scan`, the last of
 which enforces nothing (see the warning below). Replace it with the following.
 These names are what GitHub actually reports, confirmed against the check runs on
-PRs #213, #216, and #217 — except `Guardian scan gate` (new, replaces `SCA gate`)
-and `Third-party licenses current` (SOL-152414), which are new. Confirm those two
-against a real pull request before you rely on them:
+PRs #213, #216, and #217 — except `Guardian scan gate` (new, replaces `SCA gate`),
+`Third-party licenses current` (SOL-152414), and `Licence headers present`
+(SOL-152896), which are new. Confirm those three against a real pull request
+before you rely on them:
 
 | Check | Source | Gates on |
 |-------|--------|----------|
@@ -207,6 +208,7 @@ against a real pull request before you rely on them:
 | `e2e-action` | `build-and-test.yml` | E2E suite |
 | `Guardian scan gate` | `guardian-scan.yaml` job `gate` | The Guardian scan verdict, or an accounted-for reason there is none (fork PR). Replaces `SCA gate`; see the warning below |
 | `Third-party licenses current` | `ci-pr.yaml` job `licenses` | `THIRD_PARTY_LICENSES.md` still matching `go list -deps ./cmd/server`. Needs no secret, so it reports on fork pull requests too |
+| `Licence headers present` | `ci-pr.yaml` job `license_headers` | Every `.go` file outside `vendor/` opening with the Apache-2.0 header. Needs no secret and no Go toolchain, so it reports on fork pull requests too |
 | `CHANGELOG updated` | `ci-pr.yaml` job `changelog` | Advisory today; see note below |
 | `DCO sign-off` | `dco.yaml` job `dco` | a sign-off on every commit the PR adds, except a PR GitHub records as opened by `dependabot[bot]` (SOL-152808) |
 | `DCO check self-test` | `ci-pr.yaml` job `dco_selftest` | the gate's own logic still working |
@@ -646,5 +648,5 @@ After repository is made public:
 ## Questions?
 
 If you need help with any of these admin tasks, contact:
-- Andrea Ross (andrea.ross@solace.com)
+- support@solace.com
 - Solace DevRel team
