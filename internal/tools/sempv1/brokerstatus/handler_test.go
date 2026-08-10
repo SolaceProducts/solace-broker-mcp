@@ -312,7 +312,7 @@ func TestHandle_Appliance_Success(t *testing.T) {
 	if got := hw["platform"]; got != "Solace Event Broker 3560" {
 		t.Errorf("hardwareDetails.platform = %v, want \"Solace Event Broker 3560\"", got)
 	}
-	if got := hw["chassisSerial"]; got != "S009001344" {
+	if got := hw["chassisSerial"]; got != "TESTSERIAL-CHASSIS-01" {
 		t.Errorf("hardwareDetails.chassisSerial = %v, want fixture value", got)
 	}
 	if got := hw["biosVersion"]; got == nil || got == "" {

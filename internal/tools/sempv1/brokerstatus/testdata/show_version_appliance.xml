@@ -1,36 +1,40 @@
-<rpc-reply semp-version="app/100.0main.0.7305">
+<!-- Scrubbed capture: the version and load strings below are synthetic GA
+     placeholders, not the lab appliance's real build (SOL-152999). Do not paste
+     a raw re-capture over them. Placeholder conventions:
+     test/performance/mock-semp/canned/sanitize.local.tsv.example -->
+<rpc-reply semp-version="app/10.25.1.10">
   <rpc>
     <show>
       <version>
-        <description>Solace Event Broker 3560 Version 100.0main.0.7305</description>
+        <description>Solace Event Broker 3560 Version 10.25.1.10</description>
         <executables>
           <executable>
             <name>CLI</name>
-            <release>100.0main.0.7305</release>
+            <release>10.25.1.10</release>
             <build-date>2026-05-12T08:14:22+00:00</build-date>
           </executable>
           <executable>
             <name>DataplaneMgr</name>
-            <release>100.0main.0.7305</release>
+            <release>10.25.1.10</release>
             <build-date>2026-05-12T08:14:22+00:00</build-date>
           </executable>
           <executable>
             <name>Controlplane</name>
-            <release>100.0main.0.7305</release>
+            <release>10.25.1.10</release>
             <build-date>2026-05-12T08:14:22+00:00</build-date>
           </executable>
           <executable>
             <name>Managementplane</name>
-            <release>100.0main.0.7305</release>
+            <release>10.25.1.10</release>
             <build-date>2026-05-12T08:14:22+00:00</build-date>
           </executable>
         </executables>
-        <current-load>soltr_100.0main.0.7305</current-load>
+        <current-load>soltr_10.25.1.10</current-load>
         <backout-load-not-existant></backout-load-not-existant>
         <loads>
           <load>
             <index>1</index>
-            <version>soltr_100.0main.0.7305</version>
+            <version>soltr_10.25.1.10</version>
             <solbase-version>SolBase-4.2.220.40</solbase-version>
             <is-solbase-present>1</is-solbase-present>
           </load>
