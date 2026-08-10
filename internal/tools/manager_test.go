@@ -152,18 +152,41 @@ func TestRegister_DuplicatePanics(t *testing.T) {
 
 // --- Broker resolution tests ---
 
+// callToolResultText extracts the CallToolResult's error text, failing the
+// test immediately if result is nil, has no Content, or protocol-level err is
+// non-nil — every buildLocalErrorResult/buildErrorResult caller must return
+// (result, nil), never a bare protocol error (SOL-152980).
+func callToolResultText(t *testing.T, result *mcp.CallToolResult, err error) string {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected a non-nil CallToolResult")
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError to be true")
+	}
+	sc, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("StructuredContent = %T, want map[string]any", result.StructuredContent)
+	}
+	if sc["retryable"] != false {
+		t.Errorf("retryable = %v, want false", sc["retryable"])
+	}
+	return result.Content[0].(*mcp.TextContent).Text
+}
+
 func TestCallTool_MissingBroker(t *testing.T) {
 	mgr := NewToolManager(newTestPool(t))
 	mgr.Register(newStubHandler("test-tool"))
 
-	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"msgVpnName": "default",
 	}, Identity{})
-	if err == nil {
-		t.Fatal("expected error for missing broker")
-	}
-	if !strings.Contains(err.Error(), "broker parameter is required") {
-		t.Errorf("error = %v, want 'broker parameter is required'", err)
+	text := callToolResultText(t, result, err)
+	if !strings.Contains(text, "broker parameter is required") {
+		t.Errorf("text = %q, want 'broker parameter is required'", text)
 	}
 }
 
@@ -171,15 +194,13 @@ func TestCallTool_UnknownBroker(t *testing.T) {
 	mgr := NewToolManager(newTestPool(t))
 	mgr.Register(newStubHandler("test-tool"))
 
-	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     "nonexistent",
 		"msgVpnName": "default",
 	}, Identity{})
-	if err == nil {
-		t.Fatal("expected error for unknown broker")
-	}
-	if !strings.Contains(err.Error(), "unknown broker") {
-		t.Errorf("error = %v, want 'unknown broker'", err)
+	text := callToolResultText(t, result, err)
+	if !strings.Contains(text, "unknown broker") {
+		t.Errorf("text = %q, want 'unknown broker'", text)
 	}
 }
 
@@ -193,15 +214,13 @@ func TestCallTool_UnknownBroker_PreservesCallerCasing(t *testing.T) {
 	mgr.Register(newStubHandler("test-tool"))
 
 	const rawAlias = "PRODEAST-DOESNT-EXIST"
-	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     rawAlias,
 		"msgVpnName": "default",
 	}, Identity{})
-	if err == nil {
-		t.Fatal("expected error for unknown broker")
-	}
-	if !strings.Contains(err.Error(), rawAlias) {
-		t.Errorf("error should preserve operator's original casing %q verbatim, got: %v", rawAlias, err)
+	text := callToolResultText(t, result, err)
+	if !strings.Contains(text, rawAlias) {
+		t.Errorf("text should preserve operator's original casing %q verbatim, got: %q", rawAlias, text)
 	}
 }
 
@@ -238,18 +257,16 @@ func TestCallTool_ValidationError_MissingRequired(t *testing.T) {
 	mgr := NewToolManager(newTestPool(t))
 	mgr.Register(newStubHandler("test-tool"))
 
-	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker": "dev",
 		// msgVpnName missing
 	}, Identity{})
-	if err == nil {
-		t.Fatal("expected validation error for missing required field")
+	text := callToolResultText(t, result, err)
+	if !strings.Contains(text, "parameter validation failed") {
+		t.Errorf("text = %q, want 'parameter validation failed'", text)
 	}
-	if !strings.Contains(err.Error(), "parameter validation failed") {
-		t.Errorf("error = %v, want 'parameter validation failed'", err)
-	}
-	if !strings.Contains(err.Error(), "msgVpnName") {
-		t.Errorf("error should mention 'msgVpnName', got: %v", err)
+	if !strings.Contains(text, "msgVpnName") {
+		t.Errorf("text should mention 'msgVpnName', got: %q", text)
 	}
 }
 
@@ -265,15 +282,13 @@ func TestCallTool_ValidationError_WrongType(t *testing.T) {
 	}
 	mgr.Register(handler)
 
-	_, err := mgr.CallTool(context.Background(), "typed-tool", map[string]any{
+	result, err := mgr.CallTool(context.Background(), "typed-tool", map[string]any{
 		"broker": "dev",
 		"count":  "not-a-number",
 	}, Identity{})
-	if err == nil {
-		t.Fatal("expected validation error for wrong type")
-	}
-	if !strings.Contains(err.Error(), "parameter validation failed") {
-		t.Errorf("error = %v, want 'parameter validation failed'", err)
+	text := callToolResultText(t, result, err)
+	if !strings.Contains(text, "parameter validation failed") {
+		t.Errorf("text = %q, want 'parameter validation failed'", text)
 	}
 }
 
@@ -352,6 +367,12 @@ func TestCallTool_OutputValidationPasses(t *testing.T) {
 	}
 }
 
+// TestCallTool_OutputValidationFails is a regression test for SOL-152980.
+// handler.Handle has already run by the time output validation fails — for a
+// destructive tool, any broker-side mutation is already done — so CallTool
+// must return a structured result the agent can see (with retryable: false),
+// never a bare protocol error that leaves the agent unable to tell the action
+// already took effect.
 func TestCallTool_OutputValidationFails(t *testing.T) {
 	mgr := NewToolManager(newTestPool(t))
 
@@ -365,15 +386,13 @@ func TestCallTool_OutputValidationFails(t *testing.T) {
 	}
 	mgr.Register(handler)
 
-	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     "dev",
 		"msgVpnName": "default",
 	}, Identity{})
-	if err == nil {
-		t.Fatal("expected output validation error")
-	}
-	if !strings.Contains(err.Error(), "output validation") {
-		t.Errorf("error = %v, want 'output validation'", err)
+	text := callToolResultText(t, result, err)
+	if !strings.Contains(text, "output validation") {
+		t.Errorf("text = %q, want 'output validation'", text)
 	}
 }
 
