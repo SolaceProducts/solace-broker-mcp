@@ -70,7 +70,7 @@ git push origin v0.4.0
 Pushing the tag runs `.github/workflows/release.yml`, which:
 
 1. Re-runs the full build-and-test suite.
-2. Runs the FOSSA scan against the tag.
+2. Runs the release readiness check (the Guardian gate) against the tag.
 3. Builds binaries for `linux` and `darwin` × `amd64` and `arm64`, attesting each archive's build provenance in the job that built it.
 4. Builds and pushes a multi-arch image to `ghcr.io/solaceproducts/solace-broker-mcp` (`{version}`, `{major}.{minor}`, `latest`, `sha-<short-sha>` tags), and attests the image digest, pushing the attestation to the registry alongside it.
 5. Publishes a GitHub Release whose notes are the tagged version's `CHANGELOG.md` block (with the auto-generated PR list appended beneath), plus the binary archives and SHA-256 checksums. If no `## [X.Y.Z]` block exists for the tag, the release fails rather than falling back to auto-only notes.
@@ -81,18 +81,18 @@ The jobs are not fully serialized:
 
 ```
 push v* tag
-  ├─> test           (reuses build-and-test.yml)
-  ├─> release-notes  (CHANGELOG block must exist)
-  ├─> licenses       (inventory must match the binary)
-  └─> fossa_scan     (SCA gate)
+  ├─> test               (reuses build-and-test.yml)
+  ├─> release-notes      (CHANGELOG block must exist)
+  ├─> licenses           (inventory must match the binary)
+  └─> release-readiness  (Guardian gate)
 
 waits on
   build-binaries   test, release-notes, licenses
-  build-docker     test, release-notes, licenses, fossa_scan   ← pushes the image
-  release          build-binaries, build-docker, fossa_scan
+  build-docker     test, release-notes, licenses, release-readiness   ← pushes the image
+  release          build-binaries, build-docker, release-readiness
 ```
 
-A failed job blocks the GitHub Release, binaries, checksums, and the container image: `build-docker` waits on the FOSSA scan as well as the build, so a failing SCA gate publishes nothing. That matters because a registry push cannot be withdrawn — the binaries are only artifacts until `release` publishes them, but the image is live the moment it is pushed.
+A failed job blocks the GitHub Release, binaries, checksums, and the container image: `build-docker` waits on the readiness check as well as the build, so a failing Guardian gate publishes nothing. That matters because a registry push cannot be withdrawn — the binaries are only artifacts until `release` publishes them, but the image is live the moment it is pushed.
 
 One window remains: the image is pushed *before* it is attested, so a run that fails on the attest step leaves `latest` live with no attestation — a consumer's `gh attestation verify` then fails because the release is incomplete, not because the image was tampered with. That ordering is unavoidable, because attesting a registry digest requires the digest to exist. If a release run fails partway, check `ghcr.io` and roll forward (see Rollback).
 
