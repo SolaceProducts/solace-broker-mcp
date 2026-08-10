@@ -39,9 +39,17 @@ import (
 // doesn't use session cookies (bearer, OAuth).
 func newTestClientWith(t *testing.T, srv *httptest.Server, authn auth.Authenticator, jar *resilience.SafeCookieJar) *HTTPClient {
 	t.Helper()
+	return newTestClientWithURL(t, srv.URL, authn, jar)
+}
+
+// newTestClientWithURL is newTestClientWith with an explicit URL, so a case
+// can exercise a credentialed baseURL without a live server ever seeing it —
+// NewHTTPClient does no request I/O, so nothing needs the URL to resolve.
+func newTestClientWithURL(t *testing.T, url string, authn auth.Authenticator, jar *resilience.SafeCookieJar) *HTTPClient {
+	t.Helper()
 
 	brokerCfg := &config.BrokerConfig{
-		URL:  srv.URL,
+		URL:  url,
 		Auth: config.AuthConfig{Mode: config.AuthModeBasic},
 	}
 	retries := 1
@@ -465,10 +473,14 @@ func TestHTTPClient_LogValue_ExcludesCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSafeCookieJar: %v", err)
 	}
+	// Same host:port as srv, with userinfo spliced in — sanitizing it should
+	// still yield srv.URL exactly (host/port retained, credentials dropped).
+	credentialedURL := strings.Replace(srv.URL, "://", "://embedded-user:embedded-pass@", 1)
 	cases := []struct {
 		name    string
 		authn   auth.Authenticator
 		jar     *resilience.SafeCookieJar
+		url     string // defaults to srv.URL
 		secrets []string
 	}{
 		{
@@ -482,11 +494,27 @@ func TestHTTPClient_LogValue_ExcludesCredentials(t *testing.T) {
 			authn:   auth.NewBearerAuthenticator("SECRET_BEARER_TOKEN_VAL"),
 			secrets: []string{"SECRET_BEARER_TOKEN_VAL"},
 		},
+		{
+			// A credentialed URL should never reach HTTPClient in production
+			// (validateBrokerURL rejects it at config load), but LogValue's
+			// SanitizeURLString call is defense in depth for exactly the case
+			// where it does — this pins that it actually strips the userinfo
+			// rather than passing it through unexamined (SOL-152979).
+			name:    "credentialed base URL is sanitized",
+			authn:   auth.NewBasicAuthenticator("user", "pass", basicJar),
+			jar:     basicJar,
+			url:     credentialedURL,
+			secrets: []string{"embedded-user", "embedded-pass"},
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			client := newTestClientWith(t, srv, tc.authn, tc.jar)
+			url := tc.url
+			if url == "" {
+				url = srv.URL
+			}
+			client := newTestClientWithURL(t, url, tc.authn, tc.jar)
 
 			var buf bytes.Buffer
 			old := slog.Default()

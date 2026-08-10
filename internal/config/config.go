@@ -1565,19 +1565,27 @@ func sanitizeURL(u *url.URL) string {
 }
 
 // SanitizeURLString parses s and returns the URL with any userinfo stripped.
-// Empty input passes through unchanged. Unparseable input is replaced with
-// "<unparseable url>" rather than echoed back: we cannot prove the original
-// string is credential-free, so the safe default is to drop it. Used by the
-// LogValuer implementations on BrokerConfig and MCPClientAuthConfig, and
-// exported so internal/semp and internal/semp/resilience can apply the same
-// defense-in-depth sanitizing to the broker URLs they log for retry/failure
-// context (SOL-152979).
+// Empty input passes through unchanged. Anything that isn't an http/https URL
+// with a host is replaced with "<unparseable url>" rather than echoed back:
+// we cannot prove such input is credential-free, so the safe default is to
+// drop it. This includes the schemeless "user:pass@host" form, which
+// url.Parse treats as opaque rather than as userinfo — Scheme becomes "user",
+// Host stays empty, and the userinfo check below never fires — so it's the
+// scheme/host check that rejects it, not the explicit Opaque != "" check
+// (which is implied by Host == "" today but kept as its own guard rather than
+// relying on that being coincidental). validateBrokerURL already rejects all
+// of these at config load, so a valid broker URL always takes the
+// parsed-and-stripped branch; this guard only matters for a call site that
+// logs before validation has run. Used by the LogValuer implementations on
+// BrokerConfig and MCPClientAuthConfig, and exported so internal/semp and
+// internal/semp/resilience can apply the same defense-in-depth sanitizing to
+// the broker URLs they log for retry/failure context (SOL-152979).
 func SanitizeURLString(s string) string {
 	if s == "" {
 		return ""
 	}
 	u, err := url.Parse(s)
-	if err != nil {
+	if err != nil || u.Opaque != "" || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return "<unparseable url>"
 	}
 	return sanitizeURL(u)
