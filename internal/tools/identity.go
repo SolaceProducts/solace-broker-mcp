@@ -39,7 +39,6 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/logging/sanitize"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // absentSentinel is the single value any audit-log identity field takes when
@@ -178,19 +177,11 @@ func extraStringSlice(t *sdkauth.TokenInfo, key string) (values []string, presen
 	return cp, true
 }
 
-// requestGroups extracts the caller's groups from the request identity.
-// Reads under authz.TokenInfoExtraKeyGroups. Returns (nil, false) when the
-// groups claim was missing from the token (the day-one IdP misconfiguration
-// case).
-func requestGroups(req *mcp.CallToolRequest) (groups []string, present bool) {
-	if req == nil {
-		return nil, false
-	}
-	if req.Extra == nil {
-		return nil, false
-	}
-	if req.Extra.TokenInfo == nil {
-		return nil, false
-	}
-	return extraStringSlice(req.Extra.TokenInfo, authz.TokenInfoExtraKeyGroups)
+// requestGroups reads the caller's groups claim from token info.
+// Returns (nil, false) when the claim is absent — callers must treat that as a deny.
+//
+// Takes *sdkauth.TokenInfo, not a request type, so the tools/call path and the
+// tools/list middleware read the claim through one function and cannot drift.
+func requestGroups(info *sdkauth.TokenInfo) (groups []string, present bool) {
+	return extraStringSlice(info, authz.TokenInfoExtraKeyGroups)
 }

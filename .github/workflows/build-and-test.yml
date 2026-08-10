@@ -35,9 +35,8 @@ name: Build and Test
 #
 #   1. `workflow_dispatch` runs the full suite on any ref, no pull request
 #      needed: `gh workflow run build-and-test.yml --ref my-branch`. Dispatch
-#      requires write access, so it adds no fork exposure, and `fossa_scan`'s
-#      `if` correctly evaluates false on a dispatch. Same pattern as
-#      `fossa-scan.yaml` and `llm-eval.yml`.
+#      requires write access, so it adds no fork exposure. Same
+#      `workflow_dispatch` pattern as `guardian-scan.yaml` and `llm-eval.yml`.
 #   2. Open the pull request. A draft is enough; `opened` and `synchronize` both
 #      fire for drafts.
 #
@@ -88,8 +87,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Read-only by default. Every elevated scope this workflow needs belongs to
-# `fossa_scan` alone, so it is granted there and nowhere else.
+# Read-only for every job; scanning and its elevated scopes moved to
+# guardian-scan.yaml.
 #
 # This used to be one workflow-level block granting `pull-requests: write`,
 # `id-token: write`, `checks: write`, and `statuses: write` to every job. That
@@ -110,43 +109,24 @@ concurrency:
 permissions:
   contents: read
 
+# Supply-chain scanning moved to guardian-scan.yaml; this workflow is now
+# lint/build/e2e only.
 jobs:
-  fossa_scan:
-    if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
-    name: FOSSA Scan
-    # The scan authenticates to Vault by OIDC (`id-token`), reads the dependency
-    # graph and workflow metadata (`packages`, `actions`), and reports back on the
-    # commit (`pull-requests`, `statuses`, `checks`). Scoped to this job so no
-    # other job inherits any of it.
-    permissions:
-      contents: read
-      packages: read
-      pull-requests: write
-      id-token: write
-      actions: read
-      checks: write
-      statuses: write
-    uses: SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml@fc521b087f780457f92d4cb46038184e92ad2fbc # pinned 2026-05-12
-    with:
-      use_vault: true
-      config_file: '.github/workflow-config.json'
-    secrets:
-      # Vault address is injected from an org/repo secret, not committed to the repo.
-      VAULT_URL: ${{ secrets.VAULT_URL }}
-
   lint:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: 'go.mod'
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.11.4
           # The action's fallback restore key is prefixed on OS + workdir +
@@ -168,10 +148,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: 'go.mod'
 
@@ -225,10 +207,12 @@ jobs:
     needs: build
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: 'go.mod'
 
@@ -253,12 +237,18 @@ jobs:
   e2e-oauth:
     runs-on: ubuntu-latest
     needs: build
+    # The suite's curls into Keycloak/broker/MCP are individually bounded, but
+    # a dependency that accepts TCP and never answers would otherwise sit on
+    # GitHub's 360-minute default. The full cycle runs in ~1 minute warm.
+    timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: 'go.mod'
 
@@ -296,7 +286,23 @@ jobs:
 
       - name: MCP server log (on failure)
         if: failure()
-        run: cat test/e2e-oauth/bin/mcp-server.log 2>/dev/null || echo "No server log found"
+        # The suite restarts the server between phases and rotates the previous
+        # phase's log to mcp-server.log.N, so collect every one — the failing
+        # phase is often not the last. Rotated files first, since they are the
+        # earlier phases and a later failure is often a cascade from them.
+        run: |
+          shopt -s nullglob
+          logs=(test/e2e-oauth/bin/mcp-server.log.[0-9]* test/e2e-oauth/bin/mcp-server.log)
+          if [ ${#logs[@]} -eq 0 ]; then echo "No server log found"; fi
+          for f in "${logs[@]}"; do echo "=== $f ==="; cat "$f"; done
+
+      - name: Generated MCP server configs (on failure)
+        if: failure()
+        # Each phase's meaning lives in its tool_authorization block; without
+        # these, a CI-only failure gives no way to see what the server ran with.
+        run: |
+          shopt -s nullglob
+          for f in test/e2e-oauth/bin/mcp-config-*.yaml; do echo "=== $f ==="; cat "$f"; done
 
       - name: Broker OAuth profile snapshot (on failure)
         if: failure()
@@ -317,10 +323,12 @@ jobs:
     needs: build
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: 'go.mod'
 
@@ -351,10 +359,12 @@ jobs:
     needs: build
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: 'go.mod'
 
@@ -385,10 +395,12 @@ jobs:
     needs: build
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: 'go.mod'
 

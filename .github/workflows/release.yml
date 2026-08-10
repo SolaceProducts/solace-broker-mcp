@@ -5,30 +5,16 @@ on:
     tags:
       - 'v*'
 
-# Least privilege by default: every job below declares what it needs. This
-# matters most for `fossa_scan`, which hands its job token to a reusable
-# workflow in another repository — a broad top-level grant would travel with
-# it. (`test` also calls a reusable workflow, but a local one, and it scopes
-# its own jobs.)
+# Least privilege by default: every job declares what it needs.
 permissions:
   contents: read
 
 jobs:
   test:
-    # build-and-test.yml scopes permissions per job and defaults to
-    # `contents: read`; a caller can only downgrade what the called workflow
-    # asks for, never raise it. This mirrors the widest grant that workflow
-    # makes (its own `fossa_scan`) so nothing is silently stripped. That job is
-    # skipped on a tag push, but the grant costs nothing and keeps the two
-    # workflows from drifting into a hard-to-debug OIDC failure.
+    # build-and-test.yml is lint/build/e2e only (scanning moved to
+    # guardian-scan.yaml) and scopes its own jobs to contents: read.
     permissions:
       contents: read
-      packages: read
-      pull-requests: write
-      id-token: write
-      actions: read
-      checks: write
-      statuses: write
     uses: ./.github/workflows/build-and-test.yml
 
   # Fail fast, before anything is published: a release must have a matching
@@ -41,24 +27,18 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Extract release notes from CHANGELOG
         run: .github/scripts/extract-release-notes.sh "${GITHUB_REF_NAME}" release-notes.md
       - name: Upload release notes
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-notes
           path: release-notes.md
 
-  # Same fail-fast reasoning as release-notes above, for the other artifact that
-  # ships with the release. THIRD_PARTY_LICENSES.md satisfies a Legal release
-  # condition, so a tag must not be publishable while it misstates the binary.
-  #
-  # The same check runs on every pull request, which is what normally keeps `main`
-  # clean. This job is what makes that a guarantee rather than a dependency on the
-  # branch-protection configuration being correct: until `Third-party licenses
-  # current` is registered as a required status check, a pull request can merge
-  # with it red. Verifying again at the tag closes that window, and costs seconds.
+  # Same fail-fast reasoning as release-notes, for the other release artifact.
   licenses:
     name: Third-party licenses current
     runs-on: ubuntu-latest
@@ -66,9 +46,11 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: 'go.mod'
       - name: Self-test the licence check
@@ -89,35 +71,26 @@ jobs:
         if: always()
         run: .github/scripts/build-test-licenses-check.sh
 
-  fossa_scan:
-    name: FOSSA Scan
-    # Same grant, and the same reasoning, as the `fossa_scan` job in
-    # build-and-test.yml: the scan authenticates to Vault by OIDC (`id-token`),
-    # reads the dependency graph and workflow metadata (`packages`, `actions`),
-    # and reports back on the commit (`pull-requests`, `statuses`, `checks`).
-    # Scoped to this job so it inherits nothing the release jobs hold.
+  # Release gate: re-scans the tag, uploads to Guardian, and fails the release
+  # if Guardian blocks (admin skip_security_checks is the escape hatch).
+  # Replaces the Vault-backed FOSSA scan.
+  release-readiness:
+    name: Release Readiness Check
     permissions:
       contents: read
-      packages: read
+      packages: read     # ceiling for guardian-scan's FOSSA jobs (private scan container)
       pull-requests: write
-      id-token: write
-      actions: read
       checks: write
       statuses: write
-    uses: SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml@fc521b087f780457f92d4cb46038184e92ad2fbc # pinned 2026-05-12
+    uses: ./.github/workflows/release-readiness-check.yaml
     with:
-      git_ref: ${{ github.ref_name }}
-      use_vault: true
-      config_file: '.github/workflow-config.json'
-    secrets:
-      # Vault address is injected from an org/repo secret, not committed to the repo.
-      VAULT_URL: ${{ secrets.VAULT_URL }}
+      version: ${{ github.ref_name }}
 
   build-binaries:
     needs: [test, release-notes, licenses]
     runs-on: ubuntu-latest
-    # `id-token`/`attestations` for the provenance step below; nothing here
-    # writes to the repository or the registry.
+    # id-token/attestations for the provenance step below; nothing here writes
+    # to the repository or the registry.
     permissions:
       contents: read
       id-token: write
@@ -135,10 +108,12 @@ jobs:
             goarch: arm64
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: 'go.mod'
 
@@ -158,11 +133,8 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME}"
           ARCHIVE="solace-broker-mcp-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
-          # NOTICE and THIRD_PARTY_LICENSES.md ship alongside LICENSE, not just in
-          # the repository. Apache-2.0 section 4(d) requires the attribution
-          # notices to travel with the derivative work, and THIRD_PARTY_LICENSES.md
-          # describes itself as accompanying the release — which was not true of
-          # this archive until SOL-152414.
+          # NOTICE and THIRD_PARTY_LICENSES.md ship alongside LICENSE (Apache-2.0
+          # section 4(d)), per SOL-152414.
           tar czf "${ARCHIVE}" \
             solace-broker-mcp \
             broker-config.example.yaml \
@@ -171,43 +143,29 @@ jobs:
             THIRD_PARTY_LICENSES.md
           echo "ARCHIVE=${ARCHIVE}" >> "${GITHUB_ENV}"
 
-      # Attested here, per matrix leg, rather than in the release job, for two
-      # reasons. The digest is bound to the archive before it round-trips
-      # through upload-artifact/download-artifact, so the attestation covers
-      # the bytes as built rather than the bytes as restored. And a failure to
-      # attest surfaces before anything is published, instead of after the
-      # image is already live on ghcr.io.
-      #
-      # It is *not* about naming the builder: the SLSA predicate records
-      # workflow_ref, job_workflow_ref, run_id and run_attempt — not the job
-      # name — and all of these jobs are inline in this file, so attesting from
-      # the release job would produce the same values.
+      # Attested per matrix leg so the digest is bound before the archive
+      # round-trips through upload-artifact, and a failure surfaces pre-publish.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: ${{ env.ARCHIVE }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: binary-${{ matrix.goos }}-${{ matrix.goarch }}
           path: ${{ env.ARCHIVE }}
 
+  # Multi-arch build + push + provenance attestation, inline here because these
+  # scopes (packages/id-token/attestations) belong to the release path only —
+  # putting the build in a shared reusable workflow would force the scan path
+  # and the release-readiness gate chain to grant them too. Gated on
+  # release-readiness: a registry push is irreversible and moves `latest`, so it
+  # must wait for the Guardian gate. Admin skip_security_checks can publish over
+  # a block via release-readiness-check.
   build-docker:
-    # `fossa_scan` is a prerequisite here, not just of `release`: this job pushes
-    # unconditionally, and a push cannot be undone. Without it a failing SCA gate
-    # still publishes the image and moves `latest`, and only the GitHub Release
-    # waits — leaving a live image the release never vouched for. The two jobs ran
-    # in parallel before, so on a clean run this costs the longer of the two, not
-    # the sum.
-    needs: [test, release-notes, licenses, fossa_scan]
+    needs: [test, release-notes, licenses, release-readiness]
     runs-on: ubuntu-latest
-    # `packages` to push to ghcr.io, `id-token`/`attestations` for the
-    # provenance step. `artifact-metadata` is needed because
-    # attest-build-provenance defaults `create-storage-record: true`, and with
-    # `push-to-registry: true` under an organization account it creates a
-    # storage record for the pushed attestation; without the permission the
-    # action still succeeds but logs two warnings per run.
     permissions:
       contents: read
       packages: write
@@ -216,16 +174,18 @@ jobs:
       artifact-metadata: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -233,7 +193,7 @@ jobs:
 
       - name: Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/solaceproducts/solace-broker-mcp
           tags: |
@@ -244,7 +204,7 @@ jobs:
 
       - name: Build and push
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -256,31 +216,29 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # The digest covers the whole multi-arch index, so one attestation covers
-      # every tag pushed above. push-to-registry stores a second copy of the
-      # bundle next to the image, which cosign can verify straight from
-      # ghcr.io. `gh attestation verify oci://…` still queries the GitHub API
-      # by default — it only reads the registry copy when passed
-      # `--bundle-from-oci`.
+      # One attestation covers the whole multi-arch index (every tag pushed
+      # above); push-to-registry stores a copy beside the image for cosign.
       - name: Attest image provenance
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-name: ghcr.io/solaceproducts/solace-broker-mcp
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
   release:
-    needs: [build-binaries, build-docker, fossa_scan]
+    needs: [build-binaries, build-docker, release-readiness]
     runs-on: ubuntu-latest
     # Creates the GitHub Release and uploads the archives and checksums to it.
     permissions:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: binary-*
           merge-multiple: true
@@ -293,12 +251,12 @@ jobs:
       # A single artifact downloaded by name extracts flat into the working dir
       # (no name-subdirectory), so body_path: release-notes.md below resolves.
       - name: Download release notes
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-notes
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           body_path: release-notes.md
           generate_release_notes: true

@@ -8,98 +8,15 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# Read-only for every job; the scan that needed elevated scopes moved to
+# guardian-scan.yaml.
 permissions:
   contents: read
-  packages: read
-  pull-requests: write
-  id-token: write
-  actions: read
-  issues: write
-  checks: write
-  statuses: write
 
 jobs:
-  # Skipped for fork pull requests, and it has to be. GitHub withholds repository
-  # secrets from a `pull_request` run triggered by a fork, so `secrets.VAULT_URL`
-  # arrives empty and the shared workflow exits 1 on its own input validation —
-  # red on every external contribution, for a secret the contributor cannot have.
-  #
-  # The two ways to scan a fork's code with real credentials both run untrusted
-  # code with an elevated token: `pull_request_target`, and a `workflow_run`
-  # follow-up that checks out the head ref. Neither is worth a pre-merge scan on a
-  # path that already needs a maintainer to approve the workflow run and a code
-  # owner to approve the pull request. The backstop is the full FOSSA scan on push
-  # to `main` in build-and-test.yml, plus a reviewer reading `go.mod`.
-  #
-  # Do not make this the required status check — see `sca_gate` below.
-  fossa_scan:
-    name: FOSSA Scan
-    if: github.event.pull_request.head.repo.full_name == github.repository
-    uses: SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml@fc521b087f780457f92d4cb46038184e92ad2fbc # pinned 2026-05-12
-    with:
-      use_vault: true
-      config_file: '.github/workflow-config.json'
-    secrets:
-      # Vault address is injected from an org/repo secret, not committed to the repo.
-      VAULT_URL: ${{ secrets.VAULT_URL }}
-
-  # THIS is the required status check for supply-chain scanning, not
-  # `FOSSA Scan / SCA Scan`.
-  #
-  # A skipped *plain* job reports `skipped`, which GitHub counts as a passing
-  # required check. A skipped *reusable-workflow caller* is different: the inner
-  # job never runs, so the `FOSSA Scan / SCA Scan` context is never created at
-  # all. Requiring a context that is never created leaves it pending forever and
-  # the pull request unmergeable — trading a red check for a stuck one. Observed
-  # on PR #232, where the already-gated caller in build-and-test.yml produced
-  # bare `FOSSA Scan` as `skipped` and no ` / SCA Scan` context.
-  #
-  # This job always reports, so it is safe to require. It does not blindly trust
-  # `skipped`: it re-derives the fork condition itself and fails a skip it cannot
-  # account for. Without that, narrowing `fossa_scan`'s `if` later — or an
-  # upstream change that skips the caller for some other reason — would silently
-  # turn the gate off on same-repo pull requests, which is the exact trap the
-  # `FOSSA Scan` warning in ADMIN_SETUP.md documents.
-  #
-  # What that does NOT buy, stated so nobody reads more into it: this workflow
-  # runs on `pull_request`, so it runs from the pull request's own ref. A pull
-  # request that edits this job — `exit 0`, or dropping `needs: fossa_scan` —
-  # still reports `SCA gate` as green. That is the tamper hole `dco.yaml` avoids
-  # by living on `pull_request_target`, and it is not worth the same treatment
-  # here: on a fork pull request the gate passes anyway, so tampering gains
-  # nothing, which leaves only a collaborator editing it on a same-repo pull
-  # request. The control for that is review, not the trigger. Read `.github/`
-  # diffs.
-  sca_gate:
-    name: SCA gate
-    needs: fossa_scan
-    if: always()
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Require a FOSSA verdict, or a reason there cannot be one
-        env:
-          SCAN_RESULT: ${{ needs.fossa_scan.result }}
-          IS_FORK_PR: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
-        run: |
-          set -euo pipefail
-          case "$SCAN_RESULT" in
-            success)
-              echo "FOSSA scan passed."
-              ;;
-            skipped)
-              if [ "$IS_FORK_PR" != "true" ]; then
-                echo "::error::FOSSA scan was skipped on a same-repo pull request, where it should always run. Treating an unexplained skip as a failure rather than passing the gate. Check the 'if' condition on the fossa_scan job."
-                exit 1
-              fi
-              echo "::notice::FOSSA scan skipped: a fork pull request gets no repository secrets, so the Vault-backed scan cannot run. Supply-chain review for this pull request is the full scan on push to main plus a reviewer reading go.mod. See .github/ADMIN_SETUP.md."
-              ;;
-            *)
-              echo "::error::FOSSA scan reported '${SCAN_RESULT}'."
-              exit 1
-              ;;
-          esac
+  # Supply-chain + container scanning moved to guardian-scan.yaml; its
+  # `Guardian scan gate` job is the required check (replaced `SCA gate`).
+  # See .github/ADMIN_SETUP.md.
 
   # The DCO gate itself runs from .github/workflows/dco.yaml on
   # pull_request_target, which means it executes the *base ref's* script — so a
@@ -118,9 +35,26 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Run the DCO check's self-test against this PR's version
         run: .github/scripts/dco-check.test.sh
+      # dco.yaml runs pull_request_target (base ref), so a PR that breaks the
+      # authenticated-fetch scheme it depends on never exercises its own
+      # change there — this job exists precisely to close that gap for
+      # dco-check.sh, and the same reasoning applies to the fetch's auth.
+      # A same-repo pull_request run gets a real (if read-only-on-forks)
+      # GITHUB_TOKEN, so this ls-remote is a faithful probe of the exact
+      # mechanism, without touching any ref.
+      - name: Verify the authenticated-fetch scheme dco.yaml relies on still works
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+          git ls-remote origin HEAD
 
   release_notes_selftest:
     name: Release-notes extraction self-test
@@ -129,7 +63,9 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Run the release-notes extraction self-test against this PR's version
         run: .github/scripts/extract-release-notes.test.sh
 
@@ -153,9 +89,11 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: 'go.mod'
       - name: Self-test the licence check
@@ -177,6 +115,57 @@ jobs:
         if: always()
         run: .github/scripts/build-test-licenses-check.sh
 
+  # Apache 2.0 works best when the grant travels with the file. The headers were
+  # applied once, by hand, and the codebase then grew past them: 53 of 260 Go
+  # files had none by August 2026 (SOL-152896). This is the gate that stops the
+  # same clock restarting, and the reason the 53-file fix was worth doing at all.
+  #
+  # Needs no secret and no Go toolchain, so it gives a real verdict on a fork
+  # pull request — which is exactly where an unheadered new file arrives.
+  #
+  # The self-test runs first because a vacuous pass is this check's dangerous
+  # failure mode, not a false alarm. It has five plausible ones: a header below
+  # the package clause, a reworded header, a missing blank line before `package`,
+  # a walk that silently stops descending into a subtree, and a walk that matches
+  # nothing at all. The suite pins each, and is kept honest by mutation — every
+  # one of those five, applied to a copy of the script, turns it red.
+  #
+  # Do NOT read dco_selftest's rationale onto this job. That one exists because
+  # the enforcing DCO gate runs on `pull_request_target` against the *base ref's*
+  # script, so the self-test is the only place the PR's own copy is exercised.
+  # Here the gate and its self-test both run from the PR's ref, so the self-test
+  # closes no such gap; it only narrows the shape of the tamper. A blunt `exit 0`
+  # in the script is caught — ten negative cases then exit 0 where they expect 1
+  # — but the suite asserts over fixed fixtures, so an edit outside their shape
+  # survives it. Adding `-o -name gen` to the prune list keeps the suite at 24/24
+  # (its only nesting fixture is `internal/deep/pkg`) while every `.go` file under
+  # a `gen/` directory silently stops being checked.
+  #
+  # That tamper hole is real, and unlike the Guardian scan gate in
+  # guardian-scan.yaml it is not self-limiting: that gate dismisses tampering on
+  # the grounds that a fork PR passes anyway, whereas this check gives fork PRs a
+  # real verdict, so there is something to gain. It is accepted rather than
+  # closed, on the same terms as `licenses`: the
+  # control is a human reading the `.github/` diff, not the trigger. Note that
+  # today that is ordinary review — `.github/CODEOWNERS` maps `*` to
+  # dax-developers, but "Require review from Code Owners" is not enabled on the
+  # `main-protection` ruleset yet (SOL-152412), so no reviewer is *compelled* by
+  # the ruleset. Moving this job to `pull_request_target` to close the hole would
+  # run untrusted code with an elevated token, which is a worse trade for a
+  # licence-header check.
+  license_headers:
+    name: Licence headers present
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Self-test the licence-header check
+        run: .github/scripts/license-header-check.test.sh
+      - name: Verify every Go file carries the Apache-2.0 header
+        run: .github/scripts/license-header-check.sh
+
   changelog:
     name: CHANGELOG updated
     runs-on: ubuntu-latest
@@ -184,9 +173,10 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Advise on a missing [Unreleased] entry for behavior-changing PRs
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}

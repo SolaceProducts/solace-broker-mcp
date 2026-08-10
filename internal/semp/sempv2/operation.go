@@ -1,3 +1,17 @@
+// Copyright 2024-2026 Solace Corporation. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 // Package sempv2 provides a client for making authenticated HTTP calls to the
 // Solace SEMPv2 management API. It defines the Client interface, the Operation
 // type (parsed from OpenAPI specs), and the HTTPClient implementation.
@@ -15,13 +29,14 @@ import (
 // It holds the HTTP method, path template with parameter placeholders, and the
 // parameter definitions needed to construct a valid request.
 type Operation struct {
-	ID            string          // operationId from OpenAPI spec (e.g., "getMsgVpnQueue")
-	Method        string          // HTTP method (GET, POST, PUT, PATCH, DELETE)
-	Path          string          // path template including basePath (e.g., "/SEMP/v2/monitor/msgVpns/{msgVpnName}/queues/{queueName}")
-	Parameters    []Parameter     // path, query, and body parameters
-	Description   string          // human-readable description from the spec
-	BodyFields    map[string]bool // body attribute names the operation accepts; nil when unknown
-	SchemaVersion string          // spec's info.version (e.g. "10.26.2.9715"); empty if omitted
+	ID             string            // operationId from OpenAPI spec (e.g., "getMsgVpnQueue")
+	Method         string            // HTTP method (GET, POST, PUT, PATCH, DELETE)
+	Path           string            // path template including basePath (e.g., "/SEMP/v2/monitor/msgVpns/{msgVpnName}/queues/{queueName}")
+	Parameters     []Parameter       // path, query, and body parameters
+	Description    string            // human-readable description from the spec
+	BodyFields     map[string]bool   // body attribute names the operation accepts; nil when unknown
+	ResponseFields map[string]string // response item attribute name -> JSON type ("string", "integer", ...); nil when unknown
+	SchemaVersion  string            // spec's info.version (e.g. "10.26.2.9715"); empty if omitted
 }
 
 // Parameter describes a single parameter for a SEMPv2 operation.
@@ -109,13 +124,14 @@ func ParseSpecs(fsys fs.FS) (map[string]*Operation, error) {
 
 				key := specType + "/" + opDef.OperationID
 				operations[key] = &Operation{
-					ID:            opDef.OperationID,
-					Method:        method,
-					Path:          spec.BasePath + path,
-					Parameters:    params,
-					Description:   description,
-					BodyFields:    extractBodyFields(opDef, spec.Parameters, spec.Definitions),
-					SchemaVersion: spec.Info.Version,
+					ID:             opDef.OperationID,
+					Method:         method,
+					Path:           spec.BasePath + path,
+					Parameters:     params,
+					Description:    description,
+					BodyFields:     extractBodyFields(opDef, spec.Parameters, spec.Definitions),
+					ResponseFields: extractResponseFields(opDef, spec.Definitions),
+					SchemaVersion:  spec.Info.Version,
 				}
 			}
 		}
@@ -225,6 +241,95 @@ func extractBodyFields(opDef *openapi2.Operation, sharedParams map[string]*opena
 	fields := make(map[string]bool, len(bodySchema.Value.Properties))
 	for name := range bodySchema.Value.Properties {
 		fields[name] = true
+	}
+	return fields
+}
+
+// resolveSchemaRef follows a single local "#/definitions/..." $ref into
+// definitions, returning the resolved SchemaRef unchanged if ref has no Ref
+// set (already inline) or if the ref can't be found. SEMP specs don't chain
+// $refs more than one level deep for the shapes this package resolves
+// (response envelope -> data -> item), so one hop is sufficient.
+func resolveSchemaRef(ref *openapi2.SchemaRef, definitions map[string]*openapi2.SchemaRef) *openapi2.SchemaRef {
+	if ref == nil || ref.Ref == "" {
+		return ref
+	}
+	resolved, ok := definitions[strings.TrimPrefix(ref.Ref, "#/definitions/")]
+	if !ok {
+		return ref
+	}
+	return resolved
+}
+
+// schemaTypeName returns the first declared JSON type for a schema (e.g.
+// "string", "integer", "boolean"), or "object" as the fallback when the type
+// is unset — the common case for a nested object with no explicit "type"
+// keyword in Swagger 2.0.
+func schemaTypeName(s *openapi2.Schema) string {
+	if s == nil || s.Type == nil || len(*s.Type) == 0 {
+		return "object"
+	}
+	return (*s.Type)[0]
+}
+
+// extractResponseFields returns the operation's response item attribute names
+// mapped to their JSON type, resolved from the 200 response's schema. It
+// returns nil when the response has no schema, no "data" property, or the
+// item schema can't be resolved to a concrete property set. nil means
+// "unknown" rather than "no fields" — SOL-150785's schema-consistency work
+// (not yet built; ResponseFields has no callers today) is expected to skip
+// validation on nil rather than treat it as every field being unexpected.
+//
+// SEMP monitor/config responses wrap the actual attributes in an envelope:
+// {"data": <item or array of item>, "meta": {...}, "links": {...}}. This
+// unwraps that envelope — resolving "data" itself, and its array items when
+// data is a list (e.g. getMsgVpnQueues) — to reach the flat, un-nested
+// attribute schema (e.g. MsgVpnQueue) SEMP responses actually use; that flat
+// shape is confirmed by inspection of the embedded specs, not assumed.
+//
+// Only the "200" response is inspected — confirmed empirically that every
+// operation across all three embedded specs uses 200 as its sole success
+// code, so this isn't a guess about a convention that might not hold.
+func extractResponseFields(opDef *openapi2.Operation, definitions map[string]*openapi2.SchemaRef) map[string]string {
+	resp, ok := opDef.Responses["200"]
+	if !ok || resp.Schema == nil {
+		return nil
+	}
+
+	envelope := resolveSchemaRef(resp.Schema, definitions)
+	if envelope.Value == nil {
+		return nil
+	}
+
+	dataRef, ok := envelope.Value.Properties["data"]
+	if !ok {
+		return nil
+	}
+	data := resolveSchemaRef(dataRef, definitions)
+	if data.Value == nil {
+		return nil
+	}
+
+	itemSchema := data.Value
+	if schemaTypeName(itemSchema) == "array" {
+		if itemSchema.Items == nil {
+			return nil
+		}
+		item := resolveSchemaRef(itemSchema.Items, definitions)
+		if item.Value == nil {
+			return nil
+		}
+		itemSchema = item.Value
+	}
+
+	if len(itemSchema.Properties) == 0 {
+		return nil
+	}
+
+	fields := make(map[string]string, len(itemSchema.Properties))
+	for name, propRef := range itemSchema.Properties {
+		prop := resolveSchemaRef(propRef, definitions)
+		fields[name] = schemaTypeName(prop.Value)
 	}
 	return fields
 }

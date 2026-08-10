@@ -42,7 +42,7 @@ The server resolves variables at startup. The `.env` file loads automatically be
 | `tls_key_file` | — | none | Path to TLS private key (PEM). |
 | `tls_terminated_upstream` | — | `false` | Opt-in to a plaintext listener while `mcp_client_auth.mode: oauth`. Acknowledges that TLS is terminated by an upstream proxy/ingress. Ignored in the dev modes. |
 | `log_level` | — | `info` | Log verbosity: `debug`, `info`, `warn`, `error`. |
-| `enable_write_tools` | — | `false` | When `true`, register every tool that is not read-only (13 in total): the four action-API tools (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`) plus the nine Config-API management tools (`create`/`update`/`delete` for `message-vpn`, `queue`, and `topic-endpoint`). This includes the non-destructive stats-reset tools (which still mutate broker state) and provisioning tools such as `delete-message-vpn`. When `false`, those tools are skipped at registration and never appear in `tools/list`. Secure-by-default for trial / dev deployments. |
+| `enable_write_tools` | — | `false` | When `true`, register every tool that is not read-only (16 in total): the four action-API tools (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`) plus the 12 Config-API management tools (`create`/`update`/`delete` for `message-vpn`, `queue`, `topic-endpoint`, and `rdp`). This includes the non-destructive stats-reset tools (which still mutate broker state) and provisioning tools such as `delete-message-vpn`. When `false`, those tools are skipped at registration and never appear in `tools/list`. Secure-by-default for trial / dev deployments. |
 
 **TLS:** Provide both `tls_cert_file` and `tls_key_file` together — providing only one is a startup error. When both are set, the server starts with HTTPS; when neither is set, plain HTTP.
 
@@ -216,6 +216,7 @@ mcp_client_auth:
 | YAML field | Description |
 |---|---|
 | `enabled` | Required. `true` turns tool authorization on; `false` turns it off. There is no default — the field must be present under `mode: oauth`. |
+| `filter_tools_list` | Optional, defaults to `false`. When `true`, `tools/list` returns only the tools the caller's groups grant, instead of every registered tool. Only meaningful when tool authorization is on (`enabled: true` in this same block) — setting it while `enabled: false` logs a startup `WARN` and leaves filtering off, since there is no policy to filter against. See [Filtering `tools/list`](#filtering-toolslist) below. |
 | `groups_claim_name` | Name of the OIDC claim in the caller's JWT that carries their group or role memberships. Optional; defaults to `"groups"`. Must match the claim your IdP emits (see [Authentication](authentication.md) for setting this up on the IdP side). Only meaningful when `enabled: true`. **Top-level lookup only** — the value is read from the top of the JWT claims object; nested paths (e.g. `authorization.roles`) are not supported. If your IdP emits memberships inside a nested object, flatten them into a top-level claim with an IdP mapper before the token is issued. |
 | `access_level_groups` | Map from group name — as it appears in the caller's token — to the list of MCP tool names that group grants. Required when `enabled: true`. Union semantics: a caller is allowed to invoke a tool when at least one of their groups grants it. A tool that no group grants is unreachable by every caller. **No wildcard** — a group that should grant every tool must list every tool name explicitly. This is deliberate: an "all tools" glob would silently include every newly-added tool at upgrade time, without the operator noticing the surface expanded. |
 
@@ -224,6 +225,57 @@ mcp_client_auth:
 **Interaction with `enable_write_tools`.** The two controls are orthogonal — they answer different questions, and a caller reaches a tool only when both answers permit it. `enable_write_tools` decides which tools the server registers at all; `access_level_groups` decides which callers may invoke a registered tool. Granting a write/action tool (for example `delete-queue-messages`, `disconnect-client`, `clear-queue-stats`, `clear-client-stats`, or any of the Config-API management tools) while `enable_write_tools: false` is therefore inert — the tool never appears in `tools/list`, so the grant cannot take effect. This is a supported way to stage an RBAC policy ahead of enabling write tools, so it is not a startup error; the server emits one startup `WARN` per inert tool naming the tool and the referencing groups. Setting `enable_write_tools: true` activates those grants and silences the WARN. A grant naming a tool the server does not know at all remains a **fatal** startup error.
 
 **Group soft cap.** If a caller's claim carries more than 250 memberships, the server uses the first 250 in JWT-array order and emits a WARN carrying the total count and the cap (no caller identity, so as not to reveal group counts per user on the shared log stream). The cap sits above the ceilings of the major IdPs (Entra 200, Okta 100), so legitimate deployments never hit it — the WARN indicates either a claim mapper misconfiguration on the IdP or a caller belonging to unusually many groups.
+
+### Filtering `tools/list`
+
+By default every authenticated caller receives the full tool list, even for tools their groups do not grant — authorization is enforced when they try to invoke one. Setting `filter_tools_list: true` narrows `tools/list` to the tools the caller may actually invoke:
+
+```yaml
+mcp_client_auth:
+  mode: oauth
+  issuer: "https://idp.example.com"
+  audience: "mcp-server"
+  resource_url: "https://mcp.example.com/mcp"
+  tool_authorization:
+    enabled: true
+    filter_tools_list: true
+    groups_claim_name: "groups"
+    access_level_groups:
+      Ops:
+        - list-vpns
+```
+
+The benefit is context, not access control: an AI agent handed tools it will be denied spends context on their descriptions and schemas, and tends to misreport the cause when a call is refused. A caller in a narrow role can drop from ~24 tools to 2 or 3.
+
+**This is not an access control.** `tools/call` remains the only authorization boundary, and it is enforced identically whether filtering is on or off. A tool absent from the list is still callable by name — the server resolves tool calls against the full registered set, not against whatever a previous list returned. Filtering changes what a caller *sees*, never what they may *do*.
+
+**If tools are missing or your client misbehaves, set `filter_tools_list: false` and restart.** Authorization is still fully enforced on every tool call, so turning filtering off does not weaken access control. This is the first thing to try when a caller reports missing tools.
+
+The filter reuses the same policy decision as `tools/call`, so a listed tool is always callable and a callable tool is always listed. The two structurally exempt tools (`list-brokers` and `describe-semp-schema`) are never filtered — they are always callable, so hiding them would break that guarantee and remove broker discovery for every caller.
+
+A caller whose groups grant nothing receives a normal response containing only the exempt tools — never an error and never an empty list. The same applies when the token carries no groups claim at all: the filter fails closed. The two cases are deliberately indistinguishable to the caller but are distinguishable in the server log (see below).
+
+**Startup posture.** The server states the filtering posture on every boot, alongside the `tool authorization is enabled/disabled` line:
+
+| `tool_authorization.enabled` | `filter_tools_list` | Log |
+|---|---|---|
+| `true` | `true` | `INFO` — `tools/list filtering is enabled` |
+| `true` | absent or `false` | `INFO` — `tools/list filtering is disabled`, `reason: filter_tools_list not set` |
+| `false` | `true` | `WARN` — `tools/list filtering is disabled`, `reason: tool_authorization.enabled is false`. The server starts normally; the flag has no policy to filter against. |
+| `false` | absent or `false` | `INFO` — `tools/list filtering is disabled`, `reason: filter_tools_list not set` |
+
+**Filter audit logging.** Because nothing about the filtering reaches the caller, the server log is the only diagnostic. Each filtered `tools/list` emits one line with `msg: "tool list filter"` and `event: "tool_list_filter"`, carrying the same caller identity fields as the call path (`sub`, `iss`, `client_id`, `jti`, `correlation_id`) plus:
+
+| Field | Meaning |
+|---|---|
+| `decision_reason` | `"filtered"` — groups matched some grants and at least one tool was removed. `"unfiltered"` — the caller's grants cover every registered tool. `"not_permitted"` — the claim was present but matched no grants, so only the exempt tools remain. `"missing_claim"` — the token carried no claim under the configured `groups_claim_name`; the filter failed closed. |
+| `groups_present` | Whether the token carried the groups claim at all. |
+| `tools_before` / `tools_after` | Tool counts entering and leaving the filter. |
+| `expected_claim` | The configured `groups_claim_name`. Present on `missing_claim` only, so a deployment using a non-default claim name can be triaged from the record without cross-referencing config. |
+
+`missing_claim` is logged at **`WARN`**; every other outcome at `INFO`. The distinction matters: `not_permitted` is the policy working as configured, while `missing_claim` means the token could not answer the authorization question at all — typically an IdP claim-mapper misconfiguration, which affects every caller of that deployment rather than one user. The same reasons appear on the `tool authorization` call-path line, so filter both by `event` to tell the two paths apart.
+
+As on the call path, the caller's actual group names are never logged.
 
 **Audit logging.** Every gated tool invocation emits a single structured log line with `msg: "tool authorization"` before dispatching the underlying tool call. The line carries the caller identity fields the server already logs (`sub`, `iss`, `client_id`, `jti`, `correlation_id`) plus authorization-specific fields:
 
