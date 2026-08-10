@@ -172,9 +172,16 @@ func callToolResultText(t *testing.T, result *mcp.CallToolResult, err error) str
 		t.Fatalf("StructuredContent = %T, want map[string]any", result.StructuredContent)
 	}
 	if sc["retryable"] != false {
-		t.Errorf("retryable = %v, want false", sc["retryable"])
+		t.Fatalf("retryable = %v, want false", sc["retryable"])
 	}
-	return result.Content[0].(*mcp.TextContent).Text
+	if len(result.Content) == 0 {
+		t.Fatal("expected result.Content to be non-empty")
+	}
+	text, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("result.Content[0] = %T, want *mcp.TextContent", result.Content[0])
+	}
+	return text.Text
 }
 
 func TestCallTool_MissingBroker(t *testing.T) {

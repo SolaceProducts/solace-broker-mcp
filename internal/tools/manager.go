@@ -314,8 +314,8 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 	// it is the one place the raw text is kept. For a broker/handler-originated
 	// error the agent only ever sees the sanitized message from buildErrorResult;
 	// for a local error the agent sees this same err.Error() text verbatim via
-	// buildLocalErrorResult, which is safe precisely because that text is one
-	// this package wrote itself, never broker- or handler-originated
+	// buildLocalErrorResult, which is safe precisely because that text is
+	// something this package wrote itself, never broker- or handler-originated
 	// (SOL-152980). Folding "detail" onto this line, rather than a separate
 	// emit, keeps one tool error in one record at a single (ERROR) level.
 	//
