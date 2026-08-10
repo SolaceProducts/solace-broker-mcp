@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-10
+
 ### Added
 
 - New `THIRD_PARTY_BUILD_TEST.md` inventory covering the third-party components used to build and test the project but not shipped in the binary: the Go modules of the two e2e submodules, the nine npm packages the LLM eval suite installs, the GitHub Actions and reusable workflows CI uses, and the five container images pulled by the build and the e2e fixtures. This is the second of the two third-party lists the Solace public-repository Legal checklist requires; `THIRD_PARTY_LICENSES.md` remains the release inventory and is unchanged. Every licence was read from the component's own licence file or its source repository rather than inferred. Nothing found constrains how we license or distribute the product — every Go module and GitHub Action is permissive (MIT, BSD-3-Clause, Apache-2.0) — but the file deliberately does not claim universal permissiveness: the Claude Code CLI used by the LLM eval suite ships under Anthropic's commercial terms and the Solace broker test fixture is proprietary, both being tools we run rather than code we link or redistribute. Kept honest by `.github/scripts/build-test-licenses-check.sh`, which fails CI on drift in either direction across all four sources, including component *versions*, under its own self-test. Discovery is derived with `find` rather than hardcoded, and prunes rather than filters, so a new submodule, lockfile, or Dockerfile cannot introduce components the gate is blind to and a sibling worktree cannot inject ones it does not have. The rebuild procedure lives in the document itself rather than only on the gate's failure path. Two further facts surfaced and recorded rather than smoothed over: `golang.org/x/oauth2` is pinned at two different versions across the repository's modules (no licensing consequence, both BSD-3-Clause), and the distroless runtime base is the one build input that reaches a published artifact, so its OS-package layers are a gap in the *release* inventory that neither file currently enumerates. Tracked under SOL-152861.
@@ -351,7 +353,8 @@ This project uses [Semantic Versioning](https://semver.org/):
 
 ## Links
 
-- [Unreleased]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.6.0...HEAD
+- [Unreleased]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.7.0...HEAD
+- [0.7.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.6.0...v0.7.0
 - [0.6.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.5.0...v0.6.0
 - [0.5.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.4.0...v0.5.0
 - [0.4.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.3.0...v0.4.0
