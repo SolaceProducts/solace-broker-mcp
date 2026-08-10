@@ -5,6 +5,31 @@
 # project relies on instead of a contributor licence agreement, so it BLOCKS —
 # there is deliberately no label, flag, or env var that skips it.
 #
+# A second, narrower control also runs here: the author and committer email on
+# every PR commit must not use a non-routable domain — one ending in `.local`,
+# `.sol-local`, `.internal`, or `.lan`, or a bare hostname with no dot at all.
+# These are the shapes a developer machine invents when `git config user.email`
+# is unset. Author email is not stored in any file, so no secret scan finds it,
+# but it publishes permanently with the git history when the repo goes public.
+# Enforcing this at PR time is cheap; catching it after publication is not — a
+# fork keeps the leaked address forever.
+#
+# The check is a denylist rather than an allowlist so an outside contributor
+# with an ordinary personal or corporate address can still open a PR. It runs
+# alongside DCO because both read the same identity fields; keeping it in one
+# job means one clear failure surface for the contributor. Non-routable
+# addresses already on `main` are covered by an exception in
+# .github/OPEN_SOURCE_STATUS.md; this gate is forward-only.
+#
+# The two checks do NOT walk the same commit range. DCO exempts merge commits
+# that contribute no content of their own (see below); the identity check
+# exempts nothing. The exemption is an argument about *certification* — a merge
+# that adds nothing has nothing to certify — and it does not carry over, because
+# the merge commit still has an author and a committer, written by whoever ran
+# `git merge`, and those fields publish with the history exactly like any other
+# commit's. Sharing one range would blind the identity gate precisely at
+# `git merge main`, the workflow CONTRIBUTING.md tells contributors to use.
+#
 # A commit passes when its message contains a `Signed-off-by:` line whose email
 # matches the commit's author or committer, case-insensitively.
 #
@@ -162,6 +187,14 @@ for merge in $(git rev-list --merges "$HEAD_REV" "^${BASE_REV}" $EXCLUDE_BASE_RE
   fi
 done
 
+# The identity check's own range: every commit the PR contributes, merges
+# included unconditionally. See the merge-exemption note in the header — the
+# DCO exemption is about certifying content and does not extend to the author
+# and committer fields, which a content-free merge still carries and still
+# publishes.
+# shellcheck disable=SC2086 # as above
+identity_commits=$(git rev-list "$HEAD_REV" "^${BASE_REV}" $EXCLUDE_BASE_REF)
+
 if [ -z "${commits//[[:space:]]/}" ]; then
   # Nothing to check. Confirm that really means "contributes nothing" rather
   # than "the range computation missed something", and fail closed if not.
@@ -173,8 +206,14 @@ if [ -z "${commits//[[:space:]]/}" ]; then
     echo "::error::This pull request changes files against '${BASE_REV}', but the only commits it adds are merge commits that carry no content of their own. Nothing in it is covered by a sign-off." >&2
     exit 1
   fi
-  echo "No commits contributed by this PR — nothing to check."
-  exit 0
+  if [ -z "${identity_commits//[[:space:]]/}" ]; then
+    echo "No commits contributed by this PR — nothing to check."
+    exit 0
+  fi
+  # Content-free merges only. Nothing to sign off, but their identity fields
+  # are still this PR's contribution, so fall through to the identity check
+  # rather than exiting clean here.
+  echo "DCO: no commits contributed by this PR carry content of their own — nothing to sign off."
 fi
 
 # Sign-off lines on a commit, verbatim. Anchored on the `Signed-off-by:` key so
@@ -213,6 +252,28 @@ signoff_emails() {
 
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
+# Author-identity check. Rejects the shapes a developer machine invents when
+# `git config user.email` is unset — a bare hostname (`alice@buildbox`), an
+# mDNS domain (`.local`), or an internal-only TLD (`.sol-local`, `.internal`,
+# `.lan`). A denylist rather than an allowlist so ordinary external addresses
+# can still contribute; a typo like `.locol` slips through, and that is the
+# accepted trade-off.
+identity_domain_ok() {
+  local email="$1" domain
+  domain="${email##*@}"
+  # reject empty-domain and no-`@` inputs
+  [ "$domain" != "$email" ] && [ -n "$domain" ] || return 1
+  domain=$(lower "$domain")
+  case "$domain" in
+    *.local|*.sol-local|*.internal|*.lan) return 1 ;;
+  esac
+  # bare hostname (no dot at all in the domain part)
+  case "$domain" in
+    *.*) return 0 ;;
+    *)   return 1 ;;
+  esac
+}
+
 failed=""
 total=0
 for sha in $commits; do
@@ -234,50 +295,69 @@ for sha in $commits; do
   fi
 done
 
-if [ -z "$failed" ]; then
-  echo "DCO: all ${total} commit(s) contributed by this PR are signed off — OK."
+# Separate walk, over the unexempted range.
+failed_identity=""
+identity_total=0
+for sha in $identity_commits; do
+  identity_total=$((identity_total + 1))
+  author_email=$(lower "$(git show -s --format='%ae' "$sha")")
+  committer_email=$(lower "$(git show -s --format='%ce' "$sha")")
+
+  if ! identity_domain_ok "$author_email" || ! identity_domain_ok "$committer_email"; then
+    failed_identity="${failed_identity}${sha}"$'\n'
+  fi
+done
+
+if [ -z "$failed" ] && [ -z "$failed_identity" ]; then
+  [ "$total" -eq 0 ] || echo "DCO: all ${total} commit(s) contributed by this PR are signed off — OK."
+  echo "Identity: all ${identity_total} commit(s) use a routable author and committer address — OK."
   exit 0
 fi
 
-failed_count=$(grep -c . <<<"$failed")
-failed_merges=""
-echo "::error::${failed_count} of ${total} commit(s) in this pull request are missing a Developer Certificate of Origin sign-off."
-echo
-while IFS= read -r sha; do
-  [ -n "$sha" ] || continue
-  echo "  $(git show -s --format='%h %s' "$sha" | sanitize)"
-  echo "    author:    $(git show -s --format='%an <%ae>' "$sha" | sanitize)"
-  echo "    committer: $(git show -s --format='%cn <%ce>' "$sha" | sanitize)"
-  reason=$(merge_content_reason "$sha")
-  [ -z "$reason" ] || failed_merges=yes # decides which bulk fix is safe to print
-  case "$reason" in
-    octopus)
-      echo "    this is an octopus merge; the check cannot recompute a merge of more"
-      echo "    than two parents, so it needs a sign-off of its own — redo it with"
-      echo "    \`git merge --signoff\`"
-      ;;
-    conflict)
-      echo "    re-merging this commit's parents conflicts, so the check cannot tell"
-      echo "    what you resolved by hand. A resolution is a contribution — redo the"
-      echo "    merge with \`git merge --signoff\`"
-      ;;
-    differs)
-      echo "    this merge records a result that re-merging its parents does not"
-      echo "    reproduce, so it contributes something of its own and needs a"
-      echo "    sign-off — redo it with \`git merge --signoff\`"
-      ;;
-  esac
-  found=$(signoff_lines "$sha")
-  if [ -n "$found" ]; then
-    echo "    sign-off present but no email matches the author or committer:"
-    sed 's/^[[:space:]]*/      /' <<<"$found"
-  else
-    echo "    no Signed-off-by line found"
-  fi
-  echo
-done <<<"$failed"
+# Reports the DCO failures in $failed. A function rather than an inline block so
+# an identity-only failure can skip it without wrapping ninety lines in an
+# `if`, and so its locals cannot leak into the identity report below.
+report_dco_failures() {
+  local failed_count failed_merges="" sha reason found
 
-cat <<'EOF'
+  failed_count=$(grep -c . <<<"$failed")
+  echo "::error::${failed_count} of ${total} commit(s) in this pull request are missing a Developer Certificate of Origin sign-off."
+  echo
+  while IFS= read -r sha; do
+    [ -n "$sha" ] || continue
+    echo "  $(git show -s --format='%h %s' "$sha" | sanitize)"
+    echo "    author:    $(git show -s --format='%an <%ae>' "$sha" | sanitize)"
+    echo "    committer: $(git show -s --format='%cn <%ce>' "$sha" | sanitize)"
+    reason=$(merge_content_reason "$sha")
+    [ -z "$reason" ] || failed_merges=yes # decides which bulk fix is safe to print
+    case "$reason" in
+      octopus)
+        echo "    this is an octopus merge; the check cannot recompute a merge of more"
+        echo "    than two parents, so it needs a sign-off of its own — redo it with"
+        echo "    \`git merge --signoff\`"
+        ;;
+      conflict)
+        echo "    re-merging this commit's parents conflicts, so the check cannot tell"
+        echo "    what you resolved by hand. A resolution is a contribution — redo the"
+        echo "    merge with \`git merge --signoff\`"
+        ;;
+      differs)
+        echo "    this merge records a result that re-merging its parents does not"
+        echo "    reproduce, so it contributes something of its own and needs a"
+        echo "    sign-off — redo it with \`git merge --signoff\`"
+        ;;
+    esac
+    found=$(signoff_lines "$sha")
+    if [ -n "$found" ]; then
+      echo "    sign-off present but no email matches the author or committer:"
+      sed 's/^[[:space:]]*/      /' <<<"$found"
+    else
+      echo "    no Signed-off-by line found"
+    fi
+    echo
+  done <<<"$failed"
+
+  cat <<'EOF'
 Every commit needs a sign-off line carrying its own author (or committer) email:
 
   Signed-off-by: Your Name <your.email@example.com>
@@ -288,15 +368,15 @@ Every commit needs a sign-off line carrying its own author (or committer) email:
   git commit --amend -s --no-edit && git push --force-with-lease
 EOF
 
-# The bulk fix is `git rebase --signoff`, but rebase FLATTENS merge commits: it
-# replays their parents' commits linearly and throws the merge away, taking any
-# conflict resolution with it. Measured on a branch with one conflict-resolution
-# merge: 5 commits and the resolution before, 2 commits and conflict markers
-# after, worktree left mid-rebase. So the moment a merge is among the offenders,
-# that advice is destructive and must not be printed. Note this is true of any
-# upstream argument — `HEAD~N` and the base sha are equally unsafe here.
-if [ -n "$failed_merges" ]; then
-  cat <<EOF
+  # The bulk fix is `git rebase --signoff`, but rebase FLATTENS merge commits: it
+  # replays their parents' commits linearly and throws the merge away, taking any
+  # conflict resolution with it. Measured on a branch with one conflict-resolution
+  # merge: 5 commits and the resolution before, 2 commits and conflict markers
+  # after, worktree left mid-rebase. So the moment a merge is among the offenders,
+  # that advice is destructive and must not be printed. Note this is true of any
+  # upstream argument — `HEAD~N` and the base sha are equally unsafe here.
+  if [ -n "$failed_merges" ]; then
+    cat <<EOF
 
 Do NOT run \`git rebase --signoff\` on this branch. Merge commits are among the
 commits listed above, and rebase would replay them as ordinary commits, throwing
@@ -308,19 +388,104 @@ away the merge and any conflict resolution in it.
   # otherwise, re-create the merge so git signs it
   git merge --signoff <the branch you merged>
 EOF
-else
-  cat <<EOF
+  else
+    cat <<EOF
 
   # every commit this PR adds
   git rebase --signoff ${BASE_REV} && git push --force-with-lease
 EOF
-fi
+  fi
 
-cat <<'EOF'
+  cat <<'EOF'
 
 If the email above is not the one you meant to sign off with, set
 `git config user.email` first, then re-run. Adding the line certifies the
 Developer Certificate of Origin: https://developercertificate.org/ — see
 .github/CONTRIBUTING.md#developer-certificate-of-origin.
 EOF
+}
+
+# Reports the identity failures in $failed_identity. Extracted for the same two
+# reasons as report_dco_failures above: the caller stays a one-line guard rather
+# than a long indented block, and the locals cannot leak.
+report_identity_failures() {
+  local identity_failed_count sha identity_failed_merges=""
+
+  identity_failed_count=$(grep -c . <<<"$failed_identity")
+  # Extra blank line only when a DCO block preceded this one, so an
+  # identity-only failure doesn't start with a stray blank line.
+  [ -z "$failed" ] || echo
+  echo "::error::${identity_failed_count} of ${identity_total} commit(s) in this pull request use an author or committer email whose domain is not routable (.local, .sol-local, .internal, .lan, or a bare hostname). These publish permanently with the git history."
+  echo
+  while IFS= read -r sha; do
+    [ -n "$sha" ] || continue
+    echo "  $(git show -s --format='%h %s' "$sha" | sanitize)"
+    echo "    author:    $(git show -s --format='%an <%ae>' "$sha" | sanitize)"
+    echo "    committer: $(git show -s --format='%cn <%ce>' "$sha" | sanitize)"
+    echo
+  done <<<"$failed_identity"
+
+  cat <<'EOF'
+Set your commit identity to a routable address, then rewrite the commits listed
+above. The address sits in two places — the author/committer fields and the
+`Signed-off-by:` trailer — and both have to change: `--reset-author` alone
+leaves the old address published in the trailer, and leaves DCO failing,
+because the trailer no longer matches the author or committer.
+
+  git config user.email "you@your-domain.example"
+
+Substitute the address CI listed above for BAD below.
+
+  # only the most recent commit (works on a merge commit too — amend keeps its
+  # parents)
+  export BAD="the.address@ci.listed"
+  git log -1 --format=%B | grep -vi "signed-off-by:.*<$BAD>" |
+    git commit --amend --reset-author -s --file=-
+EOF
+
+  # Same hazard as the DCO bulk fix: rebase replays merges as ordinary commits
+  # and drops any conflict resolution with them. Withhold the branch-wide
+  # command when a merge is among the offenders.
+  while IFS= read -r sha; do
+    [ -n "$sha" ] || continue
+    [ "$(git rev-list --parents -n1 "$sha" | wc -w)" -le 2 ] || identity_failed_merges=yes
+  done <<<"$failed_identity"
+
+  if [ -n "$identity_failed_merges" ]; then
+    cat <<'EOF'
+
+Do NOT rewrite this branch with `git rebase` — merge commits are among those
+listed above, and rebase would replay them as ordinary commits, throwing away
+the merge and any conflict resolution in it. Fix a merge that is not at the tip
+by re-creating it: reset to before it, then redo the merge with your corrected
+identity.
+EOF
+  else
+    cat <<'EOF'
+
+  # every commit on the branch carrying that address, leaving the others alone.
+  # The --exec argument must stay on ONE line; git rejects a newline in it.
+  git rebase --exec 'git log -1 --format="%ae %ce" | grep -qiF "$BAD" || exit 0; git log -1 --format=%B | grep -vi "signed-off-by:.*<$BAD>" | git commit --amend --reset-author -s --file=-' <base>
+
+Do NOT drop the leading guard and run `--exec 'git commit --amend
+--reset-author'` over the branch. `--exec` runs after every commit it replays,
+so that rewrites the author of everyone else's commits on the branch to you.
+EOF
+  fi
+
+  cat <<'EOF'
+
+Then `git push --force-with-lease`.
+
+See .github/CONTRIBUTING.md#author-identity for the requirement and the
+reasoning.
+EOF
+}
+
+# Both guarded: an identity-only failure must not print a misleading "0 of N
+# commit(s) are missing a Developer Certificate of Origin sign-off", and a
+# DCO-only failure must not print an empty identity block.
+[ -z "$failed" ] || report_dco_failures
+[ -z "$failed_identity" ] || report_identity_failures
+
 exit 1
