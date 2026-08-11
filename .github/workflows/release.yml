@@ -83,6 +83,7 @@ jobs:
       checks: write
       statuses: write
     uses: ./.github/workflows/release-readiness-check.yaml
+    secrets: inherit
     with:
       version: ${{ github.ref_name }}
 
