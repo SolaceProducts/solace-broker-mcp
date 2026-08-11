@@ -217,7 +217,7 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 // declared length (or that lie) are caught by http.MaxBytesReader, which
 // fails the downstream read once the limit is exceeded and closes the
 // connection, so an oversized body is never fully buffered; the SDK surfaces
-// that read failure to the client as 400 "failed to read body".
+// that read failure to the client as 413 "request body exceeds N bytes".
 func limitRequestBody(next http.Handler, maxBytes int64) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.ContentLength > maxBytes {
@@ -232,12 +232,12 @@ func limitRequestBody(next http.Handler, maxBytes int64) http.Handler {
 // buildMCPEndpoint assembles the /mcp handler chain around authedHandler.
 //
 // The layer order, outermost first, is: limitRequestBody → correlation →
-// authedHandler. limitRequestBody is the OUTERMOST layer so an oversized
-// request is rejected with 413 before any work is done. A deliberate
-// consequence: a 413 is returned BEFORE the correlation middleware runs, so
-// 413 responses carry no correlation ID. This is intentional. Correlation sits
-// OUTSIDE auth (ADR-001) so a 401 still gets an ID, but the body limit sits
-// outside correlation by design.
+// authedHandler. limitRequestBody's Content-Length short-circuit rejects an
+// oversized request with 413 BEFORE correlation runs, so that 413 carries no
+// correlation ID. This is intentional: correlation sits OUTSIDE auth (ADR-001)
+// so a 401 still gets an ID, but the body-limit short-circuit sits outside
+// correlation by design. (A streamed oversize body instead trips inside the
+// SDK, which returns its own 413 after correlation has stamped the ID.)
 //
 // When correlationEnabled is false the correlation layer is omitted entirely
 // (correlation.From then returns "").
