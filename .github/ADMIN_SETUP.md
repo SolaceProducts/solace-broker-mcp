@@ -140,9 +140,11 @@ of `dependabot.yml` and are already on.
   briefly extended it to do so instead of adding a Dependabot config, but
   Renovate cannot be enrolled for a public repository under the org's current
   system — reverted under SOL-152808 ahead of this repo going public.
-- Dependabot's `commit-message` config has no field for a commit trailer, so its
-  pull requests cannot carry the `Signed-off-by` line the required `DCO` check
-  looks for. The CNCF `dco2` App passes them anyway — confirmed on PR #289.
+- Dependabot's pull requests pass the required `DCO` check by bot exemption, not
+  by sign-off. Its commits do carry a trailer, but one whose address matches
+  neither author nor committer; `dco2` never reads it, skipping bot-authored
+  commits outright. That exemption is broader than the retired workflow's — see
+  "Required Status Checks" below.
 
 ---
 
@@ -259,9 +261,33 @@ never match. Because it is an App evaluating commits server-side rather than a
 workflow the pull request supplies, a pull request cannot weaken the thing that
 judges it.
 
-Dependabot's `commit-message` configuration has no field for a commit trailer, so
-its pull requests cannot carry a `Signed-off-by` line. The App passes them anyway —
-confirmed on PR #289, where `DCO` reported `success`.
+That server-side evaluation is also where the App is *weaker* than what it
+replaced, and the two should be weighed together.
+
+Dependabot's pull requests pass `DCO`, but not for the reason the wording invites.
+Its commits do carry a trailer — `Signed-off-by: dependabot[bot]
+<support@github.com>` on `20ddc122` in PR #289, where `DCO` reported `success`.
+That address matches neither the author
+(`49699333+dependabot[bot]@users.noreply.github.com`) nor the committer
+(`noreply@github.com`), and `dco2` requires a match. It never gets that far:
+`should_skip_commit` short-circuits on `author.is_bot` and reports `FromBot`
+before reading the message. Dependabot cannot be made to emit a matching trailer
+(dependabot-core#3480, closed not-planned), so the pass is an exemption.
+
+The retired `.github/workflows/dco.yaml` exempted **one** bot, matched on an
+unforgeable login and reviewable in-repo. `dco2` exempts **every** bot-authored
+commit, and its whole config surface — `allowOverrideAction`,
+`allowRemediationCommits`, `require.members` — has no key to narrow or disable
+that. The swap bought server-side evaluation and widened the bot exemption; both
+are true.
+
+One related default worth a decision rather than a discovery: `dco2` sets
+`allowOverrideAction: true` unless a `.github/dco.yml` says otherwise, and this
+repo has no such file. A failed `DCO` check therefore shows a *Set DCO to pass*
+button to anyone with write access. Upstream notes it is not a security boundary
+— a maintainer who can change repository config could bypass it regardless — but
+the retired workflow offered no equivalent one-click path, and this is the one
+widening that a committed file can close.
 
 If *Require approval for all outside collaborators* is on (Settings → Actions →
 General), fork PR runs wait for a maintainer and their checks read **pending**

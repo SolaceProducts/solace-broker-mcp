@@ -372,16 +372,22 @@ GitHub App, not a workflow in this repository. What it checks, precisely:
   whose email matches that commit's own author or committer, compared
   case-insensitively. A sign-off copied along with someone else's commit does not
   count.
-- Merge commits are exempt while re-merging their parents reproduces exactly what
-  they recorded, so refreshing your branch with `git merge main` is fine. A merge
-  that contributes something of its own, such as a conflict resolution or files
-  edited or added during the merge, needs its own sign-off (`git merge --signoff`).
-  Octopus merges and merges the check cannot recompute always need one.
+- Merge commits are exempt, all of them, unconditionally — `dco2` skips a merge
+  before it reads the message. So refreshing your branch with `git merge main` is
+  fine, and a merge that resolves a conflict or edits files of its own will also
+  pass without a sign-off. That is wider than the retired workflow, which
+  exempted a merge only while re-merging its parents reproduced exactly what the
+  merge recorded. Signing a content-bearing merge (`git merge --signoff`) is
+  still the right thing to do — there is something of your own to certify — but
+  it is now convention, not something CI will catch.
 - `Co-Authored-By:` trailers are ignored. Co-authors do not need their own
   sign-off.
 
-The check reports the offending commits and the exact commands to fix them. There
-is no label or flag that skips it. Use your real name. Pseudonyms and
+The check reports the offending commits and the exact commands to fix them. No
+label or flag in a pull request skips it, and a pull request cannot alter the App
+that judges it. A failed check does show a *Set DCO to pass* button to anyone with
+write access on this repository — see ADMIN_SETUP.md → "Required Status Checks"
+for why that default is recorded rather than relied on. Use your real name. Pseudonyms and
 anonymous contributions aren't accepted.
 
 ### Author identity

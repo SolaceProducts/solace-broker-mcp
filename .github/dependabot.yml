@@ -6,10 +6,28 @@ version: 2
 #
 # Not Renovate: Renovate cannot be enrolled for a public repository under the
 # org's current system, so it stays scoped to the one thing it already covers,
-# the pinned Claude Code CLI version (.github/renovate.json). Dependabot's own
-# commit-message config has no field for a DCO Signed-off-by trailer, so its
-# pull requests cannot carry one; the CNCF dco2 App that enforces the required
-# `DCO` check passes them anyway, confirmed on PR #289. Tracked under SOL-152808.
+# the pinned Claude Code CLI version (.github/renovate.json). Tracked under
+# SOL-152808.
+#
+# Why Dependabot's pull requests satisfy the required `DCO` check, stated
+# precisely because the obvious explanation is wrong: its commits DO carry a
+# trailer — `Signed-off-by: dependabot[bot] <support@github.com>` on 20ddc122
+# (PR #289) — but that address matches neither the author
+# (49699333+dependabot[bot]@users.noreply.github.com) nor the committer
+# (noreply@github.com), and dco2 requires a match (`signoffs_match`). The
+# trailer is never read: `should_skip_commit` short-circuits on
+# `author.is_bot` and returns `FromBot` first. Dependabot cannot be configured
+# to emit a matching trailer at all (dependabot-core#3480, closed not-planned).
+#
+# So the pass is an exemption, not a sign-off, and it is BROADER than the one it
+# replaced. The retired .github/workflows/dco.yaml exempted a single bot by
+# login, unforgeable and auditable in-repo. dco2 skips every bot-authored commit
+# unconditionally; its config surface (allowOverrideAction,
+# allowRemediationCommits, require.members) has no key to narrow or disable
+# that. Accepted deliberately — a pull request cannot edit an App that evaluates
+# commits server-side, which the workflow it replaced could not claim — but the
+# widening is real and should be weighed as this repo goes public, not treated
+# as equivalent.
 #
 # `cooldown` holds every update back until the release is at least 14 days old,
 # so a freshly-published (and possibly yanked or compromised) version is not
