@@ -1015,8 +1015,9 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 				Issuer:   mock.issuer,
 				Audience: mock.audience,
 				ToolAuthorization: &config.ToolAuthorizationConfig{
-					Enabled:         boolPtr(true),
-					GroupsClaimName: strPtr("groups"),
+					Enabled:           boolPtr(true),
+					GroupsClaimName:   strPtr("groups"),
+					AccessLevelGroups: map[string][]string{"Ops": {"list-vpns"}},
 				},
 			},
 		}
@@ -1058,8 +1059,9 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 				Issuer:   mock.issuer,
 				Audience: mock.audience,
 				ToolAuthorization: &config.ToolAuthorizationConfig{
-					Enabled:         boolPtr(true),
-					GroupsClaimName: strPtr("groups"),
+					Enabled:           boolPtr(true),
+					GroupsClaimName:   strPtr("groups"),
+					AccessLevelGroups: map[string][]string{"Ops": {"list-vpns"}},
 				},
 			},
 		}
@@ -1091,8 +1093,9 @@ func Test_OIDCVerifier_GroupsExtraction(t *testing.T) {
 				Issuer:   mock.issuer,
 				Audience: mock.audience,
 				ToolAuthorization: &config.ToolAuthorizationConfig{
-					Enabled:         boolPtr(true),
-					GroupsClaimName: strPtr("groups"),
+					Enabled:           boolPtr(true),
+					GroupsClaimName:   strPtr("groups"),
+					AccessLevelGroups: map[string][]string{"Ops": {"list-vpns"}},
 				},
 			},
 		}
@@ -1234,8 +1237,9 @@ func TestBuildTokenInfo(t *testing.T) {
 			MCPClientAuth: config.MCPClientAuthConfig{
 				Mode: config.AuthModeOAuth,
 				ToolAuthorization: &config.ToolAuthorizationConfig{
-					Enabled:         boolPtr(true),
-					GroupsClaimName: strPtr("roles"),
+					Enabled:           boolPtr(true),
+					GroupsClaimName:   strPtr("roles"),
+					AccessLevelGroups: map[string][]string{"Ops": {"list-vpns"}},
 				},
 			},
 		}
@@ -1260,8 +1264,9 @@ func TestBuildTokenInfo(t *testing.T) {
 			MCPClientAuth: config.MCPClientAuthConfig{
 				Mode: config.AuthModeOAuth,
 				ToolAuthorization: &config.ToolAuthorizationConfig{
-					Enabled:         boolPtr(true),
-					GroupsClaimName: strPtr("groups"),
+					Enabled:           boolPtr(true),
+					GroupsClaimName:   strPtr("groups"),
+					AccessLevelGroups: map[string][]string{"Ops": {"list-vpns"}},
 				},
 			},
 		}
