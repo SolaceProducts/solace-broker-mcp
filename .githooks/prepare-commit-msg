@@ -5,9 +5,9 @@
 # have to remember `git commit -s`. Install with `make hooks`. Tests:
 # .githooks/prepare-commit-msg.test.sh.
 #
-# This hook is a CONVENIENCE, never the control. The `DCO sign-off` check in CI
-# is the enforcement; it re-verifies every commit a PR adds regardless of what
-# ran locally. A contributor without the hook installed is not a gap — which is
+# This hook is a CONVENIENCE, never the control. The required `DCO` check — the
+# CNCF dco2 App — is the enforcement; it re-verifies every commit a PR adds
+# regardless of what ran locally. A contributor without the hook installed is not a gap — which is
 # also why this hook must never fail a commit. See `exit 0` at the bottom.
 #
 # The marker on line 2 is how `make hooks` recognises its own installed copy, so
@@ -102,7 +102,7 @@ fi
 # on every commit and must stay silent — it already cannot block one (`exit 0` at
 # the bottom), but it can still emit noise. The trade-off, chosen deliberately: if
 # interpret-trailers ever fails, you get no trailer AND no local warning. The
-# `DCO sign-off` CI check is what catches that.
+# required `DCO` check is what catches that.
 #
 # The `git -c trailer.*` pins are load-bearing, not tidiness. The check below
 # compares line 2 against the trailer this hook ASKED for, so any config that

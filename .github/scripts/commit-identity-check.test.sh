@@ -63,7 +63,7 @@ expect() {
     return
   fi
 
-  if [ -n "$needle" ] && ! printf '%s' "$out" | grep -qF "$needle"; then
+  if [ -n "$needle" ] && ! printf '%s' "$out" | grep -qF -- "$needle"; then
     printf '::error::SELF-TEST FAILED: %s — exit code was right (%s) but the output never mentioned %s, so the check may be passing or failing for the wrong reason.\n' "$name" "$want" "$needle" >&2
     printf '%s\n' "$out" >&2
     fail_count=$((fail_count + 1))
@@ -160,6 +160,75 @@ GIT_COMMITTER_NAME="$ALICE_NAME" GIT_COMMITTER_EMAIL="alice@laptop.local" \
   GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@laptop.local" \
   git -C "$r" merge -q --no-ff side -m "merge side"
 expect 1 "a merge commit's identity is checked too" "$r" "not routable"
+
+# --- the remediation text ----------------------------------------------------
+# The printed fix instructions are part of the control, not commentary. Advice
+# that rewrites the wrong commits, or that leaves the bad address in the
+# `Signed-off-by:` trailer while the check goes green, defeats the check by
+# being followed. These cases pin the two guards lifted from the retired
+# dco-check.sh: no branch-wide rebase when a merge is among the offenders, and a
+# per-commit guard on `--exec` when it is not.
+
+# capture <repo> — the check's combined output, exit code ignored.
+capture() {
+  ( cd "$1" &&
+    BASE_SHA="$(git rev-parse refs/remotes/origin/main)" \
+    BASE_REF="main" \
+    HEAD_SHA="$(git rev-parse HEAD)" \
+    "$CHECK" 2>&1 ) || true
+}
+
+# assert_has / assert_lacks <case name> <output> <needle>
+assert_has() {
+  if printf '%s' "$2" | grep -qF -- "$3"; then
+    printf '  ok       %s\n' "$1"
+    pass_count=$((pass_count + 1))
+  else
+    printf '::error::SELF-TEST FAILED: %s — the failure output never mentioned %s.\n' "$1" "$3" >&2
+    printf '%s\n' "$2" >&2
+    fail_count=$((fail_count + 1))
+  fi
+}
+assert_lacks() {
+  if printf '%s' "$2" | grep -qF -- "$3"; then
+    printf '::error::SELF-TEST FAILED: %s — the failure output contained %s, which it must not.\n' "$1" "$3" >&2
+    printf '%s\n' "$2" >&2
+    fail_count=$((fail_count + 1))
+  else
+    printf '  ok       %s\n' "$1"
+    pass_count=$((pass_count + 1))
+  fi
+}
+
+# A plain commit: the bulk fix is offered, and it carries the per-commit guard
+# that stops `--exec` rewriting a colleague's commits during the replay.
+r=$(new_repo advice_plain)
+GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@laptop.local" \
+  git -C "$r" commit -q --allow-empty -m "work"
+out=$(capture "$r")
+# Assert on the command line itself, not the whole output — the cautionary prose
+# below it deliberately quotes the unguarded form as the thing not to run.
+rebase_line=$(printf '%s\n' "$out" | grep -F 'git rebase --exec' || true)
+assert_has "the bulk fix is offered for a plain commit" "$rebase_line" 'git rebase --exec'
+assert_has "the bulk fix guards --exec per commit" "$rebase_line" '|| exit 0'
+assert_has "the hazard of dropping the guard is spelled out" "$out" 'runs after every commit it replays'
+assert_has "the trailer is stripped, not just the author reset" "$out" 'signed-off-by:.*<$BAD>'
+assert_has "the base of the rebase is the PR's own base" "$out" "$(git -C "$r" rev-parse refs/remotes/origin/main)"
+assert_has "the requirement is cross-referenced" "$out" '.github/CONTRIBUTING.md#author-identity'
+
+# A merge among the offenders: rebase would flatten it and discard the conflict
+# resolution, so the branch-wide command must be withheld entirely.
+r=$(new_repo advice_merge)
+git -C "$r" checkout -q -b side
+GIT_AUTHOR_NAME="$BOB_NAME" GIT_AUTHOR_EMAIL="bob@example.com" \
+  git -C "$r" commit -q --allow-empty -m "side work"
+git -C "$r" checkout -q main
+GIT_COMMITTER_NAME="$ALICE_NAME" GIT_COMMITTER_EMAIL="alice@laptop.local" \
+  GIT_AUTHOR_NAME="$ALICE_NAME" GIT_AUTHOR_EMAIL="alice@laptop.local" \
+  git -C "$r" merge -q --no-ff side -m "merge side"
+out=$(capture "$r")
+assert_has "a failing merge withholds the rebase" "$out" 'Do NOT rewrite this branch with `git rebase`'
+assert_lacks "no rebase command is printed when a merge fails" "$out" 'git rebase --exec'
 
 # --- no commits --------------------------------------------------------------
 

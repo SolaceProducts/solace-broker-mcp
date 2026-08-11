@@ -103,25 +103,81 @@ failed_count=$(grep -c . <<<"$failed")
 echo "::error::${failed_count} of ${total} commit(s) in this pull request use an author or committer email whose domain is not routable (.local, .sol-local, .internal, .lan, or a bare hostname). These publish permanently with the git history." >&2
 echo >&2
 
+# Commit metadata is attacker-controlled text going into a CI log that reads
+# workflow commands from stdout. Strip carriage returns and control characters
+# so a crafted address cannot forge a `::` directive or garble the report.
+sanitize() { tr -d '\r' | tr -d '\000-\010\013\014\016-\037'; }
+
 while IFS= read -r sha; do
   [ -n "$sha" ] || continue
   printf '  %s  author=%s  committer=%s\n' \
     "$(git rev-parse --short "$sha")" \
-    "$(git show -s --format='%ae' "$sha")" \
-    "$(git show -s --format='%ce' "$sha")" >&2
+    "$(git show -s --format='%ae' "$sha" | sanitize)" \
+    "$(git show -s --format='%ce' "$sha" | sanitize)" >&2
 done <<<"$failed"
 
 cat >&2 <<'EOF'
 
-To fix, set a routable address and rewrite the commits this pull request adds:
+Set your commit identity to a routable address, then rewrite the commits listed
+above. The address sits in two places — the author/committer fields and the
+`Signed-off-by:` trailer — and both have to change: `--reset-author` alone
+leaves the old address published in the trailer, and leaves the `DCO` check
+failing, because the trailer no longer matches the author or committer.
 
-  git config user.email "you@example.com"
-  git rebase --exec 'git commit --amend --no-edit --reset-author' origin/main
-  git push --force-with-lease
+  git config user.email "you@your-domain.example"
 
-Check it took before pushing:
+Substitute the address CI listed above for BAD below.
 
-  git log origin/main..HEAD --format='%h %ae %ce'
+  # only the most recent commit (works on a merge commit too — amend keeps its
+  # parents)
+  export BAD="the.address@ci.listed"
+  git log -1 --format=%B | grep -vi "signed-off-by:.*<$BAD>" |
+    git commit --amend --reset-author -s --file=-
+EOF
+
+# `git rebase` replays a merge as an ordinary commit, throwing away the merge and
+# any conflict resolution in it. This check walks merges, so a merge can be among
+# the offenders — withhold the branch-wide command when one is.
+failed_merges=""
+while IFS= read -r sha; do
+  [ -n "$sha" ] || continue
+  [ "$(git rev-list --parents -n1 "$sha" | wc -w)" -le 2 ] || failed_merges=yes
+done <<<"$failed"
+
+if [ -n "$failed_merges" ]; then
+  cat >&2 <<'EOF'
+
+Do NOT rewrite this branch with `git rebase` — merge commits are among those
+listed above, and rebase would replay them as ordinary commits, throwing away
+the merge and any conflict resolution in it. Fix a merge that is not at the tip
+by re-creating it: reset to before it, then redo the merge with your corrected
+identity.
+EOF
+else
+  cat >&2 <<'EOF'
+
+  # every commit on the branch carrying that address, leaving the others alone.
+  # The --exec argument must stay on ONE line; git rejects a newline in it.
+EOF
+  # shellcheck disable=SC2016 # $BAD is for the contributor's shell, not this one
+  REBASE_EXEC='git log -1 --format="%ae %ce" | grep -qiF "$BAD" || exit 0; git log -1 --format=%B | grep -vi "signed-off-by:.*<$BAD>" | git commit --amend --reset-author -s --file=-'
+  printf "  git rebase --exec '%s' %s\n" "$REBASE_EXEC" "$BASE_REV" >&2
+  cat >&2 <<'EOF'
+
+Do NOT drop the leading guard and run `--exec 'git commit --amend
+--reset-author'` over the branch. `--exec` runs after every commit it replays,
+so that rewrites the author of everyone else's commits on the branch to you.
+EOF
+fi
+
+printf "\nCheck it took before pushing:\n\n  git log %s..HEAD --format='%%h %%ae %%ce'\n" "$BASE_REV" >&2
+
+cat >&2 <<'EOF'
+
+Then `git push --force-with-lease`.
+
+See .github/CONTRIBUTING.md#author-identity for the requirement and the
+reasoning.
 EOF
 
 exit 1
