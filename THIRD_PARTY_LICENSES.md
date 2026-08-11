@@ -4,7 +4,7 @@ This file lists the third-party components compiled into the `solace-broker-mcp`
 binary, with their versions and licenses. It is the human-readable OSS compliance
 inventory that accompanies the release.
 
-**Generated** 2026-08-04 with
+**Generated** 2026-08-11 with
 [`go-licenses`](https://github.com/google/go-licenses) against `./cmd/server`:
 
 ```bash
@@ -48,7 +48,7 @@ under MPL-2.0.
 | `github.com/go-openapi/swag/jsonname` | v0.25.5 | Apache-2.0 | [license](https://github.com/go-openapi/swag/blob/jsonname/v0.25.5/jsonname/LICENSE) |
 | `github.com/google/jsonschema-go/jsonschema` | v0.4.3 | MIT | [license](https://github.com/google/jsonschema-go/blob/v0.4.3/LICENSE) |
 | `github.com/maypok86/otter/v2` | v2.3.0 | Apache-2.0 | [license](https://github.com/maypok86/otter/blob/v2.3.0/LICENSE) |
-| `github.com/modelcontextprotocol/go-sdk` | v1.6.1 | Apache-2.0 | [license](https://github.com/modelcontextprotocol/go-sdk/blob/v1.6.1/LICENSE) |
+| `github.com/modelcontextprotocol/go-sdk` | v1.7.0 | Apache-2.0 | [license](https://github.com/modelcontextprotocol/go-sdk/blob/v1.7.0/LICENSE) |
 | `github.com/oasdiff/yaml` | v0.1.1 | MIT | [license](https://github.com/oasdiff/yaml/blob/v0.1.1/LICENSE) |
 | `github.com/oasdiff/yaml3` | v0.0.14 | MIT | [license](https://github.com/oasdiff/yaml3/blob/v0.0.14/LICENSE) |
 | `github.com/pmezard/go-difflib/difflib` | v1.0.0 | BSD-3-Clause | [license](https://github.com/pmezard/go-difflib/blob/v1.0.0/LICENSE) |
@@ -65,6 +65,7 @@ under MPL-2.0.
 | `golang.org/x/sync` | v0.22.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sync/+/v0.22.0:LICENSE) |
 | `golang.org/x/sys/cpu` | v0.41.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sys/+/v0.41.0:LICENSE) |
 | `golang.org/x/text` | v0.14.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/text/+/v0.14.0:LICENSE) |
+| `golang.org/x/time/rate` | v0.15.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/time/+/v0.15.0:LICENSE) |
 | `gopkg.in/yaml.v3` | v3.0.1 | MIT | [license](https://github.com/go-yaml/yaml/blob/v3.0.1/LICENSE) |
 
 ## Notes
