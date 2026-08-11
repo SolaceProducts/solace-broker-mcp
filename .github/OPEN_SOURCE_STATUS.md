@@ -82,13 +82,14 @@ repository today. The cost-to-value ratio favours accepting.
 
 **What we do instead:**
 
-- `.github/scripts/dco-check.sh` fails any future PR whose commits carry an
-  author or committer email on a non-routable domain (`.local`, `.sol-local`,
-  `.internal`, `.lan`, or a bare hostname). Denylist rather than allowlist so
-  outside contributors with ordinary addresses are not blocked. The gate is
-  forward-only — it walks the PR's commits, not the history already on `main`.
-- `.github/scripts/dco-check.test.sh` covers the pass and fail paths, so the
-  gate is verified on every PR rather than trusted.
+- `.github/scripts/commit-identity-check.sh` fails any future PR whose commits
+  carry an author or committer email on a non-routable domain (`.local`,
+  `.sol-local`, `.internal`, `.lan`, or a bare hostname). Denylist rather than
+  allowlist so outside contributors with ordinary addresses are not blocked. The
+  gate is forward-only — it walks the PR's commits, not the history already on
+  `main`.
+- `.github/scripts/commit-identity-check.test.sh` covers the pass and fail paths
+  plus a mutation probe, so the gate is verified on every PR rather than trusted.
 - `.github/CONTRIBUTING.md` states the identity requirement and the fix
   commands, next to the DCO enforcement section it already describes.
 - Both affected contributors are notified before the repository flips public.
@@ -157,16 +158,17 @@ These settings must be configured by repository admin:
 ### 3. Branch Protection (10 minutes)
 - Require PR reviews before merge
 - Require CI checks to pass
-- **Add `Guardian scan gate` to the required status checks** (from
-  `guardian-scan.yaml`), the always-reporting supply-chain gate — not
-  `Guardian scan` itself, which is skipped on fork pull requests.
-  `.github/ADMIN_SETUP.md` explains why the gate is the safe context to require.
-- **Add `DCO sign-off` and `DCO check self-test` to the required status checks.**
-  These checks are not cosmetic. DCO is the control the project carries in place of a
-  contributor license agreement. Both checks exist in CI, but until they are
-  *required* they enforce nothing, so the control is incomplete until this step
-  is done. `.github/ADMIN_SETUP.md` has the exact strings and the reason each is
-  needed.
+- **`Guardian scan gate`** (from `guardian-scan.yaml` job `gate`) is the
+  supply-chain context, and the only safe one to require: it always reports.
+  Two nearby names must stay out of the list. `Guardian scan` is the *workflow's*
+  name and has never been a check at all, so requiring it blocks every merge
+  forever. `Guardian gate` is a real job gated on `is_trunk`, so it is always
+  skipped on a pull request and GitHub counts skipped as passing — a gate that
+  enforces nothing. `.github/ADMIN_SETUP.md` explains both failure modes.
+- **`DCO` is required**, served by the CNCF `dco2` GitHub App. DCO is the control
+  the project carries in place of a contributor licence agreement, and an
+  unrequired check enforces nothing. `.github/ADMIN_SETUP.md` has the exact
+  string and the reason.
 - Prevent force pushes to main
 - See: ADMIN_SETUP.md → "Branch Protection"
 
@@ -177,9 +179,9 @@ These settings must be configured by repository admin:
   Go module and GitHub Actions updates run on Dependabot too
   (`.github/dependabot.yml`). Renovate can't be enrolled for a public repo
   under the org's current system, so it stays scoped to just the pinned Claude
-  Code CLI version (`.github/renovate.json`). Dependabot's PRs are exempted
-  from the `DCO sign-off` check rather than expected to satisfy it; see
-  `.github/workflows/dco.yaml`
+  Code CLI version (`.github/renovate.json`). Dependabot's PRs cannot carry a
+  `Signed-off-by` trailer; the `dco2` App passes them anyway, confirmed on
+  PR #289
 - CodeQL runs on every PR, but the repository API reports Code Security as
   disabled; confirm the configuration rather than assuming it
 - See: ADMIN_SETUP.md → "Security Settings"

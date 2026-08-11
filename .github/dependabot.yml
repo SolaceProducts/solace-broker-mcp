@@ -8,8 +8,8 @@ version: 2
 # org's current system, so it stays scoped to the one thing it already covers,
 # the pinned Claude Code CLI version (.github/renovate.json). Dependabot's own
 # commit-message config has no field for a DCO Signed-off-by trailer, so its
-# PRs are exempted from that check instead — see .github/workflows/dco.yaml
-# and .github/scripts/dco-check.sh. Tracked under SOL-152808.
+# pull requests cannot carry one; the CNCF dco2 App that enforces the required
+# `DCO` check passes them anyway, confirmed on PR #289. Tracked under SOL-152808.
 #
 # `cooldown` holds every update back until the release is at least 14 days old,
 # so a freshly-published (and possibly yanked or compromised) version is not

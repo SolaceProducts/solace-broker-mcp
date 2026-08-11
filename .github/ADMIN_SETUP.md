@@ -140,12 +140,9 @@ of `dependabot.yml` and are already on.
   briefly extended it to do so instead of adding a Dependabot config, but
   Renovate cannot be enrolled for a public repository under the org's current
   system — reverted under SOL-152808 ahead of this repo going public.
-- Dependabot's `commit-message` config has no field for a commit trailer, so
-  its PRs can never carry the `Signed-off-by` line the `DCO sign-off` required
-  check normally needs. Rather than leave every one of its PRs permanently red,
-  `.github/workflows/dco.yaml` skips that check specifically for PRs GitHub
-  itself records as opened by `dependabot[bot]` — see that file and
-  `.github/scripts/dco-check.sh` for why this is safe from PR-side forgery.
+- Dependabot's `commit-message` config has no field for a commit trailer, so its
+  pull requests cannot carry the `Signed-off-by` line the required `DCO` check
+  looks for. The CNCF `dco2` App passes them anyway — confirmed on PR #289.
 
 ---
 
@@ -188,14 +185,18 @@ review.
 
 ### Required status checks
 
-**Require branches to be up to date before merging** is already on. The context
-list is not: it currently holds `lint`, `build`, and `FOSSA Scan`, the last of
-which enforces nothing (see the warning below). Replace it with the following.
-These names are what GitHub actually reports, confirmed against the check runs on
-PRs #213, #216, and #217 — except `Guardian scan gate` (new, replaces `SCA gate`),
-`Third-party licenses current` (SOL-152414), and `Licence headers present`
-(SOL-152896), which are new. Confirm those three against a real pull request
-before you rely on them:
+**Require branches to be up to date before merging** is on, and the context list
+is applied. Twelve contexts are registered, corrected under SOL-152412 from the
+old `lint` / `build` / `FOSSA Scan` list. This table is the single authoritative
+copy.
+
+Read the live list rather than trusting the table:
+
+```bash
+gh api repos/OWNER/REPO/rulesets/13942241 \
+  --jq '.rules[] | select(.type=="required_status_checks")
+        | .parameters.required_status_checks[] | "\(.context)\t\(.integration_id // "UNPINNED")"'
+```
 
 | Check | Source | Gates on |
 |-------|--------|----------|
@@ -210,8 +211,8 @@ before you rely on them:
 | `Third-party licenses current` | `ci-pr.yaml` job `licenses` | `THIRD_PARTY_LICENSES.md` still matching `go list -deps ./cmd/server`. Needs no secret, so it reports on fork pull requests too |
 | `Licence headers present` | `ci-pr.yaml` job `license_headers` | Every `.go` file outside `vendor/` opening with the Apache-2.0 header. Needs no secret and no Go toolchain, so it reports on fork pull requests too |
 | `CHANGELOG updated` | `ci-pr.yaml` job `changelog` | Advisory today; see note below |
-| `DCO sign-off` | `dco.yaml` job `dco` | a sign-off on every commit the PR adds, except a PR GitHub records as opened by `dependabot[bot]` (SOL-152808) |
-| `DCO check self-test` | `ci-pr.yaml` job `dco_selftest` | the gate's own logic still working |
+| `Commit identity routable` | `ci-pr.yaml` job `identity` | Every commit the PR adds using a routable author and committer address, so a machine hostname does not publish permanently with the history (SOL-152902). **Not yet registered** — see below |
+| `DCO` | the CNCF `dco2` GitHub App | a `Signed-off-by` trailer on every commit the pull request adds. DCO stands in for a contributor licence agreement, so this is the control behind the repository's provenance claim |
 
 ⚠️ **Require `Guardian scan gate`, and nothing FOSSA-shaped.** The old
 `FOSSA Scan` and `FOSSA Scan / SCA Scan` contexts no longer exist — the
@@ -237,36 +238,30 @@ the bare caller name. `guardian-scan.yaml` sidesteps it by triggering directly
 rather than being called, so its contexts are plain job names.
 
 ⚠️ **Both DCO rows are required, and dropping either removes a control.** DCO
-stands in for a contributor licence agreement, so the repository is not covered
-until both are registered — an unrequired check enforces nothing, the same trap the
-old `FOSSA Scan` context was (a required-looking check that only ever reported
-skipped).
+stands in for a contributor licence agreement, so dropping the row does not weaken
+the control — it removes it, along with the repository's claim that every
+contribution carries a sign-off. An unrequired check enforces nothing, the same
+trap the old `FOSSA Scan` context was.
 
-- `DCO sign-off` *is* the control. Dropping the row removes it.
-- `DCO check self-test` blocks for a different reason: the gate runs the *base
-  ref's* copy of `dco-check.sh`, so a PR that breaks the script shows the
-  self-test red and the gate green. Unless the self-test blocks, that PR merges
-  and the gate stays broken for everything after it. It guards regressions on
-  trusted PRs only, since a fork can rewrite the test in its own PR — which is
-  exactly why the gate itself does not live there.
+⚠️ **`Commit identity routable` is new and not yet in the ruleset.** It went in
+with SOL-153050, when DCO enforcement moved to the `dco2` App and the
+non-routable-address check that had been sharing `dco-check.sh` needed its own
+home. The App checks sign-off and nothing else, so without this job the control
+SOL-152902 delivered would have disappeared with that script.
 
-Both strings are the jobs' `name:` values verbatim. They are plain jobs, not
-reusable-workflow calls, so each produces exactly one context with no ` / `
-suffix. Confirmed against a live run: `dco.yaml` is on `main` and both contexts
-report on same-repo pull requests. Verified on PR #232 (`29fe3ab`) with
+Register it once it has reported green on a real pull request — the same rule
+applied to every other context here, and the one that would have caught the
+`Guardian scan` mistake. Until it is required it enforces nothing.
 
-```bash
-gh api repos/OWNER/REPO/commits/<head-sha>/check-runs --jq '.check_runs[].name'
-```
+`DCO` is served by the CNCF `dco2` GitHub App, so its `integration_id` is `974774`,
+not the `15368` an Actions-produced context carries. Pinning it to Actions would
+never match. Because it is an App evaluating commits server-side rather than a
+workflow the pull request supplies, a pull request cannot weaken the thing that
+judges it.
 
-which returned `DCO sign-off` and `DCO check self-test` alongside the other nine,
-and returned bare `FOSSA Scan` as `skipped` — the trap described above, observed
-rather than inferred.
-
-Both are ready to register now. The workflow is on `main`, so the deadlock that
-would follow from registering `DCO sign-off` while `dco.yaml` was still absent
-(`pull_request_target` runs the base ref's workflows, so the check could not
-report) no longer applies.
+Dependabot's `commit-message` configuration has no field for a commit trailer, so
+its pull requests cannot carry a `Signed-off-by` line. The App passes them anyway —
+confirmed on PR #289, where `DCO` reported `success`.
 
 If *Require approval for all outside collaborators* is on (Settings → Actions →
 General), fork PR runs wait for a maintainer and their checks read **pending**
@@ -329,9 +324,9 @@ closed, two human controls stand in, and both need someone to actually do them:
   request supplies the workflow definitions that run for it. It cannot reach a
   secret and its token is read-only, so this is not a credential-theft path, but a
   pull request can still weaken its own checks — including `Guardian scan gate`,
-  which runs from the pull request's own ref. `DCO sign-off` is the exception:
-  `dco.yaml` runs on `pull_request_target` so a pull request cannot edit the copy
-  that judges it.
+  which runs from the pull request's own ref. `DCO` is the exception: it is a
+  GitHub App evaluating commits server-side, not a workflow the pull request
+  supplies, so a pull request cannot edit the thing that judges it.
 - **A red FOSSA on `main` needs an owner.** Nothing routes it today: the failure
   lands on an already-merged commit, and no alert or assignee follows from it.
   Whoever merges a dependency-touching fork pull request should watch the next
