@@ -47742,7 +47742,7 @@
         "subscriptionQos": {
           "description": "The quality of service (QoS) for the subscription as either 0 (deliver at most once) or 1 (deliver at least once). QoS 2 is not supported, but QoS 2 messages attracted by QoS 0 or QoS 1 subscriptions are accepted and delivered accordingly.\n\nThe minimum access scope/level required to retrieve this attribute is \"vpn/read-only\". (This description is taken from the corresponding attribute in the configuration API.)\n\n",
           "format": "int64",
-          "maximum": 1,
+          "maximum": 2,
           "minimum": 0,
           "type": "integer",
           "x-accessLevels": {
@@ -71818,7 +71818,7 @@
     },
     "description": "SEMP (starting in `v2`) is a RESTful API for configuring, monitoring, and administering a Solace Event Broker. This specification defines the following API:\n\n\nAPI|Base Path|Purpose\n:---|:---|:---\nPrivate monitoring|/SEMP/v2/\\_\\_private\\_monitor\\_\\_|Internal use only\n\n\n\nThe following APIs are also available:\n\n\nAPI|Base Path|Purpose\n:---|:---|:---\nPrivate action|/SEMP/v2/\\_\\_private\\_action\\_\\_|Internal use only\nPrivate configuration|/SEMP/v2/\\_\\_private\\_config\\_\\_|Internal use only\n\n\n\nFor tutorials, architectural and protocol design documentation, and other information about the SEMP API, consult the [SEMP documentation](https://docs.solace.com/Admin/SEMP/Using-SEMP.htm) on the Solace website. The SEMP API specifications are also [available for download](https://solace.com/downloads/).\n\nIf you need additional support, please contact us at [support@solace.com](mailto:support@solace.com).",
     "title": "SEMP (Solace Element Management Protocol)",
-    "version": "10.26.2.9715"
+    "version": "10.26.3.10320"
   },
   "parameters": {
     "countQuery": {
