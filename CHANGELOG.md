@@ -14,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-08-11
+
+`v0.7.0` was tagged but its release pipeline failed before publishing anything, so it has no binary archives, no container image, and no GitHub Release — only a git tag and a Go module version. **0.7.1 is the first published release of the 0.7 line**, and because git history is cumulative it contains everything listed under 0.7.0 below in addition to the change here. Anyone looking for 0.7.0 downloads wants 0.7.1.
+
+Taken together with 0.7.0, this is the first release published from the public repository, and the first whose artifacts can be verified: every binary archive and the container image now carries a build provenance attestation tracing it to the workflow run and commit that produced it, with the commands in `README.md`. Also new since 0.6.0 — the `describe-semp-schema` tool, which lets an agent enumerate a SEMPv2 operation's configurable attributes before attempting a write; an optional `filter_tools_list` flag narrowing `tools/list` to what the caller is actually authorized to invoke; and a second third-party inventory, `THIRD_PARTY_BUILD_TEST.md`, covering the components used to build and test the project rather than ship in it.
+
+**Two breaking changes, both from the move to the `SolaceProducts` GitHub organization.** The Go module path is now `github.com/SolaceProducts/solace-broker-mcp`. The container image is published to `ghcr.io/solaceproducts/solace-broker-mcp` — and the old path does not fail loudly, it keeps serving the last image pushed there, so a stale reference silently stops receiving updates. Migration notes are in the **Changed** section under 0.7.0.
+
+### Changed
+
+- Updated the embedded SEMPv2 OpenAPI specs to the 10.26.3 rolling release (`10.26.3.10320`), so tool schemas track current broker attributes. The three spec files are renamed to `semp-v2-swagger-{action,config,monitor}.10.26.3.json` and continue to be sourced from the private-extended variant. Loading is unaffected — specs are picked up by the embed glob and typed from their `basePath`, not their filename. Tracked under SOL-152939.
+
 ## [0.7.0] - 2026-08-10
 
 ### Added
@@ -353,7 +365,8 @@ This project uses [Semantic Versioning](https://semver.org/):
 
 ## Links
 
-- [Unreleased]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.7.0...HEAD
+- [Unreleased]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.7.1...HEAD
+- [0.7.1]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.7.0...v0.7.1
 - [0.7.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.6.0...v0.7.0
 - [0.6.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.5.0...v0.6.0
 - [0.5.0]: https://github.com/SolaceProducts/solace-broker-mcp/compare/v0.4.0...v0.5.0
