@@ -383,11 +383,11 @@ GitHub App, not a workflow in this repository. What it checks, precisely:
 - `Co-Authored-By:` trailers are ignored. Co-authors do not need their own
   sign-off.
 
-The check reports the offending commits and the exact commands to fix them. No
-label or flag in a pull request skips it, and a pull request cannot alter the App
-that judges it. A failed check does show a *Set DCO to pass* button to anyone with
-write access on this repository — see ADMIN_SETUP.md → "Required Status Checks"
-for why that default is recorded rather than relied on. Use your real name. Pseudonyms and
+The check reports the offending commits and the exact commands to fix them. There
+is nothing that skips it: no label, no flag, and no override button — the App's
+*Set DCO to pass* button is switched off in `.github/dco.yml`. A pull request
+cannot change that, because `dco2` reads its configuration from the default
+branch. Fixing the sign-off is the only route through. Use your real name. Pseudonyms and
 anonymous contributions aren't accepted.
 
 ### Author identity

@@ -183,7 +183,7 @@ These settings must be configured by repository admin:
   `DCO` check by bot exemption rather than by sign-off — `dco2` skips every
   bot-authored commit, a wider exemption than the retired workflow's single
   login-matched one, with no config key to narrow it. See ADMIN_SETUP.md →
-  "Required Status Checks"
+  "Required status checks"
 - CodeQL runs on every PR, but the repository API reports Code Security as
   disabled; confirm the configuration rather than assuming it
 - See: ADMIN_SETUP.md → "Security Settings"

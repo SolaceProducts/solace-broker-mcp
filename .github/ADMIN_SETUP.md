@@ -144,7 +144,7 @@ of `dependabot.yml` and are already on.
   by sign-off. Its commits do carry a trailer, but one whose address matches
   neither author nor committer; `dco2` never reads it, skipping bot-authored
   commits outright. That exemption is broader than the retired workflow's — see
-  "Required Status Checks" below.
+  "Required status checks" below.
 
 ---
 
@@ -281,13 +281,22 @@ commit, and its whole config surface — `allowOverrideAction`,
 that. The swap bought server-side evaluation and widened the bot exemption; both
 are true.
 
-One related default worth a decision rather than a discovery: `dco2` sets
-`allowOverrideAction: true` unless a `.github/dco.yml` says otherwise, and this
-repo has no such file. A failed `DCO` check therefore shows a *Set DCO to pass*
-button to anyone with write access. Upstream notes it is not a security boundary
-— a maintainer who can change repository config could bypass it regardless — but
-the retired workflow offered no equivalent one-click path, and this is the one
-widening that a committed file can close.
+The other default the swap introduced is closed rather than accepted. `dco2`
+renders a *Set DCO to pass* button on a failed check unless told not to, and the
+retired workflow had no equivalent one-click path, so `.github/dco.yml` now sets
+`allowOverrideAction: false`. Two things follow that are easy to get wrong:
+
+- **It takes effect only from `main`.** `dco2` reads `.github/dco.yml` from the
+  default branch, so this had no effect on the pull request that added it, and a
+  pull request cannot re-enable the button for itself. Verify after merge, not
+  before, by looking at a failed `DCO` check's details page.
+- **It is not a security boundary**, and upstream says so — anyone with write
+  access can edit the file. It stops the button being reached for while trying to
+  land something, and makes clearing a red `DCO` a reviewable commit instead. The
+  residual insider risk is recorded as accepted in
+  `docs/internal/threat-model.md`.
+
+The bot and merge exemptions above have no such switch; those stay accepted.
 
 If *Require approval for all outside collaborators* is on (Settings → Actions →
 General), fork PR runs wait for a maintainer and their checks read **pending**
