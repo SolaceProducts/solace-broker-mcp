@@ -6,7 +6,7 @@ require (
 	github.com/getkin/kin-openapi v0.145.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/maypok86/otter/v2 v2.3.0
-	github.com/modelcontextprotocol/go-sdk v1.6.1
+	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/sony/gobreaker/v2 v2.4.0
 	golang.org/x/sync v0.22.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -21,6 +21,7 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/time v0.15.0 // indirect
 )
 
 require (
