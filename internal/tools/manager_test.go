@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -228,6 +229,43 @@ func TestCallTool_UnknownBroker_PreservesCallerCasing(t *testing.T) {
 	text := callToolResultText(t, result, err)
 	if !strings.Contains(text, rawAlias) {
 		t.Errorf("text should preserve operator's original casing %q verbatim, got: %q", rawAlias, text)
+	}
+}
+
+// TestClassifyBrokerError_BrokerInitError_SuppressesUnvouchedText covers the
+// half of classifyBrokerError's dispatch that TestCallTool_UnknownBroker and
+// TestCallTool_UnknownBroker_PreservesCallerCasing leave bare (flagged in
+// PR #280 review): an error that is not semp.ErrUnknownBroker takes the
+// broker_init_error branch, which is documented (see classifyBrokerError,
+// buildBrokerResolutionErrorResult) to route through buildErrorResult rather
+// than echo the underlying error verbatim like unknown_broker does. If that
+// routing ever flipped to buildLocalErrorResult, this pins the regression:
+// an arbitrary construction failure (here standing in for a future
+// cookie-jar/authenticator/token-exchange error) would leak unvouched text
+// to the agent instead of the generic message.
+//
+// A live construction failure isn't reachable through CallTool with today's
+// BrokerPool (see classifyBrokerError's doc comment), so this drives
+// classifyBrokerError and buildBrokerResolutionErrorResult directly with a
+// synthetic error — the same two calls manager.go's GetSEMPv1/GetSEMPv2
+// branches make.
+func TestClassifyBrokerError_BrokerInitError_SuppressesUnvouchedText(t *testing.T) {
+	m := &ToolManager{}
+	underlying := errors.New("dial tcp 10.1.2.3:443: connection refused")
+
+	errorType, toolErr := m.classifyBrokerError("prod", underlying)
+	if errorType != "broker_init_error" {
+		t.Fatalf("errorType = %q, want %q", errorType, "broker_init_error")
+	}
+
+	result := m.buildBrokerResolutionErrorResult(errorType, toolErr, "prod")
+	text := callToolResultText(t, result, nil)
+
+	if strings.Contains(text, "10.1.2.3") || strings.Contains(text, "connection refused") {
+		t.Errorf("broker_init_error result leaked unvouched detail verbatim: %q", text)
+	}
+	if text != genericInternalMessage {
+		t.Errorf("text = %q, want the generic internal-error message", text)
 	}
 }
 
