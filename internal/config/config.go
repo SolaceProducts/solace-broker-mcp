@@ -571,6 +571,32 @@ func sanitizeYAMLError(err error) error {
 	return errors.New(yamlNodeValuePattern.ReplaceAllString(err.Error(), "`[redacted]`"))
 }
 
+// ReadResolvedConfigFile reads the config file at path and applies steps 1-3 of
+// LoadConfig's processing order — read, .env load, ${VAR_NAME} substitution —
+// returning the resolved YAML bytes without parsing or validating them.
+//
+// This exists for readers that need a field or two out of the config without a
+// full load, and must agree with LoadConfig on what those fields say. The
+// --health probe is the caller: it needs the port, scheme, and TLS certificate
+// path before slog and the config machinery are up, and a probe that resolved
+// `tls_cert_file: "${TLS_CERT_PATH}"` differently from the server would report a
+// correctly-serving container as unhealthy. Prefer LoadConfig for anything that
+// needs a validated ServerConfig.
+func ReadResolvedConfigFile(path string) ([]byte, error) {
+	data, err := os.ReadFile(path) //nolint:gosec // same trusted operator-provided config path LoadConfig accepts
+	if err != nil {
+		return nil, fmt.Errorf("reading config file: %w", err)
+	}
+
+	loadEnvFile(path)
+
+	data, err = substituteEnvVars(data)
+	if err != nil {
+		return nil, fmt.Errorf("substituting env vars: %w", err)
+	}
+	return data, nil
+}
+
 // LoadConfig reads a YAML configuration file from path, substitutes ${VAR_NAME}
 // env var references, parses YAML, applies defaults, validates, and returns a
 // ServerConfig ready for use.

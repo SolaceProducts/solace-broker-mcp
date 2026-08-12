@@ -21,6 +21,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -163,8 +164,10 @@ type healthConfig struct {
 	CertFile string // tls_cert_file, pinned by the probe when Scheme is https
 }
 
-// healthProbeTimeout bounds the whole --health request. Docker's HEALTHCHECK
-// timeout is 3s (see the Dockerfile), so the probe must give up before that.
+// healthProbeTimeout bounds the whole --health request. It deliberately matches
+// the Dockerfile HEALTHCHECK's own 3s timeout: whichever fires first, the outcome
+// is the same failed attempt, and a probe that gave up earlier would report a
+// slow-but-live server as unhealthy sooner than the operator asked it to.
 const healthProbeTimeout = 3 * time.Second
 
 // healthProbeTLSConfig builds the TLS client config for the --health probe when
@@ -188,15 +191,18 @@ func healthProbeTLSConfig(certPath string) (*tls.Config, error) {
 		return nil, fmt.Errorf("read health probe certificate: %w", err)
 	}
 
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(pemData) {
-		return nil, fmt.Errorf("health probe certificate %s contains no usable PEM certificate", certPath)
-	}
-
+	// Pin the leaf alone. AppendCertsFromPEM would anchor every certificate in the
+	// file, so a leaf+CA bundle (the shape cert-manager and corporate PKI emit)
+	// would widen the probe from "this certificate" to "anything that CA ever
+	// issued" — including an impostor with the same SAN. Go's verifier
+	// short-circuits when the presented leaf is itself in the root pool, so a
+	// leaf-only pool verifies both self-signed and CA-issued certificates.
 	leaf, err := firstCertificateFromPEM(pemData)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("health probe certificate %s: %w", certPath, err)
 	}
+	pool := x509.NewCertPool()
+	pool.AddCert(leaf)
 
 	serverName := certificateServerName(leaf)
 	if serverName == "" {
@@ -212,8 +218,10 @@ func healthProbeTLSConfig(certPath string) (*tls.Config, error) {
 	}, nil
 }
 
-// firstCertificateFromPEM returns the leaf certificate from a PEM bundle that
-// may also contain intermediates or a private key.
+// firstCertificateFromPEM returns the first CERTIFICATE block in a PEM bundle
+// that may also contain intermediates or a private key. That block is the leaf:
+// crypto/tls.X509KeyPair matches the private key against Certificate[0], so a
+// bundle whose first certificate is not the leaf cannot serve TLS at all.
 func firstCertificateFromPEM(pemData []byte) (*x509.Certificate, error) {
 	for block, rest := pem.Decode(pemData); block != nil; block, rest = pem.Decode(rest) {
 		if block.Type != "CERTIFICATE" {
@@ -221,11 +229,11 @@ func firstCertificateFromPEM(pemData []byte) (*x509.Certificate, error) {
 		}
 		leaf, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			return nil, fmt.Errorf("parse health probe certificate: %w", err)
+			return nil, fmt.Errorf("parsing certificate: %w", err)
 		}
 		return leaf, nil
 	}
-	return nil, errors.New("no CERTIFICATE block in health probe certificate")
+	return nil, errors.New("contains no PEM CERTIFICATE block")
 }
 
 // certificateServerName picks the hostname the probe verifies against: a DNS SAN
@@ -240,16 +248,16 @@ func certificateServerName(leaf *x509.Certificate) string {
 	return ""
 }
 
-// healthProbeExitCode performs the --health request and returns the process exit
-// code: 0 when the server answers 200, 1 for anything else. A nil tlsCfg probes
-// over plaintext. Only the status code is consulted; the body is discarded.
-func healthProbeExitCode(healthURL string, tlsCfg *tls.Config) int {
+// probeHealth performs the --health request and returns nil when the server
+// answers 200. A nil tlsCfg probes over plaintext. Only the status code is
+// consulted; the body is discarded.
+func probeHealth(healthURL string, tlsCfg *tls.Config) error {
 	ctx, cancel := context.WithTimeout(context.Background(), healthProbeTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil) //nolint:gosec // loopback health check built from an integer port; no SSRF risk
 	if err != nil {
-		return 1
+		return fmt.Errorf("building health request: %w", err)
 	}
 
 	client := &http.Client{}
@@ -259,11 +267,37 @@ func healthProbeExitCode(healthURL string, tlsCfg *tls.Config) int {
 
 	resp, err := client.Do(req) //nolint:gosec // taint propagated from healthURL above
 	if err != nil {
-		return 1
+		return fmt.Errorf("health request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("health endpoint returned HTTP %d, want 200", resp.StatusCode)
+	}
+	return nil
+}
+
+// healthExitCode runs the whole --health probe for hc and returns the process
+// exit code: 0 healthy, 1 otherwise. The reason for a non-zero code is written to
+// errOut, which Docker captures into State.Health.Log — the operator's only
+// diagnostic channel here, since the probe has no logger. Without it "server
+// down", "server returned 503", "certificate unreadable" and "certificate
+// verification failed" are indistinguishable, and that last one is the outcome
+// that would indicate an actual loopback impersonator.
+func healthExitCode(hc healthConfig, healthURL string, errOut io.Writer) int {
+	var tlsCfg *tls.Config
+	if hc.Scheme == "https" {
+		var err error
+		if tlsCfg, err = healthProbeTLSConfig(hc.CertFile); err != nil {
+			// Unhealthy, not a probe defect: the server serves TLS from this same
+			// certificate file. See healthProbeTLSConfig.
+			fmt.Fprintln(errOut, err)
+			return 1
+		}
+	}
+
+	if err := probeHealth(healthURL, tlsCfg); err != nil {
+		fmt.Fprintln(errOut, err)
 		return 1
 	}
 	return 0
@@ -285,7 +319,11 @@ func healthConfigFromFile() healthConfig {
 	if path == "" {
 		return healthConfig{Scheme: "http"}
 	}
-	data, err := os.ReadFile(path) //nolint:gosec // path from trusted config locations
+	// Resolve through the config package rather than reading the file directly, so
+	// .env loading and ${VAR_NAME} substitution match what the server saw. A probe
+	// that read `tls_cert_file: "${TLS_CERT_PATH}"` literally would fail to open a
+	// certificate the server is serving from perfectly well.
+	data, err := config.ReadResolvedConfigFile(path)
 	if err != nil {
 		return healthConfig{Scheme: "http"}
 	}
@@ -297,11 +335,15 @@ func healthConfigFromFile() healthConfig {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return healthConfig{Scheme: "http"}
 	}
+	// Trim as LoadConfig does (config.go), so the probe and the server agree on
+	// both the paths themselves and on whether TLS is configured at all.
+	certFile := strings.TrimSpace(cfg.TLSCertFile)
+	keyFile := strings.TrimSpace(cfg.TLSKeyFile)
 	scheme := "http"
-	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+	if certFile != "" && keyFile != "" {
 		scheme = "https"
 	}
-	return healthConfig{Port: cfg.Port, Scheme: scheme, CertFile: cfg.TLSCertFile}
+	return healthConfig{Port: cfg.Port, Scheme: scheme, CertFile: certFile}
 }
 
 // newHTTPServer builds the MCP server's *http.Server with the production
@@ -683,18 +725,7 @@ func main() {
 			port = hc.Port
 		}
 		healthURL := hc.Scheme + "://localhost:" + strconv.Itoa(port) + "/health"
-
-		var tlsCfg *tls.Config
-		if hc.Scheme == "https" {
-			var err error
-			if tlsCfg, err = healthProbeTLSConfig(hc.CertFile); err != nil {
-				// Unhealthy, not a probe defect: the server serves TLS from this
-				// same certificate file. See healthProbeTLSConfig.
-				os.Exit(1)
-			}
-		}
-
-		os.Exit(healthProbeExitCode(healthURL, tlsCfg))
+		os.Exit(healthExitCode(hc, healthURL, os.Stderr))
 	}
 
 	// 0. Bootstrap slog at INFO so LoadConfig can emit logs. The handler is

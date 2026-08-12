@@ -3836,3 +3836,46 @@ func TestServerConfig_StaticTokenExposedCleartext(t *testing.T) {
 		})
 	}
 }
+
+// TestReadResolvedConfigFile_SubstitutesEnvVars pins the contract the --health
+// probe depends on: the resolved bytes must agree with what LoadConfig would
+// parse, ${VAR_NAME} references included.
+func TestReadResolvedConfigFile_SubstitutesEnvVars(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("tls_cert_file: \"${TEST_CERT_PATH}\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TEST_CERT_PATH", "/etc/certs/server.pem")
+
+	got, err := ReadResolvedConfigFile(path)
+	if err != nil {
+		t.Fatalf("ReadResolvedConfigFile: unexpected error: %v", err)
+	}
+	if !strings.Contains(string(got), "/etc/certs/server.pem") {
+		t.Errorf("resolved bytes = %q, want the substituted path", string(got))
+	}
+	if strings.Contains(string(got), "${TEST_CERT_PATH}") {
+		t.Error("resolved bytes still contain the unsubstituted reference")
+	}
+}
+
+func TestReadResolvedConfigFile_ErrorsOnMissingFile(t *testing.T) {
+	if _, err := ReadResolvedConfigFile(filepath.Join(t.TempDir(), "absent.yaml")); err == nil {
+		t.Fatal("ReadResolvedConfigFile(missing file) = nil error, want an error")
+	}
+}
+
+// TestReadResolvedConfigFile_ErrorsOnUnsetEnvVar matches LoadConfig, which refuses
+// a config referencing an env var that is not set rather than substituting empty.
+func TestReadResolvedConfigFile_ErrorsOnUnsetEnvVar(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("tls_cert_file: \"${TEST_DEFINITELY_UNSET_VAR}\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ReadResolvedConfigFile(path); err == nil {
+		t.Fatal("ReadResolvedConfigFile(unset var) = nil error, want an error")
+	}
+}
