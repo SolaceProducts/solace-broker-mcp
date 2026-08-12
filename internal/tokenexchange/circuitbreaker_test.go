@@ -140,6 +140,44 @@ func TestIsBreakerSuccess(t *testing.T) {
 	}
 }
 
+// TestNewCountingIsBreakerSuccess pins the counter maintenance directly,
+// without going through a real breaker: a failure increments, a success
+// resets to 0, and the return value still passes through isBreakerSuccess's
+// verdict unchanged (a rejection is a success here, same as TestIsBreakerSuccess).
+func TestNewCountingIsBreakerSuccess(t *testing.T) {
+	t.Parallel()
+	var counter atomic.Uint32
+	isSuccess := newCountingIsBreakerSuccess(&counter)
+
+	if ok := isSuccess(rawWith(FailureClassNetwork)); ok {
+		t.Errorf("isSuccess(network failure) = true, want false")
+	}
+	if got := counter.Load(); got != 1 {
+		t.Errorf("counter after 1 failure = %d, want 1", got)
+	}
+
+	if ok := isSuccess(rawWith(FailureClassUpstream5xx)); ok {
+		t.Errorf("isSuccess(5xx failure) = true, want false")
+	}
+	if got := counter.Load(); got != 2 {
+		t.Errorf("counter after 2 failures = %d, want 2", got)
+	}
+
+	if ok := isSuccess(&ExchangeError{Sentinel: ErrExchangeRejected}); !ok {
+		t.Errorf("isSuccess(rejection) = false, want true (a rejection is a success for breaker purposes)")
+	}
+	if got := counter.Load(); got != 0 {
+		t.Errorf("counter after a success = %d, want 0 (success must reset it)", got)
+	}
+
+	if ok := isSuccess(nil); !ok {
+		t.Errorf("isSuccess(nil) = false, want true")
+	}
+	if got := counter.Load(); got != 0 {
+		t.Errorf("counter after another success = %d, want 0 (stays at 0, does not go negative)", got)
+	}
+}
+
 // TestNewReadyToTrip pins newReadyToTrip's two independent rules: an
 // undecayed consecutive-failure count, and a failure-rate rule gated by a
 // minimum sample. Most cases isolate one rule by disabling or starving the
