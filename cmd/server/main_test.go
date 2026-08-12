@@ -31,6 +31,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -967,5 +969,35 @@ func TestHealthExitCode_ReportsNonOKStatus(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "503") {
 		t.Errorf("diagnostic %q does not report the status code", out.String())
+	}
+}
+
+// TestHealthProbeTimeout_IsUnderDockerHealthcheckTimeout keeps the probe's own
+// deadline strictly inside the Dockerfile HEALTHCHECK timeout, parsed from the
+// Dockerfile itself so the two cannot drift apart.
+//
+// Whichever deadline fires first decides the outcome, and they must not be the
+// same: when Docker kills the probe the exit is silent, whereas when the probe
+// times out itself it writes the reason to stderr and Docker records it in
+// State.Health.Log. On a hung server — precisely when an operator needs the
+// diagnostic — an equal deadline turns that into a coin flip.
+func TestHealthProbeTimeout_IsUnderDockerHealthcheckTimeout(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+
+	m := regexp.MustCompile(`HEALTHCHECK[^\n]*--timeout=(\d+)s`).FindSubmatch(data)
+	if m == nil {
+		t.Fatal("no HEALTHCHECK --timeout=<N>s found in Dockerfile; keep this test and the Dockerfile in sync")
+	}
+	seconds, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		t.Fatalf("parse Dockerfile timeout %q: %v", m[1], err)
+	}
+	dockerTimeout := time.Duration(seconds) * time.Second
+
+	if healthProbeTimeout >= dockerTimeout {
+		t.Errorf("healthProbeTimeout = %v, want strictly less than the Dockerfile HEALTHCHECK timeout of %v, so the probe reports its own failure instead of being killed silently", healthProbeTimeout, dockerTimeout)
 	}
 }

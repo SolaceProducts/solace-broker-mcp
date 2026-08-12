@@ -164,11 +164,15 @@ type healthConfig struct {
 	CertFile string // tls_cert_file, pinned by the probe when Scheme is https
 }
 
-// healthProbeTimeout bounds the whole --health request. It deliberately matches
-// the Dockerfile HEALTHCHECK's own 3s timeout: whichever fires first, the outcome
-// is the same failed attempt, and a probe that gave up earlier would report a
-// slow-but-live server as unhealthy sooner than the operator asked it to.
-const healthProbeTimeout = 3 * time.Second
+// healthProbeTimeout bounds the whole --health request. It sits deliberately
+// inside the Dockerfile HEALTHCHECK's own 3s timeout rather than matching it: the
+// two deadlines race, and only one of the outcomes is diagnosable. When the probe
+// times out first it writes the reason to stderr and Docker records it in
+// State.Health.Log; when Docker kills the probe the exit is silent. A hung server
+// is exactly when the operator needs that line, so the probe must lose the race
+// by design. TestHealthProbeTimeout_IsUnderDockerHealthcheckTimeout parses the
+// Dockerfile and fails if the margin disappears.
+const healthProbeTimeout = 2500 * time.Millisecond
 
 // healthProbeTLSConfig builds the TLS client config for the --health probe when
 // the server is serving HTTPS.
