@@ -153,6 +153,33 @@ func jsonOK(w http.ResponseWriter) {
 	json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
 }
 
+// TestSender_New_SanitizesBrokerURLForLogging pins that New sanitizes
+// brokerURL once at construction — the highest-leverage of the sites this
+// hardens, since every retry/failure log line in retry.go and sender.go
+// reads d.brokerURL. validateBrokerURL already rejects a credentialed URL at
+// config load in every mode, so this is defense in depth for a path that
+// isn't reachable today, not a regression test for a live bug (SOL-152979).
+func TestSender_New_SanitizesBrokerURLForLogging(t *testing.T) {
+	retries := 0
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RequestTimeoutDuration: 5 * time.Second,
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
+	}
+
+	d := New(&http.Client{}, sempCfg, bearerAuth(t), "https://embedded-user:embedded-pass@broker.example.com:943", NewSemaphore(10), NewRateLimiter(0))
+
+	if strings.Contains(d.brokerURL, "embedded-user") || strings.Contains(d.brokerURL, "embedded-pass") {
+		t.Errorf("New did not sanitize brokerURL, credentials survived: %q", d.brokerURL)
+	}
+	if !strings.Contains(d.brokerURL, "broker.example.com:943") {
+		t.Errorf("New over-sanitized brokerURL, host lost: %q", d.brokerURL)
+	}
+}
+
 // --- Rate Limiter Tests ---
 
 // TestSender_Do_BoundsOverallRetryChainDeadline proves the overall retry-chain

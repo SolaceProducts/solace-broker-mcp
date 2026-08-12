@@ -50,6 +50,11 @@ Never `fmt.Sprintf` into the message string with external data. Always `slog.Str
 - `HTTPClient` — lower risk (unexported fields) but should still get `LogValuer` for defense in depth
 - OAuth config types (`BrokerOAuthConfig`, `BrokerClientAuth`, `ClientSecretAuth`) also implement `LogValuer`, excluding secret material
 - Any new credential-carrying type follows the same pattern
+- Any URL-valued attribute exposed by a `LogValuer` (`url`, `base_url`, and the
+  like) must route through `config.SanitizeURLString` before logging. The
+  `ReplaceAttr` safety net in Rule 3 does not cover these keys, so this rule is
+  the only control for them. Known exception: `internal/tokenexchange.Params.LogValue`
+  logs `TokenURL` under `idp_endpoint` unsanitized — tracked as SOL-153000.
 
 ### Rule 3: `ReplaceAttr` safety net on the handler
 
@@ -60,7 +65,7 @@ Keys matching `password`, `token`, `secret`, `authorization`, `credential`, `api
 Always log explicit fields, even if `LogValuer` is implemented.
 
 - Avoid: `slog.Any("config", brokerConfig)`
-- Prefer: `slog.String("url", config.URL)`
+- Prefer: `slog.String("url", config.SanitizeURLString(brokerConfig.URL))`
 
 ### Rule 5: Review errors from external systems before logging
 

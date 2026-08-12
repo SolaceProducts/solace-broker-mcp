@@ -58,11 +58,15 @@ type HTTPClient struct {
 // LogValue implements slog.LogValuer for HTTPClient. It exposes only the base
 // URL — username, password, and token are deliberately excluded. Although
 // these fields are unexported, this provides defense in depth against
-// reflection-based logging.
+// reflection-based logging. baseURL is routed through SanitizeURLString for
+// the same reason BrokerConfig.LogValue routes URL through it: validation
+// already rejects credentialed URLs, but this keeps that guarantee from
+// being the only thing standing between a broker URL and the log stream
+// (SOL-152979).
 // See docs/secure-logging-rules.md Rule 2.
 func (c *HTTPClient) LogValue() slog.Value {
 	return slog.GroupValue(
-		slog.String("base_url", c.baseURL),
+		slog.String("base_url", config.SanitizeURLString(c.baseURL)),
 	)
 }
 

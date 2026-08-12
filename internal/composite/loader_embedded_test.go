@@ -172,3 +172,52 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 		}
 	})
 }
+
+// TestLoadTools_ListVPNs_RetainsDiscoveryFields pins that list-vpns keeps
+// replicationEnabled and dmrEnabled in its select list.
+//
+// These two sit in a validation blind spot. The framework's RequiredFields /
+// RequiredFieldsPerStep checks (see ValidatePostProcess) only guard fields the
+// postprocess handler consumes, and list_vpns.go references neither of these —
+// it branches solely on enabled, state, and msgVpnName. So nothing else in the
+// suite notices if they are dropped from the YAML.
+//
+// But they are the reason list-vpns is documented as the discovery step for
+// "which VPNs are replicated": the values are consumed by the model reading the
+// response, not by our Go code. Removing them would leave every existing test
+// green while silently removing the tool's ability to answer that question, and
+// the follow-up path (get-replication-status per VPN) has no other way to learn
+// which VPNs are worth asking about.
+//
+// Both fields being genuinely independent was confirmed against a live broker
+// during SOL-151996: a Message VPN with DR replication configured reported
+// replicationEnabled=true AND dmrEnabled=true, while the reserved and default
+// VPNs on the same broker reported false for both.
+func TestLoadTools_ListVPNs_RetainsDiscoveryFields(t *testing.T) {
+	tools, err := LoadTools(definitions.FS, "tools.yaml")
+	if err != nil {
+		t.Fatalf("LoadTools: %v", err)
+	}
+
+	tool := findTool(tools, "list-vpns")
+	if tool == nil {
+		t.Fatal("tool list-vpns not found in embedded definitions")
+	}
+	step := findStep(tool, "vpns")
+	if step == nil {
+		t.Fatal("step 'vpns' not found in list-vpns")
+	}
+
+	inSelect := make(map[string]bool, len(step.Select))
+	for _, f := range step.Select {
+		inSelect[f] = true
+	}
+	for _, field := range []string{"replicationEnabled", "dmrEnabled"} {
+		if !inSelect[field] {
+			t.Errorf("list-vpns step 'vpns' select is missing %q — the postprocess handler "+
+				"does not read it, so no other test guards it, but the tool's documented "+
+				"discovery role depends on it reaching the model; select = %v",
+				field, step.Select)
+		}
+	}
+}
