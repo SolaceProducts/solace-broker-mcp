@@ -112,7 +112,9 @@ func newCountingIsBreakerSuccess(consecutiveFailures *atomic.Uint32) func(error)
 //
 // consecutive_failures tells the operator which rule opened the breaker: on
 // closed→open it equals the threshold when the consecutive rule fired, and
-// sits below it when the rate rule did.
+// sits below it when the rate rule did. (The counter keeps incrementing and
+// resetting even with consecutive_failure_threshold: 0 — that comparison
+// just has no meaning once the rule is disabled.)
 func newLogBreakerStateChange(consecutiveFailures *atomic.Uint32) func(name string, from, to gobreaker.State) {
 	return func(name string, from, to gobreaker.State) {
 		slog.Warn("token exchange circuit breaker state change",

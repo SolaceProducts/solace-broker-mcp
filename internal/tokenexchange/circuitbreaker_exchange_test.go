@@ -1161,7 +1161,7 @@ func TestBreaker_RateRuleTripsOnPartialDegradation(t *testing.T) {
 	t.Parallel()
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		// Odd-numbered requests fail, even-numbered succeed: S F S F ... —
+		// Odd-numbered requests fail, even-numbered succeed: F S F S ... —
 		// sequential distinct-key calls, so the parity is deterministic.
 		if hits.Add(1)%2 == 0 {
 			w.Header().Set("Content-Type", "application/json")
