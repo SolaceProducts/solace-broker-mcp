@@ -1150,16 +1150,13 @@ func TestBreaker_RecoveryNeedsFreshFailuresToRetrip(t *testing.T) {
 	}
 }
 
-// TestBreaker_RateRuleTripsOnPartialDegradation is the end-to-end trip test
-// for the rate rule — the high-traffic path every other exchange-level test
-// deliberately starves. It drives the one failure shape the consecutive rule
-// is structurally blind to: a PARTIALLY degraded IdP whose interleaved
-// successes reset the consecutive streak on every other call, while the
-// failure rate sits exactly at the 50% threshold. The consecutive rule is
-// disabled (threshold 0) so a trip can only come from the rate rule, and the
-// trip must land exactly at the 10th evaluated outcome — the 9th (4 failures
-// of 8 evaluated, also 50%) is below the MinimumRequests floor and must not
-// trip.
+// TestBreaker_RateRuleTripsOnPartialDegradation covers the rate rule's trip
+// end-to-end — the path every other exchange-level test deliberately starves
+// — using the shape the consecutive rule is blind to: interleaved successes
+// reset the streak while the failure rate holds above 50%. Must stay closed
+// at 9 evaluated outcomes (55%, but under the MinimumRequests floor) and
+// trip on the 11th call — the first failure checked after the floor is met
+// (the 10th outcome is a success; the rate rule is only checked on failures).
 func TestBreaker_RateRuleTripsOnPartialDegradation(t *testing.T) {
 	t.Parallel()
 	var hits atomic.Int32
