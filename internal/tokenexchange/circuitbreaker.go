@@ -47,7 +47,7 @@ func newTokenExchangeCircuitBreaker(cfg CircuitBreakerConfig) *gobreaker.Circuit
 		ReadyToTrip:   newReadyToTrip(cfg, &consecutiveFailures),
 		IsSuccessful:  newIsBreakerSuccess(&consecutiveFailures),
 		IsExcluded:    isBreakerExcluded,
-		OnStateChange: logBreakerStateChange,
+		OnStateChange: newLogBreakerStateChange(&consecutiveFailures),
 	})
 }
 
@@ -99,19 +99,23 @@ func newIsBreakerSuccess(consecutiveFailures *atomic.Uint32) func(error) bool {
 	}
 }
 
-// logBreakerStateChange runs UNDER the breaker's internal mutex — gobreaker
-// (v2.4.0) fires OnStateChange from afterRequest while cb.mutex is held — so
-// while it executes, all breaker traffic is serialized behind it. Transitions
-// are rare and the work here is a single WARN log, which is acceptable; keep
-// this callback to cheap logging only (no blocking work, and no State()/
-// Counts() calls — those re-take the same lock). Transitions are
-// operationally important (the IdP just became unreachable, or recovered),
-// hence WARN.
-func logBreakerStateChange(name string, from, to gobreaker.State) {
-	slog.Warn("token exchange circuit breaker state change",
-		slog.String("breaker", name),
-		slog.String("from", from.String()),
-		slog.String("to", to.String()))
+// newLogBreakerStateChange builds the OnStateChange callback. It runs UNDER
+// the breaker's internal mutex (gobreaker v2.4.0 fires it from afterRequest
+// with cb.mutex held), so keep it to cheap logging only — no blocking work,
+// no State()/Counts() calls (those re-take the lock; the atomic Load below
+// does not). WARN because transitions are operationally important.
+//
+// consecutive_failures tells the operator which rule opened the breaker: on
+// closed→open it equals the threshold when the consecutive rule fired, and
+// sits below it when the rate rule did.
+func newLogBreakerStateChange(consecutiveFailures *atomic.Uint32) func(name string, from, to gobreaker.State) {
+	return func(name string, from, to gobreaker.State) {
+		slog.Warn("token exchange circuit breaker state change",
+			slog.String("breaker", name),
+			slog.String("from", from.String()),
+			slog.String("to", to.String()),
+			slog.Uint64("consecutive_failures", uint64(consecutiveFailures.Load())))
+	}
 }
 
 // The circuit breaker protects one shared IdP, so its counters must reflect

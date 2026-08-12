@@ -1269,3 +1269,42 @@ func TestBreaker_ConcurrentConsecutiveCounterRaceFree(t *testing.T) {
 	// does not pin. -race is the actual assertion here.
 	_ = e.breaker.State()
 }
+
+// TestBreaker_StateChangeLogCarriesConsecutiveFailures pins the trip WARN's
+// consecutive_failures attribute — the operator's signal for which rule
+// opened the breaker. NOT parallel: captureLogs swaps the global logger.
+func TestBreaker_StateChangeLogCarriesConsecutiveFailures(t *testing.T) {
+	records, restore := captureLogs(t)
+	defer restore()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	cfg := DefaultCircuitBreakerConfig()
+	cfg.ConsecutiveFailureThreshold = 3
+	cfg.MinimumRequests = 1_000_000 // isolate the trip to the consecutive rule
+	cfg.OpenStateDuration = time.Hour
+	e := newBreakerTestExchangerPlain(t, srv.URL, cfg)
+
+	for i := 0; i < 3; i++ {
+		_, _ = e.Exchange(context.Background(), inputWithSubject(fmt.Sprintf("log-trip-%d", i)))
+	}
+	if got := e.breaker.State(); got != gobreaker.StateOpen {
+		t.Fatalf("breaker State = %v after 3 failures, want open", got)
+	}
+
+	// Filter to the closed→open transition rather than assuming capture order.
+	for _, rec := range records() {
+		if rec.Message != "token exchange circuit breaker state change" ||
+			rec.Attrs["from"] != "closed" || rec.Attrs["to"] != "open" {
+			continue
+		}
+		if got := rec.Attrs["consecutive_failures"]; got != "3" {
+			t.Errorf("trip WARN consecutive_failures = %q, want %q (must carry the tripping count)", got, "3")
+		}
+		return
+	}
+	t.Error("no closed→open state-change WARN captured")
+}
