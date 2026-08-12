@@ -16,6 +16,14 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -504,5 +512,203 @@ func TestReadyz_AfterInit_Returns200(t *testing.T) {
 	}
 	if rec.Body.String() != `{"status":"ready"}` {
 		t.Errorf("GET /readyz body = %q, want %q", rec.Body.String(), `{"status":"ready"}`)
+	}
+}
+
+// writeTestServerCert generates a self-signed certificate with the given SANs,
+// writes it to a PEM file, and returns the file path plus the keypair for
+// serving. The SANs are chosen by the caller so the --health probe tests can
+// pin certificates that deliberately do not cover "localhost" — the SAN
+// mismatch that used to justify skipping verification altogether (SOL-153167).
+func writeTestServerCert(t *testing.T, dnsSANs []string, ipSANs []net.IP) (certPath string, keypair tls.Certificate) {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "solace-broker-mcp-test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     dnsSANs,
+		IPAddresses:  ipSANs,
+		// Self-signed leaf pinned as its own root: Go accepts a chain whose
+		// leaf is present in the root pool, and the real server cert may or
+		// may not be a CA, so both shapes must work.
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+
+	certPath = filepath.Join(t.TempDir(), "server.pem")
+	if err := os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatalf("write certificate: %v", err)
+	}
+
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse certificate: %v", err)
+	}
+	return certPath, tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}
+}
+
+// TestHealthProbeTLSConfig_PinsCertAndTakesServerNameFromDNSSAN is the core of
+// SOL-153167: the probe verifies the server's certificate against a pool
+// containing that certificate, and borrows the SAN as the verification
+// hostname, rather than switching verification off.
+func TestHealthProbeTLSConfig_PinsCertAndTakesServerNameFromDNSSAN(t *testing.T) {
+	certPath, _ := writeTestServerCert(t, []string{"broker.internal.example"}, nil)
+
+	got, err := healthProbeTLSConfig(certPath)
+	if err != nil {
+		t.Fatalf("healthProbeTLSConfig: unexpected error: %v", err)
+	}
+	if got.InsecureSkipVerify {
+		t.Error("InsecureSkipVerify = true, want false (certificate verification must stay on)")
+	}
+	if got.RootCAs == nil {
+		t.Error("RootCAs = nil, want a pool containing the pinned server certificate")
+	}
+	if got.ServerName != "broker.internal.example" {
+		t.Errorf("ServerName = %q, want %q (the cert's DNS SAN)", got.ServerName, "broker.internal.example")
+	}
+}
+
+// TestHealthProbeTLSConfig_FallsBackToIPSAN covers a cert issued to an address
+// rather than a name, which is common for brokers behind an IP-only listener.
+func TestHealthProbeTLSConfig_FallsBackToIPSAN(t *testing.T) {
+	certPath, _ := writeTestServerCert(t, nil, []net.IP{net.ParseIP("10.1.2.3")})
+
+	got, err := healthProbeTLSConfig(certPath)
+	if err != nil {
+		t.Fatalf("healthProbeTLSConfig: unexpected error: %v", err)
+	}
+	if got.ServerName != "10.1.2.3" {
+		t.Errorf("ServerName = %q, want %q (the cert's IP SAN)", got.ServerName, "10.1.2.3")
+	}
+}
+
+func TestHealthProbeTLSConfig_ErrorsWhenCertMissing(t *testing.T) {
+	_, err := healthProbeTLSConfig(filepath.Join(t.TempDir(), "absent.pem"))
+	if err == nil {
+		t.Fatal("healthProbeTLSConfig(missing file) = nil error, want an error")
+	}
+}
+
+func TestHealthProbeTLSConfig_ErrorsOnMalformedPEM(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "garbage.pem")
+	if err := os.WriteFile(path, []byte("not a certificate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := healthProbeTLSConfig(path)
+	if err == nil {
+		t.Fatal("healthProbeTLSConfig(malformed PEM) = nil error, want an error")
+	}
+}
+
+// TestHealthProbeTLSConfig_ErrorsWhenCertHasNoSAN guards the case where no
+// verification hostname can be derived: better to fail the probe than to fall
+// back to unverified TLS.
+func TestHealthProbeTLSConfig_ErrorsWhenCertHasNoSAN(t *testing.T) {
+	certPath, _ := writeTestServerCert(t, nil, nil)
+
+	_, err := healthProbeTLSConfig(certPath)
+	if err == nil {
+		t.Fatal("healthProbeTLSConfig(cert with no SAN) = nil error, want an error")
+	}
+}
+
+// TestHealthProbeExitCode_SucceedsOverTLSWithNonLocalhostSAN is the end-to-end
+// proof: a real TLS handshake against a server whose certificate does not cover
+// "localhost" succeeds with verification enabled, because the pinned cert and
+// its SAN are used instead.
+func TestHealthProbeExitCode_SucceedsOverTLSWithNonLocalhostSAN(t *testing.T) {
+	certPath, keypair := writeTestServerCert(t, []string{"broker.internal.example"}, nil)
+
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{keypair}, MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	defer srv.Close()
+
+	tlsCfg, err := healthProbeTLSConfig(certPath)
+	if err != nil {
+		t.Fatalf("healthProbeTLSConfig: unexpected error: %v", err)
+	}
+
+	if code := healthProbeExitCode(srv.URL+"/health", tlsCfg); code != 0 {
+		t.Errorf("healthProbeExitCode = %d, want 0", code)
+	}
+}
+
+// TestHealthProbeExitCode_FailsWhenCertNotPinned proves verification is
+// genuinely enforced: the same server, probed without the pin, must fail. If
+// this test passes while the previous one does too, the pin is doing the work.
+func TestHealthProbeExitCode_FailsWhenCertNotPinned(t *testing.T) {
+	_, keypair := writeTestServerCert(t, []string{"broker.internal.example"}, nil)
+
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{keypair}, MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	defer srv.Close()
+
+	unpinned := &tls.Config{ServerName: "broker.internal.example", MinVersion: tls.VersionTLS12}
+
+	if code := healthProbeExitCode(srv.URL+"/health", unpinned); code != 1 {
+		t.Errorf("healthProbeExitCode = %d, want 1 (unknown authority must not verify)", code)
+	}
+}
+
+// TestHealthProbeExitCode_FailsOnNonOKStatus keeps the liveness contract: only
+// 200 means healthy.
+func TestHealthProbeExitCode_FailsOnNonOKStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	if code := healthProbeExitCode(srv.URL+"/health", nil); code != 1 {
+		t.Errorf("healthProbeExitCode = %d, want 1", code)
+	}
+}
+
+// TestHealthProbeExitCode_SucceedsOverPlaintext pins the default deployment
+// shape: no TLS configured, no TLS client config, still healthy.
+func TestHealthProbeExitCode_SucceedsOverPlaintext(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	if code := healthProbeExitCode(srv.URL+"/health", nil); code != 0 {
+		t.Errorf("healthProbeExitCode = %d, want 0", code)
+	}
+}
+
+// TestHealthConfigFromFile_RetainsCertPath covers the plumbing the probe needs:
+// the cert path itself, not just the derived scheme.
+func TestHealthConfigFromFile_RetainsCertPath(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfg := "port: 9090\ntls_cert_file: /etc/certs/server.pem\ntls_key_file: /etc/certs/server-key.pem\n"
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CONFIG_FILE", cfgPath)
+
+	got := healthConfigFromFile()
+	if got.CertFile != "/etc/certs/server.pem" {
+		t.Errorf("CertFile = %q, want /etc/certs/server.pem", got.CertFile)
 	}
 }
