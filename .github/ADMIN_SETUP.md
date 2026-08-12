@@ -214,6 +214,7 @@ gh api repos/OWNER/REPO/rulesets/13942241 \
 | `Licence headers present` | `ci-pr.yaml` job `license_headers` | Every `.go` file outside `vendor/` opening with the Apache-2.0 header. Needs no secret and no Go toolchain, so it reports on fork pull requests too |
 | `CHANGELOG updated` | `ci-pr.yaml` job `changelog` | Advisory today; see note below |
 | `Commit identity routable` | `ci-pr.yaml` job `identity` | Every commit the PR adds using a routable author and committer address, so a machine hostname does not publish permanently with the history (SOL-152902). **Not yet registered** — see below |
+| `workflow-lint` | `workflow-lint.yaml` job `workflow-lint` | Every file under `.github/workflows/` passing actionlint (correctness, shellcheck over `run:` blocks) and zizmor (workflow security, including SHA-pinning via `unpinned-uses`), so workflow security is enforced by a tool rather than argued in a code comment (SOL-152856). **Not yet registered** — see below |
 | `DCO` | the CNCF `dco2` GitHub App | a `Signed-off-by` trailer on every commit the pull request adds. DCO stands in for a contributor licence agreement, so this is the control behind the repository's provenance claim |
 
 ⚠️ **Require `Guardian scan gate`, and nothing FOSSA-shaped.** The old
@@ -254,6 +255,27 @@ SOL-152902 delivered would have disappeared with that script.
 Register it once it has reported green on a real pull request — the same rule
 applied to every other context here, and the one that would have caught the
 `Guardian scan` mistake. Until it is required it enforces nothing.
+
+⚠️ **`workflow-lint` is new and not yet in the ruleset.** It went in with
+SOL-152856. Register it on the same terms as the row above: read the context name
+off a real run rather than assuming it, then add it.
+
+```bash
+gh run list --workflow workflow-lint.yaml --limit 1 --json databaseId \
+  --jq '.[0].databaseId' \
+  | xargs -I{} gh run view {} --json jobs --jq '.jobs[].name'
+```
+
+Its job id and `name:` are deliberately identical, so the context is the bare
+`workflow-lint` with no `caller / inner` suffix — but read it anyway. Assuming a
+name is what produced the `FOSSA Scan` versus `FOSSA Scan / SCA Scan` gap.
+
+One property matters when registering it: `workflow-lint.yaml` carries **no
+`paths:` filter**, deliberately. A required check filtered to
+`.github/workflows/**` never creates a check run on a pull request that touches
+only Go code, so the context stays pending forever and the pull request cannot
+merge. If someone later adds a `paths:` filter to make it cheaper, this required
+context is what breaks. Condition inside the job, never in the trigger.
 
 `DCO` is served by the CNCF `dco2` GitHub App, so its `integration_id` is `974774`,
 not the `15368` an Actions-produced context carries. Pinning it to Actions would
