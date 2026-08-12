@@ -189,13 +189,13 @@ All five come from one repository, pinned to a single commit.
 
 | Action | Ref | Owner |
 |---|---|---|
-| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `4c3adb2` | Solace |
-| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `4c3adb2` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-db-sync` | `4c3adb2` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `4c3adb2` | Solace |
-| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `4c3adb2` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `47931eb` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `47931eb` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-db-sync` | `47931eb` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `47931eb` | Solace |
+| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `47931eb` | Solace |
 
-`4c3adb2` is a branch commit, not a tag, so there is no release to record beside
+`47931eb` is a branch commit, not a tag, so there is no release to record beside
 it. The repository itself is Apache-2.0.
 
 Two entries have been dropped from this table, both by the reverse-direction
