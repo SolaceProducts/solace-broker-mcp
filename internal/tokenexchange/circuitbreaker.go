@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync/atomic"
 
 	"github.com/sony/gobreaker/v2"
 )
@@ -31,38 +32,44 @@ const breakerName = "idp-token-exchange"
 // The success type is *Token because that is what Exchange's protected section
 // returns. BucketPeriod is derived from the window (never operator-set) so the
 // failure rate is computed over ~10 rolling buckets.
+//
+// consecutiveFailures is a local, not an Exchanger field — only the two
+// closures built here ever touch it, so a wider home would only widen its
+// blast radius for no benefit. See newReadyToTrip for why it exists.
 func newTokenExchangeCircuitBreaker(cfg CircuitBreakerConfig) *gobreaker.CircuitBreaker[*Token] {
+	var consecutiveFailures atomic.Uint32
 	return gobreaker.NewCircuitBreaker[*Token](gobreaker.Settings{
 		Name:          breakerName,
 		Interval:      cfg.FailureRateWindow,
 		BucketPeriod:  cfg.FailureRateWindow / 10,
 		Timeout:       cfg.OpenStateDuration,
 		MaxRequests:   cfg.HalfOpenProbeRequests,
-		ReadyToTrip:   newReadyToTrip(cfg),
-		IsSuccessful:  isBreakerSuccess,
+		ReadyToTrip:   newReadyToTrip(cfg, &consecutiveFailures),
+		IsSuccessful:  newIsBreakerSuccess(&consecutiveFailures),
 		IsExcluded:    isBreakerExcluded,
 		OnStateChange: logBreakerStateChange,
 	})
 }
 
-// newReadyToTrip builds the trip predicate. Two rules: a consecutive-failure
-// count, and a failure-rate rule gated by a minimum sample so a couple of
-// failures cannot trip on noise. The denominator excludes excluded outcomes
-// (429, cancellations) so throttling cannot dilute or drive the rate.
+// newReadyToTrip builds the trip predicate. Two independent rules: a
+// consecutive-failure count, and a failure-rate rule gated by a minimum
+// sample so a couple of failures cannot trip on noise. The denominator
+// excludes excluded outcomes (429, cancellations) so throttling cannot
+// dilute or drive the rate.
 //
-// Regime gap, deliberate: gobreaker's ConsecutiveFailures counter is
-// window-bound — it decays as the rolling window's buckets (window/10) age
-// out — so the consecutive rule only trips when counted failures arrive in
-// quick succession, i.e. a fast-failing outage such as connection refused.
-// A slow outage whose failures each burn the full retry-chain deadline
-// (~19s) spaces them too far apart to ever accumulate, and at traffic too
-// low for MinimumRequests the rate rule cannot trip either, so in that
-// low-traffic slow-failure regime the breaker stays closed (fails open):
-// exchanges still run their normal retry/timeout budget.
-func newReadyToTrip(cfg CircuitBreakerConfig) func(gobreaker.Counts) bool {
+// The consecutive rule reads consecutiveFailures, an undecayed counter this
+// package owns, instead of gobreaker's own counts.ConsecutiveFailures:
+// gobreaker's version decays as its rolling window's buckets age out, so a
+// slow, low-traffic outage (failures spaced wider than a bucket period) can
+// leave it permanently below threshold even though every exchange failed —
+// and too sparse for MinimumRequests to save via the rate rule. This
+// counter never decays on time, only on an observed success, because
+// Exchange sits behind a token cache: a quiet gap usually means "nothing
+// needed a token," not "the IdP healed."
+func newReadyToTrip(cfg CircuitBreakerConfig, consecutiveFailures *atomic.Uint32) func(gobreaker.Counts) bool {
 	return func(counts gobreaker.Counts) bool {
 		if cfg.ConsecutiveFailureThreshold > 0 &&
-			counts.ConsecutiveFailures >= cfg.ConsecutiveFailureThreshold {
+			consecutiveFailures.Load() >= cfg.ConsecutiveFailureThreshold {
 			return true
 		}
 
@@ -73,6 +80,22 @@ func newReadyToTrip(cfg CircuitBreakerConfig) func(gobreaker.Counts) bool {
 
 		failureRate := float64(counts.TotalFailures) / float64(evaluated) * 100
 		return failureRate >= cfg.FailureRateThresholdPercent
+	}
+}
+
+// newIsBreakerSuccess wraps isBreakerSuccess to maintain consecutiveFailures
+// (see newReadyToTrip). gobreaker only calls IsSuccessful for outcomes
+// IsExcluded already let through, so an excluded outcome never reaches the
+// counter either — matching the rate rule's denominator.
+func newIsBreakerSuccess(consecutiveFailures *atomic.Uint32) func(error) bool {
+	return func(err error) bool {
+		ok := isBreakerSuccess(err)
+		if ok {
+			consecutiveFailures.Store(0)
+		} else {
+			consecutiveFailures.Add(1)
+		}
+		return ok
 	}
 }
 
