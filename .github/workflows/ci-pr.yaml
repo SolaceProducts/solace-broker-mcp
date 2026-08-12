@@ -18,18 +18,17 @@ jobs:
   # `Guardian scan gate` job is the required check (replaced `SCA gate`).
   # See .github/ADMIN_SETUP.md.
 
-  # The DCO gate itself runs from .github/workflows/dco.yaml on
-  # pull_request_target, which means it executes the *base ref's* script — so a
-  # PR that edits dco-check.sh never exercises its own version there. This job
-  # closes that gap: it is an ordinary `pull_request` test of the PR's copy.
+  # Machine-generated commit emails publish permanently with the git history of
+  # a public repository, and cannot be recalled without rewriting history
+  # everyone has fetched. Prevention is the only control that works
+  # (SOL-152902). This check used to live inside dco-check.sh; DCO enforcement
+  # moved to the CNCF dco2 App, which checks sign-off and nothing else, so this
+  # half needed its own home rather than disappearing with that script.
   #
-  # It has to be a REQUIRED status check to do its job. Otherwise a PR that
-  # breaks dco-check.sh shows this job red and `DCO sign-off` green — the gate
-  # having passed on the base ref's still-working copy — merges anyway, and the
-  # gate is broken for every PR after it, with the only warning being a check
-  # nobody had to look at. See .github/ADMIN_SETUP.md.
-  dco_selftest:
-    name: DCO check self-test
+  # The self-test runs first and is not decoration: a denylist that matches
+  # nothing looks exactly like a denylist that found nothing.
+  identity:
+    name: Commit identity routable
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -37,24 +36,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Full history: the check walks the range this PR adds, which needs
+          # both the base and the head reachable.
+          fetch-depth: 0
           persist-credentials: false
-      - name: Run the DCO check's self-test against this PR's version
-        run: .github/scripts/dco-check.test.sh
-      # dco.yaml runs pull_request_target (base ref), so a PR that breaks the
-      # authenticated-fetch scheme it depends on never exercises its own
-      # change there — this job exists precisely to close that gap for
-      # dco-check.sh, and the same reasoning applies to the fetch's auth.
-      # A same-repo pull_request run gets a real (if read-only-on-forks)
-      # GITHUB_TOKEN, so this ls-remote is a faithful probe of the exact
-      # mechanism, without touching any ref.
-      - name: Verify the authenticated-fetch scheme dco.yaml relies on still works
+      - name: Self-test the commit identity check
+        run: .github/scripts/commit-identity-check.test.sh
+      - name: Verify every commit uses a routable author and committer address
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          export GIT_CONFIG_COUNT=1
-          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
-          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
-          git ls-remote origin HEAD
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: .github/scripts/commit-identity-check.sh
 
   release_notes_selftest:
     name: Release-notes extraction self-test
@@ -80,8 +73,7 @@ jobs:
   #
   # The self-test runs first, and it is not decoration: the failure mode that
   # matters here is a vacuous pass, where a reformatted table stops parsing and
-  # the check goes green forever while the inventory rots. Same reasoning as
-  # dco_selftest above.
+  # the check goes green forever while the inventory rots.
   licenses:
     name: Third-party licenses current
     runs-on: ubuntu-latest
@@ -130,11 +122,9 @@ jobs:
   # nothing at all. The suite pins each, and is kept honest by mutation — every
   # one of those five, applied to a copy of the script, turns it red.
   #
-  # Do NOT read dco_selftest's rationale onto this job. That one exists because
-  # the enforcing DCO gate runs on `pull_request_target` against the *base ref's*
-  # script, so the self-test is the only place the PR's own copy is exercised.
-  # Here the gate and its self-test both run from the PR's ref, so the self-test
-  # closes no such gap; it only narrows the shape of the tamper. A blunt `exit 0`
+  # What this self-test does and does not buy: the gate and its self-test both
+  # run from the PR's own ref, so the self-test closes no base-ref gap; it only
+  # narrows the shape of the tamper. A blunt `exit 0`
   # in the script is caught — ten negative cases then exit 0 where they expect 1
   # — but the suite asserts over fixed fixtures, so an edit outside their shape
   # survives it. Adding `-o -name gen` to the prune list keeps the suite at 24/24
