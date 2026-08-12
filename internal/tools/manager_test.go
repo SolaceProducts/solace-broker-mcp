@@ -441,6 +441,42 @@ func TestCallTool_OutputValidationFails(t *testing.T) {
 	}
 }
 
+// TestCallTool_NilResult is a regression test for SOL-152980 (flagged in PR
+// #280 review): unlike output_validation_error and marshal_error, the
+// nil_result branch had no test. It's the one post-handler branch that's both
+// reachable and unpinned — handler.Handle has already run by the time it
+// fires, so for a destructive tool any broker-side mutation is already done,
+// and retryable: false is what keeps the agent from retrying an action that
+// already took effect. Covers both shapes that hit this branch: a literal nil
+// *ToolResult and a non-nil result with nil StructuredContent.
+func TestCallTool_NilResult(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		result *ToolResult
+	}{
+		{"nil result", nil},
+		{"nil structured content", &ToolResult{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr := NewToolManager(newTestPool(t))
+			handler := newStubHandler("test-tool")
+			handler.handleFn = func(context.Context, *ToolContext, map[string]any) (*ToolResult, error) {
+				return tc.result, nil
+			}
+			mgr.Register(handler)
+
+			result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+				"broker":     "dev",
+				"msgVpnName": "default",
+			}, Identity{})
+			text := callToolResultText(t, result, err)
+			if !strings.Contains(text, "returned nil result") {
+				t.Errorf("text = %q, want 'returned nil result'", text)
+			}
+		})
+	}
+}
+
 // --- Destructive tool WARNING tests ---
 
 func TestCallTool_DestructiveWarningLogged(t *testing.T) {
