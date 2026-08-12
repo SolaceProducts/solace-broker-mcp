@@ -188,9 +188,8 @@ review.
 ### Required status checks
 
 **Require branches to be up to date before merging** is on, and the context list
-is applied. Twelve contexts are registered, corrected under SOL-152412 from the
-old `lint` / `build` / `FOSSA Scan` list. This table is the single authoritative
-copy.
+is applied. Thirteen contexts are registered. This table is the single
+authoritative copy.
 
 Read the live list rather than trusting the table:
 
@@ -213,8 +212,8 @@ gh api repos/OWNER/REPO/rulesets/13942241 \
 | `Third-party licenses current` | `ci-pr.yaml` job `licenses` | `THIRD_PARTY_LICENSES.md` still matching `go list -deps ./cmd/server`. Needs no secret, so it reports on fork pull requests too |
 | `Licence headers present` | `ci-pr.yaml` job `license_headers` | Every `.go` file outside `vendor/` opening with the Apache-2.0 header. Needs no secret and no Go toolchain, so it reports on fork pull requests too |
 | `CHANGELOG updated` | `ci-pr.yaml` job `changelog` | Advisory today; see note below |
-| `Commit identity routable` | `ci-pr.yaml` job `identity` | Every commit the PR adds using a routable author and committer address, so a machine hostname does not publish permanently with the history (SOL-152902). **Not yet registered** — see below |
-| `workflow-lint` | `workflow-lint.yaml` job `workflow-lint` | Every file under `.github/workflows/` passing actionlint (correctness, shellcheck over `run:` blocks) and zizmor (workflow security, including SHA-pinning via `unpinned-uses`), so workflow security is enforced by a tool rather than argued in a code comment (SOL-152856). **Not yet registered** — see below |
+| `Commit identity routable` | `ci-pr.yaml` job `identity` | Every commit the PR adds using a routable author and committer address, so a machine hostname does not publish permanently with the history. Pinned to Actions (`15368`), not to the `dco2` App — see below |
+| `workflow-lint` | `workflow-lint.yaml` job `workflow-lint` | Every file under `.github/workflows/` passing actionlint (correctness, plus shellcheck over `run:` blocks) and zizmor (workflow security, including SHA pinning via `unpinned-uses`), so workflow security is enforced by a tool rather than argued in a code comment. **Not yet registered** — see below |
 | `DCO` | the CNCF `dco2` GitHub App | a `Signed-off-by` trailer on every commit the pull request adds. DCO stands in for a contributor licence agreement, so this is the control behind the repository's provenance claim |
 
 ⚠️ **Require `Guardian scan gate`, and nothing FOSSA-shaped.** The old
@@ -240,25 +239,29 @@ The naming rule still holds: a reusable-workflow caller that **runs** surfaces a
 the bare caller name. `guardian-scan.yaml` sidesteps it by triggering directly
 rather than being called, so its contexts are plain job names.
 
-⚠️ **Both DCO rows are required, and dropping either removes a control.** DCO
+⚠️ **The `DCO` row is required, and dropping it removes a control.** DCO
 stands in for a contributor licence agreement, so dropping the row does not weaken
 the control — it removes it, along with the repository's claim that every
 contribution carries a sign-off. An unrequired check enforces nothing, the same
 trap the old `FOSSA Scan` context was.
 
-⚠️ **`Commit identity routable` is new and not yet in the ruleset.** It went in
-with SOL-153050, when DCO enforcement moved to the `dco2` App and the
-non-routable-address check that had been sharing `dco-check.sh` needed its own
-home. The App checks sign-off and nothing else, so without this job the control
-SOL-152902 delivered would have disappeared with that script.
+⚠️ **`Commit identity routable` and `DCO` are two controls, not one, and they pin
+to different sources.** `DCO` is the sign-off gate, served by the `dco2` App and
+pinned to `974774`. `Commit identity routable` rejects non-routable author and
+committer addresses, comes from GitHub Actions, and is pinned to `15368`. Pinning
+either to the other's id means the context never matches and nothing reports.
 
-Register it once it has reported green on a real pull request — the same rule
-applied to every other context here, and the one that would have caught the
-`Guardian scan` mistake. Until it is required it enforces nothing.
+Both are required. The App checks sign-off and nothing else, so dropping the
+identity row does not weaken that control — it removes it.
 
-⚠️ **`workflow-lint` is new and not yet in the ruleset.** It went in with
-SOL-152856. Register it on the same terms as the row above: read the context name
-off a real run rather than assuming it, then add it.
+**Register a new context only once it has reported green on a real pull request**,
+and only after the pull request creating it has merged. Registering early leaves
+every open pull request with a context its branch cannot produce. This is the rule
+that would have caught the `Guardian scan` mistake.
+
+⚠️ **`workflow-lint` is new and not yet in the ruleset.** It gates the workflow
+files themselves, with actionlint and zizmor. Register it under the rule above,
+and read the context name off a real run rather than assuming it:
 
 ```bash
 gh run list --workflow workflow-lint.yaml --limit 1 --json databaseId \
