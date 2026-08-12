@@ -20,6 +20,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -61,6 +62,105 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*sempv2.HTTPClient, 
 		t.Fatalf("NewHTTPClient() error: %v", err)
 	}
 	return client, server
+}
+
+// newTestClientWithURL builds an HTTPClient pointed at an explicit URL rather
+// than a live server — NewHTTPClient does no request I/O, so a case can
+// exercise a credentialed baseURL without anything needing to resolve it.
+func newTestClientWithURL(t *testing.T, url string, authn auth.Authenticator, jar *resilience.SafeCookieJar) *sempv2.HTTPClient {
+	t.Helper()
+	brokerCfg := &config.BrokerConfig{
+		URL:  url,
+		Auth: config.AuthConfig{Mode: "basic"},
+	}
+	retries := 0
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		RequestTimeoutDuration: 5 * time.Second,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
+	}
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), resilience.NewRateLimiter(0), authn, jar)
+	if err != nil {
+		t.Fatalf("NewHTTPClient() error: %v", err)
+	}
+	return client
+}
+
+// TestHTTPClient_LogValue_ExcludesCredentials mirrors sempv1's test of the
+// same name: slog.Any on an *HTTPClient must expose base_url but never the
+// auth credentials, and — the case sempv1's original version didn't cover,
+// since building from srv.URL alone carries no userinfo to strip in the
+// first place — a credentialed base URL must come out with its host intact
+// and its userinfo gone (SOL-152979).
+func TestHTTPClient_LogValue_ExcludesCredentials(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+
+	basicJar, err := resilience.NewSafeCookieJar()
+	if err != nil {
+		t.Fatalf("NewSafeCookieJar: %v", err)
+	}
+	credentialedURL := strings.Replace(srv.URL, "://", "://embedded-user:embedded-pass@", 1)
+	cases := []struct {
+		name    string
+		authn   auth.Authenticator
+		jar     *resilience.SafeCookieJar
+		url     string // defaults to srv.URL
+		secrets []string
+	}{
+		{
+			name:    "basic auth credentials are not logged",
+			authn:   auth.NewBasicAuthenticator("SECRET_USERNAME_VAL", "SECRET_PASSWORD_VAL", basicJar),
+			jar:     basicJar,
+			secrets: []string{"SECRET_USERNAME_VAL", "SECRET_PASSWORD_VAL"},
+		},
+		{
+			name:    "bearer token is not logged",
+			authn:   auth.NewBearerAuthenticator("SECRET_BEARER_TOKEN_VAL"),
+			secrets: []string{"SECRET_BEARER_TOKEN_VAL"},
+		},
+		{
+			name:    "credentialed base URL is sanitized",
+			authn:   auth.NewBasicAuthenticator("user", "pass", basicJar),
+			jar:     basicJar,
+			url:     credentialedURL,
+			secrets: []string{"embedded-user", "embedded-pass"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			url := tc.url
+			if url == "" {
+				url = srv.URL
+			}
+			client := newTestClientWithURL(t, url, tc.authn, tc.jar)
+
+			var buf bytes.Buffer
+			old := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+			defer slog.SetDefault(old)
+
+			slog.Info("broker", slog.Any("client", client))
+
+			out := buf.String()
+
+			if !strings.Contains(out, "base_url") {
+				t.Errorf("expected base_url in log output, got: %s", out)
+			}
+			if !strings.Contains(out, srv.URL) {
+				t.Errorf("expected base URL %q in log output, got: %s", srv.URL, out)
+			}
+			for _, secret := range tc.secrets {
+				if strings.Contains(out, secret) {
+					t.Errorf("credential %q leaked into log output:\n%s", secret, out)
+				}
+			}
+		})
+	}
 }
 
 func testOp(method string, params ...sempv2.Parameter) *sempv2.Operation {
