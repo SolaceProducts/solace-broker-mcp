@@ -339,11 +339,11 @@ assert_check "wrong container image tag fails" 1 \
 # weakened to 1 with the whole suite staying green, which is a fail-open — a
 # one-character stale row would then satisfy any future re-pin.
 assert_check "a longer correct short SHA still passes" 0 \
-    set_solace_action_ref "4c3adb2cd1"
+    set_solace_action_ref "47931eb2fd"
 assert_check "a correct short SHA below the 7-character floor fails" 1 \
-    set_solace_action_ref "4c3ad"
+    set_solace_action_ref "47931"
 assert_check "a wrong SHA of acceptable length fails" 1 \
-    set_solace_action_ref "4c3adb3"
+    set_solace_action_ref "47931ec"
 
 # --- discovery is derived, not hardcoded -------------------------------------
 # A hand-maintained input list fails open as the repository grows, which is the
