@@ -82,7 +82,7 @@ circuit breaker on that path.
 | Spoofed/MITM IdP (Spoofing) | No config knob disables TLS verification for the IdP client (unlike the broker client) — cert + hostname verification always on (`internal/idpclient/client.go:69-93`) | Mitigated |
 | Malformed/intercepted IdP response (Tampering) | Content-Type, token shape, `token_type`, `issued_token_type`, and `expires_in` bounds all checked (`internal/tokenexchange/response.go:59-166`) | Mitigated |
 | IdP outage causes fast failure cascades (DoS) | Circuit breaker (above) + retry chain deadline + a cross-caller 429 gate that short-circuits before the breaker (`internal/tokenexchange/exchange.go:207-220`, `retry_after_gate.go`) | Mitigated |
-| IdP outage that's slow rather than fast (each failure burning the full retry-chain deadline) never trips the breaker (DoS) | None — explicitly acknowledged in code: *"the breaker stays closed (fails open)"* (`internal/tokenexchange/circuitbreaker.go:53-61`) | **No mitigation — accepted risk, documented in code** |
+| IdP outage that's slow rather than fast (each failure burning the full retry-chain deadline) never trips the breaker (DoS) | Resolved under SOL-152286: the consecutive-failure rule now uses an undecayed counter (`newIsBreakerSuccess`/`newReadyToTrip`, `internal/tokenexchange/circuitbreaker.go`) that resets only on an observed success, not on a rolling-window timer, so it trips regardless of failure spacing. Residual: a *partially* degraded IdP (interleaved successes) below `minimum_requests` still can't trip either rule — inherent to the sample floor, not fixed by this change | Mitigated |
 | Cross-caller or cross-broker token cache confusion (Info Disclosure/Elevation) | Cache key is `sha256(SubjectToken \|\| 0x00 \|\| BrokerAlias)` (`internal/tokenexchange/dedup_key.go:56-62`) — collision requires the byte-identical inbound JWT, i.e. the same identity | Mitigated by construction |
 | Token leak via cache logging (Info Disclosure) | `CachedCredential`/`GetResult` `LogValue()` explicitly omit the token value (`internal/oauth/cache/cache.go:30-40,76-78`) | Mitigated |
 | Stale token served after the IdP revokes the inbound token upstream (Info Disclosure/Elevation) | None — invalidation is reactive only, triggered by a broker 401 (`internal/tokenexchange/exchange.go:291-299`), not by any revocation push/poll | **No mitigation — accepted risk** |
@@ -187,7 +187,7 @@ a gap, not an exception."*
 | 5 | Server → broker | No compensation/rollback on a failed multi-step write | Currently unreachable (all write tools are single-step) |
 | 6 | Server → broker | `insecure_skip_verify` needs no opt-in gate outside production (oauth) mode | Dev/non-oauth deployments |
 | 7 | Server → broker | Unbounded goroutine/queue buildup if a caller sets no context deadline | All deployments |
-| 8 | OAuth token exchange | A slow/low-traffic IdP outage may never trip the circuit breaker (fails open) | oauth broker mode |
+| 8 | ~~OAuth token exchange~~ | ~~A slow/low-traffic IdP outage may never trip the circuit breaker (fails open)~~ Resolved under SOL-152286 | ~~oauth broker mode~~ |
 | 9 | OAuth token exchange | Cached hop-2 token isn't revoked when the IdP revokes the inbound token upstream | oauth broker mode |
 | 10 | Config and secrets | Nothing prevents a plaintext secret typed directly into the YAML | All deployments |
 | 11 | Config and secrets | No CI/lint gate enforces `secure-logging-rules.md` generally; relies on `/check-logs` discipline | All deployments |
