@@ -45,7 +45,7 @@ func newTokenExchangeCircuitBreaker(cfg CircuitBreakerConfig) *gobreaker.Circuit
 		Timeout:       cfg.OpenStateDuration,
 		MaxRequests:   cfg.HalfOpenProbeRequests,
 		ReadyToTrip:   newReadyToTrip(cfg, &consecutiveFailures),
-		IsSuccessful:  newIsBreakerSuccess(&consecutiveFailures),
+		IsSuccessful:  newCountingIsBreakerSuccess(&consecutiveFailures),
 		IsExcluded:    isBreakerExcluded,
 		OnStateChange: newLogBreakerStateChange(&consecutiveFailures),
 	})
@@ -83,11 +83,16 @@ func newReadyToTrip(cfg CircuitBreakerConfig, consecutiveFailures *atomic.Uint32
 	}
 }
 
-// newIsBreakerSuccess wraps isBreakerSuccess to maintain consecutiveFailures
-// (see newReadyToTrip). gobreaker only calls IsSuccessful for outcomes
-// IsExcluded already let through, so an excluded outcome never reaches the
-// counter either — matching the rate rule's denominator.
-func newIsBreakerSuccess(consecutiveFailures *atomic.Uint32) func(error) bool {
+// newCountingIsBreakerSuccess wraps isBreakerSuccess to maintain
+// consecutiveFailures (see newReadyToTrip) — the name says so because this
+// is the one callback slot below that is NOT a pure function of its error
+// argument; see the block comment above isBreakerExcluded for why that
+// matters. gobreaker only calls IsSuccessful for outcomes IsExcluded already
+// let through, so an excluded outcome never reaches the counter either —
+// matching the rate rule's denominator. The write is a lock-free atomic op,
+// so it stays within the "fast and side-effect-free" constraint despite not
+// being pure.
+func newCountingIsBreakerSuccess(consecutiveFailures *atomic.Uint32) func(error) bool {
 	return func(err error) bool {
 		ok := isBreakerSuccess(err)
 		if ok {
@@ -122,9 +127,21 @@ func newLogBreakerStateChange(consecutiveFailures *atomic.Uint32) func(name stri
 // IdP availability and nothing else. These three functions translate a Layer 2
 // exchange outcome into one of gobreaker's three verdicts — excluded, failure,
 // or success — and own the policy for which outcomes mean "the IdP is
-// unhealthy". They must stay fast and side-effect-free: gobreaker invokes them
-// while holding the lock that guards its internal counters, so no logging, no
-// State()/Counts() calls, no blocking work.
+// unhealthy". They are pure functions of their error argument, and must stay
+// that way: no logging, no State()/Counts() calls, no blocking work. (The
+// IsSuccessful slot actually installed is newCountingIsBreakerSuccess, a thin
+// wrapper that is deliberately NOT pure — see its own doc.)
+//
+// Correctness here leans on three gobreaker v2.4.0 behaviors that are not
+// documented contract: IsExcluded runs before IsSuccessful; IsSuccessful runs
+// before ReadyToTrip sees its effect; and a stale outcome (started before a
+// trip, finished after recovery) is discarded by the generation check before
+// either callback runs. The first two are covered end-to-end — a bump that
+// reordered them would fail the sparse-spacing and exclusion tests in
+// circuitbreaker_exchange_test.go. The third is not test-covered, which is
+// why gobreaker is excluded from the go-minor-patch Dependabot group
+// (.github/dependabot.yml): a bump needs a human reading its changelog, not
+// an auto-merge that could silently let stale results pollute the counter.
 
 // isBreakerExcluded reports outcomes that must count as neither success nor
 // failure. Excluding them (rather than counting a success) keeps the failure
