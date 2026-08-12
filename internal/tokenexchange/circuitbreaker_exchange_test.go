@@ -1224,18 +1224,33 @@ func TestBreaker_RateRuleTripsOnPartialDegradation(t *testing.T) {
 }
 
 // TestBreaker_ConcurrentConsecutiveCounterRaceFree drives many concurrent
-// Exchange calls across distinct dedup keys with a mix of successes and
-// failures, so the consecutive-failure counter is read and written from many
-// goroutines at once. The test asserts no data race (enforced by `go test
-// -race`, which `make check` always runs) and that the breaker ends in a
-// state consistent with SOME valid interleaving, not a specific one.
+// Exchange calls so the counter is read/written from many goroutines at
+// once. -race catches a torn access; serialization is gobreaker's own
+// guarantee (afterRequest takes cb.mutex before any callback), not proven
+// here. What this test proves instead: no update is silently LOST. The
+// threshold (callers+1) is unreachable by the concurrent phase alone, so the
+// breaker is guaranteed closed afterward; a deterministic follow-up run
+// then must trip at EXACTLY that threshold — a lost increment would trip
+// late or never. Concurrent tripping itself is covered elsewhere
+// (TestBreaker_ConcurrentDistinctKeysCountExactlyOncePerCall,
+// TestBreaker_OpenBreakerRejectsStampedeCleanly).
 func TestBreaker_ConcurrentConsecutiveCounterRaceFree(t *testing.T) {
 	t.Parallel()
 	var counter atomic.Int32
+	var phase atomic.Int32 // 0=concurrent (mixed outcomes), 1=baseline (success), 2=follow-up (fail)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		// Deterministic per-request outcome (odd => fail) so the test is
-		// reproducible without any shared mutable healthy/unhealthy toggle
-		// racing the assertions below.
+		switch phase.Load() {
+		case 1:
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, successJSON("race-tok", 3600))
+			return
+		case 2:
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		// Concurrent phase: deterministic per-request outcome (odd => fail)
+		// so the mix is reproducible without a shared mutable toggle racing
+		// the goroutines themselves.
 		if counter.Add(1)%2 == 0 {
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(w, successJSON("race-tok", 3600))
@@ -1245,12 +1260,13 @@ func TestBreaker_ConcurrentConsecutiveCounterRaceFree(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	const callers = 50
+	const threshold = callers + 1 // unreachable by the concurrent phase alone
 	cfg := DefaultCircuitBreakerConfig()
-	cfg.ConsecutiveFailureThreshold = 5
+	cfg.ConsecutiveFailureThreshold = threshold
 	cfg.MinimumRequests = 1_000_000
 	e := newBreakerTestExchangerPlain(t, srv.URL, cfg)
 
-	const callers = 50
 	var wg sync.WaitGroup
 	wg.Add(callers)
 	for i := 0; i < callers; i++ {
@@ -1261,10 +1277,27 @@ func TestBreaker_ConcurrentConsecutiveCounterRaceFree(t *testing.T) {
 	}
 	wg.Wait()
 
-	// No assertion beyond "no race and no panic" — the breaker's exact final
-	// state depends on goroutine interleaving, which this test deliberately
-	// does not pin. -race is the actual assertion here.
-	_ = e.breaker.State()
+	if got := e.breaker.State(); got != gobreaker.StateClosed {
+		t.Fatalf("breaker State = %v after the concurrent phase, want closed (threshold is unreachable by 50 calls alone)", got)
+	}
+
+	// One guaranteed success resets the counter to a known 0 before the
+	// deterministic run (the concurrent phase's last outcome is unspecified).
+	phase.Store(1)
+	if _, err := e.Exchange(context.Background(), inputWithSubject("race-baseline")); err != nil {
+		t.Fatalf("baseline call err = %v, want nil", err)
+	}
+
+	phase.Store(2)
+	for i := 0; i < threshold; i++ {
+		_, err := e.Exchange(context.Background(), inputWithSubject(fmt.Sprintf("race-followup-%d", i)))
+		if !errors.Is(err, ErrExchangeTransport) {
+			t.Fatalf("follow-up failure %d: err = %v, want ErrExchangeTransport", i, err)
+		}
+	}
+	if got := e.breaker.State(); got != gobreaker.StateOpen {
+		t.Fatalf("breaker State = %v after %d follow-up failures from a known baseline, want open (a lost update during contention would trip early or never)", got, threshold)
+	}
 }
 
 // TestBreaker_StateChangeLogCarriesConsecutiveFailures pins the trip WARN's
