@@ -136,7 +136,13 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 		authenticator: authn,
 		sem:           sem,
 		rateLimiter:   limiter.C(),
-		brokerURL:     brokerURL,
+		// Sanitized once here rather than at each of the many log sites below —
+		// brokerURL is logging-only (see the field doc), so nothing downstream
+		// needs the raw form. Defense in depth: validateBrokerURL already
+		// rejects credentialed URLs at config load, but this keeps that
+		// guarantee from being the only thing standing between a broker URL
+		// and the log stream (SOL-152979).
+		brokerURL: config.SanitizeURLString(brokerURL),
 	}
 
 	// Configure retryablehttp client with the underlying http.Client.

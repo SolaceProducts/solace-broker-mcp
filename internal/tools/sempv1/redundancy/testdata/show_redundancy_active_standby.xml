@@ -1,0 +1,93 @@
+<!-- Provenance: captured from the active member of a real HA pair (a Solace
+     Cloud Active/Standby service) with the SEMPv1 show-redundancy request
+     (SOL-151996). Complements
+     show_redundancy_standalone.xml, which is redundancy-disabled: this one
+     exercises the HA-enabled paths — redundancy-status Up, redundancy-mode
+     Active/Standby, both adb-link-up and adb-hello-up true, a populated
+     mate-router-name, and a priority-reported-by-mate subtree reporting the
+     mate as Standby rather than None.
+
+     Scrubbed capture: group-management-server-identity, mate-router-name, and
+     the VRRP static-address are synthetic placeholders, not the real service's
+     identity. Do not paste a raw re-capture over them. The mate name keeps the
+     broker's real "<identity-prefix>backup" pairing so the fixture stays
+     recognizable to someone who knows the format. Placeholder conventions:
+     test/performance/mock-semp/canned/sanitize.local.tsv.example
+
+     Note on the sparse <backup> status: this is a capture from the ACTIVE
+     member, where the backup virtual router is shut down, so the broker emits
+     only <activity> for it. That is the wire truth, not a parse gap — the
+     omitempty assertions depend on it. A capture with a fully populated backup
+     status has to come from the STANDBY member, which a Cloud service does not
+     expose (its management endpoint always routes to the active member). -->
+<rpc-reply semp-version="broker/10.25.24.8245">
+  <rpc>
+    <show>
+      <redundancy>
+        <config-status>Enabled</config-status>
+        <redundancy-status>Up</redundancy-status>
+        <operating-mode>Message Routing Node</operating-mode>
+        <switchover-mechanism>Hostlist</switchover-mechanism>
+        <auto-revert>false</auto-revert>
+        <redundancy-mode>Active/Standby</redundancy-mode>
+        <active-standby-role>Primary</active-standby-role>
+        <group-management-server-identity>testha01.messaging.example.com</group-management-server-identity>
+        <mate-router-name>testha01backup</mate-router-name>
+        <oper-status>
+          <adb-link-up>true</adb-link-up>
+          <adb-hello-up>true</adb-hello-up>
+        </oper-status>
+        <failover-criteria>any-fail</failover-criteria>
+        <vrrp-interfaces>
+          <interface>
+            <name>intf0</name>
+            <static-address>198.51.100.10</static-address>
+            <static-status>Up</static-status>
+          </interface>
+        </vrrp-interfaces>
+        <virtual-routers>
+          <primary>
+            <config>
+              <routing-interface>intf0:1</routing-interface>
+              <vrrp-vrid>-1</vrrp-vrid>
+            </config>
+            <status>
+              <activity>Local Active</activity>
+              <vrrp>Initialize</vrrp>
+              <vrrp-interfaces>
+                <interface>
+                  <name>intf0</name>
+                  <status>Initialize</status>
+                </interface>
+              </vrrp-interfaces>
+              <routing-interface>Up</routing-interface>
+              <vrrp-priority>250</vrrp-priority>
+              <priority-reported-by-mate>
+                <summary>Standby</summary>
+                <cspf>None</cspf>
+                <adb-hello>Standby</adb-hello>
+                <vrrp>Standby (100)</vrrp>
+                <vrrp-interfaces>
+                  <interface>
+                    <name>intf0</name>
+                    <priority>Standby (100)</priority>
+                  </interface>
+                </vrrp-interfaces>
+              </priority-reported-by-mate>
+            </status>
+          </primary>
+          <backup>
+            <config>
+              <routing-interface>intf0:1</routing-interface>
+              <vrrp-vrid>-1</vrrp-vrid>
+            </config>
+            <status>
+              <activity>Shutdown</activity>
+            </status>
+          </backup>
+        </virtual-routers>
+      </redundancy>
+    </show>
+  </rpc>
+<execute-result code="ok"/>
+</rpc-reply>

@@ -66,6 +66,77 @@ func TestListBridges_Counts(t *testing.T) {
 // TestListBridges_OutboundOnlyFailure pins that an outbound-only failure
 // (inbound healthy, outbound not) still counts as down even though SEMP has no
 // outboundFailureReason field to bucket it under.
+// TestListBridges_DownWithEmptyInboundFailureReason uses the two bridge rows a
+// real HA/DR pair returns, captured during SOL-151996 from a Message VPN with
+// replication configured:
+//
+//	#MSGVPN_REPLICATION_BRIDGE  enabled=false  inbound=disabled             outbound=not-applicable  reason="Bridge disabled"
+//	<a replication peer bridge>  enabled=true   inbound=not-ready-wait-next  outbound=not-applicable  reason=""
+//
+// The second row is the case no existing test covers: a bridge that is down on
+// its inbound direction with an EMPTY inboundFailureReason. Every other
+// down-bridge case in this file supplies a non-empty reason, so nothing pinned
+// what happens when the reason is blank.
+//
+// That combination is not hypothetical — it is the normal shape of a bridge
+// connection failure. As the F8 fixture notes in test/e2e-monitoring/helpers.sh
+// record (lab-verified against SEMP 2.46, and independently reproduced on
+// broker 10.25.24.8245 by this capture), a bridge's inboundFailureReason and
+// rxConnectionFailureCategory stay empty / "no-failure" indefinitely for
+// connection-level failures — an unreachable host, a wrong remote VPN name, and
+// bad credentials all leave the reason blank. Only inboundState moves.
+//
+// So the contract this pins is: such a bridge must land in downCount, and must
+// NOT create a "" bucket in byInboundFailureReason. An empty-string key would
+// render as a nameless group in the tool output and, worse, would imply the
+// broker reported a reason when it reported none.
+func TestListBridges_DownWithEmptyInboundFailureReason(t *testing.T) {
+	items := []any{
+		// Reserved replication bridge, admin-disabled. Excluded from downCount
+		// (down by design) and from the reason buckets, even though SEMP does
+		// populate a reason for this one.
+		bridge(false, "disabled", "not-applicable", "Bridge disabled"),
+		// Enabled peer bridge, inbound stuck, no reason reported.
+		bridge(true, "not-ready-wait-next", "not-applicable", ""),
+	}
+	got, err := ListBridges(map[string]map[string]any{"bridges": {"data": items}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, c := range []struct {
+		key  string
+		want int
+	}{
+		{"downCount", 1},
+		{"disabledCount", 1},
+		{"scanned", 2},
+	} {
+		if got[c.key] != c.want {
+			t.Errorf("%s: got %v, want %d", c.key, got[c.key], c.want)
+		}
+	}
+
+	byReason, ok := got["byInboundFailureReason"].(map[string]int)
+	if !ok {
+		t.Fatalf("byInboundFailureReason: wrong type %T", got["byInboundFailureReason"])
+	}
+	if _, present := byReason[""]; present {
+		t.Errorf("byInboundFailureReason has an empty-string key: %v — a bridge whose "+
+			"reason the broker left blank must not be bucketed under \"\"", byReason)
+	}
+	// "Bridge disabled" belongs to the admin-disabled row, which is excluded
+	// from bucketing entirely — same exclusion list-rdps applies to
+	// "RDP Shutdown".
+	if _, present := byReason["Bridge disabled"]; present {
+		t.Errorf("byInboundFailureReason contains %q from an admin-disabled bridge: %v",
+			"Bridge disabled", byReason)
+	}
+	if len(byReason) != 0 {
+		t.Errorf("byInboundFailureReason = %v, want empty (one row disabled, one row down with no reason)", byReason)
+	}
+}
+
 func TestListBridges_OutboundOnlyFailure(t *testing.T) {
 	// inbound healthy, outbound neither "ready" nor "not-applicable".
 	items := []any{

@@ -1351,6 +1351,36 @@ brokers:
 	}
 }
 
+// TestSanitizeURLString pins the exported contract: userinfo stripped for
+// any valid http/https URL, everything else replaced with
+// "<unparseable url>" rather than echoed back — including the schemeless
+// "user:pass@host:port" form url.Parse treats as opaque, which a naive
+// User != nil check alone would miss.
+func TestSanitizeURLString(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"empty", "", ""},
+		{"no userinfo", "https://broker.example.com:1943", "https://broker.example.com:1943"},
+		{"username only", "https://admin@broker.example.com", "https://broker.example.com"},
+		{"username and password", "https://admin:hunter2@broker.example.com:1943", "https://broker.example.com:1943"},
+		{"schemeless is opaque, rejected by the scheme/host check", "admin:hunter2@broker.example.com:943", "<unparseable url>"},
+		{"scheme-relative", "//admin:hunter2@broker.example.com", "<unparseable url>"},
+		{"non-http(s) scheme", "ftp://admin:hunter2@broker.example.com", "<unparseable url>"},
+		{"no host", "https://", "<unparseable url>"},
+		{"unparseable", "https://admin:hunter2@[::1", "<unparseable url>"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SanitizeURLString(tc.in); got != tc.want {
+				t.Errorf("SanitizeURLString(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestBrokerConfig_LogValue_RedactsURLCredentials pins that the LogValuer
 // itself strips userinfo from the URL — independent of whether validation
 // has run. validateBrokerURL already rejects credentialed URLs, but

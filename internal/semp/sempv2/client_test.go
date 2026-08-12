@@ -20,6 +20,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -61,6 +62,105 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*sempv2.HTTPClient, 
 		t.Fatalf("NewHTTPClient() error: %v", err)
 	}
 	return client, server
+}
+
+// newTestClientWithURL builds an HTTPClient pointed at an explicit URL rather
+// than a live server — NewHTTPClient does no request I/O, so a case can
+// exercise a credentialed baseURL without anything needing to resolve it.
+func newTestClientWithURL(t *testing.T, url string, authn auth.Authenticator, jar *resilience.SafeCookieJar) *sempv2.HTTPClient {
+	t.Helper()
+	brokerCfg := &config.BrokerConfig{
+		URL:  url,
+		Auth: config.AuthConfig{Mode: "basic"},
+	}
+	retries := 0
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		RequestTimeoutDuration: 5 * time.Second,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
+	}
+	client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), resilience.NewRateLimiter(0), authn, jar)
+	if err != nil {
+		t.Fatalf("NewHTTPClient() error: %v", err)
+	}
+	return client
+}
+
+// TestHTTPClient_LogValue_ExcludesCredentials mirrors sempv1's test of the
+// same name: slog.Any on an *HTTPClient must expose base_url but never the
+// auth credentials, and — the case sempv1's original version didn't cover,
+// since building from srv.URL alone carries no userinfo to strip in the
+// first place — a credentialed base URL must come out with its host intact
+// and its userinfo gone (SOL-152979).
+func TestHTTPClient_LogValue_ExcludesCredentials(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+
+	basicJar, err := resilience.NewSafeCookieJar()
+	if err != nil {
+		t.Fatalf("NewSafeCookieJar: %v", err)
+	}
+	credentialedURL := strings.Replace(srv.URL, "://", "://embedded-user:embedded-pass@", 1)
+	cases := []struct {
+		name    string
+		authn   auth.Authenticator
+		jar     *resilience.SafeCookieJar
+		url     string // defaults to srv.URL
+		secrets []string
+	}{
+		{
+			name:    "basic auth credentials are not logged",
+			authn:   auth.NewBasicAuthenticator("SECRET_USERNAME_VAL", "SECRET_PASSWORD_VAL", basicJar),
+			jar:     basicJar,
+			secrets: []string{"SECRET_USERNAME_VAL", "SECRET_PASSWORD_VAL"},
+		},
+		{
+			name:    "bearer token is not logged",
+			authn:   auth.NewBearerAuthenticator("SECRET_BEARER_TOKEN_VAL"),
+			secrets: []string{"SECRET_BEARER_TOKEN_VAL"},
+		},
+		{
+			name:    "credentialed base URL is sanitized",
+			authn:   auth.NewBasicAuthenticator("user", "pass", basicJar),
+			jar:     basicJar,
+			url:     credentialedURL,
+			secrets: []string{"embedded-user", "embedded-pass"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			url := tc.url
+			if url == "" {
+				url = srv.URL
+			}
+			client := newTestClientWithURL(t, url, tc.authn, tc.jar)
+
+			var buf bytes.Buffer
+			old := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+			defer slog.SetDefault(old)
+
+			slog.Info("broker", slog.Any("client", client))
+
+			out := buf.String()
+
+			if !strings.Contains(out, "base_url") {
+				t.Errorf("expected base_url in log output, got: %s", out)
+			}
+			if !strings.Contains(out, srv.URL) {
+				t.Errorf("expected base URL %q in log output, got: %s", srv.URL, out)
+			}
+			for _, secret := range tc.secrets {
+				if strings.Contains(out, secret) {
+					t.Errorf("credential %q leaked into log output:\n%s", secret, out)
+				}
+			}
+		})
+	}
 }
 
 func testOp(method string, params ...sempv2.Parameter) *sempv2.Operation {
@@ -303,6 +403,80 @@ func TestClient_Execute_RejectsUnsafePathParam(t *testing.T) {
 			t.Error("handler was not called; a legitimate dotted value must not be rejected")
 		}
 	})
+}
+
+// TestClient_Execute_EscapesReservedCharInCompositeKeyPath pins the URL built
+// for a bridge whose name begins with "#" — the form SEMP gives every
+// replication bridge ("#MSGVPN_REPLICATION_BRIDGE") — on the one path template
+// in this server whose final segment is a two-part composite key,
+// {bridgeName},{bridgeVirtualRouter}.
+//
+// Two requirements pull in opposite directions here, which is why this is worth
+// pinning rather than trusting to url.PathEscape by inspection:
+//
+//   - The "#" MUST be percent-encoded to %23. Left raw, everything after it is
+//     a URL fragment, so the request would hit the bridges *collection* rather
+//     than one bridge — and the broker would answer 200 with the wrong body,
+//     making the failure silent instead of a 404.
+//   - The comma joining the composite key MUST stay a literal comma. It comes
+//     from the path template, not from a parameter value, so no escaping should
+//     reach it. %2C-encoding it would make the broker read the whole segment as
+//     a single bridge name and 404.
+//
+// get-bridge-status is the only tool that can hit this: bridgeVirtualRouter is
+// "auto" on a standalone broker, so both the composite key and the reserved
+// bridge name only appear together on an HA pair querying its replication
+// bridge. Verified against a live HA broker during SOL-151996 — a GET on
+// .../bridges/%23MSGVPN_REPLICATION_BRIDGE,backup returns that bridge.
+func TestClient_Execute_EscapesReservedCharInCompositeKeyPath(t *testing.T) {
+	var gotEscaped, gotDecoded string
+	client, server := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotEscaped = r.URL.EscapedPath()
+		gotDecoded = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{})
+	})
+	defer server.Close()
+
+	op := &sempv2.Operation{
+		ID:     "getMsgVpnBridge",
+		Method: "GET",
+		Path:   "/SEMP/v2/monitor/msgVpns/{msgVpnName}/bridges/{bridgeName},{bridgeVirtualRouter}",
+		Parameters: []sempv2.Parameter{
+			{Name: "msgVpnName", In: "path"},
+			{Name: "bridgeName", In: "path"},
+			{Name: "bridgeVirtualRouter", In: "path"},
+		},
+	}
+
+	_, err := client.Execute(context.Background(), op, map[string]any{
+		"msgVpnName":          "test-dr-active-vpn",
+		"bridgeName":          "#MSGVPN_REPLICATION_BRIDGE",
+		"bridgeVirtualRouter": "backup",
+	})
+	if err != nil {
+		t.Fatalf("Execute() with reserved-char bridge name: unexpected error: %v", err)
+	}
+
+	const wantSegment = "/bridges/%23MSGVPN_REPLICATION_BRIDGE,backup"
+	if !strings.Contains(gotEscaped, wantSegment) {
+		t.Errorf("escaped path = %q, want it to contain %q", gotEscaped, wantSegment)
+	}
+	// Guard each half of the requirement separately, so a regression names
+	// which one broke rather than just failing the combined match above.
+	if strings.Contains(gotEscaped, "/bridges/#") {
+		t.Errorf("escaped path = %q: '#' was not encoded, so the bridge name "+
+			"becomes a URL fragment and the request targets the collection", gotEscaped)
+	}
+	if strings.Contains(gotEscaped, "%2C") || strings.Contains(gotEscaped, "%2c") {
+		t.Errorf("escaped path = %q: the composite-key comma must stay literal, not %%2C", gotEscaped)
+	}
+	// The decoded path is what the broker's router matches on: one segment
+	// holding the raw bridge name, a comma, then the virtual router.
+	const wantDecoded = "/SEMP/v2/monitor/msgVpns/test-dr-active-vpn/bridges/#MSGVPN_REPLICATION_BRIDGE,backup"
+	if gotDecoded != wantDecoded {
+		t.Errorf("decoded path = %q, want %q", gotDecoded, wantDecoded)
+	}
 }
 
 func TestClient_Execute_PathParams(t *testing.T) {
