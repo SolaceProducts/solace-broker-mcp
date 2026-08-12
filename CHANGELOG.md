@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The token-exchange circuit breaker's `consecutive_failure_threshold` rule now trips a slow, low-traffic IdP outage, not only a fast-failing one. It previously read gobreaker's own `ConsecutiveFailures`, which decays as the rolling window's buckets (`failure_rate_window`/10) age out — failures spaced wider than a bucket period could leave the count permanently below threshold even though every exchange failed, and at traffic too low for `minimum_requests` the rate rule couldn't cover the gap either, so the breaker could stay closed through a genuine sustained outage. The rule now reads a separate, undecayed counter this package owns: it increments on every counted failure and resets only on an observed success (never on a timer, since Exchange sits behind a token cache — a quiet gap usually means no caller needed a token, not that the IdP recovered). Excluded outcomes (429, cancellations, config faults) still touch neither counter. No config or behavior change for the fast-failing case this rule always caught; `consecutive_failure_threshold: 0` still disables it. Tracked under SOL-152286.
+
 ## [0.7.1] - 2026-08-11
 
 `v0.7.0` was tagged but its release pipeline failed before publishing anything, so it has no binary archives, no container image, and no GitHub Release — only a git tag and a Go module version. **0.7.1 is the first published release of the 0.7 line**, and because git history is cumulative it contains everything listed under 0.7.0 below in addition to the change here. Anyone looking for 0.7.0 downloads wants 0.7.1.
