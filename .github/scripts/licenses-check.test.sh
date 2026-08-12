@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Self-test for licenses-check.sh, in the same spirit as dco-check.test.sh.
+# Self-test for licenses-check.sh.
 #
 # A compliance gate that cannot fail is not a gate. The dangerous failure mode
 # here is not a false alarm, it is a *silent pass*, and three real ones were

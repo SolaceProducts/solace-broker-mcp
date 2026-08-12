@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Self-test for license-header-check.sh, in the same spirit as
-# licenses-check.test.sh and dco-check.test.sh.
+# licenses-check.test.sh.
 #
 # A gate that cannot fail is not a gate. The dangerous failure mode for a licence
 # header check is not a false alarm — it is a *silent pass*, and there are five

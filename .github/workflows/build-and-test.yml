@@ -54,11 +54,10 @@ on:
       - main
   pull_request:
     types: [opened, synchronize, reopened]
-    # Scoped to main to match dco.yaml, which is scoped for a correctness reason
-    # (see its header). Without this, a pull request against a throwaway base
-    # would spin up five Dockerized e2e suites and still not get a DCO verdict.
-    # Add a branch here if the project starts taking pull requests against
-    # release branches, and add it to dco.yaml at the same time.
+    # Scoped to main deliberately. Without this, a pull request against a
+    # throwaway base would spin up five Dockerized e2e suites for a branch
+    # nothing merges into. Add a branch here if the project starts taking pull
+    # requests against release branches.
     branches: [main]
   workflow_dispatch:
   workflow_call:

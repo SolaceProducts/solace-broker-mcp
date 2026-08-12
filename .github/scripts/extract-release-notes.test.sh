@@ -4,7 +4,7 @@
 # runs the real script against them, and asserts the exit code and published
 # body. Covers the release gate (block must exist AND carry a real entry) and
 # the curated-summary preference/fallback, so this gating script's logic is
-# verified on every PR rather than trusted — same pattern as dco-check.test.sh.
+# verified on every PR rather than trusted — same pattern as the other gates.
 #
 # Run manually:  .github/scripts/extract-release-notes.test.sh
 # Runs in CI as the `release_notes_selftest` job in .github/workflows/ci-pr.yaml.

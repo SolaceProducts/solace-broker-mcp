@@ -73,8 +73,7 @@ jobs:
       pull-requests: write
       checks: write
       statuses: write
-    # No `secrets: inherit`: guardian-scan.yaml reads its secrets from the
-    # `guardian` Environment, which resolves independently of the caller.
+    secrets: inherit
     with:
       git_ref: ${{ inputs.version }}
       product_full_version: ${{ inputs.version }}

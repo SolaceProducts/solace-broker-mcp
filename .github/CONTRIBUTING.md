@@ -152,7 +152,7 @@ considered and why they lose.
 
 ### PR Review Process
 
-1. **Automated checks** — CI must pass (build, lint, test, E2E, DCO sign-off)
+1. **Automated checks** — CI must pass (build, lint, test, E2E, DCO)
 2. **Maintainer review** — At least one maintainer approval required
 3. **Address feedback** — Respond to review comments and make requested changes
 4. **Squash or rebase** — Clean up commit history if requested
@@ -303,8 +303,8 @@ git log -1 --format=%B     # expect a Signed-off-by line
 git reset --soft HEAD~1    # drop the test commit, keep your working tree
 ```
 
-The hook is a convenience, not the control: the `DCO sign-off` CI check is the
-enforcement and re-verifies every commit regardless of what ran locally. Re-run
+The hook is a convenience, not the control: the `DCO` check is the enforcement
+and re-verifies every commit regardless of what ran locally. Re-run
 `make hooks` after a change to `.githooks/` lands on `main`; it upgrades its own
 copy but refuses to overwrite an unrelated `prepare-commit-msg` hook you already
 have, and refuses to install anywhere but inside this repository's git directory.
@@ -363,8 +363,8 @@ address CI matches against, so make sure it is set to the one you mean to use.
 
 ### Enforcement
 
-The `DCO sign-off` check in CI blocks any PR that is missing a sign-off. What it
-checks, precisely:
+The `DCO` check blocks any PR that is missing a sign-off. It is the CNCF `dco2`
+GitHub App, not a workflow in this repository. What it checks, precisely:
 
 - Every commit your PR adds. Commits already on the branch you are targeting are
   not re-checked.
@@ -372,22 +372,28 @@ checks, precisely:
   whose email matches that commit's own author or committer, compared
   case-insensitively. A sign-off copied along with someone else's commit does not
   count.
-- Merge commits are exempt while re-merging their parents reproduces exactly what
-  they recorded, so refreshing your branch with `git merge main` is fine. A merge
-  that contributes something of its own, such as a conflict resolution or files
-  edited or added during the merge, needs its own sign-off (`git merge --signoff`).
-  Octopus merges and merges the check cannot recompute always need one.
+- Merge commits are exempt, all of them, unconditionally — `dco2` skips a merge
+  before it reads the message. So refreshing your branch with `git merge main` is
+  fine, and a merge that resolves a conflict or edits files of its own will also
+  pass without a sign-off. That is wider than the retired workflow, which
+  exempted a merge only while re-merging its parents reproduced exactly what the
+  merge recorded. Signing a content-bearing merge (`git merge --signoff`) is
+  still the right thing to do — there is something of your own to certify — but
+  it is now convention, not something CI will catch.
 - `Co-Authored-By:` trailers are ignored. Co-authors do not need their own
   sign-off.
 
 The check reports the offending commits and the exact commands to fix them. There
-is no label or flag that skips it. Use your real name. Pseudonyms and
+is nothing that skips it: no label, no flag, and no override button — the App's
+*Set DCO to pass* button is switched off in `.github/dco.yml`. A pull request
+cannot change that, because `dco2` reads its configuration from the default
+branch. Fixing the sign-off is the only route through. Use your real name. Pseudonyms and
 anonymous contributions aren't accepted.
 
 ### Author identity
 
-The same CI check also rejects commits whose author or committer email uses a
-non-routable domain — one ending in `.local`, `.sol-local`, `.internal`, or
+A separate CI check, `Commit identity routable`, rejects commits whose author or
+committer email uses a non-routable domain — one ending in `.local`, `.sol-local`, `.internal`, or
 `.lan`, or a bare hostname with no dot. These are the addresses a developer
 machine invents when `git config user.email` is unset, and they publish
 permanently with the git history when the repository is public.

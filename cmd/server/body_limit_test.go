@@ -164,10 +164,11 @@ func TestLimitRequestBody_RealSDK_UnderLimit(t *testing.T) {
 }
 
 // TestLimitRequestBody_RealSDK_StreamedOversize pins the client-observable
-// contract when MaxBytesReader trips inside the SDK's io.ReadAll: the SDK
-// turns the read failure into 400 "failed to read body" (streamable.go,
-// go-sdk v1.5.0). If an SDK upgrade changes how it buffers or reports the
-// body, this test surfaces it so the mitigation can be re-verified.
+// contract when MaxBytesReader trips inside the SDK's io.ReadAll. As of
+// go-sdk v1.7.0 the SDK maps the read failure to 413 "request body exceeds
+// <n> bytes" (previously 400 "failed to read body" in <= v1.6.1). If an
+// SDK upgrade changes how it buffers or reports the body, this test surfaces
+// it so the mitigation can be re-verified.
 func TestLimitRequestBody_RealSDK_StreamedOversize(t *testing.T) {
 	handler := newRealSDKHandler()
 
@@ -177,17 +178,18 @@ func TestLimitRequestBody_RealSDK_StreamedOversize(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusRequestEntityTooLarge, rec.Body.String())
 	}
-	if got := rec.Body.String(); !strings.Contains(got, "failed to read body") {
-		t.Errorf("body = %q, want it to contain %q", got, "failed to read body")
+	if got := rec.Body.String(); !strings.Contains(got, "request body exceeds") {
+		t.Errorf("body = %q, want it to contain %q", got, "request body exceeds")
 	}
 }
 
 // TestLimitRequestBody_RealSDK_DeclaredOversize proves a client that declares
-// its oversized Content-Length gets a 413 from the middleware; the SDK never
-// produces that status, so observing it confirms the short-circuit.
+// its oversized Content-Length gets the middleware's 413 "request body too
+// large" short-circuit, distinct from the SDK's own 413 ("request body
+// exceeds N bytes") for streamed bodies.
 func TestLimitRequestBody_RealSDK_DeclaredOversize(t *testing.T) {
 	handler := newRealSDKHandler()
 

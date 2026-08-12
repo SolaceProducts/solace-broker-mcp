@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Self-test for build-test-licenses-check.sh, in the same spirit as
-# licenses-check.test.sh and dco-check.test.sh.
+# licenses-check.test.sh.
 #
 # A compliance gate that cannot fail is not a gate. The dangerous failure mode is
 # not a false alarm, it is a *silent pass*: the inventory rots, CI stays green,
@@ -138,7 +138,7 @@ add_dash_uses_action() { # <tmp> — the `- uses:` step form, which an anchor
     # without the `-` alternative silently misses. A new third-party action
     # entering CI must not report green.
     unlink_workflows "$1"
-    printf '        - uses: example/sneaky-action@v1\n' >>"$1/.github/workflows/dco.yaml"
+    printf '        - uses: example/sneaky-action@v1\n' >>"$1/.github/workflows/ci-pr.yaml"
 }
 
 bump_action_version() { # <tmp> — Dependabot bumps actions daily; a version
@@ -192,7 +192,7 @@ add_port_registry_image() { # <tmp> — a colon before the last '/' is a registr
     # `localhost`, and the gate then reports a name nothing uses while the real
     # image goes undocumented.
     unlink_workflows "$1"
-    printf '\n# fixture\n    image: localhost:5000/testonly/thing\n' >>"$1/.github/workflows/dco.yaml"
+    printf '\n# fixture\n    image: localhost:5000/testonly/thing\n' >>"$1/.github/workflows/ci-pr.yaml"
 }
 
 # --- harness ---------------------------------------------------------------

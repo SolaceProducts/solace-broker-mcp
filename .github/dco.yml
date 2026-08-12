@@ -1,0 +1,33 @@
+# Configuration for the CNCF dco2 GitHub App, which serves the required `DCO`
+# check. Reference: https://github.com/cncf/dco2, sample at
+# https://github.com/cncf/dco2/blob/main/docs/config/dco.yml
+#
+# dco2 reads this file from the `.github` directory of the DEFAULT BRANCH only, so
+# a pull request cannot weaken the gate that is judging it — a change here has no
+# effect until it merges to `main`. That is the same property the App was adopted
+# for; this file inherits it rather than undoing it.
+#
+# Every other key is left at its default deliberately. Writing defaults out
+# invites them to drift silently from upstream's, and this file should say only
+# what this repository has actually decided. The defaults in force, for reference:
+# allowRemediationCommits.individual false, allowRemediationCommits.thirdParty
+# false, require.members true.
+
+# Hide the `Set DCO to pass` button that dco2 otherwise renders on a failed
+# check's details page.
+#
+# Set because DCO sign-off is the control this project relies on instead of a
+# contributor licence agreement, so a one-click path to marking it satisfied is a
+# path we should not offer. Nothing about a missing sign-off is unfixable: the
+# check prints the exact commands, and `git commit -s` costs nothing.
+#
+# This is NOT a security boundary, and upstream says so. Anyone with write access
+# can edit this file, so it stops an accident, not an intent. What it buys is that
+# clearing a red DCO check becomes a deliberate, reviewable commit to the default
+# branch rather than a button someone reaches for while trying to land a release.
+# Recorded as the closure of the accepted risk in docs/internal/threat-model.md.
+#
+# The retired .github/workflows/dco.yaml had no equivalent override, so leaving
+# this at its `true` default would have made the move to dco2 a net loosening of
+# the control. See .github/ADMIN_SETUP.md → "Required status checks".
+allowOverrideAction: false

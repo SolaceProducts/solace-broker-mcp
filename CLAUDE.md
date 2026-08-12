@@ -44,7 +44,7 @@ tool name; LLMs see and pattern-match against this string.
 Run `/check-logs` to scan for logging security violations. Fix all CRITICAL
 and HIGH issues before committing. Rules: `docs/internal/secure-logging-rules.md`.
 
-Every commit needs a DCO `Signed-off-by` trailer — the `DCO sign-off` CI check
+Every commit needs a DCO `Signed-off-by` trailer — the required `DCO` check
 blocks a PR without one. `make hooks` (once per clone) installs a
 `prepare-commit-msg` hook that adds it automatically; otherwise commit with
 `git commit -s`.
