@@ -1,0 +1,116 @@
+<!-- Provenance: captured with the SEMPv1 show-redundancy request during a
+     release-activity window on a real Active/Standby HA pair (SOL-151996).
+     This is the DEGRADED-state fixture, and the counterpart to
+     show_redundancy_active_standby.xml: where that one is a healthy pair seen
+     from its active Primary member, this one is a pair whose Primary has
+     released activity, seen from the Backup member that took over.
+
+     What only this fixture exercises:
+       - redundancy-status Down while both adb-link-up and adb-hello-up are
+         still true. Mate-link health and group health are independent — a
+         reader that infers one from the other is wrong, and this is the only
+         fixture that separates them (the standalone fixture has Down with both
+         flags false, so it cannot).
+       - active-standby-role Backup. Every other fixture is Primary.
+       - a fully populated <backup> virtual-router status subtree, with the
+         <primary> subtree reduced to bare <activity>. The exact mirror of
+         show_redundancy_active_standby.xml, so the omitempty behavior is
+         pinned in both directions rather than only ever on the backup role.
+       - priority-reported-by-mate reporting "Release" / "Release (0)". No
+         other fixture carries this enum value.
+
+     How it was obtained, since it is not reproducible from a Cloud service by
+     observation alone: `release-activity` under configure/redundancy on the
+     active Primary member, then a capture through the service's management
+     endpoint. A Cloud HA service fronts one endpoint that routes to whichever
+     member is active, so releasing activity moves that endpoint onto the
+     Backup member — which is what makes the populated backup subtree
+     reachable without direct access to the standby. Reverted afterwards with
+     `no release-activity`; recovery is not instant (the returning member
+     resyncs its message spool, ~45s here) and redundancy-status reads Down
+     until it completes.
+
+     Note: config-status is "Enabled", not the "Enabled-Released" the released
+     member's CLI reports. Not a parse gap — the release is configured on the
+     Primary, while this capture is from the Backup, which carries no such
+     flag. A capture from the released member itself would differ here.
+
+     Scrubbed capture: group-management-server-identity, mate-router-name, and
+     the VRRP static-address are synthetic placeholders, not the real service's
+     identity. Do not paste a raw re-capture over them. The mate name keeps the
+     broker's real "<identity-prefix>primary" pairing — note the suffix is
+     "primary" here, not "backup", because the mate of the Backup member is the
+     Primary. The static-address is .11 where the active-standby fixture is
+     .10: these are two different members of the pair. Placeholder
+     conventions: test/performance/mock-semp/canned/sanitize.local.tsv.example -->
+<rpc-reply semp-version="broker/10.25.24.8245">
+  <rpc>
+    <show>
+      <redundancy>
+        <config-status>Enabled</config-status>
+        <redundancy-status>Down</redundancy-status>
+        <operating-mode>Message Routing Node</operating-mode>
+        <switchover-mechanism>Hostlist</switchover-mechanism>
+        <auto-revert>false</auto-revert>
+        <redundancy-mode>Active/Standby</redundancy-mode>
+        <active-standby-role>Backup</active-standby-role>
+        <group-management-server-identity>testha01.messaging.example.com</group-management-server-identity>
+        <mate-router-name>testha01primary</mate-router-name>
+        <oper-status>
+          <adb-link-up>true</adb-link-up>
+          <adb-hello-up>true</adb-hello-up>
+        </oper-status>
+        <failover-criteria>any-fail</failover-criteria>
+        <vrrp-interfaces>
+          <interface>
+            <name>intf0</name>
+            <static-address>198.51.100.11</static-address>
+            <static-status>Up</static-status>
+          </interface>
+        </vrrp-interfaces>
+        <virtual-routers>
+          <primary>
+            <config>
+              <routing-interface>intf0:1</routing-interface>
+              <vrrp-vrid>-1</vrrp-vrid>
+            </config>
+            <status>
+              <activity>Shutdown</activity>
+            </status>
+          </primary>
+          <backup>
+            <config>
+              <routing-interface>intf0:1</routing-interface>
+              <vrrp-vrid>-1</vrrp-vrid>
+            </config>
+            <status>
+              <activity>Local Active</activity>
+              <vrrp>Initialize</vrrp>
+              <vrrp-interfaces>
+                <interface>
+                  <name>intf0</name>
+                  <status>Initialize</status>
+                </interface>
+              </vrrp-interfaces>
+              <routing-interface>Up</routing-interface>
+              <vrrp-priority>240</vrrp-priority>
+              <priority-reported-by-mate>
+                <summary>Release</summary>
+                <cspf>None</cspf>
+                <adb-hello>Release</adb-hello>
+                <vrrp>Release (0)</vrrp>
+                <vrrp-interfaces>
+                  <interface>
+                    <name>intf0</name>
+                    <priority>Release (0)</priority>
+                  </interface>
+                </vrrp-interfaces>
+              </priority-reported-by-mate>
+            </status>
+          </backup>
+        </virtual-routers>
+      </redundancy>
+    </show>
+  </rpc>
+<execute-result code="ok"/>
+</rpc-reply>
