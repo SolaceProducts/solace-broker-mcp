@@ -656,10 +656,12 @@ Under `mode: disabled` and `mode: static` the server binds `127.0.0.1` only by d
 
 - Verify the MCP client supports OAuth (Claude Code and Claude Desktop do)
 - Check that the `resource_url` matches the URL the client is connecting to
-- Verify the `/.well-known/oauth-protected-resource` endpoint returns valid metadata:
+- Verify the PRM endpoint returns valid metadata. Both paths return the same document:
   ```bash
   curl http://localhost:9090/.well-known/oauth-protected-resource
+  curl http://localhost:9090/.well-known/oauth-protected-resource/mcp
   ```
+  The bare path is what `WWW-Authenticate` advertises on a 401. The `/mcp`-suffixed path is the RFC 9728 §3.1 canonical path used by clients that construct it directly (e.g. SAM's Automatic OAuth discovery).
 
 ### "Allowed Client Scopes rejected request to client-registration service"
 
