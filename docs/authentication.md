@@ -604,7 +604,7 @@ A browser window opens on first use for user login. The IdP must support anonymo
 The numbered steps in detail:
 
 1. Claude Code connects to the MCP server and receives a `401 Unauthorized` response
-2. Claude Code fetches the OAuth Protected Resource Metadata from `/.well-known/oauth-protected-resource` to discover the authorization server
+2. Claude Code fetches the OAuth Protected Resource Metadata from `/.well-known/oauth-protected-resource` to discover the authorization server (the server also serves the same document at the RFC 9728 canonical path `/.well-known/oauth-protected-resource/mcp` for clients that build that URL directly)
 3. **Option A:** Claude Code uses the pre-registered client credentials and skips DCR
    **Option B:** Claude Code performs Dynamic Client Registration (RFC 7591) to obtain a client ID at runtime
 4. A browser window opens for the user to log in with IdP credentials
