@@ -539,6 +539,15 @@ func TestRegisterMetadataRoutes(t *testing.T) {
 			canonStatus: http.StatusOK,
 		},
 		{
+			// Pins that the canonical path is derived from resource_url, not
+			// hardcoded to /mcp — regressing the derivation would fail here.
+			name:        "path prefix from ingress — canonical follows resource_url path",
+			cfg:         oauthCfg("https://gateway.example.com/broker/mcp"),
+			bareStatus:  http.StatusOK,
+			canonPath:   "/.well-known/oauth-protected-resource/broker/mcp",
+			canonStatus: http.StatusOK,
+		},
+		{
 			name:       "empty path — canonical collides with bare, skip",
 			cfg:        oauthCfg("https://mcp.example.com"),
 			bareStatus: http.StatusOK,
