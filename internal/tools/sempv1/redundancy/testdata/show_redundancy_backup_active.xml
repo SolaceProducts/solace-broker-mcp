@@ -1,0 +1,103 @@
+<!-- Provenance: captured with the SEMPv1 show-redundancy request from the
+     Backup member of a real Active/Standby HA pair, after activity had moved
+     to it and the group had returned to health (SOL-151996).
+
+     This exists to decouple two properties that show_redundancy_released.xml
+     conflates. That fixture has a populated <backup> subtree AND
+     redundancy-status Down, so a test using it alone cannot tell whether a
+     reader keys off the role or off group health. Here the pair is fully
+     healthy — redundancy-status Up, both mate-link flags true — while the
+     Backup is still the active member with the populated subtree. Anything
+     that treats "activity on the backup role" as inherently degraded fails
+     against this fixture and passes against the other.
+
+     How activity comes to rest on the Backup: `release-activity` on the
+     Primary, then `no release-activity` to clear it. With auto-revert false
+     (the wire value below) the Primary does NOT take activity back when it
+     returns — it rejoins as a healthy standby and the Backup stays active
+     indefinitely. That is a normal steady state for such a pair, not a fault,
+     and it is the state captured here.
+
+     Distinguishing it from show_redundancy_released.xml on the wire:
+     redundancy-status flips Down -> Up, and priority-reported-by-mate reports
+     the returned mate as "Standby" / "Standby (150)" instead of "Release" /
+     "Release (0)". Everything else is identical, including the populated
+     backup subtree and the bare-<activity> primary subtree.
+
+     Scrubbed capture: group-management-server-identity, mate-router-name, and
+     the VRRP static-address are synthetic placeholders, not the real service's
+     identity. Do not paste a raw re-capture over them. Values are kept
+     consistent with show_redundancy_released.xml — same pair, same member, so
+     the same placeholders. Conventions:
+     test/performance/mock-semp/canned/sanitize.local.tsv.example -->
+<rpc-reply semp-version="broker/10.25.24.8245">
+  <rpc>
+    <show>
+      <redundancy>
+        <config-status>Enabled</config-status>
+        <redundancy-status>Up</redundancy-status>
+        <operating-mode>Message Routing Node</operating-mode>
+        <switchover-mechanism>Hostlist</switchover-mechanism>
+        <auto-revert>false</auto-revert>
+        <redundancy-mode>Active/Standby</redundancy-mode>
+        <active-standby-role>Backup</active-standby-role>
+        <group-management-server-identity>testha01.messaging.example.com</group-management-server-identity>
+        <mate-router-name>testha01primary</mate-router-name>
+        <oper-status>
+          <adb-link-up>true</adb-link-up>
+          <adb-hello-up>true</adb-hello-up>
+        </oper-status>
+        <failover-criteria>any-fail</failover-criteria>
+        <vrrp-interfaces>
+          <interface>
+            <name>intf0</name>
+            <static-address>198.51.100.11</static-address>
+            <static-status>Up</static-status>
+          </interface>
+        </vrrp-interfaces>
+        <virtual-routers>
+          <primary>
+            <config>
+              <routing-interface>intf0:1</routing-interface>
+              <vrrp-vrid>-1</vrrp-vrid>
+            </config>
+            <status>
+              <activity>Shutdown</activity>
+            </status>
+          </primary>
+          <backup>
+            <config>
+              <routing-interface>intf0:1</routing-interface>
+              <vrrp-vrid>-1</vrrp-vrid>
+            </config>
+            <status>
+              <activity>Local Active</activity>
+              <vrrp>Initialize</vrrp>
+              <vrrp-interfaces>
+                <interface>
+                  <name>intf0</name>
+                  <status>Initialize</status>
+                </interface>
+              </vrrp-interfaces>
+              <routing-interface>Up</routing-interface>
+              <vrrp-priority>240</vrrp-priority>
+              <priority-reported-by-mate>
+                <summary>Standby</summary>
+                <cspf>None</cspf>
+                <adb-hello>Standby</adb-hello>
+                <vrrp>Standby (150)</vrrp>
+                <vrrp-interfaces>
+                  <interface>
+                    <name>intf0</name>
+                    <priority>Standby (150)</priority>
+                  </interface>
+                </vrrp-interfaces>
+              </priority-reported-by-mate>
+            </status>
+          </backup>
+        </virtual-routers>
+      </redundancy>
+    </show>
+  </rpc>
+<execute-result code="ok"/>
+</rpc-reply>
