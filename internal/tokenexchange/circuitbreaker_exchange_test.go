@@ -943,10 +943,12 @@ func TestBreaker_OpenBreakerRejectsStampedeCleanly(t *testing.T) {
 
 // sparseSpacingBreakerConfig uses a 100ms window (10ms buckets) so failures
 // spaced ~30ms apart cross 3+ bucket boundaries between each one — wide
-// enough that gobreaker's own bucket-decayed ConsecutiveFailures cannot
-// accumulate past 2 (confirmed by simulating gobreaker's rolling-bucket
-// arithmetic directly). MinimumRequests is starved so only the consecutive
-// rule can trip.
+// enough that gobreaker's own bucket-decayed ConsecutiveFailures peaks at 4,
+// below the threshold of 5 (confirmed by simulating gobreaker's
+// rolling-bucket arithmetic at this exact geometry; sleep jitter only widens
+// the spacing, which decays the old counter harder, so the margin is safe in
+// the only direction timing can drift). MinimumRequests is starved so only
+// the consecutive rule can trip.
 func sparseSpacingBreakerConfig() CircuitBreakerConfig {
 	c := DefaultCircuitBreakerConfig()
 	c.ConsecutiveFailureThreshold = 5
@@ -1145,6 +1147,82 @@ func TestBreaker_RecoveryNeedsFreshFailuresToRetrip(t *testing.T) {
 	}
 	if got := e.breaker.State(); got != gobreaker.StateClosed {
 		t.Errorf("breaker State = %v after 1 failure post-recovery, want closed (recovery must restart the counter at 0)", got)
+	}
+}
+
+// TestBreaker_RateRuleTripsOnPartialDegradation is the end-to-end trip test
+// for the rate rule — the high-traffic path every other exchange-level test
+// deliberately starves. It drives the one failure shape the consecutive rule
+// is structurally blind to: a PARTIALLY degraded IdP whose interleaved
+// successes reset the consecutive streak on every other call, while the
+// failure rate sits exactly at the 50% threshold. The consecutive rule is
+// disabled (threshold 0) so a trip can only come from the rate rule, and the
+// trip must land exactly at the 10th evaluated outcome — the 9th (4 failures
+// of 8 evaluated, also 50%) is below the MinimumRequests floor and must not
+// trip.
+func TestBreaker_RateRuleTripsOnPartialDegradation(t *testing.T) {
+	t.Parallel()
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Odd-numbered requests fail, even-numbered succeed: S F S F ... —
+		// sequential distinct-key calls, so the parity is deterministic.
+		if hits.Add(1)%2 == 0 {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, successJSON("degraded-tok", 3600))
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	cfg := DefaultCircuitBreakerConfig() // MinimumRequests=10, threshold 50%
+	cfg.ConsecutiveFailureThreshold = 0  // isolate the rate rule
+	// Freeze the window far past the test's runtime so bucket decay cannot
+	// age outcomes out mid-test (same rationale as the exact-count test).
+	cfg.FailureRateWindow = time.Hour
+	cfg.OpenStateDuration = time.Hour
+	e := newBreakerTestExchangerPlain(t, srv.URL, cfg)
+
+	// 9 evaluated outcomes, alternating F S F S... (hits 1,3,5,7,9 fail;
+	// 2,4,6,8 succeed): 5 failures of 9 evaluated is already 55%, but
+	// 9 < MinimumRequests, so the floor must hold the breaker closed.
+	for i := 0; i < 9; i++ {
+		_, err := e.Exchange(context.Background(), inputWithSubject(fmt.Sprintf("degraded-%d", i)))
+		if i%2 == 0 && !errors.Is(err, ErrExchangeTransport) {
+			t.Fatalf("call %d: err = %v, want ErrExchangeTransport (odd hit fails)", i, err)
+		}
+		if i%2 == 1 && err != nil {
+			t.Fatalf("call %d: err = %v, want nil (even hit succeeds)", i, err)
+		}
+	}
+	if got := e.breaker.State(); got != gobreaker.StateClosed {
+		t.Fatalf("breaker State = %v at 9 evaluated outcomes, want closed (below the MinimumRequests floor)", got)
+	}
+
+	// 10th evaluated outcome is a success (hit 10, even) — the rate rule only
+	// runs its check on failures, so an 11th call (hit 11, odd → failure)
+	// delivers the tripping evaluation: 6 failures of 11 evaluated = 54.5%,
+	// floor met, threshold crossed.
+	if _, err := e.Exchange(context.Background(), inputWithSubject("degraded-9")); err != nil {
+		t.Fatalf("10th call: err = %v, want nil (even hit succeeds)", err)
+	}
+	_, err := e.Exchange(context.Background(), inputWithSubject("degraded-10"))
+	if !errors.Is(err, ErrExchangeTransport) {
+		t.Fatalf("11th call: err = %v, want ErrExchangeTransport", err)
+	}
+	if got := e.breaker.State(); got != gobreaker.StateOpen {
+		t.Fatalf("breaker State = %v after 6 failures of 11 evaluated, want open (rate rule must trip despite interleaved successes)", got)
+	}
+
+	// Fail-fast proof, same as the consecutive-rule tests: rejected without
+	// an IdP round-trip.
+	hitsBeforeNext := hits.Load()
+	_, err = e.Exchange(context.Background(), inputWithSubject("degraded-rejected"))
+	if !errors.Is(err, ErrExchangeCircuitOpen) {
+		t.Errorf("post-trip call err = %v, want ErrExchangeCircuitOpen", err)
+	}
+	if got := hits.Load(); got != hitsBeforeNext {
+		t.Errorf("server hits rose from %d to %d; open breaker must not call the IdP", hitsBeforeNext, got)
 	}
 }
 
