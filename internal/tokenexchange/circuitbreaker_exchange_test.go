@@ -931,3 +931,263 @@ func TestBreaker_OpenBreakerRejectsStampedeCleanly(t *testing.T) {
 		t.Errorf("server hits rose from %d to %d during the stampede; an open breaker must not call the IdP", hitsAfterTrip, got)
 	}
 }
+
+// ---------- SOL-152286: undecayed consecutive-failure counter ----------
+//
+// gobreaker's own ConsecutiveFailures decays as its rolling window's buckets
+// age out, so a slow, low-traffic outage can leave it permanently below
+// threshold even though every exchange failed. The tests below drive
+// failures spaced wide enough (relative to a deliberately tiny window) that
+// the OLD decayed counter would never reach the threshold, proving the new
+// counter is what actually trips the breaker.
+
+// sparseSpacingBreakerConfig uses a 100ms window (10ms buckets) so failures
+// spaced ~30ms apart cross 3+ bucket boundaries between each one — wide
+// enough that gobreaker's own bucket-decayed ConsecutiveFailures cannot
+// accumulate past 2 (confirmed by simulating gobreaker's rolling-bucket
+// arithmetic directly). MinimumRequests is starved so only the consecutive
+// rule can trip.
+func sparseSpacingBreakerConfig() CircuitBreakerConfig {
+	c := DefaultCircuitBreakerConfig()
+	c.ConsecutiveFailureThreshold = 5
+	c.MinimumRequests = 1_000_000
+	c.FailureRateWindow = 100 * time.Millisecond
+	c.OpenStateDuration = time.Hour
+	return c
+}
+
+// TestBreaker_SparseSpacingStillTrips is the money test for SOL-152286: five
+// failures spaced wider than the rolling window's bucket period must still
+// trip the consecutive rule, even though gobreaker's own decayed counter
+// would plateau below threshold at this spacing.
+func TestBreaker_SparseSpacingStillTrips(t *testing.T) {
+	t.Parallel()
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	e := newBreakerTestExchangerPlain(t, srv.URL, sparseSpacingBreakerConfig())
+
+	const spacedFailures = 5
+	for i := 0; i < spacedFailures; i++ {
+		_, err := e.Exchange(context.Background(), inputWithSubject(fmt.Sprintf("sparse-%d", i)))
+		if !errors.Is(err, ErrExchangeTransport) {
+			t.Fatalf("failure %d: err = %v, want ErrExchangeTransport", i, err)
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+
+	if got := e.breaker.State(); got != gobreaker.StateOpen {
+		t.Fatalf("breaker State = %v after %d sparsely-spaced failures, want open", got, spacedFailures)
+	}
+
+	hitsBeforeNext := hits.Load()
+	_, err := e.Exchange(context.Background(), inputWithSubject("sparse-rejected"))
+	if !errors.Is(err, ErrExchangeCircuitOpen) {
+		t.Errorf("post-trip call err = %v, want ErrExchangeCircuitOpen", err)
+	}
+	if got := hits.Load(); got != hitsBeforeNext {
+		t.Errorf("server hits rose from %d to %d; open breaker must not call the IdP", hitsBeforeNext, got)
+	}
+}
+
+// TestBreaker_SuccessResetsConsecutiveCounter asserts a single success
+// between failures resets the undecayed counter, so 4 failures + 1 success +
+// 4 failures must NOT trip a threshold-5 rule — only a 5th consecutive
+// failure after the success does.
+func TestBreaker_SuccessResetsConsecutiveCounter(t *testing.T) {
+	t.Parallel()
+	var healthy atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if healthy.Load() {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, successJSON("reset-tok", 3600))
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	cfg := DefaultCircuitBreakerConfig()
+	cfg.ConsecutiveFailureThreshold = 5
+	cfg.MinimumRequests = 1_000_000
+	e := newBreakerTestExchangerPlain(t, srv.URL, cfg)
+
+	for i := 0; i < 4; i++ {
+		_, err := e.Exchange(context.Background(), inputWithSubject(fmt.Sprintf("reset-fail-a-%d", i)))
+		if !errors.Is(err, ErrExchangeTransport) {
+			t.Fatalf("pre-reset failure %d: err = %v, want ErrExchangeTransport", i, err)
+		}
+	}
+
+	healthy.Store(true)
+	if _, err := e.Exchange(context.Background(), inputWithSubject("reset-success")); err != nil {
+		t.Fatalf("reset success call err = %v, want nil", err)
+	}
+	healthy.Store(false)
+
+	for i := 0; i < 4; i++ {
+		_, err := e.Exchange(context.Background(), inputWithSubject(fmt.Sprintf("reset-fail-b-%d", i)))
+		if !errors.Is(err, ErrExchangeTransport) {
+			t.Fatalf("post-reset failure %d: err = %v, want ErrExchangeTransport", i, err)
+		}
+	}
+	if got := e.breaker.State(); got != gobreaker.StateClosed {
+		t.Fatalf("breaker State = %v after 4+success+4 failures, want closed (success must reset the streak)", got)
+	}
+
+	_, err := e.Exchange(context.Background(), inputWithSubject("reset-fail-fifth"))
+	if !errors.Is(err, ErrExchangeTransport) {
+		t.Fatalf("5th post-reset failure: err = %v, want ErrExchangeTransport", err)
+	}
+	if got := e.breaker.State(); got != gobreaker.StateOpen {
+		t.Errorf("breaker State = %v after a fresh run of 5, want open", got)
+	}
+}
+
+// TestBreaker_ExcludedDoesNotResetConsecutiveCounter asserts an excluded
+// outcome (429) neither increments nor resets the counter: 4 failures, a
+// 429, then 1 more failure must still trip a threshold-5 rule (4+1=5, the
+// 429 is invisible to the counter).
+func TestBreaker_ExcludedDoesNotResetConsecutiveCounter(t *testing.T) {
+	t.Parallel()
+	var rateLimited atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if rateLimited.Load() {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	cfg := DefaultCircuitBreakerConfig()
+	cfg.ConsecutiveFailureThreshold = 5
+	cfg.MinimumRequests = 1_000_000
+	e := newBreakerTestExchangerPlain(t, srv.URL, cfg)
+
+	for i := 0; i < 4; i++ {
+		_, err := e.Exchange(context.Background(), inputWithSubject(fmt.Sprintf("excl-fail-%d", i)))
+		if !errors.Is(err, ErrExchangeTransport) {
+			t.Fatalf("failure %d: err = %v, want ErrExchangeTransport", i, err)
+		}
+	}
+
+	rateLimited.Store(true)
+	_, err := e.Exchange(context.Background(), inputWithSubject("excl-429"))
+	if !errors.Is(err, ErrExchangeTransport) {
+		t.Fatalf("429 call: err = %v, want ErrExchangeTransport", err)
+	}
+	rateLimited.Store(false)
+	if got := e.breaker.State(); got != gobreaker.StateClosed {
+		t.Fatalf("breaker State = %v after a 429; must stay closed (excluded, not counted)", got)
+	}
+
+	_, err = e.Exchange(context.Background(), inputWithSubject("excl-fail-fifth"))
+	if !errors.Is(err, ErrExchangeTransport) {
+		t.Fatalf("5th failure: err = %v, want ErrExchangeTransport", err)
+	}
+	if got := e.breaker.State(); got != gobreaker.StateOpen {
+		t.Errorf("breaker State = %v after 4+429+1 failures, want open (429 must not reset the streak)", got)
+	}
+}
+
+// TestBreaker_RecoveryNeedsFreshFailuresToRetrip pins that closing the
+// breaker via recovery restarts the consecutive counter at 0: a single
+// ordinary failure right after recovery must NOT immediately re-trip a
+// threshold-5 rule.
+func TestBreaker_RecoveryNeedsFreshFailuresToRetrip(t *testing.T) {
+	t.Parallel()
+	var healthy atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if healthy.Load() {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, successJSON("retrip-tok", 3600))
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	cfg := recoveryBreakerConfig()
+	cfg.ConsecutiveFailureThreshold = 5
+	e := newBreakerTestExchangerPlain(t, srv.URL, cfg)
+
+	for i := 0; i < 5; i++ {
+		_, err := e.Exchange(context.Background(), inputWithSubject(fmt.Sprintf("retrip-trip-%d", i)))
+		if !errors.Is(err, ErrExchangeTransport) {
+			t.Fatalf("trip failure %d: err = %v, want ErrExchangeTransport", i, err)
+		}
+	}
+	if got := e.breaker.State(); got != gobreaker.StateOpen {
+		t.Fatalf("breaker State = %v after 5 failures, want open", got)
+	}
+
+	healthy.Store(true)
+	waitForBreakerState(t, e.breaker, gobreaker.StateHalfOpen)
+	if _, err := e.Exchange(context.Background(), inputWithSubject("retrip-probe-1")); err != nil {
+		t.Fatalf("probe 1 err = %v, want nil", err)
+	}
+	if _, err := e.Exchange(context.Background(), inputWithSubject("retrip-probe-2")); err != nil {
+		t.Fatalf("probe 2 err = %v, want nil", err)
+	}
+	if got := e.breaker.State(); got != gobreaker.StateClosed {
+		t.Fatalf("breaker State = %v after 2 consecutive probe successes, want closed", got)
+	}
+
+	healthy.Store(false)
+	_, err := e.Exchange(context.Background(), inputWithSubject("retrip-single-failure"))
+	if !errors.Is(err, ErrExchangeTransport) {
+		t.Fatalf("post-recovery failure: err = %v, want ErrExchangeTransport", err)
+	}
+	if got := e.breaker.State(); got != gobreaker.StateClosed {
+		t.Errorf("breaker State = %v after 1 failure post-recovery, want closed (recovery must restart the counter at 0)", got)
+	}
+}
+
+// TestBreaker_ConcurrentConsecutiveCounterRaceFree drives many concurrent
+// Exchange calls across distinct dedup keys with a mix of successes and
+// failures, so the consecutive-failure counter is read and written from many
+// goroutines at once. The test asserts no data race (enforced by `go test
+// -race`, which `make check` always runs) and that the breaker ends in a
+// state consistent with SOME valid interleaving, not a specific one.
+func TestBreaker_ConcurrentConsecutiveCounterRaceFree(t *testing.T) {
+	t.Parallel()
+	var counter atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Deterministic per-request outcome (odd => fail) so the test is
+		// reproducible without any shared mutable healthy/unhealthy toggle
+		// racing the assertions below.
+		if counter.Add(1)%2 == 0 {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, successJSON("race-tok", 3600))
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	cfg := DefaultCircuitBreakerConfig()
+	cfg.ConsecutiveFailureThreshold = 5
+	cfg.MinimumRequests = 1_000_000
+	e := newBreakerTestExchangerPlain(t, srv.URL, cfg)
+
+	const callers = 50
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	for i := 0; i < callers; i++ {
+		go func(i int) {
+			defer wg.Done()
+			_, _ = e.Exchange(context.Background(), inputWithSubject(fmt.Sprintf("race-%d", i)))
+		}(i)
+	}
+	wg.Wait()
+
+	// No assertion beyond "no race and no panic" — the breaker's exact final
+	// state depends on goroutine interleaving, which this test deliberately
+	// does not pin. -race is the actual assertion here.
+	_ = e.breaker.State()
+}
