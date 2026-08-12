@@ -851,10 +851,12 @@ func main() {
 	// it; see buildMCPEndpoint for the full layer order and 413 rationale.
 	mux.Handle("/mcp", buildMCPEndpoint(authedHandler, correlationEnabled))
 
-	// Register OAuth Protected Resource Metadata endpoint (RFC 9728)
-	// This enables MCP clients to discover the authorization server for OAuth flows.
+	// Register OAuth Protected Resource Metadata endpoint (RFC 9728). Served at
+	// both the RFC 9728 canonical path (§3.1: suffixed with the resource path)
+	// and the bare path we advertise in WWW-Authenticate.
 	if metadataHandler := auth.NewProtectedResourceMetadataHandler(cfg); metadataHandler != nil {
 		mux.Handle("/.well-known/oauth-protected-resource", metadataHandler)
+		mux.Handle("/.well-known/oauth-protected-resource/mcp", metadataHandler)
 		slog.Info("registered OAuth protected resource metadata endpoint")
 	}
 

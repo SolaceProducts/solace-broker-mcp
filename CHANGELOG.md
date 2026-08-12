@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- OAuth Protected Resource Metadata (PRM) is now also served at the RFC 9728 §3.1 canonical path `/.well-known/oauth-protected-resource/mcp`, in addition to the existing bare `/.well-known/oauth-protected-resource`. Both paths return the same document. The `WWW-Authenticate` challenge on a 401 continues to advertise the bare URL, so clients that follow the challenge verbatim (e.g. Claude Code) are unaffected; clients that build the RFC 9728 canonical path directly (e.g. SAM's Automatic OAuth discovery) now get a 200 instead of a 404. Tracked under SOL-153089.
+
 ## [0.7.1] - 2026-08-11
 
 `v0.7.0` was tagged but its release pipeline failed before publishing anything, so it has no binary archives, no container image, and no GitHub Release — only a git tag and a Go module version. **0.7.1 is the first published release of the 0.7 line**, and because git history is cumulative it contains everything listed under 0.7.0 below in addition to the change here. Anyone looking for 0.7.0 downloads wants 0.7.1.
