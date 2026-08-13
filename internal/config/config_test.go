@@ -3879,3 +3879,67 @@ func TestReadResolvedConfigFile_ErrorsOnUnsetEnvVar(t *testing.T) {
 		t.Fatal("ReadResolvedConfigFile(unset var) = nil error, want an error")
 	}
 }
+
+// TestLoadConfig_ResolvesVarsFromEnvFile pins step 2 of the processing order as a
+// step LoadConfig actually performs, not merely one loadEnvFile implements. The
+// variable is deliberately absent from the process environment, so the only way
+// substitution can succeed is if the .env file beside the config was loaded first.
+// Deleting the loadEnvFile call from ReadResolvedConfigFile turns this red.
+func TestLoadConfig_ResolvesVarsFromEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfg := `port: 9090
+mcp_client_auth:
+  mode: disabled
+brokers:
+  b1:
+    url: "https://broker:1943"
+    auth:
+      mode: basic
+      username: admin
+      password: "${TEST_ENVFILE_ONLY_PASSWORD}"
+`
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("TEST_ENVFILE_ONLY_PASSWORD=from-env-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Unsetenv("TEST_ENVFILE_ONLY_PASSWORD")                       //nolint:errcheck // only the .env file may supply it
+	t.Cleanup(func() { os.Unsetenv("TEST_ENVFILE_ONLY_PASSWORD") }) //nolint:errcheck // loadEnvFile sets it process-wide
+
+	got, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: unexpected error: %v", err)
+	}
+	b, ok := got.Broker("b1")
+	if !ok {
+		t.Fatal(`Broker("b1") not found`)
+	}
+	if b.Auth.Password != "from-env-file" {
+		t.Errorf("password = %q, want %q — the .env file beside the config was not loaded before substitution", b.Auth.Password, "from-env-file")
+	}
+}
+
+// TestReadResolvedConfigFile_ResolvesVarsFromEnvFile pins the same step for the
+// partial readers that share this preprocessing, currently the --health probe.
+func TestReadResolvedConfigFile_ResolvesVarsFromEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("tls_cert_file: \"${TEST_ENVFILE_ONLY_CERT}\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("TEST_ENVFILE_ONLY_CERT=/etc/certs/from-env-file.pem\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Unsetenv("TEST_ENVFILE_ONLY_CERT")                       //nolint:errcheck // only the .env file may supply it
+	t.Cleanup(func() { os.Unsetenv("TEST_ENVFILE_ONLY_CERT") }) //nolint:errcheck // loadEnvFile sets it process-wide
+
+	got, err := ReadResolvedConfigFile(cfgPath)
+	if err != nil {
+		t.Fatalf("ReadResolvedConfigFile: unexpected error: %v", err)
+	}
+	if !strings.Contains(string(got), "/etc/certs/from-env-file.pem") {
+		t.Errorf("resolved bytes = %q, want the value from the .env file", string(got))
+	}
+}

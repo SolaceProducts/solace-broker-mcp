@@ -571,19 +571,19 @@ func sanitizeYAMLError(err error) error {
 	return errors.New(yamlNodeValuePattern.ReplaceAllString(err.Error(), "`[redacted]`"))
 }
 
-// ReadResolvedConfigFile reads the config file at path and applies steps 1-3 of
-// LoadConfig's processing order — read, .env load, ${VAR_NAME} substitution —
-// returning the resolved YAML bytes without parsing or validating them.
+// ReadResolvedConfigFile performs steps 1-3 of LoadConfig's processing order —
+// read, .env load, ${VAR_NAME} substitution — returning the resolved YAML bytes
+// without parsing or validating them. LoadConfig calls it, so a reader that needs
+// a field or two without a full load sees exactly what the server sees, by
+// construction rather than by convention.
 //
-// This exists for readers that need a field or two out of the config without a
-// full load, and must agree with LoadConfig on what those fields say. The
-// --health probe is the caller: it needs the port, scheme, and TLS certificate
-// path before slog and the config machinery are up, and a probe that resolved
-// `tls_cert_file: "${TLS_CERT_PATH}"` differently from the server would report a
-// correctly-serving container as unhealthy. Prefer LoadConfig for anything that
-// needs a validated ServerConfig.
+// The --health probe is that reader: it needs the port, scheme, and TLS
+// certificate path before slog and the config machinery are up, and a probe that
+// resolved `tls_cert_file: "${TLS_CERT_PATH}"` differently from the server would
+// report a correctly-serving container as unhealthy. Prefer LoadConfig for
+// anything that needs a validated ServerConfig.
 func ReadResolvedConfigFile(path string) ([]byte, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // same trusted operator-provided config path LoadConfig accepts
+	data, err := os.ReadFile(path) //nolint:gosec // G304/G703 — path is the operator-provided config file location (CONFIG_FILE env var, /etc/mcp-server/config.yaml, or ./broker-config.yaml), not untrusted external input
 	if err != nil {
 		return nil, fmt.Errorf("reading config file: %w", err)
 	}
@@ -602,24 +602,21 @@ func ReadResolvedConfigFile(path string) ([]byte, error) {
 // ServerConfig ready for use.
 //
 // Processing order:
-//  1. Read YAML file (raw bytes)
+//  1. Read YAML file (raw bytes)          ┐
 //  2. Load .env file (so env vars are available for substitution)
-//  3. Substitute ${VAR_NAME} in raw bytes
+//  3. Substitute ${VAR_NAME} in raw bytes ┘ ReadResolvedConfigFile
 //  4. Parse YAML
 //  5. Apply defaults (fill missing optional fields)
 //  6. Apply env var overrides (MCP_SERVER_PORT — runtime override)
 //  7. Validate (required fields, value ranges, TLS pairing)
+//
+// Steps 1-3 live in ReadResolvedConfigFile so that partial readers — today the
+// --health probe — share this preprocessing rather than reimplementing it. A
+// change to the order or semantics here therefore reaches them too.
 func LoadConfig(path string) (*ServerConfig, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // G304/G703 — path is the operator-provided config file location (CONFIG_FILE env var, /etc/mcp-server/config.yaml, or ./broker-config.yaml), not untrusted external input
+	data, err := ReadResolvedConfigFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading config file: %w", err)
-	}
-
-	loadEnvFile(path)
-
-	data, err = substituteEnvVars(data)
-	if err != nil {
-		return nil, fmt.Errorf("substituting env vars: %w", err)
+		return nil, err
 	}
 
 	var raw yamlConfig
