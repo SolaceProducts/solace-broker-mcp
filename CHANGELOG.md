@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The 8 create/update ("write") composite tools — `create-message-vpn`, `update-message-vpn`, `create-queue`, `update-queue`, `create-topic-endpoint`, `update-topic-endpoint`, `create-rdp`, `update-rdp` — now declare a strict, SEMPv2-spec-derived output schema instead of the generic permissive envelope every composite tool used before. Each schema is generated from its operation's resolved response fields, rejects fields the spec doesn't declare, and requires the resource's own identifier field(s) to be present. A future SEMP release that renames, removes, or reshapes a response field a client depends on now fails schema validation instead of silently passing through. Monitor (read-only) tools are unchanged; delete/action tools (no response data) keep the permissive step schema automatically. Verified against real Solace PubSub+ broker containers (`test/e2e-management`, `test/e2e-action`). Tracked under SOL-152947.
+
 ### Fixed
 
 - OAuth Protected Resource Metadata (PRM) is now also served at the RFC 9728 §3.1 canonical path `/.well-known/oauth-protected-resource/mcp`, in addition to the existing bare `/.well-known/oauth-protected-resource`. Both paths return the same document. The `WWW-Authenticate` challenge on a 401 continues to advertise the bare URL, so clients that follow the challenge verbatim (e.g. Claude Code) are unaffected; clients that build the RFC 9728 canonical path directly (e.g. SAM's Automatic OAuth discovery) now get a 200 instead of a 404. Tracked under SOL-153089.

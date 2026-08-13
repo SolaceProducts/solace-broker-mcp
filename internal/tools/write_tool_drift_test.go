@@ -149,3 +149,57 @@ func TestWriteToolDrift_MissingEnvelopeDataRejected(t *testing.T) {
 		t.Error("expected rejection when the envelope's own required 'data' key is missing, got nil error")
 	}
 }
+
+// TestWriteToolIdentifierFields_ResolveAgainstRealResponseFields guards an
+// invariant composite.BuildStrictOutputSchema relies on but never checks
+// itself: every field name listed in writeToolIdentifierFields must actually
+// appear in its operation's resolved ResponseFields.
+//
+// composite.fieldPropertiesSchema builds "properties" from ResponseFields and
+// "required" from this map independently. If the two ever disagree — a typo
+// here, a renamed field in a future spec bump, or a new write tool added with
+// the wrong identifier name — the generated schema ends up requiring a field
+// that additionalProperties:false simultaneously forbids from appearing
+// outside "properties". That schema is self-contradictory: no real broker
+// response could ever satisfy it, and the tool's output validation breaks for
+// every caller, silently, until someone notices in production. This test
+// catches that at CI time instead, against the real embedded catalog.
+func TestWriteToolIdentifierFields_ResolveAgainstRealResponseFields(t *testing.T) {
+	operations, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatalf("ParseSpecs: %v", err)
+	}
+	realTools, err := composite.LoadTools(definitions.FS, "tools.yaml")
+	if err != nil {
+		t.Fatalf("LoadTools: %v", err)
+	}
+	toolByName := make(map[string]composite.CompositeTool, len(realTools))
+	for _, tl := range realTools {
+		toolByName[tl.Name] = tl
+	}
+
+	for name, identifierFields := range writeToolIdentifierFields {
+		tool, ok := toolByName[name]
+		if !ok {
+			t.Errorf("%s: listed in writeToolIdentifierFields but not found in the real catalog", name)
+			continue
+		}
+		if len(tool.Steps) == 0 {
+			t.Errorf("%s: no steps", name)
+			continue
+		}
+		op, ok := operations[tool.Steps[0].Operation]
+		if !ok {
+			t.Errorf("%s: operation %q not found in the real specs", name, tool.Steps[0].Operation)
+			continue
+		}
+		for _, field := range identifierFields {
+			if _, present := op.ResponseFields[field]; !present {
+				t.Errorf("%s: identifier field %q is not in operation %q's resolved ResponseFields (%v) — "+
+					"this would make BuildStrictOutputSchema produce a schema that requires %q while "+
+					"additionalProperties:false forbids it, which no real response could ever satisfy",
+					name, field, op.ID, op.ResponseFields, field)
+			}
+		}
+	}
+}

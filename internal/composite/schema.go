@@ -62,6 +62,14 @@ func BuildStrictOutputSchema(tool CompositeTool, operations map[string]*sempv2.O
 // required names response fields that must be present on each item.
 func buildStepSchema(step Step, op *sempv2.Operation, required []string) map[string]any {
 	if op == nil || op.ResponseFields == nil {
+		// NOTE: this guard runs before the FollowPages/ForEach switch below, so
+		// a paginated or fan-out step whose ResponseFields didn't resolve gets
+		// the bare permissive fallback rather than at least the known envelope
+		// shape (data/truncated, or byKey) with permissive items inside.
+		// Unreached today — every write tool (SOL-152947's scope) is a
+		// single-step "collect" strategy with neither flag set — but worth
+		// tightening if this generator is ever extended to monitor tools,
+		// which do have paginated/fan-out steps.
 		return permissiveStepSchema()
 	}
 	item := fieldPropertiesSchema(op.ResponseFields, required)
