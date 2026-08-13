@@ -76,6 +76,14 @@ type CompositeExecutor struct {
 // defaultMaxPages is the production value of CompositeExecutor.maxPages.
 const defaultMaxPages = 1000
 
+// Operations returns the executor's operation catalog. Exposed for callers
+// that need to introspect an operation outside of execution — e.g.
+// CompositeToolHandler.Metadata() building an output schema from a step's
+// resolved response fields (BuildStrictOutputSchema).
+func (ce *CompositeExecutor) Operations() map[string]*sempv2.Operation {
+	return ce.operations
+}
+
 // NewCompositeExecutor creates an executor with the given operation catalog.
 // The operations map is keyed by prefixed operation ID (e.g.,
 // "monitor/getMsgVpnQueue") matching the format produced by sempv2.ParseSpecs().

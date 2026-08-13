@@ -58,29 +58,41 @@ func TestBuildStrictOutputSchema_FlatStep(t *testing.T) {
 	}
 	schema := BuildStrictOutputSchema(tool, operations, map[string][]string{"queue": {"queueName"}})
 
-	good := map[string]any{"queue": map[string]any{"queueName": "q1", "bindCount": float64(3)}}
+	// A flat (non-paginated, non-fan-out) step's real runtime value is the
+	// whole SEMP envelope verbatim — {"data": ..., "meta": {...}} — not the
+	// item alone. See buildStepSchema's doc comment: this was confirmed
+	// against a real broker via e2e-management, not assumed from the start.
+	good := map[string]any{"queue": map[string]any{
+		"data": map[string]any{"queueName": "q1", "bindCount": float64(3)},
+		"meta": map[string]any{"responseCode": float64(200)},
+	}}
 	if r := validateAgainst(t, schema, good); !r.Valid() {
 		t.Errorf("expected valid, got errors: %v", r.Errors())
 	}
 
-	missingIdentifier := map[string]any{"queue": map[string]any{"bindCount": float64(3)}}
+	missingEnvelopeData := map[string]any{"queue": map[string]any{"meta": map[string]any{}}}
+	if r := validateAgainst(t, schema, missingEnvelopeData); r.Valid() {
+		t.Error("expected rejection when the envelope's own required 'data' key is missing")
+	}
+
+	missingIdentifier := map[string]any{"queue": map[string]any{"data": map[string]any{"bindCount": float64(3)}}}
 	if r := validateAgainst(t, schema, missingIdentifier); r.Valid() {
 		t.Error("expected rejection when the required identifier field is missing")
 	}
 
-	unexpectedField := map[string]any{"queue": map[string]any{"queueName": "q1", "somethingNew": "x"}}
+	unexpectedField := map[string]any{"queue": map[string]any{"data": map[string]any{"queueName": "q1", "somethingNew": "x"}}}
 	if r := validateAgainst(t, schema, unexpectedField); r.Valid() {
 		t.Error("expected rejection for a field not in ResponseFields (additionalProperties: false)")
 	}
 
-	typeChanged := map[string]any{"queue": map[string]any{"queueName": "q1", "bindCount": "not-a-number"}}
+	typeChanged := map[string]any{"queue": map[string]any{"data": map[string]any{"queueName": "q1", "bindCount": "not-a-number"}}}
 	if r := validateAgainst(t, schema, typeChanged); r.Valid() {
 		t.Error("expected rejection when bindCount's type doesn't match the spec")
 	}
 
 	// Non-identifier fields are typed-if-present, not required — a broker
 	// omitting bindCount must not fail validation.
-	sparseButValid := map[string]any{"queue": map[string]any{"queueName": "q1"}}
+	sparseButValid := map[string]any{"queue": map[string]any{"data": map[string]any{"queueName": "q1"}}}
 	if r := validateAgainst(t, schema, sparseButValid); !r.Valid() {
 		t.Errorf("expected valid when a non-identifier field is simply absent, got errors: %v", r.Errors())
 	}
@@ -224,16 +236,18 @@ func TestBuildStrictOutputSchema_RealCreateQueue(t *testing.T) {
 	// as valid here would assert a real spec property that isn't actually
 	// there — exactly the kind of wrong assumption this generator exists to
 	// catch, and did catch while writing this test.
+	// The runtime value is the whole SEMP envelope, not the item alone —
+	// confirmed against a real broker via e2e-management. See
+	// buildStepSchema's doc comment.
 	good := map[string]any{"createQueue": map[string]any{
-		"queueName": "orders",
+		"data": map[string]any{"queueName": "orders"},
 	}}
 	if r := validateAgainst(t, schema, good); !r.Valid() {
 		t.Errorf("expected valid, got errors: %v", r.Errors())
 	}
 
 	driftedField := map[string]any{"createQueue": map[string]any{
-		"queueName":    "orders",
-		"notInTheSpec": "x",
+		"data": map[string]any{"queueName": "orders", "notInTheSpec": "x"},
 	}}
 	if r := validateAgainst(t, schema, driftedField); r.Valid() {
 		t.Error("expected rejection for a field the real spec doesn't declare")

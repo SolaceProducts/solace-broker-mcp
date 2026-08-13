@@ -16,9 +16,44 @@ package tools
 
 import (
 	"context"
+	"strings"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
 )
+
+// writeToolIdentifierFields names, per write tool, the response field(s) that
+// identify the resource being created/updated — required in the generated
+// output schema, because a response that doesn't name its own resource is
+// broken, not sparse (see composite.BuildStrictOutputSchema). Every entry
+// here is a create/update tool; delete and action tools have no response
+// data (SempMetaOnlyResponse) and fall back to the generator's permissive
+// per-step schema automatically — confirmed directly against the embedded
+// spec for every write tool (SOL-152947), not assumed.
+var writeToolIdentifierFields = map[string][]string{
+	"create-message-vpn":    {"msgVpnName"},
+	"update-message-vpn":    {"msgVpnName"},
+	"create-queue":          {"msgVpnName", "queueName"},
+	"update-queue":          {"msgVpnName", "queueName"},
+	"create-topic-endpoint": {"msgVpnName", "topicEndpointName"},
+	"update-topic-endpoint": {"msgVpnName", "topicEndpointName"},
+	"create-rdp":            {"msgVpnName", "restDeliveryPointName"},
+	"update-rdp":            {"msgVpnName", "restDeliveryPointName"},
+}
+
+// callsConfigOrActionOperation reports whether any step of tool calls a
+// SEMPv2 config or action operation (as opposed to monitor). Purely
+// structural — no separate flag to keep in sync with tools.yaml. Distinct
+// from register.go's isWriteTool(Annotations), which checks !ReadOnly for
+// the enable_write_tools gate — this checks the step's operation prefix
+// specifically, for output-schema generation.
+func callsConfigOrActionOperation(tool composite.CompositeTool) bool {
+	for _, step := range tool.Steps {
+		if strings.HasPrefix(step.Operation, "config/") || strings.HasPrefix(step.Operation, "action/") {
+			return true
+		}
+	}
+	return false
+}
 
 // CompositeToolHandler adapts a YAML-driven composite tool definition to the
 // ToolHandler interface. A single instance is created per composite tool at
@@ -40,18 +75,35 @@ func NewCompositeToolHandler(tool composite.CompositeTool, executor *composite.C
 }
 
 // Metadata returns a fresh Metadata value built from the YAML-loaded composite
-// tool definition. The input schema is computed from the tool's Parameters; the
-// output schema is the generic step-keyed envelope shared by every composite
-// tool's collect strategy. Each call returns a freshly allocated value with
-// fresh maps inside, so callers cannot mutate shared state.
+// tool definition. The input schema is computed from the tool's Parameters.
+// The output schema is the generic step-keyed envelope for monitor (read)
+// tools; for write tools (SOL-152947) it's generated from the operation's
+// resolved response fields instead — monitor tools keep the generic envelope
+// for now (SOL-150785's equivalent generator work for read tools is a
+// separate, not-yet-scheduled follow-up). Each call returns a freshly
+// allocated value with fresh maps inside, so callers cannot mutate shared
+// state.
 func (h *CompositeToolHandler) Metadata() Metadata {
 	return Metadata{
 		Name:         h.tool.Name,
 		Description:  h.tool.Description,
 		InputSchema:  buildCompositeInputSchema(h.tool.Parameters),
-		OutputSchema: StepKeyedEnvelopeSchema(),
+		OutputSchema: h.outputSchema(),
 		Annotations:  toolAnnotations(h.tool.Annotations),
 	}
+}
+
+// outputSchema returns the strict, spec-derived schema for a write tool, or
+// the generic step-keyed envelope for everything else.
+func (h *CompositeToolHandler) outputSchema() map[string]any {
+	if !callsConfigOrActionOperation(h.tool) {
+		return StepKeyedEnvelopeSchema()
+	}
+	var required map[string][]string
+	if fields, ok := writeToolIdentifierFields[h.tool.Name]; ok && len(h.tool.Steps) > 0 {
+		required = map[string][]string{h.tool.Steps[0].ID: fields}
+	}
+	return composite.BuildStrictOutputSchema(h.tool, h.executor.Operations(), required)
 }
 
 // Handle executes the composite tool's steps against the SEMP client in the

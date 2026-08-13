@@ -93,7 +93,28 @@ func buildStepSchema(step Step, op *sempv2.Operation, required []string) map[str
 			"additionalProperties": false,
 		}
 	default:
-		return item
+		// A non-paginated, non-fan-out step's result is runSingle's return of
+		// result.Data verbatim — the RAW parsed HTTP response body
+		// (json.Unmarshal(body, &data) in client.go), i.e. the whole SEMP
+		// envelope {"data": ..., "meta": {...}, "links": {...}}, not
+		// pre-unwrapped to the item alone. Confirmed against a real broker
+		// via the e2e-management suite: a first version of this schema that
+		// used item directly here rejected every real create/update response
+		// ("Additional property data/links/meta is not allowed"). Only
+		// "data" is required — the swagger envelope schemas mark "meta" as
+		// the sole required envelope field, but a create/update tool
+		// returning no "data" would be meaningless to the caller regardless
+		// of what the spec technically permits.
+		return map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"data":  item,
+				"meta":  map[string]any{"type": "object"},
+				"links": map[string]any{"type": "object"},
+			},
+			"required":             []string{"data"},
+			"additionalProperties": false,
+		}
 	}
 }
 
