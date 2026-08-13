@@ -53,6 +53,10 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: 'go.mod'
+          # Build from a cold module cache. A release runs once per tag, so the
+          # cache buys little, and a cache entry restored from a less-trusted
+          # ref is an input to an artifact we then attest.
+          cache: false
       - name: Self-test the licence check
         run: .github/scripts/licenses-check.test.sh
       - name: Verify THIRD_PARTY_LICENSES.md and NOTICE match the binary
@@ -82,8 +86,18 @@ jobs:
       pull-requests: write
       checks: write
       statuses: write
+    # No `secrets: inherit`. Every `secrets.*` reference in guardian-scan.yaml
+    # sits in a job declaring `environment: guardian`, and all six names —
+    # FOSSA_API_KEY, GUARDIAN_URL, GUARDIAN_API_TOKEN, PRISMACLOUD_* — exist in
+    # that environment, which the job resolves itself. Nothing was reading
+    # through `inherit`.
+    #
+    # Worth stating because one of them, FOSSA_API_KEY, also exists as an org
+    # secret, so `inherit` looked load-bearing. It was not: environment secrets
+    # outrank org secrets, so the `guardian` copy is what those jobs already
+    # got. What `inherit` actually did was hand the scan every other org and
+    # repo secret (LLM_SERVICE_API_KEY, VAULT_URL) that it never references.
     uses: ./.github/workflows/release-readiness-check.yaml
-    secrets: inherit
     with:
       version: ${{ github.ref_name }}
 
@@ -117,6 +131,9 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: 'go.mod'
+          # Cold cache, same reasoning as the `licenses` job above — and it
+          # matters more here, since these are the binaries we publish.
+          cache: false
 
       - name: Build
         env:
@@ -245,9 +262,13 @@ jobs:
           merge-multiple: true
           path: dist/
 
+      # `--` rather than `./*.tar.gz`, which is the other fix shellcheck offers
+      # for SC2035: `./` would prefix every line of the published checksums file
+      # with `./`, changing a release artifact people verify against. `--` stops
+      # option parsing and leaves the filenames bare.
       - name: Generate checksums
         working-directory: dist
-        run: sha256sum *.tar.gz > checksums-sha256.txt
+        run: sha256sum -- *.tar.gz > checksums-sha256.txt
 
       # A single artifact downloaded by name extracts flat into the working dir
       # (no name-subdirectory), so body_path: release-notes.md below resolves.

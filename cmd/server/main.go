@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -134,6 +135,27 @@ func buildMux(readiness *health.ReadinessState) *http.ServeMux {
 	mux.Handle("/ready", readyz)
 
 	return mux
+}
+
+// registerMetadataRoutes serves PRM (RFC 9728) at the bare path (advertised in
+// WWW-Authenticate) and at the §3.1 canonical path derived from resource_url.
+// The canonical route is skipped when the two would collide (empty/"/" path),
+// which would otherwise panic ServeMux. No-op when mode != oauth.
+func registerMetadataRoutes(mux *http.ServeMux, cfg *config.ServerConfig) {
+	metadataHandler := auth.NewProtectedResourceMetadataHandler(cfg)
+	if metadataHandler == nil {
+		return
+	}
+
+	const barePath = "/.well-known/oauth-protected-resource"
+	mux.Handle(barePath, metadataHandler)
+
+	parsed, _ := url.Parse(cfg.MCPClientAuth.ResourceURL)
+	resourcePath := strings.TrimRight(parsed.Path, "/")
+	if resourcePath != "" {
+		mux.Handle(barePath+resourcePath, metadataHandler)
+	}
+	slog.Info("registered OAuth protected resource metadata endpoint")
 }
 
 // buildRootHandler returns the outermost HTTP handler for the server: the mux
@@ -851,12 +873,7 @@ func main() {
 	// it; see buildMCPEndpoint for the full layer order and 413 rationale.
 	mux.Handle("/mcp", buildMCPEndpoint(authedHandler, correlationEnabled))
 
-	// Register OAuth Protected Resource Metadata endpoint (RFC 9728)
-	// This enables MCP clients to discover the authorization server for OAuth flows.
-	if metadataHandler := auth.NewProtectedResourceMetadataHandler(cfg); metadataHandler != nil {
-		mux.Handle("/.well-known/oauth-protected-resource", metadataHandler)
-		slog.Info("registered OAuth protected resource metadata endpoint")
-	}
+	registerMetadataRoutes(mux, cfg)
 
 	// Catch-all: return JSON 404 for any unregistered path. MCP SDK clients
 	// probe multiple OAuth discovery endpoints during (re-)authentication
