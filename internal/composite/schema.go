@@ -14,7 +14,11 @@
 
 package composite
 
-import "github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
+import (
+	"slices"
+
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
+)
 
 // BuildStrictOutputSchema generates a step-keyed JSON Schema for a composite
 // tool's output, deriving each step's per-field schema from its operation's
@@ -56,25 +60,53 @@ func BuildStrictOutputSchema(tool CompositeTool, operations map[string]*sempv2.O
 	}
 }
 
-// buildStepSchema generates one step's schema, honoring the FollowPages
-// (paginated list envelope) and ForEach (fan-out byKey envelope) shapes
-// documented on Step and produced by executor.go's fetchPaginated/fetchFanOut.
-// required names response fields that must be present on each item.
+// buildStepSchema generates one step's schema, honoring the ForEach (fan-out
+// byKey envelope) and FollowPages (paginated list envelope) shapes documented
+// on Step and produced by executor.go's fetchFanOut/fetchPaginated. required
+// names response fields that must be present on each item.
+//
+// Checked in the same order runStep dispatches (ForEach first: see
+// runStep/runSingle in executor.go) so a step with both flags set — fetchFanOut
+// calling runSingle per row, which itself honors FollowPages — gets the byKey
+// wrapper its runtime result actually has, not the bare paginated shape. No
+// step sets both today, but getting the order wrong here would silently
+// mismatch runtime behavior the day one does.
 func buildStepSchema(step Step, op *sempv2.Operation, required []string) map[string]any {
 	if op == nil || op.ResponseFields == nil {
-		// NOTE: this guard runs before the FollowPages/ForEach switch below, so
-		// a paginated or fan-out step whose ResponseFields didn't resolve gets
+		// NOTE: this guard runs before the ForEach/FollowPages switch below, so
+		// a fan-out or paginated step whose ResponseFields didn't resolve gets
 		// the bare permissive fallback rather than at least the known envelope
-		// shape (data/truncated, or byKey) with permissive items inside.
+		// shape (byKey, or data/truncated) with permissive items inside.
 		// Unreached today — every write tool (SOL-152947's scope) is a
 		// single-step "collect" strategy with neither flag set — but worth
 		// tightening if this generator is ever extended to monitor tools,
-		// which do have paginated/fan-out steps.
+		// which do have fan-out/paginated steps.
 		return permissiveStepSchema()
 	}
 	item := fieldPropertiesSchema(op.ResponseFields, required)
 
 	switch {
+	case step.ForEach != "":
+		// fetchFanOut runs runSingle per row and keys the result by row —
+		// runSingle's non-paginated return is result.Data verbatim, the same
+		// raw SEMP envelope {"data": ..., "meta": {...}, "links": {...}} the
+		// default case below wraps, not the unwrapped item. A first version of
+		// this case used item directly, which every real fan-out call would
+		// have rejected the same way an early version of the default case did
+		// ("Additional property data/meta/links is not allowed") — caught in
+		// review before any fan-out write tool exercised it (none exist yet;
+		// list-vpns, the only ForEach tool in the catalog today, is
+		// monitor-only and never reaches this function). fetchFanOut always
+		// sets byKey; skipped only appears when nonzero. See executor.go.
+		return map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"byKey":   map[string]any{"type": "object", "additionalProperties": envelopeSchema(item)},
+				"skipped": map[string]any{"type": "integer"},
+			},
+			"required":             []string{"byKey"},
+			"additionalProperties": false,
+		}
 	case step.FollowPages:
 		// fetchPaginated always sets data + truncated; truncatedMessage only
 		// appears when truncated is true. See executor.go.
@@ -88,18 +120,6 @@ func buildStepSchema(step Step, op *sempv2.Operation, required []string) map[str
 			"required":             []string{"data", "truncated"},
 			"additionalProperties": false,
 		}
-	case step.ForEach != "":
-		// fetchFanOut always sets byKey; skipped only appears when nonzero.
-		// See executor.go.
-		return map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"byKey":   map[string]any{"type": "object", "additionalProperties": item},
-				"skipped": map[string]any{"type": "integer"},
-			},
-			"required":             []string{"byKey"},
-			"additionalProperties": false,
-		}
 	default:
 		// A non-paginated, non-fan-out step's result is runSingle's return of
 		// result.Data verbatim — the RAW parsed HTTP response body
@@ -108,21 +128,29 @@ func buildStepSchema(step Step, op *sempv2.Operation, required []string) map[str
 		// pre-unwrapped to the item alone. Confirmed against a real broker
 		// via the e2e-management suite: a first version of this schema that
 		// used item directly here rejected every real create/update response
-		// ("Additional property data/links/meta is not allowed"). Only
-		// "data" is required — the swagger envelope schemas mark "meta" as
-		// the sole required envelope field, but a create/update tool
-		// returning no "data" would be meaningless to the caller regardless
-		// of what the spec technically permits.
-		return map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"data":  item,
-				"meta":  map[string]any{"type": "object"},
-				"links": map[string]any{"type": "object"},
-			},
-			"required":             []string{"data"},
-			"additionalProperties": false,
-		}
+		// ("Additional property data/links/meta is not allowed").
+		return envelopeSchema(item)
+	}
+}
+
+// envelopeSchema wraps an item schema in the SEMP response envelope shape —
+// {"data": item, "meta": {...}, "links": {...}}, only "data" required. Shared
+// by the flat (default) and fan-out-item cases in buildStepSchema, both of
+// which receive the raw envelope at runtime (see buildStepSchema's case
+// comments). Only "data" is required — the swagger envelope schemas mark
+// "meta" as the sole required envelope field, but a create/update tool
+// returning no "data" would be meaningless to the caller regardless of what
+// the spec technically permits.
+func envelopeSchema(item map[string]any) map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"data":  item,
+			"meta":  map[string]any{"type": "object"},
+			"links": map[string]any{"type": "object"},
+		},
+		"required":             []string{"data"},
+		"additionalProperties": false,
 	}
 }
 
@@ -139,6 +167,14 @@ func permissiveStepSchema() map[string]any {
 // required list, additionalProperties: false — from resolved response
 // fields. Shared by the flat, paginated-item, and fan-out-item cases in
 // buildStepSchema.
+//
+// required is cloned before being stored, not stored as-is: callers (e.g.
+// CompositeToolHandler.outputSchema) pass the same slice value straight
+// through from the package-level writeToolIdentifierFields map, and a caller
+// of the generated schema mutating the returned "required" slice would
+// otherwise corrupt that map for every future call to every handler —
+// confirmed by mutating one Metadata() call's returned schema and observing
+// a brand-new handler instance return the corrupted value on its next call.
 func fieldPropertiesSchema(fields map[string]string, required []string) map[string]any {
 	properties := make(map[string]any, len(fields))
 	for name, jsonType := range fields {
@@ -150,7 +186,7 @@ func fieldPropertiesSchema(fields map[string]string, required []string) map[stri
 		"additionalProperties": false,
 	}
 	if len(required) > 0 {
-		schema["required"] = required
+		schema["required"] = slices.Clone(required)
 	}
 	return schema
 }

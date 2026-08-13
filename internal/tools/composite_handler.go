@@ -77,10 +77,9 @@ func NewCompositeToolHandler(tool composite.CompositeTool, executor *composite.C
 // Metadata returns a fresh Metadata value built from the YAML-loaded composite
 // tool definition. The input schema is computed from the tool's Parameters.
 // The output schema is the generic step-keyed envelope for monitor (read)
-// tools; for write tools (SOL-152947) it's generated from the operation's
-// resolved response fields instead — monitor tools keep the generic envelope
-// for now (SOL-150785's equivalent generator work for read tools is a
-// separate, not-yet-scheduled follow-up). Each call returns a freshly
+// tools; a tool with a config/ or action/ step gets the strict, spec-derived
+// generator instead (SOL-150785's equivalent generator work for read tools is
+// a separate, not-yet-scheduled follow-up). Each call returns a freshly
 // allocated value with fresh maps inside, so callers cannot mutate shared
 // state.
 func (h *CompositeToolHandler) Metadata() Metadata {
@@ -93,8 +92,17 @@ func (h *CompositeToolHandler) Metadata() Metadata {
 	}
 }
 
-// outputSchema returns the strict, spec-derived schema for a write tool, or
-// the generic step-keyed envelope for everything else.
+// outputSchema returns the strict, spec-derived schema for any tool with a
+// config/ or action/ step, or the generic step-keyed envelope for everything
+// else (monitor tools). This includes delete/action tools, not just the 8
+// create/update ones in writeToolIdentifierFields — but their operations
+// resolve no ResponseFields (SempMetaOnlyResponse), so composite.
+// BuildStrictOutputSchema falls back to its permissive per-step schema for
+// them automatically. The practical effect is unchanged from a plain
+// permissive schema for those tools: their step content stays unconstrained;
+// only the top-level envelope gains the (harmless, always-true-at-runtime)
+// constraint that it contains exactly this tool's known step IDs, in place of
+// StepKeyedEnvelopeSchema's fully generic wrapper.
 func (h *CompositeToolHandler) outputSchema() map[string]any {
 	if !callsConfigOrActionOperation(h.tool) {
 		return StepKeyedEnvelopeSchema()

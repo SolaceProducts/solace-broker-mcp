@@ -76,12 +76,22 @@ type CompositeExecutor struct {
 // defaultMaxPages is the production value of CompositeExecutor.maxPages.
 const defaultMaxPages = 1000
 
-// Operations returns the executor's operation catalog. Exposed for callers
-// that need to introspect an operation outside of execution — e.g.
-// CompositeToolHandler.Metadata() building an output schema from a step's
-// resolved response fields (BuildStrictOutputSchema).
+// Operations returns a shallow copy of the executor's operation catalog.
+// Exposed for callers that need to introspect an operation outside of
+// execution — e.g. CompositeToolHandler.Metadata() building an output schema
+// from a step's resolved response fields (BuildStrictOutputSchema). Copied
+// rather than returned directly: ce.operations is read concurrently by every
+// in-flight Execute call, and this method has no way to guarantee a caller
+// won't mutate the map it gets back — a copy keeps that mutation (accidental
+// or not) from corrupting executor state or racing with concurrent execution.
+// The *sempv2.Operation values themselves are still shared, not deep-copied;
+// nothing in this codebase mutates an Operation after ParseSpecs builds it.
 func (ce *CompositeExecutor) Operations() map[string]*sempv2.Operation {
-	return ce.operations
+	ops := make(map[string]*sempv2.Operation, len(ce.operations))
+	for k, v := range ce.operations {
+		ops[k] = v
+	}
+	return ops
 }
 
 // NewCompositeExecutor creates an executor with the given operation catalog.

@@ -140,18 +140,64 @@ func TestBuildStrictOutputSchema_FanOutStep(t *testing.T) {
 	}
 	schema := BuildStrictOutputSchema(tool, operations, nil)
 
+	// A fan-out step's per-key value is runSingle's return of result.Data
+	// verbatim — the same raw SEMP envelope {"data": ..., "meta": {...}} the
+	// flat (default) case wraps, not the item alone. This test originally
+	// asserted the unwrapped item here and passed only because nothing
+	// exercised the real shape; caught in review before any fan-out write
+	// tool relied on it. See buildStepSchema's ForEach case comment.
 	good := map[string]any{"clients": map[string]any{
-		"byKey": map[string]any{"vpn-a": map[string]any{"clientName": "c1"}},
+		"byKey": map[string]any{"vpn-a": map[string]any{
+			"data": map[string]any{"clientName": "c1"},
+			"meta": map[string]any{"responseCode": float64(200)},
+		}},
 	}}
 	if r := validateAgainst(t, schema, good); !r.Valid() {
 		t.Errorf("expected valid fan-out envelope, got errors: %v", r.Errors())
 	}
 
 	badItem := map[string]any{"clients": map[string]any{
-		"byKey": map[string]any{"vpn-a": map[string]any{"clientName": "c1", "unexpected": true}},
+		"byKey": map[string]any{"vpn-a": map[string]any{
+			"data": map[string]any{"clientName": "c1", "unexpected": true},
+		}},
 	}}
 	if r := validateAgainst(t, schema, badItem); r.Valid() {
-		t.Error("expected rejection for an unexpected field inside a fan-out item")
+		t.Error("expected rejection for an unexpected field inside a fan-out item's data")
+	}
+
+	missingEnvelopeData := map[string]any{"clients": map[string]any{
+		"byKey": map[string]any{"vpn-a": map[string]any{"meta": map[string]any{}}},
+	}}
+	if r := validateAgainst(t, schema, missingEnvelopeData); r.Valid() {
+		t.Error("expected rejection when a fan-out item's envelope is missing its required 'data' key")
+	}
+}
+
+// TestBuildStrictOutputSchema_ForEachCheckedBeforeFollowPages guards the
+// switch order in buildStepSchema against a regression: runStep (executor.go)
+// dispatches ForEach before FollowPages (fetchFanOut runs runSingle per row,
+// which itself honors FollowPages), so a step with both flags set gets a
+// byKey-wrapped result at runtime — the schema generator must check ForEach
+// first too, or a doubly-flagged step gets the bare paginated shape instead.
+// No shipped step sets both today; this only pins the ordering itself.
+func TestBuildStrictOutputSchema_ForEachCheckedBeforeFollowPages(t *testing.T) {
+	tool := CompositeTool{
+		Steps: []Step{{
+			ID: "clients", Operation: "monitor/getMsgVpnClients",
+			ForEach: "vpns", ForEachKey: "msgVpnName", FollowPages: true,
+		}},
+		Result: ResultStrategy{Strategy: "collect"},
+	}
+	operations := map[string]*sempv2.Operation{
+		"monitor/getMsgVpnClients": fakeOpWithResponseFields(map[string]string{"clientName": "string"}),
+	}
+	schema := BuildStrictOutputSchema(tool, operations, nil)
+
+	props := schema["properties"].(map[string]any)
+	step := props["clients"].(map[string]any)
+	stepProps := step["properties"].(map[string]any)
+	if _, hasByKey := stepProps["byKey"]; !hasByKey {
+		t.Errorf("expected the byKey wrapper (ForEach takes precedence, matching runStep's dispatch order), got properties: %v", stepProps)
 	}
 }
 
@@ -251,5 +297,25 @@ func TestBuildStrictOutputSchema_RealCreateQueue(t *testing.T) {
 	}}
 	if r := validateAgainst(t, schema, driftedField); r.Valid() {
 		t.Error("expected rejection for a field the real spec doesn't declare")
+	}
+}
+
+// TestFieldPropertiesSchema_DoesNotAliasCallerSlice is a regression test:
+// fieldPropertiesSchema used to store the caller's "required" slice directly.
+// Callers pass a slice sourced from a shared, reused value (e.g.
+// writeToolIdentifierFields, a package-level map in internal/tools), so
+// mutating a generated schema's "required" list used to corrupt that shared
+// value for every future call to every handler — confirmed before fixing by
+// mutating a real Metadata() call's returned schema and observing a
+// brand-new handler instance return the corrupted value.
+func TestFieldPropertiesSchema_DoesNotAliasCallerSlice(t *testing.T) {
+	callerOwned := []string{"queueName"}
+	schema := fieldPropertiesSchema(map[string]string{"queueName": "string"}, callerOwned)
+
+	got := schema["required"].([]string)
+	got[0] = "MUTATED"
+
+	if callerOwned[0] != "queueName" {
+		t.Fatalf("mutating the returned schema's required slice corrupted the caller's slice: %v", callerOwned)
 	}
 }
