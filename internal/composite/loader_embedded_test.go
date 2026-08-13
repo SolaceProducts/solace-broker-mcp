@@ -46,6 +46,29 @@ func findStep(tool *CompositeTool, id string) *Step {
 	return nil
 }
 
+// createOrUpdateWriteTools names every create/update write tool — the ones
+// whose operation echoes the resource back as response data, so both
+// BodyFields and ResponseFields (and the generated strict output schema) are
+// expected to resolve. Deliberately NOT keyed on "does the operation declare
+// a body parameter": every action tool (disconnect-client, clear-*-stats,
+// delete-queue-messages) also declares one, but resolves to a genuinely
+// empty schema ({"properties": {}} in the spec) — a real, permanent
+// difference from create/update's full-resource body, not a resolution
+// failure. Keep this list in sync with writeToolIdentifierFields in
+// internal/tools/composite_handler.go (can't import it directly: tools
+// already imports composite, so the reverse would cycle) — update
+// deliberately, same convention as wantToolCount above.
+var createOrUpdateWriteTools = map[string]bool{
+	"create-message-vpn":    true,
+	"update-message-vpn":    true,
+	"create-queue":          true,
+	"update-queue":          true,
+	"create-topic-endpoint": true,
+	"update-topic-endpoint": true,
+	"create-rdp":            true,
+	"update-rdp":            true,
+}
+
 func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 	tools, err := LoadTools(definitions.FS, "tools.yaml")
 	if err != nil {
@@ -115,6 +138,57 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 						t.Errorf("tool %q step %q (%s): path param %q not wired in args", tool.Name, step.ID, op.Path, param)
 					}
 				}
+			}
+		}
+	})
+
+	// SOL-152947: the CI breakage guard for write tools (config/action), the
+	// same role path-params-wired plays for path wiring. constructRequestBody
+	// already rejects an unrecognized body field at runtime via op.BodyFields
+	// (internal/tools' output-schema generator similarly derives strictness
+	// from op.ResponseFields) — but nothing proved those two extractions stay
+	// resolvable against the real embedded catalog until now. A future spec
+	// bump that breaks either resolution for a write tool (renamed/reshaped
+	// body schema, envelope no longer exposing "data") degrades silently:
+	// constructRequestBody falls back to skipping the unknown-field check
+	// (BodyFields == nil), and the generated output schema falls back to
+	// fully permissive (ResponseFields == nil) — both fail open, not closed.
+	// This catches that at CI time instead.
+	t.Run("write-tool-schema-resolves", func(t *testing.T) {
+		for _, tool := range tools {
+			if !createOrUpdateWriteTools[tool.Name] {
+				continue
+			}
+			if len(tool.Steps) == 0 {
+				t.Errorf("tool %q: no steps", tool.Name)
+				continue
+			}
+			step := tool.Steps[0]
+			op, ok := operations[step.Operation]
+			if !ok {
+				continue // already reported by the "operations" subtest above
+			}
+
+			if op.BodyFields == nil {
+				t.Errorf("tool %q step %q (%s): BodyFields did not resolve — constructRequestBody's unknown-field check would silently stop working", tool.Name, step.ID, op.ID)
+			}
+			if op.ResponseFields == nil {
+				t.Errorf("tool %q step %q (%s): ResponseFields did not resolve — the generated output schema would silently fall back to fully permissive", tool.Name, step.ID, op.ID)
+			}
+
+			schema := BuildStrictOutputSchema(tool, operations, nil)
+			props, ok := schema["properties"].(map[string]any)
+			if !ok {
+				t.Errorf("tool %q: BuildStrictOutputSchema produced no top-level properties", tool.Name)
+				continue
+			}
+			stepSchema, ok := props[step.ID].(map[string]any)
+			if !ok {
+				t.Errorf("tool %q step %q: no generated schema", tool.Name, step.ID)
+				continue
+			}
+			if _, isStrict := stepSchema["additionalProperties"]; !isStrict {
+				t.Errorf("tool %q step %q: generated schema fell back to the fully permissive shape ({\"type\":\"object\"} only) — the strict, spec-derived schema was expected here", tool.Name, step.ID)
 			}
 		}
 	})
