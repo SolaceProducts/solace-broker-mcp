@@ -62,7 +62,7 @@ The three modes are tiered, not interleaved: `mode: static` and `mode: disabled`
 | Startup log | `WARN: client_auth.mode = disabled` banner | `WARN: client_auth.mode = static` banner | `INFO: client auth via OAuth/OIDC` |
 | Client must send | Nothing required (any/no `Authorization` header accepted) | `Authorization: Bearer <dev_token>` on every request | `Authorization: Bearer <JWT from IdP>` on every request |
 | Server validates | Nothing — passes every request to handler | Constant-time compare against `dev_token` | JWT signature, `iss`, `aud`, `exp`; refreshes JWKS from issuer |
-| `/.well-known/oauth-protected-resource` | Not served (404) | Not served (404) | Served — advertises issuer, audience, resource URL |
+| `/.well-known/oauth-protected-resource` (bare, advertised in `WWW-Authenticate`) and `/.well-known/oauth-protected-resource<resource_url path>` (RFC 9728 §3.1 canonical) | Not served (404) | Not served (404) | Served — same document at both paths; advertises issuer, audience, resource URL |
 | Broker URL `http://` allowed | Yes | Yes | No — `https://` required |
 | Self-signed TLS allowed | Yes (per-broker `insecure_skip_verify: true`) | Yes | Yes (per-broker; normally false in prod) |
 | Token expiration | n/a | 24h synthetic (matches current static verifier) | Whatever the IdP issues (`exp`) |
