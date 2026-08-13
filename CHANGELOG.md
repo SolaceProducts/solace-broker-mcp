@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- OAuth Protected Resource Metadata (PRM) is now also served at the RFC 9728 §3.1 canonical path `/.well-known/oauth-protected-resource/mcp`, in addition to the existing bare `/.well-known/oauth-protected-resource`. Both paths return the same document. The `WWW-Authenticate` challenge on a 401 continues to advertise the bare URL, so clients that follow the challenge verbatim (e.g. Claude Code) are unaffected; clients that build the RFC 9728 canonical path directly (e.g. SAM's Automatic OAuth discovery) now get a 200 instead of a 404. Tracked under SOL-153089.
 ### Security
 
 - Broker URLs logged at four runtime sites — the once-per-alias "broker connection created" line, the `Sender`'s retry/failure logging (`internal/semp/resilience`), and both SEMPv1 and SEMPv2 `HTTPClient.LogValue` implementations — now go through the same `SanitizeURLString` sanitizer `BrokerConfig.LogValue` already applied, instead of logging the URL raw. `validateBrokerURL` already rejects any broker URL with embedded userinfo at config load in every mode, so none of these could carry a credential today; this closes the gap where that validation guarantee was the *only* thing standing between a broker URL and the log stream, with no independent defense at the log sites themselves and no coverage from the `ReplaceAttr` redaction safety net (its redacted-key list doesn't include `url`/`base_url`/`broker`). No behavior change for a valid, non-credentialed URL. Found in a Claude-assisted security sweep. Tracked under SOL-152979.

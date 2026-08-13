@@ -37,6 +37,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -999,5 +1000,85 @@ func TestHealthProbeTimeout_IsUnderDockerHealthcheckTimeout(t *testing.T) {
 
 	if healthProbeTimeout >= dockerTimeout {
 		t.Errorf("healthProbeTimeout = %v, want strictly less than the Dockerfile HEALTHCHECK timeout of %v, so the probe reports its own failure instead of being killed silently", healthProbeTimeout, dockerTimeout)
+	}
+}
+
+// TestRegisterMetadataRoutes exercises the mux wiring for PRM (RFC 9728):
+// both the bare path and the §3.1 canonical path (derived from resource_url)
+// must return the same document. Non-oauth modes register nothing.
+func TestRegisterMetadataRoutes(t *testing.T) {
+	oauthCfg := func(resourceURL string) *config.ServerConfig {
+		return &config.ServerConfig{
+			Port: 9090,
+			MCPClientAuth: config.MCPClientAuthConfig{
+				Mode:        config.AuthModeOAuth,
+				Issuer:      "https://auth.example.com",
+				Audience:    "solace-mcp-server",
+				ResourceURL: resourceURL,
+			},
+		}
+	}
+
+	tests := []struct {
+		name        string
+		cfg         *config.ServerConfig
+		bareStatus  int
+		canonPath   string // "" means the canonical route should not be registered
+		canonStatus int
+	}{
+		{
+			name:        "oauth mode — both paths registered",
+			cfg:         oauthCfg("http://localhost:9090/mcp"),
+			bareStatus:  http.StatusOK,
+			canonPath:   "/.well-known/oauth-protected-resource/mcp",
+			canonStatus: http.StatusOK,
+		},
+		{
+			// Pins that the canonical path is derived from resource_url, not
+			// hardcoded to /mcp — regressing the derivation would fail here.
+			name:        "path prefix from ingress — canonical follows resource_url path",
+			cfg:         oauthCfg("https://gateway.example.com/broker/mcp"),
+			bareStatus:  http.StatusOK,
+			canonPath:   "/.well-known/oauth-protected-resource/broker/mcp",
+			canonStatus: http.StatusOK,
+		},
+		{
+			name:       "empty path — canonical collides with bare, skip",
+			cfg:        oauthCfg("https://mcp.example.com"),
+			bareStatus: http.StatusOK,
+		},
+		{
+			name:       "static mode — no registration",
+			cfg:        &config.ServerConfig{MCPClientAuth: config.MCPClientAuthConfig{Mode: config.AuthModeStatic}},
+			bareStatus: http.StatusNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			registerMetadataRoutes(mux, tt.cfg)
+
+			bareRec := httptest.NewRecorder()
+			bareReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/.well-known/oauth-protected-resource", nil)
+			mux.ServeHTTP(bareRec, bareReq)
+			if bareRec.Code != tt.bareStatus {
+				t.Errorf("bare path status = %d, want %d", bareRec.Code, tt.bareStatus)
+			}
+
+			if tt.canonPath == "" {
+				return
+			}
+
+			canonRec := httptest.NewRecorder()
+			canonReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tt.canonPath, nil)
+			mux.ServeHTTP(canonRec, canonReq)
+			if canonRec.Code != tt.canonStatus {
+				t.Errorf("canonical path status = %d, want %d", canonRec.Code, tt.canonStatus)
+			}
+			if bareRec.Body.String() != canonRec.Body.String() {
+				t.Errorf("body mismatch: bare=%q canonical=%q", bareRec.Body.String(), canonRec.Body.String())
+			}
+		})
 	}
 }
