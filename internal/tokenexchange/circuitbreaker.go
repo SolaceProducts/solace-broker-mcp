@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync/atomic"
 
 	"github.com/sony/gobreaker/v2"
 )
@@ -31,38 +32,44 @@ const breakerName = "idp-token-exchange"
 // The success type is *Token because that is what Exchange's protected section
 // returns. BucketPeriod is derived from the window (never operator-set) so the
 // failure rate is computed over ~10 rolling buckets.
+//
+// consecutiveFailures is a local, not an Exchanger field — only the two
+// closures built here ever touch it, so a wider home would only widen its
+// blast radius for no benefit. See newReadyToTrip for why it exists.
 func newTokenExchangeCircuitBreaker(cfg CircuitBreakerConfig) *gobreaker.CircuitBreaker[*Token] {
+	var consecutiveFailures atomic.Uint32
 	return gobreaker.NewCircuitBreaker[*Token](gobreaker.Settings{
 		Name:          breakerName,
 		Interval:      cfg.FailureRateWindow,
 		BucketPeriod:  cfg.FailureRateWindow / 10,
 		Timeout:       cfg.OpenStateDuration,
 		MaxRequests:   cfg.HalfOpenProbeRequests,
-		ReadyToTrip:   newReadyToTrip(cfg),
-		IsSuccessful:  isBreakerSuccess,
+		ReadyToTrip:   newReadyToTrip(cfg, &consecutiveFailures),
+		IsSuccessful:  newCountingIsBreakerSuccess(&consecutiveFailures),
 		IsExcluded:    isBreakerExcluded,
-		OnStateChange: logBreakerStateChange,
+		OnStateChange: newLogBreakerStateChange(&consecutiveFailures),
 	})
 }
 
-// newReadyToTrip builds the trip predicate. Two rules: a consecutive-failure
-// count, and a failure-rate rule gated by a minimum sample so a couple of
-// failures cannot trip on noise. The denominator excludes excluded outcomes
-// (429, cancellations) so throttling cannot dilute or drive the rate.
+// newReadyToTrip builds the trip predicate. Two independent rules: a
+// consecutive-failure count, and a failure-rate rule gated by a minimum
+// sample so a couple of failures cannot trip on noise. The denominator
+// excludes excluded outcomes (429, cancellations) so throttling cannot
+// dilute or drive the rate.
 //
-// Regime gap, deliberate: gobreaker's ConsecutiveFailures counter is
-// window-bound — it decays as the rolling window's buckets (window/10) age
-// out — so the consecutive rule only trips when counted failures arrive in
-// quick succession, i.e. a fast-failing outage such as connection refused.
-// A slow outage whose failures each burn the full retry-chain deadline
-// (~19s) spaces them too far apart to ever accumulate, and at traffic too
-// low for MinimumRequests the rate rule cannot trip either, so in that
-// low-traffic slow-failure regime the breaker stays closed (fails open):
-// exchanges still run their normal retry/timeout budget.
-func newReadyToTrip(cfg CircuitBreakerConfig) func(gobreaker.Counts) bool {
+// The consecutive rule reads consecutiveFailures, an undecayed counter this
+// package owns, instead of gobreaker's own counts.ConsecutiveFailures:
+// gobreaker's version decays as its rolling window's buckets age out, so a
+// slow, low-traffic outage (failures spaced wider than a bucket period) can
+// leave it permanently below threshold even though every exchange failed —
+// and too sparse for MinimumRequests to save via the rate rule. This
+// counter never decays on time, only on an observed success, because
+// Exchange sits behind a token cache: a quiet gap usually means "nothing
+// needed a token," not "the IdP healed."
+func newReadyToTrip(cfg CircuitBreakerConfig, consecutiveFailures *atomic.Uint32) func(gobreaker.Counts) bool {
 	return func(counts gobreaker.Counts) bool {
 		if cfg.ConsecutiveFailureThreshold > 0 &&
-			counts.ConsecutiveFailures >= cfg.ConsecutiveFailureThreshold {
+			consecutiveFailures.Load() >= cfg.ConsecutiveFailureThreshold {
 			return true
 		}
 
@@ -76,28 +83,67 @@ func newReadyToTrip(cfg CircuitBreakerConfig) func(gobreaker.Counts) bool {
 	}
 }
 
-// logBreakerStateChange runs UNDER the breaker's internal mutex — gobreaker
-// (v2.4.0) fires OnStateChange from afterRequest while cb.mutex is held — so
-// while it executes, all breaker traffic is serialized behind it. Transitions
-// are rare and the work here is a single WARN log, which is acceptable; keep
-// this callback to cheap logging only (no blocking work, and no State()/
-// Counts() calls — those re-take the same lock). Transitions are
-// operationally important (the IdP just became unreachable, or recovered),
-// hence WARN.
-func logBreakerStateChange(name string, from, to gobreaker.State) {
-	slog.Warn("token exchange circuit breaker state change",
-		slog.String("breaker", name),
-		slog.String("from", from.String()),
-		slog.String("to", to.String()))
+// newCountingIsBreakerSuccess wraps isBreakerSuccess to maintain
+// consecutiveFailures (see newReadyToTrip) — the name says so because this
+// is the one callback slot below that is NOT a pure function of its error
+// argument; see the block comment above isBreakerExcluded for why that
+// matters. gobreaker only calls IsSuccessful for outcomes IsExcluded already
+// let through, so an excluded outcome never reaches the counter either —
+// matching the rate rule's denominator. The write is a lock-free atomic op,
+// so it stays within the "fast and side-effect-free" constraint despite not
+// being pure.
+func newCountingIsBreakerSuccess(consecutiveFailures *atomic.Uint32) func(error) bool {
+	return func(err error) bool {
+		ok := isBreakerSuccess(err)
+		if ok {
+			consecutiveFailures.Store(0)
+		} else {
+			consecutiveFailures.Add(1)
+		}
+		return ok
+	}
+}
+
+// newLogBreakerStateChange builds the OnStateChange callback. It runs UNDER
+// the breaker's internal mutex (gobreaker v2.4.0 fires it from afterRequest
+// with cb.mutex held), so keep it to cheap logging only — no blocking work,
+// no State()/Counts() calls (those re-take the lock; the atomic Load below
+// does not). WARN because transitions are operationally important.
+//
+// consecutive_failures tells the operator which rule opened the breaker: on
+// closed→open it equals the threshold when the consecutive rule fired, and
+// sits below it when the rate rule did. (The counter keeps incrementing and
+// resetting even with consecutive_failure_threshold: 0 — that comparison
+// just has no meaning once the rule is disabled.)
+func newLogBreakerStateChange(consecutiveFailures *atomic.Uint32) func(name string, from, to gobreaker.State) {
+	return func(name string, from, to gobreaker.State) {
+		slog.Warn("token exchange circuit breaker state change",
+			slog.String("breaker", name),
+			slog.String("from", from.String()),
+			slog.String("to", to.String()),
+			slog.Uint64("consecutive_failures", uint64(consecutiveFailures.Load())))
+	}
 }
 
 // The circuit breaker protects one shared IdP, so its counters must reflect
 // IdP availability and nothing else. These three functions translate a Layer 2
 // exchange outcome into one of gobreaker's three verdicts — excluded, failure,
 // or success — and own the policy for which outcomes mean "the IdP is
-// unhealthy". They must stay fast and side-effect-free: gobreaker invokes them
-// while holding the lock that guards its internal counters, so no logging, no
-// State()/Counts() calls, no blocking work.
+// unhealthy". They are pure functions of their error argument, and must stay
+// that way: no logging, no State()/Counts() calls, no blocking work. (The
+// IsSuccessful slot actually installed is newCountingIsBreakerSuccess, a thin
+// wrapper that is deliberately NOT pure — see its own doc.)
+//
+// Correctness here leans on three gobreaker v2.4.0 behaviors that are not
+// documented contract: IsExcluded runs before IsSuccessful; IsSuccessful runs
+// before ReadyToTrip sees its effect; and a stale outcome (started before a
+// trip, finished after recovery) is discarded by the generation check before
+// either callback runs. The first two are covered end-to-end — a bump that
+// reordered them would fail the sparse-spacing and exclusion tests in
+// circuitbreaker_exchange_test.go. The third is not test-covered, which is
+// why gobreaker is excluded from the go-minor-patch Dependabot group
+// (.github/dependabot.yml): a bump needs a human reading its changelog, not
+// an auto-merge that could silently let stale results pollute the counter.
 
 // isBreakerExcluded reports outcomes that must count as neither success nor
 // failure. Excluding them (rather than counting a success) keeps the failure

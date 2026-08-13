@@ -1,0 +1,114 @@
+name: Workflow lint
+
+# actionlint (correctness) and zizmor (security) over `.github/workflows/`, so
+# that what used to be argued in a code comment is re-checked on every edit.
+#
+# WHY THERE IS NO `paths:` FILTER
+#
+# The obvious shape for this workflow is `pull_request` filtered to
+# `.github/workflows/**` — it only has something to say when a workflow changes.
+# That shape is wrong for a *required* check, and wrong in the specific way this
+# repository has already been bitten by. GitHub does not report a filtered-out
+# check as skipped; it never creates the check run at all, so the required
+# context sits pending forever and the pull request cannot merge. That is the
+# same failure mode build-and-test.yml's header comment dissects at length: a
+# required check that never reports is worse than one that reports cheaply.
+#
+# So it runs on every pull request against main. The cost is a few seconds of
+# runner time on pull requests that touch no workflow; the alternative is a
+# permanently unmergeable pull request the first time someone changes only Go
+# code. If this ever needs to be conditional, condition it inside the job so the
+# check still reports, never in the trigger.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  workflow-lint:
+    name: workflow-lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+
+      # Pinned, because an unpinned linter changes its verdict without a commit
+      # and a gate that moves on its own is not a gate.
+      #
+      # The floor is not arbitrary. v1.7.7 rejects `artifact-metadata: write` in
+      # release.yml as an unknown permission scope; the scope is real and the
+      # release publishes fine with it, and v1.7.12 is the first release that
+      # knows it. So the pin cuts both ways — hold it steady, but treat a
+      # finding against a newly-added GitHub feature as a reason to bump rather
+      # than a reason to edit the workflow. `go install` at a version tag is
+      # verified against the Go checksum database.
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: v1.7.12
+        run: go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
+
+      - name: Install zizmor
+        env:
+          ZIZMOR_VERSION: 1.29.0
+        run: pipx install "zizmor==${ZIZMOR_VERSION}"
+
+      # actionlint discovers `.github/workflows/` itself and shellchecks every
+      # `run:` block on the way through.
+      #
+      # That second half is worth knowing about: actionlint shells out to
+      # shellcheck and silently skips those rules when it is absent, so a clean
+      # local run on a machine without shellcheck proves less than it appears
+      # to. The runner image ships it (0.9.0 on ubuntu-24.04), so CI is the
+      # stricter environment. It is also the one tool here that is *not*
+      # version-pinned — it moves when the runner image moves. Pin it with
+      # `-shellcheck <path>` if that drift ever produces a surprise.
+      - name: actionlint
+        run: actionlint -color
+
+      # Two flags carry the gate's strictness, and both are set on purpose
+      # rather than inherited, because zizmor's defaults are a moving target
+      # across releases and "whatever the tool felt like today" is not a
+      # policy anyone can review.
+      #
+      # --persona=regular       the low-false-positive set. `auditor` and
+      #                         `pedantic` are for a human reading output, not
+      #                         for a blocking check.
+      # --min-severity=low      blocks everything except purely informational
+      #                         code smells. One informational finding stands
+      #                         today (superfluous-actions on the release step,
+      #                         suggesting `gh release` over an action); it is a
+      #                         refactor to weigh on its own merits, not
+      #                         something to hold the gate open for.
+      #
+      # --no-online-audits is deterministic on purpose: it drops
+      # known-vulnerable-actions, ref-confusion and stale-action-refs, which
+      # would let this check go red with no commit behind it. unpinned-uses is
+      # offline and still enforced, so SHA pinning stays gated. The dropped
+      # audits are worth a scheduled non-blocking run; that is not this ticket.
+      - name: zizmor
+        run: |
+          zizmor --color=always \
+            --no-online-audits \
+            --persona=regular \
+            --min-severity=low \
+            .github/workflows/

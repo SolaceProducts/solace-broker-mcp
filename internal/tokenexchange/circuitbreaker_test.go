@@ -17,6 +17,7 @@ package tokenexchange
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 
 	"github.com/sony/gobreaker/v2"
@@ -139,17 +140,56 @@ func TestIsBreakerSuccess(t *testing.T) {
 	}
 }
 
-// TestNewReadyToTrip pins newReadyToTrip's two independent rules (see its
-// "Regime gap" doc comment): a consecutive-failure count, and a failure-rate
-// rule gated by a minimum sample. Most cases isolate one rule by disabling or
-// starving the other, since the two thresholds are otherwise unrelated.
+// TestNewCountingIsBreakerSuccess pins the counter maintenance directly,
+// without going through a real breaker: a failure increments, a success
+// resets to 0, and the return value still passes through isBreakerSuccess's
+// verdict unchanged (a rejection is a success here, same as TestIsBreakerSuccess).
+func TestNewCountingIsBreakerSuccess(t *testing.T) {
+	t.Parallel()
+	var counter atomic.Uint32
+	isSuccess := newCountingIsBreakerSuccess(&counter)
+
+	if ok := isSuccess(rawWith(FailureClassNetwork)); ok {
+		t.Errorf("isSuccess(network failure) = true, want false")
+	}
+	if got := counter.Load(); got != 1 {
+		t.Errorf("counter after 1 failure = %d, want 1", got)
+	}
+
+	if ok := isSuccess(rawWith(FailureClassUpstream5xx)); ok {
+		t.Errorf("isSuccess(5xx failure) = true, want false")
+	}
+	if got := counter.Load(); got != 2 {
+		t.Errorf("counter after 2 failures = %d, want 2", got)
+	}
+
+	if ok := isSuccess(&ExchangeError{Sentinel: ErrExchangeRejected}); !ok {
+		t.Errorf("isSuccess(rejection) = false, want true (a rejection is a success for breaker purposes)")
+	}
+	if got := counter.Load(); got != 0 {
+		t.Errorf("counter after a success = %d, want 0 (success must reset it)", got)
+	}
+
+	if ok := isSuccess(nil); !ok {
+		t.Errorf("isSuccess(nil) = false, want true")
+	}
+	if got := counter.Load(); got != 0 {
+		t.Errorf("counter after another success = %d, want 0 (stays at 0, does not go negative)", got)
+	}
+}
+
+// TestNewReadyToTrip pins newReadyToTrip's two independent rules: an
+// undecayed consecutive-failure count, and a failure-rate rule gated by a
+// minimum sample. Most cases isolate one rule by disabling or starving the
+// other, since the two thresholds are otherwise unrelated.
 func TestNewReadyToTrip(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name   string
-		cfg    func() CircuitBreakerConfig
-		counts gobreaker.Counts
-		want   bool
+		name       string
+		cfg        func() CircuitBreakerConfig
+		counts     gobreaker.Counts
+		consecFail uint32
+		want       bool
 	}{
 		// Rate rule: DefaultCircuitBreakerConfig (MinimumRequests=10,
 		// FailureRateThresholdPercent=50) with the consecutive rule disabled
@@ -234,8 +274,8 @@ func TestNewReadyToTrip(t *testing.T) {
 				cfg.MinimumRequests = 1_000_000
 				return cfg
 			},
-			counts: gobreaker.Counts{ConsecutiveFailures: 5},
-			want:   true,
+			consecFail: 5,
+			want:       true,
 		},
 		{
 			name: "consecutive failures one below threshold does not trip",
@@ -244,8 +284,8 @@ func TestNewReadyToTrip(t *testing.T) {
 				cfg.MinimumRequests = 1_000_000
 				return cfg
 			},
-			counts: gobreaker.Counts{ConsecutiveFailures: 4},
-			want:   false,
+			consecFail: 4,
+			want:       false,
 		},
 		{
 			name: "zero threshold disables the consecutive rule even at huge counts",
@@ -255,8 +295,19 @@ func TestNewReadyToTrip(t *testing.T) {
 				cfg.ConsecutiveFailureThreshold = 0
 				return cfg
 			},
-			counts: gobreaker.Counts{ConsecutiveFailures: 1000},
-			want:   false,
+			consecFail: 1000,
+			want:       false,
+		},
+		{
+			name: "gobreaker's own decayed ConsecutiveFailures is not consulted",
+			cfg: func() CircuitBreakerConfig {
+				cfg := DefaultCircuitBreakerConfig()
+				cfg.MinimumRequests = 1_000_000
+				return cfg
+			},
+			counts:     gobreaker.Counts{ConsecutiveFailures: 1000},
+			consecFail: 0,
+			want:       false,
 		},
 
 		// Both rules live, as shipped: pins that the consecutive rule is
@@ -267,16 +318,19 @@ func TestNewReadyToTrip(t *testing.T) {
 			cfg: func() CircuitBreakerConfig {
 				return DefaultCircuitBreakerConfig()
 			},
-			counts: gobreaker.Counts{Requests: 5, TotalFailures: 5, ConsecutiveFailures: 5},
-			want:   true,
+			counts:     gobreaker.Counts{Requests: 5, TotalFailures: 5},
+			consecFail: 5,
+			want:       true,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			readyToTrip := newReadyToTrip(tc.cfg())
+			var consecutiveFailures atomic.Uint32
+			consecutiveFailures.Store(tc.consecFail)
+			readyToTrip := newReadyToTrip(tc.cfg(), &consecutiveFailures)
 			if got := readyToTrip(tc.counts); got != tc.want {
-				t.Errorf("newReadyToTrip(...)(%+v) = %v, want %v", tc.counts, got, tc.want)
+				t.Errorf("newReadyToTrip(...)(%+v) with consecutiveFailures=%d = %v, want %v", tc.counts, tc.consecFail, got, tc.want)
 			}
 		})
 	}
