@@ -719,6 +719,19 @@ func main() {
 	}
 
 	if len(os.Args) == 2 && os.Args[1] == "--health" {
+		// Install the redacting handler at ERROR before anything on the probe path
+		// can log. Two reasons, both from resolving the config through
+		// config.ReadResolvedConfigFile, which calls loadEnvFile: that function logs
+		// at INFO when it finds a .env file, and this branch runs before the
+		// bootstrap SetDefault below, so the line would go out through Go's default
+		// text handler — into State.Health.Log on every successful probe, sharing
+		// the channel this probe uses for its own failure diagnostics. Raising the
+		// level to ERROR silences it, and installing newSlogHandler means anything
+		// reachable from here is covered by the ReplaceAttr redaction safety net
+		// (secure-logging Rule 3) rather than bypassing it. The probe's own output
+		// goes to stderr directly via healthExitCode, unaffected by this level.
+		slog.SetDefault(slog.New(newSlogHandler(slog.LevelError)))
+
 		hc := healthConfigFromFile()
 		port := defaults.DefaultPort
 		if v := os.Getenv("MCP_SERVER_PORT"); v != "" {
