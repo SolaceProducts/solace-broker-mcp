@@ -73,7 +73,9 @@ jobs:
       pull-requests: write
       checks: write
       statuses: write
-    secrets: inherit
+    # No `secrets: inherit` — guardian-scan.yaml's jobs carry
+    # `environment: guardian` and resolve the FOSSA/Guardian/Prisma secrets from
+    # that environment themselves. Nothing to pass down.
     with:
       git_ref: ${{ inputs.version }}
       product_full_version: ${{ inputs.version }}
