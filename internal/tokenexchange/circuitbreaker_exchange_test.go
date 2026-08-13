@@ -1225,14 +1225,16 @@ func TestBreaker_RateRuleTripsOnPartialDegradation(t *testing.T) {
 
 // TestBreaker_ConcurrentConsecutiveCounterRaceFree drives many concurrent
 // Exchange calls so the counter is read/written from many goroutines at
-// once. -race catches a torn access; serialization is gobreaker's own
-// guarantee (afterRequest takes cb.mutex before any callback), not proven
-// here. What this test proves instead: no update is silently LOST. The
-// threshold (callers+1) is unreachable by the concurrent phase alone, so the
-// breaker is guaranteed closed afterward; a deterministic follow-up run
-// then must trip at EXACTLY that threshold — a lost increment would trip
-// late or never. Concurrent tripping itself is covered elsewhere
-// (TestBreaker_ConcurrentDistinctKeysCountExactlyOncePerCall,
+// once. -race catches a torn access; serialization against lost updates is
+// gobreaker's own guarantee (afterRequest holds cb.mutex across every
+// callback, so the counter is never actually accessed concurrently) — not
+// something a test at this layer can prove or falsify. What this DOES prove:
+// 50 concurrent exchanges leave the breaker closed and the counter in a
+// USABLE state (not stuck, not double-counted), by driving a deterministic
+// follow-up run afterward and checking it trips at EXACTLY the threshold —
+// callers+1, unreachable by the concurrent phase alone, so the breaker is
+// guaranteed closed going in. Concurrent tripping itself is covered
+// elsewhere (TestBreaker_ConcurrentDistinctKeysCountExactlyOncePerCall,
 // TestBreaker_OpenBreakerRejectsStampedeCleanly).
 func TestBreaker_ConcurrentConsecutiveCounterRaceFree(t *testing.T) {
 	t.Parallel()
@@ -1296,7 +1298,7 @@ func TestBreaker_ConcurrentConsecutiveCounterRaceFree(t *testing.T) {
 		}
 	}
 	if got := e.breaker.State(); got != gobreaker.StateOpen {
-		t.Fatalf("breaker State = %v after %d follow-up failures from a known baseline, want open (a lost update during contention would trip early or never)", got, threshold)
+		t.Fatalf("breaker State = %v after %d follow-up failures from a known baseline, want open (a counter left stuck or double-counted by the concurrent phase would trip early or never)", got, threshold)
 	}
 }
 
