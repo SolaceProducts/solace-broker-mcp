@@ -42,6 +42,65 @@ prompt-injected one — an MCP client calling `ToolManager.CallTool`
 | Caller identity attribution for audit (Repudiation) | Every call logs `sub`/`iss`/`client_id`/`jti` via `Identity.LogValue` (`internal/tools/identity.go:72-82`), success and failure paths, including panics | Mitigated when auth is enabled |
 | No client auth at all (Spoofing/Repudiation collapse) | `mcp_client_auth.mode: disabled` is a supported, operator-chosen server mode (`internal/config/config.go:82`) — no identity is ever recorded in that mode | **No mitigation — accepted risk, operator-chosen** |
 | Authz-denied error leaking policy shape to a probing LLM (Info Disclosure) | Deny message is deliberately uninformative and identical whether the tool doesn't exist, the group lacks a grant, or the claim is missing (`internal/tools/authorization.go:36-38`) | Mitigated |
+| A page in the operator's browser drives broker tooling via `/mcp` (CSRF / Elevation of Privilege) | `http.NewCrossOriginProtection` wraps the endpoint outside auth (`cmd/server/main.go:293,327`): a non-safe request (POST/DELETE) with `Sec-Fetch-Site` other than `same-origin`/`none`, or an `Origin` whose host ≠ `Host`, gets 403 and a WARN log before any token validation runs. On by default, no config. Two SDK defaults sit behind it as further layers: an unconditional `Content-Type: application/json` check that forces a preflight, and DNS-rebinding/localhost protection. Requests with neither header pass as non-browser traffic — how every shipped client (Claude Code, SAM's Python backend, Go SDK e2e client) reaches the endpoint | Mitigated — one client unverified, see below |
+
+**Cross-origin protection: what is verified, and the one client that isn't.**
+The row above holds for any client that sends neither `Origin` nor
+`Sec-Fetch-Site`, which is what the five `e2e-*` suites exercise. **Claude
+Desktop's remote-MCP connector has not been observed.** If it sends an `Origin`,
+`Check` compares `url.Parse(origin).Host` against `req.Host` and would 403 every
+tool call from that client.
+
+Observing it is blocked on an org dependency, not on effort: Desktop reaches an
+HTTP MCP server only through a custom connector, and on an Enterprise plan that
+is an admin-controlled feature — disabled for this org as of 2026-08-13, so no
+member can add one. Bridging through `mcp-remote` is NOT a substitute: that
+proxy issues its own header-less HTTP calls, so it would report "no `Origin`"
+regardless of what Desktop itself would send.
+
+Note this is a property of the protection as released in `0.7.0`, not of the
+layer move that added this row. For an authenticated request the rejection
+outcome is identical before and after that move, so the exposure here is
+pre-existing rather than newly introduced.
+
+What we did instead of the connect: exercised every client shape against a live
+server with curl, 17 cases, and pinned each one as a unit test in
+`cmd/server/cross_origin_test.go`. Behaviour matched prediction in all 17. The
+result narrows the Desktop risk considerably:
+
+- A client whose HTTP call originates in Electron's **main process** (Node) sends
+  neither header and passes. This is the usual way an MCP client avoids CORS, and
+  is what Claude Code and SAM's backend already do.
+- A client calling from a **renderer** sends `Sec-Fetch-Site`, and that value —
+  not `Origin` — decides. `cross-site` is rejected.
+
+So the reachable failure mode is `Sec-Fetch-Site: cross-site`, NOT the opaque
+`Origin: null` that a first reading suggests: `Origin: null` combined with any
+passing `Sec-Fetch-Site` is allowed, because the `Origin` fallback is only
+consulted when `Sec-Fetch-Site` is absent, and every Chromium-based client sends
+it. A bare `Origin: null` with no `Sec-Fetch-Site` is rejected, but no real
+browser-stack client produces that combination.
+
+That distinction decides the fix if Desktop ever does break. `AddTrustedOrigin`
+requires a scheme AND a host, and `isRequestExempt` matches the **exact full
+`Origin` string**, not its host — but it is consulted on the `Sec-Fetch-Site`
+rejection path too. So a renderer sending `Origin: app://claude` with
+`Sec-Fetch-Site: cross-site` IS rescuable by trusting that exact origin. Only two
+combinations are not: `Origin: null` (unregisterable — no scheme or host) and
+`cross-site` with no `Origin` at all. For those the sole stdlib lever is
+`AddInsecureBypassPattern("/mcp")`, which disables protection for the whole
+endpoint, so a custom `Check` wrapper would be needed instead.
+
+No preventive carve-out is wired today, deliberately: the combination such a
+carve-out would admit is one no real client produces, so it would weaken the
+posture for pre-2023 browsers while fixing nothing. The rejection log carries
+`origin`, `host`, `sec_fetch_site`, and the correlation ID precisely so the first
+real report names its own cause and the fix above can be applied on evidence.
+
+The same `req.Host` comparison makes a `Host`-rewriting reverse proxy or ingress
+a theoretical false-rejection source. It is moot while no client sends `Origin`,
+and it would surface as a 403 with the offending origin in the WARN log rather
+than as silent breakage.
 
 ---
 
@@ -217,3 +276,8 @@ fixing rather than accepting.
 - `Third-party licenses current` (accepted risk #18 above) is a ruleset
   configuration gap, not a code gap — likely a five-minute fix once someone
   owns it.
+- Claude Desktop's `Origin` behaviour on `/mcp` is unobserved (§1), blocked on an
+  admin enabling custom connectors for the org. Until then the cross-origin row
+  is verified for every client *except* the flagship desktop one. This verifies
+  behaviour released in `0.7.0`, so it is not a gate on any later change.
+  Tracked under SOL-152971.
