@@ -173,8 +173,8 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	// should not see it.
 	handlerParams := stripBrokerParam(params)
 
-	// Read metadata once. Each call returns a fresh value with fresh maps,
-	// so caching here keeps allocations down without aliasing risk.
+	// Read metadata once. Each call returns a fresh value with fresh maps and
+	// slices, so caching here keeps allocations down without aliasing risk.
 	meta := handler.Metadata()
 
 	// Validate parameters against the handler's input schema.

@@ -406,22 +406,88 @@ func limitRequestBody(next http.Handler, maxBytes int64) http.Handler {
 	})
 }
 
+// maxLoggedHeaderBytes bounds a client-supplied header value before it reaches
+// the log stream. The cross-origin deny path runs BEFORE auth, so an
+// unauthenticated caller controls these values; without a cap each rejected
+// request could write up to the server's whole header allowance into the logs.
+const maxLoggedHeaderBytes = 256
+
+// truncateForLog bounds an untrusted header value for logging, marking any value
+// it shortened so a reader can tell a truncated origin from a genuinely short
+// one. slog's own escaping handles control characters in the value; this guards
+// volume, not injection.
+func truncateForLog(value string) string {
+	if len(value) <= maxLoggedHeaderBytes {
+		return value
+	}
+	return value[:maxLoggedHeaderBytes] + "…(truncated)"
+}
+
+// crossOriginProtection wraps next with the stdlib's CSRF protection, rejecting
+// non-safe cross-origin browser requests with 403.
+//
+// We wrap rather than set mcp.StreamableHTTPOptions.CrossOriginProtection: that
+// field is deprecated in go-sdk v1.6.0 and removed in v1.8.0, and wrapping is
+// the SDK's own documented replacement. Until v1.5.0 the SDK applied this check
+// by default when opts was nil; v1.6.0 made that conditional on a MCPGODEBUG
+// env flag, so an explicit wrap is now the only way to hold the posture.
+//
+// What Check() allows, and why non-browser clients are unaffected: GET, HEAD,
+// and OPTIONS are safe methods and always pass — so the SSE stream is never
+// rejected on origin grounds. A request carrying NEITHER Sec-Fetch-Site nor
+// Origin is treated as non-browser traffic and passes, which covers every
+// client we ship against (Claude Code, SAM's Python agent backend, the Go SDK
+// e2e client). Only a browser-initiated cross-origin POST or DELETE is
+// rejected. No trusted-origin configuration is needed, because no browser-based
+// MCP client exists; http.CrossOriginProtection.AddTrustedOrigin is the
+// extension point if one ever does.
+//
+// Rejections log at WARN with the offending Origin and the correlation ID. The
+// Origin is a client-supplied hostname, not a secret, and is safe to log; the
+// request body and Authorization header are deliberately never touched here.
+func crossOriginProtection(next http.Handler) http.Handler {
+	protection := http.NewCrossOriginProtection()
+	protection.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// host is logged alongside origin because Check rejects by comparing
+		// url.Parse(origin).Host against r.Host. Without both values a reader
+		// sees the 403 but cannot tell which comparison failed — and when a
+		// proxy or ingress rewrites Host, that is the whole diagnosis.
+		slog.WarnContext(r.Context(), "cross-origin request rejected",
+			slog.String("method", r.Method),
+			slog.String("origin", truncateForLog(r.Header.Get("Origin"))),
+			slog.String("sec_fetch_site", truncateForLog(r.Header.Get("Sec-Fetch-Site"))),
+			slog.String("host", truncateForLog(r.Host)))
+		http.Error(w, "cross-origin request denied", http.StatusForbidden)
+	}))
+	return protection.Handler(next)
+}
+
 // buildMCPEndpoint assembles the /mcp handler chain around authedHandler.
 //
 // The layer order, outermost first, is: limitRequestBody → correlation →
-// authedHandler. limitRequestBody's Content-Length short-circuit rejects an
-// oversized request with 413 BEFORE correlation runs, so that 413 carries no
-// correlation ID. This is intentional: correlation sits OUTSIDE auth (ADR-001)
-// so a 401 still gets an ID, but the body-limit short-circuit sits outside
-// correlation by design. (A streamed oversize body instead trips inside the
-// SDK, which returns its own 413 after correlation has stamped the ID.)
+// crossOriginProtection → authedHandler. limitRequestBody's Content-Length
+// short-circuit rejects an oversized request with 413 BEFORE correlation runs,
+// so that 413 carries no correlation ID. This is intentional: correlation sits
+// OUTSIDE auth (ADR-001) so a 401 still gets an ID, but the body-limit
+// short-circuit sits outside correlation by design. (A streamed oversize body
+// instead trips inside the SDK, which returns its own 413 after correlation has
+// stamped the ID.)
+//
+// crossOriginProtection sits INSIDE correlation for the same ADR-001 reason a
+// 401 does: an origin rejection is a 403 that an operator needs to correlate
+// with the surrounding log lines. It sits OUTSIDE auth so a cross-origin
+// request is rejected before the server spends JWT and JWKS validation work on
+// it, and so the rejection is reported as the 403 it is rather than being
+// masked as a 401 whenever client auth is enabled.
 //
 // When correlationEnabled is false the correlation layer is omitted entirely
-// (correlation.From then returns "").
+// (correlation.From then returns ""). Cross-origin protection is unconditional:
+// there is no scenario in which disabling it is the right call, so it takes no
+// config flag.
 func buildMCPEndpoint(authedHandler http.Handler, correlationEnabled bool) http.Handler {
-	endpoint := authedHandler
+	endpoint := crossOriginProtection(authedHandler)
 	if correlationEnabled {
-		endpoint = correlation.Middleware(authedHandler)
+		endpoint = correlation.Middleware(endpoint)
 	}
 	return limitRequestBody(endpoint, defaults.MaxMCPRequestBytes)
 }
@@ -994,15 +1060,10 @@ func main() {
 		return server
 	}, nil)
 
-	// Cross-origin protection. Since go-sdk v1.6.0 the handler no longer
-	// applies default Origin/Sec-Fetch-Site checks when opts is nil, and the
-	// StreamableHTTPOptions.CrossOriginProtection field is deprecated in
-	// favour of wrapping with net/http.CrossOriginProtection. Preserves the
-	// browser attack-surface posture we had on v1.5.x.
-	protectedMCPHandler := http.NewCrossOriginProtection().Handler(mcpHandler)
-
-	// Wrap MCP handler with auth middleware
-	authedHandler, err := auth.NewAuthMiddleware(cfg, nil, protectedMCPHandler)
+	// Wrap MCP handler with auth middleware. Cross-origin protection wraps
+	// this from the OUTSIDE, in buildMCPEndpoint — see that function for why
+	// it sits outside auth rather than around mcpHandler here.
+	authedHandler, err := auth.NewAuthMiddleware(cfg, nil, mcpHandler)
 	if err != nil {
 		slog.Error("failed to create auth middleware", slog.String("error", err.Error()))
 		os.Exit(1)
