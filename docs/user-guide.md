@@ -291,4 +291,15 @@ curl http://localhost:9090/health
 
 The `--health` flag probes the running server's `/health` endpoint without requiring curl or network tools. This flag is useful for container health checks, scripts, and environments where curl is not available. The server must be running for the check to succeed. The flag reads the config file to determine the port and TLS settings. Ensure the same config file is accessible to both the server process and the health probe.
 
-If the health check fails, verify the server process is running and the configured port is not in use by another process.
+When TLS is configured, the probe verifies the server's certificate against the one at `tls_cert_file` rather than trusting whatever the endpoint presents, so that file must also be readable by the probe and must carry at least one DNS or IP SAN. The probe uses that SAN as the verification hostname, so a certificate covering only a name other than `localhost` works normally.
+
+If the health check fails, the probe prints the reason to stderr — Docker keeps it in `docker inspect --format '{{json .State.Health.Log}}'`. Beyond a server that is not running or a port taken by another process, check:
+
+- **`no such file or directory`** — `tls_cert_file` is not readable from where the probe runs. In a container, confirm the certificate is mounted at the same path the config names.
+- **`has no DNS or IP SAN`** — the certificate identifies itself only by Common Name. Go has ignored the Common Name since 1.15, so no TLS client can verify it; reissue with a SAN. Inspect what a certificate carries with:
+
+  ```bash
+  openssl x509 -in /etc/certs/server.pem -noout -text | grep -A1 'Subject Alternative Name'
+  ```
+
+- **`x509: certificate signed by unknown authority`** — the certificate the server is serving is not the one at `tls_cert_file`. Most often the certificate was replaced on disk without restarting the server, which loads its keypair once at startup. Restart the container.

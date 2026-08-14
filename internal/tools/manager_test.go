@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -152,18 +153,48 @@ func TestRegister_DuplicatePanics(t *testing.T) {
 
 // --- Broker resolution tests ---
 
+// callToolResultText extracts the CallToolResult's error text, failing the
+// test immediately if result is nil, has no Content, or protocol-level err is
+// non-nil — every buildLocalErrorResult/buildErrorResult caller must return
+// (result, nil), never a bare protocol error (SOL-152980).
+func callToolResultText(t *testing.T, result *mcp.CallToolResult, err error) string {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected a non-nil CallToolResult")
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError to be true")
+	}
+	sc, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("StructuredContent = %T, want map[string]any", result.StructuredContent)
+	}
+	if sc["retryable"] != false {
+		t.Fatalf("retryable = %v, want false", sc["retryable"])
+	}
+	if len(result.Content) == 0 {
+		t.Fatal("expected result.Content to be non-empty")
+	}
+	text, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("result.Content[0] = %T, want *mcp.TextContent", result.Content[0])
+	}
+	return text.Text
+}
+
 func TestCallTool_MissingBroker(t *testing.T) {
 	mgr := NewToolManager(newTestPool(t))
 	mgr.Register(newStubHandler("test-tool"))
 
-	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"msgVpnName": "default",
 	}, Identity{})
-	if err == nil {
-		t.Fatal("expected error for missing broker")
-	}
-	if !strings.Contains(err.Error(), "broker parameter is required") {
-		t.Errorf("error = %v, want 'broker parameter is required'", err)
+	text := callToolResultText(t, result, err)
+	if !strings.Contains(text, "broker parameter is required") {
+		t.Errorf("text = %q, want 'broker parameter is required'", text)
 	}
 }
 
@@ -171,15 +202,13 @@ func TestCallTool_UnknownBroker(t *testing.T) {
 	mgr := NewToolManager(newTestPool(t))
 	mgr.Register(newStubHandler("test-tool"))
 
-	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     "nonexistent",
 		"msgVpnName": "default",
 	}, Identity{})
-	if err == nil {
-		t.Fatal("expected error for unknown broker")
-	}
-	if !strings.Contains(err.Error(), "unknown broker") {
-		t.Errorf("error = %v, want 'unknown broker'", err)
+	text := callToolResultText(t, result, err)
+	if !strings.Contains(text, "unknown broker") {
+		t.Errorf("text = %q, want 'unknown broker'", text)
 	}
 }
 
@@ -193,15 +222,50 @@ func TestCallTool_UnknownBroker_PreservesCallerCasing(t *testing.T) {
 	mgr.Register(newStubHandler("test-tool"))
 
 	const rawAlias = "PRODEAST-DOESNT-EXIST"
-	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     rawAlias,
 		"msgVpnName": "default",
 	}, Identity{})
-	if err == nil {
-		t.Fatal("expected error for unknown broker")
+	text := callToolResultText(t, result, err)
+	if !strings.Contains(text, rawAlias) {
+		t.Errorf("text should preserve operator's original casing %q verbatim, got: %q", rawAlias, text)
 	}
-	if !strings.Contains(err.Error(), rawAlias) {
-		t.Errorf("error should preserve operator's original casing %q verbatim, got: %v", rawAlias, err)
+}
+
+// TestClassifyBrokerError_BrokerInitError_SuppressesUnvouchedText covers the
+// half of classifyBrokerError's dispatch that TestCallTool_UnknownBroker and
+// TestCallTool_UnknownBroker_PreservesCallerCasing leave bare (flagged in
+// PR #280 review): an error that is not semp.ErrUnknownBroker takes the
+// broker_init_error branch, which is documented (see classifyBrokerError,
+// buildBrokerResolutionErrorResult) to route through buildErrorResult rather
+// than echo the underlying error verbatim like unknown_broker does. If that
+// routing ever flipped to buildLocalErrorResult, this pins the regression:
+// an arbitrary construction failure (here standing in for a future
+// cookie-jar/authenticator/token-exchange error) would leak unvouched text
+// to the agent instead of the generic message.
+//
+// A live construction failure isn't reachable through CallTool with today's
+// BrokerPool (see classifyBrokerError's doc comment), so this drives
+// classifyBrokerError and buildBrokerResolutionErrorResult directly with a
+// synthetic error — the same two calls manager.go's GetSEMPv1/GetSEMPv2
+// branches make.
+func TestClassifyBrokerError_BrokerInitError_SuppressesUnvouchedText(t *testing.T) {
+	m := &ToolManager{}
+	underlying := errors.New("dial tcp 10.1.2.3:443: connection refused")
+
+	errorType, toolErr := m.classifyBrokerError("prod", underlying)
+	if errorType != "broker_init_error" {
+		t.Fatalf("errorType = %q, want %q", errorType, "broker_init_error")
+	}
+
+	result := m.buildBrokerResolutionErrorResult(errorType, toolErr, "prod")
+	text := callToolResultText(t, result, nil)
+
+	if strings.Contains(text, "10.1.2.3") || strings.Contains(text, "connection refused") {
+		t.Errorf("broker_init_error result leaked unvouched detail verbatim: %q", text)
+	}
+	if text != genericInternalMessage {
+		t.Errorf("text = %q, want the generic internal-error message", text)
 	}
 }
 
@@ -238,18 +302,16 @@ func TestCallTool_ValidationError_MissingRequired(t *testing.T) {
 	mgr := NewToolManager(newTestPool(t))
 	mgr.Register(newStubHandler("test-tool"))
 
-	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker": "dev",
 		// msgVpnName missing
 	}, Identity{})
-	if err == nil {
-		t.Fatal("expected validation error for missing required field")
+	text := callToolResultText(t, result, err)
+	if !strings.Contains(text, "parameter validation failed") {
+		t.Errorf("text = %q, want 'parameter validation failed'", text)
 	}
-	if !strings.Contains(err.Error(), "parameter validation failed") {
-		t.Errorf("error = %v, want 'parameter validation failed'", err)
-	}
-	if !strings.Contains(err.Error(), "msgVpnName") {
-		t.Errorf("error should mention 'msgVpnName', got: %v", err)
+	if !strings.Contains(text, "msgVpnName") {
+		t.Errorf("text should mention 'msgVpnName', got: %q", text)
 	}
 }
 
@@ -265,15 +327,13 @@ func TestCallTool_ValidationError_WrongType(t *testing.T) {
 	}
 	mgr.Register(handler)
 
-	_, err := mgr.CallTool(context.Background(), "typed-tool", map[string]any{
+	result, err := mgr.CallTool(context.Background(), "typed-tool", map[string]any{
 		"broker": "dev",
 		"count":  "not-a-number",
 	}, Identity{})
-	if err == nil {
-		t.Fatal("expected validation error for wrong type")
-	}
-	if !strings.Contains(err.Error(), "parameter validation failed") {
-		t.Errorf("error = %v, want 'parameter validation failed'", err)
+	text := callToolResultText(t, result, err)
+	if !strings.Contains(text, "parameter validation failed") {
+		t.Errorf("text = %q, want 'parameter validation failed'", text)
 	}
 }
 
@@ -352,6 +412,12 @@ func TestCallTool_OutputValidationPasses(t *testing.T) {
 	}
 }
 
+// TestCallTool_OutputValidationFails is a regression test for SOL-152980.
+// handler.Handle has already run by the time output validation fails — for a
+// destructive tool, any broker-side mutation is already done — so CallTool
+// must return a structured result the agent can see (with retryable: false),
+// never a bare protocol error that leaves the agent unable to tell the action
+// already took effect.
 func TestCallTool_OutputValidationFails(t *testing.T) {
 	mgr := NewToolManager(newTestPool(t))
 
@@ -365,15 +431,49 @@ func TestCallTool_OutputValidationFails(t *testing.T) {
 	}
 	mgr.Register(handler)
 
-	_, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     "dev",
 		"msgVpnName": "default",
 	}, Identity{})
-	if err == nil {
-		t.Fatal("expected output validation error")
+	text := callToolResultText(t, result, err)
+	if !strings.Contains(text, "output validation") {
+		t.Errorf("text = %q, want 'output validation'", text)
 	}
-	if !strings.Contains(err.Error(), "output validation") {
-		t.Errorf("error = %v, want 'output validation'", err)
+}
+
+// TestCallTool_NilResult is a regression test for SOL-152980 (flagged in PR
+// #280 review): unlike output_validation_error and marshal_error, the
+// nil_result branch had no test. It's the one post-handler branch that's both
+// reachable and unpinned — handler.Handle has already run by the time it
+// fires, so for a destructive tool any broker-side mutation is already done,
+// and retryable: false is what keeps the agent from retrying an action that
+// already took effect. Covers both shapes that hit this branch: a literal nil
+// *ToolResult and a non-nil result with nil StructuredContent.
+func TestCallTool_NilResult(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		result *ToolResult
+	}{
+		{"nil result", nil},
+		{"nil structured content", &ToolResult{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr := NewToolManager(newTestPool(t))
+			handler := newStubHandler("test-tool")
+			handler.handleFn = func(context.Context, *ToolContext, map[string]any) (*ToolResult, error) {
+				return tc.result, nil
+			}
+			mgr.Register(handler)
+
+			result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+				"broker":     "dev",
+				"msgVpnName": "default",
+			}, Identity{})
+			text := callToolResultText(t, result, err)
+			if !strings.Contains(text, "returned nil result") {
+				t.Errorf("text = %q, want 'returned nil result'", text)
+			}
+		})
 	}
 }
 
