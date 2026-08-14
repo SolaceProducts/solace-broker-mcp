@@ -49,10 +49,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 		return nil, err
 	}
 
-	key := computeDeduplicationKey(DeduplicationKeyInput{
-		SubjectToken: input.SubjectToken,
-		BrokerAlias:  input.BrokerAlias,
-	})
+	key := computeDeduplicationKey(input.DedupKeyInput())
 
 	// Cross-time dedup: serve from cache if a fresh token exists.
 	gr, getErr := e.cache.Get(ctx, key)
@@ -393,5 +390,13 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 		}
 	}
 
-	return e.parseIdPResponse(resp, e.nowFunc())
+	tok, err := e.parseIdPResponse(resp, e.nowFunc())
+	if err != nil {
+		return nil, err
+	}
+	// Defense-in-depth visibility only — never fails the exchange. See
+	// warnIfAudienceMismatch's doc for why this is WARN, not a hard failure
+	// (SOL-152981).
+	warnIfAudienceMismatch(input.BrokerAlias, input.Audience, tok.Value)
+	return tok, nil
 }
