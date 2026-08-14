@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The 8 create/update ("write") composite tools — `create-message-vpn`, `update-message-vpn`, `create-queue`, `update-queue`, `create-topic-endpoint`, `update-topic-endpoint`, `create-rdp`, `update-rdp` — now declare a strict, SEMPv2-spec-derived output schema instead of the generic permissive envelope every composite tool used before. Each schema is generated from its operation's resolved response fields, rejects fields the spec doesn't declare, and requires the resource's own identifier field(s) to be present. A future SEMP release that renames, removes, or reshapes a response field a client depends on now fails schema validation instead of silently passing through. Monitor (read-only) tools are unchanged; delete/action tools (no response data) keep the permissive step schema automatically. Verified against real Solace PubSub+ broker containers (`test/e2e-management`, `test/e2e-action`). Tracked under SOL-152947.
+
 ### Fixed
 
 - The token-exchange circuit breaker's `consecutive_failure_threshold` rule now trips a slow, low-traffic IdP outage, not only a fast-failing one — it previously read gobreaker's own `ConsecutiveFailures`, which decays as its rolling window ages out and could leave the count permanently below threshold at low traffic even though every exchange failed. The rule now reads a separate, undecayed counter this package owns, reset only on an observed success. No config or behavior change for the fast-failing case this rule always caught; `consecutive_failure_threshold: 0` still disables it. Tracked under SOL-152286.
