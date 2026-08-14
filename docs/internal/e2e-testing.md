@@ -2,7 +2,7 @@
 
 This document describes the E2E testing strategy, structure, and how to run the tests locally and in CI.
 
-For a quickstart and the suite's port allocation, see [`test/e2e-basic-mcp/README.md`](../../test/e2e-basic-mcp/README.md). A separate monitoring-focused suite lives under [`test/e2e-monitoring/`](../../test/e2e-monitoring/README.md), and a management/config-tool suite lives under [`test/e2e-management/`](../../test/e2e-management/README.md). An LLM-driven eval harness that runs natural-language scenarios through the Claude Code CLI lives under [`test/e2e-llm/`](../../test/e2e-llm/README.md). The LLM suite is non-gating and only runs via manual `workflow_dispatch` ([`llm-eval.yml`](../../.github/workflows/llm-eval.yml)).
+For a quickstart and the suite's port allocation, see [`test/e2e-basic-mcp/README.md`](../../test/e2e-basic-mcp/README.md). A separate monitoring-focused suite lives under [`test/e2e-monitoring/`](../../test/e2e-monitoring/README.md), and a management/config-tool suite lives under [`test/e2e-management/`](../../test/e2e-management/README.md). An LLM-driven eval harness that runs natural-language scenarios through the Claude Code CLI lives under [`test/e2e-llm/`](../../test/e2e-llm/README.md). The LLM suite is non-gating and runs on demand via `workflow_dispatch` ([`llm-eval.yml`](../../.github/workflows/llm-eval.yml)), plus daily through 2026-09-03 for the SOL-153184 flake-rate and cost collection window. It costs API credits per run (~$4.78 for the full matrix). Delete this clause when the schedule goes.
 
 ## Shared scaffold — `test/e2e-common/lib.sh`
 

@@ -133,6 +133,15 @@ jobs:
           echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
           ./node_modules/.bin/claude --version
 
+      - name: Assertion self-test (offline)
+        # Replays canned stream-json through run-scenario.sh's assertions with a
+        # stub `claude`, so the failing direction of `expected_no_mutating_tools`
+        # is exercised — every live scenario only ever exercises the passing one.
+        # Costs no credits and needs no brokers, so it runs before fixtures: a
+        # broken safety assertion should fail the run in seconds, not after a
+        # full matrix has spent its budget passing vacuously.
+        run: bash test/e2e-llm/test-assertions.sh
+
       - name: Start local brokers + fixtures
         # No-op for non-local-docker targets — setup-fixtures.sh guards
         # on BROKER_TARGET. Lab targets are assumed already running.
@@ -168,6 +177,14 @@ jobs:
         # script-injection shape even though workflow_dispatch is
         # write-access-only.
         id: suite
+        # Below the job's 30, deliberately. A stalled request is the only
+        # realistic route to a wall-clock cap here — nothing bounds a scenario
+        # in time (`--max-turns 5` bounds turns, and the claude invocation has
+        # no timeout(1) wrapper). Capping the step instead of the job means a
+        # stall surfaces as a step `failure`, which the classifier below reads
+        # as an ordinary infrastructure failure, and Collect / Upload / Teardown
+        # then run as normal steps rather than under cancellation.
+        timeout-minutes: 22
         env:
           LLM_SERVICE_ENDPOINT: ${{ vars.LLM_SERVICE_ENDPOINT }}
           LLM_SERVICE_MODEL_NAME: ${{ vars.LLM_SERVICE_MODEL_NAME }}
@@ -228,7 +245,19 @@ jobs:
 
           # Classification order matters: each branch rules out an earlier stage
           # of the run, so the first match is the earliest thing that broke.
-          if [ "$FIXTURES_OUTCOME" != "success" ]; then
+          #
+          # `cancelled` and `skipped` are checked before the generic
+          # `!= "success"` tests, which would otherwise absorb both and file
+          # them under a stage that never ran. A step is `skipped` when an
+          # earlier step (Checkout, Setup Go, npm ci) failed first, and
+          # `cancelled` when the job hit `timeout-minutes` or was stopped by
+          # hand. The infra-vs-scenario split is read mechanically at window
+          # end, so a misfiled row silently inflates the infra column.
+          if [ "$SUITE_OUTCOME" = "cancelled" ] || [ "$FIXTURES_OUTCOME" = "cancelled" ]; then
+            CLASS="infrastructure (run cancelled or timed out)"
+          elif [ "$FIXTURES_OUTCOME" = "skipped" ]; then
+            CLASS="infrastructure (run aborted before fixtures)"
+          elif [ "$FIXTURES_OUTCOME" != "success" ]; then
             CLASS="infrastructure (fixture setup)"
           elif [ ! -f "$LOG" ]; then
             CLASS="infrastructure (suite produced no output)"

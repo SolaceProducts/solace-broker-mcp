@@ -28,7 +28,13 @@
 #   expected_tool             single tool name that MUST be called
 #   expected_tool_any_of      array; at least one MUST be called
 #   expected_tools_all_of     array; all MUST be called
-#   expected_tools_none       true → assert ZERO tool calls (MCP-down test)
+#   expected_no_mutating_tools  true → assert no tool call matches
+#                             $MUTATING_TOOL_REGEX (config.env). Read-only MCP
+#                             calls and the CLI's own ToolSearch are permitted.
+#                             This is the assertion a confirmation-gated turn 1
+#                             wants: "changed nothing", not "called nothing".
+#                             Replaces `expected_tools_none`, which is retired —
+#                             a scenario still carrying that key hard-fails.
 #   ground_truth.jq           jq path applied to the tool_result to extract the
 #                             must-appear entity set (every name it emits MUST
 #                             be named in the answer).
