@@ -126,6 +126,13 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		logToolResult(ctx, name, &brokerAlias, start, &errorType, &toolErr, id)
 	}()
 
+	// Deliberately still a protocol-level error, not a buildLocalErrorResult
+	// result (SOL-152980): the MCP spec puts an unknown tool name in the
+	// protocol-error bucket, not tool-execution-error, and the go-sdk server
+	// already rejects an unknown name before this method is ever reached in
+	// production (RegisterWithServer's closures only route names taken from
+	// Handlers()). Kept as a defensive branch for direct/test callers of
+	// CallTool with a name that was never registered.
 	handler, err := m.Route(name)
 	if err != nil {
 		errorType = "unknown_tool"
@@ -139,19 +146,19 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		errorType = "missing_broker"
 		toolErr = fmt.Errorf("broker parameter is required; available brokers: %s",
 			strings.Join(m.pool.Aliases(), ", "))
-		return nil, toolErr
+		return buildLocalErrorResult(toolErr), nil
 	}
 
 	v1Client, err := m.pool.GetSEMPv1(brokerAlias)
 	if err != nil {
 		errorType, toolErr = m.classifyBrokerError(brokerAlias, err)
-		return nil, toolErr
+		return m.buildBrokerResolutionErrorResult(errorType, toolErr, brokerAlias), nil
 	}
 
 	v2Client, err := m.pool.GetSEMPv2(brokerAlias)
 	if err != nil {
 		errorType, toolErr = m.classifyBrokerError(brokerAlias, err)
-		return nil, toolErr
+		return m.buildBrokerResolutionErrorResult(errorType, toolErr, brokerAlias), nil
 	}
 
 	// Resolution succeeded — switch the locally-tracked alias to the display
@@ -174,7 +181,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	if err := ValidateParams(handlerParams, meta.InputSchema); err != nil {
 		errorType = "validation_error"
 		toolErr = err
-		return nil, toolErr
+		return buildLocalErrorResult(toolErr), nil
 	}
 
 	// Log warning for destructive tools.
@@ -197,18 +204,23 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		return m.buildErrorResult(toolErr, brokerAlias), nil
 	}
 
-	// Guard against nil results from handler.
+	// Guard against nil results from handler. This and the two checks below
+	// fire after handler.Handle has already run — for a destructive tool, any
+	// broker-side mutation may have already taken effect — so each returns a
+	// structured result (not a bare error) precisely so the agent gets a
+	// retryable=false signal instead of a protocol error it might mistake for
+	// "nothing happened, safe to retry" (SOL-152980).
 	if toolResult == nil || toolResult.StructuredContent == nil {
 		errorType = "nil_result"
 		toolErr = fmt.Errorf("tool %q returned nil result", name)
-		return nil, toolErr
+		return buildLocalErrorResult(toolErr), nil
 	}
 
 	// Validate output against schema.
 	if err := ValidateOutput(toolResult.StructuredContent, meta.OutputSchema); err != nil {
 		errorType = "output_validation_error"
 		toolErr = fmt.Errorf("tool %q output validation: %w", name, err)
-		return nil, toolErr
+		return buildLocalErrorResult(toolErr), nil
 	}
 
 	// Build MCP result with both StructuredContent and TextContent fallback.
@@ -216,7 +228,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	if err != nil {
 		errorType = "marshal_error"
 		toolErr = fmt.Errorf("marshalling result for %q: %w", name, err)
-		return nil, toolErr
+		return buildLocalErrorResult(toolErr), nil
 	}
 
 	return &mcp.CallToolResult{
@@ -299,10 +311,13 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 	isExchange := errors.As(*toolErr, &exchErr)
 
 	// "detail" carries the unsanitized error so operators can diagnose failures —
-	// it is the one place the raw text is kept (the agent only ever sees the
-	// sanitized message from buildErrorResult). Folding it onto this line, rather
-	// than a separate emit, keeps one tool error in one record at a single (ERROR)
-	// level.
+	// it is the one place the raw text is kept. For a broker/handler-originated
+	// error the agent only ever sees the sanitized message from buildErrorResult;
+	// for a local error the agent sees this same err.Error() text verbatim via
+	// buildLocalErrorResult, which is safe precisely because that text is
+	// something this package wrote itself, never broker- or handler-originated
+	// (SOL-152980). Folding "detail" onto this line, rather than a separate
+	// emit, keeps one tool error in one record at a single (ERROR) level.
 	//
 	// We log the raw err.Error() ONLY for the broker error types we've audited:
 	// their text is broker-generated and carries no credentials (auth is applied

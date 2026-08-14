@@ -46,6 +46,8 @@ The server resolves variables at startup. The `.env` file loads automatically be
 
 **TLS:** Provide both `tls_cert_file` and `tls_key_file` together — providing only one is a startup error. When both are set, the server starts with HTTPS; when neither is set, plain HTTP.
 
+The certificate must carry at least one DNS or IP SAN. A Common Name alone is not enough for any TLS client (Go has ignored the Common Name since 1.15), and in the container image it is specifically enforced by the built-in health check: the `--health` probe verifies the server's certificate against this file, so a SAN-less certificate makes the container report unhealthy even though the server itself starts and serves HTTPS. The server loads the keypair once at startup, so replacing either file in place takes effect only after a restart.
+
 ```yaml
 port: 9090
 tls_cert_file: "/etc/certs/server.pem"
