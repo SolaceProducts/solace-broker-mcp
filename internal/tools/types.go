@@ -103,8 +103,11 @@ type Metadata struct {
 // handlers implement it directly.
 type ToolHandler interface {
 	// Metadata returns a fresh Metadata value describing the tool. Handlers
-	// must allocate fresh maps inside the returned value so callers cannot
-	// mutate shared state.
+	// must allocate fresh maps and slices inside the returned value so callers
+	// cannot mutate shared state — including any slice sourced from a
+	// package-level value rather than allocated fresh per call (see
+	// composite.fieldPropertiesSchema's use of slices.Clone for an example of
+	// this going wrong and being fixed).
 	Metadata() Metadata
 
 	// Handle executes the tool with the given context and parameters. The
