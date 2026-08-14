@@ -109,7 +109,14 @@ jobs:
       - name: Setup Node (for Claude CLI install)
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '20'
+          # Tracks the pinned CLI's own floor, which rose from >=18.0.0 to
+          # >=22.0.0 between 2.1.181 and 2.1.223. Node 20 satisfied the old
+          # floor, so this pin was invisible until the bump. npm's default
+          # engine-strict=false would have installed anyway and left the
+          # violation to surface later, in the CLI rather than the install.
+          # Re-check this against `npm view @anthropic-ai/claude-code engines`
+          # when bumping the pin.
+          node-version: '22'
 
       - name: Install pinned Claude Code CLI
         # npm ci installs exactly what package-lock.json pins (FOSSA
