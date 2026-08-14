@@ -429,6 +429,11 @@ Two caveats on how far to read a green verdict:
 
 - **It is registered as required or it is nothing.** See the warning in the
   required-checks section above. As of this writing it is not.
+- **It sees all three `go.mod` files**, not just the server binary's closure.
+  Confirmed via the repository SBOM: `solace.dev/go/messaging` is required only by
+  `test/e2e-common/broker-driver/go.mod` and is present in the graph. That is
+  wider coverage than `licenses-check.sh`, which walks
+  `go list -deps ./cmd/server` and would never see an indirect entry outside it.
 - **It covers Go modules, not workflow actions.** Roughly half the dependency
   changes this repository produces are the `actions` ecosystem, and every action
   is SHA-pinned, so advisory matching by version range does not resolve for them.
@@ -515,14 +520,33 @@ request before treating any of them as a gate.
 
 `Dependencies free of high advisories` is the one on that list whose fork
 behaviour is load-bearing rather than incidental, since closing the vulnerability
-half rests on it. What is verified and what is not, as of this writing: the
-Dependency Review API returns real data for this repository
-(`dependency-graph/compare/v0.6.0...v0.7.1` → 33 changes, ecosystems `gomod` and
-`actions`), and the action needs only `contents: read`, which a fork pull request's
-token has. What is *inferred* is the last hop — that the API resolves a fork pull
-request's head SHA in this repository. It should, because GitHub fetches the head
-commit into the base repository, but no fork pull request has ever existed here to
-prove it. Confirm on the first one, before the context is registered.
+half rests on it. Four things were checked before it was written down, because
+"the API needs a token the fork does not have" is the failure mode that would make
+this control imaginary:
+
+- **The API returns real data here.**
+  `dependency-graph/compare/v0.6.0...v0.7.1` → 33 changes, ecosystems `gomod` and
+  `actions`.
+- **Read access is enough; push access is not required.** The same endpoint
+  returns data on repositories where the calling account has `push: false` and
+  `pull` only. This is the property a fork pull request's read-only
+  `GITHUB_TOKEN` depends on.
+- **A fork pull request's head SHA resolves in the base repository.** Checked
+  against merged fork pull requests on `prometheus/prometheus`, where the head
+  commit lives in the contributor's fork: #19276 → 701 changes, #19269 → 4. GitHub
+  fetches the head commit into the base repository, and the dependency graph
+  computes over it.
+- **The gate fails when it should.** The pinned action was run against a range
+  that adds dependencies carrying high and critical advisories, with the exact
+  inputs from `ci-pr.yaml`: exit 1, `Dependency review detected vulnerable
+  packages`. `warn-only: true` on the same data exits 0, which is what rules out a
+  configuration error dressed up as a finding.
+
+What remains unverified is only what no test can reach without a fork: no fork
+pull request has ever run in *this* repository, and the "require approval for
+outside collaborators" hold below means the first one's checks do not start until
+a maintainer clicks approve. Confirm the check reports on the first real fork pull
+request before registering the context.
 
 **A third problem, and this one we create deliberately.** The GitHub Actions
 Permissions section below tells you to require approval for all outside
