@@ -158,69 +158,47 @@ jobs:
       - name: Verify every Go file carries the Apache-2.0 header
         run: .github/scripts/license-header-check.sh
 
-  # A fork pull request gets no vulnerability verdict from guardian-scan.yaml.
-  # Every scan job there is gated on `!is_fork` because GitHub withholds
-  # Environment secrets from a fork-triggered run, so `Guardian scan gate` passes
-  # the skip with a logged notice and the first enforcing scan runs *after* merge.
-  # A maintainer approving on code review cannot see a CVE. This is the check that
-  # can (SOL-153086).
+  # A fork pull request gets no vulnerability verdict from guardian-scan.yaml:
+  # every scan job there is gated on `!is_fork` because GitHub withholds
+  # Environment secrets from a fork-triggered run, so the first enforcing scan
+  # runs *after* merge and code review cannot see a CVE (SOL-153086). The
+  # Dependency Review API needs no third-party secret — only GITHUB_TOKEN against
+  # the dependency graph, which is always on for a public repository — so it
+  # reports on fork pull requests. That is why it is the right tool here and FOSSA
+  # is not.
   #
-  # It needs no third-party secret: the Dependency Review API is served by
-  # GITHUB_TOKEN against the dependency graph, which is always on for a public
-  # repository. That is the property that makes it the right tool here, and the
-  # reason FOSSA is not.
+  # `fail-on-severity: high` is the entire policy: fail a pull request that
+  # *introduces* a dependency carrying a known high or critical advisory. The
+  # other three inputs are set explicitly rather than left to their defaults, so
+  # this gate's behaviour cannot change when the action's defaults do.
   #
-  # The whole policy is one value. `fail-on-severity: high` fails a pull request
-  # that *introduces* a dependency carrying a known high or critical advisory.
-  # Two consequences are worth knowing before requiring it:
-  #
-  #   - It reads the diff, not the tree. A pull request that does not touch
-  #     go.mod has no dependency changes and passes, so an advisory published
-  #     tomorrow against a dependency already in the tree does not turn every
-  #     open pull request red. That containment is what makes this safe as a
-  #     required check.
-  #   - It blocks same-repo pull requests too, Dependabot's included. That is
-  #     new. `fossa-vuln` runs REPORT on a pull request and blocks only on push
-  #     to main, so a bump to a version that is still vulnerable used to land and
-  #     go red afterwards; now it fails before merge. When the advisory has no
-  #     fixed version there is no in-repo escape by design — closing it with an
-  #     `allow-ghsas` list would need the named owner that
-  #     .github/ADMIN_SETUP.md records as missing, so the escape is an admin
-  #     bypass someone has to justify.
-  #
-  # `license-check: false` is set rather than left to its default. With no
-  # allow/deny list the licence half is inert either way, but the licence policy
-  # lives in FOSSA and a second copy of it here would drift — the failure mode
-  # this repository keeps hitting. Setting it makes "vulnerabilities only" a
-  # reviewable decision instead of an accident of defaults. The licence half is
-  # recorded as an accepted gap in .github/ADMIN_SETUP.md.
-  #
-  # `show-openssf-scorecard: false` for the same reason zizmor runs
-  # `--no-online-audits` in workflow-lint.yaml: it calls deps.dev live, and a
-  # gate whose verdict can move with no commit behind it is not a gate.
-  #
-  # Read a green check as covering Go modules, not workflow actions. Roughly half
-  # the dependency changes here are the `actions` ecosystem, and every action is
-  # SHA-pinned, so advisory matching by version range does not resolve for them.
-  # zizmor's known-vulnerable-actions is the control for that half, and it is
-  # currently off (see workflow-lint.yaml).
+  # What a green check does and does not cover, why each input is set, the
+  # escalation path, and the steps to register it as required all live in
+  # .github/ADMIN_SETUP.md. Deliberately not repeated here — two copies of the
+  # same rationale drift, which is the failure mode `license-check: false` exists
+  # to avoid.
   dependency_review:
     name: Dependencies free of high advisories
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      # No checkout step: the action compares base against head through the API
-      # and reads nothing from the working tree. `comment-summary-in-pr` stays
-      # off deliberately — it needs `pull-requests: write`, which a fork pull
-      # request's token does not carry, so enabling it would fail on exactly the
-      # case this job exists for. The verdict goes to the job summary instead.
+      # No checkout: the action compares base against head through the API and
+      # reads nothing from the working tree.
       - name: Review dependency changes for known advisories
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
+          # Licence policy lives in FOSSA; a second copy here would drift.
           license-check: false
+          # Calls deps.dev live, and a verdict that moves with no commit behind it
+          # is not a gate. Same reason workflow-lint.yaml runs --no-online-audits.
           show-openssf-scorecard: false
+          # Already the default. Pinned because `always` and `on-failure` need
+          # `pull-requests: write`, which a fork pull request's token does not
+          # carry — so a later change here would break the case this job exists
+          # for. The verdict goes to the job summary instead.
+          comment-summary-in-pr: never
 
   changelog:
     name: CHANGELOG updated

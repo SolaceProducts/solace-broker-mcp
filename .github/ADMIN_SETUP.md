@@ -418,17 +418,28 @@ the *verdict* — an approved fork run still can't scan. The repository is now
 public with `allow_forking` on, so this is the normal contribution path rather
 than an edge case. The two halves of the gap have different answers (SOL-153086):
 
-**Vulnerabilities — closed at the pull request.** `Dependencies free of high
-advisories` (`ci-pr.yaml` job `dependency_review`) fails a pull request that
-introduces a dependency with a known high or critical advisory. It reads the
-Dependency Review API through `GITHUB_TOKEN` against the dependency graph, which
-is always on and free for a public repository, so it needs no third-party secret
-and reports on fork pull requests. That makes it the only *preventive*
-supply-chain control here — everything else in this section detects after merge.
-Two caveats on how far to read a green verdict:
+**Vulnerabilities — a preventive control exists, and closes the gap once the
+context is registered.** `Dependencies free of high advisories` (`ci-pr.yaml` job
+`dependency_review`) fails a pull request that introduces a dependency with a
+known high or critical advisory. It reads the Dependency Review API through
+`GITHUB_TOKEN` against the dependency graph, which is always on and free for a
+public repository, so it needs no third-party secret and reports on fork pull
+requests. It is the only control here capable of *prevention* — everything else in
+this section detects after merge — but capability is not enforcement: until the
+context is registered on the ruleset it goes red without blocking anything, so
+read this half as closed only from that point on. Four caveats on how far to read
+a green verdict:
 
 - **It is registered as required or it is nothing.** See the warning in the
   required-checks section above. As of this writing it is not.
+- **It reads the diff, not the tree.** It catches a dependency the pull request
+  *adds* that is already known-bad. It does not catch an advisory published
+  tomorrow against a dependency already in `go.mod` — that stays with the scan on
+  `main`. So a green verdict means "this pull request adds nothing newly
+  known-bad", not "the tree is clean". That containment is also what makes the
+  check safe to require: a pull request touching no manifest has no dependency
+  changes and passes, so a fresh advisory does not turn every open pull request
+  red.
 - **It sees all three `go.mod` files**, not just the server binary's closure.
   Confirmed via the repository SBOM: `solace.dev/go/messaging` is required only by
   `test/e2e-common/broker-driver/go.mod` and is present in the graph. That is
@@ -440,6 +451,22 @@ Two caveats on how far to read a green verdict:
   zizmor's `known-vulnerable-actions` is the control for that half, and
   `workflow-lint.yaml` runs `--no-online-audits`, which switches it off. A
   scheduled non-blocking zizmor run is the way to pick it up.
+
+Three inputs beyond `fail-on-severity` are set explicitly rather than inherited,
+so the gate cannot change behaviour when the action's defaults do. This is the
+authoritative copy of why; `ci-pr.yaml` carries one line each and points here.
+
+- `license-check: false` — the licence policy lives in FOSSA. With no allow/deny
+  list the licence half is inert either way, but setting it makes
+  "vulnerabilities only" a reviewable decision instead of an accident of defaults,
+  and keeps a second driftable copy of that policy out of the repository.
+- `show-openssf-scorecard: false` — it calls deps.dev live. A gate whose verdict
+  can move with no commit behind it is not a gate; the same reasoning has
+  `workflow-lint.yaml` running zizmor with `--no-online-audits`.
+- `comment-summary-in-pr: never` — already the default, pinned anyway. `always`
+  and `on-failure` require `pull-requests: write`, which a fork pull request's
+  token does not carry, so a later change here would fail on precisely the case
+  the job exists for. The verdict goes to the job summary instead.
 
 **Licences — an accepted gap, recorded rather than closed.** A fork pull request
 introducing a dependency under a denied licence still merges. FOSSA catches it on
