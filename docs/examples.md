@@ -13,18 +13,18 @@ deployment see the [README](../README.md) and [User Guide](user-guide.md).
 
 - [Connect Claude Desktop](#connect-claude-desktop)
 - [Connect Claude Code](#connect-claude-code)
-- [Natural-language queries](#natural-language-queries)
-- [Tool invocations by category](#tool-invocations-by-category)
-- [Multi-broker configuration](#multi-broker-configuration)
-- [Static token (local development)](#static-token-local-development)
-- [OAuth (production)](#oauth-production)
+- [Natural-Language Queries](#natural-language-queries)
+- [Tool Invocations by Category](#tool-invocations-by-category)
+- [Multi-Broker Configuration](#multi-broker-configuration)
+- [Static Token (Local Development)](#static-token-local-development)
+- [OAuth (Production)](#oauth-production)
 
 ## Connect Claude Desktop
 
 Claude Desktop connects to this server as a **remote (HTTP) MCP server**, not a
 stdio subprocess. Two methods:
 
-### Method A — Custom Connector (recommended)
+### Method A — Custom Connector (Recommended)
 
 1. Start the MCP server (binary, Docker, or `go run`).
 2. In Claude Desktop: **Settings → Connectors → Add custom connector**.
@@ -36,7 +36,7 @@ stdio subprocess. Two methods:
 
 No config file editing required.
 
-### Method B — `mcp-remote` bridge
+### Method B — `mcp-remote` Bridge
 
 Use the [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) npm bridge when
 you prefer file-based config. Edit `claude_desktop_config.json`:
@@ -93,7 +93,7 @@ claude mcp add solace-broker --transport http http://localhost:9090/mcp \
 
 See [Authentication](authentication.md) for full OAuth setup.
 
-## Natural-language queries
+## Natural-Language Queries
 
 Once connected, ask in plain language. The agent selects the tool and fills
 parameters. Representative queries and the shape they return:
@@ -111,7 +111,7 @@ parameters. Representative queries and the shape they return:
 Read-only tools return their broker data in a step-keyed envelope — see
 [Tools Reference → Output](tools-reference.md#output-the-step-keyed-envelope).
 
-## Tool invocations by category
+## Tool Invocations by Category
 
 Each block shows the `name` and `arguments` (the `params` of an MCP `tools/call`
 request). Replace `prod-broker` with one of your configured aliases (from
@@ -196,7 +196,7 @@ or are left unchanged on update:
 { "name": "delete-topic-endpoint", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te" } }
 ```
 
-## Multi-broker configuration
+## Multi-Broker Configuration
 
 Configure multiple brokers under `brokers:`; the map key is the alias used as the
 `broker` parameter and in `list-brokers` output. Aliases must be 1–63 characters,
@@ -234,7 +234,7 @@ Compare message rates between prod-broker and dev-broker.
 { "name": "get-message-rates", "arguments": { "broker": "dev-broker", "msgVpnName": "default" } }
 ```
 
-## Static token (local development)
+## Static Token (Local Development)
 
 Server config:
 
@@ -263,7 +263,7 @@ BROKER_PASSWORD=admin
 Connect with the matching bearer token (see [Claude Code](#connect-claude-code) or
 [Claude Desktop Method B](#method-b--mcp-remote-bridge)).
 
-## OAuth (production)
+## OAuth (Production)
 
 Server config (HTTPS broker URLs and issuer enforced in `oauth` mode):
 

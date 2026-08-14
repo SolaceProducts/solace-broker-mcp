@@ -14,13 +14,13 @@ itself**, and which are **not compiled into the shipped binary**.
 
 **Generated** 2026-08-20; the GitHub Actions section was refreshed 2026-08-07
 when Guardian enrollment re-pinned every action to a commit SHA, and again
-2026-08-14 when Dependabot's `github-actions` group update moved the five
+2026-08-14 when the Dependabot `github-actions` group update moved the five
 `solace-public-workflows` actions to a newer commit on the same branch. Every
-licence
-below was read from the component's own licence file or from the GitHub API for
-its source repository, at the ref in use rather than at the default branch. None
-was inferred from a package name or carried over from another row. See
-[Rebuilding this file](#rebuilding-this-file) for how to regenerate it.
+license in the following tables was read from the component's own license file or
+from the GitHub API for its source repository, at the ref in use rather than at
+the default branch. None was inferred from a package name or carried over from
+another row. See [Rebuilding This File](#rebuilding-this-file) for how to
+regenerate it.
 
 Kept honest by `.github/scripts/build-test-licenses-check.sh`, which fails CI
 when this file stops matching what the repository actually uses. See
@@ -35,9 +35,10 @@ is permissive (MIT, BSD-3-Clause, Apache-2.0).
 Three qualifications, because the unqualified version of that sentence would be
 wrong.
 
-**Not everything here is open source.** The Claude Code CLI, used by the LLM eval
-suite, ships under Anthropic's commercial terms rather than an OSI licence, and
-the Solace broker image used as a test fixture is proprietary. Both are tools we
+**Not everything here is open source.** The Claude Code CLI, used by the large
+language model (LLM) eval suite, ships under commercial terms from Anthropic
+rather than an OSI license, and the Solace broker image used as a test fixture
+is proprietary. Both are tools we
 run, not code we link or redistribute, so neither affects our licensing position.
 They are listed because the checklist asks for products *used*, not for products
 that happen to be permissively licensed.
@@ -45,17 +46,17 @@ that happen to be permissively licensed.
 **One entry does ship.** `gcr.io/distroless/static-debian12` is the runtime base
 of the container image we publish. See [Scope](#scope).
 
-**Image layers are out of scope.** The tables record the licence of the project
-that publishes each image, not the licences of the OS packages inside it. A
-statement that no strong-copyleft licence appears anywhere in the build path
+**Image layers are out of scope.** The tables record the license of the project
+that publishes each image, not the licenses of the OS packages inside it. A
+statement that no strong-copyleft license appears anywhere in the build path
 would be unsupportable on that basis alone: `golang:1.25-alpine`, the builder
 stage, carries busybox and apk-tools under GPL-2.0. Builder-stage contents are
 not distributed — only the distroless runtime stage is — so this does not change
 the conclusion, but the claim is scoped rather than asserted.
 
-## Go modules
+## Go Modules
 
-### The root module contributes nothing
+### The Root Module Contributes Nothing
 
 `go list -deps -test ./...` on the root module resolves to exactly the same
 external module set as `go list -deps ./cmd/server`. Every test dependency is
@@ -70,7 +71,7 @@ plainly now.
 
 ### `test/e2e-basic-mcp/agent`
 
-A standalone module. It builds the MCP client that drives the end-to-end suite.
+A standalone module. It builds the Model Context Protocol (MCP) client that drives the end-to-end suite.
 
 | Component | Version | License | License text |
 |---|---|---|---|
@@ -96,13 +97,13 @@ and recorded rather than smoothed over. It is a separate module with its own
 MIT. Upstream moved to MIT-0 ("MIT No Attribution") in v1.2.1 on 2023-11-07, so
 the default branch — and therefore a bare
 `gh api repos/segmentio/asm --jq .license.spdx_id` — reports MIT-0. That query
-answers for the default branch, never for the pinned tag. Read the licence at the
+answers for the default branch, never for the pinned tag. Read the license at the
 tag instead: `gh api repos/OWNER/REPO/license?ref=<tag>` accepts a ref, and
 returns MIT here. This row is worth the paragraph because the drift check compares
-names and versions and never licences, so a future bump past v1.2.0 changes the
+names and versions and never licenses, so a future bump past v1.2.0 changes the
 correct value in this column without turning CI red.
 
-**The MCP Go SDK is mid-relicence.** Its licence file states that the project is
+**The MCP Go SDK is mid-relicensing.** Its license file states that the project is
 transitioning from MIT to Apache-2.0, that contributions whose authors have
 consented are Apache-2.0, and that contributions from authors who have not
 consented remain MIT. Both are permissive and both are compatible with our use,
@@ -118,10 +119,10 @@ A standalone module. It drives broker fixtures for the end-to-end suites.
 | `solace.dev/go/messaging` | v1.10.1 | Apache-2.0 | [license](https://github.com/SolaceProducts/pubsubplus-go-client/blob/v1.10.1/LICENSE) |
 
 The only module in this file that appears nowhere in the release inventory. It is
-Solace's own Go messaging API, consumed here as an ordinary third-party
-dependency, and it is Apache-2.0.
+a Go messaging API that Solace publishes itself, consumed here as an ordinary
+third-party dependency, and it is Apache-2.0.
 
-## npm packages
+## npm Packages
 
 `test/e2e-llm/package.json` pins the Claude Code CLI that drives the LLM eval
 suite, and `.github/workflows/llm-eval.yml` installs it with `npm ci`. It is a
@@ -129,8 +130,8 @@ test tool the suite invokes as a subprocess: nothing here is imported, linked, o
 redistributed.
 
 **This is the one source in this file that is not open source.** The package
-declares `SEE LICENSE IN README.md`, which is Anthropic's commercial terms, not
-an OSI licence. It is recorded as such rather than being normalised to something
+declares `SEE LICENSE IN README.md`, which is commercial terms from Anthropic, not
+an OSI license. It is recorded as such rather than being normalized to something
 tidier.
 
 | Component | Version | License | License text |
@@ -152,15 +153,15 @@ listed.
 
 ## GitHub Actions
 
-Actions run on GitHub's runners during CI. They are not distributed with the
+Actions run on GitHub runners during CI. They are not distributed with the
 product and never enter the binary.
 
 Every action is pinned to a commit SHA rather than a moving tag, so the "Pinned
 ref" column carries a short SHA and is what the drift check compares. "Release"
 is the tag that commit corresponds to, recorded because a SHA alone tells a
-reader nothing about which version they are auditing. Licence links resolve at
-that tag, not at the default branch, for the reason the `segmentio/asm` note
-below spells out.
+reader nothing about which version they are auditing. License links resolve at
+that tag, not at the default branch, for the reason the preceding `segmentio/asm`
+note spells out.
 
 | Action | Pinned ref | Release | License | License text |
 |---|---|---|---|---|
@@ -182,12 +183,12 @@ below spells out.
 | `golangci/golangci-lint-action` | `ba0d7d2` | v9.3.0 | MIT | [license](https://github.com/golangci/golangci-lint-action/blob/v9.3.0/LICENSE) |
 | `softprops/action-gh-release` | `3d0d988` | v3.0.2 | MIT | [license](https://github.com/softprops/action-gh-release/blob/v3.0.2/LICENSE) |
 
-`actions/github-script` names its licence file `LICENSE.md` rather than
+`actions/github-script` names its license file `LICENSE.md` rather than
 `LICENSE`. Worth the sentence only because the obvious URL 404s, and a reader who
 hits that is likely to assume the row is wrong rather than that the filename is
 unusual.
 
-### Solace-internal composite actions
+### Solace-Internal Composite Actions
 
 Not third-party. Listed so the inventory accounts for every `uses:` in the
 repository rather than silently skipping the ones that did not fit the table.
@@ -202,7 +203,7 @@ All five come from one repository, pinned to a single commit.
 | `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `3e95ae9` | Solace |
 
 `63228a0` is a branch commit, not a tag, so there is no release to record beside
-it. The repository itself is Apache-2.0. Re-pinned 2026-08-14 by Dependabot's
+it. The repository itself is Apache-2.0. Re-pinned 2026-08-14 by the Dependabot
 `github-actions` group update (#304); the prior pin was `47931eb`.
 
 Two entries have been dropped from this table, both by the reverse-direction
@@ -210,16 +211,16 @@ check rather than by anyone remembering to look.
 
 `SolaceDev/re-workflows/.github/workflows/transition-pr-on-merge.yaml` went when
 SOL-152855 removed the workflow that called it: a public repository cannot
-resolve a reusable workflow from an internal repository in another organisation.
+resolve a reusable workflow from an internal repository in another organization.
 
 `SolaceDev/solace-public-workflows/.github/workflows/sca-scan-and-guard.yaml`
 went when DATAGO-147232 moved FOSSA and Prisma scanning off the Vault-backed
-reusable workflow onto the composite actions above. This table previously held
-that one row; it now holds five, and the whole third-party table above changed
+reusable workflow onto the preceding composite actions. This table previously held
+that one row; it now holds five, and the whole preceding third-party table changed
 from tags to SHA pins in the same change. None of it was reflected here until
 this update, which is what SOL-152951 is about.
 
-## Container images
+## Container Images
 
 Pulled during the build or by the end-to-end suites. Only one of these reaches a
 published artifact; see [Scope](#scope).
@@ -229,13 +230,13 @@ published artifact; see [Scope](#scope).
 | `golang` | `1.25-alpine` | `Dockerfile` builder stage | BSD-3-Clause (Go) |
 | `gcr.io/distroless/static-debian12` | `nonroot` | `Dockerfile` runtime base | Apache-2.0 (distroless) |
 | `solace/solace-pubsub-standard` | `latest` | Broker fixture for e2e suites | Solace, proprietary |
-| `quay.io/keycloak/keycloak` | `26.2.5` | IdP fixture for the OAuth e2e suite | Apache-2.0 |
+| `quay.io/keycloak/keycloak` | `26.2.5` | identity provider (IdP) fixture for the OAuth e2e suite | Apache-2.0 |
 | `apache/kafka` | `3.7.0` | Broker fixture for e2e suites | Apache-2.0 |
 
-"Upstream license" is the licence of the project that publishes the image. A
+"Upstream license" is the license of the project that publishes the image. A
 container image is a stack of filesystem layers, and the layers carry operating
-system packages under their own licences, which is not the same question. That
-distinction matters for exactly one row, below.
+system packages under their own licenses, which is not the same question. That
+distinction matters for exactly one row, addressed in the following section.
 
 ## Scope
 
@@ -255,19 +256,19 @@ container-image side of the compliance artifacts.
 **Broker and IdP fixture images are test infrastructure.** They run beside the
 tests, are never linked, and are never redistributed by us.
 
-## Rebuilding this file
+## Rebuilding This File
 
 **`make refresh-third-party-inventory`** does this and the equivalent for
 `THIRD_PARTY_LICENSES.md` automatically: it diffs against
 `build-test-licenses-check.sh`'s own verdict, rewrites only the row(s) that
-actually drifted (reading each new licence fresh, never inferring one), and
+actually drifted (reading each new license fresh, never inferring one), and
 refuses outright rather than guess at anything it doesn't recognize —
 review its diff and commit as usual. A Dependabot PR still needs a human to
 run it; Dependabot itself cannot execute post-update scripts (SOL-152956).
 
-The commands below are what that target runs under the hood, kept here for
+The following commands are what that target runs under the hood, kept here for
 anyone auditing the inventory by hand rather than trusting the script.
-These four commands print what the tables above must contain, one per source.
+These four commands print what the preceding tables must contain, one per source.
 `.github/scripts/build-test-licenses-check.sh` derives the same sets and points
 here when it fails, so this is the single copy of the procedure.
 
@@ -303,10 +304,10 @@ components and have no rows.
 
 Two things the commands cannot do for you.
 
-**Licences are read, never inferred.** Open the component's own LICENSE file, or
+**Licenses are read, never inferred.** Open the component's own LICENSE file, or
 run `gh api repos/OWNER/REPO --jq .license.spdx_id` for an action. Do not copy a
-licence from a neighbouring row and do not guess it from a package name. The
-check enforces names and versions but never licences — see [Drift](#drift) — so
+license from a neighboring row and do not guess it from a package name. The
+check enforces names and versions but never licenses — see [Drift](#drift) — so
 this rule is the only thing keeping that column true.
 
 **The prune is deliberate.** `find` follows symlinks here, so without `-prune` it
@@ -338,8 +339,8 @@ worth preserving over any convenience.
 
 What it does not enforce:
 
-- **Licence names.** Detecting that a component relicensed between versions needs
+- **License names.** Detecting that a component relicensed between versions needs
   the network and a warm module cache. Same limitation as `licenses-check.sh`,
-  documented there for the same reason. When you bump a version, open the licence
+  documented there for the same reason. When you bump a version, open the license
   link.
 - **Image layers.** See [Scope](#scope).

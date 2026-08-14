@@ -84,7 +84,7 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 | Category | Tools | Description |
 |---|---|---|
 | Discovery | `list-brokers`, `describe-semp-schema` | List configured broker aliases for use as the `broker` parameter; look up a SEMPv2 operation's request-body schema before calling a write tool |
-| Broker status | `get-broker-status`, `get-redundancy-status` | Snapshot of version, uptime, resources, spool, and HA and mate-link state |
+| Broker status | `get-broker-status`, `get-redundancy-status` | Snapshot of version, uptime, resources, spool, and high availability (HA) and mate-link state |
 | Replication | `get-replication-status` | Replication role, sync eligibility, bridge status, transaction mode, and queued-message counts |
 | Message VPN | `list-vpns`, `get-vpn-status`, `get-message-rates` | List VPNs, check per-VPN service status, read message and byte rates |
 | Queues | `list-queues`, `get-queue-metrics` | List queues with cumulative spooled count and throughput; drill into a single queue for authoritative current depth, spool, and rates |
@@ -107,7 +107,7 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 - [Examples](docs/examples.md) — Claude Desktop config, natural-language queries, and multi-broker setup
 - [Configuration](docs/configuration.md) — server settings, event broker config, client auth, and rate-limit/retry settings
 - [Authentication](docs/authentication.md) — OAuth/OIDC and static token setup for MCP clients
-- [Agent Mesh Integration](docs/sam-integration.md) — wire this MCP server into an Agent Mesh project as an agent
+- [Agent Mesh Integration](docs/sam-integration.md) — wire this MCP server into a Solace Agent Mesh project as an agent
 
 ## Prerequisites
 
@@ -140,7 +140,7 @@ brokers:
 
 `mcp_client_auth.mode: disabled` skips client authentication entirely — only use this for local development. For production, set `mcp_client_auth.mode: oauth` and provide `issuer`, `audience`, and `resource_url`. A third mode, `static`, accepts a fixed bearer token for local development with realistic auth flow. See [Authentication](docs/authentication.md) for full setup instructions.
 
-**Audit-log identity.** In `oauth` and `static` modes, every tool-invocation log line carries the caller's `sub`, `iss`, `client_id`, and `jti` claims (the latter three appear as `<absent>` when the IdP does not issue them). A separate sentinel `<verifier-bug>` is reserved for an internal coding error — it should never appear in production, and its presence indicates a bug in the server's claim-extraction code, not in the caller's token; alert on it. The request still completes and the audit line is still written. In `disabled` mode no client auth runs, so log lines carry no identity fields at all. **`disabled` and `static` modes are not real audit trails**: `disabled` lines have no attribution, and `static` lines attribute every invocation to the hardcoded `dev-user`. Use `oauth` mode for any deployment whose audit logs need to answer "who ran what tool against which broker?"
+**Audit-log identity.** In `oauth` and `static` modes, every tool-invocation log line carries the caller's `sub`, `iss`, `client_id`, and `jti` claims (the latter three appear as `<absent>` when the identity provider (IdP) does not issue them). A separate sentinel `<verifier-bug>` is reserved for an internal coding error — it should never appear in production, and its presence indicates a bug in the server's claim-extraction code, not in the caller's token; alert on it. The request still completes and the audit line is still written. In `disabled` mode no client auth runs, so log lines carry no identity fields at all. **`disabled` and `static` modes are not real audit trails**: `disabled` lines have no attribution, and `static` lines attribute every invocation to the hardcoded `dev-user`. Use `oauth` mode for any deployment whose audit logs need to answer "who ran what tool against which broker?"
 
 Under `oauth` mode with a `tool_authorization` policy configured, each gated tool call also emits a `"tool authorization"` audit line at the same `correlation_id` — logged at `INFO` on allow and `WARN` on deny, with a `decision_reason` code operators can filter and alert on. See [Tool authorization](docs/configuration.md#tool-authorization) for the full schema.
 
@@ -148,10 +148,10 @@ The same policy can also narrow `tools/list` to the tools each caller may invoke
 
 Each event broker needs:
 - `url` — the SEMP management API base URL
-- `auth.mode` — `basic`, `bearer`, or `oauth` (examples below use basic auth; for bearer token authentication, set `auth.mode: bearer` and provide `auth.token` instead; for OAuth token exchange, see [Step 2b: Configure broker OAuth (Hop 2)](docs/authentication.md#step-2b-configure-broker-oauth-hop-2))
+- `auth.mode` — `basic`, `bearer`, or `oauth` (the following examples use basic auth; for bearer token authentication, set `auth.mode: bearer` and provide `auth.token` instead; for OAuth token exchange, see [Step 2b: Configure broker OAuth (Hop 2)](docs/authentication.md#step-2b-configure-broker-oauth-hop-2))
 - `auth.username` / `auth.password` — credentials (use `${VAR_NAME}` to reference environment variables)
 
-**Broker alias contract.** The map key under `brokers:` (for example, `my-broker`) is the alias that appears in tool inputs (`broker="my-broker"`), logs, and `list-brokers` output. Aliases must be 1–63 characters, contain only letters, digits, and hyphens, and start and end with an alphanumeric character. Comparison is case-insensitive — `Prod` and `prod` collide and the server refuses to start. Original casing is preserved in all user-facing output.
+**Broker alias contract.** The map key under `brokers:` (for example, `my-broker`) is the alias that appears in tool inputs (`broker="my-broker"`), logs, and `list-brokers` output. Aliases must be 1-63 characters, contain only letters, digits, and hyphens, and start and end with an alphanumeric character. Comparison is case-insensitive — `Prod` and `prod` collide and the server refuses to start. Original casing is preserved in all user-facing output.
 
 **2. Create a `.env` file** next to the config file:
 
@@ -263,7 +263,7 @@ gh attestation verify oci://ghcr.io/solaceproducts/solace-broker-mcp:latest \
   --signer-workflow SolaceProducts/solace-broker-mcp/.github/workflows/release.yml
 ```
 
-As above, `--signer-workflow` is what pins the attestation to the release workflow rather than to the repository at large. By default the attestation is fetched from the GitHub API; add `--bundle-from-oci` to read the copy stored beside the image on `ghcr.io` instead, which is also the copy `cosign` verifies.
+As with the preceding attestation command, `--signer-workflow` is what pins the attestation to the release workflow rather than to the repository at large. By default the attestation is fetched from the GitHub API; add `--bundle-from-oci` to read the copy stored beside the image on `ghcr.io` instead, which is also the copy `cosign` verifies.
 
 The container reads config from `/etc/mcp-server/config.yaml` by default. Pass the credentials via `--env-file` or individual `-e` flags.
 
@@ -328,7 +328,7 @@ List the queues on event-broker-one's default VPN.
 
 ## Development Setup
 
-### 1. Clone and install dependencies
+### 1. Clone and Install Dependencies
 
 ```bash
 git clone https://github.com/SolaceProducts/solace-broker-mcp.git
@@ -336,7 +336,7 @@ cd solace-broker-mcp
 go mod download
 ```
 
-### 2. Install the git hooks
+### 2. Install the git Hooks
 
 ```bash
 make hooks
@@ -344,11 +344,11 @@ make hooks
 
 Once per clone. This installs `.githooks/prepare-commit-msg` into `.git/hooks/` — read out of `origin/main` rather than out of your working tree, so `git fetch` first on a fresh clone — where it adds the DCO `Signed-off-by` trailer that the required `DCO` check looks for, so you do not have to remember `git commit -s`. Use `HOOKS_REF=HEAD make hooks` when you are editing the hook itself. See [Sign off automatically](.github/CONTRIBUTING.md#sign-off-automatically), and the header of `.githooks/prepare-commit-msg` for why the hook is copied from a trusted ref rather than activated with `core.hooksPath`.
 
-### 3. Create event broker config and credentials
+### 3. Create Event Broker Config and Credentials
 
 Create `broker-config.yaml` and `.env` in the repo root (both are gitignored). See [Configuration](#configuration) for the file format and examples.
 
-### 4. Run the MCP server
+### 4. Run the MCP Server
 
 ```bash
 go run ./cmd/server
@@ -398,7 +398,7 @@ brokers:
       password: "${BROKER_PASSWORD}"
 ```
 
-When both are configured, the server starts with HTTPS. When neither is configured, plain HTTP. Providing only one is a startup error. The certificate must carry at least one DNS or IP SAN — see [Configuration](docs/configuration.md) for why, and for the container health-check consequence.
+When both are configured, the server starts with HTTPS. When neither is configured, plain HTTP. Providing only one is a startup error. The certificate must carry at least one DNS or IP SAN — see [Configuration](docs/configuration.md) for why, and for the container health check consequence.
 
 ### 5. Connect from Claude Code
 

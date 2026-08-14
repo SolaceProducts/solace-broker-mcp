@@ -74,11 +74,11 @@ SOLACE_BROKER_MCP_TOKEN="sam-mcp-dev-token-local-only"   # must equal dev_token 
 # Terminal 1 — this MCP server
 go run ./cmd/server
 
-# Terminal 2 — SAM (auto-discovers the new agent)
+# Terminal 2 — Agent Mesh (auto-discovers the new agent)
 sam run
 ```
 
-**5. Verify** — the Agent Mesh logs should include:
+**5. Verify** — the Agent Mesh logs include:
 
 ```
 Initialized MCPToolset for server: url='http://localhost:9090/mcp'
@@ -91,7 +91,7 @@ Open the Agent Mesh web UI (`http://localhost:8000`) and ask the orchestrator a 
 ## Authentication Chain
 
 ```
-SAM agent ─(Bearer SOLACE_BROKER_MCP_TOKEN)→ MCP server ─(basic BROKER_USERNAME/PASSWORD)→ Solace event broker
+Agent Mesh agent ─(Bearer SOLACE_BROKER_MCP_TOKEN)→ MCP server ─(basic BROKER_USERNAME/PASSWORD)→ Solace event broker
 ```
 
 The bearer token in the Agent Mesh `.env` and the `dev_token` in the MCP server configuration must be identical.

@@ -9,7 +9,7 @@ We release patches for security vulnerabilities in the following versions:
 | latest (main branch) | :white_check_mark: |
 | < 1.0   | :x: (pre-release)  |
 
-Once we reach v1.0, we will maintain security updates for the current major version and the previous major version.
+Once we reach v1.0, we maintain security updates for the current major version and the previous major version.
 
 ## Reporting a Vulnerability
 
@@ -49,13 +49,13 @@ When you report a security vulnerability, here's what you can expect from us:
 - **Medium vulnerabilities**: 2-4 weeks
 - **Low vulnerabilities**: Next regular release cycle
 
-**Coordinated Disclosure**: We will work with you to coordinate public disclosure timing. We prefer to:
+**Coordinated Disclosure**: We work with you to coordinate public disclosure timing. We prefer to:
 1. Develop and test a fix
 2. Release the patch
 3. Publish a security advisory
-4. Credit you (if desired) in the advisory
+4. Credit you (if wanted) in the advisory
 
-**Credit**: If you would like to be credited for the discovery, please let us know in your report. We will acknowledge your contribution in:
+**Credit**: If you would like to be credited for the discovery, please let us know in your report. We acknowledge your contribution in:
 - The GitHub Security Advisory
 - The CHANGELOG
 - Release notes
@@ -63,7 +63,7 @@ When you report a security vulnerability, here's what you can expect from us:
 ### Security Updates
 
 Security fixes are released as:
-- **Patch versions** (e.g., v0.1.1 → v0.1.2)
+- **Patch versions** (for example, v0.1.1 → v0.1.2)
 - **GitHub Security Advisories** at https://github.com/SolaceProducts/solace-broker-mcp/security/advisories
 - **CHANGELOG** entries with `[SECURITY]` prefix
 
@@ -76,7 +76,7 @@ When deploying the Solace Broker MCP Server, follow these security guidelines:
 ### Production Deployment
 
 - **Use TLS/HTTPS**: Always configure `tls_cert_file` and `tls_key_file` in production
-- **Enable authentication**: Set `mcp_client_auth.mode` to `oauth` and configure JWT validation
+- **Enable authentication**: Set `mcp_client_auth.mode` to `oauth` and configure JSON Web Token (JWT) validation
   - Provide valid `issuer` and `audience` in `mcp_client_auth` config
 - **Never use dev tokens in production**: The `dev_token` field (used with `mode: static`) is for local development only
 
@@ -123,10 +123,10 @@ When deploying the Solace Broker MCP Server, follow these security guidelines:
 ### Dependency Management
 
 - **Keep dependencies updated**: Run `go get -u ./...` regularly to get security patches
-- **Enable Dependabot**: Repository admins should enable Dependabot for automated updates
+- **Enable Dependabot**: Solace recommends repository admins enable Dependabot for automated updates
 - **Review security advisories**: Check https://github.com/advisories for Go ecosystem vulnerabilities
 
-### Write and destructive tools
+### Write and Destructive Tools
 
 Write tools (`enable_write_tools: true`) let an AI assistant delete queued
 messages, disconnect clients, reset statistics, and manage VPN, queue,
@@ -161,7 +161,7 @@ The MCP server makes SEMP (Solace Element Management Protocol) calls to brokers 
 
 When `mcp_client_auth.mode` is `"oauth"`:
 - MCP clients must provide a valid JWT token
-- Tokens are validated against the configured OIDC provider
+- Tokens are validated against the configured OpenID Connect (OIDC) provider
 - Any valid JWT with the correct issuer and audience is accepted
 
 When `mcp_client_auth.mode` is `"disabled"` or `"static"`:
@@ -189,7 +189,7 @@ We recognize security researchers who help improve the security of this project:
 
 <!--
 Format:
-- **[Researcher Name](https://github.com/username)** - [Brief description] - [Date]
+- **[Researcher Name](https://github.com/username)** — [Brief description] — [Date]
 -->
 
 *No vulnerabilities reported yet. Be the first!*

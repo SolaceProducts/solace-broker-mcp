@@ -112,8 +112,8 @@ Configured under the top-level `broker_oauth` key. Required when any broker uses
 | `mcp_server_client_auth.client_secret_post.secret` | — | Client secret sent in the token-request form body (RFC 6749 §2.3). |
 | `grant_type` | — | **Required.** Selects the OAuth grant type for the Hop 2 exchange. Must be `"urn:ietf:params:oauth:grant-type:token-exchange"` (RFC 8693) — the only grant type this version implements; any other value is rejected at config load. |
 | `audience_parameter_name` | — | **Required.** Which request parameter carries each broker's `auth.audience` value. Must be `audience` (RFC 8693 default) — the only value implemented in this version; any other value, including `scope` (Entra On-Behalf-Of style) or `resource` (RFC 8707), is rejected at config load. |
-| `circuit_breaker` | omitted (all defaults, enabled) | Optional. See [Circuit breaker](#circuit-breaker). |
-| `retry_after` | omitted (default cap) | Optional. See [Retry-After gate](#retry-after-gate). |
+| `circuit_breaker` | omitted (all defaults, enabled) | Optional. See [Circuit Breaker](#circuit-breaker). |
+| `retry_after` | omitted (default cap) | Optional. See [Retry-After Gate](#retry-after-gate). |
 
 ```yaml
 mcp_client_auth:
@@ -139,7 +139,7 @@ brokers:
       audience: "solace-broker-prod"
 ```
 
-### Circuit breaker
+### Circuit Breaker
 
 Nested under `broker_oauth.circuit_breaker`. Protects the shared IdP from a sustained outage by failing exchanges fast instead of driving every broker's requests into the full retry budget. Every field is optional; an omitted field falls back to its shipped default. Setting `circuit_breaker: {}` is equivalent to omitting the block entirely.
 
@@ -153,7 +153,7 @@ Nested under `broker_oauth.circuit_breaker`. Protects the shared IdP from a sust
 | `open_state_duration` | `30s` | How long the breaker stays open (rejecting exchanges immediately) before probing recovery. |
 | `half_open_probe_requests` | `2` | Consecutive successful probes required to close the breaker again. |
 
-### Retry-After gate
+### Retry-After Gate
 
 Nested under `broker_oauth.retry_after`. Shares a process-wide backoff across every broker when an exhausted 429 retry chain to the IdP returns a `Retry-After` header, so one throttled broker doesn't let every other broker keep hammering the same IdP.
 
@@ -218,7 +218,7 @@ mcp_client_auth:
 | YAML field | Description |
 |---|---|
 | `enabled` | Required. `true` turns tool authorization on; `false` turns it off. There is no default — the field must be present under `mode: oauth`. |
-| `filter_tools_list` | Optional, defaults to `false`. When `true`, `tools/list` returns only the tools the caller's groups grant, instead of every registered tool. Only meaningful when tool authorization is on (`enabled: true` in this same block) — setting it while `enabled: false` logs a startup `WARN` and leaves filtering off, since there is no policy to filter against. See [Filtering `tools/list`](#filtering-toolslist) below. |
+| `filter_tools_list` | Optional, defaults to `false`. When `true`, `tools/list` returns only the tools the caller's groups grant, instead of every registered tool. Only meaningful when tool authorization is on (`enabled: true` in this same block) — setting it while `enabled: false` logs a startup `WARN` and leaves filtering off, since there is no policy to filter against. See [Filtering `tools/list`](#filtering-toolslist). |
 | `groups_claim_name` | Name of the OIDC claim in the caller's JWT that carries their group or role memberships. Optional; defaults to `"groups"`. Must match the claim your IdP emits (see [Authentication](authentication.md) for setting this up on the IdP side). Only meaningful when `enabled: true`. **Top-level lookup only** — the value is read from the top of the JWT claims object; nested paths (for example, `authorization.roles`) are not supported. If your IdP emits memberships inside a nested object, flatten them into a top-level claim with an IdP mapper before the token is issued. |
 | `access_level_groups` | Map from group name — as it appears in the caller's token — to the list of MCP tool names that group grants. Required when `enabled: true`. Union semantics: a caller is allowed to invoke a tool when at least one of their groups grants it. A tool that no group grants is unreachable by every caller. **No wildcard** — a group intended to grant every tool must list every tool name explicitly. This is deliberate: an "all tools" glob would silently include every newly-added tool at upgrade time, without the operator noticing the surface expanded. |
 
@@ -253,9 +253,9 @@ The benefit is context, not access control: an AI agent handed tools it will be 
 
 **If tools are missing or your client misbehaves, set `filter_tools_list: false` and restart.** Authorization is still fully enforced on every tool call, so turning filtering off does not weaken access control. This is the first thing to try when a caller reports missing tools.
 
-The filter reuses the same policy decision as `tools/call`, so a listed tool is always callable and a callable tool is always listed. The two structurally exempt tools (`list-brokers` and `describe-semp-schema`) are never filtered — they are always callable, so hiding them would break that guarantee and remove broker discovery for every caller.
+The filter re-uses the same policy decision as `tools/call`, so a listed tool is always callable and a callable tool is always listed. The two structurally exempt tools (`list-brokers` and `describe-semp-schema`) are never filtered — they are always callable, so hiding them would break that guarantee and remove broker discovery for every caller.
 
-A caller whose groups grant nothing receives a normal response containing only the exempt tools — never an error and never an empty list. The same applies when the token carries no groups claim at all: the filter fails closed. The two cases are deliberately indistinguishable to the caller but are distinguishable in the server log (see below).
+A caller whose groups grant nothing receives a normal response containing only the exempt tools — never an error and never an empty list. The same applies when the token carries no groups claim at all: the filter fails closed. The two cases are deliberately indistinguishable to the caller but are distinguishable in the server log (see the following section).
 
 **Startup posture.** The server states the filtering posture on every boot, alongside the `tool authorization is enabled/disabled` line:
 

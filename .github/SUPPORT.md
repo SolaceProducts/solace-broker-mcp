@@ -4,7 +4,7 @@ Thanks for using the Solace Broker MCP Server. Here's where to go, depending on 
 
 ## Commercial Support
 
-If you have a Solace support contract, contact [support@solace.com](mailto:support@solace.com). Support will route your question, including anything specific to this project.
+If you have a Solace support contract, contact [support@solace.com](mailto:support@solace.com). Support routes your question, including anything specific to this project.
 
 ## Community Support
 

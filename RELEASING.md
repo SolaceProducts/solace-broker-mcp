@@ -54,8 +54,8 @@ Moving pointers let consumers track a stream instead of a fixed version:
 - No new P0/P1 found since the candidate **[Planned]**
 - Release notes finalized **[Planned]**
 - Immutable tag **[Planned]** — convention today, not enforced
-- Git tag signed by the tagger **[Planned]** — a separate mechanism from artifact attestation below, and still unenforced
-- Artifacts attested **[Implemented]** — the release workflow attaches a GitHub build provenance attestation to each binary archive and to the container image. With `--signer-workflow` and `--source-digest` (see the runbook below) a consumer can prove the artifact was built by this repository's `release.yml` from a named commit. `--repo` on its own is weaker than it looks: it binds only the repository, so any workflow in it holding `id-token: write` and `attestations: write` could mint an attestation that passes
+- Git tag signed by the tagger **[Planned]** — a separate mechanism from the artifact attestation described next, and still unenforced
+- Artifacts attested **[Implemented]** — the release workflow attaches a GitHub build provenance attestation to each binary archive and to the container image. With `--signer-workflow` and `--source-digest` (see the following Release runbook) a consumer can prove the artifact was built by this repository's `release.yml` from a named commit. `--repo` on its own is weaker than it looks: it binds only the repository, so any workflow in it holding `id-token: write` and `attestations: write` could mint an attestation that passes
 
 Today a stable release clears the **Publish gate** only; the remaining Stable-gate criteria are **[Planned]**.
 
@@ -107,7 +107,7 @@ The manual steps around the automated workflow.
 
 > The `/cut-release` skill (`.claude/skills/cut-release/SKILL.md`) automates this runbook
 > step-for-step — promote `[Unreleased]` in a prepare-release PR, tag the merge commit, verify the
-> run. Prefer it over doing these by hand; the steps below are the contract it follows and the
+> run. Prefer it over doing these by hand; the following steps are the contract it follows and the
 > manual fallback.
 
 Before tagging:

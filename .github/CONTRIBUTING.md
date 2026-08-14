@@ -428,7 +428,7 @@ committer email uses a non-routable domain — one ending in `.local`, `.sol-loc
 machine invents when `git config user.email` is unset, and they publish
 permanently with the git history when the repository is public.
 
-This is a separate control from DCO, not a stricter form of it. `git commit -s`
+This check is a separate control from DCO, not a stricter form of it. `git commit -s`
 signs off with your `user.email`, the same value git puts in the author field —
 so a bad address still produces a sign-off that matches its author, and DCO
 passes. Only this check catches it.
@@ -477,12 +477,12 @@ maintainer to approve it, not just the one on your first push. So checks can sit
 **pending**, and a check that was green can go back to pending after the PR is
 retitled or edited. That is normal and nothing for you to fix.
 
-You will also see the `Guardian scan` check report as **skipped**. Our license,
+You also see the `Guardian scan` check report as **skipped**. Our license,
 vulnerability, and container scan reports to an internal service, and GitHub
 correctly withholds those credentials from a fork's workflow run, so the scan
 cannot run on your pull request. The `Guardian scan gate` check accounts for that
 and passes. If your change adds or updates a dependency, expect a reviewer to look
-at `go.mod` and `go.sum` closely, since the automated scan is not there to do it.
+at `go.mod` and `go.sum` closely, because the automated scan is not there to do it.
 
 ## Third-party licence inventory
 
