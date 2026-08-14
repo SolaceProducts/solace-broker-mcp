@@ -13,7 +13,10 @@ itself**, and which are **not compiled into the shipped binary**.
 > build and test time" alongside the release list.
 
 **Generated** 2026-08-05; the GitHub Actions section was refreshed 2026-08-07
-when Guardian enrollment re-pinned every action to a commit SHA. Every licence
+when Guardian enrollment re-pinned every action to a commit SHA, and again
+2026-08-14 when Dependabot's `github-actions` group update moved the five
+`solace-public-workflows` actions to a newer commit on the same branch. Every
+licence
 below was read from the component's own licence file or from the GitHub API for
 its source repository, at the ref in use rather than at the default branch. None
 was inferred from a package name or carried over from another row. See
@@ -189,14 +192,15 @@ All five come from one repository, pinned to a single commit.
 
 | Action | Ref | Owner |
 |---|---|---|
-| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `47931eb` | Solace |
-| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `47931eb` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-db-sync` | `47931eb` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `47931eb` | Solace |
-| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `47931eb` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `63228a0` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `63228a0` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-db-sync` | `63228a0` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `63228a0` | Solace |
+| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `63228a0` | Solace |
 
-`47931eb` is a branch commit, not a tag, so there is no release to record beside
-it. The repository itself is Apache-2.0.
+`63228a0` is a branch commit, not a tag, so there is no release to record beside
+it. The repository itself is Apache-2.0. Re-pinned 2026-08-14 by Dependabot's
+`github-actions` group update (#304); the prior pin was `47931eb`.
 
 Two entries have been dropped from this table, both by the reverse-direction
 check rather than by anyone remembering to look.
