@@ -125,6 +125,14 @@ returns 403. Something is producing this check and we cannot say from the API
 which configuration owns it. Confirm on the settings page before relying on it,
 and re-check after the visibility change.
 
+**Nothing to enable for dependency review.** The `Dependencies free of high
+advisories` check reads the Dependency Review API, which is served by the
+dependency graph — always on and free for a public repository. It does not need
+Code Security enabled, and the API reporting Code Security as disabled (above) does
+not affect it. Confirmed live: `dependency-graph/compare/v0.6.0...v0.7.1` returns
+33 dependency changes. The cost question that parked this control was about an
+internal repository and no longer applies.
+
 **Dependency updates split between Renovate and Dependabot.**
 
 `.github/renovate.json` covers exactly one job: the pinned Claude Code CLI
@@ -211,6 +219,7 @@ gh api repos/OWNER/REPO/rulesets/13942241 \
 | `Guardian scan gate` | `guardian-scan.yaml` job `gate` | The Guardian scan verdict, or an accounted-for reason there is none (fork PR). Replaces `SCA gate`; see the warning below |
 | `Third-party licenses current` | `ci-pr.yaml` job `licenses` | `THIRD_PARTY_LICENSES.md` still matching `go list -deps ./cmd/server`. Needs no secret, so it reports on fork pull requests too |
 | `Licence headers present` | `ci-pr.yaml` job `license_headers` | Every `.go` file outside `vendor/` opening with the Apache-2.0 header. Needs no secret and no Go toolchain, so it reports on fork pull requests too |
+| `Dependencies free of high advisories` | `ci-pr.yaml` job `dependency_review` | A pull request *introducing* a dependency with a known high or critical advisory, read from the Dependency Review API. Needs no third-party secret, so it reports on fork pull requests too — the vulnerability half of the fork gap below, and the only control here that prevents rather than detects. **Not yet registered** — see below |
 | `CHANGELOG updated` | `ci-pr.yaml` job `changelog` | Advisory today; see note below |
 | `Commit identity routable` | `ci-pr.yaml` job `identity` | Every commit the PR adds using a routable author and committer address, so a machine hostname does not publish permanently with the history. Pinned to Actions (`15368`), not to the `dco2` App — see below |
 | `workflow-lint` | `workflow-lint.yaml` job `workflow-lint` | Every file under `.github/workflows/` passing actionlint (correctness, plus shellcheck over `run:` blocks) and zizmor (workflow security, including SHA pinning via `unpinned-uses`), so workflow security is enforced by a tool rather than argued in a code comment. **Not yet registered** — see below |
@@ -279,6 +288,39 @@ One property matters when registering it: `workflow-lint.yaml` carries **no
 only Go code, so the context stays pending forever and the pull request cannot
 merge. If someone later adds a `paths:` filter to make it cheaper, this required
 context is what breaks. Condition inside the job, never in the trigger.
+
+⚠️ **`Dependencies free of high advisories` is new and not yet in the ruleset.**
+Register it under the rule above — green on a real pull request first, and only
+after the pull request creating it has merged. Read the context name off a real
+run rather than assuming it; the job's `name:` is the context, with no
+`caller / inner` suffix, but assuming a name is what produced the `FOSSA Scan`
+gap.
+
+Until it is registered it enforces nothing, which matters more here than for the
+other rows: it is the one control in this repository that *prevents* a vulnerable
+dependency from merging instead of finding one afterwards. The fork section below
+reads as if that prevention exists. It exists as a workflow; it becomes a gate
+when the context is registered.
+
+Three properties to know before requiring it:
+
+- **It reports on every pull request and passes trivially on most.** The action
+  reads the *diff*, not the tree: a pull request that does not touch `go.mod` has
+  no dependency changes and passes. So an advisory published tomorrow against a
+  dependency already in the tree does not turn every open pull request red. That
+  containment is what makes it safe to require, and it is why this job needs no
+  `paths:` filter and no condition — see the `workflow-lint` note above for what
+  a filter would cost.
+- **It blocks same-repo pull requests too, Dependabot's included.** This is a
+  change in daily posture, not only a fork fix. `fossa-vuln` runs REPORT on a
+  pull request and blocks only on push to `main`, so a bump to a version that is
+  still vulnerable used to land and go red afterwards. It now fails before merge.
+- **An advisory with no fixed version has no in-repo escape, by design.** The
+  escape is an admin bypass on the ruleset, which someone has to justify in the
+  open. Closing that with an `allow-ghsas` list was rejected for the same reason
+  the licence allow-list was: it is a policy list with no named owner, and the
+  realistic failure is a contributor adding their own GHSA to unblock themselves
+  and a teammate approving the one-line change.
 
 `DCO` is served by the CNCF `dco2` GitHub App, so its `integration_id` is `974774`,
 not the `15368` an Actions-produced context carries. Pinning it to Actions would
@@ -367,39 +409,95 @@ made this impossible. What it changed, and what it deliberately did not:
    pre-merge scan on a path that already requires a maintainer to approve the
    workflow run and a code owner to approve the pull request.
 
-**The residual gap — get an owner before the repo flips public.** A fork pull
-request gets no pre-merge Guardian/SCA verdict: the scan jobs need Environment
-secrets, forks don't get them, so each fork PR merges unscanned and is only caught
-by the scan on push to `main` — detection after merge, not prevention. Today
-almost every PR is same-repo so the carve-out rarely fires; once the repo is
-public, fork PRs become the normal contribution path and this becomes the common
-case, not the edge one. Note that "require approval for outside collaborators"
-(GitHub Actions Permissions section) protects the *secrets*, not the *verdict* —
-an approved fork run still can't scan. **This is a decision for a repo owner to
-make deliberately before going public, not a default to inherit.** Until it's
-closed, two human controls stand in, and both need someone to actually do them:
+**The residual gap, and which half is now closed.** A fork pull request gets no
+pre-merge Guardian/SCA verdict: those scan jobs need Environment secrets, forks
+don't get them, so a fork PR merges unscanned by FOSSA and Prisma and is caught
+only by the scan on push to `main`. Note that "require approval for outside
+collaborators" (GitHub Actions Permissions section) protects the *secrets*, not
+the *verdict* — an approved fork run still can't scan. The repository is now
+public with `allow_forking` on, so this is the normal contribution path rather
+than an edge case. The two halves of the gap have different answers (SOL-153086):
 
-- **Read `go.mod` and `go.sum`** in any fork pull request that touches them.
+**Vulnerabilities — closed at the pull request.** `Dependencies free of high
+advisories` (`ci-pr.yaml` job `dependency_review`) fails a pull request that
+introduces a dependency with a known high or critical advisory. It reads the
+Dependency Review API through `GITHUB_TOKEN` against the dependency graph, which
+is always on and free for a public repository, so it needs no third-party secret
+and reports on fork pull requests. That makes it the only *preventive*
+supply-chain control here — everything else in this section detects after merge.
+Two caveats on how far to read a green verdict:
+
+- **It is registered as required or it is nothing.** See the warning in the
+  required-checks section above. As of this writing it is not.
+- **It covers Go modules, not workflow actions.** Roughly half the dependency
+  changes this repository produces are the `actions` ecosystem, and every action
+  is SHA-pinned, so advisory matching by version range does not resolve for them.
+  zizmor's `known-vulnerable-actions` is the control for that half, and
+  `workflow-lint.yaml` runs `--no-online-audits`, which switches it off. A
+  scheduled non-blocking zizmor run is the way to pick it up.
+
+**Licences — an accepted gap, recorded rather than closed.** A fork pull request
+introducing a dependency under a denied licence still merges. FOSSA catches it on
+push to `main` and again at the release tag. Accepted on three grounds:
+
+- A licence problem has no adversary behind it. It is a compliance defect —
+  needs fixing before release, not exploitable in the meantime.
+- The release gate already blocks shipping past FOSSA licensing findings, which
+  is where it actually bites.
+- **The compensating control is the inventory diff.** `Third-party licenses
+  current` is required, needs no secret, and reports on fork pull requests. A
+  contributor who adds a dependency without regenerating
+  `THIRD_PARTY_LICENSES.md` gets a red check; one who does regenerate it puts the
+  dependency by name, with its licence, into the diff a reviewer reads. There is
+  no equivalent human-visible signal for "this version has a CVE", which is why
+  that half got automation and this one did not.
+
+A licence allow-list on `dependency-review-action` would close it at the pull
+request, and was the original proposal. Rejected on maintenance: it is a second
+expression of a policy that already lives in FOSSA, and two copies drift; it needs
+a named owner and a Legal sign-off path, and neither exists. `@SolaceProducts/dax-developers`
+via CODEOWNERS guarantees someone approves the diff, not that anyone consults
+Legal. Revisit when someone will own the list.
+
+`govulncheck` was weighed as an alternative to `dependency-review-action` rather
+than a complement — it also needs no secret, and its reachability analysis means
+far fewer false positives, at the cost of missing a vulnerability in a dependency
+the code does not call yet. Either is defensible; one was chosen, and running both
+would mean two verdicts to reconcile on every dependency bump.
+
+Two human controls still stand, and both need someone to actually do them:
+
+- **Read `go.mod` and `go.sum`** in any fork pull request that touches them. The
+  automation covers *known high and critical* advisories in the diff; it says
+  nothing about a dependency that is merely unmaintained, unnecessary, or
+  typosquatting a real one.
 - **Read the `.github/` diff too.** Moving to `pull_request` means a fork pull
   request supplies the workflow definitions that run for it. It cannot reach a
   secret and its token is read-only, so this is not a credential-theft path, but a
-  pull request can still weaken its own checks — including `Guardian scan gate`,
-  which runs from the pull request's own ref. `DCO` is the exception: it is a
-  GitHub App evaluating commits server-side, not a workflow the pull request
-  supplies, so a pull request cannot edit the thing that judges it.
-- **A red FOSSA on `main` needs an owner.** Nothing routes it today: the failure
-  lands on an already-merged commit, and no alert or assignee follows from it.
-  Whoever merges a dependency-touching fork pull request should watch the next
-  `main` run themselves.
+  pull request can still weaken its own checks — including `Guardian scan gate`
+  and `dependency_review`, both of which run from the pull request's own ref.
+  `DCO` is the exception: it is a GitHub App evaluating commits server-side, not a
+  workflow the pull request supplies, so a pull request cannot edit the thing that
+  judges it.
 
-**Worth closing properly.** The vulnerability half of this gap does not actually
-need a credential. `govulncheck` (or `osv-scanner` over `go.mod`) needs no secret,
-no Vault, and no elevated token, so it would run fine as an eighth job in
-`build-and-test.yml` on a fork pull request — restoring *prevention* for
-critical/high vulnerabilities instead of leaving both halves to a human. Licensing
-is the harder half; `go-licenses` covers some of it. This was left out of
-SOL-152411 to keep that change to the trigger and gate problem, not because it is
-unavailable. It is the obvious follow-up.
+**Who picks up a red supply-chain scan on `main`.** Nobody, by rota or
+assignment. That is the honest answer today and it is written here rather than
+left to be assumed, because a detection control recorded as unwatched is more
+useful than one believed to be watched. The specifics:
+
+- The failure lands on an already-merged commit. `guardian-scan.yaml` on `push`
+  to `main` goes red roughly ten minutes after the merge, and `guardian-gate`
+  files its findings through Guardian's Jira reporting.
+- **No alert routes to a person.** No assignee, no Slack destination, no rota
+  owns the red `main` run. GitHub emails the commit author on a failed workflow
+  run by default, which for a merged fork pull request is the external
+  contributor, not a maintainer.
+- **So the standing convention is: whoever merges a dependency-touching pull
+  request watches the next `main` run themselves.** For a fork pull request, treat
+  that as part of merging it.
+- **To fix this properly**, route `guardian-scan.yaml` failures on `main` to a
+  team destination and name the rota that reads it. Until that exists, do not
+  count the `main` scan as a control anyone is watching.
 
 Also worth knowing: on a same-repo pull request FOSSA runs in diff mode and in
 REPORT (not BLOCK), so a green `Guardian scan gate` there is not a clean full scan
@@ -411,9 +509,20 @@ fine: `ci-pr.yaml` gives that job only `contents: read` and it reads no secrets.
 `Analyze (go)` appears to come from CodeQL default setup, which the Security
 Settings section asks you to confirm. Copilot review is inconsistent even on
 same-repo pull requests, so do not count on it. Verify `Guardian scan gate`,
-`CHANGELOG updated`, `Analyze (go)`, and the `lint` job's annotation behavior on a
-read-only token against a real fork pull request before treating any of them as a
-gate.
+`CHANGELOG updated`, `Analyze (go)`, `Dependencies free of high advisories`, and
+the `lint` job's annotation behavior on a read-only token against a real fork pull
+request before treating any of them as a gate.
+
+`Dependencies free of high advisories` is the one on that list whose fork
+behaviour is load-bearing rather than incidental, since closing the vulnerability
+half rests on it. What is verified and what is not, as of this writing: the
+Dependency Review API returns real data for this repository
+(`dependency-graph/compare/v0.6.0...v0.7.1` → 33 changes, ecosystems `gomod` and
+`actions`), and the action needs only `contents: read`, which a fork pull request's
+token has. What is *inferred* is the last hop — that the API resolves a fork pull
+request's head SHA in this repository. It should, because GitHub fetches the head
+commit into the base repository, but no fork pull request has ever existed here to
+prove it. Confirm on the first one, before the context is registered.
 
 **A third problem, and this one we create deliberately.** The GitHub Actions
 Permissions section below tells you to require approval for all outside
