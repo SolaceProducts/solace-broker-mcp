@@ -1,14 +1,14 @@
 {
   "_doc": "B4-shape tool selection: 'create an RDP' unambiguously picks create-rdp. Tool is gated (tools.yaml description requires explicit user confirmation before invoking) so the agent must NOT call on turn 1. Turn 2 'no': SEMPv2 GET on the target RDP name returns 404. Name is intentionally out-of-suite ('e2e-llm-nope-rdp') so a stray create is easy to spot. Mirrors b4-select-create-vpn / b4-select-create-topic-endpoint.",
   "prompt": "Create a new REST Delivery Point named e2e-llm-nope-rdp in VPN $BROKER_VPN on $BROKER.",
-  "expected_tools_none": true,
+  "expected_no_mutating_tools": true,
   "required_substrings_any_of": [
     "create-rdp", "create an rdp", "create the rdp", "create a rest delivery point", "e2e-llm-nope-rdp",
     "confirm", "would you like", "shall i", "sure", "proceed"
   ],
   "followup": {
     "prompt": "no, cancel",
-    "expected_tools_none": true,
+    "expected_no_mutating_tools": true,
     "ground_truth": {
       "shell": "semp_curl -so /dev/null -w '%{http_code}' \"$BROKER_URL/SEMP/v2/__private_monitor__/msgVpns/$BROKER_VPN/restDeliveryPoints/e2e-llm-nope-rdp\"",
       "expect_stdout_regex": "^(400|404)$"

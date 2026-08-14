@@ -1,5 +1,5 @@
 {
-  "_doc": "F5: detect a struggling consumer. Multiple valid tool paths — list-queues exposes the slowSubscriber flag, get-queue-metrics gives backlog depth, list-clients/get-client-details can also surface it. Accept any; assert the F5 queue surfaces in the answer. forbidden_substrings catches refusals from missing fixtures (e.g. 'queue doesn't exist') — without these the assertion would PASS on an echo-the-name refusal because $F5_QUEUE is mentioned in both.",
+  "_doc": "F5: detect a struggling consumer. Multiple valid tool paths — list-queues exposes the slowSubscriber flag, get-queue-metrics gives backlog depth, list-clients/get-client-details can also surface it. Accept any; assert the F5 queue surfaces in the answer. forbidden_substrings catches refusals from missing fixtures (e.g. 'queue doesn't exist') — without these the assertion would PASS on an echo-the-name refusal because $F5_QUEUE is mentioned in both. Every needle must be a phrase ONLY a refusal or a failed detection would produce. 'no queues' and 'zero queues' were needles until they flagged a correct answer: the suite provisions test-vpn-empty as a bare VPN with no queues, so an agent that enumerates VPNs reports one has no queues as a matter of fact, and a substring cannot tell that apart from failing to find the F5 queue.",
   "prompt": "Are any consumers on $BROKER struggling to keep up right now?",
   "expected_tool_any_of": [
     "mcp__solace-broker__list-queues",
@@ -10,7 +10,7 @@
   "required_substrings": ["$F5_QUEUE"],
   "forbidden_substrings": [
     "doesn't exist", "does not exist", "isn't there", "is not there",
-    "could not find", "couldn't find", "no queues", "zero queues",
+    "could not find", "couldn't find",
     "no consumers struggling", "none struggling", "nothing struggling"
   ]
 }

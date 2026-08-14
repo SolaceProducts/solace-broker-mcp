@@ -57,10 +57,24 @@ func TestComputeDeduplicationKey_DifferentAliasesDifferentKeys(t *testing.T) {
 	}
 }
 
+// TestComputeDeduplicationKey_DifferentAudiencesDifferentKeys is the
+// regression test for SOL-152981: Audience must participate in the key like
+// every other field, per this struct's own documented contract.
+func TestComputeDeduplicationKey_DifferentAudiencesDifferentKeys(t *testing.T) {
+	t.Parallel()
+
+	key1 := computeDeduplicationKey(DeduplicationKeyInput{SubjectToken: "token", BrokerAlias: "broker", Audience: "aud-a"})
+	key2 := computeDeduplicationKey(DeduplicationKeyInput{SubjectToken: "token", BrokerAlias: "broker", Audience: "aud-b"})
+
+	if key1 == key2 {
+		t.Errorf("different audiences produced same key: %q", key1)
+	}
+}
+
 func TestComputeDeduplicationKey_EmptyInputsProduceValidKey(t *testing.T) {
 	t.Parallel()
 
-	key := computeDeduplicationKey(DeduplicationKeyInput{SubjectToken: "", BrokerAlias: ""})
+	key := computeDeduplicationKey(DeduplicationKeyInput{SubjectToken: "", BrokerAlias: "", Audience: ""})
 
 	if len(key) != 64 {
 		t.Errorf("key length = %d, want 64", len(key))
@@ -68,9 +82,10 @@ func TestComputeDeduplicationKey_EmptyInputsProduceValidKey(t *testing.T) {
 
 	h := sha256.New()
 	h.Write([]byte{0x00})
+	h.Write([]byte{0x00})
 	want := hex.EncodeToString(h.Sum(nil))
 	if key != want {
-		t.Errorf("key = %q, want SHA-256 of single NUL byte = %q", key, want)
+		t.Errorf("key = %q, want SHA-256 of two NUL bytes = %q", key, want)
 	}
 }
 

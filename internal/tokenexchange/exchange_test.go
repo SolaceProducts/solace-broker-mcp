@@ -99,6 +99,44 @@ func TestExchange_HappyPath(t *testing.T) {
 	}
 }
 
+// TestExchange_AudienceMismatchWarnsButSucceeds is the end-to-end regression
+// test for SOL-152981's warn-only decision: exercised through the real
+// Exchange path (not just warnIfAudienceMismatch in isolation), an IdP
+// response carrying a token scoped to the wrong audience must still succeed
+// — the exchange is never failed by this check — while logging a WARN an
+// operator can act on. Not t.Parallel(): captures the process-wide slog
+// default.
+func TestExchange_AudienceMismatchWarnsButSucceeds(t *testing.T) {
+	mismatchedTok := fakeJWT(t, map[string]any{"aud": "https://wrong-audience.example.com"})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON(mismatchedTok, 3600))
+	}))
+	defer srv.Close()
+
+	e := newTestExchanger(t, srv.URL)
+
+	var tok *Token
+	out := captureWarn(t, func() {
+		var err error
+		tok, err = e.Exchange(context.Background(), validInput())
+		if err != nil {
+			t.Fatalf("Exchange: %v (audience mismatch must warn, never fail)", err)
+		}
+	})
+
+	if tok == nil || tok.Value != mismatchedTok {
+		t.Fatalf("Exchange returned tok = %v, want the IdP's token unchanged", tok)
+	}
+	if !strings.Contains(out, "WARN") {
+		t.Errorf("expected a WARN line for the audience mismatch, got: %q", out)
+	}
+	if !strings.Contains(out, validInput().Audience) {
+		t.Errorf("expected the requested audience in the WARN, got: %q", out)
+	}
+}
+
 // ---------- B02: singleflight deduplication ----------
 
 func TestExchange_SingleflightDeduplication(t *testing.T) {
@@ -633,10 +671,7 @@ func TestExchange_ExpiredContextIsHonoredOnEveryPath(t *testing.T) {
 		// cache.GetHit is the zero value of GetStatus, so a `!= GetHit` check
 		// would also pass on a zero-valued result. Assert the error first, then
 		// the status, so this cannot succeed for the wrong reason.
-		gr, err := e.cache.Get(context.Background(), computeDeduplicationKey(DeduplicationKeyInput{
-			SubjectToken: validInput().SubjectToken,
-			BrokerAlias:  validInput().BrokerAlias,
-		}))
+		gr, err := e.cache.Get(context.Background(), computeDeduplicationKey(validInput().DedupKeyInput()))
 		if err != nil {
 			t.Fatalf("priming the cache: %v", err)
 		}
@@ -672,10 +707,7 @@ func TestExchange_ExpiredContextIsHonoredOnEveryPath(t *testing.T) {
 		if _, err := e.Exchange(context.Background(), validInput()); err != nil {
 			t.Fatalf("priming exchange: %v", err)
 		}
-		gr, err := e.cache.Get(context.Background(), computeDeduplicationKey(DeduplicationKeyInput{
-			SubjectToken: validInput().SubjectToken,
-			BrokerAlias:  validInput().BrokerAlias,
-		}))
+		gr, err := e.cache.Get(context.Background(), computeDeduplicationKey(validInput().DedupKeyInput()))
 		if err != nil {
 			t.Fatalf("priming the cache: %v", err)
 		}
@@ -871,10 +903,7 @@ func TestExchange_DetachedCallWarmsCacheAfterCallerBails(t *testing.T) {
 	// The Put happens asynchronously on the detached goroutine after the gate.
 	// Poll the cache directly (not via Exchange, which would trigger a fetch on
 	// a miss and skew callCount) until the entry lands.
-	key := computeDeduplicationKey(DeduplicationKeyInput{
-		SubjectToken: input.SubjectToken,
-		BrokerAlias:  input.BrokerAlias,
-	})
+	key := computeDeduplicationKey(input.DedupKeyInput())
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		gr, err := e.cache.Get(context.Background(), key)
@@ -1625,10 +1654,7 @@ func TestExchange_CacheMissStoresResult(t *testing.T) {
 		t.Fatalf("Exchange: %v", err)
 	}
 
-	key := computeDeduplicationKey(DeduplicationKeyInput{
-		SubjectToken: input.SubjectToken,
-		BrokerAlias:  input.BrokerAlias,
-	})
+	key := computeDeduplicationKey(input.DedupKeyInput())
 	gr, err := e.cache.Get(context.Background(), key)
 	if err != nil {
 		t.Fatalf("cache.Get: %v", err)
@@ -1666,10 +1692,10 @@ func TestExchange_InvalidateForcesRefetch(t *testing.T) {
 		t.Fatalf("first Exchange: %v", err)
 	}
 
-	e.Invalidate(context.Background(), DeduplicationKeyInput{
-		SubjectToken: input.SubjectToken,
-		BrokerAlias:  input.BrokerAlias,
-	})
+	// input.DedupKeyInput() is structurally the same conversion Exchange's own
+	// key computation used above, so this can't drift from it — see
+	// SOL-152981.
+	e.Invalidate(context.Background(), input.DedupKeyInput())
 
 	second, err := e.Exchange(context.Background(), input)
 	if err != nil {
@@ -1735,10 +1761,7 @@ func TestExchange_ConcurrentMissesCollapse(t *testing.T) {
 
 	// The winning singleflight caller must have written the result to the
 	// cache; a follow-up lookup for the same key must be a hit.
-	key := computeDeduplicationKey(DeduplicationKeyInput{
-		SubjectToken: input.SubjectToken,
-		BrokerAlias:  input.BrokerAlias,
-	})
+	key := computeDeduplicationKey(input.DedupKeyInput())
 	gr, err := e.cache.Get(context.Background(), key)
 	if err != nil {
 		t.Fatalf("post-burst cache.Get: %v", err)
