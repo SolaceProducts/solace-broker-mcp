@@ -273,7 +273,9 @@ curl http://localhost:9090/livez
 # {"status":"alive"}
 ```
 
-The image includes a built-in Docker health check using the binary's `--health` flag (no shell or curl needed in the container). Check status with `docker inspect --format '{{.State.Health.Status}}' solace-broker-mcp`.
+The image includes a built-in Docker health check using the binary's `--health` flag (no shell or curl needed in the container). Check status with `docker inspect --format '{{.State.Health.Status}}' solace-broker-mcp`, and the reason for a failure with `docker inspect --format '{{json .State.Health.Log}}' solace-broker-mcp`.
+
+With TLS configured, the probe verifies the server's certificate against the file at `tls_cert_file`, which must therefore be readable inside the container and must carry at least one DNS or IP SAN — a certificate identified only by Common Name reports the container unhealthy even though the server serves HTTPS fine. See [Health Check Fails](docs/user-guide.md#troubleshooting) for the diagnostics.
 
 **Docker Compose:**
 
@@ -395,7 +397,7 @@ brokers:
       password: "${BROKER_PASSWORD}"
 ```
 
-When both are configured, the server starts with HTTPS. When neither is configured, plain HTTP. Providing only one is a startup error.
+When both are configured, the server starts with HTTPS. When neither is configured, plain HTTP. Providing only one is a startup error. The certificate must carry at least one DNS or IP SAN — see [Configuration](docs/configuration.md) for why, and for the container health-check consequence.
 
 ### 5. Connect from Claude Code
 

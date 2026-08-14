@@ -91,16 +91,21 @@ var ipv6Pattern = regexp.MustCompile(`(?i)\[?(?:` +
 	`(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}` +
 	`)(?:%[0-9a-zA-Z._-]+)?\]?`)
 
-// buildErrorResult converts a tool execution error into an MCP-compliant
-// CallToolResult with IsError: true. Per the MCP spec, tool execution errors
-// should be returned as results (not protocol-level errors) so the LLM can see
-// them and self-correct. StructuredContent carries machine-readable fields
-// (retryable, status, protocol-specific data, plus a suggestions array);
-// Content carries a human-readable text message.
+// buildErrorResult converts a tool execution or broker-construction error into
+// an MCP-compliant CallToolResult with IsError: true. Per the MCP spec, tool
+// execution errors should be returned as results (not protocol-level errors)
+// so the LLM can see them and self-correct. StructuredContent carries
+// machine-readable fields (retryable, status, protocol-specific data, plus a
+// suggestions array); Content carries a human-readable text message.
 //
-// The full unsuppressed/unsanitized error is never returned to the agent; it is
-// logged server-side by logToolResult as the "detail" field on the single
-// per-invocation error line, so the whole event stays in one record.
+// err here is not vouched-for: it may be a handler's arbitrary error, or an
+// arbitrary broker-construction failure from classifyBrokerError's
+// broker_init_error branch. The unsuppressed/unsanitized text is never
+// returned to the agent through this path — it is logged server-side by
+// logToolResult as the "detail" field on the single per-invocation error line,
+// so the whole event stays in one record. Contrast buildLocalErrorResult,
+// which echoes its error verbatim because that error is always one this
+// package constructed itself (SOL-152980).
 func (m *ToolManager) buildErrorResult(err error, brokerAlias string) *mcp.CallToolResult {
 	msg, suggestions := buildErrorMessage(err, brokerAlias)
 	retryable := isRetryable(err)
@@ -155,6 +160,62 @@ func (m *ToolManager) buildErrorResult(err error, brokerAlias string) *mcp.CallT
 		Content:           []mcp.Content{&mcp.TextContent{Text: contentText}},
 		IsError:           true,
 	}
+}
+
+// buildLocalErrorResult converts a local CallTool failure — one this package
+// constructed itself, never a broker response or a handler's arbitrary error
+// — into an MCP-spec CallToolResult the agent can see, instead of a
+// protocol-level error (SOL-152980). Covers: missing broker parameter,
+// unknown broker alias, parameter validation failure, a handler returning a
+// nil/invalid result, output-schema validation failure, and a result that
+// fails to marshal.
+//
+// Unlike buildErrorResult, err.Error() is shown verbatim: every caller of
+// this function passes a message this package wrote directly (e.g. "broker
+// parameter is required; available brokers: ...", the JSON-schema validation
+// text, "tool %q returned nil result") — never broker- or handler-originated
+// text, which is exactly what buildErrorResult exists to keep away from the
+// agent. Do not route a wrapped broker or handler error through this
+// function; use buildErrorResult instead.
+//
+// None of these are retryable with the same arguments: each is a
+// deterministic caller mistake (bad tool name upstream of this function,
+// missing/invalid parameters) or a server-side contract violation (nil
+// output, schema mismatch, marshal failure) that retrying cannot fix.
+func buildLocalErrorResult(err error) *mcp.CallToolResult {
+	msg := err.Error()
+	return &mcp.CallToolResult{
+		StructuredContent: map[string]any{
+			"error":     msg,
+			"retryable": false,
+		},
+		Content: []mcp.Content{&mcp.TextContent{Text: msg}},
+		IsError: true,
+	}
+}
+
+// buildBrokerResolutionErrorResult converts a classifyBrokerError outcome into
+// an MCP-spec CallToolResult (SOL-152980). The two outcomes need different
+// treatment: unknown_broker's message is pre-crafted by classifyBrokerError
+// itself (it echoes the caller's own alias verbatim, by design — see
+// TestCallTool_UnknownBroker_PreservesCallerCasing) and goes through
+// buildLocalErrorResult unchanged. broker_init_error wraps an arbitrary
+// underlying construction failure — today from cookie-jar or authenticator
+// setup, and in the future potentially a *tokenexchange.ExchangeError from an
+// OAuth broker's init path — so it is not vouched-for text and goes through
+// buildErrorResult instead, which suppresses unrecognized error text behind
+// the generic message, classifies an ExchangeError via its own AgentMessage,
+// and computes retryable correctly (a transient exchange failure is
+// retryable; an unrecognized construction error is not).
+func (m *ToolManager) buildBrokerResolutionErrorResult(errorType string, err error, brokerAlias string) *mcp.CallToolResult {
+	// errorType is classifyBrokerError's own return value — the two string
+	// literals it can produce ("unknown_broker", "broker_init_error") are
+	// asserted against directly here rather than via a shared const, matching
+	// every other errorType value in manager.go.
+	if errorType == "unknown_broker" {
+		return buildLocalErrorResult(err)
+	}
+	return m.buildErrorResult(err, brokerAlias)
 }
 
 // buildErrorMessage produces the human-readable, agent-facing error string

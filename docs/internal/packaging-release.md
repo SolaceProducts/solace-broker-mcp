@@ -290,6 +290,19 @@ check against the running server and exits with code 0 (healthy) or 1
 (unhealthy). This is used for Docker HEALTHCHECK in the distroless image,
 which has no shell, curl, or wget.
 
+When the config file sets `tls_cert_file`/`tls_key_file`, the probe speaks HTTPS
+and verifies the server's certificate against that same file, taking the
+verification hostname from the certificate's first DNS or IP SAN (SOL-153167 —
+it previously skipped verification, since the certificate rarely covers
+`localhost`). Three consequences for a TLS-enabled image: the certificate must
+be readable at the configured path from the probe's own process, it must carry a
+DNS or IP SAN, and it must be within its validity dates. Any of those failing
+reports the container unhealthy while the server keeps serving — which is also
+what an in-place certificate rotation without a restart looks like, since the
+server loads its keypair once at startup and would then be serving a superseded
+certificate to every client anyway. The probe writes the reason to stderr, which
+Docker records in `State.Health.Log`.
+
 | Deployment | Health check method |
 |---|---|
 | Docker | `HEALTHCHECK CMD ["/solace-broker-mcp", "--health"]` (built into image) |
