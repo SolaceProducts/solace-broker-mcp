@@ -28,17 +28,36 @@ import (
 //
 // Used by singleflight (in-flight deduplication) and the future token
 // cache (cross-time deduplication).
+//
+// Every constructor of this struct — today Exchange (exchange.go) and
+// OAuthAuthenticator.HandleAuthFailure (internal/semp/auth/oauth.go) — must
+// populate the same fields for the same logical (subject, broker, audience)
+// tuple, or Invalidate computes a different key than Exchange cached under
+// and silently fails to evict the token it meant to (SOL-152981).
 type DeduplicationKeyInput struct {
 	SubjectToken string
-	BrokerAlias  string
+	// BrokerAlias was already in this key before Audience joined it, despite
+	// ExchangeInput documenting BrokerAlias as a logging label that "does not
+	// appear in the IdP request body" — it doesn't determine what gets
+	// exchanged for. Audience, by contrast, is sent to the IdP and does
+	// determine that (via Params.AudienceParam), yet wasn't here until now.
+	// This key was correct only by the accident that BrokerAlias happens to
+	// determine Audience 1:1 today (one audience per broker alias, fixed at
+	// construction) — not because the key was self-sufficient. Adding
+	// Audience makes that true by construction instead of by coincidence
+	// (SOL-152981).
+	BrokerAlias string
+	Audience    string
 }
 
 // String, GoString, and LogValue redact SubjectToken so
 // DeduplicationKeyInput never leaks it through fmt formatting or slog
-// reflection. Value receivers so *DeduplicationKeyInput is covered too.
-// Pattern mirrors cache.CachedCredential.
+// reflection. Audience is not secret — it's already logged elsewhere (e.g.
+// ExchangeError.Audience, ExchangeInput.LogValue) — so it's included here too.
+// Value receivers so *DeduplicationKeyInput is covered too. Pattern mirrors
+// cache.CachedCredential.
 func (d DeduplicationKeyInput) String() string {
-	return fmt.Sprintf("DeduplicationKeyInput{BrokerAlias: %q}", d.BrokerAlias)
+	return fmt.Sprintf("DeduplicationKeyInput{BrokerAlias: %q, Audience: %q}", d.BrokerAlias, d.Audience)
 }
 
 func (d DeduplicationKeyInput) GoString() string {
@@ -46,7 +65,10 @@ func (d DeduplicationKeyInput) GoString() string {
 }
 
 func (d DeduplicationKeyInput) LogValue() slog.Value {
-	return slog.GroupValue(slog.String("broker_alias", d.BrokerAlias))
+	return slog.GroupValue(
+		slog.String("broker_alias", d.BrokerAlias),
+		slog.String("audience", d.Audience),
+	)
 }
 
 // computeDeduplicationKey produces a deterministic, collision-resistant
@@ -58,5 +80,7 @@ func computeDeduplicationKey(input DeduplicationKeyInput) string {
 	h.Write([]byte(input.SubjectToken))
 	h.Write([]byte{0x00})
 	h.Write([]byte(input.BrokerAlias))
+	h.Write([]byte{0x00})
+	h.Write([]byte(input.Audience))
 	return hex.EncodeToString(h.Sum(nil))
 }
