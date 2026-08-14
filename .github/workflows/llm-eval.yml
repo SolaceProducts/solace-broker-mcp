@@ -24,14 +24,17 @@ name: LLM E2E Eval
 
 on:
   schedule:
-    # 10:00 EDT daily, in working hours so a failure is noticed the same day.
+    # 02:00 Eastern daily — off-hours, so the run neither competes with a manual
+    # dispatch nor with peak hosted-runner demand. Nobody is watching at 02:00,
+    # which is fine: results are read from the artifacts at the end of the
+    # window, not reacted to daily.
     #
     # Cron here is UTC and does not follow daylight saving. The collection window
-    # (2026-08-15 to 2026-09-03) falls entirely in EDT, where 14:00 UTC is 10:00
-    # local. If the schedule ever outlives the window into EST it drifts to 09:00
-    # local and needs 15:00 UTC — one more reason not to let it outlive the
+    # (2026-08-15 to 2026-09-03) falls entirely in EDT, where 06:00 UTC is 02:00
+    # local. If the schedule ever outlives the window into EST it drifts to 01:00
+    # local and needs 07:00 UTC — one more reason not to let it outlive the
     # window.
-    - cron: '0 14 * * *'
+    - cron: '0 6 * * *'
   workflow_dispatch:
     inputs:
       target_branch:
@@ -50,12 +53,13 @@ on:
         default: ''
         type: string
 
-# Serialize runs rather than cancelling them. The schedule fires inside working
-# hours, so overlapping with a manual dispatch is a live possibility, and
-# `cancel-in-progress: true` would let that dispatch silently destroy the day's
-# data point. Cancelling is the worse outcome either way: it leaves broker
-# containers up on a runner that is about to be reclaimed, having already spent
-# the API credits it will now produce no data from.
+# Serialize runs rather than cancelling them. The 02:00 schedule makes an overlap
+# with a manual dispatch unlikely rather than impossible, and the cost of the
+# unlikely case is losing that day's data point — `cancel-in-progress: true`
+# would let a dispatch silently destroy it. Cancelling is the worse outcome
+# either way: it leaves broker containers up on a runner that is about to be
+# reclaimed, having already spent the API credits it will now produce no data
+# from.
 #
 # On a hosted runner each job gets its own VM, so this is not about Docker port
 # or container-name collisions — it is about the day's data point and, for a
