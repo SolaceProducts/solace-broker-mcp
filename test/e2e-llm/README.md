@@ -260,7 +260,7 @@ points at the right per-broker fixture var.
   "expected_tool": "mcp__solace-broker__list-vpns",
   "expected_tool_any_of": ["...", "..."],
   "expected_tools_all_of": ["...", "..."],
-  "expected_tools_none": true,
+  "expected_no_mutating_tools": true,
   "ground_truth": {
     "jq": ".vpns.data[].msgVpnName",
     "answer_regex": "[a-z][a-z0-9_-]*-vpn|default"
@@ -295,10 +295,25 @@ needs. Field semantics:
   outcome. Same environment as `setup.cmd`. Use to restore standing fixture
   state (drop a queue the scenario created; re-prime one it drained) so the
   next run finds things where it expects them.
-- **`expected_tool` / `_any_of` / `_all_of` / `_none`** — tool-choice
-  assertions. `_none: true` asserts zero calls (for the MCP-down test and
-  every Mode-2 turn 1, where the destructive tool is gated and must NOT
-  fire until the user confirms).
+- **`expected_tool` / `_any_of` / `_all_of`** — tool-choice assertions.
+- **`expected_no_mutating_tools`** — `true` asserts the agent changed nothing
+  in this turn: no call matching `MUTATING_TOOL_REGEX` (`config.env`, currently
+  `create|delete|update|clear|disconnect`). Used by the MCP-down tests and by
+  every Mode-2 turn 1, where the destructive tool is gated and must not fire
+  until the user confirms.
+
+  It deliberately permits read-only calls. An agent that reads
+  `get-queue-metrics` before asking produces a *better* confirmation ("100
+  messages, 25,600 bytes will be deleted" rather than "are you sure?"), and the
+  CLI emits a `ToolSearch` schema lookup before it can name an MCP tool at all
+  once the server's tool count crosses its deferral threshold — no scenario can
+  avoid that one.
+
+  This replaced `expected_tools_none` (zero calls of any kind), which failed on
+  both of those while being weaker where it mattered: it treated a turn-1
+  `delete-queue` exactly like a `list-queues`, since it only checked whether the
+  call list was empty. A scenario still carrying the old key now fails with a
+  pointed message rather than silently asserting nothing.
 - **`ground_truth.jq`** — applied to the matching `tool_result`'s parsed
   content to produce the *must-appear set* — every name it emits MUST be
   named in the answer (omission check).
