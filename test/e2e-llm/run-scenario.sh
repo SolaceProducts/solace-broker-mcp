@@ -347,14 +347,19 @@ invoke_claude() {
     claude "${claude_args[@]}" | tee "$run_file" | jq -r --unbuffered "$JQ_PRETTY"
     local rc=${PIPESTATUS[0]}
     set -e
+    # Bank the cost before the failure check. A non-zero exit does not mean
+    # nothing was spent — max-turns, overload and auth failures all bill for
+    # the turns they got through, and those are exactly the runs whose spend
+    # you want in the total. The jq selects on the result event, so a run that
+    # died before emitting one contributes nothing.
+    if [ -n "${SCENARIO_COST_FILE:-}" ]; then
+        jq -r 'select(.type=="result") | .total_cost_usd' "$run_file" >> "$SCENARIO_COST_FILE" 2>/dev/null || true
+    fi
     if [ "$rc" -ne 0 ]; then
         log_err "claude exited $rc"
         log_err "last 20 stream events:"
         tail -20 "$run_file" >&2 || true
         return 2
-    fi
-    if [ -n "${SCENARIO_COST_FILE:-}" ]; then
-        jq -r 'select(.type=="result") | .total_cost_usd' "$run_file" >> "$SCENARIO_COST_FILE" 2>/dev/null || true
     fi
     return 0
 }
