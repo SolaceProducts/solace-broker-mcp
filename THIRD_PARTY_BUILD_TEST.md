@@ -166,6 +166,7 @@ below spells out.
 |---|---|---|---|---|
 | `actions/attest-build-provenance` | `0f67c3f` | v4.1.1 | MIT | [license](https://github.com/actions/attest-build-provenance/blob/v4.1.1/LICENSE) |
 | `actions/checkout` | `3d3c42e` | v7.0.1 | MIT | [license](https://github.com/actions/checkout/blob/v7.0.1/LICENSE) |
+| `actions/dependency-review-action` | `a1d282b` | v5.0.0 | MIT | [license](https://github.com/actions/dependency-review-action/blob/v5.0.0/LICENSE) |
 | `actions/download-artifact` | `3e5f45b` | v8.0.1 | MIT | [license](https://github.com/actions/download-artifact/blob/v8.0.1/LICENSE) |
 | `actions/github-script` | `3a2844b` | v9.0.0 | MIT | [license](https://github.com/actions/github-script/blob/v9.0.0/LICENSE.md) |
 | `actions/setup-go` | `b7ad1da` | v7.0.0 | MIT | [license](https://github.com/actions/setup-go/blob/v7.0.0/LICENSE) |
