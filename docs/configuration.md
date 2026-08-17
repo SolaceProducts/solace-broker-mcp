@@ -253,7 +253,7 @@ The benefit is context, not access control: an AI agent handed tools it will be 
 
 **If tools are missing or your client misbehaves, set `filter_tools_list: false` and restart.** Authorization is still fully enforced on every tool call, so turning filtering off does not weaken access control. This is the first thing to try when a caller reports missing tools.
 
-The filter re-uses the same policy decision as `tools/call`, so a listed tool is always callable and a callable tool is always listed. The two structurally exempt tools (`list-brokers` and `describe-semp-schema`) are never filtered — they are always callable, so hiding them would break that guarantee and remove broker discovery for every caller.
+The filter reuses the same policy decision as `tools/call`, so a listed tool is always callable and a callable tool is always listed. The two structurally exempt tools (`list-brokers` and `describe-semp-schema`) are never filtered — they are always callable, so hiding them would break that guarantee and remove broker discovery for every caller.
 
 A caller whose groups grant nothing receives a normal response containing only the exempt tools — never an error and never an empty list. The same applies when the token carries no groups claim at all: the filter fails closed. The two cases are deliberately indistinguishable to the caller but are distinguishable in the server log (see the following section).
 

@@ -222,7 +222,7 @@ The server supports open access, static token, and OAuth/OIDC authentication for
 
 ### Server Won't Start
 
-- **Configuration file not found** — The server looks for the yaml configuration file in this order: `CONFIG_FILE` env var, `/etc/mcp-server/config.yaml`, then `./broker-config.yaml`. Set `CONFIG_FILE` explicitly if the file is in a non-standard location.
+- **Configuration file not found** — The server looks for the YAML configuration file in this order: `CONFIG_FILE` env var, `/etc/mcp-server/config.yaml`, then `./broker-config.yaml`. Set `CONFIG_FILE` explicitly if the file is in a non-standard location.
 - **TLS misconfiguration** — Both `tls_cert_file` and `tls_key_file` must be set together. Providing only one is a startup error.
 - **OAuth configuration missing** — When `mcp_client_auth.mode` is `oauth`, the `issuer`, `audience`, and `resource_url` fields are required. For local testing, set `mcp_client_auth.mode: disabled` or `static`.
 - **Broker OAuth (Hop 2) configuration rejected** — A broker with `auth.mode: oauth` requires `mcp_client_auth.mode: oauth` and a complete `broker_oauth:` block; missing or invalid fields are rejected at configuration load, before the server starts. See [Step 2b](authentication.md#step-2b-configure-broker-oauth-hop-2) for the full field reference, including `audience_parameter_name`, which only accepts `audience` in this version.

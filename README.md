@@ -336,7 +336,7 @@ cd solace-broker-mcp
 go mod download
 ```
 
-### 2. Install the git Hooks
+### 2. Install the git hooks
 
 ```bash
 make hooks

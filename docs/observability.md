@@ -568,7 +568,7 @@ metric, audit, and trace schemas.
   trace-id: 32 lowercase hex characters, not all-zero, which in practice means it arrived on
   an inbound `traceparent`. A new child span per outbound hop is correct W3C behavior. For a
   server-generated UUIDv7 or a legacy `X-Correlation-ID` value, no `traceparent` is sent,
-  since a non-conformant trace-id would be worse than none. On retry, the same ID is re-used,
+  since a non-conformant trace-id would be worse than none. On retry, the same ID is reused,
   so all attempts share one ID in the broker's logs.
 - **Logged** as the `correlation_id` attribute on every log line within the request.
 
