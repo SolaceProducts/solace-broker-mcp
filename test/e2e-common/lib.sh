@@ -567,6 +567,37 @@ cleanup_fixtures_on() {
 
 # ── MCP Protocol Helpers ─────────────────────────────────────────────────────
 
+# The protocolVersion every suite pins in its initialize handshake. Single
+# source of truth: e2e-oauth and e2e-llm read this same variable rather than
+# repeating the literal.
+#
+# 2025-11-25 is the newest revision this server can negotiate — not go-sdk's
+# latest (2026-07-28). From 2026-07-28 the spec drops the initialize handshake
+# and requires the stateless transport, which the SDK enforces: a stateful
+# server rejects that version with 400 "only supported on stateless HTTP
+# servers". Raising the pin here without switching the server to Stateless
+# would not fail — the SDK silently negotiates 2025-11-25 back — so the pin
+# would assert a revision that was never exercised — which is why every
+# initialize helper checks the negotiated revision below. Revisit alongside the
+# stateless-transport decision (no ticket yet).
+export MCP_PROTOCOL_VERSION="${MCP_PROTOCOL_VERSION:-2025-11-25}"
+
+# Fails when the server negotiated a different revision than we pinned. Takes
+# the raw initialize response (headers + SSE body). Without this the pin is a
+# request-side hint only: the SDK answers an unsupported or too-new revision
+# with 2025-11-25 rather than an error, so a drifted pin would run green while
+# asserting a revision that was never on the wire.
+assert_negotiated_protocol() {
+    local response="$1"
+    local negotiated
+    negotiated=$(sed -n 's/^data: //p' <<<"$response" | jq -r '.result.protocolVersion // empty' 2>/dev/null)
+
+    if [ "$negotiated" != "$MCP_PROTOCOL_VERSION" ]; then
+        log_fail "Server negotiated protocolVersion '${negotiated:-<none>}', expected '$MCP_PROTOCOL_VERSION'"
+        return 1
+    fi
+}
+
 # Performs the MCP initialize handshake. Returns the Mcp-Session-Id.
 mcp_initialize() {
     local response
@@ -579,7 +610,7 @@ mcp_initialize() {
             "id": 1,
             "method": "initialize",
             "params": {
-                "protocolVersion": "2025-03-26",
+                "protocolVersion": "'"$MCP_PROTOCOL_VERSION"'",
                 "capabilities": {},
                 "clientInfo": { "name": "e2e-test", "version": "1.0.0" }
             }
@@ -594,12 +625,15 @@ mcp_initialize() {
         return 1
     fi
 
+    assert_negotiated_protocol "$response" || return 1
+
     # Send initialized notification
     curl -sf -X POST "$MCP_URL/mcp" \
         -H "Content-Type: application/json" \
         -H "Accept: application/json, text/event-stream" \
         -H "Authorization: Bearer $MCP_DEV_TOKEN" \
         -H "Mcp-Session-Id: $session_id" \
+        -H "MCP-Protocol-Version: $MCP_PROTOCOL_VERSION" \
         -d '{
             "jsonrpc": "2.0",
             "method": "notifications/initialized"
@@ -626,6 +660,9 @@ mcp_call_tool() {
 
 # Sends an MCP request with the given session ID. Returns the JSON response body.
 # The server responds with SSE (text/event-stream), so we extract the data: line.
+# MCP-Protocol-Version carries the negotiated revision: the transport serves a
+# request without that header at its own default (2025-03-26), so the handshake
+# pin alone would not exercise the revision the suite claims to test.
 mcp_request() {
     local session_id="$1"
     local body="$2"
@@ -636,6 +673,7 @@ mcp_request() {
         -H "Accept: application/json, text/event-stream" \
         -H "Authorization: Bearer $MCP_DEV_TOKEN" \
         -H "Mcp-Session-Id: $session_id" \
+        -H "MCP-Protocol-Version: $MCP_PROTOCOL_VERSION" \
         -d "$body")
 
     # Extract JSON from SSE "data: {...}" lines. Keep all data: lines — a single
