@@ -322,20 +322,33 @@ invoke_claude() {
         # auto-approves every tool from our MCP server (the only one loaded,
         # thanks to --strict-mcp-config), so the list stays maintenance-free
         # as the server adds tools. Assertion logic catches wrong tool choices.
-        # Built-in tools that need approval (Bash, Read, WebSearch, …) are NOT
-        # on this allow-list, so in --print mode they can't run — the
-        # auto-approve gate keeps the agent effectively confined to MCP tools
-        # without a `--tools ""` flag. Note "effectively", not "entirely": the
-        # allow-list does not gate every built-in. ToolSearch runs regardless,
-        # because the CLI defers tool schemas once enough tools are registered
-        # and the agent cannot name an MCP tool without looking it up first.
-        # Assertions must therefore tolerate built-ins they never asked for —
-        # see `expected_no_mutating_tools`.
-        # A prior version of this argv did pass `--tools ""` to disable built-
-        # ins explicitly; CLI 2.1.181 reinterprets that as "disable ALL tools
-        # including MCP", so the agent had no tools and answered every
-        # scenario "I don't have the Solace MCP tools available" (SOL-152862).
         --allowed-tools "mcp__solace-broker__*"
+        # `--tools` scopes the BUILT-IN set only; MCP tools are unaffected.
+        # Naming ToolSearch alone yields an allow-list of one: the agent keeps
+        # MCP discovery and loses Bash, Read, Write, Edit, WebFetch and
+        # WebSearch. An allow-list is deliberate over `--disallowed-tools`,
+        # which would go quietly permissive each time the CLI ships a new
+        # built-in. ToolSearch stays because the CLI defers tool schemas once
+        # enough tools are registered, and the agent cannot name an MCP tool
+        # without looking it up first; it only loads schemas, so it reaches
+        # neither the broker nor the filesystem.
+        #
+        # Do NOT rely on --allowed-tools for this. It is the auto-approve list,
+        # not a registry filter: built-ins absent from it were still handed to
+        # the agent AND still ran, with an empty `permission_denials`. Measured
+        # on 2.1.224 via the init event's tool registry — 72 tools with
+        # --allowed-tools alone (Bash, Write and Edit among them), 41 with
+        # `--tools "ToolSearch"`, MCP's 40 intact in both. Between SOL-152862
+        # and SOL-153285 the suite ran unconfined on that false premise, and D1
+        # spent its turns shelling out to reach the broker another way.
+        #
+        # `--tools ""` also works now and is one tool tighter. It is avoided
+        # because it is the flag SOL-152862 removed: CLI 2.1.181 read it as
+        # "disable ALL tools including MCP" and every scenario answered "I
+        # don't have the Solace MCP tools available". That is fixed on 2.1.224,
+        # but dropping ToolSearch would break discovery again the moment
+        # deferral changes, and this suite has broken on a CLI bump twice.
+        --tools "ToolSearch"
         --output-format stream-json
         --verbose
         --max-turns 5
@@ -347,14 +360,19 @@ invoke_claude() {
     claude "${claude_args[@]}" | tee "$run_file" | jq -r --unbuffered "$JQ_PRETTY"
     local rc=${PIPESTATUS[0]}
     set -e
+    # Bank the cost before the failure check. A non-zero exit does not mean
+    # nothing was spent — max-turns, overload and auth failures all bill for
+    # the turns they got through, and those are exactly the runs whose spend
+    # you want in the total. The jq selects on the result event, so a run that
+    # died before emitting one contributes nothing.
+    if [ -n "${SCENARIO_COST_FILE:-}" ]; then
+        jq -r 'select(.type=="result") | .total_cost_usd' "$run_file" >> "$SCENARIO_COST_FILE" 2>/dev/null || true
+    fi
     if [ "$rc" -ne 0 ]; then
         log_err "claude exited $rc"
         log_err "last 20 stream events:"
         tail -20 "$run_file" >&2 || true
         return 2
-    fi
-    if [ -n "${SCENARIO_COST_FILE:-}" ]; then
-        jq -r 'select(.type=="result") | .total_cost_usd' "$run_file" >> "$SCENARIO_COST_FILE" 2>/dev/null || true
     fi
     return 0
 }
