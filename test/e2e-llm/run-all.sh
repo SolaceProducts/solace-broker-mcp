@@ -67,10 +67,12 @@ mcp_call() {
         -X POST "$MCP_URL/mcp" -d "$body" 2>/dev/null
 }
 
+# protocolVersion pins 2025-11-25, the newest revision this server negotiates;
+# see mcp_initialize in ../e2e-common/lib.sh for why it is not go-sdk's latest.
 precheck() {
     local sid
     sid=$(curl -s --max-time 5 -i -X POST "$MCP_URL/mcp" "${MCP_HEADERS[@]}" \
-        -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"precheck","version":"0"}}}' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"precheck","version":"0"}}}' \
         2>/dev/null | grep -i '^Mcp-Session-Id:' | awk '{print $2}' | tr -d '\r\n')
     if [ -z "$sid" ]; then
         echo -e "${RED}[PRECHECK FAIL]${NC} MCP server not reachable on $MCP_URL/mcp" >&2

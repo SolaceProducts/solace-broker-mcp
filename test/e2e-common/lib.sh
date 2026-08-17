@@ -568,6 +568,15 @@ cleanup_fixtures_on() {
 # ── MCP Protocol Helpers ─────────────────────────────────────────────────────
 
 # Performs the MCP initialize handshake. Returns the Mcp-Session-Id.
+#
+# The pinned protocolVersion is 2025-11-25, the newest revision this server can
+# negotiate — not go-sdk's latest (2026-07-28). From 2026-07-28 the spec drops
+# the initialize handshake and requires the stateless transport, which the SDK
+# enforces: a stateful server rejects that version with 400 "only supported on
+# stateless HTTP servers". Raising the pin here without switching the server to
+# Stateless would not fail — the SDK silently negotiates 2025-11-25 back — so
+# the pin would assert a revision that was never exercised. Revisit alongside
+# the stateless-transport decision (SOL-152741).
 mcp_initialize() {
     local response
     response=$(curl -sf -D - -X POST "$MCP_URL/mcp" \
@@ -579,7 +588,7 @@ mcp_initialize() {
             "id": 1,
             "method": "initialize",
             "params": {
-                "protocolVersion": "2025-03-26",
+                "protocolVersion": "2025-11-25",
                 "capabilities": {},
                 "clientInfo": { "name": "e2e-test", "version": "1.0.0" }
             }
