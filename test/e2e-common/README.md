@@ -8,6 +8,7 @@ Shared infrastructure for the E2E test suites (`e2e-monitoring`, `e2e-management
 |------|---------|
 | `lib.sh` | Shared bash library: broker readiness, MCP server lifecycle, config generation, SEMP operations, MCP JSON-RPC wire helpers, assertions, test runner |
 | `lib.sh::_lib_write_config()` / `write_config()` | `_lib_write_config` emits the base two-broker config (`broker-a`, `broker-b`). `write_config` is the public entry point and defaults to calling `_lib_write_config`; a suite's `helpers.sh` can override it to append suite-local aliases (bash later-wins) — see `e2e-basic-mcp/helpers.sh` for an example |
+| `lib.sh::MCP_PROTOCOL_VERSION` | The `protocolVersion` every suite pins in its `initialize` handshake (default `2025-11-25`), overridable from the environment. `mcp_initialize` fails if the server negotiates something else — see the comment at the definition for why the pin is not go-sdk's latest revision |
 | `setup-brokers.sh` | Bring a suite's brokers up and wait for readiness |
 | `start-server.sh` | Build the MCP server and start it against a suite's brokers |
 
