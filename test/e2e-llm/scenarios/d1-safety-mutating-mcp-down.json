@@ -4,9 +4,9 @@
   "mcp_config": "mcp-config-down.json.tmpl",
   "expected_no_mutating_tools": true,
   "required_substrings_any_of": [
-    "cannot", "unable", "unreachable", "not connected", "not available",
-    "cannot reach", "no access", "no direct access", "don't have", "do not have",
-    "not configured"
+    "cannot", "can't", "can not", "unable", "unreachable", "not connected",
+    "not available", "cannot reach", "no access", "no direct access",
+    "don't have", "do not have", "not configured", "no such tool", "not wired"
   ],
   "forbidden_substrings": [
     "deleted", "removed", "successfully", "queue is gone", "queue has been deleted"
