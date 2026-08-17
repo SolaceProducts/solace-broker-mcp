@@ -20,7 +20,9 @@ import (
 	"testing"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/definitions"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
 )
 
 func boolPtr(b bool) *bool { return &b }
@@ -199,6 +201,192 @@ func TestCompositeToolHandler_OutputSchema(t *testing.T) {
 	}
 	if addProps["type"] != "object" {
 		t.Errorf("additionalProperties type = %v, want object", addProps["type"])
+	}
+}
+
+// writeTestTool mirrors create-queue's real shape: one config-op step, no
+// select:, msgVpnName folded out of the body as a path param.
+func writeTestTool() composite.CompositeTool {
+	return composite.CompositeTool{
+		Name:        "create-queue",
+		Description: "Create a queue in a Message VPN",
+		Parameters: []composite.ParameterDef{
+			{Name: "msgVpnName", Type: "string", Required: true},
+			{Name: "queueName", Type: "string", Required: true},
+		},
+		Steps: []composite.Step{
+			{
+				ID:        "createQueue",
+				Operation: "config/createMsgVpnQueue",
+				Args: map[string]string{
+					"msgVpnName": "{{.Params.msgVpnName}}",
+				},
+			},
+		},
+		Result: composite.ResultStrategy{Strategy: "collect"},
+	}
+}
+
+// deleteTestTool mirrors delete-queue's real shape: an action/config op with
+// no response data (SempMetaOnlyResponse), same as every real delete tool.
+func deleteTestTool() composite.CompositeTool {
+	return composite.CompositeTool{
+		Name:        "delete-queue",
+		Description: "Delete a queue",
+		Steps: []composite.Step{
+			{ID: "deleteQueue", Operation: "config/deleteMsgVpnQueue"},
+		},
+		Result: composite.ResultStrategy{Strategy: "collect"},
+	}
+}
+
+func TestCallsConfigOrActionOperation(t *testing.T) {
+	if callsConfigOrActionOperation(testTool()) {
+		t.Error("a monitor-only tool should not be detected as calling config/action")
+	}
+	if !callsConfigOrActionOperation(writeTestTool()) {
+		t.Error("a tool with a config/ step should be detected as calling config/action")
+	}
+	if !callsConfigOrActionOperation(deleteTestTool()) {
+		t.Error("a tool with a config/ delete step should be detected as calling config/action")
+	}
+}
+
+// TestCompositeToolHandler_OutputSchema_MonitorToolUnchanged guards against
+// this SOL-152947 wiring accidentally widening beyond write tools — a
+// monitor tool must keep the exact generic envelope it always had.
+func TestCompositeToolHandler_OutputSchema_MonitorToolUnchanged(t *testing.T) {
+	executor := composite.NewCompositeExecutor(testOperations())
+	handler := NewCompositeToolHandler(testTool(), executor)
+
+	got := handler.Metadata().OutputSchema
+	want := StepKeyedEnvelopeSchema()
+	if got["type"] != want["type"] {
+		t.Errorf("type = %v, want %v", got["type"], want["type"])
+	}
+	addProps, ok := got["additionalProperties"].(map[string]any)
+	if !ok || addProps["type"] != "object" {
+		t.Errorf("expected the unchanged generic additionalProperties shape, got %v", got["additionalProperties"])
+	}
+	if _, hasRequired := got["required"]; hasRequired {
+		t.Error("the generic monitor-tool envelope has never had a required list; it must not gain one")
+	}
+}
+
+func TestCompositeToolHandler_OutputSchema_WriteToolIsStrict(t *testing.T) {
+	operations := map[string]*sempv2.Operation{
+		"config/createMsgVpnQueue": {
+			ID:             "createMsgVpnQueue",
+			ResponseFields: map[string]string{"msgVpnName": "string", "queueName": "string", "accessType": "string"},
+		},
+	}
+	executor := composite.NewCompositeExecutor(operations)
+	handler := NewCompositeToolHandler(writeTestTool(), executor)
+
+	schema := handler.Metadata().OutputSchema
+	if schema["additionalProperties"] != false {
+		t.Fatalf("top-level additionalProperties = %v, want false for a write tool", schema["additionalProperties"])
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("expected top-level properties map")
+	}
+	step, ok := props["createQueue"].(map[string]any)
+	if !ok {
+		t.Fatal("expected createQueue step schema")
+	}
+	if step["additionalProperties"] != false {
+		t.Errorf("step additionalProperties = %v, want false", step["additionalProperties"])
+	}
+	// The step's runtime value is the whole SEMP envelope ({"data": ...,
+	// "meta": ...}), not the item alone — the identifier fields live one
+	// level down, under properties.data.
+	stepProps, ok := step["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("expected the step schema to have a properties map (the envelope wrapper)")
+	}
+	dataSchema, ok := stepProps["data"].(map[string]any)
+	if !ok {
+		t.Fatal("expected a 'data' property on the step schema (the envelope's payload)")
+	}
+	required, ok := dataSchema["required"].([]string)
+	if !ok {
+		t.Fatal("expected the data schema to require its identifier fields")
+	}
+	wantRequired := map[string]bool{"msgVpnName": true, "queueName": true}
+	if len(required) != len(wantRequired) {
+		t.Errorf("required = %v, want %v", required, wantRequired)
+	}
+	for _, r := range required {
+		if !wantRequired[r] {
+			t.Errorf("unexpected required field %q", r)
+		}
+	}
+}
+
+// TestCompositeToolHandler_OutputSchema_DeleteToolStaysUsable confirms a
+// write tool whose operation has no ResponseFields (every real delete/action
+// tool) still gets a valid, non-crashing schema — permissive at the step
+// level (nothing to constrain) but still additionalProperties: false at the
+// top level, since the set of step IDs itself is still known.
+func TestCompositeToolHandler_OutputSchema_DeleteToolStaysUsable(t *testing.T) {
+	operations := map[string]*sempv2.Operation{
+		"config/deleteMsgVpnQueue": {ID: "deleteMsgVpnQueue", ResponseFields: nil},
+	}
+	executor := composite.NewCompositeExecutor(operations)
+	handler := NewCompositeToolHandler(deleteTestTool(), executor)
+
+	schema := handler.Metadata().OutputSchema
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("expected top-level properties map")
+	}
+	step, ok := props["deleteQueue"].(map[string]any)
+	if !ok {
+		t.Fatal("expected deleteQueue step schema")
+	}
+	if _, hasAddProps := step["additionalProperties"]; hasAddProps {
+		t.Errorf("a nil-ResponseFields step must stay fully permissive, got additionalProperties=%v", step["additionalProperties"])
+	}
+}
+
+// TestCompositeToolHandler_OutputSchema_RealCatalogWiring is the end-to-end
+// proof for SOL-152947: load the real embedded tools.yaml and specs, build
+// handlers the way NewToolManagerFromComposite does, and confirm write tools
+// get the strict schema while a monitor tool alongside them keeps the
+// generic envelope — proving the wiring is genuinely connected, not just
+// correct against synthetic fixtures.
+func TestCompositeToolHandler_OutputSchema_RealCatalogWiring(t *testing.T) {
+	operations, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatalf("ParseSpecs: %v", err)
+	}
+	realTools, err := composite.LoadTools(definitions.FS, "tools.yaml")
+	if err != nil {
+		t.Fatalf("LoadTools: %v", err)
+	}
+	executor := composite.NewCompositeExecutor(operations)
+
+	find := func(name string) composite.CompositeTool {
+		t.Helper()
+		for _, tool := range realTools {
+			if tool.Name == name {
+				return tool
+			}
+		}
+		t.Fatalf("tool %q not found in the real catalog", name)
+		return composite.CompositeTool{}
+	}
+
+	writeSchema := NewCompositeToolHandler(find("create-queue"), executor).Metadata().OutputSchema
+	if writeSchema["additionalProperties"] != false {
+		t.Errorf("create-queue (real catalog): additionalProperties = %v, want false", writeSchema["additionalProperties"])
+	}
+
+	monitorSchema := NewCompositeToolHandler(find("list-queues"), executor).Metadata().OutputSchema
+	addProps, ok := monitorSchema["additionalProperties"].(map[string]any)
+	if !ok || addProps["type"] != "object" {
+		t.Errorf("list-queues (real catalog): expected the unchanged generic envelope, got additionalProperties=%v", monitorSchema["additionalProperties"])
 	}
 }
 

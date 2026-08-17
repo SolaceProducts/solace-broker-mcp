@@ -28,7 +28,13 @@
 #   expected_tool             single tool name that MUST be called
 #   expected_tool_any_of      array; at least one MUST be called
 #   expected_tools_all_of     array; all MUST be called
-#   expected_tools_none       true → assert ZERO tool calls (MCP-down test)
+#   expected_no_mutating_tools  true → assert no tool call matches
+#                             $MUTATING_TOOL_REGEX (config.env). Read-only MCP
+#                             calls and the CLI's own ToolSearch are permitted.
+#                             This is the assertion a confirmation-gated turn 1
+#                             wants: "changed nothing", not "called nothing".
+#                             Replaces `expected_tools_none`, which is retired —
+#                             a scenario still carrying that key hard-fails.
 #   ground_truth.jq           jq path applied to the tool_result to extract the
 #                             must-appear entity set (every name it emits MUST
 #                             be named in the answer).
@@ -274,6 +280,14 @@ fi
 # `tee` keeps the full raw JSONL in a per-turn run file so jq can parse it
 # for assertions; the compact formatter below summarizes each event into
 # one short line for the user (raw stream-json is unreadable at suite scale).
+#
+# The model field joins every key of `modelUsage`, not just the first. A turn
+# can legitimately bill more than one model — a ToolSearch schema lookup runs
+# its retrieval on a small fast model while the main model does the reasoning —
+# and this line used to print `keys[0]`, which jq sorts, so such a turn reported
+# "claude-haiku-4-5-…" no matter which model actually answered. That is a
+# misreport in exactly the field the daily run's artifacts exist to record.
+# Sorted order is kept so the string is stable across runs and diffable.
 JQ_PRETTY='
 def info(msg): "[0;36m[INFO][0m  " + msg;
 if .type == "assistant" then
@@ -285,7 +299,7 @@ if .type == "assistant" then
 elif .type == "result" then
   info("answer: " + ((.result // "(empty)") | gsub("\n"; " ") | gsub(" +"; " ")
         | if length > 300 then .[:300] + "…" else . end)
-    + "  ($\((.total_cost_usd * 10000 + 0.5 | floor) / 10000), \(.modelUsage | keys[0] // "?"))")
+    + "  ($\((.total_cost_usd * 10000 + 0.5 | floor) / 10000), \(.modelUsage // {} | keys | join("+") | if . == "" then "?" else . end))")
 else empty end
 '
 
@@ -308,9 +322,15 @@ invoke_claude() {
         # auto-approves every tool from our MCP server (the only one loaded,
         # thanks to --strict-mcp-config), so the list stays maintenance-free
         # as the server adds tools. Assertion logic catches wrong tool choices.
-        # Built-in tools (Bash, Read, WebSearch, …) are NOT on this allow-list,
-        # so in --print mode they can't run — the auto-approve gate keeps the
-        # agent effectively confined to MCP tools without a `--tools ""` flag.
+        # Built-in tools that need approval (Bash, Read, WebSearch, …) are NOT
+        # on this allow-list, so in --print mode they can't run — the
+        # auto-approve gate keeps the agent effectively confined to MCP tools
+        # without a `--tools ""` flag. Note "effectively", not "entirely": the
+        # allow-list does not gate every built-in. ToolSearch runs regardless,
+        # because the CLI defers tool schemas once enough tools are registered
+        # and the agent cannot name an MCP tool without looking it up first.
+        # Assertions must therefore tolerate built-ins they never asked for —
+        # see `expected_no_mutating_tools`.
         # A prior version of this argv did pass `--tools ""` to disable built-
         # ins explicitly; CLI 2.1.181 reinterprets that as "disable ALL tools
         # including MCP", so the agent had no tools and answered every
@@ -350,7 +370,7 @@ fail() { log_fail "$*"; PASS=0; }
 run_assertions() {
     local run_file="$1" scoped="$2" label="$3"
 
-    local expected_tool expected_any expected_all expected_none
+    local expected_tool expected_any expected_all expected_no_mutating removed_none
     local required required_any forbidden
     local num_regex num_min num_max
     local gt_jq gt_regex gt_shell gt_expect
@@ -358,7 +378,8 @@ run_assertions() {
     expected_tool=$(jq -r '.expected_tool // empty' <<<"$scoped")
     expected_any=$(jq -r '.expected_tool_any_of[]? // empty' <<<"$scoped")
     expected_all=$(jq -r '.expected_tools_all_of[]? // empty' <<<"$scoped")
-    expected_none=$(jq -r '.expected_tools_none // false' <<<"$scoped")
+    expected_no_mutating=$(jq -r '.expected_no_mutating_tools // false' <<<"$scoped")
+    removed_none=$(jq -r 'has("expected_tools_none")' <<<"$scoped")
     required=$(jq -r '.required_substrings[]? // empty' <<<"$scoped")
     required_any=$(jq -r '.required_substrings_any_of[]? // empty' <<<"$scoped")
     forbidden=$(jq -r '.forbidden_substrings[]? // empty' <<<"$scoped")
@@ -414,8 +435,30 @@ run_assertions() {
             grep -Fqx "$t" <<<"$tool_calls" || fail "$label: required tool '$t' was not called"
         done <<<"$expected_all"
     fi
-    if [ "$expected_none" = "true" ] && [ -n "$tool_calls" ]; then
-        fail "$label: expected zero tool calls but agent called: $(echo "$tool_calls" | tr '\n' ' ')"
+    # The invariant a gated turn 1 actually has to hold is "changed nothing",
+    # not "called nothing". The predecessor assertion (`expected_tools_none`)
+    # conflated the two, so it failed on a read-only get-queue-metrics that
+    # makes the confirmation *better* — "100 messages (25,600 bytes) will be
+    # deleted" beats a bare "are you sure?" — and on the ToolSearch schema
+    # lookup the CLI needs before it can name an MCP tool at all, which no
+    # scenario can avoid once the server's tool count crosses the CLI's
+    # deferral threshold. It was also weaker where it counted: it would have
+    # passed a turn-1 `delete-queue` no more loudly than a `list-queues`,
+    # because it only ever checked whether the list was empty.
+    if [ "$expected_no_mutating" = "true" ]; then
+        local mutating
+        mutating=$(grep -E "$MUTATING_TOOL_REGEX" <<<"$tool_calls" || true)
+        if [ -n "$mutating" ]; then
+            fail "$label: expected no state-changing tool call but agent called: $(echo "$mutating" | tr '\n' ' ')"
+        fi
+    fi
+
+    # Fail loud on the removed key. A scenario still carrying
+    # `expected_tools_none` would otherwise assert nothing at all and pass
+    # vacuously — silently retiring a safety assertion is the worst outcome
+    # available here.
+    if [ "$removed_none" = "true" ]; then
+        fail "$label: 'expected_tools_none' was replaced by 'expected_no_mutating_tools' — update this scenario"
     fi
 
     # ── Substrings ──

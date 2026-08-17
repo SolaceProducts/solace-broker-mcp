@@ -1,11 +1,40 @@
-name: LLM E2E Eval (Manual)
+name: LLM E2E Eval
 
-# Non-gating, manually-triggered run of the LLM e2e eval suite under
-# test/e2e-llm/. Costs API credits per invocation — do not
-# add a per-PR or scheduled trigger here. Operating model (cadence,
-# ownership, pass thresholds) is out of scope for SOL-150789.
+# Non-gating run of the LLM e2e eval suite under test/e2e-llm/, on a daily
+# schedule and on demand. Costs API credits per invocation (~$4.78 for the full
+# 35-row matrix, measured 2026-08-05). Do not add a per-PR or merge-gating
+# trigger, and do not make this a required check.
+#
+# THE SCHEDULE IS A TIME-BOXED EXPERIMENT — REMOVE IT BY 2026-09-05
+#
+# SOL-153184 runs the suite unattended for a bounded window to collect the data
+# the operating-model decision needs and does not have: how often a scenario
+# flakes across many runs, what a full matrix actually costs per day, and
+# whether the fixtures hold up on a hosted runner over weeks. A hand-run cannot
+# answer any of those.
+#
+# The window is 10–20 daily runs starting 2026-08-15, so the last scheduled run
+# is 2026-09-03. By 2026-09-05, either the `schedule:` trigger below is deleted
+# or SOL-153184 records the follow-up decision (permanent daily run, on-demand
+# only, or gating). An unowned schedule burning credits past its window is the
+# failure mode this comment exists to prevent.
+#
+# Nothing here retries. A single attempt per run is what makes the flake-rate
+# data meaningful.
 
 on:
+  schedule:
+    # 02:00 Eastern daily — off-hours, so the run neither competes with a manual
+    # dispatch nor with peak hosted-runner demand. Nobody is watching at 02:00,
+    # which is fine: results are read from the artifacts at the end of the
+    # window, not reacted to daily.
+    #
+    # Cron here is UTC and does not follow daylight saving. The collection window
+    # (2026-08-15 to 2026-09-03) falls entirely in EDT, where 06:00 UTC is 02:00
+    # local. If the schedule ever outlives the window into EST it drifts to 01:00
+    # local and needs 07:00 UTC — one more reason not to let it outlive the
+    # window.
+    - cron: '0 6 * * *'
   workflow_dispatch:
     inputs:
       target_branch:
@@ -24,18 +53,56 @@ on:
         default: ''
         type: string
 
+# Serialize runs rather than cancelling them. The 02:00 schedule makes an overlap
+# with a manual dispatch unlikely rather than impossible, and the cost of the
+# unlikely case is losing that day's data point — `cancel-in-progress: true`
+# would let a dispatch silently destroy it. Cancelling is the worse outcome
+# either way: it leaves broker containers up on a runner that is about to be
+# reclaimed, having already spent the API credits it will now produce no data
+# from.
+#
+# On a hosted runner each job gets its own VM, so this is not about Docker port
+# or container-name collisions — it is about the day's data point and, for a
+# lab-broker target, two runs mutating one shared broker's fixtures.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
 jobs:
   llm-eval:
+    # A `schedule` event fires on every fork that has Actions enabled, which
+    # would hand each fork an inherited daily credit burn nobody there asked
+    # for. Manual dispatch stays available everywhere.
+    if: github.event_name != 'schedule' || github.repository == 'SolaceProducts/solace-broker-mcp'
     runs-on: ubuntu-latest
+    # Headroom, not a guess: the full 35-row matrix took 7m50s of suite time in
+    # a 10m26s job on a hosted runner (run 31039920539, 2026-08-05), measured
+    # after the Mode-2 rows landed.
     timeout-minutes: 30
+    env:
+      # A `schedule` event supplies no `inputs`, so every input needs a
+      # fallback. Resolving all three once here — instead of repeating
+      # `${{ inputs.x || 'default' }}` at each use — is what keeps the
+      # scheduled run from checking out an empty ref and skipping log capture
+      # and teardown. Steps read env.*, never inputs.*.
+      TARGET_BRANCH: ${{ inputs.target_branch || 'main' }}
+      BROKER_TARGET: ${{ inputs.broker_target || 'local-docker' }}
+      SCENARIO_FILTER: ${{ inputs.scenario_filter }}
     steps:
+      - name: Resolve run-record directory
+        # Defined once here and read as env.ART_DIR by the three steps that
+        # write, summarize, and upload it. It cannot live in the job-level env
+        # block above: the `runner` context is not in scope there. Outside the
+        # workspace, so the run record never mixes with the checkout.
+        run: echo "ART_DIR=$RUNNER_TEMP/llm-eval-run" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.target_branch }}
+          ref: ${{ env.TARGET_BRANCH }}
           persist-credentials: false
 
       - name: Setup Go
@@ -46,7 +113,14 @@ jobs:
       - name: Setup Node (for Claude CLI install)
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '20'
+          # Tracks the pinned CLI's own floor, which rose from >=18.0.0 to
+          # >=22.0.0 between 2.1.181 and 2.1.223. Node 20 satisfied the old
+          # floor, so this pin was invisible until the bump. npm's default
+          # engine-strict=false would have installed anyway and left the
+          # violation to surface later, in the CLI rather than the install.
+          # Re-check this against `npm view @anthropic-ai/claude-code engines`
+          # when bumping the pin.
+          node-version: '22'
 
       - name: Install pinned Claude Code CLI
         # npm ci installs exactly what package-lock.json pins (FOSSA
@@ -59,11 +133,19 @@ jobs:
           echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
           ./node_modules/.bin/claude --version
 
+      - name: Assertion self-test (offline)
+        # Replays canned stream-json through run-scenario.sh's assertions with a
+        # stub `claude`, so the failing direction of `expected_no_mutating_tools`
+        # is exercised — every live scenario only ever exercises the passing one.
+        # Costs no credits and needs no brokers, so it runs before fixtures: a
+        # broken safety assertion should fail the run in seconds, not after a
+        # full matrix has spent its budget passing vacuously.
+        run: bash test/e2e-llm/test-assertions.sh
+
       - name: Start local brokers + fixtures
         # No-op for non-local-docker targets — setup-fixtures.sh guards
         # on BROKER_TARGET. Lab targets are assumed already running.
-        env:
-          BROKER_TARGET: ${{ inputs.broker_target }}
+        id: fixtures
         run: bash test/e2e-llm/setup-fixtures.sh
 
       - name: Verify LLM service credentials present
@@ -89,25 +171,37 @@ jobs:
         # CLI's ambient ~/.claude login (local-dev convenience). When
         # the endpoint IS set, the preceding step has already enforced
         # that the secret is present.
+        #
+        # SCENARIO_FILTER reaches the run body through env (job-level), so it is
+        # never interpolated into the script — avoids the GitHub
+        # script-injection shape even though workflow_dispatch is
+        # write-access-only.
+        id: suite
+        # Below the job's 30, deliberately. A stalled request is the only
+        # realistic route to a wall-clock cap here — nothing bounds a scenario
+        # in time (`--max-turns 5` bounds turns, and the claude invocation has
+        # no timeout(1) wrapper). Capping the step instead of the job means a
+        # stall surfaces as a step `failure`, which the classifier below reads
+        # as an ordinary infrastructure failure, and Collect / Upload / Teardown
+        # then run as normal steps rather than under cancellation.
+        timeout-minutes: 22
         env:
-          BROKER_TARGET: ${{ inputs.broker_target }}
           LLM_SERVICE_ENDPOINT: ${{ vars.LLM_SERVICE_ENDPOINT }}
           LLM_SERVICE_MODEL_NAME: ${{ vars.LLM_SERVICE_MODEL_NAME }}
           LLM_SERVICE_API_KEY: ${{ secrets.LLM_SERVICE_API_KEY }}
-          # Bind dispatch input to env so the run body never interpolates
-          # ${{ inputs.scenario_filter }} directly — avoids the GitHub
-          # script-injection shape even though workflow_dispatch is
-          # write-access-only.
-          SCENARIO_FILTER: ${{ inputs.scenario_filter }}
         run: |
+          mkdir -p "$ART_DIR"
           ARGS=()
           if [ -n "$SCENARIO_FILTER" ]; then
             ARGS+=(--filter "$SCENARIO_FILTER")
           fi
-          bash test/e2e-llm/run-all.sh "${ARGS[@]}"
+          # pipefail so tee cannot mask the suite's exit code — without it every
+          # run in the window would look green.
+          set -o pipefail
+          bash test/e2e-llm/run-all.sh "${ARGS[@]}" 2>&1 | tee "$ART_DIR/run-raw.log"
 
       - name: Broker logs (on failure)
-        if: failure() && inputs.broker_target == 'local-docker'
+        if: failure() && env.BROKER_TARGET == 'local-docker'
         run: |
           echo "=== solace-e2e-llm-a ==="
           docker logs solace-e2e-llm-a 2>&1 | tail -100 || true
@@ -115,9 +209,116 @@ jobs:
           docker logs solace-e2e-llm-b 2>&1 | tail -100 || true
 
       - name: MCP server log (on failure)
-        if: failure() && inputs.broker_target == 'local-docker'
+        if: failure() && env.BROKER_TARGET == 'local-docker'
         run: cat test/e2e-llm/bin/mcp-server.log 2>/dev/null || echo "(no server log)"
 
+      - name: Collect run record
+        # The console log is the only record of a run today, and reading 20 of
+        # them by hand at write-up time is the reason this step exists. It
+        # writes a fixed-shape summary.txt so the window's results can be
+        # tallied mechanically, and classifies infrastructure failures (fixtures
+        # or precheck) apart from scenario failures — that split is a deliberate
+        # output of the experiment, not a nicety.
+        if: always()
+        env:
+          FIXTURES_OUTCOME: ${{ steps.fixtures.outcome }}
+          SUITE_OUTCOME: ${{ steps.suite.outcome }}
+        run: |
+          mkdir -p "$ART_DIR"
+          RAW="$ART_DIR/run-raw.log"
+          LOG="$ART_DIR/run.log"
+
+          # The suite colours its output unconditionally (helpers.sh does not
+          # gate on a tty), so strip ANSI for a log that is still readable in a
+          # text editor weeks from now.
+          if [ -f "$RAW" ]; then
+            sed 's/\x1b\[[0-9;]*m//g' "$RAW" > "$LOG"
+            rm -f "$RAW"
+          fi
+
+          # Keep the MCP server log alongside the run log when something broke;
+          # the runner's own log expires, and an infrastructure failure is
+          # undiagnosable without it.
+          if [ "$SUITE_OUTCOME" != "success" ] && [ -f test/e2e-llm/bin/mcp-server.log ]; then
+            cp test/e2e-llm/bin/mcp-server.log "$ART_DIR/mcp-server.log"
+          fi
+
+          # Classification order matters: each branch rules out an earlier stage
+          # of the run, so the first match is the earliest thing that broke.
+          #
+          # `cancelled` and `skipped` are checked before the generic
+          # `!= "success"` tests, which would otherwise absorb both and file
+          # them under a stage that never ran. A step is `skipped` when an
+          # earlier step (Checkout, Setup Go, npm ci) failed first, and
+          # `cancelled` when the job hit `timeout-minutes` or was stopped by
+          # hand. The infra-vs-scenario split is read mechanically at window
+          # end, so a misfiled row silently inflates the infra column.
+          if [ "$SUITE_OUTCOME" = "cancelled" ] || [ "$FIXTURES_OUTCOME" = "cancelled" ]; then
+            CLASS="infrastructure (run cancelled or timed out)"
+          elif [ "$FIXTURES_OUTCOME" = "skipped" ]; then
+            CLASS="infrastructure (run aborted before fixtures)"
+          elif [ "$FIXTURES_OUTCOME" != "success" ]; then
+            CLASS="infrastructure (fixture setup)"
+          elif [ ! -f "$LOG" ]; then
+            CLASS="infrastructure (suite produced no output)"
+          elif grep -q 'PRECHECK FAIL' "$LOG"; then
+            CLASS="infrastructure (precheck: MCP or broker unreachable)"
+          elif grep -q '^Summary: ' "$LOG"; then
+            CLASS="scenario (suite ran to completion)"
+          else
+            CLASS="infrastructure (suite aborted before its summary)"
+          fi
+
+          {
+            echo "run_id:          ${GITHUB_RUN_ID}"
+            echo "run_number:      ${GITHUB_RUN_NUMBER}"
+            echo "run_attempt:     ${GITHUB_RUN_ATTEMPT}"
+            echo "event:           ${GITHUB_EVENT_NAME}"
+            echo "ref:             ${TARGET_BRANCH}"
+            echo "commit:          ${GITHUB_SHA}"
+            echo "finished_utc:    $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "broker_target:   ${BROKER_TARGET}"
+            echo "scenario_filter: ${SCENARIO_FILTER:-(none)}"
+            echo "fixtures:        ${FIXTURES_OUTCOME}"
+            echo "suite:           ${SUITE_OUTCOME}"
+            echo "failure_class:   ${CLASS}"
+            echo
+            if [ -f "$LOG" ]; then
+              # Reprint the suite's own result table and its `total cost:` line.
+              # Anchored on the table's header and closing rule rather than on a
+              # PASS/FAIL pattern, so a mid-run "[PASS]" line cannot land here.
+              awk '
+                /^scenario +result$/ { intable = 1; next }
+                intable && /^═+$/    { intable = 0; next }
+                intable && /^─+$/    { next }
+                intable              { print; next }
+                /^Summary: /         { print }
+                /^Failed: /          { print }
+              ' "$LOG"
+            else
+              echo "(no suite output — see failure_class)"
+            fi
+          } > "$ART_DIR/summary.txt"
+
+          # Same content on the run's summary page, so a day's result is
+          # readable without downloading the artifact.
+          {
+            echo '```'
+            cat "$ART_DIR/summary.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload run record
+        # Retention outlasts the 20-day collection window plus write-up time, so
+        # day 1 is still readable on the day the window closes.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: llm-eval-run-${{ github.run_number }}-attempt-${{ github.run_attempt }}
+          path: ${{ env.ART_DIR }}
+          retention-days: 60
+          if-no-files-found: error
+
       - name: Tear down local brokers
-        if: always() && inputs.broker_target == 'local-docker'
+        if: always() && env.BROKER_TARGET == 'local-docker'
         run: docker compose -f test/e2e-llm/docker-compose.yml down -v

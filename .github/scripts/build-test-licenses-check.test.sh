@@ -339,7 +339,7 @@ assert_check "wrong container image tag fails" 1 \
 # weakened to 1 with the whole suite staying green, which is a fail-open — a
 # one-character stale row would then satisfy any future re-pin.
 assert_check "a longer correct short SHA still passes" 0 \
-    set_solace_action_ref "47931eb2fd"
+    set_solace_action_ref "63228a0981"
 assert_check "a correct short SHA below the 7-character floor fails" 1 \
     set_solace_action_ref "47931"
 assert_check "a wrong SHA of acceptable length fails" 1 \
