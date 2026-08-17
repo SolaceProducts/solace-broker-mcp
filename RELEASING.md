@@ -46,6 +46,7 @@ Moving pointers let consumers track a stream instead of a fixed version:
 - Coverage threshold met **[Planned]**
 - No performance regression **[Planned]**
 - Release notes drafted — the GitHub Release body is minted from that version's `CHANGELOG.md` block, with the auto-generated PR list appended beneath; a missing block fails the release **[Implemented]**
+- Every binary archive actually runs — `.github/scripts/smoke-test-binary.sh` extracts each matrix leg's archived `.tar.gz` (the artifact as uploaded, not a binary freshly built in the build job's workspace) and runs `--version`, failing if the exit is non-zero or the reported version doesn't match the tag. `linux/amd64`, `darwin/amd64`, and `darwin/arm64` run natively (`ubuntu-latest`, `macos-15-intel`, `macos-latest`); `linux/arm64` has no available native or self-hosted ARM runner and runs under QEMU user-mode emulation instead. Runs as `smoke-test`, a `needs` of `release` alongside `build-binaries` and `build-docker` **[Implemented]**
 
 **Stable gate** — promotes a candidate to a stable version (drops the pre-release suffix):
 
@@ -72,8 +73,9 @@ Pushing the tag runs `.github/workflows/release.yml`, which:
 1. Re-runs the full build-and-test suite.
 2. Runs the release readiness check (the Guardian gate) against the tag.
 3. Builds binaries for `linux` and `darwin` × `amd64` and `arm64`, attesting each archive's build provenance in the job that built it.
-4. Builds and pushes a multi-arch image to `ghcr.io/solaceproducts/solace-broker-mcp` (`{version}`, `{major}.{minor}`, `latest`, `sha-<short-sha>` tags), and attests the image digest, pushing the attestation to the registry alongside it.
-5. Publishes a GitHub Release whose notes are the tagged version's `CHANGELOG.md` block (with the auto-generated PR list appended beneath), plus the binary archives and SHA-256 checksums. If no `## [X.Y.Z]` block exists for the tag, the release fails rather than falling back to auto-only notes.
+4. Smoke-tests each of the four archived binaries — extracts the artifact and runs `--version`, asserting a clean exit and that the reported version matches the tag. `linux/arm64` is verified under QEMU emulation since no native ARM Linux runner is available; the darwin legs run on their native macOS runners.
+5. Builds and pushes a multi-arch image to `ghcr.io/solaceproducts/solace-broker-mcp` (`{version}`, `{major}.{minor}`, `latest`, `sha-<short-sha>` tags), and attests the image digest, pushing the attestation to the registry alongside it.
+6. Publishes a GitHub Release whose notes are the tagged version's `CHANGELOG.md` block (with the auto-generated PR list appended beneath), plus the binary archives and SHA-256 checksums. If no `## [X.Y.Z]` block exists for the tag, the release fails rather than falling back to auto-only notes.
 
 Anyone with permission to push tags can cut a release.
 
@@ -88,8 +90,9 @@ push v* tag
 
 waits on
   build-binaries   test, release-notes, licenses
+  smoke-test       build-binaries                                    ← executes each archive
   build-docker     test, release-notes, licenses, release-readiness   ← pushes the image
-  release          build-binaries, build-docker, release-readiness
+  release          build-binaries, build-docker, release-readiness, smoke-test
 ```
 
 A failed job blocks the GitHub Release, binaries, checksums, and the container image: `build-docker` waits on the readiness check as well as the build, so a failing Guardian gate publishes nothing. That matters because a registry push cannot be withdrawn — the binaries are only artifacts until `release` publishes them, but the image is live the moment it is pushed.
@@ -117,7 +120,7 @@ After pushing the tag:
 
 1. Watch the run: `gh run list --workflow=release.yml --limit 1`; on failure, `gh run view <run-id> --log`.
 2. Verify the release: `gh release view <tag>` shows four binary archives, `checksums-sha256.txt`, and the curated CHANGELOG notes (with the PR list appended); the image tags are present on `ghcr.io/solaceproducts/solace-broker-mcp`.
-3. Spot-check a binary: download the archive for your platform, verify it (`shasum -a 256 -c checksums-sha256.txt --ignore-missing`), and run `./solace-broker-mcp --version` — it prints the tag.
+3. Spot-check a binary: download the archive for your platform, verify it (`shasum -a 256 -c checksums-sha256.txt --ignore-missing`), and run `./solace-broker-mcp --version` — it prints the tag. CI already asserted this for all four archives in `smoke-test` before publishing; this is a trust-but-verify check on your own machine, not the first time it's been checked.
 4. Verify the attestations on both artifact kinds. `--signer-workflow` and `--source-digest` are what make this a check rather than a look: without them the command binds only the repository, and its output names the build and signer workflow but never prints a commit SHA, so there is nothing to eyeball. With them, a wrong builder or a wrong source commit fails the command.
 
    Set `TAG` and `PLATFORM`, then paste the rest as-is. The image reference deliberately uses `VERSION`, not `TAG`: `docker/metadata-action`'s `{{version}}` pattern strips the leading `v`, so the image tags are `0.7.0`, `0.7`, `latest`, and `sha-<short-sha>` — there is no `v0.7.0` image tag.
