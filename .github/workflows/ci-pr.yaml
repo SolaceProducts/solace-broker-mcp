@@ -158,6 +158,48 @@ jobs:
       - name: Verify every Go file carries the Apache-2.0 header
         run: .github/scripts/license-header-check.sh
 
+  # A fork pull request gets no vulnerability verdict from guardian-scan.yaml:
+  # every scan job there is gated on `!is_fork` because GitHub withholds
+  # Environment secrets from a fork-triggered run, so the first enforcing scan
+  # runs *after* merge and code review cannot see a CVE (SOL-153086). The
+  # Dependency Review API needs no third-party secret — only GITHUB_TOKEN against
+  # the dependency graph, which is always on for a public repository — so it
+  # reports on fork pull requests. That is why it is the right tool here and FOSSA
+  # is not.
+  #
+  # `fail-on-severity: high` is the entire policy: fail a pull request that
+  # *introduces* a dependency carrying a known high or critical advisory. The
+  # other three inputs are set explicitly rather than left to their defaults, so
+  # this gate's behaviour cannot change when the action's defaults do.
+  #
+  # What a green check does and does not cover, why each input is set, the
+  # escalation path, and the steps to register it as required all live in
+  # .github/ADMIN_SETUP.md. Deliberately not repeated here — two copies of the
+  # same rationale drift, which is the failure mode `license-check: false` exists
+  # to avoid.
+  dependency_review:
+    name: Dependencies free of high advisories
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # No checkout: the action compares base against head through the API and
+      # reads nothing from the working tree.
+      - name: Review dependency changes for known advisories
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          # Licence policy lives in FOSSA; a second copy here would drift.
+          license-check: false
+          # Calls deps.dev live, and a verdict that moves with no commit behind it
+          # is not a gate. Same reason workflow-lint.yaml runs --no-online-audits.
+          show-openssf-scorecard: false
+          # Already the default. Pinned because `always` and `on-failure` need
+          # `pull-requests: write`, which a fork pull request's token does not
+          # carry — so a later change here would break the case this job exists
+          # for. The verdict goes to the job summary instead.
+          comment-summary-in-pr: never
+
   changelog:
     name: CHANGELOG updated
     runs-on: ubuntu-latest
