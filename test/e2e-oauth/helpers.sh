@@ -562,11 +562,14 @@ mcp_initialize_as() {
         return 1
     fi
 
+    assert_negotiated_protocol "$response" || return 1
+
     curl -sf --cacert "$MCP_SERVER_CERT" -X POST "$MCP_URL/mcp" \
         -H "Content-Type: application/json" \
         -H "Accept: application/json, text/event-stream" \
         -H "Authorization: Bearer $token" \
         -H "Mcp-Session-Id: $session_id" \
+        -H "MCP-Protocol-Version: $MCP_PROTOCOL_VERSION" \
         -d '{"jsonrpc": "2.0", "method": "notifications/initialized"}' >/dev/null 2>&1 || true
 
     echo "$session_id"
@@ -580,6 +583,7 @@ mcp_request_as() {
         -H "Accept: application/json, text/event-stream" \
         -H "Authorization: Bearer $token" \
         -H "Mcp-Session-Id: $session_id" \
+        -H "MCP-Protocol-Version: $MCP_PROTOCOL_VERSION" \
         -d "$body")
     echo "$raw" | grep '^data: ' | sed 's/^data: //'
 }

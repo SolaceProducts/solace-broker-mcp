@@ -8,6 +8,8 @@ For a quickstart and the suite's port allocation, see [`test/e2e-basic-mcp/READM
 
 The generic scaffold shared by the tool-testing suites — broker readiness, MCP server build/start/stop, config generation (`write_config`), SEMP operations, the MCP JSON-RPC wire helpers, assertions, and the test runner — lives in [`test/e2e-common/lib.sh`](../../test/e2e-common/lib.sh). Each suite keeps only its own fixtures and sources the lib. Every suite runs one server with `enable_write_tools` on, so both read and write tools are registered.
 
+Protocol pin: `MCP_PROTOCOL_VERSION` (default `2025-11-25`) is the `protocolVersion` every suite sends in its `initialize` handshake — exported by the lib and overridable from the environment. `2025-11-25` is the newest revision this stateful server can negotiate; the full rationale sits at the definition in `lib.sh`. Raising it does not fail the handshake — the SDK silently negotiates back down — so `mcp_initialize` asserts the negotiated revision matches the pin.
+
 Location-independence contract: a suite sets `SUITE_DIR` (its own directory) before sourcing the lib, which derives `BIN_DIR`/`ENV_FILE`/`REPO_ROOT` from it and sources the suite's `.env`. This lets one lib serve `e2e-monitoring`, `e2e-management`, and future suites, each with its own `bin/`, `.env`, ports, and containers.
 
 | Suite | Fixtures | Focus |
@@ -69,7 +71,7 @@ test/e2e-basic-mcp/
 
 ## Configuration
 
-All test configuration lives in a single file: `test/e2e-basic-mcp/.env`. This file is the source of truth for ports, credentials, and MCP server env vars. It is read by:
+Per-suite configuration lives in a single file: `test/e2e-basic-mcp/.env`. This file is the source of truth for ports, credentials, and MCP server env vars (suite-wide protocol settings such as `MCP_PROTOCOL_VERSION` live in `e2e-common/lib.sh` instead). It is read by:
 
 - **docker-compose.yml** — broker port mappings and admin password
 - **helpers.sh** — broker URLs, SEMP auth, fixture management

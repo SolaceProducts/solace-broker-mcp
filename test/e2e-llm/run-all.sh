@@ -30,9 +30,10 @@ if [ -f "$HELPERS" ]; then
     source "$HELPERS"
 else
     RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; NC='\033[0m'
-    # Normally inherited from e2e-common/lib.sh via helpers.sh; keep the
-    # fallback in step with the value and rationale documented there.
-    MCP_PROTOCOL_VERSION='2025-11-25'
+    # Normally inherited from e2e-common/lib.sh via helpers.sh; identical form
+    # here so an operator override survives this path too. Rationale for the
+    # value lives with the definition there.
+    export MCP_PROTOCOL_VERSION="${MCP_PROTOCOL_VERSION:-2025-11-25}"
 fi
 
 FILTER=""
@@ -65,7 +66,10 @@ MCP_HEADERS=(
 # the caller needs response headers (for the Mcp-Session-Id on initialize).
 mcp_call() {
     local sid="$1" body="$2" curl_args=()
-    [ -n "$sid" ] && curl_args+=(-H "Mcp-Session-Id: $sid")
+    # MCP-Protocol-Version rides along with the session: without it the
+    # transport serves the request at its own default revision, not the one the
+    # handshake negotiated.
+    [ -n "$sid" ] && curl_args+=(-H "Mcp-Session-Id: $sid" -H "MCP-Protocol-Version: $MCP_PROTOCOL_VERSION")
     curl -s --max-time 5 "${curl_args[@]}" "${MCP_HEADERS[@]}" \
         -X POST "$MCP_URL/mcp" -d "$body" 2>/dev/null
 }
@@ -87,6 +91,7 @@ precheck() {
     # skipping it today, but a stricter server (or a future tightening) would
     # reject the tools/call below and surface as a confusing precheck fail.
     curl -s --max-time 5 "${MCP_HEADERS[@]}" -H "Mcp-Session-Id: $sid" \
+        -H "MCP-Protocol-Version: $MCP_PROTOCOL_VERSION" \
         -X POST "$MCP_URL/mcp" \
         -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
         >/dev/null 2>&1 || true
