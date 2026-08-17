@@ -533,8 +533,9 @@ restart_oauth_server() {
 # ── MCP wire (token-parameterized) ──────────────────────────────────────────
 # Mirrors e2e-common/lib.sh's mcp_initialize/mcp_call_tool/mcp_request, taking
 # the bearer token as an argument instead of the shared static dev token, and
-# using --cacert for the server's self-signed cert. See mcp_initialize there for
-# why protocolVersion pins 2025-11-25 rather than go-sdk's latest revision.
+# using --cacert for the server's self-signed cert. The pinned protocolVersion
+# comes from MCP_PROTOCOL_VERSION, defined with its rationale in
+# test/e2e-common/lib.sh.
 
 mcp_initialize_as() {
     local token="$1"
@@ -548,7 +549,7 @@ mcp_initialize_as() {
             "id": 1,
             "method": "initialize",
             "params": {
-                "protocolVersion": "2025-11-25",
+                "protocolVersion": "'"$MCP_PROTOCOL_VERSION"'",
                 "capabilities": {},
                 "clientInfo": { "name": "e2e-oauth-test", "version": "1.0.0" }
             }

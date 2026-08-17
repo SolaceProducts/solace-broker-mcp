@@ -30,6 +30,9 @@ if [ -f "$HELPERS" ]; then
     source "$HELPERS"
 else
     RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+    # Normally inherited from e2e-common/lib.sh via helpers.sh; keep the
+    # fallback in step with the value and rationale documented there.
+    MCP_PROTOCOL_VERSION='2025-11-25'
 fi
 
 FILTER=""
@@ -67,12 +70,12 @@ mcp_call() {
         -X POST "$MCP_URL/mcp" -d "$body" 2>/dev/null
 }
 
-# protocolVersion pins 2025-11-25, the newest revision this server negotiates;
-# see mcp_initialize in ../e2e-common/lib.sh for why it is not go-sdk's latest.
+# The pinned protocolVersion comes from MCP_PROTOCOL_VERSION, defined with its
+# rationale in test/e2e-common/lib.sh.
 precheck() {
     local sid
     sid=$(curl -s --max-time 5 -i -X POST "$MCP_URL/mcp" "${MCP_HEADERS[@]}" \
-        -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"precheck","version":"0"}}}' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"'"$MCP_PROTOCOL_VERSION"'","capabilities":{},"clientInfo":{"name":"precheck","version":"0"}}}' \
         2>/dev/null | grep -i '^Mcp-Session-Id:' | awk '{print $2}' | tr -d '\r\n')
     if [ -z "$sid" ]; then
         echo -e "${RED}[PRECHECK FAIL]${NC} MCP server not reachable on $MCP_URL/mcp" >&2
