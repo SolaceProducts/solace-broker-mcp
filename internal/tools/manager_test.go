@@ -74,9 +74,15 @@ type stubHandler struct {
 	outputSch   map[string]any
 	annotations Annotations
 	handleFn    func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error)
+
+	// metadataCalls counts Metadata() invocations, so tests can assert
+	// CallTool doesn't recompute/recompile a tool's schema on every call
+	// (SOL-153334) — it should only be read once, at Register() time.
+	metadataCalls int
 }
 
 func (h *stubHandler) Metadata() Metadata {
+	h.metadataCalls++
 	return Metadata{
 		Name:         h.name,
 		Description:  h.description,
@@ -149,6 +155,42 @@ func TestRegister_DuplicatePanics(t *testing.T) {
 		}
 	}()
 	mgr.Register(newStubHandler("dup"))
+}
+
+// TestCallTool_DoesNotRecomputeMetadataPerCall pins SOL-153334: a tool's
+// input/output JSON Schema is invariant after Register(), so CallTool must
+// read it once (at Register()) and reuse a compiled validator, never call
+// handler.Metadata() again per invocation. For a composite write tool this
+// also matters because Metadata() rebuilds the strict output schema from the
+// full SEMPv2 operation catalog (SOL-153335) — but even for this cheap stub
+// handler, recomputing per call is wasted marshal/parse work on every tool
+// invocation.
+func TestCallTool_DoesNotRecomputeMetadataPerCall(t *testing.T) {
+	mgr := NewToolManager(newTestPool(t))
+	handler := newStubHandler("counted-tool")
+	mgr.Register(handler)
+
+	callsAfterRegister := handler.metadataCalls
+	if callsAfterRegister == 0 {
+		t.Fatal("expected Register() to call Metadata() at least once")
+	}
+
+	for i := 0; i < 5; i++ {
+		result, err := mgr.CallTool(context.Background(), "counted-tool", map[string]any{
+			"broker":     "dev",
+			"msgVpnName": "default",
+		}, Identity{})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		if result.IsError {
+			t.Fatalf("CallTool returned an error result: %+v", result.StructuredContent)
+		}
+	}
+
+	if got := handler.metadataCalls - callsAfterRegister; got != 0 {
+		t.Errorf("handler.Metadata() called %d more time(s) across 5 CallTool invocations; want 0 (schema should be cached from Register())", got)
+	}
 }
 
 // --- Broker resolution tests ---
@@ -1216,4 +1258,76 @@ func TestCallTool_disabledMode_emitsNoIdentityFields(t *testing.T) {
 	if logged["tool"] != "test-tool" {
 		t.Errorf("tool = %v, want test-tool", logged["tool"])
 	}
+}
+
+// TestCallTool_ConcurrentSharedValidator exercises the actual assumption
+// SOL-153334 introduces: many goroutines calling CallTool for the same tool
+// concurrently all validate against one cached *gojsonschema.Schema (built
+// once in Register()). TestToolManager_ConcurrentRegisterAndRoute already
+// covers concurrent Route()/Register(), but its CallTool goroutines all fail
+// at broker resolution before reaching validation, so they never exercise
+// gojsonschema.Schema.Validate concurrently. This test resolves a real
+// (test-pool) broker and drives both the passing and failing validation
+// paths concurrently, under `go test -race`, against the one shared
+// validator.
+func TestCallTool_ConcurrentSharedValidator(t *testing.T) {
+	const workers = 64
+
+	mgr := NewToolManager(newTestPool(t))
+	mgr.Register(newStubHandler("shared-validator-tool"))
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			result, err := mgr.CallTool(context.Background(), "shared-validator-tool",
+				map[string]any{"broker": "dev", "msgVpnName": "default"}, Identity{})
+			if err != nil {
+				t.Errorf("CallTool (valid params): %v", err)
+				return
+			}
+			if result.IsError {
+				t.Errorf("CallTool (valid params) returned an error result: %+v", result.StructuredContent)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			// msgVpnName is required by newStubHandler's schema; omitting it
+			// drives the validation-failure branch, which is what touches
+			// gojsonschema's global error-template cache (see the Fable
+			// diff review for SOL-153334) — worth exercising alongside the
+			// success path, not just on its own.
+			result, err := mgr.CallTool(context.Background(), "shared-validator-tool",
+				map[string]any{"broker": "dev"}, Identity{})
+			if err != nil {
+				t.Errorf("CallTool (invalid params): %v", err)
+				return
+			}
+			if !result.IsError {
+				t.Error("CallTool (invalid params) expected an error result, got success")
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// TestRegister_CompileSchemaFailurePanics pins the new Register() invariant
+// that a schema which fails to compile is a startup-time configuration
+// error, not a runtime one: it panics immediately rather than deferring the
+// failure to a tool's first call (SOL-153334).
+func TestRegister_CompileSchemaFailurePanics(t *testing.T) {
+	mgr := NewToolManager(newTestPool(t))
+
+	handler := newStubHandler("bad-schema-tool")
+	// "type" must be a string or array of strings per JSON Schema; a bare
+	// number makes gojsonschema.NewSchema fail to compile.
+	handler.schema = map[string]any{"type": 123}
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for a schema that fails to compile")
+		}
+	}()
+	mgr.Register(handler)
 }
