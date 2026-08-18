@@ -71,23 +71,38 @@ if [ ! -x "$BIN" ]; then
     exit 1
 fi
 
+# stdout and stderr are captured separately, not merged. QEMU user-mode
+# emulation (the linux/arm64 leg) can emit incidental chatter on stderr from a
+# perfectly healthy binary — merging them (2>&1) would fold that chatter into
+# the string compared against the expected version and fail a good release,
+# with an error message pointing at the wrong cause. stderr is still captured
+# and surfaced in a failure, just never compared.
+stderr_file="$TMPDIR/stderr.txt"
 output=""
 exit_code=0
-output=$("$BIN" --version 2>&1) || exit_code=$?
+output=$("$BIN" --version 2>"$stderr_file") || exit_code=$?
 
 if [ "$exit_code" -ne 0 ]; then
-    echo "::error::[$PLATFORM] $BIN_NAME --version exited $exit_code, expected 0. Output:" >&2
+    echo "::error::[$PLATFORM] $BIN_NAME --version exited $exit_code, expected 0. stdout:" >&2
     echo "$output" >&2
+    echo "stderr:" >&2
+    cat "$stderr_file" >&2
     exit 1
 fi
 
-# Trim surrounding whitespace/newlines so a trailing newline from `fmt.Println`
-# doesn't fail an otherwise-exact match.
-actual_version="$(printf '%s' "$output" | tr -d '[:space:]')"
-expected_trimmed="$(printf '%s' "$EXPECTED_VERSION" | tr -d '[:space:]')"
+# Trim only leading/trailing whitespace, not every whitespace character —
+# `tr -d '[:space:]'` would also collapse legitimate internal characters,
+# which isn't what "exact match modulo a trailing newline" means.
+trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf '%s' "$s"; }
+actual_version="$(trim "$output")"
+expected_trimmed="$(trim "$EXPECTED_VERSION")"
 
 if [ "$actual_version" != "$expected_trimmed" ]; then
     echo "::error::[$PLATFORM] $BIN_NAME --version reported '$actual_version', expected '$expected_trimmed'. A stale or mis-stamped binary must fail the release." >&2
+    if [ -s "$stderr_file" ]; then
+        echo "stderr from that run (not part of the comparison, shown for context):" >&2
+        cat "$stderr_file" >&2
+    fi
     exit 1
 fi
 

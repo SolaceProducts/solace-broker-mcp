@@ -240,14 +240,17 @@ jobs:
         with:
           name: binary-${{ matrix.goos }}-${{ matrix.goarch }}
 
-      # Runs on every leg rather than gated to one. That costs three redundant
-      # runs of a sub-second fixture-based test, but it buys two things a
-      # single-leg gate can't: it can never silently stop running because a
-      # matrix leg was renamed or reordered (the exact "quietly skipped" risk
-      # this story treats as worse than a documented gap), and it exercises the
-      # script's shell-tool assumptions (tar, mktemp, chmod) against both GNU
-      # (Linux) and BSD (macOS) userland instead of only one.
+      # Gated to one leg, not every leg — the every-PR run in ci-pr.yaml
+      # (smoke_test_selftest job) is what actually protects against this
+      # script silently stopping being exercised; it runs on every pull request,
+      # before a tag ever exists, and doesn't depend on this release matrix's
+      # leg names at all, so it can't go quiet just because a leg is renamed.
+      # What that PR-time run can't cover is BSD userland — it runs on
+      # ubuntu-latest — so this one macOS leg keeps that coverage without
+      # paying 10x-billed macOS minutes on all four legs for a sub-second
+      # fixture test that gives identical signal on every leg it runs on.
       - name: Self-test the smoke-test script
+        if: matrix.goos == 'darwin' && matrix.goarch == 'arm64'
         run: .github/scripts/smoke-test-binary.test.sh
 
       # The archived artifact downloaded above, not a binary freshly built in

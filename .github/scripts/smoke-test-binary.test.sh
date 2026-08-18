@@ -21,6 +21,14 @@ VERSION="v9.9.9"
 pass=0
 fail=0
 
+# Every fixture builder's tmp dir is tracked here and removed once at exit,
+# rather than leaking one per case across repeated local runs (CI runners are
+# ephemeral and don't care, but a developer iterating on this file locally
+# does).
+ALL_TMP_DIRS=()
+cleanup() { [ "${#ALL_TMP_DIRS[@]}" -eq 0 ] || rm -rf "${ALL_TMP_DIRS[@]}"; }
+trap cleanup EXIT
+
 # --- fixture builders --------------------------------------------------------
 # Each returns the path to a built .tar.gz in a fresh temp dir. `set -e` in this
 # file means a builder that fails aborts the whole self-test loudly, rather
@@ -30,6 +38,7 @@ fail=0
 build_good_archive() { # <version>
     local tmp archive
     tmp=$(mktemp -d)
+    ALL_TMP_DIRS+=("$tmp")
     cat >"$tmp/$BIN_NAME" <<EOF
 #!/usr/bin/env bash
 if [ "\$1" = "--version" ]; then
@@ -48,6 +57,7 @@ EOF
 build_mismatched_archive() {
     local tmp archive
     tmp=$(mktemp -d)
+    ALL_TMP_DIRS+=("$tmp")
     cat >"$tmp/$BIN_NAME" <<'EOF'
 #!/usr/bin/env bash
 echo "v0.0.1-stale"
@@ -63,6 +73,7 @@ EOF
 build_crashing_archive() {
     local tmp archive
     tmp=$(mktemp -d)
+    ALL_TMP_DIRS+=("$tmp")
     cat >"$tmp/$BIN_NAME" <<'EOF'
 #!/usr/bin/env bash
 echo "boom" >&2
@@ -78,6 +89,7 @@ EOF
 build_nonexecutable_archive() {
     local tmp archive
     tmp=$(mktemp -d)
+    ALL_TMP_DIRS+=("$tmp")
     printf '#!/usr/bin/env bash\necho "%s"\n' "$VERSION" >"$tmp/$BIN_NAME"
     chmod -x "$tmp/$BIN_NAME"
     archive="$tmp/archive.tar.gz"
@@ -90,6 +102,7 @@ build_nonexecutable_archive() {
 build_missing_binary_archive() {
     local tmp archive
     tmp=$(mktemp -d)
+    ALL_TMP_DIRS+=("$tmp")
     echo "not a binary" >"$tmp/README.txt"
     archive="$tmp/archive.tar.gz"
     tar czf "$archive" -C "$tmp" "README.txt"
@@ -102,11 +115,32 @@ build_missing_binary_archive() {
 build_nested_binary_archive() {
     local tmp archive
     tmp=$(mktemp -d)
+    ALL_TMP_DIRS+=("$tmp")
     mkdir "$tmp/dist"
     printf '#!/usr/bin/env bash\necho "%s"\n' "$VERSION" >"$tmp/dist/$BIN_NAME"
     chmod +x "$tmp/dist/$BIN_NAME"
     archive="$tmp/archive.tar.gz"
     tar czf "$archive" -C "$tmp" "dist/$BIN_NAME"
+    echo "$archive"
+}
+
+# A binary that emits incidental chatter on stderr — the shape QEMU user-mode
+# emulation produces on the linux/arm64 leg — before printing the correct
+# version and exiting 0. This is the case a stdout/stderr merge (2>&1) cannot
+# tell apart from a genuine mismatch: a healthy binary must still pass.
+build_noisy_stderr_archive() { # <version>
+    local tmp archive
+    tmp=$(mktemp -d)
+    ALL_TMP_DIRS+=("$tmp")
+    cat >"$tmp/$BIN_NAME" <<EOF
+#!/usr/bin/env bash
+echo "qemu: some emulation notice" >&2
+echo "$1"
+exit 0
+EOF
+    chmod +x "$tmp/$BIN_NAME"
+    archive="$tmp/archive.tar.gz"
+    tar czf "$archive" -C "$tmp" "$BIN_NAME"
     echo "$archive"
 }
 
@@ -151,6 +185,9 @@ assert_check "a binary nested off the archive root fails" 1 \
 
 assert_check "a nonexistent archive path fails" 1 \
     "/nonexistent/path/archive.tar.gz" "$VERSION"
+
+assert_check "correct stdout with noisy stderr still passes — stderr must not be compared" 0 \
+    "$(build_noisy_stderr_archive "$VERSION")" "$VERSION"
 
 echo
 echo "$pass passed, $fail failed"
