@@ -89,6 +89,16 @@ DEFAULT_MCP_CONFIG="$RUNNER_DIR/mcp-config.json.tmpl"
 # declared one, before deleting the run files.
 RUN_FILE=$(mktemp -t llm-scenario.XXXXXXXX.jsonl)
 RUN_FILE2=$(mktemp -t llm-scenario.XXXXXXXX.jsonl)
+# claude runs with this as its cwd, NOT the checkout. Without it the agent's
+# "here" is the source tree of the very MCP server under test (CI invokes
+# run-all.sh from the repo root and nothing cd's), and a scenario whose tool
+# surface is unreachable goes looking for the answer on disk — D1 spent a turn
+# on `grep -n "name: delete" internal/composite/definitions/tools.yaml`. An
+# operator asking about a broker is not standing in the server's source tree,
+# so an empty dir is the realistic cwd as well as the safer one. Everything
+# passed to claude is an absolute path (MCP_CONFIG is absolutized below), so
+# nothing here depends on the checkout being cwd.
+CLAUDE_CWD=$(mktemp -d -t llm-cwd.XXXXXXXX)
 RENDERED_MCP_CONFIG=""
 TEARDOWN_CMD=""
 cleanup() {
@@ -101,6 +111,7 @@ cleanup() {
     fi
     rm -f "$RUN_FILE" "$RUN_FILE2"
     [ -n "$RENDERED_MCP_CONFIG" ] && rm -f "$RENDERED_MCP_CONFIG"
+    [ -n "${CLAUDE_CWD:-}" ] && rm -rf "$CLAUDE_CWD"
 }
 trap cleanup EXIT INT TERM HUP
 
@@ -357,7 +368,7 @@ invoke_claude() {
         -p "$prompt"
     )
     set +e
-    claude "${claude_args[@]}" | tee "$run_file" | jq -r --unbuffered "$JQ_PRETTY"
+    ( cd "$CLAUDE_CWD" && claude "${claude_args[@]}" ) | tee "$run_file" | jq -r --unbuffered "$JQ_PRETTY"
     local rc=${PIPESTATUS[0]}
     set -e
     # Bank the cost before the failure check. A non-zero exit does not mean
@@ -433,6 +444,25 @@ run_assertions() {
     local tool_calls answer
     tool_calls=$(jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="tool_use") | .name' "$run_file" | sort -u)
     answer=$(jq -r 'select(.type=="result") | .result' "$run_file")
+
+    # ── Stalled turn (diagnostic only, never fails) ──
+    # A model that reaches for a tool it was not given emits the call as TEXT
+    # — `Bash({"command": …})`, or a bare `ListMcpResourcesTool` — and that
+    # message ends its turn. No tool_use event, no tool_result, no answer to
+    # assert against. Every downstream assertion then fails for a reason that
+    # has nothing to do with what it tests: D1 reports "no substring from
+    # required_substrings_any_of", which reads as a refusal-wording problem
+    # when the model never answered at all.
+    #
+    # Warn rather than fail: the trigger is deliberately loose (a terse
+    # refusal saying "let me know if…" trips it), and a spurious warn costs a
+    # log line while a missed stall costs an hour on the wrong bug. Gated on
+    # zero real tool calls, so an answer that quotes tool syntax after
+    # actually calling tools is not flagged.
+    if [ -z "$tool_calls" ] && \
+       grep -qE "[A-Za-z_][A-Za-z0-9_]*\(\{|(^|[[:space:]])(I'll|I will|Let me) (check|look|find|see|try|search)" <<<"$answer"; then
+        log_warn "$label: possible stalled turn — no tool calls, answer announces an action it never took (text-shaped tool call?): $(head -c 140 <<<"$answer")"
+    fi
 
     # ── Tool-choice ──
     if [ -n "$expected_tool" ]; then
