@@ -4,7 +4,7 @@ This file lists the third-party components compiled into the `solace-broker-mcp`
 binary, with their versions and licenses. It is the human-readable OSS compliance
 inventory that accompanies the release.
 
-**Generated** 2026-08-11 with
+**Generated** 2026-08-18 with
 [`go-licenses`](https://github.com/google/go-licenses) against `./cmd/server`:
 
 ```bash
@@ -41,7 +41,7 @@ under MPL-2.0.
 |---|---|---|---|
 | `github.com/coreos/go-oidc/v3/oidc` | v3.20.0 | Apache-2.0 | [license](https://github.com/coreos/go-oidc/blob/v3.20.0/LICENSE) |
 | `github.com/davecgh/go-spew/spew` | v1.1.1 | ISC | [license](https://github.com/davecgh/go-spew/blob/v1.1.1/LICENSE) |
-| `github.com/getkin/kin-openapi` | v0.145.0 | MIT | [license](https://github.com/getkin/kin-openapi/blob/v0.145.0/LICENSE) |
+| `github.com/getkin/kin-openapi` | v0.146.0 | MIT | [license](https://github.com/getkin/kin-openapi/blob/v0.146.0/LICENSE) |
 | `github.com/go-jose/go-jose/v4` | v4.1.4 | Apache-2.0 | [license](https://github.com/go-jose/go-jose/blob/v4.1.4/LICENSE) |
 | `github.com/go-jose/go-jose/v4/json` | v4.1.4 | BSD-3-Clause | [license](https://github.com/go-jose/go-jose/blob/v4.1.4/json/LICENSE) |
 | `github.com/go-openapi/jsonpointer` | v0.22.5 | Apache-2.0 | [license](https://github.com/go-openapi/jsonpointer/blob/v0.22.5/LICENSE) |
