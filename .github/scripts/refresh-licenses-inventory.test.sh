@@ -102,15 +102,23 @@ assert_refresh() {
         fi
     fi
 
+    # Scratch files live under $tmp, not a fixed /tmp/...$$ path: colocating
+    # with the rest of this case's fixture means the single `rm -rf "$tmp"` at
+    # each return already cleans them up (no separate rm of a sibling path to
+    # remember), and a real mktemp name rules out any chance of collision
+    # across concurrent runs sharing one PID's $$ value.
+    local out_file
+    out_file=$(mktemp "$tmp/refresh-out.XXXXXX")
+
     local got=0
-    (cd "$tmp" && "$REFRESH" >/tmp/refresh-licenses-test-out.$$ 2>&1) || got=$?
+    (cd "$tmp" && "$REFRESH" >"$out_file" 2>&1) || got=$?
 
     if [ "$got" -ne "$want" ]; then
         echo "  NOT OK   $desc (expected exit $want, got $got)"
         echo "           --- refresh output ---"
-        sed 's/^/           /' /tmp/refresh-licenses-test-out.$$
+        sed 's/^/           /' "$out_file"
         fail=$((fail + 1))
-        rm -rf "$tmp" "/tmp/refresh-licenses-test-out.$$"
+        rm -rf "$tmp"
         return
     fi
 
@@ -123,7 +131,7 @@ assert_refresh() {
             echo "           got:  $got_row"
             echo "           want: $want_row"
             fail=$((fail + 1))
-            rm -rf "$tmp" "/tmp/refresh-licenses-test-out.$$"
+            rm -rf "$tmp"
             return
         fi
     fi
@@ -143,22 +151,23 @@ assert_refresh() {
     # the committed file whenever "today" isn't the date that file happens to
     # carry — that is the intended behaviour, not drift to catch.
     if [ "$want" -eq 0 ]; then
+        local diff_file
+        diff_file=$(mktemp "$tmp/refresh-diff.XXXXXX")
         if ! diff -u \
             <(grep -v '^\*\*Generated\*\*' "$REPO_ROOT/$DOC") \
             <(grep -v '^\*\*Generated\*\*' "$tmp/$DOC") \
-            >/tmp/refresh-licenses-diff.$$ 2>&1; then
+            >"$diff_file" 2>&1; then
             echo "  NOT OK   $desc (exit 0, but the file didn't fully converge to the committed one)"
-            sed 's/^/           /' /tmp/refresh-licenses-diff.$$
+            sed 's/^/           /' "$diff_file"
             fail=$((fail + 1))
-            rm -rf "$tmp" "/tmp/refresh-licenses-test-out.$$" "/tmp/refresh-licenses-diff.$$"
+            rm -rf "$tmp"
             return
         fi
-        rm -f "/tmp/refresh-licenses-diff.$$"
     fi
 
     echo "  ok       $desc (exit $got)"
     pass=$((pass + 1))
-    rm -rf "$tmp" "/tmp/refresh-licenses-test-out.$$"
+    rm -rf "$tmp"
 }
 
 echo "refresh-licenses-inventory.sh self-test"

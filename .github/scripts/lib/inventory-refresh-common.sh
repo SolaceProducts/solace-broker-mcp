@@ -166,7 +166,15 @@ insert_row_in_table() {
         echo "insert_row_in_table: refusing to insert \`$name\` — a row for it already exists" >&2
         return 1
     fi
-    awk -v anchor="$anchor" -v newrow="$newrow" '
+    # LC_ALL=C: the sort-position decision below (`newrow < $0`) is a string
+    # comparison, and awk's `<` collates according to the active locale. Under
+    # anything but a C/POSIX locale that collation can differ from plain byte
+    # order (and differ between a contributor's machine and CI), making row
+    # placement non-deterministic across environments — cosmetic (the gate
+    # doesn't care what order rows are in), but still unwanted diff churn.
+    # Forcing the C locale for just this invocation makes the comparison a
+    # fixed byte-order sort everywhere this runs.
+    LC_ALL=C awk -v anchor="$anchor" -v newrow="$newrow" '
         BEGIN { found_anchor = 0; in_table = 0; inserted = 0 }
         {
             if (!found_anchor) {
@@ -221,6 +229,37 @@ insert_row_in_table() {
 
 # --- GitHub Action license resolution -----------------------------------------
 #
+# check_gh_available — verifies `gh` is installed and authenticated. Both
+# resolve_action_tag's tag-list fallback and fetch_action_license shell out to
+# `gh api` with stderr suppressed and errors folded to empty output (by
+# design: a rate limit, a 404, and a missing tool must all resolve to the same
+# "could not verify, refuse rather than guess" signal). Without this check,
+# `gh` being missing or unauthenticated looks identical to a real "no tag
+# found", and the caller's generic error names the wrong cause. Cached after
+# the first call — a run touching several actions should print this once, not
+# once per action.
+_gh_preflight_ok=""
+check_gh_available() {
+    if [ -n "$_gh_preflight_ok" ]; then
+        [ "$_gh_preflight_ok" = "1" ]
+        return
+    fi
+    if ! command -v gh >/dev/null 2>&1; then
+        echo "::error::'gh' is not installed. Action licence/tag lookups need it — install the" \
+            "GitHub CLI (https://cli.github.com) and retry." >&2
+        _gh_preflight_ok=0
+        return 1
+    fi
+    if ! gh auth status >/dev/null 2>&1; then
+        echo "::error::'gh' is installed but not authenticated (checked via 'gh auth status')." \
+            "Run 'gh auth login', or set GH_TOKEN/GITHUB_TOKEN in the environment, and retry." >&2
+        _gh_preflight_ok=0
+        return 1
+    fi
+    _gh_preflight_ok=1
+    return 0
+}
+
 # resolve_action_tag <owner/repo> <action-path> <sha>
 #   Prints the release tag for a SHA-pinned action. Dependabot's github-actions
 #   ecosystem update rewrites the trailing `# vX.Y.Z` comment in the same commit
@@ -231,14 +270,28 @@ insert_row_in_table() {
 #   Solace-internal composite actions are exactly this case, and callers must
 #   treat an empty result as "no Release column to fill", not as a failure.
 resolve_action_tag() {
-    local owner_repo="$1" action="$2" sha="$3" tag
+    local owner_repo="$1" action="$2" sha="$3" tag action_re
+    # Escape every ERE metacharacter in the action path, not only `/` (which
+    # isn't actually special in ERE and needed no escaping in the first
+    # place). Action paths routinely contain `.` — a reusable-workflow
+    # reference like `owner/repo/.github/workflows/file.yaml@ref` is exactly
+    # this shape — and an unescaped `.` matches any character, so it could
+    # match a similarly-shaped `uses:` line for a *different* action and
+    # resolve the wrong trailing-comment tag.
+    # The bracket expression puts `.` right after the leading literal `]`
+    # rather than right after the opening `[` (i.e. `[].^$...]`, not
+    # `[][.^$...]`): `[` immediately followed by `.` starts a POSIX collating
+    # symbol (`[.symbol.]`), which sed then reads as unterminated and aborts
+    # with a parse error — caught by testing this exact pattern by hand.
+    action_re=$(sed -E 's/[].^$*+?(){}|\\]/\\&/g' <<<"$action")
     tag=$(
-        grep -rhoE "uses:[[:space:]]*${action//\//\\/}@${sha}[[:space:]]*#[[:space:]]*v[0-9][^[:space:]]*" \
+        grep -rhoE "uses:[[:space:]]*${action_re}@${sha}[[:space:]]*#[[:space:]]*v[0-9][^[:space:]]*" \
             .github/workflows/ 2>/dev/null |
             head -1 | grep -oE 'v[0-9][^[:space:]]*$' || true
     )
     if [ -z "$tag" ]; then
         local candidates full_form_tags
+        check_gh_available || { printf ''; return 0; }
         candidates=$(gh api "repos/${owner_repo}/tags" --paginate --jq \
             ".[] | select(.commit.sha == \"${sha}\") | .name" 2>/dev/null || true)
         # A commit can carry both a full release tag (v7.0.1) and a rolling
@@ -271,6 +324,7 @@ resolve_action_tag() {
 #   and fail the job rather than write a licence they didn't confirm.
 fetch_action_license() {
     local owner_repo="$1" ref="$2"
+    check_gh_available || return 0
     gh api "repos/${owner_repo}/license?ref=${ref}" --jq '[.license.spdx_id, .html_url] | @tsv' 2>/dev/null || true
 }
 

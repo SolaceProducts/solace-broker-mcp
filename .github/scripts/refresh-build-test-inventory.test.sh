@@ -127,6 +127,8 @@ assert_refresh() {
 
     local tmp
     tmp=$(mktemp -d)
+    local out_file
+    out_file=$(mktemp "$tmp/refresh-out.XXXXXX")
 
     ln -s "$REPO_ROOT/go.mod" "$tmp/go.mod"
     ln -s "$REPO_ROOT/go.sum" "$tmp/go.sum"
@@ -150,14 +152,14 @@ assert_refresh() {
     fi
 
     local got=0
-    (cd "$tmp" && "$REFRESH" >/tmp/refresh-build-test-out.$$ 2>&1) || got=$?
+    (cd "$tmp" && "$REFRESH" >"$out_file" 2>&1) || got=$?
 
     if [ "$got" -ne "$want" ]; then
         echo "  NOT OK   $desc (expected exit $want, got $got)"
         echo "           --- refresh output ---"
-        sed 's/^/           /' /tmp/refresh-build-test-out.$$
+        sed 's/^/           /' "$out_file"
         fail=$((fail + 1))
-        rm -rf "$tmp" "/tmp/refresh-build-test-out.$$"
+        rm -rf "$tmp"
         return
     fi
 
@@ -170,7 +172,7 @@ assert_refresh() {
             echo "           got:  $got_row"
             echo "           want: $want_row"
             fail=$((fail + 1))
-            rm -rf "$tmp" "/tmp/refresh-build-test-out.$$"
+            rm -rf "$tmp"
             return
         fi
     fi
@@ -186,19 +188,20 @@ assert_refresh() {
     # Comparing the whole file catches collateral damage to rows the case
     # under test never mentions.
     if [ "$want" -eq 0 ]; then
-        if ! diff -u "$REPO_ROOT/$DOC" "$tmp/$DOC" >/tmp/refresh-build-test-diff.$$ 2>&1; then
+        local diff_file
+        diff_file=$(mktemp "$tmp/refresh-diff.XXXXXX")
+        if ! diff -u "$REPO_ROOT/$DOC" "$tmp/$DOC" >"$diff_file" 2>&1; then
             echo "  NOT OK   $desc (exit 0, but the file didn't fully converge to the committed one)"
-            sed 's/^/           /' /tmp/refresh-build-test-diff.$$
+            sed 's/^/           /' "$diff_file"
             fail=$((fail + 1))
-            rm -rf "$tmp" "/tmp/refresh-build-test-out.$$" "/tmp/refresh-build-test-diff.$$"
+            rm -rf "$tmp"
             return
         fi
-        rm -f "/tmp/refresh-build-test-diff.$$"
     fi
 
     echo "  ok       $desc (exit $got)"
     pass=$((pass + 1))
-    rm -rf "$tmp" "/tmp/refresh-build-test-out.$$"
+    rm -rf "$tmp"
 }
 
 echo "refresh-build-test-inventory.sh self-test"
@@ -231,6 +234,8 @@ test_prose_collision() {
     local desc="a row is dropped without touching unrelated prose naming it"
     local tmp
     tmp=$(mktemp -d)
+    local out_file
+    out_file=$(mktemp "$tmp/refresh-out.XXXXXX")
     ln -s "$REPO_ROOT/go.mod" "$tmp/go.mod"
     ln -s "$REPO_ROOT/go.sum" "$tmp/go.sum"
     ln -s "$REPO_ROOT/cmd" "$tmp/cmd"
@@ -256,31 +261,31 @@ test_prose_collision() {
     grep -vE '^\| `golang\.org/x/oauth2`' "$tmp/$DOC" >"$tmp/t" && mv "$tmp/t" "$tmp/$DOC"
 
     local got=0
-    (cd "$tmp" && "$REFRESH" >/tmp/refresh-build-test-out.$$ 2>&1) || got=$?
+    (cd "$tmp" && "$REFRESH" >"$out_file" 2>&1) || got=$?
 
     if [ "$got" -ne 0 ]; then
         echo "  NOT OK   $desc (expected exit 0, got $got)"
-        sed 's/^/           /' /tmp/refresh-build-test-out.$$
+        sed 's/^/           /' "$out_file"
         fail=$((fail + 1))
-        rm -rf "$tmp" "/tmp/refresh-build-test-out.$$"
+        rm -rf "$tmp"
         return
     fi
     if ! grep -qF '`golang.org/x/oauth2` is pinned here' "$tmp/$DOC"; then
         echo "  NOT OK   $desc (the unrelated prose paragraph was deleted along with the row)"
         fail=$((fail + 1))
-        rm -rf "$tmp" "/tmp/refresh-build-test-out.$$"
+        rm -rf "$tmp"
         return
     fi
     if ! grep -qE '^\| `golang\.org/x/oauth2`' "$tmp/$DOC"; then
         echo "  NOT OK   $desc (the row was supposed to be re-added by the refresh, not left dropped)"
         fail=$((fail + 1))
-        rm -rf "$tmp" "/tmp/refresh-build-test-out.$$"
+        rm -rf "$tmp"
         return
     fi
 
     echo "  ok       $desc (exit $got)"
     pass=$((pass + 1))
-    rm -rf "$tmp" "/tmp/refresh-build-test-out.$$"
+    rm -rf "$tmp"
 }
 test_prose_collision
 
@@ -312,6 +317,8 @@ test_unpinned_action_refusal() {
     local desc="a brand-new unpinned action is refused via its own specific message"
     local tmp
     tmp=$(mktemp -d)
+    local out_file
+    out_file=$(mktemp "$tmp/refresh-out.XXXXXX")
     ln -s "$REPO_ROOT/go.mod" "$tmp/go.mod"
     ln -s "$REPO_ROOT/go.sum" "$tmp/go.sum"
     ln -s "$REPO_ROOT/cmd" "$tmp/cmd"
@@ -324,25 +331,25 @@ test_unpinned_action_refusal() {
     add_unpinned_action "$tmp"
 
     local got=0
-    (cd "$tmp" && "$REFRESH" >/tmp/refresh-build-test-out.$$ 2>&1) || got=$?
+    (cd "$tmp" && "$REFRESH" >"$out_file" 2>&1) || got=$?
 
     if [ "$got" -ne 1 ]; then
         echo "  NOT OK   $desc (expected exit 1, got $got)"
         fail=$((fail + 1))
-        rm -rf "$tmp" "/tmp/refresh-build-test-out.$$"
+        rm -rf "$tmp"
         return
     fi
-    if ! grep -qF 'refused: action is not SHA-pinned' /tmp/refresh-build-test-out.$$; then
+    if ! grep -qF 'refused: action is not SHA-pinned' "$out_file"; then
         echo "  NOT OK   $desc (exit 1, but not via the specific not-SHA-pinned message — regex regression?)"
-        sed 's/^/           /' /tmp/refresh-build-test-out.$$
+        sed 's/^/           /' "$out_file"
         fail=$((fail + 1))
-        rm -rf "$tmp" "/tmp/refresh-build-test-out.$$"
+        rm -rf "$tmp"
         return
     fi
 
     echo "  ok       $desc (exit $got)"
     pass=$((pass + 1))
-    rm -rf "$tmp" "/tmp/refresh-build-test-out.$$"
+    rm -rf "$tmp"
 }
 test_unpinned_action_refusal
 
@@ -356,6 +363,8 @@ test_shared_new_dependency_inserted_once() {
     local desc="a Go module newly shared by two test submodules is added once, not twice"
     local tmp
     tmp=$(mktemp -d)
+    local out_file
+    out_file=$(mktemp "$tmp/refresh-out.XXXXXX")
     ln -s "$REPO_ROOT/go.mod" "$tmp/go.mod"
     ln -s "$REPO_ROOT/go.sum" "$tmp/go.sum"
     ln -s "$REPO_ROOT/cmd" "$tmp/cmd"
@@ -374,13 +383,13 @@ test_shared_new_dependency_inserted_once() {
     fi
 
     local got=0
-    (cd "$tmp" && "$REFRESH" >/tmp/refresh-build-test-out.$$ 2>&1) || got=$?
+    (cd "$tmp" && "$REFRESH" >"$out_file" 2>&1) || got=$?
 
     if [ "$got" -ne 0 ]; then
         echo "  NOT OK   $desc (expected exit 0, got $got)"
-        sed 's/^/           /' /tmp/refresh-build-test-out.$$
+        sed 's/^/           /' "$out_file"
         fail=$((fail + 1))
-        rm -rf "$tmp" "/tmp/refresh-build-test-out.$$"
+        rm -rf "$tmp"
         return
     fi
 
@@ -390,13 +399,13 @@ test_shared_new_dependency_inserted_once() {
         echo "  NOT OK   $desc (expected exactly 1 row, found $count)"
         grep -E '^\| `github\.com/google/uuid`' "$tmp/$DOC" | sed 's/^/           /'
         fail=$((fail + 1))
-        rm -rf "$tmp" "/tmp/refresh-build-test-out.$$"
+        rm -rf "$tmp"
         return
     fi
 
     echo "  ok       $desc (exit $got, 1 row)"
     pass=$((pass + 1))
-    rm -rf "$tmp" "/tmp/refresh-build-test-out.$$"
+    rm -rf "$tmp"
 }
 test_shared_new_dependency_inserted_once
 

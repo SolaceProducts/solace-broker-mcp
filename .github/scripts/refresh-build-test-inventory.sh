@@ -202,7 +202,7 @@ fi
 
 echo "--- Applying ${#to_fix[@]} version fix(es), ${#to_add[@]} new row(s), ${#to_drop[@]} removal(s) ---"
 
-for entry in "${to_fix[@]}"; do
+for entry in ${to_fix[@]+"${to_fix[@]}"}; do
     IFS=$'\t' read -r kind name doc_version actual <<<"$entry"
     echo "  fix: $kind \`$name\` $doc_version -> $actual"
     case "$kind" in
@@ -241,7 +241,7 @@ for entry in "${to_fix[@]}"; do
     esac
 done
 
-for entry in "${to_add[@]}"; do
+for entry in ${to_add[@]+"${to_add[@]}"}; do
     IFS=$'\t' read -r kind name actual <<<"$entry"
     echo "  add: $kind \`$name\` @ $actual"
     case "$kind" in
@@ -298,7 +298,7 @@ for entry in "${to_add[@]}"; do
     esac
 done
 
-for name in "${to_drop[@]}"; do
+for name in ${to_drop[@]+"${to_drop[@]}"}; do
     echo "  drop: \`$name\`"
     delete_row "$DOC" "$name"
 done

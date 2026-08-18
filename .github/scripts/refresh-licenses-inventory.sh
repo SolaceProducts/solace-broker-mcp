@@ -127,7 +127,7 @@ fi
 
 echo "--- Applying ${#to_fix[@]} version fix(es), ${#to_add[@]} new row(s), ${#to_drop[@]} removal(s) ---"
 
-for entry in "${to_fix[@]}"; do
+for entry in ${to_fix[@]+"${to_fix[@]}"}; do
     IFS=$'\t' read -r name old_version new_version <<<"$entry"
     new_version=$(normalize_pseudo_version "$new_version")
     echo "  fix: \`$name\` $old_version -> $new_version"
@@ -135,7 +135,7 @@ for entry in "${to_fix[@]}"; do
     substitute_in_row_field "$DOC" "$name" 4 "$old_version" "$new_version"
 done
 
-for entry in "${to_add[@]}"; do
+for entry in ${to_add[@]+"${to_add[@]}"}; do
     IFS=$'\t' read -r mod_path mod_version <<<"$entry"
     mod_version=$(normalize_pseudo_version "$mod_version")
     echo "  add: \`$mod_path\` @ $mod_version"
@@ -178,7 +178,7 @@ for entry in "${to_add[@]}"; do
     esac
 done
 
-for name in "${to_drop[@]}"; do
+for name in ${to_drop[@]+"${to_drop[@]}"}; do
     echo "  drop: \`$name\`"
     delete_row "$DOC" "$name"
 done
