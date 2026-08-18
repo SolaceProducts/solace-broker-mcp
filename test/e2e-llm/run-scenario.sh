@@ -298,7 +298,12 @@ if .type == "assistant" then
   )
 elif .type == "result" then
   info("answer: " + ((.result // "(empty)") | gsub("\n"; " ") | gsub(" +"; " ")
-        | if length > 300 then .[:300] + "…" else . end)
+        # 1200, not 300. A truncated answer is unreadable exactly when it
+        # matters: an entity-set or substring failure is a claim about the
+        # answer text, and diagnosing one from the first 300 chars is
+        # guesswork. Two rounds of failures in this suite were misdiagnosed
+        # that way. Still capped, so a runaway answer cannot flood the log.
+        | if length > 1200 then .[:1200] + "…" else . end)
     + "  ($\((.total_cost_usd * 10000 + 0.5 | floor) / 10000), \(.modelUsage // {} | keys | join("+") | if . == "" then "?" else . end))")
 else empty end
 '
