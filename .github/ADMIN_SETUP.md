@@ -679,17 +679,20 @@ writing; re-check, do not assume.
 - ✅ **Required status checks corrected** per the Branch Protection section above
   — this document corrected 2026-08-17 (SOL-153190) to match the live ruleset,
   which was itself updated 2026-08-12. The `main-protection` ruleset now requires
-  all thirteen contexts listed in the table above, including `Guardian scan gate`
+  all thirteen registered contexts in the table above, including `Guardian scan gate`
   (from `guardian-scan.yaml`) in place of the retired `FOSSA Scan` / `FOSSA Scan /
   SCA Scan` contexts, with `strict_required_status_checks_policy: true` and an
   **empty bypass-actor list** — no admin override exists. Re-verify against the
-  live ruleset rather than trusting this line, the same query the table above
-  cites:
+  live ruleset rather than trusting this line. The list-rulesets endpoint
+  returns only `id`/`name` — no embedded rule detail — so resolving by name
+  needs two calls, not one:
   ```bash
-  gh api repos/OWNER/REPO/rulesets/13942241 \
+  RULESET_ID=$(gh api repos/OWNER/REPO/rulesets --jq '.[] | select(.name=="main-protection") | .id')
+  gh api "repos/OWNER/REPO/rulesets/$RULESET_ID" \
     --jq '.rules[] | select(.type=="required_status_checks")
           | .parameters.required_status_checks[] | "\(.context)\t\(.integration_id // "UNPINNED")"'
   ```
+  This resolves the ID at call time instead of hardcoding it, so it keeps working if the ruleset is ever recreated under a new one.
 
   > **Historical note, kept for context.** Before this was registered, the
   > precondition was to confirm `Guardian scan gate` was green on a real pull
