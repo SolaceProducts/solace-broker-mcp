@@ -157,6 +157,40 @@ func TestRegister_DuplicatePanics(t *testing.T) {
 	mgr.Register(newStubHandler("dup"))
 }
 
+// TestRegister_DuplicateCheckedBeforeSchemaCompile pins the specific
+// ordering Register() promises: the duplicate-name check runs before schema
+// compilation, so a duplicate registration panics with the "duplicate tool
+// registration" message even if its schema would also fail to compile —
+// never the schema-compile panic. Without this test, a regression that
+// reordered the checks (compile first, then check for a duplicate) would
+// still pass TestRegister_DuplicatePanics above, since that test only
+// asserts "a panic happened," not which one — both stub handlers there use
+// valid schemas, so either ordering panics on the duplicate check anyway.
+func TestRegister_DuplicateCheckedBeforeSchemaCompile(t *testing.T) {
+	mgr := NewToolManager(newTestPool(t))
+	mgr.Register(newStubHandler("dup"))
+
+	dup := newStubHandler("dup")
+	dup.schema = map[string]any{"type": 123} // fails to compile
+
+	msg := func() (r any) {
+		defer func() { r = recover() }()
+		mgr.Register(dup)
+		return nil
+	}()
+
+	if msg == nil {
+		t.Fatal("expected a panic")
+	}
+	got, ok := msg.(string)
+	if !ok {
+		t.Fatalf("panic value = %v (%T), want a string", msg, msg)
+	}
+	if !strings.Contains(got, "duplicate tool registration") {
+		t.Errorf("panic = %q, want it to mention \"duplicate tool registration\" (not a schema-compile failure) — the duplicate check must run before schema compilation", got)
+	}
+}
+
 // TestCallTool_DoesNotRecomputeMetadataPerCall pins SOL-153334: a tool's
 // input/output JSON Schema is invariant after Register(), so CallTool must
 // read it once (at Register()) and reuse a compiled validator, never call

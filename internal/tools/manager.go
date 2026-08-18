@@ -40,23 +40,30 @@ import (
 //
 // All public methods are safe for concurrent use.
 type ToolManager struct {
-	pool       *semp.BrokerPool
-	mu         sync.RWMutex
-	handlers   map[string]ToolHandler
-	validators map[string]toolValidators
+	pool  *semp.BrokerPool
+	mu    sync.RWMutex
+	tools map[string]*registeredTool
 }
 
-// toolValidators holds a registered tool's precompiled input/output JSON
-// Schema validators and its annotations. Built once, from handler.Metadata(),
-// at Register() time — CallTool reads this cache instead of calling
-// handler.Metadata() again on every invocation. That matters for two
+// registeredTool is what Register() stores for one tool: the handler plus
+// its precompiled input/output JSON Schema validators and annotations, all
+// built once from handler.Metadata() at Register() time. Keeping these
+// together means CallTool's hot path is a single map lookup under a single
+// lock, rather than one lookup for the handler (Route) and a second for the
+// cached validators — and it makes "a handler is registered without its
+// validators" structurally impossible, since both are always written by the
+// same Register() call.
+//
+// Caching the compiled validators/annotations here — instead of calling
+// handler.Metadata() again on every CallTool invocation — matters for two
 // reasons: it avoids recompiling the same JSON Schema on every call
 // (SOL-153334), and for a composite write tool it avoids rebuilding the
 // output schema from the full SEMPv2 operation catalog on every call
 // (SOL-153335) — Metadata() computes that unconditionally as part of the
 // struct it returns, so calling it again would pay that cost too even if
 // CallTool only wanted the annotations.
-type toolValidators struct {
+type registeredTool struct {
+	handler     ToolHandler
 	input       *gojsonschema.Schema
 	output      *gojsonschema.Schema
 	annotations Annotations
@@ -66,9 +73,8 @@ type toolValidators struct {
 // given pool. Tools are registered via Register() before use.
 func NewToolManager(pool *semp.BrokerPool) *ToolManager {
 	return &ToolManager{
-		pool:       pool,
-		handlers:   make(map[string]ToolHandler),
-		validators: make(map[string]toolValidators),
+		pool:  pool,
+		tools: make(map[string]*registeredTool),
 	}
 }
 
@@ -84,13 +90,22 @@ func NewToolManagerFromComposite(pool *semp.BrokerPool, tools []composite.Compos
 }
 
 // Register adds a tool handler to the manager, and compiles its input/output
-// schema validators once (see toolValidators). Panics if a handler with the
+// schema validators once (see registeredTool). Panics if a handler with the
 // same name is already registered, or if either schema fails to compile —
 // both are configuration errors that should be caught at startup, not on a
-// caller's first tool call.
+// caller's first tool call. The duplicate-name check runs before schema
+// compilation, under the same lock, so a duplicate registration fails fast
+// with the specific "duplicate tool registration" panic rather than
+// potentially compiling a schema first and panicking on that instead.
 func (m *ToolManager) Register(handler ToolHandler) {
 	meta := handler.Metadata()
 	name := meta.Name
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.tools[name]; exists {
+		panic(fmt.Sprintf("duplicate tool registration: %q", name))
+	}
 
 	inputSchema, err := compileSchema(meta.InputSchema)
 	if err != nil {
@@ -101,38 +116,45 @@ func (m *ToolManager) Register(handler ToolHandler) {
 		panic(fmt.Sprintf("tool %q: compiling output schema: %v", name, err))
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, exists := m.handlers[name]; exists {
-		panic(fmt.Sprintf("duplicate tool registration: %q", name))
-	}
-	m.handlers[name] = handler
-	m.validators[name] = toolValidators{
+	m.tools[name] = &registeredTool{
+		handler:     handler,
 		input:       inputSchema,
 		output:      outputSchema,
 		annotations: meta.Annotations,
 	}
 }
 
-// Route looks up a handler by tool name. Returns an error if the tool is not
+// lookup returns the registeredTool for name in a single lock/unlock, so a
+// caller that needs both the handler and its cached validators (CallTool)
+// does one map access instead of two. Returns an error if the tool is not
 // registered.
-func (m *ToolManager) Route(name string) (ToolHandler, error) {
+func (m *ToolManager) lookup(name string) (*registeredTool, error) {
 	m.mu.RLock()
-	handler, ok := m.handlers[name]
+	rt, ok := m.tools[name]
 	m.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("unknown tool %q", name)
 	}
-	return handler, nil
+	return rt, nil
+}
+
+// Route looks up a handler by tool name. Returns an error if the tool is not
+// registered.
+func (m *ToolManager) Route(name string) (ToolHandler, error) {
+	rt, err := m.lookup(name)
+	if err != nil {
+		return nil, err
+	}
+	return rt.handler, nil
 }
 
 // Handlers returns all registered tool handlers. The returned slice is
 // unordered — callers should sort if deterministic ordering is needed.
 func (m *ToolManager) Handlers() []ToolHandler {
 	m.mu.RLock()
-	handlers := make([]ToolHandler, 0, len(m.handlers))
-	for _, h := range m.handlers {
-		handlers = append(handlers, h)
+	handlers := make([]ToolHandler, 0, len(m.tools))
+	for _, rt := range m.tools {
+		handlers = append(handlers, rt.handler)
 	}
 	m.mu.RUnlock()
 	return handlers
@@ -171,12 +193,18 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	// production (RegisterWithServer's closures only route names taken from
 	// Handlers()). Kept as a defensive branch for direct/test callers of
 	// CallTool with a name that was never registered.
-	handler, err := m.Route(name)
+	//
+	// One lookup here gets both the handler and its precompiled
+	// validators/annotations (built once at Register() time) — see
+	// registeredTool — rather than calling Route() and then a second,
+	// separate map lookup for the validators.
+	rt, err := m.lookup(name)
 	if err != nil {
 		errorType = "unknown_tool"
 		toolErr = err
 		return nil, err
 	}
+	handler := rt.handler
 
 	// Extract and resolve broker.
 	brokerAlias, _ = params["broker"].(string)
@@ -211,29 +239,15 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	// should not see it.
 	handlerParams := stripBrokerParam(params)
 
-	// Look up this tool's precompiled validators/annotations (built once at
-	// Register() time) rather than calling handler.Metadata() again — see
-	// toolValidators. Route() above already confirmed name is registered,
-	// and Register() always populates m.handlers and m.validators together
-	// under the same lock, so a miss here is a bug, not a runtime condition.
-	m.mu.RLock()
-	v, ok := m.validators[name]
-	m.mu.RUnlock()
-	if !ok {
-		errorType = "internal_error"
-		toolErr = fmt.Errorf("tool %q has no compiled validators (registration bug)", name)
-		return buildLocalErrorResult(toolErr), nil
-	}
-
 	// Validate parameters against the handler's input schema.
-	if _, err := validateAgainstCompiledSchema(handlerParams, v.input, "parameter validation failed"); err != nil {
+	if _, err := validateAgainstCompiledSchema(handlerParams, rt.input, "parameter validation failed"); err != nil {
 		errorType = "validation_error"
 		toolErr = err
 		return buildLocalErrorResult(toolErr), nil
 	}
 
 	// Log warning for destructive tools.
-	if v.annotations.Destructive != nil && *v.annotations.Destructive {
+	if rt.annotations.Destructive != nil && *rt.annotations.Destructive {
 		slog.Warn("executing destructive operation",
 			slog.String("tool", name),
 			slog.String("broker", brokerAlias),
@@ -267,7 +281,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	// Validate output against schema. This also gives us the compact JSON
 	// encoding of StructuredContent, which we reuse below instead of
 	// marshalling it a second time.
-	resultJSON, err := validateAgainstCompiledSchema(toolResult.StructuredContent, v.output, "output validation failed")
+	resultJSON, err := validateAgainstCompiledSchema(toolResult.StructuredContent, rt.output, "output validation failed")
 	if err != nil {
 		errorType = "output_validation_error"
 		toolErr = fmt.Errorf("tool %q output validation: %w", name, err)
