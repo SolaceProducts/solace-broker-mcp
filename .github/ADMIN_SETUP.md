@@ -676,18 +676,32 @@ writing; re-check, do not assume.
 - ✅ All secrets removed from git history (`git log --all -S "password"`)
 - ✅ `.gitignore` properly configured (`.env`, `broker-config.yaml`)
 - ✅ No sensitive data in issues or PRs
-- ⬜ **Required status checks corrected** per the Branch Protection section above.
-  The ruleset still holds the old list. The supply-chain context to register is
-  `Guardian scan gate` (from `guardian-scan.yaml`) — not `FOSSA Scan` and not
-  `FOSSA Scan / SCA Scan`, both removed with the Vault-backed jobs.
+- ✅ **Required status checks corrected** per the Branch Protection section above
+  — this document corrected 2026-08-17 (SOL-153190) to match the live ruleset,
+  which was itself updated 2026-08-12. The `main-protection` ruleset now requires
+  all thirteen contexts listed in the table above, including `Guardian scan gate`
+  (from `guardian-scan.yaml`) in place of the retired `FOSSA Scan` / `FOSSA Scan /
+  SCA Scan` contexts, with `strict_required_status_checks_policy: true` and an
+  **empty bypass-actor list** — no admin override exists. Re-verify against the
+  live ruleset rather than trusting this line, the same query the table above
+  cites:
+  ```bash
+  gh api repos/OWNER/REPO/rulesets/13942241 \
+    --jq '.rules[] | select(.type=="required_status_checks")
+          | .parameters.required_status_checks[] | "\(.context)\t\(.integration_id // "UNPINNED")"'
+  ```
 
-  > **Precondition: confirm `Guardian scan gate` is green on a real pull request
-  > before requiring it.**
-  >
-  > The `gate` job fails closed, by design. So if the scan is broken for any
-  > reason, requiring it turns "scanning is broken" into "no pull request can
-  > merge". Branch protection holds zero required contexts today, which is the only
-  > reason a scan outage is not already blocking everyone.
+  > **Historical note, kept for context.** Before this was registered, the
+  > precondition was to confirm `Guardian scan gate` was green on a real pull
+  > request first: the `gate` job fails closed by design, so requiring it while
+  > the scan itself was broken would have turned "scanning is broken" into "no
+  > pull request can merge." That precondition was met before registration.
+  > **There is no "branch protection holds zero required contexts" state
+  > anymore** — every one of the thirteen contexts, `Guardian scan gate`
+  > included, now blocks a merge if it is red or never reports, with nothing to
+  > bypass it. A scan outage today blocks everyone, which is what makes the "Who
+  > picks up a red supply-chain scan on `main`" gap earlier in the Branch
+  > Protection section (above) worth reading, not less.
   >
   > Note that the SHA pin buys less than it looks like: `guardian-scan` pins the
   > `SolaceDev/solace-public-workflows` actions, but those actions run container
