@@ -92,6 +92,18 @@ jobs:
         run: .github/scripts/licenses-check.test.sh
       - name: Verify THIRD_PARTY_LICENSES.md matches the binary
         run: .github/scripts/licenses-check.sh
+      # Same job as the gate it exercises, not a separate one: refresh-licenses-
+      # inventory.sh (SOL-152956, `make refresh-third-party-inventory`) is the
+      # thing a contributor runs when the check above goes red, so its own
+      # correctness belongs under the same required context, same as every
+      # other self-test here. `GH_TOKEN` is set because this script's licence
+      # lookups for new rows call `gh api`; without a token those calls fall
+      # back to the anonymous rate limit, which every concurrent runner shares.
+      - name: Self-test the third-party licences refresh script
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: .github/scripts/refresh-licenses-inventory.test.sh
       # The second of the two lists the Solace public-repository Legal checklist
       # requires. Same job rather than a new one: they are one obligation split
       # by what ships, and a reviewer should see both verdicts in one place.
@@ -106,6 +118,13 @@ jobs:
       - name: Verify THIRD_PARTY_BUILD_TEST.md matches the build and test inputs
         if: always()
         run: .github/scripts/build-test-licenses-check.sh
+      # Same reasoning as the licences refresh self-test above, for
+      # refresh-build-test-inventory.sh.
+      - name: Self-test the build/test inventory refresh script
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: .github/scripts/refresh-build-test-inventory.test.sh
 
   # Apache 2.0 works best when the grant travels with the file. The headers were
   # applied once, by hand, and the codebase then grew past them: 53 of 260 Go

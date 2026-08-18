@@ -61,6 +61,15 @@ jobs:
         run: .github/scripts/licenses-check.test.sh
       - name: Verify THIRD_PARTY_LICENSES.md and NOTICE match the binary
         run: .github/scripts/licenses-check.sh
+      # Same reasoning as ci-pr.yaml's own copy of this step: the refresh
+      # script (SOL-152956, `make refresh-third-party-inventory`) is what a
+      # contributor runs when the check above goes red, so its correctness
+      # belongs under the same required context here too.
+      - name: Self-test the third-party licences refresh script
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: .github/scripts/refresh-licenses-inventory.test.sh
       # Verified at the tag for the same reason as the check above it: a pull
       # request can merge with this red until it is a required status check.
       # `if: always()` is load-bearing. GitHub skips later steps once one fails,
@@ -74,6 +83,11 @@ jobs:
       - name: Verify THIRD_PARTY_BUILD_TEST.md matches the build and test inputs
         if: always()
         run: .github/scripts/build-test-licenses-check.sh
+      - name: Self-test the build/test inventory refresh script
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: .github/scripts/refresh-build-test-inventory.test.sh
 
   # Release gate: re-scans the tag, uploads to Guardian, and fails the release
   # if Guardian blocks (admin skip_security_checks is the escape hatch).

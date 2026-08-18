@@ -14,6 +14,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `make refresh-third-party-inventory` regenerates `THIRD_PARTY_LICENSES.md`
+  and `THIRD_PARTY_BUILD_TEST.md` from what the repository actually uses, one
+  command instead of hand-deriving the dependency closure and reconciling
+  table rows by hand. It diffs against `licenses-check.sh` /
+  `build-test-licenses-check.sh`'s own drift diagnostics, rewrites only the
+  row(s) that actually changed, reads every new licence fresh (never inferred,
+  never copied from a neighbouring row), and refuses outright — leaving the
+  file untouched — on anything it doesn't recognize (a new container image or
+  npm package, a duplicate or unparseable row) rather than guess. Covers all
+  four kinds of drift the two checks catch: a Go module version bump, a new
+  transitive Go module, a GitHub Action SHA re-pin, and a container image tag
+  change. Still a manual step — Dependabot cannot execute post-update scripts,
+  so its own PRs still need a human to run this, review the diff, and push;
+  fully automatic refresh on a Dependabot PR itself needs a bot credential and
+  is tracked separately. Tracked under SOL-152956.
+
 ### Changed
 
 - The 8 create/update ("write") composite tools — `create-message-vpn`, `update-message-vpn`, `create-queue`, `update-queue`, `create-topic-endpoint`, `update-topic-endpoint`, `create-rdp`, `update-rdp` — now declare a strict, SEMPv2-spec-derived output schema instead of the generic permissive envelope every composite tool used before. Each schema is generated from its operation's resolved response fields, rejects fields the spec doesn't declare, and requires the resource's own identifier field(s) to be present. A future SEMP release that renames, removes, or reshapes a response field a client depends on now fails schema validation instead of silently passing through. Monitor (read-only) tools are unchanged; delete/action tools (no response data) keep the permissive step schema automatically. Verified against real Solace PubSub+ broker containers (`test/e2e-management`, `test/e2e-action`). Tracked under SOL-152947.
