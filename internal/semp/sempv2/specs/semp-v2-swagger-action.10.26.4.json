@@ -4703,7 +4703,7 @@
     },
     "description": "SEMP (starting in `v2`) is a RESTful API for configuring, monitoring, and administering a Solace Event Broker. This specification defines the following API:\n\n\nAPI|Base Path|Purpose\n:---|:---|:---\nPrivate action|/SEMP/v2/\\_\\_private\\_action\\_\\_|Internal use only\n\n\n\nThe following APIs are also available:\n\n\nAPI|Base Path|Purpose\n:---|:---|:---\nPrivate configuration|/SEMP/v2/\\_\\_private\\_config\\_\\_|Internal use only\nPrivate monitoring|/SEMP/v2/\\_\\_private\\_monitor\\_\\_|Internal use only\n\n\n\nFor tutorials, architectural and protocol design documentation, and other information about the SEMP API, consult the [SEMP documentation](https://docs.solace.com/Admin/SEMP/Using-SEMP.htm) on the Solace website. The SEMP API specifications are also [available for download](https://solace.com/downloads/).\n\nIf you need additional support, please contact us at [support@solace.com](mailto:support@solace.com).",
     "title": "SEMP (Solace Element Management Protocol)",
-    "version": "10.26.3.10320"
+    "version": "10.26.4.10725"
   },
   "parameters": {
     "countQuery": {
