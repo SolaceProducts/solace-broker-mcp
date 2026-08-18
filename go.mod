@@ -3,7 +3,7 @@ module github.com/SolaceProducts/solace-broker-mcp
 go 1.25.0
 
 require (
-	github.com/getkin/kin-openapi v0.145.0
+	github.com/getkin/kin-openapi v0.146.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/maypok86/otter/v2 v2.3.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
