@@ -14,6 +14,7 @@ Thank you for your interest in contributing to the Solace Broker MCP Server! Thi
 - [Coding Standards](#coding-standards)
 - [Testing Requirements](#testing-requirements)
 - [Developer Certificate of Origin](#developer-certificate-of-origin)
+- [Third-party licence inventory](#third-party-licence-inventory)
 
 ## Code of Conduct
 
@@ -453,6 +454,31 @@ correctly withholds those credentials from a fork's workflow run, so the scan
 cannot run on your pull request. The `Guardian scan gate` check accounts for that
 and passes. If your change adds or updates a dependency, expect a reviewer to look
 at `go.mod` and `go.sum` closely, since the automated scan is not there to do it.
+
+## Third-party licence inventory
+
+If your change bumps a Go dependency and `Third-party licenses current` goes
+red:
+
+```bash
+go run github.com/google/go-licenses@v1.6.0 csv ./cmd/server
+```
+
+That supplies the module, version, and licence data for every row — it prints
+to stdout, it does not write the file — so reconcile it into
+`THIRD_PARTY_LICENSES.md`'s table by hand, from the same closure the check
+verifies. `licenses-check.sh`'s own failure output lists what that
+reconciliation involves — exclude this repository's own module, update the
+"Generated" date, and open each new licence link rather than trusting the
+generated URL (`go-licenses` isn't authoritative there either) — follow that
+output over this summary of it, then confirm with
+`.github/scripts/licenses-check.sh`. Automatic regeneration on a pull request
+(so this stops being a manual step at all) is tracked separately under
+SOL-152956. If the check is still red after regenerating, it is usually a
+real compliance question — most often a new dependency that ships its own
+`NOTICE` file, which needs a human-written attribution block — not a
+formatting one. See `RELEASING.md`'s **Third-party licence inventory**
+section for the source-of-truth decision this follows.
 
 ## Questions?
 

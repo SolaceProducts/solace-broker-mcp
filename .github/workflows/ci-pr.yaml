@@ -237,6 +237,27 @@ jobs:
       - name: Verify every Go file carries the Apache-2.0 header
         run: .github/scripts/license-header-check.sh
 
+  # smoke-test-binary.sh only ever runs against release.yml's real archives, so
+  # there's nothing of its own to verify on a pull request — but its self-test
+  # is pure fixture-based logic with no such dependency, and running it here
+  # is what actually protects against it silently breaking, per the same
+  # reasoning as every other *.test.sh above: catching a break on every pull
+  # request, before a tag ever exists, rather than only at release time. It
+  # also doesn't depend on release.yml's matrix leg names at all, so it can't
+  # go quiet just because a leg is renamed or reordered there.
+  smoke_test_selftest:
+    name: Smoke-test script self-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Self-test the release smoke-test script
+        run: .github/scripts/smoke-test-binary.test.sh
+
   # A fork pull request gets no vulnerability verdict from guardian-scan.yaml:
   # every scan job there is gated on `!is_fork` because GitHub withholds
   # Environment secrets from a fork-triggered run, so the first enforcing scan
