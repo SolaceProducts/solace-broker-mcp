@@ -157,9 +157,9 @@ jobs:
         run: |
           set -euo pipefail
           go mod download
-          for gomod in $(find -L test -name go.mod); do
+          while IFS= read -r gomod; do
             (cd "$(dirname "$gomod")" && go mod download)
-          done
+          done < <(find -L test -name go.mod)
       - name: Self-test the third-party licences refresh script (offline cases)
         env:
           SKIP_NETWORK_TESTS: "1"
@@ -191,9 +191,9 @@ jobs:
         run: |
           set -euo pipefail
           go mod download
-          for gomod in $(find -L test -name go.mod); do
+          while IFS= read -r gomod; do
             (cd "$(dirname "$gomod")" && go mod download)
-          done
+          done < <(find -L test -name go.mod)
       # GH_TOKEN so the licence lookups these two cases exercise (`gh api`)
       # use the authenticated rate limit rather than the anonymous one every
       # concurrent runner shares. Full suites here, not just the network
