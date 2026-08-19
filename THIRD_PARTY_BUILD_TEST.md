@@ -188,7 +188,7 @@ note spells out.
 hits that is likely to assume the row is wrong rather than that the filename is
 unusual.
 
-### Solace-Internal Composite Actions
+### Solace-internal composite actions
 
 Not third-party. Listed so the inventory accounts for every `uses:` in the
 repository rather than silently skipping the ones that did not fit the table.
