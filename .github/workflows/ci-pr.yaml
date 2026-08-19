@@ -1,12 +1,20 @@
 name: CI - Pull Request
 
+# Four jobs here are required contexts, so they must report on a merge queue entry
+# too; see build-and-test.yml's header for the trigger's shape (SOL-152974).
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  merge_group:
+    types: [checks_requested]
 
+# The `|| github.sha` fallback is load-bearing: `pull_request.number` is empty on
+# `merge_group`, so without it every queue entry shares one group and — with
+# `cancel-in-progress` unconditional — cancels the entry before it, failing all
+# four required contexts here intermittently.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Read-only for every job; the scan that needed elevated scopes moved to
 # guardian-scan.yaml.
@@ -42,11 +50,16 @@ jobs:
           persist-credentials: false
       - name: Self-test the commit identity check
         run: .github/scripts/commit-identity-check.test.sh
+      # `BASE_SHA` is passed explicitly rather than left to the script's
+      # `origin/main` default, which a queue checkout need not carry. `BASE_REF`
+      # stays pull-request-only: the merge group's `base_sha` already bounds what it
+      # exists for, and the payload gives it as a full `refs/heads/main` that the
+      # script could not resolve anyway.
       - name: Verify every commit uses a routable author and committer address
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: .github/scripts/commit-identity-check.sh
 
   release_notes_selftest:
@@ -211,7 +224,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # Pull-request-only: `LABELS` has no `merge_group` analogue, so the
+      # `no-changelog` hatch would silently vanish in the queue. Skipping the step
+      # still leaves the required `CHANGELOG updated` context green, which is right —
+      # the gate already had its say on the pull request.
       - name: Advise on a missing [Unreleased] entry for behavior-changing PRs
+        if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
