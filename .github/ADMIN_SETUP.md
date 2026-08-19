@@ -133,14 +133,41 @@ gh api repos/OWNER/REPO/code-scanning/default-setup
 # threat_model: remote  schedule: weekly  runner_type: standard
 ```
 
-1. **Wait for `codeql.yml` to be green on `main`**, then disable default setup:
-   **Settings → Code security → "CodeQL analysis" row → "Switch to advanced" →
-   "Disable CodeQL"**. Doing this before the workflow is observed green leaves a
-   window with no scanning at all.
-2. **Swap the required context** on ruleset `main-protection`: **add**
-   `CodeQL gate`, confirm it reports on a live pull request, **then remove**
-   `CodeQL`/`57789`. Reversed, every merge blocks on a context nobody produces.
-   Capture the ruleset JSON first — that file is the rollback. Net count stays 14.
+⚠️ **`codeql.yml` cannot be green until step 2 happens, and that is not a bug in
+it.** GitHub refuses the upload outright while both configurations are live:
+
+```
+##[error]Code Scanning could not process the submitted SARIF file:
+CodeQL analyses from advanced configurations cannot be processed when
+the default setup is enabled
+```
+
+Observed on PR #325, 19 August 2026. The analysis itself ran and uploaded fine;
+only the *processing* is refused. So "wait for the workflow to be green, then
+disable default setup" is circular — expect `Analyze (...)` and `CodeQL gate` to
+be red on the pull request that introduces them, and read that red as the
+coexistence rule, not as a broken workflow.
+
+That also rules out the tidy "add the new context, confirm it reports, then
+remove the old one" order: `CodeQL gate` cannot report a pass while `CodeQL`'s
+producer is still enabled. One of the two has to be uncovered briefly, and the
+choice is which:
+
+1. **Capture the rollback**, then **remove `CodeQL`/`57789`** from ruleset
+   `main-protection` (14 → 13 contexts). CodeQL stops *blocking* here, but keeps
+   *scanning* — default setup is still on, and merges are not affected.
+2. **Disable default setup**: **Settings → Code security → "CodeQL analysis" row
+   → "Switch to advanced" → "Disable CodeQL"**. Advanced setup's uploads start
+   being processed from this point.
+3. **Confirm `CodeQL gate` is green** on `main` and on a live pull request.
+4. **Add `CodeQL gate`** to the ruleset (13 → 14, net count unchanged).
+
+Between steps 1 and 4 CodeQL is scanning but not blocking. That is the cheaper of
+the two exposures: doing it the other way round — disabling default setup first —
+stops the required `CodeQL` context from being produced at all, which blocks
+**every** merge in the repository until step 4 lands. A short unenforced window
+beats a repository-wide merge freeze, and there are **zero open alerts** to slip
+through it.
 
 ```bash
 # Rollback capture, before touching anything.

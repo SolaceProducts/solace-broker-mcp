@@ -37,6 +37,22 @@ name: CodeQL
 # context the ruleset requires; the `Analyze (...)` contexts stay unrequired,
 # exactly as before.
 #
+# EXPECT THIS TO BE RED UNTIL DEFAULT SETUP IS TURNED OFF
+#
+# The two configurations cannot coexist, and GitHub enforces that at upload
+# processing time rather than by ignoring one:
+#
+#   Code Scanning could not process the submitted SARIF file:
+#   CodeQL analyses from advanced configurations cannot be processed when
+#   the default setup is enabled
+#
+# The analysis runs and uploads; only the processing is refused. So the pull
+# request that introduces this file sees red `Analyze (...)` jobs and a red
+# `CodeQL gate`, and that is the coexistence rule rather than a defect. Neither
+# is a required context yet, so nothing is blocked by it. The admin steps that
+# clear it, in the one order that never freezes merges, are in
+# .github/ADMIN_SETUP.md under "Code Security".
+#
 # WHY THERE IS NO `paths:` FILTER
 #
 # Same reason as `workflow-lint.yaml`, which dissects it at length: GitHub does
