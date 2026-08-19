@@ -256,7 +256,7 @@ the replacement does and does not catch.
 **Nothing to enable for dependency review.** The `Dependencies free of high
 advisories` check reads the Dependency Review API, which is served by the
 dependency graph — always on and free for a public repository. It does not need
-Code Security enabled, and the API reporting Code Security as disabled (above) does
+Code Security enabled, and the API reporting Code Security as disabled (noted earlier) does
 not affect it. Confirmed live: `dependency-graph/compare/v0.6.0...v0.7.1` returns
 33 dependency changes. The cost question that parked this control was about an
 internal repository and no longer applies.
@@ -291,7 +291,7 @@ run?" can be answered without opening a workflow file.
 | Tool | Covers | Config | Blocking? |
 |------|--------|--------|-----------|
 | golangci-lint | Go static analysis. Eight linters: `errcheck`, `staticcheck`, `gosec`, `govet`, `revive`, `bodyclose`, `ineffassign`, `noctx`. `gosec` carries the security patterns (`G706` excluded pending a gosec release) | `.golangci.yml` | **Yes** — required check `lint` |
-| CodeQL | SAST over Go and GitHub Actions workflows. `default` query suite, `remote` threat model, `build-mode: autobuild` for Go and `none` for actions (what default setup used — read from its own `environment`, not inferred from runtime), weekly schedule plus every push, **every** pull request (fork and Dependabot included) and every merge queue entry | `.github/workflows/codeql.yml` (advanced setup), verdict in `.github/scripts/codeql-gate.sh` | **Yes** — required check `CodeQL gate`, registered 20 August 2026, within the two limits below |
+| CodeQL | SAST over Go and GitHub Actions workflows. `default` query suite, `remote` threat model, `build-mode: autobuild` for Go and `none` for actions (what default setup used — read from its own `environment`, not inferred from runtime), weekly schedule plus every push, **every** pull request (fork and Dependabot included) and every merge queue entry | `.github/workflows/codeql.yml` (advanced setup), verdict in `.github/scripts/codeql-gate.sh` | **Yes** — required check `CodeQL gate`, registered 20 August 2026, within the two limits described next |
 | FOSSA SCA | Third-party dependency licences and known vulnerabilities | `.github/workflow-config.json`, run from `guardian-scan.yaml` | **Detection, not prevention.** `Guardian scan gate` is required, but on a pull request FOSSA runs in diff mode and REPORT; the hard gate is on push to `main` and at the release tag |
 | Dependency Review | A pull request *introducing* a dependency with a known high or critical advisory | `ci-pr.yaml` job `dependency_review` | Not yet a required check — see [Required status checks](#required-status-checks) |
 
@@ -425,7 +425,7 @@ gh api repos/OWNER/REPO/rulesets/13942241 \
 | `Guardian scan gate` | `guardian-scan.yaml` job `gate` | The Guardian scan verdict, or an accounted-for reason there is none (fork PR). Replaces `SCA gate`; see the following warning |
 | `Third-party licenses current` | `ci-pr.yaml` job `licenses` | `THIRD_PARTY_LICENSES.md` still matching `go list -deps ./cmd/server`. Needs no secret, so it reports on fork pull requests too |
 | `Licence headers present` | `ci-pr.yaml` job `license_headers` | Every `.go` file outside `vendor/` opening with the Apache-2.0 header. Needs no secret and no Go toolchain, so it reports on fork pull requests too |
-| `Dependencies free of high advisories` | `ci-pr.yaml` job `dependency_review` | A pull request *introducing* a dependency with a known high or critical advisory, read from the Dependency Review API. Needs no third-party secret, so it reports on fork pull requests too — the vulnerability half of the fork gap below, and the only control here that prevents rather than detects. **Not yet registered** — see the following |
+| `Dependencies free of high advisories` | `ci-pr.yaml` job `dependency_review` | A pull request *introducing* a dependency with a known high or critical advisory, read from the Dependency Review API. Needs no third-party secret, so it reports on fork pull requests too — the vulnerability half of the fork gap described later, and the only control here that prevents rather than detects. **Not yet registered** — see the following |
 | `CHANGELOG updated` | `ci-pr.yaml` job `changelog` | Advisory today; see the following note |
 | `Commit identity routable` | `ci-pr.yaml` job `identity` | Every commit the PR adds using a routable author and committer address, so a machine hostname does not publish permanently with the history. Pinned to Actions (`15368`), not to the `dco2` App — see the following |
 | `workflow-lint` | `workflow-lint.yaml` job `workflow-lint` | Every file under `.github/workflows/` passing actionlint (correctness, plus shellcheck over `run:` blocks) and zizmor (workflow security, including SHA pinning via `unpinned-uses`), so workflow security is enforced by a tool rather than argued in a code comment. **Not yet registered** — see the following |
@@ -506,7 +506,7 @@ merge. If someone later adds a `paths:` filter to make it cheaper, this required
 context is what breaks. Condition inside the job, never in the trigger.
 
 ⚠️ **`Dependencies free of high advisories` is new and not yet in the ruleset.**
-Register it under the rule above — green on a real pull request first, and only
+Register it under the preceding rule — green on a real pull request first, and only
 after the pull request creating it has merged. Read the context name off a real
 run rather than assuming it; the job's `name:` is the context, with no
 `caller / inner` suffix, but assuming a name is what produced the `FOSSA Scan`
@@ -514,7 +514,7 @@ gap.
 
 Until it is registered it enforces nothing, which matters more here than for the
 other rows: it is the one control in this repository that *prevents* a vulnerable
-dependency from merging instead of finding one afterwards. The fork section below
+dependency from merging instead of finding one afterwards. The following fork section
 reads as if that prevention exists. It exists as a workflow; it becomes a gate
 when the context is registered.
 
@@ -525,7 +525,7 @@ Three properties to know before requiring it:
   no dependency changes and passes. So an advisory published tomorrow against a
   dependency already in the tree does not turn every open pull request red. That
   containment is what makes it safe to require, and it is why this job needs no
-  `paths:` filter and no condition — see the `workflow-lint` note above for what
+  `paths:` filter and no condition — see the earlier `workflow-lint` note for what
   a filter would cost.
 - **It blocks same-repo pull requests too, Dependabot's included.** This is a
   change in daily posture, not only a fork fix. `fossa-vuln` runs REPORT on a
@@ -648,7 +648,7 @@ read this half as closed only from that point on. Four caveats on how far to rea
 a green verdict:
 
 - **It is registered as required or it is nothing.** See the warning in the
-  required-checks section above. As of this writing it is not.
+  preceding required-checks section. As of this writing it is not.
 - **It reads the diff, not the tree.** It catches a dependency the pull request
   *adds* that is already known-bad. It does not catch an advisory published
   tomorrow against a dependency already in `go.mod` — that stays with the scan on
@@ -1111,7 +1111,7 @@ writing; re-check, do not assume.
   > missing analysis rather than concluding `neutral` — so that exception retires
   > with the migration; see [Static analysis](#static-analysis). A scan outage today blocks everyone, which is what makes the "Who
   > picks up a red supply-chain scan on `main`" gap earlier in the Branch
-  > Protection section (above) worth reading, not less.
+  > Protection section worth reading, not less.
   >
   > Note that the SHA pin buys less than it looks like: `guardian-scan` pins the
   > `SolaceDev/solace-public-workflows` actions, but those actions run container

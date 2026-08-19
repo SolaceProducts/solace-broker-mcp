@@ -78,7 +78,7 @@ go run ./cmd/server
 sam run
 ```
 
-**5. Verify** — the Agent Mesh logs include:
+**5. Verify** — the Agent Mesh logs should include:
 
 ```
 Initialized MCPToolset for server: url='http://localhost:9090/mcp'

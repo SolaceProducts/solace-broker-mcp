@@ -14,7 +14,7 @@ Thank you for your interest in contributing to the Solace Broker MCP Server! Thi
 - [Coding Standards](#coding-standards)
 - [Testing Requirements](#testing-requirements)
 - [Developer Certificate of Origin](#developer-certificate-of-origin)
-- [Third-party licence inventory](#third-party-licence-inventory)
+- [Third-Party Licence Inventory](#third-party-licence-inventory)
 
 ## Code of Conduct
 
@@ -484,7 +484,7 @@ cannot run on your pull request. The `Guardian scan gate` check accounts for tha
 and passes. If your change adds or updates a dependency, expect a reviewer to look
 at `go.mod` and `go.sum` closely, because the automated scan is not there to do it.
 
-## Third-party licence inventory
+## Third-Party Licence Inventory
 
 If your change bumps a dependency and `Third-party licenses current` goes red:
 
@@ -493,11 +493,11 @@ make refresh-third-party-inventory
 ```
 
 This regenerates both `THIRD_PARTY_LICENSES.md` and `THIRD_PARTY_BUILD_TEST.md`
-(SOL-152956) from what the repository actually uses — one command instead of
+(SOL-152956) from what the repository actually uses, one command instead of
 re-deriving the dependency closure and reconciling table rows by hand. It
 diffs against the two checks' own diagnostics, rewrites only the row(s) that
 drifted, reads each new licence fresh rather than inferring one, and refuses
-outright — leaving the file untouched — on anything it doesn't recognize (a
+outright (leaving the file untouched) on anything it doesn't recognize (a
 brand-new container image or npm package, a strong-copyleft licence, a
 duplicate or unparseable row) rather than guess. Review its diff and commit as
 usual.
@@ -506,13 +506,13 @@ If it refuses, that's not a bug to work around: it's telling you the
 remaining fix needs a human decision. Run the underlying check
 (`.github/scripts/licenses-check.sh` or `.github/scripts/build-test-licenses-check.sh`)
 directly to see exactly what's outstanding, and follow its own remediation
-text — most often either a new dependency shipping its own `NOTICE` file
+text: most often either a new dependency shipping its own `NOTICE` file
 (needs a human-written Apache-2.0 §4(d) attribution block, which no tool
 should auto-author) or a component whose licence genuinely differs from its
 parent module's and needs its own verified row.
 
 Still a manual step: Dependabot cannot execute post-update scripts, so its
-own PRs need a human to run this target, review the diff, and push — or ask
+own PRs need a human to run this target, review the diff, and push; or ask
 Claude Code to do it via the `/refresh-third-party-inventory` skill
 (`.claude/skills/refresh-third-party-inventory/`), which runs the same
 target and always stops to show the diff before committing or pushing.
