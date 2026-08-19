@@ -61,15 +61,6 @@ jobs:
         run: .github/scripts/licenses-check.test.sh
       - name: Verify THIRD_PARTY_LICENSES.md and NOTICE match the binary
         run: .github/scripts/licenses-check.sh
-      # Same reasoning as ci-pr.yaml's own copy of this step: the refresh
-      # script (SOL-152956, `make refresh-third-party-inventory`) is what a
-      # contributor runs when the check above goes red, so its correctness
-      # belongs under the same required context here too.
-      - name: Self-test the third-party licences refresh script
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: .github/scripts/refresh-licenses-inventory.test.sh
       # Verified at the tag for the same reason as the check above it: a pull
       # request can merge with this red until it is a required status check.
       # `if: always()` is load-bearing. GitHub skips later steps once one fails,
@@ -83,6 +74,62 @@ jobs:
       - name: Verify THIRD_PARTY_BUILD_TEST.md matches the build and test inputs
         if: always()
         run: .github/scripts/build-test-licenses-check.sh
+
+  # Self-tests for the inventory-refresh tooling itself (SOL-152956,
+  # `make refresh-third-party-inventory`) — not the gate above, which stays
+  # exactly as it was, and not named in any `needs:` below, so neither job
+  # here can block build-binaries/build-docker/release. Same reasoning as
+  # ci-pr.yaml's own copy of these two jobs: this tooling's tests shell out to
+  # `go run github.com/google/go-licenses` and `gh api` for a handful of
+  # cases, and letting a module-proxy or GitHub API outage block an actual
+  # release over something with no bearing on the inventory's correctness
+  # would be a worse trade here than on a PR.
+  refresh-scripts-selftest-offline:
+    name: Third-party inventory refresh scripts self-test (offline)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+      - name: Self-test the third-party licences refresh script (offline cases)
+        env:
+          SKIP_NETWORK_TESTS: "1"
+        run: .github/scripts/refresh-licenses-inventory.test.sh
+      - name: Self-test the build/test inventory refresh script (offline cases)
+        if: always()
+        env:
+          SKIP_NETWORK_TESTS: "1"
+        run: .github/scripts/refresh-build-test-inventory.test.sh
+
+  refresh-scripts-selftest-network:
+    name: Third-party inventory refresh scripts self-test (network)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+      - name: Self-test the third-party licences refresh script
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: .github/scripts/refresh-licenses-inventory.test.sh
       - name: Self-test the build/test inventory refresh script
         if: always()
         env:

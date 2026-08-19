@@ -19,6 +19,15 @@
 # two deliberate refusals (a brand-new container image, a brand-new npm
 # package) and the "don't guess when something else is also wrong" case.
 #
+# SKIP_NETWORK_TESTS=1 skips the three cases (of fifteen) that need `go run
+# github.com/google/go-licenses` or `gh api` for a genuinely new row's
+# licence — everything else here (fixes, drops, and every refusal) resolves
+# from local files and the already-warm module cache. Unset/0 by default so a
+# local or manual run gets full coverage; CI sets it for the fast, offline,
+# cross-platform-matrixed leg of this suite, so a module-proxy or GitHub API
+# outage can't block a merge on a required check that has no real bearing on
+# whether the inventory logic itself is correct.
+#
 # Usage: .github/scripts/refresh-build-test-inventory.test.sh
 
 set -uo pipefail
@@ -27,8 +36,38 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 REFRESH="$REPO_ROOT/.github/scripts/refresh-build-test-inventory.sh"
 DOC="THIRD_PARTY_BUILD_TEST.md"
 
+# shellcheck source=lib/inventory-refresh-common.sh
+source "$REPO_ROOT/.github/scripts/lib/inventory-refresh-common.sh"
+
+# current_field <name> <field-num>
+#   Reads a value straight from the committed document rather than hardcoding
+#   a snapshot of it in a case's mutation arguments — the exact coupling this
+#   ticket's own build-test-licenses-check.test.sh fix (deriving
+#   set_solace_action_ref's expected values from the live workflow ref) exists
+#   to eliminate elsewhere. A hardcoded "current" version/SHA/tag here goes
+#   stale the moment the real row changes, the same way the sibling file's
+#   fixtures used to. Backticks are stripped so the result is ready to use as
+#   change_field's <old-regex> argument, which matches against the row's raw
+#   text, not the cell's own markdown formatting.
+current_field() {
+    # Escape literal `.` for safe use as an ERE pattern: a version like
+    # v0.41.0 must match itself, not "v0<any><41><any>0" — the same
+    # precaution the literals this replaces already took by hand
+    # (`'v0\.41\.0'`).
+    get_row_field "$REPO_ROOT/$DOC" "$1" "$2" | tr -d '`' | sed -E 's/\./\\./g'
+}
+
 pass=0
 fail=0
+skip=0
+
+# skip_network <description>
+#   Prints a "skip" line and stops the caller from reporting it as pass/fail.
+#   Used only when SKIP_NETWORK_TESTS=1.
+skip_network() {
+    echo "  skip     $1 (SKIP_NETWORK_TESTS=1)"
+    skip=$((skip + 1))
+}
 
 # --- mutations ---------------------------------------------------------------
 
@@ -151,6 +190,14 @@ assert_refresh() {
         fi
     fi
 
+    # Snapshot the mutated-but-not-yet-refreshed file, for the want=1
+    # (refusal) branch below: a refusal case has no committed-file baseline
+    # to converge to (it's supposed to change nothing), so "left alone" can
+    # only be checked against what the mutation itself produced.
+    local pre_refresh_snapshot
+    pre_refresh_snapshot=$(mktemp "$tmp/refresh-pre.XXXXXX")
+    cp "$tmp/$DOC" "$pre_refresh_snapshot"
+
     local got=0
     (cd "$tmp" && "$REFRESH" >"$out_file" 2>&1) || got=$?
 
@@ -187,12 +234,35 @@ assert_refresh() {
     # "ok" because none of them happened to be checking those two rows.
     # Comparing the whole file catches collateral damage to rows the case
     # under test never mentions.
+    #
+    # The "Generated" date line is excluded from both sides before comparing:
+    # refresh-build-test-inventory.sh now bumps it as housekeeping on any real
+    # rewrite (mirroring the sibling script), so it legitimately differs from
+    # the committed file whenever "today" isn't the date that file happens to
+    # carry — that is the intended behaviour, not drift to catch.
     if [ "$want" -eq 0 ]; then
         local diff_file
         diff_file=$(mktemp "$tmp/refresh-diff.XXXXXX")
-        if ! diff -u "$REPO_ROOT/$DOC" "$tmp/$DOC" >"$diff_file" 2>&1; then
+        if ! diff -u \
+            <(grep -v '^\*\*Generated\*\*' "$REPO_ROOT/$DOC") \
+            <(grep -v '^\*\*Generated\*\*' "$tmp/$DOC") \
+            >"$diff_file" 2>&1; then
             echo "  NOT OK   $desc (exit 0, but the file didn't fully converge to the committed one)"
             sed 's/^/           /' "$diff_file"
+            fail=$((fail + 1))
+            rm -rf "$tmp"
+            return
+        fi
+    else
+        # A refusal must leave the file exactly as the mutation left it — not
+        # merely "exit nonzero". Nothing asserted this until now: a
+        # regression that failed loudly but still wrote a partial fix first
+        # would have passed every existing refusal case.
+        local refusal_diff_file
+        refusal_diff_file=$(mktemp "$tmp/refresh-refusal-diff.XXXXXX")
+        if ! diff -u "$pre_refresh_snapshot" "$tmp/$DOC" >"$refusal_diff_file" 2>&1; then
+            echo "  NOT OK   $desc (exit $got matched, but the file was touched despite the refusal)"
+            sed 's/^/           /' "$refusal_diff_file"
             fail=$((fail + 1))
             rm -rf "$tmp"
             return
@@ -210,7 +280,7 @@ assert_refresh "an already-matching file is a clean no-op" 0 -
 
 # --- Go modules ---------------------------------------------------------
 assert_refresh "a stale Go module version is fixed" 0 "golang.org/x/sys" \
-    change_field "golang.org/x/sys" 'v0\.41\.0' 'v0.1.0'
+    change_field "golang.org/x/sys" "$(current_field "golang.org/x/sys" 2)" 'v0.1.0'
 # jsonschema-go, not a golang.org/x/* module: THIRD_PARTY_BUILD_TEST.md's own
 # golang.org/x/* rows link to `+/master:LICENSE` rather than a pinned tag (an
 # existing, hand-written inconsistency with how THIRD_PARTY_LICENSES.md and
@@ -218,8 +288,12 @@ assert_refresh "a stale Go module version is fixed" 0 "golang.org/x/sys" \
 # either way (it validates versions, never licence URLs) and this script
 # doesn't try to reproduce; picking a non-x/* module here keeps this case
 # about convergence, not about that unrelated, harmless URL-style difference.
-assert_refresh "a missing Go module row is re-added, byte-identical" 0 "github.com/google/jsonschema-go" \
-    drop_row "github.com/google/jsonschema-go"
+if [ "${SKIP_NETWORK_TESTS:-0}" = "1" ]; then
+    skip_network "a missing Go module row is re-added, byte-identical"
+else
+    assert_refresh "a missing Go module row is re-added, byte-identical" 0 "github.com/google/jsonschema-go" \
+        drop_row "github.com/google/jsonschema-go"
+fi
 
 # A row whose exact backticked name also appears in unrelated prose elsewhere
 # in the document (THIRD_PARTY_BUILD_TEST.md's own note: "**`golang.org/x/oauth2`
@@ -291,9 +365,13 @@ test_prose_collision
 
 # --- GitHub Actions: third-party (5-column) table ------------------------
 assert_refresh "a re-pinned third-party action's row is fixed" 0 "actions/checkout" \
-    change_field "actions/checkout" '3d3c42e' '0000000'
-assert_refresh "a missing third-party action row is re-added, byte-identical" 0 "actions/setup-node" \
-    drop_row "actions/setup-node"
+    change_field "actions/checkout" "$(current_field "actions/checkout" 2)" '0000000'
+if [ "${SKIP_NETWORK_TESTS:-0}" = "1" ]; then
+    skip_network "a missing third-party action row is re-added, byte-identical"
+else
+    assert_refresh "a missing third-party action row is re-added, byte-identical" 0 "actions/setup-node" \
+        drop_row "actions/setup-node"
+fi
 
 # --- GitHub Actions: Solace-internal (3-column) table --------------------
 # The backtick-wrapped name in this table is the whole path
@@ -301,7 +379,8 @@ assert_refresh "a missing third-party action row is re-added, byte-identical" 0 
 # "guardian-db-sync" tail — change_field's address must match that exactly.
 assert_refresh "a re-pinned Solace-internal action's row is fixed" 0 \
     "SolaceDev/solace-public-workflows/guardian-db-sync" \
-    change_field "SolaceDev/solace-public-workflows/guardian-db-sync" '63228a0' '0000000'
+    change_field "SolaceDev/solace-public-workflows/guardian-db-sync" \
+        "$(current_field "SolaceDev/solace-public-workflows/guardian-db-sync" 2)" '0000000'
 assert_refresh "a missing Solace-internal action row is re-added, byte-identical" 0 \
     "SolaceDev/solace-public-workflows/.github/actions/fossa-guard" \
     drop_row "SolaceDev/solace-public-workflows/.github/actions/fossa-guard"
@@ -407,17 +486,68 @@ test_shared_new_dependency_inserted_once() {
     pass=$((pass + 1))
     rm -rf "$tmp"
 }
-test_shared_new_dependency_inserted_once
+if [ "${SKIP_NETWORK_TESTS:-0}" = "1" ]; then
+    skip_network "a Go module newly shared by two test submodules is added once, not twice"
+else
+    test_shared_new_dependency_inserted_once
+fi
+
+# The case above only half-locks the fix: `sort -u` on the checker's
+# diagnostics already collapses the two byte-identical "not listed" lines
+# before insert_row_in_table is ever called twice, so that case alone would
+# keep passing even if insert_row_in_table's own "refuse if this name already
+# exists" guard (lib/inventory-refresh-common.sh) were reverted — nothing
+# would call it twice in that scenario to notice. This is a direct unit test
+# of that guard specifically, needing no network: call it twice with the
+# identical row and require the second call to fail and the file to still
+# hold exactly one copy.
+test_insert_row_in_table_refuses_duplicate() {
+    local desc="insert_row_in_table refuses a second insert of a name that already exists"
+    local tmp
+    tmp=$(mktemp -d)
+    cp "$REPO_ROOT/$DOC" "$tmp/$DOC"
+
+    local row="| \`github.com/example/direct-unit-test-dup\` | v1.0.0 | MIT | [license](https://example.invalid/LICENSE) |"
+    if ! (cd "$tmp" && insert_row_in_table "$DOC" "test/e2e-basic-mcp/agent" "$row"); then
+        echo "  ERROR    $desc (the test's own first insert failed)"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+
+    local got=0
+    (cd "$tmp" && insert_row_in_table "$DOC" "test/e2e-basic-mcp/agent" "$row") || got=$?
+    if [ "$got" -eq 0 ]; then
+        echo "  NOT OK   $desc (a second insert of the same row succeeded — the duplicate-refusal guard is gone)"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+
+    local count
+    count=$(grep -cF 'github.com/example/direct-unit-test-dup' "$tmp/$DOC")
+    if [ "$count" -ne 1 ]; then
+        echo "  NOT OK   $desc (expected exactly 1 row after the refused second insert, found $count)"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+
+    echo "  ok       $desc"
+    pass=$((pass + 1))
+    rm -rf "$tmp"
+}
+test_insert_row_in_table_refuses_duplicate
 
 # --- container images -----------------------------------------------------
 assert_refresh "a bumped container image tag is fixed" 0 "apache/kafka" \
-    change_field "apache/kafka" '3\.7\.0' '9.9.9'
+    change_field "apache/kafka" "$(current_field "apache/kafka" 2)" '9.9.9'
 assert_refresh "a brand-new container image is refused, not guessed" 1 - \
     add_new_container_image
 
 # --- npm packages ----------------------------------------------------------
 assert_refresh "a bumped npm package version is fixed" 0 "@anthropic-ai/claude-code" \
-    change_field "@anthropic-ai/claude-code" '2\.1\.223' '9.9.9'
+    change_field "@anthropic-ai/claude-code" "$(current_field "@anthropic-ai/claude-code" 2)" '9.9.9'
 assert_refresh "a brand-new npm package is refused, not guessed" 1 - \
     add_new_npm_package
 
@@ -426,5 +556,5 @@ assert_refresh "an unparseable row refuses the whole batch rather than guessing"
     add_unparseable_row
 
 echo
-echo "$pass passed, $fail failed"
+echo "$pass passed, $fail failed, $skip skipped"
 [ "$fail" -eq 0 ]

@@ -22,6 +22,15 @@
 # licenses-check.sh (e.g. a differently-cased licence name that still
 # resolves) would pass on exit code alone and be wrong regardless.
 #
+# SKIP_NETWORK_TESTS=1 skips the one case that shells out to `go run
+# github.com/google/go-licenses@v1.6.0` (network, to fetch the tool itself on
+# a cold cache). Unset/0 by default so a local or manual run gets full
+# coverage; CI sets it for the fast, offline, cross-platform-matrixed leg of
+# this suite, keeping a module-proxy outage from being able to block a merge
+# on a required check — the every-case-needs-network shape this file used to
+# have coupled a required context's reliability to an external service with
+# no bearing on whether the inventory logic itself is correct.
+#
 # Usage: .github/scripts/refresh-licenses-inventory.test.sh
 
 set -uo pipefail
@@ -33,6 +42,15 @@ NOTICE_FILE="NOTICE"
 
 pass=0
 fail=0
+skip=0
+
+# skip_network <description>
+#   Prints a "skip" line and stops the caller from reporting it as pass/fail.
+#   Used only when SKIP_NETWORK_TESTS=1.
+skip_network() {
+    echo "  skip     $1 (SKIP_NETWORK_TESTS=1)"
+    skip=$((skip + 1))
+}
 
 # --- mutations ---------------------------------------------------------------
 # Same idiom as licenses-check.test.sh's own drop_row/change_version, applied
@@ -102,6 +120,14 @@ assert_refresh() {
         fi
     fi
 
+    # Snapshot the mutated-but-not-yet-refreshed file, for the want=1
+    # (refusal) branch below: a refusal case has no committed-file baseline
+    # to converge to (it's supposed to change nothing), so "left alone" can
+    # only be checked against what the mutation itself produced.
+    local pre_refresh_snapshot
+    pre_refresh_snapshot=$(mktemp "$tmp/refresh-pre.XXXXXX")
+    cp "$tmp/$DOC" "$pre_refresh_snapshot"
+
     # Scratch files live under $tmp, not a fixed /tmp/...$$ path: colocating
     # with the rest of this case's fixture means the single `rm -rf "$tmp"` at
     # each return already cleans them up (no separate rm of a sibling path to
@@ -163,6 +189,20 @@ assert_refresh() {
             rm -rf "$tmp"
             return
         fi
+    else
+        # A refusal must leave the file exactly as the mutation left it — not
+        # merely "exit nonzero". This is the check that would catch a
+        # regression where the script fails loudly but still writes a partial
+        # fix first; nothing exercised that until now.
+        local refusal_diff_file
+        refusal_diff_file=$(mktemp "$tmp/refresh-refusal-diff.XXXXXX")
+        if ! diff -u "$pre_refresh_snapshot" "$tmp/$DOC" >"$refusal_diff_file" 2>&1; then
+            echo "  NOT OK   $desc (exit $got matched, but the file was touched despite the refusal)"
+            sed 's/^/           /' "$refusal_diff_file"
+            fail=$((fail + 1))
+            rm -rf "$tmp"
+            return
+        fi
     fi
 
     echo "  ok       $desc (exit $got)"
@@ -219,9 +259,14 @@ assert_refresh "a stale version is fixed to match the binary" 0 "golang.org/x/sy
 # Direction 2: a component drops out of the row set entirely — the new
 # transitive Go module case. Deleting a real row must be repaired to exactly
 # what was there before, licence and all, not just a row that also happens to
-# pass.
-assert_refresh "a missing row is re-added, byte-identical to the original" 0 "golang.org/x/sync" \
-    drop_row "golang.org/x/sync"
+# pass. The only case in this file that needs network (fetch_go_module_license
+# shells out to go-licenses) — see SKIP_NETWORK_TESTS's own comment at the top.
+if [ "${SKIP_NETWORK_TESTS:-0}" = "1" ]; then
+    skip_network "a missing row is re-added, byte-identical to the original"
+else
+    assert_refresh "a missing row is re-added, byte-identical to the original" 0 "golang.org/x/sync" \
+        drop_row "golang.org/x/sync"
+fi
 
 # Direction 3: a documented row for a component that fell out of the closure —
 # the reverse-direction drift the ticket calls out explicitly ("the gate fails
@@ -230,10 +275,10 @@ assert_refresh "a stale row for an unused component is dropped" 0 - \
     add_stale_row "github.com/example/not-a-dependency"
 
 # Refusal: an error class this script does not recognise must abort the whole
-# run rather than guess. Confirmed by two things — exit 1, and that the
-# unrelated, otherwise-fixable row is asserted unchanged by the harness's own
-# "-" (skip) contract not applying here; the point of this case is specifically
-# that nothing gets written at all.
+# run rather than guess. Confirmed by two things — exit 1, and (via
+# assert_refresh's own want!=0 branch) that the file is byte-identical to
+# what the mutation left it as; the point of this case is specifically that
+# nothing gets written at all, not just that the process exits nonzero.
 assert_refresh "an unparseable row refuses the whole batch rather than guessing" 1 - \
     add_unparseable_row
 
@@ -247,5 +292,5 @@ assert_refresh "dropping a required differing-licence row refuses rather than re
     drop_required_component_row "github.com/go-jose/go-jose/v4/json"
 
 echo
-echo "$pass passed, $fail failed"
+echo "$pass passed, $fail failed, $skip skipped"
 [ "$fail" -eq 0 ]

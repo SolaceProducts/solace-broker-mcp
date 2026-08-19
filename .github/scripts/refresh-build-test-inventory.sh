@@ -61,6 +61,14 @@ if [ ! -f "$DOC" ]; then
     exit 1
 fi
 
+# The row-editing primitives below write via "$DOC.tmp" then `mv` it over
+# "$DOC" — if a failure lands between those two (an awk error, a full disk),
+# the intended "leave the file exactly as it was" contract silently gets an
+# exception: the stray .tmp survives in the repo root, where a later
+# `git add -A` could commit a half-written copy of a Legal document sitting
+# right next to the real one. Removed on every exit, success or failure.
+trap 'rm -f "$DOC.tmp"' EXIT
+
 # shellcheck source=lib/inventory-refresh-common.sh
 source "$LIB_DIR/inventory-refresh-common.sh"
 
@@ -86,7 +94,14 @@ find_go_submodule_for() {
     while read -r gomod; do
         [ -n "$gomod" ] || continue
         sub=$(dirname "$gomod")
-        if (cd "$sub" && go list -deps -test -f '{{with .Module}}{{.Path}}{{end}}' ./... 2>/dev/null | grep -qxF "$mod_path"); then
+        # awk, not `grep -qxF`: grep -q exits at the first match and closes its
+        # read end, and once go list's output exceeds the pipe buffer it gets
+        # SIGPIPE — under `pipefail` that makes the whole pipeline's exit
+        # status 141 even though the module WAS found, so a correct add fails
+        # intermittently here and gets misreported as "should not happen" by
+        # this function's caller. awk reads its input to EOF regardless of
+        # when the match is found, so go list is never killed mid-write.
+        if (cd "$sub" && go list -deps -test -f '{{with .Module}}{{.Path}}{{end}}' ./... 2>/dev/null | awk -v m="$mod_path" '$0 == m { f = 1 } END { exit !f }'); then
             printf '%s' "$sub"
             return 0
         fi
@@ -267,6 +282,18 @@ for entry in ${to_add[@]+"${to_add[@]}"}; do
             fi
             spdx="${license_line%%$'\t'*}"
             url="${license_line#*$'\t'}"
+            # This file's own Verdict section states every Go module here is
+            # permissive (MIT, BSD-3-Clause, Apache-2.0) — same reasoning as
+            # refresh-licenses-inventory.sh's identical check: a real
+            # strong-copyleft dependency, or an unresolved value like
+            # NOASSERTION/Unknown, must never be written in as if it were
+            # confirmed permissive.
+            if ! is_recognized_license "$spdx"; then
+                echo "::error::\`$name\` resolved to licence '$spdx', which this script does not" \
+                    "recognize. Verify by hand and add its row, reading the licence from its own" \
+                    "LICENSE file." >&2
+                exit 1
+            fi
             insert_row_in_table "$DOC" "$sub" \
                 "| \`${name}\` | ${actual} | ${spdx} | [license](${url}) |"
             ;;
@@ -283,6 +310,10 @@ for entry in ${to_add[@]+"${to_add[@]}"}; do
                         "Add its row by hand." >&2
                     exit 1
                 fi
+                # fetch_action_license already refuses (returns empty) for an
+                # unrecognized licence or a malformed/failed API response, not
+                # only a genuinely empty result — this `-z` check catches both
+                # without needing its own allow-list here too.
                 license_line=$(fetch_action_license "$owner_repo" "$tag")
                 if [ -z "$license_line" ]; then
                     echo "::error::Could not resolve a licence for \`$name\` at ref $tag via" \
@@ -302,6 +333,19 @@ for name in ${to_drop[@]+"${to_drop[@]}"}; do
     echo "  drop: \`$name\`"
     delete_row "$DOC" "$name"
 done
+
+# Housekeeping only — never load-bearing for the gate — and, like the sibling
+# script's own version of this, touches only the LEADING "**Generated** DATE"
+# token, not the narrative clauses after it (this file's own "; the GitHub
+# Actions section was refreshed ... and again ..." sentence records specific
+# past events by their own specific dates, which stay true regardless of when
+# this run happens). Without this, a real rewrite could leave the file
+# asserting a "Generated" date older than the row it just changed.
+today=$(date -u +%Y-%m-%d 2>/dev/null || true)
+if [ -n "$today" ]; then
+    sed -i.bak -E "s/^\*\*Generated\*\* [0-9]{4}-[0-9]{2}-[0-9]{2}/\*\*Generated\*\* ${today}/" "$DOC" 2>/dev/null || true
+    rm -f "$DOC.bak"
+fi
 
 echo "--- Re-running build-test-licenses-check.sh to verify the rewrite ---"
 verify_rc=0

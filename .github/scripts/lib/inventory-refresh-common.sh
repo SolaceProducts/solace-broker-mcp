@@ -316,16 +316,46 @@ resolve_action_tag() {
     printf '%s' "$tag"
 }
 
+# is_recognized_license <spdx-id>
+#   True for a licence this tooling may fold into a table without a human
+#   specifically deciding where it goes: the permissive set both documents'
+#   own Verdict sections name, plus MPL-2.0 (the one weak-copyleft exception
+#   THIRD_PARTY_LICENSES.md documents and gives its own table). Anything
+#   else — a real strong-copyleft licence, `NOASSERTION` (a real value
+#   GitHub's API returns at HTTP 200 for some repos, e.g. torvalds/linux),
+#   `Unknown`, a typo — is deliberately unrecognized: never guess a licence
+#   classification, surface it for a human instead.
+is_recognized_license() {
+    case "$1" in
+        MIT | BSD-3-Clause | Apache-2.0 | ISC | MPL-2.0) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # fetch_action_license <owner/repo> <ref>
 #   Prints "<spdx-id>\t<html-url>" for the given ref (a tag, never a bare SHA —
 #   see THIRD_PARTY_BUILD_TEST.md's segmentio/asm note on why a ref-less query
 #   answers for the default branch, not the pinned version). Prints nothing on
 #   any failure; callers must treat that as "could not verify, do not guess"
 #   and fail the job rather than write a licence they didn't confirm.
+#
+#   Validates its own result before returning it, rather than trusting
+#   whatever `gh api` printed: a failed or rate-limited call can still exit
+#   with output on stdout (an error-shaped JSON body that `--jq` folds to
+#   something non-empty but not the two real fields), and `2>/dev/null`
+#   hides the stderr message that would otherwise explain why. Requiring the
+#   tab-separated two-field shape, both fields non-empty, AND a recognized
+#   licence closes that gap without needing to know exactly which failure
+#   mode produced the bad value.
 fetch_action_license() {
-    local owner_repo="$1" ref="$2"
+    local owner_repo="$1" ref="$2" raw spdx url
     check_gh_available || return 0
-    gh api "repos/${owner_repo}/license?ref=${ref}" --jq '[.license.spdx_id, .html_url] | @tsv' 2>/dev/null || true
+    raw=$(gh api "repos/${owner_repo}/license?ref=${ref}" --jq '[.license.spdx_id, .html_url] | @tsv' 2>/dev/null) || raw=""
+    [ -n "$raw" ] || return 0
+    IFS=$'\t' read -r spdx url <<<"$raw"
+    [ -n "$spdx" ] && [ -n "$url" ] || return 0
+    is_recognized_license "$spdx" || return 0
+    printf '%s\t%s' "$spdx" "$url"
 }
 
 # normalize_pseudo_version <version>

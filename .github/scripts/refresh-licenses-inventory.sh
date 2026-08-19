@@ -52,6 +52,14 @@ if [ ! -f "$DOC" ]; then
     exit 1
 fi
 
+# The row-editing primitives below write via "$DOC.tmp" then `mv` it over
+# "$DOC" — if a failure lands between those two (an awk error, a full disk),
+# the intended "leave the file exactly as it was" contract silently gets an
+# exception: the stray .tmp survives in the repo root, where a later
+# `git add -A` could commit a half-written copy of a Legal document sitting
+# right next to the real one. Removed on every exit, success or failure.
+trap 'rm -f "$DOC.tmp"' EXIT
+
 # shellcheck source=lib/inventory-refresh-common.sh
 source "$LIB_DIR/inventory-refresh-common.sh"
 
@@ -158,22 +166,23 @@ for entry in ${to_add[@]+"${to_add[@]}"}; do
     # own header promises never to make, and one that would make the file
     # actively lie about a compliance-relevant fact while the gate stays
     # green (licenses-check.sh never inspects licence *names*, only that a
-    # row exists at the right version). Every SPDX id currently in this file
-    # is permissive; anything else, known-copyleft or simply unrecognized,
-    # refuses rather than picks a table.
+    # row exists at the right version). is_recognized_license() (shared with
+    # fetch_action_license's own check) is the one place this set is named,
+    # so this table and the Actions table in the sibling script can't
+    # silently diverge on what counts as safe to auto-file.
+    if ! is_recognized_license "$spdx"; then
+        echo "::error::\`$mod_path\` resolved to licence '$spdx', which this script does not" \
+            "recognize as either the permissive set or MPL-2.0. This may be a genuine" \
+            "strong-copyleft dependency (GPL, LGPL, AGPL, EPL, CDDL) — verify by hand and add" \
+            "its row, choosing its table deliberately rather than trusting either default." >&2
+        exit 1
+    fi
     case "$spdx" in
-        MIT | BSD-3-Clause | Apache-2.0 | ISC)
-            insert_row_in_table "$DOC" "## Permissive components" "$row"
-            ;;
         MPL-2.0)
             insert_row_in_table "$DOC" "Weak-copyleft components (MPL-2.0)" "$row"
             ;;
         *)
-            echo "::error::\`$mod_path\` resolved to licence '$spdx', which this script does not" \
-                "recognize as either the permissive set or MPL-2.0. This may be a genuine" \
-                "strong-copyleft dependency (GPL, LGPL, AGPL, EPL, CDDL) — verify by hand and add" \
-                "its row, choosing its table deliberately rather than trusting either default." >&2
-            exit 1
+            insert_row_in_table "$DOC" "## Permissive components" "$row"
             ;;
     esac
 done
