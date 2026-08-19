@@ -679,9 +679,11 @@ func TestGetStatus_Level(t *testing.T) {
 	}
 }
 
-// TestPutStatus_Level pins the slog level mapping the token exchanger consumes
-// at exchange.go:80. PutStored is Debug (routine); PutDroppedTTL is Warn (the
-// caller asked us to cache something we couldn't keep — worth surfacing).
+// TestPutStatus_Level pins the slog level mapping each PutStatus carries.
+// PutStored is Debug (routine); PutDroppedTTL is Warn (the caller asked us to
+// cache something we couldn't keep — worth surfacing). The Exchanger states
+// these levels explicitly at its own branches rather than calling Level(), so
+// this is the contract for future call sites; the two must not drift.
 func TestPutStatus_Level(t *testing.T) {
 	t.Parallel()
 

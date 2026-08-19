@@ -274,9 +274,32 @@ func (e *Exchanger) runExchangeOnce(key string, input ExchangeInput) (*Token, er
 	if putErr != nil {
 		slog.WarnContext(exchCtx, "token cache put failed", "broker", input.BrokerAlias, "error", putErr)
 	} else {
-		slog.Log(exchCtx, pr.Status.Level(), "broker credential cache store",
-			slog.String("broker", input.BrokerAlias),
-			slog.Any("result", pr.Status))
+		// One message per outcome, rather than one shared message plus a
+		// result attribute. Unlike the lookup above — where a Get always
+		// happens and hit/miss is what it found, so only the attribute can
+		// say which — a Put either wrote or refused to. A single message
+		// covering both is false on one path, and a message that names the
+		// outcome makes the attribute redundant. The level is a property of
+		// the branch, so it is stated here rather than looked up.
+		switch pr.Status {
+		case cache.PutStored:
+			slog.DebugContext(exchCtx, "broker credential cached",
+				slog.String("broker", input.BrokerAlias))
+		case cache.PutDroppedTTL:
+			slog.WarnContext(exchCtx, "broker credential not cached: remaining lifetime too short after clock-skew adjustment",
+				slog.String("broker", input.BrokerAlias))
+		default:
+			// Unreachable in the current build — PutStored and PutDroppedTTL
+			// are the only PutStatus values and both are handled above. A
+			// status added later lands here. Warn rather than falling into
+			// the stored branch: reporting an unknown outcome as a
+			// successful cache write would be a silent lie. This is the one
+			// arm that keeps `result`, because its message deliberately does
+			// not name the outcome — the status is all we have to report.
+			slog.WarnContext(exchCtx, "broker credential cache returned an unrecognized outcome; cannot tell whether the credential was written",
+				slog.String("broker", input.BrokerAlias),
+				slog.Any("result", pr.Status))
+		}
 	}
 
 	return tok, nil
