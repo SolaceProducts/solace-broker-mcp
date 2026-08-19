@@ -483,11 +483,14 @@ should auto-author) or a component whose licence genuinely differs from its
 parent module's and needs its own verified row.
 
 Still a manual step: Dependabot cannot execute post-update scripts, so its
-own PRs need a human to run this target, review the diff, and push — fully
-automatic regeneration on a Dependabot PR itself needs a bot credential and
-is tracked as a separate, later piece of work. See `RELEASING.md`'s
-**Third-party licence inventory** section for the source-of-truth decision
-this follows.
+own PRs need a human to run this target, review the diff, and push — or ask
+Claude Code to do it via the `/refresh-third-party-inventory` skill
+(`.claude/skills/refresh-third-party-inventory/`), which runs the same
+target and always stops to show the diff before committing or pushing.
+Fully automatic regeneration on a Dependabot PR itself needs a bot
+credential and is tracked as a separate, later piece of work. See
+`RELEASING.md`'s **Third-party licence inventory** section for the
+source-of-truth decision this follows.
 
 ## Questions?
 
