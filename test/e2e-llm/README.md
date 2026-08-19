@@ -364,6 +364,13 @@ needs. Field semantics:
   inside `followup`, scoped to the second turn's stream-json. Turn 1 uses
   `--session-id <uuid>` and turn 2 uses `--resume <uuid>`, so the agent
   sees turn-1 context when interpreting the followup.
+- **`followup.tools_cumulative`** — `true` widens this scope's tool-choice
+  assertions (`expected_tool*`, `expected_no_mutating_tools`) to the union of
+  turn 1's and turn 2's tool calls. For scenarios where the call may
+  legitimately land in either turn — e.g. d2, where the agent can verify the
+  non-existent target before asking for confirmation and then has nothing left
+  to call in turn 2 — so neither turn alone can require it. Substring, numeric
+  and `ground_truth` assertions stay scoped to turn 2. Illegal at top level.
 
 ### setup / teardown / ground_truth.shell environment
 
