@@ -418,7 +418,7 @@ solace-broker-mcp/
 │   ├── tools/           # MCP tool registration, event broker resolution, tool call logging
 │   └── version/         # Build-time version injection
 ├── docs/                # Architecture and secure logging rules
-├── .claude/skills/      # Claude Code skills (add-logs, check-logs)
+├── .claude/skills/      # Claude Code skills (see the SKILL.md in each)
 ├── .github/workflows/   # GitHub Actions CI
 ├── broker-config.yaml   # Local event broker config (gitignored)
 ├── .env                 # Local credentials (gitignored)
