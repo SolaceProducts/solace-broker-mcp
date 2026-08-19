@@ -44,6 +44,44 @@ DOC="THIRD_PARTY_BUILD_TEST.md"
 # mutation and the row it expects cannot drift apart.
 BUMPED_SHA="0123456789abcdef0123456789abcdef01234567"
 
+# Ground truth for the short-SHA prefix cases (set_solace_action_ref), derived
+# from the ref actually pinned in the workflows rather than hardcoded. Literal
+# short SHAs here used to be copied from whatever THIRD_PARTY_BUILD_TEST.md said
+# at the time (63228a0981 / 47931 / 47931ec, themselves left over from the ref
+# before that), and every Solace composite-action re-pin — which Dependabot's
+# github-actions group update does on a schedule — quietly turned one or more of
+# them into nonsense: no longer a prefix of anything real, or a fluke prefix of
+# the new ref, either way testing nothing like what the comments below claim.
+# Deriving from the workflow file itself, the same source version_matches()
+# actually compares against, makes that impossible: whatever the current pin is,
+# these three stay correct relative to it.
+#
+# The workflow, not THIRD_PARTY_BUILD_TEST.md, because deriving from the doc
+# would be circular — the doc is the thing under test.
+SOLACE_ACTION_FULL_SHA=$(
+    grep -rhoE 'guardian-db-sync@[0-9a-f]{40}' "$REPO_ROOT/.github/workflows/" | head -1 | cut -d@ -f2
+)
+if [ -z "$SOLACE_ACTION_FULL_SHA" ]; then
+    echo "FATAL: could not find guardian-db-sync's pinned SHA in .github/workflows/." \
+        "The short-SHA fixture cases derive from it and cannot run without it." >&2
+    exit 1
+fi
+# A longer prefix that is still correct (a longer valid prefix must still pass).
+SOLACE_ACTION_LONGER_PREFIX="${SOLACE_ACTION_FULL_SHA:0:10}"
+# A correct prefix below the 7-character floor (below the floor must fail even
+# though every character in it is right — otherwise the floor is decoration).
+SOLACE_ACTION_SHORT_OF_FLOOR="${SOLACE_ACTION_FULL_SHA:0:5}"
+# Exactly 7 characters — the floor length — but wrong: flip the 7th hex digit so
+# it differs at exactly the position version_matches()'s prefix comparison checks
+# last. Length alone must not be enough.
+_solace_7th_digit="${SOLACE_ACTION_FULL_SHA:6:1}"
+case "$_solace_7th_digit" in
+    0) _solace_7th_flipped=1 ;;
+    *) _solace_7th_flipped=0 ;;
+esac
+SOLACE_ACTION_WRONG_AT_FLOOR="${SOLACE_ACTION_FULL_SHA:0:6}${_solace_7th_flipped}"
+unset _solace_7th_digit _solace_7th_flipped
+
 pass=0
 fail=0
 
@@ -339,11 +377,11 @@ assert_check "wrong container image tag fails" 1 \
 # weakened to 1 with the whole suite staying green, which is a fail-open — a
 # one-character stale row would then satisfy any future re-pin.
 assert_check "a longer correct short SHA still passes" 0 \
-    set_solace_action_ref "63228a0981"
+    set_solace_action_ref "$SOLACE_ACTION_LONGER_PREFIX"
 assert_check "a correct short SHA below the 7-character floor fails" 1 \
-    set_solace_action_ref "47931"
+    set_solace_action_ref "$SOLACE_ACTION_SHORT_OF_FLOOR"
 assert_check "a wrong SHA of acceptable length fails" 1 \
-    set_solace_action_ref "47931ec"
+    set_solace_action_ref "$SOLACE_ACTION_WRONG_AT_FLOOR"
 
 # --- discovery is derived, not hardcoded -------------------------------------
 # A hand-maintained input list fails open as the repository grows, which is the

@@ -172,6 +172,31 @@ lint: ## golangci-lint (CI pins v2.11.4)
 .PHONY: check
 check: build-all vet lint test-cover ## Run build, vet, lint, and race-enabled tests with the coverage gate (matches CI build/lint/test jobs; E2E runs separately)
 
+# ── Compliance ───────────────────────────────────────────────────────────────
+
+# A dependency bump that changes a covered module, action, or image turns
+# `Third-party licenses current` red until THIRD_PARTY_LICENSES.md and/or
+# THIRD_PARTY_BUILD_TEST.md are updated to match (SOL-152956). Each script
+# checks its own file first and does nothing if it already matches, so running
+# both here unconditionally is cheap and safe on a clean tree. Neither script
+# invents a row it cannot verify — a container image or npm package addition,
+# or anything else outside what it recognizes, still stops and asks for a
+# manual edit, same as before this target existed.
+#
+# This is a manual step run by whoever's PR needs it, not an automated one:
+# Dependabot cannot be configured to run arbitrary post-update scripts, so its
+# own PRs still need a human to run this target, review the diff, and push —
+# one command and a commit, rather than re-deriving the dependency closure and
+# hand-editing table rows. Fully automatic refresh on a Dependabot PR itself is
+# tracked separately (the target's script logic is what such automation would
+# call; only the trigger and a bot credential are missing).
+.PHONY: refresh-third-party-inventory
+refresh-third-party-inventory: ## Regenerate THIRD_PARTY_LICENSES.md and THIRD_PARTY_BUILD_TEST.md from what the repo actually uses; review the diff, then commit
+	@rc=0; \
+	.github/scripts/refresh-licenses-inventory.sh || rc=1; \
+	.github/scripts/refresh-build-test-inventory.sh || rc=1; \
+	exit $$rc
+
 # ── E2E ──────────────────────────────────────────────────────────────────────
 
 .PHONY: e2e-up

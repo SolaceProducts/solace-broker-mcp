@@ -14,6 +14,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `make refresh-third-party-inventory` regenerates `THIRD_PARTY_LICENSES.md`
+  and `THIRD_PARTY_BUILD_TEST.md` from what the repository actually uses, one
+  command instead of hand-deriving the dependency closure and reconciling
+  table rows by hand. It diffs against `licenses-check.sh` /
+  `build-test-licenses-check.sh`'s own drift diagnostics, rewrites only the
+  row(s) that actually changed, reads every new licence fresh (never inferred,
+  never copied from a neighbouring row), and refuses outright — leaving the
+  file untouched — on anything it doesn't recognize (a new container image or
+  npm package, a duplicate or unparseable row) rather than guess. Covers all
+  four kinds of drift the two checks catch: a Go module version bump, a new
+  transitive Go module, a GitHub Action SHA re-pin, and a container image tag
+  change. Still a manual step — Dependabot cannot execute post-update scripts,
+  so its own PRs still need a human to run this, review the diff, and push;
+  fully automatic refresh on a Dependabot PR itself needs a bot credential and
+  is tracked separately. Tracked under SOL-152956.
+
 ### Changed
 
 - Updated the embedded SEMPv2 OpenAPI specs to the 10.26.4 rolling release (`10.26.4.10725`), so tool schemas track current broker attributes. The three spec files are renamed to `semp-v2-swagger-{action,config,monitor}.10.26.4.json` and continue to be sourced from the private-extended variant.
