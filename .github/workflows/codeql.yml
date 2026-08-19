@@ -1,0 +1,269 @@
+name: CodeQL
+
+# CodeQL advanced setup — the workflow half of SOL-153411.
+#
+# WHY THIS FILE EXISTS AT ALL
+#
+# CodeQL used to be served by repository-level *default setup*, with no file in
+# the repository. Default setup has two blind spots that no ruleset or workflow
+# edit can close while it remains in use, and both of them bite a public
+# repository with `bypass_actors: []`:
+#
+#   1. It never scans fork pull requests. GitHub scopes default setup to pull
+#      requests against a protected branch "excluding pull requests from forks".
+#      A *required* check that never reports makes every fork pull request
+#      unmergeable by anyone.
+#   2. It never scans merge queue entries. A merge queue tests each entry on a
+#      `gh-readonly-queue/...` branch via the `merge_group` event, and default
+#      setup gives you no workflow file to add that trigger to. This blocked
+#      SOL-152974.
+#
+# Advanced setup fixes both, and the fork half is not inferred: on 19 August 2026
+# a fork pull request against `cli/cli` (advanced setup, same `pull_request`
+# trigger shape as below) carried real verdicts from both `Analyze` matrix jobs
+# *and* the `github-advanced-security` check. SARIF upload works from a fork pull
+# request; the analysis is not skipped.
+#
+# WHY THERE IS A SEPARATE GATE JOB
+#
+# `codeql-action/analyze` has no `fail-on-severity`, `fail-on` or threshold
+# input of any kind — verified against v4.37.7's `action.yml`. The job therefore
+# passes whenever analysis *completes*, whatever it found. That is precisely the
+# reason SOL-152858 refused to require `Analyze (go)`/`Analyze (actions)` and
+# required the `github-advanced-security` app's `CodeQL` context instead.
+#
+# So the verdict lives in `CodeQL gate` below, not in the matrix. This is
+# migration-plus-a-gate, never a workflow *instead of* one. `CodeQL gate` is the
+# context the ruleset requires; the `Analyze (...)` contexts stay unrequired,
+# exactly as before.
+#
+# WHY THERE IS NO `paths:` FILTER
+#
+# Same reason as `workflow-lint.yaml`, which dissects it at length: GitHub does
+# not report a filtered-out check as skipped, it never creates the check run, so
+# a required context sits pending forever and the pull request cannot merge. The
+# whole analysis costs 1.2–1.6 min against 7.2–8.2 min for `Build and Test`, so
+# it adds nothing to the critical path and there is nothing to optimise away. If
+# this ever needs to be conditional, condition it *inside* the job so the check
+# still reports — never in the trigger.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
+  # The weekly schedule default setup ran. Worth keeping: a CodeQL query-pack
+  # update can find something in unchanged code, and `main`'s alert set is also
+  # the baseline the gate diffs pull requests against.
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # codeql-action/init reads the workflow run to derive the analysis key.
+      actions: read
+      # codeql-action/analyze uploads the SARIF. Granted on fork pull requests
+      # too — this is the documented exception to the read-only downgrade, and
+      # the `cli/cli` observation above is the empirical confirmation.
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # Reproduces default setup's `languages: [actions, go]` verbatim, and
+        # its per-language build mode with it. The `default` query suite and the
+        # `remote` threat model are both CodeQL defaults, so neither needs
+        # stating — a config file would only be needed to *extend* the threat
+        # model to `local` or add custom queries, and doing either is
+        # deliberately out of scope here (SOL-153411).
+        #
+        # The build modes are not guessed. Default setup reports its own, and it
+        # is `autobuild` for Go, read live on 19 August 2026:
+        #
+        #   gh api repos/OWNER/REPO/code-scanning/analyses --jq '.[].environment'
+        #   {"build-mode":"autobuild","category":"/language:go",...}
+        #   {"build-mode":"none","category":"/language:actions",...}
+        #
+        # SOL-153411 called for `build-mode: none` on Go, inferring buildless
+        # extraction from the 1.1–1.4 min runtime. The inference was wrong — the
+        # API says `autobuild`, and 1.1–1.4 min is simply what compiling this
+        # module costs. `none` would have been a real change in what CodeQL can
+        # see in Go code, dressed up as a fidelity measure. Migrating and
+        # changing the extraction mode in one commit is exactly what the
+        # ticket's own "reproduce today's configuration" rule forbids.
+        include:
+          - language: go
+            build-mode: autobuild
+          - language: actions
+            build-mode: none
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # `autobuild` compiles the module, so it needs a Go toolchain. Pinned to
+      # go.mod like every other workflow here rather than left to whatever the
+      # runner image ships, so the analyzed build matches the one we release.
+      - name: Setup Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        with:
+          # Load-bearing for the gate, not cosmetic. `CodeQL gate` matches
+          # analyses to expected languages on this exact string; leaving it
+          # implicit would make the gate's per-language completeness check
+          # depend on how GitHub happens to derive an analysis key from a
+          # matrix job name.
+          category: "/language:${{ matrix.language }}"
+          # Default is already true; stated because the gate depends on it.
+          # The gate queries the alerts API the moment this job ends, so the
+          # upload must be *processed*, not merely accepted, by then.
+          wait-for-processing: true
+
+  # The blocking half. Required context: `CodeQL gate`.
+  #
+  # `if: always()` and `needs: [analyze]` together are what make a failed or
+  # cancelled analysis a red gate rather than an absent one. A gate that
+  # disappears when the thing it guards breaks is the failure mode SOL-152410
+  # and SOL-152412 exist to prevent.
+  gate:
+    name: CodeQL gate
+    needs: [analyze]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Read-only: the gate reads alerts and analyses, and writes nothing.
+      security-events: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # First, and not decoration. The failure mode that matters for a gate
+      # like this one is a vacuous pass — a response shape that stops parsing
+      # and leaves the check green forever while nothing is actually enforced.
+      # Same reasoning as the `identity` and `licenses` jobs in ci-pr.yaml.
+      - name: Self-test the CodeQL gate
+        run: .github/scripts/codeql-gate.test.sh
+
+      # Fetch is deliberately separate from the decision: everything below
+      # writes JSON to disk and makes no judgement, so codeql-gate.sh is a pure
+      # function over three files and its self-test runs offline.
+      - name: Fetch the analyses and alerts for this ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF_NAME_IN: ${{ github.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          # Which ref the analysis landed on.
+          #
+          # For a pull request, codeql-action derives it from the checkout:
+          # `refs/pull/N/merge` normally, rewritten to `refs/pull/N/head` if the
+          # workflow moved off the merge commit (`git checkout HEAD^2`) —
+          # `getRef()` in the action's git-utils.ts. Both are fetched and unioned
+          # rather than picking one, so a later change to the checkout step
+          # cannot quietly leave the gate looking at an empty ref. Worth being
+          # explicit about because the *default* setup being replaced here
+          # uploaded to `refs/pull/N/head`, so the obvious guess is wrong in
+          # both directions.
+          case "$EVENT_NAME" in
+            pull_request) REFS="refs/pull/${PR_NUMBER}/merge refs/pull/${PR_NUMBER}/head" ;;
+            *)            REFS="$GITHUB_REF_NAME_IN" ;;
+          esac
+          echo "Candidate refs: $REFS"
+
+          # `--paginate` emits one JSON array per page, so pages are folded into
+          # a single flat array here and the per-ref results are unioned.
+          # codeql-gate.sh's contract is a flat array and its fixtures are flat
+          # arrays; normalising at the boundary keeps that true for a ref with
+          # more than one page (every re-run adds two more analyses).
+          # fetch_union <outfile> <refs, space-separated> <path-template with @REF@>
+          # Refs are an explicit argument rather than an inherited variable: a
+          # `VAR=x somefunction` prefix is not reliably scoped to the call in
+          # bash, and this is not the place to find that out.
+          fetch_union() {
+            local out="$1" refs="$2" tmpl="$3" ref
+            : > "$out.raw"
+            for ref in $refs; do
+              # A ref with no analyses returns `[]` and exit 0 — verified on
+              # 19 August 2026 against a nonexistent pull request ref and a
+              # nonexistent `gh-readonly-queue/...` ref, so unioning a ref that
+              # was never analyzed is free and the first merge queue entry does
+              # not go falsely red.
+              #
+              # A *non-zero* exit is therefore a real problem, most plausibly
+              # the token lacking `security-events: read`. Say so, because the
+              # bare `gh` error does not, and this is the one path that a fork
+              # pull request exercises differently from everything else here.
+              if ! gh api --paginate -H 'Accept: application/vnd.github+json' \
+                   "repos/${REPO}/code-scanning/${tmpl//@REF@/$ref}" >> "$out.raw"; then
+                echo "::error::Could not read code-scanning ${tmpl%%\?*} for ${ref}. If this is a fork pull request, check that the run's token still carries 'security-events: read'. Failing rather than treating an unreadable API as 'no findings'."
+                return 1
+              fi
+            done
+            # unique_by is harmless for analyses (distinct ids) and load-bearing
+            # for alerts, where the same alert appears under both candidate refs.
+            jq -s 'add // [] | unique_by(.id? // .number?)' "$out.raw" > "$out"
+            echo "$out: $(jq 'length' "$out") item(s)"
+          }
+
+          ALERTS_Q='alerts?state=open&ref=@REF@&per_page=100'
+          fetch_union analyses.json "$REFS" 'analyses?ref=@REF@&per_page=100'
+          fetch_union alerts.json "$REFS" "$ALERTS_Q"
+
+          # Baseline. Alert numbers are repository-scoped and stable across
+          # refs, so an alert already open on `main` carries the same number
+          # here — which is what preserves default setup's new-findings-only
+          # scope without fingerprinting rule names and line numbers.
+          fetch_union baseline.json 'refs/heads/main' "$ALERTS_Q"
+
+      - name: Decide
+        env:
+          # `blocking` on the two events a merge can actually be stopped at.
+          # `report` on push/schedule/dispatch, where the analysis of `main` is
+          # the baseline being refreshed and there is no merge left to block —
+          # findings there are printed, and the job stays green so a dirty
+          # `main` cannot wedge every open pull request behind a context nobody
+          # can turn green from a pull request.
+          CODEQL_GATE_MODE: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'blocking' || 'report' }}
+          CODEQL_ANALYZE_RESULT: ${{ needs.analyze.result }}
+          CODEQL_EXPECTED_LANGUAGES: actions go
+          # The commit the `analyze` jobs above actually examined. Analyses
+          # accumulate on a pull request ref across pushes, so without this the
+          # gate would accept a stale analysis from three commits ago as proof
+          # that this commit was scanned.
+          CODEQL_ANALYZED_SHA: ${{ github.sha }}
+          CODEQL_ANALYSES_JSON: analyses.json
+          CODEQL_ALERTS_JSON: alerts.json
+          CODEQL_BASELINE_JSON: baseline.json
+        run: .github/scripts/codeql-gate.sh
