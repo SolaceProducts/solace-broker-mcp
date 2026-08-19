@@ -146,6 +146,20 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: 'go.mod'
+      # A cold module cache makes `go list` print "go: downloading ..." to
+      # stderr while it fetches — build-test-licenses-check.sh merges that
+      # stream into what it parses as `{{.Path}} {{.Version}}` output (its
+      # own `2>&1`, out of scope to change here), so an unwarmed cache reads
+      # as a bogus dependency named literally `go:`. This is the very first
+      # run of this new job (no prior Actions cache to restore), so warm it
+      # explicitly rather than relying on setup-go's cache picking up later.
+      - name: Warm the Go module cache (root + both test submodules)
+        run: |
+          set -euo pipefail
+          go mod download
+          for gomod in $(find -L test -name go.mod); do
+            (cd "$(dirname "$gomod")" && go mod download)
+          done
       - name: Self-test the third-party licences refresh script (offline cases)
         env:
           SKIP_NETWORK_TESTS: "1"
@@ -170,6 +184,16 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: 'go.mod'
+      # Same reasoning as the offline job's own copy of this step: a cold
+      # module cache's "go: downloading ..." chatter gets merged into what
+      # build-test-licenses-check.sh parses as dependency data.
+      - name: Warm the Go module cache (root + both test submodules)
+        run: |
+          set -euo pipefail
+          go mod download
+          for gomod in $(find -L test -name go.mod); do
+            (cd "$(dirname "$gomod")" && go mod download)
+          done
       # GH_TOKEN so the licence lookups these two cases exercise (`gh api`)
       # use the authenticated rate limit rather than the anonymous one every
       # concurrent runner shares. Full suites here, not just the network
