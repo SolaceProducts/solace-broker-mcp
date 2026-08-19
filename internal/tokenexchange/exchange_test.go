@@ -1217,7 +1217,7 @@ func TestExchange_SuccessLogsDebugWithBrokerAndElapsed(t *testing.T) {
 	recs := records()
 	var found bool
 	for _, rec := range recs {
-		if rec.Message == "token exchange succeeded" {
+		if rec.Message == "broker credential obtained from identity provider" {
 			found = true
 			if rec.Level != slog.LevelDebug {
 				t.Errorf("want Debug level, got %v", rec.Level)

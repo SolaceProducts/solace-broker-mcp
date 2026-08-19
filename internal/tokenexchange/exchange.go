@@ -56,7 +56,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	if getErr != nil {
 		slog.WarnContext(ctx, "token cache get failed", "broker", input.BrokerAlias, "error", getErr)
 	} else {
-		slog.Log(ctx, gr.Status.Level(), "token cache get",
+		slog.Log(ctx, gr.Status.Level(), "broker credential cache lookup",
 			slog.String("broker", input.BrokerAlias),
 			slog.Any("result", gr.Status))
 		if gr.Status == cache.GetHit {
@@ -182,7 +182,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 
 		tok := res.Val.(*Token)
 
-		slog.DebugContext(ctx, "token exchange succeeded",
+		slog.DebugContext(ctx, "broker credential obtained from identity provider",
 			slog.String("broker", input.BrokerAlias),
 			slog.Duration("exchange_elapsed", elapsed))
 
@@ -256,7 +256,7 @@ func (e *Exchanger) runExchangeOnce(key string, input ExchangeInput) (*Token, er
 	if putErr != nil {
 		slog.WarnContext(exchCtx, "token cache put failed", "broker", input.BrokerAlias, "error", putErr)
 	} else {
-		slog.Log(exchCtx, pr.Status.Level(), "token cache put",
+		slog.Log(exchCtx, pr.Status.Level(), "broker credential cache store",
 			slog.String("broker", input.BrokerAlias),
 			slog.Any("result", pr.Status))
 	}
