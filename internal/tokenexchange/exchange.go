@@ -56,7 +56,9 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	if getErr != nil {
 		slog.WarnContext(ctx, "token cache get failed", "broker", input.BrokerAlias, "error", getErr)
 	} else {
-		slog.Log(ctx, gr.Status.Level(), "token cache get", "broker", input.BrokerAlias, "status", gr.Status)
+		slog.Log(ctx, gr.Status.Level(), "token cache get",
+			slog.String("broker", input.BrokerAlias),
+			slog.Any("result", gr.Status))
 		if gr.Status == cache.GetHit {
 			// Re-check for the same reason the singleflight branch does below:
 			// the entry guard is point-in-time and Get ignores ctx, so without
@@ -254,7 +256,9 @@ func (e *Exchanger) runExchangeOnce(key string, input ExchangeInput) (*Token, er
 	if putErr != nil {
 		slog.WarnContext(exchCtx, "token cache put failed", "broker", input.BrokerAlias, "error", putErr)
 	} else {
-		slog.Log(exchCtx, pr.Status.Level(), "token cache put", "broker", input.BrokerAlias, "status", pr.Status)
+		slog.Log(exchCtx, pr.Status.Level(), "token cache put",
+			slog.String("broker", input.BrokerAlias),
+			slog.Any("result", pr.Status))
 	}
 
 	return tok, nil
