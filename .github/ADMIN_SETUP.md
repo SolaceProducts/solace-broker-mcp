@@ -255,8 +255,11 @@ review.
 ### Required status checks
 
 **Require branches to be up to date before merging** is on, and the context list
-is applied. Fourteen contexts are registered. This table is the single
-authoritative copy.
+is applied. Sixteen contexts are documented below; **fourteen of them are
+registered** in the ruleset. The two that are not carry **Not yet registered** in
+their own row — they are listed here because they run on every pull request and are
+candidates for registration, not because they gate anything today. This table is the
+single authoritative copy of both sets.
 
 Read the live list rather than trusting the table:
 
