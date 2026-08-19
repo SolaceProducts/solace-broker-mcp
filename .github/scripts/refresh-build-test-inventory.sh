@@ -294,7 +294,17 @@ for entry in ${to_add[@]+"${to_add[@]}"}; do
                     "LICENSE file." >&2
                 exit 1
             fi
-            insert_row_in_table "$DOC" "$sub" \
+            # The anchor is the full heading ("### `test/e2e-basic-mcp/agent`"),
+            # not the bare path: insert_row_in_table matches its anchor as a
+            # literal substring anywhere in the file, and the bare submodule
+            # path is exactly the kind of string that can legitimately also
+            # appear in prose before the real heading (THIRD_PARTY_BUILD_TEST.md
+            # already has this shape for a different path — the npm section's
+            # "`test/e2e-llm/package.json` pins the Claude Code CLI..." sentence
+            # comes before that submodule's own table). The gate never checks
+            # which table a row lives in, so a match against the wrong
+            # occurrence would insert into the wrong section silently.
+            insert_row_in_table "$DOC" "### \`${sub}\`" \
                 "| \`${name}\` | ${actual} | ${spdx} | [license](${url}) |"
             ;;
         "Action")
