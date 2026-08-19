@@ -150,7 +150,7 @@ func TestRedactSecretAttr_FormatsDurations(t *testing.T) {
 		want string
 	}{
 		// The motivating case: 77496667ns is unreadable as an integer.
-		{"sub_second", "exchange_elapsed", 77496667 * time.Nanosecond, "77.496667ms"},
+		{"sub_second", "exchange_total_elapsed", 77496667 * time.Nanosecond, "77.496667ms"},
 		{"whole_seconds", "drain_delay", 10 * time.Second, "10s"},
 		{"minutes", "duration", 90 * time.Second, "1m30s"},
 		{"millis", "retry_after", 250 * time.Millisecond, "250ms"},
@@ -203,7 +203,7 @@ func TestRedactSecretAttr_RedactionBeatsDurationFormatting(t *testing.T) {
 func TestNewSlogHandler_RendersDurationsInOutput(t *testing.T) {
 	out := captureStderr(t, func() {
 		logger := slog.New(newSlogHandler(slog.LevelInfo))
-		logger.Info("top level", slog.Duration("exchange_elapsed", 77496667*time.Nanosecond))
+		logger.Info("top level", slog.Duration("exchange_total_elapsed", 77496667*time.Nanosecond))
 		logger.Info("in a group", slog.Group("g", slog.Duration("nested", 1500*time.Millisecond)))
 		logger.With(slog.Duration("bound", 250*time.Millisecond)).Info("bound on logger")
 	})
@@ -215,13 +215,13 @@ func TestNewSlogHandler_RendersDurationsInOutput(t *testing.T) {
 
 	// Line 1: a top-level duration attr.
 	var top struct {
-		Elapsed any `json:"exchange_elapsed"`
+		Elapsed any `json:"exchange_total_elapsed"`
 	}
 	if err := json.Unmarshal([]byte(lines[0]), &top); err != nil {
 		t.Fatalf("line 1 is not valid JSON: %v\n%s", err, lines[0])
 	}
 	if got, ok := top.Elapsed.(string); !ok || got != "77.496667ms" {
-		t.Fatalf("exchange_elapsed = %#v, want string %q (raw nanoseconds decode as float64)", top.Elapsed, "77.496667ms")
+		t.Fatalf("exchange_total_elapsed = %#v, want string %q (raw nanoseconds decode as float64)", top.Elapsed, "77.496667ms")
 	}
 
 	// Line 2: nested under a group — ReplaceAttr fires for group CONTENTS.

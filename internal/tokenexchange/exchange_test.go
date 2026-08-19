@@ -1225,8 +1225,8 @@ func TestExchange_SuccessLogsDebugWithBrokerAndElapsed(t *testing.T) {
 			if _, ok := rec.Attrs["broker"]; !ok {
 				t.Error("missing broker attr")
 			}
-			if _, ok := rec.Attrs["exchange_elapsed"]; !ok {
-				t.Error("missing exchange_elapsed attr")
+			if _, ok := rec.Attrs["exchange_total_elapsed"]; !ok {
+				t.Error("missing exchange_total_elapsed attr")
 			}
 		}
 	}

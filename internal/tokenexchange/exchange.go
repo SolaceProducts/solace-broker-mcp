@@ -161,6 +161,24 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 		if err := ctx.Err(); err != nil {
 			return abandonedByCaller(err, "result")
 		}
+		// The span this measures is WIDER than one IdP call, which is why it
+		// is logged as exchange_total_elapsed rather than as a round-trip
+		// time. start is taken just above the DoChan dispatch and the clock
+		// stops here, when this caller takes the result, so the interval
+		// covers: the singleflight wait, the Retry-After gate check, the
+		// circuit breaker, every retry attempt doExchange made plus the
+		// backoff (and any honored Retry-After sleep) between them, and the
+		// cache Put that runs inside the shared func before its value is
+		// published. Only the cache Get is outside it — that happens before
+		// start.
+		//
+		// So a value here is not an IdP latency figure. 8.2s may be three
+		// attempts and two backoffs, not one slow call; use the attempts
+		// count from the "token exchange retried" line to tell those apart.
+		// Two cases name time with ZERO IdP calls behind it: a breaker or
+		// rate-limit-gate rejection, which returns without dialing, and a
+		// singleflight follower, whose interval is its wait for the winner
+		// rather than any request of its own.
 		elapsed := e.nowFunc().Sub(start)
 		if res.Err != nil {
 			// Map the breaker's open-state rejection (returned by Execute
@@ -184,7 +202,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 
 		slog.DebugContext(ctx, "broker credential obtained from identity provider",
 			slog.String("broker", input.BrokerAlias),
-			slog.Duration("exchange_elapsed", elapsed))
+			slog.Duration("exchange_total_elapsed", elapsed))
 
 		return tok, nil
 	}
