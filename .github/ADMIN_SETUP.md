@@ -111,19 +111,23 @@ gh api repos/OWNER/REPO --jq '.security_and_analysis'
 | Secret scanning push protection | On | None |
 | Secret scanning validity checks | On | None |
 | Secret scanning non-provider patterns | On | None |
-| CodeQL | Running - `Analyze (go)` passes on every PR | Confirm on the settings page |
+| Code scanning (CodeQL) | On — default setup, languages `actions` and `go` | None |
 
 Both secret-scanning settings are already on, so there is nothing to enable here.
 Confirm rather than change: alerts find credentials already committed, push
 protection rejects the next one before it lands, and losing either is a
 regression. Both stay free on public repositories.
 
-On CodeQL: a check named `Analyze (go)` runs and passes on every PR, and its
-workflow path points at the code-scanning default setup. Against that, the
-repository API reports Code Security as disabled and the default-setup endpoint
-returns 403. Something is producing this check and we cannot say from the API
-which configuration owns it. Confirm on the settings page before relying on it,
-and re-check after the visibility change.
+On CodeQL: the earlier uncertainty here is resolved. The configuration is
+repository-level default setup, readable through the API now that the repository is
+public, and the `CodeQL` check is a required status check. See
+[Static analysis](#static-analysis) for what it does and does not catch.
+
+```bash
+gh api repos/OWNER/REPO/code-scanning/default-setup
+# state: configured  languages: [actions, go]  query_suite: default
+# threat_model: remote  schedule: weekly  runner_type: standard
+```
 
 **Nothing to enable for dependency review.** The `Dependencies free of high
 advisories` check reads the Dependency Review API, which is served by the
@@ -153,6 +157,61 @@ of `dependabot.yml` and are already on.
   neither author nor committer; `dco2` never reads it, skipping bot-authored
   commits outright. That exemption is broader than the retired workflow's — see
   "Required status checks" below.
+
+### Static analysis
+
+What runs, what it covers, and whether it can block a merge. Read live on
+19 August 2026. The point of this table is that "what static code analysis do you
+run?" can be answered without opening a workflow file.
+
+| Tool | Covers | Config | Blocking? |
+|------|--------|--------|-----------|
+| golangci-lint | Go static analysis. Eight linters: `errcheck`, `staticcheck`, `gosec`, `govet`, `revive`, `bodyclose`, `ineffassign`, `noctx`. `gosec` carries the security patterns (`G706` excluded pending a gosec release) | `.golangci.yml` | **Yes** — required check `lint` |
+| CodeQL | SAST over Go and GitHub Actions workflows. GitHub default setup, `default` query suite, `remote` threat model, weekly schedule plus every push and same-repo pull request | repository-level default setup; no file in the repository | **Yes** — required check `CodeQL`, within the three limits below |
+| FOSSA SCA | Third-party dependency licences and known vulnerabilities | `.github/workflow-config.json`, run from `guardian-scan.yaml` | **Detection, not prevention.** `Guardian scan gate` is required, but on a pull request FOSSA runs in diff mode and REPORT; the hard gate is on push to `main` and at the release tag |
+| Dependency Review | A pull request *introducing* a dependency with a known high or critical advisory | `ci-pr.yaml` job `dependency_review` | Not yet a required check — see [Required status checks](#required-status-checks) |
+
+Three limits on "a pull request with a CodeQL finding cannot merge". All three are
+deliberate; none is a defect to be fixed later without a decision.
+
+**1. Severity.** The check fails on new alerts at severity `error`, or security
+severity `critical` or `high`. A `medium` or `low` security-severity finding leaves
+the check green. Default setup exposes no per-repository threshold control; the
+ruleset rule that would (`code_scanning`, "Require code scanning results") is
+deliberately not used, because it blocks a pull request whose analysis never
+arrives — which is every Dependabot pull request, see limit 3.
+
+**2. New findings only.** The check's own title is "No new alerts in code changed by
+this pull request". An alert already present on `main` is pre-existing, so a pull
+request that *attempts and fails* to fix one still passes. Confirmation that a fix
+landed comes from the post-merge `main` analysis:
+
+```bash
+gh api repos/OWNER/REPO/code-scanning/alerts/<n> --jq '.state, .fixed_at'
+```
+
+**3. Dependabot pull requests are not analyzed at all.** A known limitation of
+default setup: it does not run on Dependabot-authored pull requests. Verified on
+19 August 2026 across ~300 default-setup runs — every human pull request ref carries
+two analyses, no Dependabot ref carries any. The check then concludes `neutral`
+("N configurations not found"), and GitHub counts `success`, `skipped` and `neutral`
+all as passing, so the gate is absent rather than blocking there. Accepted
+knowingly: these pull requests change dependency versions, not our Go code, and
+`Dependencies free of high advisories` plus the FOSSA guards cover that surface.
+Closing it would mean migrating off default setup to an in-repo `codeql.yml`
+(advanced setup), which is a deliberate non-goal here.
+
+**Untested: fork pull requests.** No fork pull request has ever been opened against
+this repository, so whether default setup analyzes a fork ref is unobserved. If it
+behaves as it does for Dependabot, an outside contributor's pull request would carry
+a `neutral` CodeQL check and merge ungated. Verify on the first real one rather than
+assuming either way.
+
+Do **not** require `Analyze (go)` or `Analyze (actions)` in place of `CodeQL`. They
+report success whenever the analysis completes, whatever it found, and their names
+are generated from the configured language list — so adding a language later leaves
+the required set silently covering less. `CodeQL` is stable across language changes
+and carries the verdict.
 
 ---
 
@@ -196,8 +255,11 @@ review.
 ### Required status checks
 
 **Require branches to be up to date before merging** is on, and the context list
-is applied. Thirteen contexts are registered. This table is the single
-authoritative copy.
+is applied. Sixteen contexts are documented below; **fourteen of them are
+registered** in the ruleset. The two that are not carry **Not yet registered** in
+their own row — they are listed here because they run on every pull request and are
+candidates for registration, not because they gate anything today. This table is the
+single authoritative copy of both sets.
 
 Read the live list rather than trusting the table:
 
@@ -224,6 +286,7 @@ gh api repos/OWNER/REPO/rulesets/13942241 \
 | `Commit identity routable` | `ci-pr.yaml` job `identity` | Every commit the PR adds using a routable author and committer address, so a machine hostname does not publish permanently with the history. Pinned to Actions (`15368`), not to the `dco2` App — see below |
 | `workflow-lint` | `workflow-lint.yaml` job `workflow-lint` | Every file under `.github/workflows/` passing actionlint (correctness, plus shellcheck over `run:` blocks) and zizmor (workflow security, including SHA pinning via `unpinned-uses`), so workflow security is enforced by a tool rather than argued in a code comment. **Not yet registered** — see below |
 | `DCO` | the CNCF `dco2` GitHub App | a `Signed-off-by` trailer on every commit the pull request adds. DCO stands in for a contributor licence agreement, so this is the control behind the repository's provenance claim |
+| `CodeQL` | code-scanning default setup, via the `github-advanced-security` App | New CodeQL alerts in the code a pull request changes. Pinned to app `57789`, **not** Actions (`15368`) — every other Actions context here is `15368`, and pinning this one there leaves it permanently pending, blocking all merges. Registered 19 August 2026. Scope and limits: [Static analysis](#static-analysis) |
 
 ⚠️ **Require `Guardian scan gate`, and nothing FOSSA-shaped.** The old
 `FOSSA Scan` and `FOSSA Scan / SCA Scan` contexts no longer exist — the
@@ -382,10 +445,10 @@ Three more notes on the list:
   findings without blocking on them; the hard gate is on push to `main` and at the
   release tag. Do not read a green PR as a clean full scan. On a fork pull request
   the scan does not run at all — see the fork section below.
-- `Analyze (go)` (CodeQL) passes on every PR. Add it if you want code scanning to
-  block merges, after settling the configuration question in the Security Settings
-  section. It is not in the list above because that is a policy call, not a
-  correctness fix.
+- `CodeQL` blocks a pull request that introduces a new alert, but only above a
+  severity floor, only for findings new to the pull request, and not at all on
+  Dependabot pull requests. Read [Static analysis](#static-analysis) before quoting
+  it as a control, and do not swap it for `Analyze (go)` / `Analyze (actions)`.
 
 **How a fork pull request gets a verdict.** SOL-152411 fixed the two problems that
 made this impossible. What it changed, and what it deliberately did not:
@@ -538,12 +601,13 @@ REPORT (not BLOCK), so a green `Guardian scan gate` there is not a clean full sc
 Nobody has ever opened a fork pull request against this repository, so none of the
 above is observed on a real external contribution. `CHANGELOG updated` should be
 fine: `ci-pr.yaml` gives that job only `contents: read` and it reads no secrets.
-`Analyze (go)` appears to come from CodeQL default setup, which the Security
-Settings section asks you to confirm. Copilot review is inconsistent even on
-same-repo pull requests, so do not count on it. Verify `Guardian scan gate`,
-`CHANGELOG updated`, `Analyze (go)`, `Dependencies free of high advisories`, and
-the `lint` job's annotation behavior on a read-only token against a real fork pull
-request before treating any of them as a gate.
+`CodeQL` comes from code-scanning default setup and is a required check, but
+whether default setup analyzes a fork ref is unobserved — and it is known not to
+analyze Dependabot refs, so do not assume it covers forks. Copilot review is
+inconsistent even on same-repo pull requests, so do not count on it. Verify
+`Guardian scan gate`, `CHANGELOG updated`, `CodeQL`, `Dependencies free of high
+advisories`, and the `lint` job's annotation behavior on a read-only token against
+a real fork pull request before treating any of them as a gate.
 
 `Dependencies free of high advisories` is the one on that list whose fork
 behaviour is load-bearing rather than incidental, since closing the vulnerability
@@ -679,7 +743,7 @@ writing; re-check, do not assume.
 - ✅ **Required status checks corrected** per the Branch Protection section above
   — this document corrected 2026-08-17 (SOL-153190) to match the live ruleset,
   which was itself updated 2026-08-12. The `main-protection` ruleset now requires
-  all thirteen registered contexts in the table above, including `Guardian scan gate`
+  all fourteen registered contexts in the table above, including `Guardian scan gate`
   (from `guardian-scan.yaml`) in place of the retired `FOSSA Scan` / `FOSSA Scan /
   SCA Scan` contexts, with `strict_required_status_checks_policy: true` and an
   **empty bypass-actor list** — no admin override exists. Re-verify against the
@@ -700,9 +764,10 @@ writing; re-check, do not assume.
   > the scan itself was broken would have turned "scanning is broken" into "no
   > pull request can merge." That precondition was met before registration.
   > **There is no "branch protection holds zero required contexts" state
-  > anymore** — every one of the thirteen contexts, `Guardian scan gate`
+  > anymore** — every one of the fourteen contexts, `Guardian scan gate`
   > included, now blocks a merge if it is red or never reports, with nothing to
-  > bypass it. A scan outage today blocks everyone, which is what makes the "Who
+  > bypass it. One exception, added later: `CodeQL` can conclude `neutral`, which
+  > GitHub counts as passing — see [Static analysis](#static-analysis). A scan outage today blocks everyone, which is what makes the "Who
   > picks up a red supply-chain scan on `main`" gap earlier in the Branch
   > Protection section (above) worth reading, not less.
   >
