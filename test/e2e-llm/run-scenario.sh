@@ -63,6 +63,13 @@
 #                             required `prompt`. Turn 1 uses `--session-id
 #                             <uuid>`; turn 2 uses `--resume <uuid>` so the
 #                             agent sees turn-1 context.
+#   followup.tools_cumulative true → the tool-choice assertions in this scope
+#                             (expected_tool{,_any_of}, expected_tools_all_of,
+#                             expected_no_mutating_tools) see turn 1's and
+#                             turn 2's tool calls as one set. For scenarios
+#                             where the call may legitimately land in either
+#                             turn, so neither turn alone can require it.
+#                             Valid only inside `followup`.
 #
 # Env-var substitution: ./helpers.sh is auto-sourced (if present), which in
 # turn pulls in the monitoring suite's F1–F7 helpers and this suite's
@@ -298,7 +305,12 @@ if .type == "assistant" then
   )
 elif .type == "result" then
   info("answer: " + ((.result // "(empty)") | gsub("\n"; " ") | gsub(" +"; " ")
-        | if length > 300 then .[:300] + "…" else . end)
+        # 1200, not 300. A truncated answer is unreadable exactly when it
+        # matters: an entity-set or substring failure is a claim about the
+        # answer text, and diagnosing one from the first 300 chars is
+        # guesswork. Two rounds of failures in this suite were misdiagnosed
+        # that way. Still capped, so a runaway answer cannot flood the log.
+        | if length > 1200 then .[:1200] + "…" else . end)
     + "  ($\((.total_cost_usd * 10000 + 0.5 | floor) / 10000), \(.modelUsage // {} | keys | join("+") | if . == "" then "?" else . end))")
 else empty end
 '
@@ -380,13 +392,15 @@ invoke_claude() {
 PASS=1
 fail() { log_fail "$*"; PASS=0; }
 
-# run_assertions <run_file> <scoped_json> <turn_label>
+# run_assertions <run_file> <scoped_json> <turn_label> [prior_run_file]
 # Applies all assertion fields (tool-choice / substring / numeric /
 # ground_truth.{jq,answer_regex} / ground_truth.{shell,expect_stdout_regex})
 # against the scoped_json blob. Same field names work at scenario top level
 # and inside `followup`, so this function serves both turns.
+# prior_run_file is turn 1's transcript, passed on the turn-2 call; it is only
+# read when the scope sets `tools_cumulative: true`.
 run_assertions() {
-    local run_file="$1" scoped="$2" label="$3"
+    local run_file="$1" scoped="$2" label="$3" prior_run_file="${4:-}"
 
     local expected_tool expected_any expected_all expected_no_mutating removed_none
     local required required_any forbidden
@@ -430,8 +444,31 @@ run_assertions() {
         return
     fi
 
-    local tool_calls answer
-    tool_calls=$(jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="tool_use") | .name' "$run_file" | sort -u)
+    local tool_calls answer tools_cumulative tool_call_files
+    # `tools_cumulative` widens the tool-choice assertions to the whole
+    # conversation: turn 1 + turn 2. Use it when the work may legitimately land
+    # in either turn — a destructive prompt whose target turns out not to exist
+    # can be verified up front (turn 1 reads, turn 2 has nothing left to call)
+    # or after the confirmation (turn 1 gates, turn 2 reads). Neither turn alone
+    # can require the call; the conversation as a whole can. Substring, numeric
+    # and ground_truth assertions stay scoped to this turn's answer.
+    tools_cumulative=$(jq -r '.tools_cumulative // false' <<<"$scoped")
+    tool_call_files=("$run_file")
+    if [ "$tools_cumulative" = "true" ]; then
+        # Fail-closed on a missing prior transcript rather than silently
+        # narrowing to this turn: a scenario that asked for the cumulative set
+        # and quietly got the turn-scoped one asserts something weaker than it
+        # says it does. Two ways to land here, so the message names both — a
+        # scenario setting the flag outside `followup` (there is no earlier turn
+        # to union with), or a caller that added a turn without threading the
+        # preceding run file through.
+        if [ -z "$prior_run_file" ]; then
+            fail "$label: tools_cumulative is set but no preceding turn's transcript was supplied — the flag is valid only inside a \`followup\` scope, and each run_assertions call past turn 1 must pass the prior run file as its 4th argument"
+            return
+        fi
+        tool_call_files+=("$prior_run_file")
+    fi
+    tool_calls=$(jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="tool_use") | .name' "${tool_call_files[@]}" | sort -u)
     answer=$(jq -r 'select(.type=="result") | .result' "$run_file")
 
     # ── Tool-choice ──
@@ -635,7 +672,7 @@ if [ -n "$FOLLOWUP" ]; then
     fi
     log_info "followup prompt: $FOLLOWUP_PROMPT"
     invoke_claude "$RUN_FILE2" "$FOLLOWUP_PROMPT" --resume "$SESSION_ID" || exit 2
-    run_assertions "$RUN_FILE2" "$FOLLOWUP" "turn-2"
+    run_assertions "$RUN_FILE2" "$FOLLOWUP" "turn-2" "$RUN_FILE"
 fi
 
 if [ "$PASS" -eq 1 ]; then

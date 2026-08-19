@@ -1,7 +1,10 @@
 {
-  "_doc": "F7: spool-quota discards. The spool quota is the primary cause. In current state the queue also happens to have egressEnabled=false and bindCount=0, so 'no consumer' is technically true and an honest model will mention it as a secondary factor. Forbidden list drops 'no consumer' because it's accurate here; we still forbid 'not bound' as fabrication-style framing the model shouldn't volunteer as the headline cause.",
+  "_doc": "F7: spool-quota discards. The spool quota is the primary cause. In current state the queue also happens to have egressEnabled=false and bindCount=0, so 'no consumer' is technically true and an honest model will mention it as a secondary factor. Forbidden list drops 'no consumer' because it's accurate here; we still forbid 'not bound' as fabrication-style framing the model shouldn't volunteer as the headline cause.\n\nTool assertion is any_of, not a single expected_tool: list-queue-discards is a legitimate second path and its own description says 'use this to diagnose why messages are being dropped across queues', which is this prompt almost verbatim. Sonnet-5 answered correctly from list-queues (maxMsgSpoolUsage, msgSpoolUsage, spooledMsgCount) plus list-queue-discards (maxMsgSpoolUsageExceededDiscardedMsgCount) — every number grounded in a tool result — and failed only because the assertion named get-queue-metrics exclusively. The causal reasoning is gated by required_substrings; this field only asserts the model reached a discard-diagnosis tool at all.\n\nSeparate open question, deliberately NOT settled by widening this: get-queue-metrics is arguably the right tool for a single named queue, since list-queue-discards pages the whole VPN at 100 queues per request. tools.yaml already steers that way in two other descriptions but not in list-queue-discards' own text. If we want that routing it belongs in the description, not in this assertion.",
   "prompt": "Why is queue $F7_SPOOL_QUEUE dropping messages on $BROKER?",
-  "expected_tool": "mcp__solace-broker__get-queue-metrics",
+  "expected_tool_any_of": [
+    "mcp__solace-broker__get-queue-metrics",
+    "mcp__solace-broker__list-queue-discards"
+  ],
   "required_substrings": ["spool", "quota"],
   "forbidden_substrings": []
 }
