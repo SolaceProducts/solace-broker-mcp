@@ -455,8 +455,15 @@ run_assertions() {
     tools_cumulative=$(jq -r '.tools_cumulative // false' <<<"$scoped")
     tool_call_files=("$run_file")
     if [ "$tools_cumulative" = "true" ]; then
+        # Fail-closed on a missing prior transcript rather than silently
+        # narrowing to this turn: a scenario that asked for the cumulative set
+        # and quietly got the turn-scoped one asserts something weaker than it
+        # says it does. Two ways to land here, so the message names both — a
+        # scenario setting the flag outside `followup` (there is no earlier turn
+        # to union with), or a caller that added a turn without threading the
+        # preceding run file through.
         if [ -z "$prior_run_file" ]; then
-            fail "$label: tools_cumulative is only valid in a followup scope"
+            fail "$label: tools_cumulative is set but no preceding turn's transcript was supplied — the flag is valid only inside a \`followup\` scope, and each run_assertions call past turn 1 must pass the prior run file as its 4th argument"
             return
         fi
         tool_call_files+=("$prior_run_file")
