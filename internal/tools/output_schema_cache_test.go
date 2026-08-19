@@ -16,6 +16,7 @@ package tools
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
@@ -27,14 +28,17 @@ import (
 // metadataCountingHandler wraps a real ToolHandler and counts Metadata()
 // calls without modifying the wrapped handler or any production code, so a
 // test can assert how many times Metadata() was actually invoked through the
-// normal ToolManager.Register()/CallTool path.
+// normal ToolManager.Register()/CallTool path. calls is an atomic counter —
+// this test drives CallTool sequentially today, but a counter a future test
+// (or -race) could catch drifting under concurrent use isn't worth the risk
+// for a one-line fix.
 type metadataCountingHandler struct {
 	ToolHandler
-	calls int
+	calls atomic.Int64
 }
 
 func (h *metadataCountingHandler) Metadata() Metadata {
-	h.calls++
+	h.calls.Add(1)
 	return h.ToolHandler.Metadata()
 }
 
@@ -81,7 +85,7 @@ func TestCallTool_CompositeWriteTool_OutputSchemaCachedNotRebuilt(t *testing.T) 
 	mgr := NewToolManager(newTestPool(t))
 	mgr.Register(counted)
 
-	callsAfterRegister := counted.calls
+	callsAfterRegister := counted.calls.Load()
 	if callsAfterRegister == 0 {
 		t.Fatal("expected Register() to call Metadata() at least once")
 	}
@@ -105,7 +109,7 @@ func TestCallTool_CompositeWriteTool_OutputSchemaCachedNotRebuilt(t *testing.T) 
 		}
 	}
 
-	if got := counted.calls - callsAfterRegister; got != 0 {
+	if got := counted.calls.Load() - callsAfterRegister; got != 0 {
 		t.Errorf("handler.Metadata() called %d more time(s) across 5 CallTool invocations on the real create-queue tool; want 0 (SOL-153335: output schema/operation catalog must not be rebuilt per call)", got)
 	}
 }
