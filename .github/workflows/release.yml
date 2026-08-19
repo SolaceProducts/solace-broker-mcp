@@ -75,6 +75,94 @@ jobs:
         if: always()
         run: .github/scripts/build-test-licenses-check.sh
 
+  # Self-tests for the inventory-refresh tooling itself (SOL-152956,
+  # `make refresh-third-party-inventory`) — not the gate above, which stays
+  # exactly as it was, and not named in any `needs:` below, so neither job
+  # here can block build-binaries/build-docker/release. Same reasoning as
+  # ci-pr.yaml's own copy of these two jobs: this tooling's tests shell out to
+  # `go run github.com/google/go-licenses` and `gh api` for a handful of
+  # cases, and letting a module-proxy or GitHub API outage block an actual
+  # release over something with no bearing on the inventory's correctness
+  # would be a worse trade here than on a PR.
+  refresh-scripts-selftest-offline:
+    name: Third-party inventory refresh scripts self-test (offline)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+          # Same reasoning as the `licenses` job above: a cache entry
+          # restored from a less-trusted ref is an input this job's own
+          # module-graph reads shouldn't trust on the release path, and a
+          # release runs once per tag, so the cache buys little anyway.
+          cache: false
+      # A cold module cache makes `go list` print "go: downloading ..." to
+      # stderr while it fetches — build-test-licenses-check.sh merges that
+      # stream into what it parses as `{{.Path}} {{.Version}}` output (its
+      # own `2>&1`, out of scope to change here), so an unwarmed cache reads
+      # as a bogus dependency named literally `go:`. `cache: false` above
+      # means this is never warm here, so this step runs every time, not
+      # only on this job's first invocation.
+      - name: Warm the Go module cache (root + both test submodules)
+        run: |
+          set -euo pipefail
+          go mod download
+          while IFS= read -r gomod; do
+            (cd "$(dirname "$gomod")" && go mod download)
+          done < <(find -L test -name go.mod)
+      - name: Self-test the third-party licences refresh script (offline cases)
+        env:
+          SKIP_NETWORK_TESTS: "1"
+        run: .github/scripts/refresh-licenses-inventory.test.sh
+      - name: Self-test the build/test inventory refresh script (offline cases)
+        if: always()
+        env:
+          SKIP_NETWORK_TESTS: "1"
+        run: .github/scripts/refresh-build-test-inventory.test.sh
+
+  refresh-scripts-selftest-network:
+    name: Third-party inventory refresh scripts self-test (network)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+          cache: false
+      - name: Warm the Go module cache (root + both test submodules)
+        run: |
+          set -euo pipefail
+          go mod download
+          while IFS= read -r gomod; do
+            (cd "$(dirname "$gomod")" && go mod download)
+          done < <(find -L test -name go.mod)
+      - name: Self-test the third-party licences refresh script
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: .github/scripts/refresh-licenses-inventory.test.sh
+      - name: Self-test the build/test inventory refresh script
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: .github/scripts/refresh-build-test-inventory.test.sh
+
   # Release gate: re-scans the tag, uploads to Guardian, and fails the release
   # if Guardian blocks (admin skip_security_checks is the escape hatch).
   # Replaces the Vault-backed FOSSA scan.

@@ -457,28 +457,37 @@ at `go.mod` and `go.sum` closely, since the automated scan is not there to do it
 
 ## Third-party licence inventory
 
-If your change bumps a Go dependency and `Third-party licenses current` goes
-red:
+If your change bumps a dependency and `Third-party licenses current` goes red:
 
 ```bash
-go run github.com/google/go-licenses@v1.6.0 csv ./cmd/server
+make refresh-third-party-inventory
 ```
 
-That supplies the module, version, and licence data for every row — it prints
-to stdout, it does not write the file — so reconcile it into
-`THIRD_PARTY_LICENSES.md`'s table by hand, from the same closure the check
-verifies. `licenses-check.sh`'s own failure output lists what that
-reconciliation involves — exclude this repository's own module, update the
-"Generated" date, and open each new licence link rather than trusting the
-generated URL (`go-licenses` isn't authoritative there either) — follow that
-output over this summary of it, then confirm with
-`.github/scripts/licenses-check.sh`. Automatic regeneration on a pull request
-(so this stops being a manual step at all) is tracked separately under
-SOL-152956. If the check is still red after regenerating, it is usually a
-real compliance question — most often a new dependency that ships its own
-`NOTICE` file, which needs a human-written attribution block — not a
-formatting one. See `RELEASING.md`'s **Third-party licence inventory**
-section for the source-of-truth decision this follows.
+This regenerates both `THIRD_PARTY_LICENSES.md` and `THIRD_PARTY_BUILD_TEST.md`
+(SOL-152956) from what the repository actually uses — one command instead of
+re-deriving the dependency closure and reconciling table rows by hand. It
+diffs against the two checks' own diagnostics, rewrites only the row(s) that
+drifted, reads each new licence fresh rather than inferring one, and refuses
+outright — leaving the file untouched — on anything it doesn't recognize (a
+brand-new container image or npm package, a strong-copyleft licence, a
+duplicate or unparseable row) rather than guess. Review its diff and commit as
+usual.
+
+If it refuses, that's not a bug to work around: it's telling you the
+remaining fix needs a human decision. Run the underlying check
+(`.github/scripts/licenses-check.sh` or `.github/scripts/build-test-licenses-check.sh`)
+directly to see exactly what's outstanding, and follow its own remediation
+text — most often either a new dependency shipping its own `NOTICE` file
+(needs a human-written Apache-2.0 §4(d) attribution block, which no tool
+should auto-author) or a component whose licence genuinely differs from its
+parent module's and needs its own verified row.
+
+Still a manual step: Dependabot cannot execute post-update scripts, so its
+own PRs need a human to run this target, review the diff, and push — fully
+automatic regeneration on a Dependabot PR itself needs a bot credential and
+is tracked as a separate, later piece of work. See `RELEASING.md`'s
+**Third-party licence inventory** section for the source-of-truth decision
+this follows.
 
 ## Questions?
 

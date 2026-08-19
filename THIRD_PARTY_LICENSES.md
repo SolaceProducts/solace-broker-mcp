@@ -17,6 +17,14 @@ and 2026-07-31 this file drifted from the binary in both directions, so
 matching `go list -deps ./cmd/server`. The FOSSA scan remains the authoritative
 automated check for licence *policy*; this file is the human-readable inventory.
 
+**`make refresh-third-party-inventory`** does the regeneration and the table
+reconciliation above in one step — it diffs against `licenses-check.sh`'s own
+verdict, rewrites only the row(s) that drifted, reads each new licence fresh
+rather than inferring one, and refuses outright rather than guess at a
+component-differing-licence case like `go-jose/go-jose/v4/json` below
+(SOL-152956). Review its diff and commit as usual; a Dependabot PR still needs
+a human to run it, since Dependabot cannot execute post-update scripts.
+
 All components are compatible with distribution under the Apache License 2.0.
 No strong-copyleft licenses (GPL, LGPL, AGPL, EPL, CDDL) are linked into the
 binary.

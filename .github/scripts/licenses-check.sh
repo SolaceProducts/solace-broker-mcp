@@ -198,12 +198,24 @@ if [ "$failures" -gt 0 ]; then
 The compliance artifacts no longer match the binary ($failures problem(s) above).
 
 They ship with the release, so a mismatch is a compliance defect, not a
-formatting nit. Regenerate the inventory:
+formatting nit.
+
+    make refresh-third-party-inventory
+
+does this automatically: it diffs against this script's own verdict, rewrites
+only the row(s) that drifted, reads each new licence fresh rather than
+inferring one, and refuses outright — leaving the file untouched — on
+anything it doesn't recognize (a strong-copyleft licence, a duplicate or
+unparseable row, a component whose licence genuinely differs from its
+parent's), same as this script already does. Review its diff and commit it.
+
+If it refuses, or you're reconciling by hand:
 
     go run github.com/google/go-licenses@v1.6.0 csv ./cmd/server
 
-Then reconcile the tables, excluding this repository's own module, and update the
-"Generated" date. Verify a new component's license from that output, and open its
+supplies the module, version, and licence data for every row. Reconcile the
+tables, excluding this repository's own module, and update the "Generated"
+date. Verify a new component's license from that output, and open its
 license link rather than trusting the generated URL.
 EOF
     exit 1

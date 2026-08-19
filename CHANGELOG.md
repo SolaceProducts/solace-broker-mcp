@@ -14,6 +14,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `make refresh-third-party-inventory` regenerates `THIRD_PARTY_LICENSES.md`
+  and `THIRD_PARTY_BUILD_TEST.md` from what the repository actually uses, one
+  command instead of hand-deriving the dependency closure and reconciling
+  table rows by hand. It diffs against `licenses-check.sh` /
+  `build-test-licenses-check.sh`'s own drift diagnostics, rewrites only the
+  row(s) that actually changed, reads every new licence fresh (never inferred,
+  never copied from a neighbouring row), and refuses outright — leaving the
+  file untouched — on anything it doesn't recognize (a new container image or
+  npm package, a duplicate or unparseable row) rather than guess. Covers all
+  four kinds of drift the two checks catch: a Go module version bump, a new
+  transitive Go module, a GitHub Action SHA re-pin, and a container image tag
+  change. Still a manual step — Dependabot cannot execute post-update scripts,
+  so its own PRs still need a human to run this, review the diff, and push;
+  fully automatic refresh on a Dependabot PR itself needs a bot credential and
+  is tracked separately. Tracked under SOL-152956.
+
 ### Changed
 
 - `ToolManager` now compiles each tool's input/output JSON Schema once, at registration, instead of re-marshalling and re-compiling it on every `CallTool` invocation; the compiled validator and the tool's annotations are cached and reused across calls. As a side effect, `CallTool` no longer calls a handler's `Metadata()` at all, which for the composite write tools also stops rebuilding the strict output schema — including copying the full ~890-entry SEMPv2 operation catalog — on every call. Internal Go API only; the on-the-wire MCP schemas, tool behavior, and response bytes are unchanged (the `TextContent` fallback is now produced by re-indenting the bytes already marshalled for output validation rather than marshalling `StructuredContent` a second time, which is byte-identical to the previous output). Found in a security/robustness/performance sweep (`/andrea-sweep`). Tracked under SOL-153334 and SOL-153335.
