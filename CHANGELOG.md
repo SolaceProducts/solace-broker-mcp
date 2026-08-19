@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Updated the embedded SEMPv2 OpenAPI specs to the 10.26.4 rolling release (`10.26.4.10725`), so tool schemas track current broker attributes. The three spec files are renamed to `semp-v2-swagger-{action,config,monitor}.10.26.4.json` and continue to be sourced from the private-extended variant. Loading is unaffected — specs are picked up by the embed glob and typed from their `basePath`, not their filename.
+- Updated the embedded SEMPv2 OpenAPI specs to the 10.26.4 rolling release (`10.26.4.10725`), so tool schemas track current broker attributes. The three spec files are renamed to `semp-v2-swagger-{action,config,monitor}.10.26.4.json` and continue to be sourced from the private-extended variant.
 
 - `ToolManager` now compiles each tool's input/output JSON Schema once, at registration, instead of re-marshalling and re-compiling it on every `CallTool` invocation; the compiled validator and the tool's annotations are cached and reused across calls. As a side effect, `CallTool` no longer calls a handler's `Metadata()` at all, which for the composite write tools also stops rebuilding the strict output schema — including copying the full ~890-entry SEMPv2 operation catalog — on every call. Internal Go API only; the on-the-wire MCP schemas, tool behavior, and response bytes are unchanged (the `TextContent` fallback is now produced by re-indenting the bytes already marshalled for output validation rather than marshalling `StructuredContent` a second time, which is byte-identical to the previous output). Found in a security/robustness/performance sweep (`/andrea-sweep`). Tracked under SOL-153334 and SOL-153335.
 
