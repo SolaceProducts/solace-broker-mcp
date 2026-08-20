@@ -184,10 +184,15 @@ These settings must be configured by repository admin:
   bot-authored commit, a wider exemption than the retired workflow's single
   login-matched one, with no config key to narrow it. See ADMIN_SETUP.md →
   "Required status checks"
-- CodeQL is code-scanning default setup (`actions`, `go`), and `CodeQL` is a
-  required status check as of 19 August 2026. It does not analyze Dependabot pull
-  requests, and its fork behaviour is untested; see ADMIN_SETUP.md →
-  "Static analysis" before quoting it as a control
+- CodeQL runs on **advanced setup** (`.github/workflows/codeql.yml`, languages
+  `actions` and `go`) as of 20 August 2026 under SOL-153411. Default setup was
+  retired because it analyzed neither fork pull requests, Dependabot pull requests,
+  nor merge queue entries — and a required check that never reports makes a fork
+  pull request unmergeable. The `CodeQL` required context was removed with it;
+  `CodeQL gate` replaces it and is **pending registration**, so CodeQL currently
+  scans and reports without blocking. See ADMIN_SETUP.md → "Code Security" for the
+  remaining step and the ordering constraints, and "Static analysis" before quoting
+  any of it as a control
 - See: ADMIN_SETUP.md → "Security Settings"
 
 ### 5. Actions Settings (5 minutes)
