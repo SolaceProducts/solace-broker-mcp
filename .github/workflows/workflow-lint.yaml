@@ -19,6 +19,10 @@ name: Workflow lint
 # permanently unmergeable pull request the first time someone changes only Go
 # code. If this ever needs to be conditional, condition it inside the job so the
 # check still reports, never in the trigger.
+# `merge_group` for the same reason there is no `paths:` filter: this is built to be
+# a required check, and one that never reports in a merge queue leaves the entry
+# hanging. Adding it now means registering it later needs no change here
+# (SOL-152974).
 on:
   push:
     branches:
@@ -26,6 +30,8 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     branches: [main]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 concurrency:

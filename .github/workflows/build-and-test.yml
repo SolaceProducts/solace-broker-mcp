@@ -48,6 +48,15 @@ name: Build and Test
 # triggering it now is narrowing `branches` to main and dropping `tags-ignore`
 # together, because a filter list naming only `branches` leaves the tag ref
 # undefined.
+#
+# `merge_group` is here because a merge queue tests each entry on a
+# `gh-readonly-queue/...` branch: bound to `pull_request` alone, none of these
+# required contexts would report there and every entry would hang until it was
+# ejected (SOL-152974). No `branches:` filter — GitHub does not document what one
+# matches for this event, and a filter matching nothing recreates that same hang.
+# `push` is scoped to `main`, so a queue entry does not double-run; the
+# post-merge push run on the SHA the queue just validated is the accepted
+# duplication — it is what keeps per-commit trunk verdicts.
 on:
   push:
     branches:
@@ -59,6 +68,8 @@ on:
     # nothing merges into. Add a branch here if the project starts taking pull
     # requests against release branches.
     branches: [main]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
   workflow_call:
 
@@ -113,6 +124,12 @@ permissions:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    # 30-minute bounds on every job here (e2e-oauth carried one first; same
+    # rationale): the whole workflow finishes in 9-12 minutes, and GitHub's
+    # 360-minute default means a wedged dependency holds a runner for six hours.
+    # A merge queue multiplies that — the entry ejects at the queue's own
+    # timeout while the abandoned run keeps burning (SOL-152974).
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -145,6 +162,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -204,6 +222,7 @@ jobs:
   e2e-basic-mcp:
     runs-on: ubuntu-latest
     needs: build
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -320,6 +339,7 @@ jobs:
   e2e-monitoring:
     runs-on: ubuntu-latest
     needs: build
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -356,6 +376,7 @@ jobs:
   e2e-management:
     runs-on: ubuntu-latest
     needs: build
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -392,6 +413,7 @@ jobs:
   e2e-action:
     runs-on: ubuntu-latest
     needs: build
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
