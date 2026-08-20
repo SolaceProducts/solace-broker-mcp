@@ -15,6 +15,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,6 +32,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/xeipuuv/gojsonschema"
 )
 
 // ToolManager validates parameters, resolves broker connections, routes tool
@@ -38,17 +40,41 @@ import (
 //
 // All public methods are safe for concurrent use.
 type ToolManager struct {
-	pool     *semp.BrokerPool
-	mu       sync.RWMutex
-	handlers map[string]ToolHandler
+	pool  *semp.BrokerPool
+	mu    sync.RWMutex
+	tools map[string]*registeredTool
+}
+
+// registeredTool is what Register() stores for one tool: the handler plus
+// its precompiled input/output JSON Schema validators and annotations, all
+// built once from handler.Metadata() at Register() time. Keeping these
+// together means CallTool's hot path is a single map lookup under a single
+// lock, rather than one lookup for the handler (Route) and a second for the
+// cached validators — and it makes "a handler is registered without its
+// validators" structurally impossible, since both are always written by the
+// same Register() call.
+//
+// Caching the compiled validators/annotations here — instead of calling
+// handler.Metadata() again on every CallTool invocation — matters for two
+// reasons: it avoids recompiling the same JSON Schema on every call
+// (SOL-153334), and for a composite write tool it avoids rebuilding the
+// output schema from the full SEMPv2 operation catalog on every call
+// (SOL-153335) — Metadata() computes that unconditionally as part of the
+// struct it returns, so calling it again would pay that cost too even if
+// CallTool only wanted the annotations.
+type registeredTool struct {
+	handler     ToolHandler
+	input       *gojsonschema.Schema
+	output      *gojsonschema.Schema
+	annotations Annotations
 }
 
 // NewToolManager creates a ToolManager that resolves broker clients from the
 // given pool. Tools are registered via Register() before use.
 func NewToolManager(pool *semp.BrokerPool) *ToolManager {
 	return &ToolManager{
-		pool:     pool,
-		handlers: make(map[string]ToolHandler),
+		pool:  pool,
+		tools: make(map[string]*registeredTool),
 	}
 }
 
@@ -63,38 +89,72 @@ func NewToolManagerFromComposite(pool *semp.BrokerPool, tools []composite.Compos
 	return mgr
 }
 
-// Register adds a tool handler to the manager. Panics if a handler with the
-// same name is already registered — duplicate tool names indicate a
-// configuration error that should be caught at startup.
+// Register adds a tool handler to the manager, and compiles its input/output
+// schema validators once (see registeredTool). Panics if a handler with the
+// same name is already registered, or if either schema fails to compile —
+// both are configuration errors that should be caught at startup, not on a
+// caller's first tool call. The duplicate-name check runs before schema
+// compilation, under the same lock, so a duplicate registration fails fast
+// with the specific "duplicate tool registration" panic rather than
+// potentially compiling a schema first and panicking on that instead.
 func (m *ToolManager) Register(handler ToolHandler) {
-	name := handler.Metadata().Name
+	meta := handler.Metadata()
+	name := meta.Name
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, exists := m.handlers[name]; exists {
+	if _, exists := m.tools[name]; exists {
 		panic(fmt.Sprintf("duplicate tool registration: %q", name))
 	}
-	m.handlers[name] = handler
+
+	inputSchema, err := compileSchema(meta.InputSchema)
+	if err != nil {
+		panic(fmt.Sprintf("tool %q: compiling input schema: %v", name, err))
+	}
+	outputSchema, err := compileSchema(meta.OutputSchema)
+	if err != nil {
+		panic(fmt.Sprintf("tool %q: compiling output schema: %v", name, err))
+	}
+
+	m.tools[name] = &registeredTool{
+		handler:     handler,
+		input:       inputSchema,
+		output:      outputSchema,
+		annotations: meta.Annotations,
+	}
+}
+
+// lookup returns the registeredTool for name in a single lock/unlock, so a
+// caller that needs both the handler and its cached validators (CallTool)
+// does one map access instead of two. Returns an error if the tool is not
+// registered.
+func (m *ToolManager) lookup(name string) (*registeredTool, error) {
+	m.mu.RLock()
+	rt, ok := m.tools[name]
+	m.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("unknown tool %q", name)
+	}
+	return rt, nil
 }
 
 // Route looks up a handler by tool name. Returns an error if the tool is not
 // registered.
 func (m *ToolManager) Route(name string) (ToolHandler, error) {
-	m.mu.RLock()
-	handler, ok := m.handlers[name]
-	m.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("unknown tool %q", name)
+	rt, err := m.lookup(name)
+	if err != nil {
+		return nil, err
 	}
-	return handler, nil
+	return rt.handler, nil
 }
 
 // Handlers returns all registered tool handlers. The returned slice is
 // unordered — callers should sort if deterministic ordering is needed.
 func (m *ToolManager) Handlers() []ToolHandler {
 	m.mu.RLock()
-	handlers := make([]ToolHandler, 0, len(m.handlers))
-	for _, h := range m.handlers {
-		handlers = append(handlers, h)
+	handlers := make([]ToolHandler, 0, len(m.tools))
+	for _, rt := range m.tools {
+		handlers = append(handlers, rt.handler)
 	}
 	m.mu.RUnlock()
 	return handlers
@@ -133,12 +193,18 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	// production (RegisterWithServer's closures only route names taken from
 	// Handlers()). Kept as a defensive branch for direct/test callers of
 	// CallTool with a name that was never registered.
-	handler, err := m.Route(name)
+	//
+	// One lookup here gets both the handler and its precompiled
+	// validators/annotations (built once at Register() time) — see
+	// registeredTool — rather than calling Route() and then a second,
+	// separate map lookup for the validators.
+	rt, err := m.lookup(name)
 	if err != nil {
 		errorType = "unknown_tool"
 		toolErr = err
 		return nil, err
 	}
+	handler := rt.handler
 
 	// Extract and resolve broker.
 	brokerAlias, _ = params["broker"].(string)
@@ -173,19 +239,15 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	// should not see it.
 	handlerParams := stripBrokerParam(params)
 
-	// Read metadata once. Each call returns a fresh value with fresh maps and
-	// slices, so caching here keeps allocations down without aliasing risk.
-	meta := handler.Metadata()
-
 	// Validate parameters against the handler's input schema.
-	if err := ValidateParams(handlerParams, meta.InputSchema); err != nil {
+	if _, err := validateAgainstCompiledSchema(handlerParams, rt.input, "parameter validation failed"); err != nil {
 		errorType = "validation_error"
 		toolErr = err
 		return buildLocalErrorResult(toolErr), nil
 	}
 
 	// Log warning for destructive tools.
-	if meta.Annotations.Destructive != nil && *meta.Annotations.Destructive {
+	if rt.annotations.Destructive != nil && *rt.annotations.Destructive {
 		slog.Warn("executing destructive operation",
 			slog.String("tool", name),
 			slog.String("broker", brokerAlias),
@@ -216,16 +278,22 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		return buildLocalErrorResult(toolErr), nil
 	}
 
-	// Validate output against schema.
-	if err := ValidateOutput(toolResult.StructuredContent, meta.OutputSchema); err != nil {
+	// Validate output against schema. This also gives us the compact JSON
+	// encoding of StructuredContent, which we reuse below instead of
+	// marshalling it a second time.
+	resultJSON, err := validateAgainstCompiledSchema(toolResult.StructuredContent, rt.output, "output validation failed")
+	if err != nil {
 		errorType = "output_validation_error"
 		toolErr = fmt.Errorf("tool %q output validation: %w", name, err)
 		return buildLocalErrorResult(toolErr), nil
 	}
 
-	// Build MCP result with both StructuredContent and TextContent fallback.
-	resultJSON, err := json.MarshalIndent(toolResult.StructuredContent, "", "  ")
-	if err != nil {
+	// Re-indent those same bytes for the TextContent fallback — byte-for-byte
+	// what json.MarshalIndent(toolResult.StructuredContent, "", "  ") would
+	// have produced (MarshalIndent is itself Marshal followed by Indent), but
+	// without a second reflection-based marshal of the same value.
+	var indented bytes.Buffer
+	if err := json.Indent(&indented, resultJSON, "", "  "); err != nil {
 		errorType = "marshal_error"
 		toolErr = fmt.Errorf("marshalling result for %q: %w", name, err)
 		return buildLocalErrorResult(toolErr), nil
@@ -233,7 +301,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 
 	return &mcp.CallToolResult{
 		StructuredContent: toolResult.StructuredContent,
-		Content:           []mcp.Content{&mcp.TextContent{Text: string(resultJSON)}},
+		Content:           []mcp.Content{&mcp.TextContent{Text: indented.String()}},
 		IsError:           toolResult.IsError,
 	}, nil
 }

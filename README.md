@@ -4,6 +4,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/SolaceProducts/solace-broker-mcp)](go.mod)
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](.github/CODE_OF_CONDUCT.md)
+[![Latest Release](https://img.shields.io/github/v/release/SolaceProducts/solace-broker-mcp)](https://github.com/SolaceProducts/solace-broker-mcp/releases)
 
 An MCP (Model Context Protocol) server for Solace event brokers, built with Go using the official [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk).
 
@@ -417,7 +418,7 @@ solace-broker-mcp/
 │   ├── tools/           # MCP tool registration, event broker resolution, tool call logging
 │   └── version/         # Build-time version injection
 ├── docs/                # Architecture and secure logging rules
-├── .claude/skills/      # Claude Code skills (add-logs, check-logs)
+├── .claude/skills/      # Claude Code skills (see the SKILL.md in each)
 ├── .github/workflows/   # GitHub Actions CI
 ├── broker-config.yaml   # Local event broker config (gitignored)
 ├── .env                 # Local credentials (gitignored)

@@ -69798,7 +69798,7 @@
           "x-writeOnly": false
         },
         "failureReason": {
-          "description": "The failure reason for the virtual IP being down.\n\nThe minimum access scope/level required to retrieve this attribute is \"global/read-only\". The allowed values and their meaning are:\n\n<pre>\n\"platform-not-supported\" - Platform does not support IPAT.\n\"msg-backbone-not-enabled\" - Message backbone not enabled.\n\"active-standby-role-unexpected\" - Active/standby role is not primary or backup.\n\"redundancy-not-enabled-on-backup\" - Redundancy not enabled on backup.\n\"ipat-not-enabled\" - IPAT not enabled.\n\"not-enabled\" - Not enabled.\n\"interface-not-configured\" - No interface configured.\n\"interface-not-found\" - Interface not found.\n\"ip-interface-not-found\" - Primary/backup IP interface not found.\n\"interface-oversubscribed-ipv4\" - Configured interface oversubscribed for IPv4.\n\"interface-oversubscribed-ipv6\" - Configured interface oversubscribed for IPv6.\n\"ip-interface-down\" - IP Interface down.\n\"system-error\" - System error.\n\"none\" - N/A.\n</pre>\n (private API only)",
+          "description": "The failure reason for the virtual IP being down.\n\nThe minimum access scope/level required to retrieve this attribute is \"global/read-only\". The allowed values and their meaning are:\n\n<pre>\n\"platform-not-supported\" - Platform does not support IPAT.\n\"msg-backbone-not-enabled\" - Message backbone not enabled.\n\"active-standby-role-unexpected\" - Active/standby role is not primary or backup.\n\"redundancy-not-enabled-on-backup\" - Redundancy not enabled on backup.\n\"ipat-not-enabled\" - IPAT not enabled.\n\"not-enabled\" - Not enabled.\n\"interface-not-configured\" - No interface configured.\n\"interface-not-found\" - Interface not found.\n\"ip-interface-not-found\" - Primary/backup IP interface not found.\n\"interface-oversubscribed-ipv4\" - Configured interface oversubscribed for IPv4.\n\"interface-oversubscribed-ipv6\" - Configured interface oversubscribed for IPv6.\n\"ip-interface-down\" - IP Interface down.\n\"ip-interface-change-in-progress\" - IP interface change in progress.\n\"none\" - N/A.\n</pre>\n (private API only)",
           "type": "string",
           "x-accessLevels": {
             "get": "global/read-only"
@@ -69820,7 +69820,7 @@
             "interface-oversubscribed-ipv4",
             "interface-oversubscribed-ipv6",
             "ip-interface-down",
-            "system-error",
+            "ip-interface-change-in-progress",
             "none"
           ],
           "x-opaque": false,
@@ -71818,7 +71818,7 @@
     },
     "description": "SEMP (starting in `v2`) is a RESTful API for configuring, monitoring, and administering a Solace Event Broker. This specification defines the following API:\n\n\nAPI|Base Path|Purpose\n:---|:---|:---\nPrivate monitoring|/SEMP/v2/\\_\\_private\\_monitor\\_\\_|Internal use only\n\n\n\nThe following APIs are also available:\n\n\nAPI|Base Path|Purpose\n:---|:---|:---\nPrivate action|/SEMP/v2/\\_\\_private\\_action\\_\\_|Internal use only\nPrivate configuration|/SEMP/v2/\\_\\_private\\_config\\_\\_|Internal use only\n\n\n\nFor tutorials, architectural and protocol design documentation, and other information about the SEMP API, consult the [SEMP documentation](https://docs.solace.com/Admin/SEMP/Using-SEMP.htm) on the Solace website. The SEMP API specifications are also [available for download](https://solace.com/downloads/).\n\nIf you need additional support, please contact us at [support@solace.com](mailto:support@solace.com).",
     "title": "SEMP (Solace Element Management Protocol)",
-    "version": "10.26.3.10320"
+    "version": "10.26.4.10725"
   },
   "parameters": {
     "countQuery": {

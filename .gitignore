@@ -7,6 +7,9 @@
 bin/
 mcp-server
 /server
+# `make build` output (BINARY in the Makefile). The leading slash anchors this
+# to the repo root, so an identically named path deeper in the tree stays tracked.
+/solace-broker-mcp
 
 # Test binary
 *.test

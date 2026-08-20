@@ -255,6 +255,16 @@ tests, are never linked, and are never redistributed by us.
 
 ## Rebuilding this file
 
+**`make refresh-third-party-inventory`** does this and the equivalent for
+`THIRD_PARTY_LICENSES.md` automatically: it diffs against
+`build-test-licenses-check.sh`'s own verdict, rewrites only the row(s) that
+actually drifted (reading each new licence fresh, never inferring one), and
+refuses outright rather than guess at anything it doesn't recognize —
+review its diff and commit as usual. A Dependabot PR still needs a human to
+run it; Dependabot itself cannot execute post-update scripts (SOL-152956).
+
+The commands below are what that target runs under the hood, kept here for
+anyone auditing the inventory by hand rather than trusting the script.
 These four commands print what the tables above must contain, one per source.
 `.github/scripts/build-test-licenses-check.sh` derives the same sets and points
 here when it fails, so this is the single copy of the procedure.

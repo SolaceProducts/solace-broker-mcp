@@ -44,6 +44,13 @@ func ValidateOutput(result map[string]any, schema map[string]any) error {
 // validateAgainstSchema validates a JSON document against a JSON Schema using
 // gojsonschema. All errors are collected into a single message prefixed with
 // the given label.
+//
+// This re-marshals and re-parses schema on every call, which is fine for the
+// ad-hoc/test callers of ValidateParams and ValidateOutput above, but wrong
+// for a tool's schema on the CallTool hot path — a tool's schema never
+// changes after registration. That path uses compileSchema +
+// validateAgainstCompiledSchema instead (SOL-153334), which compiles the
+// schema once and reuses it.
 func validateAgainstSchema(document map[string]any, schema map[string]any, errPrefix string) error {
 	schemaJSON, err := json.Marshal(schema)
 	if err != nil {
@@ -63,6 +70,52 @@ func validateAgainstSchema(document map[string]any, schema map[string]any, errPr
 		return fmt.Errorf("%s: schema validation error: %w", errPrefix, err)
 	}
 
+	return formatValidationResult(result, errPrefix)
+}
+
+// compileSchema compiles a JSON Schema once so it can be validated against
+// many documents without re-marshaling and re-parsing the schema itself on
+// every call (SOL-153334). Callers that validate the same schema repeatedly
+// — ToolManager, once per registered tool — should compile it once (at
+// registration) and reuse the result via validateAgainstCompiledSchema.
+func compileSchema(schema map[string]any) (*gojsonschema.Schema, error) {
+	schemaJSON, err := json.Marshal(schema)
+	if err != nil {
+		return nil, fmt.Errorf("marshalling schema: %w", err)
+	}
+	compiled, err := gojsonschema.NewSchema(gojsonschema.NewBytesLoader(schemaJSON))
+	if err != nil {
+		return nil, fmt.Errorf("compiling schema: %w", err)
+	}
+	return compiled, nil
+}
+
+// validateAgainstCompiledSchema validates document against a schema compiled
+// by compileSchema, without re-marshaling or re-parsing the schema itself —
+// only document is marshaled, once. It also returns that marshaled JSON so a
+// caller that needs the bytes anyway (ToolManager, for the tool result's text
+// fallback) doesn't have to marshal document a second time. The bytes are
+// still returned alongside a validation error, since a caller logging or
+// inspecting the invalid document may still want them.
+func validateAgainstCompiledSchema(document map[string]any, schema *gojsonschema.Schema, errPrefix string) ([]byte, error) {
+	docJSON, err := json.Marshal(document)
+	if err != nil {
+		return nil, fmt.Errorf("%s: marshalling document: %w", errPrefix, err)
+	}
+
+	result, err := schema.Validate(gojsonschema.NewBytesLoader(docJSON))
+	if err != nil {
+		return docJSON, fmt.Errorf("%s: schema validation error: %w", errPrefix, err)
+	}
+
+	return docJSON, formatValidationResult(result, errPrefix)
+}
+
+// formatValidationResult turns a gojsonschema result into nil (valid) or a
+// single error collecting every violation, prefixed with errPrefix. Shared by
+// the uncompiled and compiled validation paths so both produce identical
+// error text.
+func formatValidationResult(result *gojsonschema.Result, errPrefix string) error {
 	if result.Valid() {
 		return nil
 	}
