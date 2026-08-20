@@ -477,3 +477,5 @@ cap is per broker.
 | **Test helpers** | `cachetest`, `postprocesstest` — test-only registration/setup with cleanup | Production paths (build-excluded from prod use) | `internal/oauth/cache/cachetest/`, `internal/composite/postprocess/postprocesstest/` |
 
 ---
+
+<!-- SOL-153411: temporary marker for the fork-pull-request CodeQL verification. This PR is a test and will be closed unmerged. -->
