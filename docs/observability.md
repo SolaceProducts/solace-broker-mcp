@@ -3,7 +3,7 @@
 > **Status: Draft for pilot review.** This document is the proposed metric, audit, and
 > trace schema for the Broker MCP Server. It is published for review **before** the names
 > freeze at GA. After GA we commit to only ever *adding* to this schema, never renaming, so
-> the time to change a name is now. See [How to give feedback](#how-to-give-feedback).
+> the time to change a name is now. See [How to Give Feedback](#how-to-give-feedback).
 >
 > **Metrics, audit, and tracing are not emitted by the current build.** Only their feature
 > flags exist today: there is no `/metrics` handler, no audit emission, and no OTLP
@@ -31,7 +31,7 @@ turn each on when your operations model is ready. Correlation IDs are on by defa
 they carry no schema to review. This document describes what each signal contains and what
 each name means.
 
-### Implementation status
+### Implementation Status
 
 This schema is published **ahead of the code** so the names can be reviewed before they
 freeze at GA. Each capability is tagged with its status as of this draft, and the following
@@ -49,7 +49,7 @@ review, not what the current build emits. Only the **[Implemented]** capability 
 
 ---
 
-## How to give feedback
+## How to Give Feedback
 
 We are asking pilot operators one question:
 
@@ -83,7 +83,7 @@ not rename what is already there.
 | Cardinality | Every metric name and label key is documented here. A CI check that fails the build on any undocumented name or label key is planned for GA; today the catalog is maintained by review. Label values are drawn from finite domains (configured brokers, SEMP operations, HTTP status codes, the retry cap), so series cardinality stays bounded. No label carries a free-text or unbounded value. |
 | Redaction | Credentials, tokens, and raw tool arguments are never written to any signal. |
 
-### Schema versioning
+### Schema Versioning
 
 Two independent versions are published, so your queries can pin to a version and detect drift:
 
@@ -117,12 +117,12 @@ The same instruments can additionally be **pushed over OTLP**, behind its own fl
 `OBS_METRICS_OTLP_ENABLED`. The endpoint comes from the standard
 `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`. Push is off by
 default and does not activate merely because an endpoint variable is present in the
-environment; see [Decided since the first draft](#decided-since-the-first-draft) for why.
+environment; see [Decided Since the First Draft](#decided-since-the-first-draft) for why.
 Setting `OBS_METRICS_OTLP_ENABLED=true` while `OBS_METRICS_ENABLED` is false fails config
 load with an explicit error rather than emitting nothing quietly, because both egresses
 share one meter provider.
 
-### Server and scrape health
+### Server and Scrape Health
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
@@ -140,7 +140,7 @@ share one meter provider.
 
 **Cardinality:** trivial (one series each, plus one per label value on the info metrics).
 
-### Tool invocations (RED)
+### Tool Invocations (RED)
 
 The core Rate / Errors / Duration signal for every tool call that reaches its handler. A call
 refused by tool authorization never reaches one, so it is absent here and counted by
@@ -155,7 +155,7 @@ refused by tool authorization never reaches one, so it is absent here and counte
   number of tools the server exposes.
 - `broker`: the broker alias from your configuration. Bounded by the number of configured
   brokers.
-- `outcome`: see [The outcome vocabulary](#the-outcome-vocabulary).
+- `outcome`: see [The Outcome Vocabulary](#the-outcome-vocabulary).
 - `error_type`: the failure cause, from the ten values in
   [`error_type`](#error_type). Empty on any non-error outcome.
 - Histogram buckets (seconds): `0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10`.
@@ -163,10 +163,10 @@ refused by tool authorization never reaches one, so it is absent here and counte
 **Cardinality:** `error_type` is non-empty only on the error path, so the series per `tool` and
 `broker` is bounded at `success (1) + cancelled (1) + error x 10 = 12`, not the 33 a naive
 product of the two label domains would suggest. That 12 is the worst case once every outcome
-is emitted; until `cancelled` ships (see [The outcome vocabulary](#the-outcome-vocabulary)) you
+is emitted; until `cancelled` ships (see [The Outcome Vocabulary](#the-outcome-vocabulary)) you
 will observe 11. All domains are finite (CI enforcement planned for GA).
 
-### SEMP requests (RED, per attempt)
+### SEMP Requests (RED, per Attempt)
 
 Request rate, errors, and latency for each call the server makes to a broker over SEMP,
 recorded per retry attempt so you can see retry storms and per-broker latency.
@@ -199,7 +199,7 @@ no-response case or you need the reason (DNS, TLS, timeout) as a label.
 `mcp_broker_unreachable_reason` carries a coarser version of that reason today, but only as
 broker state, not per attempt.
 
-### Broker reachability
+### Broker Reachability
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
@@ -222,7 +222,7 @@ broker state, not per attempt.
 
 **Cardinality:** `|broker|` for the first metric; `|broker| x |reason|` for the second.
 
-### Authentication failures
+### Authentication Failures
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
@@ -238,7 +238,7 @@ broker state, not per attempt.
 
 **Cardinality:** `|reason|` (five values).
 
-### Authorization denials
+### Authorization Denials
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
@@ -254,16 +254,16 @@ broker state, not per attempt.
 
 **Cardinality:** `|tool| x 2`.
 
-### Audit pipeline health
+### Audit Pipeline Health
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
 | `mcp_audit_events_dropped_total` | Counter | none | Solace |
 
-Increments if an audit event cannot be written (see [Audit delivery](#audit-delivery)). A
+Increments if an audit event cannot be written (see [Audit Delivery](#audit-delivery)). A
 flat-zero series is your evidence that no audit event was lost. Alert on any increase.
 
-### OTLP export health
+### OTLP Export Health
 
 | Metric | Type | Labels | Basis |
 |---|---|---|---|
@@ -283,7 +283,7 @@ the push working, so you can answer "is our OTLP export landing?" from Prometheu
 collector is the thing that is down. The scrape path and the push path fail independently by
 design.
 
-### Trace exemplars
+### Trace Exemplars
 
 The two latency histograms (`mcp_tool_invocation_duration_seconds` and
 `mcp_semp_request_duration_seconds`) carry **trace exemplars** when both metrics and tracing are
@@ -301,7 +301,7 @@ Two things to know, because both look like bugs otherwise:
 
 Exemplars add no new label keys and no new series.
 
-### Go runtime and process metrics
+### Go Runtime and Process Metrics
 
 Standard `go_*` and `process_*` collectors from the Prometheus Go client library
 (`collectors.NewGoCollector()` and `collectors.NewProcessCollector()`): goroutine count,
@@ -311,20 +311,20 @@ present, once the metrics endpoint is wired, for diagnosing memory pressure and 
 
 ---
 
-## Audit trail — [Planned]
+## Audit Trail — [Planned]
 
 > _Status: **[Planned]**. Only the capability gate exists today; audit-event emission lands in
 > a later story. The following fields and delivery behavior are the proposed schema._
 
 One JSON event is emitted per **state-changing** operation (for example `disconnect-client`,
 `delete-queue`, broker shutdown), at completion, with the outcome known. Read-only calls are
-not audited. Authentication lifecycle events are also emitted (see [Authentication events](#authentication-events)). The stream is
+not audited. Authentication lifecycle events are also emitted (see [Authentication Events](#authentication-events)). The stream is
 enabled with `OBS_AUDIT_LOG_ENABLED`.
 
 Every event carries a top-level `"event": "audit"` tag so your log shipper can route the
 audit sub-stream to a dedicated SIEM index.
 
-### Event fields
+### Event Fields
 
 | Field | Meaning | Type |
 |---|---|---|
@@ -337,7 +337,7 @@ audit sub-stream to a dedicated SIEM index.
 | `agent_client_id` | Which AI agent or client made the call, distinct from the human user | string |
 | `tool` | The MCP tool invoked | string |
 | `broker` | The broker targeted | string |
-| `outcome` | The result; see [The outcome vocabulary](#the-outcome-vocabulary) | string |
+| `outcome` | The result; see [The Outcome Vocabulary](#the-outcome-vocabulary) | string |
 | `error_type` | Why an operation failed; present on `outcome: error` only | string (closed set) |
 | `arguments_hash` | SHA-256 over an RFC 8785 (JCS) canonicalization of the call arguments | hex string |
 | `correlation_id` | Join key to logs, traces, and the broker-side entry | string |
@@ -394,7 +394,7 @@ hash is deterministic, so an auditor can recompute it from the same arguments to
 recorded event corresponds to a specific call, without the raw argument values ever being
 stored.
 
-### Authentication events
+### Authentication Events
 
 Alongside destructive-operation events, the audit stream records authentication lifecycle
 events. The following names are distinct **event types**, not values of the shared `outcome`
@@ -432,7 +432,7 @@ The caller's actual group memberships are deliberately **not** recorded on a den
 separation-of-duties measure. `reason` tells you why without disclosing the caller's
 entitlements to whoever reads the audit stream.
 
-### Audit delivery
+### Audit Delivery
 
 Delivery is **non-blocking by design**: writing an audit event never stalls or fails the
 broker operation. The event rides the server's structured JSON log stream on stderr, tagged
@@ -455,7 +455,7 @@ which you own.** The server does not itself persist or sign events.
 
 ---
 
-## Distributed tracing — [Planned]
+## Distributed Tracing — [Planned]
 
 > _Status: **[Planned]**. OTLP export is not yet wired; the following spans, attributes, and
 > export protocol are the proposed design._
@@ -483,9 +483,9 @@ composite executor, and each SEMP attempt. Named spans:
 
 Other span names follow the OpenTelemetry HTTP semantic conventions where applicable. Span
 names beyond `semp.attempt`, and span kinds, are open items in this review (see
-[Open items for this review](#open-items-for-this-review), item 4).
+[Open Items for This Review](#open-items-for-this-review), item 4).
 
-### Span attributes
+### Span Attributes
 
 | Attribute | Meaning | Basis |
 |---|---|---|
@@ -507,7 +507,7 @@ values match OTel's `error.type` semantics. If your trace backend or trace-based
 the dotted `error.type`, tell us in your feedback, because this is the kind of thing that is
 cheap to change now and expensive after the freeze.
 
-### Resource attributes
+### Resource Attributes
 
 Set from server configuration on **both** metrics and spans, so an aggregated dashboard can
 tell instances apart without a label duplicated onto every series. All five follow the
@@ -574,7 +574,7 @@ metric, audit, and trace schemas.
 
 ---
 
-## The outcome vocabulary
+## The Outcome Vocabulary
 
 A single `outcome` vocabulary is shared across metrics, the audit trail, and traces, so the
 same call reads the same way in all three and you can join on one key.
@@ -624,11 +624,11 @@ Notes:
   A denied call produces no `operation` record at all.
 - **Load-shedding / saturation is not an `outcome` value** either; it is planned as a
   separate metric in a later release (see
-  [Planned for a later release](#planned-for-a-later-release-not-frozen-in-this-review)).
+  [Planned for a Later Release](#planned-for-a-later-release-not-frozen-in-this-review)).
 
 ---
 
-## Open items for this review
+## Open Items for This Review
 
 These are the decisions we most want pilot input on. Most are unresolved; where we have
 taken a position, we say so and name what would change it. Resolving them is the point of
@@ -669,7 +669,7 @@ the review.
    the single-predicate query the shape you need? One caveat worth knowing: no shipped build
    emits this record yet, so denial history begins at the release that first does and cannot
    be back-filled.
-### Decided since the first draft
+### Decided Since the First Draft
 
 Three items that appeared as open questions in earlier drafts are now settled, so you do not
 need to spend review time on them:
@@ -678,7 +678,7 @@ need to spend review time on them:
   questions. `server_address` is the OTel-conventional host, which is what correlates this
   service with everything else OTel-instrumented in your estate; `broker` is your configured
   alias, which is what dashboards and alerts group by. Neither is redundant.
-- **`region` is now `cloud.region`.** See [Resource attributes](#resource-attributes).
+- **`region` is now `cloud.region`.** See [Resource Attributes](#resource-attributes).
 - **OTLP metrics push has its own flag, `OBS_METRICS_OTLP_ENABLED`.** We considered activating
   push as soon as `OTEL_EXPORTER_OTLP_ENDPOINT` was set, which would be tidier and would match
   what your collectors already configure. We rejected it: that variable is frequently set
@@ -689,7 +689,7 @@ need to spend review time on them:
 
 ---
 
-## Planned for a later release (not frozen in this review)
+## Planned for a Later Release (Not Frozen in This Review)
 
 The following are on the roadmap and **not part of this freeze**. Names are indicative and
 will get their own review before they ship.
@@ -702,13 +702,13 @@ will get their own review before they ship.
 
 ---
 
-## Standards this schema supports
+## Standards This Schema Supports
 
 The audit and metrics surfaces are designed to map to the logging and monitoring
 requirements of PCI DSS Requirement 10, SOC 2 (CC7.2 / CC7.3), SOX Section 404, and
 ISO/IEC 27001 Annex A.8.15 / A.8.16 / A.8.17. Note that log **integrity** (tamper-evidence)
 and **retention** are properties of the SIEM destination you route the audit stream to, not
-of the server (see [Audit delivery](#audit-delivery)).
+of the server (see [Audit Delivery](#audit-delivery)).
 
 ---
 

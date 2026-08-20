@@ -14,7 +14,7 @@ Navigate to: **Settings → General → About**
 
 Description and topics already hold values, so these are edits, not blanks.
 Currently: description "Production MCP server for the Solace broker", topics
-`ai-agents`, `go`, `mcp`, `solace`, website unset. Replace them with the below, or
+`ai-agents`, `go`, `mcp`, `solace`, website unset. Replace them with the following, or
 decide deliberately to keep what is there.
 
 **Description** (appears at top of repo page):
@@ -65,7 +65,7 @@ second forum. This supersedes the earlier plan to open Discussions.
 | Private disclosure | Security vulnerabilities | `.github/SECURITY.md` |
 
 **Settings to set:**
-- ⬜ **Discussions** - leave OFF (currently off; keep it that way)
+- ⬜ **Discussions** — leave OFF (currently off; keep it that way)
 - ✅ Issues (already enabled)
 - ✅ Preserve this repository (mark as important)
 - ✅ Sponsorships (if applicable)
@@ -130,8 +130,9 @@ gh api repos/OWNER/REPO/code-scanning/default-setup --jq '.state'
 
 ✅ **`CodeQL gate` is registered** on ruleset `main-protection` (13 → 14 contexts),
 20 August 2026, so CodeQL now blocks rather than only reporting. The migration is
-complete; the ordering notes below are kept because the sequence is the part that
-is easy to get wrong on the next repository, not because anything is outstanding.
+complete; the following ordering notes are kept because the sequence is the part
+that is easy to get wrong on the next repository, not because anything is
+outstanding.
 
 ### Why the two setups cannot overlap, and what that forces
 
@@ -176,13 +177,13 @@ gh api repos/OWNER/REPO/commits/<sha>/check-runs --jq '.check_runs[].name'
 
 So the real exposure of the reverse order is narrower than a permanent freeze: a
 re-run gap on commits whose analysis predates the switch, not a guaranteed
-repository-wide block. The order above is still the right one, but for a
+repository-wide block. The order described earlier is still the right one, but for a
 different reason than "the old context disappears" — it is that it does not
 **depend** on that check-run name continuing to match in this repository, where
 the other order does. Prefer the sequence whose correctness you do not have to
 verify against an app's naming behaviour on a `bypass_actors: []` ruleset.
 
-⚠️ **Do not conclude from the above that `CodeQL`/`57789` could simply have stayed
+⚠️ **Do not conclude from this that `CodeQL`/`57789` could simply have stayed
 required.** It is pull-request-scoped: it does not report on a `merge_group` event
 (`github/codeql-action#1537`), so requiring it would leave every merge queue entry
 hanging — the exact failure SOL-152974 needs avoided. `CodeQL gate` exists because
@@ -256,7 +257,7 @@ the replacement does and does not catch.
 **Nothing to enable for dependency review.** The `Dependencies free of high
 advisories` check reads the Dependency Review API, which is served by the
 dependency graph — always on and free for a public repository. It does not need
-Code Security enabled, and the API reporting Code Security as disabled (above) does
+Code Security enabled, and the API reporting Code Security as disabled (noted earlier) does
 not affect it. Confirmed live: `dependency-graph/compare/v0.6.0...v0.7.1` returns
 33 dependency changes. The cost question that parked this control was about an
 internal repository and no longer applies.
@@ -273,14 +274,14 @@ handles alerts and security-only updates, as before; those run independently
 of `dependabot.yml` and are already on.
 
 - Renovate does not cover Go modules or GitHub Actions here. SOL-152586
-  briefly extended it to do so instead of adding a Dependabot config, but
+  briefly extended it to do so instead of adding a Dependabot configuration, but
   Renovate cannot be enrolled for a public repository under the org's current
   system — reverted under SOL-152808 ahead of this repo going public.
-- Dependabot's pull requests pass the required `DCO` check by bot exemption, not
+- Dependabot pull requests pass the required `DCO` check by bot exemption, not
   by sign-off. Its commits do carry a trailer, but one whose address matches
   neither author nor committer; `dco2` never reads it, skipping bot-authored
   commits outright. That exemption is broader than the retired workflow's — see
-  "Required status checks" below.
+  the following "Required Status Checks" section.
 
 ### Static analysis
 
@@ -291,7 +292,7 @@ run?" can be answered without opening a workflow file.
 | Tool | Covers | Config | Blocking? |
 |------|--------|--------|-----------|
 | golangci-lint | Go static analysis. Eight linters: `errcheck`, `staticcheck`, `gosec`, `govet`, `revive`, `bodyclose`, `ineffassign`, `noctx`. `gosec` carries the security patterns (`G706` excluded pending a gosec release) | `.golangci.yml` | **Yes** — required check `lint` |
-| CodeQL | SAST over Go and GitHub Actions workflows. `default` query suite, `remote` threat model, `build-mode: autobuild` for Go and `none` for actions (what default setup used — read from its own `environment`, not inferred from runtime), weekly schedule plus every push, **every** pull request (fork and Dependabot included) and every merge queue entry | `.github/workflows/codeql.yml` (advanced setup), verdict in `.github/scripts/codeql-gate.sh` | **Yes** — required check `CodeQL gate`, registered 20 August 2026, within the two limits below |
+| CodeQL | SAST over Go and GitHub Actions workflows. `default` query suite, `remote` threat model, `build-mode: autobuild` for Go and `none` for actions (what default setup used — read from its own `environment`, not inferred from runtime), weekly schedule plus every push, **every** pull request (fork and Dependabot included) and every merge queue entry | `.github/workflows/codeql.yml` (advanced setup), verdict in `.github/scripts/codeql-gate.sh` | **Yes** — required check `CodeQL gate`, registered 20 August 2026, within the two limits described next |
 | FOSSA SCA | Third-party dependency licences and known vulnerabilities | `.github/workflow-config.json`, run from `guardian-scan.yaml` | **Detection, not prevention.** `Guardian scan gate` is required, but on a pull request FOSSA runs in diff mode and REPORT; the hard gate is on push to `main` and at the release tag |
 | Dependency Review | A pull request *introducing* a dependency with a known high or critical advisory | `ci-pr.yaml` job `dependency_review` | Not yet a required check — see [Required status checks](#required-status-checks) |
 
@@ -312,7 +313,7 @@ input — there is no scenario where turning it off is the right call, so changi
 takes a commit a reviewer can see. The ruleset rule that would enforce a threshold
 instead (`code_scanning`, "Require code scanning results") is deliberately not used:
 it blocks a pull request whose analysis never arrives, and it cannot express the
-new-findings-only scope below.
+new-findings-only scope described next.
 
 **2. New findings only.** An alert already open on `main` is pre-existing, so a pull
 request that *attempts and fails* to fix one still passes. The gate compares alert
@@ -388,17 +389,17 @@ review.
 | Require merge queue | ✅ On | Set — see [Merge queue](#merge-queue) |
 | Bypass list empty, so rules apply to admins too | ✅ Empty | Empty |
 
-### Required status checks
+### Required Status Checks
 
 **Require branches to be up to date before merging** is **off** as of 20 August
 2026 — the merge queue supersedes it, and leaving both on is redundant friction.
 See [Merge queue](#merge-queue) for why that is safe rather than a loosening.
 
-Sixteen contexts are documented below; **fourteen of them are registered** in the
-ruleset. The two that are not carry **Not yet registered** in their own row — they
-are listed here because they run on every pull request and are candidates for
-registration, not because they gate anything today. This table is the single
-authoritative copy of both sets.
+Sixteen contexts are documented in the following table; **fourteen of them are
+registered** in the ruleset. The two that are not carry **Not yet registered** in
+their own row — they are listed here because they run on every pull request and are
+candidates for registration, not because they gate anything today. This table is the
+single authoritative copy of both sets.
 
 The count dropped from fourteen to thirteen on 20 August 2026 when `CodeQL` was
 removed as part of the advanced-setup migration (SOL-153411), and returned to
@@ -422,13 +423,13 @@ gh api repos/OWNER/REPO/rulesets/13942241 \
 | `e2e-monitoring` | `build-and-test.yml` | E2E suite (known flaky fixture; rerun the job before investigating) |
 | `e2e-management` | `build-and-test.yml` | E2E suite |
 | `e2e-action` | `build-and-test.yml` | E2E suite |
-| `Guardian scan gate` | `guardian-scan.yaml` job `gate` | The Guardian scan verdict, or an accounted-for reason there is none (fork PR). Replaces `SCA gate`; see the warning below |
+| `Guardian scan gate` | `guardian-scan.yaml` job `gate` | The Guardian scan verdict, or an accounted-for reason there is none (fork PR). Replaces `SCA gate`; see the following warning |
 | `Third-party licenses current` | `ci-pr.yaml` job `licenses` | `THIRD_PARTY_LICENSES.md` still matching `go list -deps ./cmd/server`. Needs no secret, so it reports on fork pull requests too |
 | `Licence headers present` | `ci-pr.yaml` job `license_headers` | Every `.go` file outside `vendor/` opening with the Apache-2.0 header. Needs no secret and no Go toolchain, so it reports on fork pull requests too |
-| `Dependencies free of high advisories` | `ci-pr.yaml` job `dependency_review` | A pull request *introducing* a dependency with a known high or critical advisory, read from the Dependency Review API. Needs no third-party secret, so it reports on fork pull requests too — the vulnerability half of the fork gap below, and the only control here that prevents rather than detects. **Not yet registered** — see below |
-| `CHANGELOG updated` | `ci-pr.yaml` job `changelog` | Advisory today; see note below |
-| `Commit identity routable` | `ci-pr.yaml` job `identity` | Every commit the PR adds using a routable author and committer address, so a machine hostname does not publish permanently with the history. Pinned to Actions (`15368`), not to the `dco2` App — see below |
-| `workflow-lint` | `workflow-lint.yaml` job `workflow-lint` | Every file under `.github/workflows/` passing actionlint (correctness, plus shellcheck over `run:` blocks) and zizmor (workflow security, including SHA pinning via `unpinned-uses`), so workflow security is enforced by a tool rather than argued in a code comment. **Not yet registered** — see below |
+| `Dependencies free of high advisories` | `ci-pr.yaml` job `dependency_review` | A pull request *introducing* a dependency with a known high or critical advisory, read from the Dependency Review API. Needs no third-party secret, so it reports on fork pull requests too — the vulnerability half of the fork gap described later, and the only control here that prevents rather than detects. **Not yet registered** — see the following |
+| `CHANGELOG updated` | `ci-pr.yaml` job `changelog` | Advisory today; see the following note |
+| `Commit identity routable` | `ci-pr.yaml` job `identity` | Every commit the PR adds using a routable author and committer address, so a machine hostname does not publish permanently with the history. Pinned to Actions (`15368`), not to the `dco2` App — see the following |
+| `workflow-lint` | `workflow-lint.yaml` job `workflow-lint` | Every file under `.github/workflows/` passing actionlint (correctness, plus shellcheck over `run:` blocks) and zizmor (workflow security, including SHA pinning via `unpinned-uses`), so workflow security is enforced by a tool rather than argued in a code comment. **Not yet registered** — see the following |
 | `DCO` | the CNCF `dco2` GitHub App | a `Signed-off-by` trailer on every commit the pull request adds. DCO stands in for a contributor licence agreement, so this is the control behind the repository's provenance claim |
 | ~~`CodeQL`~~ | code-scanning default setup, via the `github-advanced-security` App | **Retired 20 August 2026 (SOL-153411) — no longer registered, and no longer produced.** Kept as a row because its `integration_id` is the one genuine exception in this table and someone will hit it again: it was pinned to app `57789`, **not** Actions (`15368`), and pinning it to `15368` left it permanently pending and blocked all merges. Replaced by `CodeQL gate` |
 | `CodeQL gate` | `codeql.yml` job `gate` | New CodeQL alerts at or above threshold, **and** the absence of a usable analysis — a missing, stale or errored one fails it rather than concluding `neutral`. Pin to Actions (`15368`) like every other workflow context here, **not** to app `57789`. Reports on fork pull requests, Dependabot pull requests and `merge_group` entries, which is the whole point of the migration. Verified green on PR #325 (same-repo) before registration, then on fork pull request #327 and on merge queue entry #326 after — all three shapes observed, not inferred. Registered 20 August 2026. Scope and limits: [Static analysis](#static-analysis) |
@@ -485,7 +486,7 @@ every open pull request with a context its branch cannot produce. This is the ru
 that would have caught the `Guardian scan` mistake.
 
 ⚠️ **`workflow-lint` is new and not yet in the ruleset.** It gates the workflow
-files themselves, with actionlint and zizmor. Register it under the rule above,
+files themselves, with actionlint and zizmor. Register it under the preceding rule,
 and read the context name off a real run rather than assuming it:
 
 ```bash
@@ -506,7 +507,7 @@ merge. If someone later adds a `paths:` filter to make it cheaper, this required
 context is what breaks. Condition inside the job, never in the trigger.
 
 ⚠️ **`Dependencies free of high advisories` is new and not yet in the ruleset.**
-Register it under the rule above — green on a real pull request first, and only
+Register it under the preceding rule — green on a real pull request first, and only
 after the pull request creating it has merged. Read the context name off a real
 run rather than assuming it; the job's `name:` is the context, with no
 `caller / inner` suffix, but assuming a name is what produced the `FOSSA Scan`
@@ -514,7 +515,7 @@ gap.
 
 Until it is registered it enforces nothing, which matters more here than for the
 other rows: it is the one control in this repository that *prevents* a vulnerable
-dependency from merging instead of finding one afterwards. The fork section below
+dependency from merging instead of finding one afterwards. The following fork section
 reads as if that prevention exists. It exists as a workflow; it becomes a gate
 when the context is registered.
 
@@ -525,7 +526,7 @@ Three properties to know before requiring it:
   no dependency changes and passes. So an advisory published tomorrow against a
   dependency already in the tree does not turn every open pull request red. That
   containment is what makes it safe to require, and it is why this job needs no
-  `paths:` filter and no condition — see the `workflow-lint` note above for what
+  `paths:` filter and no condition — see the earlier `workflow-lint` note for what
   a filter would cost.
 - **It blocks same-repo pull requests too, Dependabot's included.** This is a
   change in daily posture, not only a fork fix. `fossa-vuln` runs REPORT on a
@@ -547,7 +548,7 @@ judges it.
 That server-side evaluation is also where the App is *weaker* than what it
 replaced, and the two should be weighed together.
 
-Dependabot's pull requests pass `DCO`, but not for the reason the wording invites.
+Dependabot pull requests pass `DCO`, but not for the reason the wording invites.
 Its commits do carry a trailer — `Signed-off-by: dependabot[bot]
 <support@github.com>` on `20ddc122` in PR #289, where `DCO` reported `success`.
 That address matches neither the author
@@ -559,7 +560,7 @@ before reading the message. Dependabot cannot be made to emit a matching trailer
 
 The retired `.github/workflows/dco.yaml` exempted **one** bot, matched on an
 unforgeable login and reviewable in-repo. `dco2` exempts **every** bot-authored
-commit, and its whole config surface — `allowOverrideAction`,
+commit, and its whole configuration surface — `allowOverrideAction`,
 `allowRemediationCommits`, `require.members` — has no key to narrow or disable
 that. The swap bought server-side evaluation and widened the bot exemption; both
 are true.
@@ -579,7 +580,7 @@ retired workflow had no equivalent one-click path, so `.github/dco.yml` now sets
   residual insider risk is recorded as accepted in
   `docs/internal/threat-model.md`.
 
-The bot and merge exemptions above have no such switch; those stay accepted.
+The preceding bot and merge exemptions have no such switch; those stay accepted.
 
 *Require approval for all outside collaborators* is on (Settings → Actions →
 General; set 20 August 2026), so fork PR runs wait for a maintainer and their
@@ -597,7 +598,7 @@ Three more notes on the list:
   relative to the base branch) and in REPORT, not BLOCK. So the PR surfaces new
   findings without blocking on them; the hard gate is on push to `main` and at the
   release tag. Do not read a green PR as a clean full scan. On a fork pull request
-  the scan does not run at all — see the fork section below.
+  the scan does not run at all — see the following fork section.
 - `CodeQL gate` blocks a pull request that introduces a new alert, but only above a
   severity floor and only for findings new relative to `main`. Read
   [Static analysis](#static-analysis) before quoting it as a control, and do not swap
@@ -648,7 +649,7 @@ read this half as closed only from that point on. Four caveats on how far to rea
 a green verdict:
 
 - **It is registered as required or it is nothing.** See the warning in the
-  required-checks section above. As of this writing it is not.
+  preceding required-checks section. As of this writing it is not.
 - **It reads the diff, not the tree.** It catches a dependency the pull request
   *adds* that is already known-bad. It does not catch an advisory published
   tomorrow against a dependency already in `go.mod` — that stays with the scan on
@@ -811,8 +812,8 @@ advisories` reported `success` on PR #327, so the read-only-token concern above 
 settled in practice as well as in principle. It is still unregistered as a required
 context, which is a separate decision from whether it works.
 
-**A third problem, and this one we create deliberately.** The GitHub Actions
-Permissions section below tells you to require approval for all outside
+**A third problem, and this one we create deliberately.** The following GitHub Actions
+Permissions section tells you to require approval for all outside
 collaborators. That holds the entire workflow run, not just one job, until a
 maintainer approves it.
 
@@ -828,7 +829,7 @@ contribution gets triaged as a CI outage. Two things follow:
 
 - Watch the Actions tab for runs awaiting approval, not just the pull request page.
 - Tell the contributor you are waiting on an approval click, rather than leaving
-  them looking at a grey check. `CONTRIBUTING.md` warns them this will happen, so
+  them looking at a gray check. `CONTRIBUTING.md` warns them this will happen, so
   you are confirming something they were told, not explaining a surprise.
 
 ⚠️ **Nothing notifies you that an approval is pending.** GitHub sends no dedicated
@@ -995,7 +996,7 @@ Navigate to: **Settings → Actions → General → Workflow permissions**
   (SOL-152959). The old "Read and write" default was never actually needed —
   every job that writes (`release.yml`'s `release`/`build-docker`/`build-binaries`
   jobs) already declares its own explicit `contents: write` /
-  `packages: write` / etc., which overrides the repo default regardless of what
+  `packages: write`, and so on, which overrides the repo default regardless of what
   it is. `make check` passes on this change; the release path itself is only
   exercised by an actual tag push, which has not happened since — watch the
   next one.
@@ -1007,7 +1008,7 @@ Navigate to: **Settings → Actions → General → Workflow permissions**
   The exposure was not a fork contributor. On a public repo a fork PR's
   `GITHUB_TOKEN` is read-only. It was a workflow running on a branch *inside* this
   repository, and this repository allows all actions with no SHA pinning required
-  (see "Fork pull request workflows" below), so a compromised third-party action
+  (see the following "Fork pull request workflows"), so a compromised third-party action
   would have inherited that ability. Nothing here needed the setting: Renovate opens
   PRs with its own GitHub App installation token, and no workflow in this
   repository opens or approves PRs.
@@ -1078,19 +1079,18 @@ writing; re-check, do not assume.
 - ✅ All secrets removed from git history (`git log --all -S "password"`)
 - ✅ `.gitignore` properly configured (`.env`, `broker-config.yaml`)
 - ✅ No sensitive data in issues or PRs
-- ✅ **Required status checks corrected** per the Branch Protection section above
-  — this document corrected 2026-08-17 (SOL-153190) to match the live ruleset,
-  which was itself updated 2026-08-12, and again 2026-08-20 for the merge queue and
-  the CodeQL migration. The `main-protection` ruleset now requires
-  all fourteen registered contexts in the table above, including `Guardian scan gate`
-  (from `guardian-scan.yaml`) in place of the retired `FOSSA Scan` / `FOSSA Scan /
-  SCA Scan` contexts, with a **merge queue** on `main`,
-  `strict_required_status_checks_policy: false` (superseded by the queue — see
-  [Merge queue](#merge-queue)) and an
-  **empty bypass-actor list** — no admin override exists. Re-verify against the
-  live ruleset rather than trusting this line. The list-rulesets endpoint
-  returns only `id`/`name` — no embedded rule detail — so resolving by name
-  needs two calls, not one:
+- ✅ **Required status checks corrected** per the preceding Branch Protection
+  section — this document corrected 2026-08-17 (SOL-153190) to match the live
+  ruleset, which was itself updated 2026-08-12, and again 2026-08-20 for the
+  merge queue and the CodeQL migration. The `main-protection` ruleset now
+  requires all fourteen registered contexts in the preceding table, including
+  `Guardian scan gate` (from `guardian-scan.yaml`) in place of the retired
+  `FOSSA Scan` / `FOSSA Scan / SCA Scan` contexts, with a **merge queue** on
+  `main`, `strict_required_status_checks_policy: false` (superseded by the
+  queue — see [Merge queue](#merge-queue)) and an **empty bypass-actor list**
+  — no admin override exists. Re-verify against the live ruleset rather than
+  trusting this line. The list-rulesets endpoint returns only `id`/`name` —
+  no embedded rule detail — so resolving by name needs two calls, not one:
   ```bash
   RULESET_ID=$(gh api repos/OWNER/REPO/rulesets --jq '.[] | select(.name=="main-protection") | .id')
   gh api "repos/OWNER/REPO/rulesets/$RULESET_ID" \
@@ -1112,7 +1112,7 @@ writing; re-check, do not assume.
   > missing analysis rather than concluding `neutral` — so that exception retires
   > with the migration; see [Static analysis](#static-analysis). A scan outage today blocks everyone, which is what makes the "Who
   > picks up a red supply-chain scan on `main`" gap earlier in the Branch
-  > Protection section (above) worth reading, not less.
+  > Protection section worth reading, not less.
   >
   > Note that the SHA pin buys less than it looks like: `guardian-scan` pins the
   > `SolaceDev/solace-public-workflows` actions, but those actions run container
@@ -1239,7 +1239,7 @@ If you want to host documentation via GitHub Pages:
 - Branch: `gh-pages` or `main`
 - Folder: `/docs` or `/ (root)`
 
-**Not required for this project** - README.md and docs/ folder are sufficient.
+**Not required for this project** — README.md and docs/ folder are sufficient.
 
 ---
 
@@ -1255,7 +1255,7 @@ Rulesets are the mechanism this repository already uses. Three are active:
 | `Copilot review for default branch` | Requests a Copilot review on PRs to `main`. **Also blocks force pushes and deletions**, so retiring it drops a second layer of that protection. |
 | `Code Quality Copilot review for default branch` | Copilot review including drafts and on every push |
 
-Configure `main-protection` per the Branch Protection section above. That section
+Configure `main-protection` per the preceding Branch Protection section. That section
 is the single source for the required-check names; do not maintain a second copy
 here.
 
@@ -1272,12 +1272,12 @@ After repository is made public:
 - [ ] Verify SECURITY.md appears in Security tab
 - [ ] Submit to Go package indexes (if applicable)
 - [ ] Confirm the project's Solace Community category is live, then announce there
-- [ ] Share on relevant channels (Twitter, LinkedIn, etc.)
+- [ ] Share on relevant channels (Twitter, LinkedIn, and so on)
 - [ ] Add to MCP server registry (if one exists)
 
 ---
 
-## Monitoring & Maintenance
+## Monitoring and Maintenance
 
 **Weekly:**
 - Review open issues and PRs (target <7 days for first response)
