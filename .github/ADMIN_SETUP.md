@@ -111,30 +111,32 @@ gh api repos/OWNER/REPO --jq '.security_and_analysis'
 | Secret scanning push protection | On | None |
 | Secret scanning validity checks | On | None |
 | Secret scanning non-provider patterns | On | None |
-| Code scanning (CodeQL) | On — **default setup**, languages `actions` and `go` | **Disable default setup**, then swap the required context — see below |
+| Code scanning (CodeQL) | On — **advanced setup** (`.github/workflows/codeql.yml`), languages `actions` and `go`. Default setup retired 20 August 2026 | **Register `CodeQL gate`** as a required check once `codeql.yml` is on `main` — see below |
 
 Both secret-scanning settings are already on, so there is nothing to enable here.
 Confirm rather than change: alerts find credentials already committed, push
 protection rejects the next one before it lands, and losing either is a
 regression. Both stay free on public repositories.
 
-⚠️ **CodeQL is mid-migration from default setup to advanced setup (SOL-153411).**
-`.github/workflows/codeql.yml` and its `CodeQL gate` job are in the repository; the
-two remaining steps are admin actions, and their **order is load-bearing**.
-
-Default setup and advanced setup cannot both be active, so until step 1 happens
-there are two configurations competing and the required `CodeQL` context is still
-the one being produced.
+**CodeQL runs on advanced setup** — `.github/workflows/codeql.yml`, with the
+verdict in the `CodeQL gate` job. Default setup was retired under SOL-153411 on
+20 August 2026 because it scanned no fork pull request, no Dependabot pull
+request and no merge queue entry.
 
 ```bash
-# Before: the configuration this migration replaces.
-gh api repos/OWNER/REPO/code-scanning/default-setup
-# state: configured  languages: [actions, go]  query_suite: default
-# threat_model: remote  schedule: weekly  runner_type: standard
+gh api repos/OWNER/REPO/code-scanning/default-setup --jq '.state'
+# not-configured   <- advanced setup is the only configuration; see below for why
 ```
 
-⚠️ **`codeql.yml` cannot be green until step 2 happens, and that is not a bug in
-it.** GitHub refuses the upload outright while both configurations are live:
+⚠️ **One step remains: register `CodeQL gate` as a required status check** on
+ruleset `main-protection` (13 → 14 contexts). Until that lands, CodeQL scans and
+reports but does not block. Do it only once `codeql.yml` is on `main` — see
+"Order matters" below for why the sequence is not free-form.
+
+### Why the two setups cannot overlap, and what that forces
+
+Default and advanced setup cannot both be active, and GitHub enforces that at
+upload-processing time rather than by ignoring one:
 
 ```
 ##[error]Code Scanning could not process the submitted SARIF file:
@@ -142,32 +144,89 @@ CodeQL analyses from advanced configurations cannot be processed when
 the default setup is enabled
 ```
 
-Observed on PR #325, 19 August 2026. The analysis itself ran and uploaded fine;
-only the *processing* is refused. So "wait for the workflow to be green, then
-disable default setup" is circular — expect `Analyze (...)` and `CodeQL gate` to
-be red on the pull request that introduces them, and read that red as the
-coexistence rule, not as a broken workflow.
+Observed on PR #325, 19 August 2026. The analysis ran and uploaded fine; only the
+*processing* was refused. Two consequences, both of which invalidate the obvious
+migration order:
 
-That also rules out the tidy "add the new context, confirm it reports, then
-remove the old one" order: `CodeQL gate` cannot report a pass while `CodeQL`'s
-producer is still enabled. One of the two has to be uncovered briefly, and the
-choice is which:
+- **"Wait for the workflow to be green, then disable default setup" is circular.**
+  It cannot be green until default setup is off.
+- **"Add the new context, confirm it reports, then remove the old one" is also
+  impossible.** `CodeQL gate` cannot report a pass while `CodeQL`'s producer is
+  still enabled.
 
-1. **Capture the rollback**, then **remove `CodeQL`/`57789`** from ruleset
-   `main-protection` (14 → 13 contexts). CodeQL stops *blocking* here, but keeps
-   *scanning* — default setup is still on, and merges are not affected.
-2. **Disable default setup**: **Settings → Code security → "CodeQL analysis" row
-   → "Switch to advanced" → "Disable CodeQL"**. Advanced setup's uploads start
-   being processed from this point.
-3. **Confirm `CodeQL gate` is green** on `main` and on a live pull request.
-4. **Add `CodeQL gate`** to the ruleset (13 → 14, net count unchanged).
+So one of the two has to be uncovered briefly, and the choice is which.
 
-Between steps 1 and 4 CodeQL is scanning but not blocking. That is the cheaper of
-the two exposures: doing it the other way round — disabling default setup first —
-stops the required `CodeQL` context from being produced at all, which blocks
-**every** merge in the repository until step 4 lands. A short unenforced window
-beats a repository-wide merge freeze, and there are **zero open alerts** to slip
-through it.
+**Remove the required context first.** That leaves CodeQL **scanning but not
+blocking** for a bounded window — an exposure whose size you can see and whose
+mechanism does not depend on anything uncertain.
+
+Be careful about the reason, because the tempting version of it is wrong.
+Disabling default setup first does **not** stop the `CodeQL` context from being
+produced: advanced setup produces a `CodeQL` check run from the same
+`github-advanced-security` app (`57789`) once its upload is processed. Verified
+here on 20 August 2026, on PR #325's head after default setup was already off:
+
+```bash
+gh api repos/OWNER/REPO/commits/<sha>/check-runs --jq '.check_runs[].name'
+# CodeQL gate      app=15368 (github-actions)
+# Analyze (go)     app=15368
+# Analyze (actions) app=15368
+# CodeQL           app=57789 (github-advanced-security)   <- still produced
+```
+
+So the real exposure of the reverse order is narrower than a permanent freeze: a
+re-run gap on commits whose analysis predates the switch, not a guaranteed
+repository-wide block. The order above is still the right one, but for a
+different reason than "the old context disappears" — it is that it does not
+**depend** on that check-run name continuing to match in this repository, where
+the other order does. Prefer the sequence whose correctness you do not have to
+verify against an app's naming behaviour on a `bypass_actors: []` ruleset.
+
+⚠️ **Do not conclude from the above that `CodeQL`/`57789` could simply have stayed
+required.** It is pull-request-scoped: it does not report on a `merge_group` event
+(`github/codeql-action#1537`), so requiring it would leave every merge queue entry
+hanging — the exact failure SOL-152974 needs avoided. `CodeQL gate` exists because
+it reports on all three of pull requests, fork pull requests and merge queue
+entries.
+
+### Order matters — what was actually done, 20 August 2026
+
+Recorded because the sequence is the only part of this that is easy to get wrong,
+and because the ticket's own prescribed order could not work:
+
+1. **Captured the ruleset JSON as the rollback**, then removed `CodeQL`/`57789`
+   from `main-protection` (14 → 13). CodeQL stopped blocking; default setup was
+   still on, so it kept scanning.
+2. **Disabled default setup** (`PATCH /code-scanning/default-setup`,
+   `state=not-configured`; equivalently **Settings → Code security → "CodeQL
+   analysis" → "Switch to advanced" → "Disable CodeQL"**).
+3. **Re-ran PR #325's CodeQL workflow** and confirmed all three checks green —
+   `Analyze (actions)`, `Analyze (go)`, `CodeQL gate`. This is the live-pull-request
+   verification, done *before* the context became required rather than after.
+4. **Merge `codeql.yml` to `main`.**
+5. **Add `CodeQL gate`** to the ruleset (13 → 14, net count unchanged).
+
+⚠️ **Do not register `CodeQL gate` before step 4.** Any open pull request whose
+branch predates `codeql.yml` will not run the workflow at all, so the context
+never reports and the pull request cannot merge — the same never-reports trap
+`workflow-lint.yaml`'s header comment dissects. `strict_required_status_checks_policy`
+is `true`, so those branches must update to `main` anyway, which brings the
+workflow with it.
+
+```bash
+# Rollback capture, before touching anything.
+gh api repos/OWNER/REPO/rulesets/13942241 > /tmp/ruleset-13942241-rollback.json
+
+# Verify the live list, on the day it changes.
+gh api repos/OWNER/REPO/rulesets/13942241 \
+  --jq '.rules[] | select(.type=="required_status_checks")
+        | .parameters.required_status_checks[] | "\(.context) \(.integration_id // "")"'
+```
+
+Reverting is a settings toggle plus the rollback file: re-enable default setup
+(`state=configured`, languages `actions` and `go`) and re-add `CodeQL`/`57789`.
+Migrating at **zero open alerts** is what made all of this cheap — there was no
+alert continuity to preserve.
 
 ```bash
 # Rollback capture, before touching anything.
@@ -221,7 +280,7 @@ run?" can be answered without opening a workflow file.
 | Tool | Covers | Config | Blocking? |
 |------|--------|--------|-----------|
 | golangci-lint | Go static analysis. Eight linters: `errcheck`, `staticcheck`, `gosec`, `govet`, `revive`, `bodyclose`, `ineffassign`, `noctx`. `gosec` carries the security patterns (`G706` excluded pending a gosec release) | `.golangci.yml` | **Yes** — required check `lint` |
-| CodeQL | SAST over Go and GitHub Actions workflows. `default` query suite, `remote` threat model, buildless Go extraction (`build-mode: none`), weekly schedule plus every push, **every** pull request (fork and Dependabot included) and every merge queue entry | `.github/workflows/codeql.yml` (advanced setup), verdict in `.github/scripts/codeql-gate.sh` | **Yes** — required check `CodeQL gate`, within the two limits below |
+| CodeQL | SAST over Go and GitHub Actions workflows. `default` query suite, `remote` threat model, `build-mode: autobuild` for Go and `none` for actions (what default setup used — read from its own `environment`, not inferred from runtime), weekly schedule plus every push, **every** pull request (fork and Dependabot included) and every merge queue entry | `.github/workflows/codeql.yml` (advanced setup), verdict in `.github/scripts/codeql-gate.sh` | **Scanning and reporting, not yet blocking** — `CodeQL gate` is pending registration; once registered it blocks within the two limits below |
 | FOSSA SCA | Third-party dependency licences and known vulnerabilities | `.github/workflow-config.json`, run from `guardian-scan.yaml` | **Detection, not prevention.** `Guardian scan gate` is required, but on a pull request FOSSA runs in diff mode and REPORT; the hard gate is on push to `main` and at the release tag |
 | Dependency Review | A pull request *introducing* a dependency with a known high or critical advisory | `ci-pr.yaml` job `dependency_review` | Not yet a required check — see [Required status checks](#required-status-checks) |
 
@@ -320,11 +379,16 @@ review.
 ### Required status checks
 
 **Require branches to be up to date before merging** is on, and the context list
-is applied. Sixteen contexts are documented below; **fourteen of them are
-registered** in the ruleset. The two that are not carry **Not yet registered** in
+is applied. Sixteen contexts are documented below; **thirteen of them are
+registered** in the ruleset. The three that are not carry **Not yet registered** in
 their own row — they are listed here because they run on every pull request and are
 candidates for registration, not because they gate anything today. This table is the
 single authoritative copy of both sets.
+
+The count dropped from fourteen to thirteen on 20 August 2026 when `CodeQL` was
+removed as part of the advanced-setup migration (SOL-153411). Registering
+`CodeQL gate` returns it to fourteen — see [Code Security](#code-security) for why
+the removal had to come first.
 
 Read the live list rather than trusting the table:
 
@@ -351,8 +415,8 @@ gh api repos/OWNER/REPO/rulesets/13942241 \
 | `Commit identity routable` | `ci-pr.yaml` job `identity` | Every commit the PR adds using a routable author and committer address, so a machine hostname does not publish permanently with the history. Pinned to Actions (`15368`), not to the `dco2` App — see below |
 | `workflow-lint` | `workflow-lint.yaml` job `workflow-lint` | Every file under `.github/workflows/` passing actionlint (correctness, plus shellcheck over `run:` blocks) and zizmor (workflow security, including SHA pinning via `unpinned-uses`), so workflow security is enforced by a tool rather than argued in a code comment. **Not yet registered** — see below |
 | `DCO` | the CNCF `dco2` GitHub App | a `Signed-off-by` trailer on every commit the pull request adds. DCO stands in for a contributor licence agreement, so this is the control behind the repository's provenance claim |
-| `CodeQL` | code-scanning default setup, via the `github-advanced-security` App | **Being replaced by `CodeQL gate` — SOL-153411.** New CodeQL alerts in the code a pull request changes. Pinned to app `57789`, **not** Actions (`15368`) — every other Actions context here is `15368`, and pinning this one there leaves it permanently pending, blocking all merges. Registered 19 August 2026. Remove *after* `CodeQL gate` is added and seen reporting; see the migration steps under [Code Security](#code-security) |
-| `CodeQL gate` | `codeql.yml` job `gate` | New CodeQL alerts at or above threshold, **and** the absence of a usable analysis. Pinned to Actions (`15368`) like every other workflow context here — not to app `57789`. Reports on fork pull requests, Dependabot pull requests and `merge_group` entries, which is the whole point of the migration. **Not yet registered** — see the migration steps under [Code Security](#code-security). Scope and limits: [Static analysis](#static-analysis) |
+| ~~`CodeQL`~~ | code-scanning default setup, via the `github-advanced-security` App | **Retired 20 August 2026 (SOL-153411) — no longer registered, and no longer produced.** Kept as a row because its `integration_id` is the one genuine exception in this table and someone will hit it again: it was pinned to app `57789`, **not** Actions (`15368`), and pinning it to `15368` left it permanently pending and blocked all merges. Replaced by `CodeQL gate` |
+| `CodeQL gate` | `codeql.yml` job `gate` | New CodeQL alerts at or above threshold, **and** the absence of a usable analysis — a missing, stale or errored one fails it rather than concluding `neutral`. Pin to Actions (`15368`) like every other workflow context here, **not** to app `57789`. Reports on fork pull requests, Dependabot pull requests and `merge_group` entries, which is the whole point of the migration; verified green on PR #325 before registration. **Not yet registered** — see [Code Security](#code-security). Scope and limits: [Static analysis](#static-analysis) |
 
 ⚠️ **Require `Guardian scan gate`, and nothing FOSSA-shaped.** The old
 `FOSSA Scan` and `FOSSA Scan / SCA Scan` contexts no longer exist — the
@@ -672,8 +736,16 @@ fine: `ci-pr.yaml` gives that job only `contents: read` and it reads no secrets.
 outside evidence rather than reasoning: on 19 August 2026, fork pull requests
 against `cli/cli` (advanced setup, the same `pull_request` trigger shape as
 `codeql.yml`) carried real verdicts from both `Analyze` jobs, so the SARIF upload
-is not blocked by the read-only-token downgrade. The `CodeQL` context it replaces
-was the opposite — default setup analyzes no fork ref at all. Copilot review is
+is not blocked by the read-only-token downgrade. Three Dependabot pull requests
+there behaved the same way. The `CodeQL` context it replaces was the opposite —
+default setup analyzes no fork ref at all.
+
+⚠️ Still worth doing for real. That is another repository's configuration, and the
+one thing not yet observed here is a **fork** pull request against *this* repo —
+it needs a fork plus maintainer approval of the run (SOL-152960). The same-repo
+half is confirmed locally: `CodeQL gate` went green on PR #325 on 20 August 2026,
+crediting only the two analyses whose `commit_sha` matched the commit under test
+out of six present on the ref. Copilot review is
 inconsistent even on same-repo pull requests, so do not count on it. Verify
 `Guardian scan gate`, `CHANGELOG updated`, `CodeQL gate`, `Dependencies free of
 high advisories`, and the `lint` job's annotation behavior on a read-only token
@@ -813,7 +885,7 @@ writing; re-check, do not assume.
 - ✅ **Required status checks corrected** per the Branch Protection section above
   — this document corrected 2026-08-17 (SOL-153190) to match the live ruleset,
   which was itself updated 2026-08-12. The `main-protection` ruleset now requires
-  all fourteen registered contexts in the table above, including `Guardian scan gate`
+  all thirteen registered contexts in the table above, including `Guardian scan gate`
   (from `guardian-scan.yaml`) in place of the retired `FOSSA Scan` / `FOSSA Scan /
   SCA Scan` contexts, with `strict_required_status_checks_policy: true` and an
   **empty bypass-actor list** — no admin override exists. Re-verify against the
@@ -834,7 +906,7 @@ writing; re-check, do not assume.
   > the scan itself was broken would have turned "scanning is broken" into "no
   > pull request can merge." That precondition was met before registration.
   > **There is no "branch protection holds zero required contexts" state
-  > anymore** — every one of the fourteen contexts, `Guardian scan gate`
+  > anymore** — every one of the thirteen contexts, `Guardian scan gate`
   > included, now blocks a merge if it is red or never reports, with nothing to
   > bypass it. One exception, added later: `CodeQL` can conclude `neutral`, which
   > GitHub counts as passing. Its replacement `CodeQL gate` cannot — it fails on a
