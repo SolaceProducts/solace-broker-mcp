@@ -252,7 +252,7 @@ jobs:
       # Attested per matrix leg so the digest is bound before the archive
       # round-trips through upload-artifact, and a failure surfaces pre-publish.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: ${{ env.ARCHIVE }}
 
@@ -411,7 +411,7 @@ jobs:
       # One attestation covers the whole multi-arch index (every tag pushed
       # above); push-to-registry stores a copy beside the image for cosign.
       - name: Attest image provenance
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/solaceproducts/solace-broker-mcp
           subject-digest: ${{ steps.build.outputs.digest }}
