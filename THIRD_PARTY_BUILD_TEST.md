@@ -12,7 +12,7 @@ itself**, and which are **not compiled into the shipped binary**.
 > Legal checklist, which asks for a "list of all used 3rd party products used at
 > build and test time" alongside the release list.
 
-**Generated** 2026-08-19; the GitHub Actions section was refreshed 2026-08-07
+**Generated** 2026-08-20; the GitHub Actions section was refreshed 2026-08-07
 when Guardian enrollment re-pinned every action to a commit SHA, and again
 2026-08-14 when Dependabot's `github-actions` group update moved the five
 `solace-public-workflows` actions to a newer commit on the same branch. Every
@@ -164,7 +164,7 @@ below spells out.
 
 | Action | Pinned ref | Release | License | License text |
 |---|---|---|---|---|
-| `actions/attest-build-provenance` | `0f67c3f` | v4.1.1 | MIT | [license](https://github.com/actions/attest-build-provenance/blob/v4.1.1/LICENSE) |
+| `actions/attest-build-provenance` | `4d10147` | v4.2.2 | MIT | [license](https://github.com/actions/attest-build-provenance/blob/v4.2.2/LICENSE) |
 | `actions/checkout` | `3d3c42e` | v7.0.1 | MIT | [license](https://github.com/actions/checkout/blob/v7.0.1/LICENSE) |
 | `actions/dependency-review-action` | `a1d282b` | v5.0.0 | MIT | [license](https://github.com/actions/dependency-review-action/blob/v5.0.0/LICENSE) |
 | `actions/download-artifact` | `3e5f45b` | v8.0.1 | MIT | [license](https://github.com/actions/download-artifact/blob/v8.0.1/LICENSE) |
@@ -195,11 +195,11 @@ All five come from one repository, pinned to a single commit.
 
 | Action | Ref | Owner |
 |---|---|---|
-| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `63228a0` | Solace |
-| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `63228a0` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-db-sync` | `63228a0` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `63228a0` | Solace |
-| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `63228a0` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `3e95ae9` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `3e95ae9` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-db-sync` | `3e95ae9` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `3e95ae9` | Solace |
+| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `3e95ae9` | Solace |
 
 `63228a0` is a branch commit, not a tag, so there is no release to record beside
 it. The repository itself is Apache-2.0. Re-pinned 2026-08-14 by Dependabot's
