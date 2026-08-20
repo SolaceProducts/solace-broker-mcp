@@ -130,8 +130,9 @@ gh api repos/OWNER/REPO/code-scanning/default-setup --jq '.state'
 
 ✅ **`CodeQL gate` is registered** on ruleset `main-protection` (13 → 14 contexts),
 20 August 2026, so CodeQL now blocks rather than only reporting. The migration is
-complete; the ordering notes below are kept because the sequence is the part that
-is easy to get wrong on the next repository, not because anything is outstanding.
+complete; the following ordering notes are kept because the sequence is the part
+that is easy to get wrong on the next repository, not because anything is
+outstanding.
 
 ### Why the two setups cannot overlap, and what that forces
 
@@ -176,13 +177,13 @@ gh api repos/OWNER/REPO/commits/<sha>/check-runs --jq '.check_runs[].name'
 
 So the real exposure of the reverse order is narrower than a permanent freeze: a
 re-run gap on commits whose analysis predates the switch, not a guaranteed
-repository-wide block. The order above is still the right one, but for a
+repository-wide block. The order described earlier is still the right one, but for a
 different reason than "the old context disappears" — it is that it does not
 **depend** on that check-run name continuing to match in this repository, where
 the other order does. Prefer the sequence whose correctness you do not have to
 verify against an app's naming behaviour on a `bypass_actors: []` ruleset.
 
-⚠️ **Do not conclude from the above that `CodeQL`/`57789` could simply have stayed
+⚠️ **Do not conclude from this that `CodeQL`/`57789` could simply have stayed
 required.** It is pull-request-scoped: it does not report on a `merge_group` event
 (`github/codeql-action#1537`), so requiring it would leave every merge queue entry
 hanging — the exact failure SOL-152974 needs avoided. `CodeQL gate` exists because
@@ -312,7 +313,7 @@ input — there is no scenario where turning it off is the right call, so changi
 takes a commit a reviewer can see. The ruleset rule that would enforce a threshold
 instead (`code_scanning`, "Require code scanning results") is deliberately not used:
 it blocks a pull request whose analysis never arrives, and it cannot express the
-new-findings-only scope below.
+new-findings-only scope described next.
 
 **2. New findings only.** An alert already open on `main` is pre-existing, so a pull
 request that *attempts and fails* to fix one still passes. The gate compares alert

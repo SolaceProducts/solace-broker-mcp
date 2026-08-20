@@ -199,7 +199,7 @@ or are left unchanged on update:
 ## Multi-Broker Configuration
 
 Configure multiple brokers under `brokers:`; the map key is the alias used as the
-`broker` parameter and in `list-brokers` output. Aliases must be 1–63 characters,
+`broker` parameter and in `list-brokers` output. Aliases must be 1-63 characters,
 letters/digits/hyphens only, starting and ending alphanumeric, and are compared
 case-insensitively.
 
