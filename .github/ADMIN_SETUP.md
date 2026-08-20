@@ -111,7 +111,7 @@ gh api repos/OWNER/REPO --jq '.security_and_analysis'
 | Secret scanning push protection | On | None |
 | Secret scanning validity checks | On | None |
 | Secret scanning non-provider patterns | On | None |
-| Code scanning (CodeQL) | On — **advanced setup** (`.github/workflows/codeql.yml`), languages `actions` and `go`. Default setup retired 20 August 2026 | **Register `CodeQL gate`** as a required check once `codeql.yml` is on `main` — see below |
+| Code scanning (CodeQL) | On — **advanced setup** (`.github/workflows/codeql.yml`), languages `actions` and `go`. Default setup retired 20 August 2026 | None — `CodeQL gate` registered as a required check 20 August 2026 |
 
 Both secret-scanning settings are already on, so there is nothing to enable here.
 Confirm rather than change: alerts find credentials already committed, push
@@ -128,10 +128,10 @@ gh api repos/OWNER/REPO/code-scanning/default-setup --jq '.state'
 # not-configured   <- advanced setup is the only configuration; see below for why
 ```
 
-⚠️ **One step remains: register `CodeQL gate` as a required status check** on
-ruleset `main-protection` (13 → 14 contexts). Until that lands, CodeQL scans and
-reports but does not block. Do it only once `codeql.yml` is on `main` — see
-"Order matters" below for why the sequence is not free-form.
+✅ **`CodeQL gate` is registered** on ruleset `main-protection` (13 → 14 contexts),
+20 August 2026, so CodeQL now blocks rather than only reporting. The migration is
+complete; the ordering notes below are kept because the sequence is the part that
+is easy to get wrong on the next repository, not because anything is outstanding.
 
 ### Why the two setups cannot overlap, and what that forces
 
@@ -203,15 +203,26 @@ and because the ticket's own prescribed order could not work:
 3. **Re-ran PR #325's CodeQL workflow** and confirmed all three checks green —
    `Analyze (actions)`, `Analyze (go)`, `CodeQL gate`. This is the live-pull-request
    verification, done *before* the context became required rather than after.
-4. **Merge `codeql.yml` to `main`.**
+4. **Merge `codeql.yml` to `main`.** Landed as PR #325.
 5. **Add `CodeQL gate`** to the ruleset (13 → 14, net count unchanged).
+
+All five steps completed 20 August 2026. `CodeQL gate` was subsequently observed
+green on a fork pull request (#327) and on a real merge queue entry (#326) — see
+[Merge queue](#merge-queue).
 
 ⚠️ **Do not register `CodeQL gate` before step 4.** Any open pull request whose
 branch predates `codeql.yml` will not run the workflow at all, so the context
 never reports and the pull request cannot merge — the same never-reports trap
-`workflow-lint.yaml`'s header comment dissects. `strict_required_status_checks_policy`
-is `true`, so those branches must update to `main` anyway, which brings the
-workflow with it.
+`workflow-lint.yaml`'s header comment dissects.
+
+This trap got *sharper* on the same day, and the mitigation that used to cover it
+is gone. `strict_required_status_checks_policy` was `true` at the time, so a stale
+branch had to update to `main` before merging and that update brought the workflow
+with it. Adopting the merge queue turned that flag off (SOL-152974), so a branch
+opened before a new required workflow lands is no longer forced to pick it up. The
+rule is now load-bearing on its own: **merge the workflow first, register the
+context second, and expect open pull requests to need a rebase** rather than
+assuming the platform will drag them forward.
 
 ```bash
 # Rollback capture, before touching anything.
@@ -280,7 +291,7 @@ run?" can be answered without opening a workflow file.
 | Tool | Covers | Config | Blocking? |
 |------|--------|--------|-----------|
 | golangci-lint | Go static analysis. Eight linters: `errcheck`, `staticcheck`, `gosec`, `govet`, `revive`, `bodyclose`, `ineffassign`, `noctx`. `gosec` carries the security patterns (`G706` excluded pending a gosec release) | `.golangci.yml` | **Yes** — required check `lint` |
-| CodeQL | SAST over Go and GitHub Actions workflows. `default` query suite, `remote` threat model, `build-mode: autobuild` for Go and `none` for actions (what default setup used — read from its own `environment`, not inferred from runtime), weekly schedule plus every push, **every** pull request (fork and Dependabot included) and every merge queue entry | `.github/workflows/codeql.yml` (advanced setup), verdict in `.github/scripts/codeql-gate.sh` | **Scanning and reporting, not yet blocking** — `CodeQL gate` is pending registration; once registered it blocks within the two limits below |
+| CodeQL | SAST over Go and GitHub Actions workflows. `default` query suite, `remote` threat model, `build-mode: autobuild` for Go and `none` for actions (what default setup used — read from its own `environment`, not inferred from runtime), weekly schedule plus every push, **every** pull request (fork and Dependabot included) and every merge queue entry | `.github/workflows/codeql.yml` (advanced setup), verdict in `.github/scripts/codeql-gate.sh` | **Yes** — required check `CodeQL gate`, registered 20 August 2026, within the two limits below |
 | FOSSA SCA | Third-party dependency licences and known vulnerabilities | `.github/workflow-config.json`, run from `guardian-scan.yaml` | **Detection, not prevention.** `Guardian scan gate` is required, but on a pull request FOSSA runs in diff mode and REPORT; the hard gate is on push to `main` and at the release tag |
 | Dependency Review | A pull request *introducing* a dependency with a known high or critical advisory | `ci-pr.yaml` job `dependency_review` | Not yet a required check — see [Required status checks](#required-status-checks) |
 
@@ -374,21 +385,25 @@ review.
 |---------|--------|----------|
 | Restrict deletions | ✅ On | Set |
 | Block force pushes | ✅ On | Set |
+| Require merge queue | ✅ On | Set — see [Merge queue](#merge-queue) |
 | Bypass list empty, so rules apply to admins too | ✅ Empty | Empty |
 
 ### Required status checks
 
-**Require branches to be up to date before merging** is on, and the context list
-is applied. Sixteen contexts are documented below; **thirteen of them are
-registered** in the ruleset. The three that are not carry **Not yet registered** in
-their own row — they are listed here because they run on every pull request and are
-candidates for registration, not because they gate anything today. This table is the
-single authoritative copy of both sets.
+**Require branches to be up to date before merging** is **off** as of 20 August
+2026 — the merge queue supersedes it, and leaving both on is redundant friction.
+See [Merge queue](#merge-queue) for why that is safe rather than a loosening.
+
+Sixteen contexts are documented below; **fourteen of them are registered** in the
+ruleset. The two that are not carry **Not yet registered** in their own row — they
+are listed here because they run on every pull request and are candidates for
+registration, not because they gate anything today. This table is the single
+authoritative copy of both sets.
 
 The count dropped from fourteen to thirteen on 20 August 2026 when `CodeQL` was
-removed as part of the advanced-setup migration (SOL-153411). Registering
-`CodeQL gate` returns it to fourteen — see [Code Security](#code-security) for why
-the removal had to come first.
+removed as part of the advanced-setup migration (SOL-153411), and returned to
+fourteen the same day when `CodeQL gate` was registered — see
+[Code Security](#security-settings) for why the removal had to come first.
 
 Read the live list rather than trusting the table:
 
@@ -416,21 +431,29 @@ gh api repos/OWNER/REPO/rulesets/13942241 \
 | `workflow-lint` | `workflow-lint.yaml` job `workflow-lint` | Every file under `.github/workflows/` passing actionlint (correctness, plus shellcheck over `run:` blocks) and zizmor (workflow security, including SHA pinning via `unpinned-uses`), so workflow security is enforced by a tool rather than argued in a code comment. **Not yet registered** — see below |
 | `DCO` | the CNCF `dco2` GitHub App | a `Signed-off-by` trailer on every commit the pull request adds. DCO stands in for a contributor licence agreement, so this is the control behind the repository's provenance claim |
 | ~~`CodeQL`~~ | code-scanning default setup, via the `github-advanced-security` App | **Retired 20 August 2026 (SOL-153411) — no longer registered, and no longer produced.** Kept as a row because its `integration_id` is the one genuine exception in this table and someone will hit it again: it was pinned to app `57789`, **not** Actions (`15368`), and pinning it to `15368` left it permanently pending and blocked all merges. Replaced by `CodeQL gate` |
-| `CodeQL gate` | `codeql.yml` job `gate` | New CodeQL alerts at or above threshold, **and** the absence of a usable analysis — a missing, stale or errored one fails it rather than concluding `neutral`. Pin to Actions (`15368`) like every other workflow context here, **not** to app `57789`. Reports on fork pull requests, Dependabot pull requests and `merge_group` entries, which is the whole point of the migration; verified green on PR #325 before registration. **Not yet registered** — see [Code Security](#code-security). Scope and limits: [Static analysis](#static-analysis) |
+| `CodeQL gate` | `codeql.yml` job `gate` | New CodeQL alerts at or above threshold, **and** the absence of a usable analysis — a missing, stale or errored one fails it rather than concluding `neutral`. Pin to Actions (`15368`) like every other workflow context here, **not** to app `57789`. Reports on fork pull requests, Dependabot pull requests and `merge_group` entries, which is the whole point of the migration. Verified green on PR #325 (same-repo) before registration, then on fork pull request #327 and on merge queue entry #326 after — all three shapes observed, not inferred. Registered 20 August 2026. Scope and limits: [Static analysis](#static-analysis) |
 
 ⚠️ **Require `Guardian scan gate`, and nothing FOSSA-shaped.** The old
 `FOSSA Scan` and `FOSSA Scan / SCA Scan` contexts no longer exist — the
 Vault-backed FOSSA jobs were removed from `ci-pr.yaml`, `build-and-test.yml`, and
 `fossa-scan.yaml` (deleted). Scanning now runs in `guardian-scan.yaml`, which
-triggers on `pull_request` and `push` directly, so its jobs surface under their
-plain names with no `caller / inner` suffix.
+triggers on `pull_request`, `push` and `merge_group` directly, so its jobs surface
+under their plain names with no `caller / inner` suffix.
 
 - **`Guardian scan gate` is the one to require.** `guardian-scan.yaml` job `gate`
   always reports. It passes on a scan success, fails on a scan failure, and passes
-  a fork PR's skip with a logged reason — re-deriving the fork condition itself and
-  **failing** a skip it cannot account for, so narrowing the scan jobs' `if` later
-  cannot quietly switch the gate off on same-repo pull requests. Same design as the
-  `SCA gate` it replaced.
+  an *accounted-for* skip with a logged reason — **failing** a skip it cannot
+  account for, so narrowing the scan jobs' `if` later cannot quietly switch the
+  gate off on same-repo pull requests. Same design as the `SCA gate` it replaced.
+
+  There are two accounted-for skips, not one: a fork pull request (no Environment
+  secrets) and a merge queue entry (scans already ran on the pull request; SOL-152974).
+  Both conditions come from the `setup` job's `is_fork` / `is_queue` outputs, which
+  the scan jobs' `if` and the gate both read — the gate does **not** re-derive them
+  independently, so the two cannot drift apart, but equally the gate's fail-closed
+  property protects only against a *third* unexplained skip. Verified live: the gate
+  returned `success` on merge queue entry #326 with all four scan jobs skipped, and
+  on fork pull request #327.
 - **Do not require the individual scan jobs.** `build`, `fossa-license`,
   `fossa-vuln`, `prisma`, and `guardian-gate` all skip on a fork PR (no Environment
   secrets); a skipped plain job counts as passing, and only `gate` fails closed on
@@ -558,9 +581,9 @@ retired workflow had no equivalent one-click path, so `.github/dco.yml` now sets
 
 The bot and merge exemptions above have no such switch; those stay accepted.
 
-If *Require approval for all outside collaborators* is on (Settings → Actions →
-General), fork PR runs wait for a maintainer and their checks read **pending**
-rather than failing; `pull_request_target` is not exempt. Pending fails closed, so
+*Require approval for all outside collaborators* is on (Settings → Actions →
+General; set 20 August 2026), so fork PR runs wait for a maintainer and their
+checks read **pending** rather than failing; `pull_request_target` is not exempt. Pending fails closed, so
 nothing slips through. The failure mode to avoid is reading that as a misconfigured
 list and dropping a DCO row. Approve the workflow run instead.
 
@@ -729,27 +752,35 @@ Also worth knowing: on a same-repo pull request FOSSA runs in diff mode and in
 REPORT (not BLOCK), so a green `Guardian scan gate` there is not a clean full scan
 — the hard gate is on push to `main` and at the release tag.
 
-Nobody has ever opened a fork pull request against this repository, so none of the
-above is observed on a real external contribution. `CHANGELOG updated` should be
-fine: `ci-pr.yaml` gives that job only `contents: read` and it reads no secrets.
-`CodeQL gate` should be fine on a fork ref, and this is the one item here with
-outside evidence rather than reasoning: on 19 August 2026, fork pull requests
+**Observed on a real fork pull request, 20 August 2026 (PR #327).** All fourteen
+required contexts reported `success` on a fork ref — `lint`, `build`, the five
+`e2e-*`, `Guardian scan gate`, `Third-party licenses current`, `Licence headers
+present`, `CHANGELOG updated`, `Commit identity routable`, `DCO` and `CodeQL gate`
+— with the four Guardian scan jobs and `Build image` skipped as designed, 30 check
+runs in total. `Dependencies free of high advisories` also reported `success`,
+which matters because closing the vulnerability half of the fork gap rests on it
+and it had until then only been reasoned about.
+
+⚠️ **What #327 did *not* exercise: the approval hold.** It was opened from a
+maintainer's own fork by an account with write access here, so the run started
+immediately. An *outside* collaborator's run waits for a human click (see
+below), and that path is still unobserved. Read #327 as proof the checks work on a
+fork ref, not as proof the approval flow does.
+
+The earlier outside evidence is kept because it is what the fork behaviour was
+predicted from, and the prediction held: on 19 August 2026, fork pull requests
 against `cli/cli` (advanced setup, the same `pull_request` trigger shape as
 `codeql.yml`) carried real verdicts from both `Analyze` jobs, so the SARIF upload
 is not blocked by the read-only-token downgrade. Three Dependabot pull requests
 there behaved the same way. The `CodeQL` context it replaces was the opposite —
 default setup analyzes no fork ref at all.
 
-⚠️ Still worth doing for real. That is another repository's configuration, and the
-one thing not yet observed here is a **fork** pull request against *this* repo —
-it needs a fork plus maintainer approval of the run (SOL-152960). The same-repo
-half is confirmed locally: `CodeQL gate` went green on PR #325 on 20 August 2026,
-crediting only the two analyses whose `commit_sha` matched the commit under test
-out of six present on the ref. Copilot review is
-inconsistent even on same-repo pull requests, so do not count on it. Verify
-`Guardian scan gate`, `CHANGELOG updated`, `CodeQL gate`, `Dependencies free of
-high advisories`, and the `lint` job's annotation behavior on a read-only token
-against a real fork pull request before treating any of them as a gate.
+Both halves are now confirmed here. Same-repo: `CodeQL gate` went green on PR #325
+on 20 August 2026, crediting only the two analyses whose `commit_sha` matched the
+commit under test out of six present on the ref. Fork ref: PR #327, same day, all
+fourteen contexts green (above). What remains untested is the approval hold on an
+*outside* collaborator (SOL-152960), not the checks themselves. Copilot review is
+inconsistent even on same-repo pull requests, so do not count on it.
 
 `Dependencies free of high advisories` is the one on that list whose fork
 behaviour is load-bearing rather than incidental, since closing the vulnerability
@@ -775,11 +806,10 @@ this control imaginary:
   packages`. `warn-only: true` on the same data exits 0, which is what rules out a
   configuration error dressed up as a finding.
 
-What remains unverified is only what no test can reach without a fork: no fork
-pull request has ever run in *this* repository, and the "require approval for
-outside collaborators" hold below means the first one's checks do not start until
-a maintainer clicks approve. Confirm the check reports on the first real fork pull
-request before registering the context.
+This was confirmed on a fork ref on 20 August 2026: `Dependencies free of high
+advisories` reported `success` on PR #327, so the read-only-token concern above is
+settled in practice as well as in principle. It is still unregistered as a required
+context, which is a separate decision from whether it works.
 
 **A third problem, and this one we create deliberately.** The GitHub Actions
 Permissions section below tells you to require approval for all outside
@@ -798,7 +828,27 @@ contribution gets triaged as a CI outage. Two things follow:
 
 - Watch the Actions tab for runs awaiting approval, not just the pull request page.
 - Tell the contributor you are waiting on an approval click, rather than leaving
-  them looking at a grey check.
+  them looking at a grey check. `CONTRIBUTING.md` warns them this will happen, so
+  you are confirming something they were told, not explaining a surprise.
+
+⚠️ **Nothing notifies you that an approval is pending.** GitHub sends no dedicated
+alert for a run awaiting approval — no email, no mention, nothing in the
+notification inbox that says "approve this run". The only thing that reaches a
+human is the ordinary review request generated by `.github/CODEOWNERS`
+(`* @SolaceProducts/dax-developers`), which fires because the pull request exists
+at all, not because a run is held. The banner offering "Approve and run" is visible
+only to someone who has already opened the pull request page.
+
+Two consequences, both easy to trip over:
+
+- **The CODEOWNERS catch-all is load-bearing for something other than review
+  coverage.** Narrowing it to specific paths would silently remove the only signal
+  that an external contribution is waiting. If it is ever narrowed, add a
+  deliberate notification path in the same change.
+- **A held run is invisible in aggregate.** There is no queue view of "runs
+  awaiting approval" across the repository; you find them one pull request at a
+  time, or by filtering the Actions tab. With option 3 above holding every push,
+  this is the failure mode that turns into a stale community pull request.
 
 This also constrains the required-check list. Every context you require is a
 context that reports only after a human approves the run, so requiring more of
@@ -808,6 +858,123 @@ Copying a community branch into this repository to test it is no longer necessar
 and is now the worse option: a same-repo branch is a trusted context, so doing it
 runs the contributor's code with this repository's secrets. Approve the fork run
 instead.
+
+### Merge queue
+
+Enabled on `main` 20 August 2026 under SOL-152974. Pull requests are no longer
+merged directly: the **Merge** button becomes **Merge when ready**, and GitHub
+builds `main`-plus-your-change on a throwaway `gh-readonly-queue/*` ref, runs the
+required checks against *that*, and merges only if they pass.
+
+**Where the queue page is.** GitHub gives it no top-level repository tab, so it is
+easy to lose. The URL is `/queue/<target branch>`:
+
+```
+https://github.com/OWNER/REPO/queue/main
+```
+
+Otherwise you reach it from a queued pull request's merge box. An empty queue still
+renders, so the URL is safe to bookmark.
+
+**Live configuration.** Read it rather than trusting the table:
+
+```bash
+gh api repos/OWNER/REPO/rulesets/13942241 \
+  --jq '.rules[] | select(.type=="merge_queue") | .parameters'
+```
+
+| Parameter | Value | Why |
+|-----------|-------|-----|
+| `merge_method` | `SQUASH` | The queue applies one method to everything, so per-pull-request choice is gone. `allowed_merge_methods` in the `pull_request` rule still lists all three, but on `main` only this one is reachable. Squash keeps `main` linear, which makes speculative rebuilds and any post-merge bisect tractable |
+| `max_entries_to_merge` | `1` | Serial merges keep blame unambiguous. At a few pull requests a day there is no throughput to win by batching |
+| `max_entries_to_build` | `1` | No speculative parallel builds. Raise this first if the queue ever backs up |
+| `min_entries_to_merge` | `1` | With 1, `min_entries_to_merge_wait_minutes` never engages, so latency stays flat |
+| `grouping_strategy` | `ALLGREEN` | A failing entry must not drag the entries behind it in with it |
+| `check_response_timeout_minutes` | `45` | **Derived, not guessed:** all seven `build-and-test.yml` jobs carry `timeout-minutes: 30`, so a job can legitimately run 30 minutes before Actions kills it. A queue timeout under that would abort entries whose jobs are still working. 45 leaves 15 minutes for runner queueing. Observed need is far lower — see below — so this is headroom against the job ceiling, not against measured runtime |
+
+**`strict_required_status_checks_policy` was turned off in the same change.** This
+is not a loosening. "Require branches to be up to date" was a proxy for "test the
+merge result"; the queue does that directly and more strictly, because it tests the
+actual merge commit rather than requiring the branch to have been rebased at some
+earlier point. Leaving both on means contributors rebase constantly for a guarantee
+the queue already provides. Note the side effect recorded under
+[Order matters](#order-matters--what-was-actually-done-20-august-2026): stale
+branches are no longer dragged forward, so registering a new required context now
+needs a deliberate rebase of open pull requests.
+
+**Verified on a real entry, 20 August 2026 (PR #326, Dependabot).** All fourteen
+required contexts reported on the `merge_group` event and the entry merged itself:
+
+| Result | Detail |
+|--------|--------|
+| Wall clock | 8 minutes, entry to merge |
+| Critical path | the five `e2e-*` jobs (last at 7 min) — **not** CodeQL, which finished at 1 min |
+| `DCO` | reported `success` on `merge_group`; the `dco2` App subscribes to the event. This was the one required context whose queue behaviour was disputed during review, on the theory that an App would not fire outside `pull_request` |
+| `Guardian scan gate` | `success` with all four scan jobs skipped, via the `is_queue` arm |
+| `CHANGELOG updated` | `success` — the changelog *step* is gated to `pull_request`, not the job, precisely so the required context still reports. Gating at job level would leave it missing and hang every entry until the 45-minute timeout |
+| `CodeQL gate` | `success` in `blocking` mode (`CODEQL_GATE_MODE` resolves to `blocking` on `merge_group`) |
+| Skipped, by design | `Build image`, `FOSSA licensing`, `FOSSA vulnerability`, `Guardian gate`, `Prisma scan` — exactly the set the `is_queue` gate suppresses, no more |
+| Cleanup | automatic; zero `gh-readonly-queue/*` refs and zero entries afterwards |
+
+The result worth keeping: **the tested SHA and the merged SHA were identical**
+(`0c57095`). The queue fast-forwards its build commit onto `main` rather than
+re-merging, so what passed the checks is bit-for-bit what landed. That is the
+guarantee the queue buys, and it is why turning off the up-to-date requirement is
+safe.
+
+⚠️ **A queue entry is a trusted context, and that is a security property of the
+`is_queue` skip — not just an optimisation.** GitHub builds the entry on a
+same-repo `gh-readonly-queue/*` ref, so a `merge_group` run is *not* subject to the
+fork downgrade: Environment secrets are available and `GITHUB_TOKEN` is not
+read-only. When a maintainer queues a **fork** pull request, that contributor's code
+therefore runs in a context where the `pull_request` protections no longer apply.
+
+What closes this today is that only one `merge_group`-triggered workflow references
+a secret at all — `guardian-scan.yaml`, whose `fossa-license` and `fossa-vuln` jobs
+carry `environment: guardian` and `secrets.FOSSA_API_KEY` — and both are gated
+`if: ${{ !fromJSON(needs.setup.outputs.is_fork) && !fromJSON(needs.setup.outputs.is_queue) }}`.
+The `is_queue` half was added to avoid re-scanning what the pull request already
+scanned, but it is *also* the control that keeps fork code away from that key.
+
+So: **do not make the Guardian scans run on merge queue entries.** "We should scan
+the merge result too" is a reasonable-sounding change that would reintroduce the
+exposure. If it is ever wanted, gate it on the entry not originating from a fork
+rather than dropping the `is_queue` condition. Verify the invariant before adding a
+`merge_group` trigger to any workflow that touches a secret:
+
+```bash
+# Workflows on merge_group that reference a non-GITHUB_TOKEN secret or an Environment.
+grep -l merge_group .github/workflows/* \
+  | xargs grep -n -E 'secrets\.|environment:' \
+  | grep -v GITHUB_TOKEN
+```
+
+⚠️ **A required context that does not subscribe to `merge_group` hangs the queue.**
+It never reports, and the entry sits until `check_response_timeout_minutes`
+expires, then fails. Before registering any new required context, confirm its
+workflow includes `merge_group: types: [checks_requested]` — and for an App-produced
+context, that the App subscribes to the event. This is why `CodeQL`/`57789` could
+not have stayed required (see [Code Security](#security-settings)) and why `CodeQL gate`
+exists.
+
+⚠️ **Ruleset edits are UI-only in practice.** `PATCH /repos/{owner}/{repo}/rulesets/{id}`
+returns **404 Not Found** — not 403 — with a classic PAT holding `repo` scope on an
+account with `admin: true` on the repository, while `GET` on the same URL returns
+200. The 404 makes it look like a wrong path or ruleset id; it is not. Most likely an
+org policy on classic PAT writes. Make ruleset changes in the UI and use the API to
+*verify*, which is the direction that works:
+
+```bash
+# Capture before touching anything — this is the rollback.
+gh api repos/OWNER/REPO/rulesets/13942241 > /tmp/ruleset-before.json
+# ... make the change in the UI ...
+gh api repos/OWNER/REPO/rulesets/13942241 > /tmp/ruleset-after.json
+diff <(jq -S . /tmp/ruleset-before.json) <(jq -S . /tmp/ruleset-after.json)
+```
+
+Diffing before against after is worth the extra step: the rulesets UI saves the
+whole rule set at once, so an unintended change to a neighbouring rule is easy to
+make and invisible without the comparison.
 
 ---
 
@@ -846,19 +1013,40 @@ Navigate to: **Settings → Actions → General → Workflow permissions**
 Navigate to: **Settings → Actions → General → Fork pull request workflows from
 outside collaborators**
 
-Pick the approval posture before the repo goes public. GitHub offers three
-options, and the default on a public repo is the middle one:
+GitHub offers three options, and the default on a public repo is the middle one:
 
 1. Require approval for first-time contributors who are new to GitHub
-2. **Require approval for first-time contributors** (the default)
-3. Require approval for all outside collaborators
+2. Require approval for first-time contributors (the GitHub default)
+3. **Require approval for all outside collaborators** ← set here, 20 August 2026
 
-Choose option 3. GitHub defines the default as "only users who have never had a
-commit or pull request merged into this repository will require approval", so a
-contributor is exempt permanently once any one of their contributions merges. This
-repository allows all actions and does not require SHA pinning
-(`allowed_actions: all`, `sha_pinning_required: false`), so until that tightens, a
-human should look at every external workflow run before it executes.
+✅ **Option 3 is live.** Verify rather than trust this line:
+
+```bash
+gh api repos/OWNER/REPO/actions/permissions/fork-pr-contributor-approval
+# {"approval_policy":"all_external_contributors"}
+```
+
+The repo sat on the default (option 2) until 20 August 2026, so anything written
+before then describing "all outside collaborators" was stating the target, not the
+live setting. Why option 3: GitHub defines the default as "only users who have
+never had a commit or pull request merged into this repository will require
+approval", so a contributor is exempt permanently once any one of their
+contributions merges. This repository allows all actions and does not require SHA
+pinning (`allowed_actions: all`, `sha_pinning_required: false`), so until that
+tightens, a human should look at every external workflow run before it executes.
+
+The cost is recurring rather than one-off, and that is the point: under option 2
+one approval exempts a contributor for good, whereas option 3 holds **every push**
+from an external contributor, including a rebase of a pull request you already
+approved once. Budget maintainer attention for that, and read the notification
+path below — nothing tells you an approval is pending except a review request.
+
+Worth knowing that this is defence in depth rather than the only control: a fork
+pull request's `GITHUB_TOKEN` is read-only here
+(`default_workflow_permissions: read`) and cannot approve reviews
+(`can_approve_pull_request_reviews: false`), and Environment secrets are withheld
+from fork-triggered runs regardless. What approval actually buys is a human look
+before *someone else's* code consumes this repository's runners.
 
 This has a cost worth knowing: until a maintainer approves the run, **no checks
 report at all** on an external contributor's pull request, so it shows pending
@@ -884,10 +1072,13 @@ writing; re-check, do not assume.
 - ✅ No sensitive data in issues or PRs
 - ✅ **Required status checks corrected** per the Branch Protection section above
   — this document corrected 2026-08-17 (SOL-153190) to match the live ruleset,
-  which was itself updated 2026-08-12. The `main-protection` ruleset now requires
-  all thirteen registered contexts in the table above, including `Guardian scan gate`
+  which was itself updated 2026-08-12, and again 2026-08-20 for the merge queue and
+  the CodeQL migration. The `main-protection` ruleset now requires
+  all fourteen registered contexts in the table above, including `Guardian scan gate`
   (from `guardian-scan.yaml`) in place of the retired `FOSSA Scan` / `FOSSA Scan /
-  SCA Scan` contexts, with `strict_required_status_checks_policy: true` and an
+  SCA Scan` contexts, with a **merge queue** on `main`,
+  `strict_required_status_checks_policy: false` (superseded by the queue — see
+  [Merge queue](#merge-queue)) and an
   **empty bypass-actor list** — no admin override exists. Re-verify against the
   live ruleset rather than trusting this line. The list-rulesets endpoint
   returns only `id`/`name` — no embedded rule detail — so resolving by name
@@ -906,7 +1097,7 @@ writing; re-check, do not assume.
   > the scan itself was broken would have turned "scanning is broken" into "no
   > pull request can merge." That precondition was met before registration.
   > **There is no "branch protection holds zero required contexts" state
-  > anymore** — every one of the thirteen contexts, `Guardian scan gate`
+  > anymore** — every one of the fourteen contexts, `Guardian scan gate`
   > included, now blocks a merge if it is red or never reports, with nothing to
   > bypass it. One exception, added later: `CodeQL` can conclude `neutral`, which
   > GitHub counts as passing. Its replacement `CodeQL gate` cannot — it fails on a
@@ -987,25 +1178,37 @@ Navigate to: **Settings → General → Pull Requests**
 
 | Setting | Target | Live now |
 |---------|--------|----------|
-| Allow merge commits | ✅ On | On |
+| Allow merge commits | ✅ On | On — but unreachable on `main`; see below |
 | Allow squash merging | ✅ On | On |
-| Allow rebase merging | ✅ On | On |
+| Allow rebase merging | ✅ On | On — but unreachable on `main`; see below |
 | Automatically delete head branches | ✅ On | On |
+
+**All three merge methods stay enabled, but only squash is reachable on `main`.**
+The merge queue applies a single method (`SQUASH`) to every entry, so these
+settings and `allowed_merge_methods` in the `pull_request` rule now only affect
+pull requests against non-default bases. Leave them on: turning them off would not
+change `main`'s behaviour and would remove the choice where it still exists.
 | Always suggest updating pull request branches | ⬜ No effect here | Off |
 
-"Always suggest updating pull request branches" changes nothing on `main`, so
-leave it. GitHub only restricts the "Update branch" button when the base branch
-does *not* require branches to be up to date; the setting lifts that restriction.
-`main-protection` sets `strict_required_status_checks_policy: true`, so the button
-is already offered on every stale pull request to `main`.
+"Always suggest updating pull request branches" is worth **reconsidering** as of
+20 August 2026, and the reasoning that made it a no-op has been inverted by the
+merge queue.
 
-Turn the setting on if you want the button on pull requests targeting other
-branches. `main-protection` applies to `~DEFAULT_BRANCH` only, so any pull request
-against a non-default base already lacks it today. Nobody is asking for that, so
-leaving the setting off is fine.
+GitHub only restricts the "Update branch" button when the base branch does *not*
+require branches to be up to date; the setting lifts that restriction.
+`main-protection` used to set `strict_required_status_checks_policy: true`, so the
+button was offered on every stale pull request to `main` and the setting added
+nothing. That flag is now `false` (superseded by the queue), so the button is no
+longer offered unconditionally — and stale branches are no longer forced forward.
+
+Turning it on is the cheap way to get the button back for contributors who need to
+pick up a newly-required context, which is the one case where a rebase is genuinely
+necessary rather than ceremonial. Left off for now because nobody has hit it;
+revisit the next time a required context is added.
 
 "Update branch" needs write access to the head branch either way, so a fork
-contributor never gets the button and has to rebase locally.
+contributor never gets the button regardless of this setting, and has to rebase
+locally.
 
 **Default commit messages.** Live values, which differ from the labels in the UI:
 

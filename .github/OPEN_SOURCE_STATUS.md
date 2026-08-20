@@ -188,16 +188,28 @@ These settings must be configured by repository admin:
   `actions` and `go`) as of 20 August 2026 under SOL-153411. Default setup was
   retired because it analyzed neither fork pull requests, Dependabot pull requests,
   nor merge queue entries — and a required check that never reports makes a fork
-  pull request unmergeable. The `CodeQL` required context was removed with it;
-  `CodeQL gate` replaces it and is **pending registration**, so CodeQL currently
-  scans and reports without blocking. See ADMIN_SETUP.md → "Code Security" for the
-  remaining step and the ordering constraints, and "Static analysis" before quoting
-  any of it as a control
+  pull request unmergeable. The `CodeQL` required context was removed with it and
+  `CodeQL gate` replaces it, **registered as a required check 20 August 2026**, so
+  CodeQL now blocks rather than only reporting. Observed green on all three event
+  shapes: same-repo (#325), fork (#327) and merge queue entry (#326). See
+  ADMIN_SETUP.md → "Code Security" for the ordering constraints, and "Static
+  analysis" before quoting any of it as a control
+- **Merge queue enabled on `main`** 20 August 2026 under SOL-152974, squash method,
+  one entry at a time. Pull requests are added to the queue rather than merged
+  directly; the queue tests each change rebased onto `main` and merges only what
+  passes. `strict_required_status_checks_policy` was turned off in the same change
+  because the queue supersedes it. Verified on a real entry: all fourteen required
+  contexts reported on the `merge_group` event, 8 minutes end to end, and the tested
+  commit was bit-for-bit the commit that landed. See ADMIN_SETUP.md → "Merge queue"
 - See: ADMIN_SETUP.md → "Security Settings"
 
 ### 5. Actions Settings (5 minutes)
-- Turn off "Allow GitHub Actions to create and approve pull requests" (currently on)
-- Set fork pull request workflows to require approval for all outside collaborators
+- ✅ "Allow GitHub Actions to create and approve pull requests" turned off
+  (SOL-152958); confirmed live as `can_approve_pull_request_reviews: false`
+- ✅ Fork pull request workflows set to require approval for all outside
+  collaborators (20 August 2026). Note this holds *every* push from an external
+  contributor, not just their first — and nothing notifies maintainers that a run
+  is waiting
 - See: ADMIN_SETUP.md → "GitHub Actions Permissions"
 
 ### 6. Make Repository Public (5 minutes)
@@ -216,11 +228,12 @@ These settings must be configured by repository admin:
 
 ## Open Source Maturity Progress
 
-This table is a historical record of PR #15 (2026-04-24), not current state. As of
-2026-07-29 one gap remains behind the Security row: "Allow GitHub Actions to
-create and approve pull requests" is still on. Secret scanning and its push
-protection have since been enabled. Do not cite the following score as go/no-go
-evidence without re-checking the live settings.
+This table is a historical record of PR #15 (2026-04-24), not current state. The
+gap recorded here behind the Security row — "Allow GitHub Actions to create and
+approve pull requests" still being on — was closed under SOL-152958 and is
+confirmed off as of 2026-08-20. Secret scanning and its push protection have since
+been enabled. Do not cite the following score as go/no-go evidence without
+re-checking the live settings.
 
 | Category | Before PR #15 | After PR #15 | Target |
 |----------|---------------|--------------|--------|

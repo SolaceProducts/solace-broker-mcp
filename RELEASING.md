@@ -114,6 +114,15 @@ Before tagging:
 
 1. Confirm `main` is green: `gh run list --branch main --limit 1`.
 2. Update `CHANGELOG.md` on `main`: move the `[Unreleased]` items into a new dated `## [X.Y.Z]` version section and update the comparison links at the bottom. This step is **required** — the release workflow extracts that block as the Release body and fails the release if the dated block is absent. Do it in a "prepare release" PR *before* tagging, so the block lives in the tagged commit.
+
+   ⚠️ **The prepare-release PR goes through the merge queue, and squash-merging means its head commit never lands on `main`.** Tag the commit the merge *produced*, not the branch tip you pushed:
+
+   ```bash
+   gh pr view <n> --json mergeCommit --jq '.mergeCommit.oid'
+   git merge-base --is-ancestor <that-sha> origin/main   # must succeed before tagging
+   ```
+
+   Tagging the PR head instead produces a tag on a commit that is not an ancestor of `main`, and the release would describe a tree that was never merged. `/cut-release` already does this correctly (Phase C captures `mergeCommit` and Phase D verifies ancestry); the warning is for the manual fallback. Allow ~8 minutes for the queue after approving, on top of review time.
 3. Nothing to do here at tag time: `Third-party licenses current` is a required check on every pull request, so a drifted inventory could never have merged. See **Third-party licence inventory** below for the manual regeneration step when that check does go red.
 
 ### Third-party licence inventory
