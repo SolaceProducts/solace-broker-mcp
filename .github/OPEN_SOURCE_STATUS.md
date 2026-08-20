@@ -192,7 +192,7 @@ These settings must be configured by repository admin:
   `CodeQL gate` replaces it, **registered as a required check 20 August 2026**, so
   CodeQL now blocks rather than only reporting. Observed green on all three event
   shapes: same-repo (#325), fork (#327) and merge queue entry (#326). See
-  ADMIN_SETUP.md → "Code Security" for the ordering constraints, and "Static
+  ADMIN_SETUP.md → "Security Settings" for the ordering constraints, and "Static
   analysis" before quoting any of it as a control
 - **Merge queue enabled on `main`** 20 August 2026 under SOL-152974, squash method,
   one entry at a time. Pull requests are added to the queue rather than merged

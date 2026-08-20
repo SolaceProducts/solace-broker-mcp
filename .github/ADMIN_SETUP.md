@@ -403,7 +403,7 @@ authoritative copy of both sets.
 The count dropped from fourteen to thirteen on 20 August 2026 when `CodeQL` was
 removed as part of the advanced-setup migration (SOL-153411), and returned to
 fourteen the same day when `CodeQL gate` was registered — see
-[Code Security](#security-settings) for why the removal had to come first.
+[Security Settings](#security-settings) for why the removal had to come first.
 
 Read the live list rather than trusting the table:
 
@@ -944,17 +944,25 @@ rather than dropping the `is_queue` condition. Verify the invariant before addin
 
 ```bash
 # Workflows on merge_group that reference a non-GITHUB_TOKEN secret or an Environment.
-grep -l merge_group .github/workflows/* \
-  | xargs grep -n -E 'secrets\.|environment:' \
-  | grep -v GITHUB_TOKEN
+# Expect exactly guardian-scan.yaml. Anything else is a new exposure to justify.
+for f in .github/workflows/*; do
+  grep -q merge_group "$f" || continue
+  grep -nH -E 'secrets\.|environment:' "$f" | grep -v GITHUB_TOKEN
+done
 ```
+
+The loop rather than `grep -l ... | xargs grep` is deliberate: `-H` keeps the
+filename even when only one workflow matches (plain `grep` drops it for a single
+file operand, which is the case that matters most here — one hit reads as
+unattributed), and the explicit `continue` makes the zero-match case silent
+instead of `xargs` running `grep` with no operands and returning a confusing 123.
 
 ⚠️ **A required context that does not subscribe to `merge_group` hangs the queue.**
 It never reports, and the entry sits until `check_response_timeout_minutes`
 expires, then fails. Before registering any new required context, confirm its
 workflow includes `merge_group: types: [checks_requested]` — and for an App-produced
 context, that the App subscribes to the event. This is why `CodeQL`/`57789` could
-not have stayed required (see [Code Security](#security-settings)) and why `CodeQL gate`
+not have stayed required (see [Security Settings](#security-settings)) and why `CodeQL gate`
 exists.
 
 ⚠️ **Ruleset edits are UI-only in practice.** `PATCH /repos/{owner}/{repo}/rulesets/{id}`
@@ -1182,13 +1190,13 @@ Navigate to: **Settings → General → Pull Requests**
 | Allow squash merging | ✅ On | On |
 | Allow rebase merging | ✅ On | On — but unreachable on `main`; see below |
 | Automatically delete head branches | ✅ On | On |
+| Always suggest updating pull request branches | ⬜ Worth reconsidering | Off |
 
 **All three merge methods stay enabled, but only squash is reachable on `main`.**
 The merge queue applies a single method (`SQUASH`) to every entry, so these
 settings and `allowed_merge_methods` in the `pull_request` rule now only affect
 pull requests against non-default bases. Leave them on: turning them off would not
 change `main`'s behaviour and would remove the choice where it still exists.
-| Always suggest updating pull request branches | ⬜ No effect here | Off |
 
 "Always suggest updating pull request branches" is worth **reconsidering** as of
 20 August 2026, and the reasoning that made it a no-op has been inverted by the
