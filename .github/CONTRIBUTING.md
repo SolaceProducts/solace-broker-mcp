@@ -151,13 +151,42 @@ including five Dockerized E2E suites. The header comment in
 `.github/workflows/build-and-test.yml` records the alternatives that were
 considered and why they lose.
 
+### If You Are Contributing From a Fork
+
+**Your checks will not start until a maintainer approves the run.** This is
+expected and it is not a CI failure. Every workflow run from a fork is held for a
+human click, so what you will see on a fresh pull request is a set of grey,
+pending checks and no logs — not a red X, and not a green tick either.
+
+Two things worth knowing so it does not read as something broken:
+
+- **It happens on every push, not just your first.** Rebase or add a commit and the
+  new run waits for approval again. There is no point at which you become exempt.
+- **Nothing tells us automatically that you are waiting.** GitHub sends maintainers
+  no notification for a held run — we find it from the ordinary review request on
+  the pull request. If your checks have sat pending for a while, a comment on the
+  pull request is the fastest way to get them started, and it is a reasonable thing
+  to ask for rather than a nag.
+
+Everything else about a fork pull request works normally: all required checks do
+report once the run is approved, including the E2E suites, licence and DCO checks,
+and CodeQL. None of them needs a secret you do not have.
+
 ### PR Review Process
 
-1. **Automated checks** — CI must pass (build, lint, test, E2E, DCO)
+1. **Automated checks** — CI must pass (build, lint, test, E2E, DCO, CodeQL)
 2. **Maintainer review** — At least one maintainer approval required
 3. **Address feedback** — Respond to review comments and make requested changes
-4. **Squash or rebase** — Clean up commit history if requested
-5. **Maintainer merge** — A maintainer will merge when approved
+4. **Merge queue** — A maintainer adds the pull request to the merge queue rather
+   than merging it directly. GitHub then re-runs the required checks against your
+   change rebased onto the current `main` and merges it only if they pass. You do
+   not need to keep your branch up to date with `main` yourself; the queue does
+   that. If a check fails at this stage it is usually a genuine conflict with
+   something that landed after your last push, so expect the occasional round trip
+   even on an approved pull request.
+5. **Squash merge** — Everything on `main` lands as a single squashed commit, so
+   your pull request title becomes the commit subject. Tidy commit history within
+   the branch is welcome but not required.
 
 **Response time:** We aim to provide initial feedback within 48 hours (business days). Larger PRs may take longer to review.
 
