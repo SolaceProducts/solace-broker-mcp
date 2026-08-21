@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Updated the embedded SEMPv2 OpenAPI specs to the 10.26.4 rolling release (`10.26.4.10725`), so tool schemas track current broker attributes. The three spec files are renamed to `semp-v2-swagger-{action,config,monitor}.10.26.4.json` and continue to be sourced from the private-extended variant.
+
 ### Fixed
 
 - The token-exchange circuit breaker's `consecutive_failure_threshold` rule now trips a slow, low-traffic IdP outage, not only a fast-failing one — it previously read gobreaker's own `ConsecutiveFailures`, which decays as its rolling window ages out and could leave the count permanently below threshold at low traffic even though every exchange failed. The rule now reads a separate, undecayed counter this package owns, reset only on an observed success. No config or behavior change for the fast-failing case this rule always caught; `consecutive_failure_threshold: 0` still disables it. Tracked under SOL-152286.
