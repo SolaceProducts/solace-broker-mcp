@@ -9,7 +9,7 @@
 # Env overrides (same names as run.sh so the two scripts share vocabulary):
 #   CLIENTS      loadgen -clients                (default 200)
 #   DURATION     loadgen -duration               (default 60s)
-#   TOOLS        loadgen -tools                  (default get-broker-status,list-queues)
+#   TOOLS        loadgen -tools                  (default get-broker-status,list-queues,list-rdps,get-rdp-status)
 #   BROKERS      loadgen -broker-count           (default 50)
 #   LATENCY_MS   mock-semp -default-latency-ms   (default 0). Set >0 to make every
 #                broker response take that long — combined with the MCP config's
@@ -29,8 +29,10 @@
 #   ERROR_STATUSES weighted status pool "code:w,code:w,..."
 #                  (default "503:70,429:20,500:10")
 #   BROKER_ALIAS   fidelity -broker  (default broker-01; must exist in broker-config.mock.yaml)
-#   VPN            fidelity -vpn   (default: the VPN recorded in fixtures.manifest
-#                  at capture time — set this only to override that)
+#   VPN            fidelity/loadgen -vpn (default: the VPN recorded in
+#                  fixtures.manifest at capture time — set only to override)
+#   RDP            fidelity/loadgen -rdp (default: the RDP recorded in
+#                  fixtures.manifest; the mock serves get-rdp-status for it only)
 
 set -euo pipefail
 
@@ -40,7 +42,7 @@ bin="$here/bin"
 
 CLIENTS="${CLIENTS:-200}"
 DURATION="${DURATION:-60s}"
-TOOLS="${TOOLS:-get-broker-status,list-queues}"
+TOOLS="${TOOLS:-get-broker-status,list-queues,list-rdps,get-rdp-status}"
 BROKERS="${BROKERS:-50}"
 LATENCY_MS="${LATENCY_MS:-0}"
 TOTAL_RPS="${TOTAL_RPS:-0}"
@@ -95,6 +97,23 @@ if [[ -z "$VPN" || "$VPN" == "unknown" ]]; then
   echo "fixtures.manifest records no VPN — recapture with ./regen-golden.sh, or pass VPN=<name> explicitly." >&2
   exit 2
 fi
+
+# Same for the pinned RDP. The mock answers get-rdp-status for exactly one RDP
+# name — the one in the capture — and misses (404, non-zero exit) for any
+# other, so both fidelity and loadgen have to ask for that one.
+RDP="${RDP:-$("$here/fixtures-manifest.sh" rdp)}"
+if [[ -z "$RDP" || "$RDP" == "unknown" ]]; then
+  echo "fixtures.manifest records no RDP — recapture with ./regen-golden.sh, or pass RDP=<name> explicitly." >&2
+  exit 2
+fi
+
+# Validate TOOLS before anything starts. loadgen enforces this at its own
+# startup too, but by then the mock is listening, the fidelity gate has run,
+# and (split-host) we may have waited minutes for Box B — a typo in TOOLS
+# should cost nothing. The tool list lives in loadgen's own recipe map, so the
+# check is delegated rather than duplicated here: a bash copy of the valid
+# names would drift the first time a tool is added.
+"$bin/loadgen" -validate-only -tools "$TOOLS" -vpn "$VPN" -rdp "$RDP"
 
 # Convert Go duration to seconds for the sampler's -duration arg.
 sample_secs=$(awk -v d="$DURATION" 'BEGIN {
@@ -182,6 +201,26 @@ arm_injection() {
     http://localhost:19000/_mock/config >/dev/null
 }
 
+# snapshot_fanout banks the per-rule SEMP counts accumulated so far and zeroes
+# them: POST /_mock/hits reports the window it closes. Called between the
+# fidelity gate and the load run, so the gate's requests are recorded as the
+# fan-out table they are, and the shutdown summary in mock.log covers only the
+# load phase. Skipped under NO_MOCK=1 for the same reason arm_injection is: the
+# mock isn't ours. Never fatal.
+snapshot_fanout() {
+  [[ "$NO_MOCK" == "1" ]] && { echo "   (NO_MOCK=1: read /_mock/hits on the host that owns the mock)"; return 0; }
+  local out="$runs/semp-fanout.json"
+  if ! curl -fsS -X POST http://localhost:19000/_mock/hits -o "$out"; then
+    echo "   WARNING: could not read /_mock/hits; mock.log's shutdown summary will include the gate's requests" >&2
+    return 0
+  fi
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '.rules[] | select(.hits > 0) | "   \(.hits) \(.rule)"' "$out"
+  else
+    echo "   counts in $out (install jq to see them tabulated here)"
+  fi
+}
+
 wait_for_tcp() {
   local host=$1 port=$2 name=$3 timeout_s=${4:-12}
   local end=$((SECONDS + timeout_s))
@@ -253,18 +292,24 @@ fi
 # Fidelity gate: exact-mode diff of MCP tool output vs golden captures.
 # Runs BEFORE arm_injection so the check isn't flaked by a 1% error roll.
 # BROKER_ALIAS + VPN must match how the goldens were captured; see run.sh.
-echo "== 3b. fidelity gate (exact mode; broker=$BROKER_ALIAS vpn=$VPN; exclusions in fidelity/exclusions.txt)"
-if ! "$bin/fidelity" -mcp-url "$mcp_url" -broker "$BROKER_ALIAS" -vpn "$VPN" \
+echo "== 3b. fidelity gate (exact mode; broker=$BROKER_ALIAS vpn=$VPN rdp=$RDP; exclusions in fidelity/exclusions.txt)"
+if ! "$bin/fidelity" -mcp-url "$mcp_url" -broker "$BROKER_ALIAS" -vpn "$VPN" -rdp "$RDP" \
       -golden-dir "$here/fidelity/golden" | tee "$runs/fidelity.log"; then
   echo "!! fidelity FAILED — aborting before load run" >&2
   exit 1
 fi
 
+# The gate makes exactly one call per check, so the counters now hold each
+# tool's SEMP fan-out. Bank that table and zero the counters so mock.log's
+# shutdown summary measures the load phase alone.
+echo "== 3c. SEMP fan-out per tool call (from the gate's one-call-per-check pass)"
+snapshot_fanout
+
 extra_args=()
 [[ "$TOTAL_RPS" != "0" ]] && extra_args+=(-total-rps "$TOTAL_RPS")
 
 if awk -v r="$ERROR_RATE" 'BEGIN { exit !(r+0 > 0) }'; then
-  echo "== 3c. arming error injection (rate=$ERROR_RATE count=$ERROR_COUNT/port statuses=$ERROR_STATUSES)"
+  echo "== 3d. arming error injection (rate=$ERROR_RATE count=$ERROR_COUNT/port statuses=$ERROR_STATUSES)"
   arm_injection
   inject_note="inject rate=$ERROR_RATE count=$ERROR_COUNT/port statuses=$ERROR_STATUSES"
 else
@@ -274,6 +319,7 @@ fi
 echo "== 4. loadgen against $mcp_url ($CLIENTS clients, $DURATION, tools=$TOOLS${TOTAL_RPS:+, total-rps=$TOTAL_RPS}; $inject_note)"
 "$bin/loadgen" -mcp-url "$mcp_url" -broker-count "$BROKERS" \
   -clients "$CLIENTS" -duration "$DURATION" -tools "$TOOLS" \
+  -vpn "$VPN" -rdp "$RDP" \
   "${extra_args[@]}" \
   > >(tee "$runs/loadgen.log") 2>&1 &
 lg_pid=$!

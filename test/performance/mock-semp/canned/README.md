@@ -38,6 +38,14 @@ why you want just one side.
 | `show_version.xml`, `show_system.xml`, `show_memory.xml`, `show_message_spool.xml` | SEMPv1 `<show>` commands behind `get-broker-status` |
 | `show_hardware_details.xml` | SEMPv1, appliance-only path of `get-broker-status` |
 | `queues_page<N>.json` | SEMPv2 `list-queues`, one file per page; pages must be contiguous from 1. However many the broker's queue count produces — `sanitize.sh` globs them |
+| `rdps_page<N>.json` | SEMPv2 `list-rdps`, same per-page scheme |
+| `rdp_object.json`, `rdp_queue_bindings.json`, `rdp_rest_consumers.json` | SEMPv2 `get-rdp-status`, for the single RDP `RDP_NAME` pinned at capture time |
+
+`mock-semp` reads the pinned RDP's name out of `rdp_object.json` rather than
+taking it as a flag, so the fixture and the rule cannot name different RDPs. A
+request for any other RDP name is a miss: 404, a `MISS` line, and a non-zero
+exit at shutdown. `fixtures.manifest` records the name (`# rdp:`), and the run
+scripts read it from there to pass `-rdp` to `fidelity` and `loadgen`.
 
 `mock-semp` reads them from disk at startup — no `go:embed`, no rebuild
 after a recapture. Anything unmatched is a logged miss and a non-zero exit.

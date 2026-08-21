@@ -20,10 +20,10 @@
 //	-listen-addr         interface to bind for broker ports (localhost or 0.0.0.0)  default localhost
 //	-listen-start        first broker port (inclusive)             default 8081
 //	-listen-count        number of broker ports to bind             default 50
-//	-config-listen-addr  interface to bind for /_mock/config        default localhost
+//	-config-listen-addr  interface to bind for /_mock/*             default localhost
 //	                     (kept separate from -listen-addr so opening broker ports
 //	                     to the LAN doesn't also expose the injection knob).
-//	-config-port         /_mock/config endpoint port                default 9000
+//	-config-port         /_mock/config and /_mock/hits port         default 9000
 //	-default-latency-ms  fixed sleep before every response, all ports (default 0).
 //	                     Overridden per-port by POST /_mock/config.
 //	-canned-dir          directory of captured SEMP responses to replay.
@@ -44,14 +44,25 @@
 // built to observe (backpressure behavior, timeout handling, memory under
 // contention) — the flag is how you make it appear on demand.
 //
-// The mock serves two tools' worth of canned responses:
-//   - get-broker-status  (4 SEMPv1 POSTs to /SEMP)
-//   - list-queues        (SEMPv2 GET, 2 pages)
+// The mock serves four tools' worth of canned responses:
+//   - get-broker-status  (4 SEMPv1 POSTs to /SEMP, 5 on an appliance)
+//   - list-queues        (SEMPv2 GET, paginated)
+//   - list-rdps          (SEMPv2 GET, paginated)
+//   - get-rdp-status     (SEMPv2 GET x3, for one pinned RDP only)
 //
 // Any request that matches no rule returns 404 and logs a miss. The process
 // exits non-zero at shutdown if any miss was logged — a silent 404 in a log
 // file is easy to skim past; a failed exit code is a hard gate. See plan
-// step 3.
+// step 3. That gate is what makes the pinned-RDP rules safe: a request for an
+// RDP the capture doesn't cover fails the run instead of being answered with
+// the pinned RDP's body.
+//
+// Shutdown also logs how many requests each rule served. That is the harness's
+// own measurement of per-tool SEMP fan-out — the factor that converts
+// loadgen's tool calls/s into the SEMP requests/s the performance targets are
+// written in. GET /_mock/hits reports the same counts mid-run; POST reports
+// and zeroes them, which is how the run scripts keep the fidelity gate's dozen
+// requests out of the load phase's totals.
 package main
 
 import (
@@ -130,6 +141,9 @@ func main() {
 
 	configMux := http.NewServeMux()
 	configMux.Handle("/_mock/config", cfg.handler())
+	// Same port as /_mock/config: both are operator knobs, and neither should
+	// be reachable from the LAN when broker ports are.
+	configMux.Handle("/_mock/hits", handler.hitsHandler())
 	configSrv := &http.Server{
 		Addr:              net.JoinHostPort(*configListenAddr, strconv.Itoa(*configPort)),
 		Handler:           configMux,
@@ -166,6 +180,10 @@ func main() {
 	}
 	_ = configSrv.Shutdown(shutdownCtx)
 	wg.Wait()
+
+	// Per-rule counts before the gate: on a failing run they say which rules
+	// did fire, which is the first thing you want next to the MISS lines.
+	handler.logHitSummary()
 
 	// Hard gate: if any request matched no rule, exit non-zero. The plan
 	// spells this out explicitly — a silent miss looks identical to success

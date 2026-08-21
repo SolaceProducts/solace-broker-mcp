@@ -51,11 +51,16 @@ table="$here/sanitize.local.tsv"
 
 # --- files -------------------------------------------------------------------
 #
-# The SEMPv1 captures and the goldens are a fixed set. The queues pages are
-# not: capture.sh follows pagination, so their count tracks the broker's queue
-# count. Globbing them (rather than naming page 1..3, as this script once did)
-# is what keeps a broker with two pages from aborting the capture and a broker
-# with four from leaving page 4 unscrubbed.
+# The SEMPv1 captures, the per-RDP captures and the goldens are a fixed set.
+# The paginated collections are not: capture.sh follows pagination, so the page
+# count tracks how many queues or RDPs the broker holds. Globbing them (rather
+# than naming page 1..3, as this script once did) is what keeps a broker with
+# two pages from aborting the capture and a broker with four from leaving page 4
+# unscrubbed.
+#
+# Every capture must appear here. A file left off the list is not merely
+# unscrubbed — it is also invisible to the residual scan below, so the run
+# would report "clean" while carrying whatever the omitted file carries.
 #
 # Only capture output is listed. This script must never rewrite tracked source
 # files: a capture that edits scripts in the working tree is a surprise, and a
@@ -66,18 +71,29 @@ files=(
   "$canned_dir/show_memory.xml"
   "$canned_dir/show_message_spool.xml"
   "$canned_dir/show_hardware_details.xml"
+  "$canned_dir/rdp_object.json"
+  "$canned_dir/rdp_queue_bindings.json"
+  "$canned_dir/rdp_rest_consumers.json"
   "$golden_dir/get-broker-status.json"
   "$golden_dir/list-queues.json"
+  "$golden_dir/list-rdps.json"
+  "$golden_dir/list-rdps-paged.json"
+  "$golden_dir/get-rdp-status.json"
 )
 
-shopt -s nullglob
-pages=("$canned_dir"/queues_page*.json)
-shopt -u nullglob
-if (( ${#pages[@]} == 0 )); then
-  echo "sanitize: no queues_page*.json in $canned_dir — capture is incomplete" >&2
-  exit 2
-fi
-files+=("${pages[@]}")
+# Paginated collections, one glob each. An empty glob means the capture never
+# finished — the mock cannot serve that tool at all, so stop here rather than
+# scrubbing a partial tree.
+for prefix in queues_page rdps_page; do
+  shopt -s nullglob
+  pages=("$canned_dir/$prefix"*.json)
+  shopt -u nullglob
+  if (( ${#pages[@]} == 0 )); then
+    echo "sanitize: no ${prefix}*.json in $canned_dir — capture is incomplete" >&2
+    exit 2
+  fi
+  files+=("${pages[@]}")
+done
 
 # Guard against a partial capture — every named file must exist. A silent skip
 # would leave a real value behind on a broken tree.
@@ -141,6 +157,15 @@ fi
 #   build  non-GA build markers: the "+lo.NNN" suffix and the "NNNmain.N"
 #          main-branch form. GA versions never carry either.
 #
+# The RDP captures carry three fields that can name a real endpoint: a REST
+# consumer's remoteHost/remotePort and a queue binding's postRequestTarget. The
+# scan below only recognizes 192.168/16 and 172.16/12 addresses, so an RDP
+# pointed at a real internal service by hostname passes it. Rather than ask the
+# reader to know that, report_rdp_endpoints prints those values at the end of
+# every run: the one thing a clean scan cannot vouch for is put in front of
+# whoever ran the scrub. On the capture this harness was built against they were
+# "example.com", 80 and "/", which is why no table entries exist for them.
+#
 # A hit is fatal: regen-golden.sh runs under set -e, so the capture stops
 # before the manifest is written and before anything replays the fixture.
 # scan reports matches of $pattern that do not also match $allow. grep -E has
@@ -187,3 +212,27 @@ fi
 
 echo "sanitize: residual scan clean (MACs, lab IPs, WWPNs, build markers)"
 echo "sanitize: note — serials have no detectable shape; the scan cannot vouch for them."
+
+# report_rdp_endpoints prints the RDP endpoint fields the scan cannot judge, so
+# the human check does not depend on anyone remembering it exists. Reported, not
+# gated: "example.com" and a real internal hostname are indistinguishable by
+# shape, and only a reader can tell which one is on screen.
+report_rdp_endpoints() {
+  local rdp_files=() f
+  for f in "$canned_dir/rdp_rest_consumers.json" "$canned_dir/rdp_queue_bindings.json" \
+           "$golden_dir/get-rdp-status.json"; do
+    [[ -f "$f" ]] && rdp_files+=("$f")
+  done
+  (( ${#rdp_files[@]} )) || return 0
+
+  local values
+  # -h suppresses the filename prefix: postRequestTarget values contain
+  # slashes, so stripping a prefix after the fact would mangle them.
+  values="$(grep -ohaE '"(remoteHost|postRequestTarget)":"[^"]*"|"remotePort":[0-9]+' "${rdp_files[@]}" 2>/dev/null |
+    sort -u || true)"
+  [[ -z "$values" ]] && return 0
+
+  echo "sanitize: RDP endpoints in the capture — confirm none names a real internal service:"
+  while IFS= read -r v; do echo "            $v"; done <<<"$values"
+}
+report_rdp_endpoints
