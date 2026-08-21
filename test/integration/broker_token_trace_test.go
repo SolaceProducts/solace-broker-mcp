@@ -23,10 +23,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	internalauth "github.com/SolaceProducts/solace-broker-mcp/internal/auth"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/idpclient"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache"
 	sempauth "github.com/SolaceProducts/solace-broker-mcp/internal/semp/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
@@ -125,6 +127,20 @@ func newTraceAuthenticator(t *testing.T, idpURL string, clockSkew time.Duration)
 	}
 	t.Cleanup(func() { _ = tokenCache.Close() })
 
+	// The retrying client, because that is what main.go passes. A plain
+	// http.Client would work for everything else here, but it does not carry
+	// the transport wrapper that counts HTTP attempts, so the attempt count on
+	// the "issued" log line would read 0 for a scenario that cannot occur in
+	// production. Short waits keep the retry cases fast.
+	httpClient, err := idpclient.NewRetryingHTTPClient(idpclient.RetryOptions{
+		MaxRetries:   3,
+		RetryWaitMin: 10 * time.Millisecond,
+		RetryWaitMax: 30 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewRetryingHTTPClient: %v", err)
+	}
+
 	exchanger, err := tokenexchange.New(tokenexchange.Params{
 		TokenURL:         idpURL,
 		ClientID:         "mcp-server",
@@ -132,7 +148,7 @@ func newTraceAuthenticator(t *testing.T, idpURL string, clockSkew time.Duration)
 		ClientSecret:     traceClientSecret,
 		GrantType:        tokenexchange.GrantTypeTokenExchange,
 		AudienceParam:    tokenexchange.AudienceParamAudience,
-		HTTPClient:       &http.Client{Timeout: 5 * time.Second},
+		HTTPClient:       httpClient,
 		Cache:            tokenCache,
 	})
 	if err != nil {
@@ -349,4 +365,80 @@ func renderTrace(recs []traceRecord) string {
 		fmt.Fprintf(&b, "  %-5s %s\n", r.Level, r.Msg)
 	}
 	return b.String()
+}
+
+// Test_BrokerTokenTrace_AttemptCount checks the attempt count on the "issued"
+// line, which is the only way a reader can tell a slow exchange caused by
+// retries apart from one slow call.
+//
+// The count comes from a transport wrapper that the retrying client installs,
+// so it is only correct when the Exchanger holds that client — which is what
+// main.go passes and what newTraceAuthenticator above uses. A plain
+// http.Client silently reports 0.
+func Test_BrokerTokenTrace_AttemptCount(t *testing.T) {
+	cases := []struct {
+		name string
+		// fail503 is how many times the IdP answers 503 before succeeding.
+		fail503      int
+		wantAttempts int
+	}{
+		{name: "succeeds first time", fail503: 0, wantAttempts: 1},
+		{name: "succeeds on the third attempt", fail503: 2, wantAttempts: 3},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var seen atomic.Int32
+			idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if int(seen.Add(1)) <= tc.fail503 {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				idpIssues(3600)(w, nil)
+			}))
+			t.Cleanup(idp.Close)
+
+			auth := newTraceAuthenticator(t, idp.URL, 10*time.Second)
+			ctx := traceCtxWithSubjectToken(t)
+
+			recs := captureTrace(t, func() {
+				if err := auth.AddAuth(ctx, httptest.NewRequestWithContext(ctx, http.MethodGet, "/SEMP/v2/monitor", nil)); err != nil {
+					t.Fatalf("AddAuth: %v", err)
+				}
+			})
+
+			got, ok := attemptsOnIssuedLine(recs)
+			if !ok {
+				t.Fatalf(`no "identity provider issued broker token" line carrying an attempt count.
+
+%s`, renderTrace(recs))
+			}
+			if got != tc.wantAttempts {
+				t.Errorf(`the IdP was called %d time(s) but the log line says %d.
+
+A wrong count here misreads a retried exchange as a single slow call. If the
+count is 0, the Exchanger was built with an http.Client that does not count
+attempts — see newTraceAuthenticator.
+
+%s`, tc.wantAttempts, got, renderTrace(recs))
+			}
+		})
+	}
+}
+
+// attemptsOnIssuedLine pulls the attempt count off the IdP success line.
+func attemptsOnIssuedLine(recs []traceRecord) (int, bool) {
+	for _, r := range recs {
+		if r.Msg != "identity provider issued broker token" {
+			continue
+		}
+		var m struct {
+			Attempts *int `json:"attempts"`
+		}
+		if err := json.Unmarshal([]byte(r.Raw), &m); err != nil || m.Attempts == nil {
+			return 0, false
+		}
+		return *m.Attempts, true
+	}
+	return 0, false
 }

@@ -181,7 +181,8 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 		//
 		// So a value here is not an IdP latency figure. 8.2s may be three
 		// attempts and two backoffs, not one slow call; use the attempts
-		// count from the "token exchange retried" line to tell those apart.
+		// count on the "identity provider issued broker token" line to tell
+		// those apart.
 		// Two cases name time with ZERO IdP calls behind it: a breaker or
 		// rate-limit-gate rejection, which returns without dialing, and a
 		// singleflight follower, whose interval is its wait for the winner
@@ -266,12 +267,6 @@ func (e *Exchanger) runExchangeOnce(key string, input ExchangeInput) (*Token, er
 		classified := e.classifyRetryOutcome(exchCtx, err, attempts(), input.BrokerAlias)
 		e.raiseGateOnExhaustedRateLimit(classified, input.BrokerAlias)
 		return nil, classified
-	}
-
-	if n := attempts(); n > 1 {
-		slog.DebugContext(exchCtx, "token exchange retried",
-			slog.String("broker", input.BrokerAlias),
-			slog.Int("attempts", n))
 	}
 
 	pr, putErr := e.cache.Put(exchCtx, key, cache.CachedCredential{
@@ -383,7 +378,7 @@ func (e *Exchanger) classifyRetryOutcome(ctx context.Context, err error, attempt
 		return err
 	}
 
-	slog.DebugContext(ctx, "token exchange retries exhausted",
+	slog.DebugContext(ctx, "broker token request retries exhausted",
 		slog.String("broker", brokerAlias),
 		slog.Int("attempts", attempts),
 		slog.String("underlying", err.Error()))
@@ -430,6 +425,14 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 		}
 	}
 
+	// This and the "issued" line below sit here rather than one level up in
+	// runExchangeOnce so they fire once per real IdP interaction: a caller that
+	// the singleflight collapsed never reaches this function, and neither does
+	// one the breaker or the rate-limit gate turned away. The absence of these
+	// two lines is therefore meaningful — it says no request left the process.
+	slog.DebugContext(ctx, "requesting broker token from identity provider",
+		slog.String("broker", input.BrokerAlias))
+
 	resp, err := e.httpClient.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -442,10 +445,26 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 		}
 	}
 
+	// Read the status before parseIdPResponse, which closes the body and does
+	// not return the response.
+	status := resp.StatusCode
+
 	tok, err := e.parseIdPResponse(resp, e.nowFunc())
 	if err != nil {
 		return nil, err
 	}
+
+	// attempts belongs here rather than on the completion line further out: it
+	// is a fact about this IdP interaction, and by this point the response has
+	// arrived so the live counter has stopped moving. httpClient is the
+	// retrying client, so one Do above can be several attempts with backoff
+	// between them — which is why this is a count and not a duration. A
+	// duration measured here would silently include that backoff; per-attempt
+	// timing has to come from the transport itself (SOL-153394).
+	slog.DebugContext(ctx, "identity provider issued broker token",
+		slog.String("broker", input.BrokerAlias),
+		slog.Int("http_status", status),
+		slog.Int("attempts", idpclient.AttemptsFromContext(ctx)))
 	// Defense-in-depth visibility only — never fails the exchange. See
 	// warnIfAudienceMismatch's doc for why this is WARN, not a hard failure
 	// (SOL-152981).

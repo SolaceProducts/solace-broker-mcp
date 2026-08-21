@@ -122,7 +122,9 @@ func checkRetry(ctx context.Context, resp *http.Response, err error) (bool, erro
 }
 
 // attemptsKey is the context key used by WithAttemptsCounter. Unexported so
-// only this package can attach or read the counter — enforces the API.
+// the counter can only be attached and read through this package's own API
+// (WithAttemptsCounter, AttemptsFromContext) rather than by any caller that
+// guesses the key.
 type attemptsKey struct{}
 
 // WithAttemptsCounter attaches a fresh attempts counter to ctx and returns
@@ -143,6 +145,21 @@ func WithAttemptsCounter(ctx context.Context) (context.Context, func() int) {
 	counter := new(int)
 	ctx = context.WithValue(ctx, attemptsKey{}, counter)
 	return ctx, func() int { return *counter }
+}
+
+// AttemptsFromContext returns the attempt count for a ctx that came from
+// WithAttemptsCounter, for code that holds the context but not the reader the
+// constructor returned. Returns 0 when ctx carries no counter, which is
+// indistinguishable from "attached but nothing sent yet" — read it only where
+// a request has already completed.
+//
+// The count is live, not a snapshot: it reflects the attempts made so far, so
+// reading it mid-flight gives a number that is still moving.
+func AttemptsFromContext(ctx context.Context) int {
+	if c, ok := ctx.Value(attemptsKey{}).(*int); ok && c != nil {
+		return *c
+	}
+	return 0
 }
 
 // attemptsRecorder is a RoundTripper wrapper that increments the counter
