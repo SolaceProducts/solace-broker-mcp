@@ -169,24 +169,50 @@ func TestPinnedRDPSubResources(t *testing.T) {
 // request for any RDP other than the pinned one must miss and 404, never be
 // served the pinned RDP's body. Serving it would make every measurement of
 // get-rdp-status silently valid-looking for RDPs that were never captured.
+//
+// The names are chosen for their string relationship to the pinned "rdp_1",
+// because the regression to guard against is the name comparison in
+// sempv2RDPPath degrading from == to a prefix or substring match — an easy
+// refactor slip, and the one wrong answer nothing else in the harness would
+// catch. An unrelated name cannot detect that: HasPrefix("rdp_999", "rdp_1")
+// is false, so rdp_999 alone would keep passing. Each case below fails under
+// one such degradation, in both directions.
 func TestUnpinnedRDPNameMisses(t *testing.T) {
-	subs := []string{"", "/" + rdpSubQueueBindings, "/" + rdpSubRestConsumers}
-	for _, sub := range subs {
-		t.Run("sub="+sub, func(t *testing.T) {
-			h := newTestHandler(t)
-			path := privateVPNBase + "/restDeliveryPoints/rdp_999" + sub
+	names := map[string]string{
+		// Shares no prefix with the pinned name: the plain wrong-RDP case.
+		"unrelated": "rdp_999",
+		// The pinned name is a prefix of this one, so HasPrefix(name, pinned)
+		// or Contains(name, pinned) would serve it. The VPN this fixture was
+		// captured from holds rdp_1 through rdp_196, so these neighbours are
+		// real names a caller can ask for, not synthetic ones.
+		"pinned-is-prefix": "rdp_10",
+		// The mirror image: this is a prefix of the pinned name, catching
+		// HasPrefix(pinned, name) — which rdp_10 does not.
+		"prefix-of-pinned": "rdp_",
+	}
+	subs := map[string]string{
+		"object":        "",
+		"queueBindings": "/" + rdpSubQueueBindings,
+		"restConsumers": "/" + rdpSubRestConsumers,
+	}
+	for nameLabel, rdpName := range names {
+		for subLabel, sub := range subs {
+			t.Run(nameLabel+"/"+subLabel, func(t *testing.T) {
+				h := newTestHandler(t)
+				path := privateVPNBase + "/restDeliveryPoints/" + rdpName + sub
 
-			rec := get(t, h, path)
-			if rec.Code != http.StatusNotFound {
-				t.Errorf("status = %d, want 404 (body=%q)", rec.Code, rec.Body.String())
-			}
-			if strings.Contains(rec.Body.String(), testRDPName) {
-				t.Errorf("served the pinned RDP's body for an unpinned name: %s", rec.Body.String())
-			}
-			if h.missCount() != 1 {
-				t.Errorf("missCount = %d, want 1", h.missCount())
-			}
-		})
+				rec := get(t, h, path)
+				if rec.Code != http.StatusNotFound {
+					t.Errorf("%s: status = %d, want 404 (body=%q)", path, rec.Code, rec.Body.String())
+				}
+				if strings.Contains(rec.Body.String(), testRDPName) {
+					t.Errorf("%s: served the pinned RDP's body for an unpinned name: %s", path, rec.Body.String())
+				}
+				if h.missCount() != 1 {
+					t.Errorf("%s: missCount = %d, want 1", path, h.missCount())
+				}
+			})
+		}
 	}
 }
 
