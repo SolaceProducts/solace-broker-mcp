@@ -16,7 +16,9 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	internalauth "github.com/SolaceProducts/solace-broker-mcp/internal/auth"
@@ -67,13 +69,20 @@ func NewOAuthAuthenticator(exchanger tokenExchanger, audience string, brokerAlia
 // Hop 1 middleware) for a broker-scoped token and sets it as the
 // Authorization: Bearer header on req.
 func (a *OAuthAuthenticator) AddAuth(ctx context.Context, req *http.Request) error {
+	// Opens the trace. Everything between this and the finish line below
+	// belongs to one broker call, whichever route the token took.
+	slog.DebugContext(ctx, "broker token needed",
+		slog.String("broker", a.brokerAlias))
+
 	subjectToken, ok := internalauth.RawSubjectTokenFromContext(ctx)
 	if !ok {
-		return &tokenexchange.ExchangeError{
+		err := &tokenexchange.ExchangeError{
 			Sentinel:    tokenexchange.ErrExchangeMissingSubject,
 			Message:     "oauth auth: no subject token on context — Hop 1 middleware may not have run",
 			BrokerAlias: a.brokerAlias,
 		}
+		a.logUnavailable(ctx, err)
+		return err
 	}
 
 	tok, err := a.exchanger.Exchange(ctx, tokenexchange.ExchangeInput{
@@ -82,11 +91,35 @@ func (a *OAuthAuthenticator) AddAuth(ctx context.Context, req *http.Request) err
 		Audience:     a.audience,
 	})
 	if err != nil {
+		a.logUnavailable(ctx, err)
 		return fmt.Errorf("oauth auth: token exchange failed: %w", err)
 	}
 
 	req.Header.Set("Authorization", "Bearer "+tok.Value)
+
+	// Closes the trace opened above, on the success path.
+	slog.DebugContext(ctx, "broker token attached to request",
+		slog.String("broker", a.brokerAlias))
+
 	return nil
+}
+
+// logUnavailable closes the trace on every failure path, so a start line always
+// has a partner and a dangling one means something abnormal.
+//
+// It carries the sentinel and nothing else: the tool layer already reports the
+// same failure at ERROR with the full diagnostics, so repeating them here would
+// log one failure twice. A non-ExchangeError cannot reach here today; the
+// fallback keeps the line honest if one ever does.
+func (a *OAuthAuthenticator) logUnavailable(ctx context.Context, err error) {
+	reason := "unknown"
+	var exchErr *tokenexchange.ExchangeError
+	if errors.As(err, &exchErr) && exchErr.Sentinel != nil {
+		reason = exchErr.Sentinel.Error()
+	}
+	slog.DebugContext(ctx, "broker token unavailable",
+		slog.String("broker", a.brokerAlias),
+		slog.String("reason", reason))
 }
 
 // HandleAuthFailure evicts the cached token and signals a retry that must

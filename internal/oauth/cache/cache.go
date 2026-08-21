@@ -72,10 +72,6 @@ func (s GetStatus) String() string {
 	}
 }
 
-func (s GetStatus) Level() slog.Level {
-	return slog.LevelDebug
-}
-
 // GetResult is returned by Get. Callers inspect Status to distinguish
 // a hit from a miss.
 type GetResult struct {
@@ -95,8 +91,8 @@ func (r GetResult) LogValue() slog.Value {
 type PutStatus int
 
 const (
-	PutStored    PutStatus = iota // Entry accepted and stored.
-	PutDroppedTTL                 // TTL was zero or negative after clock-skew; not stored.
+	PutStored     PutStatus = iota // Entry accepted and stored.
+	PutDroppedTTL                  // TTL was zero or negative after clock-skew; not stored.
 )
 
 func (s PutStatus) String() string {
@@ -110,13 +106,13 @@ func (s PutStatus) String() string {
 	}
 }
 
-func (s PutStatus) Level() slog.Level {
-	switch s {
-	case PutDroppedTTL:
-		return slog.LevelWarn
-	default:
-		return slog.LevelDebug
-	}
+// LogValue renders the status as its name rather than the underlying iota.
+// slog resolves LogValuer but never calls String, so without this a caller
+// logging a bare PutStatus emits an integer — and PutStored is 0, which reads
+// as a success exit code while 1 reads as failure. Live at the cache-store
+// site's default arm, which reports an unrecognized status verbatim.
+func (s PutStatus) LogValue() slog.Value {
+	return slog.StringValue(s.String())
 }
 
 // PutResult is returned by Put.

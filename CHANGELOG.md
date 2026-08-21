@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Token-cache log lines now name their outcome instead of encoding it as an integer. The `status` field (`0`/`1`, with opposite polarity between the get and put lines) becomes `result`, spelled `hit` or `miss`. The cache-write line is split in two and carries no `result`: `broker token cached` at DEBUG, or `broker token not cached: remaining lifetime too short after clock-skew adjustment` at WARN. Anything keying on `status` or on the old message strings needs updating. Tracked under SOL-153363.
+- Duration attributes in the server's JSON logs are now human-readable strings rather than raw nanoseconds — `"77.496667ms"` instead of `77496667`. This applies to every duration the server emits, wherever it appears, because the conversion matches on the value's type rather than on a list of field names. **Each of these values changes from a JSON number to a JSON string, so anything consuming them numerically will break.** Redaction still takes precedence: a duration under a credential-shaped key is redacted, not formatted. The `exchange_elapsed` key is also renamed to `exchange_total_elapsed` — it spans deduplication waiting, the rate-limit gate, the circuit breaker, every retry attempt and its backoff, and the cache write, so a value can cover several attempts, or a rejection that never reached the identity provider. Anything filtering on the old key needs updating. Tracked under SOL-153363.
+
 ## [0.8.0] - 2026-08-20
 
 ### Added
@@ -35,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is tracked separately. Tracked under SOL-152956.
 
 ### Changed
+
 
 - Updated the embedded SEMPv2 OpenAPI specs to the 10.26.4 rolling release (`10.26.4.10725`), so tool schemas track current broker attributes. The three spec files are renamed to `semp-v2-swagger-{action,config,monitor}.10.26.4.json` and continue to be sourced from the private-extended variant.
 

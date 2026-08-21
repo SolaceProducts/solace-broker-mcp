@@ -56,8 +56,15 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	if getErr != nil {
 		slog.WarnContext(ctx, "token cache get failed", "broker", input.BrokerAlias, "error", getErr)
 	} else {
-		slog.Log(ctx, gr.Status.Level(), "token cache get", "broker", input.BrokerAlias, "status", gr.Status)
-		if gr.Status == cache.GetHit {
+		// One message per outcome. A message that names what happened needs no
+		// result attribute alongside it. Both are Debug, so the level is stated
+		// here rather than read from Status.Level().
+		if gr.Status != cache.GetHit {
+			slog.DebugContext(ctx, "no cached broker token",
+				slog.String("broker", input.BrokerAlias))
+		} else {
+			slog.DebugContext(ctx, "using cached broker token",
+				slog.String("broker", input.BrokerAlias))
 			// Re-check for the same reason the singleflight branch does below:
 			// the entry guard is point-in-time and Get ignores ctx, so without
 			// this a caller cancelled during the lookup still leaves with a
@@ -159,6 +166,14 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 		if err := ctx.Err(); err != nil {
 			return abandonedByCaller(err, "result")
 		}
+		// Wider than one IdP call, hence exchange_total_elapsed rather than a
+		// round-trip time: start is taken above the DoChan dispatch, so this
+		// covers the singleflight wait, the gate and breaker checks, every
+		// retry attempt and its backoff, and the cache Put. Only the cache Get
+		// is outside it. 8.2s here may be three attempts, not one slow call —
+		// the attempts count on the "issued" line tells those apart. A breaker
+		// or gate rejection, and a follower waiting on another caller, report
+		// time with no IdP call behind it at all.
 		elapsed := e.nowFunc().Sub(start)
 		if res.Err != nil {
 			// Map the breaker's open-state rejection (returned by Execute
@@ -180,9 +195,9 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 
 		tok := res.Val.(*Token)
 
-		slog.DebugContext(ctx, "token exchange succeeded",
+		slog.DebugContext(ctx, "broker token exchange completed",
 			slog.String("broker", input.BrokerAlias),
-			slog.Duration("exchange_elapsed", elapsed))
+			slog.Duration("exchange_total_elapsed", elapsed))
 
 		return tok, nil
 	}
@@ -241,12 +256,6 @@ func (e *Exchanger) runExchangeOnce(key string, input ExchangeInput) (*Token, er
 		return nil, classified
 	}
 
-	if n := attempts(); n > 1 {
-		slog.DebugContext(exchCtx, "token exchange retried",
-			slog.String("broker", input.BrokerAlias),
-			slog.Int("attempts", n))
-	}
-
 	pr, putErr := e.cache.Put(exchCtx, key, cache.CachedCredential{
 		Value:     tok.Value,
 		ExpiresAt: tok.ExpiresAt,
@@ -254,7 +263,27 @@ func (e *Exchanger) runExchangeOnce(key string, input ExchangeInput) (*Token, er
 	if putErr != nil {
 		slog.WarnContext(exchCtx, "token cache put failed", "broker", input.BrokerAlias, "error", putErr)
 	} else {
-		slog.Log(exchCtx, pr.Status.Level(), "token cache put", "broker", input.BrokerAlias, "status", pr.Status)
+		// One message per outcome. A Put either wrote or refused to, so a
+		// shared message is false on one path, and the levels differ.
+		switch pr.Status {
+		case cache.PutStored:
+			slog.DebugContext(exchCtx, "broker token cached",
+				slog.String("broker", input.BrokerAlias))
+		case cache.PutDroppedTTL:
+			slog.WarnContext(exchCtx, "broker token not cached: remaining lifetime too short after clock-skew adjustment",
+				slog.String("broker", input.BrokerAlias))
+		default:
+			// Unreachable in the current build — PutStored and PutDroppedTTL
+			// are the only PutStatus values and both are handled above. A
+			// status added later lands here. Warn rather than falling into
+			// the stored branch: reporting an unknown outcome as a
+			// successful cache write would be a silent lie. This is the one
+			// arm that keeps `result`, because its message deliberately does
+			// not name the outcome — the status is all we have to report.
+			slog.WarnContext(exchCtx, "broker token cache returned an unrecognized outcome; cannot tell whether the token was written",
+				slog.String("broker", input.BrokerAlias),
+				slog.Any("result", pr.Status))
+		}
 	}
 
 	return tok, nil
@@ -331,7 +360,7 @@ func (e *Exchanger) classifyRetryOutcome(ctx context.Context, err error, attempt
 		return err
 	}
 
-	slog.DebugContext(ctx, "token exchange retries exhausted",
+	slog.DebugContext(ctx, "broker token request retries exhausted",
 		slog.String("broker", brokerAlias),
 		slog.Int("attempts", attempts),
 		slog.String("underlying", err.Error()))
@@ -378,6 +407,13 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 		}
 	}
 
+	// Here rather than in runExchangeOnce so this and the "issued" line fire
+	// once per real IdP call: a collapsed singleflight caller, or one the gate
+	// or breaker turned away, never reaches this function. Their absence says
+	// no request left the process.
+	slog.DebugContext(ctx, "requesting broker token from identity provider",
+		slog.String("broker", input.BrokerAlias))
+
 	resp, err := e.httpClient.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -390,10 +426,23 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 		}
 	}
 
+	// Read the status before parseIdPResponse, which closes the body and does
+	// not return the response.
+	status := resp.StatusCode
+
 	tok, err := e.parseIdPResponse(resp, e.nowFunc())
 	if err != nil {
 		return nil, err
 	}
+
+	// attempts belongs on this line, not the completion line further out: it
+	// describes this IdP call, and the counter has stopped moving now the
+	// response is in. A count rather than a duration because httpClient
+	// retries, so timing here would include backoff.
+	slog.DebugContext(ctx, "identity provider issued broker token",
+		slog.String("broker", input.BrokerAlias),
+		slog.Int("http_status", status),
+		slog.Int("attempts", idpclient.AttemptsFromContext(ctx)))
 	// Defense-in-depth visibility only — never fails the exchange. See
 	// warnIfAudienceMismatch's doc for why this is WARN, not a hard failure
 	// (SOL-152981).

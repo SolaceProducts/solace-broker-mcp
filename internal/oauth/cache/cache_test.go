@@ -653,53 +653,34 @@ func TestConcurrentAccess_IncludesDelete(t *testing.T) {
 	t.Logf("ran %d Put, %d Get, %d Delete goroutines on overlapping keys", n, n, n)
 }
 
-// TestGetStatus_Level pins the slog level mapping the token exchanger consumes
-// at exchange.go:41. Both GetHit and GetMiss are Debug — routine cache traffic
-// doesn't warrant a Warn.
-func TestGetStatus_Level(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name   string
-		status GetStatus
-		want   slog.Level
-	}{
-		{"hit is debug", GetHit, slog.LevelDebug},
-		{"miss is debug", GetMiss, slog.LevelDebug},
-	}
-
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if got := tc.status.Level(); got != tc.want {
-				t.Errorf("%v.Level(): got %v, want %v", tc.status, got, tc.want)
-			}
-		})
-	}
-}
-
-// TestPutStatus_Level pins the slog level mapping the token exchanger consumes
-// at exchange.go:80. PutStored is Debug (routine); PutDroppedTTL is Warn (the
-// caller asked us to cache something we couldn't keep — worth surfacing).
-func TestPutStatus_Level(t *testing.T) {
+// TestPutStatus_LogValue is symmetric with TestGetStatus_LogValue. PutStored
+// is 0 and GetHit is also 0, so a bare integer carries no signal about which
+// enum — or which polarity — a reader is looking at.
+func TestPutStatus_LogValue(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name   string
 		status PutStatus
-		want   slog.Level
+		want   string
 	}{
-		{"stored is debug", PutStored, slog.LevelDebug},
-		{"dropped_ttl is warn", PutDroppedTTL, slog.LevelWarn},
+		{"stored", PutStored, `"result":"stored"`},
+		{"dropped_ttl", PutDroppedTTL, `"result":"dropped_ttl"`},
 	}
 
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := tc.status.Level(); got != tc.want {
-				t.Errorf("%v.Level(): got %v, want %v", tc.status, got, tc.want)
+
+			var buf bytes.Buffer
+			slog.New(slog.NewJSONHandler(&buf, nil)).Info("m", "result", tc.status)
+
+			if got := buf.String(); !strings.Contains(got, tc.want) {
+				t.Errorf("emitted %s, want it to contain %s", strings.TrimSpace(got), tc.want)
+			}
+			if bad := fmt.Sprintf(`"result":%d`, int(tc.status)); strings.Contains(buf.String(), bad) {
+				t.Errorf("emitted the raw enum %s; LogValue is not being honored", bad)
 			}
 		})
 	}
