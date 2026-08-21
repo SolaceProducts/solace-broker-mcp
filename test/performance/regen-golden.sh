@@ -30,10 +30,14 @@ bin="$here/bin"
 config="${CONFIG_FILE:-$repo_root/broker-config.yaml}"
 broker_alias="${BROKER_ALIAS:-my-broker}"
 vpn="${VPN:-default}"
-# The RDP that get-rdp-status is captured and replayed for. mock-semp reads
-# the name back out of the captured object, and the manifest records it here,
-# so the fixture, the mock and the run scripts all name the same RDP.
-rdp_name="${RDP_NAME:-rdp_1}"
+# The RDP that get-rdp-status is captured and replayed for. Optional, and
+# deliberately not defaulted to a literal: capture.sh pins the first RDP the
+# VPN reports when this is unset, and step 3 below reads the name back out of
+# the captured object — the same source mock-semp resolves it from. So the
+# fixture, the mock, the manifest and the run scripts all name the same RDP
+# because they all read it from one place, rather than because a default
+# happened to match the lab.
+rdp_name="${RDP_NAME:-}"
 runs="$bin/runs/$(date +%Y%m%d-%H%M%S)-regen"
 mkdir -p "$runs"
 
@@ -168,13 +172,31 @@ if [[ -z "$broker_url" ]]; then
   exit 2
 fi
 
-echo "== 3. canned/*: direct SEMP capture from $broker_url (vpn=$vpn rdp=$rdp_name)"
+echo "== 3. canned/*: direct SEMP capture from $broker_url (vpn=$vpn rdp=${rdp_name:-<first in VPN>})"
 BROKER_URL="$broker_url" \
   BROKER_USERNAME="$BROKER_USERNAME" \
   BROKER_PASSWORD="$BROKER_PASSWORD" \
   MSG_VPN="$vpn" \
   RDP_NAME="$rdp_name" \
   "$here/mock-semp/canned/capture.sh" 2>&1 | tee "$runs/canned.log"
+
+# Read the pinned name back out of the capture, exactly as mock-semp does at
+# startup (pinnedRDPName in mock-semp/handler.go). capture.sh may have derived
+# it, so this — not $RDP_NAME — is what the golden capture and the manifest
+# must use. Parsing the fixture rather than the capture log keeps the manifest
+# describing the bytes on disk.
+rdp_object="$here/mock-semp/canned/rdp_object.json"
+if command -v jq >/dev/null 2>&1; then
+  rdp_name="$(jq -r '.data.restDeliveryPointName // ""' "$rdp_object")"
+else
+  rdp_name="$(grep -oE '"restDeliveryPointName"[[:space:]]*:[[:space:]]*"[^"]*"' "$rdp_object" |
+    head -1 | sed -E 's/.*"([^"]+)"$/\1/')"
+fi
+if [[ -z "$rdp_name" ]]; then
+  echo "capture wrote no restDeliveryPointName into $rdp_object — cannot pin an RDP." >&2
+  exit 2
+fi
+echo "   pinned RDP: $rdp_name"
 
 echo "== 4. fidelity -capture (alias=$broker_alias vpn=$vpn rdp=$rdp_name)"
 "$bin/fidelity" -mcp-url http://localhost:9090 -broker "$broker_alias" -vpn "$vpn" -rdp "$rdp_name" \

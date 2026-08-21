@@ -39,7 +39,7 @@ why you want just one side.
 | `show_hardware_details.xml` | SEMPv1, appliance-only path of `get-broker-status` |
 | `queues_page<N>.json` | SEMPv2 `list-queues`, one file per page; pages must be contiguous from 1. However many the broker's queue count produces — `sanitize.sh` globs them |
 | `rdps_page<N>.json` | SEMPv2 `list-rdps`, same per-page scheme |
-| `rdp_object.json`, `rdp_queue_bindings.json`, `rdp_rest_consumers.json` | SEMPv2 `get-rdp-status`, for the single RDP `RDP_NAME` pinned at capture time |
+| `rdp_object.json`, `rdp_queue_bindings.json`, `rdp_rest_consumers.json` | SEMPv2 `get-rdp-status`, for the single RDP pinned at capture time (`RDP_NAME`, or the first the VPN reports) |
 
 `mock-semp` reads the pinned RDP's name out of `rdp_object.json` rather than
 taking it as a flag, so the fixture and the rule cannot name different RDPs. A

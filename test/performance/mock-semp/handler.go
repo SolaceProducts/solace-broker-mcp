@@ -431,8 +431,17 @@ const (
 //
 // One page per sub-resource is enough while the pinned RDP has a single queue
 // binding and a single REST consumer (get-rdp-status asks for count=100).
-// A pinned RDP with more than 100 of either would need page files here, and
-// would announce itself as a miss rather than a truncated answer.
+//
+// A pinned RDP with more than 100 of either would NOT announce itself. The
+// tool declares no maxResults parameter, so resolveMaxResults returns
+// defaultMax (100) and fetchPaginated stops on the first page without ever
+// issuing a cursor request — see internal/composite/executor.go. Fixture and
+// golden would each hold the first 100 of N with truncated: true, they would
+// match, and the gate would stay green over a partial answer. Nothing misses,
+// and sempv2RDPPath ignores the cursor parameter anyway (unlike
+// sempv2ListCursorEquals), so a cursor request would re-serve page 1 rather
+// than fail. Pinning a busy RDP is therefore a capture-time judgement the
+// harness cannot make for you: prefer one with a single binding and consumer.
 func buildPinnedRDPRules() []*rule {
 	const objectFile = "rdp_object.json"
 	pinned := pinnedRDPName(objectFile)

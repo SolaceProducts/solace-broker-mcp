@@ -345,8 +345,13 @@ CONFIG_FILE=./broker-config.real.yaml ./regen-golden.sh
 ```
 
 Overrides: `BROKER_ALIAS` (default `my-broker`), `VPN` (default `default`),
-`RDP_NAME` (default `rdp_1` — the single RDP `get-rdp-status` is captured and
-replayed for).
+`RDP_NAME` (the single RDP `get-rdp-status` is captured and replayed for —
+defaults to the first RDP the VPN reports, derived from the captured
+collection). Setting `RDP_NAME` to a name the VPN does not hold fails before
+anything is captured; leaving it unset cannot name an RDP the broker lacks.
+Prefer an RDP with one queue binding and one REST consumer: `get-rdp-status`
+declares no `maxResults`, so a busier one is captured silently truncated at 100
+rather than caught.
 For example, to capture from a non-default VPN:
 
 ```

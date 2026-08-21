@@ -17,12 +17,14 @@
 #   BROKER_USERNAME=... \
 #   BROKER_PASSWORD=... \
 #   MSG_VPN=default \
-#   RDP_NAME=rdp_1 \
+#   [RDP_NAME=rdp_1] \
 #   ./capture.sh
 #
-# RDP_NAME pins the single RDP that get-rdp-status is replayed for. mock-semp
-# reads the pinned name back out of the captured object rather than taking a
-# flag, so the two cannot disagree; a request for any other RDP misses.
+# RDP_NAME pins the single RDP that get-rdp-status is replayed for, and is
+# optional: unset, this pins the first RDP the VPN reports. mock-semp reads the
+# pinned name back out of the captured object rather than taking a flag, so the
+# two cannot disagree; a request for any other RDP misses. Setting it to a name
+# the VPN does not hold fails before anything is captured.
 #
 # Exits non-zero on any HTTP failure — a missing response file is a build
 # mistake, not a runtime one.
@@ -32,7 +34,12 @@ set -euo pipefail
 : "${BROKER_USERNAME:?BROKER_USERNAME is required}"
 : "${BROKER_PASSWORD:?BROKER_PASSWORD is required}"
 MSG_VPN="${MSG_VPN:-default}"
-RDP_NAME="${RDP_NAME:-rdp_1}"
+# No literal default. Unset means "pin whichever RDP this VPN reports first",
+# derived from the collection captured below — see pin_rdp_name. A hardcoded
+# name would be the one place in this chain that can name an RDP the capture
+# does not contain, which is exactly what mock-semp reading the name back out
+# of rdp_object.json exists to prevent.
+RDP_NAME="${RDP_NAME:-}"
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
@@ -81,6 +88,34 @@ curl_get() {
   echo "wrote $out ($(wc -c < "$out") bytes)"
 }
 
+# All SEMPv2 captures use the private monitor endpoint, because that is what
+# MCP uses: the monitor spec's basePath is /SEMP/v2/__private_monitor__, and
+# list-queues needs it for bindCount, a private-schema attribute the public
+# /SEMP/v2/monitor/... path rejects as "not a valid attribute". Capturing from
+# the private path keeps the fixture byte-comparable with what MCP sees
+# end-to-end.
+SEMP_BASE="/SEMP/v2/__private_monitor__/msgVpns/$MSG_VPN"
+
+# An explicitly requested RDP is checked before a single fixture is written.
+# Every capture below overwrites its file, and the per-RDP requests come last,
+# so without this a bad RDP_NAME replaces the five SEMPv1 captures and both
+# paginated collections and *then* fails on a bare curl 404 — leaving a tree
+# that no longer matches fixtures.manifest and a message that never mentions
+# RDP_NAME. One request up front buys a clear error and an untouched tree.
+#
+# Only needed for an explicit name: a derived one comes from the captured
+# collection and therefore cannot name an RDP the broker lacks.
+if [[ -n "$RDP_NAME" ]]; then
+  if ! curl -fsS --config - \
+      "$BROKER_URL$SEMP_BASE/restDeliveryPoints/$RDP_NAME?select=restDeliveryPointName" \
+      -o /dev/null <<<"$_curl_user_cfg"; then
+    echo "capture: RDP_NAME='$RDP_NAME' does not exist in VPN '$MSG_VPN' on $BROKER_URL." >&2
+    echo "         Nothing was captured. Leave RDP_NAME unset to pin the first RDP the VPN reports," >&2
+    echo "         or pass a name this VPN actually holds." >&2
+    exit 2
+  fi
+fi
+
 echo "--- SEMPv1: get-broker-status inputs ---"
 curl_semp show_version.xml       '<rpc><show><version/></show></rpc>'
 curl_semp show_system.xml        '<rpc><show><system/></show></rpc>'
@@ -93,14 +128,6 @@ curl_semp show_message_spool.xml '<rpc><show><message-spool><detail/></message-s
 # at all. On a software broker the broker answers with a SEMP failure rather
 # than an HTTP error, which is captured and simply never requested.
 curl_semp show_hardware_details.xml '<rpc><show><hardware><details/></hardware></show></rpc>'
-
-# All SEMPv2 captures use the private monitor endpoint, because that is what
-# MCP uses: the monitor spec's basePath is /SEMP/v2/__private_monitor__, and
-# list-queues needs it for bindCount, a private-schema attribute the public
-# /SEMP/v2/monitor/... path rejects as "not a valid attribute". Capturing from
-# the private path keeps the fixture byte-comparable with what MCP sees
-# end-to-end.
-SEMP_BASE="/SEMP/v2/__private_monitor__/msgVpns/$MSG_VPN"
 
 # capture_pages follows a collection's pagination chain into
 # <prefix><N>.json, one file per page.
@@ -143,15 +170,46 @@ echo "--- SEMPv2: list-rdps (page 1 + follow pagination) ---"
 RDPS_SELECT="clientName,enabled,lastFailureReason,lastFailureTime,msgVpnName,restDeliveryPointName,up"
 capture_pages rdps_page "$SEMP_BASE/restDeliveryPoints?count=100&select=$RDPS_SELECT"
 
+# pin_rdp_name prints the first restDeliveryPointName in the captured
+# collection. jq preferred, grep fallback, matching capture_pages' handling of
+# nextPageUri — this script cannot assume jq.
+pin_rdp_name() {
+  local page="$1"
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '.data[0].restDeliveryPointName // ""' "$page"
+  else
+    grep -oE '"restDeliveryPointName"[[:space:]]*:[[:space:]]*"[^"]*"' "$page" |
+      head -1 | sed -E 's/.*"([^"]+)"$/\1/' || true
+  fi
+}
+
+# Pin the RDP from the data just captured rather than from a literal. mock-semp
+# reads the pinned name back out of rdp_object.json, so taking it from the
+# collection makes "the fixture and the rule name the same RDP" true by
+# construction on any broker, not just the lab VPN this was built against.
+if [[ -z "$RDP_NAME" ]]; then
+  RDP_NAME="$(pin_rdp_name rdps_page1.json)"
+  if [[ -z "$RDP_NAME" ]]; then
+    echo "capture: VPN '$MSG_VPN' on $BROKER_URL reports no RDPs, so get-rdp-status has nothing" >&2
+    echo "         to capture and mock-semp will not start. Capture from a VPN that has at least" >&2
+    echo "         one RDP (the fidelity gate needs one), or set RDP_NAME to pick a specific one." >&2
+    exit 2
+  fi
+  echo "pinned RDP '$RDP_NAME' (first in the captured collection; set RDP_NAME to override)"
+fi
+
 echo "--- SEMPv2: get-rdp-status for RDP '$RDP_NAME' (3 requests) ---"
 RDP_SELECT="clientName,clientProfileName,enabled,lastFailureReason,lastFailureTime,msgVpnName,restDeliveryPointName,timeConnectionsBlocked,up"
 BINDINGS_SELECT="lastFailureReason,lastFailureTime,postRequestTarget,queueBindingName,restDeliveryPointName,up,uptime"
 CONSUMERS_SELECT="authenticationScheme,enabled,httpRequestOutstandingTxMsgCount,httpRequestTimedOutTxMsgCount,httpRequestTxMsgCount,httpResponseErrorRxMsgCount,httpResponseSuccessRxMsgCount,lastConnectionFailureReason,lastConnectionFailureTime,lastFailureReason,lastFailureTime,outgoingConnectionCount,remoteHost,remotePort,restConsumerName,restDeliveryPointName,up"
 
-# get-rdp-status asks for count=100 on both sub-collections. One page each is
-# all this captures; an RDP with more than 100 queue bindings or REST consumers
-# would need page files, and would announce itself as a mock miss rather than
-# quietly answering with a partial list.
+# get-rdp-status asks for count=100 on both sub-collections, and one page each
+# is all this captures. An RDP with more than 100 queue bindings or REST
+# consumers would be captured silently truncated, not caught: the tool declares
+# no maxResults, so it never requests a second page (fetchPaginated in
+# internal/composite/executor.go stops at the 100-item default), the golden
+# records the same first 100 with truncated: true, and the gate passes over a
+# partial answer. Pin an RDP with one binding and one consumer.
 rdp_path="$SEMP_BASE/restDeliveryPoints/$RDP_NAME"
 curl_get rdp_object.json         "$rdp_path?select=$RDP_SELECT"
 curl_get rdp_queue_bindings.json "$rdp_path/queueBindings?count=100&select=$BINDINGS_SELECT"
