@@ -56,11 +56,9 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	if getErr != nil {
 		slog.WarnContext(ctx, "token cache get failed", "broker", input.BrokerAlias, "error", getErr)
 	} else {
-		// One message per outcome, matching the cache-store site below: a
-		// message that names what happened needs no result attribute to
-		// disambiguate it, and "lookup" plus result=hit read as two ways of
-		// saying the same thing. Both outcomes are Debug, so the level is
-		// stated here rather than taken from Status.Level().
+		// One message per outcome. A message that names what happened needs no
+		// result attribute alongside it. Both are Debug, so the level is stated
+		// here rather than read from Status.Level().
 		if gr.Status != cache.GetHit {
 			slog.DebugContext(ctx, "no cached broker token",
 				slog.String("broker", input.BrokerAlias))
@@ -168,25 +166,14 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 		if err := ctx.Err(); err != nil {
 			return abandonedByCaller(err, "result")
 		}
-		// The span this measures is WIDER than one IdP call, which is why it
-		// is logged as exchange_total_elapsed rather than as a round-trip
-		// time. start is taken just above the DoChan dispatch and the clock
-		// stops here, when this caller takes the result, so the interval
-		// covers: the singleflight wait, the Retry-After gate check, the
-		// circuit breaker, every retry attempt doExchange made plus the
-		// backoff (and any honored Retry-After sleep) between them, and the
-		// cache Put that runs inside the shared func before its value is
-		// published. Only the cache Get is outside it — that happens before
-		// start.
-		//
-		// So a value here is not an IdP latency figure. 8.2s may be three
-		// attempts and two backoffs, not one slow call; use the attempts
-		// count on the "identity provider issued broker token" line to tell
-		// those apart.
-		// Two cases name time with ZERO IdP calls behind it: a breaker or
-		// rate-limit-gate rejection, which returns without dialing, and a
-		// singleflight follower, whose interval is its wait for the winner
-		// rather than any request of its own.
+		// Wider than one IdP call, hence exchange_total_elapsed rather than a
+		// round-trip time: start is taken above the DoChan dispatch, so this
+		// covers the singleflight wait, the gate and breaker checks, every
+		// retry attempt and its backoff, and the cache Put. Only the cache Get
+		// is outside it. 8.2s here may be three attempts, not one slow call —
+		// the attempts count on the "issued" line tells those apart. A breaker
+		// or gate rejection, and a follower waiting on another caller, report
+		// time with no IdP call behind it at all.
 		elapsed := e.nowFunc().Sub(start)
 		if res.Err != nil {
 			// Map the breaker's open-state rejection (returned by Execute
@@ -276,13 +263,8 @@ func (e *Exchanger) runExchangeOnce(key string, input ExchangeInput) (*Token, er
 	if putErr != nil {
 		slog.WarnContext(exchCtx, "token cache put failed", "broker", input.BrokerAlias, "error", putErr)
 	} else {
-		// One message per outcome, rather than one shared message plus a
-		// result attribute. Unlike the lookup above — where a Get always
-		// happens and hit/miss is what it found, so only the attribute can
-		// say which — a Put either wrote or refused to. A single message
-		// covering both is false on one path, and a message that names the
-		// outcome makes the attribute redundant. The level is a property of
-		// the branch, so it is stated here rather than looked up.
+		// One message per outcome. A Put either wrote or refused to, so a
+		// shared message is false on one path, and the levels differ.
 		switch pr.Status {
 		case cache.PutStored:
 			slog.DebugContext(exchCtx, "broker token cached",
@@ -425,11 +407,10 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 		}
 	}
 
-	// This and the "issued" line below sit here rather than one level up in
-	// runExchangeOnce so they fire once per real IdP interaction: a caller that
-	// the singleflight collapsed never reaches this function, and neither does
-	// one the breaker or the rate-limit gate turned away. The absence of these
-	// two lines is therefore meaningful — it says no request left the process.
+	// Here rather than in runExchangeOnce so this and the "issued" line fire
+	// once per real IdP call: a collapsed singleflight caller, or one the gate
+	// or breaker turned away, never reaches this function. Their absence says
+	// no request left the process.
 	slog.DebugContext(ctx, "requesting broker token from identity provider",
 		slog.String("broker", input.BrokerAlias))
 
@@ -454,13 +435,10 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 		return nil, err
 	}
 
-	// attempts belongs here rather than on the completion line further out: it
-	// is a fact about this IdP interaction, and by this point the response has
-	// arrived so the live counter has stopped moving. httpClient is the
-	// retrying client, so one Do above can be several attempts with backoff
-	// between them — which is why this is a count and not a duration. A
-	// duration measured here would silently include that backoff; per-attempt
-	// timing has to come from the transport itself (SOL-153394).
+	// attempts belongs on this line, not the completion line further out: it
+	// describes this IdP call, and the counter has stopped moving now the
+	// response is in. A count rather than a duration because httpClient
+	// retries, so timing here would include backoff.
 	slog.DebugContext(ctx, "identity provider issued broker token",
 		slog.String("broker", input.BrokerAlias),
 		slog.Int("http_status", status),

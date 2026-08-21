@@ -34,26 +34,18 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
 )
 
-// AddAuth obtains a broker token and puts it on an outgoing SEMP request. It
-// does that through Exchanger and TokenCache, and this test runs all three
-// together against a fake IdP.
+// AddAuth obtains a broker token and puts it on an outgoing SEMP request,
+// working through Exchanger and TokenCache. This test runs all three against a
+// fake IdP and checks two things:
 //
-// It checks two things, and deliberately nothing else. It does not check the
-// wording of the log lines in between, so rewording one of those does not
-// break this test.
+//  1. No secret is written to a log. AddAuth's unit tests use a fake exchanger
+//     returning a placeholder, so there is no real secret there to leak.
 //
-//  1. None of the secrets are written to a log. AddAuth handles the inbound
-//     token from the request and the broker token it gets back; Exchanger also
-//     holds the IdP client secret. AddAuth's own unit tests use a fake
-//     exchanger that returns a placeholder token, so there is no real secret
-//     there to leak. The values here are real, so a log line that prints one
-//     fails the build.
+//  2. AddAuth logs one start line and one finish line on every path, so a
+//     reader can tell "never got a token" from "still in progress".
 //
-//  2. AddAuth logs one line when it starts and one line when it finishes, on
-//     every path. That is what lets someone reading the logs tell "this request
-//     never got a token" apart from "this request is still in progress". A unit
-//     test cannot check it, because the fake exchanger skips everything AddAuth
-//     does in between.
+// It does not check the wording of the lines in between, so rewording one of
+// those does not break this test.
 
 const (
 	traceBrokerAlias  = "prod-us"

@@ -63,32 +63,15 @@ import (
 // in slog output. Case-insensitive substring match — see redactSecretAttr.
 var redactedKeys = []string{"password", "token", "secret", "authorization", "credential", "api_key", "private_key"}
 
-// redactSecretAttr is the slog.HandlerOptions.ReplaceAttr filter used by
-// newSlogHandler. It does two things, in this order:
+// redactSecretAttr is the ReplaceAttr filter for newSlogHandler. It redacts
+// values under credential-shaped keys, then renders any remaining duration as
+// "77.496667ms" rather than the raw nanoseconds slog would emit.
 //
-//  1. Redaction. Any attribute whose key (lowercased) contains one of
-//     redactedKeys has its value replaced with [REDACTED] and returns
-//     immediately. Redaction must be the FIRST thing that happens so no later
-//     rewrite can ever render a credential-keyed value; a duration-kinded
-//     attribute under a credential-shaped key (say token_ttl) is redacted, not
-//     formatted.
-//  2. Duration formatting. Any remaining duration-kinded value is rendered with
-//     time.Duration.String() — "77.496667ms" rather than the raw 77496667
-//     nanoseconds slog's JSON handler would otherwise emit for the underlying
-//     int64.
-//
-// The duration branch keys off the value's KIND, not its key name. That is the
-// opposite of the redaction branch above (which must match key names, because a
-// secret is identified by what it is called, not by its type) and it is
-// deliberate: matching on kind converts every duration attribute in the tree at
-// once, including ones added later under names nobody has thought of yet, with
-// no list to keep in sync.
-//
-// This is the only place the conversion can live. time.Duration already has a
-// String method, but slog resolves slog.LogValuer and never String, and a
-// LogValue method cannot be added to time.Duration because Go forbids methods
-// on another package's type. So the call sites are already correct and the fix
-// belongs in the handler.
+// Redaction runs first so a duration under a credential-shaped key (token_ttl,
+// say) is redacted rather than formatted. The duration branch matches on the
+// value's kind, not its key, so it covers every duration attribute including
+// ones added later. It has to live here: slog calls LogValue and never String,
+// and Go does not allow adding a LogValue method to time.Duration.
 func redactSecretAttr(_ []string, a slog.Attr) slog.Attr {
 	key := strings.ToLower(a.Key)
 	for _, r := range redactedKeys {
