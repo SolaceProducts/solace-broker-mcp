@@ -14,7 +14,7 @@ Thank you for your interest in contributing to the Solace Broker MCP Server! Thi
 - [Coding Standards](#coding-standards)
 - [Testing Requirements](#testing-requirements)
 - [Developer Certificate of Origin](#developer-certificate-of-origin)
-- [Third-party licence inventory](#third-party-licence-inventory)
+- [Third-Party Licence Inventory](#third-party-licence-inventory)
 
 ## Code of Conduct
 
@@ -151,13 +151,42 @@ including five Dockerized E2E suites. The header comment in
 `.github/workflows/build-and-test.yml` records the alternatives that were
 considered and why they lose.
 
+### If You Are Contributing From a Fork
+
+**Your checks will not start until a maintainer approves the run.** This is
+expected and it is not a CI failure. Every workflow run from a fork is held for a
+human click, so what you will see on a fresh pull request is a set of grey,
+pending checks and no logs — not a red X, and not a green tick either.
+
+Two things worth knowing so it does not read as something broken:
+
+- **It happens on every push, not just your first.** Rebase or add a commit and the
+  new run waits for approval again. There is no point at which you become exempt.
+- **Nothing tells us automatically that you are waiting.** GitHub sends maintainers
+  no notification for a held run — we find it from the ordinary review request on
+  the pull request. If your checks have sat pending for a while, a comment on the
+  pull request is the fastest way to get them started, and it is a reasonable thing
+  to ask for rather than a nag.
+
+Everything else about a fork pull request works normally: all required checks do
+report once the run is approved, including the E2E suites, licence and DCO checks,
+and CodeQL. None of them needs a secret you do not have.
+
 ### PR Review Process
 
-1. **Automated checks** — CI must pass (build, lint, test, E2E, DCO)
+1. **Automated checks** — CI must pass (build, lint, test, E2E, DCO, CodeQL)
 2. **Maintainer review** — At least one maintainer approval required
 3. **Address feedback** — Respond to review comments and make requested changes
-4. **Squash or rebase** — Clean up commit history if requested
-5. **Maintainer merge** — A maintainer will merge when approved
+4. **Merge queue** — A maintainer adds the pull request to the merge queue rather
+   than merging it directly. GitHub then re-runs the required checks against your
+   change rebased onto the current `main` and merges it only if they pass. You do
+   not need to keep your branch up to date with `main` yourself; the queue does
+   that. If a check fails at this stage it is usually a genuine conflict with
+   something that landed after your last push, so expect the occasional round trip
+   even on an approved pull request.
+5. **Squash merge** — Everything on `main` lands as a single squashed commit, so
+   your pull request title becomes the commit subject. Tidy commit history within
+   the branch is welcome but not required.
 
 **Response time:** We aim to provide initial feedback within 48 hours (business days). Larger PRs may take longer to review.
 
@@ -399,7 +428,7 @@ committer email uses a non-routable domain — one ending in `.local`, `.sol-loc
 machine invents when `git config user.email` is unset, and they publish
 permanently with the git history when the repository is public.
 
-This is a separate control from DCO, not a stricter form of it. `git commit -s`
+This check is a separate control from DCO, not a stricter form of it. `git commit -s`
 signs off with your `user.email`, the same value git puts in the author field —
 so a bad address still produces a sign-off that matches its author, and DCO
 passes. Only this check catches it.
@@ -448,14 +477,14 @@ maintainer to approve it, not just the one on your first push. So checks can sit
 **pending**, and a check that was green can go back to pending after the PR is
 retitled or edited. That is normal and nothing for you to fix.
 
-You will also see the `Guardian scan` check report as **skipped**. Our license,
+You also see the `Guardian scan` check report as **skipped**. Our license,
 vulnerability, and container scan reports to an internal service, and GitHub
 correctly withholds those credentials from a fork's workflow run, so the scan
 cannot run on your pull request. The `Guardian scan gate` check accounts for that
 and passes. If your change adds or updates a dependency, expect a reviewer to look
-at `go.mod` and `go.sum` closely, since the automated scan is not there to do it.
+at `go.mod` and `go.sum` closely, because the automated scan is not there to do it.
 
-## Third-party licence inventory
+## Third-Party Licence Inventory
 
 If your change bumps a dependency and `Third-party licenses current` goes red:
 
@@ -464,11 +493,11 @@ make refresh-third-party-inventory
 ```
 
 This regenerates both `THIRD_PARTY_LICENSES.md` and `THIRD_PARTY_BUILD_TEST.md`
-(SOL-152956) from what the repository actually uses — one command instead of
+(SOL-152956) from what the repository actually uses, one command instead of
 re-deriving the dependency closure and reconciling table rows by hand. It
 diffs against the two checks' own diagnostics, rewrites only the row(s) that
 drifted, reads each new licence fresh rather than inferring one, and refuses
-outright — leaving the file untouched — on anything it doesn't recognize (a
+outright (leaving the file untouched) on anything it doesn't recognize (a
 brand-new container image or npm package, a strong-copyleft licence, a
 duplicate or unparseable row) rather than guess. Review its diff and commit as
 usual.
@@ -477,17 +506,20 @@ If it refuses, that's not a bug to work around: it's telling you the
 remaining fix needs a human decision. Run the underlying check
 (`.github/scripts/licenses-check.sh` or `.github/scripts/build-test-licenses-check.sh`)
 directly to see exactly what's outstanding, and follow its own remediation
-text — most often either a new dependency shipping its own `NOTICE` file
+text: most often either a new dependency shipping its own `NOTICE` file
 (needs a human-written Apache-2.0 §4(d) attribution block, which no tool
 should auto-author) or a component whose licence genuinely differs from its
 parent module's and needs its own verified row.
 
 Still a manual step: Dependabot cannot execute post-update scripts, so its
-own PRs need a human to run this target, review the diff, and push — fully
-automatic regeneration on a Dependabot PR itself needs a bot credential and
-is tracked as a separate, later piece of work. See `RELEASING.md`'s
-**Third-party licence inventory** section for the source-of-truth decision
-this follows.
+own PRs need a human to run this target, review the diff, and push; or ask
+Claude Code to do it via the `/refresh-third-party-inventory` skill
+(`.claude/skills/refresh-third-party-inventory/`), which runs the same
+target and always stops to show the diff before committing or pushing.
+Fully automatic regeneration on a Dependabot PR itself needs a bot
+credential and is tracked as a separate, later piece of work. See
+`RELEASING.md`'s **Third-party licence inventory** section for the
+source-of-truth decision this follows.
 
 ## Questions?
 

@@ -1,6 +1,6 @@
 # Tools Reference
 
-Complete reference for every tool the Solace Event Broker MCP Server exposes:
+Complete reference for every tool the Solace Event Broker MCP (Model Context Protocol) Server exposes:
 parameters, output shape, an example invocation, and an example natural-language
 request. For task-oriented walkthroughs see [Examples](examples.md); for a
 narrative overview see the [User Guide](user-guide.md).
@@ -9,17 +9,17 @@ narrative overview see the [User Guide](user-guide.md).
 > output as input to a human decision, not as verified fact, and confirm any
 > write or destructive action before allowing it.
 
-The server exposes **24 read-only tools** plus **16 write tools** — 4 action
+The server exposes **24 read-only tools** plus **16 write tools** — four action
 tools and 12 Config-API management tools. The write tools are gated behind
 `enable_write_tools` (off by default) and are not registered with the MCP server
 when disabled — see
-[Action tools and `enable_write_tools`](#action-tools-and-enable_write_tools).
+[Action Tools and `enable_write_tools`](#action-tools-and-enable_write_tools).
 
 ## Conventions
 
 These apply to every tool unless noted otherwise.
 
-### The `broker` parameter
+### The `broker` Parameter
 
 Every tool **except `list-brokers` and `describe-semp-schema`** takes a required `broker` parameter
 identifying which configured broker to query. It is injected automatically into
@@ -30,7 +30,7 @@ each tool's input schema at registration (`injectBrokerParam` in
 { "type": "string", "description": "Target broker alias (required). Available brokers: <alias>, <alias>, ..." }
 ```
 
-The accepted values are the broker aliases from your config. Call `list-brokers`
+The accepted values are the broker aliases from your configuration. Call `list-brokers`
 to discover them. Alias matching is case-insensitive; original casing is
 preserved in output.
 
@@ -38,12 +38,12 @@ preserved in output.
 
 List tools accept an optional `maxResults` integer: **default 100, maximum 500**
 (`defaultMax`/`capMax` in the composite executor). The server pages through the
-broker's SEMP responses internally and returns up to `maxResults` items. Brokers
+broker's SEMP (Solace Element Management Protocol) responses internally and returns up to `maxResults` items. Brokers
 with more than 500 matching objects require a narrower query. Applies to:
 `list-vpns`, `list-queues`, `list-clients`, `list-client-subscriptions`,
 `list-slow-subscribers`, `list-rdps`, `list-queue-discards`.
 
-### Rate limiting and retries
+### Rate Limiting and Retries
 
 Requests to each broker are subject to per-broker concurrency limits and an
 automatic retry policy with backoff. Transient upstream failures (HTTP 429 from a
@@ -51,7 +51,7 @@ proxy/gateway, 503 from an overloaded broker) are retried automatically and
 reported as `retryable: true` if retries are exhausted. Tune these in
 [Configuration](configuration.md).
 
-### Output: the step-keyed envelope
+### Output: the Step-Keyed Envelope
 
 Most read-only tools return their broker data in a **step-keyed envelope** — a
 top-level JSON object whose keys are the tool's internal step IDs and whose values
@@ -74,7 +74,7 @@ fields: `error` (message), `retryable` (bool), `status` (HTTP code), plus
 source-specific fields (`operation`, `sempStatus`, `sempCode` for SEMPv2; `kind`,
 `reasonCode` for SEMPv1) and `suggestions`.
 
-### Action tools and `enable_write_tools`
+### Action Tools and `enable_write_tools`
 
 The four action tools (`disconnect-client`, `clear-client-stats`,
 `delete-queue-messages`, `clear-queue-stats`) change broker state. They are gated
@@ -84,9 +84,9 @@ behind the server-level `enable_write_tools` flag:
   authenticated client still cannot invoke them.
 - **`enable_write_tools: true`:** registered and callable.
 
-This is independent of `mcp_client_auth.mode`. The two **destructive** tools
+This gating is independent of `mcp_client_auth.mode`. The two **destructive** tools
 (`delete-queue-messages`, `disconnect-client`) carry the MCP `destructiveHint`
-annotation, instruct the calling LLM to obtain explicit user confirmation before
+annotation, instruct the calling large language model (LLM) to obtain explicit user confirmation before
 invocation, and cause the server to log a WARNING audit line on every call. The
 two `clear-*-stats` tools are writes but non-destructive (counters only).
 
@@ -94,7 +94,7 @@ The 12 Config-API management tools (create/update/delete for Message VPNs,
 queues, topic endpoints, and REST delivery points) are gated behind the same
 flag and documented under [Management](#management-config-api).
 
-## Tool index
+## Tool Index
 
 | Category | Tool | Write? |
 |---|---|---|
@@ -191,7 +191,7 @@ state, not a health verdict.
 | `broker` | string | yes | Target broker alias. |
 
 **Returns:** step-keyed envelope (native SEMPv1). Inner fields cover version,
-uptime/restart, scaling and resource utilization, spool state, and HA roles;
+uptime/restart, scaling and resource utilization, spool state, and high-availability (HA) roles;
 appliances add a `hardwareDetails` section. Field shape is documented in
 `docs/internal/semp/get-broker-status-curated-fields.md`.
 
@@ -203,7 +203,7 @@ appliances add a `hardwareDetails` section. Field shape is documented in
 
 ### get-redundancy-status
 
-Broker redundancy and high-availability status: config/operational status,
+Broker redundancy and high-availability status: configuration/operational status,
 active-standby role, mate router name, mate link state, and per-virtual-router
 activity. Single SEMPv1 call.
 
@@ -259,7 +259,7 @@ useful "has replication been flaky recently?" signal.
 ### list-vpns
 
 List Message VPNs with enabled state, connection count, and basic status. For
-per-service TLS status and AMQP support, use `get-vpn-status`.
+per-service TLS status and Advanced Message Queuing Protocol (AMQP) support, use `get-vpn-status`.
 
 **Parameters:**
 
@@ -271,7 +271,7 @@ per-service TLS status and AMQP support, use `get-vpn-status`.
 **Returns:** step-keyed envelope, step `vpns` (array). Selected fields per VPN:
 `msgVpnName`, `enabled`, `state`, `msgVpnConnections`,
 `msgVpnTotalUniqueSubscriptions`, `msgSpoolUsage`, `msgSpoolMsgCount`,
-`replicationEnabled`, `dmrEnabled`, per-service up/failure fields (SMF, MQTT,
+`replicationEnabled`, `dmrEnabled`, per-service up/failure fields (Solace Message Format (SMF), MQTT,
 REST, Web), and discard counts.
 
 ```json
@@ -377,7 +377,7 @@ flip for slow ACKs).
 `queueName`, `spooledMsgCount`, `txUnackedMsgCount`, `bindCount`, `maxBindCount`,
 `rxMsgRate`, `txMsgRate`, `rxByteRate`, `txByteRate`, `redeliveredMsgCount`,
 `maxDeliveredUnackedMsgsPerFlow`, `msgSpoolUsage`, `maxMsgSpoolUsage`,
-`lowPriorityMsgCongestionState`, plus per-category discard counters and config
+`lowPriorityMsgCongestionState`, plus per-category discard counters and configuration
 (`accessType`, `durable`, `owner`, `maxTtl`, `maxRedeliveryCount`, `maxMsgSize`).
 
 ```json
@@ -789,7 +789,7 @@ queue: `queueName`, `maxTtlExpiredDiscardedMsgCount`,
 ## Action Tools
 
 Write tools, gated behind `enable_write_tools` (off by default). See
-[Action tools and `enable_write_tools`](#action-tools-and-enable_write_tools).
+[Action Tools and `enable_write_tools`](#action-tools-and-enable_write_tools).
 All four return the same strict success envelope on completion.
 
 ### disconnect-client
@@ -885,7 +885,7 @@ Create, update, and delete SEMPv2 **config** objects — Message VPNs, queues,
 topic endpoints, and REST delivery points. Gated behind `enable_write_tools`
 (off by default), the same as the preceding action tools.
 
-- `create-*` is **additive** (not destructive); config attributes you omit take
+- `create-*` is **additive** (not destructive); configuration attributes you omit take
   the broker default.
 - `update-*` applies a **partial (PATCH)** update — only the attributes you
   supply change — and is marked **destructive** because it can be
@@ -893,12 +893,12 @@ topic endpoints, and REST delivery points. Gated behind `enable_write_tools`
 - `delete-*` removes the object (and any messages spooled on a queue or topic
   endpoint) and is **destructive**.
 
-Create and update tools take a config object (`msgVpnConfig`, `queueConfig`,
+Create and update tools take a configuration object (`msgVpnConfig`, `queueConfig`,
 `topicEndpointConfig`, `rdpConfig`) whose attributes are spread into the SEMPv2
 request body. Do **not** put the object's own name (`msgVpnName`, `queueName`,
-`topicEndpointName`, `restDeliveryPointName`) inside the config object — the
+`topicEndpointName`, `restDeliveryPointName`) inside the configuration object — the
 name comes from its dedicated parameter. A reserved name, or any attribute the
-object's schema doesn't define, placed inside the config object is rejected
+object's schema doesn't define, placed inside the configuration object is rejected
 before the broker call rather than sent on. Every management tool's description
 instructs the LLM to obtain explicit user confirmation — restating the target
 and effect — as a separate reply before invoking.

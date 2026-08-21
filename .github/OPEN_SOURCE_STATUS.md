@@ -12,28 +12,28 @@
 
 All blocking issues for public release are resolved:
 
-- [x] **C1: LICENSE file** - Apache 2.0 license in place
-- [x] **C2: CONTRIBUTING.md** - Comprehensive contribution guidelines with DCO
-- [x] **C3: CODE_OF_CONDUCT.md** - Contributor Covenant 2.1 adopted
+- [x] **C1: LICENSE file** — Apache 2.0 license in place
+- [x] **C2: CONTRIBUTING.md** — Comprehensive contribution guidelines with the Developer Certificate of Origin (DCO)
+- [x] **C3: CODE_OF_CONDUCT.md** — Contributor Covenant 2.1 adopted
 
 ### ✅ HIGH Priority (All Complete)
 
 All high-priority items are complete:
 
-- [x] **H1: SECURITY.md** - Vulnerability disclosure policy with security best practices
-- [x] **H2: Issue Templates** - Bug report and feature request templates
-- [x] **H3: PR Template** - Comprehensive pull request checklist
-- [x] **H4: CHANGELOG.md** - Keep a Changelog format with v0.1.0 history
-- [x] **H5: Release Process** - Documented in RELEASING.md (workflow already exists from PR #14)
+- [x] **H1: SECURITY.md** — Vulnerability disclosure policy with security best practices
+- [x] **H2: Issue Templates** — Bug report and feature request templates
+- [x] **H3: PR Template** — Comprehensive pull request checklist
+- [x] **H4: CHANGELOG.md** — Keep a Changelog format with v0.1.0 history
+- [x] **H5: Release Process** — Documented in RELEASING.md (workflow already exists from PR #14)
 
 ### ⏳ MEDIUM Priority (Requires Admin Access)
 
 These items are **documented** but require repository admin to configure:
 
-- [ ] **M1: Repository Metadata** - See ADMIN_SETUP.md section "Repository Settings"
+- [ ] **M1: Repository Metadata** — See ADMIN_SETUP.md section "Repository Settings"
   - Description, topics, website URL
   - Admin needed to configure in Settings → General → About
-- [ ] **M2: Support channels** - See ADMIN_SETUP.md section "Features"
+- [ ] **M2: Support channels** — See ADMIN_SETUP.md section "Features"
   - GitHub Discussions is **not** being enabled. Support runs on two channels:
     GitHub Issues for bugs and features, and a dedicated Solace Community
     (Discourse) category for questions and discussion. Vulnerabilities go through
@@ -42,7 +42,7 @@ These items are **documented** but require repository admin to configure:
   - Remaining work: stand up the Solace Community category and repoint the
     `/discussions` links in `.github/CONTRIBUTING.md` and
     `.github/ISSUE_TEMPLATE/config.yml`. Tracked separately.
-- [x] **M3: README Badges** - Already added in first commit (build, license, Go version, CoC)
+- [x] **M3: README Badges** — Already added in first commit (build, license, Go version, CoC)
 
 ---
 
@@ -52,7 +52,7 @@ Items where the checklist calls for a control this repository does not fully
 meet, recorded per section 5 of the Open Source Solace Software Checklist. Each
 row needs four approvers named before the repository goes public.
 
-### E1: Non-routable author addresses in seven pre-existing commits
+### E1: Non-Routable Author Addresses in Seven Pre-Existing Commits
 
 **Ticket:** SOL-152902
 **Recorded:** 2026-08-06
@@ -78,7 +78,7 @@ close to the whole history — and break every existing reference to a commit SH
 in Jira, PR discussions, and the CHANGELOG. The exposure is one internal dev
 hostname and one contributor's laptop name, both already attached to those
 contributors' own commits and already visible to anyone with access to the
-repository today. The cost-to-value ratio favours accepting.
+repository today. The cost-to-value ratio favors accepting.
 
 **What we do instead:**
 
@@ -101,21 +101,21 @@ repository today. The cost-to-value ratio favours accepting.
 ### New Files Created
 
 **Core Compliance:**
-- `LICENSE` - Apache 2.0 official text (11.3 KB)
-- `.github/CONTRIBUTING.md` - Contribution guidelines (9.6 KB)
-- `.github/CODE_OF_CONDUCT.md` - Contributor Covenant 2.1 (5.4 KB)
+- `LICENSE` — Apache 2.0 official text (11.3 KB)
+- `.github/CONTRIBUTING.md` — Contribution guidelines (9.6 KB)
+- `.github/CODE_OF_CONDUCT.md` — Contributor Covenant 2.1 (5.4 KB)
 
-**Security & Templates:**
-- `.github/SECURITY.md` - Vulnerability disclosure policy (7.2 KB)
-- `.github/ISSUE_TEMPLATE/bug_report.yml` - Structured bug report form (4.3 KB)
-- `.github/ISSUE_TEMPLATE/feature_request.yml` - Structured feature request form (4.4 KB)
-- `.github/ISSUE_TEMPLATE/config.yml` - Issue template configuration (525 B)
-- `.github/PULL_REQUEST_TEMPLATE.md` - PR checklist template (3.3 KB)
+**Security and Templates:**
+- `.github/SECURITY.md` — Vulnerability disclosure policy (7.2 KB)
+- `.github/ISSUE_TEMPLATE/bug_report.yml` — Structured bug report form (4.3 KB)
+- `.github/ISSUE_TEMPLATE/feature_request.yml` — Structured feature request form (4.4 KB)
+- `.github/ISSUE_TEMPLATE/config.yml` — Issue template configuration (525 B)
+- `.github/PULL_REQUEST_TEMPLATE.md` — PR checklist template (3.3 KB)
 
 **Process Documentation:**
-- `CHANGELOG.md` - Version history following Keep a Changelog (5.8 KB)
-- `.github/ADMIN_SETUP.md` - Admin configuration guide (8.0 KB)
-- `.github/RELEASE_GUIDE.md` - Release process documentation (9.3 KB; since superseded by the root `RELEASING.md`)
+- `CHANGELOG.md` — Version history following Keep a Changelog (5.8 KB)
+- `.github/ADMIN_SETUP.md` — Admin configuration guide (8.0 KB)
+- `.github/RELEASE_GUIDE.md` — Release process documentation (9.3 KB; since superseded by the root `RELEASING.md`)
 
 ### Modified Files
 
@@ -123,7 +123,7 @@ repository today. The cost-to-value ratio favours accepting.
 - All 21 Go source files updated with Apache 2.0 headers
 
 **Documentation:**
-- `README.md` - Added badges, Contributing section, Security section, License section
+- `README.md` — Added badges, Contributing section, Security section, License section
 
 **Total Changes:**
 - **33 files changed**
@@ -134,12 +134,12 @@ repository today. The cost-to-value ratio favours accepting.
 
 ## What Works Without Admin
 
-✅ **All files created** - No admin access needed
-✅ **Templates will work** - GitHub automatically recognizes them
-✅ **SECURITY.md visible** - GitHub shows in Security tab
-✅ **COC and Contributing** - GitHub shows in sidebar
-✅ **PR template active** - Applies to all new PRs
-✅ **Issue templates active** - Applies to all new issues
+✅ **All files created** — No admin access needed
+✅ **Templates work** — GitHub automatically recognizes them
+✅ **SECURITY.md visible** — GitHub shows in Security tab
+✅ **Code of Conduct and Contributing guide** — GitHub shows in sidebar
+✅ **PR template active** — Applies to all new PRs
+✅ **Issue templates active** — Applies to all new issues
 
 ## What Requires Admin
 
@@ -166,7 +166,7 @@ These settings must be configured by repository admin:
   skipped on a pull request and GitHub counts skipped as passing — a gate that
   enforces nothing. `.github/ADMIN_SETUP.md` explains both failure modes.
 - **`DCO` is required**, served by the CNCF `dco2` GitHub App. DCO is the control
-  the project carries in place of a contributor licence agreement, and an
+  the project carries in place of a contributor license agreement, and an
   unrequired check enforces nothing. `.github/ADMIN_SETUP.md` has the exact
   string and the reason.
 - Prevent force pushes to main
@@ -179,18 +179,37 @@ These settings must be configured by repository admin:
   Go module and GitHub Actions updates run on Dependabot too
   (`.github/dependabot.yml`). Renovate can't be enrolled for a public repo
   under the org's current system, so it stays scoped to just the pinned Claude
-  Code CLI version (`.github/renovate.json`). Dependabot's PRs pass the required
+  Code CLI version (`.github/renovate.json`). Dependabot pull requests pass the required
   `DCO` check by bot exemption rather than by sign-off — `dco2` skips every
   bot-authored commit, a wider exemption than the retired workflow's single
-  login-matched one, with no config key to narrow it. See ADMIN_SETUP.md →
-  "Required status checks"
-- CodeQL runs on every PR, but the repository API reports Code Security as
-  disabled; confirm the configuration rather than assuming it
+  login-matched one, with no configuration key to narrow it. See ADMIN_SETUP.md →
+  "Required Status Checks"
+- CodeQL runs on **advanced setup** (`.github/workflows/codeql.yml`, languages
+  `actions` and `go`) as of 20 August 2026 under SOL-153411. Default setup was
+  retired because it analyzed neither fork pull requests, Dependabot pull requests,
+  nor merge queue entries — and a required check that never reports makes a fork
+  pull request unmergeable. The `CodeQL` required context was removed with it and
+  `CodeQL gate` replaces it, **registered as a required check 20 August 2026**, so
+  CodeQL now blocks rather than only reporting. Observed green on all three event
+  shapes: same-repo (#325), fork (#327) and merge queue entry (#326). See
+  ADMIN_SETUP.md → "Security Settings" for the ordering constraints, and "Static
+  analysis" before quoting any of it as a control
+- **Merge queue enabled on `main`** 20 August 2026 under SOL-152974, squash method,
+  one entry at a time. Pull requests are added to the queue rather than merged
+  directly; the queue tests each change rebased onto `main` and merges only what
+  passes. `strict_required_status_checks_policy` was turned off in the same change
+  because the queue supersedes it. Verified on a real entry: all fourteen required
+  contexts reported on the `merge_group` event, 8 minutes end to end, and the tested
+  commit was bit-for-bit the commit that landed. See ADMIN_SETUP.md → "Merge queue"
 - See: ADMIN_SETUP.md → "Security Settings"
 
 ### 5. Actions Settings (5 minutes)
-- Turn off "Allow GitHub Actions to create and approve pull requests" (currently on)
-- Set fork pull request workflows to require approval for all outside collaborators
+- ✅ "Allow GitHub Actions to create and approve pull requests" turned off
+  (SOL-152958); confirmed live as `can_approve_pull_request_reviews: false`
+- ✅ Fork pull request workflows set to require approval for all outside
+  collaborators (20 August 2026). Note this holds *every* push from an external
+  contributor, not just their first — and nothing notifies maintainers that a run
+  is waiting
 - See: ADMIN_SETUP.md → "GitHub Actions Permissions"
 
 ### 6. Make Repository Public (5 minutes)
@@ -209,11 +228,12 @@ These settings must be configured by repository admin:
 
 ## Open Source Maturity Progress
 
-This table is a historical record of PR #15 (2026-04-24), not current state. As of
-2026-07-29 one gap remains behind the Security row: "Allow GitHub Actions to
-create and approve pull requests" is still on. Secret scanning and its push
-protection have since been enabled. Do not cite the following score as go/no-go
-evidence without re-checking the live settings.
+This table is a historical record of PR #15 (2026-04-24), not current state. The
+gap recorded here behind the Security row — "Allow GitHub Actions to create and
+approve pull requests" still being on — was closed under SOL-152958 and is
+confirmed off as of 2026-08-20. Secret scanning and its push protection have since
+been enabled. Do not cite the following score as go/no-go evidence without
+re-checking the live settings.
 
 | Category | Before PR #15 | After PR #15 | Target |
 |----------|---------------|--------------|--------|
@@ -225,7 +245,7 @@ evidence without re-checking the live settings.
 | Release Process | 1/5 ❌ | **4/5 ✅** | 5/5 |
 | Discoverability | 0/5 ❌ | **3/5 ⚠️** | 5/5 |
 
-**Overall Score at the time of PR #15**: 31/35 (89%) - **Growth Stage** ✅
+**Overall Score at the time of PR #15**: 31/35 (89%) — **Growth Stage** ✅
 
 **Target Achieved at the time of PR #15**: Yes! Exceeded 80% threshold for
 public release.
@@ -241,16 +261,16 @@ treating the 80% threshold as met.
 
 ### Immediate (Before Public Release)
 
-1. **Admin configures repository** - See ADMIN_SETUP.md (~45 minutes)
-2. **Cut a release** - `[Unreleased]` carries entries, so v0.6.0 does not describe
+1. **Admin configures repository** — See ADMIN_SETUP.md (~45 minutes)
+2. **Cut a release** — `[Unreleased]` carries entries, so v0.6.0 does not describe
   `main`. See RELEASING.md.
-3. **Make repository public** - Settings → Danger Zone → Change visibility
+3. **Make repository public** — Settings → Danger Zone → Change visibility
 
 ### Post-Publication
 
-1. **Monitor community health** - Track issue/PR response times
-2. **Announce release** - Solace Community, social media, internal channels
-3. **Submit to registries** - MCP server registry (if exists), Go package indexes
+1. **Monitor community health** — Track issue/PR response times
+2. **Announce release** — Solace Community, social media, internal channels
+3. **Submit to registries** — Model Context Protocol (MCP) server registry (if exists), Go package indexes
 
 ### Future Enhancements
 
@@ -272,7 +292,7 @@ For questions about open source readiness:
 ## References
 
 Internal review documents (not committed):
-- `Mark2-report.md` - Architecture review findings
-- `open-source.md` - Open source readiness review with 11 findings
+- `Mark2-report.md` — Architecture review findings
+- `open-source.md` — Open source readiness review with 11 findings
 
 All findings from these reviews have been addressed in PR #15.

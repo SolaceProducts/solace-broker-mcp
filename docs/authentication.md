@@ -7,14 +7,14 @@ The Solace Event Broker MCP Server supports three authentication modes for MCP c
 - [Mode 1: No Authentication (`mode: disabled`)](#mode-1-no-authentication-mode-disabled)
 - [Mode 2: Static Dev Token (`mode: static`)](#mode-2-static-dev-token-mode-static)
 - [Mode 3: OAuth / JWT (`mode: oauth`)](#mode-3-oauth--jwt-mode-oauth)
-  - [Choose a client registration method](#choose-a-client-registration-method)
-  - [Step 1: Set up the identity provider](#step-1-set-up-the-identity-provider)
-  - [Step 2: Configure the MCP server](#step-2-configure-the-mcp-server)
-  - [Step 2b: Configure broker OAuth (Hop 2)](#step-2b-configure-broker-oauth-hop-2)
-  - [TLS for the MCP server's own listener](#tls-for-the-mcp-servers-own-listener)
-  - [Tool authorization (claim-based RBAC)](#tool-authorization-claim-based-rbac)
-  - [Step 3: Start the MCP server](#step-3-start-the-mcp-server)
-  - [Step 4: Add the server to Claude Code](#step-4-add-the-server-to-claude-code)
+  - [Choose a Client Registration Method](#choose-a-client-registration-method)
+  - [Step 1: Set Up the Identity Provider](#step-1-set-up-the-identity-provider)
+  - [Step 2: Configure the MCP Server](#step-2-configure-the-mcp-server)
+  - [Step 2b: Configure Broker OAuth (Hop 2)](#step-2b-configure-broker-oauth-hop-2)
+  - [TLS for the MCP Server's Own Listener](#tls-for-the-mcp-servers-own-listener)
+  - [Tool Authorization (Claim-Based RBAC)](#tool-authorization-claim-based-rbac)
+  - [Step 3: Start the MCP Server](#step-3-start-the-mcp-server)
+  - [Step 4: Add the Server to Claude Code](#step-4-add-the-server-to-claude-code)
 - [Troubleshooting](#troubleshooting)
 
 ## Mode 1: No Authentication (`mode: disabled`)
@@ -252,9 +252,9 @@ The `audience` value must exactly match the value configured in step 1.2. Set `r
 >   resource_url: "https://localhost:9090/mcp"
 > ```
 
-> **Note:** Under `mode: oauth` the validator enforces `https://` on **both** the `issuer` and `resource_url` URLs (an `http://` value is rejected at startup). When running Keycloak locally for testing, terminate TLS in front of it (for example, via Caddy or a reverse proxy) or run Keycloak with a TLS cert. `resource_url` is the externally advertised identifier for OAuth discovery, so it must be `https://` even when the MCP server's own listener is plaintext behind an upstream terminator — see [TLS for the MCP server's own listener](#tls-for-the-mcp-servers-own-listener).
+> **Note:** Under `mode: oauth` the validator enforces `https://` on **both** the `issuer` and `resource_url` URLs (an `http://` value is rejected at startup). When running Keycloak locally for testing, terminate TLS in front of it (for example, via Caddy or a reverse proxy) or run Keycloak with a TLS cert. `resource_url` is the externally advertised identifier for OAuth discovery, so it must be `https://` even when the MCP server's own listener is plaintext behind an upstream terminator — see [TLS for the MCP Server's Own Listener](#tls-for-the-mcp-servers-own-listener).
 
-### Step 2b: Configure broker OAuth (Hop 2)
+### Step 2b: Configure Broker OAuth (Hop 2)
 
 This step is only needed if one or more brokers use `auth.mode: oauth` instead of `basic`/`bearer`. Under this mode, the MCP server obtains each broker's token by exchanging the calling agent's Hop 1 token (RFC 8693 token exchange) against the identity provider. `mcp_client_auth.mode: oauth` (Hop 1) is required first — RFC 8693 token exchange consumes the agent's Hop 1 JWT as its `subject_token`, so with `mode: static` or `mode: disabled` there is no agent token to exchange and Hop 2 has nothing to do.
 
@@ -290,14 +290,14 @@ brokers:
 | `broker_oauth.idp_token_endpoint` | The IdP's token endpoint — where the MCP server POSTs the token-exchange request. Must be `https://` in production. |
 | `broker_oauth.mcp_server_client_id` | The MCP server's own `client_id`, registered at the IdP (this is a separate client registration from the one used for Hop 1 in step 1.2). |
 | `broker_oauth.mcp_server_client_auth` | How the MCP server authenticates itself to the IdP's token endpoint — a discriminated union, exactly one sub-block populated: `client_secret_basic.secret` (sent via HTTP Basic auth) or `client_secret_post.secret` (sent in the form body). |
-| `broker_oauth.grant_type` | The OAuth grant type used for the Hop 2 exchange — see [Grant type](#grant-type). |
-| `broker_oauth.audience_parameter_name` | Which request parameter carries the per-broker audience value — see [Audience parameter name](#audience-parameter-name). |
+| `broker_oauth.grant_type` | The OAuth grant type used for the Hop 2 exchange — see [Grant Type](#grant-type). |
+| `broker_oauth.audience_parameter_name` | Which request parameter carries the per-broker audience value — see [Audience Parameter Name](#audience-parameter-name). |
 | `brokers.<alias>.auth.mode` | Set to `oauth` to use token exchange for this broker. |
 | `brokers.<alias>.auth.audience` | Optional, even under `auth.mode: oauth` — omitting it does not fail startup. This broker's audience value, forwarded to the IdP during exchange using whichever request parameter `audience_parameter_name` selects; when omitted, the exchange request carries no audience parameter at all. Omit if the broker's OAuth profile does not validate audience; set it only if it does. If set, it must not be whitespace-only (a `${VAR}` resolving to blank fails config load). |
 
 The IdP needs a second client registration for the MCP server itself (distinct from the Hop 1 client in step 1.2) — a **confidential** client with a client secret, since the MCP server authenticates itself directly to the token endpoint rather than involving a browser. Grant it whatever token-exchange permissions your IdP requires (for Keycloak, enable the token-exchange feature for the client and permit it to exchange tokens for the target broker's audience).
 
-#### Grant type
+#### Grant Type
 
 `grant_type` tells the IdP which OAuth flow this request is: RFC 8693 token exchange trades one already-issued token (the agent's Hop 1 JWT) for another (a broker-bound token), rather than the IdP verifying a password or a client secret directly. Set it to the literal RFC 8693 grant-type URN:
 
@@ -307,7 +307,7 @@ grant_type: "urn:ietf:params:oauth:grant-type:token-exchange"
 
 This is the only grant type this version implements. The field exists (rather than being hardcoded) so a future grant type can be added without a config schema change, but today any other value — including a value your IdP itself recognizes for some other flow — is rejected at config load with `broker_oauth.grant_type is required` (if empty) or `broker_oauth.grant_type "…" is not supported in this version` (if set to anything else).
 
-#### Audience parameter name
+#### Audience Parameter Name
 
 `audience_parameter_name` tells the runtime which OAuth request parameter carries each broker's `auth.audience` value in the token-exchange POST. Different IdP families expect the audience on a different parameter, but this version implements only one:
 
@@ -322,7 +322,7 @@ Two optional sub-blocks tune the runtime's resilience behavior — see [Configur
 - `broker_oauth.circuit_breaker` — fails token-exchange calls fast during a sustained IdP outage, instead of letting every broker's requests queue up against a dead IdP. On by default; every field optional.
 - `broker_oauth.retry_after` — shares a process-wide backoff across every broker when the IdP asks callers to slow down (HTTP 429 with `Retry-After`), so one throttled broker doesn't let every other broker keep hammering the same IdP.
 
-### TLS for the MCP server's own listener
+### TLS for the MCP Server's Own Listener
 
 `mode: oauth` is a production profile, so the server must not silently serve its
 own listener over plaintext — client bearer tokens and tool results would travel
@@ -364,7 +364,7 @@ itself and `tls_terminated_upstream` is ignored (no plaintext, no `WARN`).
 Providing **neither** is a fatal config error. The setting is ignored entirely in
 the `disabled`/`static` dev modes.
 
-### Tool authorization (claim-based RBAC)
+### Tool Authorization (Claim-Based RBAC)
 
 Under `mode: oauth`, the server can gate individual MCP tools by the caller's
 group or role memberships. Configure a claim in the IdP that lists these
@@ -558,7 +558,7 @@ A browser window opens on first use for user login. The IdP must support anonymo
 > Broker-bound OAuth via RFC 8693 token exchange (the `broker_oauth:` config
 > block) obtains a broker-bound token by exchanging the client's Hop 1 token,
 > and requires `mcp_client_auth.mode: oauth` — see
-> [Step 2b: Configure broker OAuth (Hop 2)](#step-2b-configure-broker-oauth-hop-2).
+> [Step 2b: Configure Broker OAuth (Hop 2)](#step-2b-configure-broker-oauth-hop-2).
 
 **Server→broker flow when `auth.mode: oauth` (Hop 2), cache miss:**
 
@@ -617,15 +617,15 @@ On success, the server logs: `"using JWT token for authentication — production
 
 ## Troubleshooting
 
-### Banner appears at startup ("INSECURE MODE")
+### Banner Appears at Startup ("INSECURE MODE")
 
 This is expected for `mode: disabled` and `mode: static`. The banner is the deliberate signal that the server is running without production-grade auth. If production mode was intended, switch to `mode: oauth`.
 
-### Cannot reach the server from another host (Modes 1 and 2)
+### Cannot Reach the Server from Another Host (Modes 1 and 2)
 
 Under `mode: disabled` and `mode: static` the server binds `127.0.0.1` only by default, so it is reachable from the local host but not the network. Check the startup log line (the `bind_address` field) for the effective host:port. To bind another interface, set `listen_address` in the config (for `mode: disabled` this also requires `allow_remote_unauthenticated: true`). See [Configuration](configuration.md#server-settings).
 
-### "401 Unauthorized" errors in Mode 2
+### "401 Unauthorized" Errors in Mode 2
 
 - Verify that your client is sending the `Authorization: Bearer <token>` header
 - Confirm the token value matches exactly what's in your configuration (no extra spaces or quotes)
@@ -641,13 +641,13 @@ Under `mode: disabled` and `mode: static` the server binds `127.0.0.1` only by d
 - Access the server in your client's MCP server list and choose "reconnect" (not "re-authenticate")
 - Modes 1 and 2 do not have an authorization server configured to handle OAuth flows
 
-### "failed to connect to identity provider" on server startup
+### "failed to connect to identity provider" on Server Startup
 
 - Verify the `issuer` URL is correct and reachable from the server
 - If using Keycloak locally, ensure the container is running and healthy before starting the MCP server
 - The MCP server connects to the issuer's `/.well-known/openid-configuration` at startup to fetch JWKS keys
 
-### "403 Forbidden" with a valid token
+### "403 Forbidden" with a Valid Token
 
 - Verify the audience mapper is configured in the IdP so the `aud` claim matches the `audience` config value
 - Decode the JWT (for example, at jwt.io) to inspect the actual `aud` claim
@@ -661,7 +661,7 @@ Under `mode: disabled` and `mode: static` the server binds `127.0.0.1` only by d
   curl http://localhost:9090/.well-known/oauth-protected-resource
   curl http://localhost:9090/.well-known/oauth-protected-resource/mcp
   ```
-  The bare path is what `WWW-Authenticate` advertises on a 401. The `/mcp`-suffixed path is the RFC 9728 §3.1 canonical path used by clients that construct it directly (e.g. SAM's Automatic OAuth discovery).
+  The bare path is what `WWW-Authenticate` advertises on a 401. The `/mcp`-suffixed path is the RFC 9728 §3.1 canonical path used by clients that construct it directly (for example, the Automatic OAuth discovery feature in Solace Agent Mesh).
 
 ### "Allowed Client Scopes rejected request to client-registration service"
 
@@ -680,19 +680,19 @@ This error occurs during Dynamic Client Registration when the IdP rejects the re
 - The IdP is running in a container (for example, Docker/Podman), so requests arrive from the container bridge gateway IP, not localhost. Disable source-host matching in the registration policy or add the gateway IP to the trusted hosts list.
 - The redirect URIs in the registration request do not match the trusted hosts. Ensure `localhost` and `127.0.0.1` are permitted.
 
-### "invalid_redirect_uri" with pre-registered client
+### "invalid_redirect_uri" with Pre-Registered Client
 
 - The redirect URI in the authorization request does not match what is registered in the IdP
 - Verify that `http://localhost:<port>/callback` is in the client's valid redirect URIs, where `<port>` matches `--callback-port`
 - Some IdPs require an exact match — wildcards may not be supported for pre-registered clients
 
-### "invalid_client" with pre-registered client
+### "invalid_client" with Pre-Registered Client
 
 - The `--client-id` does not match any client in the IdP
 - If using a confidential client, the client secret may be incorrect — re-add the server with `claude mcp add ... --client-secret` to re-enter it
 - Verify the client is not disabled or expired in the IdP
 
-### "You are not authorized to use this tool." from a valid user (Mode 3)
+### "You are not authorized to use this tool." from a Valid User (Mode 3)
 
 This is a tool-authorization denial. The token authenticated successfully, but the server's claim-based policy did not grant the tool. The caller-facing message is deliberately generic — grep the server logs for a `msg: "tool authorization"` line at the same `correlation_id` to see why:
 
