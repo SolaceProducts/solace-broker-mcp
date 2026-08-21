@@ -249,6 +249,14 @@ The miss count is never reset — it feeds the shutdown gate.
 | `get-rdp-status` | 3 | object, then queue bindings and REST consumers in parallel |
 | `get-broker-status` | 5 | SEMPv1; the fifth (`show hardware details`) fires on appliances only, so this is 4 on a software broker |
 
+`semp-fanout.json` is keyed by **rule, not by tool**, and the two `list-rdps`
+rows above share rules. The gate calls `list-rdps` twice — once at default
+arguments, once at `maxResults=200` — so `sempv2 rdps page 1` reads 2 (one hit
+from each) and `sempv2 rdps page 2 (cursor)` reads 1, belonging only to the
+paginated call. The totals reconcile with the table (2 + 1 = 1 + 2), but the
+per-call numbers are the table's, not the file's. Every other row maps to its
+rules one-to-one.
+
 The default `maxResults` is **100**, so `followPages` never paginates at
 default arguments regardless of how much data the broker holds — the SEMP cost
 of a list tool is set by the caller's `maxResults`, not by broker size.
@@ -296,7 +304,12 @@ Doing them together matters: self-changing fields (uptime, memory percentages,
 disk usage) drift with wall-clock time, so canned and goldens taken hours
 apart cannot match exact-mode comparison even when replaying the same data.
 It finishes by writing `fixtures.manifest` — a sha256 per file plus the
-capture time, broker alias, and VPN.
+capture time, broker alias, VPN, and the RDP the capture pinned (`# rdp:`).
+That last one is not just provenance: `mock-semp` serves `get-rdp-status` for
+that RDP alone, so `run.sh` and `run-loadgen.sh` read it back
+(`./fixtures-manifest.sh rdp`) to pass `-rdp` to `fidelity` and `loadgen`. A
+manifest without it stops both scripts with a pointer to recapture, rather than
+letting them ask for an RDP the mock will 404.
 
 `run.sh` and `run-loadgen.sh` verify that manifest before starting anything
 (`./fixtures-manifest.sh check`, runnable on its own). The check fails when:

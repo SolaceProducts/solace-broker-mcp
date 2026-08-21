@@ -299,9 +299,13 @@ if ! "$bin/fidelity" -mcp-url "$mcp_url" -broker "$BROKER_ALIAS" -vpn "$VPN" -rd
   exit 1
 fi
 
-# The gate makes exactly one call per check, so the counters now hold each
-# tool's SEMP fan-out. Bank that table and zero the counters so mock.log's
+# The gate makes exactly one call per check, so the counters now hold the SEMP
+# cost of those five calls. Bank that table and zero the counters so mock.log's
 # shutdown summary measures the load phase alone.
+#
+# Read it per rule, not per tool: two of the five checks are list-rdps (default
+# args, and maxResults=200 for the paginated one), so "rdps page 1" shows 2 —
+# one hit from each. README's per-call table has the split.
 echo "== 3c. SEMP fan-out per tool call (from the gate's one-call-per-check pass)"
 snapshot_fanout
 

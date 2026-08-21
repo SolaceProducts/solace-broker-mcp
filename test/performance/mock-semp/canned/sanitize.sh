@@ -228,8 +228,15 @@ report_rdp_endpoints() {
   local values
   # -h suppresses the filename prefix: postRequestTarget values contain
   # slashes, so stripping a prefix after the fact would mangle them.
-  values="$(grep -ohaE '"(remoteHost|postRequestTarget)":"[^"]*"|"remotePort":[0-9]+' "${rdp_files[@]}" 2>/dev/null |
-    sort -u || true)"
+  #
+  # The pattern tolerates whitespace after the colon and the sed squeezes it
+  # back out, so the same value reported from two files collapses to one line.
+  # Canned bodies are compact broker output, but the goldens come from
+  # json.MarshalIndent — a pattern matching only "key":"value" reports nothing
+  # at all from get-rdp-status.json, which is the one file here captured
+  # independently rather than derived from the canned bytes.
+  values="$(grep -ohaE '"(remoteHost|postRequestTarget)":[[:space:]]*"[^"]*"|"remotePort":[[:space:]]*[0-9]+' "${rdp_files[@]}" 2>/dev/null |
+    sed -E 's/":[[:space:]]+/":/' | sort -u || true)"
   [[ -z "$values" ]] && return 0
 
   echo "sanitize: RDP endpoints in the capture — confirm none names a real internal service:"
