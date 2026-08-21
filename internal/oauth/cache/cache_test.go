@@ -679,9 +679,11 @@ func TestGetStatus_Level(t *testing.T) {
 	}
 }
 
-// TestPutStatus_Level pins the slog level mapping the token exchanger consumes
-// at exchange.go:80. PutStored is Debug (routine); PutDroppedTTL is Warn (the
-// caller asked us to cache something we couldn't keep — worth surfacing).
+// TestPutStatus_Level pins the slog level mapping each PutStatus carries.
+// PutStored is Debug (routine); PutDroppedTTL is Warn (the caller asked us to
+// cache something we couldn't keep — worth surfacing). The Exchanger states
+// these levels explicitly at its own branches rather than calling Level(), so
+// this is the contract for future call sites; the two must not drift.
 func TestPutStatus_Level(t *testing.T) {
 	t.Parallel()
 
@@ -700,6 +702,77 @@ func TestPutStatus_Level(t *testing.T) {
 			t.Parallel()
 			if got := tc.status.Level(); got != tc.want {
 				t.Errorf("%v.Level(): got %v, want %v", tc.status, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGetStatus_LogValue asserts the emitted log output, not just the method
+// return: the bug this guards against is that slog resolves LogValuer but
+// never calls String, so a GetStatus with only a String method serialized as
+// its iota (status=1 for a miss). Asserting through a real handler is what
+// makes that regression visible — a unit check of String() alone passed the
+// whole time the logs were unreadable.
+func TestGetStatus_LogValue(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		status GetStatus
+		want   string
+	}{
+		{"hit", GetHit, `"result":"hit"`},
+		{"miss", GetMiss, `"result":"miss"`},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+			slog.New(slog.NewJSONHandler(&buf, nil)).Info("m", "result", tc.status)
+
+			if got := buf.String(); !strings.Contains(got, tc.want) {
+				t.Errorf("emitted %s, want it to contain %s", strings.TrimSpace(got), tc.want)
+			}
+			// Guard the specific regression: the raw iota must not appear as
+			// the value. Without LogValue this emitted "result":1.
+			if bad := fmt.Sprintf(`"result":%d`, int(tc.status)); strings.Contains(buf.String(), bad) {
+				t.Errorf("emitted the raw enum %s; LogValue is not being honored", bad)
+			}
+		})
+	}
+}
+
+// TestPutStatus_LogValue is symmetric with TestGetStatus_LogValue. PutStored
+// is 0 and GetHit is also 0, so a bare integer carries no signal about which
+// enum — or which polarity — a reader is looking at.
+func TestPutStatus_LogValue(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		status PutStatus
+		want   string
+	}{
+		{"stored", PutStored, `"result":"stored"`},
+		{"dropped_ttl", PutDroppedTTL, `"result":"dropped_ttl"`},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+			slog.New(slog.NewJSONHandler(&buf, nil)).Info("m", "result", tc.status)
+
+			if got := buf.String(); !strings.Contains(got, tc.want) {
+				t.Errorf("emitted %s, want it to contain %s", strings.TrimSpace(got), tc.want)
+			}
+			if bad := fmt.Sprintf(`"result":%d`, int(tc.status)); strings.Contains(buf.String(), bad) {
+				t.Errorf("emitted the raw enum %s; LogValue is not being honored", bad)
 			}
 		})
 	}

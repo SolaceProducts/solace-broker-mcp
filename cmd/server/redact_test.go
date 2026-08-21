@@ -21,6 +21,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestRedactSecretAttr covers the ReplaceAttr filter used by newSlogHandler.
@@ -134,4 +135,116 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// TestRedactSecretAttr_FormatsDurations covers the second branch of the
+// ReplaceAttr filter: a duration-kinded value is rendered via
+// time.Duration.String() instead of the raw int64 nanoseconds slog's JSON
+// handler would emit. Matching is on the value's KIND, not the key name, so the
+// key is irrelevant here. SOL-153363.
+func TestRedactSecretAttr_FormatsDurations(t *testing.T) {
+	cases := []struct {
+		name string
+		key  string
+		d    time.Duration
+		want string
+	}{
+		// The motivating case: 77496667ns is unreadable as an integer.
+		{"sub_second", "exchange_total_elapsed", 77496667 * time.Nanosecond, "77.496667ms"},
+		{"whole_seconds", "drain_delay", 10 * time.Second, "10s"},
+		{"minutes", "duration", 90 * time.Second, "1m30s"},
+		{"millis", "retry_after", 250 * time.Millisecond, "250ms"},
+		{"micros", "waited", 4 * time.Microsecond, "4µs"},
+
+		// Edge cases: neither is special-cased, both must still be strings.
+		{"zero", "clamped_to", 0, "0s"},
+		{"negative", "requested", -5 * time.Millisecond, "-5ms"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := redactSecretAttr(nil, slog.Duration(tc.key, tc.d))
+			if out.Value.Kind() != slog.KindString {
+				t.Fatalf("kind = %v, want String (a duration must not stay numeric)", out.Value.Kind())
+			}
+			if got := out.Value.String(); got != tc.want {
+				t.Fatalf("key=%q: got %q, want %q", tc.key, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRedactSecretAttr_RedactionBeatsDurationFormatting pins the ORDER of the
+// two branches. A duration-kinded attribute under a credential-shaped key must
+// be redacted, never formatted — the secrets check returns early, so it can
+// never be the second thing that happens. No such attribute exists in the tree
+// today (none of the nine duration keys match redactedKeys), so this guards the
+// invariant against a future duration attr named e.g. token_ttl rather than
+// describing current behavior. SOL-153363.
+func TestRedactSecretAttr_RedactionBeatsDurationFormatting(t *testing.T) {
+	for _, key := range []string{"token_ttl", "secret_timeout", "password_age"} {
+		t.Run(key, func(t *testing.T) {
+			out := redactSecretAttr(nil, slog.Duration(key, 30*time.Second))
+			if got := out.Value.String(); got != "[REDACTED]" {
+				t.Fatalf("key=%q: got %q, want [REDACTED] — redaction must win over duration formatting", key, got)
+			}
+		})
+	}
+}
+
+// TestNewSlogHandler_RendersDurationsInOutput exercises the full handler path
+// and asserts on the rendered JSON, which is what an operator actually reads:
+// the duration must be a JSON *string* ("77.496667ms"), not the number
+// 77496667. It also covers the two placements ReplaceAttr is easy to get wrong
+// — an attribute nested inside a group, and one bound on the logger via
+// .With() — because if either were missed some durations would silently stay
+// numeric. Verified empirically that slog's JSON handler calls ReplaceAttr for
+// both. SOL-153363.
+func TestNewSlogHandler_RendersDurationsInOutput(t *testing.T) {
+	out := captureStderr(t, func() {
+		logger := slog.New(newSlogHandler(slog.LevelInfo))
+		logger.Info("top level", slog.Duration("exchange_total_elapsed", 77496667*time.Nanosecond))
+		logger.Info("in a group", slog.Group("g", slog.Duration("nested", 1500*time.Millisecond)))
+		logger.With(slog.Duration("bound", 250*time.Millisecond)).Info("bound on logger")
+	})
+
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("want 3 log lines, got %d:\n%s", len(lines), out)
+	}
+
+	// Line 1: a top-level duration attr.
+	var top struct {
+		Elapsed any `json:"exchange_total_elapsed"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &top); err != nil {
+		t.Fatalf("line 1 is not valid JSON: %v\n%s", err, lines[0])
+	}
+	if got, ok := top.Elapsed.(string); !ok || got != "77.496667ms" {
+		t.Fatalf("exchange_total_elapsed = %#v, want string %q (raw nanoseconds decode as float64)", top.Elapsed, "77.496667ms")
+	}
+
+	// Line 2: nested under a group — ReplaceAttr fires for group CONTENTS.
+	var grouped struct {
+		G struct {
+			Nested any `json:"nested"`
+		} `json:"g"`
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &grouped); err != nil {
+		t.Fatalf("line 2 is not valid JSON: %v\n%s", err, lines[1])
+	}
+	if got, ok := grouped.G.Nested.(string); !ok || got != "1.5s" {
+		t.Fatalf("g.nested = %#v, want string %q", grouped.G.Nested, "1.5s")
+	}
+
+	// Line 3: bound via .With(), which slog pre-formats through ReplaceAttr.
+	var bound struct {
+		Bound any `json:"bound"`
+	}
+	if err := json.Unmarshal([]byte(lines[2]), &bound); err != nil {
+		t.Fatalf("line 3 is not valid JSON: %v\n%s", err, lines[2])
+	}
+	if got, ok := bound.Bound.(string); !ok || got != "250ms" {
+		t.Fatalf("bound = %#v, want string %q", bound.Bound, "250ms")
+	}
 }

@@ -1217,7 +1217,7 @@ func TestExchange_SuccessLogsDebugWithBrokerAndElapsed(t *testing.T) {
 	recs := records()
 	var found bool
 	for _, rec := range recs {
-		if rec.Message == "token exchange succeeded" {
+		if rec.Message == "broker credential obtained from identity provider" {
 			found = true
 			if rec.Level != slog.LevelDebug {
 				t.Errorf("want Debug level, got %v", rec.Level)
@@ -1225,8 +1225,8 @@ func TestExchange_SuccessLogsDebugWithBrokerAndElapsed(t *testing.T) {
 			if _, ok := rec.Attrs["broker"]; !ok {
 				t.Error("missing broker attr")
 			}
-			if _, ok := rec.Attrs["exchange_elapsed"]; !ok {
-				t.Error("missing exchange_elapsed attr")
+			if _, ok := rec.Attrs["exchange_total_elapsed"]; !ok {
+				t.Error("missing exchange_total_elapsed attr")
 			}
 		}
 	}
@@ -2168,5 +2168,92 @@ func TestExchange_ChainDeadlineFiresMidRetry(t *testing.T) {
 	// the deadline fence isn't firing — retry loop is running to completion.
 	if elapsed > 3*time.Second {
 		t.Errorf("elapsed = %v, want < 3s (chain deadline should have fenced the loop)", elapsed)
+	}
+}
+
+// TestExchange_CacheStoreLogsNameTheirOutcome pins the split store-line
+// messages. The store site has two outcomes that are "wrote it" vs "refused
+// to", not two results of one operation, so each path carries its own message
+// and its own level and neither carries a result attribute — the message
+// already names the outcome. Regression guarded: collapsing these back into
+// one shared message makes the line false on whichever path it does not
+// describe.
+//
+// Not parallel: captureLogs swaps the process-global default logger.
+func TestExchange_CacheStoreLogsNameTheirOutcome(t *testing.T) {
+	cases := []struct {
+		name string
+		// clockSkew large enough to drive the derived TTL non-positive
+		// exercises the dropped path; zero skew stores normally.
+		clockSkew time.Duration
+		wantMsg   string
+		wantLevel slog.Level
+	}{
+		{
+			name:      "stored",
+			clockSkew: 0,
+			wantMsg:   "broker credential cached",
+			wantLevel: slog.LevelDebug,
+		},
+		{
+			name:      "dropped for short remaining lifetime",
+			clockSkew: time.Hour,
+			wantMsg:   "broker credential not cached: remaining lifetime too short after clock-skew adjustment",
+			wantLevel: slog.LevelWarn,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			records, restore := captureLogs(t)
+			defer restore()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				// A positive expires_in: a non-positive one is rejected by
+				// response validation before Put is ever reached, so the
+				// skew above is what drives the drop.
+				fmt.Fprint(w, successJSON("exchanged-token", 60))
+			}))
+			defer srv.Close()
+
+			p := validParams(t)
+			p.TokenURL = srv.URL
+			p.Cache = cachetest.WithConfig(t, cache.CacheConfig{
+				MaxSize:   100,
+				ClockSkew: tc.clockSkew,
+				MaxTTL:    time.Hour,
+			})
+			e, err := New(p)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			if _, err := e.Exchange(context.Background(), validInput()); err != nil {
+				t.Fatalf("Exchange: %v", err)
+			}
+
+			var found bool
+			for _, rec := range records() {
+				if rec.Message != tc.wantMsg {
+					continue
+				}
+				found = true
+				if rec.Level != tc.wantLevel {
+					t.Errorf("level: got %v, want %v", rec.Level, tc.wantLevel)
+				}
+				if got := rec.Attrs["broker"]; got != "test-broker" {
+					t.Errorf("broker attr: got %q, want %q", got, "test-broker")
+				}
+				// The message names the outcome; a result attribute here
+				// would only restate it.
+				if v, ok := rec.Attrs["result"]; ok {
+					t.Errorf("result attr present (%q); the message already names the outcome", v)
+				}
+			}
+			if !found {
+				t.Errorf("no record with message %q", tc.wantMsg)
+			}
+		})
 	}
 }
