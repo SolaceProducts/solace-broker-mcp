@@ -174,18 +174,38 @@ jobs:
       pull-requests: write
       checks: write
       statuses: write
-    # No `secrets: inherit`. Every `secrets.*` reference in guardian-scan.yaml
-    # sits in a job declaring `environment: guardian`, and all six names —
-    # FOSSA_API_KEY, GUARDIAN_URL, GUARDIAN_API_TOKEN, PRISMACLOUD_* — exist in
-    # that environment, which the job resolves itself. Nothing was reading
-    # through `inherit`.
+    uses: ./.github/workflows/release-readiness-check.yaml # zizmor: ignore[secrets-inherit]
+    # `secrets: inherit` is load-bearing on both hops of this chain. Do not
+    # remove it, and do not replace it with explicitly named secrets.
     #
-    # Worth stating because one of them, FOSSA_API_KEY, also exists as an org
-    # secret, so `inherit` looked load-bearing. It was not: environment secrets
-    # outrank org secrets, so the `guardian` copy is what those jobs already
-    # got. What `inherit` actually did was hand the scan every other org and
-    # repo secret (LLM_SERVICE_API_KEY, VAULT_URL) that it never references.
-    uses: ./.github/workflows/release-readiness-check.yaml
+    # A workflow reached via `workflow_call` starts with an EMPTY `secrets`
+    # context, and that emptiness extends to the called workflow's own
+    # `environment:` layer. `inherit` is what opens that context; once open,
+    # guardian-scan.yaml's `environment: guardian` jobs resolve their six
+    # secrets themselves. Without it they read every one as an empty string and
+    # all four scan jobs fail.
+    #
+    # Naming the secrets instead is not an option here, tempting as the zizmor
+    # finding makes it look. Five of the six (GUARDIAN_URL, GUARDIAN_API_TOKEN,
+    # PRISMACLOUD_*) live only in the `guardian` environment, and a job that
+    # calls a reusable workflow with `uses:` may not declare `environment:` —
+    # so this job cannot see them to pass them on. It would forward empty
+    # strings and reproduce the outage. Explicit passing would first require
+    # moving those secrets to repo or org scope, which .github/ADMIN_SETUP.md
+    # keeps environment-scoped on purpose.
+    #
+    # Hence the suppression rather than a fix. What `inherit` over-shares is
+    # LLM_SERVICE_API_KEY and VAULT_URL — neither referenced by the scan, and
+    # VAULT_URL is dead since the move off Vault.
+    #
+    # Removed once already, by 5ca7de1 (SOL-152856), to let the new zizmor gate
+    # start green. That blocked the v0.8.0 release exactly as it had blocked
+    # v0.7.0 before #291 (DATAGO-148031) added it. Nothing on PR CI catches the
+    # regression: guardian-scan.yaml's direct push/pull_request triggers have no
+    # `workflow_call` hop, so only a tag push exercises this path. Verify a
+    # change here with a workflow_dispatch of release-readiness-check.yaml
+    # against the branch. SOL-153473.
+    secrets: inherit
     with:
       version: ${{ github.ref_name }}
 
