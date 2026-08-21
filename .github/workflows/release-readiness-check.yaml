@@ -66,16 +66,24 @@ jobs:
   guardian:
     name: Guardian gate
     needs: authorize
-    uses: ./.github/workflows/guardian-scan.yaml
+    uses: ./.github/workflows/guardian-scan.yaml # zizmor: ignore[secrets-inherit]
     permissions:
       contents: read
       packages: read     # ceiling for guardian-scan's FOSSA jobs (private scan container)
       pull-requests: write
       checks: write
       statuses: write
-    # No `secrets: inherit` — guardian-scan.yaml's jobs carry
-    # `environment: guardian` and resolve the FOSSA/Guardian/Prisma secrets from
-    # that environment themselves. Nothing to pass down.
+    # Load-bearing — do not remove, and do not replace with named secrets.
+    # `environment: guardian` on guardian-scan's jobs does not resolve their
+    # secrets when the workflow is reached via `workflow_call`: the `secrets`
+    # context arrives empty unless the caller opens it, so all six come through
+    # as empty strings and every scan job fails. Five of them exist only in the
+    # `guardian` environment, which a `uses:` job cannot enter — so naming them
+    # here is impossible, not merely verbose. release.yml's call of this
+    # workflow carries the same directive and the long form of this note.
+    # Removing it broke v0.7.0 (fixed by #291) and v0.8.0 (5ca7de1 /
+    # SOL-152856, fixed by SOL-153473).
+    secrets: inherit
     with:
       git_ref: ${{ inputs.version }}
       product_full_version: ${{ inputs.version }}
