@@ -30,6 +30,14 @@ bin="$here/bin"
 config="${CONFIG_FILE:-$repo_root/broker-config.yaml}"
 broker_alias="${BROKER_ALIAS:-my-broker}"
 vpn="${VPN:-default}"
+# The RDP that get-rdp-status is captured and replayed for. Optional, and
+# deliberately not defaulted to a literal: capture.sh pins the first RDP the
+# VPN reports when this is unset, and step 3 below reads the name back out of
+# the captured object — the same source mock-semp resolves it from. So the
+# fixture, the mock, the manifest and the run scripts all name the same RDP
+# because they all read it from one place, rather than because a default
+# happened to match the lab.
+rdp_name="${RDP_NAME:-}"
 runs="$bin/runs/$(date +%Y%m%d-%H%M%S)-regen"
 mkdir -p "$runs"
 
@@ -164,15 +172,34 @@ if [[ -z "$broker_url" ]]; then
   exit 2
 fi
 
-echo "== 3. canned/*: direct SEMP capture from $broker_url (vpn=$vpn)"
+echo "== 3. canned/*: direct SEMP capture from $broker_url (vpn=$vpn rdp=${rdp_name:-<first in VPN>})"
 BROKER_URL="$broker_url" \
   BROKER_USERNAME="$BROKER_USERNAME" \
   BROKER_PASSWORD="$BROKER_PASSWORD" \
   MSG_VPN="$vpn" \
+  RDP_NAME="$rdp_name" \
   "$here/mock-semp/canned/capture.sh" 2>&1 | tee "$runs/canned.log"
 
-echo "== 4. fidelity -capture (alias=$broker_alias vpn=$vpn)"
-"$bin/fidelity" -mcp-url http://localhost:9090 -broker "$broker_alias" -vpn "$vpn" \
+# Read the pinned name back out of the capture, exactly as mock-semp does at
+# startup (pinnedRDPName in mock-semp/handler.go). capture.sh may have derived
+# it, so this — not $RDP_NAME — is what the golden capture and the manifest
+# must use. Parsing the fixture rather than the capture log keeps the manifest
+# describing the bytes on disk.
+rdp_object="$here/mock-semp/canned/rdp_object.json"
+if command -v jq >/dev/null 2>&1; then
+  rdp_name="$(jq -r '.data.restDeliveryPointName // ""' "$rdp_object")"
+else
+  rdp_name="$(grep -oE '"restDeliveryPointName"[[:space:]]*:[[:space:]]*"[^"]*"' "$rdp_object" |
+    head -1 | sed -E 's/.*"([^"]+)"$/\1/')"
+fi
+if [[ -z "$rdp_name" ]]; then
+  echo "capture wrote no restDeliveryPointName into $rdp_object — cannot pin an RDP." >&2
+  exit 2
+fi
+echo "   pinned RDP: $rdp_name"
+
+echo "== 4. fidelity -capture (alias=$broker_alias vpn=$vpn rdp=$rdp_name)"
+"$bin/fidelity" -mcp-url http://localhost:9090 -broker "$broker_alias" -vpn "$vpn" -rdp "$rdp_name" \
   -golden-dir "$here/fidelity/golden" -capture 2>&1 | tee "$runs/regen.log"
 
 echo "== 5. sanitize canned and golden — strip lab-identifying values"
@@ -182,11 +209,24 @@ echo "== 5. sanitize canned and golden — strip lab-identifying values"
 # a no-op.
 "$here/mock-semp/canned/sanitize.sh" 2>&1 | tee "$runs/sanitize.log"
 
+# The paginated list-rdps fidelity check is the only thing in the suite that
+# walks a cursor chain, and it can only do that if this capture produced more
+# than one RDP page. With a single page it still passes — a one-page golden
+# against a one-page replay — so the coverage would disappear without anything
+# turning red. Warn here, where recapturing from a bigger VPN is still an
+# option; mock-semp repeats the warning at every startup.
+rdps_pages=$(find "$here/mock-semp/canned" -maxdepth 1 -name 'rdps_page*.json' | wc -l)
+if (( rdps_pages < 2 )); then
+  echo "!! WARNING: this VPN yielded $rdps_pages RDP page(s) (<=100 RDPs), so the paginated" >&2
+  echo "   list-rdps check has no cursor chain to walk and pagination goes uncovered." >&2
+  echo "   Capture from a VPN with more than 100 RDPs to keep that coverage." >&2
+fi
+
 echo "== 6. record fixtures.manifest (hashes + capture time for both sets)"
 # One manifest per capture is what lets run.sh prove canned and golden came
 # from the same pass. Written last, after sanitization, so it describes
 # exactly the bytes the mock will replay.
-BROKER_ALIAS="$broker_alias" VPN="$vpn" "$here/fixtures-manifest.sh" write
+BROKER_ALIAS="$broker_alias" VPN="$vpn" RDP_NAME="$rdp_name" "$here/fixtures-manifest.sh" write
 
 echo "== canned regenerated at $here/mock-semp/canned"
 echo "== goldens regenerated at $here/fidelity/golden"
