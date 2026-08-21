@@ -56,10 +56,17 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	if getErr != nil {
 		slog.WarnContext(ctx, "token cache get failed", "broker", input.BrokerAlias, "error", getErr)
 	} else {
-		slog.Log(ctx, gr.Status.Level(), "broker credential cache lookup",
-			slog.String("broker", input.BrokerAlias),
-			slog.Any("result", gr.Status))
-		if gr.Status == cache.GetHit {
+		// One message per outcome, matching the cache-store site below: a
+		// message that names what happened needs no result attribute to
+		// disambiguate it, and "lookup" plus result=hit read as two ways of
+		// saying the same thing. Both outcomes are Debug, so the level is
+		// stated here rather than taken from Status.Level().
+		if gr.Status != cache.GetHit {
+			slog.DebugContext(ctx, "no cached broker token",
+				slog.String("broker", input.BrokerAlias))
+		} else {
+			slog.DebugContext(ctx, "using cached broker token",
+				slog.String("broker", input.BrokerAlias))
 			// Re-check for the same reason the singleflight branch does below:
 			// the entry guard is point-in-time and Get ignores ctx, so without
 			// this a caller cancelled during the lookup still leaves with a
@@ -200,7 +207,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 
 		tok := res.Val.(*Token)
 
-		slog.DebugContext(ctx, "broker credential obtained from identity provider",
+		slog.DebugContext(ctx, "broker token exchange completed",
 			slog.String("broker", input.BrokerAlias),
 			slog.Duration("exchange_total_elapsed", elapsed))
 
@@ -283,10 +290,10 @@ func (e *Exchanger) runExchangeOnce(key string, input ExchangeInput) (*Token, er
 		// the branch, so it is stated here rather than looked up.
 		switch pr.Status {
 		case cache.PutStored:
-			slog.DebugContext(exchCtx, "broker credential cached",
+			slog.DebugContext(exchCtx, "broker token cached",
 				slog.String("broker", input.BrokerAlias))
 		case cache.PutDroppedTTL:
-			slog.WarnContext(exchCtx, "broker credential not cached: remaining lifetime too short after clock-skew adjustment",
+			slog.WarnContext(exchCtx, "broker token not cached: remaining lifetime too short after clock-skew adjustment",
 				slog.String("broker", input.BrokerAlias))
 		default:
 			// Unreachable in the current build — PutStored and PutDroppedTTL
@@ -296,7 +303,7 @@ func (e *Exchanger) runExchangeOnce(key string, input ExchangeInput) (*Token, er
 			// successful cache write would be a silent lie. This is the one
 			// arm that keeps `result`, because its message deliberately does
 			// not name the outcome — the status is all we have to report.
-			slog.WarnContext(exchCtx, "broker credential cache returned an unrecognized outcome; cannot tell whether the credential was written",
+			slog.WarnContext(exchCtx, "broker token cache returned an unrecognized outcome; cannot tell whether the token was written",
 				slog.String("broker", input.BrokerAlias),
 				slog.Any("result", pr.Status))
 		}

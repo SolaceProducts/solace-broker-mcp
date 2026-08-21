@@ -72,20 +72,6 @@ func (s GetStatus) String() string {
 	}
 }
 
-func (s GetStatus) Level() slog.Level {
-	return slog.LevelDebug
-}
-
-// LogValue renders the status as its name ("hit"/"miss") rather than the
-// underlying iota. slog resolves LogValuer but never calls String, so without
-// this a caller logging a bare GetStatus emits an integer — and 1 ("miss")
-// reads as a failure code next to the HTTP statuses logged elsewhere in the
-// tree. Defined on the enum, not just its GetResult wrapper, so every call
-// site is covered whether it logs the result or the status alone.
-func (s GetStatus) LogValue() slog.Value {
-	return slog.StringValue(s.String())
-}
-
 // GetResult is returned by Get. Callers inspect Status to distinguish
 // a hit from a miss.
 type GetResult struct {
@@ -105,8 +91,8 @@ func (r GetResult) LogValue() slog.Value {
 type PutStatus int
 
 const (
-	PutStored    PutStatus = iota // Entry accepted and stored.
-	PutDroppedTTL                 // TTL was zero or negative after clock-skew; not stored.
+	PutStored     PutStatus = iota // Entry accepted and stored.
+	PutDroppedTTL                  // TTL was zero or negative after clock-skew; not stored.
 )
 
 func (s PutStatus) String() string {
@@ -120,20 +106,11 @@ func (s PutStatus) String() string {
 	}
 }
 
-func (s PutStatus) Level() slog.Level {
-	switch s {
-	case PutDroppedTTL:
-		return slog.LevelWarn
-	default:
-		return slog.LevelDebug
-	}
-}
-
-// LogValue is symmetric with GetStatus.LogValue. PutStatus is the more
-// misleading of the two as a bare integer: PutStored is 0, which reads as a
-// success exit code, while GetHit is also 0 — so the same number means
-// "success" on both a get and a put line while the meaning of 1 flips between
-// them.
+// LogValue renders the status as its name rather than the underlying iota.
+// slog resolves LogValuer but never calls String, so without this a caller
+// logging a bare PutStatus emits an integer — and PutStored is 0, which reads
+// as a success exit code while 1 reads as failure. Live at the cache-store
+// site's default arm, which reports an unrecognized status verbatim.
 func (s PutStatus) LogValue() slog.Value {
 	return slog.StringValue(s.String())
 }

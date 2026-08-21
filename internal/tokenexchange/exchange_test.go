@@ -1217,7 +1217,7 @@ func TestExchange_SuccessLogsDebugWithBrokerAndElapsed(t *testing.T) {
 	recs := records()
 	var found bool
 	for _, rec := range recs {
-		if rec.Message == "broker credential obtained from identity provider" {
+		if rec.Message == "broker token exchange completed" {
 			found = true
 			if rec.Level != slog.LevelDebug {
 				t.Errorf("want Debug level, got %v", rec.Level)
@@ -2192,13 +2192,13 @@ func TestExchange_CacheStoreLogsNameTheirOutcome(t *testing.T) {
 		{
 			name:      "stored",
 			clockSkew: 0,
-			wantMsg:   "broker credential cached",
+			wantMsg:   "broker token cached",
 			wantLevel: slog.LevelDebug,
 		},
 		{
 			name:      "dropped for short remaining lifetime",
 			clockSkew: time.Hour,
-			wantMsg:   "broker credential not cached: remaining lifetime too short after clock-skew adjustment",
+			wantMsg:   "broker token not cached: remaining lifetime too short after clock-skew adjustment",
 			wantLevel: slog.LevelWarn,
 		},
 	}
