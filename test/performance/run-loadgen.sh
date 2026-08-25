@@ -11,6 +11,13 @@
 #   DURATION     loadgen -duration               (default 60s)
 #   TOOLS        loadgen -tools                  (default get-broker-status,list-queues,list-rdps,get-rdp-status)
 #   BROKERS      loadgen -broker-count           (default 50)
+#   BROKERS_CSV  loadgen -brokers <csv>          (default empty = use BROKERS).
+#                Pins this instance to an explicit alias list instead of the
+#                generated broker-01..broker-N. Set it to split one population
+#                across two concurrent loadgen instances — loadgen reports a
+#                single blended set of percentiles, so measuring a slow broker
+#                against the healthy remainder needs one instance per group.
+#                Mutually exclusive with BROKERS.
 #   LATENCY_MS   mock-semp -default-latency-ms   (default 0). Set >0 to make every
 #                broker response take that long — combined with the MCP config's
 #                max_concurrent_per_broker, requests pile up on the per-broker
@@ -43,11 +50,30 @@ bin="$here/bin"
 CLIENTS="${CLIENTS:-200}"
 DURATION="${DURATION:-60s}"
 TOOLS="${TOOLS:-get-broker-status,list-queues,list-rdps,get-rdp-status}"
+# Record whether BROKERS came from the environment before the default lands,
+# so the BROKERS_CSV conflict check below can tell "caller set 50" from
+# "nobody set anything".
+brokers_explicit="${BROKERS+set}"
 BROKERS="${BROKERS:-50}"
+BROKERS_CSV="${BROKERS_CSV:-}"
 LATENCY_MS="${LATENCY_MS:-0}"
 TOTAL_RPS="${TOTAL_RPS:-0}"
 RUN_TAG="${RUN_TAG:-${CLIENTS}c}"
 NO_MOCK="${NO_MOCK:-0}"
+
+# loadgen rejects -brokers and -broker-count together; catch it here instead,
+# where the message can name the environment variables the caller actually set.
+if [[ -n "$BROKERS_CSV" ]]; then
+  if [[ -n "$brokers_explicit" ]]; then
+    echo "set BROKERS_CSV or BROKERS, not both (got BROKERS_CSV=$BROKERS_CSV BROKERS=$BROKERS)" >&2
+    exit 2
+  fi
+  broker_args=(-brokers "$BROKERS_CSV")
+  broker_note="brokers=$BROKERS_CSV"
+else
+  broker_args=(-broker-count "$BROKERS")
+  broker_note="broker-count=$BROKERS"
+fi
 ERROR_RATE="${ERROR_RATE:-0}"
 ERROR_COUNT="${ERROR_COUNT:-0}"
 ERROR_STATUSES="${ERROR_STATUSES:-503:70,429:20,500:10}"
@@ -320,8 +346,8 @@ else
   inject_note="no error injection"
 fi
 
-echo "== 4. loadgen against $mcp_url ($CLIENTS clients, $DURATION, tools=$TOOLS${TOTAL_RPS:+, total-rps=$TOTAL_RPS}; $inject_note)"
-"$bin/loadgen" -mcp-url "$mcp_url" -broker-count "$BROKERS" \
+echo "== 4. loadgen against $mcp_url ($CLIENTS clients, $DURATION, tools=$TOOLS, $broker_note${TOTAL_RPS:+, total-rps=$TOTAL_RPS}; $inject_note)"
+"$bin/loadgen" -mcp-url "$mcp_url" "${broker_args[@]}" \
   -clients "$CLIENTS" -duration "$DURATION" -tools "$TOOLS" \
   -vpn "$VPN" -rdp "$RDP" \
   "${extra_args[@]}" \

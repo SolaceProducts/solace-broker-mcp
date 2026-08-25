@@ -10,6 +10,10 @@
 #   MOCK_HOST      required — LAN address of Box A running mock-semp
 #   DURATION       how long to hold MCP up for the loadgen run (default 90s;
 #                  should exceed the loadgen -duration you use on Box A)
+#   CONFIG_FILE    MCP broker config (default ./broker-config.mock.yaml). Point
+#                  this at a per-run copy to vary request_min_interval; the file
+#                  used is copied into the run directory so the numbers stay
+#                  traceable to it.
 #   BROKER_USERNAME / BROKER_PASSWORD   (default perf/perf; mock accepts anything)
 
 set -euo pipefail
@@ -25,6 +29,18 @@ export MOCK_HOST
 export BROKER_USERNAME="${BROKER_USERNAME:-perf}"
 export BROKER_PASSWORD="${BROKER_PASSWORD:-perf}"
 DURATION="${DURATION:-90s}"
+CONFIG_FILE="${CONFIG_FILE:-$here/broker-config.mock.yaml}"
+
+# Fail loud on a bad path. Silently falling back to the committed config would
+# make every run measure the interval that file happens to ship, and a sweep
+# meant to vary the pacer would report one setting under five names.
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  echo "CONFIG_FILE not found: $CONFIG_FILE" >&2
+  exit 2
+fi
+# MCP is launched with cwd=$repo_root, so a relative path would resolve against
+# the repo root rather than against the caller. Pin it here instead.
+CONFIG_FILE="$(realpath "$CONFIG_FILE")"
 
 for b in memsampler mcp-server; do
   if [[ ! -x "$bin/$b" ]]; then
@@ -85,11 +101,14 @@ wait_for_http() {
   return 1
 }
 
-echo "== 1. MCP server on :9090 (config: broker-config.mock.yaml, MOCK_HOST=$MOCK_HOST)"
+echo "== 1. MCP server on :9090 (config: $CONFIG_FILE, MOCK_HOST=$MOCK_HOST)"
+# Keep the exact config alongside the numbers it produced. Recording only the
+# filename is not enough: the per-run copies are local and get overwritten.
+cp "$CONFIG_FILE" "$runs/broker-config.used.yaml"
 # Exec the prebuilt binary, not `go run`: `go run` runs the compiled program
 # as a child process, so $mcp_pid would be the toolchain wrapper and the
 # memsampler in step 2 would sample that instead of MCP.
-setsid bash -c "cd '$repo_root' && CONFIG_FILE='$here/broker-config.mock.yaml' exec '$bin/mcp-server'" \
+setsid bash -c "cd '$repo_root' && CONFIG_FILE='$CONFIG_FILE' exec '$bin/mcp-server'" \
   >"$runs/mcp.log" 2>&1 &
 mcp_pid=$!
 wait_for_http "http://localhost:9090/health" mcp-server
