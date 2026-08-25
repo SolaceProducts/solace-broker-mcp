@@ -35,8 +35,8 @@ import (
 )
 
 // AddAuth obtains a broker token and puts it on an outgoing SEMP request,
-// working through Exchanger and TokenCache. This test runs all three against a
-// fake IdP and checks two things:
+// working through Exchanger and TokenCache. The tests here run all three
+// against a fake IdP, which is the only way to check:
 //
 //  1. No secret is written to a log. AddAuth's unit tests use a fake exchanger
 //     returning a placeholder, so there is no real secret there to leak.
@@ -44,8 +44,15 @@ import (
 //  2. AddAuth logs one start line and one finish line on every path, so a
 //     reader can tell "never got a token" from "still in progress".
 //
-// It does not check the wording of the lines in between, so rewording one of
-// those does not break this test.
+//  3. The finish line names its cause, including when the caller cancels —
+//     Exchange returns a bare context error there rather than an ExchangeError.
+//
+//  4. The attempt count on the IdP line reflects real retries, which needs the
+//     retrying client production wires rather than a plain http.Client.
+//
+// Checks 1 and 2 deliberately ignore the wording of the lines in between, so
+// rewording one does not break them. Checks 3 and 4 do name a message, because
+// they assert what that specific line carries.
 
 const (
 	traceBrokerAlias  = "prod-us"
