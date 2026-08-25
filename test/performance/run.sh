@@ -26,6 +26,10 @@
 #                   Default: "503:70,429:20,500:10" — mirrors realistic broker
 #                   overload signals and exercises the MCP retry chain.
 #                   Only 429/500/502/503/504 are accepted (retryable codes).
+#   CONFIG_FILE  MCP broker config (default ./broker-config.mock.yaml). Point
+#                this at a per-run copy to vary request_min_interval; the file
+#                used is copied into the run directory so the numbers stay
+#                traceable to it.
 #   BROKER_ALIAS fidelity -broker  (default broker-01; must exist in broker-config.mock.yaml)
 #   VPN          fidelity/loadgen -vpn (default: the VPN recorded in fixtures.manifest
 #                at capture time — set this only to override that)
@@ -54,6 +58,18 @@ ERROR_STATUSES="${ERROR_STATUSES:-503:70,429:20,500:10}"
 # fixtures.manifest after the preflight below — hardcoding a default here is
 # how it drifted from regen-golden.sh's.
 BROKER_ALIAS="${BROKER_ALIAS:-broker-01}"
+CONFIG_FILE="${CONFIG_FILE:-$here/broker-config.mock.yaml}"
+
+# Fail loud on a bad path. Silently falling back to the committed config would
+# make every run measure the interval that file happens to ship, and a sweep
+# meant to vary the pacer would report one setting under five names.
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  echo "CONFIG_FILE not found: $CONFIG_FILE" >&2
+  exit 2
+fi
+# MCP is launched with cwd=$repo_root, so a relative path would resolve against
+# the repo root rather than against the caller. Pin it here instead.
+CONFIG_FILE="$(realpath "$CONFIG_FILE")"
 export BROKER_USERNAME="${BROKER_USERNAME:-perf}"
 export BROKER_PASSWORD="${BROKER_PASSWORD:-perf}"
 # Single-host: MCP reaches the mock over loopback.
@@ -236,11 +252,14 @@ snapshot_fanout() {
   fi
 }
 
-echo "== 2. MCP server on :9090 (config: broker-config.mock.yaml)"
+echo "== 2. MCP server on :9090 (config: $CONFIG_FILE)"
+# Keep the exact config alongside the numbers it produced. Recording only the
+# filename is not enough: the per-run copies are local and get overwritten.
+cp "$CONFIG_FILE" "$runs/broker-config.used.yaml"
 # Exec the prebuilt binary, not `go run`: `go run` runs the compiled program
 # as a child process, so $mcp_pid would be the toolchain wrapper and the
 # memsampler in step 4 would sample that instead of MCP.
-setsid bash -c "cd '$repo_root' && CONFIG_FILE='$here/broker-config.mock.yaml' exec '$bin/mcp-server'" \
+setsid bash -c "cd '$repo_root' && CONFIG_FILE='$CONFIG_FILE' exec '$bin/mcp-server'" \
   >"$runs/mcp.log" 2>&1 &
 mcp_pid=$!
 wait_for_http "http://localhost:9090/health" mcp-server

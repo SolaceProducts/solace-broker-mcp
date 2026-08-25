@@ -13,3 +13,8 @@ fixtures.manifest
 # this checkout captures from — publishing it would defeat the scrubbing it
 # drives. Start from sanitize.local.tsv.example, which is tracked.
 mock-semp/canned/sanitize.local.tsv
+
+# Per-run config copies. One per measurement run, varying request_min_interval
+# against a fixed max_concurrent_per_broker; the run scripts copy whichever one
+# they used into the run directory, which is where the provenance belongs.
+broker-config.run*.yaml
