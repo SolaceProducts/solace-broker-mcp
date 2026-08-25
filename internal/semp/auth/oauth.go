@@ -109,13 +109,21 @@ func (a *OAuthAuthenticator) AddAuth(ctx context.Context, req *http.Request) err
 //
 // It carries the sentinel and nothing else: the tool layer already reports the
 // same failure at ERROR with the full diagnostics, so repeating them here would
-// log one failure twice. A non-ExchangeError cannot reach here today; the
-// fallback keeps the line honest if one ever does.
+// log one failure twice.
+//
+// A cancelled caller does not get an ExchangeError — Exchange returns the bare
+// context error from its entry guard, its cache-hit re-check, and the select
+// that notices the caller left — so that case is read separately. It is
+// ordinary traffic, not an edge case: any client that disconnects mid-request
+// arrives here.
 func (a *OAuthAuthenticator) logUnavailable(ctx context.Context, err error) {
 	reason := "unknown"
 	var exchErr *tokenexchange.ExchangeError
-	if errors.As(err, &exchErr) && exchErr.Sentinel != nil {
+	switch {
+	case errors.As(err, &exchErr) && exchErr.Sentinel != nil:
 		reason = exchErr.Sentinel.Error()
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		reason = err.Error()
 	}
 	slog.DebugContext(ctx, "broker token unavailable",
 		slog.String("broker", a.brokerAlias),

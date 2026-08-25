@@ -427,3 +427,52 @@ func attemptsOnIssuedLine(recs []traceRecord) (int, bool) {
 	}
 	return 0, false
 }
+
+// A client that disconnects mid-request is ordinary traffic, and the trace it
+// leaves behind should say so. Exchange returns the bare context error rather
+// than an ExchangeError on its cancellation paths, so without handling that
+// case the closing line reports reason=unknown for a cause that is known.
+func Test_BrokerTokenTrace_CancelledCallerNamesTheCause(t *testing.T) {
+	idp := httptest.NewServer(idpIssues(3600))
+	t.Cleanup(idp.Close)
+
+	auth := newTraceAuthenticator(t, idp.URL, 10*time.Second)
+
+	ctx, cancel := context.WithCancel(traceCtxWithSubjectToken(t))
+	cancel()
+
+	var err error
+	recs := captureTrace(t, func() {
+		err = auth.AddAuth(ctx, httptest.NewRequestWithContext(ctx, http.MethodGet, "/SEMP/v2/monitor", nil))
+	})
+
+	if err == nil {
+		t.Fatal("AddAuth: want an error for a cancelled caller, got nil")
+	}
+
+	var reason string
+	var found bool
+	for _, r := range recs {
+		if r.Msg != msgUnavail {
+			continue
+		}
+		found = true
+		var m map[string]any
+		if jsonErr := json.Unmarshal([]byte(r.Raw), &m); jsonErr != nil {
+			t.Fatalf("unmarshalling %q: %v", r.Raw, jsonErr)
+		}
+		reason, _ = m["reason"].(string)
+	}
+
+	if !found {
+		t.Fatalf("no %q line was logged for a cancelled caller.\n\n%s", msgUnavail, renderTrace(recs))
+	}
+	if reason == "unknown" {
+		t.Errorf(`the trace closed with reason=unknown for a cancelled caller.
+
+Exchange returned a context error, so the cause is known. Reporting it as
+unknown loses the one thing this line exists to say.
+
+%s`, renderTrace(recs))
+	}
+}
