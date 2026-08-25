@@ -17,6 +17,7 @@
 #   ./fixtures-manifest.sh write              # after a capture (regen-golden.sh)
 #   ./fixtures-manifest.sh check [--no-canned]  # preflight (run.sh, run-loadgen.sh)
 #   ./fixtures-manifest.sh vpn                # print the VPN the capture used
+#   ./fixtures-manifest.sh rdp                # print the RDP the capture pinned
 #
 # check fails when:
 #   - the manifest is absent          → nothing has been captured here
@@ -35,7 +36,7 @@
 # Env:
 #   FIXTURE_AGE_WARN  age past which check prints a warning (default 7d;
 #                     accepts <N>d or <N>h). Warning only.
-#   BROKER_ALIAS/VPN  recorded by write as capture provenance.
+#   BROKER_ALIAS/VPN/RDP_NAME  recorded by write as capture provenance.
 
 set -euo pipefail
 
@@ -87,6 +88,7 @@ cmd_write() {
     echo "# captured_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "# broker_alias: ${BROKER_ALIAS:-unknown}"
     echo "# vpn: ${VPN:-unknown}"
+    echo "# rdp: ${RDP_NAME:-unknown}"
     ( cd "$here" && printf '%s\n' "$paths" | xargs sha256sum )
   } >"$manifest"
 
@@ -164,10 +166,11 @@ EOF
   if [[ -n "$captured_epoch" ]]; then
     age_s=$(( $(date +%s) - captured_epoch ))
     warn_s="$(age_seconds "${FIXTURE_AGE_WARN:-7d}")"
-    printf '   fixtures captured %s (%dh ago) broker=%s vpn=%s\n' \
+    printf '   fixtures captured %s (%dh ago) broker=%s vpn=%s rdp=%s\n' \
       "$captured_at" "$(( age_s / 3600 ))" \
       "$(sed -n 's/^# broker_alias: //p' "$manifest")" \
-      "$(sed -n 's/^# vpn: //p' "$manifest")"
+      "$(sed -n 's/^# vpn: //p' "$manifest")" \
+      "$(sed -n 's/^# rdp: //p' "$manifest")"
     if (( age_s > warn_s )); then
       echo "   WARNING: older than ${FIXTURE_AGE_WARN:-7d}. Still internally consistent, so the run proceeds," >&2
       echo "            but the broker it describes has moved on — recapture before trusting a regression." >&2
@@ -187,9 +190,20 @@ cmd_vpn() {
   sed -n 's/^# vpn: //p' "$manifest" | head -1
 }
 
+# cmd_rdp prints the RDP name the capture pinned, for the same reason cmd_vpn
+# exists: the mock pins one RDP (it reads the name out of the captured object),
+# so fidelity and loadgen must ask for that RDP and no other. Reading it from
+# the capture's own provenance is what keeps the two from drifting — a literal
+# default in each script is how they would.
+cmd_rdp() {
+  [[ -f "$manifest" ]] || return 0
+  sed -n 's/^# rdp: //p' "$manifest" | head -1
+}
+
 case "${1:-}" in
   write) shift; cmd_write "$@" ;;
   check) shift; cmd_check "$@" ;;
   vpn)   shift; cmd_vpn "$@" ;;
-  *) echo "usage: $0 {write|check [--no-canned]|vpn}" >&2; exit 2 ;;
+  rdp)   shift; cmd_rdp "$@" ;;
+  *) echo "usage: $0 {write|check [--no-canned]|vpn|rdp}" >&2; exit 2 ;;
 esac

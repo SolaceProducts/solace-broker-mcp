@@ -11,7 +11,7 @@
 # Env overrides:
 #   CLIENTS      loadgen -clients      (default 32)
 #   DURATION     loadgen -duration     (default 60s)
-#   TOOLS        loadgen -tools        (default get-broker-status,list-queues)
+#   TOOLS        loadgen -tools        (default get-broker-status,list-queues,list-rdps,get-rdp-status)
 #   LATENCY_MS   mock-semp -default-latency-ms (default 0). Set >0 to make every
 #                broker response take that long — with max_concurrent_per_broker=10
 #                in the MCP config, this is what causes requests to queue up on
@@ -27,8 +27,10 @@
 #                   overload signals and exercises the MCP retry chain.
 #                   Only 429/500/502/503/504 are accepted (retryable codes).
 #   BROKER_ALIAS fidelity -broker  (default broker-01; must exist in broker-config.mock.yaml)
-#   VPN          fidelity -vpn     (default: the VPN recorded in fixtures.manifest
+#   VPN          fidelity/loadgen -vpn (default: the VPN recorded in fixtures.manifest
 #                at capture time — set this only to override that)
+#   RDP          fidelity/loadgen -rdp (default: the RDP recorded in fixtures.manifest;
+#                the mock serves get-rdp-status for that RDP only)
 #   BROKER_USERNAME / BROKER_PASSWORD  (default perf/perf; mock accepts anything non-empty)
 
 set -euo pipefail
@@ -41,7 +43,7 @@ mkdir -p "$runs"
 
 CLIENTS="${CLIENTS:-32}"
 DURATION="${DURATION:-60s}"
-TOOLS="${TOOLS:-get-broker-status,list-queues}"
+TOOLS="${TOOLS:-get-broker-status,list-queues,list-rdps,get-rdp-status}"
 LATENCY_MS="${LATENCY_MS:-0}"
 ERROR_RATE="${ERROR_RATE:-0}"
 ERROR_COUNT="${ERROR_COUNT:-0}"
@@ -87,6 +89,23 @@ if [[ -z "$VPN" || "$VPN" == "unknown" ]]; then
   echo "fixtures.manifest records no VPN — recapture with ./regen-golden.sh, or pass VPN=<name> explicitly." >&2
   exit 2
 fi
+
+# Same for the pinned RDP. The mock answers get-rdp-status for exactly one RDP
+# name — the one in the capture — and misses (404, non-zero exit) for any
+# other, so both fidelity and loadgen have to ask for that one.
+RDP="${RDP:-$("$here/fixtures-manifest.sh" rdp)}"
+if [[ -z "$RDP" || "$RDP" == "unknown" ]]; then
+  echo "fixtures.manifest records no RDP — recapture with ./regen-golden.sh, or pass RDP=<name> explicitly." >&2
+  exit 2
+fi
+
+# Validate TOOLS before anything starts. loadgen enforces this at its own
+# startup too, but by then the mock is listening, the fidelity gate has run,
+# and (split-host) we may have waited minutes for Box B — a typo in TOOLS
+# should cost nothing. The tool list lives in loadgen's own recipe map, so the
+# check is delegated rather than duplicated here: a bash copy of the valid
+# names would drift the first time a tool is added.
+"$bin/loadgen" -validate-only -tools "$TOOLS" -vpn "$VPN" -rdp "$RDP"
 
 mock_pid= mcp_pid= mem_pid= top_pid=
 # kill_tree signals a pid (and its process group if reachable) and waits for
@@ -198,6 +217,25 @@ arm_injection() {
     http://localhost:19000/_mock/config >/dev/null
 }
 
+# snapshot_fanout banks the per-rule SEMP counts accumulated so far and zeroes
+# them: POST /_mock/hits reports the window it closes. Called between the
+# fidelity gate and the load run, so the gate's requests are recorded as the
+# fan-out table they are, and the shutdown summary in mock.log covers only the
+# load phase. Never fatal — a missing fan-out table is worth a warning, not a
+# dead run, and mock.log still carries the (combined) totals.
+snapshot_fanout() {
+  local out="$runs/semp-fanout.json"
+  if ! curl -fsS -X POST http://localhost:19000/_mock/hits -o "$out"; then
+    echo "   WARNING: could not read /_mock/hits; mock.log's shutdown summary will include the gate's requests" >&2
+    return 0
+  fi
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '.rules[] | select(.hits > 0) | "   \(.hits) \(.rule)"' "$out"
+  else
+    echo "   counts in $out (install jq to see them tabulated here)"
+  fi
+}
+
 echo "== 2. MCP server on :9090 (config: broker-config.mock.yaml)"
 # Exec the prebuilt binary, not `go run`: `go run` runs the compiled program
 # as a child process, so $mcp_pid would be the toolchain wrapper and the
@@ -207,18 +245,31 @@ setsid bash -c "cd '$repo_root' && CONFIG_FILE='$here/broker-config.mock.yaml' e
 mcp_pid=$!
 wait_for_http "http://localhost:9090/health" mcp-server
 
-echo "== 3. fidelity gate (exact mode; broker=$BROKER_ALIAS vpn=$VPN; exclusions in fidelity/exclusions.txt)"
+echo "== 3. fidelity gate (exact mode; broker=$BROKER_ALIAS vpn=$VPN rdp=$RDP; exclusions in fidelity/exclusions.txt)"
 # BROKER_ALIAS + VPN must match how the goldens were captured; the mock
 # replays canned bytes regardless of the alias in the request path, so
 # BROKER_ALIAS just picks which mock broker MCP dials.
-if ! "$bin/fidelity" -mcp-url http://localhost:9090 -broker "$BROKER_ALIAS" -vpn "$VPN" \
+if ! "$bin/fidelity" -mcp-url http://localhost:9090 -broker "$BROKER_ALIAS" -vpn "$VPN" -rdp "$RDP" \
       -golden-dir "$here/fidelity/golden" | tee "$runs/fidelity.log"; then
   echo "!! fidelity FAILED — aborting before load run" >&2
   exit 1
 fi
 
+# The gate makes exactly one call per check, so the counters now hold the SEMP
+# cost of those five calls — the factor that turns loadgen's tool calls/s into
+# SEMP requests/s. Bank that table, then zero the counters so the shutdown
+# summary in mock.log measures the load phase alone instead of the load phase
+# plus these dozen requests.
+#
+# Read it per rule, not per tool: two of the five checks are list-rdps (default
+# args, and maxResults=200 for the paginated one), so "rdps page 1" shows 2 —
+# one hit from each — and only "rdps page 2 (cursor)" is unique to the
+# paginated call. README's per-call table has the split.
+echo "== 3b. SEMP fan-out per tool call (from the gate's one-call-per-check pass)"
+snapshot_fanout
+
 if awk -v r="$ERROR_RATE" 'BEGIN { exit !(r+0 > 0) }'; then
-  echo "== 3b. arming error injection (rate=$ERROR_RATE count=$ERROR_COUNT/port statuses=$ERROR_STATUSES)"
+  echo "== 3c. arming error injection (rate=$ERROR_RATE count=$ERROR_COUNT/port statuses=$ERROR_STATUSES)"
   arm_injection
 fi
 
@@ -247,6 +298,7 @@ fi
 echo "== 5. loadgen ($CLIENTS clients, $DURATION, tools=$TOOLS; $inject_note)"
 "$bin/loadgen" -mcp-url http://localhost:9090 -broker-count 50 \
   -clients "$CLIENTS" -duration "$DURATION" -tools "$TOOLS" \
+  -vpn "$VPN" -rdp "$RDP" \
   | tee "$runs/loadgen.log"
 
 echo "== done"

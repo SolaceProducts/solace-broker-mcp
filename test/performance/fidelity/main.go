@@ -13,9 +13,9 @@
 // limitations under the License.
 
 // Command fidelity is the hard gate before any performance load run. It
-// connects to a live MCP server, invokes get-broker-status and list-queues,
-// and deep-equals the tool output against golden JSON captured earlier
-// (with MCP pointed at the real broker).
+// connects to a live MCP server, invokes every tool in buildChecks, and
+// deep-equals the tool output against golden JSON captured earlier (with MCP
+// pointed at the real broker).
 //
 // Exit codes:
 //
@@ -32,6 +32,7 @@
 //	  -mcp-url http://localhost:9090 \
 //	  -broker  my-broker \
 //	  -vpn     default \
+//	  -rdp     rdp_1 \
 //	  -golden-dir test/performance/fidelity/golden
 //
 // Auth: reads MCP_DEV_TOKEN from env and sends it as Bearer if set. Leave
@@ -60,7 +61,8 @@ import (
 func main() {
 	mcpURL := flag.String("mcp-url", "http://localhost:9090", "MCP server URL")
 	broker := flag.String("broker", "", "broker alias to invoke tools against (required)")
-	vpn := flag.String("vpn", "default", "msgVpnName for list-queues")
+	vpn := flag.String("vpn", "default", "msgVpnName for the tools that take one (list-queues, list-rdps, get-rdp-status)")
+	rdp := flag.String("rdp", "", "restDeliveryPointName for get-rdp-status (required). Must name the RDP the capture pinned — the run scripts read it from fixtures.manifest. Deliberately not defaulted: a default that disagreed with the capture would surface as a confusing diff or a mock miss instead of a clear error.")
 	goldenDir := flag.String("golden-dir", "test/performance/fidelity/golden", "directory containing golden JSON files")
 	exclusionsPath := flag.String("exclusions", "", "path to a plain-text file of dotted paths (one per line, # comments allowed) that exact-mode diff should skip — e.g. broker uptime, which advances between the canned and golden captures. Default: <golden-dir>/../exclusions.txt if it exists.")
 	capture := flag.Bool("capture", false, "capture mode: overwrite golden files with the tools' current output instead of comparing (use when MCP is pointed at the real broker)")
@@ -72,12 +74,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, "fidelity: -broker is required")
 		os.Exit(1)
 	}
+	if *rdp == "" {
+		fmt.Fprintln(os.Stderr, "fidelity: -rdp is required (the RDP name the capture pinned; ./fixtures-manifest.sh rdp prints it)")
+		os.Exit(1)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
 	if *capture {
-		if err := captureGoldens(ctx, *mcpURL, *broker, *vpn, *goldenDir); err != nil {
+		if err := captureGoldens(ctx, *mcpURL, *broker, *vpn, *rdp, *goldenDir); err != nil {
 			fmt.Fprintf(os.Stderr, "FAIL: %v\n", err)
 			os.Exit(1)
 		}
@@ -91,7 +97,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := run(ctx, *mcpURL, *broker, *vpn, *goldenDir, *shape, exclusions); err != nil {
+	if err := run(ctx, *mcpURL, *broker, *vpn, *rdp, *goldenDir, *shape, exclusions); err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: %v\n", err)
 		os.Exit(1)
 	}
@@ -160,25 +166,14 @@ func loadExclusions(explicit, goldenDir string, shape bool) (map[string]bool, er
 // Overwrites existing files. Recapturing at the same moment as
 // mock-semp/canned/capture.sh keeps live-metric drift (memory usage,
 // message rates) below noise threshold in the subsequent diff.
-func captureGoldens(ctx context.Context, mcpURL, broker, vpn, goldenDir string) error {
+func captureGoldens(ctx context.Context, mcpURL, broker, vpn, rdp, goldenDir string) error {
 	session, err := connect(ctx, mcpURL)
 	if err != nil {
 		return fmt.Errorf("connecting to MCP: %w", err)
 	}
 	defer session.Close()
 
-	checks := []toolCheck{
-		{
-			tool:       "get-broker-status",
-			goldenFile: filepath.Join(goldenDir, "get-broker-status.json"),
-			args:       map[string]any{"broker": broker},
-		},
-		{
-			tool:       "list-queues",
-			goldenFile: filepath.Join(goldenDir, "list-queues.json"),
-			args:       map[string]any{"broker": broker, "msgVpnName": vpn},
-		},
-	}
+	checks := buildChecks(broker, vpn, rdp, goldenDir)
 
 	// Two-phase write so a mid-recapture failure never leaves one golden
 	// updated and another stale: first collect every tool's output and stage
@@ -199,17 +194,17 @@ func captureGoldens(ctx context.Context, mcpURL, broker, vpn, goldenDir string) 
 		out, err := callTool(ctx, session, c.tool, c.args)
 		if err != nil {
 			cleanupTemps()
-			return fmt.Errorf("%s: %w", c.tool, err)
+			return fmt.Errorf("%s: %w", c.name(), err)
 		}
 		data, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {
 			cleanupTemps()
-			return fmt.Errorf("%s: marshaling: %w", c.tool, err)
+			return fmt.Errorf("%s: marshaling: %w", c.name(), err)
 		}
 		tmp, err := stageTemp(c.goldenFile, data, 0o600)
 		if err != nil {
 			cleanupTemps()
-			return fmt.Errorf("%s: staging %s: %w", c.tool, c.goldenFile, err)
+			return fmt.Errorf("%s: staging %s: %w", c.name(), c.goldenFile, err)
 		}
 		stagedFiles = append(stagedFiles, staged{tmp: tmp, final: c.goldenFile, size: len(data)})
 	}
@@ -255,33 +250,20 @@ func stageTemp(finalPath string, data []byte, perm os.FileMode) (string, error) 
 	return tmp, nil
 }
 
-func run(ctx context.Context, mcpURL, broker, vpn, goldenDir string, shape bool, exclusions map[string]bool) error {
+func run(ctx context.Context, mcpURL, broker, vpn, rdp, goldenDir string, shape bool, exclusions map[string]bool) error {
 	session, err := connect(ctx, mcpURL)
 	if err != nil {
 		return fmt.Errorf("connecting to MCP: %w", err)
 	}
 	defer session.Close()
 
-	checks := []toolCheck{
-		{
-			tool:       "get-broker-status",
-			goldenFile: filepath.Join(goldenDir, "get-broker-status.json"),
-			args:       map[string]any{"broker": broker},
-		},
-		{
-			tool:       "list-queues",
-			goldenFile: filepath.Join(goldenDir, "list-queues.json"),
-			args:       map[string]any{"broker": broker, "msgVpnName": vpn},
-		},
-	}
-
 	var firstErr error
-	for _, c := range checks {
-		fmt.Printf("--- %s ---\n", c.tool)
+	for _, c := range buildChecks(broker, vpn, rdp, goldenDir) {
+		fmt.Printf("--- %s ---\n", c.name())
 		if err := verify(ctx, session, c, shape, exclusions); err != nil {
 			fmt.Printf("  DIFF: %v\n", err)
 			if firstErr == nil {
-				firstErr = fmt.Errorf("%s diverged", c.tool)
+				firstErr = fmt.Errorf("%s diverged", c.name())
 			}
 			continue
 		}
@@ -295,6 +277,61 @@ type toolCheck struct {
 	tool       string
 	goldenFile string
 	args       map[string]any
+	// label names the check in the output. Defaults to the tool name; set it
+	// when two checks call the same tool with different arguments, so a diff
+	// says which of them drifted.
+	label string
+}
+
+// name returns the label to print for this check.
+func (c toolCheck) name() string {
+	if c.label != "" {
+		return c.label
+	}
+	return c.tool
+}
+
+// buildChecks declares every tool the fidelity gate covers, with the exact
+// arguments to call it with and the golden it must match.
+//
+// One list, used by both capture and verify. They used to carry a copy each,
+// which meant a tool added to one and not the other would capture a golden
+// nothing ever checked, or check a golden nothing ever captured.
+func buildChecks(broker, vpn, rdp, goldenDir string) []toolCheck {
+	return []toolCheck{
+		{
+			tool:       "get-broker-status",
+			goldenFile: filepath.Join(goldenDir, "get-broker-status.json"),
+			args:       map[string]any{"broker": broker},
+		},
+		{
+			tool:       "list-queues",
+			goldenFile: filepath.Join(goldenDir, "list-queues.json"),
+			args:       map[string]any{"broker": broker, "msgVpnName": vpn},
+		},
+		{
+			tool:       "list-rdps",
+			goldenFile: filepath.Join(goldenDir, "list-rdps.json"),
+			args:       map[string]any{"broker": broker, "msgVpnName": vpn},
+		},
+		{
+			// The default maxResults of 100 stops followPages before it asks
+			// for a second page, so the check above never exercises
+			// pagination however many RDPs the broker holds. Asking for more
+			// than one page's worth drives the mock through its cursor rule,
+			// and because the golden records every RDP returned, exact-mode
+			// length comparison is the assertion that all of them came back.
+			tool:       "list-rdps",
+			label:      "list-rdps (maxResults=200, paginated)",
+			goldenFile: filepath.Join(goldenDir, "list-rdps-paged.json"),
+			args:       map[string]any{"broker": broker, "msgVpnName": vpn, "maxResults": 200},
+		},
+		{
+			tool:       "get-rdp-status",
+			goldenFile: filepath.Join(goldenDir, "get-rdp-status.json"),
+			args:       map[string]any{"broker": broker, "msgVpnName": vpn, "restDeliveryPointName": rdp},
+		},
+	}
 }
 
 // verify calls one tool, unmarshals the golden and the actual output as
@@ -303,6 +340,13 @@ type toolCheck struct {
 func verify(ctx context.Context, session *mcp.ClientSession, c toolCheck, shape bool, exclusions map[string]bool) error {
 	goldenBytes, err := os.ReadFile(c.goldenFile)
 	if err != nil {
+		// A capture taken before this check existed leaves the manifest and
+		// the golden dir agreeing with each other and simply lacking the file,
+		// so the fixture preflight passes and this is the first thing to
+		// notice. Without the pointer it reads as a regression in the tool.
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("no golden at %s — this check is newer than the capture; recapture both fixture sets with ./regen-golden.sh", c.goldenFile)
+		}
 		return fmt.Errorf("reading golden: %w", err)
 	}
 	var golden map[string]any

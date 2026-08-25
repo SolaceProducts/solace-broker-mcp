@@ -28,7 +28,13 @@
 //	  -brokers  my-broker \
 //	  -clients  32 \
 //	  -duration 60s \
-//	  -tools    get-broker-status,list-queues
+//	  -tools    get-broker-status,list-queues,list-rdps,get-rdp-status \
+//	  -rdp      rdp_1
+//
+// Every tool loadgen can call is listed in toolRecipes along with the
+// arguments it needs; a -tools list naming anything else stops the run at
+// startup. get-rdp-status additionally needs -rdp, which must name the RDP
+// the mock's fixture pinned (run.sh reads it from fixtures.manifest).
 //
 // Auth: reads MCP_DEV_TOKEN from env and sends it as Bearer if set.
 package main
@@ -58,24 +64,45 @@ func main() {
 	brokersCSV := flag.String("brokers", "", "comma-separated broker aliases; each client is pinned to one, round-robin. Mutually exclusive with -broker-count.")
 	brokerCount := flag.Int("broker-count", 0, "shortcut: generate <prefix>-01..<prefix>-N as the alias list. Zero means use -brokers instead.")
 	brokerPrefix := flag.String("broker-prefix", "broker", "prefix used with -broker-count (e.g. -broker-count=50 => broker-01..broker-50)")
-	vpn := flag.String("vpn", "default", "msgVpnName argument for tools that need it (e.g. list-queues)")
+	vpn := flag.String("vpn", "default", "msgVpnName argument for every tool whose recipe needs it (list-queues, list-rdps, get-rdp-status)")
+	rdp := flag.String("rdp", "", "restDeliveryPointName argument for get-rdp-status. Must name the RDP the fixture pinned — run.sh reads it from fixtures.manifest")
 	clients := flag.Int("clients", 32, "number of concurrent MCP sessions")
 	duration := flag.Duration("duration", 60*time.Second, "steady-state run duration")
 	warmup := flag.Duration("warmup", 0, "duration excluded from stats before steady state; useful for skipping session warmup jitter")
-	toolsCSV := flag.String("tools", "get-broker-status,list-queues", "comma-separated tool names; each client rotates through them")
+	toolsCSV := flag.String("tools", "get-broker-status,list-queues,list-rdps,get-rdp-status", "comma-separated tool names; each client rotates through them")
 	rps := flag.Float64("rps", 0, "per-client req/s cap; 0 = unlimited (client fires as fast as MCP responds). Mutually exclusive with -total-rps.")
 	totalRPS := flag.Float64("total-rps", 0, "aggregate req/s across all clients; divided evenly so per-client = total-rps/clients. Mutually exclusive with -rps.")
 	connectTimeout := flag.Duration("connect-timeout", 30*time.Second, "deadline for opening each MCP session before the run starts")
+	validateOnly := flag.Bool("validate-only", false, "check -tools against the argument recipes and exit, without opening any session. The run scripts call this in their preflight so a typo in TOOLS costs nothing instead of surfacing after the mock is up, the fidelity gate has run, and (split-host) MCP has been waited for.")
 	flag.Parse()
+
+	tools := splitCSV(*toolsCSV)
+	if len(tools) == 0 || *clients < 1 || *duration <= 0 {
+		fmt.Fprintln(os.Stderr, "loadgen: -tools, -clients, -duration are required and non-empty")
+		os.Exit(2)
+	}
+	// Refuse the run before a single session is dialled. A tool called with
+	// missing required arguments returns IsError, which lands in the same
+	// error count as broker unavailability and timeouts — so an argument gap
+	// would complete the run and read as a resilience finding rather than an
+	// operator mistake.
+	//
+	// Checked before the broker flags so -validate-only needs nothing but the
+	// tool list and its argument values — the preflight has those, and asking
+	// it for a broker count it doesn't use would be a wart.
+	argValues := map[string]string{argVPN: *vpn, argRDP: *rdp}
+	if err := validateTools(tools, argValues); err != nil {
+		fmt.Fprintf(os.Stderr, "loadgen: %v\n", err)
+		os.Exit(2)
+	}
+	if *validateOnly {
+		fmt.Printf("loadgen: -tools %v OK (arguments resolvable for every tool)\n", tools)
+		return
+	}
 
 	brokers, err := resolveBrokers(*brokersCSV, *brokerCount, *brokerPrefix)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "loadgen: %v\n", err)
-		os.Exit(2)
-	}
-	tools := splitCSV(*toolsCSV)
-	if len(tools) == 0 || *clients < 1 || *duration <= 0 {
-		fmt.Fprintln(os.Stderr, "loadgen: -tools, -clients, -duration are required and non-empty")
 		os.Exit(2)
 	}
 	perClientRPS, err := resolveRPS(*rps, *totalRPS, *clients)
@@ -92,7 +119,7 @@ func main() {
 	cfg := runConfig{
 		mcpURL:         *mcpURL,
 		brokers:        brokers,
-		vpn:            *vpn,
+		argValues:      argValues,
 		tools:          tools,
 		clients:        *clients,
 		duration:       *duration,
@@ -107,15 +134,95 @@ func main() {
 }
 
 type runConfig struct {
-	mcpURL         string
-	brokers        []string
-	vpn            string
+	mcpURL  string
+	brokers []string
+	// argValues maps an argument name from toolRecipes to the flag-supplied
+	// value for it. Validated against every named tool's recipe before the
+	// run starts, so buildCallSpecs can build arguments without a fallible
+	// lookup on the call path.
+	argValues      map[string]string
 	tools          []string
 	clients        int
 	duration       time.Duration
 	warmup         time.Duration
 	rps            float64
 	connectTimeout time.Duration
+}
+
+// Argument names the recipes below draw on. Constants rather than repeated
+// literals so a typo is a compile error instead of a tool-side IsError that
+// only shows up as a high error rate mid-run.
+const (
+	argVPN = "msgVpnName"
+	argRDP = "restDeliveryPointName"
+)
+
+// toolRecipes names the arguments each tool needs beyond "broker", which
+// every tool takes. Deliberately a literal per-tool list: deriving arguments
+// from the tool's input schema would couple loadgen to MCP's tool
+// registration path, which is a much bigger change than four entries justify.
+//
+// A tool absent from this map cannot be called at all — validateTools stops
+// the run at startup. That matters more than it looks: a tool invoked without
+// its required arguments returns IsError, and callOnce folds IsError into the
+// same error count as broker unavailability, timeouts, and MCP-side rate
+// limiting. A misconfigured workload would otherwise complete and report a
+// high error rate that reads as a finding about the system under test.
+var toolRecipes = map[string][]string{
+	"get-broker-status": {},
+	"get-rdp-status":    {argVPN, argRDP},
+	"list-queues":       {argVPN},
+	"list-rdps":         {argVPN},
+}
+
+// validateTools rejects a tool list naming anything loadgen cannot build
+// arguments for: a tool with no recipe, or a recipe whose argument has no
+// value (an empty flag). Both are operator mistakes, and both must stop the
+// run rather than be measured.
+func validateTools(tools []string, argValues map[string]string) error {
+	known := make([]string, 0, len(toolRecipes))
+	for name := range toolRecipes {
+		known = append(known, name)
+	}
+	sort.Strings(known)
+
+	for _, tool := range tools {
+		recipe, ok := toolRecipes[tool]
+		if !ok {
+			return fmt.Errorf("no argument recipe for tool %q — cannot call it. Known tools: %s",
+				tool, strings.Join(known, ", "))
+		}
+		for _, arg := range recipe {
+			if argValues[arg] == "" {
+				return fmt.Errorf("tool %q needs argument %q but no value was given (see the corresponding flag)", tool, arg)
+			}
+		}
+	}
+	return nil
+}
+
+// callSpec is one prebuilt tool invocation: the tool name and the exact
+// argument map to send. Built once per client before the clock starts, so the
+// steady-state loop neither allocates a map per call nor performs a lookup
+// that could fail.
+type callSpec struct {
+	tool string
+	args map[string]any
+}
+
+// buildCallSpecs prepares one callSpec per tool in the rotation, for one
+// broker. Requires validateTools to have passed: every tool named here has a
+// recipe and every argument in that recipe has a value.
+func buildCallSpecs(tools []string, broker string, argValues map[string]string) []callSpec {
+	out := make([]callSpec, 0, len(tools))
+	for _, tool := range tools {
+		args := map[string]any{"broker": broker}
+		for _, arg := range toolRecipes[tool] {
+			args[arg] = argValues[arg]
+		}
+		out = append(out, callSpec{tool: tool, args: args})
+	}
+	return out
 }
 
 // sample is one recorded tool call. Zero-value err means success. Kept as a
@@ -166,12 +273,14 @@ func run(ctx context.Context, cfg runConfig) error {
 
 	for i := 0; i < cfg.clients; i++ {
 		broker := cfg.brokers[i%len(cfg.brokers)]
+		// Arguments resolved here, off the clock. Each client gets its own
+		// specs because "broker" differs per client; nothing mutates them
+		// afterwards.
+		specs := buildCallSpecs(cfg.tools, broker, cfg.argValues)
 		wg.Go(func() {
 			perClient[i] = clientLoop(ctx, sessions[i], clientJob{
 				id:       i,
-				broker:   broker,
-				vpn:      cfg.vpn,
-				tools:    cfg.tools,
+				specs:    specs,
 				warmup:   cfg.warmup,
 				duration: cfg.duration,
 				rps:      cfg.rps,
@@ -216,10 +325,10 @@ func run(ctx context.Context, cfg runConfig) error {
 // clientJob is the immutable per-goroutine config; the mutable atomics for
 // live counters are passed alongside.
 type clientJob struct {
-	id       int
-	broker   string
-	vpn      string
-	tools    []string
+	id int
+	// specs is the rotation this client fires, in order, wrapping around.
+	// Prebuilt by buildCallSpecs; read-only for the lifetime of the loop.
+	specs    []callSpec
 	warmup   time.Duration
 	duration time.Duration
 	rps      float64
@@ -290,12 +399,12 @@ func clientLoop(ctx context.Context, session *mcp.ClientSession, j clientJob) []
 			}
 		}
 
-		tool := j.tools[callIdx%len(j.tools)]
+		spec := j.specs[callIdx%len(j.specs)]
 		callIdx++
 
 		callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		t0 := time.Now()
-		err := callOnce(callCtx, session, tool, j.broker, j.vpn)
+		err := callOnce(callCtx, session, spec)
 		latency := time.Since(t0)
 		cancel()
 
@@ -332,15 +441,14 @@ func clientLoop(ctx context.Context, session *mcp.ClientSession, j clientJob) []
 // test, not a fidelity check; that's what fidelity/main.go is for. Tool
 // error responses (IsError=true) surface as errors in the reported error
 // rate so the operator can see broker unavailability, timeouts, MCP-side
-// rate limits, etc. — but the number is observational, not a gate.
-func callOnce(ctx context.Context, session *mcp.ClientSession, tool, broker, vpn string) error {
-	args := map[string]any{"broker": broker}
-	if tool == "list-queues" {
-		args["msgVpnName"] = vpn
-	}
+// rate limits, etc. — but the number is observational, not a gate. That
+// reading only holds because validateTools has already ruled out the one
+// IsError cause that is an operator mistake rather than a system signal: a
+// tool called without its required arguments.
+func callOnce(ctx context.Context, session *mcp.ClientSession, spec callSpec) error {
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{
-		Name:      tool,
-		Arguments: args,
+		Name:      spec.tool,
+		Arguments: spec.args,
 	})
 	if err != nil {
 		return err
