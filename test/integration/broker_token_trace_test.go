@@ -82,11 +82,6 @@ func captureTrace(t *testing.T, fn func()) []traceRecord {
 
 	fn()
 
-	// The cache Put runs inside the singleflight goroutine and completes
-	// independently of the caller, so its log line can land after AddAuth
-	// returns. Settle before reading the buffer.
-	time.Sleep(50 * time.Millisecond)
-
 	var recs []traceRecord
 	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
 		if line == "" {
@@ -258,8 +253,6 @@ func Test_BrokerTokenTrace(t *testing.T) {
 				if err := auth.AddAuth(ctx, httptest.NewRequestWithContext(ctx, http.MethodGet, "/SEMP/v2/monitor", nil)); err != nil {
 					t.Fatalf("priming acquisition failed: %v", err)
 				}
-				// Let the priming Put land, so the captured run is a real hit.
-				time.Sleep(50 * time.Millisecond)
 			}
 
 			var addAuthErr error
