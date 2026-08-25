@@ -1,24 +1,24 @@
 # Configuration
 
-The server is configured via a YAML config file plus a `.env` file for credentials. See the [Quickstart](../README.md#quickstart) in the README for a minimal working example.
+The server is configured via a YAML configuration file plus a `.env` file for credentials. See the [Quickstart](../README.md#quickstart) in the README for a minimal working example.
 
-## Config File Location
+## Configuration File Location
 
-The server searches for the config file in this order:
+The server searches for the configuration file in this order:
 
 | Priority | Source | Value |
 |---|---|---|
-| 1 | `CONFIG_FILE` env var | Custom path |
+| 1 | `CONFIG_FILE` environment variable | Custom path |
 | 2 | System path | `/etc/mcp-server/config.yaml` |
 | 3 | Local path | `./broker-config.yaml` |
 
 Set `CONFIG_FILE` explicitly if the file is in a non-standard location.
 
-The server loads a separate credentials file automatically (default: `.env` in the same directory as the config file). Override the path with the `ENV_FILE` env var.
+The server loads a separate credentials file automatically (default: `.env` in the same directory as the configuration file). Override the path with the `ENV_FILE` environment variable.
 
 ## Environment Variable Substitution
 
-Use `${VAR_NAME}` anywhere in the YAML config to reference an environment variable:
+Use `${VAR_NAME}` anywhere in the YAML configuration to reference an environment variable:
 
 ```yaml
 brokers:
@@ -36,13 +36,13 @@ The server resolves variables at startup. The `.env` file loads automatically be
 |---|---|---|---|
 | `port` | `MCP_SERVER_PORT` | `9090` | Port the MCP server listens on. |
 | `listen_address` | — | see Bind address | Host the server binds to. Empty binds all interfaces; the default depends on the client auth mode. |
-| `allow_remote_unauthenticated` | — | `false` | Opt-in to a non-loopback `listen_address` while `mcp_client_auth.mode: disabled`. Acknowledges that the listener has no client authentication. |
-| `allow_insecure_broker_tls` | — | `false` | Opt-in to a broker with `insecure_skip_verify: true` while `mcp_client_auth.mode: oauth`. Acknowledges that disabling broker certificate verification exposes the broker admin credential to a man-in-the-middle. |
+| `allow_remote_unauthenticated` | — | `false` | Opt in to a non-loopback `listen_address` while `mcp_client_auth.mode: disabled`. Acknowledges that the listener has no client authentication. |
+| `allow_insecure_broker_tls` | — | `false` | Opt in to an event broker with `insecure_skip_verify: true` while `mcp_client_auth.mode: oauth`. Acknowledges that disabling event broker certificate verification exposes the event broker admin credential to a man-in-the-middle. |
 | `tls_cert_file` | — | none | Path to TLS certificate (PEM). |
 | `tls_key_file` | — | none | Path to TLS private key (PEM). |
-| `tls_terminated_upstream` | — | `false` | Opt-in to a plaintext listener while `mcp_client_auth.mode: oauth`. Acknowledges that TLS is terminated by an upstream proxy/ingress. Ignored in the dev modes. |
+| `tls_terminated_upstream` | — | `false` | Opt in to a plaintext listener while `mcp_client_auth.mode: oauth`. Acknowledges that TLS is terminated by an upstream proxy/ingress. Ignored in the dev modes. |
 | `log_level` | — | `info` | Log verbosity: `debug`, `info`, `warn`, `error`. |
-| `enable_write_tools` | — | `false` | When `true`, register every tool that is not read-only (16 in total): the four action-API tools (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`) plus the twelve Config-API management tools (`create`/`update`/`delete` for `message-vpn`, `queue`, `topic-endpoint`, and `rdp`). This includes the non-destructive stats-reset tools (which still mutate broker state) and provisioning tools such as `delete-message-vpn`. When `false`, those tools are skipped at registration and never appear in `tools/list`. Secure-by-default for trial / dev deployments. |
+| `enable_write_tools` | — | `false` | When `true`, register every tool that is not read-only (16 in total): the four action-API tools (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`) plus the 12 Config-API management tools (`create`/`update`/`delete` for `message-vpn`, `queue`, `topic-endpoint`, and `rdp`). This includes the non-destructive stats-reset tools (which still mutate event broker state) and provisioning tools such as `delete-message-vpn`. When `false`, those tools are skipped at registration and never appear in `tools/list`. Secure-by-default for trial / dev deployments. |
 
 **TLS:** Provide both `tls_cert_file` and `tls_key_file` together — providing only one is a startup error. When both are set, the server starts with HTTPS; when neither is set, plain HTTP.
 
@@ -63,11 +63,11 @@ Under `mode: oauth` (production) a plaintext listener would carry client bearer 
 | `oauth` | all interfaces (`:port`) | used verbatim |
 | `disabled` / `static` | `127.0.0.1` only | used verbatim |
 
-An explicit `listen_address` must be an IP address or `localhost`. Under `mode: disabled` (no client authentication), binding a non-loopback address is **refused at startup** — it would expose unauthenticated MCP access backed by the broker admin credential to the network. To proceed, bind `127.0.0.1`, switch to `mode: oauth`, or set `allow_remote_unauthenticated: true` to accept the risk. The effective bind address is logged at startup.
+An explicit `listen_address` must be an IP address or `localhost`. Under `mode: disabled` (no client authentication), binding a non-loopback address is **refused at startup** — it would expose unauthenticated MCP access backed by the event broker admin credential to the network. To proceed, bind `127.0.0.1`, switch to `mode: oauth`, or set `allow_remote_unauthenticated: true` to accept the risk. The effective bind address is logged at startup.
 
-**Broker TLS in production:** Under `mode: oauth`, a broker with `insecure_skip_verify: true` is **refused at startup** — disabling certificate verification would expose the broker admin credential the server sends on every SEMP request to a man-in-the-middle. To proceed, use a trusted certificate, or set `allow_insecure_broker_tls: true` to accept the risk. `allow_insecure_broker_tls` is a single server-wide opt-in, not per-broker: setting it to onboard one self-signed broker also lifts the check for every other broker in the config, including ones added later. Dev modes (`static`/`disabled`) allow self-signed brokers without the opt-in.
+**Event Broker TLS in production:** Under `mode: oauth`, an event broker with `insecure_skip_verify: true` is **refused at startup** — disabling certificate verification would expose the event broker admin credential the server sends on every SEMP request to a man-in-the-middle. To proceed, use a trusted certificate, or set `allow_insecure_broker_tls: true` to accept the risk. `allow_insecure_broker_tls` is a single server-wide opt-in, not per event broker: setting it to onboard one self-signed event broker also lifts the check for every other event broker in the configuration, including ones added later. Dev modes (`static`/`disabled`) allow self-signed event brokers without the opt-in.
 
-**Logging:** The server writes structured JSON logs to stderr. The server automatically redacts credentials in all log output. Every tool invocation is logged with the tool name, target broker, status, and duration.
+**Logging:** The server writes structured JSON logs to stderr. The server automatically redacts credentials in all log output. Every tool invocation is logged with the tool name, target event broker, status, and duration.
 
 ## Event Broker Settings
 
@@ -82,10 +82,10 @@ Aliases must be 1-63 characters, contain only letters, digits, and hyphens, and 
 | `auth.username` | — | Basic auth username. |
 | `auth.password` | — | Basic auth password. |
 | `auth.token` | — | Bearer token (used when `auth.mode: bearer`). |
-| `auth.audience` | — | Optional, even under `auth.mode: oauth` — omitting it does not fail config load or startup. RFC 8693 audience value for this broker, forwarded to the IdP during token exchange (requires the top-level `broker_oauth:` block — see [Broker OAuth (Hop 2)](#broker-oauth-hop-2)). When omitted, the runtime sends the token-exchange request without an audience parameter at all. Omit when the broker's OAuth profile does not validate audience; set it only if the broker's OAuth profile does. If set, it must not be whitespace-only — a `${VAR}` that resolves to blank does fail config load. |
-| `insecure_skip_verify` | `false` | Skip TLS certificate verification. Development only. Under `mcp_client_auth.mode: oauth` (production) it is **refused at startup** unless `allow_insecure_broker_tls: true` is also set (see Broker TLS in production). |
+| `auth.audience` | — | Optional, even under `auth.mode: oauth` — omitting it does not fail configuration load or startup. RFC 8693 audience value for this event broker, forwarded to the IdP during token exchange (requires the top-level `broker_oauth:` block — see [Broker OAuth (Hop 2)](#broker-oauth-hop-2)). When omitted, the runtime sends the token-exchange request without an audience parameter at all. Omit when the event broker's OAuth profile does not validate audience; set it only if the event broker's OAuth profile does. If set, it must not be whitespace-only — a `${VAR}` that resolves to blank does fail configuration load. |
+| `insecure_skip_verify` | `false` | Skip TLS certificate verification. Development only. Under `mcp_client_auth.mode: oauth` (production) it is **refused at startup** unless `allow_insecure_broker_tls: true` is also set (see Event Broker TLS in production). |
 
-Solace recommends using `https://` event broker URLs in production environments.
+Under `mcp_client_auth.mode: oauth`, every configured event broker's `url` must be `https://` — the server refuses to start otherwise. Outside `oauth` mode, Solace still recommends `https://` event broker URLs, but it isn't enforced.
 
 ```yaml
 brokers:
@@ -99,9 +99,9 @@ brokers:
 
 ## Broker OAuth (Hop 2)
 
-Configured under the top-level `broker_oauth` key. Required when any broker uses `auth.mode: oauth` — obtains the broker-bound token by exchanging the calling agent's Hop 1 token (RFC 8693 token exchange) against an identity provider.
+Configured under the top-level `broker_oauth` key. Required when any event broker uses `auth.mode: oauth` — obtains the event-broker-bound token by exchanging the calling agent's Hop 1 token (RFC 8693 token exchange) against an identity provider (IdP).
 
-`mcp_client_auth.mode: oauth` (Hop 1) is required first: token exchange consumes the agent's Hop 1 JWT as its `subject_token`, so a broker with `auth.mode: oauth` while Hop 1 is `static`/`disabled` is **refused at config load** with an `mcp_client_auth.mode must be oauth` error naming the affected broker(s). The `broker_oauth:` block itself is likewise required once any broker uses `auth.mode: oauth` — omitting it fails config load with `broker_oauth block is required when any broker uses auth.mode: "oauth"`. Every field in the following table (other than `circuit_breaker`/`retry_after`) is required; an empty or unsupported value fails config load naming that field.
+`mcp_client_auth.mode: oauth` (Hop 1) is required first: token exchange consumes the agent's Hop 1 JSON Web Token (JWT) as its `subject_token`, so an event broker with `auth.mode: oauth` while Hop 1 is `static`/`disabled` is **refused at configuration load** with an `mcp_client_auth.mode must be oauth` error naming the affected event broker(s). The `broker_oauth:` block itself is likewise required once any event broker uses `auth.mode: oauth` — omitting it fails configuration load with `broker_oauth block is required when any broker uses auth.mode: "oauth"`. Every field in the following table (other than `circuit_breaker`/`retry_after`) is required; an empty or unsupported value fails configuration load naming that field.
 
 | YAML field | Default | Description |
 |---|---|---|
@@ -110,8 +110,8 @@ Configured under the top-level `broker_oauth` key. Required when any broker uses
 | `mcp_server_client_auth` | — | **Required.** Discriminated union — exactly one of the following sub-blocks must be populated. |
 | `mcp_server_client_auth.client_secret_basic.secret` | — | Client secret sent via HTTP Basic auth (RFC 6749 §2.3). |
 | `mcp_server_client_auth.client_secret_post.secret` | — | Client secret sent in the token-request form body (RFC 6749 §2.3). |
-| `grant_type` | — | **Required.** Selects the OAuth grant type for the Hop 2 exchange. Must be `"urn:ietf:params:oauth:grant-type:token-exchange"` (RFC 8693) — the only grant type this version implements; any other value is rejected at config load. |
-| `audience_parameter_name` | — | **Required.** Which request parameter carries each broker's `auth.audience` value. Must be `audience` (RFC 8693 default) — the only value implemented in this version; any other value, including `scope` (Entra On-Behalf-Of style) or `resource` (RFC 8707), is rejected at config load. |
+| `grant_type` | — | **Required.** Selects the OAuth grant type for the Hop 2 exchange. Must be `"urn:ietf:params:oauth:grant-type:token-exchange"` (RFC 8693) — the only grant type this version implements; any other value is rejected at configuration load. |
+| `audience_parameter_name` | — | **Required.** Which request parameter carries each event broker's `auth.audience` value. Must be `audience` (RFC 8693 default) — the only value implemented in this version; any other value, including `scope` (Entra On-Behalf-Of style) or `resource` (RFC 8707), is rejected at configuration load. |
 | `circuit_breaker` | omitted (all defaults, enabled) | Optional. See [Circuit Breaker](#circuit-breaker). |
 | `retry_after` | omitted (default cap) | Optional. See [Retry-After Gate](#retry-after-gate). |
 
@@ -141,7 +141,7 @@ brokers:
 
 ### Circuit Breaker
 
-Nested under `broker_oauth.circuit_breaker`. Protects the shared IdP from a sustained outage by failing exchanges fast instead of driving every broker's requests into the full retry budget. Every field is optional; an omitted field falls back to its shipped default. Setting `circuit_breaker: {}` is equivalent to omitting the block entirely.
+Nested under `broker_oauth.circuit_breaker`. Protects the shared IdP from a sustained outage by failing exchanges fast instead of driving every event broker's requests into the full retry budget. Every field is optional; an omitted field falls back to its shipped default. Setting `circuit_breaker: {}` is equivalent to omitting the block entirely.
 
 | YAML field | Default | Description |
 |---|---|---|
@@ -155,7 +155,7 @@ Nested under `broker_oauth.circuit_breaker`. Protects the shared IdP from a sust
 
 ### Retry-After Gate
 
-Nested under `broker_oauth.retry_after`. Shares a process-wide backoff across every broker when an exhausted 429 retry chain to the IdP returns a `Retry-After` header, so one throttled broker doesn't let every other broker keep hammering the same IdP.
+Nested under `broker_oauth.retry_after`. Shares a process-wide backoff across every event broker when an exhausted 429 retry chain to the IdP returns a `Retry-After` header, so one throttled event broker doesn't let every other event broker keep hammering the same IdP.
 
 | YAML field | Default | Description |
 |---|---|---|
@@ -218,11 +218,11 @@ mcp_client_auth:
 | YAML field | Description |
 |---|---|
 | `enabled` | Required. `true` turns tool authorization on; `false` turns it off. There is no default — the field must be present under `mode: oauth`. |
-| `filter_tools_list` | Optional, defaults to `false`. When `true`, `tools/list` returns only the tools the caller's groups grant, instead of every registered tool. Only meaningful when tool authorization is on (`enabled: true` in this same block) — setting it while `enabled: false` logs a startup `WARN` and leaves filtering off, since there is no policy to filter against. See [Filtering `tools/list`](#filtering-toolslist). |
+| `filter_tools_list` | Optional, defaults to `false`. When `true`, `tools/list` returns only the tools the caller's groups grant, instead of every registered tool. Only meaningful when tool authorization is on (`enabled: true` in this same block) — setting it while `enabled: false` logs a startup `WARN` and leaves filtering off, because there is no policy to filter against. See [Filtering `tools/list`](#filtering-toolslist). |
 | `groups_claim_name` | Name of the OIDC claim in the caller's JWT that carries their group or role memberships. Optional; defaults to `"groups"`. Must match the claim your IdP emits (see [Authentication](authentication.md) for setting this up on the IdP side). Only meaningful when `enabled: true`. **Top-level lookup only** — the value is read from the top of the JWT claims object; nested paths (for example, `authorization.roles`) are not supported. If your IdP emits memberships inside a nested object, flatten them into a top-level claim with an IdP mapper before the token is issued. |
 | `access_level_groups` | Map from group name — as it appears in the caller's token — to the list of MCP tool names that group grants. Required when `enabled: true`. Union semantics: a caller is allowed to invoke a tool when at least one of their groups grants it. A tool that no group grants is unreachable by every caller. **No wildcard** — a group intended to grant every tool must list every tool name explicitly. This is deliberate: an "all tools" glob would silently include every newly-added tool at upgrade time, without the operator noticing the surface expanded. |
 
-**`list-brokers` and `describe-semp-schema` are structurally exempt.** Every authenticated caller can invoke these tools regardless of their groups; neither is composed with the authorization wrapper. `list-brokers` lets callers discover which broker aliases exist; `describe-semp-schema` lets callers inspect the SEMPv2 schema for any operation (spec content only, no broker state). Listing either tool in an `access_level_groups` entry is inert — the server emits a startup `WARN` naming the group but the grant has no effect.
+**`list-brokers` and `describe-semp-schema` are structurally exempt.** Every authenticated caller can invoke these tools regardless of their groups; neither is composed with the authorization wrapper. `list-brokers` lets callers discover which event broker aliases exist; `describe-semp-schema` lets callers inspect the SEMPv2 schema for any operation (spec content only, no event broker state). Listing either tool in an `access_level_groups` entry is inert — the server emits a startup `WARN` naming the group but the grant has no effect.
 
 **Interaction with `enable_write_tools`.** The two controls are orthogonal — they answer different questions, and a caller reaches a tool only when both answers permit it. `enable_write_tools` decides which tools the server registers at all; `access_level_groups` decides which callers may invoke a registered tool. Granting a write/action tool (for example `delete-queue-messages`, `disconnect-client`, `clear-queue-stats`, `clear-client-stats`, or any of the Config-API management tools) while `enable_write_tools: false` is therefore inert — the tool never appears in `tools/list`, so the grant cannot take effect. This is a supported way to stage an RBAC policy ahead of enabling write tools, so it is not a startup error; the server emits one startup `WARN` per inert tool naming the tool and the referencing groups. Setting `enable_write_tools: true` activates those grants and silences the WARN. A grant naming a tool the server does not know at all remains a **fatal** startup error.
 
@@ -247,13 +247,13 @@ mcp_client_auth:
         - list-vpns
 ```
 
-The benefit is context, not access control: an AI agent handed tools it will be denied spends context on their descriptions and schemas, and tends to misreport the cause when a call is refused. A caller in a narrow role can drop from ~24 tools to 2 or 3.
+The benefit is context, not access control: an AI agent handed tools it will be denied spends context on their descriptions and schemas, and tends to misreport the cause when a call is refused. A caller in a narrow role can drop from approximately 24 tools to two or three.
 
 **This is not an access control.** `tools/call` remains the only authorization boundary, and it is enforced identically whether filtering is on or off. A tool absent from the list is still callable by name — the server resolves tool calls against the full registered set, not against whatever a previous list returned. Filtering changes what a caller *sees*, never what they may *do*.
 
 **If tools are missing or your client misbehaves, set `filter_tools_list: false` and restart.** Authorization is still fully enforced on every tool call, so turning filtering off does not weaken access control. This is the first thing to try when a caller reports missing tools.
 
-The filter reuses the same policy decision as `tools/call`, so a listed tool is always callable and a callable tool is always listed. The two structurally exempt tools (`list-brokers` and `describe-semp-schema`) are never filtered — they are always callable, so hiding them would break that guarantee and remove broker discovery for every caller.
+The filter reuses the same policy decision as `tools/call`, so a listed tool is always callable and a callable tool is always listed. The two structurally exempt tools (`list-brokers` and `describe-semp-schema`) are never filtered — they are always callable, so hiding them would break that guarantee and remove event broker discovery for every caller.
 
 A caller whose groups grant nothing receives a normal response containing only the exempt tools — never an error and never an empty list. The same applies when the token carries no groups claim at all: the filter fails closed. The two cases are deliberately indistinguishable to the caller but are distinguishable in the server log (see the following section).
 
@@ -273,7 +273,7 @@ A caller whose groups grant nothing receives a normal response containing only t
 | `decision_reason` | `"filtered"` — groups matched some grants and at least one tool was removed. `"unfiltered"` — the caller's grants cover every registered tool. `"not_permitted"` — the claim was present but matched no grants, so only the exempt tools remain. `"missing_claim"` — the token carried no claim under the configured `groups_claim_name`; the filter failed closed. |
 | `groups_present` | Whether the token carried the groups claim at all. |
 | `tools_before` / `tools_after` | Tool counts entering and leaving the filter. |
-| `expected_claim` | The configured `groups_claim_name`. Present on `missing_claim` only, so a deployment using a non-default claim name can be triaged from the record without cross-referencing config. |
+| `expected_claim` | The configured `groups_claim_name`. Present on `missing_claim` only, so a deployment using a non-default claim name can be triaged from the record without cross-referencing the configuration. |
 
 `missing_claim` is logged at **`WARN`**; every other outcome at `INFO`. The distinction matters: `not_permitted` is the policy working as configured, while `missing_claim` means the token could not answer the authorization question at all — typically an IdP claim-mapper misconfiguration, which affects every caller of that deployment rather than one user. The same reasons appear on the `tool authorization` call-path line, so filter both by `event` to tell the two paths apart.
 

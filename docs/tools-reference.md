@@ -1,6 +1,6 @@
 # Tools Reference
 
-Complete reference for every tool the Solace Event Broker MCP (Model Context Protocol) Server exposes:
+Complete reference for every tool the Solace Event Broker Model Context Protocol (MCP) Server exposes:
 parameters, output shape, an example invocation, and an example natural-language
 request. For task-oriented walkthroughs see [Examples](examples.md); for a
 narrative overview see the [User Guide](user-guide.md).
@@ -22,7 +22,7 @@ These apply to every tool unless noted otherwise.
 ### The `broker` Parameter
 
 Every tool **except `list-brokers` and `describe-semp-schema`** takes a required `broker` parameter
-identifying which configured broker to query. It is injected automatically into
+identifying which configured event broker to query. It is injected automatically into
 each tool's input schema at registration (`injectBrokerParam` in
 `internal/tools/register.go`), so it is not declared in any tool definition:
 
@@ -30,7 +30,7 @@ each tool's input schema at registration (`injectBrokerParam` in
 { "type": "string", "description": "Target broker alias (required). Available brokers: <alias>, <alias>, ..." }
 ```
 
-The accepted values are the broker aliases from your configuration. Call `list-brokers`
+The accepted values are the event broker aliases from your configuration. Call `list-brokers`
 to discover them. Alias matching is case-insensitive; original casing is
 preserved in output.
 
@@ -38,27 +38,27 @@ preserved in output.
 
 List tools accept an optional `maxResults` integer: **default 100, maximum 500**
 (`defaultMax`/`capMax` in the composite executor). The server pages through the
-broker's SEMP (Solace Element Management Protocol) responses internally and returns up to `maxResults` items. Brokers
+event broker's SEMP (Solace Element Management Protocol) responses internally and returns up to `maxResults` items. Event brokers
 with more than 500 matching objects require a narrower query. Applies to:
 `list-vpns`, `list-queues`, `list-clients`, `list-client-subscriptions`,
 `list-slow-subscribers`, `list-rdps`, `list-queue-discards`.
 
 ### Rate Limiting and Retries
 
-Requests to each broker are subject to per-broker concurrency limits and an
+Requests to each event broker are subject to per-event-broker concurrency limits and an
 automatic retry policy with backoff. Transient upstream failures (HTTP 429 from a
-proxy/gateway, 503 from an overloaded broker) are retried automatically and
+proxy/gateway, 503 from an overloaded event broker) are retried automatically and
 reported as `retryable: true` if retries are exhausted. Tune these in
 [Configuration](configuration.md).
 
 ### Output: the Step-Keyed Envelope
 
-Most read-only tools return their broker data in a **step-keyed envelope** — a
+Most read-only tools return their event broker data in a **step-keyed envelope** — a
 top-level JSON object whose keys are the tool's internal step IDs and whose values
 are the SEMP response objects for that step (schema:
 `{"type":"object","additionalProperties":{"type":"object"}}`). Single-step tools
 return one key; multi-step tools (for example `get-rdp-status`) return one key per
-step. The broker may omit any optional field, so the envelope schema does not
+step. The event broker may omit any optional field, so the envelope schema does not
 enumerate inner fields — the authoritative field list per tool is the `select`
 set documented under each tool's **Returns**.
 
@@ -68,7 +68,7 @@ schema: `get-discard-stats` and the four action tools (documented inline in this
 ### Errors
 
 On failure a tool returns a structured error object. Full field reference and
-common HTTP-status causes (401/403/404/429/503) are in the
+common HTTP-status causes (400 with `sempStatus: "NOT_FOUND"` for missing objects, 401/403/429/503) are in the
 [User Guide → Tool Returns an Error](user-guide.md#tool-returns-an-error). Key
 fields: `error` (message), `retryable` (bool), `status` (HTTP code), plus
 source-specific fields (`operation`, `sempStatus`, `sempCode` for SEMPv2; `kind`,
@@ -77,7 +77,7 @@ source-specific fields (`operation`, `sempStatus`, `sempCode` for SEMPv2; `kind`
 ### Action Tools and `enable_write_tools`
 
 The four action tools (`disconnect-client`, `clear-client-stats`,
-`delete-queue-messages`, `clear-queue-stats`) change broker state. They are gated
+`delete-queue-messages`, `clear-queue-stats`) change event broker state. They are gated
 behind the server-level `enable_write_tools` flag:
 
 - **Default (`false`):** not registered; absent from `tools/list`; an
@@ -91,7 +91,7 @@ invocation, and cause the server to log a WARNING audit line on every call. The
 two `clear-*-stats` tools are writes but non-destructive (counters only).
 
 The 12 Config-API management tools (create/update/delete for Message VPNs,
-queues, topic endpoints, and REST delivery points) are gated behind the same
+queues, topic endpoints, and REST Delivery Points) are gated behind the same
 flag and documented under [Management](#management-config-api).
 
 ## Tool Index
@@ -120,7 +120,7 @@ request. A full request wraps it: `{"method":"tools/call","params":{"name":"<too
 
 ### list-brokers
 
-List all configured broker aliases. Use one of the returned names as the
+List all configured event broker aliases. Use one of the returned names as the
 `broker` parameter on any other tool. No `broker` parameter.
 
 **Parameters:** none.
@@ -136,7 +136,7 @@ List all configured broker aliases. Use one of the returned names as the
 { "brokers": ["prod-broker", "dev-broker"] }
 ```
 
-**Example request:** "What brokers are configured?"
+**Example request:** "What event brokers are configured?"
 
 ---
 
@@ -146,7 +146,7 @@ Return the SEMPv2 schema slice for a given operation's request-body definition.
 Use this before invoking a `create-*` or `update-*` tool to enumerate every
 configurable attribute with types, defaults, enum values, and writability flags.
 No `broker` parameter — the response is derived from the embedded OpenAPI specs
-and does not contact any broker. Scoped to the **config** and **action** SEMPv2
+and does not contact any event broker. Scoped to the **config** and **action** SEMPv2
 APIs; the monitor API is read-only (GET-only, no request bodies) and is not
 indexed here — a `monitor/...` operation returns `unknown operation`.
 
@@ -178,17 +178,17 @@ call, that is the expected path. Direct invocation is supported but uncommon.
 
 ### get-broker-status
 
-Curated point-in-time status snapshot of a broker: edition and version, uptime
+Curated point-in-time status snapshot of an event broker: edition and version, uptime
 and restart reason, scaling limits and resource headroom, memory and
 message-spool utilization, and — on hardware appliances — chassis identity and
-physical-component inventory (CPU, memory, power, disks, blades). Reports raw
+physical-component inventory (CPU, memory, power, disks, and blades). Reports raw
 state, not a health verdict.
 
 **Parameters:**
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 
 **Returns:** step-keyed envelope (native SEMPv1). Inner fields cover version,
 uptime/restart, scaling and resource utilization, spool state, and high-availability (HA) roles;
@@ -203,7 +203,7 @@ appliances add a `hardwareDetails` section. Field shape is documented in
 
 ### get-redundancy-status
 
-Broker redundancy and high-availability status: configuration/operational status,
+Event broker redundancy and high-availability status: configuration/operational status,
 active-standby role, mate router name, mate link state, and per-virtual-router
 activity. Single SEMPv1 call.
 
@@ -211,7 +211,7 @@ activity. Single SEMPv1 call.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 
 **Returns:** step-keyed envelope (native SEMPv1) with redundancy/HA fields.
 
@@ -236,7 +236,7 @@ useful "has replication been flaky recently?" signal.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN. |
 
 **Returns:** step-keyed envelope, step `replication`. Selected fields:
@@ -265,7 +265,7 @@ per-service TLS status and Advanced Message Queuing Protocol (AMQP) support, use
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `maxResults` | integer | no | Max VPNs to return (default 100, max 500). |
 
 **Returns:** step-keyed envelope, step `vpns` (array). Selected fields per VPN:
@@ -291,7 +291,7 @@ Reports raw state, not a health verdict.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN. |
 
 **Returns:** step-keyed envelope, step `vpnStatus`. Selected fields: `msgVpnName`,
@@ -313,7 +313,7 @@ Current and average message and byte throughput rates for a VPN.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN. |
 
 **Returns:** step-keyed envelope, step `rates`. Selected fields: `msgVpnName`,
@@ -343,7 +343,7 @@ discard/redelivery counters, use `get-queue-metrics`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max queues to return (default 100, max 500). |
 
@@ -369,7 +369,7 @@ flip for slow ACKs).
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN. |
 | `queueName` | string | yes | The queue name. |
 
@@ -402,7 +402,7 @@ per-client discard counts, byte/message rates, and software version, use
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max clients to return (default 100, max 500). |
 
@@ -426,7 +426,7 @@ does not rule out a slow consumer — for slow guaranteed-message consumers use
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN the client is connected to. |
 | `clientName` | string | yes | The client connection name. |
 
@@ -451,13 +451,13 @@ List topic subscriptions for a specific client.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN the client is connected to. |
 | `clientName` | string | yes | The client connection name. |
 | `maxResults` | integer | no | Max subscriptions to return (default 100, max 500). |
 
 **Returns:** step-keyed envelope, step `subscriptions` (array of subscription
-records as returned by the broker).
+records as returned by the event broker).
 
 ```json
 { "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" }
@@ -467,7 +467,7 @@ records as returned by the broker).
 
 ### list-slow-subscribers
 
-Clients in a VPN flagged with the broker's `slowSubscriber` field
+Clients in a VPN flagged with the event broker's `slowSubscriber` field
 (server-side `where: slowSubscriber==true`). Narrow signal — catches direct-
 messaging/replication-bridge backpressure; does **not** flip for slow guaranteed
 consumers. For those, use `list-queues` / `get-queue-metrics`.
@@ -476,7 +476,7 @@ consumers. For those, use `list-queues` / `get-queue-metrics`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN to search. |
 | `maxResults` | integer | no | Max results to return (default 100, max 500). |
 
@@ -503,7 +503,7 @@ last failure reason. For full detail use `get-rdp-status`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max RDPs to return (default 100, max 500). |
 
@@ -526,7 +526,7 @@ bindings, and its REST consumers.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN containing the RDP. |
 | `restDeliveryPointName` | string | yes | The RDP name. |
 
@@ -558,7 +558,7 @@ and last inbound failure reason. For full detail use `get-bridge-status`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max bridges to return (default 100, max 500). |
 
@@ -577,17 +577,17 @@ bridge: `bridgeName`, `bridgeVirtualRouter`, `enabled`, `inboundState`,
 
 Detailed status for a single bridge. Bridges are identified by two names, not
 one — `bridgeName` and `bridgeVirtualRouter` — since a bridge configuration
-can differ between a broker's primary and backup virtual router in an HA
+can differ between an event broker's primary and backup virtual router in an HA
 pair; most deployments use `bridgeVirtualRouter: "auto"`.
 
 **Parameters:**
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN containing the Bridge. |
 | `bridgeName` | string | yes | The bridge name. |
-| `bridgeVirtualRouter` | string | yes | `primary`, `backup`, or `auto` (most brokers use `auto`). |
+| `bridgeVirtualRouter` | string | yes | `primary`, `backup`, or `auto` (most event brokers use `auto`). |
 
 **Returns:** step-keyed envelope, step `bridgeStatus` (object): `bridgeName`,
 `bridgeVirtualRouter`, `clientName`, `enabled`, `establisher`,
@@ -614,7 +614,7 @@ cluster into this VPN. For full detail use `get-kafka-receiver-status`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max Kafka Receivers to return (default 100, max 500). |
 
@@ -640,7 +640,7 @@ Kafka-topic-to-Solace-destination bindings are actually up).
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN containing the Kafka Receiver. |
 | `kafkaReceiverName` | string | yes | The Kafka Receiver name. |
 
@@ -666,7 +666,7 @@ an external Kafka cluster. For full detail use `get-kafka-sender-status`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max Kafka Senders to return (default 100, max 500). |
 
@@ -692,7 +692,7 @@ Solace-queue-to-Kafka-topic bindings are actually up).
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN containing the Kafka Sender. |
 | `kafkaSenderName` | string | yes | The Kafka Sender name. |
 
@@ -714,8 +714,8 @@ Solace-queue-to-Kafka-topic bindings are actually up).
 
 ### get-discard-stats
 
-Pre-aggregated message discard counters. **Without `vpnName`:** broker-wide totals
-(client-level ingress/egress discards plus broker-wide spool-level discards).
+Pre-aggregated message discard counters. **Without `vpnName`:** event-broker-wide totals
+(client-level ingress/egress discards plus event-broker-wide spool-level discards).
 **With `vpnName`:** client-level discards scoped to that VPN only — SEMPv1 exposes
 no per-VPN spool breakdown (use `list-queue-discards` for per-queue spool
 discards). Note the parameter is `vpnName`, not `msgVpnName`.
@@ -724,8 +724,8 @@ discards). Note the parameter is `vpnName`, not `msgVpnName`.
 
 | Name | Type | Required | Constraints | Description |
 |---|---|---|---|---|
-| `broker` | string | yes | — | Target broker alias. |
-| `vpnName` | string | no | `minLength: 1` | Scope to a single VPN (client-level only). Omit for broker-wide totals. Empty string is rejected. |
+| `broker` | string | yes | — | Target event broker alias. |
+| `vpnName` | string | no | `minLength: 1` | Scope to a single VPN (client-level only). Omit for event-broker-wide totals. Empty string is rejected. |
 
 **Returns:** strict object (field-level schema):
 
@@ -742,7 +742,7 @@ discards). Note the parameter is `vpnName`, not `msgVpnName`.
 }
 ```
 
-`clientDiscards` is always present; `spoolDiscards` appears only for broker-wide
+`clientDiscards` is always present; `spoolDiscards` appears only for event-broker-wide
 scope; `vpnName` echoes the requested VPN when scoped.
 
 ```json
@@ -757,15 +757,15 @@ scope; `vpnName` echoes the requested VPN when scoped.
 
 ### list-queue-discards
 
-Per-queue message discard counts for a VPN: TTL-expired, max-redelivery-exceeded,
-spool-quota-exceeded, and other categories. For broker/VPN aggregates use
+Per-queue message discard counts for a VPN: time-to-live (TTL)–expired, max-redelivery-exceeded,
+spool-quota-exceeded, and other categories. For event broker/VPN aggregates use
 `get-discard-stats`.
 
 **Parameters:**
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN. |
 | `maxResults` | integer | no | Max queues to return (default 100, max 500). |
 
@@ -775,7 +775,7 @@ queue: `queueName`, `maxTtlExpiredDiscardedMsgCount`,
 `maxMsgSpoolUsageExceededDiscardedMsgCount`, `maxMsgSizeExceededDiscardedMsgCount`,
 `lowPriorityMsgCongestionDiscardedMsgCount`, `disabledDiscardedMsgCount`,
 `noLocalDeliveryDiscardedMsgCount`, `clientProfileDeniedDiscardedMsgCount`,
-`destinationGroupErrorDiscardedMsgCount`, DMQ counters, and
+`destinationGroupErrorDiscardedMsgCount`, dead message queue (DMQ) counters, and
 `xaTransactionNotSupportedDiscardedMsgCount`.
 
 ```json
@@ -796,7 +796,7 @@ All four return the same strict success envelope on completion.
 
 **Destructive.** Forcibly disconnect a connected client — service-impacting; the
 client must reconnect. The description instructs the LLM to obtain explicit user
-confirmation (restating broker, VPN, and client) as a separate reply before
+confirmation (restating event broker, VPN, and client) as a separate reply before
 invoking. The server logs a WARNING audit line on every call.
 
 Annotations: `readOnly: false`, `destructiveHint: true`, `idempotentHint: false`.
@@ -805,7 +805,7 @@ Annotations: `readOnly: false`, `destructiveHint: true`, `idempotentHint: false`
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN the client is connected to. |
 | `clientName` | string | yes | The client connection to disconnect. |
 
@@ -838,7 +838,7 @@ Annotations: `readOnly: false`, `destructiveHint: false`, `idempotentHint: true`
 
 **Destructive.** Permanently delete ALL spooled messages from a queue —
 irreversible. The description instructs the LLM to obtain explicit user
-confirmation (restating broker, VPN, and queue) as a separate reply before
+confirmation (restating event broker, VPN, and queue) as a separate reply before
 invoking. The server logs a WARNING audit line on every call.
 
 Annotations: `readOnly: false`, `destructiveHint: true`, `idempotentHint: false`.
@@ -847,7 +847,7 @@ Annotations: `readOnly: false`, `destructiveHint: true`, `idempotentHint: false`
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN containing the queue. |
 | `queueName` | string | yes | The queue to drain. |
 
@@ -882,11 +882,11 @@ Annotations: `readOnly: false`, `destructiveHint: false`, `idempotentHint: true`
 ## Management (Config API)
 
 Create, update, and delete SEMPv2 **config** objects — Message VPNs, queues,
-topic endpoints, and REST delivery points. Gated behind `enable_write_tools`
+topic endpoints, and REST Delivery Points. Gated behind `enable_write_tools`
 (off by default), the same as the preceding action tools.
 
 - `create-*` is **additive** (not destructive); configuration attributes you omit take
-  the broker default.
+  the event broker default.
 - `update-*` applies a **partial (PATCH)** update — only the attributes you
   supply change — and is marked **destructive** because it can be
   service-affecting (for example, disabling a VPN drops its client connections).
@@ -899,7 +899,7 @@ request body. Do **not** put the object's own name (`msgVpnName`, `queueName`,
 `topicEndpointName`, `restDeliveryPointName`) inside the configuration object — the
 name comes from its dedicated parameter. A reserved name, or any attribute the
 object's schema doesn't define, placed inside the configuration object is rejected
-before the broker call rather than sent on. Every management tool's description
+before the event broker call rather than sent on. Every management tool's description
 instructs the LLM to obtain explicit user confirmation — restating the target
 and effect — as a separate reply before invoking.
 
@@ -915,9 +915,9 @@ Annotations: `readOnly: false`, `destructive: false`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | Name of the VPN to create. |
-| `msgVpnConfig` | object | no | MsgVpn attributes (for example, `enabled`, `maxConnectionCount`, `maxMsgSpoolUsage`). Omitted attributes take broker defaults. |
+| `msgVpnConfig` | object | no | MsgVpn attributes (for example, `enabled`, `maxConnectionCount`, `maxMsgSpoolUsage`). Omitted attributes take event broker defaults. |
 
 **Returns:** step-keyed envelope, step `createVpn`.
 
@@ -936,7 +936,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The VPN to modify. |
 | `msgVpnConfig` | object | yes | MsgVpn attributes to change. Do not include `msgVpnName`. |
 
@@ -957,7 +957,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The VPN to delete. |
 
 **Returns:** step-keyed envelope, step `deleteVpn`.
@@ -977,10 +977,10 @@ Annotations: `readOnly: false`, `destructive: false`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The VPN to create the queue in. |
 | `queueName` | string | yes | Name of the queue to create. |
-| `queueConfig` | object | no | Queue attributes (for example, `accessType`, `egressEnabled`, `ingressEnabled`, `maxMsgSpoolUsage`, `permission`). Omitted attributes take broker defaults. |
+| `queueConfig` | object | no | Queue attributes (for example, `accessType`, `egressEnabled`, `ingressEnabled`, `maxMsgSpoolUsage`, `permission`). Omitted attributes take event broker defaults. |
 
 **Returns:** step-keyed envelope, step `createQueue`.
 
@@ -1000,7 +1000,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The VPN containing the queue. |
 | `queueName` | string | yes | The queue to modify. |
 | `queueConfig` | object | yes | Queue attributes to change. Do not include `msgVpnName` or `queueName`. |
@@ -1021,7 +1021,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The VPN containing the queue. |
 | `queueName` | string | yes | The queue to delete. |
 
@@ -1042,10 +1042,10 @@ Annotations: `readOnly: false`, `destructive: false`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The VPN to create the topic endpoint in. |
 | `topicEndpointName` | string | yes | Name of the topic endpoint to create. |
-| `topicEndpointConfig` | object | no | TopicEndpoint attributes (for example, `accessType`, `egressEnabled`, `ingressEnabled`, `maxMsgSpoolUsage`, `permission`). Omitted attributes take broker defaults. |
+| `topicEndpointConfig` | object | no | TopicEndpoint attributes (for example, `accessType`, `egressEnabled`, `ingressEnabled`, `maxMsgSpoolUsage`, `permission`). Omitted attributes take event broker defaults. |
 
 **Returns:** step-keyed envelope, step `createTopicEndpoint`.
 
@@ -1065,7 +1065,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The VPN containing the topic endpoint. |
 | `topicEndpointName` | string | yes | The topic endpoint to modify. |
 | `topicEndpointConfig` | object | yes | TopicEndpoint attributes to change. Do not include `msgVpnName` or `topicEndpointName`. |
@@ -1087,7 +1087,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The VPN containing the topic endpoint. |
 | `topicEndpointName` | string | yes | The topic endpoint to delete. |
 
@@ -1110,10 +1110,10 @@ Annotations: `readOnly: false`, `destructiveHint: false`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN to create the RDP in. |
 | `restDeliveryPointName` | string | yes | Name of the RDP to create. |
-| `rdpConfig` | object | no | RestDeliveryPoint attributes (for example, `enabled`, `clientProfileName`, `service`, `vendor`). Omitted attributes take broker defaults. |
+| `rdpConfig` | object | no | RestDeliveryPoint attributes (for example, `enabled`, `clientProfileName`, `service`, `vendor`). Omitted attributes take event broker defaults. |
 
 **Returns:** step-keyed envelope, step `createRdp`.
 
@@ -1132,7 +1132,7 @@ Annotations: `readOnly: false`, `destructiveHint: true`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN containing the RDP. |
 | `restDeliveryPointName` | string | yes | The RDP to modify. |
 | `rdpConfig` | object | yes | RestDeliveryPoint attributes to change. Do not include `msgVpnName` or `restDeliveryPointName`. |
@@ -1154,7 +1154,7 @@ Annotations: `readOnly: false`, `destructiveHint: true`.
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `broker` | string | yes | Target broker alias. |
+| `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The Message VPN containing the RDP. |
 | `restDeliveryPointName` | string | yes | The RDP to delete. |
 

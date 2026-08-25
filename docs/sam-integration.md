@@ -1,6 +1,6 @@
 # Connecting solace-broker-mcp to Solace Agent Mesh
 
-This guide shows how to integrate this MCP server with Agent Mesh. For general MCP support in Agent Mesh — connection types, tool filtering, TLS/SSL config, environment variable passing — see the upstream [MCP Integration tutorial](https://github.com/SolaceLabs/solace-agent-mesh/blob/main/docs/docs/documentation/developing/tutorials/mcp-integration.md).
+This guide shows how to integrate this Model Context Protocol (MCP) server with Agent Mesh. For general MCP support in Agent Mesh — connection types, tool filtering, TLS/SSL configuration, environment variable passing — see the upstream [MCP Integration tutorial](https://github.com/SolaceLabs/solace-agent-mesh/blob/main/docs/docs/documentation/developing/tutorials/mcp-integration.md).
 
 ## Prerequisites
 
@@ -86,7 +86,9 @@ Agent card tool manifest populated with 24 tools.
 Registered new agent 'SolaceBrokerAgent' in registry.
 ```
 
-Open the Agent Mesh web UI (`http://localhost:8000`) and ask the orchestrator a broker-related question — the orchestrator delegates to the `SolaceBrokerAgent`, which calls the MCP tools.
+Open the Agent Mesh web UI (`http://localhost:8000`) and ask the orchestrator an event broker-related question — the orchestrator delegates to the `SolaceBrokerAgent`, which calls the MCP tools.
+
+> **Port note:** The Agent Mesh web UI defaults to `http://localhost:8000`. If you're running the Solace event broker via Docker per this repository's Quickstart, that port is likely already in use by the event broker's REST messaging service — change one of the two ports if you hit a conflict.
 
 ## Authentication Chain
 
@@ -102,5 +104,5 @@ The following topics are covered in the [Agent Mesh MCP Integration tutorial](ht
 
 - Other connection types (`stdio`, `sse`, Docker)
 - Tool filtering (`tool_name`, `allow_list`, `deny_list`)
-- TLS/SSL config for self-signed certs (`ssl_config`)
+- TLS/SSL configuration for self-signed certificates (`ssl_config`)
 - Passing environment variables to the MCP server process
