@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Idle MCP sessions are now closed after two hours instead of being held for the lifetime of the process. The server passed no options to the SDK's streamable-HTTP handler, leaving `SessionTimeout` at its zero value — which the go-sdk documents as "idle sessions are never closed". A session was released only on an explicit `DELETE` or a transport close, so any client that connected and then vanished (a sleeping laptop, a killed container, a dropped network, or a client that simply never sends `DELETE`) left its session and the goroutines behind it in memory permanently. On a long-running server this grew without bound and no metric revealed it. Operator-visible effect: a client whose session has been idle for more than two hours receives `404 session not found` on its next request and re-initializes; spec-compliant clients do this transparently. Tracked under SOL-153582.
+
 ### Changed
 
 - The DEBUG logs for acquiring a broker token now trace the whole sequence, from `broker token needed` through to `broker token attached to request` or `broker token unavailable`. The old messages are replaced: `token cache get`, `token cache put` (both carried a `status` field of `0` or `1`), `token exchange succeeded`, `token exchange retried` and `token exchange retries exhausted` are gone. New fields on these lines: `http_status`, `attempts`, `reason`. Anything matching the old messages or reading `status` on the cache lines needs updating. Tracked under SOL-153363.
