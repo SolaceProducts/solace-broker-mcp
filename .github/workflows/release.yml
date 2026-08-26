@@ -75,6 +75,57 @@ jobs:
         if: always()
         run: .github/scripts/build-test-licenses-check.sh
 
+      # SBOM — SOL-153188. cyclonedx-gomod reads go.mod/the module graph
+      # directly, so it agrees with the build by construction, the same
+      # reasoning SOL-153190 used to pick the Go module graph over FOSSA for
+      # THIRD_PARTY_LICENSES.md — no reconciliation needed between generator
+      # and any gate, because there is no second resolution to disagree with.
+      # Pinned to v1.10.0 deliberately, not @latest: v1.10.0 is the newest
+      # release whose own go.mod requires exactly `go 1.25`, matching this
+      # repo's pin — v1.11.0 requires 1.26 and would force a toolchain
+      # download on every release run for no benefit here.
+      #
+      # Absence must not gate, a proven divergence must — these are two
+      # different failure modes and this story is explicit that only one of
+      # them should block a release. SOL-148440 already recorded the SBOM as
+      # not gating: "do not add a job that fails the release when it is
+      # absent." That governs `Generate SBOM` specifically — `continue-on-
+      # error: true` there means a cyclonedx-gomod outage or bug degrades to
+      # "release ships with no SBOM," not "release ships with nothing." It
+      # does NOT govern the drift check: once an SBOM exists, the AC treats a
+      # divergence from THIRD_PARTY_LICENSES.md as "a bug in one of the two,"
+      # which is a real defect worth blocking on, not a tooling availability
+      # problem — a wrong SBOM published alongside the release would be worse
+      # than none at all. Hence the check step below has no continue-on-error,
+      # and is gated on generation's own step outcome (not just `always()`,
+      # which would run it against a nonexistent file if generation failed).
+      - name: Self-test the SBOM check
+        if: always()
+        run: .github/scripts/sbom-check.test.sh
+      - name: Generate SBOM
+        id: sbom_generate
+        if: always()
+        continue-on-error: true
+        run: |
+          SBOM="solace-broker-mcp-${GITHUB_REF_NAME}.cdx.json"
+          go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.10.0 \
+            app -json -licenses -main cmd/server -output "${SBOM}" .
+          echo "SBOM=${SBOM}" >> "${GITHUB_ENV}"
+      - name: Verify the SBOM's dependency set matches THIRD_PARTY_LICENSES.md
+        id: sbom_check
+        if: always() && steps.sbom_generate.outcome == 'success'
+        run: .github/scripts/sbom-check.sh "${SBOM}"
+      # Gated on both prior steps' own outcomes, not `always()` or plain
+      # success() — this must upload nothing if generation didn't produce a
+      # real SBOM, and nothing if the SBOM it produced failed its drift check,
+      # regardless of what else in this job passed or failed.
+      - name: Upload SBOM
+        if: steps.sbom_generate.outcome == 'success' && steps.sbom_check.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom
+          path: ${{ env.SBOM }}
+
   # Self-tests for the inventory-refresh tooling itself (SOL-152956,
   # `make refresh-third-party-inventory`) — not the gate above, which stays
   # exactly as it was, and not named in any `needs:` below, so neither job
@@ -456,13 +507,38 @@ jobs:
           merge-multiple: true
           path: dist/
 
+      # A single artifact downloaded by name extracts flat into the working
+      # dir (no name-subdirectory) — same behavior release-notes below already
+      # relies on — so this lands directly at dist/, next to the archives.
+      # `continue-on-error: true` because the `licenses` job's own SBOM
+      # generation is deliberately allowed to fail without gating (SOL-148440:
+      # "do not add a job that fails the release when it is absent") — the
+      # "sbom" artifact may legitimately not exist, and downloading it must
+      # degrade the same way, not turn absence into a release failure here
+      # instead.
+      - name: Download SBOM
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sbom
+          path: dist/
+
       # `--` rather than `./*.tar.gz`, which is the other fix shellcheck offers
       # for SC2035: `./` would prefix every line of the published checksums file
       # with `./`, changing a release artifact people verify against. `--` stops
-      # option parsing and leaves the filenames bare.
+      # option parsing and leaves the filenames bare. Includes the SBOM
+      # (*.cdx.json) alongside the archives — SOL-153188 — so it's verifiable
+      # the same way every other release asset already is. `nullglob` matters
+      # here specifically because the SBOM may be legitimately absent (see the
+      # download step above): without it, an unmatched `*.cdx.json` glob stays
+      # a literal, unexpanded string under `bash -e` (this step's default
+      # shell), and sha256sum would fail trying to open a file named that,
+      # turning an intentionally-tolerated absence into a hard failure here.
       - name: Generate checksums
         working-directory: dist
-        run: sha256sum -- *.tar.gz > checksums-sha256.txt
+        run: |
+          shopt -s nullglob
+          sha256sum -- *.tar.gz *.cdx.json > checksums-sha256.txt
 
       # A single artifact downloaded by name extracts flat into the working dir
       # (no name-subdirectory), so body_path: release-notes.md below resolves.
@@ -471,6 +547,14 @@ jobs:
         with:
           name: release-notes
 
+      # `dist/*.cdx.json` is an intentionally-optional pattern — SOL-153188's
+      # SBOM is allowed to be absent (see the `licenses` job). Confirmed
+      # against this action's actual source at the pinned v3.0.2: `paths()` in
+      # src/util.ts resolves each pattern with `glob.sync()` and concatenates
+      # whatever matches, so a pattern matching nothing just contributes
+      # nothing — no error, no warning. That's the default; a separate
+      # `fail_on_unmatched_files` input would make it strict, and this step
+      # doesn't set it.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
@@ -478,4 +562,5 @@ jobs:
           generate_release_notes: true
           files: |
             dist/*.tar.gz
+            dist/*.cdx.json
             dist/checksums-sha256.txt
