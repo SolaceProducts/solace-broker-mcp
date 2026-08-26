@@ -11,7 +11,7 @@
     "in sync"
   ],
   "forbidden_substrings": [
-    "(broker[a-z0-9_.-]*|node|it) is down",
+    "(broker[a-z0-9_.-]*|node|it)[`'\"*]* is down",
     "is not operational",
     "is unhealthy",
     "out of capacity",

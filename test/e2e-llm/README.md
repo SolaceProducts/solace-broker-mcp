@@ -395,6 +395,19 @@ the target's own name in `required_substrings_any_of` means an answer that
 merely echoes the prompt passes. `f5-composition` and `c1` both carry notes
 about this.
 
+A fourth, and the easiest to miss: **the model writes markdown**. Real answers
+wrap entity names in backticks or asterisks —
+
+> Done — all spooled messages on `` `e2e-llm-action-queue-broker-a` `` have been purged.
+
+so any pattern spanning subject and verb must tolerate the markup *and* a
+name long enough to reach it. A gap of `[a-z0-9 _-]{0,20}` matches none of
+that, and it fails silently in whichever direction the list runs. Use the
+name idiom the scenarios share — ``[`'"*]*[a-z0-9_.-]+[`'"*]*`` — rather
+than a bare character run, and put a markdown-formatted variant of every
+phrase in the `test-assertions.sh` corpus. Plain-text-only corpora are how
+this class of bug got shipped once already.
+
 So: prefer a pattern to a long literal list wherever the assertion is
 load-bearing, and pin it in [`test-assertions.sh`](test-assertions.sh) in
 **both** directions — the phrasings that must pass *and* the phrasings that

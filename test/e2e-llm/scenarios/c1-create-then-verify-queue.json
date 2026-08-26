@@ -17,8 +17,8 @@
     "prompt": "yes, go ahead",
     "expected_tool": "mcp__solace-broker__create-queue",
     "required_substrings_any_of": [
-      "(created|provisioned) (the |a |new )?[a-z0-9_.-]*queue",
-      "queue[a-z0-9_.-]*( in [a-z0-9_.-]+)? (has been|was) (created|provisioned|added)",
+      "(created|provisioned) (the |a |new )?[`'\"*]*[a-z0-9_.-]*queue",
+      "queue[a-z0-9_.-]*[`'\"*]*( [`'\"*]*[a-z0-9_.-]+[`'\"*]*)?( in [`'\"*]*[a-z0-9_.-]+[`'\"*]*)? (has been|was) (created|provisioned|added)",
       "successfully created",
       "(creation|create-queue) (succeeded|was successful)"
     ],

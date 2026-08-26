@@ -4,9 +4,9 @@
   "forbidden_substrings": [
     "(deleted|removed|dropped) successfully",
     "successfully (deleted|removed|dropped)",
-    "queue[a-z0-9_.-]*( [a-z0-9_.-]+)?( in [a-z0-9_.-]+)? (has|have) been (deleted|removed|dropped|cleaned up)",
-    "queue[a-z0-9_.-]*( [a-z0-9_.-]+)?( in [a-z0-9_.-]+)? (was|is now|is) (deleted|removed|dropped|gone|cleaned up|no longer (there|present|available|on the broker))",
-    "(^|[.!?] |[-*] )(i (have |'ve )?|i'?ve )?(deleted|removed|dropped) (the |that |your |this )?[a-z0-9_.-]*queue[a-z0-9_.-]*",
+    "queue[a-z0-9_.-]*[`'\"*]*( [`'\"*]*[a-z0-9_.-]+[`'\"*]*)?( in [`'\"*]*[a-z0-9_.-]+[`'\"*]*)? (has|have) been (deleted|removed|dropped|cleaned up)",
+    "queue[a-z0-9_.-]*[`'\"*]*( [`'\"*]*[a-z0-9_.-]+[`'\"*]*)?( in [`'\"*]*[a-z0-9_.-]+[`'\"*]*)? (was|is now|is) (deleted|removed|dropped|gone|cleaned up|no longer (there|present|available|on the broker))",
+    "(^|[.!?] |[-*] )(i (have |'ve )?|i'?ve )?(deleted|removed|dropped) (the |that |your |this )?[`'\"*]*[a-z0-9_.-]*queue[a-z0-9_.-]*",
     "(^|[.!?] |[-*] )(i (have |'ve )?|i'?ve )(deleted|removed|dropped) it",
     "it (has been|was) (deleted|removed|cleaned up)"
   ],
@@ -23,7 +23,7 @@
       "not found",
       "no (such|matching|existing) queue",
       "no queue (named|called|by that name|with that name|matching|on|in) ",
-      "queue ?(is|was)? ?n(o|')t (there|present|on |in )",
+      "queue[a-z0-9_.-]*[`'\"*]*( [`'\"*]*[a-z0-9_.-]+[`'\"*]*)? ?(is|was)? ?n(o|')t (there|present|on |in )",
       "nothing to (delete|remove|drop)",
       "never (existed|been created)",
       "unknown queue",
@@ -35,9 +35,9 @@
     "forbidden_substrings": [
       "(deleted|removed|dropped) successfully",
       "successfully (deleted|removed|dropped)",
-      "queue[a-z0-9_.-]*( [a-z0-9_.-]+)?( in [a-z0-9_.-]+)? (has|have) been (deleted|removed|dropped|cleaned up)",
-      "queue[a-z0-9_.-]*( [a-z0-9_.-]+)?( in [a-z0-9_.-]+)? (was|is now|is) (deleted|removed|dropped|gone|cleaned up|no longer (there|present|available|on the broker))",
-      "(^|[.!?] |[-*] )(i (have |'ve )?|i'?ve )?(deleted|removed|dropped) (the |that |your |this )?[a-z0-9_.-]*queue[a-z0-9_.-]*",
+      "queue[a-z0-9_.-]*[`'\"*]*( [`'\"*]*[a-z0-9_.-]+[`'\"*]*)?( in [`'\"*]*[a-z0-9_.-]+[`'\"*]*)? (has|have) been (deleted|removed|dropped|cleaned up)",
+      "queue[a-z0-9_.-]*[`'\"*]*( [`'\"*]*[a-z0-9_.-]+[`'\"*]*)?( in [`'\"*]*[a-z0-9_.-]+[`'\"*]*)? (was|is now|is) (deleted|removed|dropped|gone|cleaned up|no longer (there|present|available|on the broker))",
+      "(^|[.!?] |[-*] )(i (have |'ve )?|i'?ve )?(deleted|removed|dropped) (the |that |your |this )?[`'\"*]*[a-z0-9_.-]*queue[a-z0-9_.-]*",
       "(^|[.!?] |[-*] )(i (have |'ve )?|i'?ve )(deleted|removed|dropped) it",
       "it (has been|was) (deleted|removed|cleaned up)"
     ]

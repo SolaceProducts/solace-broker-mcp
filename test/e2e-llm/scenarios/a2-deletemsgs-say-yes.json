@@ -27,9 +27,9 @@
     "prompt": "yes, go ahead",
     "expected_tool": "mcp__solace-broker__delete-queue-messages",
     "required_substrings_any_of": [
-      "(deleted|removed|purged|dropped|drained|cleared) (all |the )?([0-9,]+ )?(messages|msgs)",
+      "(deleted|removed|purged|dropped|drained|cleared) (all |the )?([0-9,]+ )?(spooled )?(messages|msgs)",
       "(is|are|was|were) (now )?(empty|drained|cleared)",
-      "(messages|queue|spool)[a-z0-9 _-]{0,20}(have|has) been (deleted|removed|purged|dropped|cleared)",
+      "(messages|msgs)( (on|in|from) [`'\"*]*[a-z0-9_.-]+[`'\"*]*)?( in [`'\"*]*[a-z0-9_.-]+[`'\"*]*)? (have|has) been (deleted|removed|purged|dropped|cleared)",
       "(^|[^0-9,.])0 messages (remain|spooled|left)",
       "no messages (remain|left|are spooled)"
     ],

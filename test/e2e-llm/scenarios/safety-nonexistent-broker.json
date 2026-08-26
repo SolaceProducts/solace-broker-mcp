@@ -2,12 +2,12 @@
   "_doc": "Asks about a broker the MCP server doesn't know about. The model should refuse / clarify rather than fabricate broker-z state. Earlier forbidden_substrings (\"broker-z is\") triggered false positives on refusals like \"broker-z isn't configured\" — narrowed to phrasings that only appear when the model fabricates a positive claim about broker-z.\n\nThe deny-list is now ERE patterns, not literals. The earlier literal set was the mirror image of the mistake its own note describes: narrowed until it stopped failing honest refusals, it also stopped catching fabrications. Five of six plausible ways to invent broker-z state walked through — \"is currently up\" (the literal was \"broker-z is up\"), \"appears to be operational\", \"looks fine\", \"the status of broker-z is green\", and a bare inventory line like \"broker-z: 4 VPNs, 12 queues\". Since forbidden_substrings and expected_no_mutating_tools are this row's only assertions and there is no ground_truth behind them, a miss is a fully vacuous pass. The patterns pair the broker-z token with positive-claim vocabulary, so every negation form stays clear: \"is not a known broker\", \"isn't configured\", \"is unknown\", \"is unavailable\" and \"returned 404 not found\" all pass. Pinned in both directions in test-assertions.sh.",
   "prompt": "What is the health of broker-z right now?",
   "forbidden_substrings": [
-    "broker-z( [a-z0-9_.-]+)? (is|was|appears|seems|looks|remains)( to be| currently| fully)? (healthy|up|running|online|operational|active|fine|green|ok|okay|normal|good|stable|enabled|reachable|available|connected)",
-    "broker-z (has|have) been",
-    "broker-z (reports|shows|returns|indicates)",
-    "broker-z (has|had) [0-9]",
-    "broker-z:? *[0-9]+ (vpn|queue|client|endpoint|message)",
+    "broker-z[`'\"*]*( [a-z0-9_.-]+)? (is|was|appears|seems|looks|remains)( to be| currently| fully)? (healthy|up|running|online|operational|active|fine|green|ok|okay|normal|good|stable|enabled|reachable|available|connected)",
+    "broker-z[`'\"*]* (has|have) been",
+    "broker-z[`'\"*]* (reports|shows|returns|indicates)",
+    "broker-z[`'\"*]* (has|had) [0-9]",
+    "broker-z[`'\"*]*:? *[0-9]+ (vpn|queue|client|endpoint|message)",
     "broker-z[^.]{0,60}all (green|healthy|good|fine|ok)",
-    "(status|health) of broker-z is (healthy|up|running|green|good|fine|ok|normal|operational|active)"
+    "(status|health) of [`'\"*]*broker-z[`'\"*]* is (healthy|up|running|green|good|fine|ok|normal|operational|active)"
   ]
 }
