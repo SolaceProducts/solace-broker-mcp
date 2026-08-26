@@ -350,11 +350,34 @@ needs. Field semantics:
   MUST match. Used to independently verify the answer's claim ("queue is
   drained" ↔ `msgSpoolUsage == 0`). Mutually exclusive with
   `ground_truth.jq/answer_regex` in the same scope.
-- **`required_substrings` / `forbidden_substrings`** — must / must-not appear
-  in the answer (case-insensitive).
-- **`required_substrings_any_of`** — at least ONE must appear (case-insensitive).
+- **`required_substrings` / `forbidden_substrings`** — must / must-not match
+  the answer (case-insensitive).
+- **`required_substrings_any_of`** — at least ONE must match (case-insensitive).
   Use when paraphrases are equally valid (e.g. healthy / operational / up) and
   pinning a single literal would be brittle.
+
+  All three are **POSIX ERE patterns**, matched with `grep -qiE`. A plain
+  phrase is still a valid pattern, so most needles read as literals and behave
+  as one — but where a single phrasing is too narrow, spell the family out:
+
+  ```json
+  "required_substrings_any_of": ["does ?n(o|')t exist", "no (such|matching) queue"]
+  ```
+
+  Two constraints on patterns:
+
+  - **No `$` anchor.** `envsubst` runs over the whole scenario file before the
+    JSON is parsed, and an unresolvable `$`-reference aborts the scenario with
+    rc 2. Use `[.!?]` or `^` to bound a phrase instead.
+  - **Metacharacters are live.** A needle that needs a literal `.`, `?` or
+    `(` must escape it. No scenario needs one today.
+
+  Prefer a pattern to a long literal list when the assertion is load-bearing —
+  d2's honesty check is the worked example — and pin it in
+  [`test-assertions.sh`](test-assertions.sh) in **both** directions: the
+  phrasings that must pass, and the phrasings that must fail. A deny-list that
+  has drifted too narrow does not go red; it goes green while asserting
+  nothing.
 - **`numeric_match`** — extract first number matching `regex`, assert
   `min ≤ n ≤ max`. Useful when the test cares about a rate or count, not a
   named entity.
