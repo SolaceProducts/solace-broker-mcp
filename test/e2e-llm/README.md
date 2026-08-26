@@ -182,7 +182,7 @@ port of the direct test catalog.
 | `f3-subscriptions` | F3 | a, b | Multi-arg parameterization — pulls VPN + client name out of the prompt |
 | `f3-client-healthy` | F3 | a, b | False-positive resistance — must NOT invent problems in clean state |
 | `f4-message-rate` | F4 | a | Numeric fidelity — answer's rate falls in a sensible range |
-| `f5-detect` | F5 | a | Path tolerance — multiple valid tool routes accepted |
+| `f5-detect` | F5, F6 | a | Path tolerance — multiple valid tool routes accepted; answer must name both the backing-up queue and the flagged client |
 | `f5-composition` | F5 | a | Diagnosis grounded in current broker state |
 | `f6-slow-subscriber` | F6 | a, b | Exercises `list-slow-subscribers` — only MCP tool for the per-client `slowSubscriber` flag |
 | `f7-causal` | F7 | a | Causal explanation cites the real cause (spool/quota) |
