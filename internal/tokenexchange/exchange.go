@@ -152,7 +152,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	abandonedByCaller := func(cause error, via string) (*Token, error) {
 		slog.DebugContext(ctx, "token exchange abandoned by caller",
 			slog.String("broker", input.BrokerAlias),
-			slog.Duration("waited", e.nowFunc().Sub(start)),
+			slog.String("waited", e.nowFunc().Sub(start).String()),
 			slog.String("cause", cause.Error()),
 			slog.String("via", via))
 		return nil, cause
@@ -203,7 +203,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 
 		slog.DebugContext(ctx, "broker token exchange completed",
 			slog.String("broker", input.BrokerAlias),
-			slog.Duration("exchange_total_elapsed", elapsed))
+			slog.String("exchange_total_elapsed", elapsed.String()))
 
 		return tok, nil
 	}
