@@ -35,7 +35,7 @@ A Model Context Protocol (MCP) server for Solace event brokers, built with Go us
 
 ## Overview
 
-solace-broker-mcp is an HTTP service that exposes Solace event broker management and monitoring to AI assistants through MCP. The server provides 40 tools: 24 read-only tools that query event broker status, inspect queues, diagnose client issues, and monitor message traffic, plus 16 optional write and action tools (off by default) for operational actions and configuration. It uses the Solace Element Management Protocol (SEMP), SEMPv1 and SEMPv2.
+solace-broker-mcp is an HTTP service that exposes Solace event broker management and monitoring to AI assistants through MCP. The server provides 40 tools: 24 read-only tools that query event broker status, inspect queues, diagnose client issues, and monitor message traffic, plus 16 optional write and action tools (off by default) for operational actions and configuration. It uses the Solace Element Management Protocol (SEMP) v1 and v2 APIs.
 
 MCP-compatible clients, for example, Claude Code, invoke these tools using natural language. The AI assistant translates requests into tool calls. The server handles authentication, rate limiting, retries, and response formatting.
 

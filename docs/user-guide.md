@@ -32,7 +32,7 @@ The Solace Event Broker MCP Server requires:
 |---|---|
 | **Solace event broker** | One or more event brokers with Solace Element Management Protocol (SEMP) management enabled. The server connects to the SEMP management API (typically port 8080 for HTTP or 1943 for HTTPS). |
 | **SEMPv1+v2 reachability** | The machine running the MCP server must have network access to both the SEMPv1 (`/SEMP`) and SEMPv2 (`/SEMP/v2`) endpoints on each event broker's SEMP management port. |
-| **Event Broker credentials** | Per-event-broker SEMP credentials: a username and password (basic auth), a static token (bearer auth), or an OAuth identity provider for token exchange (`auth.mode: oauth` — requires `mcp_client_auth.mode: oauth`; see [Authentication](authentication.md#step-2b-configure-broker-oauth-hop-2)). |
+| **Event broker credentials** | Per-event-broker SEMP credentials: a username and password (basic auth), a static token (bearer auth), or an OAuth identity provider for token exchange (`auth.mode: oauth` — requires `mcp_client_auth.mode: oauth`; see [Authentication](authentication.md#step-2b-configure-broker-oauth-hop-2)). |
 | **Runtime environment** | One of: Docker, a supported OS/architecture for the binary (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64), or Kubernetes. |
 | **MCP client** | An MCP-compatible AI client such as Claude Code or Claude Desktop. |
 | **OAuth provider** (production only) | An OpenID Connect (OIDC)-compliant identity provider (for example, Keycloak, Auth0, Okta) is required when `mcp_client_auth.mode` is `oauth`. An OAuth provider is not required when `mode` is `disabled` or `static` (local development). |
