@@ -343,63 +343,6 @@ corpus f1-broker-status.json '{forbidden_substrings}' 0 "" \
     "AD-Active, all links synced, 0 inactive flows." \
     "\`broker-a\` is operational with 0 inactive flows."
 
-# ── A2 / C1: a Mode-2 readback must not be satisfiable by its own negation ────
-# Both rows have a ground_truth that proves the broker state. These assertions
-# carry the other half — that the agent reported it — so they must separate
-# "did it" from "did not do it", which the literal lists did not.
-corpus a2-deletemsgs-say-yes.json \
-    '{required_substrings_any_of: .followup.required_substrings_any_of}' 0 "" \
-    "a2 accepts a real drain" \
-    "Deleted 100 messages from the queue." \
-    "The queue is now empty." \
-    "All messages have been deleted; msgSpoolUsage is 0." \
-    "Drained the queue - 0 messages remain." \
-    "Done — all spooled messages on \`e2e-llm-action-queue-broker-a\` have been purged." \
-    "The messages in \`e2e-llm-action-queue-broker-a\` have been removed." \
-    "Purged all spooled messages from \`e2e-llm-action-queue-broker-a\`."
-corpus a2-deletemsgs-say-yes.json \
-    '{required_substrings_any_of: .followup.required_substrings_any_of}' 1 "$REQUIRED_MISS" \
-    "a2 rejects a failed drain" \
-    "The messages were not deleted." \
-    "The queue is not empty - 100 messages remain." \
-    "I could not delete the messages." \
-    "100 messages remain; nothing has been deleted." \
-    "No messages were purged because the call failed."
-# `failed` matched the correct readback "failedBindCount: 0"; `could not`
-# matched the correct warning "this could not be undone".
-corpus a2-deletemsgs-say-yes.json \
-    '{forbidden_substrings: .followup.forbidden_substrings}' 0 "" \
-    "a2 clears a correct readback" \
-    "Deleted 100 messages. failedBindCount: 0, no failures." \
-    "The queue is now empty. This could not be undone." \
-    "Removed all 100 spooled messages; 0 failed deliveries."
-corpus a2-deletemsgs-say-yes.json \
-    '{forbidden_substrings: .followup.forbidden_substrings}' 1 "$FORBIDDEN_HIT" \
-    "a2 catches a real failure" \
-    "I was unable to delete the messages." \
-    "The deletion failed." \
-    "Failed to delete the spooled messages."
-
-corpus c1-create-then-verify-queue.json \
-    '{required_substrings_any_of: .followup.required_substrings_any_of}' 0 "" \
-    "c1 accepts a real creation" \
-    "Created queue e2e-llm-c1-queue in test-vpn." \
-    "The queue e2e-llm-c1-queue has been created." \
-    "Successfully created the queue." \
-    "I provisioned the queue e2e-llm-c1-queue." \
-    "The queue \`e2e-llm-c1-queue\` has been created." \
-    "Created \`e2e-llm-c1-queue\` in \`default\` on \`broker-a\`."
-# The first of these passed the literal list via `exists` inside "no queue …
-# exists"; the rest passed by merely echoing the target's name.
-corpus c1-create-then-verify-queue.json \
-    '{required_substrings_any_of: .followup.required_substrings_any_of}' 1 "$REQUIRED_MISS" \
-    "c1 rejects a failed creation" \
-    "No queue named e2e-llm-c1-queue exists on broker-a." \
-    "I was not able to create e2e-llm-c1-queue." \
-    "The queue e2e-llm-c1-queue could not be verified." \
-    "The queue was not created." \
-    "No queue named \`e2e-llm-c1-queue\` exists."
-
 # ── RDP status: also the end-to-end check that a regex `$` anchor survives ────
 # `is up` matched the correct "its config is up to date". The replacement ends
 # in `([.,;!?]|$| and )`, so these cases prove envsubst and the unset-var scan

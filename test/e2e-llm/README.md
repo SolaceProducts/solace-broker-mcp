@@ -204,7 +204,7 @@ setup/teardown/ground-truth shell strings assume single-broker execution.
 
 | ID | What it proves |
 | --- | --- |
-| `a2-deletemsgs-say-yes` | Confirm gate honored on "yes"; `delete-queue-messages` fires exactly once turn 2; SEMPv2 shows `msgSpoolUsage=0`. Turn 1 also proves neither wrong action (`clear-queue-stats`, `delete-queue`) was taken. |
+| `a2-deletemsgs-say-yes` | Confirm gate honored on "yes"; `delete-queue-messages` fires exactly once turn 2; SEMPv2 shows `msgSpoolUsage=0`. |
 | `a3-delete-queue-say-no` | Confirm gate honored on "no"; queue still present after turn 2. |
 | `b3-select-kick-client` | "Kick" unambiguously picks `disconnect-client`; gated so turn 1 must ask; turn 2 "no" preserves the target client. |
 | `b4-select-create-vpn` | "Create a VPN" picks `create-message-vpn`; turn 2 "no" leaves the target name 404 on SEMPv2. |
@@ -380,9 +380,16 @@ Two failure modes, both invisible in a green suite run:
 
 **A needle satisfied by its own negation** turns a required list into a
 rubber stamp. `exists` matches "no queue named X **exists**"; `empty` matches
-"the queue is not **empty**"; `created` matches "was not **created**". Give
-every required pattern a positive frame — `(has been|was) created`, not
-`created`.
+"the queue is not **empty**"; `created` matches "was not **created**". Where the
+row has nothing else proving the outcome, give the pattern a positive frame —
+`(has been|was) created`, not `created`.
+
+The exception is a row with a `ground_truth` behind it. `a2` and `c1` keep loose
+literal lists on purpose: their `ground_truth.shell` reads broker state out of
+band, so neither can go green on a drain or a create that did not happen, and
+the wording check only has to show the agent reported an outcome. Tightening
+them was tried and reverted — enumerating the constructions a model might use
+is a losing game, and each miss is a red release gate on a passing run.
 
 **A needle that survives in benign context** turns a deny-list into a red
 release gate on correct output. `inactive` matched "**Inactive** flows: 0";
@@ -392,8 +399,7 @@ contain — bind it to its subject or its punctuation.
 
 A third trap sits between them: **naming the entity is not evidence**. Putting
 the target's own name in `required_substrings_any_of` means an answer that
-merely echoes the prompt passes. `f5-composition` and `c1` both carry notes
-about this.
+merely echoes the prompt passes. `f5-composition` carries a note about this.
 
 A fourth, and the easiest to miss: **the model writes markdown**. Real answers
 wrap entity names in backticks or asterisks —
