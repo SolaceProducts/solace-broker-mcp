@@ -108,7 +108,7 @@ func (e *Exchanger) raiseGateOnExhaustedRateLimit(err error, brokerAlias string)
 func logGateSet(brokerAlias string, honored time.Duration, gatedUntil time.Time) {
 	slog.Warn("token exchange rate limited: honoring IdP Retry-After for all callers",
 		slog.String("broker", brokerAlias),
-		slog.Duration("retry_after", honored),
+		slog.String("retry_after", honored.String()),
 		slog.Time("gated_until", gatedUntil))
 }
 
@@ -116,8 +116,8 @@ func logGateSet(brokerAlias string, honored time.Duration, gatedUntil time.Time)
 func logGateClamped(brokerAlias string, requested, clampedTo time.Duration) {
 	slog.Warn("token exchange Retry-After exceeded configured cap, clamping",
 		slog.String("broker", brokerAlias),
-		slog.Duration("requested", requested),
-		slog.Duration("clamped_to", clampedTo))
+		slog.String("requested", requested.String()),
+		slog.String("clamped_to", clampedTo.String()))
 }
 
 // logGateNotSet: the IdP gave us nothing usable, so the gate can't engage —
