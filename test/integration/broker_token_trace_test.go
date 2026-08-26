@@ -30,6 +30,7 @@ import (
 	internalauth "github.com/SolaceProducts/solace-broker-mcp/internal/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/idpclient"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache/cachetest"
 	sempauth "github.com/SolaceProducts/solace-broker-mcp/internal/semp/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
 )
@@ -111,15 +112,11 @@ func captureTrace(t *testing.T, fn func()) []traceRecord {
 func newTraceAuthenticator(t *testing.T, idpURL string, clockSkew time.Duration) *sempauth.OAuthAuthenticator {
 	t.Helper()
 
-	tokenCache, err := cache.NewTokenCache(cache.CacheConfig{
+	tokenCache := cachetest.WithConfig(t, cache.CacheConfig{
 		MaxSize:   64,
 		ClockSkew: clockSkew,
 		MaxTTL:    time.Hour,
 	})
-	if err != nil {
-		t.Fatalf("NewTokenCache: %v", err)
-	}
-	t.Cleanup(func() { _ = tokenCache.Close() })
 
 	// The retrying client, because that is what main.go passes. A plain
 	// http.Client would work for everything else here, but it does not carry
@@ -517,13 +514,9 @@ func Test_BrokerTokenTrace_CancelledDuringCacheHitClaimsNothing(t *testing.T) {
 	idp := httptest.NewServer(idpIssues(3600))
 	t.Cleanup(idp.Close)
 
-	inner, err := cache.NewTokenCache(cache.CacheConfig{
+	inner := cachetest.WithConfig(t, cache.CacheConfig{
 		MaxSize: 8, ClockSkew: 10 * time.Second, MaxTTL: time.Hour,
 	})
-	if err != nil {
-		t.Fatalf("NewTokenCache: %v", err)
-	}
-	t.Cleanup(func() { _ = inner.Close() })
 
 	ctx, cancel := context.WithCancel(traceCtxWithSubjectToken(t))
 	wrapped := &cancelDuringGet{inner: inner, cancel: cancel}

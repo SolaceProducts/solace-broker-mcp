@@ -19,7 +19,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The DEBUG logs for acquiring a broker token now trace the whole sequence, from `broker token needed` through to `broker token attached to request` or `broker token unavailable`. The old messages are replaced: `token cache get`, `token cache put` (both carried a `status` field of `0` or `1`), `token exchange succeeded`, `token exchange retried` and `token exchange retries exhausted` are gone. New fields on these lines: `http_status`, `attempts`, `reason`. Anything matching the old messages or reading `status` on the cache lines needs updating. Tracked under SOL-153363.
 - Duration fields on the token-exchange log lines are now strings (`"77.496667ms"`) rather than raw nanoseconds: `exchange_total_elapsed` (renamed from `exchange_elapsed`), `waited`, `retry_after`, `requested` and `clamped_to`. Anything consuming one as a number will break. Durations elsewhere, including `duration` on `tool invoked`, are unchanged. Tracked under SOL-153363.
 
-
 ## [0.8.0] - 2026-08-20
 
 ### Added
