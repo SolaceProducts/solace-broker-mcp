@@ -653,6 +653,41 @@ func TestConcurrentAccess_IncludesDelete(t *testing.T) {
 	t.Logf("ran %d Put, %d Get, %d Delete goroutines on overlapping keys", n, n, n)
 }
 
+// TestGetStatus_LogValue asserts the emitted log output, not the method return:
+// slog resolves LogValuer and never String, so a status with only a String
+// method serializes as its iota. Asserting through a real handler is what makes
+// that visible — a unit check of String() passed the whole time these logs were
+// unreadable.
+func TestGetStatus_LogValue(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		status GetStatus
+		want   string
+	}{
+		{"hit", GetHit, `"result":"hit"`},
+		{"miss", GetMiss, `"result":"miss"`},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+			slog.New(slog.NewJSONHandler(&buf, nil)).Info("m", "result", tc.status)
+
+			if got := buf.String(); !strings.Contains(got, tc.want) {
+				t.Errorf("emitted %s, want it to contain %s", strings.TrimSpace(got), tc.want)
+			}
+			if bad := fmt.Sprintf(`"result":%d`, int(tc.status)); strings.Contains(buf.String(), bad) {
+				t.Errorf("emitted the raw enum %s; LogValue is not being honored", bad)
+			}
+		})
+	}
+}
+
 // TestPutStatus_LogValue is symmetric with TestGetStatus_LogValue. PutStored
 // is 0 and GetHit is also 0, so a bare integer carries no signal about which
 // enum — or which polarity — a reader is looking at.

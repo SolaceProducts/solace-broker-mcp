@@ -483,3 +483,97 @@ unknown loses the one thing this line exists to say.
 %s`, renderTrace(recs))
 	}
 }
+
+// cancelDuringGet wraps a TokenCache and cancels the caller partway through a
+// successful lookup, which is the window Exchange's post-hit re-check exists to
+// catch: TokenCache.Get takes a context but does not promise to honour it, so a
+// caller can go away between the entry guard and the return.
+type cancelDuringGet struct {
+	inner  cache.TokenCache
+	cancel context.CancelFunc
+}
+
+func (c *cancelDuringGet) Get(ctx context.Context, key string) (cache.GetResult, error) {
+	res, err := c.inner.Get(ctx, key)
+	if err == nil && res.Status == cache.GetHit {
+		c.cancel()
+	}
+	return res, err
+}
+
+func (c *cancelDuringGet) Put(ctx context.Context, key string, entry cache.CachedCredential) (cache.PutResult, error) {
+	return c.inner.Put(ctx, key, entry)
+}
+
+func (c *cancelDuringGet) Delete(ctx context.Context, key string) (cache.DeleteResult, error) {
+	return c.inner.Delete(ctx, key)
+}
+
+func (c *cancelDuringGet) Close() error { return c.inner.Close() }
+
+// A caller cancelled during the cache lookup gets an error rather than the token
+// the lookup found. It must not be told its cached token was used.
+func Test_BrokerTokenTrace_CancelledDuringCacheHitClaimsNothing(t *testing.T) {
+	idp := httptest.NewServer(idpIssues(3600))
+	t.Cleanup(idp.Close)
+
+	inner, err := cache.NewTokenCache(cache.CacheConfig{
+		MaxSize: 8, ClockSkew: 10 * time.Second, MaxTTL: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("NewTokenCache: %v", err)
+	}
+	t.Cleanup(func() { _ = inner.Close() })
+
+	ctx, cancel := context.WithCancel(traceCtxWithSubjectToken(t))
+	wrapped := &cancelDuringGet{inner: inner, cancel: cancel}
+
+	httpClient, err := idpclient.NewRetryingHTTPClient(idpclient.RetryOptions{
+		MaxRetries: 1, RetryWaitMin: 5 * time.Millisecond, RetryWaitMax: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewRetryingHTTPClient: %v", err)
+	}
+
+	exchanger, err := tokenexchange.New(tokenexchange.Params{
+		TokenURL:         idp.URL,
+		ClientID:         "mcp-server",
+		ClientAuthMethod: tokenexchange.ClientSecretBasic,
+		ClientSecret:     traceClientSecret,
+		GrantType:        tokenexchange.GrantTypeTokenExchange,
+		AudienceParam:    tokenexchange.AudienceParamAudience,
+		HTTPClient:       httpClient,
+		Cache:            wrapped,
+	})
+	if err != nil {
+		t.Fatalf("tokenexchange.New: %v", err)
+	}
+	auth := sempauth.NewOAuthAuthenticator(exchanger, traceAudience, traceBrokerAlias)
+
+	// Prime the cache on an uncancelled context, so the captured run below finds
+	// a hit — and the wrapper cancels it partway through that lookup.
+	warm := traceCtxWithSubjectToken(t)
+	if err := auth.AddAuth(warm, httptest.NewRequestWithContext(warm, http.MethodGet, "/SEMP/v2/monitor", nil)); err != nil {
+		t.Fatalf("priming acquisition failed: %v", err)
+	}
+
+	var addAuthErr error
+	recs := captureTrace(t, func() {
+		addAuthErr = auth.AddAuth(ctx, httptest.NewRequestWithContext(ctx, http.MethodGet, "/SEMP/v2/monitor", nil))
+	})
+
+	if addAuthErr == nil {
+		t.Fatal("AddAuth: want an error for a caller cancelled during the lookup, got nil")
+	}
+
+	for _, r := range recs {
+		if r.Msg == "using cached broker token" {
+			t.Errorf(`a cancelled caller was told its cached token was used, then handed an error.
+
+The cache-hit line must sit below the context re-check in Exchange, so it only
+fires on the path that actually returns a token.
+
+%s`, renderTrace(recs))
+		}
+	}
+}

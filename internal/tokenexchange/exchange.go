@@ -63,16 +63,22 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 			slog.DebugContext(ctx, "no cached broker token",
 				slog.String("broker", input.BrokerAlias))
 		} else {
-			slog.DebugContext(ctx, "using cached broker token",
-				slog.String("broker", input.BrokerAlias))
 			// Re-check for the same reason the singleflight branch does below:
 			// the entry guard is point-in-time and Get ignores ctx, so without
 			// this a caller cancelled during the lookup still leaves with a
 			// usable credential. One load on the hit path is cheaper than
 			// handing a token to a caller that has already gone away.
+			//
+			// The log sits below this guard, not above it: a caller cancelled in
+			// the window the guard exists to catch would otherwise be told its
+			// cached token was used, then handed an error. A cancelled caller
+			// emits no cache-outcome line at all, which is correct — the closing
+			// line in AddAuth names the cancellation.
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
+			slog.DebugContext(ctx, "using cached broker token",
+				slog.String("broker", input.BrokerAlias))
 			return &Token{
 				Value:     gr.Entry.Value,
 				ExpiresAt: gr.Entry.ExpiresAt,

@@ -72,6 +72,16 @@ func (s GetStatus) String() string {
 	}
 }
 
+// LogValue renders the status as its name rather than the underlying iota. No
+// call site logs a bare GetStatus today — Exchange splits the lookup into one
+// message per outcome — but slog resolves LogValuer and never String, so
+// without this the next one to do so emits a number, and GetHit is 0, which
+// reads as a success code. Symmetric with PutStatus.LogValue, which the
+// cache-store site's default arm does use.
+func (s GetStatus) LogValue() slog.Value {
+	return slog.StringValue(s.String())
+}
+
 // GetResult is returned by Get. Callers inspect Status to distinguish
 // a hit from a miss.
 type GetResult struct {
