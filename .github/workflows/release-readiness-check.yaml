@@ -73,6 +73,10 @@ jobs:
       pull-requests: write
       checks: write
       statuses: write
+      # Ceiling for guardian-scan's `update-manifest` job (OIDC). It never runs
+      # on this path, but a reusable workflow's permissions must be a SUBSET of
+      # the caller's — under-granting fails at run creation.
+      id-token: write
     # Load-bearing — do not remove, and do not replace with named secrets.
     # `environment: guardian` on guardian-scan's jobs does not resolve their
     # secrets when the workflow is reached via `workflow_call`: the `secrets`
