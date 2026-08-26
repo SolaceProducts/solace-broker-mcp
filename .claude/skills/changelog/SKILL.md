@@ -44,18 +44,19 @@ the PR like any other change.
 ### Step 2: Learn the house voice
 
 Read `CHANGELOG.md` before drafting: the `[Unreleased]` section for what is
-pending, and the recent version blocks for the fullest voice examples — the detailed
-breaking-change paragraphs in `[0.5.0]` and `[0.3.0]`, and the migration **tables** in
-`[0.3.0]`. Match what you see, do not impose a generic style:
+pending, and `[0.5.0]` and `[0.3.0]` for the **structure** of a breaking-change entry
+and the **form** of a migration table. Take structure from them, not length — see the
+length bullet below. Match the conventions here, do not impose a generic style:
 
 - Keep a Changelog categories, in this order: **Added**, **Changed**, **Deprecated**,
   **Removed**, **Fixed**, **Security**. Added/Changed/Removed/Fixed are the common
   ones; use Deprecated and Security when the change is genuinely one (see Step 3).
-- Each entry is **one list item (bullet) per logical change**, and most are one or
-  two sentences. Length scales with impact, but the bar for a full paragraph is
-  high: it is for a breaking change that genuinely needs old behavior, new behavior,
-  and a migration path. Calibrate against the file as a whole — a typical entry is
-  far shorter than the longest ones, which are outliers rather than the voice.
+- Each entry is **one list item (bullet) per logical change**. Target one or two
+  sentences (~50 words); reserve a full paragraph for a breaking change that needs
+  old behavior, new behavior, and a migration path. **This is a deliberate change
+  from what the file currently shows.** The `[0.6.0]`–`[0.8.0]` entries run to a
+  median of 93–191 words — do not match their length. The older blocks (`[0.1.0]`
+  through `[0.5.0]`, medians 4–16) are the target.
 - Say what changed and what breaks. **Why** it changed belongs in the commit message,
   and **how** it works belongs in a code comment; an entry that runs long is usually
   carrying one of those. A reader of this file is updating their queries, dashboards,
@@ -120,7 +121,7 @@ into one sentence.
   version blocks — that is the release process's job (today it is the manual
   `## Release Process` in `CHANGELOG.md` / `RELEASING.md`; automating the
   release-notes link is tracked separately). Do not commit, push, or tag.
-- Print the resulting diff and stop for human review.
+- Print the resulting diff.
 
 ### Step 6: Check the draft against the tree
 
@@ -131,11 +132,16 @@ rather than as shipped, after a later revision moved it.
 - **Every identifier the entry names must exist as written** — log message, field,
   config key, flag, tool name. Grep each one. A name that no longer exists sends a
   reader looking for something that was renamed mid-branch.
-- **Anything observable in the diff that the entry omits.** Re-read the diff for
+- **Nothing observable in the diff may be silently omitted.** Re-read the branch
+  diff (`git diff main...HEAD`, from Step 1) for
   changed strings and fields and confirm each is either covered or deliberately out
   of scope. Where an entry claims a category — "the old messages are replaced" —
   list **all** of them: a partial list reads as complete, which is worse than a
   vague sentence.
+- If an identifier is not found, correct it from the tree; if you cannot resolve it,
+  flag it to the human rather than guessing.
+
+Then stop for human review.
 
 ## Rules
 
@@ -143,7 +149,8 @@ rather than as shipped, after a later revision moved it.
 - Never invent a SOL ticket number — use the `SOL-????.` placeholder and flag it.
 - One bullet per logical change; omit pure test/refactor/docs churn.
 - An entry describes the branch's whole diff against `main`, not any single commit.
-  If commits land after the entry is drafted, **re-derive from `main..HEAD` and
-  rewrite** rather than patching the existing text — patching assumes you already
-  know what those commits changed, which is the assumption Step 1 exists to avoid.
+  If commits land after the entry is drafted, **re-derive and rewrite** — `git diff
+  main...HEAD` for the files and `git log main..HEAD` for the commits, as in Step 1 —
+  rather than patching the existing text. Patching assumes you already know what
+  those commits changed, which is the assumption Step 1 exists to avoid.
 - If nothing user- or operator-visible changed, say so and write nothing.
