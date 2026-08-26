@@ -1,0 +1,172 @@
+name: Dev build (unstable)
+
+# Publishes an unstable image from `main` once a day for the dev instance of the
+# lab Broker MCP deployment (SOL-153564). Deploying is done by the lab's hourly
+# cron in the SolaceDev/dax repo (SOL-151979); nothing here deploys anything.
+#
+# Not a release: no git tag, no Release, no CHANGELOG, and `:latest` never moves.
+# Writes to a separate `-dev` package, so no tag name here can collide with one
+# release.yml pushes. `contents: read` means this cannot create a tag or Release
+# even if it tried. (It could technically push to the release package, since
+# `packages: write` is repo-scoped — that isolation is by construction, not by
+# permission.)
+
+on:
+  schedule:
+    # 10:17 PM EST. Off the hour because GitHub delays scheduled runs under load.
+    # A schedule only ever runs on the default branch, so "publishes from main
+    # only" is enforced by the trigger type rather than a filter. Daily, not
+    # per-merge: 5-6 merges/day would mean ~150MB/day on the lab host and would
+    # replace the dev container under anyone debugging against it. Cost is that
+    # the lab sees one commit per day and cannot be used to bisect.
+    - cron: '17 3 * * *'
+  # Forces a fix into the lab today. Also the only way to exercise this at all:
+  # both triggers require the file to be on the default branch.
+  workflow_dispatch:
+
+# release.yml declares no group, so this can never cancel a release run.
+concurrency:
+  group: dev-build
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dev-build:
+    name: dev-build
+    # A schedule fires on every fork with Actions enabled, handing each one a
+    # nightly failure on a push nobody there can make. Same guard as llm-eval.yml.
+    if: github.event_name != 'schedule' || github.repository == 'SolaceProducts/solace-broker-mcp'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # No id-token/attestations/artifact-metadata: no provenance attestation,
+      # since this is never distributed. That is also part of why the package is
+      # not public — an unattested image should not be casually pullable.
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Required: a shallow clone fetches no tags, so `git describe` below
+          # would degrade to a bare SHA with no release base.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve version and commit
+        id: ver
+        # `--long` matters: without it, `git describe` the morning after a
+        # release returns a bare `v0.8.2` (the tag sits on main's HEAD), so the
+        # dev image would report a version identical to the stable release and
+        # the two lab instances would be indistinguishable. Diverges from
+        # Makefile:9 on purpose. `--dirty` omitted — a CI checkout is clean.
+        # The regex is Makefile:7-9's filter: VERSION is spliced into -ldflags.
+        run: |
+          version=$(git describe --tags --always --long 2>/dev/null \
+            | grep -E '^[A-Za-z0-9._+-]+$' || echo dev)
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          # cut, not `--short=7`: --short is a MINIMUM width and git widens it on
+          # ambiguity, which would make the skip check below compare a tag name
+          # that is never pushed — rebuilding every night.
+          echo "short_sha=$(git rev-parse HEAD | cut -c1-7)" >> "$GITHUB_OUTPUT"
+          echo "Building ${version} from $(git rev-parse HEAD)"
+
+      - name: Skip if this commit is already built
+        id: skip
+        # Correctness, not optimisation: buildkit stamps a fresh `created`
+        # timestamp, so a fully cache-hit build still pushes a new digest for
+        # byte-identical content, and the lab (which compares image IDs) would
+        # redeploy nightly for nothing. Keyed on the immutable per-commit tag, so
+        # it fails open on the first run and self-corrects after a failed build.
+        env:
+          REF: ghcr.io/solaceproducts/solace-broker-mcp-dev:dev-${{ steps.ver.outputs.short_sha }}
+        run: |
+          if docker buildx imagetools inspect "$REF" >/dev/null 2>&1; then
+            echo "already-built=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::${REF} already exists — nothing merged to main since the last build. Pushing nothing."
+          else
+            echo "already-built=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Docker metadata
+        id: meta
+        if: steps.skip.outputs.already-built != 'true'
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/solaceproducts/solace-broker-mcp-dev
+          # No `latest` and no semver, deliberately: `:latest` keeps meaning
+          # "newest release", and a package with no `latest` makes a bare
+          # `docker pull` fail instead of silently serving an unstable build.
+          # `prefix=dev-` overrides the default `sha-` so the tag is
+          # self-describing away from its package name.
+          tags: |
+            type=raw,value=dev
+            type=sha,prefix=dev-
+          # metadata-action already emits `revision` and `created`. These two say
+          # the image is unsupported wherever someone meets it first.
+          labels: |
+            org.opencontainers.image.title=Solace Broker MCP (unstable dev build)
+            org.opencontainers.image.description=Unstable build from main. Not a release, not supported. See SOL-153564.
+
+      - name: Build and push
+        id: build
+        if: steps.skip.outputs.already-built != 'true'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          # One consumer, so the second architecture is waste. A wrong guess here
+          # fails safely: the container will not start and the lab's config probe
+          # catches that before touching the running instance.
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.ver.outputs.version }}
+          # Read the shared cache, never write it. release.yml:428 and
+          # build-image.yaml:71 already export mode=max into one ~10GB LRU
+          # budget; a third writer would evict entries the release build and every
+          # PR scan hit. That is the one way this could slow the release path
+          # without touching release.yml. The compile layer never cache-hits
+          # anyway — VERSION is in the `RUN go build` at Dockerfile:11-14.
+          cache-from: type=gha
+
+      - name: Summary
+        # success(), not always(): a skip is a success, so this covers both real
+        # outcomes. On a failure `$SKIPPED` is empty and always() would print a
+        # "Pushed" table with blank values.
+        if: success()
+        env:
+          SKIPPED: ${{ steps.skip.outputs.already-built }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          SHORT_SHA: ${{ steps.ver.outputs.short_sha }}
+        run: |
+          {
+            if [ "$SKIPPED" = "true" ]; then
+              echo "### No new image"
+              echo
+              echo "\`main\` has not moved since the last dev build, so nothing was pushed."
+              echo "The lab's next hourly poll is a silent no-op."
+            else
+              echo "### Pushed"
+              echo
+              echo "| | |"
+              echo "|---|---|"
+              echo "| Version | \`${VERSION}\` |"
+              echo "| Moving tag | \`ghcr.io/solaceproducts/solace-broker-mcp-dev:dev\` |"
+              echo "| Immutable tag | \`ghcr.io/solaceproducts/solace-broker-mcp-dev:dev-${SHORT_SHA}\` |"
+              echo
+              echo "The lab dev instance picks this up at the next :30 poll, on port 9091."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
