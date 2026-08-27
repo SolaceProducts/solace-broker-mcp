@@ -223,6 +223,31 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: .github/scripts/refresh-build-test-inventory.test.sh
 
+  # Runs the real pipeline (a real `go run cyclonedx-gomod`, checked against
+  # the real committed THIRD_PARTY_LICENSES.md) on every PR, deliberately
+  # outside release.yml's blocking path — release.yml's own SBOM steps
+  # already exercise this for real on every tag, so a self-test gating the
+  # release too would duplicate that coverage while adding a new way for a
+  # transient module-proxy hiccup to hold up a release. Here it has no such
+  # cost: a failure is reported on the PR that caused it and nothing else
+  # depends on this job succeeding.
+  sbom-check-selftest:
+    name: SBOM check script self-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+      - name: Self-test the SBOM check script
+        run: .github/scripts/sbom-check.test.sh
+
   # Apache 2.0 works best when the grant travels with the file. The headers were
   # applied once, by hand, and the codebase then grew past them: 53 of 260 Go
   # files had none by August 2026 (SOL-152896). This is the gate that stops the

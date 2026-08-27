@@ -99,9 +99,16 @@ jobs:
       # than none at all. Hence the check step below has no continue-on-error,
       # and is gated on generation's own step outcome (not just `always()`,
       # which would run it against a nonexistent file if generation failed).
-      - name: Self-test the SBOM check
-        if: always()
-        run: .github/scripts/sbom-check.test.sh
+      #
+      # No self-test step here, deliberately — sbom-check.sh's self-test runs
+      # non-blocking on every pull request instead (ci-pr.yaml's
+      # `sbom-check-selftest` job), for two reasons: it catches a regression
+      # in the script on the PR that introduced it rather than at the next
+      # tag, and running it here too would duplicate, with no continue-on-
+      # error, exactly what `Generate SBOM` and the check below already
+      # exercise for real — a self-test failure from a transient module-proxy
+      # hiccup would gate the release on a step providing no coverage the
+      # next two don't already give it.
       - name: Generate SBOM
         id: sbom_generate
         if: always()

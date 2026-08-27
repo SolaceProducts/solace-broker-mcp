@@ -46,10 +46,15 @@ done
 # (that's `metadata.component` instead, per the CycloneDX spec) — confirmed by
 # inspecting real output, not assumed — so no root-module filtering is needed
 # here the way licenses-check.sh needs for raw go-licenses/go-list output.
-sbom_modules=$(jq -r '.components[] | "\(.name) \(.version)"' "$SBOM" | sort -u)
+# `.components[]?` (with `?`), not `.components[]` — a malformed SBOM missing
+# the key entirely makes plain indexing raise a jq error, which under `set -e`
+# aborts the script right here with a raw jq trace and no `::error::`
+# annotation. `?` turns that into empty output instead, so the check below
+# reports it properly the same way a genuinely empty array does.
+sbom_modules=$(jq -r '.components[]? | "\(.name) \(.version)"' "$SBOM" | sort -u)
 
 if [ -z "$sbom_modules" ]; then
-    echo "::error::$SBOM lists no components. Refusing to compare against an empty set." >&2
+    echo "::error file=$SBOM::lists no components (or is missing a components array). Refusing to compare against an empty set." >&2
     exit 1
 fi
 
@@ -57,7 +62,14 @@ fi
 # Same extraction pattern licenses-check.sh uses, deliberately not the strict
 # candidate/parsed-row distinction that script's check 2 makes — an unparseable
 # row there is that document's own problem to catch, not this script's.
-documented=$(grep -oE '^\| `[^`]+` \| [^ |]+ \|' "$DOC" | sed -E 's/^\| `([^`]+)` \| ([^ |]+) \|$/\1 \2/')
+# `|| true` on the grep for the same reason licenses-check.sh's own version
+# does: under `pipefail`, a table with zero matching rows makes grep exit 1,
+# which would abort this script right here rather than let the `-z` check
+# below report it — the exact failure mode Copilot's review caught. `sort -u`
+# so a duplicate row (already impossible per licenses-check.sh, but this
+# script doesn't rely on that) can't produce two conflicting resolutions.
+documented=$( { grep -oE '^\| `[^`]+` \| [^ |]+ \|' "$DOC" || true; } |
+    sed -E 's/^\| `([^`]+)` \| ([^ |]+) \|$/\1 \2/' | sort -u)
 
 if [ -z "$documented" ]; then
     echo "::error::Parsed no component rows at all from $DOC. The table format may have changed; this script needs updating to match it." >&2
@@ -91,8 +103,8 @@ resolve_module() {
 }
 
 failures=0
-err() {
-    echo "::error::$1" >&2
+err() { # <file> <message>
+    echo "::error file=$1::$2" >&2
     failures=$((failures + 1))
 }
 
@@ -103,13 +115,13 @@ while read -r component doc_version; do
     module=$(resolve_module "$component")
 
     if [ -z "$module" ]; then
-        err "\`$component\` is documented in $DOC but is not in the SBOM's module set. Either the SBOM is missing a component, or the row should have been dropped."
+        err "$DOC" "\`$component\` is documented but is not in the SBOM's module set ($SBOM). Either the SBOM is missing a component, or the row should have been dropped."
         continue
     fi
 
     sbom_version=$(awk -v m="$module" '$1 == m { print $2; exit }' <<<"$sbom_modules")
     if [ "$(normalize_version "$doc_version")" != "$(normalize_version "$sbom_version")" ]; then
-        err "\`$component\` is documented at $doc_version but the SBOM reports \`$module\`@$sbom_version."
+        err "$DOC" "\`$component\` is documented at $doc_version but the SBOM reports \`$module\`@$sbom_version."
     fi
 
     covered_modules="${covered_modules}${module}"$'\n'
@@ -119,7 +131,7 @@ done <<<"$documented"
 while read -r mod_path mod_version; do
     [ -n "$mod_path" ] || continue
     if ! grep -qxF "$mod_path" <<<"$covered_modules"; then
-        err "\`${mod_path}\`@${mod_version} is in the SBOM but not documented anywhere in $DOC."
+        err "$SBOM" "\`${mod_path}\`@${mod_version} is in the SBOM but not documented anywhere in $DOC."
     fi
 done <<<"$sbom_modules"
 

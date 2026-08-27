@@ -21,12 +21,21 @@ DOC="THIRD_PARTY_LICENSES.md"
 pass=0
 fail=0
 
+# Every temp dir this file creates is tracked here and removed once at exit,
+# rather than an explicit rm -rf per case that a mid-case `set -e` abort would
+# skip — same pattern smoke-test-binary.test.sh already uses for this file's
+# sibling.
+ALL_TMP_DIRS=()
+cleanup() { [ "${#ALL_TMP_DIRS[@]}" -eq 0 ] || rm -rf "${ALL_TMP_DIRS[@]}"; }
+trap cleanup EXIT
+
 # assert_check <description> <expected exit code> <sbom-json> <doc-content>
 assert_check() {
     local desc="$1" want="$2" sbom_json="$3" doc_content="$4"
     local tmp got=0
 
     tmp=$(mktemp -d)
+    ALL_TMP_DIRS+=("$tmp")
     printf '%s' "$sbom_json" >"$tmp/sbom.json"
     printf '%s' "$doc_content" >"$tmp/$DOC"
 
@@ -39,8 +48,6 @@ assert_check() {
         echo "  NOT OK   $desc (expected exit $want, got $got)"
         fail=$((fail + 1))
     fi
-
-    rm -rf "$tmp"
 }
 
 # A minimal, valid document table wrapping the given rows — just enough for
@@ -62,7 +69,9 @@ sbom_with_components() { # <name1> <version1> [<name2> <version2> ...]
 echo "sbom-check.sh self-test"
 echo "-- real pipeline, end to end --"
 
-real_sbom=$(mktemp -d)/sbom.json
+real_sbom_dir=$(mktemp -d)
+ALL_TMP_DIRS+=("$real_sbom_dir")
+real_sbom="$real_sbom_dir/sbom.json"
 # `go run ...@v1.10.0`, matching release.yml's real "Generate SBOM" step
 # exactly — that step never `go install`s the tool, so a pre-installed
 # $GOBIN/cyclonedx-gomod would pass here and not exist in real CI.
@@ -90,7 +99,6 @@ else
         fail=$((fail + 1))
     fi
 fi
-rm -rf "$(dirname "$real_sbom")"
 
 echo "-- synthetic fixtures, one property each --"
 

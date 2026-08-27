@@ -144,7 +144,7 @@ If the target refuses (exits non-zero), that is not a bug to work around: `licen
 After pushing the tag:
 
 1. Watch the run: `gh run list --workflow=release.yml --limit 1`; on failure, `gh run view <run-id> --log`.
-2. Verify the release: `gh release view <tag>` shows four binary archives, `checksums-sha256.txt`, and the curated CHANGELOG notes (with the PR list appended); the image tags are present on `ghcr.io/solaceproducts/solace-broker-mcp`.
+2. Verify the release: `gh release view <tag>` shows four binary archives, `checksums-sha256.txt`, and the curated CHANGELOG notes (with the PR list appended); the image tags are present on `ghcr.io/solaceproducts/solace-broker-mcp`. Note whether `solace-broker-mcp-<tag>.cdx.json` is also present — it's best-effort (see SBOM and dependency classification below), so its absence isn't a failed release, but a run of misses is worth a look at the `licenses` job's log.
 3. Spot-check a binary: download the archive for your platform, verify it (`shasum -a 256 -c checksums-sha256.txt --ignore-missing`), and run `./solace-broker-mcp --version` — it prints the tag. CI already asserted this for all four archives in `smoke-test` before publishing; this is a trust-but-verify check on your own machine, not the first time it's been checked.
 4. Verify the attestations on both artifact kinds. `--signer-workflow` and `--source-digest` are what make this a check rather than a look: without them the command binds only the repository, and its output names the build and signer workflow but never prints a commit SHA, so there is nothing to eyeball. With them, a wrong builder or a wrong source commit fails the command.
 
@@ -188,6 +188,8 @@ If a release shipped without an SBOM (check its assets — `.cdx.json` missing m
 2. Permissive (Apache-2.0, MIT, BSD-3-Clause, ISC, and similar) → add it to the green table, no approval needed.
 3. Weak copyleft (MPL-2.0 and similar) → add it to the yellow table, and get a named approver and date before merging — the same standard the two existing yellow entries were held to. Don't invent or assume an approval; a missing name here is a gap to surface, not to fill.
 4. Strong copyleft (GPL, LGPL, AGPL, EPL, CDDL) or anything FOSSA's Issues tab actually flags → stop. This should already have failed the Guardian gate before reaching this document; if it hasn't, that's a bigger problem than this file.
+
+## Rollback **[Implemented]**
 
 Tags are never reused — we roll forward, not back.
 
