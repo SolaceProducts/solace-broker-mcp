@@ -12,7 +12,7 @@ itself**, and which are **not compiled into the shipped binary**.
 > Legal checklist, which asks for a "list of all used 3rd party products used at
 > build and test time" alongside the release list.
 
-**Generated** 2026-08-20; the GitHub Actions section was refreshed 2026-08-07
+**Generated** 2026-08-27; the GitHub Actions section was refreshed 2026-08-07
 when Guardian enrollment re-pinned every action to a commit SHA, and again
 2026-08-14 when the Dependabot `github-actions` group update moved the five
 `solace-public-workflows` actions to a newer commit on the same branch. Every
@@ -196,15 +196,15 @@ All five come from one repository, pinned to a single commit.
 
 | Action | Ref | Owner |
 |---|---|---|
-| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `3e95ae9` | Solace |
-| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `3e95ae9` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-db-sync` | `3e95ae9` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `3e95ae9` | Solace |
-| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `3e95ae9` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `55ea947` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `55ea947` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-db-sync` | `55ea947` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `55ea947` | Solace |
+| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `55ea947` | Solace |
 
-`63228a0` is a branch commit, not a tag, so there is no release to record beside
-it. The repository itself is Apache-2.0. Re-pinned 2026-08-14 by the Dependabot
-`github-actions` group update (#304); the prior pin was `47931eb`.
+`55ea947` is a branch commit, not a tag, so there is no release to record beside
+it. The repository itself is Apache-2.0. Re-pinned 2026-08-27 by the Dependabot
+`github-actions` group update (#334); the prior pin was `3e95ae9`.
 
 Two entries have been dropped from this table, both by the reverse-direction
 check rather than by anyone remembering to look.
