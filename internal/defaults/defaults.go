@@ -117,6 +117,27 @@ const MaxSEMPResponseBytes = 16 * 1024 * 1024
 // surfaces as 400. No known MCP client produces one.
 const MaxMCPRequestBytes = 4 * 1024 * 1024
 
+// DefaultMCPSessionIdleTimeout bounds how long a streamable-HTTP MCP session
+// may sit idle before the SDK closes it. It backs
+// mcp.StreamableHTTPOptions.SessionTimeout.
+//
+// Left at the SDK's zero value, idle sessions are NEVER closed: a session
+// leaves the handler's map only on an explicit DELETE or a transport close,
+// so any client that initializes and then disappears (laptop sleep, container
+// kill, network drop, or a client that simply never sends DELETE) leaks its
+// session and the goroutines behind it for the lifetime of the process.
+//
+// Decided: 2 hours.
+// Reasoning: long enough to survive a meeting, a lunch break, or an idle
+// afternoon on a desktop client, while still bounding session growth on a
+// long-running pod to a couple of hours' worth of abandoned connections.
+// Trade-off: when the timeout fires, the next request bearing that session ID
+// gets 404 "session not found". A spec-compliant client re-initializes and
+// the user sees nothing; a client that does not will surface an error. Do NOT
+// shorten this without weighing that — the value is chosen for client
+// tolerance, not for how fast memory is reclaimed.
+const DefaultMCPSessionIdleTimeout = 2 * time.Hour
+
 // DefaultMaxConcurrentPerBroker is the maximum number of in-flight SEMP
 // requests allowed per broker, enforced by a semaphore shared across the
 // broker's SEMPv1 and SEMPv2 clients (see resilience.Semaphore and

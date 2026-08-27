@@ -406,6 +406,22 @@ func limitRequestBody(next http.Handler, maxBytes int64) http.Handler {
 	})
 }
 
+// newMCPStreamableOptions builds the options for the SDK's streamable-HTTP
+// handler. Passing nil here would leave every field at its zero value, which
+// for SessionTimeout means "never close an idle session" — see
+// defaults.DefaultMCPSessionIdleTimeout for why that leaks and why the value
+// is what it is.
+//
+// Deliberately NOT set here: CrossOriginProtection (deprecated; we wrap
+// instead — see crossOriginProtection), MaxRequestBodyBytes (we bound the
+// body ourselves in limitRequestBody, ahead of the SDK), and Stateless (the
+// stateful default is the only mode we have exercised against real clients).
+func newMCPStreamableOptions() *mcp.StreamableHTTPOptions {
+	return &mcp.StreamableHTTPOptions{
+		SessionTimeout: defaults.DefaultMCPSessionIdleTimeout,
+	}
+}
+
 // maxLoggedHeaderBytes bounds a client-supplied header value before it reaches
 // the log stream. The cross-origin deny path runs BEFORE auth, so an
 // unauthenticated caller controls these values; without a cap each rejected
@@ -1058,7 +1074,7 @@ func main() {
 	// Create MCP handler
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
 		return server
-	}, nil)
+	}, newMCPStreamableOptions())
 
 	// Wrap MCP handler with auth middleware. Cross-origin protection wraps
 	// this from the OUTSIDE, in buildMCPEndpoint — see that function for why
