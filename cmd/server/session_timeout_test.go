@@ -85,6 +85,12 @@ func initializeSession(t *testing.T, handler *mcp.StreamableHTTPHandler) string 
 
 // sessionStatus replays a request under sessionID and reports the status the
 // SDK answers with. 404 means the session is gone.
+//
+// It reuses the initialize body rather than a more lifelike follow-up such as
+// tools/list because these tests assert only on the session-lookup outcome
+// (200 vs 404), which the SDK decides before it dispatches the method. Reusing
+// initialize keeps the probe independent of which tools happen to be
+// registered — this handler deliberately registers none.
 func sessionStatus(handler *mcp.StreamableHTTPHandler, sessionID string) int {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, newSessionRequest(initializeBody, sessionID))
@@ -150,9 +156,16 @@ func TestSessionTimeout_KeepsActiveSession(t *testing.T) {
 	sessionID := initializeSession(t, handler)
 
 	// Exercise the session across a span several times its idle timeout,
-	// touching it more frequently than the timeout throughout.
-	for range 10 {
-		time.Sleep(testSessionIdleTimeout / 4)
+	// touching it far more frequently than the timeout throughout.
+	//
+	// The touch interval is timeout/10, not timeout/4: this test fails when a
+	// gap between touches exceeds the timeout, so the margin has to absorb a
+	// GC pause or CI scheduling lag. At timeout/4 a single 100ms stall would
+	// reap the session and fail the test against correct code. 30 touches at
+	// timeout/10 keeps a 10x margin while still spanning 3x the timeout, so
+	// the assertion remains meaningful.
+	for range 30 {
+		time.Sleep(testSessionIdleTimeout / 10)
 		if status := sessionStatus(handler, sessionID); status != http.StatusOK {
 			t.Fatalf("actively used session %s was closed (status %d); "+
 				"SessionTimeout must bound idleness, not total lifetime",
