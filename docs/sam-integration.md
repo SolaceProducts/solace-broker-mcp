@@ -33,7 +33,8 @@ For a shared or production deployment, use `mode: static` (a bearer token) or
 `mode: oauth`, and set the connector's **Authentication Type** in step 4 to
 match. See [authentication.md](authentication.md).
 
-**2. Start the MCP server** (listens on `:9090`, endpoint `/mcp`):
+**2. Start the MCP server** — in non-OAuth modes it binds loopback by default,
+serving the MCP endpoint at `http://127.0.0.1:9090/mcp`:
 
 ```bash
 go run ./cmd/server
@@ -45,9 +46,9 @@ go run ./cmd/server
 SAM_PLATFORM_ALLOW_PRIVATE_MCP=true sam run --embedded
 ```
 
-By default Agent Mesh blocks connectors pointing at loopback or private
+By default, Agent Mesh blocks connectors pointing at loopback or private
 addresses (SSRF protection), so discovering `localhost:9090` fails without this
-flag. It is only needed for local development — a production MCP server has a
+flag. Note that this workaround is only needed for local development — a production MCP server has a
 routable URL.
 
 The embedded runtime starts an in-process broker and serves the web UI at
@@ -84,7 +85,7 @@ tools; select the ones to expose (or all), then save.
   ```text
   You manage and inspect Solace event brokers via SEMP-backed MCP tools. Use the
   broker tools to answer questions about broker status, queues, clients, and
-  redundancy, and to perform management actions when asked.
+  redundancy, and to perform configuration and action updates when asked.
   ```
 
 - In the **Connectors** section, select **Edit** and add the connector from
@@ -113,16 +114,6 @@ tools; select the ones to expose (or all), then save.
 Either way, the agent calls the MCP tools, which query your configured broker
 over SEMP.
 
-## Authentication Chain
-
-```
-Agent (in Agent Mesh) ─(optional bearer token)→ MCP server ─(basic BROKER_USERNAME/PASSWORD)→ Solace event broker
-```
-
-In this local example the agent-to-MCP hop is unauthenticated. When
-`mcp_client_auth` is `static` or `oauth`, the agent sends a bearer token that
-the connector's **Authentication Type** must supply — and it must equal the
-`dev_token` in the MCP server configuration.
 
 ## Defining the integration as code
 
