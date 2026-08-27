@@ -136,15 +136,15 @@ tidier.
 
 | Component | Version | License | License text |
 |---|---|---|---|
-| `@anthropic-ai/claude-code` | 2.1.223 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
-| `@anthropic-ai/claude-code-darwin-arm64` | 2.1.223 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
-| `@anthropic-ai/claude-code-darwin-x64` | 2.1.223 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
-| `@anthropic-ai/claude-code-linux-arm64` | 2.1.223 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
-| `@anthropic-ai/claude-code-linux-arm64-musl` | 2.1.223 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
-| `@anthropic-ai/claude-code-linux-x64` | 2.1.223 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
-| `@anthropic-ai/claude-code-linux-x64-musl` | 2.1.223 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
-| `@anthropic-ai/claude-code-win32-arm64` | 2.1.223 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
-| `@anthropic-ai/claude-code-win32-x64` | 2.1.223 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
+| `@anthropic-ai/claude-code` | 2.1.231 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
+| `@anthropic-ai/claude-code-darwin-arm64` | 2.1.231 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
+| `@anthropic-ai/claude-code-darwin-x64` | 2.1.231 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
+| `@anthropic-ai/claude-code-linux-arm64` | 2.1.231 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
+| `@anthropic-ai/claude-code-linux-arm64-musl` | 2.1.231 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
+| `@anthropic-ai/claude-code-linux-x64` | 2.1.231 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
+| `@anthropic-ai/claude-code-linux-x64-musl` | 2.1.231 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
+| `@anthropic-ai/claude-code-win32-arm64` | 2.1.231 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
+| `@anthropic-ai/claude-code-win32-x64` | 2.1.231 | Anthropic Commercial Terms | [terms](https://www.anthropic.com/legal/commercial-terms) |
 
 Eight of the nine are per-platform binary packages that npm resolves as optional
 dependencies of the first. Only one platform is ever installed on a given runner,
