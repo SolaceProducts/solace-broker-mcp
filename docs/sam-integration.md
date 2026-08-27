@@ -1,21 +1,19 @@
 # Connecting solace-broker-mcp to Solace Agent Mesh
 
-This guide shows how to connect this MCP server to Solace Agent Mesh (the Go `sam` CLI, 2.x)
-by registering it as an **MCP connector** and assigning it to an agent from the
-Agent Mesh UI. For general MCP support in Agent Mesh — connection types, tool
-filtering, auth options, TLS — see the bundled docs (`sam docs`) or
-[docs.solace.com](https://docs.solace.com).
+This guide shows how to connect this MCP server to the Solace Agent Mesh desktop
+app by registering it as an **MCP connector** and assigning it to an agent from
+the Agent Mesh UI.
 
-> **This example runs Agent Mesh locally.** `sam run --embedded` starts an
-> in-process dev event broker that Agent Mesh uses for its own internal
-> agent-to-agent messaging. That dev broker is unrelated to the Solace brokers
-> this MCP server monitors — the MCP server still connects to your real
-> broker(s) over SEMP per `broker-config.yaml`. For a team or production
-> deployment you run Agent Mesh against your own broker; the connector and agent steps below are identical.
+> **This example runs Agent Mesh locally.** The desktop app starts an in-process
+> dev event broker that Agent Mesh uses for its own internal agent-to-agent
+> messaging. That dev broker is unrelated to the Solace brokers this MCP server
+> monitors — the MCP server still connects to your real broker(s) over SEMP per
+> `broker-config.yaml`. For a team or production deployment you point Agent Mesh
+> at your own broker; the connector and agent steps below are identical.
 
 ## Prerequisites
 
-- The Go `sam` CLI installed (`sam --version` reports 2.x).
+- The Solace Agent Mesh desktop app installed.
 - Ability to run this MCP server locally with configured `broker-config.yaml`
   and `.env` files. See [Quickstart](../README.md#quickstart).
 
@@ -40,21 +38,25 @@ serving the MCP endpoint at `http://127.0.0.1:9090/mcp`:
 go run ./cmd/server
 ```
 
-**3. Start Agent Mesh locally** — allow connectors to reach a loopback MCP URL:
+**3. Open the Agent Mesh desktop app** — the app auto-starts its in-process
+broker and runtime; no command to run. On first launch, connect an LLM provider —
+this becomes the `general` model alias your agent uses.
+
+To reach a loopback MCP server locally, set `SAM_PLATFORM_ALLOW_PRIVATE_MCP=true`
+in the environment the app launches from. By default Agent Mesh blocks connectors
+pointing at loopback or private addresses (SSRF protection), so discovering
+`localhost:9090` fails without it. On macOS, a GUI app launched from Finder won't
+see your shell env, so set it for the login session:
 
 ```bash
-SAM_PLATFORM_ALLOW_PRIVATE_MCP=true sam run --embedded
+launchctl setenv SAM_PLATFORM_ALLOW_PRIVATE_MCP true
 ```
 
-By default, Agent Mesh blocks connectors pointing at loopback or private
-addresses (SSRF protection), so discovering `localhost:9090` fails without this
-flag. Note that this workaround is only needed for local development — a production MCP server has a
-routable URL.
+Then fully quit the app (Cmd+Q — closing the window isn't enough) and relaunch it;
+an already-running app keeps its old environment and won't pick up the new value.
 
-The embedded runtime starts an in-process broker and serves the web UI at
-**http://127.0.0.1:8800** by default (health probe on `:8090`). Open the UI and
-connect an LLM provider on first launch — this becomes the `general` model alias
-your agent uses.
+This workaround is only needed for local development — a production MCP server
+has a routable URL.
 
 **4. Add the MCP server as a connector** — in the UI left nav, go to
 **Builder** > **Connectors** > **Create Connector**, then the **Custom** tab >
@@ -93,32 +95,6 @@ tools; select the ones to expose (or all), then save.
   later by editing an existing agent.)
 - Select **Create and Deploy**.
 
-**6. Verify** — from the UI or the terminal.
-
-- **UI:** start a new chat and ask a broker-related question. Select
-  `SolaceBrokerAgent` directly, or ask the **Orchestrator**, which delegates to it.
-
-- **CLI:** send a task from the terminal. `sam task send` targets
-  `http://localhost:8800` and the `orchestrator` by default; the orchestrator
-  delegates to your agent.
-
-  ```bash
-  sam task send "List the Solace brokers that are configured."
-  ```
-
-  Target a specific agent with `-a/--agent <agent-name>`. No auth token is
-  needed for this local no-auth instance. Note: if a tool is backed by an OAuth
-  connector, `sam task send` prints an authorization URL and waits for a browser
-  login — so OAuth-backed tools cannot complete a fully headless CLI run.
-
-Either way, the agent calls the MCP tools, which query your configured broker
-over SEMP.
-
-
-## Defining the integration as code
-
-The UI flow above is the quickest path. You can also declare the connector and
-agent as YAML and apply them with `sam config apply` — the version-controllable
-path for GitOps and automation. That path targets the Platform service and
-requires `sam auth login` (Early Access; commands and schema may change). See
-the declarative config docs via `sam docs`.
+**6. Verify** — start a new chat and ask a broker-related question. Select
+`SolaceBrokerAgent` directly, or ask the **Orchestrator**, which delegates to it.
+The agent calls the MCP tools, which query your configured broker over SEMP.
