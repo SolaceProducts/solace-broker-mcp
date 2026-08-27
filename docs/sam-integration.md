@@ -1,6 +1,6 @@
 # Connecting solace-broker-mcp to Solace Agent Mesh
 
-This guide connects this MCP server to Solace Agent Mesh (the Go `sam` CLI, 2.x)
+This guide shows how to connect this MCP server to Solace Agent Mesh (the Go `sam` CLI, 2.x)
 by registering it as an **MCP connector** and assigning it to an agent from the
 Agent Mesh UI. For general MCP support in Agent Mesh — connection types, tool
 filtering, auth options, TLS — see the bundled docs (`sam docs`) or
@@ -11,8 +11,7 @@ filtering, auth options, TLS — see the bundled docs (`sam docs`) or
 > agent-to-agent messaging. That dev broker is unrelated to the Solace brokers
 > this MCP server monitors — the MCP server still connects to your real
 > broker(s) over SEMP per `broker-config.yaml`. For a team or production
-> deployment you run Agent Mesh against your own broker (Kubernetes or Agent
-> Mesh Cloud); the connector and agent steps below are identical.
+> deployment you run Agent Mesh against your own broker; the connector and agent steps below are identical.
 
 ## Prerequisites
 
@@ -93,9 +92,26 @@ tools; select the ones to expose (or all), then save.
   later by editing an existing agent.)
 - Select **Create and Deploy**.
 
-**6. Verify** — start a new chat and ask a broker-related question. Select
-`SolaceBrokerAgent` directly, or ask the **Orchestrator**, which delegates to it.
-The agent calls the MCP tools, which query your configured broker over SEMP.
+**6. Verify** — from the UI or the terminal.
+
+- **UI:** start a new chat and ask a broker-related question. Select
+  `SolaceBrokerAgent` directly, or ask the **Orchestrator**, which delegates to it.
+
+- **CLI:** send a task from the terminal. `sam task send` targets
+  `http://localhost:8800` and the `orchestrator` by default; the orchestrator
+  delegates to your agent.
+
+  ```bash
+  sam task send "List the Solace brokers that are configured."
+  ```
+
+  Target a specific agent with `-a/--agent <agent-name>`. No auth token is
+  needed for this local no-auth instance. Note: if a tool is backed by an OAuth
+  connector, `sam task send` prints an authorization URL and waits for a browser
+  login — so OAuth-backed tools cannot complete a fully headless CLI run.
+
+Either way, the agent calls the MCP tools, which query your configured broker
+over SEMP.
 
 ## Authentication Chain
 
