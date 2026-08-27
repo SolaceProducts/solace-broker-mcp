@@ -155,7 +155,7 @@ jobs:
         with:
           go-version-file: 'go.mod'
       - name: FOSSA analyze
-        uses: SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan@3e95ae9f28bf20a10a16cbfabc01a12276378e7d
+        uses: SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan@55ea9479744c8da500afa607ce968857e678cb1b
         with:
           scanners: "fossa"
           additional_scan_params: |
@@ -163,7 +163,7 @@ jobs:
             fossa.revision=${{ env.FOSSA_REVISION }}
           fossa_api_key: ${{ secrets.FOSSA_API_KEY }}
       - name: FOSSA licensing guard
-        uses: SolaceDev/solace-public-workflows/.github/actions/fossa-guard@3e95ae9f28bf20a10a16cbfabc01a12276378e7d
+        uses: SolaceDev/solace-public-workflows/.github/actions/fossa-guard@55ea9479744c8da500afa607ce968857e678cb1b
         with:
           fossa_api_key: ${{ secrets.FOSSA_API_KEY }}
           fossa_project_id: ${{ env.FOSSA_PROJECT_ID }}
@@ -207,7 +207,7 @@ jobs:
         with:
           go-version-file: 'go.mod'
       - name: FOSSA analyze and upload
-        uses: SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan@3e95ae9f28bf20a10a16cbfabc01a12276378e7d
+        uses: SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan@55ea9479744c8da500afa607ce968857e678cb1b
         with:
           scanners: "fossa"
           additional_scan_params: |
@@ -218,7 +218,7 @@ jobs:
           guardian_url: ${{ fromJSON(env.IS_TRUNK) && secrets.GUARDIAN_URL || '' }}
           guardian_token: ${{ fromJSON(env.IS_TRUNK) && secrets.GUARDIAN_API_TOKEN || '' }}
       - name: FOSSA vulnerability guard
-        uses: SolaceDev/solace-public-workflows/.github/actions/fossa-guard@3e95ae9f28bf20a10a16cbfabc01a12276378e7d
+        uses: SolaceDev/solace-public-workflows/.github/actions/fossa-guard@55ea9479744c8da500afa607ce968857e678cb1b
         with:
           fossa_api_key: ${{ secrets.FOSSA_API_KEY }}
           fossa_project_id: ${{ env.FOSSA_PROJECT_ID }}
@@ -264,7 +264,7 @@ jobs:
       # not wanted on a public repo. The Prisma verdict is enforced by the
       # Guardian gate on trunk, not on PRs.
       - name: Prisma Cloud scan
-        uses: SolaceDev/solace-public-workflows/prisma-cloud-scan@3e95ae9f28bf20a10a16cbfabc01a12276378e7d
+        uses: SolaceDev/solace-public-workflows/prisma-cloud-scan@55ea9479744c8da500afa607ce968857e678cb1b
         with:
           image_registry: ${{ env.IMAGE_REGISTRY }}
           image_repo: ${{ env.IMAGE_REPO }}
@@ -298,7 +298,7 @@ jobs:
           ref: ${{ needs.setup.outputs.ref }}
           persist-credentials: false
       - name: Guardian DB sync and Jira report
-        uses: SolaceDev/solace-public-workflows/guardian-db-sync@3e95ae9f28bf20a10a16cbfabc01a12276378e7d
+        uses: SolaceDev/solace-public-workflows/guardian-db-sync@55ea9479744c8da500afa607ce968857e678cb1b
         with:
           guardian-url: ${{ secrets.GUARDIAN_URL }}
           guardian-key: ${{ secrets.GUARDIAN_API_TOKEN }}
@@ -307,7 +307,7 @@ jobs:
           unifiers: "fossa,prisma"
           upload-logs: "true"
       - name: Guardian vulnerability gate
-        uses: SolaceDev/solace-public-workflows/guardian-vulnerability-gate@3e95ae9f28bf20a10a16cbfabc01a12276378e7d
+        uses: SolaceDev/solace-public-workflows/guardian-vulnerability-gate@55ea9479744c8da500afa607ce968857e678cb1b
         with:
           guardian-url: ${{ secrets.GUARDIAN_URL }}
           guardian-key: ${{ secrets.GUARDIAN_API_TOKEN }}

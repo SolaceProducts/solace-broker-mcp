@@ -1,14 +1,25 @@
 {
-  "_doc": "F5 composition: diagnose why the slow-consumer queue is backed up. Originally required BOTH get-queue-metrics and get-client-details, but the F5 fixture is queue-level (slowSubscriber flag does NOT flip — see SOL-150328) and get-queue-metrics alone exposes the full diagnosis (bindCount=1, txUnackedMsgCount at maxDeliveredUnackedMsgsPerFlow ceiling, rxMsgRate > txMsgRate, growing spool). A 'complete with one tool' answer is correct here, so any_of replaces all_of. required_substrings_any_of targets diagnostic terminology (unacked / ceiling / spool) rather than 'slow' — the queue name itself contains 'slow', so a substring match on 'slow' would PASS on a refusal that just echoes the queue name. forbidden_substrings catches refusals from missing fixtures.",
+  "_doc": "F5 composition: diagnose why the slow-consumer queue is backed up. Originally required BOTH get-queue-metrics and get-client-details, but the F5 fixture is queue-level (slowSubscriber flag does NOT flip — see SOL-150328) and get-queue-metrics alone exposes the full diagnosis (bindCount=1, txUnackedMsgCount at maxDeliveredUnackedMsgsPerFlow ceiling, rxMsgRate > txMsgRate, growing spool). A 'complete with one tool' answer is correct here, so any_of replaces all_of. required_substrings_any_of targets diagnostic terminology (unacked / ceiling / spool) rather than 'slow' — the queue name itself contains 'slow', so a substring match on 'slow' would PASS on a refusal that just echoes the queue name. forbidden_substrings catches refusals from missing fixtures.\n\n`no queues` and `zero queues` were dropped from forbidden_substrings: they are the two needles f5-detect.json removed for flagging a correct answer, since the suite provisions test-vpn-empty as a bare VPN and an agent that enumerates VPNs reports one has no queues as a matter of fact. The fix landed on f5-detect and not on this file, which carried the identical pair. The remaining needles are all refusal-or-failed-detection phrasings.",
   "prompt": "Why is queue $F5_QUEUE backed up on $BROKER? Give a concrete diagnosis grounded in current broker state.",
   "expected_tool_any_of": [
     "mcp__solace-broker__get-queue-metrics",
     "mcp__solace-broker__get-client-details"
   ],
-  "required_substrings_any_of": ["unacked", "ceiling", "spool", "rxMsgRate", "txMsgRate"],
+  "required_substrings_any_of": [
+    "unacked",
+    "ceiling",
+    "spool",
+    "rxMsgRate",
+    "txMsgRate"
+  ],
   "forbidden_substrings": [
-    "doesn't exist", "does not exist", "isn't there", "is not there",
-    "could not find", "couldn't find", "no queues", "zero queues",
-    "premise doesn't hold", "premise does not hold"
+    "doesn't exist",
+    "does not exist",
+    "isn't there",
+    "is not there",
+    "could not find",
+    "couldn't find",
+    "premise doesn't hold",
+    "premise does not hold"
   ]
 }

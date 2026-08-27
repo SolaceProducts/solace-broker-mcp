@@ -1,7 +1,25 @@
 {
-  "_doc": "F1 positive: broker-level prompt with no VPN/queue/client name should route to get-broker-status (not list-vpns, not get-vpn-status). Broker is up, fixtures are healthy, so the model must report operational state — catches a model that hedges or invents capacity issues from a clean snapshot.",
+  "_doc": "F1 positive: broker-level prompt with no VPN/queue/client name should route to get-broker-status (not list-vpns, not get-vpn-status). Broker is up, fixtures are healthy, so the model must report operational state — catches a model that hedges or invents capacity issues from a clean snapshot.\n\nforbidden_substrings needles are ERE patterns and every one must be a phrase a CORRECT answer cannot contain — the same rule read-get-rdp-status.json spells out. Three needles broke it as literals. Bare `inactive` matched the correct \"Inactive flows: 0\" and \"is not inactive\", so it is now `is (ad-)?inactive`, which a negation cannot satisfy. Bare `not active` matched \"not actively replicating\", so it carries a trailing non-letter boundary. Bare `is down` matched a correct \"message rate is down 5% from peak\", so it is scoped to a broker/node subject. This row has only two assertions and no ground_truth, so a needle that survives negation is a red release gate on correct output, not a flake.",
   "prompt": "What's the overall status of $BROKER?",
   "expected_tool": "mcp__solace-broker__get-broker-status",
-  "required_substrings_any_of": ["operational", "running", "healthy", "is up", "AD-Active", "in sync"],
-  "forbidden_substrings": ["is down", "is not operational", "is unhealthy", "out of capacity", "inactive", "unsynced", "not synced", "not in sync", "not active", "not AD-Active"]
+  "required_substrings_any_of": [
+    "operational",
+    "running",
+    "healthy",
+    "is up",
+    "AD-Active",
+    "in sync"
+  ],
+  "forbidden_substrings": [
+    "(broker[a-z0-9_.-]*|node|it)[`'\"*]* is down",
+    "is not operational",
+    "is unhealthy",
+    "out of capacity",
+    "is (ad-)?inactive",
+    "unsynced",
+    "not synced",
+    "not in sync",
+    "not active([^a-z]|$)",
+    "not ad-active"
+  ]
 }

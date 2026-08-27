@@ -115,7 +115,7 @@ func (e *ExchangeError) LogAttrs() []slog.Attr {
 		attrs = append(attrs, slog.String("gate", "retry_after"))
 	}
 	if e.Elapsed != 0 {
-		attrs = append(attrs, slog.Duration("exchange_elapsed", e.Elapsed))
+		attrs = append(attrs, slog.String("exchange_total_elapsed", e.Elapsed.String()))
 	}
 	return attrs
 }

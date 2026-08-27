@@ -34,7 +34,7 @@ on:
     # local. If the schedule ever outlives the window into EST it drifts to 01:00
     # local and needs 07:00 UTC — one more reason not to let it outlive the
     # window.
-    - cron: '0 6 * * *'
+    - cron: '0 6 * * *' # schedule owner: lkiri (reassigned from helen-zhu-solace)
   workflow_dispatch:
     inputs:
       target_branch:

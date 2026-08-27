@@ -1,16 +1,12 @@
 {
-  "_doc": "F5: detect a struggling consumer. Multiple valid tool paths — list-queues exposes the slowSubscriber flag, get-queue-metrics gives backlog depth, list-clients/get-client-details can also surface it. Accept any; assert the F5 queue surfaces in the answer. forbidden_substrings catches refusals from missing fixtures (e.g. 'queue doesn't exist') — without these the assertion would PASS on an echo-the-name refusal because $F5_QUEUE is mentioned in both. Every needle must be a phrase ONLY a refusal or a failed detection would produce. 'no queues' and 'zero queues' were needles until they flagged a correct answer: the suite provisions test-vpn-empty as a bare VPN with no queues, so an agent that enumerates VPNs reports one has no queues as a matter of fact, and a substring cannot tell that apart from failing to find the F5 queue.",
+  "_doc": "F5/F6: detect a struggling consumer. Multiple valid tool paths — list-queues exposes the F5 queue backing up, list-slow-subscribers/list-clients expose the F6 client whose slowSubscriber flag is set. Accept any; assert both fixtures surface in the answer.\n\nThis row carried a forbidden_substrings deny-list until SOL-153377. Its stated purpose was to stop an echo-the-name refusal passing on required_substrings alone, which stopped applying once the prompt no longer named the queue: the agent cannot echo a name it was never given, so an answer containing $F5_QUEUE has already read it off the broker. What the deny-list kept doing was flag correct answers. 'no queues' and 'zero queues' went first — the suite provisions test-vpn-empty as a bare VPN, so an agent that enumerates VPNs reports one has no queues as a matter of fact. Then the all-clear needles ('nothing struggling', 'none struggling') did the same thing to 'Nothing struggling in test-vpn-empty', a true statement about the empty VPN sitting next to a correct detection in the default one. Both times a substring could not see the scope the sentence was qualified by.\n\nThe replacement is positive evidence instead of absence of a phrase: name the specific client the broker flagged. $F6_SUB_CLIENT_NAME_A is discoverable only from the slowSubscriber signal — it is in no prompt in this suite and in no queue listing — so an answer that names it has done the detection, and an all-clear verdict cannot produce it by accident. That closes the same gap without any wording assumption to go stale.\n\nCost of the trade: this now requires the agent to reach the client-level signal, not just the queue. A run that stops at list-queues answers the question defensibly and still goes red. That is the intended strictness for this row — 'which consumer' is the answer the fixture exists to test — but it is the first thing to reconsider if the row starts flaking on model updates.",
   "prompt": "Are any consumers on $BROKER struggling to keep up right now?",
   "expected_tool_any_of": [
     "mcp__solace-broker__list-queues",
     "mcp__solace-broker__get-queue-metrics",
+    "mcp__solace-broker__list-slow-subscribers",
     "mcp__solace-broker__list-clients",
     "mcp__solace-broker__get-client-details"
   ],
-  "required_substrings": ["$F5_QUEUE"],
-  "forbidden_substrings": [
-    "doesn't exist", "does not exist", "isn't there", "is not there",
-    "could not find", "couldn't find",
-    "no consumers struggling", "none struggling", "nothing struggling"
-  ]
+  "required_substrings": ["$F5_QUEUE", "$F6_SUB_CLIENT_NAME_A"]
 }
