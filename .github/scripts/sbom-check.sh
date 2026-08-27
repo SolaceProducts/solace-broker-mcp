@@ -50,8 +50,17 @@ done
 # the key entirely makes plain indexing raise a jq error, which under `set -e`
 # aborts the script right here with a raw jq trace and no `::error::`
 # annotation. `?` turns that into empty output instead, so the check below
-# reports it properly the same way a genuinely empty array does.
-sbom_modules=$(jq -r '.components[]? | "\(.name) \(.version)"' "$SBOM" | sort -u)
+# reports it properly the same way a genuinely empty array does. `?` only
+# covers a missing key, though — SBOM content that isn't valid JSON at all is
+# a jq *parse* error, which `?` doesn't touch, so that failure is caught
+# explicitly below instead.
+sbom_rc=0
+sbom_modules_raw=$(jq -r '.components[]? | "\(.name) \(.version)"' "$SBOM" 2>&1) || sbom_rc=$?
+if [ "$sbom_rc" -ne 0 ]; then
+    echo "::error file=$SBOM::could not be parsed as JSON — $sbom_modules_raw" >&2
+    exit 1
+fi
+sbom_modules=$(sort -u <<<"$sbom_modules_raw")
 
 if [ -z "$sbom_modules" ]; then
     echo "::error file=$SBOM::lists no components (or is missing a components array). Refusing to compare against an empty set." >&2

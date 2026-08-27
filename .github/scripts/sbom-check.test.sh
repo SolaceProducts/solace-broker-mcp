@@ -147,6 +147,13 @@ assert_check "an empty SBOM component list fails rather than vacuously passing" 
     "$(sbom_with_components)" \
     "$(doc_with_rows '| `github.com/example/foo` | v1.0.0 | MIT | [license](x) |')"
 
+# SBOM content that isn't valid JSON at all is a jq *parse* error, distinct
+# from the missing-`components`-key case above that `.components[]?` already
+# handles — this one needs its own explicit catch.
+assert_check "an SBOM that isn't valid JSON fails with a clean error, not a raw jq trace" 1 \
+    "not json at all" \
+    "$(doc_with_rows '| `github.com/example/foo` | v1.0.0 | MIT | [license](x) |')"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
