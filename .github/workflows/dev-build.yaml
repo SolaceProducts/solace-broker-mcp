@@ -13,7 +13,8 @@ name: Dev build (unstable)
 
 on:
   schedule:
-    # 10:17 PM EST. Off the hour because GitHub delays scheduled runs under load.
+    # 03:17 UTC year-round (cron is UTC), so 10:17 PM EST / 11:17 PM EDT — both
+    # overnight, drift accepted. Off the hour: GitHub delays runs under load.
     # A schedule only ever runs on the default branch, so "publishes from main
     # only" is enforced by the trigger type rather than a filter. Daily, not
     # per-merge: 5-6 merges/day would mean ~150MB/day on the lab host and would
@@ -24,10 +25,15 @@ on:
   # both triggers require the file to be on the default branch.
   workflow_dispatch:
 
-# release.yml declares no group, so this can never cancel a release run.
+# Serialize, don't cancel. A cancellation between the two tag pushes leaves
+# `dev-<sha>` published while `dev` still points at the old build — and the skip
+# check keys on `dev-<sha>`, so every later run skips and `dev` never catches up.
+# Nothing queues at one run a day, so cancelling can only cause that.
+# (llm-eval.yml:54, same call.) release.yml declares no group, so this cannot
+# cancel a release run.
 concurrency:
   group: dev-build
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -35,15 +41,19 @@ permissions:
 jobs:
   dev-build:
     name: dev-build
-    # A schedule fires on every fork with Actions enabled, handing each one a
-    # nightly failure on a push nobody there can make. Same guard as llm-eval.yml.
-    if: github.event_name != 'schedule' || github.repository == 'SolaceProducts/solace-broker-mcp'
+    # Upstream only, and unconditional rather than schedule-only: a fork's token
+    # cannot push to this org's package, so a dispatched run there would build
+    # for minutes and then fail. llm-eval.yml guards only its schedule because a
+    # manual run is useful on a fork; publishing to our package never is.
+    if: github.repository == 'SolaceProducts/solace-broker-mcp'
     runs-on: ubuntu-latest
+    # ~4 min build; uncapped, a hung one holds a runner for six hours.
+    timeout-minutes: 20
     permissions:
       contents: read
-      # No id-token/attestations/artifact-metadata: no provenance attestation,
-      # since this is never distributed. That is also part of why the package is
-      # not public — an unattested image should not be casually pullable.
+      # No id-token/attestations/artifact-metadata: no cosign-verifiable GitHub
+      # attestation, since this is never distributed — part of why the package is
+      # not public. Buildx's own provenance is disabled on the build step below.
       packages: write
     steps:
       - name: Checkout
@@ -88,7 +98,8 @@ jobs:
         # timestamp, so a fully cache-hit build still pushes a new digest for
         # byte-identical content, and the lab (which compares image IDs) would
         # redeploy nightly for nothing. Keyed on the immutable per-commit tag, so
-        # it fails open on the first run and self-corrects after a failed build.
+        # it fails open on the first run and self-corrects after a build that
+        # failed BEFORE pushing — see the concurrency note for the other case.
         env:
           REF: ghcr.io/solaceproducts/solace-broker-mcp-dev:dev-${{ steps.ver.outputs.short_sha }}
         run: |
@@ -113,11 +124,13 @@ jobs:
           tags: |
             type=raw,value=dev
             type=sha,prefix=dev-
-          # metadata-action already emits `revision` and `created`. These two say
-          # the image is unsupported wherever someone meets it first.
+          # metadata-action already emits `revision` and `created`. `version` is
+          # pinned because it would otherwise be derived from the tags and read
+          # `dev`, while the binary inside reports v0.8.0-0-g65fe9bf.
           labels: |
             org.opencontainers.image.title=Solace Broker MCP (unstable dev build)
             org.opencontainers.image.description=Unstable build from main. Not a release, not supported. See SOL-153564.
+            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
 
       - name: Build and push
         id: build
@@ -132,6 +145,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Stated, not defaulted: buildx attaches SLSA provenance on a registry
+          # push unless told otherwise, which also makes the artifact an image
+          # index. Nothing verifies this image, so keep it a plain manifest.
+          provenance: false
           build-args: |
             VERSION=${{ steps.ver.outputs.version }}
           # Read the shared cache, never write it. release.yml:428 and
