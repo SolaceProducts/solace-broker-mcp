@@ -68,7 +68,7 @@ schema: `get-discard-stats` and the four action tools (documented inline in this
 ### Errors
 
 On failure a tool returns a structured error object. Full field reference and
-common HTTP-status causes (400 with `sempStatus: "NOT_FOUND"` for missing objects, 401/403/429/503) are in the
+common HTTP-status causes (400 with `sempStatus: "NOT_FOUND"` for missing objects, 404 when the request never reaches the event broker's SEMP API, 401/403/429/503) are in the
 [User Guide → Tool Returns an Error](user-guide.md#tool-returns-an-error). Key
 fields: `error` (message), `retryable` (bool), `status` (HTTP code), plus
 source-specific fields (`operation`, `sempStatus`, `sempCode` for SEMPv2; `kind`,

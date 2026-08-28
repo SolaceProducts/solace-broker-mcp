@@ -88,8 +88,6 @@ Registered new agent 'SolaceBrokerAgent' in registry.
 
 Open the Agent Mesh web UI (`http://localhost:8000`) and ask the orchestrator an event broker-related question — the orchestrator delegates to the `SolaceBrokerAgent`, which calls the MCP tools.
 
-> **Port note:** The Agent Mesh web UI defaults to `http://localhost:8000`. If you're running the Solace event broker via Docker per this repository's Quickstart, that port is likely already in use by the event broker's REST messaging service — change one of the two ports if you hit a conflict.
-
 ## Authentication Chain
 
 ```

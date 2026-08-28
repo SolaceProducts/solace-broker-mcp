@@ -85,7 +85,7 @@ Aliases must be 1-63 characters, contain only letters, digits, and hyphens, and 
 | `auth.audience` | — | Optional, even under `auth.mode: oauth` — omitting it does not fail configuration load or startup. RFC 8693 audience value for this event broker, forwarded to the IdP during token exchange (requires the top-level `broker_oauth:` block — see [Broker OAuth (Hop 2)](#broker-oauth-hop-2)). When omitted, the runtime sends the token-exchange request without an audience parameter at all. Omit when the event broker's OAuth profile does not validate audience; set it only if the event broker's OAuth profile does. If set, it must not be whitespace-only — a `${VAR}` that resolves to blank does fail configuration load. |
 | `insecure_skip_verify` | `false` | Skip TLS certificate verification. Development only. Under `mcp_client_auth.mode: oauth` (production) it is **refused at startup** unless `allow_insecure_broker_tls: true` is also set (see Event Broker TLS in production). |
 
-Under `mcp_client_auth.mode: oauth`, every configured event broker's `url` must be `https://` — the server refuses to start otherwise. Outside `oauth` mode, Solace still recommends `https://` event broker URLs, but it isn't enforced.
+Under `mcp_client_auth.mode: oauth`, `https://` is required — and enforced at configuration load, before the server's listener starts — for every configured event broker's `url`, and the same check also covers `mcp_client_auth.issuer`, `mcp_client_auth.resource_url`, and `broker_oauth.idp_token_endpoint`. A plain `http://` value on any of these fails startup. Outside `oauth` mode, Solace still recommends `https://` event broker URLs, but it isn't enforced.
 
 ```yaml
 brokers:
