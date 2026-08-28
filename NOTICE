@@ -39,12 +39,15 @@ github.com/go-openapi/jsonpointer
 
 gopkg.in/yaml.v3
 github.com/oasdiff/yaml3
+go.yaml.in/yaml/v3
   Copyright 2011-2016 Canonical Ltd.
 
   Licensed under the Apache License, Version 2.0.
 
-  github.com/oasdiff/yaml3 is a fork of gopkg.in/yaml.v3. Its NOTICE and its
-  dual MIT / Apache-2.0 split are the same, so this attribution covers both.
+  github.com/oasdiff/yaml3 and go.yaml.in/yaml/v3 are both forks of
+  gopkg.in/yaml.v3 (go.yaml.in/yaml/v3 is the project's own successor import
+  path). Their NOTICE and their dual MIT / Apache-2.0 split are the same, so
+  this attribution covers all three.
 
-  Portions of both, derived from libyaml, are licensed under the MIT License
-  (Copyright 2006-2010 Kirill Simonov).
+  Portions of all three, derived from libyaml, are licensed under the MIT
+  License (Copyright 2006-2010 Kirill Simonov).
