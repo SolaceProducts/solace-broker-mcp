@@ -357,7 +357,9 @@ least one of them, or startup fails with a config error.
    > network scope is trusted: on Kubernetes keep the Service `ClusterIP` and put
    > the TLS-terminating ingress in front of it; on bare metal set `listen_address`
    > to the proxy-facing interface (loopback for a same-host proxy) so only the
-   > terminator can reach the port.
+   > terminator can reach the port. See
+   > [`deploy/kubernetes/README.md`](../deploy/kubernetes/README.md) for the
+   > shipped manifests and how to switch them to `mode: oauth`.
 
 If **both** are set, direct TLS takes precedence: the server terminates TLS
 itself and `tls_terminated_upstream` is ignored (no plaintext, no `WARN`).
