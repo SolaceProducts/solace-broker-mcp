@@ -4,6 +4,9 @@ This guide shows how to connect this MCP server to the Solace Agent Mesh desktop
 app by registering it as an **MCP connector** and assigning it to an agent from
 the Agent Mesh UI.
 
+_Validated against Solace Agent Mesh v2.307.3 (macOS), 2026-08. UI navigation may
+differ in later versions._
+
 > **This example runs Agent Mesh locally.** The desktop app starts an in-process
 > dev event broker that Agent Mesh uses for its own internal agent-to-agent
 > messaging. That dev broker is unrelated to the Solace brokers this MCP server
@@ -13,7 +16,9 @@ the Agent Mesh UI.
 
 ## Prerequisites
 
-- The Solace Agent Mesh desktop app installed.
+- The Solace Agent Mesh desktop app installed. See the
+  [Solace Agent Mesh docs](https://docs.solace.com/Agent-Mesh/agent-mesh.htm) for
+  install and getting-started guides.
 - Ability to run this MCP server locally with configured `broker-config.yaml`
   and `.env` files. See [Quickstart](../README.md#quickstart).
 
@@ -55,8 +60,11 @@ launchctl setenv SAM_PLATFORM_ALLOW_PRIVATE_MCP true
 Then fully quit the app (Cmd+Q — closing the window isn't enough) and relaunch it;
 an already-running app keeps its old environment and won't pick up the new value.
 
-This workaround is only needed for local development — a production MCP server
-has a routable URL.
+This is needed whenever the MCP server's URL resolves to a loopback or private
+(RFC1918/RFC4193) address — local development, and also self-hosted deployments
+where Agent Mesh reaches the server over a cluster-internal or otherwise private
+address. It relaxes only private and loopback addresses; link-local (including
+cloud instance metadata) stays blocked.
 
 **4. Add the MCP server as a connector** — in the UI left nav, go to
 **Builder** > **Connectors** > **Create Connector**, then the **Custom** tab >
