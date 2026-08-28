@@ -223,23 +223,40 @@ func assertErrorCode(t *testing.T, code json.RawMessage, want int) {
 	}
 }
 
-// sseFrames splits a text/event-stream body into its frames and returns the
-// "data:" payload of each. It enforces the framing rules rather than merely
-// tolerating them: frames are blank-line separated, every line must be a
-// recognised SSE field, and a frame must carry data. A body that merely
-// happens to contain the right JSON but is not legal SSE fails here.
-func sseFrames(t *testing.T, body string) []string {
+// sseFrame is one parsed text/event-stream frame: the value of its "event:"
+// field (empty when unlabelled) and the joined payload of its "data:" fields.
+type sseFrame struct {
+	event string
+	data  string
+}
+
+// sseFrames splits a text/event-stream body into its frames. It enforces the
+// framing rules rather than merely tolerating them: frames are blank-line
+// separated, every line must be a recognised SSE field, and a frame must carry
+// data. A body that merely happens to contain the right JSON but is not legal
+// SSE fails here.
+//
+// Line endings are normalised to LF first. The SSE spec accepts CRLF, LF and a
+// lone CR interchangeably (go-sdk's writeEvent emits LF today, in event.go),
+// so a server switching terminators is still conformant and must not fail this
+// suite. Assertions on frame contents therefore go through this parser rather
+// than searching the raw body for a literal, which would couple them to the
+// terminator the SDK happens to use.
+func sseFrames(t *testing.T, body string) []sseFrame {
 	t.Helper()
 	if body == "" {
 		t.Fatal("SSE body is empty; the server must emit at least one frame")
 	}
+	body = strings.ReplaceAll(body, "\r\n", "\n")
+	body = strings.ReplaceAll(body, "\r", "\n")
 	if !strings.HasSuffix(body, "\n\n") {
 		t.Fatalf("SSE body does not end with a blank line (frame terminator); got %q", body)
 	}
-	var payloads []string
-	for _, frame := range strings.Split(strings.TrimSuffix(body, "\n\n"), "\n\n") {
+	var frames []sseFrame
+	for frame := range strings.SplitSeq(strings.TrimSuffix(body, "\n\n"), "\n\n") {
+		var parsed sseFrame
 		var data []string
-		for _, line := range strings.Split(frame, "\n") {
+		for line := range strings.SplitSeq(frame, "\n") {
 			field, value, ok := strings.Cut(line, ":")
 			if !ok {
 				t.Fatalf("SSE line %q is not a `field: value` pair", line)
@@ -250,7 +267,9 @@ func sseFrames(t *testing.T, body string) []string {
 			switch field {
 			case "data":
 				data = append(data, strings.TrimPrefix(value, " "))
-			case "event", "id", "retry":
+			case "event":
+				parsed.event = strings.TrimPrefix(value, " ")
+			case "id", "retry":
 				// Legal SSE fields the SDK may emit; nothing to assert.
 			default:
 				t.Errorf("SSE frame carries unknown field %q in line %q", field, line)
@@ -259,9 +278,10 @@ func sseFrames(t *testing.T, body string) []string {
 		if len(data) == 0 {
 			t.Fatalf("SSE frame %q carries no data field", frame)
 		}
-		payloads = append(payloads, strings.Join(data, "\n"))
+		parsed.data = strings.Join(data, "\n")
+		frames = append(frames, parsed)
 	}
-	return payloads
+	return frames
 }
 
 // decodeSingleResponse asserts the recorder holds exactly one JSON-RPC message
@@ -277,7 +297,7 @@ func decodeSingleResponse(t *testing.T, rec *httptest.ResponseRecorder) jsonRPCE
 		if len(frames) != 1 {
 			t.Fatalf("got %d SSE frames, want exactly 1; body: %s", len(frames), rec.Body.String())
 		}
-		payload = frames[0]
+		payload = frames[0].data
 	}
 	var env jsonRPCEnvelope
 	if err := json.Unmarshal([]byte(payload), &env); err != nil {
@@ -645,12 +665,15 @@ func TestSSE_ResponseFraming(t *testing.T) {
 	}
 	// The SDK labels response frames `event: message`. Assert it explicitly:
 	// clients that dispatch on the event name ignore frames of other types.
-	if !strings.Contains(rec.Body.String(), "event: message\n") {
-		t.Errorf("SSE frame is not labelled `event: message`; body: %s", rec.Body.String())
+	// Read via the parser rather than searching the raw body, so the assertion
+	// is not coupled to the line terminator the SDK emits.
+	if frames[0].event != "message" {
+		t.Errorf("SSE frame is labelled %q, want `message`; body: %s",
+			frames[0].event, rec.Body.String())
 	}
 	var env jsonRPCEnvelope
-	if err := json.Unmarshal([]byte(frames[0]), &env); err != nil {
-		t.Fatalf("SSE data field is not the JSON-RPC response: %v; data: %s", err, frames[0])
+	if err := json.Unmarshal([]byte(frames[0].data), &env); err != nil {
+		t.Fatalf("SSE data field is not the JSON-RPC response: %v; data: %s", err, frames[0].data)
 	}
 	assertEnvelope(t, env, "1")
 }
