@@ -110,8 +110,9 @@ func initializeBodyAt(clientName, protocolVersion string) string {
 //
 // Sharing is safe: sessions are created per initialize and are independent,
 // and no test here mutates server state (no tool is added or removed after
-// registration). toollist_budget_test.go already reuses one server the same
-// way.
+// registration). This is the first cross-test sharing in the package —
+// toollist_budget_test.go and composite_schema_test.go each build their own —
+// so a test added here that does mutate the server would need its own.
 var (
 	conformanceServerOnce sync.Once
 	conformanceServer     *mcp.Server
@@ -1143,15 +1144,30 @@ func TestToolsCall_ValidationOutsideToolManagerIsNotConformant(t *testing.T) {
 		wantMessage string
 	}{
 		{
-			name:        "describe-semp-schema wrong type",
-			tool:        "describe-semp-schema",
-			arguments:   `{"operation":42}`,
-			wantMessage: "missing required parameter 'operation'",
-		},
-		{
 			name:        "describe-semp-schema missing required field",
 			tool:        "describe-semp-schema",
 			arguments:   `{}`,
+			wantMessage: "missing required parameter 'operation'",
+		},
+		{
+			// A wrong-typed parameter is reported as MISSING, not as
+			// wrong-typed. describe_semp_schema.go:354 does
+			//
+			//	operation, _ := args["operation"].(string)
+			//
+			// and discards the comma-ok, so a non-string yields "" — which the
+			// next line cannot tell apart from an absent key. The caller sent
+			// "operation" and is told it did not.
+			//
+			// That is worse than the misclassification this test is named for.
+			// A JSON-RPC error at least tells the model something failed; this
+			// tells it the wrong thing, sending it to re-supply a parameter it
+			// already supplied — plausibly the same way, so it does not
+			// converge. Pinned separately from the missing-field case above
+			// because the two are distinct defects that today share a message.
+			name:        "describe-semp-schema wrong type is misreported as missing",
+			tool:        "describe-semp-schema",
+			arguments:   `{"operation":42}`,
 			wantMessage: "missing required parameter 'operation'",
 		},
 	}
