@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -1213,4 +1214,279 @@ func TestToolsCall_ValidationOutsideToolManagerIsNotConformant(t *testing.T) {
 				env.Result)
 		}
 	})
+}
+
+// toolsWithoutInputValidation records the tools that do NOT validate their
+// arguments against their own declared input schema, because they are
+// registered outside the ToolManager pipeline (tools.RegisterListBrokers and
+// tools.RegisterDescribeSempSchema call mcp.Server.AddTool directly). The
+// untyped AddTool contract puts unmarshalling and schema validation on the
+// caller, and neither of these two does it — see
+// TestToolsCall_ValidationOutsideToolManagerIsNotConformant for the exact
+// failure mode of each. Tracked as SOL-153693.
+//
+// This is an allow-list, not an excuse. TestToolsCall_EveryToolValidatesItsInput
+// is a two-way gate over it, in the same shape as toolsWithoutOutputSchema:
+// a tool NOT listed here that accepts schema-invalid arguments fails the test
+// (the point of the gate — a third tool must not join these two unnoticed),
+// and a tool listed here that starts validating also fails it, so whoever
+// fixes SOL-153693 is told to delete the entry rather than leave a stale
+// allow-list behind.
+//
+// One caveat, deliberately not papered over: list-brokers declares no
+// properties at all, so no schema-invalid argument set can be derived from its
+// schema and the gate can only skip it. Its entry is still load-bearing —
+// every name here must match a registered tool, so the entry cannot rot after
+// a rename — but the "started validating" direction cannot fire for it until
+// its schema declares something to violate.
+var toolsWithoutInputValidation = map[string]bool{
+	"list-brokers":         true,
+	"describe-semp-schema": true,
+}
+
+// TestToolsCall_EveryToolValidatesItsInput is a gate, not a behaviour test: it
+// fails when a newly registered tool accepts schema-invalid arguments.
+//
+// Input validation on this server lives in ToolManager.CallTool
+// (internal/tools/manager.go), which checks arguments against the tool's
+// compiled input schema before dispatching to the handler. It does NOT live in
+// the SDK: production registers every tool with the untyped mcp.Server.AddTool,
+// whose contract explicitly leaves validation to the caller. So a tool
+// registered outside ToolManager silently gets none — which is exactly how the
+// two tools in toolsWithoutInputValidation ended up unvalidated (SOL-153693).
+//
+// This test does not fix those two. It stops a third joining them unnoticed:
+// every tool on the wire whose schema allows an invalid probe to be derived is
+// called with arguments derived from its OWN input schema (see
+// deriveInvalidArguments; the tools that allow none are logged and counted),
+// and must answer with a tool result carrying isError:true — the
+// MCP 2025-11-25 classification for an input-validation failure, which the
+// model can read and correct itself from, as opposed to a JSON-RPC error.
+//
+// No broker is contacted. Validation runs before handler.Handle, and the
+// broker alias sent is "dev" from budgetTestConfig, which resolves offline
+// (the pool builds SEMP clients lazily) — a bogus alias would fail broker
+// resolution first and this test would then be asserting the wrong thing.
+func TestToolsCall_EveryToolValidatesItsInput(t *testing.T) {
+	handler := conformanceHandler(t)
+	sessionID := initializeSessionFor(t, handler)
+
+	allTools := listToolsOverWire(t, handler, sessionID)
+	if len(allTools) == 0 {
+		t.Fatal("tools/list returned no tools; the registration pipeline is broken")
+	}
+
+	registered := make(map[string]bool, len(allTools))
+	probed, skipped := 0, 0
+	for _, tool := range allTools {
+		registered[tool.Name] = true
+
+		arguments, victim, ok := deriveInvalidArguments(t, tool.InputSchema)
+		if !ok {
+			// Not a pass. A gate that quietly probes nothing is worse than no
+			// gate, so every skip is named and the total is reported below.
+			skipped++
+			t.Logf("SKIP %s: no schema-invalid probe can be derived — its input schema "+
+				"declares no required string property other than the injected broker",
+				tool.Name)
+			continue
+		}
+		probed++
+
+		t.Run(tool.Name, func(t *testing.T) {
+			env := callToolOverWire(t, handler, sessionID, tool.Name, arguments)
+			validated := isErrorToolResult(t, env)
+
+			if toolsWithoutInputValidation[tool.Name] {
+				if validated {
+					t.Fatalf("%s now returns an isError tool result for a schema-invalid %q — "+
+						"it is validating its input. The SOL-153693 gap is closed for this "+
+						"tool: delete its entry from toolsWithoutInputValidation.", tool.Name, victim)
+				}
+				return
+			}
+			if !validated {
+				t.Fatalf("%s accepted a schema-invalid %q (an integer where its own input "+
+					"schema declares a string) without returning isError:true.\n"+
+					"arguments: %s\nresponse: %s\n"+
+					"Every tool must validate its arguments against its declared input "+
+					"schema. The SDK does not do this for untyped Server.AddTool "+
+					"registrations — ToolManager.CallTool does, so a tool registered "+
+					"outside that pipeline gets no validation at all (SOL-153693). "+
+					"Route the tool through ToolManager, or validate in its handler and "+
+					"return an isError result.",
+					tool.Name, victim, arguments, responseForLog(env))
+			}
+		})
+	}
+
+	// Staleness guard for the allow-list itself: an entry naming a tool that no
+	// longer exists (renamed, removed) would otherwise sit here forever,
+	// silently excusing nothing.
+	for name := range toolsWithoutInputValidation {
+		if !registered[name] {
+			t.Errorf("toolsWithoutInputValidation names %q, which is not a registered "+
+				"tool; remove the stale entry", name)
+		}
+	}
+
+	t.Logf("input-validation gate: %d tools probed, %d skipped (of %d registered)",
+		probed, skipped, len(allTools))
+	if probed == 0 {
+		t.Fatal("the gate probed no tools at all; the probe derivation is broken")
+	}
+}
+
+// isErrorToolResult reports whether a tools/call response is a tool result
+// with isError:true — MCP's classification for an input-validation failure.
+// A JSON-RPC error is deliberately NOT counted as validation: the model cannot
+// act on a protocol error, and describe-semp-schema's rejection-by-protocol-
+// error is precisely one of the gaps this gate exists to keep from spreading.
+func isErrorToolResult(t *testing.T, env jsonRPCEnvelope) bool {
+	t.Helper()
+	if env.Error != nil {
+		return false
+	}
+	var result wireToolResult
+	if err := json.Unmarshal(env.Result, &result); err != nil {
+		t.Fatalf("decoding tools/call result: %v; result: %s", err, env.Result)
+	}
+	return result.IsError != nil && *result.IsError
+}
+
+// responseForLog renders whichever half of the envelope arrived, so a failure
+// message shows what actually came back rather than an empty Result.
+func responseForLog(env jsonRPCEnvelope) string {
+	if env.Error != nil {
+		return fmt.Sprintf("JSON-RPC error (code %s): %s", env.Error.Code, env.Error.Message)
+	}
+	return string(env.Result)
+}
+
+// deriveInvalidArguments builds one schema-invalid argument set for a tool from
+// nothing but that tool's own input schema, so the gate carries no per-tool
+// knowledge and covers any tool added later for free.
+//
+// The single violation introduced is a type error: a required property the
+// schema declares as a string is sent as an integer. Every other required
+// property is filled with a plausible valid value, so a tool that rejects the
+// call is rejecting the one violation and not something incidental.
+//
+// The injected broker parameter is never the victim. It is read out and
+// stripped by ToolManager.CallTool BEFORE validation runs, so a non-string
+// broker would be answered with a broker-resolution error instead of a
+// validation error — a pass for the wrong reason. It is always sent as "dev".
+//
+// Returns ok=false when the schema declares no required string property other
+// than broker, which is the only case the caller may skip.
+func deriveInvalidArguments(t *testing.T, raw json.RawMessage) (arguments, victim string, ok bool) {
+	t.Helper()
+	var schema struct {
+		Required   []string                   `json:"required"`
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("decoding inputSchema: %v; schema: %s", err, raw)
+	}
+
+	// Sorted so the chosen victim is stable across runs — Go map iteration is
+	// not, and a gate that probes a different parameter each run reports
+	// failures that are hard to reproduce.
+	required := append([]string(nil), schema.Required...)
+	sort.Strings(required)
+
+	for _, name := range required {
+		if name == brokerParamName {
+			continue
+		}
+		if declaredType(t, schema.Properties[name]) == "string" {
+			victim = name
+			break
+		}
+	}
+	if victim == "" {
+		return "", "", false
+	}
+
+	args := make(map[string]any, len(required))
+	for _, name := range required {
+		switch {
+		case name == brokerParamName:
+			args[name] = validBrokerAlias
+		case name == victim:
+			// The one violation: an integer where a string is declared.
+			args[name] = 42
+		default:
+			args[name] = plausibleValue(t, schema.Properties[name])
+		}
+	}
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		t.Fatalf("encoding probe arguments: %v", err)
+	}
+	return string(encoded), victim, true
+}
+
+const (
+	// brokerParamName is the parameter injectBrokerParam adds to every
+	// ToolManager-registered tool's schema (internal/tools/register.go).
+	brokerParamName = "broker"
+	// validBrokerAlias is the only alias in budgetTestConfig. It must resolve,
+	// because broker resolution precedes input validation.
+	validBrokerAlias = "dev"
+)
+
+// declaredType returns a property schema's "type" keyword, or "" if the
+// property is absent or declares no single type.
+func declaredType(t *testing.T, raw json.RawMessage) string {
+	t.Helper()
+	if raw == nil {
+		return ""
+	}
+	var prop struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &prop); err != nil {
+		// A union type ("type": ["string","null"]) lands here. Treat it as
+		// untyped rather than failing: it is simply not a usable probe target.
+		return ""
+	}
+	return prop.Type
+}
+
+// plausibleValue produces a value that satisfies a property schema, so the
+// probe's only schema violation is the one deriveInvalidArguments introduced
+// deliberately. It covers the JSON Schema types this server's tools actually
+// declare; an enum is honoured because an arbitrary string would violate it.
+func plausibleValue(t *testing.T, raw json.RawMessage) any {
+	t.Helper()
+	var prop struct {
+		Type string `json:"type"`
+		Enum []any  `json:"enum"`
+	}
+	if raw != nil {
+		if err := json.Unmarshal(raw, &prop); err != nil {
+			t.Fatalf("decoding property schema: %v; schema: %s", err, raw)
+		}
+	}
+	if len(prop.Enum) > 0 {
+		return prop.Enum[0]
+	}
+	switch prop.Type {
+	case "string":
+		// Non-empty, so a minLength:1 constraint (which every named string
+		// parameter in tools.yaml carries) is satisfied.
+		return "conformance-probe"
+	case "integer", "number":
+		return 1
+	case "boolean":
+		return true
+	case "array":
+		return []any{}
+	default:
+		// "object" and anything undeclared. An empty object satisfies a schema
+		// with no required sub-properties, which is what the *Config parameters
+		// on the update tools declare.
+		return map[string]any{}
+	}
 }
