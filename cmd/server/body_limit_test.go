@@ -150,10 +150,10 @@ func TestLimitRequestBody_DeclaredOversizeRejectedBeforeHandler(t *testing.T) {
 func TestLimitRequestBody_RealSDK_UnderLimit(t *testing.T) {
 	handler := newRealSDKHandler()
 
-	initialize := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{` +
-		`"protocolVersion":"2025-06-18","capabilities":{},` +
-		`"clientInfo":{"name":"body-limit-test","version":"0.0.1"}}}`
-	req := newMCPRequest(strings.NewReader(initialize))
+	// The protocol revision comes from conformance_test.go's single
+	// wireProtocolVersion constant, so an SDK bump changes it in one place
+	// rather than in every hand-written initialize body (SOL-150761).
+	req := newMCPRequest(strings.NewReader(initializeBodyFor("body-limit-test")))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
