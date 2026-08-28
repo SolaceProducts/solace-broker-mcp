@@ -34,9 +34,11 @@ const testSessionIdleTimeout = 100 * time.Millisecond
 
 // initializeBody is a minimal MCP initialize request. The SDK issues an
 // Mcp-Session-Id in response, which is what the reaping tests then track.
-const initializeBody = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{` +
-	`"protocolVersion":"2025-11-25","capabilities":{},` +
-	`"clientInfo":{"name":"session-timeout-test","version":"0.0.1"}}}`
+//
+// The protocol revision comes from conformance_test.go's single
+// wireProtocolVersion constant, so an SDK bump changes it in one place rather
+// than in every hand-written initialize body (SOL-150761).
+var initializeBody = initializeBodyFor("session-timeout-test")
 
 // newSessionTestHandler builds a genuine StreamableHTTPHandler with a short
 // idle timeout, so tests observe the real SDK's session lifecycle rather than
@@ -159,11 +161,19 @@ func TestSessionTimeout_KeepsActiveSession(t *testing.T) {
 	// touching it far more frequently than the timeout throughout.
 	//
 	// The touch interval is timeout/10, not timeout/4: this test fails when a
-	// gap between touches exceeds the timeout, so the margin has to absorb a
-	// GC pause or CI scheduling lag. At timeout/4 a single 100ms stall would
-	// reap the session and fail the test against correct code. 30 touches at
-	// timeout/10 keeps a 10x margin while still spanning 3x the timeout, so
-	// the assertion remains meaningful.
+	// gap between touches exceeds the timeout, so the interval has to leave
+	// room for a GC pause or CI scheduling lag.
+	//
+	// What that buys is smaller than it looks. The stall a run can absorb is
+	// timeout - sleep, so going from timeout/4 to timeout/10 moved it from
+	// 75ms to 90ms — about 15ms more headroom, not a tenfold gain. Shrinking
+	// the fraction further cannot help much: the headroom is capped at the
+	// timeout itself however small the sleep gets.
+	//
+	// So if this ever flakes, the fix is to raise the absolute
+	// testSessionIdleTimeout (500ms would give a 450ms+ stall tolerance), not
+	// to shrink the sleep fraction again. 30 touches still span 3x the
+	// timeout, which is what keeps the assertion meaningful.
 	for range 30 {
 		time.Sleep(testSessionIdleTimeout / 10)
 		if status := sessionStatus(handler, sessionID); status != http.StatusOK {
