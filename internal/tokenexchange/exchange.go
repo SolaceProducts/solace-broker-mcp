@@ -23,6 +23,7 @@ import (
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/idpclient"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
 	"github.com/sony/gobreaker/v2"
 )
 
@@ -103,6 +104,12 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	// because it's per-caller observability: a caller that cancelled
 	// mid-exchange must not see "exchange succeeded" attributed to its
 	// request. The Put log is per-exchange and stays inside with the Put.
+	// The winner's correlation ID travels into the detached exchange as a
+	// plain string, never as a context: passing the caller's ctx down would
+	// invite re-coupling its cancellation to the shared call, which is the
+	// regression the Background() root below exists to prevent.
+	corrID := correlation.From(ctx)
+
 	start := e.nowFunc()
 	ch := e.group.DoChan(key, func() (_ interface{}, err error) {
 		// singleflight runs this on its OWN goroutine, which none of the
@@ -122,7 +129,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 				err = fmt.Errorf("token exchange panicked (%T)", r)
 			}
 		}()
-		return e.runProtectedExchange(key, input)
+		return e.runProtectedExchange(key, input, corrID)
 	})
 
 	// abandonedByCaller records a caller that left before taking a result, and
@@ -222,7 +229,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 //
 // gateCheck runs FIRST, before the breaker — a gated call records no
 // breaker outcome and makes no IdP round-trip, regardless of breaker state.
-func (e *Exchanger) runProtectedExchange(key string, input ExchangeInput) (*Token, error) {
+func (e *Exchanger) runProtectedExchange(key string, input ExchangeInput, corrID string) (*Token, error) {
 	if e.gateCheck() {
 		return nil, &ExchangeError{
 			Sentinel: ErrExchangeRateLimited,
@@ -230,22 +237,33 @@ func (e *Exchanger) runProtectedExchange(key string, input ExchangeInput) (*Toke
 		}
 	}
 	if e.breaker == nil {
-		return e.runExchangeOnce(key, input)
+		return e.runExchangeOnce(key, input, corrID)
 	}
 	return e.breaker.Execute(func() (*Token, error) {
-		return e.runExchangeOnce(key, input)
+		return e.runExchangeOnce(key, input, corrID)
 	})
 }
 
 // runExchangeOnce performs the detached, retry-bounded IdP call, classifies the
 // outcome, and caches a success. This is the unit the breaker measures.
-func (e *Exchanger) runExchangeOnce(key string, input ExchangeInput) (*Token, error) {
+func (e *Exchanger) runExchangeOnce(key string, input ExchangeInput, corrID string) (*Token, error) {
 	// Detach from the caller's context so one caller's cancellation does not
 	// abort the shared IdP call for all singleflight waiters. The explicit
 	// timeout bounds the whole retry chain independently — httpClient.Timeout
 	// bounds each attempt, chainDeadline bounds attempts + backoffs together.
 	exchCtx, cancel := context.WithTimeout(context.Background(), e.chainDeadline)
 	defer cancel()
+
+	// Re-seed ONLY the correlation ID onto the detached context so the log
+	// lines below can be joined to the request that triggered this exchange
+	// (the singleflight winner's — waiters log completion under their own
+	// ctx). Copying the value, not reparenting the context, keeps caller
+	// cancellation severed. Not context.WithoutCancel(ctx): that would carry
+	// every request-scoped value — including the raw subject token — onto a
+	// context that outlives the request. Unconditional: the slog handler
+	// emits nothing for an empty ID, so the correlation-disabled path is
+	// byte-identical with or without this seed.
+	exchCtx = correlation.With(exchCtx, corrID)
 
 	// Attach an attempts counter so the transport wrapper inside
 	// NewRetryingHTTPClient increments it on every attempt. We read it back

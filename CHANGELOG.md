@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The token-exchange log lines emitted under the detached exchange context — the broker-token IdP request/response lines, the cache-put outcomes (including the `token cache put failed` WARN), and `broker token request retries exhausted` — now carry the `correlation_id` of the request that triggered the exchange. Previously they had none, so a cache put could not be joined to its get without timestamp guessing. When several concurrent requests share one exchange, the lines carry the initiating (singleflight winner's) request ID; each caller's own `broker token exchange completed` line is unchanged and still carries its own. With correlation disabled, output is unchanged. Tracked under SOL-153364.
+
 - Idle MCP sessions are now closed after two hours instead of being held for the lifetime of the process. The server passed no options to the SDK's streamable-HTTP handler, leaving `SessionTimeout` at its zero value — which the go-sdk documents as "idle sessions are never closed". A session was released only on an explicit `DELETE` or a transport close, so any client that connected and then vanished (a sleeping laptop, a killed container, a dropped network, or a client that simply never sends `DELETE`) left its session and the goroutines behind it in memory permanently. On a long-running server this grew without bound and no metric revealed it. Operator-visible effect: a client whose session has been idle for more than two hours receives `404 session not found` on its next request and re-initializes; spec-compliant clients do this transparently. Tracked under SOL-153582.
 
 ### Changed
