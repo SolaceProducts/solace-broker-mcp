@@ -20,6 +20,17 @@ log_level: info   # debug, info, warn, error
 #     off the network unless you opt in)
 # Set explicitly (e.g. "0.0.0.0") to override. Binding a non-loopback address
 # under mode: disabled additionally requires allow_remote_unauthenticated: true.
+#
+# IN A CONTAINER, the loopback default binds the CONTAINER's loopback, so a
+# published port (docker run -p 9090:9090) reaches nothing and the connection
+# is refused. This file is written for running the binary directly. To run it
+# in a container, use the static-token recipe below, which pairs a routable
+# bind with a token so the port is not left unauthenticated:
+#   listen_address: "0.0.0.0"
+#   mcp_client_auth:
+#     mode: static
+#     dev_token: "${DEV_TOKEN}"
+# deploy/kubernetes/ ships exactly that combination.
 # listen_address: "127.0.0.1"
 
 # TLS — set both to enable HTTPS, or terminate TLS at a load balancer.
@@ -28,16 +39,17 @@ tls_key_file: ""
 
 # Under mcp_client_auth.mode: oauth (production), the server refuses to start
 # with a plaintext listener unless TLS is configured above OR you acknowledge
-# that TLS is terminated by an upstream proxy/ingress. This example assumes an
-# upstream terminates TLS (see resource_url below), so the acknowledgment is set;
-# the server logs a startup WARN while it serves plaintext. Remove this and set
-# tls_cert_file/tls_key_file to terminate TLS at the server instead.
+# that TLS is terminated by an upstream proxy/ingress. Not needed by the
+# dev-mode default below, so it is left off; uncomment it when you turn on
+# oauth behind a TLS-terminating proxy/ingress, and the server serves plaintext
+# with a startup WARN. Set tls_cert_file/tls_key_file above instead to
+# terminate TLS at the server.
 #
 # Bind scope: this flag does not restrict where the server binds. Under
 # mode: oauth, listen_address defaults to all interfaces, so the plaintext port
 # is reachable by anything that can route to it — not just the terminating
 # proxy. Set listen_address above to the proxy-facing interface only.
-tls_terminated_upstream: true
+# tls_terminated_upstream: true
 
 # Under mcp_client_auth.mode: oauth (production), a broker with
 # insecure_skip_verify: true is refused at startup. Uncomment to accept the risk
@@ -54,14 +66,41 @@ tls_terminated_upstream: true
 # Operational profile (https:// requirement, etc.) is now derived from
 # mcp_client_auth.mode: oauth = production, disabled/static = development.
 mcp_client_auth:
-  mode: oauth
-  issuer: "https://idp.example.com"
-  audience: "mcp-server"
-  resource_url: "https://mcp.example.com/mcp"
+  # Default: no client authentication, so this example runs as-is with no
+  # identity provider to set up. This is safe only because the dev modes bind
+  # 127.0.0.1 only (see listen_address above) — the server is not reachable
+  # from off this host. Do not expose this mode on a routable interface.
+  #
+  # FOR PRODUCTION, TURN ON OAUTH: delete `mode: disabled` below and uncomment
+  # the oauth block that follows it. OAuth is the only mode intended to be
+  # reachable over a network; it validates a JWT on every request. Two further
+  # settings are mandatory under oauth and the server refuses to start without
+  # them: `tool_authorization.enabled` (below) and, unless you set
+  # tls_cert_file/tls_key_file, `tls_terminated_upstream: true` (above).
+  mode: disabled
+
+  # Or, for basic protection without an identity provider, use a shared static
+  # token instead — replace `mode: disabled` above with these two lines. Set
+  # DEV_TOKEN in your environment or .env file; the token does not expire and
+  # every caller shares it, so treat it like a password.
+  #
+  # mode: static
+  # dev_token: "${DEV_TOKEN}"
+
+  # Production (Hop 1: MCP client -> MCP server). Supply your IdP's values:
+  #
+  # mode: oauth
+  # issuer: "https://idp.example.com"
+  # audience: "mcp-server"
+  # resource_url: "https://mcp.example.com/mcp"
+  #
+  # Switching to oauth also requires, above: tls_terminated_upstream: true (or
+  # tls_cert_file/tls_key_file), since oauth refuses a plaintext listener.
 
   # Tool authorization (RBAC). REQUIRED under mode: oauth — you must opt in or
   # out explicitly with the `enabled` field. A tool_authorization block under
-  # mode: static or mode: disabled is rejected at startup.
+  # mode: static or mode: disabled is rejected at startup, which is why it is
+  # left commented out under the dev-mode default above.
   #
   # Turn it OFF (all authenticated callers can invoke any tool):
   #
@@ -94,19 +133,6 @@ mcp_client_auth:
   # list-brokers is structurally exempt — every authenticated caller can call
   # it regardless of their groups, since a caller needs it to discover which
   # broker aliases exist before invoking any other tool.
-
-# Development examples (uncomment one and comment out the oauth block above):
-#
-# mcp_client_auth:
-#   mode: disabled
-#   # Both dev modes default to binding 127.0.0.1 only. To expose mode: disabled
-#   # (no client auth) on a routable interface, you must acknowledge the risk:
-#   # listen_address: "0.0.0.0"
-#   # allow_remote_unauthenticated: true
-#
-# mcp_client_auth:
-#   mode: static
-#   dev_token: "static-token"
 
 # Enable the write/action tools (delete-queue-messages, clear-queue-stats,
 # disconnect-client, clear-client-stats). Default false — these write tools do

@@ -1,12 +1,12 @@
 # User Guide
 
-The Solace Event Broker MCP Server is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that connects AI assistants to Solace event brokers. It exposes broker management and monitoring capabilities as MCP tools, allowing AI agents like Claude to query broker status, inspect queues, diagnose client issues, and monitor message traffic through natural language.
+The Solace Event Broker MCP Server is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that connects AI assistants to Solace event brokers. It exposes event broker management and monitoring capabilities as MCP tools, allowing AI agents like Claude to query event broker status, inspect queues, diagnose client issues, and monitor message traffic through natural language.
 
 Application scenarios:
 
 - **Incident triage** — Query event broker status, queue activity, and slow consumers using natural language queries instead of direct SEMP API calls.
-- **Operational monitoring** — Monitor VPN status, client connections, and message rates across multiple brokers through a conversational interface.
-- **Multi-broker management** — Configure multiple event broker connections and address them by alias in queries.
+- **Operational monitoring** — Monitor VPN status, client connections, and message rates across multiple event brokers through a conversational interface.
+- **Multi-event-broker management** — Configure multiple event broker connections and address them by alias in queries.
 
 Built with Go using the official [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk).
 
@@ -19,6 +19,9 @@ Built with Go using the official [MCP Go SDK](https://github.com/modelcontextpro
   - [Connecting an MCP Client](#connecting-an-mcp-client)
   - [Example Queries](#example-queries)
 - [Tools Reference](#tools-reference)
+- [Recommended Environments](#recommended-environments)
+  - [Authentication](#authentication)
+  - [Deployment Targets](#deployment-targets)
 - [Troubleshooting](#troubleshooting)
 
 ## Prerequisites
@@ -27,9 +30,9 @@ The Solace Event Broker MCP Server requires:
 
 | Requirement | Details |
 |---|---|
-| **Solace event broker** | One or more brokers with Solace Element Management Protocol (SEMP) management enabled. The server connects to the SEMP management API (typically port 8080 for HTTP or 1943 for HTTPS). |
-| **SEMPv1+v2 reachability** | The machine running the MCP server must have network access to both the SEMPv1 (`/SEMP`) and SEMPv2 (`/SEMP/v2`) endpoints on each broker's SEMP management port. |
-| **Broker credentials** | Per-broker SEMP credentials: a username and password (basic auth), a static token (bearer auth), or an OAuth identity provider for token exchange (`auth.mode: oauth` — requires `mcp_client_auth.mode: oauth`; see [Authentication](authentication.md#step-2b-configure-broker-oauth-hop-2)). |
+| **Solace event broker** | One or more event brokers with Solace Element Management Protocol (SEMP) management enabled. The server connects to the SEMP management API (typically port 8080 for HTTP or 1943 for HTTPS). |
+| **SEMPv1+v2 reachability** | The machine running the MCP server must have network access to both the SEMPv1 (`/SEMP`) and SEMPv2 (`/SEMP/v2`) endpoints on each event broker's SEMP management port. |
+| **Event broker credentials** | Per-event-broker SEMP credentials: a username and password (basic auth), a static token (bearer auth), or an OAuth identity provider for token exchange (`auth.mode: oauth` — requires `mcp_client_auth.mode: oauth`; see [Authentication](authentication.md#step-2b-configure-broker-oauth-hop-2)). |
 | **Runtime environment** | One of: Docker, a supported OS/architecture for the binary (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64), or Kubernetes. |
 | **MCP client** | An MCP-compatible AI client such as Claude Code or Claude Desktop. |
 | **OAuth provider** (production only) | An OpenID Connect (OIDC)-compliant identity provider (for example, Keycloak, Auth0, Okta) is required when `mcp_client_auth.mode` is `oauth`. An OAuth provider is not required when `mode` is `disabled` or `static` (local development). |
@@ -38,7 +41,7 @@ The Solace Event Broker MCP Server requires:
 ## Limitations and Considerations
 
 - **No stdio transport** — The server runs as a standalone HTTP service and must be started before connecting an MCP client. It cannot be auto-launched as a subprocess by clients like Claude Desktop.
-- **Pagination limits** — List tools return up to 100 results by default and cap at 500 via the `maxResults` parameter. Brokers with more than 500 queues, clients, or VPNs require multiple queries.
+- **Pagination limits** — List tools return up to 100 results by default and cap at 500 via the `maxResults` parameter. Event brokers with more than 500 queues, clients, or VPNs require multiple queries.
 - **OAuth required in production** — Production deployments use `mcp_client_auth.mode: oauth`; the boot banner flags `disabled` and `static` as insecure modes. All MCP client connections must present a valid OAuth or JSON Web Token (JWT). Plan your identity provider integration before deploying to shared environments.
 
 ## Quick Start
@@ -91,7 +94,7 @@ What are the current message rates for default VPN on my-broker?
 
 ## Tools Reference
 
-The server exposes 24 read-only tools plus 16 write tools (40 total when write tools are enabled). For full per-tool parameters, output shape, and example invocations, see the [Tools Reference](tools-reference.md); this section is the narrative overview. All broker-querying tools require a `broker` parameter to identify which configured event broker to query; `list-brokers` and `describe-semp-schema` are the exceptions — `list-brokers` returns the available event broker aliases, and `describe-semp-schema` returns SEMPv2 schema slices from the embedded OpenAPI spec without contacting any broker. `describe-semp-schema` is primarily a helper: when a user says something like *"Create a queue named orders with a spool quota of 500 MB"*, the agent typically calls `describe-semp-schema` unprompted before the `create-queue` call, because the write tool descriptions point at it. Operators watching traces should expect it to fire immediately before a `create-*` or `update-*` call rather than being invoked directly. The write tools split into four action-API tools (operational actions against live objects) and 12 Config-API management tools (create/update/delete for Message VPNs, queues, topic endpoints, and REST delivery points); all are gated behind `enable_write_tools` (default off). Tools marked destructive via the MCP `destructiveHint` annotation (including `delete-queue-messages`, `disconnect-client`, and the service-affecting `update-*`/`delete-*` management tools) have descriptions that instruct the calling large language model (LLM) to obtain explicit user confirmation before invocation.
+The server exposes 24 read-only tools plus 16 write tools (40 total when write tools are enabled). For full per-tool parameters, output shape, and example invocations, see the [Tools Reference](tools-reference.md); this section is the narrative overview. All event-broker-querying tools require a `broker` parameter to identify which configured event broker to query; `list-brokers` and `describe-semp-schema` are the exceptions — `list-brokers` returns the available event broker aliases, and `describe-semp-schema` returns SEMPv2 schema slices from the embedded OpenAPI spec without contacting any event broker. `describe-semp-schema` is primarily a helper: when a user says something like *"Create a queue named orders with a spool quota of 500 MB"*, the agent typically calls `describe-semp-schema` unprompted before the `create-queue` call, because the write tool descriptions point at it. Operators watching traces should expect it to fire immediately before a `create-*` or `update-*` call rather than being invoked directly. The write tools split into four action API tools (operational actions against live objects) and 12 Config API management tools (create/update/delete for Message VPNs, queues, topic endpoints, and REST Delivery Points); all are gated behind `enable_write_tools` (default off). Tools marked destructive via the MCP `destructiveHint` annotation (including `delete-queue-messages`, `disconnect-client`, and the service-affecting `update-*`/`delete-*` management tools) have descriptions that instruct the calling large language model (LLM) to obtain explicit user confirmation before invocation.
 
 ### Discovery
 
@@ -103,8 +106,8 @@ The server exposes 24 read-only tools plus 16 write tools (40 total when write t
 
 | Tool | Description |
 |---|---|
-| `get-broker-status` | Curated point-in-time broker status snapshot: edition and version, uptime and restart reason, broker-tier scaling limits and resource headroom, memory utilization, and message-spool state with high-availability (HA) roles and disk utilization. On hardware appliances it additionally returns a `hardwareDetails` section with chassis identity, CPU, memory, power, disks, and blade inventory. Reports raw state, not a pass/fail verdict. |
-| `get-redundancy-status` | Event broker redundancy and high-availability status: configuration/operational status, active-standby role, mate router name, mate link state, and per-virtual-router activity. |
+| `get-broker-status` | Curated point-in-time event broker status snapshot: edition and version, uptime and restart reason, event-broker-tier scaling limits and resource headroom, memory utilization, and message-spool state with high-availability (HA) roles and disk utilization. On hardware appliances it additionally returns a `hardwareDetails` section with chassis identity, CPU, memory, power, disks, and blade inventory. Reports raw state, not a pass/fail verdict. |
+| `get-redundancy-status` | Event broker redundancy and high-availability status: configuration/operational status, active/standby role, mate router name, mate link state, and per-virtual-router activity. |
 
 ### Replication
 
@@ -134,7 +137,7 @@ The server exposes 24 read-only tools plus 16 write tools (40 total when write t
 | `list-clients` | List active client connections in a VPN with connection details, uptime, and slow subscriber status. Default 100 results, max 500. |
 | `get-client-details` | Performance metrics for a specific connected client: message rates, slow subscriber status, and egress discard counts. Use to diagnose slow consumers. |
 | `list-client-subscriptions` | Topic subscriptions for a specific client. Default 100 results, max 500. |
-| `list-slow-subscribers` | Filtered list of clients in a VPN flagged with the broker's slow-subscriber field (server-side `where` filter). Narrow signal — catches direct-messaging or replication-bridge backpressure; does NOT flip for slow guaranteed-message consumers (slow to ACK). For those, use `list-queues` / `get-queue-metrics`. Default 100 results, max 500. |
+| `list-slow-subscribers` | Filtered list of clients in a VPN flagged with the event broker's slow-subscriber field (server-side `where` filter). Narrow signal — catches Direct-messaging or replication-bridge backpressure; does NOT flip for slow Guaranteed-message consumers (slow to ACK). For those, use `list-queues` / `get-queue-metrics`. Default 100 results, max 500. |
 
 ### REST Delivery Points
 
@@ -148,7 +151,7 @@ The server exposes 24 read-only tools plus 16 write tools (40 total when write t
 | Tool | Description |
 |---|---|
 | `list-bridges` | List bridges in a VPN with enabled state, inbound/outbound connection state, and last inbound failure reason. Default 100 results, max 500. |
-| `get-bridge-status` | Detailed status for a single bridge: enabled state, inbound/outbound connection state, last inbound failure reason, uptime, remote VPN/broker, connection establisher, and failure category. Bridges are identified by `bridgeName` + `bridgeVirtualRouter`. |
+| `get-bridge-status` | Detailed status for a single bridge: enabled state, inbound/outbound connection state, last inbound failure reason, uptime, remote VPN/event broker, connection establisher, and failure category. Bridges are identified by `bridgeName` + `bridgeVirtualRouter`. |
 
 ### Kafka
 
@@ -163,16 +166,16 @@ The server exposes 24 read-only tools plus 16 write tools (40 total when write t
 
 | Tool | Description |
 |---|---|
-| `get-discard-stats` | Broker-wide or per-VPN discard aggregates: client-level ingress/egress discards plus broker-wide spool discards (native SEMPv1). Per-VPN scope returns client-level discards only — the broker exposes no per-VPN spool breakdown via SEMPv1. |
+| `get-discard-stats` | Event-broker-wide or per-VPN discard aggregates: client-level ingress/egress discards plus event-broker-wide spool discards (native SEMPv1). Per-VPN scope returns client-level discards only — the event broker exposes no per-VPN spool breakdown via SEMPv1. |
 | `list-queue-discards` | Per-queue discard counters for a VPN: TTL-expired, max-redelivery, spool-quota-exceeded, and other discard categories. Complements `get-discard-stats` with queue-level granularity. Default 100 results, max 500. |
 
 ### Actions
 
-These tools modify broker state via the SEMPv2 action API. There is **one tool per action** so each tool's behavior is unambiguous: the destructive tools carry the MCP `destructiveHint` annotation and a description that instructs the calling LLM to obtain explicit user confirmation — restating the target (broker, VPN, queue or client) and the effect — before invocation; the non-destructive stats-reset tools do not. The tool manager logs a WARNING line on every destructive invocation for audit.
+These tools modify event broker state via the SEMPv2 action API. There is **one tool per action** so each tool's behavior is unambiguous: the destructive tools carry the MCP `destructiveHint` annotation and a description that instructs the calling LLM to obtain explicit user confirmation — restating the target (event broker, VPN, queue or client) and the effect — before invocation; the non-destructive stats-reset tools do not. The tool manager logs a WARNING line on every destructive invocation for audit.
 
-**Naming convention.** Action-API tools use `<verb>-<resource>-<object>` (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`). The Config-API management tools ([following](#management-config-api)) use `<verb>-<object>` — a `create-`, `update-`, or `delete-` prefix on `message-vpn`, `queue`, `topic-endpoint`, or `rdp`. Action tools run an operational action against a live object; management tools change configuration.
+**Naming convention.** Action API tools use `<verb>-<resource>-<object>` (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`). The Config API management tools ([following](#management-config-api)) use `<verb>-<object>` — a `create-`, `update-`, or `delete-` prefix on `message-vpn`, `queue`, `topic-endpoint`, or `rdp`. Action tools run an operational action against a live object; management tools change configuration.
 
-**Disabled by default.** These four action tools — together with the 12 Config-API management tools following — are write tools (they change broker state) and are gated behind the server-level `enable_write_tools` flag. With the default (`false`) they are not registered with the MCP server and do not appear in `tools/list` — clients see only the read-only tool set. Set `enable_write_tools: true` in the YAML configuration to expose them. This gating is independent of `mcp_client_auth.mode`: an authenticated client still cannot invoke these tools when the flag is off, because the server never registers them.
+**Disabled by default.** These four action tools — together with the 12 Config API management tools following — are write tools (they change event broker state) and are gated behind the server-level `enable_write_tools` flag. With the default (`false`) they are not registered with the MCP server and do not appear in `tools/list` — clients see only the read-only tool set. Set `enable_write_tools: true` in the YAML configuration to expose them. This gating is independent of `mcp_client_auth.mode`: an authenticated client still cannot invoke these tools when the flag is off, because the server never registers them.
 
 `enable_write_tools` is the only enforced control. `destructiveHint` and the confirmation text in tool descriptions are hints, not enforced by the MCP protocol — whether the user is actually prompted depends on the client and the model.
 
@@ -187,7 +190,7 @@ These tools modify broker state via the SEMPv2 action API. There is **one tool p
 
 ### Management (Config API)
 
-These tools create, update, and delete broker configuration objects via the SEMPv2 config API, and are gated behind `enable_write_tools` alongside the preceding action tools. `create-*` is additive; `update-*` applies a partial (PATCH) update, changing only the fields supplied; `delete-*` removes the object. `update-*` and `delete-*` can be service-affecting (for example, disabling a VPN drops its client connections) and both carry the `destructiveHint` annotation; `create-*` does not. Every tool's description instructs the calling large language model (LLM) to obtain explicit user confirmation — restating the target and effect — before invocation. Create and update tools accept a configuration object (`msgVpnConfig`, `queueConfig`, `topicEndpointConfig`, `rdpConfig`); any attribute omitted takes the broker default.
+These tools create, update, and delete event broker configuration objects via the SEMPv2 config API, and are gated behind `enable_write_tools` alongside the preceding action tools. `create-*` is additive; `update-*` applies a partial (PATCH) update, changing only the fields supplied; `delete-*` removes the object. `update-*` and `delete-*` can be service-affecting (for example, disabling a VPN drops its client connections) and both carry the `destructiveHint` annotation; `create-*` does not. Every tool's description instructs the calling LLM to obtain explicit user confirmation — restating the target and effect — before invocation. Create and update tools accept a configuration object (`msgVpnConfig`, `queueConfig`, `topicEndpointConfig`, `rdpConfig`); any attribute omitted takes the event broker default.
 
 | Tool | Destructive | Description |
 |---|---|---|
@@ -208,9 +211,9 @@ These tools create, update, and delete broker configuration objects via the SEMP
 
 ### Authentication
 
-The server supports open access, static token, and OAuth/OIDC authentication for MCP clients, and basic auth, bearer token, or OAuth (RFC 8693 token exchange) for broker connections. Under OAuth mode, the server also supports claim-based tool authorization — gating individual MCP tools by the caller's group or role memberships — which must be opted in or out explicitly. See the [Authentication](authentication.md) guide for setup instructions (including the broker OAuth walkthrough) and the [Tool Authorization](configuration.md#tool-authorization) reference for the policy schema and audit-log shape.
+The server supports open access, static token, and OAuth/OIDC authentication for MCP clients, and basic auth, bearer token, or OAuth (RFC 8693 token exchange) for event broker connections. Under OAuth mode, the server also supports claim-based tool authorization — gating individual MCP tools by the caller's group or role memberships — which must be opted in or out explicitly. See the [Authentication](authentication.md) guide for setup instructions (including the event broker OAuth walkthrough) and the [Tool Authorization](configuration.md#tool-authorization) reference for the policy schema and audit-log shape.
 
-## Deployment Targets
+### Deployment Targets
 
 | Environment | Notes |
 |---|---|
@@ -222,16 +225,16 @@ The server supports open access, static token, and OAuth/OIDC authentication for
 
 ### Server Won't Start
 
-- **Configuration file not found** — The server looks for the YAML configuration file in this order: `CONFIG_FILE` env var, `/etc/mcp-server/config.yaml`, then `./broker-config.yaml`. Set `CONFIG_FILE` explicitly if the file is in a non-standard location.
+- **Configuration file not found** — The server looks for the YAML configuration file in this order: `CONFIG_FILE` environment variable, `/etc/mcp-server/config.yaml`, then `./broker-config.yaml`. Set `CONFIG_FILE` explicitly if the file is in a non-standard location.
 - **TLS misconfiguration** — Both `tls_cert_file` and `tls_key_file` must be set together. Providing only one is a startup error.
 - **OAuth configuration missing** — When `mcp_client_auth.mode` is `oauth`, the `issuer`, `audience`, and `resource_url` fields are required. For local testing, set `mcp_client_auth.mode: disabled` or `static`.
-- **Broker OAuth (Hop 2) configuration rejected** — A broker with `auth.mode: oauth` requires `mcp_client_auth.mode: oauth` and a complete `broker_oauth:` block; missing or invalid fields are rejected at configuration load, before the server starts. See [Step 2b](authentication.md#step-2b-configure-broker-oauth-hop-2) for the full field reference, including `audience_parameter_name`, which only accepts `audience` in this version.
+- **Broker OAuth (Hop 2) configuration rejected** — An event broker with `auth.mode: oauth` requires `mcp_client_auth.mode: oauth` and a complete `broker_oauth:` block; missing or invalid fields are rejected at configuration load, before the server starts. See [Step 2b](authentication.md#step-2b-configure-broker-oauth-hop-2) for the full field reference, including `audience_parameter_name`, which only accepts `audience` in this version.
 
-### Cannot Connect to Broker
+### Cannot Connect to Event Broker
 
-- **SEMP not enabled** — Verify the broker's SEMP management interface is accessible at the configured URL (for example, `http://broker:8080/SEMP`).
+- **SEMP not enabled** — Verify the event broker's SEMP management interface is accessible at the configured URL (for example, `http://broker:8080/SEMP`).
 - **Authentication failure** — Check that credentials in the `.env` file are correct. For basic auth, verify both `username` and `password`. For bearer mode, verify the `token`. For OAuth mode, verify the `broker_oauth:` block — see [Step 2b](authentication.md#step-2b-configure-broker-oauth-hop-2).
-- **TLS certificate errors** — If the event broker uses a self-signed certificate, enable `insecure_skip_verify` in the broker configuration. In production (`mcp_client_auth.mode: oauth`) this is refused at startup unless you also set `allow_insecure_broker_tls: true` to acknowledge the risk. See [Configuration](configuration.md) for details.
+- **TLS certificate errors** — If the event broker uses a self-signed certificate, enable `insecure_skip_verify` in the event broker configuration. In production (`mcp_client_auth.mode: oauth`) this is refused at startup unless you also set `allow_insecure_broker_tls: true` to acknowledge the risk. See [Configuration](configuration.md) for details.
 
 ### Tool Returns an Error
 
@@ -243,18 +246,19 @@ Tool errors include structured fields to help diagnose the problem:
 | `retryable` | `true` if retrying may succeed (rate limits, transient failures). | Always |
 | `status` | HTTP status code from the SEMP API. | SEMPv2, SEMPv1, or retries-exhausted (when non-zero) |
 | `operation` | The SEMP operation that failed (for example, `monitor/getMsgVpnQueues`). | SEMPv2 |
-| `sempStatus` | Broker error status string from `meta.error.status` (for example, `NOT_FOUND`). | SEMPv2, when non-empty |
-| `sempCode` | Broker error code from `meta.error.code` (for example, `6`). | SEMPv2, when non-zero |
+| `sempStatus` | Event broker error status string from `meta.error.status` (for example, `NOT_FOUND`). | SEMPv2, when non-empty |
+| `sempCode` | Event broker error code from `meta.error.code` (for example, `6`). | SEMPv2, when non-zero |
 | `kind` | SEMPv1 error classification: `http`, `execute-fail`, `parse`, `permission`, `limit`, or `unknown`. | SEMPv1 |
-| `reasonCode` | SEMPv1 reason code from the broker response. | SEMPv1 `execute-fail` responses |
+| `reasonCode` | SEMPv1 reason code from the event broker response. | SEMPv1 `execute-fail` responses |
 | `attempts` | Number of attempts made before retries were exhausted. | Retries exhausted |
 | `suggestions` | Array of actionable hints for resolving the error. | Any source, when available |
 
 Common causes:
-- **404** — The specified VPN, queue, client, or RDP does not exist. Check the name for typos.
+- **400 with `sempStatus: "NOT_FOUND"` (`sempCode: 6`)** — The specified VPN, queue, client, or RDP does not exist on the event broker. Check the name for typos. Detect this from `sempCode`/`sempStatus`, not the HTTP status — the server's own `suggestions` hints key off `sempCode` for the same reason.
+- **404** — The request never reached the event broker's SEMP API at all: a misconfigured broker `url`, an incorrect SEMP base path, or a SEMP version mismatch. Check the broker's `url` and SEMP version compatibility; not retried.
 - **401 / 403** — Event broker credentials lack permission for the requested operation. Verify the SEMP user has monitor-level access.
-- **429** — Rate limiting from a proxy, gateway, or load balancer in front of the broker. (The broker itself does not emit 429 over SEMP.) Retryable — the server retries automatically based on the configured retry policy.
-- **503** — The broker is overloaded or out of resources. Retryable — the server retries automatically based on the configured retry policy.
+- **429** — Rate limiting from a proxy, gateway, or load balancer in front of the event broker. (The event broker itself does not emit 429 over SEMP.) Retryable — the server retries automatically based on the configured retry policy.
+- **503** — The event broker is overloaded or out of resources. Retryable — the server retries automatically based on the configured retry policy.
 
 ### "Session not found" Errors
 

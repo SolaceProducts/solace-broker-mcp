@@ -11,22 +11,53 @@ data:
     port: 9090
     log_level: info
 
-    mcp_client_auth:
-      mode: oauth
-      issuer: "https://idp.example.com"
-      audience: "mcp-server"
-      resource_url: "https://mcp.example.com/mcp"
+    # A pod must bind all interfaces or the Service and the kubelet probes
+    # cannot reach it. The dev modes default to 127.0.0.1, so set it here.
+    listen_address: "0.0.0.0"
 
-    # TLS for the server's own listener is terminated by the ingress/service in
-    # front of this pod (the Service exposes plaintext :9090). Acknowledge that
-    # so mode: oauth does not refuse to start; the server logs a startup WARN.
-    # To terminate TLS in the pod instead, set tls_cert_file/tls_key_file and
-    # remove this line.
+    mcp_client_auth:
+      # Default: a shared static token, so this deploys and runs with no
+      # identity provider to set up. DEV_TOKEN ships EMPTY in the Secret and
+      # the server refuses to start until you set it — an unedited apply must
+      # not come up on a credential published in this repository. Because the
+      # pod binds all interfaces, the token is sent in cleartext to anything in
+      # the cluster that can route to the Service; the server logs two startup
+      # INSECURE MODE warnings saying so. Keep the Service ClusterIP.
+      #
+      # FOR PRODUCTION, TURN ON OAUTH: delete the two lines below and uncomment
+      # the oauth block that follows. OAuth is the only mode intended to be
+      # network-reachable, and it is the only one that gives you per-caller
+      # identity in the audit log.
+      mode: static
+      dev_token: "${DEV_TOKEN}"
+
+      # Production — supply your identity provider's values:
+      #
+      # mode: oauth
+      # issuer: "https://idp.example.com"
+      # audience: "mcp-server"
+      # resource_url: "https://mcp.example.com/mcp"
+      #
+      # tool_authorization is REQUIRED under mode: oauth — the server refuses
+      # to start unless `enabled` is set explicitly. It is rejected under the
+      # dev modes, so it stays commented out while mode: static is in use.
+      # `false` lets any authenticated caller invoke any registered tool; see
+      # docs/authentication.md to gate tools by the caller's groups.
+      #
+      # tool_authorization:
+      #   enabled: false
+
+    # Required under mode: oauth, which refuses a plaintext listener. TLS for
+    # the server's own listener is terminated by the ingress/gateway in front of
+    # this pod (the Service exposes plaintext :9090), so acknowledge that here
+    # when you turn oauth on; the server then logs a startup WARN and serves
+    # plaintext. To terminate TLS in the pod instead, set tls_cert_file/
+    # tls_key_file and leave this off.
     #
-    # The pod binds all interfaces (required so the Service/ingress can reach it),
-    # so the plaintext port MUST NOT be exposed beyond the cluster — keep the
-    # Service ClusterIP and terminate TLS at an Ingress or gateway in front of it.
-    tls_terminated_upstream: true
+    # Either way the plaintext port MUST NOT be exposed beyond the cluster —
+    # keep the Service ClusterIP and terminate TLS at an Ingress or gateway.
+    #
+    # tls_terminated_upstream: true
 
     semp:
       max_concurrent_per_broker: 10

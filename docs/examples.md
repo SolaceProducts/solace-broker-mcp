@@ -4,7 +4,7 @@ Task-oriented examples for connecting clients and using the tools. For the full
 per-tool schema reference see [Tools Reference](tools-reference.md); for setup and
 deployment see the [README](../README.md) and [User Guide](user-guide.md).
 
-> The server runs as a standalone HTTP service — it has **no stdio transport** and
+> The server runs as a standalone HTTP service. It has **no stdio transport** and
 > cannot be auto-launched as a subprocess. Every client connects over Streamable
 > HTTP to an already-running server (default `http://localhost:9090/mcp`). Start
 > the server first.
@@ -21,8 +21,8 @@ deployment see the [README](../README.md) and [User Guide](user-guide.md).
 
 ## Connect Claude Desktop
 
-Claude Desktop connects to this server as a **remote (HTTP) MCP server**, not a
-stdio subprocess. Two methods:
+Claude Desktop connects to this server as a **remote (HTTP) Model Context
+Protocol (MCP) server**, not a stdio subprocess. Two methods:
 
 ### Method A — Custom Connector (Recommended)
 
@@ -34,12 +34,12 @@ stdio subprocess. Two methods:
    `/.well-known/oauth-protected-resource`). In `mode: disabled` or `static`, no
    browser flow runs.
 
-No config file editing required.
+No configuration file editing required.
 
 ### Method B — `mcp-remote` Bridge
 
 Use the [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) npm bridge when
-you prefer file-based config. Edit `claude_desktop_config.json`:
+you prefer file-based configuration. Edit `claude_desktop_config.json`:
 
 - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
@@ -95,12 +95,12 @@ See [Authentication](authentication.md) for full OAuth setup.
 
 ## Natural-Language Queries
 
-Once connected, ask in plain language. The agent selects the tool and fills
+After connecting, ask in plain language. The agent selects the tool and fills
 parameters. Representative queries and the shape they return:
 
 | You ask | Tool invoked | Returns (shape) |
 |---|---|---|
-| "What brokers are configured?" | `list-brokers` | `{ "brokers": ["prod-broker", "dev-broker"] }` |
+| "What event brokers are configured?" | `list-brokers` | `{ "brokers": ["prod-broker", "dev-broker"] }` |
 | "What's prod-broker's current status?" | `get-broker-status` | envelope with version, uptime, resource and spool utilization |
 | "List queues with a backlog on the default VPN" | `list-queues` | envelope `{ "queues": [ { "queueName": ..., "spooledMsgCount": ... }, ... ] }` |
 | "Why is orders.q backing up?" | `get-queue-metrics` | envelope `{ "queueMetrics": { "spooledMsgCount": ..., "txUnackedMsgCount": ..., "bindCount": ... } }` |
@@ -108,7 +108,7 @@ parameters. Representative queries and the shape they return:
 | "Are we dropping messages anywhere?" | `get-discard-stats` | `{ "clientDiscards": {...}, "spoolDiscards": {...} }` |
 | "Create a queue orders.q in the default VPN" | `create-queue` | envelope `{ "createQueue": { ... } }` (agent confirms first; write tool) |
 
-Read-only tools return their broker data in a step-keyed envelope — see
+Read-only tools return their event broker data in a step-keyed envelope. See
 [Tools Reference → Output](tools-reference.md#output-the-step-keyed-envelope).
 
 ## Tool Invocations by Category
@@ -123,7 +123,7 @@ request). Replace `prod-broker` with one of your configured aliases (from
 { "name": "list-brokers", "arguments": {} }
 ```
 
-**Broker status / replication**
+**Event Broker Status / Replication**
 
 ```json
 { "name": "get-broker-status", "arguments": { "broker": "prod-broker" } }
@@ -169,7 +169,7 @@ request). Replace `prod-broker` with one of your configured aliases (from
 { "name": "list-queue-discards", "arguments": { "broker": "prod-broker", "msgVpnName": "default" } }
 ```
 
-**Action tools** (only available when `enable_write_tools: true`; destructive tools
+**Action Tools** (only available when `enable_write_tools: true`; destructive tools
 prompt for confirmation through the agent):
 
 ```json
@@ -179,10 +179,10 @@ prompt for confirmation through the agent):
 { "name": "disconnect-client", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "clientName": "consumer-7" } }
 ```
 
-**Management tools** (Config API; only available when `enable_write_tools: true`;
+**Management Tools** (Config API; only available when `enable_write_tools: true`;
 `update-*`/`delete-*` prompt for confirmation through the agent). Create and
-update a config object; omitted attributes take broker defaults on create
-or are left unchanged on update:
+update a configuration object; omitted attributes take event broker defaults on
+create or are left unchanged on update:
 
 ```json
 { "name": "create-message-vpn", "arguments": { "broker": "prod-broker", "msgVpnName": "orders-vpn", "msgVpnConfig": { "enabled": true, "maxConnectionCount": 100 } } }
@@ -198,7 +198,7 @@ or are left unchanged on update:
 
 ## Multi-Broker Configuration
 
-Configure multiple brokers under `brokers:`; the map key is the alias used as the
+Configure multiple event brokers under `brokers:`; the map key is the alias used as the
 `broker` parameter and in `list-brokers` output. Aliases must be 1-63 characters,
 letters/digits/hyphens only, starting and ending alphanumeric, and are compared
 case-insensitively.
@@ -236,7 +236,7 @@ Compare message rates between prod-broker and dev-broker.
 
 ## Static Token (Local Development)
 
-Server config:
+Server configuration:
 
 ```yaml
 mcp_client_auth:
@@ -265,7 +265,7 @@ Connect with the matching bearer token (see [Claude Code](#connect-claude-code) 
 
 ## OAuth (Production)
 
-Server config (HTTPS broker URLs and issuer enforced in `oauth` mode):
+Server configuration (HTTPS event broker URLs and issuer enforced in `oauth` mode):
 
 ```yaml
 mcp_client_auth:
@@ -289,6 +289,6 @@ brokers:
       password: "${BROKER_PASSWORD}"
 ```
 
-Clients authenticate via the OAuth 2.1 Authorization Code + PKCE flow. Full IdP
-setup (Keycloak audience mapper, client registration, DCR) is in
-[Authentication](authentication.md).
+Clients authenticate via the OAuth 2.1 Authorization Code + PKCE flow. Full
+identity provider (IdP) setup (Keycloak audience mapper, client registration,
+Dynamic Client Registration (DCR)) is in [Authentication](authentication.md).

@@ -101,7 +101,11 @@ early adopters request it.
 
 ### Kubernetes deployment section in user documentation
 
-**Status:** Pending
+**Status:** Largely delivered by SOL-153712 —
+[`deploy/kubernetes/README.md`](../../deploy/kubernetes/README.md) now covers
+the manifests, the mandatory pre-apply edits (ConfigMap and Secret), image-tag
+naming, health probes, the shutdown grace budget, and the switch to production
+OAuth. Remaining: a Helm chart and ingress/TLS worked examples.
 
 **Requirement:** The upcoming user-facing documentation should include a
 Kubernetes deployment guide covering the example manifests in
