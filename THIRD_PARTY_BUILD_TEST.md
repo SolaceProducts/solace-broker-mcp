@@ -202,9 +202,9 @@ All five come from one repository, pinned to a single commit.
 | `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `6c01e11` | Solace |
 | `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `6c01e11` | Solace |
 
-`7ffc795` is a branch commit, not a tag, so there is no release to record beside
-it. The repository itself is Apache-2.0. Re-pinned 2026-08-28 by the Dependabot
-`github-actions` group update (#345); the prior pin was `55ea947`.
+`6c01e11` is a branch commit, not a tag, so there is no release to record beside
+it. The repository itself is Apache-2.0. Re-pinned 2026-08-31 by the Dependabot
+`github-actions` group update (#350); the prior pin was `7ffc795`.
 
 Two entries have been dropped from this table, both by the reverse-direction
 check rather than by anyone remembering to look.
