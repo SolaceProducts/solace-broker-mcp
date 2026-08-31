@@ -51,11 +51,17 @@
 #                             ground_truth.{jq,answer_regex} and
 #                             ground_truth.{shell,expect_stdout_regex} are
 #                             mutually exclusive per scope.
-#   required_substrings       each MUST appear in the answer (case-insensitive)
-#   required_substrings_any_of  at least ONE MUST appear (case-insensitive) —
+#   required_substrings       each MUST match the answer (case-insensitive)
+#   required_substrings_any_of  at least ONE MUST match (case-insensitive) —
 #                             use when paraphrases are equally valid (e.g.
 #                             healthy / operational / up)
-#   forbidden_substrings      each MUST NOT appear in the answer
+#   forbidden_substrings      each MUST NOT match the answer
+#                             All three are POSIX ERE patterns matched with
+#                             `grep -qiE`, not literals: a plain phrase is
+#                             still a valid pattern, and `(a|b)`, `?` and `.`
+#                             are available where one phrasing is too narrow.
+#                             `$` is unavailable as an anchor — envsubst runs
+#                             over the scenario file first.
 #   numeric_match.regex       extracts a number from the answer
 #   numeric_match.min/max     extracted number MUST fall in [min, max]
 #   followup                  optional second turn. Object with the same
@@ -517,23 +523,28 @@ run_assertions() {
     fi
 
     # ── Substrings ──
+    # `grep -qiE`, not `-qiF`: needles are POSIX ERE patterns. A plain phrase
+    # is still a valid pattern, so the literal needles across scenarios/ keep
+    # their old meaning — none of them contains an ERE metacharacter. Rows
+    # where a single phrasing is too narrow (d2's honesty assertions) spell
+    # the alternatives out as a pattern instead of enumerating literals.
     while IFS= read -r needle; do
         [ -z "$needle" ] && continue
-        grep -qi -- "$needle" <<<"$answer" || fail "$label: required substring '$needle' missing"
+        grep -qiE -- "$needle" <<<"$answer" || fail "$label: required substring '$needle' missing"
     done <<<"$required"
 
     if [ -n "$required_any" ]; then
         local matched_any=""
         while IFS= read -r needle; do
             [ -z "$needle" ] && continue
-            if grep -qi -- "$needle" <<<"$answer"; then matched_any="$needle"; break; fi
+            if grep -qiE -- "$needle" <<<"$answer"; then matched_any="$needle"; break; fi
         done <<<"$required_any"
         [ -z "$matched_any" ] && fail "$label: no substring from required_substrings_any_of present: $(echo "$required_any" | tr '\n' ' ')"
     fi
 
     while IFS= read -r needle; do
         [ -z "$needle" ] && continue
-        if grep -qi -- "$needle" <<<"$answer"; then
+        if grep -qiE -- "$needle" <<<"$answer"; then
             # Intentional: any single forbidden hit is a hard fail, so stop
             # at the first one rather than spamming N fail lines for the
             # same logical violation.

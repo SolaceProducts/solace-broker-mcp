@@ -47,6 +47,7 @@ Moving pointers let consumers track a stream instead of a fixed version:
 - No performance regression **[Planned]**
 - Release notes drafted — the GitHub Release body is minted from that version's `CHANGELOG.md` block, with the auto-generated PR list appended beneath; a missing block fails the release **[Implemented]**
 - Every binary **archive** actually runs — `.github/scripts/smoke-test-binary.sh` extracts each matrix leg's archived `.tar.gz` (the artifact as uploaded, not a binary freshly built in the build job's workspace) and runs `--version`, failing if the exit is non-zero or the reported version doesn't match the tag. `linux/amd64`, `darwin/amd64`, and `darwin/arm64` run natively (`ubuntu-latest`, `macos-15-intel`, `macos-latest`); `linux/arm64` has no available native or self-hosted ARM runner and runs under QEMU user-mode emulation instead. Runs as `smoke-test`, a `needs` of `release` alongside `build-binaries` and `build-docker` **[Implemented]**. **Gap, not yet covered:** the container image `build-docker` pushes comes from a separate `buildx` build, not the archives this smoke test extracts, and the two jobs run in parallel — an image with a broken binary inside it can still reach `ghcr.io` live without ever being executed, and a registry push cannot be withdrawn. Closing this needs a `--version` run against the built image before push, which would also serialize the image build behind the archive legs; deliberately left as a follow-up rather than folded in here **[Planned]**
+- SBOM published, but not gating on its own absence — `cyclonedx-gomod` (pinned `v1.10.0`) generates a CycloneDX SBOM against the same closure `THIRD_PARTY_LICENSES.md` inventories, in the `licenses` job, with `continue-on-error: true`: a generation failure degrades the release to "no SBOM attached," never to "no release," per SOL-148440's own note that the SBOM must not gate. What *is* gating: once an SBOM exists, `.github/scripts/sbom-check.sh` verifies its dependency set matches `THIRD_PARTY_LICENSES.md` — a real divergence is treated as a bug in one of the two artifacts, not a tooling-availability problem, and fails the job like any other compliance drift here **[Implemented]**
 
 **Stable gate** — promotes a candidate to a stable version (drops the pre-release suffix):
 
@@ -75,7 +76,7 @@ Pushing the tag runs `.github/workflows/release.yml`, which:
 3. Builds binaries for `linux` and `darwin` × `amd64` and `arm64`, attesting each archive's build provenance in the job that built it.
 4. Smoke-tests each of the four archived binaries — extracts the artifact and runs `--version`, asserting a clean exit and that the reported version matches the tag. `linux/arm64` is verified under QEMU emulation since no native ARM Linux runner is available; the darwin legs run on their native macOS runners.
 5. Builds and pushes a multi-arch image to `ghcr.io/solaceproducts/solace-broker-mcp` (`{version}`, `{major}.{minor}`, `latest`, `sha-<short-sha>` tags), and attests the image digest, pushing the attestation to the registry alongside it.
-6. Publishes a GitHub Release whose notes are the tagged version's `CHANGELOG.md` block (with the auto-generated PR list appended beneath), plus the binary archives and SHA-256 checksums. If no `## [X.Y.Z]` block exists for the tag, the release fails rather than falling back to auto-only notes.
+6. Publishes a GitHub Release whose notes are the tagged version's `CHANGELOG.md` block (with the auto-generated PR list appended beneath), plus the binary archives, the SBOM (when generation succeeded), and SHA-256 checksums covering everything actually attached. If no `## [X.Y.Z]` block exists for the tag, the release fails rather than falling back to auto-only notes.
 
 Anyone with permission to push tags can cut a release.
 
@@ -85,7 +86,7 @@ The jobs are not fully serialized:
 push v* tag
   ├─> test               (reuses build-and-test.yml)
   ├─> release-notes      (CHANGELOG block must exist)
-  ├─> licenses           (inventory must match the binary)
+  ├─> licenses           (inventory must match the binary; also generates and verifies the SBOM)
   └─> release-readiness  (Guardian gate)
 
 waits on
@@ -143,7 +144,7 @@ If the target refuses (exits non-zero), that is not a bug to work around: `licen
 After pushing the tag:
 
 1. Watch the run: `gh run list --workflow=release.yml --limit 1`; on failure, `gh run view <run-id> --log`.
-2. Verify the release: `gh release view <tag>` shows four binary archives, `checksums-sha256.txt`, and the curated CHANGELOG notes (with the PR list appended); the image tags are present on `ghcr.io/solaceproducts/solace-broker-mcp`.
+2. Verify the release: `gh release view <tag>` shows four binary archives, `checksums-sha256.txt`, and the curated CHANGELOG notes (with the PR list appended); the image tags are present on `ghcr.io/solaceproducts/solace-broker-mcp`. Note whether `solace-broker-mcp-<tag>.cdx.json` is also present — it's best-effort (see SBOM and dependency classification below), so its absence isn't a failed release, but a run of misses is worth a look at the `licenses` job's log.
 3. Spot-check a binary: download the archive for your platform, verify it (`shasum -a 256 -c checksums-sha256.txt --ignore-missing`), and run `./solace-broker-mcp --version` — it prints the tag. CI already asserted this for all four archives in `smoke-test` before publishing; this is a trust-but-verify check on your own machine, not the first time it's been checked.
 4. Verify the attestations on both artifact kinds. `--signer-workflow` and `--source-digest` are what make this a check rather than a look: without them the command binds only the repository, and its output names the build and signer workflow but never prints a commit SHA, so there is nothing to eyeball. With them, a wrong builder or a wrong source commit fails the command.
 
@@ -172,6 +173,21 @@ After pushing the tag:
 5. Announce once verified: internal channels, and the [Solace Community](https://solace.community/) for releases worth a wider note.
 
 If a job fails for environmental reasons, re-run it: `gh run rerun <run-id>`. Never delete and re-push a tag to retry — tags are immutable (see Versioning). If the build itself is bad, fix on `main` and tag the next PATCH (see Rollback).
+
+### SBOM and dependency classification
+
+**SBOM — generated fresh every release, nothing to do manually.** `cyclonedx-gomod app -main cmd/server` (pinned `v1.10.0`, matching this repo's Go version so it never forces a toolchain download) runs in the `licenses` job against the same closure `THIRD_PARTY_LICENSES.md` inventories, and is verified against that file by `.github/scripts/sbom-check.sh` before being attached to the release as `solace-broker-mcp-<tag>.cdx.json`, checksummed alongside every other asset. As covered in Gates above: generation is allowed to fail without blocking the release (SOL-148440 — the SBOM is not gating on its own absence), but once one exists, a real divergence from `THIRD_PARTY_LICENSES.md` is treated as a bug and does block, the same as any other compliance drift here.
+
+If a release shipped without an SBOM (check its assets — `.cdx.json` missing means generation failed that run), that's a signal to look at the `licenses` job's log for that tag, not something to regenerate after the fact; the next tag's release will simply try again.
+
+**Classification record (`THIRD_PARTY_CLASSIFICATION.md`) — a committed snapshot, not a generated artifact.** It records Solace's third-party policy classification (green/yellow/red) for the same dependency closure, sourced from FOSSA's actual policy result for project `SolaceProducts_solace-broker-mcp` — not inferred from licence type alone, since FOSSA's configured policy is what's authoritative for what counts as a conflict. It stays committed rather than regenerated at release time because a yellow approval is a human decision that must survive a re-run.
+
+**When a new dependency lands** (a genuinely new module, not a version bump of an existing one — those are covered by `make refresh-third-party-inventory` above and need no classification change):
+
+1. Check its licence against FOSSA's Dependencies-tab verdict for that exact module and version — `https://app.fossa.com/projects/custom+48578/SolaceProducts_solace-broker-mcp` — not against licence type alone.
+2. Permissive (Apache-2.0, MIT, BSD-3-Clause, ISC, and similar) → add it to the green table, no approval needed.
+3. Weak copyleft (MPL-2.0 and similar) → add it to the yellow table, and get a named approver and date before merging — the same standard the two existing yellow entries were held to. Don't invent or assume an approval; a missing name here is a gap to surface, not to fill.
+4. Strong copyleft (GPL, LGPL, AGPL, EPL, CDDL) or anything FOSSA's Issues tab actually flags → stop. This should already have failed the Guardian gate before reaching this document; if it hasn't, that's a bigger problem than this file.
 
 ## Rollback **[Implemented]**
 

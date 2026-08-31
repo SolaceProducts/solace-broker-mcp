@@ -195,6 +195,8 @@ gh attestation verify solace-broker-mcp-v1.2.0-linux-amd64.tar.gz \
 
 Pass the exact archive filename: the command takes a single file, so a glob such as `solace-broker-mcp-v*.tar.gz` fails when you have more than one archive in the directory. `--signer-workflow` is what pins the attestation to the release workflow; `--repo` alone would accept an attestation minted by any workflow in this repository.
 
+Most releases also carry a CycloneDX SBOM (`solace-broker-mcp-<tag>.cdx.json`), covered by the same checksums file above. Generation is best-effort and never blocks a release, so its absence on a given release means generation failed that run, not that this project doesn't publish one — see [RELEASING.md](RELEASING.md#sbom-and-dependency-classification) for how it's produced and verified.
+
 The archive contains the binary, an example configuration file (`broker-config.example.yaml`), and the license. Copy the example configuration file to `broker-config.yaml` and modify as needed.
 
 Run the MCP server with the configuration file:
