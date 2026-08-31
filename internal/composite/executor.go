@@ -212,7 +212,7 @@ func (ce *CompositeExecutor) runSingle(ctx context.Context, step Step, client se
 		return ce.fetchPaginated(ctx, step, client, execCtx)
 	}
 
-	args, err := ResolveArgs(step.Args, execCtx)
+	args, err := ResolveArgs(step, execCtx)
 	if err != nil {
 		return nil, fmt.Errorf("tool step %s: failed to resolve args: %w", step.ID, err)
 	}
@@ -300,7 +300,7 @@ func (ce *CompositeExecutor) fetchFanOut(ctx context.Context, step Step, client 
 
 		if step.ForEachIf != "" {
 			iterCtx := &ExecuteContext{Params: execCtx.Params, StepResults: execCtx.StepResults, Item: item}
-			resolved, err := resolveTemplateString("forEachIf", step.ForEachIf, iterCtx)
+			resolved, err := resolveTemplateString("forEachIf", step.ForEachIf, step.compiledForEachIf, iterCtx)
 			if err != nil {
 				return nil, fmt.Errorf("tool step %s: forEach parent %q data[%d]: forEachIf: %w", step.ID, step.ForEach, i, err)
 			}
@@ -370,14 +370,25 @@ func (ce *CompositeExecutor) fetchFanOut(ctx context.Context, step Step, client 
 	return result, nil
 }
 
-// resolveTemplateString parses and executes a single Go text/template against
-// the execution context, mirroring ResolveArgs' safety guarantees (parse-error
+// resolveTemplateString executes a single Go text/template against the
+// execution context, mirroring ResolveArgs' safety guarantees (parse-error
 // wrapping, panic recovery via safeTemplateExecute). Used by fetchFanOut for
 // the ForEachIf predicate — a single template value, not the args map form.
-func resolveTemplateString(name, tmplStr string, execCtx *ExecuteContext) (string, error) {
-	tmpl, err := template.New(name).Option("missingkey=error").Parse(tmplStr)
-	if err != nil {
-		return "", fmt.Errorf("parse: %w", err)
+//
+// compiled is the step's precompiled ForEachIf template (see
+// compileStepTemplates), non-nil for any step loaded via LoadTools. It is
+// executed directly, skipping a re-parse of tmplStr. compiled is nil for a
+// Step built directly in Go rather than through LoadTools (as many tests
+// do), in which case tmplStr is parsed on the spot, matching pre-fix
+// behavior.
+func resolveTemplateString(name, tmplStr string, compiled *template.Template, execCtx *ExecuteContext) (string, error) {
+	tmpl := compiled
+	if tmpl == nil {
+		var err error
+		tmpl, err = template.New(name).Option("missingkey=error").Parse(tmplStr)
+		if err != nil {
+			return "", fmt.Errorf("parse: %w", err)
+		}
 	}
 	return safeTemplateExecute(tmpl, execCtx)
 }
@@ -405,7 +416,7 @@ func applySelect(args map[string]any, fields []string) {
 // truncated flag indicating whether more results exist beyond what was
 // returned. The caller is responsible for storing the result in execCtx.
 func (ce *CompositeExecutor) fetchPaginated(ctx context.Context, step Step, client sempv2.Client, execCtx *ExecuteContext) (map[string]any, error) {
-	baseArgs, err := ResolveArgs(step.Args, execCtx)
+	baseArgs, err := ResolveArgs(step, execCtx)
 	if err != nil {
 		return nil, fmt.Errorf("tool step %s: failed to resolve args: %w", step.ID, err)
 	}
@@ -621,17 +632,28 @@ func (ce *CompositeExecutor) executeBatch(ctx context.Context, batch ExecutionBa
 }
 
 // ResolveArgs resolves Go text/template expressions in step arguments against
-// the execution context. Each arg value is parsed and executed as a template
-// with access to .Params (input parameters) and .StepResults (prior step results).
+// the execution context. Each arg value executes as a template with access
+// to .Params (input parameters) and .StepResults (prior step results).
 // Template execution is wrapped in a recover to catch panics from nil map
 // traversal (e.g., {{.StepResults.missing.data}}).
-func ResolveArgs(args map[string]string, execCtx *ExecuteContext) (map[string]any, error) {
-	resolved := make(map[string]any, len(args))
+//
+// When step.compiledArgs holds a precompiled template for a key (populated by
+// compileStepTemplates at load time for any step loaded via LoadTools), that
+// template is executed directly, skipping a re-parse of the source string. A
+// Step built directly in Go rather than through LoadTools (as many tests do)
+// has no compiled form, so this falls back to parsing templateStr on the
+// spot, exactly as before this optimization.
+func ResolveArgs(step Step, execCtx *ExecuteContext) (map[string]any, error) {
+	resolved := make(map[string]any, len(step.Args))
 
-	for key, templateStr := range args {
-		tmpl, err := template.New(key).Option("missingkey=error").Parse(templateStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse template for arg %s: %w", key, err)
+	for key, templateStr := range step.Args {
+		tmpl := step.compiledArgs[key]
+		if tmpl == nil {
+			var err error
+			tmpl, err = template.New(key).Option("missingkey=error").Parse(templateStr)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse template for arg %s: %w", key, err)
+			}
 		}
 
 		result, err := safeTemplateExecute(tmpl, execCtx)
@@ -643,6 +665,37 @@ func ResolveArgs(args map[string]string, execCtx *ExecuteContext) (map[string]an
 	}
 
 	return resolved, nil
+}
+
+// compileStepTemplates parses step.Args and step.ForEachIf (when set) into
+// their compiled *template.Template forms, storing them on the step so the
+// per-call path in ResolveArgs/resolveTemplateString executes rather than
+// re-parses. Called once per step from validateTool during LoadTools —
+// composite tool definitions are loaded once at startup and never change
+// afterward, so the source text is static and known ahead of time; re-parsing
+// it on every step call (as ResolveArgs/resolveTemplateString used to do
+// unconditionally) is avoidable work on a hot path. See SOL-153764.
+func compileStepTemplates(step *Step) error {
+	if len(step.Args) > 0 {
+		step.compiledArgs = make(map[string]*template.Template, len(step.Args))
+		for key, tmplStr := range step.Args {
+			tmpl, err := template.New(key).Option("missingkey=error").Parse(tmplStr)
+			if err != nil {
+				return fmt.Errorf("arg %s: %w", key, err)
+			}
+			step.compiledArgs[key] = tmpl
+		}
+	}
+
+	if step.ForEachIf != "" {
+		tmpl, err := template.New("forEachIf").Option("missingkey=error").Parse(step.ForEachIf)
+		if err != nil {
+			return fmt.Errorf("forEachIf: %w", err)
+		}
+		step.compiledForEachIf = tmpl
+	}
+
+	return nil
 }
 
 // safeTemplateExecute executes a template with a recover wrapper to catch panics

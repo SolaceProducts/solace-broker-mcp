@@ -58,6 +58,10 @@ func LoadTools(fsys fs.FS, filename string) ([]CompositeTool, error) {
 // validation passes — the second, ValidatePostProcess, runs after the
 // postprocess registry is populated and cross-checks each handler's
 // RequiredFields against the step `select:` clauses.
+//
+// It also compiles each step's Args/ForEachIf templates once here (see
+// compileStepTemplates), so a malformed template now fails at load time
+// (server startup) instead of only on the first invocation that reaches it.
 func validateTool(tool *CompositeTool) error {
 	if tool.Name == "" {
 		return fmt.Errorf("tool name is required")
@@ -151,6 +155,17 @@ func validateTool(tool *CompositeTool) error {
 		}
 	default:
 		return fmt.Errorf("result strategy %q is not supported; supported values: collect, postProcess", tool.Result.Strategy)
+	}
+
+	// Compile Args/ForEachIf templates once here rather than leaving them to
+	// be re-parsed on every step call (SOL-153764). Indexed rather than the
+	// `for _, step := range tool.Steps` pattern used above: this loop must
+	// mutate tool.Steps[i] itself (compileStepTemplates takes *Step), and a
+	// range over Steps by value would only mutate a throwaway copy.
+	for i := range tool.Steps {
+		if err := compileStepTemplates(&tool.Steps[i]); err != nil {
+			return fmt.Errorf("step %s: %w", tool.Steps[i].ID, err)
+		}
 	}
 
 	return nil
