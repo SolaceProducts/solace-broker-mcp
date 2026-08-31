@@ -391,8 +391,13 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 	// each one's Error() implementation is verified to render only broker- or
 	// server-generated text, never unreviewed content from an intermediary
 	// (proxy/gateway/WAF) or credentials (auth is applied via headers, not
-	// URLs). This held for sempv1.Error, RetriesExhaustedError, and
-	// ExchangeError from the start; sempv2.SEMPError's Error() used to fall
+	// URLs). errors.As above matches an audited type anywhere in the wrap
+	// chain, but detail = (*toolErr).Error() below renders the OUTERMOST
+	// error's text — so this guarantee also depends on every wrapper in that
+	// chain being package-authored (true today). Wrapping an audited type in
+	// something unaudited would silently widen this gate. This held for
+	// sempv1.Error, RetriesExhaustedError, and ExchangeError from the start;
+	// sempv2.SEMPError's Error() used to fall
 	// back to the raw, unparsed HTTP response body when the broker's
 	// meta.error envelope failed to parse — exactly the intermediary-response
 	// case this comment warned about — until SOL-153766 fixed Error() itself

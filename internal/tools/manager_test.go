@@ -778,6 +778,11 @@ func TestCallTool_SEMPv2BodyFallbackNotLoggedRaw(t *testing.T) {
 		if strings.Contains(detail, bodyMarker) {
 			t.Errorf("log detail = %q, leaked unaudited raw Body content", detail)
 		}
+		// Assert the positive too: dropping the marker shouldn't come at the
+		// cost of dropping the operation/status context operators still need.
+		if !strings.Contains(detail, "returned HTTP 502") {
+			t.Errorf("log detail = %q, want it to still contain %q", detail, "returned HTTP 502")
+		}
 	}
 	if !found {
 		t.Fatalf("did not find a \"tool invoked\" error log line; log:\n%s", buf.String())

@@ -470,8 +470,9 @@ func truncateErrorBytes(b []byte) string {
 // parseSEMPError creates a SEMPError with best-effort extraction of the
 // broker's meta.error fields (code, status, description). If the body is not
 // valid JSON or the meta.error structure is absent, the structured fields stay
-// zero-valued and Body carries the raw response. Description and Body are
-// broker-controlled and truncated at maxErrorTextLen.
+// zero-valued and Body carries the raw response. Description is
+// broker-controlled; Body may not be (see the field doc). Both are
+// truncated at maxErrorTextLen.
 func parseSEMPError(op string, statusCode int, body []byte) *SEMPError {
 	e := &SEMPError{
 		Operation:  op,
