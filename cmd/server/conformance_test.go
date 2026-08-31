@@ -954,6 +954,24 @@ func callToolOverWire(t *testing.T, handler http.Handler, sessionID, name, argum
 	return env
 }
 
+// callToolOverWireOmittedArguments is callToolOverWire's counterpart for
+// SOL-153765: unlike callToolOverWire, which always writes an "arguments" key
+// (possibly with malformed content), this omits the key entirely — the wire
+// condition a client produces by sending tools/call with no arguments field
+// at all (json.RawMessage's own omitempty tag matches this on the server
+// side too; see internal/tools/register.go).
+func callToolOverWireOmittedArguments(t *testing.T, handler http.Handler, sessionID, name string) jsonRPCEnvelope {
+	t.Helper()
+	body := fmt.Sprintf(`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":%q}}`, name)
+	rec := postMCP(t, handler, body, sessionID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("tools/call status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	env := decodeSingleResponse(t, rec)
+	assertEnvelope(t, env, "7")
+	return env
+}
+
 // TestToolsCall_ReturnsStructuredContent pins the successful-call contract:
 // the result carries structuredContent (the machine-readable payload an agent
 // consumes) alongside the human-readable content blocks, and does not set
@@ -1051,59 +1069,84 @@ func TestToolsCall_InputValidationIsAToolResult(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			env := callToolOverWire(t, handler, sessionID, "get-vpn-status", tc.arguments)
-
-			if env.Error != nil {
-				t.Fatalf("input validation came back as a JSON-RPC error (code %s: %s).\n"+
-					"MCP 2025-11-25 requires input-validation failures to be tool "+
-					"results with isError:true so the model can correct itself. "+
-					"This is a conformance regression — see SOL-150761.",
-					env.Error.Code, env.Error.Message)
-			}
-			var result wireToolResult
-			if err := json.Unmarshal(env.Result, &result); err != nil {
-				t.Fatalf("decoding tools/call result: %v; result: %s", err, env.Result)
-			}
-			if result.IsError == nil || !*result.IsError {
-				t.Fatalf("result does not set isError:true for invalid input; "+
-					"the model would treat this failure as a successful call. result: %s",
-					env.Result)
-			}
-			if len(result.Content) == 0 {
-				t.Fatal("isError result carries no content; the model has nothing to read")
-			}
 			// The message must say enough for a model to correct itself: our
 			// own "parameter validation failed" prefix plus the offending
 			// parameter name. The rest of the sentence is xeipuuv/gojsonschema
 			// wording, which is a third-party string and not our contract, so
 			// it is deliberately not asserted.
-			for _, want := range []string{"parameter validation failed", "msgVpnName"} {
-				if !strings.Contains(string(env.Result), want) {
-					t.Errorf("validation message does not mention %q; result: %s", want, env.Result)
-				}
-			}
-			// The error result is itself structured, so an agent can branch on
-			// retryable without parsing prose.
-			var structured struct {
-				Error     string `json:"error"`
-				Retryable *bool  `json:"retryable"`
-			}
-			if result.StructuredContent == nil {
-				t.Fatal("isError result has no structuredContent")
-			}
-			if err := json.Unmarshal(result.StructuredContent, &structured); err != nil {
-				t.Fatalf("structuredContent is not the error shape: %v", err)
-			}
-			if structured.Error == "" {
-				t.Error("structuredContent.error is empty")
-			}
-			if structured.Retryable == nil {
-				t.Error("structuredContent.retryable is absent; an agent cannot tell " +
-					"a permanent input error from a transient one")
-			} else if *structured.Retryable {
-				t.Error("structuredContent.retryable = true, want false; " +
-					"retrying the same invalid arguments cannot succeed")
-			}
+			assertConformantErrorResult(t, env, "parameter validation failed", "msgVpnName")
 		})
+	}
+
+	// SOL-153765: register.go's callToolHandler closure unmarshals
+	// req.Params.Arguments before ToolManager.CallTool ever runs, so these two
+	// cases used to bypass the isError-tool-result contract above entirely —
+	// both came back as a bare JSON-RPC protocol error instead. Unlike the
+	// schema-validation cases, the message here is our own generic wording,
+	// not gojsonschema's, so no message substring is asserted — just the
+	// shape of the result.
+	t.Run("omitted arguments field", func(t *testing.T) {
+		env := callToolOverWireOmittedArguments(t, handler, sessionID, "get-vpn-status")
+		assertConformantErrorResult(t, env)
+	})
+	t.Run("arguments not a JSON object", func(t *testing.T) {
+		env := callToolOverWire(t, handler, sessionID, "get-vpn-status", `"not-an-object"`)
+		assertConformantErrorResult(t, env)
+	})
+}
+
+// assertConformantErrorResult checks the MCP 2025-11-25 contract shared by
+// every ToolManager-routed input error (SOL-150761 / SOL-153765): a tool
+// result — never a JSON-RPC protocol error — with isError:true, non-empty
+// content, and a structured {error, retryable:false} body. wantMessages, if
+// given, are additional substrings the raw result must contain.
+func assertConformantErrorResult(t *testing.T, env jsonRPCEnvelope, wantMessages ...string) {
+	t.Helper()
+	if env.Error != nil {
+		t.Fatalf("input validation came back as a JSON-RPC error (code %s: %s).\n"+
+			"MCP 2025-11-25 requires input-validation failures to be tool "+
+			"results with isError:true so the model can correct itself. "+
+			"This is a conformance regression — see SOL-150761 / SOL-153765.",
+			env.Error.Code, env.Error.Message)
+	}
+	var result wireToolResult
+	if err := json.Unmarshal(env.Result, &result); err != nil {
+		t.Fatalf("decoding tools/call result: %v; result: %s", err, env.Result)
+	}
+	if result.IsError == nil || !*result.IsError {
+		t.Fatalf("result does not set isError:true for invalid input; "+
+			"the model would treat this failure as a successful call. result: %s",
+			env.Result)
+	}
+	if len(result.Content) == 0 {
+		t.Fatal("isError result carries no content; the model has nothing to read")
+	}
+	for _, want := range wantMessages {
+		if !strings.Contains(string(env.Result), want) {
+			t.Errorf("validation message does not mention %q; result: %s", want, env.Result)
+		}
+	}
+	// The error result is itself structured, so an agent can branch on
+	// retryable without parsing prose.
+	var structured struct {
+		Error     string `json:"error"`
+		Retryable *bool  `json:"retryable"`
+	}
+	if result.StructuredContent == nil {
+		t.Fatal("isError result has no structuredContent")
+	}
+	if err := json.Unmarshal(result.StructuredContent, &structured); err != nil {
+		t.Fatalf("structuredContent is not the error shape: %v", err)
+	}
+	if structured.Error == "" {
+		t.Error("structuredContent.error is empty")
+	}
+	if structured.Retryable == nil {
+		t.Error("structuredContent.retryable is absent; an agent cannot tell " +
+			"a permanent input error from a transient one")
+	} else if *structured.Retryable {
+		t.Error("structuredContent.retryable = true, want false; " +
+			"retrying the same invalid arguments cannot succeed")
 	}
 }
 

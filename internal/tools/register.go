@@ -17,6 +17,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime/debug"
@@ -163,10 +164,7 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 		mcpTool := toMCPTool(reg.meta, pool)
 
 		var callToolHandler mcp.ToolHandler = func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			var params map[string]any
-			if err := json.Unmarshal(req.Params.Arguments, &params); err != nil {
-				return nil, fmt.Errorf("parsing tool arguments: %w", err)
-			}
+			start := time.Now()
 			// Per-invocation audit identity from the SDK extras (SOL-149606).
 			// Extra and TokenInfo can be nil in disabled mode or under test
 			// scaffolding; NewIdentityFromTokenInfo handles nil cleanly.
@@ -174,7 +172,41 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 			if req.Extra != nil {
 				info = req.Extra.TokenInfo
 			}
-			return mgr.CallTool(ctx, reg.name, params, NewIdentityFromTokenInfo(info))
+			id := NewIdentityFromTokenInfo(info)
+
+			// req.Params.Arguments carries omitempty on the wire, so a client
+			// can send tools/call with no arguments field at all — treat that
+			// the same as {} rather than failing json.Unmarshal on a nil/empty
+			// RawMessage, mirroring describe_semp_schema.go's guard
+			// (SOL-153765).
+			var params map[string]any
+			if len(req.Params.Arguments) > 0 {
+				if err := json.Unmarshal(req.Params.Arguments, &params); err != nil {
+					// This closure bypasses ToolManager.CallTool, so without
+					// this audit call a parse failure here would never reach
+					// the audit surface at all (SOL-153765). Emit the same
+					// "tool invoked" audit line CallTool's own defer would,
+					// and return the manager's normal structured/retryable
+					// error shape instead of a bare protocol error.
+					//
+					// toolErr (with the wrapped stdlib decode error) is
+					// passed to logToolResult only — it logs unvouched
+					// errors by Go type, never by text (secure-logging-
+					// rules.md), so the raw decode message never reaches the
+					// audit log. buildLocalErrorResult, in contrast, shows
+					// err.Error() to the client verbatim, and its contract is
+					// that every caller passes text this package wrote
+					// itself — never text derived from client input — so it
+					// gets a separate, static message rather than the
+					// wrapped decode error.
+					var brokerAlias string
+					errorType := "bad_request"
+					toolErr := fmt.Errorf("parsing tool arguments: %w", err)
+					logToolResult(ctx, reg.name, &brokerAlias, start, &errorType, &toolErr, id)
+					return buildLocalErrorResult(errors.New("tool arguments must be a JSON object")), nil
+				}
+			}
+			return mgr.CallTool(ctx, reg.name, params, id)
 		}
 
 		// Compose withAuthorization INSIDE withRecovery so denials inherit
