@@ -10,7 +10,7 @@ narrative overview see the [User Guide](user-guide.md).
 > write or destructive action before allowing it.
 
 The server exposes **24 read-only tools** plus **16 write tools** — four action
-tools and 12 Config-API management tools. The write tools are gated behind
+tools and 12 Config API management tools. The write tools are gated behind
 `enable_write_tools` (off by default) and are not registered with the MCP server
 when disabled — see
 [Action Tools and `enable_write_tools`](#action-tools-and-enable_write_tools).
@@ -90,7 +90,7 @@ annotation, instruct the calling large language model (LLM) to obtain explicit u
 invocation, and cause the server to log a WARNING audit line on every call. The
 two `clear-*-stats` tools are writes but non-destructive (counters only).
 
-The 12 Config-API management tools (create/update/delete for Message VPNs,
+The 12 Config API management tools (create/update/delete for Message VPNs,
 queues, topic endpoints, and REST Delivery Points) are gated behind the same
 flag and documented under [Management](#management-config-api).
 
@@ -99,7 +99,7 @@ flag and documented under [Management](#management-config-api).
 | Category | Tool | Write? |
 |---|---|---|
 | Discovery | [`list-brokers`](#list-brokers), [`describe-semp-schema`](#describe-semp-schema) | — |
-| Broker Status | [`get-broker-status`](#get-broker-status), [`get-redundancy-status`](#get-redundancy-status) | — |
+| Event Broker Status | [`get-broker-status`](#get-broker-status), [`get-redundancy-status`](#get-redundancy-status) | — |
 | Replication | [`get-replication-status`](#get-replication-status) | — |
 | Message VPN | [`list-vpns`](#list-vpns), [`get-vpn-status`](#get-vpn-status), [`get-message-rates`](#get-message-rates) | — |
 | Queues | [`list-queues`](#list-queues), [`get-queue-metrics`](#get-queue-metrics) | — |
@@ -174,7 +174,7 @@ call, that is the expected path. Direct invocation is supported but uncommon.
 
 ---
 
-## Broker Status
+## Event Broker Status
 
 ### get-broker-status
 

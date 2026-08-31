@@ -317,7 +317,7 @@ audience_parameter_name: "audience"
 
 `audience` is RFC 8693's own parameter — the default for Keycloak and most OIDC-compliant IdPs — and the only value this version accepts. Concepts like Microsoft Entra's On-Behalf-Of style (`scope`) or RFC 8707's resource-indicator style (`resource`) are not yet implemented; setting either is rejected at configuration load with `broker_oauth.audience_parameter_name "scope" is not supported in this version (must be one of [audience])`. If your IdP requires one of those styles, event broker OAuth is not yet usable against it in this version.
 
-Two optional sub-blocks tune the runtime's resilience behavior — see [Configuration](configuration.md#broker-oauth-hop-2) for every field and its default:
+Two optional sub-blocks tune the runtime's resilience behavior — see [Configuration](configuration.md#event-broker-oauth-hop-2) for every field and its default:
 
 - `broker_oauth.circuit_breaker` — fails token-exchange calls fast during a sustained IdP outage, instead of letting every event broker's requests queue up against a dead IdP. On by default; every field optional.
 - `broker_oauth.retry_after` — shares a process-wide backoff across every event broker when the IdP asks callers to slow down (HTTP 429 with `Retry-After`), so one throttled event broker doesn't let every other event broker keep hammering the same IdP.
