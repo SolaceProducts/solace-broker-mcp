@@ -60,6 +60,18 @@ Never `fmt.Sprintf` into the message string with external data. Always `slog.Str
 
 Keys matching `password`, `token`, `secret`, `authorization`, `credential`, `api_key`, `private_key` get replaced with `[REDACTED]`. This is defense in depth — catches anything that slips past Rule 2.
 
+The match is a case-insensitive substring on the key, so it fires on non-secret
+values too. Any attribute key — whether it comes from a `LogValuer`, a
+`slog.LogAttrs` call, or a bare `slog.String` — must avoid those substrings
+unless the value genuinely is a credential. In particular, name an IdP or OAuth
+endpoint key `idp_endpoint`, never `token_endpoint` or `token_url`: the latter
+reach operators as `[REDACTED]` and cost real debugging signal (SOL-153827).
+Known exception: `BrokerOAuthConfig.LogValue` (`internal/config/config.go`)
+logs under `idp_token_endpoint`, deliberately mirroring the YAML field name so
+operators can map a log line back to the config key. It has no production call
+site, and its value is already sanitized, so the collision would blank the
+field rather than leak it.
+
 ### Rule 4: Never log raw structs
 
 Always log explicit fields, even if `LogValuer` is implemented.

@@ -46,6 +46,23 @@ func fakeJWT(t *testing.T, claims map[string]any) string {
 // could never redact anything regardless of key names.
 var redactedKeyTestFixture = []string{"password", "token", "secret", "authorization", "credential", "api_key", "private_key"}
 
+// redactSecretAttrTestFixture applies redactedKeyTestFixture as a
+// slog.HandlerOptions.ReplaceAttr, mirroring cmd/server/main.go's
+// redactSecretAttr. Defined once and shared by captureWarn below and by
+// TestExchangeError_LogAttrs_EndpointSurvivesRedaction in errors_test.go, so
+// both exercise a single copy of the production filter's shape rather than
+// two hand-copied closures that could drift apart.
+func redactSecretAttrTestFixture(_ []string, a slog.Attr) slog.Attr {
+	key := strings.ToLower(a.Key)
+	for _, r := range redactedKeyTestFixture {
+		if strings.Contains(key, r) {
+			a.Value = slog.StringValue("[REDACTED]")
+			return a
+		}
+	}
+	return a
+}
+
 // captureWarn swaps in a buffer-backed slog handler — with the same
 // redaction ReplaceAttr production installs, see redactedKeyTestFixture —
 // for the duration of fn, restoring the previous default afterward, and
@@ -55,16 +72,7 @@ func captureWarn(t *testing.T, fn func()) string {
 	var buf bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
-		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
-			key := strings.ToLower(a.Key)
-			for _, r := range redactedKeyTestFixture {
-				if strings.Contains(key, r) {
-					a.Value = slog.StringValue("[REDACTED]")
-					return a
-				}
-			}
-			return a
-		},
+		ReplaceAttr: redactSecretAttrTestFixture,
 	})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	fn()
