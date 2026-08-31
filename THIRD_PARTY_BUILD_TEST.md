@@ -12,7 +12,7 @@ itself**, and which are **not compiled into the shipped binary**.
 > Legal checklist, which asks for a "list of all used 3rd party products used at
 > build and test time" alongside the release list.
 
-**Generated** 2026-08-28; the GitHub Actions section was refreshed 2026-08-07
+**Generated** 2026-08-31; the GitHub Actions section was refreshed 2026-08-07
 when Guardian enrollment re-pinned every action to a commit SHA, and again
 2026-08-14 when the Dependabot `github-actions` group update moved the five
 `solace-public-workflows` actions to a newer commit on the same branch. Every
@@ -176,7 +176,7 @@ note spells out.
 | `docker/build-push-action` | `53b7df9` | v7.3.0 | Apache-2.0 | [license](https://github.com/docker/build-push-action/blob/v7.3.0/LICENSE) |
 | `docker/login-action` | `dbcb813` | v4.6.0 | Apache-2.0 | [license](https://github.com/docker/login-action/blob/v4.6.0/LICENSE) |
 | `docker/metadata-action` | `dc80280` | v6.2.0 | Apache-2.0 | [license](https://github.com/docker/metadata-action/blob/v6.2.0/LICENSE) |
-| `docker/setup-buildx-action` | `bb05f3f` | v4.2.0 | Apache-2.0 | [license](https://github.com/docker/setup-buildx-action/blob/v4.2.0/LICENSE) |
+| `docker/setup-buildx-action` | `37fe631` | v4.3.0 | Apache-2.0 | [license](https://github.com/docker/setup-buildx-action/blob/v4.3.0/LICENSE) |
 | `docker/setup-qemu-action` | `96fe6ef` | v4.2.0 | Apache-2.0 | [license](https://github.com/docker/setup-qemu-action/blob/v4.2.0/LICENSE) |
 | `github/codeql-action/analyze` | `ff2f1c6` | v4.37.7 | MIT | [license](https://github.com/github/codeql-action/blob/v4.37.7/LICENSE) |
 | `github/codeql-action/init` | `ff2f1c6` | v4.37.7 | MIT | [license](https://github.com/github/codeql-action/blob/v4.37.7/LICENSE) |
@@ -196,15 +196,15 @@ All five come from one repository, pinned to a single commit.
 
 | Action | Ref | Owner |
 |---|---|---|
-| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `7ffc795` | Solace |
-| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `7ffc795` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-db-sync` | `7ffc795` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `7ffc795` | Solace |
-| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `7ffc795` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `6c01e11` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `6c01e11` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-db-sync` | `6c01e11` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `6c01e11` | Solace |
+| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `6c01e11` | Solace |
 
-`7ffc795` is a branch commit, not a tag, so there is no release to record beside
-it. The repository itself is Apache-2.0. Re-pinned 2026-08-28 by the Dependabot
-`github-actions` group update (#345); the prior pin was `55ea947`.
+`6c01e11` is a branch commit, not a tag, so there is no release to record beside
+it. The repository itself is Apache-2.0. Re-pinned 2026-08-31 by the Dependabot
+`github-actions` group update (#350); the prior pin was `7ffc795`.
 
 Two entries have been dropped from this table, both by the reverse-direction
 check rather than by anyone remembering to look.
