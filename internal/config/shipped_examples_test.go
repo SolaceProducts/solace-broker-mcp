@@ -75,6 +75,7 @@ func TestShippedExampleConfigLoads(t *testing.T) {
 			"otherwise an operator copying it gets a server that refuses to start: %v", err)
 	}
 	assertStartsWithoutIdentityProvider(t, cfg, "broker-config.example.yaml")
+	assertNeverUnauthenticatedOnTheNetwork(t, cfg, "broker-config.example.yaml")
 }
 
 // assertStartsWithoutIdentityProvider guards the property LoadConfig cannot:
@@ -91,6 +92,42 @@ func assertStartsWithoutIdentityProvider(t *testing.T, cfg *ServerConfig, name s
 		t.Fatalf("%s ships mcp_client_auth.mode: oauth, so starting it requires a reachable "+
 			"identity provider; the shipped default must run without one. Keep oauth as "+
 			"commented-out sample lines instead.", name)
+	}
+}
+
+// assertNeverUnauthenticatedOnTheNetwork guards the risk specific to the
+// standalone example, which ships mode: disabled. That mode is safe there for
+// exactly one reason: the dev modes bind 127.0.0.1, so nothing off the host can
+// reach a server that asks callers for nothing. allow_remote_unauthenticated is
+// the single opt-in that removes that protection, and setting it would put
+// broker-admin-backed tools on the network with no client authentication at
+// all. It is legal, it loads, and no other assertion here would catch it.
+func assertNeverUnauthenticatedOnTheNetwork(t *testing.T, cfg *ServerConfig, name string) {
+	t.Helper()
+
+	if cfg.AllowRemoteUnauthenticated {
+		t.Fatalf("%s sets allow_remote_unauthenticated: true, which lifts the loopback-only "+
+			"bind that is the sole reason mode: disabled is safe here. The shipped example "+
+			"must never acknowledge that risk on an operator's behalf.", name)
+	}
+}
+
+// assertShipsASharedToken pins what the Kubernetes ConfigMap must be. A pod has
+// to bind all interfaces for the Service and the kubelet probes to reach it, so
+// it cannot fall back on the loopback bind that makes mode: disabled safe for a
+// local binary — and mode: oauth cannot start without a reachable identity
+// provider. Of the three modes that leaves exactly one, so pin it directly
+// rather than ruling the other two out separately. With the mode pinned,
+// allow_remote_unauthenticated cannot take effect and needs no assertion of its
+// own: it only applies under mode: disabled, which this check already refuses.
+func assertShipsASharedToken(t *testing.T, cfg *ServerConfig, name string) {
+	t.Helper()
+
+	if cfg.MCPClientAuth.Mode != AuthModeStatic {
+		t.Fatalf("%s ships mcp_client_auth.mode: %q; the Kubernetes default must be %q. "+
+			"A pod binds a routable address, so it cannot ship unauthenticated, and oauth "+
+			"would require a reachable identity provider to start. Keep oauth as "+
+			"commented-out sample lines instead.", name, cfg.MCPClientAuth.Mode, AuthModeStatic)
 	}
 }
 
@@ -126,5 +163,5 @@ func TestShippedKubernetesConfigMapLoads(t *testing.T) {
 			"the server's own validator, otherwise `kubectl apply -f deploy/kubernetes/` "+
 			"produces a crash-looping pod: %v", err)
 	}
-	assertStartsWithoutIdentityProvider(t, cfg, "deploy/kubernetes/configmap.yaml")
+	assertShipsASharedToken(t, cfg, "deploy/kubernetes/configmap.yaml")
 }
