@@ -19,6 +19,8 @@
 // strategies (collect, postProcess).
 package composite
 
+import "text/template"
+
 // CompositeToolsFile is the top-level structure of the embedded YAML file.
 type CompositeToolsFile struct {
 	Tools []CompositeTool `yaml:"tools"`
@@ -69,6 +71,34 @@ type Step struct {
 	ForEachIf   string            `yaml:"forEachIf"`   // optional predicate template; iteration skipped when it resolves to a false bool
 	ForEachKey  string            `yaml:"forEachKey"`  // parent-row field whose value keys this step's result map (required with ForEach)
 	Concurrency int               `yaml:"concurrency"` // max in-flight per-row calls in fan-out; 0 means use the framework default
+
+	// compiledArgs and compiledForEachIf cache the parsed *template.Template
+	// form of Args and ForEachIf. They are populated once by
+	// compileStepTemplates, called from validateTool during LoadTools —
+	// composite tool definitions are loaded once at startup and never change
+	// afterward, so the source text is static and known ahead of time.
+	// ResolveArgs and resolveTemplateString (executor.go) execute these
+	// instead of re-parsing the source string on every step call.
+	//
+	// Unexported: gopkg.in/yaml.v3 (with KnownFields(true), as loader.go
+	// configures its decoder) ignores unexported fields, so these are
+	// invisible to the YAML schema and cannot be set from tool definitions.
+	//
+	// Concurrency: once populated these are never mutated again — no further
+	// Parse/Funcs/Option call touches them — which is what makes concurrent
+	// use safe. A fan-out step's *template.Template is Execute'd by up to
+	// fanOutMaxConcurrency goroutines at once (see fetchFanOut), and the same
+	// compiled template may also be in flight for other concurrent tool
+	// invocations; text/template documents Execute as safe for concurrent
+	// callers provided the template itself is not modified concurrently,
+	// which holds here by construction.
+	//
+	// A Step built directly in Go rather than via LoadTools (as many tests
+	// do) has both fields nil; ResolveArgs/resolveTemplateString fall back to
+	// parsing the raw source on the spot in that case, matching the pre-fix
+	// behavior for those steps.
+	compiledArgs      map[string]*template.Template
+	compiledForEachIf *template.Template
 }
 
 // ResultStrategy defines how step results are combined into the tool's final

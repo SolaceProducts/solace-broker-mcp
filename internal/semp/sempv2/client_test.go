@@ -917,8 +917,14 @@ func TestClient_Execute_SEMPErrorMalformedBody(t *testing.T) {
 	if sempErr.Body != "<html>Access Denied</html>" {
 		t.Errorf("Body = %q, want raw HTML preserved", sempErr.Body)
 	}
-	if !strings.Contains(sempErr.Error(), "<html>Access Denied</html>") {
-		t.Errorf("Error() = %q, want it to fall back to Body", sempErr.Error())
+	// Error() must never render Body: it is unaudited content that may
+	// originate from an intermediary (proxy/gateway/WAF), not the broker
+	// (SOL-153766). Body stays available as a struct field for callers that
+	// need it, but no sink — including Error() — renders it. Pin the exact
+	// contract (operation + status only) rather than just the absence of the
+	// leaked string, so a format change can't slip past a vacuous check.
+	if got, want := sempErr.Error(), "testOp returned HTTP 403"; got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
 	}
 }
 
