@@ -232,6 +232,9 @@ func TestObservability_NumericDefaults(t *testing.T) {
 	if o.ShutdownDrainDelayS != defaults.DefaultShutdownDrainDelayS {
 		t.Errorf("ShutdownDrainDelayS = %d, want %d", o.ShutdownDrainDelayS, defaults.DefaultShutdownDrainDelayS)
 	}
+	if o.MetricsBindAddress != defaults.DefaultMetricsBindAddress {
+		t.Errorf("MetricsBindAddress = %q, want %q", o.MetricsBindAddress, defaults.DefaultMetricsBindAddress)
+	}
 }
 
 // TestObservability_NumericFromYAML proves the numeric tunables parse from the
@@ -240,6 +243,7 @@ func TestObservability_NumericDefaults(t *testing.T) {
 // decode, so an int field gets it for free.
 func TestObservability_NumericFromYAML(t *testing.T) {
 	t.Setenv("OTEL_INTERVAL", "120")
+	t.Setenv("METRICS_ADDR", "0.0.0.0:9099")
 
 	yamlBody := obsYAML + `
 observability:
@@ -247,6 +251,7 @@ observability:
   progress_signal_threshold_ms: 8000
   otel_self_stats_interval_s: ${OTEL_INTERVAL}
   shutdown_drain_delay_s: 7
+  metrics_bind_address: ${METRICS_ADDR}
 `
 	cfg, err := LoadConfig(writeTemp(t, yamlBody))
 	if err != nil {
@@ -265,6 +270,9 @@ observability:
 	}
 	if o.ShutdownDrainDelayS != 7 {
 		t.Errorf("ShutdownDrainDelayS = %d, want 7", o.ShutdownDrainDelayS)
+	}
+	if o.MetricsBindAddress != "0.0.0.0:9099" {
+		t.Errorf("MetricsBindAddress = %q, want 0.0.0.0:9099 (from ${METRICS_ADDR})", o.MetricsBindAddress)
 	}
 }
 

@@ -26,6 +26,11 @@ import "time"
 // conflict with the Solace broker's SEMP management port (default 8080).
 const DefaultPort = 9090
 
+// DefaultMetricsBindAddress is the address the Prometheus /metrics listener
+// binds to when observability.metrics_bind_address is unset. A dedicated port
+// lets operators network-policy scraping independently of MCP traffic.
+const DefaultMetricsBindAddress = ":9091"
+
 // DefaultLoopbackListenAddress is the host the MCP server binds to when
 // listen_address is unset and mcp_client_auth.mode is not oauth. Loopback-only
 // by default keeps the dev auth modes (disabled, static) unreachable from the
