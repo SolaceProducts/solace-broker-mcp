@@ -89,9 +89,17 @@ func TestResolveArgs_UsesCompiledTemplate_IgnoresLaterSourceMutation(t *testing.
 // ForEachIf analogue of the ResolveArgs test above, exercised through the
 // full fetchFanOut path (resolveTemplateString's compiled-template argument).
 func TestFanOut_ForEachIf_UsesCompiledTemplate_IgnoresLaterSourceMutation(t *testing.T) {
+	// Multiple enabled rows so fetchFanOut's goroutines execute the SAME
+	// compiled template concurrently — a single row would let -race pass
+	// vacuously for the property this test claims to cover.
 	client := newMockClient()
 	client.responses["getMsgVpns"] = &sempv2.Result{
-		Data: vpnRows(map[string]any{"msgVpnName": "a", "enabled": true}),
+		Data: vpnRows(
+			map[string]any{"msgVpnName": "a", "enabled": true},
+			map[string]any{"msgVpnName": "b", "enabled": true},
+			map[string]any{"msgVpnName": "c", "enabled": true},
+			map[string]any{"msgVpnName": "d", "enabled": false},
+		),
 	}
 
 	tool := fanOutTool()
@@ -116,8 +124,8 @@ func TestFanOut_ForEachIf_UsesCompiledTemplate_IgnoresLaterSourceMutation(t *tes
 	if !ok {
 		t.Fatalf("byKey missing or wrong type: %T", clients["byKey"])
 	}
-	if len(byKey) != 1 {
-		t.Errorf("byKey size: got %d, want 1 (enabled=true row from the pre-corruption predicate)", len(byKey))
+	if len(byKey) != 3 {
+		t.Errorf("byKey size: got %d, want 3 (the enabled=true rows from the pre-corruption predicate)", len(byKey))
 	}
 }
 
