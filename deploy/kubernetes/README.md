@@ -2,7 +2,8 @@
 
 Reference manifests for running the Solace Broker MCP Server in a cluster:
 `configmap.yaml` (server config), `secret.yaml` (credentials),
-`deployment.yaml` (the pod), and `service.yaml` (a ClusterIP Service).
+`deployment.yaml` (the pod), `service.yaml` (a ClusterIP Service), and
+`poddisruptionbudget.yaml` (keeps a pod serving through node drains).
 
 They are a starting point to copy and edit, not a turnkey install. Applied
 unmodified the pod will not start: `DEV_TOKEN` ships empty and the server
