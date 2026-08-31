@@ -44,9 +44,9 @@ MCP-compatible clients, for example, Claude Code, invoke these tools using natur
 - **24 read-only monitoring tools** — Event broker status, Message VPNs, queues, clients, REST Delivery Points, bridges, Kafka Receivers/Senders, and SEMPv2 schema introspection
 - **16 optional write and action tools** — Disconnect clients, delete queued messages, reset statistics, and create, update, or delete Message VPNs, queues, topic endpoints, and REST Delivery Points; gated behind `enable_write_tools` (off by default)
 - **Client authentication** — Development mode (no authentication), static bearer tokens, or OAuth 2.1/OpenID Connect (OIDC) with JSON Web Token (JWT) validation
-- **Claim-based tool authorization** — Under OAuth mode, gate individual MCP tools by a configurable OIDC claim carrying the caller's group or role memberships (`groups` by default); `list-brokers` stays exempt so callers can always discover configured brokers
-- **Multi-broker configuration** — Connect to multiple brokers and address them by configured alias
-- **Retry and rate limiting** — Configurable backoff intervals and concurrent request limits per broker
+- **Claim-based tool authorization** — Under OAuth mode, gate individual MCP tools by a configurable OIDC claim carrying the caller's group or role memberships (`groups` by default); `list-brokers` stays exempt so callers can always discover configured event brokers
+- **Multi-event-broker configuration** — Connect to multiple event brokers and address them by configured alias
+- **Retry and rate limiting** — Configurable backoff intervals and concurrent request limits per event broker
 - **Deployment options** — Standalone binary, Docker container, or Go source
 - **TLS/HTTPS support** — Optional certificate-based transport encryption
 - **Structured logging** — JSON output with automatic credential redaction
@@ -77,14 +77,14 @@ The server implements the MCP HTTP transport specification and exposes event bro
 
 ## Tools
 
-The server exposes read-only tools grouped by what they inspect, plus write tools for operational actions and configuration management. Every tool except `list-brokers` and `describe-semp-schema` takes a `broker` parameter naming a configured broker alias. See the [Tools Reference](docs/tools-reference.md) for full per-tool parameters, output shape, and example invocations; the [user guide](docs/user-guide.md#tools-reference) has the narrative overview.
+The server exposes read-only tools grouped by what they inspect, plus write tools for operational actions and configuration management. Every tool except `list-brokers` and `describe-semp-schema` takes a `broker` parameter naming a configured event broker alias. See the [Tools Reference](docs/tools-reference.md) for full per-tool parameters, output shape, and example invocations; the [user guide](docs/user-guide.md#tools-reference) has the narrative overview.
 
 > **Note:** Results are interpreted and acted on by an AI assistant. Treat tool output as input to a human decision, not as verified fact, and confirm any write or destructive action before allowing it. See the [Disclaimer](#disclaimer).
 
 | Category | Tools | Description |
 |---|---|---|
-| Discovery | `list-brokers`, `describe-semp-schema` | List configured broker aliases for use as the `broker` parameter; look up a SEMPv2 operation's request-body schema before calling a write tool |
-| Broker status | `get-broker-status`, `get-redundancy-status` | Snapshot of version, uptime, resources, spool, and high availability (HA) and mate-link state |
+| Discovery | `list-brokers`, `describe-semp-schema` | List configured event broker aliases for use as the `broker` parameter; look up a SEMPv2 operation's request-body schema before calling a write tool |
+| Event broker status | `get-broker-status`, `get-redundancy-status` | Snapshot of version, uptime, resources, spool, and high availability (HA) and mate-link state |
 | Replication | `get-replication-status` | Replication role, sync eligibility, bridge status, transaction mode, and queued-message counts |
 | Message VPN | `list-vpns`, `get-vpn-status`, `get-message-rates` | List VPNs, check per-VPN service status, read message and byte rates |
 | Queues | `list-queues`, `get-queue-metrics` | List queues with cumulative spooled count and throughput; drill into a single queue for authoritative current depth, spool, and rates |
@@ -92,9 +92,9 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 | REST Delivery Points | `list-rdps`, `get-rdp-status` | List RDPs; inspect bindings, REST consumers, and last failure reason |
 | Bridges | `list-bridges`, `get-bridge-status` | List bridges with inbound/outbound connection state; inspect a single bridge's connection establisher and failure category |
 | Kafka | `list-kafka-receivers`, `get-kafka-receiver-status`, `list-kafka-senders`, `get-kafka-sender-status` | List Kafka Receivers/Senders with up/down status; inspect a single receiver's or sender's topic/queue-binding status |
-| Discards | `get-discard-stats`, `list-queue-discards` | Broker-wide and per-VPN discard aggregates; per-queue discard counters |
+| Discards | `get-discard-stats`, `list-queue-discards` | Event-broker-wide and per-VPN discard aggregates; per-queue discard counters |
 | Actions | `delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats` | One tool per operational action. Destructive tools (`delete-queue-messages`, `disconnect-client`) are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; the `clear-*-stats` tools are non-destructive. |
-| Management | `create-message-vpn`, `update-message-vpn`, `delete-message-vpn`, `create-queue`, `update-queue`, `delete-queue`, `create-topic-endpoint`, `update-topic-endpoint`, `delete-topic-endpoint`, `create-rdp`, `update-rdp`, `delete-rdp` | Create, update, and delete Config-API objects (Message VPNs, queues, topic endpoints, REST Delivery Points). `delete-*` and the service-affecting `update-*` tools are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; `create-*` is additive and not annotated. |
+| Management | `create-message-vpn`, `update-message-vpn`, `delete-message-vpn`, `create-queue`, `update-queue`, `delete-queue`, `create-topic-endpoint`, `update-topic-endpoint`, `delete-topic-endpoint`, `create-rdp`, `update-rdp`, `delete-rdp` | Create, update, and delete Config API objects (Message VPNs, queues, topic endpoints, REST Delivery Points). `delete-*` and the service-affecting `update-*` tools are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; `create-*` is additive and not annotated. |
 
 **The action and management tools are write tools, gated behind `enable_write_tools: true` in the configuration (default off; not registered in `tools/list` when disabled).** That's 16 write tools in total (four action, 12 management), on top of the 24 read-only tools.
 
@@ -104,7 +104,7 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 
 - [User Guide](docs/user-guide.md) — overview, tools reference, deployment, and troubleshooting
 - [Tools Reference](docs/tools-reference.md) — per-tool parameters, output schema, and example invocations for all 40 tools
-- [Examples](docs/examples.md) — Claude Desktop configuration, natural-language queries, and multi-broker setup
+- [Examples](docs/examples.md) — Claude Desktop configuration, natural-language queries, and multi-event-broker setup
 - [Configuration](docs/configuration.md) — server settings, event broker configuration, client authentication, and rate-limit/retry settings
 - [Authentication](docs/authentication.md) — OAuth/OIDC and static token setup for MCP clients
 - [Agent Mesh Integration](docs/sam-integration.md) — wire this MCP server into a Solace Agent Mesh project as an agent
@@ -140,7 +140,7 @@ brokers:
 
 `mcp_client_auth.mode: disabled` skips client authentication entirely; use this only for local development. For production, set `mcp_client_auth.mode: oauth` and provide `issuer`, `audience`, and `resource_url`. A third mode, `static`, accepts a fixed bearer token for local development with a realistic authentication flow. See [Authentication](docs/authentication.md) for full setup instructions.
 
-**Audit-log identity.** In `oauth` and `static` modes, every tool-invocation log line carries the caller's `sub`, `iss`, `client_id`, and `jti` claims (the latter three appear as `<absent>` when the identity provider (IdP) does not issue them). A separate sentinel `<verifier-bug>` is reserved for an internal coding error — it should never appear in production, and its presence indicates a bug in the server's claim-extraction code, not in the caller's token; alert on it. The request still completes and the audit line is still written. In `disabled` mode no client authentication runs, so log lines carry no identity fields at all. **`disabled` and `static` modes are not real audit trails**: `disabled` lines have no attribution, and `static` lines attribute every invocation to the hardcoded `dev-user`. Use `oauth` mode for any deployment whose audit logs need to answer "who ran what tool against which broker?"
+**Audit-log identity.** In `oauth` and `static` modes, every tool-invocation log line carries the caller's `sub`, `iss`, `client_id`, and `jti` claims (the latter three appear as `<absent>` when the identity provider (IdP) does not issue them). A separate sentinel `<verifier-bug>` is reserved for an internal coding error — it should never appear in production, and its presence indicates a bug in the server's claim-extraction code, not in the caller's token; alert on it. The request still completes and the audit line is still written. In `disabled` mode no client authentication runs, so log lines carry no identity fields at all. **`disabled` and `static` modes are not real audit trails**: `disabled` lines have no attribution, and `static` lines attribute every invocation to the hardcoded `dev-user`. Use `oauth` mode for any deployment whose audit logs need to answer "who ran what tool against which event broker?"
 
 Under `oauth` mode with a `tool_authorization` policy configured, each gated tool call also emits a `"tool authorization"` audit line at the same `correlation_id`, logged at `INFO` on allow and `WARN` on deny, with a `decision_reason` code operators can filter and alert on. See [Tool authorization](docs/configuration.md#tool-authorization) for the full schema.
 
@@ -148,10 +148,10 @@ The same policy can also narrow `tools/list` to the tools each caller may invoke
 
 Each event broker needs:
 - `url` — the SEMP management API base URL
-- `auth.mode` — `basic`, `bearer`, or `oauth` (the following examples use basic authentication; for bearer token authentication, set `auth.mode: bearer` and provide `auth.token` instead; for OAuth token exchange, see [Step 2b: Configure broker OAuth (Hop 2)](docs/authentication.md#step-2b-configure-broker-oauth-hop-2))
+- `auth.mode` — `basic`, `bearer`, or `oauth` (the following examples use basic authentication; for bearer token authentication, set `auth.mode: bearer` and provide `auth.token` instead; for OAuth token exchange, see [Step 2b: Configure Broker OAuth (Hop 2)](docs/authentication.md#step-2b-configure-broker-oauth-hop-2))
 - `auth.username` / `auth.password` — credentials (use `${VAR_NAME}` to reference environment variables)
 
-**Broker alias contract.** The map key under `brokers:` (for example, `my-broker`) is the alias that appears in tool inputs (`broker="my-broker"`), logs, and `list-brokers` output. Aliases must be 1-63 characters, contain only letters, digits, and hyphens, and start and end with an alphanumeric character. Comparison is case-insensitive; `Prod` and `prod` collide and the server refuses to start. Original casing is preserved in all user-facing output.
+**Event broker alias contract.** The map key under `brokers:` (for example, `my-broker`) is the alias that appears in tool inputs (`broker="my-broker"`), logs, and `list-brokers` output. Aliases must be 1-63 characters, contain only letters, digits, and hyphens, and start and end with an alphanumeric character. Comparison is case-insensitive; `Prod` and `prod` collide and the server refuses to start. Original casing is preserved in all user-facing output.
 
 **2. Create a `.env` file** next to the configuration file:
 
@@ -197,7 +197,7 @@ Pass the exact archive filename: the command takes a single file, so a glob such
 
 Most releases also carry a CycloneDX SBOM (`solace-broker-mcp-<tag>.cdx.json`), covered by the same checksums file above. Generation is best-effort and never blocks a release, so its absence on a given release means generation failed that run, not that this project doesn't publish one — see [RELEASING.md](RELEASING.md#sbom-and-dependency-classification) for how it's produced and verified.
 
-The archive contains the binary, an example config (`broker-config.example.yaml`), and the license. Copy the example config to `broker-config.yaml` and modify as needed.
+The archive contains the binary, an example configuration file (`broker-config.example.yaml`), and the license. Copy the example configuration file to `broker-config.yaml` and modify as needed.
 
 Run the MCP server with the configuration file:
 
@@ -205,7 +205,7 @@ Run the MCP server with the configuration file:
 CONFIG_FILE=./broker-config.yaml ./solace-broker-mcp
 ```
 
-If the config file is named `broker-config.yaml` in the current directory, the server does not require `CONFIG_FILE`.
+If the configuration file is named `broker-config.yaml` in the current directory, the server does not require `CONFIG_FILE`.
 
 Verify:
 
@@ -226,13 +226,13 @@ go install github.com/SolaceProducts/solace-broker-mcp/cmd/server@latest
 
 This builds the latest tagged release and places a `server` binary in `$(go env GOBIN)` (or `$(go env GOPATH)/bin`). Ensure that directory is on your `PATH`. Pin a specific version by replacing `@latest` with a tag, for example, `@v1.2.0`.
 
-Run it the same way as the downloaded binary, pointing `CONFIG_FILE` at your config:
+Run it the same way as the downloaded binary, pointing `CONFIG_FILE` at your configuration file:
 
 ```bash
 CONFIG_FILE=./broker-config.yaml server
 ```
 
-> **Note:** The installed binary is named `server` (the command's package directory), not `solace-broker-mcp`. Rename it or create a symlink if you prefer the longer name. Unlike release archives, `go install` does not include the example config or license — copy `broker-config.example.yaml` from the repository.
+> **Note:** The installed binary is named `server` (the command's package directory), not `solace-broker-mcp`. Rename it or create a symlink if you prefer the longer name. Unlike release archives, `go install` does not include the example configuration file or license — copy `broker-config.example.yaml` from the repository.
 
 Verify:
 
@@ -267,7 +267,7 @@ gh attestation verify oci://ghcr.io/solaceproducts/solace-broker-mcp:latest \
 
 As with the binary attestation command shown earlier, `--signer-workflow` is what pins the attestation to the release workflow rather than to the repository at large. By default the attestation is fetched from the GitHub API; add `--bundle-from-oci` to read the copy stored beside the image on `ghcr.io` instead, which is also the copy `cosign` verifies.
 
-The container reads config from `/etc/mcp-server/config.yaml` by default. Pass the credentials via `--env-file` or individual `-e` flags.
+The container reads configuration from `/etc/mcp-server/config.yaml` by default. Pass the credentials via `--env-file` or individual `-e` flags.
 
 Verify:
 
@@ -278,7 +278,7 @@ curl http://localhost:9090/livez
 
 The image includes a built-in Docker health check using the binary's `--health` flag (no shell or curl needed in the container). Check status with `docker inspect --format '{{.State.Health.Status}}' solace-broker-mcp`, and the reason for a failure with `docker inspect --format '{{json .State.Health.Log}}' solace-broker-mcp`.
 
-With TLS configured, the probe verifies the server's certificate against the file at `tls_cert_file`, which must therefore be readable inside the container and must carry at least one DNS or IP SAN; a certificate identified only by Common Name reports the container unhealthy even though the server serves HTTPS fine. See [Health Check Fails](docs/user-guide.md#troubleshooting) for the diagnostics.
+With TLS configured, the probe verifies the server's certificate against the file at `tls_cert_file`, which must therefore be readable inside the container and must carry at least one DNS or IP Subject Alternative Name (SAN); a certificate identified only by Common Name reports the container unhealthy even though the server serves HTTPS fine. See [Health Check Fails](docs/user-guide.md#troubleshooting) for the diagnostics.
 
 **Docker Compose:**
 
@@ -305,7 +305,7 @@ claude mcp add solace-broker --transport http http://localhost:9090/mcp
 Example query:
 
 ```
-List queues in the default VPN on the dev broker
+List queues in the default VPN on the dev event broker
 ```
 
 ### Connect from Solace Agent Mesh
@@ -382,7 +382,7 @@ Environment variables take precedence over YAML settings, which take precedence 
 
 **TLS (HTTPS):**
 
-To enable HTTPS, add both `tls_cert_file` and `tls_key_file` to the YAML config:
+To enable HTTPS, add both `tls_cert_file` and `tls_key_file` to the YAML configuration:
 
 ```yaml
 port: 9090
@@ -431,7 +431,7 @@ solace-broker-mcp/
 
 ## CI
 
-GitHub Actions CI runs automatically on pull requests targeting `main` and on pushes to `main`. The workflow runs lint (golangci-lint), build, `go vet`, unit tests, end-to-end (E2E) tests against real Solace brokers, and OAuth integration tests.
+GitHub Actions CI runs automatically on pull requests targeting `main` and on pushes to `main`. The workflow runs lint (golangci-lint), build, `go vet`, unit tests, end-to-end (E2E) tests against real Solace event brokers, and OAuth integration tests.
 
 ## Contributing
 
@@ -461,11 +461,11 @@ This software is provided under the Apache License 2.0 on an "AS IS" basis, with
 
 If you have a Solace support contract, this project is covered through the usual [support@solace.com](mailto:support@solace.com) channel. Everyone else gets community support on a best-effort basis with no service-level commitment. See [Support](#support) for details.
 
-You are responsible for ensuring your use of this server complies with the terms governing your brokers and any laws, regulations, or policies that apply to you.
+You are responsible for ensuring your use of this server complies with the terms governing your event brokers and any laws, regulations, or policies that apply to you.
 
-**Production brokers.** This server issues real SEMP calls against the brokers you configure, including production brokers. Read operations add monitoring load; write operations (see [Tools](#tools)) change broker state. Test against a non-production broker before using it against production.
+**Production event brokers.** This server issues real SEMP calls against the event brokers you configure, including production event brokers. Read operations add monitoring load; write operations (see [Tools](#tools)) change event broker state. Test against a non-production event broker before using it against production.
 
-**AI-generated output.** This server is driven by AI assistants that interpret broker data and decide which tools to call. AI models can misread data, draw wrong conclusions, and select the wrong tool or arguments. Review the server's responses before acting on them, and review every proposed write or destructive action before you allow it.
+**AI-generated output.** This server is driven by AI assistants that interpret event broker data and decide which tools to call. AI models can misread data, draw wrong conclusions, and select the wrong tool or arguments. Review the server's responses before acting on them, and review every proposed write or destructive action before you allow it.
 
 ## License
 
