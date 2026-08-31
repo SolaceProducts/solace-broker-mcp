@@ -178,17 +178,23 @@ your environment, and apply:
 kubectl apply -f deploy/kubernetes/
 ```
 
-The manifests include:
+[`deploy/kubernetes/README.md`](../../deploy/kubernetes/README.md) is the
+source of truth for what must be edited before applying, the image-tag naming,
+and the switch to production OAuth. In outline the manifests are:
 
 - **`deployment.yaml`** — pod spec with config volume mount, secret env vars,
-  liveness/readiness probes (`httpGet /health`), security context
-  (`runAsNonRoot: true`, `runAsUser: 65534`)
+  startup/liveness/readiness probes (`httpGet /readyz` and `/livez`), security
+  context (`runAsNonRoot: true`, `runAsUser: 65532`)
 - **`service.yaml`** — ClusterIP service exposing port 9090
 - **`configmap.yaml`** — server configuration (broker URLs, SEMP settings)
-- **`secret.yaml`** — broker credentials as environment variables
+- **`secret.yaml`** — broker credentials plus the MCP client dev token, as
+  environment variables
 
 Edit `configmap.yaml` with your broker URLs and settings. Edit `secret.yaml`
-with your credentials:
+with your credentials. `DEV_TOKEN` backs the ConfigMap's default
+`mcp_client_auth.mode: static` and ships empty on purpose — the server refuses
+to start until it is set, so an unedited apply cannot come up on a credential
+published in this repository:
 
 ```yaml
 # WARNING: Do not commit this file with real credentials.
@@ -200,6 +206,7 @@ metadata:
 stringData:
   BROKER_USERNAME: admin
   BROKER_PASSWORD: changeme
+  DEV_TOKEN: ""
 ```
 
 > **Future:** A Helm chart for templated deployments, rollback, and

@@ -257,6 +257,15 @@ docker run -d \
 > gh auth token | docker login ghcr.io -u $(gh api user --jq .login) --password-stdin
 > ```
 
+> **Important:** `broker-config.example.yaml` ships with `mcp_client_auth.mode: disabled`, which binds `127.0.0.1` only — inside a container that is the *container's* loopback, so the published port refuses connections. For a container, bind all interfaces and pair that with a token so the port is not left unauthenticated:
+> ```yaml
+> listen_address: "0.0.0.0"
+> mcp_client_auth:
+>   mode: static
+>   dev_token: "${DEV_TOKEN}"
+> ```
+> Set `DEV_TOKEN` in the `--env-file`. See [deploy/kubernetes/](deploy/kubernetes/README.md) for the same combination applied to a cluster.
+
 The image carries a build provenance attestation, published to the registry alongside it. Verifying it proves the image was built by this repository's `release.yml` workflow:
 
 ```bash
@@ -293,6 +302,20 @@ services:
     env_file:
       - .env
 ```
+
+### Kubernetes Deployment
+
+Reference manifests — ConfigMap, Secret, Deployment, and a ClusterIP Service —
+are in [`deploy/kubernetes/`](deploy/kubernetes/):
+
+```bash
+kubectl apply -f deploy/kubernetes/
+```
+
+Read [`deploy/kubernetes/README.md`](deploy/kubernetes/README.md) first: it
+lists the values that must be set before applying (`DEV_TOKEN` ships empty and
+the pod will not start without it), the image-tag naming, and how to switch to
+production OAuth.
 
 ### Connect from Claude Code
 
