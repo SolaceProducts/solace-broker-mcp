@@ -182,9 +182,20 @@ The manifests include:
 
 - **`deployment.yaml`** — pod spec with config volume mount, secret env vars,
   liveness/readiness probes (`httpGet /health`), security context
-  (`runAsNonRoot: true`, `runAsUser: 65534`)
-- **`service.yaml`** — ClusterIP service exposing port 9090
-- **`configmap.yaml`** — server configuration (broker URLs, SEMP settings)
+  (`runAsNonRoot: true`, `runAsUser: 65534`); defaults to `replicas: 2` with a
+  pinned `maxUnavailable: 0` rollout strategy and best-effort topology spread
+  across nodes
+- **`service.yaml`** — ClusterIP service exposing port 9090, with
+  `sessionAffinity: ClientIP` to pin a client to the pod holding its MCP
+  session. Required above one replica, and bypassed entirely by an ingress or
+  service mesh — see [Observability](../observability.md) §
+  "Session affinity is required above one replica"
+- **`poddisruptionbudget.yaml`** — `maxUnavailable: 1`, so a node drain evicts
+  one pod at a time. Applied automatically by the directory-wide `kubectl
+  apply` above
+- **`configmap.yaml`** — server configuration (broker URLs, SEMP settings).
+  Note `semp.max_concurrent_per_broker` and `request_min_interval` are
+  per-pod, so a broker sees `replicas ×` the configured value
 - **`secret.yaml`** — broker credentials as environment variables
 
 Edit `configmap.yaml` with your broker URLs and settings. Edit `secret.yaml`
