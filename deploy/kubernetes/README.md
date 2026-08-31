@@ -53,6 +53,26 @@ curl -s localhost:9090/readyz    # 200 once the pod is Ready
 Health endpoints are unauthenticated; `/mcp` is not, and returns 401 without
 the token.
 
+### Pod stuck in `CrashLoopBackOff`?
+
+`kubectl apply` reports success even when the server cannot start — the
+resources are created, then the container exits. Startup problems are reported
+in the pod log:
+
+```bash
+kubectl logs -l app.kubernetes.io/name=solace-broker-mcp --tail=20
+```
+
+The most common cause on a first deploy is an unset `DEV_TOKEN`, which reports:
+
+```
+failed to load config error="validating config:
+  mcp_client_auth.dev_token is required when mcp_client_auth.mode is \"static\""
+```
+
+Every startup refusal names the offending configuration key, so the log line is
+the fastest route to the cause.
+
 ## Client authentication
 
 The ConfigMap defaults to `mcp_client_auth.mode: static` — a shared token from
