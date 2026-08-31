@@ -148,6 +148,38 @@ func TestSessionTimeout_ReapsIdleSession(t *testing.T) {
 	}
 }
 
+// TestSession_IsNotPortableAcrossInstances pins the premise the Kubernetes
+// manifests rest on (SOL-152089): a session ID is valid only on the instance
+// that issued it. The two handlers here stand in for two pods.
+//
+// That is why service.yaml sets sessionAffinity: ClientIP, and why the
+// Deployment cannot be scaled past one replica without it. The behavior lives
+// in the SDK, which Dependabot bumps daily, so if a release ever makes sessions
+// portable this fails and the affinity requirement can be re-derived.
+//
+// Both directions are asserted: a 404 from podB alone would also be produced by
+// a handler that rejects every session, which would prove nothing.
+func TestSession_IsNotPortableAcrossInstances(t *testing.T) {
+	// A long timeout keeps idle reaping out of this test: the only reason a
+	// session should be missing here is that it belongs to the other instance.
+	podA := newSessionTestHandler(time.Hour)
+	podB := newSessionTestHandler(time.Hour)
+
+	sessionID := initializeSession(t, podA)
+
+	if status := sessionStatus(podB, sessionID); status != http.StatusNotFound {
+		t.Errorf("session %s issued by podA got status %d on podB, want %d; "+
+			"if sessions are now portable across instances, "+
+			"service.yaml's sessionAffinity: ClientIP is no longer required",
+			sessionID, status, http.StatusNotFound)
+	}
+	if status := sessionStatus(podA, sessionID); status != http.StatusOK {
+		t.Errorf("session %s got status %d on the podA that issued it, want %d; "+
+			"the 404 above would then say nothing about instance boundaries",
+			sessionID, status, http.StatusOK)
+	}
+}
+
 // TestSessionTimeout_KeepsActiveSession proves the timeout is an IDLE timeout,
 // not a session lifetime cap. A session used more often than the timeout must
 // survive indefinitely — otherwise the fix would cut off working clients mid

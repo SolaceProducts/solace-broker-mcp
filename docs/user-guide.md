@@ -262,7 +262,15 @@ Common causes:
 
 ### "Session not found" Errors
 
-After restarting the MCP server, "session not found" errors indicate the client session has become stale.
+MCP sessions live in the server process's memory, so `404 session not found` means the process
+holding your session no longer has it. Three distinct causes produce the identical error.
+Reconnecting clears all three, but only the first is a misconfiguration worth fixing:
+
+| What you see | Cause | How to confirm |
+|---|---|---|
+| 404 on nearly every request, from first use, on a multi-replica deployment | Requests are landing on pods that did not issue the session — affinity is absent, or bypassed by an ingress or mesh | `kubectl get svc solace-broker-mcp -o jsonpath='{.spec.sessionAffinity}'` should print `ClientIP`. If an ingress, gateway, or service mesh fronts the Service, that setting does not apply — configure stickiness there on the `Mcp-Session-Id` header, or run one replica |
+| 404 after a long idle gap, one client at a time | The session passed its 2-hour idle timeout. Expected | The client sat idle for more than two hours |
+| 404 for every client at once, just after a deploy or restart | Pods were replaced; sessions do not survive a rolling update. Expected | `kubectl get pods -l app.kubernetes.io/name=solace-broker-mcp` — check `AGE` and `RESTARTS` |
 
 **Solution:** Reconnect the MCP client:
 

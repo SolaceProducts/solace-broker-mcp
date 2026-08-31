@@ -361,6 +361,14 @@ least one of them, or startup fails with a configuration error.
    > [`deploy/kubernetes/README.md`](../deploy/kubernetes/README.md) for the
    > shipped manifests and how to switch them to `mode: oauth`.
 
+   > **Above one replica:** an ingress in this position bypasses the Service's
+   > `sessionAffinity: ClientIP`, because it load-balances to pod IPs rather than
+   > through the ClusterIP. MCP sessions live in one pod's memory, so clients get
+   > `404 session not found` unless stickiness is configured on the
+   > `Mcp-Session-Id` header at the ingress. See
+   > [Observability](observability.md) § "Session affinity is required above one
+   > replica".
+
 If **both** are set, direct TLS takes precedence: the server terminates TLS
 itself and `tls_terminated_upstream` is ignored (no plaintext, no `WARN`).
 Providing **neither** is a fatal configuration error. The setting is ignored entirely in
