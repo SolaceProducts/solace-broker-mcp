@@ -45,6 +45,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/hooks"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
@@ -568,7 +569,7 @@ func startServer(srv *http.Server, tlsCertFile, tlsKeyFile string) <-chan error 
 // skipping the graceful wait. Readiness has already flipped to 503 above, so a
 // forced exit still leaves /readyz correct. A nil forceSig (the startup-error
 // path, which never drains) simply never fires that select case.
-func drainAndShutdown(srv shutdowner, readiness *health.ReadinessState, drainDelay, shutdownTimeout time.Duration, forceSig <-chan os.Signal) error {
+func drainAndShutdown(srv shutdowner, readiness *health.ReadinessState, drainDelay, shutdownTimeout time.Duration, forceSig <-chan os.Signal, shutdownHooks *hooks.Registry) error {
 	readiness.SetShuttingDown()
 	slog.Info("draining before shutdown",
 		slog.String("reason", "signal"),
@@ -584,7 +585,7 @@ func drainAndShutdown(srv shutdowner, readiness *health.ReadinessState, drainDel
 			return nil
 		}
 	}
-	return gracefulShutdown(srv, shutdownTimeout, forceSig)
+	return gracefulShutdown(srv, shutdownTimeout, forceSig, shutdownHooks)
 }
 
 // forceClose is the shared "second signal" reaction (SOL-151437): a single WARN
@@ -646,7 +647,12 @@ type shutdowner interface {
 // returned via the force path — no goroutine leak. A nil forceSig (the
 // startup-error path) never fires that case, so that path keeps its exact
 // prior behavior, including the Shutdown-timed-out forced-close fallback.
-func gracefulShutdown(srv shutdowner, timeout time.Duration, forceSig <-chan os.Signal) error {
+//
+// shutdownHooks runs (SOL-152449) once srv.Shutdown has settled, success or
+// timed-out-then-forced-close alike — never while requests may still be
+// in-flight. A second signal returns before that point, so it skips hooks
+// entirely: "stop now" outranks a telemetry flush.
+func gracefulShutdown(srv shutdowner, timeout time.Duration, forceSig <-chan os.Signal, shutdownHooks *hooks.Registry) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -661,6 +667,9 @@ func gracefulShutdown(srv shutdowner, timeout time.Duration, forceSig <-chan os.
 				slog.Error("forced close failed", slog.String("error", closeErr.Error()))
 			}
 		}
+		hookCtx, hookCancel := context.WithTimeout(context.Background(), time.Duration(defaults.DefaultShutdownHookTimeoutSeconds)*time.Second)
+		defer hookCancel()
+		shutdownHooks.RunAll(hookCtx)
 		return err
 	case sig := <-forceSig:
 		forceClose(srv, sig)
@@ -1071,6 +1080,10 @@ func main() {
 	readiness := health.NewReadinessState()
 	mux := buildMux(readiness)
 
+	// shutdownHooks is empty until a later story (SOL-152091, SOL-152420,
+	// SOL-152418) registers an OTel provider flush against it.
+	shutdownHooks := hooks.NewRegistry()
+
 	// Create MCP handler
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
 		return server
@@ -1178,11 +1191,11 @@ func main() {
 		drainDelay := drainDelayForSignal(receivedSignal, time.Duration(cfg.Observability.ShutdownDrainDelayS)*time.Second)
 		// Pass the still-registered signal channel so a second SIGINT/SIGTERM
 		// during the drain or graceful wait forces an immediate close (SOL-151437).
-		_ = drainAndShutdown(httpServer, readiness, drainDelay, shutdownTimeout, done)
+		_ = drainAndShutdown(httpServer, readiness, drainDelay, shutdownTimeout, done, shutdownHooks)
 	} else {
 		// Startup-error path never began serving, so there is nothing to drain
 		// and no second-signal semantics: pass a nil force channel.
-		_ = gracefulShutdown(httpServer, shutdownTimeout, nil)
+		_ = gracefulShutdown(httpServer, shutdownTimeout, nil, shutdownHooks)
 	}
 
 	slog.Info("server stopped")
