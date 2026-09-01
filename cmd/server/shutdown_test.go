@@ -27,7 +27,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/hooks"
 )
 
 // TestDrainDelayForSignal proves the SIGINT-vs-SIGTERM drain policy (reviewer
@@ -104,7 +106,7 @@ func TestDrainAndShutdown_FlipsReadyzBeforeDelay(t *testing.T) {
 	}()
 
 	start := time.Now()
-	if err := drainAndShutdown(srv, readiness, drainDelay, 5*time.Second, nil); err != nil {
+	if err := drainAndShutdown(srv, readiness, drainDelay, 5*time.Second, nil, nil); err != nil {
 		t.Fatalf("drainAndShutdown returned error: %v", err)
 	}
 	elapsed := time.Since(start)
@@ -135,7 +137,7 @@ func TestDrainAndShutdown_SetsShuttingDownEvenWithZeroDelay(t *testing.T) {
 	readiness := health.NewReadinessState()
 	readiness.SetInitialized()
 
-	if err := drainAndShutdown(srv, readiness, 0, 5*time.Second, nil); err != nil {
+	if err := drainAndShutdown(srv, readiness, 0, 5*time.Second, nil, nil); err != nil {
 		t.Fatalf("drainAndShutdown returned error: %v", err)
 	}
 	if !readiness.IsShuttingDown() {
@@ -194,7 +196,7 @@ func TestDrainAndShutdown_ShutdownGetsFullBudgetAfterDrain(t *testing.T) {
 	readiness.SetInitialized()
 
 	start := time.Now()
-	if err := drainAndShutdown(cs, readiness, drainDelay, shutdownTimeout, nil); err != nil {
+	if err := drainAndShutdown(cs, readiness, drainDelay, shutdownTimeout, nil, nil); err != nil {
 		t.Fatalf("drainAndShutdown returned error: %v", err)
 	}
 
@@ -238,7 +240,7 @@ func TestGracefulShutdown_ForcedCloseFallback(t *testing.T) {
 	wantErr := context.DeadlineExceeded
 	cs := &captureShutdowner{shutdownErr: wantErr}
 
-	err := gracefulShutdown(cs, 50*time.Millisecond, nil)
+	err := gracefulShutdown(cs, 50*time.Millisecond, nil, nil)
 	if err != wantErr {
 		t.Errorf("gracefulShutdown returned %v, want the original Shutdown error %v", err, wantErr)
 	}
@@ -310,7 +312,7 @@ func TestDrainAndShutdown_SecondSignalDuringDrainForcesClose(t *testing.T) {
 	forceSig <- syscall.SIGTERM
 
 	start := time.Now()
-	if err := drainAndShutdown(srv, readiness, drainDelay, 30*time.Second, forceSig); err != nil {
+	if err := drainAndShutdown(srv, readiness, drainDelay, 30*time.Second, forceSig, nil); err != nil {
 		t.Fatalf("drainAndShutdown returned error on forced close: %v", err)
 	}
 	elapsed := time.Since(start)
@@ -343,7 +345,7 @@ func TestDrainAndShutdown_SecondSignalDuringGracefulForcesClose(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- drainAndShutdown(srv, readiness, 0, 30*time.Second, forceSig)
+		done <- drainAndShutdown(srv, readiness, 0, 30*time.Second, forceSig, nil)
 	}()
 
 	select {
@@ -428,6 +430,100 @@ func TestForceClose_LogsSingleWarnNamingSignal(t *testing.T) {
 	}
 	if got := srv.closeCount.Load(); got != 1 {
 		t.Errorf("forceClose invoked Close %d times, want exactly 1", got)
+	}
+}
+
+// TestGracefulShutdown_RunsHooksAfterShutdown proves shutdownHooks actually
+// gets invoked on a normal shutdown (SOL-152449) — the registry parameter
+// isn't just plumbed through and ignored.
+func TestGracefulShutdown_RunsHooksAfterShutdown(t *testing.T) {
+	cs := &captureShutdowner{}
+	registry := hooks.NewRegistry()
+	var hookRan atomic.Bool
+	registry.Register("test-hook", func(context.Context) error {
+		hookRan.Store(true)
+		return nil
+	})
+
+	if err := gracefulShutdown(cs, 50*time.Millisecond, nil, registry); err != nil {
+		t.Fatalf("gracefulShutdown returned error: %v", err)
+	}
+	if !hookRan.Load() {
+		t.Error("registered hook did not run after a normal shutdown")
+	}
+}
+
+// TestGracefulShutdown_SecondSignalSkipsHooks proves AC #3 (SOL-152449): a
+// second signal forcing an immediate close must skip registered hooks
+// entirely — "stop now" outranks a telemetry flush.
+func TestGracefulShutdown_SecondSignalSkipsHooks(t *testing.T) {
+	srv := newBlockingShutdowner()
+	registry := hooks.NewRegistry()
+	var hookRan atomic.Bool
+	registry.Register("test-hook", func(context.Context) error {
+		hookRan.Store(true)
+		return nil
+	})
+
+	forceSig := make(chan os.Signal, 1)
+	forceSig <- syscall.SIGTERM
+
+	if err := gracefulShutdown(srv, 30*time.Second, forceSig, registry); err != nil {
+		t.Errorf("gracefulShutdown returned %v on forced close, want nil", err)
+	}
+	if hookRan.Load() {
+		t.Error("registered hook ran despite a second-signal forced close; hooks must be skipped")
+	}
+}
+
+// TestGracefulShutdown_SecondSignalDuringHookFlushCutsItShort proves a second
+// signal WHILE hooks are running (SOL-152449) cancels the flush immediately
+// instead of waiting out the budget — same "stop now" guarantee as the rest
+// of shutdown.
+func TestGracefulShutdown_SecondSignalDuringHookFlushCutsItShort(t *testing.T) {
+	cs := &captureShutdowner{} // Shutdown returns nil immediately, no delay.
+	registry := hooks.NewRegistry()
+
+	hookStarted := make(chan struct{})
+	hookCanceled := make(chan struct{})
+	registry.Register("blocker", func(ctx context.Context) error {
+		close(hookStarted)
+		<-ctx.Done()
+		close(hookCanceled)
+		return ctx.Err()
+	})
+
+	forceSig := make(chan os.Signal, 1)
+	done := make(chan error, 1)
+	go func() { done <- gracefulShutdown(cs, 30*time.Second, forceSig, registry) }()
+
+	select {
+	case <-hookStarted:
+	case <-time.After(time.Second):
+		t.Fatal("hook never started; test cannot exercise the mid-flush signal")
+	}
+
+	start := time.Now()
+	forceSig <- syscall.SIGTERM
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("gracefulShutdown returned %v on a second signal, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("gracefulShutdown did not return after a second signal during hook flush")
+	}
+
+	hookBudget := time.Duration(defaults.DefaultShutdownHookTimeoutSeconds) * time.Second
+	if elapsed := time.Since(start); elapsed >= hookBudget {
+		t.Errorf("gracefulShutdown took %v after the second signal, want well under the %v hook budget", elapsed, hookBudget)
+	}
+
+	select {
+	case <-hookCanceled:
+	case <-time.After(time.Second):
+		t.Error("hook's context was never canceled after the second signal")
 	}
 }
 
