@@ -34,7 +34,8 @@ func metricsConfig(bindAddr string) *config.ServerConfig {
 // provider must not be returned, since the endpoint is not serving.
 func TestStartMetricsEndpoint_BindFailureIsUnready(t *testing.T) {
 	// Occupy an address so the metrics listener cannot bind to it.
-	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	occupied, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("could not occupy a port: %v", err)
 	}
