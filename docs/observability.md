@@ -628,6 +628,151 @@ Notes:
 
 ---
 
+## Deployment Topology and Resource Policy — [Implemented]
+
+Unlike the signal schemas above, this section describes the example manifests in
+`deploy/kubernetes/` as they ship today. They are a starting point to copy and edit, not a
+supported product surface. Note there is no `kustomization.yaml` in that directory, so
+adapt them by editing your copies — or add a base of your own first if you want to layer
+Kustomize overlays on top.
+
+### Availability
+
+The Deployment defaults to `replicas: 2`. A single replica goes fully dark during any rolling
+update or node drain. Two *separate* mechanisms keep a pod serving, and it is worth being
+precise about which covers what — because a PodDisruptionBudget does **not** govern rolling
+updates:
+
+| Disruption | Enforced by | Mechanism |
+|---|---|---|
+| Rolling update (`kubectl rollout restart`, image change) | Deployment controller | `strategy.rollingUpdate.maxUnavailable: 0` — the replacement reaches Ready before the pod it replaces retires |
+| Node drain, cluster upgrade | Eviction API | `poddisruptionbudget.yaml` — `maxUnavailable: 1`, one eviction at a time |
+| Node failure, OOM kill | nothing | Involuntary; bypasses both |
+
+A rollout deletes pods directly through the ReplicaSet and never consults the PDB, so the
+strategy is pinned explicitly rather than inherited. The default `maxUnavailable: 25%`
+resolves to `0` only via `floor(0.25 × 2)` at exactly two replicas — too incidental to rest
+the guarantee on.
+
+The PDB uses `maxUnavailable: 1`, not `minAvailable: 1`. The two are identical at two
+replicas, but `minAvailable: 1` against `replicas: 1` permits zero disruptions and hangs
+every drain of that node indefinitely — a cluster-wide hazard created by an application
+manifest, and one that outlives a `git revert`, since `kubectl apply -f` does not prune the
+PDB object. `maxUnavailable: 1` degrades to a brief outage instead, so scaling down stays
+safe and the replica count and the PDB no longer have to move in lockstep.
+
+`topologySpreadConstraints` (`maxSkew: 1` over `kubernetes.io/hostname`,
+`whenUnsatisfiable: ScheduleAnyway`) asks the scheduler to place the replicas on different
+nodes. Without it `replicas: 2` is two pods in one failure domain, and node failure — the
+involuntary case nothing protects — stays a full outage. It is best-effort by design so
+single-node dev clusters still schedule both pods.
+
+#### The PDB protects availability, not sessions
+
+MCP sessions live in pod memory (see below), so **any** pod replacement takes its sessions
+with it. A rolling update recycles both pods, so no session survives an upgrade: affinity
+re-routes those clients onto a pod that never issued their session and they receive
+`404 session not found`. The graceful-shutdown budget in `deployment.yaml` drains in-flight
+*requests*; it cannot make session state portable.
+
+Two replicas buy a Service endpoint that stays reachable throughout. They do not buy a
+conversation that survives an upgrade. Clients re-initialize on the 404 — plan upgrades
+accordingly.
+
+### Session affinity is required above one replica
+
+The MCP streamable-HTTP handler runs in the SDK's **stateful** mode: it issues an
+`Mcp-Session-Id` on initialize and holds that session in process memory, per pod. A request
+carrying a session ID that reaches a pod which did not issue it is answered
+`404 session not found` — the SDK does not transparently re-initialize.
+
+`service.yaml` therefore sets `sessionAffinity: ClientIP`, pinning a client to the pod
+holding its session. **Do not scale beyond one replica without it.** Two constraints follow:
+
+- `sessionAffinityConfig.clientIP.timeoutSeconds` (10800, 3h) must stay **above** the MCP
+  session idle timeout, currently the compile-time constant
+  `defaults.DefaultMCPSessionIdleTimeout` (2h). If the routing entry expired first,
+  kube-proxy would re-route a still-live session onto another pod and produce exactly the 404
+  the affinity prevents. The timeout is not operator-configurable today, so only a code change
+  can invert this. Nothing enforces the relationship today — though it is checkable in
+  principle: `gopkg.in/yaml.v3` is already a direct dependency, so a test could parse the
+  manifest and compare it against the constant. That guard has not been written.
+- **Service-level affinity does not survive an ingress, gateway, or mesh.** kube-proxy applies
+  it on the ClusterIP path only. An Ingress or Gateway controller load-balances straight to pod
+  IPs, never transiting the ClusterIP, so the field is ignored and the 404 returns in full —
+  and that is the topology [Authentication](authentication.md) recommends for OAuth ("keep the
+  Service `ClusterIP` and put the TLS-terminating ingress in front of it"). A service mesh
+  sidecar bypasses it as well. Behind any of these, configuring stickiness at *that* layer is
+  a required deployment step, and the hash key is not the obvious one — the session ID is
+  wrong. [Authentication](authentication.md#session-routing-at-the-ingress-required-above-one-replica)
+  § "Session Routing at the Ingress" is authoritative; `deploy/kubernetes/ingress.yaml.example`
+  is the manifest.
+- Where affinity *is* in effect it is keyed on source IP, so every client behind one NAT or
+  egress gateway — including an in-cluster proxy, whose own pod IP is what gets hashed —
+  lands on a single pod. Sessions stay correct, but the second replica takes no traffic and
+  recycling the loaded pod drops every session at once.
+
+### What else is per-pod
+
+The session map is the most visible piece of per-process state, but it is not the only one, and
+a second replica doubles all of them:
+
+- **SEMP concurrency and pacing.** `semp.max_concurrent_per_broker` and `request_min_interval`
+  are enforced per process, so the load a broker actually sees is `replicas ×` the configured
+  value. At the example config's `max_concurrent_per_broker: 10`, two replicas can put 20
+  concurrent SEMP requests on one broker — and that limit exists to protect the broker's
+  management plane, which is shared with human operators and other tooling. Divide these by the
+  replica count, or raise the replica count deliberately knowing the multiplier.
+- **Retries and circuit breakers** trip independently per pod, so a broker brownout produces
+  one retry storm per replica instead of one in total.
+- **The broker token cache** starts cold on each pod, so token exchanges against the IdP also
+  scale with the replica count.
+
+None of this is wrong, but none of it is visible from one pod's logs either — and under
+ClientIP affinity it means two clients can legitimately observe different behaviour from the
+same deployment at the same moment.
+
+### Resource requests and limits
+
+The container sets `requests: cpu 100m / memory 128Mi` and `limits: memory 512Mi`. The
+asymmetry is deliberate: **memory is capped, CPU is not.**
+
+**No CPU limit.** A CPU limit is enforced by CFS throttling, which stalls the process at
+burst even when the node has idle cores — and burst is the normal shape of this workload,
+where a tool call fans out to SEMP and parses the response. `requests.cpu` guarantees this
+pod's scheduling share under contention, so it stays served while neighbours are busy; a limit
+would only add latency at the moments that matter most.
+
+Be precise about what that guarantee covers, though: `requests` protects this pod *from*
+others, not others *from* this pod. Dropping the limit is exactly what lets this container
+burst into otherwise-idle cores — which is the intent — but on a shared cluster that is the
+platform team's call, expressed as a `LimitRange` or `ResourceQuota` rather than here. Both
+cut the other way too, and neither is visible from this repo: a namespace `ResourceQuota`
+carrying a `limits.cpu` entry **rejects** a pod that omits one (the Deployment is admitted
+and then no pods appear), and a `LimitRange` with a default CPU limit **silently re-injects**
+the throttling this section argues against.
+
+**A memory limit, because the failure modes are not symmetric.** Memory is incompressible:
+an unbounded leak has no equivalent of "runs slower", it takes the node down with it. Capping
+it makes an over-consuming pod the kernel's problem via OOM kill, after which the Deployment
+replaces it. That division of labour is intentional — **memory eviction is Kubernetes' job,
+not the application's.** In particular, **`/readyz` is not a memory-pressure signal**: it
+reports the server's own initialization state and will happily return 200 from a pod moments
+from being OOM-killed. Nothing in process is watching the heap, and nothing is meant to be.
+
+The 512Mi ceiling over a 128Mi request leaves headroom for the in-process session map
+described above plus buffered SEMP responses under concurrent tool calls.
+
+Two caveats on that ceiling. There is no session-count cap — sessions are bounded only by the
+2h idle timeout — so sustained growth ends in an OOM kill rather than backpressure. And
+because both replicas run identical code against one client population, they approach the
+limit together; OOM is involuntary, so neither the PDB nor the rollout strategy protects
+against losing both. Until a session gauge exists (metrics are `[Planned]` above, and no
+session metric appears in the proposed set), the signal to watch is the container's own
+`container_memory_working_set_bytes` against its limit, via cAdvisor or `kubectl top pods`.
+
+---
+
 ## Open Items for This Review
 
 These are the decisions we most want pilot input on. Most are unresolved; where we have

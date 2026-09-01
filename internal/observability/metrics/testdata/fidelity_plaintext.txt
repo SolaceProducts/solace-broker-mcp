@@ -1,0 +1,29 @@
+# HELP mcp_build_info 
+# TYPE mcp_build_info gauge
+mcp_build_info{version="0.0.0-spike"} 1
+# HELP mcp_tool_invocation_duration_seconds 
+# TYPE mcp_tool_invocation_duration_seconds histogram
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="0"} 0
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="5"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="10"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="25"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="50"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="75"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="100"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="250"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="500"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="750"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="1000"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="2500"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="5000"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="7500"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="10000"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="+Inf"} 1
+mcp_tool_invocation_duration_seconds_sum{tool="get-broker-status"} 0.042
+mcp_tool_invocation_duration_seconds_count{tool="get-broker-status"} 1
+# HELP mcp_tool_invocation_total 
+# TYPE mcp_tool_invocation_total counter
+mcp_tool_invocation_total{tool="get-broker-status"} 1
+# HELP target_info Target metadata
+# TYPE target_info gauge
+target_info{service_instance_id="spike-test-instance",service_name="solace-broker-mcp",service_version="0.0.0-spike"} 1

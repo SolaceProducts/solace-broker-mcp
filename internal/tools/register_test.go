@@ -313,6 +313,200 @@ func TestListBrokersEmitsAuditLog(t *testing.T) {
 	}
 }
 
+// callToolTestHarness spins up a real MCP server+client session over an
+// in-memory transport with a single stub tool registered, mirroring
+// TestPanicAuditedAsError / TestListBrokersEmitsAuditLog. The SOL-153765
+// regression only reproduces at the wire level — req.Params.Arguments'
+// omitempty behavior and the SDK's any-typed CallToolParams.Arguments both
+// need a real client-to-server round trip, not a direct call into the
+// unexported closure. clientMiddleware, if given, is installed on the client
+// via AddSendingMiddleware before Connect.
+func callToolTestHarness(t *testing.T, clientMiddleware ...mcp.Middleware) *mcp.ClientSession {
+	t.Helper()
+	pool := newRegTestPool(t)
+	mgr := NewToolManager(pool)
+	mgr.Register(newStubHandler("test-tool"))
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+	RegisterWithServer(mgr, server, pool, true, nil, "")
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go func() {
+		_ = server.Run(ctx, serverTransport)
+	}()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1.0"}, nil)
+	if len(clientMiddleware) > 0 {
+		client.AddSendingMiddleware(clientMiddleware...)
+	}
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	t.Cleanup(func() { session.Close() })
+	return session
+}
+
+// forceOmitArguments is client-sending middleware that clears
+// CallToolParams.Arguments back to nil immediately before the request is
+// marshaled and sent. It exists because ClientSession.CallTool itself
+// defaults a nil Arguments to map[string]any{} ("avoid sending nil over the
+// wire" — see the SDK's client.go) before any middleware runs, which means a
+// plain call through the typed client can never actually omit the
+// "arguments" field. Undoing that default here, after the SDK's own
+// defaulting but before the wire marshal, is the only way to reproduce the
+// exact condition in the ticket: a tools/call request with no "arguments"
+// field on the wire at all.
+func forceOmitArguments(next mcp.MethodHandler) mcp.MethodHandler {
+	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		if method == "tools/call" {
+			if p, ok := req.GetParams().(*mcp.CallToolParams); ok {
+				p.Arguments = nil
+			}
+		}
+		return next(ctx, method, req)
+	}
+}
+
+// TestCallToolHandler_OmittedArguments_AuditedAndValidated covers SOL-153765:
+// a tools/call request with no "arguments" field at all is legal MCP
+// (CallToolParams.Arguments carries omitempty), and must be treated the same
+// as an empty object rather than failing json.Unmarshal on a nil RawMessage.
+// Pre-fix, this closure returned a bare protocol error before ever calling
+// ToolManager.CallTool, so zero audit lines were emitted. Post-fix, the
+// request flows into normal validation (missing_broker, since no broker
+// parameter is present either) and is fully audited.
+func TestCallToolHandler_OmittedArguments_AuditedAndValidated(t *testing.T) {
+	var logBuf bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(oldLogger)
+
+	session := callToolTestHarness(t, forceOmitArguments)
+	ctx := context.Background()
+
+	// forceOmitArguments strips Arguments back to nil right before send, so
+	// the wire request carries no "arguments" key at all — reproducing the
+	// exact condition in the ticket
+	// ({"method":"tools/call","params":{"name":"test-tool"}}).
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "test-tool"})
+	if err != nil {
+		t.Fatalf("CallTool returned a protocol-level error instead of a tool result: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected an error result (missing required broker), got success: %v", res.StructuredContent)
+	}
+
+	audits := auditLines(t, &logBuf, "test-tool")
+	if len(audits) != 1 {
+		t.Fatalf("expected exactly 1 audit line for test-tool, got %d: %s", len(audits), logBuf.String())
+	}
+	if got := audits[0]["status"]; got != "error" {
+		t.Errorf("audit status = %v, want %q", got, "error")
+	}
+	if got := audits[0]["error_type"]; got != "missing_broker" {
+		t.Errorf("audit error_type = %v, want %q (omitted arguments must reach normal validation, not a bespoke parse-error type)", got, "missing_broker")
+	}
+}
+
+// TestCallToolHandler_NullArguments_AuditedAndValidated covers a third legal
+// wire shape distinct from "omitted entirely": arguments present but JSON
+// null. json.Unmarshal(null, &map) already succeeds with a nil map even on
+// unfixed code (unlike the nil/empty-RawMessage case this ticket fixes), so
+// this test passes both before and after the fix — it is a regression pin
+// for this wire shape, not a red/green case, and is kept so a future change
+// to the unmarshal guard can't regress it.
+func TestCallToolHandler_NullArguments_AuditedAndValidated(t *testing.T) {
+	var logBuf bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(oldLogger)
+
+	session := callToolTestHarness(t)
+	ctx := context.Background()
+
+	// json.RawMessage("null") is a non-empty []byte, so the client SDK's
+	// omitempty does not drop it — the literal `"arguments":null` reaches
+	// the server, unlike a plain nil interface (which omitempty would
+	// suppress, collapsing this into the omitted case above).
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "test-tool", Arguments: json.RawMessage("null")})
+	if err != nil {
+		t.Fatalf("CallTool returned a protocol-level error instead of a tool result: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected an error result (missing required broker), got success: %v", res.StructuredContent)
+	}
+
+	audits := auditLines(t, &logBuf, "test-tool")
+	if len(audits) != 1 {
+		t.Fatalf("expected exactly 1 audit line for test-tool, got %d: %s", len(audits), logBuf.String())
+	}
+	if got := audits[0]["error_type"]; got != "missing_broker" {
+		t.Errorf("audit error_type = %v, want %q", got, "missing_broker")
+	}
+}
+
+// TestCallToolHandler_MalformedArguments_AuditedAsError covers the other half
+// of SOL-153765: arguments present but not a JSON object (genuinely
+// malformed from this closure's point of view, since CallToolParams.Arguments
+// is typed `any` client-side and can legally hold a non-object value). Before
+// the fix this closure returned a bare protocol error and never audited the
+// call. After the fix it must audit the failure itself (this path never
+// reaches ToolManager.CallTool) and return the manager's normal
+// structured/retryable error shape instead of a protocol error — and it must
+// never echo the raw stdlib decode error text (which can contain client-
+// supplied bytes) into the client-facing message or the audit "detail" field.
+func TestCallToolHandler_MalformedArguments_AuditedAsError(t *testing.T) {
+	var logBuf bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(oldLogger)
+
+	session := callToolTestHarness(t)
+	ctx := context.Background()
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "test-tool", Arguments: "not-an-object"})
+	if err != nil {
+		t.Fatalf("CallTool returned a protocol-level error instead of a structured tool result: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected an error result for malformed arguments, got success: %v", res.StructuredContent)
+	}
+
+	structured, ok := res.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured content to be a JSON object, got %T: %v", res.StructuredContent, res.StructuredContent)
+	}
+	errMsg, _ := structured["error"].(string)
+	if errMsg == "" {
+		t.Fatalf("expected a non-empty client-facing error message, got: %v", structured)
+	}
+	if strings.Contains(errMsg, "not-an-object") || strings.Contains(errMsg, "cannot unmarshal") {
+		t.Errorf("client-facing error echoes the raw stdlib decode error instead of a static message: %q", errMsg)
+	}
+	if retryable, ok := structured["retryable"].(bool); !ok || retryable {
+		t.Errorf("expected retryable=false, got %v", structured["retryable"])
+	}
+
+	audits := auditLines(t, &logBuf, "test-tool")
+	if len(audits) != 1 {
+		t.Fatalf("expected exactly 1 audit line for test-tool, got %d: %s", len(audits), logBuf.String())
+	}
+	if got := audits[0]["status"]; got != "error" {
+		t.Errorf("audit status = %v, want %q", got, "error")
+	}
+	if got := audits[0]["error_type"]; got != "bad_request" {
+		t.Errorf("audit error_type = %v, want %q", got, "bad_request")
+	}
+	// secure-logging-rules.md: unvouched error text is logged by Go type
+	// only, never verbatim — the audit "detail" field must not carry the raw
+	// client-supplied bytes from the failed decode.
+	if detail, _ := audits[0]["detail"].(string); strings.Contains(detail, "not-an-object") {
+		t.Errorf("audit detail leaked raw decode error text: %q", detail)
+	}
+}
+
 // TestListBrokers_ResponseContainsOnlyAliases closes a Quality Plan gap
 // (SOL-147161 §3.3): list-brokers is the one tool response an MCP client
 // sees before it has picked a broker, so it's the one place a future change

@@ -5,7 +5,22 @@ metadata:
   labels:
     app.kubernetes.io/name: solace-broker-mcp
 spec:
-  replicas: 1
+  # Two replicas keep one pod serving through updates and drains, via two
+  # separate mechanisms: strategy below covers rollouts (a rollout never
+  # consults a PDB), poddisruptionbudget.yaml covers drains.
+  #
+  # Requires service.yaml's sessionAffinity: ClientIP — read the caveat there
+  # before fronting this with an ingress or service mesh.
+  replicas: 2
+  # Pinned, not inherited: the 25% defaults only happen to give 0/1 at exactly
+  # two replicas. maxUnavailable: 0 brings the replacement to Ready before the
+  # old pod retires, so a rollout that cannot place a third pod stalls rather
+  # than dropping capacity.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: solace-broker-mcp
@@ -14,6 +29,17 @@ spec:
       labels:
         app.kubernetes.io/name: solace-broker-mcp
     spec:
+      # Without this both replicas can land on one node, where node failure —
+      # involuntary, so the PDB does not help — is still a full outage.
+      # ScheduleAnyway keeps single-node dev clusters schedulable; swap
+      # topologyKey for topology.kubernetes.io/zone to spread across AZs.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: solace-broker-mcp
       # Graceful-shutdown budget (SOL-151288). On SIGTERM the server flips
       # /readyz to 503, sleeps obs.shutdown_drain_delay_s (default 10s) so K8s
       # deregisters the pod, then gracefully drains in-flight requests for up to
@@ -86,13 +112,23 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
+          # Memory is capped, CPU deliberately is not (SOL-152089).
+          #
+          # No limits.cpu: CFS throttling stalls the process at burst, which is
+          # this workload's normal shape (a tool call fans out to SEMP), and
+          # requests.cpu already guarantees the share under contention.
+          #
+          # limits.memory is set because memory is incompressible — a leak
+          # takes the node down rather than just running slower. OOM eviction
+          # is Kubernetes' job; /readyz reports init state, not memory
+          # pressure, so nothing in-process watches the heap. 512Mi covers the
+          # session map plus buffered SEMP responses under concurrent calls.
           resources:
             requests:
               cpu: 100m
-              memory: 64Mi
-            limits:
-              cpu: 500m
               memory: 128Mi
+            limits:
+              memory: 512Mi
       volumes:
         - name: config
           configMap:

@@ -82,7 +82,7 @@ The Dockerfile uses a multi-stage build:
 
 - **Builder stage** (`golang:1.25-alpine`): compiles the binary with ldflags
 - **Runtime stage** (`gcr.io/distroless/static-debian12:nonroot`): ~2 MB base,
-  includes CA certificates for TLS/OIDC, runs as non-root UID 65534
+  includes CA certificates for TLS/OIDC, runs as non-root UID 65532
 - **HEALTHCHECK**: uses the binary's `--health` flag (no shell or curl needed)
 
 The `VERSION` build argument defaults to `dev` if not provided.
@@ -178,17 +178,40 @@ your environment, and apply:
 kubectl apply -f deploy/kubernetes/
 ```
 
-The manifests include:
+[`deploy/kubernetes/README.md`](../../deploy/kubernetes/README.md) is the
+source of truth for what must be edited before applying, the image-tag naming,
+and the switch to production OAuth. In outline the manifests are:
 
 - **`deployment.yaml`** — pod spec with config volume mount, secret env vars,
-  liveness/readiness probes (`httpGet /health`), security context
-  (`runAsNonRoot: true`, `runAsUser: 65534`)
-- **`service.yaml`** — ClusterIP service exposing port 9090
-- **`configmap.yaml`** — server configuration (broker URLs, SEMP settings)
-- **`secret.yaml`** — broker credentials as environment variables
+  startup/liveness/readiness probes (`httpGet /readyz` and `/livez`), security
+  context (`runAsNonRoot: true`, `runAsUser: 65532`); defaults to `replicas: 2`
+  with a pinned `maxUnavailable: 0` rollout strategy and best-effort topology
+  spread across nodes
+- **`service.yaml`** — ClusterIP service exposing port 9090, with
+  `sessionAffinity: ClientIP` to pin a client to the pod holding its MCP
+  session. Required above one replica, and bypassed entirely by an ingress or
+  service mesh — see
+  [Authentication](../authentication.md#session-routing-at-the-ingress-required-above-one-replica)
+  § "Session Routing at the Ingress"
+- **`ingress.yaml.example`** — copy-and-edit Ingress carrying the source-address
+  hash annotation that replaces `sessionAffinity` once an ingress fronts the
+  Service. The `.example` suffix keeps the directory-wide `kubectl apply` from
+  picking it up. Rationale in
+  [Authentication](../authentication.md#session-routing-at-the-ingress-required-above-one-replica)
+- **`poddisruptionbudget.yaml`** — `maxUnavailable: 1`, so a node drain evicts
+  one pod at a time. Applied automatically by the directory-wide `kubectl
+  apply` above
+- **`configmap.yaml`** — server configuration (broker URLs, SEMP settings).
+  Note `semp.max_concurrent_per_broker` and `request_min_interval` are
+  per-pod, so a broker sees `replicas ×` the configured value
+- **`secret.yaml`** — broker credentials plus the MCP client dev token, as
+  environment variables
 
 Edit `configmap.yaml` with your broker URLs and settings. Edit `secret.yaml`
-with your credentials:
+with your credentials. `DEV_TOKEN` backs the ConfigMap's default
+`mcp_client_auth.mode: static` and ships empty on purpose — the server refuses
+to start until it is set, so an unedited apply cannot come up on a credential
+published in this repository:
 
 ```yaml
 # WARNING: Do not commit this file with real credentials.
@@ -200,6 +223,7 @@ metadata:
 stringData:
   BROKER_USERNAME: admin
   BROKER_PASSWORD: changeme
+  DEV_TOKEN: ""
 ```
 
 > **Future:** A Helm chart for templated deployments, rollback, and
@@ -307,7 +331,7 @@ Docker records in `State.Health.Log`.
 |---|---|
 | Docker | `HEALTHCHECK CMD ["/solace-broker-mcp", "--health"]` (built into image) |
 | Docker (external) | `curl http://localhost:9090/health` from host |
-| Kubernetes | `httpGet` liveness/readiness probe on `/health` port 9090 |
+| Kubernetes | `httpGet` startup/readiness probe on `/readyz` and liveness probe on `/livez`, port 9090 |
 | Bare metal | `curl http://localhost:9090/health` (cron, monitoring agent, and so on) |
 
 ## Security Considerations
@@ -328,7 +352,7 @@ Docker records in `State.Health.Log`.
   certs, or set `tls_terminated_upstream: true` to acknowledge upstream
   termination (the server then serves plaintext and logs a startup WARN). Ensure
   the plaintext port's network scope is trusted — keep it behind the terminator.
-- **Container runs as non-root** (UID 65534 in distroless). Do not override
+- **Container runs as non-root** (UID 65532 in distroless). Do not override
   with `--user root`.
 - **Run as a non-root user** on bare metal deployments. Create a dedicated
   service account rather than running as root.

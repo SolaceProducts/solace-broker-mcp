@@ -57,15 +57,29 @@ type SEMPError struct {
 	Description string // meta.error.description — broker's human-readable message
 	SEMPCode    int    // meta.error.code (6=NOT_FOUND, 72=UNAUTHORIZED, etc.)
 	SEMPStatus  string // meta.error.status ("NOT_FOUND", "FAIL")
-	Body        string // raw response body preserved as fallback
+	// Body is the raw response body, preserved for debugging when
+	// parseSEMPError could not unmarshal a meta.error envelope out of it
+	// (Description stays empty in that case). Unlike Description, Body is
+	// NOT necessarily broker-authored: a non-SEMP response reaching this
+	// client — a reverse proxy, API gateway, or WAF's error page — lands
+	// here verbatim and has never been reviewed by this codebase (SOL-153766).
+	// Deliberately not rendered by Error() or any other sink for that reason
+	// (mirrors sempv1.Error.Body's equivalent, documented debug-only status).
+	Body string
 }
 
-// Error implements the error interface.
+// Error implements the error interface. It never renders Body: Body is
+// unaudited external content (see the field doc above), and Error() is what
+// manager.go's audit logging puts into the "detail" log field for the broker
+// error types it trusts (SOL-153766). Only Description — parsed from the
+// broker's own meta.error.description — is broker-authored and safe to
+// include; when it's empty (Body-fallback case) Error() reports just the
+// operation and status.
 func (e *SEMPError) Error() string {
 	if e.Description != "" {
 		return fmt.Sprintf("%s returned HTTP %d: %s", e.Operation, e.StatusCode, e.Description)
 	}
-	return fmt.Sprintf("%s returned HTTP %d: %s", e.Operation, e.StatusCode, e.Body)
+	return fmt.Sprintf("%s returned HTTP %d", e.Operation, e.StatusCode)
 }
 
 // HTTPClient implements the Client interface by making real HTTP calls to a
@@ -406,13 +420,19 @@ func encodeCSVQueryParam(name string, val any) string {
 	return url.QueryEscape(name) + "=" + strings.Join(encoded, ",")
 }
 
-// maxErrorTextLen bounds broker-controlled error text (Description and the
-// raw Body fallback) captured into a SEMPError. The body read is capped at
-// 16 MiB (defaults.MaxSEMPResponseBytes), so without this bound a misbehaving
-// broker or intermediary can push a multi-MiB string into every downstream
-// sink: SEMPError.Error(), the tool-result log's detail field, and the
-// agent-facing MCP error message. Truncating at capture bounds all of them
-// at once. 4 KiB comfortably holds any real SEMP error description.
+// maxErrorTextLen bounds Description, the one field captured into a SEMPError
+// that is both broker-authored and rendered by a sink: SEMPError.Error() (in
+// turn the tool-result log's "detail" field) and the agent-facing MCP error
+// message. The body read is capped at 16 MiB (defaults.MaxSEMPResponseBytes),
+// so without this bound a misbehaving broker could still push a multi-MiB
+// description into both sinks; truncating at capture bounds them at once. 4
+// KiB comfortably holds any real SEMP error description.
+//
+// Body is truncated to the same bound purely to cap SEMPError's own memory
+// footprint — not because any sink renders it. Body is unaudited, possibly
+// non-broker content (see its field doc), so Error() never includes it
+// (SOL-153766); it exists only as a debug-only struct field, the same
+// posture sempv1.Error.Body documents for its own equivalent.
 const maxErrorTextLen = 4096
 
 // truncationMarker is appended to error text cut at maxErrorTextLen.
@@ -450,8 +470,9 @@ func truncateErrorBytes(b []byte) string {
 // parseSEMPError creates a SEMPError with best-effort extraction of the
 // broker's meta.error fields (code, status, description). If the body is not
 // valid JSON or the meta.error structure is absent, the structured fields stay
-// zero-valued and Body carries the raw response. Description and Body are
-// broker-controlled and truncated at maxErrorTextLen.
+// zero-valued and Body carries the raw response. Description is
+// broker-controlled; Body may not be (see the field doc). Both are
+// truncated at maxErrorTextLen.
 func parseSEMPError(op string, statusCode int, body []byte) *SEMPError {
 	e := &SEMPError{
 		Operation:  op,

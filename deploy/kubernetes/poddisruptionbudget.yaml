@@ -1,0 +1,18 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: solace-broker-mcp
+  labels:
+    app.kubernetes.io/name: solace-broker-mcp
+spec:
+  # Evicts one pod at a time during a drain. Enforced by the Eviction API, so
+  # it covers drains and cluster upgrades — not node failure, not OOM kills,
+  # and not rolling updates (deployment.yaml's strategy covers those).
+  #
+  # maxUnavailable, not minAvailable: identical at 2 replicas, but
+  # minAvailable: 1 against replicas: 1 blocks that node's drains forever.
+  maxUnavailable: 1
+  selector:
+    # Must match the Deployment's pod labels, or this guards nothing.
+    matchLabels:
+      app.kubernetes.io/name: solace-broker-mcp

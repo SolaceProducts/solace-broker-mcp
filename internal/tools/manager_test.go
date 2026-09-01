@@ -720,6 +720,75 @@ func TestCallTool_SanitizesResponseButPreservesLogDetail(t *testing.T) {
 	}
 }
 
+// TestCallTool_SEMPv2BodyFallbackNotLoggedRaw verifies the SOL-153766 fix: when
+// parseSEMPError fails to unmarshal a meta.error envelope (Description stays
+// empty), the raw response Body is unaudited — it may originate from a proxy,
+// gateway, or WAF rather than the broker itself — so it must never reach the
+// "detail" field on the "tool invoked" error log line. Contrast
+// TestCallTool_SanitizesResponseButPreservesLogDetail immediately above, which
+// exercises the Description branch (genuinely broker-authored) and asserts the
+// opposite: that branch's text is expected to survive into "detail" verbatim.
+func TestCallTool_SEMPv2BodyFallbackNotLoggedRaw(t *testing.T) {
+	var buf bytes.Buffer
+	old := slog.Default()
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(logger)
+	defer slog.SetDefault(old)
+
+	mgr := NewToolManager(newTestPool(t))
+
+	// A marker that would only appear if the raw, unparsed Body (e.g. a WAF's
+	// HTML error page carrying a session cookie) leaked into the audit log.
+	const bodyMarker = "SESSIONID=deadbeef1234"
+
+	handler := newStubHandler("test-tool")
+	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		return nil, &sempv2.SEMPError{
+			Operation:  "getMsgVpnQueue",
+			StatusCode: 502,
+			// Description intentionally left empty: this is the
+			// meta.error-parse-failed path where only Body is populated.
+			Body: "<html><body>Bad Gateway " + bodyMarker + "</body></html>",
+		}
+	}
+	mgr.Register(handler)
+
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+		"broker":     "dev",
+		"msgVpnName": "default",
+	}, Identity{})
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError to be true")
+	}
+
+	var found bool
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var fields map[string]any
+		if json.Unmarshal([]byte(line), &fields) != nil {
+			continue
+		}
+		if fields["msg"] != "tool invoked" || fields["status"] != "error" {
+			continue
+		}
+		found = true
+		detail, _ := fields["detail"].(string)
+		if strings.Contains(detail, bodyMarker) {
+			t.Errorf("log detail = %q, leaked unaudited raw Body content", detail)
+		}
+		// Assert the positive too: dropping the marker shouldn't come at the
+		// cost of dropping the operation/status context operators still need.
+		if !strings.Contains(detail, "returned HTTP 502") {
+			t.Errorf("log detail = %q, want it to still contain %q", detail, "returned HTTP 502")
+		}
+	}
+	if !found {
+		t.Fatalf("did not find a \"tool invoked\" error log line; log:\n%s", buf.String())
+	}
+}
+
 // TestLogToolResult_UnknownErrorLogsTypeNotMessage verifies the type gate on the
 // "detail" field: for an error that is none of the audited broker types, we log
 // only the Go type — never the raw message — since we can't vouch for its

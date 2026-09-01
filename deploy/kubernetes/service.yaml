@@ -6,6 +6,20 @@ metadata:
     app.kubernetes.io/name: solace-broker-mcp
 spec:
   type: ClusterIP
+  # MCP sessions live in one pod's memory, so a session ID sent to any other
+  # pod gets a 404. ClientIP affinity pins each client to its own pod, and is
+  # required above one replica. timeoutSeconds must stay above the 2h session
+  # idle timeout (defaults.DefaultMCPSessionIdleTimeout).
+  #
+  # CAVEAT: kube-proxy applies this on the ClusterIP path only. An Ingress,
+  # Gateway, or service mesh bypasses it — including the TLS-terminating
+  # ingress docs/authentication.md recommends for OAuth. Behind any of those
+  # this field does nothing and stickiness must be set there instead: see
+  # ingress.yaml.example.
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
   ports:
     - name: http
       port: 9090

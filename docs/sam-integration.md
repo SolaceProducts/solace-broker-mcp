@@ -1,6 +1,6 @@
 # Connecting solace-broker-mcp to Solace Agent Mesh
 
-This guide shows how to connect this MCP server to the Solace Agent Mesh desktop
+This guide shows how to connect this Model Context Protocol (MCP) server to the Solace Agent Mesh desktop
 app by registering it as an **MCP connector** and assigning it to an agent from
 the Agent Mesh UI.
 
@@ -9,10 +9,10 @@ differ in later versions._
 
 > **This example runs Agent Mesh locally.** The desktop app starts an in-process
 > dev event broker that Agent Mesh uses for its own internal agent-to-agent
-> messaging. That dev broker is unrelated to the Solace brokers this MCP server
-> monitors — the MCP server still connects to your real broker(s) over SEMP per
+> messaging. That dev event broker is unrelated to the Solace event brokers this MCP server
+> monitors — the MCP server still connects to your real event broker(s) over SEMP per
 > `broker-config.yaml`. For a team or production deployment you point Agent Mesh
-> at your own broker; the connector and agent steps below are identical.
+> at your own event broker; the connector and agent steps below are identical.
 
 ## Prerequisites
 
@@ -44,7 +44,7 @@ go run ./cmd/server
 ```
 
 **3. Open the Agent Mesh desktop app** — the app auto-starts its in-process
-broker and runtime; no command to run. On first launch, connect an LLM provider —
+event broker and runtime; no command to run. On first launch, connect an LLM provider —
 this becomes the `general` model alias your agent uses.
 
 To reach a loopback MCP server locally, set `SAM_PLATFORM_ALLOW_PRIVATE_MCP=true`
@@ -94,7 +94,7 @@ tools; select the ones to expose (or all), then save.
 
   ```text
   You manage and inspect Solace event brokers via SEMP-backed MCP tools. Use the
-  broker tools to answer questions about broker status, queues, clients, and
+  event broker tools to answer questions about event broker status, queues, clients, and
   redundancy, and to perform configuration and action updates when asked.
   ```
 
@@ -103,6 +103,6 @@ tools; select the ones to expose (or all), then save.
   later by editing an existing agent.)
 - Select **Create and Deploy**.
 
-**6. Verify** — start a new chat and ask a broker-related question. Select
+**6. Verify** — start a new chat and ask an event broker-related question. Select
 `SolaceBrokerAgent` directly, or ask the **Orchestrator**, which delegates to it.
-The agent calls the MCP tools, which query your configured broker over SEMP.
+The agent calls the MCP tools, which query your configured event broker over SEMP.
