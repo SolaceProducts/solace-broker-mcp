@@ -90,6 +90,8 @@ func resolveMaxHonoredRetryAfter(ra *config.IdPRetryAfterConfig) time.Duration {
 // takes the default.
 func resolveCircuitBreakerConfig(cb *config.IdPCircuitBreakerConfig) *CircuitBreakerConfig {
 	if cb != nil && cb.Enabled != nil && !*cb.Enabled {
+		// Context-free by nature: this runs once at startup, before any
+		// request exists, so there is no correlation ID to carry.
 		slog.Warn("token exchange circuit breaker is DISABLED by configuration; " +
 			"the IdP is unprotected against failure storms (not recommended in production)")
 		return nil

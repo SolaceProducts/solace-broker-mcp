@@ -2556,4 +2556,65 @@ func TestExchange_RecoveredPanicLogCarriesWinnerID(t *testing.T) {
 	if _, ok := rec["panic_type"]; !ok {
 		t.Error("panic line missing panic_type")
 	}
+	// Secure-logging rule: the panic VALUE must never reach the log — only
+	// its Go type and the stack. The injected value is a distinctive string,
+	// so its appearance anywhere in the record would mean the value leaked.
+	for k, v := range rec {
+		if s, ok := v.(string); ok && strings.Contains(s, "injected test panic") {
+			t.Errorf("panic VALUE leaked into log field %q: %q", k, s)
+		}
+	}
+}
+
+// The gate log lines fire under whatever context runExchangeOnce hands
+// raiseGateOnExhaustedRateLimit — the seeded detached context in production —
+// so a rate-limit WARN is attributable to the request whose exhaustion raised
+// the gate.
+func TestRaiseGate_LogCarriesCorrelationID(t *testing.T) {
+	// NOT parallel: captureJSONLogs swaps the global logger.
+	logs := captureJSONLogs(t)
+
+	e, err := New(validParams(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	e.nowFunc = func() time.Time { return pinnedNow() }
+
+	exchErr := &ExchangeError{
+		Sentinel:         ErrExchangeRetriesExhausted,
+		FailureClass:     FailureClassRateLimited,
+		RetryAfterResult: &retryAfterResult{delay: 10 * time.Second, ok: true},
+	}
+	ctx := correlation.With(context.Background(), "gate-corr-id")
+	e.raiseGateOnExhaustedRateLimit(ctx, exchErr, "corr-gate-broker")
+
+	rec := findMsg(forBroker(logs.records(t), "corr-gate-broker"),
+		"token exchange rate limited: honoring IdP Retry-After for all callers")
+	if rec == nil {
+		t.Fatal("no gate-set line captured")
+	}
+	if got, _ := rec["correlation_id"].(string); got != "gate-corr-id" {
+		t.Errorf("gate line correlation_id = %q, want %q", got, "gate-corr-id")
+	}
+}
+
+// The audience-mismatch WARN logs under doExchange's context — the seeded
+// detached context in production — so an IdP that issues a token with the
+// wrong aud claim is attributable to the request that asked for it.
+func TestWarnIfAudienceMismatch_LogCarriesCorrelationID(t *testing.T) {
+	// NOT parallel: captureJSONLogs swaps the global logger.
+	logs := captureJSONLogs(t)
+
+	token := fakeJWT(t, map[string]any{"aud": "https://other.example.com"})
+	ctx := correlation.With(context.Background(), "aud-corr-id")
+	warnIfAudienceMismatch(ctx, "corr-aud-broker", "https://broker.example.com", token)
+
+	rec := findMsg(forBroker(logs.records(t), "corr-aud-broker"),
+		"token exchange: issued access token's aud claim does not include the requested audience")
+	if rec == nil {
+		t.Fatal("no audience-mismatch line captured")
+	}
+	if got, _ := rec["correlation_id"].(string); got != "aud-corr-id" {
+		t.Errorf("audience line correlation_id = %q, want %q", got, "aud-corr-id")
+	}
 }

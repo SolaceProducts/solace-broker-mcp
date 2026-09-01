@@ -16,6 +16,7 @@ package tokenexchange
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
@@ -128,7 +129,7 @@ func TestWarnIfAudienceMismatch_MatchingAudienceNoWarn(t *testing.T) {
 	token := fakeJWT(t, map[string]any{"aud": "https://broker.example.com"})
 
 	out := captureWarn(t, func() {
-		warnIfAudienceMismatch("my-broker", "https://broker.example.com", token)
+		warnIfAudienceMismatch(context.Background(), "my-broker", "https://broker.example.com", token)
 	})
 	if out != "" {
 		t.Errorf("expected no log output for a matching audience, got: %q", out)
@@ -141,7 +142,7 @@ func TestWarnIfAudienceMismatch_MismatchLogsWarnWithClaimedAudiences(t *testing.
 	token := fakeJWT(t, map[string]any{"aud": []string{"https://other-broker.example.com"}})
 
 	out := captureWarn(t, func() {
-		warnIfAudienceMismatch("my-broker", "https://broker.example.com", token)
+		warnIfAudienceMismatch(context.Background(), "my-broker", "https://broker.example.com", token)
 	})
 	if !strings.Contains(out, "WARN") {
 		t.Errorf("expected a WARN line, got: %q", out)
@@ -170,7 +171,7 @@ func TestWarnIfAudienceMismatch_EmptyRequestedAudienceSkipsCheck(t *testing.T) {
 	token := fakeJWT(t, map[string]any{"aud": "anything"})
 
 	out := captureWarn(t, func() {
-		warnIfAudienceMismatch("my-broker", "", token)
+		warnIfAudienceMismatch(context.Background(), "my-broker", "", token)
 	})
 	if out != "" {
 		t.Errorf("expected no log output when no audience was requested, got: %q", out)
@@ -181,7 +182,7 @@ func TestWarnIfAudienceMismatch_OpaqueTokenSkipsCheck(t *testing.T) {
 	// Not t.Parallel(): captureWarn swaps the process-wide slog default,
 	// which would race with other parallel tests' own log output.
 	out := captureWarn(t, func() {
-		warnIfAudienceMismatch("my-broker", "https://broker.example.com", "opaque-reference-token")
+		warnIfAudienceMismatch(context.Background(), "my-broker", "https://broker.example.com", "opaque-reference-token")
 	})
 	if out != "" {
 		t.Errorf("expected no log output for a non-JWT access token, got: %q", out)
@@ -240,7 +241,7 @@ func TestWarnIfAudienceMismatch_MissingAudClaimLogsWarn(t *testing.T) {
 	token := fakeJWT(t, map[string]any{"sub": "svc-account"}) // no aud claim at all
 
 	out := captureWarn(t, func() {
-		warnIfAudienceMismatch("my-broker", "https://broker.example.com", token)
+		warnIfAudienceMismatch(context.Background(), "my-broker", "https://broker.example.com", token)
 	})
 	if !strings.Contains(out, "WARN") {
 		t.Errorf("expected a WARN line for a token with no aud claim, got: %q", out)

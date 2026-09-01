@@ -232,7 +232,7 @@ func TestRaiseGateOnExhaustedRateLimit_OnlyExhaustedRateLimitedRaisesGate(t *tes
 			FailureClass:     FailureClassRateLimited,
 			RetryAfterResult: &retryAfterResult{delay: 5 * time.Second, ok: true},
 		}
-		e.raiseGateOnExhaustedRateLimit(err, "test-broker")
+		e.raiseGateOnExhaustedRateLimit(context.Background(), err, "test-broker")
 		if !e.gateCheck() {
 			t.Error("gateCheck() = false, want true — exhausted+rate-limited+usable Retry-After must raise the gate")
 		}
@@ -246,7 +246,7 @@ func TestRaiseGateOnExhaustedRateLimit_OnlyExhaustedRateLimitedRaisesGate(t *tes
 			FailureClass:     FailureClassRateLimited,
 			RetryAfterResult: &retryAfterResult{delay: 5 * time.Second, ok: true},
 		}
-		e.raiseGateOnExhaustedRateLimit(err, "test-broker")
+		e.raiseGateOnExhaustedRateLimit(context.Background(), err, "test-broker")
 		if e.gateCheck() {
 			t.Error("gateCheck() = true, want false — a non-exhausted (mid-chain) 429 must not raise the gate")
 		}
@@ -259,7 +259,7 @@ func TestRaiseGateOnExhaustedRateLimit_OnlyExhaustedRateLimitedRaisesGate(t *tes
 			Sentinel:     ErrExchangeRetriesExhausted,
 			FailureClass: FailureClassUpstream5xx,
 		}
-		e.raiseGateOnExhaustedRateLimit(err, "test-broker")
+		e.raiseGateOnExhaustedRateLimit(context.Background(), err, "test-broker")
 		if e.gateCheck() {
 			t.Error("gateCheck() = true, want false — an exhausted 5xx must not raise the rate-limit gate")
 		}
@@ -273,7 +273,7 @@ func TestRaiseGateOnExhaustedRateLimit_OnlyExhaustedRateLimitedRaisesGate(t *tes
 			FailureClass:     FailureClassRateLimited,
 			RetryAfterResult: &retryAfterResult{ok: false},
 		}
-		e.raiseGateOnExhaustedRateLimit(err, "test-broker")
+		e.raiseGateOnExhaustedRateLimit(context.Background(), err, "test-broker")
 		if e.gateCheck() {
 			t.Error("gateCheck() = true, want false — absent/unparseable Retry-After must preserve current behavior (no gate)")
 		}
@@ -286,7 +286,7 @@ func TestRaiseGateOnExhaustedRateLimit_OnlyExhaustedRateLimitedRaisesGate(t *tes
 			Sentinel:     ErrExchangeRetriesExhausted,
 			FailureClass: FailureClassRateLimited,
 		}
-		e.raiseGateOnExhaustedRateLimit(err, "test-broker")
+		e.raiseGateOnExhaustedRateLimit(context.Background(), err, "test-broker")
 		if e.gateCheck() {
 			t.Error("gateCheck() = true, want false — a nil RetryAfterResult must not raise the gate")
 		}
@@ -296,7 +296,7 @@ func TestRaiseGateOnExhaustedRateLimit_OnlyExhaustedRateLimitedRaisesGate(t *tes
 		t.Parallel()
 		e := newExchanger(t)
 		// errors.As must fail cleanly here, not panic.
-		e.raiseGateOnExhaustedRateLimit(ErrExchangeRetriesExhausted, "test-broker")
+		e.raiseGateOnExhaustedRateLimit(context.Background(), ErrExchangeRetriesExhausted, "test-broker")
 		if e.gateCheck() {
 			t.Error("gateCheck() = true, want false — a sentinel with no ExchangeError wrapper must not raise the gate")
 		}
@@ -450,7 +450,7 @@ func TestRaiseGateOnExhaustedRateLimit_LogsGateSet(t *testing.T) {
 		FailureClass:     FailureClassRateLimited,
 		RetryAfterResult: &retryAfterResult{delay: 10 * time.Second, ok: true},
 	}
-	e.raiseGateOnExhaustedRateLimit(exchErr, "broker-a")
+	e.raiseGateOnExhaustedRateLimit(context.Background(), exchErr, "broker-a")
 
 	if !e.gateCheck() {
 		t.Fatal("gateCheck() = false, want true — the gate must be raised")
@@ -497,7 +497,7 @@ func TestRaiseGateOnExhaustedRateLimit_LogsGateClamped(t *testing.T) {
 		FailureClass:     FailureClassRateLimited,
 		RetryAfterResult: &retryAfterResult{delay: requested, ok: true},
 	}
-	e.raiseGateOnExhaustedRateLimit(exchErr, "broker-b")
+	e.raiseGateOnExhaustedRateLimit(context.Background(), exchErr, "broker-b")
 
 	if !e.gateCheck() {
 		t.Fatal("gateCheck() = false, want true — the gate must still be raised, at the clamped value")
@@ -548,7 +548,7 @@ func TestRaiseGateOnExhaustedRateLimit_ZeroDelayLogsNothing(t *testing.T) {
 		FailureClass:     FailureClassRateLimited,
 		RetryAfterResult: &retryAfterResult{delay: 0, ok: true},
 	}
-	e.raiseGateOnExhaustedRateLimit(exchErr, "broker-zero")
+	e.raiseGateOnExhaustedRateLimit(context.Background(), exchErr, "broker-zero")
 
 	if e.gateCheck() {
 		t.Error("gateCheck() = true, want false — a zero delay must not raise the gate")
@@ -585,7 +585,7 @@ func TestRaiseGateOnExhaustedRateLimit_LosingCASLogsNothing(t *testing.T) {
 		FailureClass:     FailureClassRateLimited,
 		RetryAfterResult: &retryAfterResult{delay: 5 * time.Second, ok: true},
 	}
-	e.raiseGateOnExhaustedRateLimit(exchErr, "broker-losing-cas")
+	e.raiseGateOnExhaustedRateLimit(context.Background(), exchErr, "broker-losing-cas")
 
 	if got := e.gatedUntil.Load(); got != preExistingUntil {
 		t.Errorf("gatedUntil = %d, want unchanged %d — a shorter delay must not shorten an already-later gate", got, preExistingUntil)
@@ -610,7 +610,7 @@ func TestRaiseGateOnExhaustedRateLimit_LogsGateNotSet_Absent(t *testing.T) {
 		FailureClass:     FailureClassRateLimited,
 		RetryAfterResult: &retryAfterResult{ok: false, raw: ""},
 	}
-	e.raiseGateOnExhaustedRateLimit(exchErr, "broker-c")
+	e.raiseGateOnExhaustedRateLimit(context.Background(), exchErr, "broker-c")
 
 	if e.gateCheck() {
 		t.Fatal("gateCheck() = true, want false — an absent Retry-After must not raise the gate")
@@ -643,7 +643,7 @@ func TestRaiseGateOnExhaustedRateLimit_LogsGateNotSet_Unparseable(t *testing.T) 
 		FailureClass:     FailureClassRateLimited,
 		RetryAfterResult: &retryAfterResult{ok: false, raw: "not-a-valid-value"},
 	}
-	e.raiseGateOnExhaustedRateLimit(exchErr, "broker-d")
+	e.raiseGateOnExhaustedRateLimit(context.Background(), exchErr, "broker-d")
 
 	if e.gateCheck() {
 		t.Fatal("gateCheck() = true, want false — an unparseable Retry-After must not raise the gate")
@@ -666,7 +666,7 @@ func TestLogGateNotSet_RawValueCappedInLogs(t *testing.T) {
 	defer restore()
 
 	oversized := strings.Repeat("x", maxRetryAfterRawLogLen*2)
-	logGateNotSet("broker-e", oversized)
+	logGateNotSet(context.Background(), "broker-e", oversized)
 
 	rec := findLog(records(), "token exchange rate limited: IdP sent an unparseable Retry-After, cannot pace subsequent callers")
 	if rec == nil {

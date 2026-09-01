@@ -115,6 +115,16 @@ func newCountingIsBreakerSuccess(consecutiveFailures *atomic.Uint32) func(error)
 // sits below it when the rate rule did. (The counter keeps incrementing and
 // resetting even with consecutive_failure_threshold: 0 — that comparison
 // just has no meaning once the rule is disabled.)
+//
+// Deliberately context-free — this line carries no correlation_id, and that
+// is a design choice, not a gap: gobreaker's callback signature has no
+// context, and the ID reachable from the calling stack would be misleading
+// anyway. A closed-to-open transition is the verdict on a WINDOW of failures,
+// not on the request whose failure tipped it, and the open-to-half-open
+// transition fires lazily on whichever request happens to arrive after the
+// timeout — attributing either to that one request's ID would send an
+// operator to the wrong trace. Breaker transitions are keyed by the breaker
+// name instead.
 func newLogBreakerStateChange(consecutiveFailures *atomic.Uint32) func(name string, from, to gobreaker.State) {
 	return func(name string, from, to gobreaker.State) {
 		slog.Warn("token exchange circuit breaker state change",

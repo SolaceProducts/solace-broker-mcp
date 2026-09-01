@@ -15,6 +15,7 @@
 package tokenexchange
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"time"
@@ -70,7 +71,7 @@ func (e *Exchanger) raiseGate(delay time.Duration) (effectiveUntil time.Time, ra
 // chain — a 429 that a later retry in the same chain resolves never reaches
 // here, so an intermediate throttle doesn't pre-emptively block other
 // callers.
-func (e *Exchanger) raiseGateOnExhaustedRateLimit(err error, brokerAlias string) {
+func (e *Exchanger) raiseGateOnExhaustedRateLimit(ctx context.Context, err error, brokerAlias string) {
 	if !errors.Is(err, ErrExchangeRetriesExhausted) {
 		return
 	}
@@ -83,7 +84,7 @@ func (e *Exchanger) raiseGateOnExhaustedRateLimit(err error, brokerAlias string)
 	}
 
 	if !exchErr.RetryAfterResult.ok {
-		logGateNotSet(brokerAlias, exchErr.RetryAfterResult.raw)
+		logGateNotSet(ctx, brokerAlias, exchErr.RetryAfterResult.raw)
 		return
 	}
 
@@ -97,24 +98,24 @@ func (e *Exchanger) raiseGateOnExhaustedRateLimit(err error, brokerAlias string)
 		return
 	}
 	if wasClamped {
-		logGateClamped(brokerAlias, exchErr.RetryAfterResult.delay, delay)
+		logGateClamped(ctx, brokerAlias, exchErr.RetryAfterResult.delay, delay)
 	} else {
-		logGateSet(brokerAlias, delay, until)
+		logGateSet(ctx, brokerAlias, delay, until)
 	}
 }
 
 // logGateSet: the IdP asked us to wait; every caller is now paced back, not
 // just the one that hit it.
-func logGateSet(brokerAlias string, honored time.Duration, gatedUntil time.Time) {
-	slog.Warn("token exchange rate limited: honoring IdP Retry-After for all callers",
+func logGateSet(ctx context.Context, brokerAlias string, honored time.Duration, gatedUntil time.Time) {
+	slog.WarnContext(ctx, "token exchange rate limited: honoring IdP Retry-After for all callers",
 		slog.String("broker", brokerAlias),
 		slog.String("retry_after", honored.String()),
 		slog.Time("gated_until", gatedUntil))
 }
 
 // logGateClamped: the IdP asked for longer than the configured cap allows.
-func logGateClamped(brokerAlias string, requested, clampedTo time.Duration) {
-	slog.Warn("token exchange Retry-After exceeded configured cap, clamping",
+func logGateClamped(ctx context.Context, brokerAlias string, requested, clampedTo time.Duration) {
+	slog.WarnContext(ctx, "token exchange Retry-After exceeded configured cap, clamping",
 		slog.String("broker", brokerAlias),
 		slog.String("requested", requested.String()),
 		slog.String("clamped_to", clampedTo.String()))
@@ -123,13 +124,13 @@ func logGateClamped(brokerAlias string, requested, clampedTo time.Duration) {
 // logGateNotSet: the IdP gave us nothing usable, so the gate can't engage —
 // distinguishes absent from malformed since the latter is a more
 // interesting signal.
-func logGateNotSet(brokerAlias string, raw string) {
+func logGateNotSet(ctx context.Context, brokerAlias string, raw string) {
 	if raw == "" {
-		slog.Warn("token exchange rate limited: IdP sent no Retry-After, cannot pace subsequent callers",
+		slog.WarnContext(ctx, "token exchange rate limited: IdP sent no Retry-After, cannot pace subsequent callers",
 			slog.String("broker", brokerAlias))
 		return
 	}
-	slog.Warn("token exchange rate limited: IdP sent an unparseable Retry-After, cannot pace subsequent callers",
+	slog.WarnContext(ctx, "token exchange rate limited: IdP sent an unparseable Retry-After, cannot pace subsequent callers",
 		slog.String("broker", brokerAlias),
 		slog.String("retry_after_raw", capString(raw, maxRetryAfterRawLogLen)))
 }

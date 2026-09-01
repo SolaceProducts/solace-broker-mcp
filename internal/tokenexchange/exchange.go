@@ -124,9 +124,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 				// A fresh Background()-rooted context seeded only with the
 				// winner's correlation ID: the panic line gets attributed to
 				// the triggering request without coupling anything to caller
-				// cancellation. The other context-free log sites in this
-				// package stay as they are — no correlation ID is in scope
-				// there; this one already had it captured.
+				// cancellation.
 				slog.ErrorContext(correlation.With(context.Background(), corrID),
 					"recovered panic in token exchange",
 					slog.String("event", "panic_recovered"),
@@ -283,7 +281,7 @@ func (e *Exchanger) runExchangeOnce(key string, input ExchangeInput, corrID stri
 	tok, err := e.doExchange(exchCtx, input)
 	if err != nil {
 		classified := e.classifyRetryOutcome(exchCtx, err, attempts(), input.BrokerAlias)
-		e.raiseGateOnExhaustedRateLimit(classified, input.BrokerAlias)
+		e.raiseGateOnExhaustedRateLimit(exchCtx, classified, input.BrokerAlias)
 		return nil, classified
 	}
 
@@ -477,6 +475,6 @@ func (e *Exchanger) doExchange(ctx context.Context, input ExchangeInput) (*Token
 	// Defense-in-depth visibility only — never fails the exchange. See
 	// warnIfAudienceMismatch's doc for why this is WARN, not a hard failure
 	// (SOL-152981).
-	warnIfAudienceMismatch(input.BrokerAlias, input.Audience, tok.Value)
+	warnIfAudienceMismatch(ctx, input.BrokerAlias, input.Audience, tok.Value)
 	return tok, nil
 }
