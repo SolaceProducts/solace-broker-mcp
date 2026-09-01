@@ -1107,6 +1107,11 @@ func validate(cfg *ServerConfig) error {
 			cfg.ListenAddress, AuthModeDisabled))
 	}
 
+	// Reject a metrics_bind_address that shares the MCP server's port.
+	if err := validateMetricsBindAddress(cfg); err != nil {
+		errs = append(errs, err)
+	}
+
 	// TLS: both cert and key must be provided together, or neither.
 	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
 		errs = append(errs, fmt.Errorf("both tls_cert_file and tls_key_file must be provided together; got cert=%q, key=%q", cfg.TLSCertFile, cfg.TLSKeyFile))
@@ -1537,6 +1542,46 @@ func isLoopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// validateMetricsBindAddress rejects a metrics listener that shares the MCP
+// server's port. Only when metrics are enabled; otherwise no listener starts.
+func validateMetricsBindAddress(cfg *ServerConfig) error {
+	if !cfg.Observability.MetricsEnabled {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(cfg.Observability.MetricsBindAddress)
+	if err != nil {
+		return fmt.Errorf("observability.metrics_bind_address %q is invalid (want host:port, e.g. %q): %w",
+			cfg.Observability.MetricsBindAddress, defaults.DefaultMetricsBindAddress, err)
+	}
+	// A non-numeric port (a service name) is left for the listener to reject.
+	if p, atoiErr := strconv.Atoi(port); atoiErr != nil || p != cfg.Port {
+		return nil
+	}
+	if hostsOverlap(cfg.ListenAddress, host) {
+		return fmt.Errorf(
+			"observability.metrics_bind_address %q collides with the MCP server listener %q (same port): set metrics_bind_address to a free port, or move the MCP server off it",
+			cfg.Observability.MetricsBindAddress, cfg.BindAddress())
+	}
+	return nil
+}
+
+// hostsOverlap reports whether two listener hosts contend for the same port.
+// A wildcard ("", "0.0.0.0", "::") overlaps any host; loopback spellings unify.
+func hostsOverlap(a, b string) bool {
+	if isWildcardHost(a) || isWildcardHost(b) {
+		return true
+	}
+	if isLoopbackHost(a) && isLoopbackHost(b) {
+		return true
+	}
+	return a == b
+}
+
+// isWildcardHost reports whether host binds all interfaces rather than one.
+func isWildcardHost(host string) bool {
+	return host == "" || host == "0.0.0.0" || host == "::"
 }
 
 // validateBrokerURL checks that s is a well-formed URL with an http or https

@@ -1,0 +1,9 @@
+# HELP mcp_build_info Server build info; always 1, labelled with the version.
+# TYPE mcp_build_info gauge
+mcp_build_info{version="v1.2.3-test"} 1
+# HELP mcp_metrics_scrape_total Number of /metrics scrapes served.
+# TYPE mcp_metrics_scrape_total counter
+mcp_metrics_scrape_total 1
+# HELP mcp_schema_version Observability schema versions; always 1, labelled with each schema.
+# TYPE mcp_schema_version gauge
+mcp_schema_version{audit_schema="1.0",metrics_schema="1.0"} 1

@@ -56,11 +56,14 @@ type ObservabilityConfig struct {
 	// var directly.
 	AuthFailureCounterEnabled bool `yaml:"-"`
 
-	// Numeric tunables. Parsed from YAML (inheriting ${VAR} substitution);
+	// YAML tunables. Parsed from YAML (inheriting ${VAR} substitution);
 	// defaults applied in applyDefaults.
 	SaturationThresholdMs     int `yaml:"saturation_threshold_ms"`
 	ProgressSignalThresholdMs int `yaml:"progress_signal_threshold_ms"`
 	OTelSelfStatsIntervalS    int `yaml:"otel_self_stats_interval_s"`
+	// MetricsBindAddress is the address the Prometheus /metrics listener binds
+	// to (e.g. ":9091" or "0.0.0.0:9091"). Defaulted to DefaultMetricsBindAddress when empty.
+	MetricsBindAddress string `yaml:"metrics_bind_address"`
 	// ShutdownDrainDelayS is the propagation window, in seconds, the server
 	// waits after flipping /readyz to 503 on SIGTERM before it begins graceful
 	// HTTP shutdown. It gives the orchestrator time to deregister the pod from
@@ -130,5 +133,8 @@ func applyObservabilityDefaults(cfg *ServerConfig) {
 	}
 	if o.ShutdownDrainDelayS <= 0 {
 		o.ShutdownDrainDelayS = defaults.DefaultShutdownDrainDelayS
+	}
+	if o.MetricsBindAddress == "" {
+		o.MetricsBindAddress = defaults.DefaultMetricsBindAddress
 	}
 }

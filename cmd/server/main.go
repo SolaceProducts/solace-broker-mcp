@@ -23,12 +23,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -46,6 +48,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/hooks"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
@@ -536,6 +539,58 @@ func startServer(srv *http.Server, tlsCertFile, tlsKeyFile string) <-chan error 
 		}
 	}()
 	return errCh
+}
+
+// startMetricsEndpoint serves Prometheus /metrics on its own listener and
+// registers a "metrics_endpoint" readiness probe. Returns the provider for
+// instrument registration, or nil if the provider failed to build or the
+// listener failed to bind (both surface on /readyz).
+//
+// No explicit shutdown: /metrics is pull-based, so nothing is buffered to lose,
+// and process exit reaps the listener. TODO(SOL-152449): once the shared
+// shutdown-hook registry lands, register provider.Shutdown against it.
+func startMetricsEndpoint(cfg *config.ServerConfig, readiness *health.ReadinessState) *metrics.Provider {
+	provider, err := metrics.New(version.Version())
+	if err != nil {
+		slog.Error("metrics endpoint unavailable: provider build failed", slog.String("error", err.Error()))
+		readiness.RegisterListener("metrics_endpoint", func() error { return err })
+		return nil
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", provider.Handler())
+	srv := newHTTPServer(cfg.Observability.MetricsBindAddress, mux)
+
+	// Open the port and wait, so a failure (e.g. port in use) shows on /readyz.
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", srv.Addr)
+	if err != nil {
+		slog.Error("metrics endpoint failed to bind",
+			slog.String("addr", srv.Addr), slog.String("error", err.Error()))
+		readiness.RegisterListener("metrics_endpoint", func() error { return err })
+		_ = provider.Shutdown(context.Background())
+		return nil
+	}
+
+	// Holds the listener's current state: empty while it serves, or the error if
+	// it dies later. The probe reads this, so a later failure shows on /readyz.
+	var serveErr atomic.Pointer[error]
+	readiness.RegisterListener("metrics_endpoint", func() error {
+		if e := serveErr.Load(); e != nil {
+			return *e
+		}
+		return nil
+	})
+
+	go func() {
+		slog.Info("metrics endpoint listening", slog.String("addr", srv.Addr))
+		if e := srv.Serve(ln); e != nil && !errors.Is(e, http.ErrServerClosed) {
+			slog.Error("metrics endpoint failed", slog.String("error", e.Error()))
+			serveErr.Store(&e)
+		}
+	}()
+
+	return provider
 }
 
 // drainAndShutdown performs the SIGTERM graceful-drain sequence (SOL-151288).
@@ -1167,6 +1222,13 @@ func main() {
 	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
 
 	serverErr := startServer(httpServer, cfg.TLSCertFile, cfg.TLSKeyFile)
+
+	// Metrics endpoint: a second listener on its own port, only when enabled.
+	// Registered before SetInitialized so a bind failure shows on the first
+	// /readyz check. No explicit shutdown — see startMetricsEndpoint.
+	if metrics.Enabled(cfg.Observability) {
+		startMetricsEndpoint(cfg, readiness)
+	}
 
 	// Startup is complete and the serving goroutine has been launched:
 	// SetInitialized flips /readyz to ready. startServer only starts the
