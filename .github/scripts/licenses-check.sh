@@ -54,6 +54,9 @@ REQUIRED_COMPONENTS=(
     # BSD-3-Clause (a vendored copy of the standard library's encoding/json),
     # where the parent github.com/go-jose/go-jose/v4 is Apache-2.0.
     "github.com/go-jose/go-jose/v4/json"
+    # BSD-3-Clause (a vendored copy of github.com/golang/gddo httputil), where
+    # the parent github.com/prometheus/client_golang is Apache-2.0.
+    "github.com/prometheus/client_golang/internal/github.com/golang/gddo"
 )
 
 for f in "$DOC" "$NOTICE_FILE"; do
