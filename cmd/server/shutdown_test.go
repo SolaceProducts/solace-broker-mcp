@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/hooks"
 )
@@ -472,6 +473,57 @@ func TestGracefulShutdown_SecondSignalSkipsHooks(t *testing.T) {
 	}
 	if hookRan.Load() {
 		t.Error("registered hook ran despite a second-signal forced close; hooks must be skipped")
+	}
+}
+
+// TestGracefulShutdown_SecondSignalDuringHookFlushCutsItShort proves a second
+// signal WHILE hooks are running (SOL-152449) cancels the flush immediately
+// instead of waiting out the budget — same "stop now" guarantee as the rest
+// of shutdown.
+func TestGracefulShutdown_SecondSignalDuringHookFlushCutsItShort(t *testing.T) {
+	cs := &captureShutdowner{} // Shutdown returns nil immediately, no delay.
+	registry := hooks.NewRegistry()
+
+	hookStarted := make(chan struct{})
+	hookCanceled := make(chan struct{})
+	registry.Register("blocker", func(ctx context.Context) error {
+		close(hookStarted)
+		<-ctx.Done()
+		close(hookCanceled)
+		return ctx.Err()
+	})
+
+	forceSig := make(chan os.Signal, 1)
+	done := make(chan error, 1)
+	go func() { done <- gracefulShutdown(cs, 30*time.Second, forceSig, registry) }()
+
+	select {
+	case <-hookStarted:
+	case <-time.After(time.Second):
+		t.Fatal("hook never started; test cannot exercise the mid-flush signal")
+	}
+
+	start := time.Now()
+	forceSig <- syscall.SIGTERM
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("gracefulShutdown returned %v on a second signal, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("gracefulShutdown did not return after a second signal during hook flush")
+	}
+
+	hookBudget := time.Duration(defaults.DefaultShutdownHookTimeoutSeconds) * time.Second
+	if elapsed := time.Since(start); elapsed >= hookBudget {
+		t.Errorf("gracefulShutdown took %v after the second signal, want well under the %v hook budget", elapsed, hookBudget)
+	}
+
+	select {
+	case <-hookCanceled:
+	case <-time.After(time.Second):
+		t.Error("hook's context was never canceled after the second signal")
 	}
 }
 

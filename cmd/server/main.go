@@ -650,8 +650,9 @@ type shutdowner interface {
 //
 // shutdownHooks runs (SOL-152449) once srv.Shutdown has settled, success or
 // timed-out-then-forced-close alike — never while requests may still be
-// in-flight. A second signal returns before that point, so it skips hooks
-// entirely: "stop now" outranks a telemetry flush.
+// in-flight. A second signal before that point skips hooks entirely; one
+// during the flush (runShutdownHooks) cuts it short instead. Either way,
+// "stop now" outranks a telemetry flush.
 func gracefulShutdown(srv shutdowner, timeout time.Duration, forceSig <-chan os.Signal, shutdownHooks *hooks.Registry) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -667,13 +668,34 @@ func gracefulShutdown(srv shutdowner, timeout time.Duration, forceSig <-chan os.
 				slog.Error("forced close failed", slog.String("error", closeErr.Error()))
 			}
 		}
-		hookCtx, hookCancel := context.WithTimeout(context.Background(), time.Duration(defaults.DefaultShutdownHookTimeoutSeconds)*time.Second)
-		defer hookCancel()
-		shutdownHooks.RunAll(hookCtx)
+		runShutdownHooks(shutdownHooks, forceSig)
 		return err
 	case sig := <-forceSig:
 		forceClose(srv, sig)
 		return nil
+	}
+}
+
+// runShutdownHooks flushes shutdownHooks within DefaultShutdownHookTimeoutSeconds.
+// A second signal (SOL-151437) mid-flush cancels it immediately instead of
+// waiting out the budget — the same "stop now" guarantee as the rest of
+// shutdown.
+func runShutdownHooks(shutdownHooks *hooks.Registry, forceSig <-chan os.Signal) {
+	hookCtx, hookCancel := context.WithTimeout(context.Background(), time.Duration(defaults.DefaultShutdownHookTimeoutSeconds)*time.Second)
+	defer hookCancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		shutdownHooks.RunAll(hookCtx)
+	}()
+
+	select {
+	case <-done:
+	case sig := <-forceSig:
+		slog.Warn("second signal received during shutdown-hook flush; abandoning remaining hooks",
+			slog.String("signal", sig.String()))
+		hookCancel()
 	}
 }
 

@@ -51,21 +51,14 @@ func (r *Registry) Register(name string, fn func(context.Context) error) {
 	r.hooks = append(r.hooks, namedHook{name: name, fn: fn})
 }
 
-// RunAll runs every registered hook concurrently and returns once they have
-// all finished or ctx's deadline passes, whichever comes first. Each hook
-// gets ctx directly, so every hook effectively gets the same full budget
-// regardless of how many others are registered — one slow or blocked hook
-// cannot shrink another's share. A hook still running when ctx expires is
-// abandoned, not waited on; RunAll returns anyway, bounding the total wall
-// time to ctx's deadline no matter how many hooks are registered. A failing
-// hook is logged and does not affect the caller's shutdown outcome.
+// RunAll runs every registered hook concurrently, returning once they all
+// finish or ctx's deadline passes. Each hook gets ctx directly, so every hook
+// gets the full budget regardless of how many others are registered. A slow
+// hook is abandoned rather than waited on; a panicking one is recovered (via
+// safego.Go) instead of crashing the process. Either way the rest keep
+// running, and a failing hook never changes the caller's shutdown outcome.
 //
-// RunAll is a no-op on a nil Registry or one with no hooks registered, so an
-// unused registry costs nothing.
-//
-// Each hook runs via safego.Go: a panicking hook is recovered and logged
-// rather than crashing the process mid-shutdown, the same guarantee
-// safego gives every other worker goroutine in this codebase.
+// A nil or empty Registry is a no-op — an unused registry costs nothing.
 func (r *Registry) RunAll(ctx context.Context) {
 	if r == nil || len(r.hooks) == 0 {
 		return
@@ -75,7 +68,10 @@ func (r *Registry) RunAll(ctx context.Context) {
 	for _, h := range r.hooks {
 		safego.Go(&g, func() error {
 			if err := h.fn(ctx); err != nil {
-				slog.Error("shutdown hook failed", slog.String("hook", h.name), slog.String("error", err.Error()))
+				// No err.Error(): hooks wrap external systems (an OTel
+				// collector), whose error text is unaudited (docs/internal/
+				// secure-logging-rules.md Rule 5).
+				slog.Error("shutdown hook failed", slog.String("hook", h.name))
 				return err
 			}
 			return nil
