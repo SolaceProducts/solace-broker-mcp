@@ -60,9 +60,20 @@ const DefaultShutdownTimeoutSeconds = 30
 // flight. Accepted as the cost of a 502-free rolling update.
 //
 // The pod's terminationGracePeriodSeconds must be at least
-// DefaultShutdownDrainDelayS + DefaultShutdownTimeoutSeconds plus a small buffer
-// so K8s does not SIGKILL the process mid-drain (see deploy/kubernetes/deployment.yaml).
+// DefaultShutdownDrainDelayS + DefaultShutdownTimeoutSeconds + DefaultShutdownHookTimeoutSeconds
+// plus a small buffer so K8s does not SIGKILL the process mid-drain (see
+// deploy/kubernetes/deployment.yaml).
 const DefaultShutdownDrainDelayS = 10
+
+// DefaultShutdownHookTimeoutSeconds bounds RunAll (internal/observability/hooks),
+// run after the HTTP server's own shutdown. Hooks run concurrently, so this is
+// the total budget regardless of hook count, not a per-hook allowance.
+//
+// Decided: 3s, taken from the 5s slack between DefaultShutdownDrainDelayS +
+// DefaultShutdownTimeoutSeconds (40s) and terminationGracePeriodSeconds (45s,
+// see deploy/kubernetes/deployment.yaml) — leaving 2s of buffer before SIGKILL.
+// A hook that needs longer is abandoned, not waited on.
+const DefaultShutdownHookTimeoutSeconds = 3
 
 // DefaultSEMPRequestTimeoutDuration is the per-request timeout for individual
 // SEMP API calls to a broker. Matches the story spec default and the Solace

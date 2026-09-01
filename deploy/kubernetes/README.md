@@ -132,10 +132,11 @@ until cold-start init finishes (~60s budget).
 
 `terminationGracePeriodSeconds: 45` is sized deliberately: on SIGTERM the
 server flips `/readyz` to 503, waits `obs.shutdown_drain_delay_s` (default 10s)
-for the endpoint to be deregistered, then drains in-flight requests for up to
-30s. The image is distroless with no shell, so this runs in-process and there
-is no `preStop` hook. **If you raise the drain delay, raise this value to
-match**, or Kubernetes will SIGKILL mid-drain.
+for the endpoint to be deregistered, drains in-flight requests for up to 30s,
+then flushes any registered shutdown hooks (OTel providers) for up to 3s more.
+The image is distroless with no shell, so this runs in-process and there is no
+`preStop` hook. **If you raise the drain delay, raise this value to match**,
+or Kubernetes will SIGKILL mid-drain.
 
 ## Configuration reference
 

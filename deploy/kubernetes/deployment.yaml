@@ -40,16 +40,19 @@ spec:
           labelSelector:
             matchLabels:
               app.kubernetes.io/name: solace-broker-mcp
-      # Graceful-shutdown budget (SOL-151288). On SIGTERM the server flips
-      # /readyz to 503, sleeps obs.shutdown_drain_delay_s (default 10s) so K8s
-      # deregisters the pod, then gracefully drains in-flight requests for up to
-      # DefaultShutdownTimeoutSeconds (30s). This drain runs IN-PROCESS: the
-      # distroless image has no shell, so there is NO preStop hook. The grace
-      # period must cover both phases plus a small buffer, or K8s SIGKILLs
-      # mid-drain and causes the 502s this design prevents:
+      # Graceful-shutdown budget (SOL-151288, SOL-152449). On SIGTERM the server
+      # flips /readyz to 503, sleeps obs.shutdown_drain_delay_s (default 10s) so
+      # K8s deregisters the pod, gracefully drains in-flight requests for up to
+      # DefaultShutdownTimeoutSeconds (30s), then flushes any registered
+      # shutdown hooks (OTel providers) for up to DefaultShutdownHookTimeoutSeconds
+      # (3s). This drain runs IN-PROCESS: the distroless image has no shell, so
+      # there is NO preStop hook. The grace period must cover all three phases
+      # plus a small buffer, or K8s SIGKILLs mid-drain and causes the 502s this
+      # design prevents:
       #   terminationGracePeriodSeconds = shutdown_drain_delay_s (10)
       #                                 + DefaultShutdownTimeoutSeconds (30)
-      #                                 + 5s buffer = 45
+      #                                 + DefaultShutdownHookTimeoutSeconds (3)
+      #                                 + 2s buffer = 45
       # If you raise obs.shutdown_drain_delay_s, raise this value to match.
       #
       # The readinessProbe below targets /readyz, so on SIGTERM the server's
