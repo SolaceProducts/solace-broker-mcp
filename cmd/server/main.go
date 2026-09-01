@@ -981,10 +981,13 @@ func main() {
 		slog.Int("port", cfg.Port),
 		slog.String("log_level", cfg.LogLevel))
 
-	// One-line summary of which observability capabilities are enabled. No
-	// behavior is wired into the request path yet (SOL-151278 skeleton); this
-	// line lets operators confirm the door-closing defaults and any OBS_*
-	// overrides took effect at startup.
+	// One-line summary of which observability capabilities are enabled, so
+	// operators can confirm the door-closing defaults and any OBS_* overrides
+	// took effect at startup.
+	//
+	// Two of these are wired: correlation IDs (SOL-151279) and saturation
+	// events (SOL-153443, as log lines — see docs/observability.md). Metrics,
+	// audit and tracing remain flags with no emission behind them.
 	slog.Info("observability config loaded",
 		slog.Bool("correlation_id", cfg.Observability.CorrelationIDEnabled),
 		slog.Bool("metrics", cfg.Observability.MetricsEnabled),
@@ -1037,6 +1040,26 @@ func main() {
 	defer pool.Close()
 	slog.Info("created broker pool",
 		slog.Any("broker_aliases", pool.Aliases()))
+
+	// Interim saturation signal (SOL-153443): periodically log how full each
+	// broker's in-flight semaphore is, so an operator can tell "we are pacing or
+	// shedding to protect this broker" from "something else is slow". Off unless
+	// OBS_SATURATION_EVENTS_ENABLED is set; StartOccupancyReporter starts no
+	// goroutine in that case.
+	//
+	// The cadence reuses observability.otel_self_stats_interval_s, which is
+	// already defined as how often the server reports on itself; occupancy is
+	// exactly that kind of self-statistic and does not warrant a second knob.
+	//
+	// Stopped before pool.Close so the reporter cannot read a semaphore through
+	// a client the pool is tearing down. Defers run last-in-first-out, so this
+	// one, registered after the pool's, fires first.
+	stopOccupancyReporter := health.StartOccupancyReporter(
+		cfg.Observability,
+		time.Duration(cfg.Observability.OTelSelfStatsIntervalS)*time.Second,
+		pool.OccupancySnapshot,
+	)
+	defer stopOccupancyReporter()
 
 	// 5. Load embedded composite tool definitions
 	compositeTools, err := composite.LoadTools(definitions.FS, "tools.yaml")

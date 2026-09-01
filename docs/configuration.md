@@ -344,3 +344,10 @@ Lower it (`1s` to `5s`) where a caller needs a fast answer more than it needs
 the request to eventually go through, accepting that a slow broker will then
 shed sooner. Setting it to `0` restores the older behavior, where a request with
 no deadline of its own waits for as long as it takes.
+
+To see this happening before requests start failing, set
+`OBS_SATURATION_EVENTS_ENABLED=true`. The server then warns while a request is
+still queued past `observability.saturation_threshold_ms` (default `1000`) and
+periodically reports each broker's in-flight occupancy, both naming the gate
+involved. Size the threshold against `request_min_interval`, not against
+`max_queue_wait`. See [Observability](observability.md#load-and-saturation-visibility--interim--logs-only).

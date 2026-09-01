@@ -18,10 +18,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
@@ -64,9 +68,14 @@ type BrokerPool struct {
 	// miss without it. Access must hold p.mu (RLock for read-only,
 	// Lock for read+write); bare map access faults under -race.
 	clients   map[string]*BrokerClient
-	src       BrokerSource              // broker resolution surface (see BrokerSource doc)
-	sempCfg   *config.SEMPConfig        // shared SEMP settings
-	exchanger *tokenexchange.Exchanger  // process-wide token exchanger; nil when no broker uses OAuth
+	src       BrokerSource             // broker resolution surface (see BrokerSource doc)
+	sempCfg   *config.SEMPConfig       // shared SEMP settings
+	exchanger *tokenexchange.Exchanger // process-wide token exchanger; nil when no broker uses OAuth
+	// obs carries the observability capability flags and tunables, read only to
+	// decide whether a new BrokerClient gets the interim saturation signal
+	// (SOL-153443). Copied by value at construction: these are load-time flags
+	// that never change afterwards.
+	obs config.ObservabilityConfig
 }
 
 // NewBrokerPool creates a BrokerPool from the server configuration. No
@@ -84,7 +93,48 @@ func NewBrokerPool(cfg *config.ServerConfig, exchanger *tokenexchange.Exchanger)
 		src:       cfg,
 		sempCfg:   &cfg.SEMP,
 		exchanger: exchanger,
+		obs:       cfg.Observability,
 	}
+}
+
+// senderOptions builds the resilience options every BrokerClient this pool
+// creates is given. Empty unless the operator opted into saturation events.
+//
+// The threshold is observability.saturation_threshold_ms, which measures the
+// wait to be admitted to a broker, not end-to-end call latency. It must stay
+// comfortably above semp.request_min_interval: at the pacing interval alone a
+// request routinely waits one interval, and a threshold below that would report
+// every request as slow.
+func (p *BrokerPool) senderOptions() []resilience.Option {
+	if !health.SaturationEventsEnabled(p.obs) {
+		return nil
+	}
+	return []resilience.Option{
+		resilience.WithSaturationEvents(time.Duration(p.obs.SaturationThresholdMs) * time.Millisecond),
+	}
+}
+
+// OccupancySnapshot reports current in-flight-semaphore occupancy for every
+// broker this pool has realized, sorted by alias so repeated readings line up.
+//
+// Brokers are created lazily, so a configured but never-used broker correctly
+// appears in no snapshot: it has no semaphore and no load to report. This is
+// the data source for health.StartOccupancyReporter.
+func (p *BrokerPool) OccupancySnapshot() []health.BrokerOccupancy {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	out := make([]health.BrokerOccupancy, 0, len(p.clients))
+	for _, client := range p.clients {
+		inFlight, limit := client.InFlight()
+		out = append(out, health.BrokerOccupancy{
+			Broker:   client.alias,
+			InFlight: inFlight,
+			Limit:    limit,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Broker < out[j].Broker })
+	return out
 }
 
 // getOrCreate returns the BrokerClient for alias, creating it on first access.
@@ -121,7 +171,7 @@ func (p *BrokerPool) getOrCreate(alias string) (*BrokerClient, error) {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownBroker, alias)
 	}
 
-	client, err := NewBrokerClient(cfg.DisplayName(), cfg, p.sempCfg, p.exchanger)
+	client, err := NewBrokerClient(cfg.DisplayName(), cfg, p.sempCfg, p.exchanger, p.senderOptions()...)
 	if err != nil {
 		return nil, err
 	}

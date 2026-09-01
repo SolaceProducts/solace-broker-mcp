@@ -136,6 +136,37 @@ type Sender struct {
 	brokerURL     string             // for logging context
 	retryBudget   time.Duration      // overall deadline for the whole retry chain; 0 disables
 	maxQueueWait  time.Duration      // overall bound on admission (both gates); 0 disables
+	// slowAdmissionAfter is the wait past which admit emits the interim
+	// saturation warning. 0 disables the signal, which is the zero value and
+	// therefore the default for any Sender built without WithSaturationEvents.
+	slowAdmissionAfter time.Duration
+}
+
+// Option customizes a Sender at construction. Options are applied after the
+// SEMPConfig-derived fields, so an option always wins over a config default.
+type Option func(*Sender)
+
+// WithSaturationEvents turns on the interim log-based saturation signal: a
+// single WARN per request that is still waiting to be admitted after slowAfter,
+// naming the gate it is stuck at.
+//
+// This is the stopgap for SOL-153443, not the metric the observability schema
+// describes. `docs/observability.md` specifies a `/metrics` endpoint that this
+// build does not have — there is no meter provider, no exporter, and no
+// OpenTelemetry dependency — and building one here would duplicate the
+// in-flight work under SOL-150254. A log line needs none of that and answers
+// the same first question: is the server pacing or shedding to protect this
+// broker, or is something else slow?
+//
+// A non-positive slowAfter leaves the signal off. The caller gates on
+// OBS_SATURATION_EVENTS_ENABLED (health.SaturationEventsEnabled) and only
+// passes this option when the operator has opted in.
+func WithSaturationEvents(slowAfter time.Duration) Option {
+	return func(d *Sender) {
+		if slowAfter > 0 {
+			d.slowAdmissionAfter = slowAfter
+		}
+	}
 }
 
 // New creates a Sender configured for a specific broker. It sets up
@@ -158,7 +189,10 @@ type Sender struct {
 // same sharing requirement: a Sender-private limiter admits up to 2× the
 // configured rate because each protocol client paces only itself (SOL-152401).
 // Its lifetime is owned by the caller — BrokerClient.Close() stops it.
-func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authenticator, brokerURL string, sem Semaphore, limiter *RateLimiter) *Sender {
+// opts carry cross-cutting concerns that are not part of the SEMP transport
+// policy — today only the interim saturation signal. Variadic so the many
+// existing construction sites, almost all of them tests, stay untouched.
+func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authenticator, brokerURL string, sem Semaphore, limiter *RateLimiter, opts ...Option) *Sender {
 	if authn == nil {
 		panic("resilience.New: authn must be non-nil; construct via semp.newAuthenticator in semp.NewBrokerClient")
 	}
@@ -259,6 +293,10 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 			time.Duration(retryMax)*sempCfg.RetryMaxInterval
 	}
 
+	for _, opt := range opts {
+		opt(d)
+	}
+
 	return d
 }
 
@@ -303,6 +341,33 @@ func (d *Sender) admit(ctx context.Context) error {
 		expired = timer.C
 	}
 
+	// slow is the interim saturation signal's trip wire (SOL-153443). It shares
+	// the expired timer's two properties deliberately: one timer for both gates,
+	// measured from entry, so it reports total admission wait rather than
+	// restarting per gate.
+	//
+	// It fires DURING the wait rather than on resolution, and that is the point.
+	// An operator fielding "MCP feels slow" is reading the log now, while the
+	// episode is happening; a resolution-time line arrives only once the request
+	// finishes, up to max_queue_wait later. Worse, max_queue_wait: 0 is a
+	// supported setting that restores unbounded waiting, and under it a
+	// resolution-time signal is silent forever — exactly the case that most
+	// needs a signal.
+	//
+	// Firing inside a select means the arm has to be re-entered, hence the
+	// labeled loops below. Setting slow = nil after it fires makes the arm block
+	// forever, which is what keeps this to one warning per request: a signal
+	// that re-fires every threshold period would flood the log of a saturated
+	// broker and get itself switched off. The nil also carries the
+	// already-warned state into the second gate for free, since both gates read
+	// the same variable.
+	var slow <-chan time.Time
+	if d.slowAdmissionAfter > 0 {
+		slowTimer := time.NewTimer(d.slowAdmissionAfter)
+		defer slowTimer.Stop()
+		slow = slowTimer.C
+	}
+
 	// Rate limit: wait for the per-broker interval before sending a new request.
 	// This does NOT apply to retries — retryablehttp handles those internally
 	// with jittered backoff (RateLimitLinearJitterBackoff). During failure
@@ -313,29 +378,75 @@ func (d *Sender) admit(ctx context.Context) error {
 	// over time by the backoff and
 	// jitter desynchronizes concurrent failures. The broker's Retry-After
 	// header (if present on 429/503) takes priority over computed backoff.
-	select {
-	case <-d.rateLimiter:
-		slog.Debug("rate limiter: request permitted",
-			slog.String("broker", d.brokerURL))
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-expired:
-		return d.shed(ctx, AdmissionStageRateLimit, start)
+rateLimitGate:
+	for {
+		select {
+		case <-d.rateLimiter:
+			slog.Debug("rate limiter: request permitted",
+				slog.String("broker", d.brokerURL))
+			break rateLimitGate
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-expired:
+			return d.shed(ctx, AdmissionStageRateLimit, start)
+		case <-slow:
+			d.warnSlowAdmission(ctx, AdmissionStageRateLimit, start)
+			slow = nil
+		}
 	}
 
 	// In-flight cap: acquire a per-broker semaphore slot for the duration of
 	// the request, including retryablehttp's internal retries (the request is
 	// still in flight against the broker while retrying). Acquired after the
 	// rate-limiter tick so a slot is held only while genuinely in flight.
-	select {
-	case d.sem <- struct{}{}:
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-expired:
-		return d.shed(ctx, AdmissionStageConcurrency, start)
+concurrencyGate:
+	for {
+		select {
+		case d.sem <- struct{}{}:
+			break concurrencyGate
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-expired:
+			return d.shed(ctx, AdmissionStageConcurrency, start)
+		case <-slow:
+			d.warnSlowAdmission(ctx, AdmissionStageConcurrency, start)
+			slow = nil
+		}
 	}
 
 	return nil
+}
+
+// warnSlowAdmission reports a request that is still queued for admission after
+// slowAdmissionAfter, naming the gate it is waiting at. Called from inside the
+// gate's select, so the request has NOT resolved yet: the line describes a wait
+// in progress, and no companion line is emitted when it ends. A request that
+// goes on to be shed is reported again by shed, with the same stage vocabulary.
+//
+// WARN matches shed's level for the same reason: both are the server working as
+// configured under load, and both point the operator at the same two knobs
+// (semp.max_concurrent_per_broker, semp.request_min_interval).
+//
+// brokerURL was sanitized once in New; stage, the threshold and the durations
+// are server-generated. operationID is the caller's opaque request identifier,
+// logged the same way shed logs it.
+func (d *Sender) warnSlowAdmission(ctx context.Context, stage string, start time.Time) {
+	slog.Warn("broker admission slow: request still waiting to be admitted",
+		slog.String("broker", d.brokerURL),
+		slog.String("operation", operationID(ctx)),
+		slog.String("stage", stage),
+		slog.Duration("waited", time.Since(start)),
+		slog.Duration("threshold", d.slowAdmissionAfter),
+		slog.Duration("max_queue_wait", d.maxQueueWait))
+}
+
+// operationID reads the caller's operation identifier off the context,
+// reporting "unknown" when none was attached.
+func operationID(ctx context.Context) string {
+	if id, ok := ctx.Value(OperationIDKey{}).(string); ok {
+		return id
+	}
+	return "unknown"
 }
 
 // shed builds the BrokerBusyError for an expired admission budget and logs the
@@ -369,11 +480,6 @@ func (d *Sender) shed(ctx context.Context, stage string, start time.Time) error 
 
 	waited := time.Since(start)
 
-	opID := "unknown"
-	if id, ok := ctx.Value(OperationIDKey{}).(string); ok {
-		opID = id
-	}
-
 	// WARN, not ERROR: shedding is the server working as configured under load,
 	// and it is the signal an operator alerts on to decide whether to raise
 	// semp.max_concurrent_per_broker, lower semp.request_min_interval, or add
@@ -382,7 +488,7 @@ func (d *Sender) shed(ctx context.Context, stage string, start time.Time) error 
 	// caller-sourced text.
 	slog.Warn("request shed: broker admission bound exceeded",
 		slog.String("broker", d.brokerURL),
-		slog.String("operation", opID),
+		slog.String("operation", operationID(ctx)),
 		slog.String("stage", stage),
 		slog.Duration("waited", waited),
 		slog.Duration("max_queue_wait", d.maxQueueWait))

@@ -47,7 +47,22 @@ type BrokerClient struct {
 	// rateLimiter is the broker's shared request pacer, held by both protocol
 	// clients' Senders. Owned here so Close() is its single stop site.
 	rateLimiter *resilience.RateLimiter
-	alias       string // broker alias (for error messages)
+	// sem is the broker's shared in-flight cap, held by both protocol clients'
+	// Senders. Retained here so InFlight can read its occupancy; the Senders
+	// own acquiring and releasing slots, and nothing here touches it.
+	sem   resilience.Semaphore
+	alias string // broker alias (for error messages)
+}
+
+// InFlight reports how many requests are currently in flight to this broker and
+// the configured semp.max_concurrent_per_broker cap.
+//
+// A buffered channel backs the semaphore precisely so this is readable without
+// a separate counter to keep in step (see resilience.Semaphore). len on a
+// channel is safe for concurrent use, and the value is a snapshot that may be
+// stale the instant it is returned — which is what a load reading is.
+func (b *BrokerClient) InFlight() (inFlight, limit int) {
+	return len(b.sem), cap(b.sem)
 }
 
 // NewBrokerClient creates a BrokerClient for the given broker configuration.
@@ -77,7 +92,10 @@ type BrokerClient struct {
 // (which reject an OAuth broker without exchanger coordinates at
 // startup) and by main.go, which builds the exchanger whenever
 // Hop2OAuthActive() returns true.
-func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, exchanger *tokenexchange.Exchanger) (*BrokerClient, error) {
+// opts are forwarded to both protocol clients' Senders. Variadic so the
+// existing construction sites stay untouched; today the pool uses it to turn on
+// the interim saturation signal (SOL-153443).
+func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, exchanger *tokenexchange.Exchanger, opts ...resilience.Option) (*BrokerClient, error) {
 	jar, err := newCookieJar(alias, brokerCfg.Auth.Mode)
 	if err != nil {
 		return nil, err
@@ -88,12 +106,12 @@ func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *conf
 	}
 	sem := resilience.NewSemaphore(sempCfg.MaxConcurrentPerBroker)
 	limiter := resilience.NewRateLimiter(*sempCfg.RequestMinInterval)
-	sempV1Client, err := sempv1.NewHTTPClient(brokerCfg, sempCfg, sem, limiter, authn, jar)
+	sempV1Client, err := sempv1.NewHTTPClient(brokerCfg, sempCfg, sem, limiter, authn, jar, opts...)
 	if err != nil {
 		limiter.Stop()
 		return nil, fmt.Errorf("creating SEMPv1 client for broker %q: %w", alias, err)
 	}
-	sempV2Client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, sem, limiter, authn, jar)
+	sempV2Client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, sem, limiter, authn, jar, opts...)
 	if err != nil {
 		limiter.Stop()
 		return nil, fmt.Errorf("creating SEMPv2 client for broker %q: %w", alias, err)
@@ -103,6 +121,7 @@ func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *conf
 		sempV2Client:  sempV2Client,
 		authenticator: authn,
 		rateLimiter:   limiter,
+		sem:           sem,
 		alias:         alias,
 	}, nil
 }

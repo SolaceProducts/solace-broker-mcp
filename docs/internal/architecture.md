@@ -351,6 +351,7 @@ sequenceDiagram
 | **Audit log** | Skeleton | Capability gate only (`internal/observability/audit/audit.go:27`); record emission not yet implemented. Default OFF. |
 | **Metrics** | Skeleton | Capability gate only (`internal/observability/metrics/metrics.go:27`); instruments/export not yet implemented. Default OFF. |
 | **Tracing** | Skeleton | Capability gate only (`internal/observability/tracing/tracing.go:26`); OTel tracer not yet implemented. Default OFF. |
+| **Saturation events** | Implemented (logs) | Interim log-based signal, not the roadmap metric (SOL-153443). Per-request `broker admission slow` WARN from `internal/semp/resilience/sender.go` (`admit`/`warnSlowAdmission`) once a request's admission wait passes `observability.saturation_threshold_ms`; periodic per-broker `broker in-flight occupancy` from `internal/observability/health/saturation.go`, fed by `semp.BrokerPool.OccupancySnapshot`. Default OFF. |
 
 Middleware ordering on `/mcp` (outermost first): panic recovery → body-limit →
 correlation → auth. Correlation sits **outside** auth so a 401 still gets an ID;
