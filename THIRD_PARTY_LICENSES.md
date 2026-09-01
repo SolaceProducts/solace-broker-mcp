@@ -4,7 +4,7 @@ This file lists the third-party components compiled into the `solace-broker-mcp`
 binary, with their versions and licenses. It is the human-readable OSS compliance
 inventory that accompanies the release.
 
-**Generated** 2026-08-18 with
+**Generated** 2026-08-28 with
 [`go-licenses`](https://github.com/google/go-licenses) against `./cmd/server`:
 
 ```bash
@@ -48,7 +48,6 @@ under MPL-2.0.
 | Component | Version | License | License text |
 |---|---|---|---|
 | `github.com/coreos/go-oidc/v3/oidc` | v3.20.0 | Apache-2.0 | [license](https://github.com/coreos/go-oidc/blob/v3.20.0/LICENSE) |
-| `github.com/davecgh/go-spew/spew` | v1.1.1 | ISC | [license](https://github.com/davecgh/go-spew/blob/v1.1.1/LICENSE) |
 | `github.com/getkin/kin-openapi` | v0.146.0 | MIT | [license](https://github.com/getkin/kin-openapi/blob/v0.146.0/LICENSE) |
 | `github.com/go-jose/go-jose/v4` | v4.1.4 | Apache-2.0 | [license](https://github.com/go-jose/go-jose/blob/v4.1.4/LICENSE) |
 | `github.com/go-jose/go-jose/v4/json` | v4.1.4 | BSD-3-Clause | [license](https://github.com/go-jose/go-jose/blob/v4.1.4/json/LICENSE) |
@@ -59,20 +58,20 @@ under MPL-2.0.
 | `github.com/modelcontextprotocol/go-sdk` | v1.7.0 | Apache-2.0 | [license](https://github.com/modelcontextprotocol/go-sdk/blob/v1.7.0/LICENSE) |
 | `github.com/oasdiff/yaml` | v0.1.1 | MIT | [license](https://github.com/oasdiff/yaml/blob/v0.1.1/LICENSE) |
 | `github.com/oasdiff/yaml3` | v0.0.14 | MIT | [license](https://github.com/oasdiff/yaml3/blob/v0.0.14/LICENSE) |
-| `github.com/pmezard/go-difflib/difflib` | v1.0.0 | BSD-3-Clause | [license](https://github.com/pmezard/go-difflib/blob/v1.0.0/LICENSE) |
 | `github.com/santhosh-tekuri/jsonschema/v6` | v6.0.2 | Apache-2.0 | [license](https://github.com/santhosh-tekuri/jsonschema/blob/v6.0.2/LICENSE) |
 | `github.com/segmentio/asm` | v1.1.3 | MIT | [license](https://github.com/segmentio/asm/blob/v1.1.3/LICENSE) |
 | `github.com/segmentio/encoding` | v0.5.4 | MIT | [license](https://github.com/segmentio/encoding/blob/v0.5.4/LICENSE) |
 | `github.com/sony/gobreaker/v2` | v2.4.0 | MIT | [license](https://github.com/sony/gobreaker/blob/v2.4.0/LICENSE) |
-| `github.com/stretchr/testify` | v1.11.1 | MIT | [license](https://github.com/stretchr/testify/blob/v1.11.1/LICENSE) |
+| `github.com/stretchr/testify` | v1.12.1 | MIT | [license](https://github.com/stretchr/testify/blob/v1.12.1/LICENSE) |
 | `github.com/xeipuuv/gojsonpointer` | 4e3ac2762d5f | Apache-2.0 | [license](https://github.com/xeipuuv/gojsonpointer/blob/4e3ac2762d5f/LICENSE-APACHE-2.0.txt) |
 | `github.com/xeipuuv/gojsonreference` | bd5ef7bd5415 | Apache-2.0 | [license](https://github.com/xeipuuv/gojsonreference/blob/bd5ef7bd5415/LICENSE-APACHE-2.0.txt) |
 | `github.com/xeipuuv/gojsonschema` | v1.2.0 | Apache-2.0 | [license](https://github.com/xeipuuv/gojsonschema/blob/v1.2.0/LICENSE-APACHE-2.0.txt) |
 | `github.com/yosida95/uritemplate/v3` | v3.0.2 | BSD-3-Clause | [license](https://github.com/yosida95/uritemplate/blob/v3.0.2/LICENSE) |
+| `go.yaml.in/yaml/v3` | v3.0.5 | MIT | [license](https://github.com/yaml/go-yaml/blob/v3.0.5/LICENSE) |
 | `golang.org/x/oauth2` | v0.36.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/oauth2/+/v0.36.0:LICENSE) |
 | `golang.org/x/sync` | v0.22.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sync/+/v0.22.0:LICENSE) |
-| `golang.org/x/sys/cpu` | v0.41.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sys/+/v0.41.0:LICENSE) |
-| `golang.org/x/text` | v0.14.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/text/+/v0.14.0:LICENSE) |
+| `golang.org/x/sys/cpu` | v0.47.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/sys/+/v0.47.0:LICENSE) |
+| `golang.org/x/text` | v0.40.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/text/+/v0.40.0:LICENSE) |
 | `golang.org/x/time/rate` | v0.15.0 | BSD-3-Clause | [license](https://cs.opensource.google/go/x/time/+/v0.15.0:LICENSE) |
 | `gopkg.in/yaml.v3` | v3.0.1 | MIT | [license](https://github.com/go-yaml/yaml/blob/v3.0.1/LICENSE) |
 

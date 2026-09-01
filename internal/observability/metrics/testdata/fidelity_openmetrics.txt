@@ -1,0 +1,30 @@
+# HELP mcp_build_info 
+# TYPE mcp_build_info gauge
+mcp_build_info{version="0.0.0-spike"} 1.0
+# HELP mcp_tool_invocation_duration_seconds 
+# TYPE mcp_tool_invocation_duration_seconds histogram
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="0.0"} 0
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="5.0"} 1 # {trace_id="61d643e391c0c12255b01e1216f1ee21",span_id="bbb9739ffbbc1ff0"} 0.042 1.7879390215284288e+09
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="10.0"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="25.0"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="50.0"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="75.0"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="100.0"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="250.0"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="500.0"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="750.0"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="1000.0"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="2500.0"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="5000.0"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="7500.0"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="10000.0"} 1
+mcp_tool_invocation_duration_seconds_bucket{tool="get-broker-status",le="+Inf"} 1
+mcp_tool_invocation_duration_seconds_sum{tool="get-broker-status"} 0.042
+mcp_tool_invocation_duration_seconds_count{tool="get-broker-status"} 1
+# HELP mcp_tool_invocation 
+# TYPE mcp_tool_invocation counter
+mcp_tool_invocation_total{tool="get-broker-status"} 1.0 # {trace_id="61d643e391c0c12255b01e1216f1ee21",span_id="bbb9739ffbbc1ff0"} 1.0 1.787939021528421e+09
+# HELP target_info Target metadata
+# TYPE target_info gauge
+target_info{service_instance_id="spike-test-instance",service_name="solace-broker-mcp",service_version="0.0.0-spike"} 1.0
+# EOF
