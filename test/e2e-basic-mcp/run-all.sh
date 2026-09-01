@@ -68,13 +68,28 @@ else
     NEGATIVE_EXIT=$?
 fi
 
-# 6. Summary table
+# 6. Run Scenario 4: SEMP throttling (SOL-153444)
+#
+# Last on purpose. It restarts the MCP server three times with different
+# `semp:` limits, so it takes over port 9090 from the shared server the earlier
+# scenarios used. Anything added after it would find that server gone.
+log_info ""
+log_info "=== Scenario 4: Throttling (rate limiter + in-flight cap) ==="
+log_info ""
+if bash "$SCRIPT_DIR/test-throttling.sh"; then
+    THROTTLING_EXIT=0
+else
+    THROTTLING_EXIT=$?
+fi
+
+# 7. Summary table
 TOTAL_RUN=0
 TOTAL_PASSED=0
 TOTAL_FAILED=0
 SAW_STANDALONE=0
 SAW_AGENT=0
 SAW_NEGATIVE=0
+SAW_THROTTLING=0
 
 echo ""
 echo "┏━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━┳━━━━━━━━━┓"
@@ -91,6 +106,7 @@ if [ -f "$E2E_RESULTS_DIR/results.txt" ]; then
             "Standalone tests")     SAW_STANDALONE=1 ;;
             "Agent tests")          SAW_AGENT=1      ;;
             "Negative-path tests")  SAW_NEGATIVE=1   ;;
+            "Throttling tests")     SAW_THROTTLING=1 ;;
         esac
     done < "$E2E_RESULTS_DIR/results.txt"
 fi
@@ -106,18 +122,22 @@ fi
 if [ "$SAW_NEGATIVE" -eq 0 ] && [ "$NEGATIVE_EXIT" -ne 0 ]; then
     printf "┃ %-23s ┃ %5s ┃ %7s ┃ %7s ┃\n" "Negative-path tests" "CRASH" "--" "--"
 fi
+if [ "$SAW_THROTTLING" -eq 0 ] && [ "$THROTTLING_EXIT" -ne 0 ]; then
+    printf "┃ %-23s ┃ %5s ┃ %7s ┃ %7s ┃\n" "Throttling tests" "CRASH" "--" "--"
+fi
 
 echo "┣━━━━━━━━━━━━━━━━━━━━━━━━━╋━━━━━━━╋━━━━━━━━━╋━━━━━━━━━┫"
 printf "┃ %-23s ┃ %5s ┃ %7s ┃ %7s ┃\n" "TOTAL" "$TOTAL_RUN" "$TOTAL_PASSED" "$TOTAL_FAILED"
 echo "┗━━━━━━━━━━━━━━━━━━━━━━━━━┻━━━━━━━┻━━━━━━━━━┻━━━━━━━━━┛"
 echo ""
 
-if [ "$STANDALONE_EXIT" -eq 0 ] && [ "$AGENT_EXIT" -eq 0 ] && [ "$NEGATIVE_EXIT" -eq 0 ]; then
+if [ "$STANDALONE_EXIT" -eq 0 ] && [ "$AGENT_EXIT" -eq 0 ] && [ "$NEGATIVE_EXIT" -eq 0 ] && [ "$THROTTLING_EXIT" -eq 0 ]; then
     log_ok "All E2E scenarios passed"
     exit 0
 else
     [ "$STANDALONE_EXIT" -ne 0 ] && log_fail "Standalone scenario failed"
     [ "$AGENT_EXIT" -ne 0 ] && log_fail "Agent scenario failed"
     [ "$NEGATIVE_EXIT" -ne 0 ] && log_fail "Negative-path scenario failed"
+    [ "$THROTTLING_EXIT" -ne 0 ] && log_fail "Throttling scenario failed"
     exit 1
 fi

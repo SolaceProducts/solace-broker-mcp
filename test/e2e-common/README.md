@@ -11,6 +11,7 @@ Shared infrastructure for the E2E test suites (`e2e-monitoring`, `e2e-management
 | `lib.sh::MCP_PROTOCOL_VERSION` | The `protocolVersion` every suite pins in its `initialize` handshake (default `2025-11-25`), overridable from the environment. `mcp_initialize` fails if the server negotiates something else — see the comment at the definition for why the pin is not go-sdk's latest revision |
 | `setup-brokers.sh` | Bring a suite's brokers up and wait for readiness |
 | `start-server.sh` | Build the MCP server and start it against a suite's brokers |
+| `semp-tap/` | Recording reverse proxy (own `go.mod`, stdlib only). Sits between the MCP server and a real broker and records one line per SEMP request, so a suite can assert on the rate and in-flight concurrency the broker actually sees. Used by `e2e-basic-mcp`'s throttling scenario; lifecycle helpers are `build_semp_tap` / `start_semp_tap` / `stop_semp_tap` in `lib.sh`. Its package comment documents the measurement window — read it before writing an assertion on the record |
 
 ## Quickstart pattern
 

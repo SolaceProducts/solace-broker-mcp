@@ -359,6 +359,95 @@ stop_broker_drivers() {
     sleep 3
 }
 
+# ── semp-tap (recording reverse proxy in front of a real broker) ─────────────
+# semp-tap sits between the MCP server and a real Dockerized broker and records
+# one line per SEMP request, so a suite can assert on the request rate and
+# in-flight concurrency the broker actually sees rather than on client-side
+# wall-clock timing. The broker is still real; the tap only observes.
+#
+# Used by the throttling scenario (SOL-153444). Point one broker alias's url at
+# $SEMP_TAP_URL and leave every other alias pointed straight at its broker, and
+# the record holds exactly that alias's traffic — the per-broker rate limiter and
+# in-flight semaphore are keyed by alias, so nothing else pollutes the sample.
+#
+# Sources live in test/e2e-common/semp-tap with their own go.mod (stdlib only).
+# The measurement-window subtlety is documented at length in its package comment;
+# read that before changing an assertion built on the record.
+
+SEMP_TAP_PORT="${SEMP_TAP_PORT:-8084}"
+SEMP_TAP_URL="http://localhost:${SEMP_TAP_PORT}"
+SEMP_TAP_PID=""
+
+build_semp_tap() {
+    log_info "Building semp-tap binary (recording reverse proxy) ..."
+    mkdir -p "$BIN_DIR"
+    (cd "$REPO_ROOT/test/e2e-common/semp-tap" && go build -o "$BIN_DIR/semp-tap" .)
+    log_info "semp-tap binary built: $BIN_DIR/semp-tap"
+}
+
+# Start the tap and block until its socket is bound.
+#   $1 upstream    real broker base URL to forward to (e.g. $BROKER_A_URL)
+#   $2 record      path to write the CSV request record to
+#   $3 delay       optional per-response hold (default 0); see the package doc
+start_semp_tap() {
+    local upstream="$1"
+    local record="$2"
+    local delay="${3:-0}"
+    local readyfile="$BIN_DIR/semp-tap.ready"
+    local logfile="$BIN_DIR/semp-tap.log"
+
+    # Clear a tap left behind by a crashed run, the way start_server sweeps
+    # MCP_PORT. Without this a stale listener turns every phase into a
+    # bind failure whose real cause is one run ago.
+    local existing_pid
+    existing_pid=$(lsof -ti:"$SEMP_TAP_PORT" 2>/dev/null || true)
+    if [ -n "$existing_pid" ]; then
+        log_warn "Killing existing process on semp-tap port $SEMP_TAP_PORT (PID=$existing_pid)"
+        kill_gracefully $existing_pid
+    fi
+
+    rm -f "$readyfile"
+    "$BIN_DIR/semp-tap" \
+        -listen ":$SEMP_TAP_PORT" \
+        -upstream "$upstream" \
+        -record "$record" \
+        -delay "$delay" \
+        -ready-file "$readyfile" \
+        >"$logfile" 2>&1 &
+    SEMP_TAP_PID=$!
+
+    # Wait on the bound socket, not a sleep. The MCP server starts next and its
+    # first tool call would otherwise race the listener into a connection-refused
+    # flake at the start of a phase.
+    local attempt=0
+    while [ $attempt -lt 40 ] && [ ! -s "$readyfile" ]; do
+        sleep 0.25
+        attempt=$((attempt + 1))
+    done
+    if [ ! -s "$readyfile" ]; then
+        log_fail "semp-tap did not bind $SEMP_TAP_URL within 10s; last 20 lines of $logfile:"
+        tail -n 20 "$logfile" >&2 2>/dev/null || true
+        # Reap it before dropping the PID. A tap that bound the port but never
+        # wrote the ready file would otherwise survive as an orphan and make the
+        # next phase's bind fail for a reason that looks unrelated.
+        stop_semp_tap
+        return 1
+    fi
+    log_info "semp-tap ready on $SEMP_TAP_URL → $upstream (delay=$delay, record=$record)"
+}
+
+stop_semp_tap() {
+    if [ -z "$SEMP_TAP_PID" ] || ! kill -0 "$SEMP_TAP_PID" 2>/dev/null; then
+        SEMP_TAP_PID=""
+        return 0
+    fi
+    log_info "Stopping semp-tap (PID=$SEMP_TAP_PID) ..."
+    # Graceful: the tap flushes each record as it completes, but SIGTERM lets an
+    # in-flight request finish and be recorded rather than vanish from the sample.
+    kill_gracefully "$SEMP_TAP_PID"
+    SEMP_TAP_PID=""
+}
+
 # Generate the MCP server config from .env-derived values so ports stay in sync.
 # Credentials use ${VAR_NAME} substitution — resolved by the server via ENV_FILE.
 # enable_write_tools is on for every suite: all suites exercise one server with

@@ -74,3 +74,48 @@ cleanup_fixtures() {
     cleanup_fixtures_on "$BROKER_A_SEMP_CONFIG" "broker-a"
     cleanup_fixtures_on "$BROKER_B_SEMP_CONFIG" "broker-b"
 }
+
+# Config generator for the throttling scenario (SOL-153444, test-throttling.sh).
+#
+# Deliberately NOT the suite's write_config above: that one appends its own semp
+# block (a retry budget for the negative-path aliases), and semp is a single
+# global block, so appending a second one would leave the phase's limits at the
+# mercy of YAML key ordering. This builds the base broker set with
+# _lib_write_config and then owns the whole semp block itself.
+#
+# broker-throttle points at the tap rather than at the broker. The per-broker
+# rate limiter and in-flight semaphore are keyed by broker alias, so this alias
+# gets its own pair and the tap's record contains only traffic this scenario
+# generated. broker-a/broker-b stay pointed straight at their brokers.
+#
+# retries: 0 is load-bearing, not tidiness. Retries are explicitly not paced —
+# retryablehttp performs them inside the one limiter tick and the one semaphore
+# slot (see the comment on Sender.Do) — so a single transient blip would inject
+# arrivals at the tap that no gap assertion accounts for.
+#
+#   $1 config_file          path to write the generated YAML to
+#   $2 request_min_interval e.g. "200ms", or "0" to disable the pacer
+#   $3 max_concurrent       e.g. 2, or 10 to leave the cap provably slack
+write_throttle_config() {
+    local config_file="$1"
+    local min_interval="$2"
+    local max_concurrent="$3"
+
+    _lib_write_config "$config_file"
+    cat >> "$config_file" <<EOF
+  broker-throttle:
+    # Points at semp-tap, which forwards to broker-a and records what the
+    # broker actually receives. Same credentials — the tap is transparent.
+    url: "${SEMP_TAP_URL}"
+    auth:
+      mode: basic
+      username: "\${E2E_A_USERNAME}"
+      password: "\${E2E_A_PASSWORD}"
+
+semp:
+  request_min_interval: ${min_interval}
+  max_concurrent_per_broker: ${max_concurrent}
+  retries: 0
+EOF
+    log_info "Throttle config written to $config_file (request_min_interval=$min_interval, max_concurrent_per_broker=$max_concurrent)"
+}

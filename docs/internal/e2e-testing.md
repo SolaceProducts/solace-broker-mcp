@@ -27,12 +27,14 @@ Unit tests mock the Solace broker entirely. E2E tests validate the full stack en
 HTTP transport → MCP protocol → SEMP API → live Solace broker
 ```
 
-Two scenarios are covered:
+Four scenarios are covered:
 
 1. **Standalone** — raw curl requests against the MCP server (no AI agent)
 2. **Agent** — a Go program using the MCP SDK client to connect and call tools
+3. **Negative paths** — tool-execution failures surface as clean MCP structured errors
+4. **Throttling** — the SEMP rate limiter and in-flight cap hold against a real broker
 
-Both scenarios run against **two independent brokers** (`broker-a`, `broker-b`) to verify multi-broker routing.
+Scenarios 1 and 2 run against **two independent brokers** (`broker-a`, `broker-b`) to verify multi-broker routing.
 
 ---
 
@@ -44,20 +46,27 @@ test/e2e-basic-mcp/
 ├── .env                     # Single source of truth: ports, credentials
 ├── docker-compose.yml       # Two Solace PubSub+ broker containers
 ├── helpers.sh               # Shared bash functions (broker wait, server start, MCP helpers, assertions)
-├── setup-brokers.sh         # Bring brokers up and wait until ready (idempotent)
-├── run-all.sh               # Master test runner (orchestrates both scenarios, prints summary table)
-├── start-server.sh          # Build and start a fresh MCP server from latest source
+├── run-all.sh               # Master test runner (orchestrates every scenario, prints summary table)
 ├── test-standalone.sh       # Scenario 1: raw curl MCP protocol tests
 ├── test-agent.sh            # Scenario 2: builds and runs the Go agent
-├── bin/                     # Built binaries (gitignored)
+├── test-negative-paths.sh   # Scenario 3: structured-error envelope contract
+├── test-throttling.sh       # Scenario 4: rate limiter + in-flight cap
+├── test-throttling-analysis.sh  # Self-test of scenario 4's record arithmetic (no Docker)
+├── bin/                     # Built binaries, generated configs, records (gitignored)
 │   ├── mcp-server
 │   ├── mcp-server.pid       # PID file when server is started with --bg
+│   ├── semp-tap             # recording reverse proxy (scenario 4)
+│   ├── mcp-config-throttle-*.yaml   # per-phase configs (scenario 4)
+│   ├── throttle-record-*.csv        # per-phase request records (scenario 4)
 │   └── agent
 └── agent/
     ├── main.go              # Go MCP SDK client agent program
     ├── go.mod
     └── go.sum
 ```
+
+Broker startup (`setup-brokers.sh`) and server startup (`start-server.sh`) are
+shared and live in `test/e2e-common/`, not in the suite directory.
 
 ---
 
@@ -289,6 +298,42 @@ Because LiteLLM exposes an OpenAI-compatible API, a Go OpenAI client (for exampl
 
 ---
 
+## Scenario 4: Throttling (SEMP rate limiter and in-flight cap)
+
+`test-throttling.sh` (SOL-153444) proves that `semp.request_min_interval` and `semp.max_concurrent_per_broker` are honored end to end against a real Dockerized broker. Both were previously covered only by unit tests against an `httptest` server (`internal/semp/resilience/ratelimiter_test.go`, `internal/semp/rate_limiter_shared_test.go`).
+
+### How it measures
+
+One MCP tool call is not one SEMP request — composites fan out, pagination adds more, retries add attempts the client never sees — so client-side timing cannot say what rate the broker experienced. Instead `semp-tap` (`test/e2e-common/semp-tap`, own `go.mod`, stdlib only) is placed between the MCP server and broker-a, and a dedicated `broker-throttle` alias points at it. The broker is real and does the real work; the tap forwards everything and records one CSV line per request. Because the rate limiter and the in-flight semaphore are keyed by broker alias, the record contains exactly this scenario's traffic.
+
+**The measurement window matters.** `Sender.Do` releases its semaphore slot when the response *headers* arrive, with the body still open (`internal/semp/resilience/sender.go`). The tap therefore measures in-flight over `[request received → response headers returned]` via `ModifyResponse`, not over full body-proxy completion. Measuring the wider window would report a correct cap of 2 as an occasional 3. For the same reason the tap counts requests, never connections: `max_concurrent_per_broker` also sizes the transport's `MaxConnsPerHost` per protocol client, so up to 2x the cap in TCP connections can legitimately exist.
+
+### Phases
+
+`semp:` is a single global block, and the two limits mask each other — with the pacer at 200ms and a local broker answering in tens of milliseconds, in-flight count never reaches 2, so a cap of 2 could never be shown to bind. Each limit gets a phase where it is the only constraint, plus a shared control. The MCP server is restarted between phases (the `e2e-oauth` pattern).
+
+| Phase | `request_min_interval` | `max_concurrent_per_broker` | Tap delay | Asserts |
+|---|---|---|---|---|
+| pacer | `200ms` | `10` | 0 | every gap ≥ 100ms, and the aggregate span ≥ gaps × 200ms − 200ms |
+| cap | `0s` | `2` | 150ms | peak in-flight == 2 |
+| pacer-control | `0s` | `10` | 0 | the inverse of the pacer phase |
+| cap-control | `0s` | `10` | 150ms | the inverse of the cap phase |
+
+The two control phases are the answer to "sanity-check that the assertion can actually fail". Each runs the identical load with its limit off and asserts the inverse. They are real, always-on CI assertions rather than commented-out or manual steps, so if the tap ever stops being able to see a violation, the control goes red and names the assertion that has gone blind.
+
+Each control differs from the phase it validates in exactly one variable. A single shared control would differ from the pacer phase in both the interval and the tap delay at once. That is also empirically the wrong shape: with no tap delay the same load peaks at only ~5 in flight rather than 10, so a delay-free run is a poor control for the cap even though it is the right control for the pacer.
+
+### Keeping it deterministic
+
+- Every assertion is count-based or a generous lower bound. A loaded CI runner makes gaps longer and requests overlap more, which is the safe direction for all of them.
+- Pacing is asserted twice, mirroring `rate_limiter_shared_test.go`. The per-pair minimum gap carries a deliberately wide floor (half the interval) because transit jitter can shorten a single gap, and widening costs nothing: every defect this guards against produces gaps near zero, not gaps a few milliseconds short. The aggregate span is the precise check, because that jitter cancels over a run.
+- The record arithmetic itself is self-tested against synthetic records by `test-throttling-analysis.sh`, which runs first in the scenario and also standalone in about a second with no Docker. Every numeric result passes a `require_int` guard first, because `[ "" -lt 13 ]` exits 2 and would otherwise fall through an `if` and return success.
+- `retries: 0` in the throttle config. Retries are explicitly *not* paced (they run inside one limiter tick and one semaphore slot), so a transient blip would otherwise inject arrivals no gap assertion accounts for.
+- The scenario warms the broker client up and then skips the first arrivals. `RateLimiter` is a bare `time.Ticker`, not a token bucket: its channel buffers one tick, so idle time is credit and the first request after an idle period is admitted with no wait. The warm-up makes that behavior deterministic rather than accidental.
+- Phases with a concurrency assertion hold each response an identical extra 150ms at the tap, so overlap is arithmetic rather than a race against how fast the broker answers. Both limits are still enforced by the real server against a real broker; only the measurement window is widened, and identically in the phase and its control.
+
+The scenario runs last in `run-all.sh` because it takes over port `9090` from the shared server the earlier scenarios use.
+
 ## Test Output
 
 `run-all.sh` prints a summary table at the end:
@@ -299,8 +344,10 @@ Because LiteLLM exposes an OpenAI-compatible API, a Go OpenAI client (for exampl
 ┣━━━━━━━━━━━━━━━━━━━━━━━━━╋━━━━━━━╋━━━━━━━━━╋━━━━━━━━━┫
 ┃ Standalone tests        ┃     9 ┃       9 ┃       0 ┃
 ┃ Agent tests             ┃     1 ┃       1 ┃       0 ┃
+┃ Negative-path tests     ┃     3 ┃       3 ┃       0 ┃
+┃ Throttling tests        ┃     4 ┃       4 ┃       0 ┃
 ┣━━━━━━━━━━━━━━━━━━━━━━━━━╋━━━━━━━╋━━━━━━━━━╋━━━━━━━━━┫
-┃ TOTAL                   ┃    10 ┃      10 ┃       0 ┃
+┃ TOTAL                   ┃    17 ┃      17 ┃       0 ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━┻━━━━━━━┻━━━━━━━━━┻━━━━━━━━━┛
 ```
 
