@@ -2566,55 +2566,201 @@ func TestExchange_RecoveredPanicLogCarriesWinnerID(t *testing.T) {
 	}
 }
 
-// The gate log lines fire under whatever context runExchangeOnce hands
-// raiseGateOnExhaustedRateLimit — the seeded detached context in production —
-// so a rate-limit WARN is attributable to the request whose exhaustion raised
-// the gate.
-func TestRaiseGate_LogCarriesCorrelationID(t *testing.T) {
+// The rate-limit failure path, driven end to end through Exchange: an IdP
+// that answers 429 + Retry-After until the retry chain exhausts must produce
+// a gate WARN and a retries-exhausted DEBUG that both carry the caller's
+// correlation ID. Going through Exchange (not calling the gate helper
+// directly) pins the call-site wiring — reverting runExchangeOnce to hand the
+// gate a bare context would fail here.
+func TestExchange_GateAndExhaustionLogsCarryCorrelationID(t *testing.T) {
 	// NOT parallel: captureJSONLogs swaps the global logger.
 	logs := captureJSONLogs(t)
 
-	e, err := New(validParams(t))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	e.nowFunc = func() time.Time { return pinnedNow() }
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// "1", not a larger value: the retrying client honors Retry-After as
+		// its backoff, so this is also how long each retry sleeps.
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
 
-	exchErr := &ExchangeError{
-		Sentinel:         ErrExchangeRetriesExhausted,
-		FailureClass:     FailureClassRateLimited,
-		RetryAfterResult: &retryAfterResult{delay: 10 * time.Second, ok: true},
-	}
+	e := newRetryingTestExchanger(t, srv.URL)
+	input := validInput()
+	input.BrokerAlias = "corr-gate-broker"
+
 	ctx := correlation.With(context.Background(), "gate-corr-id")
-	e.raiseGateOnExhaustedRateLimit(ctx, exchErr, "corr-gate-broker")
-
-	rec := findMsg(forBroker(logs.records(t), "corr-gate-broker"),
-		"token exchange rate limited: honoring IdP Retry-After for all callers")
-	if rec == nil {
-		t.Fatal("no gate-set line captured")
+	_, err := e.Exchange(ctx, input)
+	if !errors.Is(err, ErrExchangeRetriesExhausted) {
+		t.Fatalf("err = %v, want retries exhausted", err)
 	}
-	if got, _ := rec["correlation_id"].(string); got != "gate-corr-id" {
-		t.Errorf("gate line correlation_id = %q, want %q", got, "gate-corr-id")
+
+	recs := forBroker(logs.records(t), input.BrokerAlias)
+	for _, msg := range []string{
+		"broker token request retries exhausted",
+		"token exchange rate limited: honoring IdP Retry-After for all callers",
+	} {
+		rec := findMsg(recs, msg)
+		if rec == nil {
+			t.Errorf("line %q not captured", msg)
+			continue
+		}
+		if got, _ := rec["correlation_id"].(string); got != "gate-corr-id" {
+			t.Errorf("line %q: correlation_id = %q, want %q", msg, got, "gate-corr-id")
+		}
 	}
 }
 
-// The audience-mismatch WARN logs under doExchange's context — the seeded
-// detached context in production — so an IdP that issues a token with the
-// wrong aud claim is attributable to the request that asked for it.
-func TestWarnIfAudienceMismatch_LogCarriesCorrelationID(t *testing.T) {
+// The audience-mismatch WARN, driven end to end through Exchange: the IdP
+// issues a JWT whose aud claim doesn't include the requested audience, and
+// the WARN must carry the caller's correlation ID. Going through Exchange
+// (not calling warnIfAudienceMismatch directly) pins that doExchange hands
+// the helper the seeded detached context.
+func TestExchange_AudienceMismatchLogCarriesCorrelationID(t *testing.T) {
 	// NOT parallel: captureJSONLogs swaps the global logger.
 	logs := captureJSONLogs(t)
 
 	token := fakeJWT(t, map[string]any{"aud": "https://other.example.com"})
-	ctx := correlation.With(context.Background(), "aud-corr-id")
-	warnIfAudienceMismatch(ctx, "corr-aud-broker", "https://broker.example.com", token)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON(token, 3600))
+	}))
+	defer srv.Close()
 
-	rec := findMsg(forBroker(logs.records(t), "corr-aud-broker"),
+	e := newTestExchanger(t, srv.URL)
+	input := validInput() // requests audience https://broker.example.com
+	input.BrokerAlias = "corr-aud-broker"
+
+	ctx := correlation.With(context.Background(), "aud-corr-id")
+	if _, err := e.Exchange(ctx, input); err != nil {
+		t.Fatalf("Exchange: %v (audience mismatch must warn, not fail)", err)
+	}
+
+	rec := findMsg(forBroker(logs.records(t), input.BrokerAlias),
 		"token exchange: issued access token's aud claim does not include the requested audience")
 	if rec == nil {
 		t.Fatal("no audience-mismatch line captured")
 	}
 	if got, _ := rec["correlation_id"].(string); got != "aud-corr-id" {
 		t.Errorf("audience line correlation_id = %q, want %q", got, "aud-corr-id")
+	}
+}
+
+// The headline semantic with more than one caller: detached exchange lines
+// carry the singleflight WINNER's ID, and each caller's completion line
+// carries its OWN. Single-caller tests cannot distinguish "winner's ID" from
+// "current caller's ID"; this one can. The winner is made deterministic by
+// gating the IdP handler until the waiter has joined the flight.
+func TestExchange_DetachedLinesCarryWinnerIDNotWaiterID(t *testing.T) {
+	// NOT parallel: captureJSONLogs swaps the global logger.
+	logs := captureJSONLogs(t)
+
+	var callCount atomic.Int32
+	entered := make(chan struct{})
+	gate := make(chan struct{})
+	var once sync.Once
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount.Add(1)
+		once.Do(func() { close(entered) })
+		<-gate
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("shared-tok", 3600))
+	}))
+	// Defer ordering matters (same as the abandoned-breadcrumb tests):
+	// srv.Close() waits on the outstanding handler request, so the gate
+	// unblock below — registered later, therefore running FIRST — must
+	// release the handler on every exit path, including a t.Fatal mid-test,
+	// or the whole test binary deadlocks in srv.Close.
+	defer srv.Close()
+	var gateOnce sync.Once
+	openGate := func() { gateOnce.Do(func() { close(gate) }) }
+	defer openGate()
+
+	// Real clock: Otter compares ExpiresAt to time.Now().
+	e := newTestExchanger(t, srv.URL)
+	input := validInput()
+	input.BrokerAlias = "corr-winner-broker"
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if _, err := e.Exchange(correlation.With(context.Background(), "winner-id"), input); err != nil {
+			t.Errorf("winner Exchange: %v", err)
+		}
+	}()
+	<-entered // the winner's IdP call is in flight; the flight key is held
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if _, err := e.Exchange(correlation.With(context.Background(), "waiter-id"), input); err != nil {
+			t.Errorf("waiter Exchange: %v", err)
+		}
+	}()
+
+	// The waiter logs "no cached broker token" (under its own ctx) just
+	// before joining the flight; wait for ITS line — both callers emit this
+	// message, so scan all records for the waiter's ID rather than taking
+	// the first match (which is the winner's). Then a short grace for the
+	// DoChan join itself. The callCount==1 assertion below fails loudly if
+	// this window was ever too tight, rather than passing wrongly.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		waiterMissed := false
+		for _, r := range forBroker(logs.records(t), input.BrokerAlias) {
+			if r["msg"] == "no cached broker token" && r["correlation_id"] == "waiter-id" {
+				waiterMissed = true
+				break
+			}
+		}
+		if waiterMissed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("waiter never reached its cache miss within 2s")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	openGate()
+	wg.Wait()
+
+	if n := callCount.Load(); n != 1 {
+		t.Fatalf("IdP called %d times, want 1 — the waiter did not join the winner's flight, so winner/waiter attribution cannot be asserted", n)
+	}
+
+	recs := forBroker(logs.records(t), input.BrokerAlias)
+	for _, msg := range []string{
+		"requesting broker token from identity provider",
+		"identity provider issued broker token",
+		"broker token cached",
+	} {
+		rec := findMsg(recs, msg)
+		if rec == nil {
+			t.Errorf("detached line %q not captured", msg)
+			continue
+		}
+		if got, _ := rec["correlation_id"].(string); got != "winner-id" {
+			t.Errorf("detached line %q: correlation_id = %q, want winner-id", msg, got)
+		}
+	}
+
+	var completionIDs []string
+	for _, r := range recs {
+		if r["msg"] == "broker token exchange completed" {
+			id, _ := r["correlation_id"].(string)
+			completionIDs = append(completionIDs, id)
+		}
+	}
+	if len(completionIDs) != 2 {
+		t.Fatalf("completion lines = %d, want 2 (one per caller)", len(completionIDs))
+	}
+	seen := map[string]bool{}
+	for _, id := range completionIDs {
+		seen[id] = true
+	}
+	if !seen["winner-id"] || !seen["waiter-id"] {
+		t.Errorf("completion line IDs = %v, want exactly {winner-id, waiter-id} — each caller must log completion under its own ID", completionIDs)
 	}
 }

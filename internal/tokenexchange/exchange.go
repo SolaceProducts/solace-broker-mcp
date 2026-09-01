@@ -107,7 +107,10 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	// The winner's correlation ID travels into the detached exchange as a
 	// plain string, never as a context: passing the caller's ctx down would
 	// invite re-coupling its cancellation to the shared call, which is the
-	// regression the Background() root below exists to prevent.
+	// regression the Background() root below exists to prevent. The value
+	// read here already passed the correlation middleware's sanitization —
+	// re-seeding it via correlation.With below preserves "the middleware is
+	// the sole producer of ID values"; never seed With from any other source.
 	corrID := correlation.From(ctx)
 
 	start := e.nowFunc()
