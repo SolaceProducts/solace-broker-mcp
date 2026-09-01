@@ -1,6 +1,9 @@
 # Copy-and-edit Ingress. Named .example so the directory-wide `kubectl apply`
 # skips it: the host and TLS secret are yours to supply.
 #
+# This publishes the server. Under mode: static its only credential is the
+# shared DEV_TOKEN — switch to oauth first (README.md § Client authentication).
+#
 # Every annotation below is ingress-nginx-specific. Other controllers ignore
 # them silently, so swapping ingressClassName gives a resource that reconciles
 # clean and still 404s — use that controller's own affinity feature instead.
