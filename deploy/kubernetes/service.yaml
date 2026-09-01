@@ -13,9 +13,9 @@ spec:
   #
   # CAVEAT: kube-proxy applies this on the ClusterIP path only. An Ingress,
   # Gateway, or service mesh bypasses it — including the TLS-terminating
-  # ingress docs/authentication.md recommends for OAuth. Behind any of those,
-  # set stickiness there on the Mcp-Session-Id header instead. Detail:
-  # docs/observability.md § Session affinity is required above one replica.
+  # ingress docs/authentication.md recommends for OAuth. Behind any of those
+  # this field does nothing and stickiness must be set there instead: see
+  # ingress.yaml.example.
   sessionAffinity: ClientIP
   sessionAffinityConfig:
     clientIP:

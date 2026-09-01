@@ -3,7 +3,9 @@
 Reference manifests for running the Solace Broker MCP Server in a cluster:
 `configmap.yaml` (server config), `secret.yaml` (credentials),
 `deployment.yaml` (the pod), `service.yaml` (a ClusterIP Service), and
-`poddisruptionbudget.yaml` (keeps a pod serving through node drains).
+`poddisruptionbudget.yaml` (keeps a pod serving through node drains). Plus
+`ingress.yaml.example` — required reading above one replica, and `.example` so
+the directory-wide apply skips it; see [TLS and ingress](#tls-and-ingress).
 
 They are a starting point to copy and edit, not a turnkey install. Applied
 unmodified the pod will not start: `DEV_TOKEN` ships empty and the server
@@ -99,10 +101,22 @@ are easy to miss:
 See [`docs/authentication.md`](../../docs/authentication.md) for identity
 provider setup and claim-based tool authorization.
 
-## TLS
+## TLS and ingress
 
 The Service exposes plaintext `:9090`. Terminate TLS at an Ingress or gateway
 in front of it, and do not expose that port beyond the cluster.
+`ingress.yaml.example` is a copy-and-edit starting point — it is named
+`.example` so the directory-wide `kubectl apply` above skips it, since an
+Ingress needs a hostname and TLS secret only you can supply.
+
+> **Session routing is required, not optional.** An Ingress bypasses the
+> Service's `sessionAffinity: ClientIP`, and with `replicas: 2` nearly every
+> request after initialize then hits a pod that does not hold the session and
+> gets `404 session not found`. `ingress.yaml.example` carries the annotation
+> that fixes it (`upstream-hash-by: "$remote_addr"`). Neither cookie affinity
+> nor hashing on `Mcp-Session-Id` works — see
+> [`docs/authentication.md`](../../docs/authentication.md#session-routing-at-the-ingress-required-above-one-replica)
+> § "Session Routing at the Ingress".
 
 ## Health endpoints
 

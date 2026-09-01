@@ -362,17 +362,102 @@ least one of them, or startup fails with a configuration error.
    > shipped manifests and how to switch them to `mode: oauth`.
 
    > **Above one replica:** an ingress in this position bypasses the Service's
-   > `sessionAffinity: ClientIP`, because it load-balances to pod IPs rather than
-   > through the ClusterIP. MCP sessions live in one pod's memory, so clients get
-   > `404 session not found` unless stickiness is configured on the
-   > `Mcp-Session-Id` header at the ingress. See
-   > [Observability](observability.md) § "Session affinity is required above one
-   > replica".
+   > `sessionAffinity: ClientIP`, and the deployment ships with `replicas: 2`.
+   > Configuring session routing at the ingress is a **required** step, not a
+   > tuning option — see [Session Routing at the Ingress](#session-routing-at-the-ingress-required-above-one-replica)
+   > directly below.
 
 If **both** are set, direct TLS takes precedence: the server terminates TLS
 itself and `tls_terminated_upstream` is ignored (no plaintext, no `WARN`).
 Providing **neither** is a fatal configuration error. The setting is ignored entirely in
 the `disabled`/`static` dev modes.
+
+### Session Routing at the Ingress (Required Above One Replica)
+
+The deployment ships `replicas: 2`. Putting an ingress, gateway, or mesh in
+front of the Service — which the pattern above tells you to do — **requires**
+configuring session routing at that layer. Skipping it breaks the deployment
+rather than degrading it.
+
+#### Why it breaks
+
+`sessionAffinity: ClientIP` does not apply: kube-proxy enforces it on the
+ClusterIP path only, and an ingress load-balances straight to pod IPs.
+
+Streamable HTTP sends every call as an independent POST, and the server holds
+each session in one pod's memory. A session ID reaching any other pod is
+answered `404 session not found`; the SDK does not re-initialize transparently.
+
+Unpinned, each call after initialize has roughly a `1/replicas` chance of
+reaching the right pod — at two replicas a 10-call session survives with
+probability `(1/2)^10` ≈ **0.1%**. In practice it is often worse: with a single
+controller replica, nginx's round-robin cursor makes the very next call after
+initialize land on the other pod deterministically.
+
+#### What to configure
+
+```yaml
+metadata:
+  annotations:
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"
+```
+
+Full manifest: [`deploy/kubernetes/ingress.yaml.example`](../deploy/kubernetes/ingress.yaml.example).
+
+This restores at the ingress what `sessionAffinity: ClientIP` gave on the
+ClusterIP path, and inherits its weakness: clients behind one NAT or egress
+gateway all hash to the same pod, so the second replica may take little traffic.
+Three caveats:
+
+- Under `externalTrafficPolicy: Cluster` (the default) the controller may see a
+  SNAT'd node address instead of the client IP, collapsing affinity to one pod
+  per node. Set `Local` on the controller's own Service, or enable PROXY
+  protocol.
+- `$remote_addr` is only trustworthy if the controller's real-IP config is
+  scoped. ingress-nginx defaults `proxy-real-ip-cidr` to `0.0.0.0/0`, so with
+  `use-forwarded-headers` on — common behind a cloud L7 load balancer — any
+  client can set its own `X-Forwarded-For` and choose which pod serves it.
+  Restrict `proxy-real-ip-cidr` to the load balancer's CIDR.
+- Sessions still die with their pod. Affinity pins a live session; it cannot
+  carry state across a rolling update.
+
+#### What does not work
+
+All three of these apply cleanly and leave the 404s in place.
+
+**Cookie stickiness** (`nginx.ingress.kubernetes.io/affinity: cookie`) needs the
+client to echo a cookie the ingress set. Whether that happens depends entirely
+on the client's HTTP stack — the Go SDK keeps no cookie jar, httpx-based clients
+including the Python SDK do — so it silently works for some clients and not
+others. That inconsistency is worse than a clean failure, and this is the most
+likely wrong turn.
+
+**Hashing on the session ID** (`upstream-hash-by: "$http_mcp_session_id"`) is
+the intuitive choice and is subtly broken: the initialize POST carries no such
+header — the server mints the ID onto the *response* — so it hashes on a
+constant empty key, putting every new session on whichever single pod that key
+maps to, while the ID it returns hashes independently of it. At two replicas
+half of all sessions are born on the wrong pod. The session ID is the exact
+routing key for every request except the one that creates the session, and that
+exception is what disqualifies it.
+
+**These annotations on another controller.** Every annotation here is
+ingress-nginx-specific. Traefik, HAProxy, Contour, and cloud ALB controllers
+ignore unknown `nginx.ingress.kubernetes.io/*` keys silently, so changing
+`ingressClassName` and applying gives a resource that reconciles clean and 404s
+exactly as before. Use that controller's own affinity feature — see below.
+
+#### Gateway API and service meshes
+
+Gateway API's `sessionPersistence` (`BackendLBPolicy`) does not solve this — it
+is gateway-assigned persistence, where the gateway issues a token the client
+echoes back, so it fails exactly as cookies do. It is also experimental-channel
+with thin support.
+
+With no portable answer today, use your controller's consistent-hash-on-source-address
+extension — Istio `DestinationRule` `consistentHash.useSourceIp`, Envoy Gateway
+`BackendTrafficPolicy` with `consistentHash.type: SourceIP` — or run
+`replicas: 1` and accept the rollout downtime.
 
 ### Tool Authorization (Claim-Based RBAC)
 
