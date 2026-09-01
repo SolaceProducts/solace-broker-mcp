@@ -18,7 +18,9 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv1"
@@ -429,3 +431,83 @@ func TestBuildErrorResult_ExchangeError_StructuredFields(t *testing.T) {
 // Note: TestAgentMessage_* and TestExchangeError_NeverContainsSecrets
 // live in internal/tokenexchange/errors_test.go — they exercise methods
 // on *ExchangeError, and belong with the type they test.
+
+// A shed request (SOL-153442) must reach the agent as a clear, retryable,
+// structured failure. Without an explicit case it would fall through
+// buildErrorMessage's default to genericInternalMessage with retryable=false —
+// telling the agent an internal error occurred and not to try again, which is
+// the opposite of the truth on both counts.
+func TestBuildErrorResult_BrokerBusy_StructuredFields(t *testing.T) {
+	m := &ToolManager{}
+	// Wrapped twice, matching how the SEMPv2 and SEMPv1 clients wrap a Do error.
+	err := fmt.Errorf("executing getMsgVpn: %w", &resilience.BrokerBusyError{
+		Stage:   resilience.AdmissionStageConcurrency,
+		Waited:  30100 * time.Millisecond,
+		MaxWait: 30 * time.Second,
+	})
+
+	result := m.buildErrorResult(err, "my-broker")
+
+	if !result.IsError {
+		t.Fatal("expected IsError=true")
+	}
+	structured, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("StructuredContent type = %T, want map[string]any", result.StructuredContent)
+	}
+
+	if got := structured["retryable"]; got != true {
+		t.Errorf("retryable = %v, want true — the request was never sent", got)
+	}
+	if got := structured["retryAfterMs"]; got != int64(30000) {
+		t.Errorf("retryAfterMs = %v, want the configured bound 30000", got)
+	}
+	if got := structured["error_source"]; got != "load_shed" {
+		t.Errorf("error_source = %v, want %q", got, "load_shed")
+	}
+	if _, present := structured["status"]; present {
+		t.Errorf("status present (%v); a shed request never reached the broker, so it has no HTTP status",
+			structured["status"])
+	}
+
+	msg, _ := structured["error"].(string)
+	if strings.Contains(msg, genericInternalMessage) {
+		t.Errorf("error = %q, want the busy message rather than the generic internal one", msg)
+	}
+	for _, want := range []string{"too busy", "was not sent", "30 seconds"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error = %q, want it to mention %q", msg, want)
+		}
+	}
+}
+
+// isRetryable must be true for a shed request with no idempotency caveat: the
+// request never left the server, so even a write is safe to repeat. Asserted
+// separately from the structured-fields test because this is the property a
+// write tool's caller depends on.
+func TestIsRetryable_BrokerBusy(t *testing.T) {
+	err := fmt.Errorf("executing SEMPv1 request: %w", &resilience.BrokerBusyError{
+		Stage:   resilience.AdmissionStageRateLimit,
+		MaxWait: 5 * time.Second,
+	})
+	if !isRetryable(err) {
+		t.Error("isRetryable = false, want true — a shed request never reached the broker")
+	}
+}
+
+// The retry-after hint must round to at least one second. A sub-second bound
+// would otherwise render as "Wait about 0 seconds", which reads as nonsense and
+// invites an immediate retry storm.
+func TestBuildErrorMessage_BrokerBusy_SubSecondBoundRoundsUp(t *testing.T) {
+	msg, _ := buildErrorMessage(&resilience.BrokerBusyError{
+		Stage:   resilience.AdmissionStageRateLimit,
+		MaxWait: 200 * time.Millisecond,
+	}, "my-broker")
+
+	if strings.Contains(msg, "0 seconds") {
+		t.Errorf("message = %q, want a floor of 1 second rather than 0", msg)
+	}
+	if !strings.Contains(msg, "1 second") {
+		t.Errorf("message = %q, want it to round a sub-second bound up to 1 second", msg)
+	}
+}

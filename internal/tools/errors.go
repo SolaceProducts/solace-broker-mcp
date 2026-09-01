@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv1"
@@ -118,9 +119,19 @@ func (m *ToolManager) buildErrorResult(err error, brokerAlias string) *mcp.CallT
 	var sempv2Err *sempv2.SEMPError
 	var sempv1Err *sempv1.Error
 	var retriesErr *resilience.RetriesExhaustedError
+	var busyErr *resilience.BrokerBusyError
 	var exchErr *tokenexchange.ExchangeError
 
 	switch {
+	// Checked before the protocol errors: a shed request never reached the
+	// broker, so there is no status or SEMP code to report, and the useful
+	// machine-readable fact is how long to wait.
+	case errors.As(err, &busyErr):
+		// retryAfterMs is the configured bound, not the pacing interval. The
+		// trigger is sustained saturation, so telling every shed caller to come
+		// back in one interval just re-forms the queue that caused the shed.
+		structured["retryAfterMs"] = busyErr.MaxWait.Milliseconds()
+		structured["error_source"] = "load_shed"
 	case errors.As(err, &sempv2Err):
 		structured["status"] = sempv2Err.StatusCode
 		structured["operation"] = sempv2Err.Operation
@@ -233,6 +244,7 @@ func (m *ToolManager) buildBrokerResolutionErrorResult(errorType string, err err
 // denied the request from the agent's output alone.
 func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 	var retriesErr *resilience.RetriesExhaustedError
+	var busyErr *resilience.BrokerBusyError
 	var sempv2Err *sempv2.SEMPError
 	var sempv1Err *sempv1.Error
 	var exchErr *tokenexchange.ExchangeError
@@ -241,6 +253,21 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 	var status, code int // broker HTTP status and comRc_t code, for suggestions
 
 	switch {
+	// The server shed this request before sending it: the broker was too busy
+	// to admit it within semp.max_queue_wait (SOL-153442). Every word here is
+	// server-generated, so nothing needs sanitizing — no broker text exists,
+	// because no broker was contacted.
+	//
+	// Saying the request was not sent is the load-bearing part. It tells the
+	// agent this is safe to repeat even for a write, which is the opposite of
+	// the non-idempotent retry-exhaustion case below.
+	case errors.As(err, &busyErr):
+		return fmt.Sprintf(
+				"The broker is too busy to accept this request right now, so it was not sent. "+
+					"Nothing was changed on the broker. Wait about %d seconds and try again.",
+				max(1, int(busyErr.MaxWait.Round(time.Second)/time.Second))),
+			[]string{"If this keeps happening, the broker is saturated: reduce how many requests you issue at once."}
+
 	case errors.As(err, &retriesErr):
 		// The underlying network error can contain a host or IP address, so
 		// don't show it. Just report how many attempts were made and the
@@ -386,12 +413,21 @@ func buildSEMPv2Message(err *sempv2.SEMPError) string {
 }
 
 // isRetryable returns true for errors that represent transient conditions where
-// the same request might succeed later: exhausted internal retries (the
-// resilience layer only exhausts on genuinely transient HTTP statuses, e.g.
-// 429/503), a live HTTP 429 or 503, or a transient comRc_t code (229 TIME_OUT).
-// All other SEMP/envelope errors are deterministic and non-retryable.
+// the same request might succeed later: a request shed at admission because the
+// broker was too busy (never sent, so always safe to repeat), exhausted
+// internal retries (the resilience layer only exhausts on genuinely transient
+// HTTP statuses, e.g. 429/503), a live HTTP 429 or 503, or a transient comRc_t
+// code (229 TIME_OUT). All other SEMP/envelope errors are deterministic and
+// non-retryable.
 func isRetryable(err error) bool {
 	if errors.Is(err, tokenexchange.ErrExchangeTransport) {
+		return true
+	}
+	// A shed request never reached the broker, so retrying it is safe
+	// unconditionally — including for a write. This is the one retryable case
+	// with no idempotency caveat at all.
+	var busyErr *resilience.BrokerBusyError
+	if errors.As(err, &busyErr) {
 		return true
 	}
 	var retriesErr *resilience.RetriesExhaustedError

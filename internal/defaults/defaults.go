@@ -246,6 +246,45 @@ const DefaultLogLevel = "info"
 // Matches the story spec and the Solace Terraform provider default (100ms).
 const DefaultRequestMinInterval = 100 * time.Millisecond
 
+// DefaultMaxQueueWait bounds how long a SEMP request waits for admission —
+// the rate-limiter tick plus the in-flight semaphore slot, as one budget
+// measured from entry to resilience.Sender.Do. Past it the request is shed
+// with a *resilience.BrokerBusyError rather than waiting on.
+//
+// Decided: 30 seconds.
+//
+// Reasoning: this is a hang-breaker, not a load shedder. Without it a caller
+// that sets no context deadline waits forever, and the MCP server sets none of
+// its own — cmd/server/main.go leaves http.Server.WriteTimeout at zero to keep
+// streamable connections alive, so nothing upstream bounds a tool call. Both
+// admission gates could park such a caller indefinitely, and the semaphore is
+// the worse of the two: a slot is held for the whole retry chain, which at
+// default settings (see resilience.New's retryBudget) runs to roughly 16
+// minutes. Ten of those pin every slot and the eleventh caller never returns.
+//
+// The value has to clear normal queueing so the common case is untouched. At
+// DefaultRequestMinInterval (100ms) 30s covers a ~300-deep limiter backlog,
+// two orders of magnitude past the 1-10 concurrent sessions
+// DefaultMaxConcurrentPerBroker is sized for.
+//
+// Trade-off: a shorter bound (1-5s) turns this into real load shedding and
+// gives an agent a much faster signal, but at DefaultSEMPRequestTimeoutDuration
+// (1m) a healthy-but-slow broker can legitimately hold all ten slots for a
+// minute, and a 5s bound would shed the next caller with nothing actually
+// wrong. Operators who want the faster signal can tune it down.
+//
+// That trade-off does not vanish at 30s, it only shrinks: 30s is still under
+// the 1m per-attempt timeout, so a broker answering slowly enough to hold every
+// slot for half a minute will shed the next caller here too. The two gates are
+// therefore sized against different things — the 300-deep figure above is the
+// pacing gate's headroom and says nothing about the in-flight gate's.
+// docs/configuration.md tells operators how to size the bound against whichever
+// gate their deployment actually hits.
+//
+// Zero disables the bound and restores the pre-SOL-153442 behavior of waiting
+// on the caller's context alone.
+const DefaultMaxQueueWait = 30 * time.Second
+
 // DefaultRetries is the maximum number of retry attempts for a failed SEMP
 // request before surfacing the error to the caller. Used by the future retry
 // logic (Story 5). Zero disables retries entirely. Matches the story spec and

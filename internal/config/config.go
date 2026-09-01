@@ -473,18 +473,23 @@ func (c MCPClientAuthConfig) LogValue() slog.Value {
 // operators familiar with terraform-provider-solacebroker get a consistent
 // experience across tools.
 //
-// RequestMinInterval and Retries use pointer types so we can distinguish
-// "field omitted in YAML" (nil) from "field set to 0" (non-nil pointer to
-// zero). Zero is a legitimate operator choice for both -- the Terraform
-// provider documents "set request_min_interval to 0 for no rate limit", and
-// retries=0 means no retries by analogy. Plain int/time.Duration cannot tell
-// those two cases apart, because both produce the zero value. After
-// applyDefaults runs, these fields are guaranteed non-nil so downstream code
-// can dereference safely.
+// RequestMinInterval, Retries, and MaxQueueWait use pointer types so we can
+// distinguish "field omitted in YAML" (nil) from "field set to 0" (non-nil
+// pointer to zero). Zero is a legitimate operator choice for all three -- the
+// Terraform provider documents "set request_min_interval to 0 for no rate
+// limit", retries=0 means no retries by analogy, and max_queue_wait=0 restores
+// the pre-SOL-153442 behavior of waiting for admission on the caller's context
+// alone. Plain int/time.Duration cannot tell those two cases apart, because
+// both produce the zero value. After applyDefaults runs, these fields are
+// guaranteed non-nil so downstream code can dereference safely.
+//
+// MaxQueueWait has no Terraform-provider counterpart: it bounds a queue that
+// only exists inside this server, not a broker-side behavior.
 type SEMPConfig struct {
 	MaxConcurrentPerBroker int            `yaml:"max_concurrent_per_broker"` // transport MaxConnsPerHost per protocol client
 	RequestTimeoutDuration time.Duration  `yaml:"request_timeout_duration"`  // HTTP request timeout for SEMP calls (e.g., "30s")
 	RequestMinInterval     *time.Duration `yaml:"request_min_interval"`      // minimum spacing between SEMP requests; 0 = no throttle
+	MaxQueueWait           *time.Duration `yaml:"max_queue_wait"`            // max wait for admission (rate-limiter tick + in-flight slot); 0 = unbounded
 	Retries                *int           `yaml:"retries"`                   // max retry attempts for a failed SEMP call; 0 = no retries
 	RetryMinInterval       time.Duration  `yaml:"retry_min_interval"`        // starting backoff before the first retry (must be > 0)
 	RetryMaxInterval       time.Duration  `yaml:"retry_max_interval"`        // cap on retry backoff, must be >= RetryMinInterval
@@ -698,13 +703,17 @@ func applyDefaults(cfg *ServerConfig) {
 	if cfg.SEMP.RequestTimeoutDuration == 0 {
 		cfg.SEMP.RequestTimeoutDuration = defaults.DefaultSEMPRequestTimeoutDuration
 	}
-	// RequestMinInterval and Retries are pointers so we can distinguish
-	// "operator omitted the field" (nil) from "operator set it to 0" (non-nil
-	// pointer to zero). Apply the default only when nil. See the SEMPConfig
-	// struct doc for the full rationale.
+	// RequestMinInterval, MaxQueueWait, and Retries are pointers so we can
+	// distinguish "operator omitted the field" (nil) from "operator set it to 0"
+	// (non-nil pointer to zero). Apply the default only when nil. See the
+	// SEMPConfig struct doc for the full rationale.
 	if cfg.SEMP.RequestMinInterval == nil {
 		def := defaults.DefaultRequestMinInterval
 		cfg.SEMP.RequestMinInterval = &def
+	}
+	if cfg.SEMP.MaxQueueWait == nil {
+		def := defaults.DefaultMaxQueueWait
+		cfg.SEMP.MaxQueueWait = &def
 	}
 	if cfg.SEMP.Retries == nil {
 		def := defaults.DefaultRetries
@@ -1006,11 +1015,16 @@ func validate(cfg *ServerConfig) error {
 		errs = append(errs, fmt.Errorf("semp.request_timeout_duration must be > 0, got %s", cfg.SEMP.RequestTimeoutDuration))
 	}
 
-	// RequestMinInterval and Retries are guaranteed non-nil by applyDefaults,
-	// so dereferencing is safe here. Story rule: non-negative for both; zero is
-	// explicitly allowed (0 = no rate limit / no retries).
+	// RequestMinInterval, MaxQueueWait, and Retries are guaranteed non-nil by
+	// applyDefaults, so dereferencing is safe here. Story rule: non-negative for
+	// all three; zero is explicitly allowed (0 = no rate limit / no admission
+	// bound / no retries).
 	if *cfg.SEMP.RequestMinInterval < 0 {
 		errs = append(errs, fmt.Errorf("semp.request_min_interval must be >= 0, got %s", *cfg.SEMP.RequestMinInterval))
+	}
+
+	if *cfg.SEMP.MaxQueueWait < 0 {
+		errs = append(errs, fmt.Errorf("semp.max_queue_wait must be >= 0, got %s", *cfg.SEMP.MaxQueueWait))
 	}
 
 	if *cfg.SEMP.Retries < 0 {
