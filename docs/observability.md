@@ -702,9 +702,11 @@ holding its session. **Do not scale beyond one replica without it.** Two constra
   IPs, never transiting the ClusterIP, so the field is ignored and the 404 returns in full —
   and that is the topology [Authentication](authentication.md) recommends for OAuth ("keep the
   Service `ClusterIP` and put the TLS-terminating ingress in front of it"). A service mesh
-  sidecar bypasses it as well. Behind any of these, configure stickiness at *that* layer keyed
-  on the `Mcp-Session-Id` header (nginx `upstream-hash-by`, Gateway API `sessionPersistence`),
-  which is the correct routing key regardless — source IP is only a proxy for it.
+  sidecar bypasses it as well. Behind any of these, configuring stickiness at *that* layer is
+  a required deployment step, and the hash key is not the obvious one — the session ID is
+  wrong. [Authentication](authentication.md#session-routing-at-the-ingress-required-above-one-replica)
+  § "Session Routing at the Ingress" is authoritative; `deploy/kubernetes/ingress.yaml.example`
+  is the manifest.
 - Where affinity *is* in effect it is keyed on source IP, so every client behind one NAT or
   egress gateway — including an in-cluster proxy, whose own pod IP is what gets hashed —
   lands on a single pod. Sessions stay correct, but the second replica takes no traffic and

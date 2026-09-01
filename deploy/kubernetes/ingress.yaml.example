@@ -1,0 +1,62 @@
+# Copy-and-edit Ingress. Named .example so the directory-wide `kubectl apply`
+# skips it: the host and TLS secret are yours to supply.
+#
+# This publishes the server. Under mode: static its only credential is the
+# shared DEV_TOKEN — switch to oauth first (README.md § Client authentication).
+#
+# Every annotation below is ingress-nginx-specific. Other controllers ignore
+# them silently, so swapping ingressClassName gives a resource that reconciles
+# clean and still 404s — use that controller's own affinity feature instead.
+#
+# upstream-hash-by is required, not tuning. An Ingress bypasses the Service's
+# sessionAffinity, and MCP sessions live in one pod's memory, so with
+# replicas: 2 unpinned requests get 404 session not found. Neither cookie
+# affinity nor hashing on Mcp-Session-Id works — docs/authentication.md
+# § Session Routing at the Ingress explains why.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: solace-broker-mcp
+  labels:
+    app.kubernetes.io/name: solace-broker-mcp
+  annotations:
+    # Read the note above before changing this key.
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"
+    # The SSE stream on GET /mcp is long-lived, and buffering defeats it.
+    # 7200 matches the server's 2h session idle timeout so the stream outlives
+    # the session that owns it; a shorter value severs streams the server still
+    # considers live, and this server sends nothing on an idle stream to keep
+    # it warm. Raise both if that timeout ever becomes configurable.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "7200"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "7200"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+spec:
+  ingressClassName: nginx
+  tls:
+    # EDIT: your hostname. Under mode: oauth it must match resource_url's host.
+    - hosts:
+        - mcp.example.com
+      secretName: solace-broker-mcp-tls
+  rules:
+    - host: mcp.example.com
+      http:
+        paths:
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: solace-broker-mcp
+                port:
+                  name: http
+          # OAuth discovery. Clients probe several paths under here before they
+          # hold a token, and the server answers unregistered ones with a JSON
+          # 404 that lets them fail gracefully — route the whole prefix, or
+          # nginx's plain-text default backend breaks that. Drop under static.
+          - path: /.well-known
+            pathType: Prefix
+            backend:
+              service:
+                name: solace-broker-mcp
+                port:
+                  name: http
+# /livez and /readyz stay unexposed: unauthenticated, and for the kubelet.

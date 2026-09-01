@@ -190,8 +190,14 @@ and the switch to production OAuth. In outline the manifests are:
 - **`service.yaml`** — ClusterIP service exposing port 9090, with
   `sessionAffinity: ClientIP` to pin a client to the pod holding its MCP
   session. Required above one replica, and bypassed entirely by an ingress or
-  service mesh — see [Observability](../observability.md) §
-  "Session affinity is required above one replica"
+  service mesh — see
+  [Authentication](../authentication.md#session-routing-at-the-ingress-required-above-one-replica)
+  § "Session Routing at the Ingress"
+- **`ingress.yaml.example`** — copy-and-edit Ingress carrying the source-address
+  hash annotation that replaces `sessionAffinity` once an ingress fronts the
+  Service. The `.example` suffix keeps the directory-wide `kubectl apply` from
+  picking it up. Rationale in
+  [Authentication](../authentication.md#session-routing-at-the-ingress-required-above-one-replica)
 - **`poddisruptionbudget.yaml`** — `maxUnavailable: 1`, so a node drain evicts
   one pod at a time. Applied automatically by the directory-wide `kubectl
   apply` above
