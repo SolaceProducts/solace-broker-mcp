@@ -121,7 +121,14 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 		// TYPE and stack, never its value, per the secure-logging rules.
 		defer func() {
 			if r := recover(); r != nil {
-				slog.Error("recovered panic in token exchange",
+				// A fresh Background()-rooted context seeded only with the
+				// winner's correlation ID: the panic line gets attributed to
+				// the triggering request without coupling anything to caller
+				// cancellation. The other context-free log sites in this
+				// package stay as they are — no correlation ID is in scope
+				// there; this one already had it captured.
+				slog.ErrorContext(correlation.With(context.Background(), corrID),
+					"recovered panic in token exchange",
 					slog.String("event", "panic_recovered"),
 					slog.String("broker", input.BrokerAlias),
 					slog.String("panic_type", fmt.Sprintf("%T", r)),

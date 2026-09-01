@@ -2495,3 +2495,65 @@ func findMsg(recs []map[string]any, msg string) map[string]any {
 	}
 	return nil
 }
+
+// panickingCache wraps a real TokenCache and panics on Put, forcing a panic
+// inside the singleflight closure (the only place the recovery net covers).
+type panickingCache struct {
+	inner cache.TokenCache
+}
+
+func (c *panickingCache) Get(ctx context.Context, key string) (cache.GetResult, error) {
+	return c.inner.Get(ctx, key)
+}
+func (c *panickingCache) Put(context.Context, string, cache.CachedCredential) (cache.PutResult, error) {
+	panic("injected test panic")
+}
+func (c *panickingCache) Delete(ctx context.Context, key string) (cache.DeleteResult, error) {
+	return c.inner.Delete(ctx, key)
+}
+func (c *panickingCache) Close() error {
+	return c.inner.Close()
+}
+
+// A panic inside the singleflight goroutine is recovered, surfaced to the
+// caller as an ordinary error, and its ERROR log line carries the winner's
+// correlation ID — the panic-recovery site logs under a fresh context seeded
+// with the ID, since the detached goroutine has no request context of its
+// own. Pins both the recovery contract and the attribution added for
+// SOL-153364 (Copilot review on PR #349).
+func TestExchange_RecoveredPanicLogCarriesWinnerID(t *testing.T) {
+	// NOT parallel: captureJSONLogs swaps the global logger.
+	logs := captureJSONLogs(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("doomed-token", 3600))
+	}))
+	defer srv.Close()
+
+	e := newTestExchanger(t, srv.URL)
+	e.cache = &panickingCache{inner: e.cache}
+	input := validInput()
+	input.BrokerAlias = "corr-panic-broker"
+
+	ctx := correlation.With(context.Background(), "panic-corr-id")
+	tok, err := e.Exchange(ctx, input)
+
+	if tok != nil {
+		t.Errorf("tok = %v, want nil after a recovered panic", tok)
+	}
+	if err == nil || !strings.Contains(err.Error(), "token exchange panicked") {
+		t.Fatalf("err = %v, want the recovered-panic error", err)
+	}
+
+	rec := findMsg(forBroker(logs.records(t), input.BrokerAlias), "recovered panic in token exchange")
+	if rec == nil {
+		t.Fatal(`no "recovered panic in token exchange" line captured`)
+	}
+	if got, _ := rec["correlation_id"].(string); got != "panic-corr-id" {
+		t.Errorf("panic line correlation_id = %q, want %q", got, "panic-corr-id")
+	}
+	if _, ok := rec["panic_type"]; !ok {
+		t.Error("panic line missing panic_type")
+	}
+}
