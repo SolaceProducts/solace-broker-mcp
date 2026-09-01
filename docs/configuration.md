@@ -349,5 +349,11 @@ To see this happening before requests start failing, set
 `OBS_SATURATION_EVENTS_ENABLED=true`. The server then warns while a request is
 still queued past `observability.saturation_threshold_ms` (default `1000`) and
 periodically reports each broker's in-flight occupancy, both naming the gate
-involved. Size the threshold against `request_min_interval`, not against
-`max_queue_wait`. See [Observability](observability.md#load-and-saturation-visibility--interim--logs-only).
+involved.
+
+Size the threshold between the two: above `request_min_interval` (a request
+routinely waits about one pacing interval, and a fan-out step waits several)
+and below `max_queue_wait`. Set it at or above `max_queue_wait` and the signal
+is silently dead, because the request is shed before the warning fires. Neither
+bound is validated. See
+[Observability](observability.md#load-and-saturation-visibility--interim--logs-only).

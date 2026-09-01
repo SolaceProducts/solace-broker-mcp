@@ -204,6 +204,48 @@ func TestStartOccupancyReporter_StopHaltsReportingAndIsIdempotent(t *testing.T) 
 	}
 }
 
+// A non-positive interval is the guard between a caller's arithmetic mistake
+// and a time.NewTicker panic on a background goroutine, where the crash would
+// surface far from its cause. Pinned because it is reachable from config: the
+// interval is derived from observability.otel_self_stats_interval_s.
+func TestStartOccupancyReporter_NonPositiveInterval_IsInert(t *testing.T) {
+	for _, interval := range []time.Duration{0, -time.Second} {
+		t.Run(interval.String(), func(t *testing.T) {
+			logs := captureLogs(t)
+			var called atomic.Bool
+			stop := health.StartOccupancyReporter(enabledCfg(), interval,
+				func() []health.BrokerOccupancy {
+					called.Store(true)
+					return []health.BrokerOccupancy{{Broker: "prod-east", InFlight: 5, Limit: 10}}
+				})
+			defer stop()
+
+			time.Sleep(5 * reportInterval)
+
+			if called.Load() {
+				t.Error("the snapshot function was called with a non-positive interval")
+			}
+			if n := len(logs.matching(t, occupancyMsg)); n != 0 {
+				t.Errorf("got %d occupancy lines, want 0", n)
+			}
+		})
+	}
+}
+
+// The first reading must not wait out a full interval. An operator who turns
+// the capability on part-way through an incident would otherwise sit blind for
+// otel_self_stats_interval_s, 60s by default.
+func TestStartOccupancyReporter_ReportsImmediatelyOnStart(t *testing.T) {
+	logs := captureLogs(t)
+	// An interval far longer than the test's patience: any line that appears
+	// can only be the start-up reading, not a tick.
+	stop := health.StartOccupancyReporter(enabledCfg(), time.Hour,
+		staticSnapshot(health.BrokerOccupancy{Broker: "prod-east", InFlight: 2, Limit: 10}))
+	defer stop()
+
+	waitForLine(t, logs, occupancyMsg)
+}
+
 // A nil snapshot is a wiring mistake, not a reason to panic on a background
 // goroutine where the crash would surface far from its cause.
 func TestStartOccupancyReporter_NilSnapshot_IsInert(t *testing.T) {

@@ -146,8 +146,9 @@ func (p *BrokerPool) OccupancySnapshot() []health.BrokerOccupancy {
 // branch — both GetSEMPv1 and GetSEMPv2 delegate here, so neither accessor
 // can trigger a duplicate log.
 //
-// This is the sole reader/writer of p.clients. See the field doc on p.clients
-// for the invariants any future method must observe.
+// This is the sole WRITER of p.clients; Close and OccupancySnapshot also read
+// it. See the field doc on p.clients for the invariants any future method must
+// observe — in particular, every access holds p.mu.
 func (p *BrokerPool) getOrCreate(alias string) (*BrokerClient, error) {
 	canonical := strings.ToLower(alias)
 

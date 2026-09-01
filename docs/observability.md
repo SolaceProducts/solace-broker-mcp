@@ -897,10 +897,15 @@ Three things worth knowing:
   companion line is emitted when the wait ends. A request that goes on to be shed is
   reported again by `request shed: broker admission bound exceeded`, using the same `stage`
   vocabulary.
-- **The threshold must stay clear of `semp.request_min_interval`.** A request routinely
-  waits about one pacing interval with nothing wrong. The default sits ten intervals above
-  the default pace; if you lower `request_min_interval` or run high concurrency, raise the
-  threshold rather than reading the resulting volume as saturation.
+- **The threshold has a floor and a ceiling, and both matter.** The floor is
+  `semp.request_min_interval`: a request routinely waits about one pacing interval with
+  nothing wrong, and a fan-out step issues up to 8 calls at once, so the last row of a
+  healthy fan-out waits roughly 700-800ms at the default pace. The default trip point of
+  `1000` sits just above that. Lower `request_min_interval`, raise fan-out concurrency, or
+  run many concurrent callers, and you should raise the threshold rather than read the
+  resulting volume as saturation. The ceiling is `semp.max_queue_wait`: set the threshold
+  at or above it and the signal is silently dead, because the request is shed before the
+  timer fires. Nothing validates either bound today.
 
 ### `broker in-flight occupancy` — periodic, per broker
 
@@ -915,10 +920,21 @@ information that a broker is busy.
 | `limit` | The configured `semp.max_concurrent_per_broker` cap. |
 
 `WARN` when `in_flight` has reached `limit` — every further request to that broker now
-queues at the concurrency gate — and `INFO` below it.
+queues at the concurrency gate — and `INFO` below it. One reading is emitted at startup so
+turning the capability on mid-incident does not cost you a full interval of silence.
 
 Only brokers the server has actually connected to appear. Broker clients are created on
 first use, so a configured but unused broker has no in-flight cap to report.
+
+**This line detects sustained pressure, not bursts.** It is a point sample on a timer, so
+a saturation episode shorter than the interval can fall entirely between two ticks and
+produce no line at any level. That is an acceptable trade for an interim signal, because
+the episodes that matter most are long: a semaphore slot is held for a request's whole
+retry chain, roughly 16 minutes at default settings, so a genuinely degraded broker stays
+visible across many ticks. For short spikes, rely on the per-request `broker admission
+slow` warning above, which is evaluated on every request rather than on a timer. Lowering
+`otel_self_stats_interval_s` narrows the gap but does not close it; the metric form will,
+because a gauge is scraped rather than sampled by the process.
 
 **Joining the two lines:** the per-request line identifies a broker by sanitized URL and
 the periodic line by configured alias, because each reuses the identifier already

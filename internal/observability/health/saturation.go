@@ -86,6 +86,10 @@ func StartOccupancyReporter(cfg config.ObservabilityConfig, interval time.Durati
 		defer exited.Done()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
+		// Report once before waiting out the first interval. An operator who
+		// turns this on part-way through an incident should not have to wait a
+		// full interval — 60s by default — for the first reading.
+		reportOccupancy(snapshot())
 		for {
 			select {
 			case <-done:

@@ -356,6 +356,18 @@ const DefaultMaxOAuthTokenTTL = 24 * time.Hour
 // shed rather than alongside it. The earlier value of 10ms predates a consumer
 // and described tool-call latency; against a 100ms pacing interval it would
 // have reported effectively every request as saturated.
+//
+// The number of concurrent arrivals is what sets that band, and the composite
+// executor's fan-out is what drives it: a fan-out step issues up to
+// fanOutDefaultConcurrency (8) calls at once, so the last row of a healthy
+// fan-out waits roughly 7-8 pacing intervals — 700-800ms — behind the tick.
+// That is the real constraint on this default, and the margin is only about
+// 20%. Raising fanOutDefaultConcurrency, or shipping a tool step that sets
+// `concurrency:` toward fanOutMaxConcurrency (32), pushes normal fan-out past
+// the trip point and turns a healthy broker into a stream of warnings. Move
+// this default with it if that happens; volume is precisely the failure mode
+// that gets an operator to switch the signal off.
+//
 // Validation needed: tune against real deployments once we see how often this
 // fires under normal load.
 const DefaultSaturationThresholdMs = 1000

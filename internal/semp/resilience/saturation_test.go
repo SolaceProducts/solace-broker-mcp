@@ -172,9 +172,67 @@ func TestAdmit_SlowAtConcurrencyGate_WarnsWithConcurrencyStage(t *testing.T) {
 
 	waitForLogLine(t, logs, slowAdmissionMsg, 1)
 
+	select {
+	case err := <-done:
+		t.Fatalf("admit returned %v while the only slot was held; the warning must fire during the wait", err)
+	default:
+	}
+
 	rec := logs.matching(t, slowAdmissionMsg)[0]
 	if got := rec["stage"]; got != AdmissionStageConcurrency {
 		t.Errorf("stage = %v, want %q", got, AdmissionStageConcurrency)
+	}
+}
+
+// Warning at the concurrency gate must not release the concurrency gate, and a
+// request that warns and then gets a slot must still be admitted normally,
+// holding exactly one slot.
+//
+// Asserting only that the log line appeared cannot catch the dangerous version
+// of this bug: a warn arm that breaks out of the gate instead of re-entering
+// the select emits exactly the same line while letting the request past the
+// in-flight cap entirely — unbounded concurrency against the degraded broker
+// this feature exists to protect, plus a slot the caller's deferred release
+// never accounted for.
+//
+// It also covers the warn-then-SUCCEED half of "fires regardless of outcome".
+// The shed half is TestAdmit_SlowThenShed_LogsBothSignals.
+func TestAdmit_SlowAtConcurrencyGate_StillWaitsForASlotThenAdmits(t *testing.T) {
+	logs := captureLogs(t)
+	sem := NewSemaphore(1)
+	sem <- struct{}{} // the only slot is taken.
+	sender := newSaturationSender(t, nil, NewRateLimiter(0), sem)
+
+	done := make(chan error, 1)
+	go func() { done <- sender.admit(context.Background()) }()
+
+	waitForLogLine(t, logs, slowAdmissionMsg, 1)
+
+	// Give a gate-bypassing implementation ample room to return before the slot
+	// is freed. A plain non-blocking check would race it.
+	select {
+	case err := <-done:
+		t.Fatalf("admit returned %v while the only slot was still held (err=%v); "+
+			"the warning must not release the concurrency gate", err, err)
+	case <-time.After(4 * slowAdmissionThreshold):
+	}
+
+	<-sem // free the slot; admission must now complete.
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("admit() error = %v, want nil once a slot was freed", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("admit did not return after a slot was freed")
+	}
+
+	if got := len(sem); got != 1 {
+		t.Errorf("len(sem) = %d after admission, want exactly 1 slot held", got)
+	}
+	if n := len(logs.matching(t, slowAdmissionMsg)); n != 1 {
+		t.Errorf("got %d slow-admission warnings, want 1 for a request that warned then succeeded", n)
 	}
 }
 
