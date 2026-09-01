@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package metrics is the home for the server's metrics emission. Skeleton
-// (SOL-151278): only the capability gate exists today; the metric instruments
-// and their export land in a later story. The v1 default is OFF (door-closing
-// policy) — operators opt in. Emitted records will carry
-// schema.MetricsSchemaVersion.
+// Package metrics provides the server's Prometheus metrics: an OTel meter
+// provider, a client_golang registry, the self-observation instruments, and
+// the /metrics handler. The v1 default is OFF (door-closing policy) — operators
+// opt in. Emitted records carry schema.MetricsSchemaVersion.
 package metrics
 
 import (
@@ -151,8 +150,8 @@ func (p *Provider) Handler() http.Handler {
 	})
 }
 
-// Shutdown flushes and stops the meter provider. Wired as a shutdown hook
-// against the shared shutdown-hook registry.
+// Shutdown flushes and stops the meter provider. Not yet wired into the
+// shutdown path — see the TODO in cmd/server (SOL-152449).
 func (p *Provider) Shutdown(ctx context.Context) error {
 	return p.meterProvider.Shutdown(ctx)
 }

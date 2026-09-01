@@ -543,7 +543,8 @@ func startServer(srv *http.Server, tlsCertFile, tlsKeyFile string) <-chan error 
 
 // startMetricsEndpoint serves Prometheus /metrics on its own listener and
 // registers a "metrics_endpoint" readiness probe. Returns the provider for
-// instrument registration, or nil if the engine failed.
+// instrument registration, or nil if the provider failed to build or the
+// listener failed to bind (both surface on /readyz).
 //
 // No explicit shutdown: /metrics is pull-based, so nothing is buffered to lose,
 // and process exit reaps the listener. TODO(SOL-152449): once the shared
@@ -551,7 +552,7 @@ func startServer(srv *http.Server, tlsCertFile, tlsKeyFile string) <-chan error 
 func startMetricsEndpoint(cfg *config.ServerConfig, readiness *health.ReadinessState) *metrics.Provider {
 	provider, err := metrics.New(version.Version())
 	if err != nil {
-		slog.Error("metrics endpoint disabled: provider build failed", slog.String("error", err.Error()))
+		slog.Error("metrics endpoint unavailable: provider build failed", slog.String("error", err.Error()))
 		readiness.RegisterListener("metrics_endpoint", func() error { return err })
 		return nil
 	}
@@ -567,7 +568,8 @@ func startMetricsEndpoint(cfg *config.ServerConfig, readiness *health.ReadinessS
 		slog.Error("metrics endpoint failed to bind",
 			slog.String("addr", srv.Addr), slog.String("error", err.Error()))
 		readiness.RegisterListener("metrics_endpoint", func() error { return err })
-		return provider
+		_ = provider.Shutdown(context.Background())
+		return nil
 	}
 
 	// Holds the listener's current state: empty while it serves, or the error if
