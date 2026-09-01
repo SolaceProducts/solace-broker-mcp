@@ -15,7 +15,9 @@
 package tokenexchange
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -31,6 +33,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/idpclient"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache/cachetest"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
 )
 
 // newTestExchanger builds an Exchanger pointing at the given httptest server
@@ -2255,5 +2258,509 @@ func TestExchange_CacheStoreLogsNameTheirOutcome(t *testing.T) {
 				t.Errorf("no record with message %q", tc.wantMsg)
 			}
 		})
+	}
+}
+
+// ---------- SOL-153364: correlation ID crosses the detached-context boundary ----------
+
+// jsonLogBuffer is a mutex-guarded sink for JSON log lines. The detached
+// exchange goroutine can still be writing while a test reads, so both paths
+// take the lock.
+type jsonLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *jsonLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+// records parses every buffered line into a map. Unlike captureHandler (which
+// intercepts records before any handler runs and drops their context), this
+// asserts on real emitted output.
+func (b *jsonLogBuffer) records(t *testing.T) []map[string]any {
+	t.Helper()
+	b.mu.Lock()
+	data := b.buf.String()
+	b.mu.Unlock()
+	var recs []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(data), "\n") {
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("non-JSON log line %q: %v", line, err)
+		}
+		recs = append(recs, m)
+	}
+	return recs
+}
+
+// forBroker filters records to those carrying the given broker attribute, so
+// lines leaked by a previous test's still-draining detached goroutine (which
+// use a different alias) cannot pollute assertions.
+func forBroker(recs []map[string]any, alias string) []map[string]any {
+	var out []map[string]any
+	for _, r := range recs {
+		if r["broker"] == alias {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// captureJSONLogs swaps the default logger for the PRODUCTION handler
+// composition — correlation.NewSlogHandler over a JSON handler, the same
+// chain cmd/server/main.go installs — writing to an in-process buffer.
+// correlation_id only exists post-handler, so only this composition can
+// observe it. Callers must not use t.Parallel(): the swap is process-global,
+// same convention as captureLogs.
+func captureJSONLogs(t *testing.T) *jsonLogBuffer {
+	t.Helper()
+	buf := &jsonLogBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(correlation.NewSlogHandler(
+		slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return buf
+}
+
+// The exchange context is deliberately detached from the caller (rooted at
+// context.Background() so singleflight waiters survive caller cancellation),
+// which used to drop the correlation ID from every log line under it. This
+// pins the fix: the ID is re-seeded across the detach, so all lines emitted
+// for one exchange — caller-side and detached-side, including the cache put
+// needed for the get↔put join — carry the originating request's ID.
+func TestExchange_CorrelationIDSurvivesDetach(t *testing.T) {
+	// NOT parallel: captureJSONLogs swaps the global logger.
+	logs := captureJSONLogs(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("corr-tok", 3600))
+	}))
+	defer srv.Close()
+
+	// Real clock: Otter compares ExpiresAt to time.Now(); a pinned past clock
+	// would drop the Put and the "broker token cached" line with it.
+	e := newTestExchanger(t, srv.URL)
+	input := validInput()
+	input.BrokerAlias = "corr-survives-broker"
+
+	ctx := correlation.With(context.Background(), "test-corr-id")
+	if _, err := e.Exchange(ctx, input); err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+
+	recs := forBroker(logs.records(t), input.BrokerAlias)
+	if len(recs) == 0 {
+		t.Fatal("no log lines captured for the exchange")
+	}
+	sawCachePut := false
+	for _, r := range recs {
+		if r["msg"] == "broker token cached" {
+			sawCachePut = true
+		}
+		if got, _ := r["correlation_id"].(string); got != "test-corr-id" {
+			t.Errorf("line %q: correlation_id = %q, want %q", r["msg"], got, "test-corr-id")
+		}
+	}
+	if !sawCachePut {
+		t.Error(`no "broker token cached" line captured; cannot assert the get-to-put join`)
+	}
+}
+
+// An unseeded caller context stands in for OBS_CORRELATION_ID_ENABLED=false,
+// the only way a request reaches the exchange without an ID: when the
+// capability is on, the middleware generates an ID for clients that send
+// none, so "client sent no header" still yields one. Disabled must stay
+// byte-identical to before the fix — no correlation_id key at all, never an
+// empty one that would poison dashboard queries.
+func TestExchange_NoCorrelationIDWhenCapabilityDisabled(t *testing.T) {
+	// NOT parallel: captureJSONLogs swaps the global logger.
+	logs := captureJSONLogs(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("no-corr-tok", 3600))
+	}))
+	defer srv.Close()
+
+	e := newTestExchanger(t, srv.URL)
+	input := validInput()
+	input.BrokerAlias = "corr-disabled-broker"
+
+	if _, err := e.Exchange(context.Background(), input); err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+
+	recs := forBroker(logs.records(t), input.BrokerAlias)
+	if len(recs) == 0 {
+		t.Fatal("no log lines captured for the exchange")
+	}
+	for _, r := range recs {
+		if v, ok := r["correlation_id"]; ok {
+			t.Errorf("line %q: correlation_id present (%v), want key absent when no ID is on the caller ctx", r["msg"], v)
+		}
+	}
+}
+
+// The ticket's motivating failure: a caller cancels mid-exchange, the shared
+// IdP call finishes detached, and its log lines (the cache-put WARN being the
+// costly one) were unattributable to any request. Pins that the detached
+// lines still emit — and carry the singleflight winner's ID — after the only
+// caller has bailed.
+func TestExchange_DetachedLogsCarryWinnerIDAfterCallerBails(t *testing.T) {
+	// NOT parallel: captureJSONLogs swaps the global logger.
+	logs := captureJSONLogs(t)
+
+	entered := make(chan struct{})
+	gate := make(chan struct{})
+	var once sync.Once
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		once.Do(func() { close(entered) })
+		<-gate
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("bailed-tok", 3600))
+	}))
+	defer srv.Close()
+
+	// Real clock, same reason as TestExchange_DetachedCallWarmsCacheAfterCallerBails.
+	e := newTestExchanger(t, srv.URL)
+	input := validInput()
+	input.BrokerAlias = "corr-bail-broker"
+
+	cancelCtx, cancel := context.WithCancel(correlation.With(context.Background(), "winner-corr-id"))
+	bailed := make(chan error, 1)
+	go func() {
+		_, err := e.Exchange(cancelCtx, input)
+		bailed <- err
+	}()
+
+	<-entered // the detached IdP call is in flight
+	cancel()  // the only caller bails
+
+	if err := <-bailed; !errors.Is(err, context.Canceled) {
+		t.Fatalf("caller err = %v, want context.Canceled", err)
+	}
+
+	// Release the detached call; it finishes and logs on its own goroutine.
+	close(gate)
+
+	// The final detached line is the cache-put outcome. Poll the captured
+	// output until it lands (same bounded-poll shape as the cache poll in
+	// TestExchange_DetachedCallWarmsCacheAfterCallerBails).
+	deadline := time.Now().Add(2 * time.Second)
+	var recs []map[string]any
+	for {
+		recs = forBroker(logs.records(t), input.BrokerAlias)
+		if hasMsg(recs, "broker token cached") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(`detached "broker token cached" line never emitted within 2s`)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	for _, msg := range []string{
+		"requesting broker token from identity provider",
+		"identity provider issued broker token",
+		"broker token cached",
+	} {
+		rec := findMsg(recs, msg)
+		if rec == nil {
+			t.Errorf("detached line %q not captured", msg)
+			continue
+		}
+		if got, _ := rec["correlation_id"].(string); got != "winner-corr-id" {
+			t.Errorf("detached line %q: correlation_id = %q, want %q", msg, got, "winner-corr-id")
+		}
+	}
+}
+
+func hasMsg(recs []map[string]any, msg string) bool {
+	return findMsg(recs, msg) != nil
+}
+
+func findMsg(recs []map[string]any, msg string) map[string]any {
+	for _, r := range recs {
+		if r["msg"] == msg {
+			return r
+		}
+	}
+	return nil
+}
+
+// panickingCache wraps a real TokenCache and panics on Put, forcing a panic
+// inside the singleflight closure (the only place the recovery net covers).
+type panickingCache struct {
+	inner cache.TokenCache
+}
+
+func (c *panickingCache) Get(ctx context.Context, key string) (cache.GetResult, error) {
+	return c.inner.Get(ctx, key)
+}
+func (c *panickingCache) Put(context.Context, string, cache.CachedCredential) (cache.PutResult, error) {
+	panic("injected test panic")
+}
+func (c *panickingCache) Delete(ctx context.Context, key string) (cache.DeleteResult, error) {
+	return c.inner.Delete(ctx, key)
+}
+func (c *panickingCache) Close() error {
+	return c.inner.Close()
+}
+
+// A panic inside the singleflight goroutine is recovered, surfaced to the
+// caller as an ordinary error, and its ERROR log line carries the winner's
+// correlation ID — the panic-recovery site logs under a fresh context seeded
+// with the ID, since the detached goroutine has no request context of its
+// own. Pins both the recovery contract and the attribution added for
+// SOL-153364 (Copilot review on PR #349).
+func TestExchange_RecoveredPanicLogCarriesWinnerID(t *testing.T) {
+	// NOT parallel: captureJSONLogs swaps the global logger.
+	logs := captureJSONLogs(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("doomed-token", 3600))
+	}))
+	defer srv.Close()
+
+	e := newTestExchanger(t, srv.URL)
+	e.cache = &panickingCache{inner: e.cache}
+	input := validInput()
+	input.BrokerAlias = "corr-panic-broker"
+
+	ctx := correlation.With(context.Background(), "panic-corr-id")
+	tok, err := e.Exchange(ctx, input)
+
+	if tok != nil {
+		t.Errorf("tok = %v, want nil after a recovered panic", tok)
+	}
+	if err == nil || !strings.Contains(err.Error(), "token exchange panicked") {
+		t.Fatalf("err = %v, want the recovered-panic error", err)
+	}
+
+	rec := findMsg(forBroker(logs.records(t), input.BrokerAlias), "recovered panic in token exchange")
+	if rec == nil {
+		t.Fatal(`no "recovered panic in token exchange" line captured`)
+	}
+	if got, _ := rec["correlation_id"].(string); got != "panic-corr-id" {
+		t.Errorf("panic line correlation_id = %q, want %q", got, "panic-corr-id")
+	}
+	if _, ok := rec["panic_type"]; !ok {
+		t.Error("panic line missing panic_type")
+	}
+	// Secure-logging rule: the panic VALUE must never reach the log — only
+	// its Go type and the stack. The injected value is a distinctive string,
+	// so its appearance anywhere in the record would mean the value leaked.
+	for k, v := range rec {
+		if s, ok := v.(string); ok && strings.Contains(s, "injected test panic") {
+			t.Errorf("panic VALUE leaked into log field %q: %q", k, s)
+		}
+	}
+}
+
+// The rate-limit failure path, driven end to end through Exchange: an IdP
+// that answers 429 + Retry-After until the retry chain exhausts must produce
+// a gate WARN and a retries-exhausted DEBUG that both carry the caller's
+// correlation ID. Going through Exchange (not calling the gate helper
+// directly) pins the call-site wiring — reverting runExchangeOnce to hand the
+// gate a bare context would fail here.
+func TestExchange_GateAndExhaustionLogsCarryCorrelationID(t *testing.T) {
+	// NOT parallel: captureJSONLogs swaps the global logger.
+	logs := captureJSONLogs(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// "1", not a larger value: the retrying client honors Retry-After as
+		// its backoff, so this is also how long each retry sleeps.
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	e := newRetryingTestExchanger(t, srv.URL)
+	input := validInput()
+	input.BrokerAlias = "corr-gate-broker"
+
+	ctx := correlation.With(context.Background(), "gate-corr-id")
+	_, err := e.Exchange(ctx, input)
+	if !errors.Is(err, ErrExchangeRetriesExhausted) {
+		t.Fatalf("err = %v, want retries exhausted", err)
+	}
+
+	recs := forBroker(logs.records(t), input.BrokerAlias)
+	for _, msg := range []string{
+		"broker token request retries exhausted",
+		"token exchange rate limited: honoring IdP Retry-After for all callers",
+	} {
+		rec := findMsg(recs, msg)
+		if rec == nil {
+			t.Errorf("line %q not captured", msg)
+			continue
+		}
+		if got, _ := rec["correlation_id"].(string); got != "gate-corr-id" {
+			t.Errorf("line %q: correlation_id = %q, want %q", msg, got, "gate-corr-id")
+		}
+	}
+}
+
+// The audience-mismatch WARN, driven end to end through Exchange: the IdP
+// issues a JWT whose aud claim doesn't include the requested audience, and
+// the WARN must carry the caller's correlation ID. Going through Exchange
+// (not calling warnIfAudienceMismatch directly) pins that doExchange hands
+// the helper the seeded detached context.
+func TestExchange_AudienceMismatchLogCarriesCorrelationID(t *testing.T) {
+	// NOT parallel: captureJSONLogs swaps the global logger.
+	logs := captureJSONLogs(t)
+
+	token := fakeJWT(t, map[string]any{"aud": "https://other.example.com"})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON(token, 3600))
+	}))
+	defer srv.Close()
+
+	e := newTestExchanger(t, srv.URL)
+	input := validInput() // requests audience https://broker.example.com
+	input.BrokerAlias = "corr-aud-broker"
+
+	ctx := correlation.With(context.Background(), "aud-corr-id")
+	if _, err := e.Exchange(ctx, input); err != nil {
+		t.Fatalf("Exchange: %v (audience mismatch must warn, not fail)", err)
+	}
+
+	rec := findMsg(forBroker(logs.records(t), input.BrokerAlias),
+		"token exchange: issued access token's aud claim does not include the requested audience")
+	if rec == nil {
+		t.Fatal("no audience-mismatch line captured")
+	}
+	if got, _ := rec["correlation_id"].(string); got != "aud-corr-id" {
+		t.Errorf("audience line correlation_id = %q, want %q", got, "aud-corr-id")
+	}
+}
+
+// The headline semantic with more than one caller: detached exchange lines
+// carry the singleflight WINNER's ID, and each caller's completion line
+// carries its OWN. Single-caller tests cannot distinguish "winner's ID" from
+// "current caller's ID"; this one can. The winner is made deterministic by
+// gating the IdP handler until the waiter has joined the flight.
+func TestExchange_DetachedLinesCarryWinnerIDNotWaiterID(t *testing.T) {
+	// NOT parallel: captureJSONLogs swaps the global logger.
+	logs := captureJSONLogs(t)
+
+	var callCount atomic.Int32
+	entered := make(chan struct{})
+	gate := make(chan struct{})
+	var once sync.Once
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount.Add(1)
+		once.Do(func() { close(entered) })
+		<-gate
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("shared-tok", 3600))
+	}))
+	// Defer ordering matters (same as the abandoned-breadcrumb tests):
+	// srv.Close() waits on the outstanding handler request, so the gate
+	// unblock below — registered later, therefore running FIRST — must
+	// release the handler on every exit path, including a t.Fatal mid-test,
+	// or the whole test binary deadlocks in srv.Close.
+	defer srv.Close()
+	var gateOnce sync.Once
+	openGate := func() { gateOnce.Do(func() { close(gate) }) }
+	defer openGate()
+
+	// Real clock: Otter compares ExpiresAt to time.Now().
+	e := newTestExchanger(t, srv.URL)
+	input := validInput()
+	input.BrokerAlias = "corr-winner-broker"
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if _, err := e.Exchange(correlation.With(context.Background(), "winner-id"), input); err != nil {
+			t.Errorf("winner Exchange: %v", err)
+		}
+	}()
+	<-entered // the winner's IdP call is in flight; the flight key is held
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if _, err := e.Exchange(correlation.With(context.Background(), "waiter-id"), input); err != nil {
+			t.Errorf("waiter Exchange: %v", err)
+		}
+	}()
+
+	// The waiter logs "no cached broker token" (under its own ctx) just
+	// before joining the flight; wait for ITS line — both callers emit this
+	// message, so scan all records for the waiter's ID rather than taking
+	// the first match (which is the winner's). Then a short grace for the
+	// DoChan join itself. The callCount==1 assertion below fails loudly if
+	// this window was ever too tight, rather than passing wrongly.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		waiterMissed := false
+		for _, r := range forBroker(logs.records(t), input.BrokerAlias) {
+			if r["msg"] == "no cached broker token" && r["correlation_id"] == "waiter-id" {
+				waiterMissed = true
+				break
+			}
+		}
+		if waiterMissed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("waiter never reached its cache miss within 2s")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	openGate()
+	wg.Wait()
+
+	if n := callCount.Load(); n != 1 {
+		t.Fatalf("IdP called %d times, want 1 — the waiter did not join the winner's flight, so winner/waiter attribution cannot be asserted", n)
+	}
+
+	recs := forBroker(logs.records(t), input.BrokerAlias)
+	for _, msg := range []string{
+		"requesting broker token from identity provider",
+		"identity provider issued broker token",
+		"broker token cached",
+	} {
+		rec := findMsg(recs, msg)
+		if rec == nil {
+			t.Errorf("detached line %q not captured", msg)
+			continue
+		}
+		if got, _ := rec["correlation_id"].(string); got != "winner-id" {
+			t.Errorf("detached line %q: correlation_id = %q, want winner-id", msg, got)
+		}
+	}
+
+	var completionIDs []string
+	for _, r := range recs {
+		if r["msg"] == "broker token exchange completed" {
+			id, _ := r["correlation_id"].(string)
+			completionIDs = append(completionIDs, id)
+		}
+	}
+	if len(completionIDs) != 2 {
+		t.Fatalf("completion lines = %d, want 2 (one per caller)", len(completionIDs))
+	}
+	seen := map[string]bool{}
+	for _, id := range completionIDs {
+		seen[id] = true
+	}
+	if !seen["winner-id"] || !seen["waiter-id"] {
+		t.Errorf("completion line IDs = %v, want exactly {winner-id, waiter-id} — each caller must log completion under its own ID", completionIDs)
 	}
 }

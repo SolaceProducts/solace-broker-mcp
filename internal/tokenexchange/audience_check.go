@@ -15,6 +15,7 @@
 package tokenexchange
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
@@ -124,7 +125,7 @@ func decodeJWTClaimsUnverified(token string) (jwtClaims, bool) {
 // substrings including "token", which "aud_claim" doesn't. ("audience" isn't
 // in that redaction list; requested_audience two lines below is already
 // logged unredacted.)
-func warnIfAudienceMismatch(brokerAlias, requestedAudience, accessToken string) {
+func warnIfAudienceMismatch(ctx context.Context, brokerAlias, requestedAudience, accessToken string) {
 	if requestedAudience == "" {
 		return
 	}
@@ -137,7 +138,7 @@ func warnIfAudienceMismatch(brokerAlias, requestedAudience, accessToken string) 
 			return
 		}
 	}
-	slog.Warn("token exchange: issued access token's aud claim does not include the requested audience",
+	slog.WarnContext(ctx, "token exchange: issued access token's aud claim does not include the requested audience",
 		slog.String("broker", brokerAlias),
 		slog.String("requested_audience", requestedAudience),
 		slog.Any("aud_claim", boundedAudienceList(claims.Audience)))

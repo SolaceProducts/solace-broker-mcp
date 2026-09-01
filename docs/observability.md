@@ -572,6 +572,19 @@ metric, audit, and trace schemas.
   so all attempts share one ID in the broker's logs.
 - **Logged** as the `correlation_id` attribute on every log line within the request.
 
+**Shared broker-token exchanges log under the initiating request's ID.** When several
+concurrent requests need the same broker token, the server performs one exchange on behalf of
+all of them, and the lines describing that work — the identity-provider request/response, the
+cache write, retry exhaustion, the Retry-After gate, the audience-mismatch WARN, and the
+recovered-panic ERROR — carry the correlation ID of the request that initiated it. Every request still logs its own `broker token exchange completed` line
+under its own ID. So if a request's ID turns up no identity-provider lines, that request rode
+an exchange another request started: pivot to the `broker` attribute plus the time window
+around the request's own completion line. A failed exchange surfaces through each caller's own
+error handling rather than a per-caller line from the exchange itself. Two lines never carry a
+correlation ID by design: the circuit-breaker state-change WARN (a transition is the verdict
+on a window of failures, not on any one request — filter on its `breaker` attribute instead)
+and the startup configuration WARN, which runs before any request exists.
+
 ---
 
 ## The Outcome Vocabulary
