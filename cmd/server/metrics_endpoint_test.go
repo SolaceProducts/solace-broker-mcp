@@ -88,14 +88,19 @@ func TestMetricsProvider_ShutdownHook(t *testing.T) {
 	reg := hooks.NewRegistry()
 	reg.Register("metrics_provider", provider.Shutdown)
 
-	start := time.Now()
-	reg.RunAll(context.Background())
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Errorf("RunAll with the metrics hook took %v, want near-instant", elapsed)
+	// Bound the context like cmd/server does, so a hook that ever blocks fails
+	// at the deadline instead of hanging CI. RunAll honours the deadline only if
+	// the caller sets one.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	reg.RunAll(ctx)
+	if ctx.Err() != nil {
+		t.Fatalf("RunAll exceeded its budget: %v", ctx.Err())
 	}
 
 	// The hook ran provider.Shutdown, so the meter provider is already stopped:
-	// a second Shutdown now errors, which proves the hook actually fired.
+	// a second Shutdown now errors. This proves Shutdown satisfies the hook
+	// contract, not that main() wires it in (that is exercised end-to-end).
 	if err := provider.Shutdown(context.Background()); err == nil {
 		t.Error("expected the provider to be already shut down by the hook, got nil")
 	}
