@@ -25,13 +25,16 @@
 // JSON-RPC handler ctx. RawSubjectTokenFromContext is the read-side accessor
 // used by the outbound OAuth Authenticator.
 //
-// Validation invariant: Extra's Authorization on a request that reached the
-// JSON-RPC handler already passed RequireBearerToken (otherwise 401).
-// A value present under rawSubjectTokenKey{} has therefore already been
-// validated by the SDK (signature, issuer, audience, expiry). Downstream
-// code reads it without re-validating.
+// Validation invariant (static and oauth modes): Extra's Authorization on a
+// request that reached the JSON-RPC handler already passed
+// RequireBearerToken (otherwise 401). A value present under
+// rawSubjectTokenKey{} has therefore already been validated by the SDK
+// (signature, issuer, audience, expiry). Hop 2 reads it without
+// re-validating.
 //
-// Disabled mode has no hop 2 oauth.
+// Disabled mode has no hop 2 oauth. RequestExtraMiddleware still runs and
+// may stamp an unvalidated Authorization if the client sent one; nothing
+// exchanges it.
 package auth
 
 import (
@@ -75,9 +78,9 @@ func parseBearerToken(authHeader string) (string, bool) {
 // defensive; the middleware never stores either in production). Folding
 // these into ok=false lets callers branch once.
 //
-// See the package doc for the validation invariant: a true return means
-// the token has already been validated upstream and the caller does not
-// re-validate.
+// See the package doc for the validation invariant: in static/oauth a true
+// return means the token was validated upstream. Disabled mode has no hop 2
+// and must not treat a present value as validated.
 func RawSubjectTokenFromContext(ctx context.Context) (string, bool) {
 	v := ctx.Value(rawSubjectTokenKey{})
 	if v == nil {

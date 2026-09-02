@@ -16,6 +16,7 @@ package integration_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -251,7 +252,7 @@ func TestHandlerContext_SubjectTokenFollowsCurrentRequest(t *testing.T) {
 
 	inbound := &inboundRecorder{key: "Authorization"}
 	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
-	var handler http.Handler = sdkauth.RequireBearerToken(verifier, nil)(streamable)
+	handler := sdkauth.RequireBearerToken(verifier, nil)(streamable)
 	handler = inbound.wrap(handler)
 
 	ts := httptest.NewServer(handler)
@@ -392,6 +393,7 @@ func TestHandlerContext_ConcurrentCallsOnSameSessionAreIsolated(t *testing.T) {
 		select {
 		case <-released:
 		case <-time.After(2 * time.Second):
+			return nil, errors.New("concurrent isolation: peer call did not enter handler within 2s")
 		}
 		tok, _ := auth.RawSubjectTokenFromContext(ctx)
 		mu.Lock()
@@ -404,7 +406,7 @@ func TestHandlerContext_ConcurrentCallsOnSameSessionAreIsolated(t *testing.T) {
 
 	inbound := &inboundLog{}
 	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
-	var handler http.Handler = sdkauth.RequireBearerToken(verifier, nil)(streamable)
+	handler := sdkauth.RequireBearerToken(verifier, nil)(streamable)
 	handler = correlation.Middleware(handler)
 	handler = inbound.wrap(handler)
 
