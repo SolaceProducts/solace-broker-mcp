@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 )
 
 // ExchangeError is a structured error returned by the token exchange
@@ -89,7 +91,21 @@ func (e *ExchangeError) AgentMessage(brokerAlias string) string {
 func (e *ExchangeError) LogAttrs() []slog.Attr {
 	var attrs []slog.Attr
 	if e.TokenEndpoint != "" {
-		attrs = append(attrs, slog.String("token_endpoint", e.TokenEndpoint))
+		// Key is "idp_endpoint", not "token_endpoint": redactSecretAttr in
+		// cmd/server/main.go replaces the value of any attribute whose
+		// lowercased key contains one of its redactedKeys substrings, and
+		// "token" is on that list. Under the old key this field reached
+		// operators as [REDACTED] on every token-exchange failure, hiding the
+		// one value that separates a misconfigured IdP endpoint from an
+		// unreachable one (SOL-153827). Params.LogValue in types.go names the
+		// same URL the same way, for the same reason.
+		//
+		// SanitizeURLString is defense in depth on top of that rename: now that
+		// the key no longer trips the redaction net, nothing downstream would
+		// strip userinfo if a credentialed URL ever reached here.
+		// config.validateBrokerURL already rejects one at config load — the
+		// same guarantee sempv1/sempv2 HTTPClient.LogValue sanitize behind.
+		attrs = append(attrs, slog.String("idp_endpoint", config.SanitizeURLString(e.TokenEndpoint)))
 	}
 	if e.BrokerAlias != "" {
 		attrs = append(attrs, slog.String("exchange_broker", e.BrokerAlias))
