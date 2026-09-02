@@ -112,13 +112,23 @@ func Middleware(next http.Handler) http.Handler {
 
 // resolveID applies the traceparent → X-Correlation-ID → generate precedence.
 func resolveID(r *http.Request) string {
-	if id, ok := traceIDFromTraceparent(r.Header.Get(headerTraceparent)); ok {
-		return id
-	}
-	if id, ok := sanitize(r.Header.Get(headerCorrelationID)); ok {
+	if id, ok := FromHeader(r.Header); ok {
 		return id
 	}
 	return Generate()
+}
+
+// FromHeader returns the correlation ID implied by h using Middleware's
+// traceparent → X-Correlation-ID precedence, without generating. ok is
+// false when neither header yields a usable ID, including a nil map.
+func FromHeader(h http.Header) (string, bool) {
+	if h == nil {
+		return "", false
+	}
+	if id, ok := traceIDFromTraceparent(h.Get(headerTraceparent)); ok {
+		return id, true
+	}
+	return sanitize(h.Get(headerCorrelationID))
 }
 
 // traceIDFromTraceparent extracts the trace-id from a W3C traceparent header.

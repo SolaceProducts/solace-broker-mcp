@@ -208,6 +208,52 @@ func TestGenerate_ValidUUIDv7(t *testing.T) {
 	}
 }
 
+// TestFromHeader pins the no-generate contract used by RequestExtraMiddleware:
+// usable inbound headers yield an ID; missing or unusable headers yield ok=false
+// rather than a fresh UUIDv7.
+func TestFromHeader(t *testing.T) {
+	t.Parallel()
+	t.Run("nil header", func(t *testing.T) {
+		t.Parallel()
+		if id, ok := FromHeader(nil); ok || id != "" {
+			t.Errorf("FromHeader(nil) = %q, %v; want \"\", false", id, ok)
+		}
+	})
+	t.Run("empty header", func(t *testing.T) {
+		t.Parallel()
+		if id, ok := FromHeader(http.Header{}); ok || id != "" {
+			t.Errorf("FromHeader(empty) = %q, %v; want \"\", false", id, ok)
+		}
+	})
+	t.Run("X-Correlation-ID", func(t *testing.T) {
+		t.Parallel()
+		h := make(http.Header)
+		h.Set(headerCorrelationID, "client-id")
+		id, ok := FromHeader(h)
+		if !ok || id != "client-id" {
+			t.Errorf("FromHeader(X-Correlation-ID) = %q, %v; want client-id, true", id, ok)
+		}
+	})
+	t.Run("traceparent wins", func(t *testing.T) {
+		t.Parallel()
+		h := make(http.Header)
+		h.Set(headerTraceparent, validTraceparent)
+		h.Set(headerCorrelationID, "client-id")
+		id, ok := FromHeader(h)
+		if !ok || id != validTraceID {
+			t.Errorf("FromHeader(traceparent) = %q, %v; want %q, true", id, ok, validTraceID)
+		}
+	})
+	t.Run("invalid X-Correlation-ID", func(t *testing.T) {
+		t.Parallel()
+		h := make(http.Header)
+		h.Set(headerCorrelationID, "id\ninjected")
+		if id, ok := FromHeader(h); ok {
+			t.Errorf("FromHeader(invalid) = %q, true; want false (must not generate)", id)
+		}
+	})
+}
+
 // TestFrom_Absent pins that From returns "" when no ID is on the context —
 // the contract dependent code relies on when the capability is off (middleware
 // not wired).

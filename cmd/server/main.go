@@ -889,6 +889,15 @@ func installToolListFiltering(server *mcp.Server, cfg *config.ServerConfig, poli
 	slog.Info("tools/list filtering is enabled")
 }
 
+// installRequestExtraMiddleware copies Extra.Header onto each JSON-RPC
+// handler ctx. Always on: hop 2 and correlation.From have no other per-POST
+// pipe (SOL-153935). Last AddReceivingMiddleware registration is outermost
+// and runs first.
+func installRequestExtraMiddleware(server *mcp.Server) {
+	server.AddReceivingMiddleware(auth.RequestExtraMiddleware())
+	slog.Info("request extra middleware is enabled")
+}
+
 // logStartupBanners emits the boot-time WARN banners: auth-mode signal,
 // static-cleartext exposure, and OAuth plaintext-listener acknowledgement.
 func logStartupBanners(cfg *config.ServerConfig) {
@@ -1166,8 +1175,13 @@ func main() {
 	}
 
 	// Narrow tools/list to what each caller may invoke. Off by default; when
-	// off, AddReceivingMiddleware is never called and dispatch is unchanged.
+	// off, the list-filter middleware is not registered.
 	installToolListFiltering(server, cfg, policy, groupsClaimName)
+	// Copy this POST's Extra.Header onto the JSON-RPC handler ctx so hop 2
+	// and correlation.From see this request, not initialize (SOL-153935).
+	// Registered after list-filter so AddReceivingMiddleware wraps outermost
+	// and this runs first.
+	installRequestExtraMiddleware(server)
 
 	slog.Info("all tools registered")
 

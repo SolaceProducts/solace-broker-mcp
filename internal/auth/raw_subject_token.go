@@ -64,23 +64,26 @@ func InjectRawSubjectToken(next http.Handler) http.Handler {
 	slog.Debug("InjectRawSubjectToken middleware installed")
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// The parse here intentionally mirrors sdkauth.verify in
-		// go-sdk v1.5.0 (auth/auth.go: strings.Fields + case-insensitive
-		// "bearer" check). Because the SDK runs upstream of us, anything
-		// it rejected we never see; anything it accepted should match
-		// these conditions. If the SDK ever changes its parsing rules,
-		// this code may under-capture (we'd silently fail to stash a
-		// token the SDK approved) — the safe drift direction, but worth
-		// revisiting on SDK upgrades.
-		authHeader := r.Header.Get("Authorization")
-		fields := strings.Fields(authHeader)
-		if len(fields) == 2 && strings.EqualFold(fields[0], "Bearer") && fields[1] != "" {
-			ctx := context.WithValue(r.Context(), rawSubjectTokenKey{}, fields[1])
+		if token, ok := parseBearerToken(r.Header.Get("Authorization")); ok {
+			ctx := context.WithValue(r.Context(), rawSubjectTokenKey{}, token)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// parseBearerToken extracts the token from an Authorization header using the
+// same rules as sdkauth.verify in go-sdk v1.5.0 (strings.Fields +
+// case-insensitive "bearer"). If the SDK ever changes its parsing rules,
+// this may under-capture — the safe drift direction, but worth revisiting
+// on SDK upgrades. Shared by InjectRawSubjectToken and RequestExtraMiddleware.
+func parseBearerToken(authHeader string) (string, bool) {
+	fields := strings.Fields(authHeader)
+	if len(fields) == 2 && strings.EqualFold(fields[0], "Bearer") && fields[1] != "" {
+		return fields[1], true
+	}
+	return "", false
 }
 
 // RawSubjectTokenFromContext returns the raw bearer token captured by

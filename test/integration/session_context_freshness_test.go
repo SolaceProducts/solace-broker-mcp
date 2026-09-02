@@ -101,6 +101,17 @@ func (r *inboundRecorder) lastValue() string {
 	return r.last
 }
 
+func registerFreshnessTool(t *testing.T, h *metaStubHandler) *mcp.Server {
+	t.Helper()
+	pool := metaTestPool(t)
+	mgr := tools.NewToolManager(pool)
+	mgr.Register(h)
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+	server.AddReceivingMiddleware(auth.RequestExtraMiddleware())
+	tools.RegisterWithServer(mgr, server, pool, true, nil, "")
+	return server
+}
+
 // TestHandlerContext_CorrelationIDFollowsCurrentRequest pins that a tool
 // handler's correlation.From(ctx) equals the X-Correlation-ID on THIS
 // tools/call POST, not the ID that opened the session.
@@ -129,11 +140,7 @@ func TestHandlerContext_CorrelationIDFollowsCurrentRequest(t *testing.T) {
 		return &tools.ToolResult{StructuredContent: map[string]any{"step1": map[string]any{"ok": true}}}, nil
 	}
 
-	pool := metaTestPool(t)
-	mgr := tools.NewToolManager(pool)
-	mgr.Register(h)
-	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	tools.RegisterWithServer(mgr, server, pool, true, nil, "")
+	server := registerFreshnessTool(t, h)
 
 	inbound := &inboundRecorder{key: correlation.HeaderCorrelationID}
 	var handler http.Handler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
@@ -240,15 +247,11 @@ func TestHandlerContext_SubjectTokenFollowsCurrentRequest(t *testing.T) {
 		return &tools.ToolResult{StructuredContent: map[string]any{"step1": map[string]any{"ok": true}}}, nil
 	}
 
-	pool := metaTestPool(t)
-	mgr := tools.NewToolManager(pool)
-	mgr.Register(h)
-	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	tools.RegisterWithServer(mgr, server, pool, true, nil, "")
+	server := registerFreshnessTool(t, h)
 
 	inbound := &inboundRecorder{key: "Authorization"}
 	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
-	var handler http.Handler = sdkauth.RequireBearerToken(verifier, nil)(auth.InjectRawSubjectToken(streamable))
+	var handler http.Handler = sdkauth.RequireBearerToken(verifier, nil)(streamable)
 	handler = inbound.wrap(handler)
 
 	ts := httptest.NewServer(handler)
@@ -397,15 +400,11 @@ func TestHandlerContext_ConcurrentCallsOnSameSessionAreIsolated(t *testing.T) {
 		return &tools.ToolResult{StructuredContent: map[string]any{"step1": map[string]any{"ok": true}}}, nil
 	}
 
-	pool := metaTestPool(t)
-	mgr := tools.NewToolManager(pool)
-	mgr.Register(h)
-	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	tools.RegisterWithServer(mgr, server, pool, true, nil, "")
+	server := registerFreshnessTool(t, h)
 
 	inbound := &inboundLog{}
 	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
-	var handler http.Handler = sdkauth.RequireBearerToken(verifier, nil)(auth.InjectRawSubjectToken(streamable))
+	var handler http.Handler = sdkauth.RequireBearerToken(verifier, nil)(streamable)
 	handler = correlation.Middleware(handler)
 	handler = inbound.wrap(handler)
 
@@ -493,5 +492,73 @@ func TestHandlerContext_ConcurrentCallsOnSameSessionAreIsolated(t *testing.T) {
 			t.Errorf("handler ctx saw token=%q correlation_id=%q; want each in-flight POST's own pair ({%q, %q} and {%q, %q}), not the session-init {%q, %q} and not the sibling call",
 				obs.token, obs.corr, tokenA, corrA, tokenB, corrB, tokenInit, corrInit)
 		}
+	}
+}
+
+// TestHandlerContext_GeneratedCorrelationIDFollowsCurrentRequest pins that
+// when the client omits both correlation headers, HTTP middleware generates
+// a per-POST ID, stamps it inbound (so Extra sees it), and the handler ctx
+// matches THIS POST's generated ID, not initialize's.
+func TestHandlerContext_GeneratedCorrelationIDFollowsCurrentRequest(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu   sync.Mutex
+		seen []string
+	)
+	h := &metaStubHandler{name: "corr-generated-freshness-tool"}
+	h.handleFn = func(ctx context.Context, _ *tools.ToolContext, _ map[string]any) (*tools.ToolResult, error) {
+		mu.Lock()
+		seen = append(seen, correlation.From(ctx))
+		mu.Unlock()
+		return &tools.ToolResult{StructuredContent: map[string]any{"step1": map[string]any{"ok": true}}}, nil
+	}
+
+	server := registerFreshnessTool(t, h)
+	stamped := &inboundRecorder{key: correlation.HeaderCorrelationID}
+	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
+	handler := correlation.Middleware(stamped.wrap(streamable))
+
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "c", Version: "0.1.0"}, nil)
+	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{
+		Endpoint:             ts.URL,
+		HTTPClient:           ts.Client(),
+		DisableStandaloneSSE: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	initID := stamped.lastValue()
+	if initID == "" {
+		t.Fatal("initialize POST had no stamped X-Correlation-ID")
+	}
+
+	_, err = session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      h.name,
+		Arguments: map[string]any{"broker": "dev", "msgVpnName": "default"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	callID := stamped.lastValue()
+	if callID == "" {
+		t.Fatal("tools/call POST had no stamped X-Correlation-ID")
+	}
+	if callID == initID {
+		t.Fatalf("tools/call reused initialize's generated ID %q; each POST must mint its own", initID)
+	}
+
+	mu.Lock()
+	got := append([]string(nil), seen...)
+	mu.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("handler ran %d time(s), want 1", len(got))
+	}
+	if got[0] != callID {
+		t.Errorf("handler ctx correlation_id = %q, want this POST's generated %q (not initialize %q)", got[0], callID, initID)
 	}
 }
