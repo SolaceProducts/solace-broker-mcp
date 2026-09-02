@@ -166,6 +166,9 @@ semp:
   max_concurrent_per_broker: 10
   request_timeout_duration: 1m
   request_min_interval: 100ms
+  # Max wait for admission (pacing + in-flight slot) before a request is
+  # rejected instead of queued. 0 waits indefinitely.
+  max_queue_wait: 30s
   retries: 10
   retry_min_interval: 3s
   retry_max_interval: 30s

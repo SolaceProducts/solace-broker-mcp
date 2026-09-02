@@ -301,8 +301,46 @@ Configured under the `semp` key. Controls how the server throttles and retries r
 | YAML field | Default | Description |
 |---|---|---|
 | `semp.request_min_interval` | `100ms` | Minimum spacing between successive SEMP requests per event broker. Set to `0` to disable throttling. |
+| `semp.max_queue_wait` | `30s` | Maximum time a request waits to be admitted before it is rejected. Set to `0` to wait indefinitely. |
 | `semp.request_timeout_duration` | `1m` | HTTP request timeout for individual SEMP calls. |
 | `semp.retries` | `10` | Maximum retry attempts for a failed SEMP call. Set to `0` to disable retries. |
 | `semp.retry_min_interval` | `3s` | Starting backoff before the first retry. |
 | `semp.retry_max_interval` | `30s` | Maximum backoff cap regardless of retry count. |
 | `semp.max_concurrent_per_broker` | `10` | Maximum concurrent SEMP requests per event broker. |
+
+### When a broker is too busy
+
+Every request passes two admission gates before it is sent: the pacing interval
+(`semp.request_min_interval`) and the in-flight limit
+(`semp.max_concurrent_per_broker`). `semp.max_queue_wait` is a single budget
+covering both. A request that cannot clear them within that budget is rejected
+without being sent, and the caller gets a retryable error carrying a
+`retryAfterMs` hint.
+
+The server logs each rejection at `WARN` as `request shed: broker admission
+bound exceeded`, with a `stage` field naming the gate that ran out of budget:
+
+| `stage` | What it means | Where to look |
+|---|---|---|
+| `rate_limit` | Requests are arriving faster than the configured pace sustains | Raise the request rate ceiling by lowering `semp.request_min_interval`, or reduce how many callers share the broker |
+| `concurrency` | Every in-flight slot is occupied, typically by requests waiting on a slow broker | Raise `semp.max_concurrent_per_broker`, or investigate broker health — a slot is held for a request's whole retry chain |
+
+The default of `30s` is set to break hangs, not to shed load. The two gates give
+it different amounts of room, so size it against whichever one your deployment
+actually hits:
+
+- **Pacing gate.** At the default `request_min_interval` of `100ms`, `30s`
+  absorbs a backlog roughly 300 requests deep. Ordinary queueing never comes
+  close.
+- **In-flight gate.** This one is tighter than it looks. A slot is held for a
+  request's whole retry chain, and `request_timeout_duration` alone defaults to
+  `1m`. A healthy but slow broker that holds all
+  `semp.max_concurrent_per_broker` slots for 30 seconds or more will shed the
+  next caller even though nothing is wrong. If your broker's normal response
+  time is a significant fraction of `request_timeout_duration`, raise
+  `semp.max_queue_wait` above it, raise `semp.max_concurrent_per_broker`, or both.
+
+Lower it (`1s` to `5s`) where a caller needs a fast answer more than it needs
+the request to eventually go through, accepting that a slow broker will then
+shed sooner. Setting it to `0` restores the older behavior, where a request with
+no deadline of its own waits for as long as it takes.

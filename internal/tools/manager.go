@@ -372,10 +372,16 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 	var sempv1Err *sempv1.Error
 	var sempv2Err *sempv2.SEMPError
 	var retriesErr *resilience.RetriesExhaustedError
+	var busyErr *resilience.BrokerBusyError
 	var exchErr *tokenexchange.ExchangeError
 	isV1 := errors.As(*toolErr, &sempv1Err)
 	isV2 := errors.As(*toolErr, &sempv2Err)
 	isRetries := errors.As(*toolErr, &retriesErr)
+	// BrokerBusyError clears the audit gate below by construction: it is built
+	// entirely from server-side values (the configured bound, the measured wait,
+	// a fixed stage constant) and never touches a broker, so its Error() cannot
+	// carry broker, intermediary, or caller text.
+	isBusy := errors.As(*toolErr, &busyErr)
 	isExchange := errors.As(*toolErr, &exchErr)
 
 	// "detail" carries the unsanitized error so operators can diagnose failures —
@@ -408,7 +414,7 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 	// field names, and "detail" is a raw string), so this type gate is the
 	// actual safeguard.
 	detail := fmt.Sprintf("%T", *toolErr)
-	if isV1 || isV2 || isRetries || isExchange {
+	if isV1 || isV2 || isRetries || isBusy || isExchange {
 		detail = (*toolErr).Error()
 	}
 

@@ -3943,3 +3943,103 @@ func TestReadResolvedConfigFile_ResolvesVarsFromEnvFile(t *testing.T) {
 		t.Errorf("resolved bytes = %q, want the value from the .env file", string(got))
 	}
 }
+
+// semp.max_queue_wait bounds how long a request waits for admission before it
+// is shed (SOL-153442). Omitted, it must take the default; the pointer type is
+// what lets applyDefaults tell "omitted" from an operator's explicit 0.
+func TestLoadConfig_MaxQueueWait_DefaultApplied(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SEMP.MaxQueueWait == nil || *cfg.SEMP.MaxQueueWait != defaults.DefaultMaxQueueWait {
+		t.Errorf("expected default max_queue_wait %s, got %v", defaults.DefaultMaxQueueWait, cfg.SEMP.MaxQueueWait)
+	}
+}
+
+func TestLoadConfig_MaxQueueWait_ExplicitValueHonored(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+semp:
+  max_queue_wait: 5s
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SEMP.MaxQueueWait == nil || *cfg.SEMP.MaxQueueWait != 5*time.Second {
+		t.Errorf("expected max_queue_wait 5s, got %v", cfg.SEMP.MaxQueueWait)
+	}
+}
+
+// Zero is the documented opt-out: it restores the pre-SOL-153442 behavior of
+// waiting for admission on the caller's context alone. applyDefaults must not
+// clobber it with the 30s default.
+func TestLoadConfig_MaxQueueWait_ExplicitZeroHonored(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+semp:
+  max_queue_wait: 0s
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SEMP.MaxQueueWait == nil || *cfg.SEMP.MaxQueueWait != 0 {
+		t.Errorf("expected operator-set max_queue_wait=0 to be honored, got %v", cfg.SEMP.MaxQueueWait)
+	}
+}
+
+func TestLoadConfig_MaxQueueWait_NegativeRejected(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+semp:
+  max_queue_wait: -10ms
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	_, err := LoadConfig(writeTemp(t, yaml))
+	if err == nil {
+		t.Fatal("expected error for negative max_queue_wait")
+	}
+	if !strings.Contains(err.Error(), "semp.max_queue_wait must be >= 0") {
+		t.Errorf("error = %v, want it to name semp.max_queue_wait", err)
+	}
+}

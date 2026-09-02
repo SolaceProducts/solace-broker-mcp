@@ -78,6 +78,49 @@ func (e *RetriesExhaustedError) Error() string {
 // Unwrap returns the underlying error so errors.Is/As can traverse the chain.
 func (e *RetriesExhaustedError) Unwrap() error { return e.Err }
 
+// Admission stages, reported on BrokerBusyError.Stage. Do gates every request
+// on two queues in sequence, and which one ran out of budget is the first thing
+// an operator needs: the rate-limiter gate points at semp.request_min_interval
+// (arrival rate exceeds the configured pace), the concurrency gate points at
+// semp.max_concurrent_per_broker or at a broker slow enough that in-flight
+// requests are holding their slots.
+const (
+	AdmissionStageRateLimit   = "rate_limit"
+	AdmissionStageConcurrency = "concurrency"
+)
+
+// BrokerBusyError is returned by Do when a request could not be admitted within
+// semp.max_queue_wait. The request was never sent — nothing reached the broker
+// — so replaying it is always safe, including for a write the caller declared
+// non-idempotent. That is the difference from RetriesExhaustedError, where the
+// broker may already have acted.
+//
+// Before SOL-153442 this condition had no error at all: a caller that set no
+// context deadline simply waited, and the MCP server sets no deadline of its
+// own (cmd/server/main.go leaves http.Server.WriteTimeout at zero to keep
+// streamable connections alive). Sustained saturation was therefore an
+// indefinite hang with no signal.
+type BrokerBusyError struct {
+	// Stage is AdmissionStageRateLimit or AdmissionStageConcurrency — which of
+	// Do's two admission gates the budget expired at.
+	Stage string
+
+	// Waited is the time spent trying to be admitted, measured from entry to
+	// Do across both gates. Slightly exceeds MaxWait by scheduling jitter.
+	Waited time.Duration
+
+	// MaxWait is the configured semp.max_queue_wait that was exceeded. Upper
+	// layers use it as the retry-after hint: under sustained saturation, backing
+	// off by at least the bound is what keeps every shed caller from returning
+	// at once.
+	MaxWait time.Duration
+}
+
+func (e *BrokerBusyError) Error() string {
+	return fmt.Sprintf("broker busy: request not admitted within %s at the %s gate (waited %s); "+
+		"the request was not sent", e.MaxWait, e.Stage, e.Waited)
+}
+
 // Sender wraps retryablehttp.Client with per-broker rate limiting, custom retry
 // policy, and 401 re-auth. Both SEMPv1 and SEMPv2 clients compose this to get
 // shared HTTP resilience without duplication.
@@ -92,6 +135,7 @@ type Sender struct {
 	sem           Semaphore          // bounds in-flight requests; shared per-broker across SEMPv1+v2
 	brokerURL     string             // for logging context
 	retryBudget   time.Duration      // overall deadline for the whole retry chain; 0 disables
+	maxQueueWait  time.Duration      // overall bound on admission (both gates); 0 disables
 }
 
 // New creates a Sender configured for a specific broker. It sets up
@@ -143,6 +187,19 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 		// guarantee from being the only thing standing between a broker URL
 		// and the log stream (SOL-152979).
 		brokerURL: config.SanitizeURLString(brokerURL),
+	}
+
+	// Admission bound (SOL-153442). Deliberately NOT added to the nil-guard
+	// panic above, unlike Retries: a nil MaxQueueWait means "no bound", which is
+	// exactly the pre-SOL-153442 behavior and a safe reading for a
+	// hand-constructed config. Production always goes through config
+	// applyDefaults, which fills it. Panicking instead would break every
+	// direct-construction test in this package and in test/integration for no
+	// safety gain — the failure mode of getting this wrong is "behaves as it did
+	// before", not "silently exceeds a configured limit", which is what makes
+	// the sem and limiter guards worth a panic.
+	if sempCfg.MaxQueueWait != nil {
+		d.maxQueueWait = *sempCfg.MaxQueueWait
 	}
 
 	// Configure retryablehttp client with the underlying http.Client.
@@ -205,11 +262,47 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 	return d
 }
 
-// Do sends an HTTP request through the rate limiter and retryablehttp client.
-// The caller is responsible for building the request and adding authentication.
-// On success, returns the HTTP response (body open for the caller to read).
-// On failure after retries, returns a RetriesExhaustedError or a wrapped error.
-func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
+// admit passes a request through both per-broker admission gates — the rate
+// limiter, then the in-flight semaphore — and returns nil once a semaphore slot
+// is held. The caller owns releasing that slot; admit acquires it and never
+// releases it on the success path.
+//
+// Both gates share ONE budget of d.maxQueueWait, measured from entry rather
+// than restarted per gate, so the caller-visible ceiling is the configured
+// bound and not two of them (SOL-153442). Past the budget the request is shed
+// with a *BrokerBusyError instead of waiting on.
+//
+// Bounding both gates rather than just the rate limiter is the point. The
+// limiter drains at a fixed pace and only backs up while arrival rate exceeds
+// it; the semaphore holds each slot for the entire retry chain, which at
+// default settings runs to roughly 16 minutes (see retryBudget in New). A
+// degraded broker fills every slot, and a caller with no deadline blocking on
+// the semaphore is the indefinite hang this exists to prevent. Bounding the
+// limiter alone would move that hang one line down, not remove it.
+//
+// A zero budget disables the bound: `expired` stays nil, and a receive on a nil
+// channel blocks forever, so both selects fall back to waiting on the caller's
+// context exactly as they did before.
+func (d *Sender) admit(ctx context.Context) error {
+	start := time.Now()
+
+	// One timer for both gates, so the budget carries across rather than
+	// resetting: a request that spends most of it waiting for a tick sheds on
+	// the remainder at the concurrency gate, and the caller-visible ceiling
+	// stays d.maxQueueWait rather than twice it.
+	//
+	// A timer that fires while the rate-limiter gate is not looking is still
+	// delivered to the concurrency gate's select. That is the timer-channel
+	// guarantee, NOT buffering — since Go 1.23 timer channels are unbuffered
+	// (cap(timer.C) == 0). Do not "fix" this by draining or re-arming the
+	// timer; either would silently reinstate the per-gate budget this avoids.
+	var expired <-chan time.Time
+	if d.maxQueueWait > 0 {
+		timer := time.NewTimer(d.maxQueueWait)
+		defer timer.Stop()
+		expired = timer.C
+	}
+
 	// Rate limit: wait for the per-broker interval before sending a new request.
 	// This does NOT apply to retries — retryablehttp handles those internally
 	// with jittered backoff (RateLimitLinearJitterBackoff). During failure
@@ -225,7 +318,9 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 		slog.Debug("rate limiter: request permitted",
 			slog.String("broker", d.brokerURL))
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return ctx.Err()
+	case <-expired:
+		return d.shed(ctx, AdmissionStageRateLimit, start)
 	}
 
 	// In-flight cap: acquire a per-broker semaphore slot for the duration of
@@ -235,7 +330,75 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	select {
 	case d.sem <- struct{}{}:
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return ctx.Err()
+	case <-expired:
+		return d.shed(ctx, AdmissionStageConcurrency, start)
+	}
+
+	return nil
+}
+
+// shed builds the BrokerBusyError for an expired admission budget and logs the
+// event for the operator.
+//
+// A caller that set its own deadline must never be told the broker is busy when
+// what actually happened is that its own deadline passed. Two checks, because
+// one is not enough:
+//
+// The Deadline() comparison comes first and is the load-bearing one. Checking
+// only ctx.Err() loses this race almost every time: a timer fires straight from
+// the runtime, while a context deadline has to propagate through
+// cancelCtx.cancel before Err() reports it, so a caller whose deadline expires
+// a few hundred microseconds BEFORE the budget still reads Err() == nil here
+// and would be handed a BrokerBusyError. Measured at ~2ms wide on an idle
+// machine and wider under load. Comparing the deadline against the clock has no
+// such window.
+//
+// The ctx.Err() check then covers explicit cancellation, which has no deadline
+// to read. A cancel landing within microseconds of the budget expiring can
+// still surface as a BrokerBusyError; that residue is inherent to selecting on
+// two simultaneously-ready channels and is harmless, since nothing was sent
+// either way.
+func (d *Sender) shed(ctx context.Context, stage string, start time.Time) error {
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		return context.DeadlineExceeded
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	waited := time.Since(start)
+
+	opID := "unknown"
+	if id, ok := ctx.Value(OperationIDKey{}).(string); ok {
+		opID = id
+	}
+
+	// WARN, not ERROR: shedding is the server working as configured under load,
+	// and it is the signal an operator alerts on to decide whether to raise
+	// semp.max_concurrent_per_broker, lower semp.request_min_interval, or add
+	// broker capacity. brokerURL was sanitized once in New; stage and the
+	// durations are server-generated, so nothing here is broker- or
+	// caller-sourced text.
+	slog.Warn("request shed: broker admission bound exceeded",
+		slog.String("broker", d.brokerURL),
+		slog.String("operation", opID),
+		slog.String("stage", stage),
+		slog.Duration("waited", waited),
+		slog.Duration("max_queue_wait", d.maxQueueWait))
+
+	return &BrokerBusyError{Stage: stage, Waited: waited, MaxWait: d.maxQueueWait}
+}
+
+// Do sends an HTTP request through the rate limiter and retryablehttp client.
+// The caller is responsible for building the request and adding authentication.
+// On success, returns the HTTP response (body open for the caller to read).
+// On failure after retries, returns a RetriesExhaustedError or a wrapped error.
+// When the request cannot be admitted within semp.max_queue_wait it returns a
+// BrokerBusyError and never reaches the broker (see admit).
+func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
+	if err := d.admit(ctx); err != nil {
+		return nil, err
 	}
 	defer func() { <-d.sem }()
 

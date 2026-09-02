@@ -120,7 +120,7 @@ production broker, the confirmation gate on write tools.
 | Same, in non-production (basic/bearer) mode | No opt-in gate required | **No mitigation — accepted risk, dev-scoped** |
 | SSRF via a caller-steered broker target or path (Tampering/Elevation) | Broker host is 100% static/config-sourced (`internal/semp/pool.go:87-119`); path template params are escaped and dot-segment-blocked (`internal/semp/sempv2/client.go:203-228`) | Mitigated — no vector found |
 | This server overloads the broker (DoS) | Shared per-broker semaphore + rate limiter + capped transient retries (`internal/semp/resilience/semaphore.go`, `ratelimiter.go`, `retry.go:22`) | Mitigated |
-| Unbounded goroutine/queue buildup on this server when a caller sets no context deadline (DoS) | None — callers block on `ctx.Done()` only (`internal/semp/resilience/sender.go:200-212`) | **No mitigation — accepted risk** |
+| Unbounded goroutine/queue buildup on this server when a caller sets no context deadline (DoS) | `semp.max_queue_wait` (default 30s) bounds both admission gates — the rate-limiter tick and the in-flight semaphore — as one budget measured from entry to `Sender.Do` (`internal/semp/resilience/sender.go:286-369`). Past it the request is shed with a `BrokerBusyError` and never sent. Bounding the semaphore matters most: a slot is held for the whole retry chain, ~16 minutes at defaults. An operator can still opt out with `max_queue_wait: 0` | Mitigated (SOL-153442) |
 
 ---
 
@@ -245,7 +245,7 @@ a gap, not an exception."*
 | 4 | MCP client → server | `mcp_client_auth.mode: disabled` records no identity at all | Operator-chosen, disabled-auth deployments |
 | 5 | Server → broker | No compensation/rollback on a failed multi-step write | Currently unreachable (all write tools are single-step) |
 | 6 | Server → broker | `insecure_skip_verify` needs no opt-in gate outside production (oauth) mode | Dev/non-oauth deployments |
-| 7 | Server → broker | Unbounded goroutine/queue buildup if a caller sets no context deadline | All deployments |
+| 7 | ~~Server → broker~~ | ~~Unbounded goroutine/queue buildup if a caller sets no context deadline~~ Resolved under SOL-153442 (`semp.max_queue_wait`) | ~~All deployments~~ Only where an operator sets `max_queue_wait: 0` |
 | 8 | ~~OAuth token exchange~~ | ~~A slow/low-traffic IdP outage may never trip the circuit breaker (fails open)~~ Resolved under SOL-152286 | ~~oauth broker mode~~ |
 | 9 | OAuth token exchange | Cached hop-2 token isn't revoked when the IdP revokes the inbound token upstream | oauth broker mode |
 | 10 | Config and secrets | Nothing prevents a plaintext secret typed directly into the YAML | All deployments |
