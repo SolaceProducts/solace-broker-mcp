@@ -860,15 +860,15 @@ need to spend review time on them:
 > _Status: **[Interim]**. This ships as structured **log lines**, not as metrics. The
 > `mcp_saturation_total` counter and the occupancy gauge described in
 > [Planned for a Later Release](#planned-for-a-later-release-not-frozen-in-this-review)
-> are still roadmap. Nothing in this section appears on `/metrics`, because this build has
-> no `/metrics` endpoint._
+> are still roadmap. Nothing in this section appears on `/metrics`, because no meter
+> provider or OpenTelemetry dependency exists yet to feed these instruments onto that endpoint._
 
 Support and SRE needed one question answered quickly: when a customer says "MCP feels
 slow", is the server pacing or shedding requests to protect a broker, or is something else
 slow? The metric form of that answer depends on a metrics pipeline this build does not
-have — no endpoint, no meter provider, no OpenTelemetry dependency — and standing one up
-here would duplicate work already in flight under SOL-150254. So the signal ships as logs
-now and moves to metrics when that pipeline lands.
+have — no meter provider, no OpenTelemetry dependency, no saturation instruments — and
+standing one up here would duplicate work already in flight under SOL-150254. So the
+signal ships as logs now and moves to metrics when that pipeline lands.
 
 Both lines are gated on `OBS_SATURATION_EVENTS_ENABLED` (default off). Neither is a stable
 interface: they are diagnostic output, and the metric that replaces them is where the

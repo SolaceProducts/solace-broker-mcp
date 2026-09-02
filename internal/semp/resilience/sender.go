@@ -151,9 +151,9 @@ type Option func(*Sender)
 // naming the gate it is stuck at.
 //
 // This is the stopgap for SOL-153443, not the metric the observability schema
-// describes. `docs/observability.md` specifies a `/metrics` endpoint that this
-// build does not have — there is no meter provider, no exporter, and no
-// OpenTelemetry dependency — and building one here would duplicate the
+// describes. `docs/observability.md` specifies a gauge on the `/metrics`
+// endpoint SOL-152091 added — nothing registers a meter provider, exporter,
+// or these instruments on it yet — and building that here would duplicate the
 // in-flight work under SOL-150254. A log line needs none of that and answers
 // the same first question: is the server pacing or shedding to protect this
 // broker, or is something else slow?

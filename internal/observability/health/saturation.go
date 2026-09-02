@@ -50,9 +50,10 @@ const occupancyMessage = "broker in-flight occupancy"
 // semaphore is, and returns a stop function that halts it.
 //
 // This is the interim, log-based half of SOL-153443. The observability schema
-// specifies this as a gauge on a Prometheus /metrics endpoint, but this build
-// has no such endpoint, no meter provider and no OpenTelemetry dependency, and
-// standing one up here would duplicate the work in flight under SOL-150254. A
+// specifies this as a gauge on the Prometheus /metrics endpoint SOL-152091
+// added, but nothing registers a meter provider or these instruments on it
+// yet, and standing that up here would duplicate the work in flight under
+// SOL-150254. A
 // periodic log line needs none of that and answers the same question: which
 // broker is under pressure right now. See docs/observability.md.
 //
