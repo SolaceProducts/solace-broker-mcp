@@ -69,9 +69,16 @@ done
 ROOT_MODULE=$(go list -m)
 
 # Expected: "<module path> <version> <dir>" for every module in the binary's
-# closure, minus this repository itself.
+# closure, minus this repository itself. GOOS is pinned to linux because the
+# closure is platform-dependent — github.com/prometheus/procfs is only pulled
+# in on linux (client_golang's process collector) — and linux is the ground
+# truth: it is what this check's CI job runs on and what the shipped container
+# image is. Unpinned, a macOS run computes a smaller closure and reports the
+# procfs row as "listed but not in the dependency closure; drop the row" —
+# advice that, followed, deletes a correct row from a compliance artifact
+# (PR #365 did exactly that via the refresh script).
 closure=$(
-    go list -deps -f '{{with .Module}}{{.Path}} {{.Version}} {{.Dir}}{{end}}' "$TARGET" |
+    GOOS=linux go list -deps -f '{{with .Module}}{{.Path}} {{.Version}} {{.Dir}}{{end}}' "$TARGET" |
         grep -v '^$' |
         grep -v "^${ROOT_MODULE} " |
         sort -u

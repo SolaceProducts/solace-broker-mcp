@@ -215,9 +215,13 @@ while read -r gomod; do
     # so the closure silently empties and the reverse-direction check then
     # reports every real component as unused — telling a maintainer to delete
     # legitimate rows from a compliance artifact.
+    #
+    # GOOS pinned to linux for the same reason as licenses-check.sh: the
+    # closure is platform-dependent, and linux (what CI runs on) is the ground
+    # truth this inventory documents — not the maintainer's laptop.
     list_out=""
     list_rc=0
-    list_out=$(cd "$sub" && go list -deps -test -f '{{with .Module}}{{.Path}} {{.Version}}{{end}}' ./... 2>&1) || list_rc=$?
+    list_out=$(cd "$sub" && GOOS=linux go list -deps -test -f '{{with .Module}}{{.Path}} {{.Version}}{{end}}' ./... 2>&1) || list_rc=$?
     if [ "$list_rc" -ne 0 ]; then
         err "$DOC" "'go list' failed in $sub, so its dependency closure is unknown. Fix that before trusting this check. Output: $(head -3 <<<"$list_out" | tr '\n' ' ')"
         continue

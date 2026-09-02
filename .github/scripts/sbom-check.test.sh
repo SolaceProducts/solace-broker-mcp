@@ -72,18 +72,31 @@ echo "-- real pipeline, end to end --"
 real_sbom_dir=$(mktemp -d)
 ALL_TMP_DIRS+=("$real_sbom_dir")
 real_sbom="$real_sbom_dir/sbom.json"
-# `go run ...@v1.10.0`, matching release.yml's real "Generate SBOM" step
-# exactly — that step never `go install`s the tool, so a pre-installed
-# $GOBIN/cyclonedx-gomod would pass here and not exist in real CI.
+# The SBOM must describe the linux build — that is what release.yml's ubuntu
+# runner generates and what the committed document is validated against — even
+# when this self-test runs on macOS, so GOOS=linux is exported to the tool's
+# module analysis. `GOOS=linux go run` cannot do that: it would cross-compile
+# cyclonedx-gomod itself into a linux executable this host can't exec ("exec
+# format error"). So the pinned tool version is built natively into a
+# throwaway GOBIN first, and GOOS applies only to its run. The throwaway GOBIN
+# keeps the property the previous plain-`go run` shape had: a stale
+# pre-installed cyclonedx-gomod on the host can't be picked up and mask what
+# real CI would do.
 #
 # A failure to even generate the SBOM counts as a failed case, not a skip —
 # a self-test that quietly skips its own most important case on tool trouble
 # is a vacuous pass waiting to happen, the exact failure mode every other
 # self-test in this directory is written to avoid.
+tool_dir=$(mktemp -d)
+ALL_TMP_DIRS+=("$tool_dir")
 gen_output=""
 gen_rc=0
-gen_output=$(go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.10.0 \
-    app -json -licenses -main cmd/server -output "$real_sbom" "$REPO_ROOT" 2>&1) || gen_rc=$?
+gen_output=$(GOBIN="$tool_dir" go install \
+    github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.10.0 2>&1) || gen_rc=$?
+if [ "$gen_rc" -eq 0 ]; then
+    gen_output=$(GOOS=linux "$tool_dir/cyclonedx-gomod" \
+        app -json -licenses -main cmd/server -output "$real_sbom" "$REPO_ROOT" 2>&1) || gen_rc=$?
+fi
 if [ "$gen_rc" -ne 0 ]; then
     echo "  NOT OK   could not generate a real SBOM to test against:"
     while IFS= read -r line; do echo "           $line"; done <<<"$gen_output"
