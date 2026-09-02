@@ -69,6 +69,7 @@ under MPL-2.0.
 | `github.com/prometheus/client_model` | v0.6.2 | Apache-2.0 | [license](https://github.com/prometheus/client_model/blob/v0.6.2/LICENSE) |
 | `github.com/prometheus/common` | v0.70.1 | Apache-2.0 | [license](https://github.com/prometheus/common/blob/v0.70.1/LICENSE) |
 | `github.com/prometheus/otlptranslator` | v1.0.0 | Apache-2.0 | [license](https://github.com/prometheus/otlptranslator/blob/v1.0.0/LICENSE) |
+| `github.com/prometheus/procfs` | v0.21.1 | Apache-2.0 | [license](https://github.com/prometheus/procfs/blob/v0.21.1/LICENSE) |
 | `github.com/santhosh-tekuri/jsonschema/v6` | v6.0.2 | Apache-2.0 | [license](https://github.com/santhosh-tekuri/jsonschema/blob/v6.0.2/LICENSE) |
 | `github.com/segmentio/asm` | v1.1.3 | MIT | [license](https://github.com/segmentio/asm/blob/v1.1.3/LICENSE) |
 | `github.com/segmentio/encoding` | v0.5.4 | MIT | [license](https://github.com/segmentio/encoding/blob/v0.5.4/LICENSE) |
