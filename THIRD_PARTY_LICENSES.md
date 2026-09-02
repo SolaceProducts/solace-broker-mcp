@@ -4,7 +4,7 @@ This file lists the third-party components compiled into the `solace-broker-mcp`
 binary, with their versions and licenses. It is the human-readable OSS compliance
 inventory that accompanies the release.
 
-**Generated** 2026-09-01 with
+**Generated** 2026-09-02 with
 [`go-licenses`](https://github.com/google/go-licenses) against `./cmd/server`:
 
 ```bash
@@ -50,7 +50,7 @@ under MPL-2.0.
 | `github.com/beorn7/perks` | v1.0.1 | MIT | [license](https://github.com/beorn7/perks/blob/v1.0.1/LICENSE) |
 | `github.com/cespare/xxhash/v2` | v2.3.0 | MIT | [license](https://github.com/cespare/xxhash/blob/v2.3.0/LICENSE.txt) |
 | `github.com/coreos/go-oidc/v3/oidc` | v3.20.0 | Apache-2.0 | [license](https://github.com/coreos/go-oidc/blob/v3.20.0/LICENSE) |
-| `github.com/getkin/kin-openapi` | v0.146.0 | MIT | [license](https://github.com/getkin/kin-openapi/blob/v0.146.0/LICENSE) |
+| `github.com/getkin/kin-openapi` | v0.147.0 | MIT | [license](https://github.com/getkin/kin-openapi/blob/v0.147.0/LICENSE) |
 | `github.com/go-jose/go-jose/v4` | v4.1.4 | Apache-2.0 | [license](https://github.com/go-jose/go-jose/blob/v4.1.4/LICENSE) |
 | `github.com/go-jose/go-jose/v4/json` | v4.1.4 | BSD-3-Clause | [license](https://github.com/go-jose/go-jose/blob/v4.1.4/json/LICENSE) |
 | `github.com/go-logr/logr` | v1.4.4 | Apache-2.0 | [license](https://github.com/go-logr/logr/blob/v1.4.4/LICENSE) |
@@ -69,7 +69,6 @@ under MPL-2.0.
 | `github.com/prometheus/client_model` | v0.6.2 | Apache-2.0 | [license](https://github.com/prometheus/client_model/blob/v0.6.2/LICENSE) |
 | `github.com/prometheus/common` | v0.70.1 | Apache-2.0 | [license](https://github.com/prometheus/common/blob/v0.70.1/LICENSE) |
 | `github.com/prometheus/otlptranslator` | v1.0.0 | Apache-2.0 | [license](https://github.com/prometheus/otlptranslator/blob/v1.0.0/LICENSE) |
-| `github.com/prometheus/procfs` | v0.21.1 | Apache-2.0 | [license](https://github.com/prometheus/procfs/blob/v0.21.1/LICENSE) |
 | `github.com/santhosh-tekuri/jsonschema/v6` | v6.0.2 | Apache-2.0 | [license](https://github.com/santhosh-tekuri/jsonschema/blob/v6.0.2/LICENSE) |
 | `github.com/segmentio/asm` | v1.1.3 | MIT | [license](https://github.com/segmentio/asm/blob/v1.1.3/LICENSE) |
 | `github.com/segmentio/encoding` | v0.5.4 | MIT | [license](https://github.com/segmentio/encoding/blob/v0.5.4/LICENSE) |
