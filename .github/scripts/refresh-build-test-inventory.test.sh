@@ -200,9 +200,13 @@ setup_refresh_fixture() { # <tmp>
 # compute_converged_baseline
 #   Runs refresh against an unmutated fixture and saves the result as
 #   CONVERGED_DOC. Aborts the suite if that run does not exit 0 — every
-#   later exit-0 case is meaningless without this oracle.
+#   later exit-0 case is meaningless without this oracle. Not reachable
+#   today (this always runs before any case sets INVENTORY_SOURCE), but
+#   shadowed with a local, unset value regardless: the baseline must stay
+#   an unmutated oracle even if a future case sets INVENTORY_SOURCE before
+#   calling this.
 compute_converged_baseline() {
-    local tmp out_file got=0
+    local tmp out_file got=0 INVENTORY_SOURCE=
     tmp=$(mktemp -d)
     out_file=$(mktemp "$tmp/refresh-out.XXXXXX")
     setup_refresh_fixture "$tmp"
