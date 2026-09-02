@@ -901,6 +901,89 @@ func Test_NewTokenVerifier_TLSWithSSLCertFile(t *testing.T) {
 func boolPtr(b bool) *bool       { return &b }
 func strPtr(s string) *string    { return &s }
 
+// Test_Verifier_PrincipalProjection drives real signed tokens through the
+// verifier and projects the resulting TokenInfo onto a Principal — the same
+// two steps production performs, one in the SDK middleware and one in
+// PrincipalMiddleware. It is the sample-JWT coverage for the committed claim
+// set; the per-request attachment itself is covered in principal_test.go and,
+// end to end over HTTP, in test/integration/principal_freshness_test.go.
+func Test_Verifier_PrincipalProjection(t *testing.T) {
+	mock := newMockOIDCServer(t)
+	defer mock.close()
+
+	cfg := &config.ServerConfig{
+		Port: 9090,
+		MCPClientAuth: config.MCPClientAuthConfig{
+			Mode:        config.AuthModeOAuth,
+			Issuer:      mock.issuer,
+			Audience:    mock.audience,
+			ResourceURL: "http://localhost:9090/mcp",
+		},
+	}
+	verifier, err := NewTokenVerifier(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewTokenVerifier: %v", err)
+	}
+
+	t.Run("all committed claims present", func(t *testing.T) {
+		token, err := mock.createToken(map[string]interface{}{
+			"sub":       "user-42",
+			"scope":     "openid read:queues",
+			"client_id": "cursor-ide",
+			"jti":       "jti-abc-123",
+		})
+		if err != nil {
+			t.Fatalf("createToken: %v", err)
+		}
+		info, err := verifier(context.Background(), token, nil)
+		if err != nil {
+			t.Fatalf("verifier: %v", err)
+		}
+
+		p := NewPrincipal(context.Background(), info)
+		if !p.Present() {
+			t.Fatal("Present() = false for a verified token")
+		}
+		if p.Sub() != "user-42" {
+			t.Errorf("Sub() = %q, want user-42", p.Sub())
+		}
+		if got := strings.Join(p.Scopes(), " "); got != "openid read:queues" {
+			t.Errorf("Scopes() = %q, want %q", got, "openid read:queues")
+		}
+		if p.ClientID() != "cursor-ide" {
+			t.Errorf("ClientID() = %q, want cursor-ide", p.ClientID())
+		}
+		if p.Iss() != mock.issuer {
+			t.Errorf("Iss() = %q, want %q", p.Iss(), mock.issuer)
+		}
+		if p.Jti() != "jti-abc-123" {
+			t.Errorf("Jti() = %q, want jti-abc-123", p.Jti())
+		}
+	})
+
+	t.Run("minimal token: omitted claims read as empty", func(t *testing.T) {
+		// createToken fills sub, iss, aud, exp, iat and nothing else — the
+		// shape a spartan IdP issues.
+		token, err := mock.createToken(map[string]interface{}{})
+		if err != nil {
+			t.Fatalf("createToken: %v", err)
+		}
+		info, err := verifier(context.Background(), token, nil)
+		if err != nil {
+			t.Fatalf("verifier: %v", err)
+		}
+
+		p := NewPrincipal(context.Background(), info)
+		if p.Sub() != "test-user" || p.Iss() != mock.issuer {
+			t.Errorf("Sub()=%q Iss()=%q, want test-user / %q", p.Sub(), p.Iss(), mock.issuer)
+		}
+		if len(p.Scopes()) != 0 || p.ClientID() != "" || p.Jti() != "" {
+			t.Errorf("omitted claims must read empty; got scopes=%v client_id=%q jti=%q",
+				p.Scopes(), p.ClientID(), p.Jti())
+		}
+	})
+}
+
 // Test_OIDCVerifier_SanitizedErrorResponse verifies that when buildTokenInfo
 // rejects a token, the HTTP 401 response body contains only the static
 // sentinel text — no claim names, json type errors, or go-oidc detail.

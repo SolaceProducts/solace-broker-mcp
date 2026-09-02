@@ -37,10 +37,26 @@ const MaxLen = 256
 
 // VerifierBugSentinel is the audit sentinel emitted by callers when their
 // own verifier stashed a non-string value where a string was expected.
-// Distinct from an "absent" sentinel so log consumers can tell "IdP did
-// not issue this claim" (normal) from "our code put garbage in Extra"
-// (alarm).
+// Distinct from AbsentSentinel so log consumers can tell "IdP did not issue
+// this claim" (normal) from "our code put garbage in Extra" (alarm).
 const VerifierBugSentinel = "<verifier-bug>"
+
+// AbsentSentinel is what an audit-log identity field carries when the claim
+// was missing or empty. The angle brackets keep it distinct from any real
+// claim value. It signals "no value to record" without raising alarm;
+// alarming on an empty identity belongs to operator telemetry.
+const AbsentSentinel = "<absent>"
+
+// NormalizeAbsent collapses empty or whitespace-only input to AbsentSentinel
+// and returns anything else unchanged. Presentation-layer only: auth.Principal
+// keeps absent claims as "", and each consumer applies this at emit time so
+// field names stay stable across every token within a mode.
+func NormalizeAbsent(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return AbsentSentinel
+	}
+	return s
+}
 
 // Claim defends against log-injection (CWE-117) and audit-spoofing
 // (CWE-1007) by stripping non-graphic Unicode and capping the result at
@@ -61,10 +77,19 @@ const VerifierBugSentinel = "<verifier-bug>"
 // field-level sanitization protects re-emission through error messages,
 // panic strings, custom handlers, and metric labels.
 //
-// Allocation and CPU are bounded by MaxLen: the working buffer is sized at
-// min(len(s), MaxLen) and the loop breaks as soon as another rune would
-// exceed the cap. A malicious or buggy IdP shipping a multi-megabyte claim
-// cannot force proportional work here.
+// Allocation is bounded by MaxLen: the working buffer is sized at
+// min(len(s), MaxLen) and stops growing once another rune would exceed the
+// cap. CPU is NOT bounded by MaxLen, despite what this comment claimed before
+// SOL-152087 — the cap check sits after the strip, so a claim made entirely of
+// stripped runes never fills the buffer and the loop walks every rune of the
+// input. Work is linear in input length, which upstream bounds only by
+// net/http's 1 MiB default header limit: roughly 4 ms per MiB of all-stripped
+// input, against 7 µs for the same size of graphic text.
+//
+// Left that way deliberately. Cutting the scan short would change which bytes
+// survive for such input, and that is an audit-output change this story does
+// not own. A hostile or badly broken IdP is a precondition either way, since
+// the token must pass signature, issuer and audience verification first.
 //
 // Truncation lands on a rune boundary — the projected length is checked
 // BEFORE writing, so the output is always valid UTF-8 even if the cap
