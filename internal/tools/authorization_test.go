@@ -32,6 +32,14 @@ import (
 // hand-built request and asserts on the returned result, whether the stub
 // `next` ran, and the emitted "tool authorization" slog line.
 
+// seeded pairs a request with the context auth.PrincipalMiddleware would have
+// produced for it in production, so records these tests emit carry identity
+// the way real ones do. Written as wrapped(seeded(req)): Go expands the two
+// results into the handler's two parameters.
+func seeded(req *mcp.CallToolRequest) (context.Context, *mcp.CallToolRequest) {
+	return ctxWithPrincipal(context.Background(), req), req
+}
+
 // captureSlog swaps slog.Default for a JSON handler writing to buf.
 func captureSlog(t *testing.T) (*bytes.Buffer, func()) {
 	t.Helper()
@@ -151,7 +159,7 @@ func TestWithAuthorization_Allow_PassesThroughToNext(t *testing.T) {
 		rec.handler(),
 	)
 
-	got, err := wrapped(context.Background(), requestWithGroups([]string{"Ops"}))
+	got, err := wrapped(seeded(requestWithGroups([]string{"Ops"})))
 	if err != nil {
 		t.Fatalf("wrapper returned error on allow: %v", err)
 	}
@@ -175,7 +183,7 @@ func TestWithAuthorization_Allow_EmitsInfoAuditWithDistinctDecision(t *testing.T
 		"",
 		newRecordingHandler().handler(),
 	)
-	if _, err := wrapped(context.Background(), requestWithGroups([]string{"Ops"})); err != nil {
+	if _, err := wrapped(seeded(requestWithGroups([]string{"Ops"}))); err != nil {
 		t.Fatalf("wrapper returned error: %v", err)
 	}
 
@@ -212,7 +220,7 @@ func TestWithAuthorization_Deny_ReturnsToolLevelErrorResult(t *testing.T) {
 		newRecordingHandler().handler(),
 	)
 
-	got, err := wrapped(context.Background(), requestWithGroups([]string{"Contractors"}))
+	got, err := wrapped(seeded(requestWithGroups([]string{"Contractors"})))
 	if err != nil {
 		t.Fatalf("wrapper returned Go error on deny; want tool-level result. err=%v", err)
 	}
@@ -233,7 +241,7 @@ func TestWithAuthorization_Deny_ResultShapeAndMessage(t *testing.T) {
 		"",
 		newRecordingHandler().handler(),
 	)
-	got, _ := wrapped(context.Background(), requestWithGroups([]string{"Contractors"}))
+	got, _ := wrapped(seeded(requestWithGroups([]string{"Contractors"})))
 
 	sc, ok := got.StructuredContent.(map[string]any)
 	if !ok {
@@ -262,7 +270,7 @@ func TestWithAuthorization_Deny_DoesNotCallNext(t *testing.T) {
 	rec := newRecordingHandler()
 	wrapped := withAuthorization(emptyPolicy(t), "delete-queue", "", rec.handler())
 
-	_, _ = wrapped(context.Background(), requestWithGroups([]string{"Contractors"}))
+	_, _ = wrapped(seeded(requestWithGroups([]string{"Contractors"})))
 
 	if rec.calls != 0 {
 		t.Errorf("next called %d times on deny, want 0 (tool must not run on denial)", rec.calls)
@@ -276,7 +284,7 @@ func TestWithAuthorization_Deny_EmitsWarnAuditWithDistinctDecision(t *testing.T)
 	defer cleanup()
 
 	wrapped := withAuthorization(emptyPolicy(t), "delete-queue", "", newRecordingHandler().handler())
-	_, _ = wrapped(context.Background(), requestWithGroups([]string{"Contractors"}))
+	_, _ = wrapped(seeded(requestWithGroups([]string{"Contractors"})))
 
 	lines := authzLogLines(t, buf)
 	if len(lines) != 1 {
@@ -312,7 +320,7 @@ func TestWithAuthorization_MissingClaim_ReturnsToolLevelErrorResult(t *testing.T
 		newRecordingHandler().handler(),
 	)
 
-	got, err := wrapped(context.Background(), requestMissingGroupsClaim())
+	got, err := wrapped(seeded(requestMissingGroupsClaim()))
 	if err != nil {
 		t.Fatalf("wrapper returned Go error on missing-claim: %v", err)
 	}
@@ -342,7 +350,7 @@ func TestWithAuthorization_MissingClaim_DoesNotCallNext(t *testing.T) {
 		rec.handler(),
 	)
 
-	_, _ = wrapped(context.Background(), requestMissingGroupsClaim())
+	_, _ = wrapped(seeded(requestMissingGroupsClaim()))
 
 	if rec.calls != 0 {
 		t.Errorf("next called %d times on missing-claim, want 0", rec.calls)
@@ -363,7 +371,7 @@ func TestWithAuthorization_MissingClaim_EmitsDistinguishableDecision(t *testing.
 		"groups",
 		newRecordingHandler().handler(),
 	)
-	_, _ = wrapped(context.Background(), requestMissingGroupsClaim())
+	_, _ = wrapped(seeded(requestMissingGroupsClaim()))
 
 	lines := authzLogLines(t, buf)
 	if len(lines) != 1 {
@@ -407,6 +415,8 @@ func TestWithAuthorization_NilTokenInfo_TreatsAsMissingClaim(t *testing.T) {
 				"",
 				rec.handler(),
 			)
+			// Bare context on purpose: no token means no principal, so
+			// this is the absent path. Do not wrap it in seeded().
 			got, err := wrapped(context.Background(), tc.req)
 			if err != nil {
 				t.Fatalf("wrapper returned Go error: %v", err)
@@ -451,7 +461,7 @@ func TestWithAuthorization_NilPolicy_Panics(t *testing.T) {
 			t.Fatal("expected wrapper to panic on nil policy; got no panic (silent bypass would be a security fail-open)")
 		}
 	}()
-	_, _ = wrapped(context.Background(), requestWithGroups([]string{"Ops"}))
+	_, _ = wrapped(seeded(requestWithGroups([]string{"Ops"})))
 }
 
 // Nil policy must panic on every branch — including the branch that would
@@ -467,5 +477,5 @@ func TestWithAuthorization_NilPolicy_PanicsOnMissingClaimBranchToo(t *testing.T)
 			t.Fatal("expected wrapper to panic on nil policy even when request has no groups claim; got no panic (doc/code gap)")
 		}
 	}()
-	_, _ = wrapped(context.Background(), requestMissingGroupsClaim())
+	_, _ = wrapped(seeded(requestMissingGroupsClaim()))
 }

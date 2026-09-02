@@ -23,8 +23,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
-	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -330,11 +330,7 @@ instead of writability flags) and 'raw' (the definition verbatim, larger).
 		start := time.Now()
 		var brokerAlias, errorType string
 		var toolErr error
-		var info *sdkauth.TokenInfo
-		if req.Extra != nil {
-			info = req.Extra.TokenInfo
-		}
-		id := NewIdentityFromTokenInfo(info)
+		id := NewIdentityFromPrincipal(auth.PrincipalFrom(ctx))
 		defer func() {
 			if toolErr == nil && result == nil {
 				errorType = "panic"

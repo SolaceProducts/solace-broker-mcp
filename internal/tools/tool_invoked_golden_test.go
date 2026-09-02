@@ -12,24 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Golden tests for the "tool invoked" audit line and the destructive-
-// operation WARN (SOL-152087, step 0).
+// Golden tests for the "tool invoked" audit line and the destructive-operation
+// WARN (SOL-152087).
 //
-// The SOL-149606 tests in manager_test.go assert identity fields by key,
-// which pins presence but not shape: key order, the exact set of keys, and
-// the byte rendering of each value are unchecked. Story 20 re-sources
-// tools.Identity from auth.Principal and requires the emitted line to be
-// byte-identical before and after, so these goldens capture the line as it
-// is TODAY, before the refactor, and CI enforces the requirement instead of
-// whoever remembers it.
+// The SOL-149606 tests assert identity fields by key, which pins presence but
+// not shape — key order, the exact key set, and each value's rendering go
+// unchecked. Story 20 requires the line to stay byte-identical across the
+// Principal refactor, so these goldens captured it before that change and CI
+// now enforces the requirement.
 //
-// The two nondeterministic attributes — the record timestamp and the
-// measured duration — are pinned to fixed values by ReplaceAttr so the rest
-// of the line can be compared as a string. Everything else is rendered
-// exactly as production would render it through slog.NewJSONHandler.
+// ReplaceAttr pins the two nondeterministic attributes, the timestamp and the
+// measured duration; everything else renders as production does.
 //
-// Intentionally brittle: a diff here is a change to the audit-log contract
-// and must be a deliberate, reviewed decision (Story 22 will make one).
+// Intentionally brittle: a diff here is an audit-log contract change and must
+// be a reviewed decision (Story 22 will make one).
 
 package tools
 
@@ -45,12 +41,10 @@ import (
 // goldenDuration is the fixed value substituted for the measured duration.
 const goldenDuration = 1500 * time.Microsecond
 
-// captureGoldenLogs runs fn with a JSON slog handler installed as the default
-// logger whose time and duration attributes are pinned, and returns the raw
-// emitted audit lines in order. Only the two records under test are kept —
-// "tool invoked" and the destructive-operation WARN — so unrelated INFO
-// lines emitted on the same path (the pool's "broker connection created" on
-// first resolution of an alias) do not perturb the golden.
+// captureGoldenLogs runs fn against a JSON handler with time and duration
+// pinned, returning the audit lines in order. Only the two records under test
+// are kept, so unrelated lines on the same path (the pool's "broker connection
+// created") cannot perturb the golden.
 func captureGoldenLogs(t *testing.T, level slog.Level, fn func()) []string {
 	t.Helper()
 	var buf bytes.Buffer

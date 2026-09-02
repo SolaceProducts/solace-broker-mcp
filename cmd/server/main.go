@@ -1147,6 +1147,16 @@ func main() {
 	// off, AddReceivingMiddleware is never called and dispatch is unchanged.
 	installToolListFiltering(server, cfg, policy, groupsClaimName)
 
+	// Attach the caller Principal every audit site reads (SOL-152087).
+	// Registered LAST on purpose: AddReceivingMiddleware wraps the current
+	// handler, so the last registration is the outermost and runs first —
+	// which it must, because WithListFiltering above reads the principal.
+	// TestPrincipalReachesListFiltering pins that order against this wiring.
+	// Unconditional: in auth mode "disabled" no request carries a token, so
+	// the middleware attaches nothing and audit lines keep their no-identity
+	// shape.
+	server.AddReceivingMiddleware(auth.PrincipalMiddleware())
+
 	slog.Info("all tools registered")
 
 	// 9. Set up HTTP routes

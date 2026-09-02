@@ -28,29 +28,29 @@
 //     an empty group — log lines are byte-identical to today's, so log
 //     consumers can rely on a stable schema in modes that produce audit
 //     trails and a clean absence in modes that don't.
+//
+// Since SOL-152087, Identity projects auth.Principal rather than reading
+// sdkauth.TokenInfo itself, so this line and the audit events of later
+// stories name the same principal by construction. Sanitization happens once,
+// in auth.NewPrincipal; this type adds only "<absent>" normalization.
 
 package tools
 
 import (
 	"fmt"
 	"log/slog"
-	"strings"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/logging/sanitize"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 )
 
-// absentSentinel is the single value any audit-log identity field takes when
-// the underlying claim was missing or empty. The angle brackets make it
-// visually distinct from any real claim value (RFC 7519 §4.1.2 / OIDC Core §2).
-const absentSentinel = "<absent>"
-
 // Identity carries the audit-relevant subset of OIDC claims for a single
 // tool invocation.
 //
-// Construct via NewIdentityFromTokenInfo. The zero value has present=false,
-// which matches disabled-mode behavior (no middleware → no identity).
+// Construct via NewIdentityFromPrincipal. The zero value has present=false,
+// which matches disabled-mode behavior (no middleware → no principal).
 type Identity struct {
 	present  bool
 	sub      string
@@ -80,83 +80,42 @@ func (i Identity) LogValue() slog.Value {
 	)
 }
 
-// NewIdentityFromTokenInfo builds an Identity for the audit-log layer.
+// NewIdentityFromPrincipal projects auth.Principal onto the audit-log schema.
+// Every emit site calls it with auth.PrincipalFrom(ctx), so a log line names
+// the identity the middleware attached, never a second read of the token.
 //
-// A nil TokenInfo (disabled mode or test scaffolding that constructs a bare
-// CallToolRequest) returns Identity{present:false}; LogValue then emits no
-// attributes.
+// A non-present Principal (auth mode "disabled", tests, internal composite
+// steps) yields Identity{present:false}, whose LogValue emits nothing.
 //
-// A non-nil TokenInfo populates all four fields. Each field is sanitized
-// (control chars stripped, capped at 256 bytes) and then normalized: empty
-// or whitespace-only values become the "<absent>" sentinel.
-func NewIdentityFromTokenInfo(t *sdkauth.TokenInfo) Identity {
-	if t == nil {
+// Values arrive already sanitized; here empty ones become
+// sanitize.AbsentSentinel so field names stay stable across all tokens within
+// a mode. Only four of Principal's five claims are rendered — scope rides on
+// Principal for token exchange, not for the audit line.
+func NewIdentityFromPrincipal(p auth.Principal) Identity {
+	if !p.Present() {
 		return Identity{present: false}
 	}
 	return Identity{
 		present:  true,
-		sub:      normalizeAbsent(sanitize.Claim(t.UserID)),
-		iss:      normalizeAbsent(sanitize.Claim(extraString(t, "iss"))),
-		clientID: normalizeAbsent(sanitize.Claim(extraString(t, "client_id"))),
-		jti:      normalizeAbsent(sanitize.Claim(extraString(t, "jti"))),
+		sub:      sanitize.NormalizeAbsent(p.Sub()),
+		iss:      sanitize.NormalizeAbsent(p.Iss()),
+		clientID: sanitize.NormalizeAbsent(p.ClientID()),
+		jti:      sanitize.NormalizeAbsent(p.Jti()),
 	}
-}
-
-// normalizeAbsent collapses empty/whitespace-only input to the audit-log
-// "<absent>" sentinel. Non-empty input is returned unchanged.
-func normalizeAbsent(s string) string {
-	if strings.TrimSpace(s) == "" {
-		return absentSentinel
-	}
-	return s
 }
 
 // TokenInfo.Extra convention:
-//   - Audit-field keys (iss, client_id, jti) carry string values, read via
-//     extraString. These are the Identity audit schema fields.
-//   - Other keys carry per-key typed values, read via a per-key accessor
-//     (e.g. extraStringSlice for authz.TokenInfoExtraKeyGroups). The drift
-//     test asserts by key, not by blanket type.
+//   - Identity-claim keys (iss, client_id, jti) carry strings and are read
+//     exactly once, by auth.NewPrincipal; this package never reads them.
+//   - Other keys carry per-key typed values with a per-key accessor. Groups
+//     are authorization input, not principal identity, so they stay on
+//     TokenInfo and are read here. The drift test asserts by key, not by
+//     blanket type.
 //
-// extraString reads a string-typed claim from TokenInfo.Extra by key.
-//
-// Three outcomes:
-//
-//   - Key missing: returns "" — the normal "IdP did not issue this claim" case,
-//     which downstream normalization maps to the "<absent>" sentinel.
-//
-//   - Key present, value is a string: returns the string. Happy path.
-//
-//   - Key present, value is NOT a string: contract violation by our own
-//     verifier (audit-field keys stash only strings). We emit an ERROR-level slog
-//     entry naming the key and observed type, then return sanitize.VerifierBugSentinel.
-//     The audit-log line for this request still gets emitted (with the
-//     sentinel as the field value) — the panic version we shipped initially
-//     killed the request before logToolResult's defer registered, inverting
-//     the audit guarantee on exactly the request class where it mattered
-//     most. The slog.Error preserves loudness for ops alerting; the distinct
-//     sentinel lets SIEM rules distinguish this case from "<absent>". See
-//     plan §14 for the change-of-mind rationale.
-func extraString(t *sdkauth.TokenInfo, key string) string {
-	v, ok := t.Extra[key]
-	if !ok {
-		return ""
-	}
-	s, isString := v.(string)
-	if !isString {
-		slog.Error("internal: TokenInfo.Extra has unexpected type — verifier contract violation",
-			slog.String("key", key),
-			slog.String("got_type", fmt.Sprintf("%T", v)))
-		return sanitize.VerifierBugSentinel
-	}
-	return s
-}
-
-// extraStringSlice reads a []string-typed value from TokenInfo.Extra by key.
-// Missing keys return (nil, false). Present keys with the wrong type trigger
-// the same verifier-bug slog.Error path as extraString, then return
-// (nil, false). Present keys with a valid []string return a defensive copy
-// so callers may mutate freely without affecting request-scoped storage.
+// extraStringSlice reads a []string value by key. A missing key returns
+// (nil, false); a wrong-typed one takes the same verifier-bug ERROR path
+// auth.NewPrincipal uses and also returns (nil, false). A valid value is
+// copied so callers may mutate freely.
 func extraStringSlice(t *sdkauth.TokenInfo, key string) (values []string, present bool) {
 	if t == nil {
 		return nil, false
