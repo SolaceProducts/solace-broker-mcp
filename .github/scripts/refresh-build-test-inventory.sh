@@ -101,7 +101,11 @@ find_go_submodule_for() {
         # intermittently here and gets misreported as "should not happen" by
         # this function's caller. awk reads its input to EOF regardless of
         # when the match is found, so go list is never killed mid-write.
-        if (cd "$sub" && go list -deps -test -f '{{with .Module}}{{.Path}}{{end}}' ./... 2>/dev/null | awk -v m="$mod_path" '$0 == m { f = 1 } END { exit !f }'); then
+        #
+        # GOOS pinned to linux to match build-test-licenses-check.sh's own
+        # closure exactly — the refresh must resolve a module to the same
+        # submodule the check will look for it in.
+        if (cd "$sub" && GOOS=linux go list -deps -test -f '{{with .Module}}{{.Path}}{{end}}' ./... 2>/dev/null | awk -v m="$mod_path" '$0 == m { f = 1 } END { exit !f }'); then
             printf '%s' "$sub"
             return 0
         fi
