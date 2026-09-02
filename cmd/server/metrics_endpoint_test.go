@@ -19,9 +19,13 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/hooks"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/version"
 )
 
 func metricsConfig(bindAddr string) *config.ServerConfig {
@@ -70,5 +74,29 @@ func TestStartMetricsEndpoint_SuccessIsReady(t *testing.T) {
 	status, ready, reason := readiness.Evaluate()
 	if !ready {
 		t.Errorf("expected /readyz to be ready, got status=%q reason=%q", status, reason)
+	}
+}
+
+// The provider's Shutdown must satisfy the shutdown-hook contract (SOL-153884):
+// registrable on a hooks.Registry and run cleanly, well within RunAll's budget.
+func TestMetricsProvider_ShutdownHook(t *testing.T) {
+	provider, err := metrics.New(version.Version())
+	if err != nil {
+		t.Fatalf("metrics.New: %v", err)
+	}
+
+	reg := hooks.NewRegistry()
+	reg.Register("metrics_provider", provider.Shutdown)
+
+	start := time.Now()
+	reg.RunAll(context.Background())
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("RunAll with the metrics hook took %v, want near-instant", elapsed)
+	}
+
+	// The hook ran provider.Shutdown, so the meter provider is already stopped:
+	// a second Shutdown now errors, which proves the hook actually fired.
+	if err := provider.Shutdown(context.Background()); err == nil {
+		t.Error("expected the provider to be already shut down by the hook, got nil")
 	}
 }
