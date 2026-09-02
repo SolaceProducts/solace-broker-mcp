@@ -6,8 +6,12 @@
 # copy, the tree symlinks the real submodules and workflows so expected values
 # come from real `go list`/`gh api` calls rather than a fixture that goes
 # stale, and every fix/add case asserts the produced row is byte-identical to
-# the committed one — not just that the refresh script's exit code was 0,
-# which a coincidentally-also-valid row would satisfy too.
+# the *computed* baseline (the real refresh script run once against an
+# unmutated copy of the repo), not the committed file. The committed file is
+# stale on every fresh Dependabot PR (SOL-153454); treating it as ground
+# truth made this suite fail for the exact situation the refresh scripts
+# exist to fix. Exit code 0 alone would also pass a coincidentally-also-valid
+# row, which is why the per-row check stays.
 #
 # This suite needs network access (`gh api` for action licences, `go run
 # github.com/google/go-licenses` for new Go-module rows) and a warm module
@@ -60,6 +64,12 @@ current_field() {
 pass=0
 fail=0
 skip=0
+
+# Suite-level scratch: holds the computed baseline and the ambient-drift
+# fixture. Cleaned on EXIT so a Ctrl-C mid-run doesn't leak tmpdirs.
+SUITE_TMP=$(mktemp -d)
+CONVERGED_DOC="$SUITE_TMP/$DOC"
+trap 'rm -rf "$SUITE_TMP"' EXIT
 
 # skip_network <description>
 #   Prints a "skip" line and stops the caller from reporting it as pass/fail.
@@ -147,6 +157,15 @@ PYEOF
 
 # --- harness -------------------------------------------------------------
 #
+# INVENTORY_SOURCE (optional): path of the inventory file copied into the
+# fixture. Defaults to the committed $REPO_ROOT/$DOC. The ambient-drift case
+# points this at a stale copy so the suite exercises SOL-153454 on main.
+#
+# CONVERGED_DOC: computed once per run by compute_converged_baseline, by
+# running the real refresh script against an unmutated copy of the repo.
+# Exit-0 cases whole-file-diff and per-row-diff against this, not against
+# the committed file.
+#
 # assert_refresh <description> <expected exit code> <row-name-to-check|-> <mutation fn + args>
 #   Mirrors refresh-licenses-inventory.test.sh's own assert_refresh. Workflows
 #   and both test submodules must be real copies, not symlinks: the mutation
@@ -160,6 +179,50 @@ PYEOF
 #   exactly like build-test-licenses-check.test.sh's own $CHECK variable,
 #   which points at the real script for the same reason. A copy under $tmp
 #   would never be read by anything and was previously dead weight.
+#
+#   <row-name-to-check> is the exact backticked component name whose row
+#   must, after a successful (exit-0) run, be byte-identical to the row for
+#   that name in CONVERGED_DOC — pass "-" to skip that comparison.
+
+setup_refresh_fixture() { # <tmp>
+    local tmp="$1"
+    ln -s "$REPO_ROOT/go.mod" "$tmp/go.mod"
+    ln -s "$REPO_ROOT/go.sum" "$tmp/go.sum"
+    ln -s "$REPO_ROOT/cmd" "$tmp/cmd"
+    ln -s "$REPO_ROOT/internal" "$tmp/internal"
+    ln -s "$REPO_ROOT/Dockerfile" "$tmp/Dockerfile"
+    mkdir -p "$tmp/.github"
+    cp -R "$REPO_ROOT/.github/workflows" "$tmp/.github/workflows"
+    cp -R "$REPO_ROOT/test" "$tmp/test"
+    cp "${INVENTORY_SOURCE:-$REPO_ROOT/$DOC}" "$tmp/$DOC"
+}
+
+# compute_converged_baseline
+#   Runs refresh against an unmutated fixture and saves the result as
+#   CONVERGED_DOC. Aborts the suite if that run does not exit 0 — every
+#   later exit-0 case is meaningless without this oracle. Not reachable
+#   today (this always runs before any case sets INVENTORY_SOURCE), but
+#   shadowed with a local, unset value regardless: the baseline must stay
+#   an unmutated oracle even if a future case sets INVENTORY_SOURCE before
+#   calling this.
+compute_converged_baseline() {
+    local tmp out_file got=0 INVENTORY_SOURCE=
+    tmp=$(mktemp -d)
+    out_file=$(mktemp "$tmp/refresh-out.XXXXXX")
+    setup_refresh_fixture "$tmp"
+    echo "  computing converged baseline from an unmutated copy"
+    (cd "$tmp" && "$REFRESH" >"$out_file" 2>&1) || got=$?
+    if [ "$got" -ne 0 ]; then
+        echo "  FATAL    could not compute converged baseline (refresh exited $got)"
+        echo "           --- refresh output ---"
+        sed 's/^/           /' "$out_file"
+        rm -rf "$tmp"
+        exit 1
+    fi
+    cp "$tmp/$DOC" "$CONVERGED_DOC"
+    rm -rf "$tmp"
+}
+
 assert_refresh() {
     local desc="$1" want="$2" check_row="$3"
     shift 3
@@ -169,15 +232,7 @@ assert_refresh() {
     local out_file
     out_file=$(mktemp "$tmp/refresh-out.XXXXXX")
 
-    ln -s "$REPO_ROOT/go.mod" "$tmp/go.mod"
-    ln -s "$REPO_ROOT/go.sum" "$tmp/go.sum"
-    ln -s "$REPO_ROOT/cmd" "$tmp/cmd"
-    ln -s "$REPO_ROOT/internal" "$tmp/internal"
-    ln -s "$REPO_ROOT/Dockerfile" "$tmp/Dockerfile"
-    mkdir -p "$tmp/.github"
-    cp -R "$REPO_ROOT/.github/workflows" "$tmp/.github/workflows"
-    cp -R "$REPO_ROOT/test" "$tmp/test"
-    cp "$REPO_ROOT/$DOC" "$tmp/$DOC"
+    setup_refresh_fixture "$tmp"
 
     if [ "$#" -gt 0 ]; then
         local fn="$1"
@@ -191,7 +246,7 @@ assert_refresh() {
     fi
 
     # Snapshot the mutated-but-not-yet-refreshed file, for the want=1
-    # (refusal) branch below: a refusal case has no committed-file baseline
+    # (refusal) branch below: a refusal case has no computed baseline
     # to converge to (it's supposed to change nothing), so "left alone" can
     # only be checked against what the mutation itself produced.
     local pre_refresh_snapshot
@@ -213,7 +268,7 @@ assert_refresh() {
     if [ "$check_row" != "-" ]; then
         local got_row want_row
         got_row=$(grep -F "\`$check_row\`" "$tmp/$DOC" || true)
-        want_row=$(grep -F "\`$check_row\`" "$REPO_ROOT/$DOC" || true)
+        want_row=$(grep -F "\`$check_row\`" "$CONVERGED_DOC" || true)
         if [ "$got_row" != "$want_row" ]; then
             echo "  NOT OK   $desc (exit $got matched, but the row for \`$check_row\` did not converge)"
             echo "           got:  $got_row"
@@ -225,7 +280,7 @@ assert_refresh() {
     fi
 
     # Every exit-0 case in this suite fixes (or starts, and stays) in a state
-    # that should converge to exactly the committed document — not merely
+    # that should converge to exactly the computed baseline — not merely
     # "the one row this case names looks right". Checking only that one row
     # is how the missing-Dockerfile fixture bug got past every other case
     # here: refresh-build-test-inventory.sh correctly saw `golang` and
@@ -238,16 +293,16 @@ assert_refresh() {
     # The "Generated" date line is excluded from both sides before comparing:
     # refresh-build-test-inventory.sh now bumps it as housekeeping on any real
     # rewrite (mirroring the sibling script), so it legitimately differs from
-    # the committed file whenever "today" isn't the date that file happens to
+    # the baseline whenever "today" isn't the date that file happens to
     # carry — that is the intended behaviour, not drift to catch.
     if [ "$want" -eq 0 ]; then
         local diff_file
         diff_file=$(mktemp "$tmp/refresh-diff.XXXXXX")
         if ! diff -u \
-            <(grep -v '^\*\*Generated\*\*' "$REPO_ROOT/$DOC") \
+            <(grep -v '^\*\*Generated\*\*' "$CONVERGED_DOC") \
             <(grep -v '^\*\*Generated\*\*' "$tmp/$DOC") \
             >"$diff_file" 2>&1; then
-            echo "  NOT OK   $desc (exit 0, but the file didn't fully converge to the committed one)"
+            echo "  NOT OK   $desc (exit 0, but the file didn't fully converge to the computed baseline)"
             sed 's/^/           /' "$diff_file"
             fail=$((fail + 1))
             rm -rf "$tmp"
@@ -276,7 +331,33 @@ assert_refresh() {
 
 echo "refresh-build-test-inventory.sh self-test"
 
+compute_converged_baseline
+
 assert_refresh "an already-matching file is a clean no-op" 0 -
+
+# SOL-153454: the committed inventory is not ground truth. A Dependabot
+# github-actions bump leaves this file stale against the workflow SHAs; the
+# harness must still pass. This case manufactures that shape on main so CI
+# covers it without a live Dependabot PR.
+stale_dir="$SUITE_TMP/stale"
+mkdir -p "$stale_dir"
+cp "$REPO_ROOT/$DOC" "$stale_dir/$DOC"
+if ! change_field "$stale_dir" "actions/checkout" "$(current_field "actions/checkout" 2)" '0000000'; then
+    echo "  ERROR    ambient inventory drift (could not stale actions/checkout)"
+    fail=$((fail + 1))
+elif diff -q \
+    <(grep -v '^\*\*Generated\*\*' "$stale_dir/$DOC") \
+    <(grep -v '^\*\*Generated\*\*' "$CONVERGED_DOC") \
+    >/dev/null; then
+    echo "  ERROR    ambient inventory drift (stale copy did not diverge from the baseline)"
+    fail=$((fail + 1))
+else
+    INVENTORY_SOURCE="$stale_dir/$DOC"
+    assert_refresh "a stale committed inventory still converges to the computed baseline" 0 "actions/checkout"
+    assert_refresh "ambient drift plus a further mutation still converges" 0 "golang.org/x/sys" \
+        change_field "golang.org/x/sys" "$(current_field "golang.org/x/sys" 2)" 'v0.1.0'
+    unset INVENTORY_SOURCE
+fi
 
 # --- Go modules ---------------------------------------------------------
 assert_refresh "a stale Go module version is fixed" 0 "golang.org/x/sys" \
