@@ -56,10 +56,12 @@ const metaKeyCorrelationID = "correlation_id"
 // back to the SDK — success, tool error, and panic-recovered alike — so it is
 // also where the correlation ID is stamped onto CallToolResult.Meta. Stamping
 // here (rather than across CallTool's many return paths) guarantees all three
-// result kinds carry it. The HTTP request context that correlation.Middleware
-// seeded reaches this handler's ctx (verified end-to-end through the
-// StreamableHTTPHandler), so correlation.From(ctx) yields the request's ID;
-// when the capability is off it returns "" and no Meta key is added.
+// result kinds carry it. HTTP correlation.Middleware still creates and echoes
+// the correlation ID (and stamps it on the inbound header); tool handlers do
+// NOT inherit that HTTP ctx — stateful streamable sessions freeze handler ctx
+// at initialize. After SOL-153935, correlation.From(ctx) yields this POST's
+// ID because RequestExtraMiddleware shadows the key from Extra.Header; when
+// the capability is off it returns "" and no Meta key is added.
 func withRecovery(toolName string, h mcp.ToolHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
 		defer func() {

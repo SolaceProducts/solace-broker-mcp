@@ -6,6 +6,8 @@
 **Parent epic**: SOL-150070 (OAuth token exchange / Hop 2)
 **Predecessors**: SOL-150794 (Authenticator interface), SOL-150795 (SEMP clients consume Authenticator), SOL-150796 (broker_oauth config schema + Hop 1/Hop 2 alignment guard)
 
+> **Superseded (writer path) by SOL-153935**: HTTP inject deleted; Extra.Header → handler ctx via RequestExtraMiddleware.
+
 ---
 
 ## Why this ticket exists
