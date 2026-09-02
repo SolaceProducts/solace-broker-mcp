@@ -56,13 +56,11 @@ marker; cheap-to-create new files are the structure.
 - `broker_credential_isolation_test.go` — credentials configured for one
   broker never reach another broker's wire, under concurrent load. Static
   modes only (basic, bearer).
-- `raw_subject_token_capture_test.go` — two SOL-150797 invariants:
-  (a) the chain-order contract — `auth.InjectRawSubjectToken` wrapped
-  inside the SDK's `RequireBearerToken` makes the raw bearer token
-  reachable on ctx downstream of validation, and never reachable when
-  validation failed; (b) the production wiring — `auth.NewAuthMiddleware`
-  itself installs `InjectRawSubjectToken` into the chain (regression
-  guard for a future refactor that silently drops the wrap).
+- `raw_subject_token_capture_test.go` — post-SOL-153935 negative invariant:
+  the HTTP handler ctx must **not** carry a raw subject token after
+  `NewAuthMiddleware` wraps the chain. Hop 2 reads the token from
+  `RequestExtraMiddleware` (per-request receiving middleware), not from
+  the HTTP session freeze path.
 
 ### Anticipated future files (see SOL-150070 decomposition)
 

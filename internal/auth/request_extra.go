@@ -48,7 +48,7 @@ func RequestExtraMiddleware() mcp.Middleware {
 
 func applyRequestExtra(ctx context.Context, h http.Header) context.Context {
 	if token, ok := parseBearerToken(h.Get("Authorization")); ok {
-		ctx = context.WithValue(ctx, rawSubjectTokenKey{}, token)
+		ctx = WithRawSubjectToken(ctx, token)
 	}
 	if id, ok := correlation.FromHeader(h); ok {
 		ctx = correlation.With(ctx, id)
