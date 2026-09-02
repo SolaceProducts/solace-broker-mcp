@@ -285,6 +285,32 @@ const DefaultRequestMinInterval = 100 * time.Millisecond
 // on the caller's context alone.
 const DefaultMaxQueueWait = 30 * time.Second
 
+// DefaultFairScheduling controls whether a broker's request pace is shared
+// fairly across callers rather than served first-come-first-served.
+//
+// Decided: true.
+//
+// Reasoning: without it, both admission gates are plain Go channel operations
+// and Go's channel wait queues are FIFO, so one caller's burst puts every later
+// caller behind its entire backlog. It takes no hostile client to hit — a single
+// list-* call over a large VPN fans out hundreds of SEMP requests
+// (internal/composite/executor.go), and at the default 100ms pace a 500-deep
+// backlog is 50 seconds of queueing for someone else's status check. Fairness
+// is the behavior an operator should get without having to find a setting.
+//
+// This is a KILL SWITCH, not a tuning knob. It does not shape capacity:
+// semp.request_min_interval and semp.max_concurrent_per_broker remain the only
+// capacity controls, and fair scheduling reslices that budget rather than
+// changing it. What turning it off buys is blast radius — it puts a lock and a
+// dispatcher goroutine on the hot path of every SEMP request in a service that
+// ships with two replicas and a PodDisruptionBudget, where the only other
+// remedy for a wedge would be an image rollback. The disabled path falls
+// through to the two plain gates, byte-identical to the pre-SOL-153441 code.
+//
+// The same shape of boolean already exists here for the same reason:
+// enable_write_tools, allow_remote_unauthenticated, allow_insecure_broker_tls.
+const DefaultFairScheduling = true
+
 // DefaultRetries is the maximum number of retry attempts for a failed SEMP
 // request before surfacing the error to the caller. Used by the future retry
 // logic (Story 5). Zero disables retries entirely. Matches the story spec and

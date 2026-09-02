@@ -45,7 +45,7 @@ internal/
 ├── semp/                       BrokerPool + BrokerClient — lazy per-broker client creation, thread-safe (RWMutex)
 │   ├── auth/                   Broker (outbound) auth: basic / bearer / oauth Authenticator implementations
 │   ├── correlationhdr/         Writes correlation ID (X-Correlation-ID + traceparent) onto outbound SEMP requests
-│   ├── resilience/             Sender: method-aware retries, cookie jar; reads the broker's shared rate limiter + in-flight cap
+│   ├── resilience/             Sender: method-aware retries, cookie jar; admission via the broker's fair Scheduler over its shared rate limiter + in-flight cap
 │   ├── sempv1/                 SEMPv1 client — XML envelope protocol
 │   └── sempv2/                 SEMPv2 client — HTTP + embedded OpenAPI specs (private monitor + private config)
 │       └── specs/              Embedded Swagger JSON: private monitor (reads) + private config (writes)
@@ -279,8 +279,8 @@ The executor supports two `result.strategy` values:
 
 Write tools are **registered only when `enable_write_tools` is true** (default
 false). The gate is a single check at registration
-(`internal/tools/register.go:149`, `isWriteTool` = `!ReadOnly`,
-`register.go:181`): a write tool that isn't registered never appears in
+(the `isWriteTool` check in `RegisterWithServer`, `isWriteTool` = `!ReadOnly`,
+`internal/tools/register.go`): a write tool that isn't registered never appears in
 `tools/list` and cannot be invoked. This gates **every** state-changing tool —
 destructive or not — so a default deployment exposes only the read set.
 
@@ -373,7 +373,7 @@ sequenceDiagram
     participant HC as Sender + HTTPClient<br/>(prod-us)
     participant Broker as Solace Broker<br/>(prod-us)
 
-    Note over Pool,HC: Same BrokerClient instance<br/>Shared in-flight semaphore + rate limiter + TCP pool<br/>(created lazily on first call)
+    Note over Pool,HC: Same BrokerClient instance<br/>Shared in-flight semaphore + rate limiter + admission scheduler + TCP pool<br/>(created lazily on first call)<br/>Pace is shared round-robin per caller (semp.fair_scheduling)
 
     par User A tool call
         A->>Pool: GetSempV2("prod-us")
@@ -461,8 +461,9 @@ cap is per broker.
 | **Composite Executor** | Tool definitions, steps, templates, result strategies | Brokers, HTTP, auth | `internal/composite/executor.go` |
 | **postprocess handlers** | Step result maps → summary | HTTP, brokers, MCP protocol | `internal/composite/postprocess/` |
 | **BrokerPool** | Map of configs, lazy client creation, RWMutex | Tools, MCP protocol, HTTP details | `internal/semp/pool.go` |
-| **BrokerClient** | SEMPv1 + SEMPv2 clients, authenticator; wires the cookie jar (basic auth only) and the shared per-broker in-flight semaphore and rate limiter at construction, then hands them downstream. Owns the rate limiter's lifetime — `Close()` is its single stop site | Tools, steps, MCP protocol | `internal/semp/broker.go:26` |
-| **resilience Sender** | Rate limiting, method-aware retry, in-flight cap, auth-failure re-auth | Tools, brokers by name, MCP protocol | `internal/semp/resilience/` |
+| **BrokerClient** | SEMPv1 + SEMPv2 clients, authenticator; wires the cookie jar (basic auth only) and the shared per-broker in-flight semaphore, rate limiter and admission scheduler at construction, then hands them downstream. Owns the lifetime of both the rate limiter and the scheduler — `Close()` is the single stop site for each, and stopping the scheduler is what ends its dispatcher goroutine and releases parked waiters | Tools, steps, MCP protocol | `internal/semp/broker.go:26` |
+| **resilience Sender** | Rate limiting, method-aware retry, in-flight cap, admission bound and shedding, auth-failure re-auth | Tools, brokers by name, MCP protocol | `internal/semp/resilience/` |
+| **resilience Scheduler** | Per-broker fair admission: round-robin over per-caller queues for the pace, per-caller ceiling and last-slot reservation for in-flight slots, caller-state lifecycle | Who a caller *is* (it receives an opaque key), HTTP, retries, brokers by name | `internal/semp/resilience/scheduler.go` |
 | **Broker Authenticator** | basic / bearer / oauth outbound auth | Tools, MCP protocol | `internal/semp/auth/` |
 | **sempv2.HTTPClient** | HTTP calls, auth headers, JSON parsing, correlation header | Tools, brokers, MCP protocol | `internal/semp/sempv2/client.go` |
 | **sempv1.HTTPClient** | SEMPv1 XML envelope, correlation header | Tools, brokers, MCP protocol | `internal/semp/sempv1/client.go` |

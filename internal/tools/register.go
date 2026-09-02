@@ -29,6 +29,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -175,6 +176,22 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 			// Principal auth.PrincipalMiddleware attached to ctx (SOL-152087).
 			// Absent in disabled mode and under test scaffolding.
 			id := NewIdentityFromPrincipal(auth.PrincipalFrom(ctx))
+
+			// Charge this request's broker traffic to its caller, for fair
+			// admission scheduling (SOL-153441). This closure is the single
+			// stamping site and that is provable: ToolManager.CallTool is the
+			// only production caller of BrokerPool.GetSEMPv1/GetSEMPv2, and
+			// this is the only production caller of CallTool. list-brokers and
+			// describe-semp-schema are registered separately and never resolve
+			// a broker, so they need no key.
+			//
+			// Carried on the context rather than threaded as a parameter: the
+			// only consumer is the Sender, and threading it would touch every
+			// native tool, the composite executor, and both protocol clients to
+			// move one value. Context-carried request state reaching the Sender
+			// is the established pattern here — OperationIDKey, retryStateKey,
+			// WithRetrySafe/WithRetryUnsafe all arrive the same way.
+			ctx = resilience.WithCallerKey(ctx, callerKeyFromRequest(req))
 
 			// req.Params.Arguments carries omitempty on the wire, so a client
 			// can send tools/call with no arguments field at all — treat that

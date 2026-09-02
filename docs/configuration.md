@@ -319,18 +319,102 @@ Configured under the `semp` key. Controls how the server throttles and retries r
 | `semp.retry_min_interval` | `3s` | Starting backoff before the first retry. |
 | `semp.retry_max_interval` | `30s` | Maximum backoff cap regardless of retry count. |
 | `semp.max_concurrent_per_broker` | `10` | Maximum concurrent SEMP requests per event broker. |
+| `semp.fair_scheduling` | `true` | Share each broker's request pace fairly across callers instead of first-come-first-served. Kill switch, not a capacity control. |
+
+### Sharing a broker fairly between callers
+
+With `semp.fair_scheduling` on (the default), a broker's pace is shared
+round-robin across callers rather than served in arrival order. One caller's
+burst then cannot push another caller's throughput down to a rounding error.
+
+This is not a hypothetical. A single `list-*` call over a large message VPN fans
+out one SEMP request per row, so it can enqueue hundreds of requests from one
+tool invocation. Served first-come-first-served at the default `100ms` pace, a
+500-deep backlog is 50 seconds of queueing for anyone else's status check on the
+same broker. It takes no misbehaving client, only a big VPN.
+
+Callers are identified over two rotation levels: the OIDC subject (`sub`) at the
+outer level, and that subject's MCP sessions at the inner one. Both levels
+matter, in opposite directions.
+
+Under an OAuth `client_credentials` grant the subject is a service account
+shared by every session an agent platform fronts, so keying on the subject
+alone would put the whole platform in one bucket; the session level splits it.
+Treating the `(subject, session)` pair as one flat identity would be the
+opposite mistake: sessions are freely mintable, so a caller could buy extra
+shares by opening them. Because the outer rotation is over subjects, a subject
+gets one turn per lap however many sessions it holds, and its sessions take
+turns within that.
+
+In-flight slots are capped the same way, nested: each subject may hold up to
+`max(1, ceil(max_concurrent_per_broker / active subjects))`, and within that
+allowance each of its sessions may hold up to
+`max(1, ceil(subject allowance / that subject's sessions))`. Both levels are
+needed. Without the subject level a caller would multiply its concurrency by
+opening sessions; without the session level one session could take its subject's
+entire allowance and starve its siblings, which under `client_credentials` — one
+subject, many sessions — would mean no protection at all.
+
+What this means per authentication mode:
+
+| `mcp_client_auth.mode` | Caller identity | Effect |
+|---|---|---|
+| `oauth` | Subject from the token, plus MCP session | Full per-user and per-session fairness |
+| `static` | One shared subject (`dev-user`), plus MCP session | Fair across sessions, since every caller shares the subject |
+| `disabled` | No subject, plus MCP session | Fair across sessions |
+
+Note this is `mcp_client_auth.mode`, which governs how callers authenticate to
+*this server*. A broker's own `auth.mode` (`basic`/`bearer`/`oauth`) governs how
+the server authenticates to *the broker* and has no bearing on fairness: a
+broker on basic auth behind a server in `mcp_client_auth.mode: oauth` still gets
+full per-caller fairness.
+
+**Limits worth knowing before you rely on this:**
+
+- **It reslices the budget, it does not enlarge it.**
+  `semp.request_min_interval` and `semp.max_concurrent_per_broker` remain the
+  only capacity controls, and they still hold across all callers combined.
+- **It is per process, not per cluster.** The server ships with two replicas, so
+  two callers routed to different pods each get a full per-broker budget. That
+  is true today as well; fairness does not change it.
+- **A new caller's first request waits for a completion, not for a reservation.**
+  Once another caller has work queued and holds no slots, the last free
+  in-flight slot stops being available to a caller that already holds one, so
+  the wait is bounded by a single request finishing rather than by the whole
+  backlog. It is not instant, and nothing is held in reserve for a caller that
+  has not arrived yet. When there is no such starved caller the last slot is
+  granted normally, so this costs no capacity.
+- **Requests within one session share one bucket.** Fairness is between callers.
+  A single agent's own fan-out still queues behind itself. Where a client
+  multiplexes many end users over one MCP session and one token, those users
+  share a bucket, because nothing distinguishes them on the wire.
+- **Setting `semp.request_min_interval: 0` removes pace fairness entirely.**
+  There is no pace to share, so the only fairness left is the per-subject
+  in-flight ceiling. If you disable throttling, do not rely on this feature.
+
+Turn it off with `semp.fair_scheduling: false`, which restores exact
+first-come-first-served admission. Treat that as a kill switch for a production
+incident, not as a way to shape capacity — it adds no throughput, and with one
+active caller fair scheduling already grants the entire configured rate and the
+entire in-flight cap.
 
 ### When a broker is too busy
 
-Every request passes two admission gates before it is sent: the pacing interval
-(`semp.request_min_interval`) and the in-flight limit
+Every request is gated on two per-broker resources before it is sent: the
+pacing interval (`semp.request_min_interval`) and the in-flight limit
 (`semp.max_concurrent_per_broker`). `semp.max_queue_wait` is a single budget
-covering both. A request that cannot clear them within that budget is rejected
-without being sent, and the caller gets a retryable error carrying a
+covering both, measured from the moment the request arrives rather than one
+budget per resource. A request that cannot clear them within that budget is
+rejected without being sent, and the caller gets a retryable error carrying a
 `retryAfterMs` hint.
 
+With `semp.fair_scheduling` on (the default) the two are resolved in one wait by
+the scheduler; with it off they are two sequential gates. Either way the budget
+is the same single budget and the `stage` field below means the same thing.
+
 The server logs each rejection at `WARN` as `request shed: broker admission
-bound exceeded`, with a `stage` field naming the gate that ran out of budget:
+bound exceeded`, with a `stage` field naming which resource the request was
+still waiting on:
 
 | `stage` | What it means | Where to look |
 |---|---|---|

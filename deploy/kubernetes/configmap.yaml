@@ -66,6 +66,12 @@ data:
       # Max wait for admission (pacing + in-flight slot) before a request
       # is rejected instead of queued. 0 waits indefinitely.
       max_queue_wait: 30s
+      # Share each broker's pace round-robin across callers instead of
+      # first-come-first-served, so one caller's burst cannot starve
+      # another. A kill switch, not a capacity control. Note it is
+      # per pod: with replicas: 2, callers on different pods each get a
+      # full per-broker budget, which is already true today.
+      fair_scheduling: true
       retries: 10
       retry_min_interval: 3s
       retry_max_interval: 30s
