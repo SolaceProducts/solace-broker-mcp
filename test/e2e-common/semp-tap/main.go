@@ -78,10 +78,12 @@
 //
 //	seq,start_unix_nanos,end_unix_nanos,status,method,path
 //
-// start is when the tap received the request; end is after any -delay, when the
-// headers are handed back downstream. A request whose upstream call failed is
-// recorded with status 0 so a run that silently errored cannot masquerade as a
-// well-paced one.
+// start is when the tap received the request; end is stamped inside
+// ModifyResponse: after any -delay, once the upstream headers are available, and
+// before ReverseProxy writes them downstream. The record line is written and
+// fsynced in between, so end always sits slightly before the downstream header
+// write, never after. A request whose upstream call failed is recorded with
+// status 0 so a run that silently errored cannot masquerade as a well-paced one.
 //
 // Usage:
 //
@@ -100,6 +102,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -110,6 +113,21 @@ import (
 // ModifyResponse. A context value is the only channel the two share, since
 // ReverseProxy gives ModifyResponse the *http.Response and nothing else.
 type startKey struct{}
+
+// userinfoPattern matches the "user:pass@" segment of a URL. httputil's
+// ReverseProxy hands ErrorHandler the raw dial/roundtrip error, and a
+// *url.Error prints its URL verbatim — this module is stdlib-only (own
+// go.mod) and can't reach internal/config's SanitizeURLString, so errors
+// get their own narrow scrub before they reach the log.
+var userinfoPattern = regexp.MustCompile(`://[^/@\s]*@`)
+
+// sanitizeErrForLog strips embedded userinfo from an error's message before
+// logging. The tap points at test brokers today, but the upstream URL is
+// operator-supplied (-upstream), so nothing here should assume it never
+// carries credentials.
+func sanitizeErrForLog(err error) string {
+	return userinfoPattern.ReplaceAllString(err.Error(), "://")
+}
 
 // recorder serialises record lines to the record file. Every line is written
 // and flushed as it completes, so a run that is killed mid-phase still leaves a
@@ -212,9 +230,10 @@ func main() {
 		*req = *req.WithContext(context.WithValue(req.Context(), startKey{}, time.Now()))
 	}
 
-	// End of the measurement window. Fires when the upstream response headers
-	// are available and before they are written downstream — the same instant
-	// the MCP server's Sender.Do returns and drops its semaphore slot.
+	// End of the measurement window. Fires once the upstream response headers are
+	// available and before they are written downstream, which is strictly before
+	// the MCP server's Sender.Do returns and drops its semaphore slot (see "The
+	// measurement window" above).
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		if *delay > 0 {
 			select {
@@ -233,7 +252,7 @@ func main() {
 	proxy.ErrorHandler = func(w http.ResponseWriter, req *http.Request, err error) {
 		start, _ := req.Context().Value(startKey{}).(time.Time)
 		rec.record(start, time.Now(), 0, req.Method, req.URL.Path)
-		log.Printf("semp-tap: upstream error for %s %s: %v", req.Method, req.URL.Path, err)
+		log.Printf("semp-tap: upstream error for %s %s: %s", req.Method, req.URL.Path, sanitizeErrForLog(err))
 		w.WriteHeader(http.StatusBadGateway)
 	}
 

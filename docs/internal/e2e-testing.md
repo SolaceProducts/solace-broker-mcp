@@ -310,7 +310,7 @@ One MCP tool call is not one SEMP request — composites fan out, pagination add
 
 ### Phases
 
-`semp:` is a single global block, and the two limits mask each other — with the pacer at 200ms and a local broker answering in tens of milliseconds, in-flight count never reaches 2, so a cap of 2 could never be shown to bind. Each limit gets a phase where it is the only constraint, plus a shared control. The MCP server is restarted between phases (the `e2e-oauth` pattern).
+`semp:` is a single global block, and the two limits mask each other — with the pacer at 200ms and a local broker answering in tens of milliseconds, in-flight count never reaches 2, so a cap of 2 could never be shown to bind. Each limit gets a phase where it is the only constraint, plus its own control phase. The MCP server is restarted between phases (the `e2e-oauth` pattern).
 
 | Phase | `request_min_interval` | `max_concurrent_per_broker` | Tap delay | Asserts |
 |---|---|---|---|---|
