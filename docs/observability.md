@@ -15,6 +15,11 @@
 > **Correlation IDs are the exception: they are implemented and on by default.** The
 > [Correlation ID](#correlation-id--implemented) section describes shipped behavior you can rely on
 > today.
+>
+> **Saturation visibility is a partial exception.** It ships as structured log lines, not
+> as the metric described here, behind `OBS_SATURATION_EVENTS_ENABLED` (default off). See
+> [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only).
+> The metric form remains roadmap.
 
 The Broker MCP Server is designed to emit three observability signals:
 
@@ -43,6 +48,7 @@ capability headings carry the same tag:
 | Metrics | **[Planned]** | The `/metrics` endpoint and instruments are not yet wired; the names and labels here are the proposal under review. |
 | Audit trail | **[Planned]** | Only the capability gate exists today; event emission lands in a later story. |
 | Distributed tracing | **[Planned]** | OTLP export is not yet wired. |
+| Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
 
 Present-tense wording in a **[Planned]** section describes the **target** behavior under
 review, not what the current build emits. Only the **[Implemented]** capability is live today.
@@ -635,8 +641,10 @@ Notes:
   separate signal: the `authz_denied` audit event and the `mcp_authz_denied_total` metric,
   whose closed `reason` set (`missing_claim`, `not_permitted`) is authorization throughout.
   A denied call produces no `operation` record at all.
-- **Load-shedding / saturation is not an `outcome` value** either; it is planned as a
-  separate metric in a later release (see
+- **Load-shedding / saturation is not an `outcome` value** either; it is a separate signal.
+  It ships today as log lines (see
+  [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only))
+  and is planned as a metric in a later release (see
   [Planned for a Later Release](#planned-for-a-later-release-not-frozen-in-this-review)).
 
 ---
@@ -847,13 +855,105 @@ need to spend review time on them:
 
 ---
 
+## Load and Saturation Visibility — [Interim — logs only]
+
+> _Status: **[Interim]**. This ships as structured **log lines**, not as metrics. The
+> `mcp_saturation_total` counter and the occupancy gauge described in
+> [Planned for a Later Release](#planned-for-a-later-release-not-frozen-in-this-review)
+> are still roadmap. Nothing in this section appears on `/metrics`, because no meter
+> provider or OpenTelemetry dependency exists yet to feed these instruments onto that endpoint._
+
+Support and SRE needed one question answered quickly: when a customer says "MCP feels
+slow", is the server pacing or shedding requests to protect a broker, or is something else
+slow? The metric form of that answer depends on a metrics pipeline this build does not
+have — no meter provider, no OpenTelemetry dependency, no saturation instruments — and
+standing one up here would duplicate work already in flight under SOL-150254. So the
+signal ships as logs now and moves to metrics when that pipeline lands.
+
+Both lines are gated on `OBS_SATURATION_EVENTS_ENABLED` (default off). Neither is a stable
+interface: they are diagnostic output, and the metric that replaces them is where the
+compatibility commitment will live.
+
+### `broker admission slow` — per request, at `WARN`
+
+Emitted while a request is **still waiting** to be admitted to a broker, once its wait
+passes `observability.saturation_threshold_ms` (default `1000`).
+
+| Field | Meaning |
+|---|---|
+| `broker` | The broker's URL, sanitized. Matches the `broker` field on `request shed`. |
+| `operation` | The caller's operation ID, or `unknown`. |
+| `stage` | `rate_limit` (waiting on `semp.request_min_interval`) or `concurrency` (waiting on `semp.max_concurrent_per_broker`). |
+| `waited` | Time queued so far, measured from entry to the admission path. |
+| `threshold` | The configured trip point that fired. |
+| `max_queue_wait` | The configured `semp.max_queue_wait` bound. |
+
+Three things worth knowing:
+
+- **It fires during the wait, not after.** A resolution-time line would arrive up to
+  `max_queue_wait` later, and under `max_queue_wait: 0` (unbounded, a supported setting) it
+  would never arrive at all — precisely the case that most needs a signal.
+- **One line per request, whatever happens next.** It does not re-fire on a timer, and no
+  companion line is emitted when the wait ends. A request that goes on to be shed is
+  reported again by `request shed: broker admission bound exceeded`, using the same `stage`
+  vocabulary.
+- **The threshold has a floor and a ceiling, and both matter.** The floor is
+  `semp.request_min_interval`: a request routinely waits about one pacing interval with
+  nothing wrong, and a fan-out step issues up to 8 calls at once, so the last row of a
+  healthy fan-out waits roughly 700-800ms at the default pace. The default trip point of
+  `1000` sits just above that. Lower `request_min_interval`, raise fan-out concurrency, or
+  run many concurrent callers, and you should raise the threshold rather than read the
+  resulting volume as saturation. The ceiling is `semp.max_queue_wait`: set the threshold
+  at or above it and the signal is silently dead, because the request is shed before the
+  timer fires. Nothing validates either bound today.
+
+### `broker in-flight occupancy` — periodic, per broker
+
+Emitted every `observability.otel_self_stats_interval_s` (default `60`) for each broker
+**that is carrying load**. Idle brokers are skipped: the presence of a line is itself the
+information that a broker is busy.
+
+| Field | Meaning |
+|---|---|
+| `broker` | The configured broker alias, as it appears in your config file. |
+| `in_flight` | Requests currently holding an in-flight slot. |
+| `limit` | The configured `semp.max_concurrent_per_broker` cap. |
+
+`WARN` when `in_flight` has reached `limit` — every further request to that broker now
+queues at the concurrency gate — and `INFO` below it. One reading is emitted at startup so
+turning the capability on mid-incident does not cost you a full interval of silence.
+
+Only brokers the server has actually connected to appear. Broker clients are created on
+first use, so a configured but unused broker has no in-flight cap to report.
+
+**This line detects sustained pressure, not bursts.** It is a point sample on a timer, so
+a saturation episode shorter than the interval can fall entirely between two ticks and
+produce no line at any level. That is an acceptable trade for an interim signal, because
+the episodes that matter most are long: a semaphore slot is held for a request's whole
+retry chain, roughly 16 minutes at default settings, so a genuinely degraded broker stays
+visible across many ticks. For short spikes, rely on the per-request `broker admission
+slow` warning above, which is evaluated on every request rather than on a timer. Lowering
+`otel_self_stats_interval_s` narrows the gap but does not close it; the metric form will,
+because a gauge is scraped rather than sampled by the process.
+
+**Joining the two lines:** the per-request line identifies a broker by sanitized URL and
+the periodic line by configured alias, because each reuses the identifier already
+established in its own layer. The `broker connection created` line logged at first use
+carries both, which is what maps one to the other. The metric form will carry `broker`
+(alias) and `server_address` on the same series and remove the need — see
+[Decided Since the First Draft](#decided-since-the-first-draft).
+
+---
+
 ## Planned for a Later Release (Not Frozen in This Review)
 
 The following are on the roadmap and **not part of this freeze**. Names are indicative and
 will get their own review before they ship.
 
-- Load and saturation visibility (a `mcp_saturation_total` metric and a rate-limiter health
-  gauge), so operators can see when the server sheds load to protect a broker.
+- Load and saturation visibility **as metrics** (a `mcp_saturation_total` counter and a
+  rate-limiter health gauge). An interim log-based signal ships today — see
+  [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only) —
+  but the metric form is still roadmap, tracked under SOL-150254.
 - Broker connection-pool gauges.
 - A SEMP retry-outcome counter.
 - Cancellation and progress signals (which populate the reserved `cancelled` outcome).

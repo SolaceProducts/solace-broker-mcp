@@ -337,17 +337,40 @@ const DefaultOAuthCacheMaxSize = 10000
 // stale tokens are eventually evicted even if the background sweeper misfires.
 const DefaultMaxOAuthTokenTTL = 24 * time.Hour
 
-// DefaultSaturationThresholdMs is the latency above which a tool call is
-// considered slow enough to emit a saturation signal (a future observability
-// story consumes this). Expressed in milliseconds to match the YAML field
+// DefaultSaturationThresholdMs is the wait above which a saturation signal is
+// emitted. Expressed in milliseconds to match the YAML field
 // (observability.saturation_threshold_ms).
 //
-// Assumption: 10ms is a sensible default trip point.
-// Reasoning: SEMP management-plane calls that complete well under this are
-// healthy; sustained crossings indicate the broker or the server is saturating.
-// Validation needed: tune against real broker latencies once the saturation
-// emitter lands and we observe production percentiles.
-const DefaultSaturationThresholdMs = 10
+// SOL-153443 is the first consumer, and it measures the time a request spends
+// queued for admission to a broker — waiting on the pacing interval, then on
+// the in-flight cap — not end-to-end tool-call latency. The name stays general
+// so a later signal can share the knob; what it governs today is admission
+// wait.
+//
+// Assumption: 1000ms is a sensible default trip point.
+// Reasoning: it has to sit clear of DefaultRequestMinInterval (100ms), because
+// a request routinely waits about one pacing interval with nothing wrong, and
+// several intervals once a handful of callers are queued behind it. Ten
+// intervals is comfortably outside that band while still well inside
+// DefaultMaxQueueWait (30s), so the warning arrives long before the request is
+// shed rather than alongside it. The earlier value of 10ms predates a consumer
+// and described tool-call latency; against a 100ms pacing interval it would
+// have reported effectively every request as saturated.
+//
+// The number of concurrent arrivals is what sets that band, and the composite
+// executor's fan-out is what drives it: a fan-out step issues up to
+// fanOutDefaultConcurrency (8) calls at once, so the last row of a healthy
+// fan-out waits roughly 7-8 pacing intervals — 700-800ms — behind the tick.
+// That is the real constraint on this default, and the margin is only about
+// 20%. Raising fanOutDefaultConcurrency, or shipping a tool step that sets
+// `concurrency:` toward fanOutMaxConcurrency (32), pushes normal fan-out past
+// the trip point and turns a healthy broker into a stream of warnings. Move
+// this default with it if that happens; volume is precisely the failure mode
+// that gets an operator to switch the signal off.
+//
+// Validation needed: tune against real deployments once we see how often this
+// fires under normal load.
+const DefaultSaturationThresholdMs = 1000
 
 // DefaultProgressSignalThresholdMs is the elapsed time after which a long-
 // running tool call emits a progress signal so the agent and operator know
