@@ -297,6 +297,61 @@ func TestMiddleware_EndToEndPropagation(t *testing.T) {
 	})
 }
 
+// TestMiddleware_StampsResolvedIDOnInboundHeader pins that the resolved ID is
+// written onto the inbound X-Correlation-ID before next runs, equal to the
+// response echo. That is how Extra.Header sees a generated ID (SOL-153935).
+// A client-supplied header is replaced with the sanitized resolved value.
+// Authorization is left unchanged.
+func TestMiddleware_StampsResolvedIDOnInboundHeader(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		headers map[string]string
+	}{
+		{"omitted both headers", nil},
+		{"from X-Correlation-ID", map[string]string{headerCorrelationID: "client-supplied-id"}},
+		{"trimmed X-Correlation-ID", map[string]string{headerCorrelationID: "  padded-id  "}},
+		{"from traceparent", map[string]string{headerTraceparent: validTraceparent}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			const authz = "Bearer leave-me-alone"
+			var inboundID, ctxID string
+			var inboundAuth string
+			handler := Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				inboundID = r.Header.Get(headerCorrelationID)
+				inboundAuth = r.Header.Get("Authorization")
+				ctxID = From(r.Context())
+			}))
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
+			for k, v := range tc.headers {
+				req.Header.Set(k, v)
+			}
+			req.Header.Set("Authorization", authz)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			echoed := rec.Header().Get(headerCorrelationID)
+			if echoed == "" {
+				t.Fatalf("response %s is empty", headerCorrelationID)
+			}
+			if inboundID != echoed {
+				t.Errorf("inbound %s = %q, want the echoed response value %q", headerCorrelationID, inboundID, echoed)
+			}
+			if inboundID != ctxID {
+				t.Errorf("inbound %s = %q, want the handler ctx ID %q", headerCorrelationID, inboundID, ctxID)
+			}
+			if inboundAuth != authz {
+				t.Errorf("inbound Authorization = %q, want %q (must not be mutated)", inboundAuth, authz)
+			}
+			if tc.headers == nil && !isUUIDv7(inboundID) {
+				t.Errorf("generated inbound ID = %q, want a UUIDv7", inboundID)
+			}
+		})
+	}
+}
+
 // TestMiddleware_SetsResponseHeader pins that Middleware echoes the resolved
 // correlation ID back to the caller in the X-Correlation-ID response header,
 // and that the header value is exactly the ID the downstream handler observes

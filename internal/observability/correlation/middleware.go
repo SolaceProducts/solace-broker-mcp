@@ -91,6 +91,12 @@ func From(ctx context.Context) string {
 // onto the same header name the inbound path reads from is intentional: it is
 // request/response symmetric and the value is already sanitized.
 //
+// The resolved ID is also written onto the inbound X-Correlation-ID request
+// header before next runs. The MCP streamable HTTP transport copies this
+// request's Header into req.Extra; Extra would otherwise contain only what
+// the client sent, so a generated ID would never reach JSON-RPC handlers.
+// Authorization is not touched.
+//
 // Callers gate installation on Enabled (OBS_CORRELATION_ID_ENABLED). When the
 // capability is off the middleware is not wired, From returns "", and no
 // response header is set.
@@ -98,6 +104,7 @@ func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := resolveID(r)
 		w.Header().Set(headerCorrelationID, id)
+		r.Header.Set(headerCorrelationID, id)
 		ctx := With(r.Context(), id)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
