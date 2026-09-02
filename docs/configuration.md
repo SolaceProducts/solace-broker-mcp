@@ -338,7 +338,7 @@ actually hits:
   `semp.max_concurrent_per_broker` slots for 30 seconds or more will shed the
   next caller even though nothing is wrong. If your broker's normal response
   time is a significant fraction of `request_timeout_duration`, raise
-  `max_queue_wait` above it, raise `max_concurrent_per_broker`, or both.
+  `semp.max_queue_wait` above it, raise `semp.max_concurrent_per_broker`, or both.
 
 Lower it (`1s` to `5s`) where a caller needs a fast answer more than it needs
 the request to eventually go through, accepting that a slow broker will then

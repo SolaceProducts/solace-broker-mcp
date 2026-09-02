@@ -130,7 +130,10 @@ func (m *ToolManager) buildErrorResult(err error, brokerAlias string) *mcp.CallT
 		// retryAfterMs is the configured bound, not the pacing interval. The
 		// trigger is sustained saturation, so telling every shed caller to come
 		// back in one interval just re-forms the queue that caused the shed.
-		structured["retryAfterMs"] = busyErr.MaxWait.Milliseconds()
+		// max_queue_wait accepts any Go duration, so a sub-millisecond bound
+		// (e.g. 500µs) would otherwise truncate to 0 here and could read as
+		// "retry immediately" despite the human-facing message rounding up.
+		structured["retryAfterMs"] = max(1, busyErr.MaxWait.Milliseconds())
 		structured["error_source"] = "load_shed"
 	case errors.As(err, &sempv2Err):
 		structured["status"] = sempv2Err.StatusCode
@@ -262,10 +265,15 @@ func buildErrorMessage(err error, brokerAlias string) (string, []string) {
 	// agent this is safe to repeat even for a write, which is the opposite of
 	// the non-idempotent retry-exhaustion case below.
 	case errors.As(err, &busyErr):
+		waitSeconds := max(1, int(busyErr.MaxWait.Round(time.Second)/time.Second))
+		unit := "seconds"
+		if waitSeconds == 1 {
+			unit = "second"
+		}
 		return fmt.Sprintf(
 				"The broker is too busy to accept this request right now, so it was not sent. "+
-					"Nothing was changed on the broker. Wait about %d seconds and try again.",
-				max(1, int(busyErr.MaxWait.Round(time.Second)/time.Second))),
+					"Nothing was changed on the broker. Wait about %d %s and try again.",
+				waitSeconds, unit),
 			[]string{"If this keeps happening, the broker is saturated: reduce how many requests you issue at once."}
 
 	case errors.As(err, &retriesErr):
