@@ -150,8 +150,8 @@ func (p *Provider) Handler() http.Handler {
 	})
 }
 
-// Shutdown flushes and stops the meter provider. Not yet wired into the
-// shutdown path — see the TODO in cmd/server (SOL-152449).
+// Shutdown flushes and stops the meter provider. cmd/server registers it as a
+// shutdown hook (SOL-153884).
 func (p *Provider) Shutdown(ctx context.Context) error {
 	return p.meterProvider.Shutdown(ctx)
 }

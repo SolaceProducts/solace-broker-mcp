@@ -19,9 +19,13 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/hooks"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/version"
 )
 
 func metricsConfig(bindAddr string) *config.ServerConfig {
@@ -70,5 +74,34 @@ func TestStartMetricsEndpoint_SuccessIsReady(t *testing.T) {
 	status, ready, reason := readiness.Evaluate()
 	if !ready {
 		t.Errorf("expected /readyz to be ready, got status=%q reason=%q", status, reason)
+	}
+}
+
+// The provider's Shutdown must satisfy the shutdown-hook contract (SOL-153884):
+// registrable on a hooks.Registry and run cleanly, well within RunAll's budget.
+func TestMetricsProvider_ShutdownHook(t *testing.T) {
+	provider, err := metrics.New(version.Version())
+	if err != nil {
+		t.Fatalf("metrics.New: %v", err)
+	}
+
+	reg := hooks.NewRegistry()
+	reg.Register("metrics_provider", provider.Shutdown)
+
+	// Bound the context like cmd/server does, so a hook that ever blocks fails
+	// at the deadline instead of hanging CI. RunAll honours the deadline only if
+	// the caller sets one.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	reg.RunAll(ctx)
+	if ctx.Err() != nil {
+		t.Fatalf("RunAll exceeded its budget: %v", ctx.Err())
+	}
+
+	// The hook ran provider.Shutdown, so the meter provider is already stopped:
+	// a second Shutdown now errors. This proves Shutdown satisfies the hook
+	// contract, not that main() wires it in (that is exercised end-to-end).
+	if err := provider.Shutdown(context.Background()); err == nil {
+		t.Error("expected the provider to be already shut down by the hook, got nil")
 	}
 }

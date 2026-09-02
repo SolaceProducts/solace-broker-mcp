@@ -546,9 +546,8 @@ func startServer(srv *http.Server, tlsCertFile, tlsKeyFile string) <-chan error 
 // instrument registration, or nil if the provider failed to build or the
 // listener failed to bind (both surface on /readyz).
 //
-// No explicit shutdown: /metrics is pull-based, so nothing is buffered to lose,
-// and process exit reaps the listener. TODO(SOL-152449): once the shared
-// shutdown-hook registry lands, register provider.Shutdown against it.
+// The caller registers the returned provider's Shutdown as a shutdown hook, so
+// the meter provider is flushed on graceful shutdown.
 func startMetricsEndpoint(cfg *config.ServerConfig, readiness *health.ReadinessState) *metrics.Provider {
 	provider, err := metrics.New(version.Version())
 	if err != nil {
@@ -1180,8 +1179,8 @@ func main() {
 	readiness := health.NewReadinessState()
 	mux := buildMux(readiness)
 
-	// shutdownHooks is empty until a later story (SOL-152091, SOL-152420,
-	// SOL-152418) registers an OTel provider flush against it.
+	// The metrics provider flush registers below (SOL-153884); the tracing
+	// (SOL-152420) and audit (SOL-152418) flushes follow once those land.
 	shutdownHooks := hooks.NewRegistry()
 
 	// Create MCP handler
@@ -1248,9 +1247,11 @@ func main() {
 
 	// Metrics endpoint: a second listener on its own port, only when enabled.
 	// Registered before SetInitialized so a bind failure shows on the first
-	// /readyz check. No explicit shutdown — see startMetricsEndpoint.
+	// /readyz check. The provider's flush is registered as a shutdown hook.
 	if metrics.Enabled(cfg.Observability) {
-		startMetricsEndpoint(cfg, readiness)
+		if provider := startMetricsEndpoint(cfg, readiness); provider != nil {
+			shutdownHooks.Register("metrics_provider", provider.Shutdown)
+		}
 	}
 
 	// Startup is complete and the serving goroutine has been launched:
