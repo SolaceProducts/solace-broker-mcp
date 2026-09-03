@@ -17,8 +17,6 @@ package auth
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -49,22 +47,11 @@ func (f *fakeExchanger) Invalidate(_ context.Context, input tokenexchange.Dedupl
 	f.mu.Unlock()
 }
 
-// ctxWithSubjectToken runs the InjectRawSubjectToken middleware to place
-// a bearer token on a context, exactly as the production middleware does.
+// ctxWithSubjectToken places the bearer token on a context via
+// WithRawSubjectToken, matching what RequestExtraMiddleware does per request.
 func ctxWithSubjectToken(t *testing.T, token string) context.Context {
 	t.Helper()
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.test", nil)
-	if err != nil {
-		t.Fatalf("building request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	var captured context.Context
-	handler := internalauth.InjectRawSubjectToken(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		captured = r.Context()
-	}))
-	handler.ServeHTTP(httptest.NewRecorder(), req)
-	return captured
+	return internalauth.WithRawSubjectToken(context.Background(), token)
 }
 
 func TestOAuthAuthenticator_AddAuth(t *testing.T) {

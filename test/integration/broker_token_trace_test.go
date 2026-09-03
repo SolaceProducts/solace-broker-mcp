@@ -149,24 +149,11 @@ func newTraceAuthenticator(t *testing.T, idpURL string, clockSkew time.Duration)
 	return sempauth.NewOAuthAuthenticator(exchanger, traceAudience, traceBrokerAlias)
 }
 
-// traceCtxWithSubjectToken runs the real Hop 1 middleware, so the subject
-// token reaches ctx by production's path rather than via a context key this
-// package cannot reach.
+// traceCtxWithSubjectToken places the subject token on a context via
+// WithRawSubjectToken, matching what RequestExtraMiddleware does per request.
 func traceCtxWithSubjectToken(t *testing.T) context.Context {
 	t.Helper()
-
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
-	req.Header.Set("Authorization", "Bearer "+traceSubjectTok)
-
-	var captured context.Context
-	internalauth.InjectRawSubjectToken(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		captured = r.Context()
-	})).ServeHTTP(httptest.NewRecorder(), req)
-
-	if captured == nil {
-		t.Fatal("InjectRawSubjectToken did not invoke the next handler")
-	}
-	return captured
+	return internalauth.WithRawSubjectToken(context.Background(), traceSubjectTok)
 }
 
 func idpIssues(expiresIn int) http.HandlerFunc {

@@ -34,10 +34,12 @@ type tokenExchanger interface {
 }
 
 // OAuthAuthenticator obtains a broker-bound access token by exchanging
-// the agent's inbound token (from Hop 1) via RFC 8693 token exchange.
-// Fields are set at construction and never written again, so AddAuth
-// and HandleAuthFailure are safe to call concurrently from any number
-// of goroutines. Per-request state (the subject token) flows through ctx.
+// the agent's inbound token via RFC 8693 token exchange. Hop 1 validates the
+// bearer; the raw subject token on ctx is stamped from Extra.Header by
+// RequestExtraMiddleware on each JSON-RPC POST. Fields are set at construction
+// and never written again, so AddAuth and HandleAuthFailure are safe to call
+// concurrently from any number of goroutines. Per-request state (the subject
+// token) flows through ctx.
 type OAuthAuthenticator struct {
 	exchanger   tokenExchanger
 	audience    string
@@ -65,9 +67,10 @@ func NewOAuthAuthenticator(exchanger tokenExchanger, audience string, brokerAlia
 	}
 }
 
-// AddAuth exchanges the agent's inbound token (carried on ctx by the
-// Hop 1 middleware) for a broker-scoped token and sets it as the
-// Authorization: Bearer header on req.
+// AddAuth exchanges the agent's inbound token for a broker-scoped token and
+// sets it as the Authorization: Bearer header on req. The subject token is
+// carried on handler ctx by RequestExtraMiddleware, which copies it from
+// Extra.Header on each JSON-RPC POST; the accessor is RawSubjectTokenFromContext.
 func (a *OAuthAuthenticator) AddAuth(ctx context.Context, req *http.Request) error {
 	// Opens the trace. Everything between this and the finish line below
 	// belongs to one broker call, whichever route the token took.
@@ -78,7 +81,7 @@ func (a *OAuthAuthenticator) AddAuth(ctx context.Context, req *http.Request) err
 	if !ok {
 		err := &tokenexchange.ExchangeError{
 			Sentinel:    tokenexchange.ErrExchangeMissingSubject,
-			Message:     "oauth auth: no subject token on context — Hop 1 middleware may not have run",
+			Message:     "oauth auth: no subject token on context — receiving middleware (RequestExtraMiddleware) did not stamp Extra.Header Authorization onto this handler ctx",
 			BrokerAlias: a.brokerAlias,
 		}
 		a.logUnavailable(ctx, err)

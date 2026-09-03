@@ -182,7 +182,7 @@ circuit breaker on that path.
 | Token leak via cache logging (Info Disclosure) | `CachedCredential`/`GetResult` `LogValue()` explicitly omit the token value (`internal/oauth/cache/cache.go:30-40,76-78`) | Mitigated |
 | Stale token served after the IdP revokes the inbound token upstream (Info Disclosure/Elevation) | None — invalidation is reactive only, triggered by a broker 401 (`internal/tokenexchange/exchange.go:291-299`), not by any revocation push/poll | **No mitigation — accepted risk** |
 | Singleflight dedup hands caller B a token meant for caller A (Elevation of Privilege) | Singleflight key construction is identical to the cache key — collision requires the same bearer JWT | Mitigated by construction |
-| Raw inbound JWT leaks via logs or context misuse (Info Disclosure) | Carried in an unexported context-key type (`internal/auth/raw_subject_token.go:47`); never logged; downstream types implement redacting `String()`/`LogValue()` (`internal/tokenexchange/types.go:192-198`) | Mitigated |
+| Raw inbound JWT leaks via logs or context misuse (Info Disclosure) | Carried in an unexported context-key type (`internal/auth/raw_subject_token.go:50`); never logged; downstream types implement redacting `String()`/`LogValue()` (`internal/tokenexchange/types.go:192-198`) | Mitigated |
 | Algorithm-confusion attack at hop-1 verification (`alg: none`, HMAC-as-secret) (Spoofing/Tampering) | `InsecureSkipSignatureCheck` never set; verification against the IdP's asymmetric JWKS only (`internal/auth/middleware.go:144-146`); confirmed against `go-oidc` vendor source | Mitigated |
 
 ---

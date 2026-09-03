@@ -60,13 +60,14 @@ const metaKeyCorrelationID = "correlation_id"
 // result kinds carry it; when the capability is off correlation.From(ctx)
 // returns "" and no Meta key is added.
 //
-// Which ID that is, corrected: a tool handler's context descends from the POST
-// that established the session, not the one carrying this call, so
-// correlation.From(ctx) yields the session's first ID for the session's life,
-// while the X-Correlation-ID response header is per request. This comment
-// claimed the opposite and was measured wrong under SOL-152087. Not addressed
-// here. Only the SDK's per-message RequestExtra tracks the current request,
-// which is where the caller Principal is built (auth.PrincipalMiddleware).
+// Which ID that is: a tool handler's context descends from the POST that
+// established the session, not the one carrying this call, so it does not
+// inherit the HTTP context correlation.Middleware seeded — that was measured
+// under SOL-152087. Only the SDK's per-message RequestExtra tracks the current
+// request, so SOL-153935 copies Extra.Header onto each handler ctx
+// (auth.RequestExtraMiddleware), shadowing the frozen value. HTTP
+// correlation.Middleware still creates and echoes the ID; correlation.From(ctx)
+// here now yields this POST's.
 func withRecovery(toolName string, h mcp.ToolHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
 		defer func() {

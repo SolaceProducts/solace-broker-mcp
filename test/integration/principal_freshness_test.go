@@ -81,8 +81,8 @@ func (t *tokenSwapTransport) RoundTrip(r *http.Request) (*http.Response, error) 
 
 // TestPrincipalFreshness_AuditLineNamesTheCallingToken pins per-request
 // identity through the real composition: SDK bearer verification, the
-// raw-subject-token injection DEP-001 relies on, and the principal middleware,
-// in front of a real tool registration.
+// principal middleware, and the Extra.Header middleware that carries the raw
+// subject token DEP-001 relies on, in front of a real tool registration.
 func TestPrincipalFreshness_AuditLineNamesTheCallingToken(t *testing.T) {
 	pool := metaTestPool(t)
 	mgr := tools.NewToolManager(pool)
@@ -90,13 +90,14 @@ func TestPrincipalFreshness_AuditLineNamesTheCallingToken(t *testing.T) {
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
 	tools.RegisterWithServer(mgr, server, pool, true, nil, "")
+	// Same order as installRequestMiddleware registers them: Extra.Header last
+	// so it is outermost and refreshes ctx before the principal is built.
 	server.AddReceivingMiddleware(auth.PrincipalMiddleware())
+	server.AddReceivingMiddleware(auth.RequestExtraMiddleware(true))
 
 	mcpHandler := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return server }, nil)
-	// Same order as auth.NewAuthMiddleware composes them.
-	handler := sdkauth.RequireBearerToken(rotatingVerifier, nil)(
-		auth.InjectRawSubjectToken(mcpHandler))
+	handler := sdkauth.RequireBearerToken(rotatingVerifier, nil)(mcpHandler)
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 

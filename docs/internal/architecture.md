@@ -86,7 +86,7 @@ graph TB
 
     subgraph "internal/auth + identity"
         VERIFY["middleware.go<br/>bearer verify, claims → TokenInfo"]
-        RAWTOK["raw_subject_token.go<br/>capture raw JWT for hop 2"]
+        RAWTOK["request_extra.go<br/>capture raw JWT for hop 2 (SOL-153935)"]
         IDENT["tools/identity.go<br/>log-only audit Identity"]
     end
 
@@ -179,10 +179,23 @@ Identity crosses two hops:
   (`internal/tools/identity.go`, carrying `sub`/`iss`/`client_id`/`jti` only —
   no access level or scope). Population is MCP receiving middleware rather
   than HTTP middleware because a tool handler's context descends from the POST
-  that established the session, not the current one.
+  that established the session, not the current one. `auth.RequestExtraMiddleware`
+  (`internal/auth/request_extra.go`) is what makes that possible: it copies the
+  current message's `Extra.Header` onto the handler ctx (raw bearer for hop 2,
+  and the correlation ID when `OBS_CORRELATION_ID_ENABLED` is on), so hop 2 and
+  `correlation.From` see this POST rather than the `initialize` snapshot the
+  stateful streamable session froze (SOL-153935). `installRequestMiddleware`
+  in `cmd/server/main.go` registers it LAST among the MCP receiving
+  middlewares, so `AddReceivingMiddleware`'s LIFO wrapping makes it outermost
+  and it runs FIRST — every other receiving middleware (list filtering,
+  `PrincipalMiddleware`) must see the refreshed ctx before it runs. That
+  ordering is pinned by
+  `TestInstallRequestMiddleware_RequestExtraRunsBeforeEveryEmitSite`
+  (`cmd/server/request_extra_wiring_test.go`).
 
 - **Hop 2 (outbound, GATED):** for brokers with `auth.mode: oauth`, the raw
-  subject token captured at `internal/auth/raw_subject_token.go:59` is exchanged
+  subject token captured by `auth.RequestExtraMiddleware`
+  (`internal/auth/request_extra.go:66`) is exchanged
   (RFC 8693, `internal/tokenexchange/exchange.go:30`) for a broker-scoped token,
   cached and singleflight-deduped. Hop 2 is built only when `Hop2OAuthActive()`
   is true (`cmd/server/main.go`); under `basic`/`bearer` broker auth a shared
@@ -350,7 +363,7 @@ sequenceDiagram
 
 | Signal | Status | Notes |
 |---|---|---|
-| **Correlation ID** | Implemented | `/mcp` middleware resolves traceparent → `X-Correlation-ID` → generated UUIDv7 (`internal/observability/correlation/middleware.go:97`); stamped on every request-scoped slog record and echoed on the response header; propagated to the broker via `internal/semp/correlationhdr/correlationhdr.go:48`; also stamped on `CallToolResult.Meta` (`internal/tools/register.go`). Default ON. |
+| **Correlation ID** | Implemented | `/mcp` middleware resolves traceparent → `X-Correlation-ID` → generated UUIDv7 (`internal/observability/correlation/middleware.go:97`); stamped on every request-scoped slog record and echoed on the response header; the resolved ID is also written back onto the inbound `X-Correlation-ID` request header before `next` runs, so the SDK's per-message `Extra.Header` carries it even when the client generated none. Propagated to the broker via `internal/semp/correlationhdr/correlationhdr.go:48`; also stamped on `CallToolResult.Meta` (`internal/tools/register.go`). Default ON. |
 | **Health / readiness** | Implemented | `/livez`, `/health`, `/readyz` (readiness decoupled from broker per ADR-004; `internal/observability/health/readiness.go`). |
 | **Audit log** | Skeleton | Capability gate only (`internal/observability/audit/audit.go:27`); record emission not yet implemented. Default OFF. |
 | **Metrics** | Skeleton | Capability gate only (`internal/observability/metrics/metrics.go:27`); instruments/export not yet implemented. Default OFF. |
@@ -360,6 +373,18 @@ sequenceDiagram
 Middleware ordering on `/mcp` (outermost first): panic recovery → body-limit →
 correlation → auth. Correlation sits **outside** auth so a 401 still gets an ID;
 body-limit sits outside correlation so a 413 does not (`cmd/server/main.go`).
+
+That HTTP-layer order is separate from — and does not by itself guarantee —
+the MCP *receiving*-middleware order `installRequestMiddleware` builds inside
+the SDK server (`server.AddReceivingMiddleware`, LIFO: last registered runs
+first). There, `auth.RequestExtraMiddleware` must be registered LAST so it is
+outermost and refreshes the handler ctx (bearer, correlation ID) before
+`tools.WithListFiltering` and `auth.PrincipalMiddleware` run; see the Hop 1
+section above and `cmd/server/request_extra_wiring_test.go`. When
+`OBS_CORRELATION_ID_ENABLED` is off, `auth.RequestExtraMiddleware` itself skips
+the correlation copy (it does not just rely on the HTTP layer omitting
+`correlation.Middleware`), so a client-supplied `traceparent`/`X-Correlation-ID`
+cannot revive a correlation ID while the capability is off.
 
 ---
 

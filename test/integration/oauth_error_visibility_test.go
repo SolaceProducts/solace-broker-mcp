@@ -29,7 +29,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	internalauth "github.com/SolaceProducts/solace-broker-mcp/internal/auth"
@@ -251,22 +250,7 @@ brokers:
 
 func oauthInjectSubjectToken(t *testing.T, token string) context.Context {
 	t.Helper()
-	var ctx context.Context
-	var mu sync.Mutex
-	middleware := internalauth.InjectRawSubjectToken(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		ctx = r.Context()
-		mu.Unlock()
-	}))
-	req := httptest.NewRequestWithContext(context.Background(), "GET", "/", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	middleware.ServeHTTP(httptest.NewRecorder(), req)
-	mu.Lock()
-	defer mu.Unlock()
-	if ctx == nil {
-		t.Fatal("InjectRawSubjectToken middleware did not produce a context")
-	}
-	return ctx
+	return internalauth.WithRawSubjectToken(context.Background(), token)
 }
 
 func oauthCallToolAndCaptureDetail(t *testing.T, mgr *tools.ToolManager, ctx context.Context) string {
