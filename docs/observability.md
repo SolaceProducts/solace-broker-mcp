@@ -665,13 +665,14 @@ A single `outcome` vocabulary is shared across metrics, the audit trail, and tra
 same call reads the same way in all three and you can join on one key.
 
 `outcome` answers "what happened". A companion attribute, `error_type`, answers "why", and is
-present only when `outcome` is `error`. Splitting the two keeps `outcome` small enough to group
-by on a dashboard while still carrying the detail an investigation needs.
+present only when `outcome` is `error` — except on the `tokenexchange.Exchange` span, which
+never sets it (see [Span Attributes](#span-attributes)). Splitting the two keeps `outcome`
+small enough to group by on a dashboard while still carrying the detail an investigation needs.
 
 | Value | Meaning |
 |---|---|
 | `success` | The call completed successfully. |
-| `error` | The call failed. The cause is in `error_type`. A `context.DeadlineExceeded` timeout is classified here. |
+| `error` | The call failed. The cause is in `error_type`, except on the `tokenexchange.Exchange` span, which never sets it — see [Span Attributes](#span-attributes). A `context.DeadlineExceeded` timeout is classified here. |
 | `cancelled` | The caller cancelled the request. **Reserved in the schema now for tool-invocation `outcome`; emitted from a later release (Story 42, v1.x).** |
 
 **Exception — the token-exchange span (SOL-153333, Story 50) already emits `cancelled`, ahead of the tool-invocation level above.** That span classifies by *where* the error originated, not by Go error type alone: a caller's own context ending the call (`context.Canceled` **or** `context.DeadlineExceeded` — for example the SEMP retry budget in `internal/semp/resilience/sender.go` expiring while the exchange waits) is `cancelled`, while a `context.DeadlineExceeded` from the exchange's *own* internal retry-chain deadline is `error`, per the general rule above. Classifying every `DeadlineExceeded` as `error` regardless of source would misattribute a caller's own timeout to the exchange.
