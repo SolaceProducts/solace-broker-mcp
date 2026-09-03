@@ -25,13 +25,16 @@ package tools
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"reflect"
 	"sort"
 	"strings"
 	"testing"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/logging/sanitize"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
@@ -88,44 +91,71 @@ func TestIdentity_LogValue_alwaysEmitsAllFour_inPresentMode(t *testing.T) {
 	// All four normalized to <absent> still produces the full schema.
 	id := Identity{
 		present:  true,
-		sub:      absentSentinel,
-		iss:      absentSentinel,
-		clientID: absentSentinel,
-		jti:      absentSentinel,
+		sub:      sanitize.AbsentSentinel,
+		iss:      sanitize.AbsentSentinel,
+		clientID: sanitize.AbsentSentinel,
+		jti:      sanitize.AbsentSentinel,
 	}
 	got := captureGroupAttrs(t, id)
 	for _, key := range []string{"sub", "iss", "client_id", "jti"} {
-		if got[key] != absentSentinel {
-			t.Errorf("expected %q=%q, got %q", key, absentSentinel, got[key])
+		if got[key] != sanitize.AbsentSentinel {
+			t.Errorf("expected %q=%q, got %q", key, sanitize.AbsentSentinel, got[key])
 		}
 	}
 }
 
-func TestNewIdentityFromTokenInfo_nilTokenInfo(t *testing.T) {
-	id := NewIdentityFromTokenInfo(nil)
+// TestNewIdentityFromPrincipal_absentPrincipal pins the disabled-mode path: a
+// context no middleware touched projects to Identity{present:false}, and
+// LogValue must be safe on it.
+func TestNewIdentityFromPrincipal_absentPrincipal(t *testing.T) {
+	id := NewIdentityFromPrincipal(auth.PrincipalFrom(context.Background()))
 	if id.present {
-		t.Error("nil TokenInfo should produce present=false")
+		t.Error("absent Principal should produce present=false")
 	}
-	// Must not panic; LogValue must be safe to call.
 	if v := id.LogValue(); v.Kind() != slog.KindGroup {
 		t.Errorf("LogValue kind = %v, want group", v.Kind())
 	}
 }
 
-func TestNewIdentityFromTokenInfo_emptyClaims_produceAbsentSentinel(t *testing.T) {
+// TestNewIdentityFromPrincipal_readsPrincipalOffContext is the contract every
+// emit site relies on: the projection renders exactly the claims the
+// middleware attached, field for field.
+func TestNewIdentityFromPrincipal_readsPrincipalOffContext(t *testing.T) {
+	ctx := auth.WithPrincipal(context.Background(), auth.NewPrincipal(context.Background(), &sdkauth.TokenInfo{
+		UserID: "auth0|abc123",
+		Scopes: []string{"openid"},
+		Extra: map[string]any{
+			"iss":       "https://example.auth0.com/",
+			"client_id": "cursor-ide",
+			"jti":       "jti-xyz",
+		},
+	}))
+
+	got := captureGroupAttrs(t, NewIdentityFromPrincipal(auth.PrincipalFrom(ctx)))
+	want := map[string]string{
+		"sub":       "auth0|abc123",
+		"iss":       "https://example.auth0.com/",
+		"client_id": "cursor-ide",
+		"jti":       "jti-xyz",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("projected attrs = %v, want %v", got, want)
+	}
+}
+
+func TestNewIdentityFromPrincipal_emptyClaims_produceAbsentSentinel(t *testing.T) {
 	// TokenInfo with empty UserID and Extra keys present-but-empty (mirrors
 	// what the OIDC verifier produces when the IdP omits optional claims).
-	info := &sdkauth.TokenInfo{
+	id := NewIdentityFromPrincipal(auth.NewPrincipal(context.Background(), &sdkauth.TokenInfo{
 		UserID: "",
 		Extra: map[string]any{
 			"iss":       "",
 			"client_id": "",
 			"jti":       "",
 		},
-	}
-	id := NewIdentityFromTokenInfo(info)
+	}))
 	if !id.present {
-		t.Fatal("non-nil TokenInfo should produce present=true")
+		t.Fatal("present Principal should produce present=true")
 	}
 	for _, p := range []struct{ name, got string }{
 		{"sub", id.sub},
@@ -133,81 +163,53 @@ func TestNewIdentityFromTokenInfo_emptyClaims_produceAbsentSentinel(t *testing.T
 		{"client_id", id.clientID},
 		{"jti", id.jti},
 	} {
-		if p.got != absentSentinel {
-			t.Errorf("%s = %q, want %q", p.name, p.got, absentSentinel)
+		if p.got != sanitize.AbsentSentinel {
+			t.Errorf("%s = %q, want %q", p.name, p.got, sanitize.AbsentSentinel)
 		}
 	}
 }
 
-func TestNewIdentityFromTokenInfo_extraKeyMissing_normalizesToAbsent(t *testing.T) {
+func TestNewIdentityFromPrincipal_extraKeyMissing_normalizesToAbsent(t *testing.T) {
 	// Extra map omits client_id / jti entirely (static-mode TokenInfo).
-	info := &sdkauth.TokenInfo{UserID: "dev-user"}
-	id := NewIdentityFromTokenInfo(info)
+	id := NewIdentityFromPrincipal(auth.NewPrincipal(context.Background(), &sdkauth.TokenInfo{UserID: "dev-user"}))
 	if id.sub != "dev-user" {
 		t.Errorf("sub = %q, want %q", id.sub, "dev-user")
 	}
-	if id.iss != absentSentinel || id.clientID != absentSentinel || id.jti != absentSentinel {
+	if id.iss != sanitize.AbsentSentinel || id.clientID != sanitize.AbsentSentinel || id.jti != sanitize.AbsentSentinel {
 		t.Errorf("expected all three Extra-derived fields to be %q; got iss=%q client_id=%q jti=%q",
-			absentSentinel, id.iss, id.clientID, id.jti)
+			sanitize.AbsentSentinel, id.iss, id.clientID, id.jti)
 	}
 }
 
-// TestExtraString_nonStringValue_emitsErrorAndReturnsSentinel pins the
-// verifier-contract violation behavior raised in PR #74 review. A non-string
-// value in TokenInfo.Extra is a programmer error in our verifier (commit 1
-// stashes only strings); we surface it via slog.Error + a distinct sentinel
-// instead of panicking, so the audit log line for the offending request is
-// still emitted. See plan §14.
-//
-// Three properties this test pins:
-//  1. The function does NOT panic (the panic version dropped the audit line).
-//  2. The return value is sanitize.VerifierBugSentinel, NOT absentSentinel —
-//     log consumers must be able to distinguish "claim missing" from "code bug."
-//  3. An ERROR-level log entry is emitted naming the bad key and the observed
-//     type, so ops alerting can fire on the contract violation.
-func TestExtraString_nonStringValue_emitsErrorAndReturnsSentinel(t *testing.T) {
-	var buf bytes.Buffer
+// TestNewIdentityFromPrincipal_verifierBugSentinel_passesThrough pins that the
+// projection keeps "<verifier-bug>" distinct from "<absent>" rather than
+// normalizing it away. The ERROR record itself is asserted in internal/auth.
+func TestNewIdentityFromPrincipal_verifierBugSentinel_passesThrough(t *testing.T) {
 	old := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	defer slog.SetDefault(old)
 
-	info := &sdkauth.TokenInfo{
-		Extra: map[string]any{"iss": 42}, // wrong type — verifier never does this
-	}
-
-	// (1) must not panic
-	id := NewIdentityFromTokenInfo(info)
-
-	// (2) sentinel is sanitize.VerifierBugSentinel, not absentSentinel
+	id := NewIdentityFromPrincipal(auth.NewPrincipal(context.Background(), &sdkauth.TokenInfo{
+		UserID: "user-1",
+		Extra:  map[string]any{"iss": 42}, // wrong type — verifier never does this
+	}))
 	if id.iss != sanitize.VerifierBugSentinel {
 		t.Errorf("iss = %q, want %q (verifier-bug sentinel)", id.iss, sanitize.VerifierBugSentinel)
 	}
-	if sanitize.VerifierBugSentinel == absentSentinel {
-		t.Fatal("sanitize.VerifierBugSentinel must differ from absentSentinel — log consumers rely on the distinction")
-	}
-
-	// (3) an ERROR was emitted naming the key and type
-	logged := buf.String()
-	if !strings.Contains(logged, `"level":"ERROR"`) {
-		t.Errorf("expected ERROR-level log entry, got: %s", logged)
-	}
-	if !strings.Contains(logged, `"key":"iss"`) {
-		t.Errorf("expected log entry to name the bad key %q, got: %s", "iss", logged)
-	}
-	if !strings.Contains(logged, `"got_type":"int"`) {
-		t.Errorf("expected log entry to name the observed type %q, got: %s", "int", logged)
+	if sanitize.VerifierBugSentinel == sanitize.AbsentSentinel {
+		t.Fatal("sanitize.VerifierBugSentinel must differ from sanitize.AbsentSentinel — log consumers rely on the distinction")
 	}
 }
 
 // TestSanitizeClaim_logInjection_endToEnd ensures a sub containing CR/LF
-// cannot smuggle a forged log line through either the JSON or text handler.
+// cannot smuggle a forged log line through either handler — proving the
+// projection inherits auth.NewPrincipal's sanitization.
 func TestSanitizeClaim_logInjection_endToEnd(t *testing.T) {
 	malicious := "real-user\n{\"level\":\"INFO\",\"msg\":\"FAKE\",\"admin\":true}"
-	info := &sdkauth.TokenInfo{
+	id := NewIdentityFromPrincipal(auth.NewPrincipal(context.Background(), &sdkauth.TokenInfo{
 		UserID: malicious,
 		Extra:  map[string]any{"iss": "", "client_id": "", "jti": ""},
-	}
-	id := NewIdentityFromTokenInfo(info)
+	}))
 
 	t.Run("json handler", func(t *testing.T) {
 		var buf bytes.Buffer
@@ -234,27 +236,12 @@ func TestSanitizeClaim_logInjection_endToEnd(t *testing.T) {
 	})
 }
 
-func TestNormalizeAbsent(t *testing.T) {
-	cases := map[string]string{
-		"":          absentSentinel,
-		"   ":       absentSentinel,
-		"\t":        absentSentinel,
-		"x":         "x",
-		"auth0|123": "auth0|123",
-	}
-	for in, want := range cases {
-		if got := normalizeAbsent(in); got != want {
-			t.Errorf("normalizeAbsent(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 // --- Drift-detection tests -------------------------------------------------
 
 // TestTokenInfoStruct_hasExpectedFields reflects over sdkauth.TokenInfo and
 // asserts the field set. An SDK upgrade that ADDS a field is fine but must
 // turn this test red so the human writing the upgrade PR consciously decides
-// whether the new field belongs in Identity.
+// whether the new field belongs in auth.Principal and Identity.
 func TestTokenInfoStruct_hasExpectedFields(t *testing.T) {
 	want := []string{"Expiration", "Extra", "Scopes", "UserID"}
 
@@ -266,14 +253,13 @@ func TestTokenInfoStruct_hasExpectedFields(t *testing.T) {
 	sort.Strings(got)
 
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("sdkauth.TokenInfo fields = %v, want %v\nIf the SDK has added a field, update this assertion AND audit whether Identity should carry it (plan §9.2 / §10).", got, want)
+		t.Errorf("sdkauth.TokenInfo fields = %v, want %v\nIf the SDK has added a field, update this assertion AND audit whether auth.Principal / Identity should carry it (plan §9.2 / §10).", got, want)
 	}
 }
 
 // TestTokenInfoExtra_isMapStringAny pins the type of TokenInfo.Extra. If the
-// SDK ever changes Extra to a strongly-typed struct or a different map shape,
-// our extraString / extraStringSlice helpers break; this test catches it at
-// compile/test time.
+// SDK reshapes it, auth.NewPrincipal's key reads and extraStringSlice break;
+// this catches it at test time.
 func TestTokenInfoExtra_isMapStringAny(t *testing.T) {
 	field, ok := reflect.TypeOf(sdkauth.TokenInfo{}).FieldByName("Extra")
 	if !ok {
@@ -285,26 +271,26 @@ func TestTokenInfoExtra_isMapStringAny(t *testing.T) {
 	}
 }
 
-// TestTokenInfoExtra_perKeyTypeConvention pins the widened Extra convention:
-// audit-field keys (iss, client_id, jti) carry string values; the groups key
-// carries []string. An accessor exists for each key type. Unknown keys are
-// not permitted — adding one requires updating this test, the accessor set,
-// and the convention comment on extraString.
+// TestTokenInfoExtra_perKeyTypeConvention pins the Extra convention: identity
+// keys (iss, client_id, jti) carry strings and surface through
+// auth.NewPrincipal; the groups key carries []string and surfaces through
+// extraStringSlice. Unknown keys are not permitted.
 func TestTokenInfoExtra_perKeyTypeConvention(t *testing.T) {
 	info := &sdkauth.TokenInfo{
+		UserID: "alice",
 		Extra: map[string]any{
-			"iss":       "https://idp.example.com",
-			"client_id": "cursor-ide",
-			"jti":       "jti-1",
+			"iss":                         "https://idp.example.com",
+			"client_id":                   "cursor-ide",
+			"jti":                         "jti-1",
 			authz.TokenInfoExtraKeyGroups: []string{"Ops", "Monitoring"},
 		},
 	}
 
-	// Audit-field keys: must be readable via extraString.
-	for _, key := range []string{"iss", "client_id", "jti"} {
-		v := extraString(info, key)
+	// Identity-claim keys: must surface as valid strings on the Principal.
+	p := auth.NewPrincipal(context.Background(), info)
+	for key, v := range map[string]string{"iss": p.Iss(), "client_id": p.ClientID(), "jti": p.Jti()} {
 		if v == "" || v == sanitize.VerifierBugSentinel {
-			t.Errorf("extraString(%q) = %q; expected a valid string value", key, v)
+			t.Errorf("Principal claim %q = %q; expected a valid string value", key, v)
 		}
 	}
 
@@ -327,9 +313,9 @@ func TestTokenInfoExtra_perKeyTypeConvention(t *testing.T) {
 
 	// Completeness: no unknown keys are permitted in Extra.
 	allowedKeys := map[string]bool{
-		"iss":                        true,
-		"client_id":                  true,
-		"jti":                        true,
+		"iss":                         true,
+		"client_id":                   true,
+		"jti":                         true,
 		authz.TokenInfoExtraKeyGroups: true,
 	}
 	for k := range info.Extra {
@@ -412,4 +398,3 @@ func splitNonEmptyLines(s string) []string {
 	}
 	return out
 }
-

@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/logging/sanitize"
@@ -91,11 +92,14 @@ func withAuthorization(policy *authz.Policy, toolName string, configuredGroupsCl
 			panic("withAuthorization: nil policy (composition-site invariant violated)")
 		}
 
+		// Groups come off the SDK's TokenInfo — authorization input, not
+		// principal identity. The record's identity comes from the Principal
+		// on ctx (SOL-152087), the same one "tool invoked" names.
 		var info *sdkauth.TokenInfo
 		if req.Extra != nil {
 			info = req.Extra.TokenInfo
 		}
-		id := NewIdentityFromTokenInfo(info)
+		id := NewIdentityFromPrincipal(auth.PrincipalFrom(ctx))
 
 		groups, present := requestGroups(info)
 		if !present {

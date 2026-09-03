@@ -18,18 +18,26 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 )
 
 const postureRequestExtraEnabled = "request extra middleware is enabled"
 
-// TestInstallRequestExtraMiddleware_LogsEnabled pins that production
-// wiring always installs the Extra.Header → handler ctx middleware.
-// The SDK keeps the middleware chain unexported, so the startup line is
-// the observable contract (same approach as tools/list filtering).
-func TestInstallRequestExtraMiddleware_LogsEnabled(t *testing.T) {
+// TestInstallRequestMiddleware_LogsRequestExtraEnabled pins that production
+// wiring always installs the Extra.Header → handler ctx middleware. The SDK
+// keeps the middleware chain unexported, so the startup line is the observable
+// contract (same approach as tools/list filtering).
+//
+// It calls installRequestMiddleware, the one place registration order is
+// expressed, rather than registering the middleware itself — so dropping the
+// registration from production wiring fails here. Config is the auth-disabled
+// default, in which the filter registers nothing: this asserts the Extra.Header
+// middleware is unconditional.
+func TestInstallRequestMiddleware_LogsRequestExtraEnabled(t *testing.T) {
 	buf, restore := captureStartupLog(t)
 	defer restore()
-	installRequestExtraMiddleware(newTestServer())
+	installRequestMiddleware(newTestServer(), &config.ServerConfig{}, nil, "")
 
 	var found int
 	for _, raw := range strings.Split(buf.String(), "\n") {

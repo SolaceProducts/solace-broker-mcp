@@ -71,7 +71,12 @@ func NewAuthMiddleware(cfg *config.ServerConfig, httpClient *http.Client, next h
 	})
 
 	// Hop 1: RequireBearerToken validates the token (signature, issuer, audience, expiry).
-	// Hop 2 subject token is stamped per JSON-RPC request by RequestExtraMiddleware (receiving MW).
+	//
+	// Nothing per-caller is installed on this chain's context: it does not
+	// reach a tool handler per request. Both the caller Principal
+	// (PrincipalMiddleware) and the Hop 2 subject token
+	// (RequestExtraMiddleware) are stamped per JSON-RPC request by receiving
+	// middleware instead.
 	return middleware(next), nil
 }
 

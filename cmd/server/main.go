@@ -889,11 +889,35 @@ func installToolListFiltering(server *mcp.Server, cfg *config.ServerConfig, poli
 	slog.Info("tools/list filtering is enabled")
 }
 
-// installRequestExtraMiddleware copies Extra.Header onto each JSON-RPC
-// handler ctx. Always on: hop 2 and correlation.From have no other per-POST
-// pipe (SOL-153935). Last AddReceivingMiddleware registration is outermost
-// and runs first.
-func installRequestExtraMiddleware(server *mcp.Server) {
+// installRequestMiddleware registers the MCP receiving middleware every request
+// passes through, in the order they must run.
+//
+// The order is load-bearing, and this function is the only place it is
+// expressed. AddReceivingMiddleware wraps the current handler, so the LAST
+// registration is the outermost and runs FIRST. Reordering these statements
+// would silently strip identity from every tools/list audit record, or pin
+// every record to the session's first correlation ID, while leaving the rest
+// of the suite green — so TestPrincipalReachesListFiltering and
+// TestInstallRequestMiddleware_LogsRequestExtraEnabled call THIS function,
+// not a copy of its body.
+func installRequestMiddleware(server *mcp.Server, cfg *config.ServerConfig, policy *authz.Policy, groupsClaimName string) {
+	// Narrow tools/list to what each caller may invoke. Off by default; when
+	// off, AddReceivingMiddleware is never called and dispatch is unchanged.
+	installToolListFiltering(server, cfg, policy, groupsClaimName)
+
+	// Attach the caller Principal every audit site reads (SOL-152087). After
+	// the filter, so it runs first and the filter can read what it attaches.
+	// Unconditional: in auth mode "disabled" no request carries a token, so
+	// the middleware attaches nothing and audit lines keep their no-identity
+	// shape.
+	server.AddReceivingMiddleware(auth.PrincipalMiddleware())
+
+	// Copy this POST's Extra.Header onto the JSON-RPC handler ctx so hop 2 and
+	// correlation.From see this request, not initialize (SOL-153935). Last, so
+	// it is outermost and runs first: everything above logs through the
+	// correlation slog handler, which reads the ID off ctx, so the ID must be
+	// refreshed before any of them run. Always on — hop 2 and correlation.From
+	// have no other per-POST pipe.
 	server.AddReceivingMiddleware(auth.RequestExtraMiddleware())
 	slog.Info("request extra middleware is enabled")
 }
@@ -1174,14 +1198,7 @@ func main() {
 		}
 	}
 
-	// Narrow tools/list to what each caller may invoke. Off by default; when
-	// off, the list-filter middleware is not registered.
-	installToolListFiltering(server, cfg, policy, groupsClaimName)
-	// Copy this POST's Extra.Header onto the JSON-RPC handler ctx so hop 2
-	// and correlation.From see this request, not initialize (SOL-153935).
-	// Registered after list-filter so AddReceivingMiddleware wraps outermost
-	// and this runs first.
-	installRequestExtraMiddleware(server)
+	installRequestMiddleware(server, cfg, policy, groupsClaimName)
 
 	slog.Info("all tools registered")
 

@@ -18,6 +18,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/logging/sanitize"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
@@ -101,11 +102,14 @@ func WithListFiltering(policy *authz.Policy, configuredGroupsClaimName string) m
 				return res, err
 			}
 
+			// Groups come off the SDK's TokenInfo (authorization input); the
+			// record's identity comes from the Principal on ctx (SOL-152087),
+			// as at every other emit site.
 			var info *sdkauth.TokenInfo
 			if extra := req.GetExtra(); extra != nil {
 				info = extra.TokenInfo
 			}
-			id := NewIdentityFromTokenInfo(info)
+			id := NewIdentityFromPrincipal(auth.PrincipalFrom(ctx))
 			groups, present := requestGroups(info)
 
 			toolsBefore := len(ltr.Tools)

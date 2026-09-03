@@ -25,10 +25,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
-	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -56,12 +56,17 @@ const metaKeyCorrelationID = "correlation_id"
 // back to the SDK — success, tool error, and panic-recovered alike — so it is
 // also where the correlation ID is stamped onto CallToolResult.Meta. Stamping
 // here (rather than across CallTool's many return paths) guarantees all three
-// result kinds carry it. HTTP correlation.Middleware still creates and echoes
-// the correlation ID (and stamps it on the inbound header); tool handlers do
-// NOT inherit that HTTP ctx — stateful streamable sessions freeze handler ctx
-// at initialize. After SOL-153935, correlation.From(ctx) yields this POST's
-// ID because RequestExtraMiddleware shadows the key from Extra.Header; when
-// the capability is off it returns "" and no Meta key is added.
+// result kinds carry it; when the capability is off correlation.From(ctx)
+// returns "" and no Meta key is added.
+//
+// Which ID that is: a tool handler's context descends from the POST that
+// established the session, not the one carrying this call, so it does not
+// inherit the HTTP context correlation.Middleware seeded — that was measured
+// under SOL-152087. Only the SDK's per-message RequestExtra tracks the current
+// request, so SOL-153935 copies Extra.Header onto each handler ctx
+// (auth.RequestExtraMiddleware), shadowing the frozen value. HTTP
+// correlation.Middleware still creates and echoes the ID; correlation.From(ctx)
+// here now yields this POST's.
 func withRecovery(toolName string, h mcp.ToolHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
 		defer func() {
@@ -167,14 +172,10 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 
 		var callToolHandler mcp.ToolHandler = func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			start := time.Now()
-			// Per-invocation audit identity from the SDK extras (SOL-149606).
-			// Extra and TokenInfo can be nil in disabled mode or under test
-			// scaffolding; NewIdentityFromTokenInfo handles nil cleanly.
-			var info *sdkauth.TokenInfo
-			if req.Extra != nil {
-				info = req.Extra.TokenInfo
-			}
-			id := NewIdentityFromTokenInfo(info)
+			// Per-invocation audit identity (SOL-149606), projected from the
+			// Principal auth.PrincipalMiddleware attached to ctx (SOL-152087).
+			// Absent in disabled mode and under test scaffolding.
+			id := NewIdentityFromPrincipal(auth.PrincipalFrom(ctx))
 
 			// req.Params.Arguments carries omitempty on the wire, so a client
 			// can send tools/call with no arguments field at all — treat that
@@ -290,11 +291,7 @@ func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool) {
 			start := time.Now()
 			var brokerAlias, errorType string
 			var toolErr error
-			var info *sdkauth.TokenInfo
-			if req.Extra != nil {
-				info = req.Extra.TokenInfo
-			}
-			id := NewIdentityFromTokenInfo(info)
+			id := NewIdentityFromPrincipal(auth.PrincipalFrom(ctx))
 			defer func() {
 				if toolErr == nil && result == nil {
 					errorType = "panic"

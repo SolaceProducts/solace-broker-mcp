@@ -27,6 +27,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
@@ -1176,17 +1177,18 @@ func TestToolManager_ConcurrentRegisterAndRoute(t *testing.T) {
 
 // --- SOL-149606 identity-in-audit-log tests --------------------------------
 
-// idFixture builds an Identity equivalent to what the OAuth-mode shim would
-// produce for a representative JWT — used by the per-line audit-log tests.
+// idFixture builds the Identity the OAuth-mode middleware would produce for a
+// representative JWT, through production's projection path (TokenInfo →
+// auth.Principal → Identity).
 func idFixture() Identity {
-	return NewIdentityFromTokenInfo(&sdkauth.TokenInfo{
+	return NewIdentityFromPrincipal(auth.NewPrincipal(context.Background(), &sdkauth.TokenInfo{
 		UserID: "auth0|abc123",
 		Extra: map[string]any{
 			"iss":       "https://example.auth0.com/",
 			"client_id": "cursor-ide",
 			"jti":       "jti-xyz",
 		},
-	})
+	}))
 }
 
 // captureLog runs fn with a fresh JSON slog handler installed as the default
