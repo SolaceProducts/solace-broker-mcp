@@ -20,7 +20,7 @@ source "$SUITE_DIR/../e2e-common/lib.sh"
 # e2e-config- prefix so the sweep can find and drop every remnant. These never
 # touch the shared monitoring fixtures.
 CONFIG_VPN_NAMES=("e2e-config-vpn-broker-a" "e2e-config-vpn-broker-b")
-CONFIG_QUEUE_NAMES=("e2e-config-queue-broker-a" "e2e-config-queue-broker-b" "e2e-config-iso")
+CONFIG_QUEUE_NAMES=("e2e-config-queue-broker-a" "e2e-config-queue-broker-b" "e2e-config-iso" "e2e-config-queue-sub-broker-a" "e2e-config-queue-sub-broker-b")
 CONFIG_TE_NAMES=("e2e-config-te-broker-a" "e2e-config-te-broker-b")
 CONFIG_RDP_NAMES=("e2e-config-rdp-broker-a" "e2e-config-rdp-broker-b" "e2e-config-rdp-iso")
 

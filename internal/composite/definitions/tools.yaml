@@ -895,6 +895,8 @@ tools:
       and queueName to name the new queue; any attribute omitted from queueConfig
       is set to its broker default. Use this to provision a new queue. Fails if a
       queue with the same name already exists in the VPN.
+      A newly created queue has no topic subscriptions and will not attract any
+      messages — call create-queue-subscription next to give it one.
       queueConfig accepts more attributes than listed here; call describe-semp-schema
       (operation: config/createMsgVpnQueue) if you need the full list.
     annotations:
@@ -965,14 +967,16 @@ tools:
   - name: delete-queue
     description: >
       BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
-      the target (broker, VPN, queue name) and that the queue and any spooled
-      messages will be permanently lost. The confirmation MUST come as a separate
-      user reply received AFTER you state the target and effect — do not treat
-      the user's original request as a pre-confirmation, even if it implies
-      intent.
+      the target (broker, VPN, queue name) and that the queue, any spooled
+      messages, and any topic subscriptions on it will be permanently lost. The
+      confirmation MUST come as a separate user reply received AFTER you state
+      the target and effect — do not treat the user's original request as a
+      pre-confirmation, even if it implies intent.
       Delete a queue from a Message VPN. Requires msgVpnName and queueName to
       identify the queue to delete. This is a destructive operation that removes
-      the queue and discards any messages still spooled on it.
+      the queue, discards any messages still spooled on it, and removes any
+      topic subscriptions attached to it — there is no separate step to detach
+      subscriptions first.
     annotations:
       readOnly: false
       destructive: true
@@ -1051,6 +1055,135 @@ tools:
         args:
           msgVpnName: "{{.Params.msgVpnName}}"
           queueName: "{{.Params.queueName}}"
+    result:
+      strategy: collect
+
+  - name: create-queue-subscription
+    description: >
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, queue name, topic) and that a new subscription
+      will be added. The confirmation MUST come as a separate user reply
+      received AFTER you state the target and effect — do not treat the
+      user's original request as a pre-confirmation, even if it implies
+      intent.
+      Add a topic subscription to a queue. Requires msgVpnName and queueName
+      to identify the queue, and subscriptionTopic for the topic to subscribe
+      to (Solace wildcards > and * are accepted). A queue with no
+      subscriptions attracts no messages regardless of its other settings —
+      call this immediately after create-queue if the queue needs to receive
+      traffic. Fails if the queue already has this exact subscription, or if
+      the queue does not exist.
+    annotations:
+      readOnly: false
+      destructive: false
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the queue"
+      - name: queueName
+        type: string
+        required: true
+        description: "The name of the queue to add the subscription to"
+      - name: subscriptionTopic
+        type: string
+        required: true
+        description: "The topic to subscribe the queue to. Accepts Solace wildcards (> for multi-level, * for single-level). Pass the literal characters '>' and '*' — do not HTML-escape them (e.g. '&gt;'); an escaped character changes the topic and silently creates the wrong subscription."
+    steps:
+      - id: createQueueSubscription
+        operation: config/createMsgVpnQueueSubscription
+        # msgVpnName and queueName are path params of POST
+        # .../queues/{queueName}/subscriptions. subscriptionTopic is
+        # deliberately omitted from args so constructRequestBody spreads it
+        # into the request body, where SEMP expects it for create.
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          queueName: "{{.Params.queueName}}"
+    result:
+      strategy: collect
+
+  - name: delete-queue-subscription
+    description: >
+      BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
+      the target (broker, VPN, queue name, topic) and that the subscription
+      will be permanently removed. The confirmation MUST come as a separate
+      user reply received AFTER you state the target and effect — do not
+      treat the user's original request as a pre-confirmation, even if it
+      implies intent.
+      Remove a topic subscription from a queue. Requires msgVpnName,
+      queueName, and subscriptionTopic to identify the subscription to
+      remove. Removal is silent: the broker raises no error and gives no
+      further signal — messages matching this topic simply stop arriving at
+      the queue.
+    annotations:
+      readOnly: false
+      destructive: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the queue"
+      - name: queueName
+        type: string
+        required: true
+        description: "The name of the queue to remove the subscription from"
+      - name: subscriptionTopic
+        type: string
+        required: true
+        description: "The topic of the subscription to remove. Must match an existing subscription's topic exactly, including any wildcards. Pass the literal characters '>' and '*' — do not HTML-escape them (e.g. '&gt;')."
+    steps:
+      - id: deleteQueueSubscription
+        operation: config/deleteMsgVpnQueueSubscription
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          queueName: "{{.Params.queueName}}"
+          subscriptionTopic: "{{.Params.subscriptionTopic}}"
+    result:
+      strategy: collect
+
+  - name: list-queue-subscriptions
+    description: >
+      List topic subscriptions attached to a queue. Returns up to 100 by
+      default (max 500 via maxResults). Use this to see which topics route
+      messages into a queue, or to verify a subscription was added or
+      removed. Verifies the queue exists before listing — a nonexistent
+      queue is reported as an error, never as an empty list, so "queue has
+      no subscriptions" and "queue does not exist" are never confused.
+    annotations:
+      readOnly: true
+    parameters:
+      - name: msgVpnName
+        type: string
+        required: true
+        description: "The Message VPN containing the queue"
+      - name: queueName
+        type: string
+        required: true
+        description: "The name of the queue to list subscriptions for"
+      - name: maxResults
+        type: integer
+        required: false
+        description: "Maximum number of subscriptions to return (default 100, max 500)"
+    steps:
+      # Preflight: fails (and aborts the tool call, per Execute's sequential
+      # short-circuit in executor.go) with the broker's own "queue not found"
+      # error before the subscriptions step ever runs. Without this, a
+      # nonexistent queue would report an empty subscription list instead of
+      # an error — indistinguishable from "queue exists, has no subscriptions".
+      - id: queue
+        operation: monitor/getMsgVpnQueue
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          queueName: "{{.Params.queueName}}"
+        select:
+          - queueName
+      - id: subscriptions
+        operation: monitor/getMsgVpnQueueSubscriptions
+        followPages: true
+        args:
+          msgVpnName: "{{.Params.msgVpnName}}"
+          queueName: "{{.Params.queueName}}"
+          count: "100"
     result:
       strategy: collect
 

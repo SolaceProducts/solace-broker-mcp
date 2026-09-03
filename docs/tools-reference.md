@@ -9,8 +9,8 @@ narrative overview see the [User Guide](user-guide.md).
 > output as input to a human decision, not as verified fact, and confirm any
 > write or destructive action before allowing it.
 
-The server exposes **24 read-only tools** plus **16 write tools** — four action
-tools and 12 Config API management tools. The write tools are gated behind
+The server exposes **25 read-only tools** plus **18 write tools** — four action
+tools and 14 Config API management tools. The write tools are gated behind
 `enable_write_tools` (off by default) and are not registered with the MCP server
 when disabled — see
 [Action Tools and `enable_write_tools`](#action-tools-and-enable_write_tools).
@@ -90,9 +90,10 @@ annotation, instruct the calling large language model (LLM) to obtain explicit u
 invocation, and cause the server to log a WARNING audit line on every call. The
 two `clear-*-stats` tools are writes but non-destructive (counters only).
 
-The 12 Config API management tools (create/update/delete for Message VPNs,
-queues, topic endpoints, and REST Delivery Points) are gated behind the same
-flag and documented under [Management](#management-config-api).
+The 14 Config API management tools (create/update/delete for Message VPNs,
+queues, topic endpoints, and REST Delivery Points, plus create/delete for
+queue subscriptions) are gated behind the same flag and documented under
+[Management](#management-config-api).
 
 ## Tool Index
 
@@ -102,14 +103,14 @@ flag and documented under [Management](#management-config-api).
 | Event Broker Status | [`get-broker-status`](#get-broker-status), [`get-redundancy-status`](#get-redundancy-status) | — |
 | Replication | [`get-replication-status`](#get-replication-status) | — |
 | Message VPN | [`list-vpns`](#list-vpns), [`get-vpn-status`](#get-vpn-status), [`get-message-rates`](#get-message-rates) | — |
-| Queues | [`list-queues`](#list-queues), [`get-queue-metrics`](#get-queue-metrics) | — |
+| Queues | [`list-queues`](#list-queues), [`get-queue-metrics`](#get-queue-metrics), [`list-queue-subscriptions`](#list-queue-subscriptions) | — |
 | Clients | [`list-clients`](#list-clients), [`get-client-details`](#get-client-details), [`list-client-subscriptions`](#list-client-subscriptions), [`list-slow-subscribers`](#list-slow-subscribers) | — |
 | REST Delivery Points | [`list-rdps`](#list-rdps), [`get-rdp-status`](#get-rdp-status) | — |
 | Bridges | [`list-bridges`](#list-bridges), [`get-bridge-status`](#get-bridge-status) | — |
 | Kafka | [`list-kafka-receivers`](#list-kafka-receivers), [`get-kafka-receiver-status`](#get-kafka-receiver-status), [`list-kafka-senders`](#list-kafka-senders), [`get-kafka-sender-status`](#get-kafka-sender-status) | — |
 | Discards | [`get-discard-stats`](#get-discard-stats), [`list-queue-discards`](#list-queue-discards) | — |
 | Actions | [`disconnect-client`](#disconnect-client), [`clear-client-stats`](#clear-client-stats), [`delete-queue-messages`](#delete-queue-messages), [`clear-queue-stats`](#clear-queue-stats) | write |
-| Management | [`create-message-vpn`](#create-message-vpn), [`update-message-vpn`](#update-message-vpn), [`delete-message-vpn`](#delete-message-vpn), [`create-queue`](#create-queue), [`update-queue`](#update-queue), [`delete-queue`](#delete-queue), [`create-topic-endpoint`](#create-topic-endpoint), [`update-topic-endpoint`](#update-topic-endpoint), [`delete-topic-endpoint`](#delete-topic-endpoint), [`create-rdp`](#create-rdp), [`update-rdp`](#update-rdp), [`delete-rdp`](#delete-rdp) | write |
+| Management | [`create-message-vpn`](#create-message-vpn), [`update-message-vpn`](#update-message-vpn), [`delete-message-vpn`](#delete-message-vpn), [`create-queue`](#create-queue), [`update-queue`](#update-queue), [`delete-queue`](#delete-queue), [`create-queue-subscription`](#create-queue-subscription), [`delete-queue-subscription`](#delete-queue-subscription), [`create-topic-endpoint`](#create-topic-endpoint), [`update-topic-endpoint`](#update-topic-endpoint), [`delete-topic-endpoint`](#delete-topic-endpoint), [`create-rdp`](#create-rdp), [`update-rdp`](#update-rdp), [`delete-rdp`](#delete-rdp) | write |
 
 The following example invocations show the `arguments` object of an MCP `tools/call`
 request. A full request wraps it: `{"method":"tools/call","params":{"name":"<tool>","arguments":{...}}}`.
@@ -385,6 +386,32 @@ flip for slow ACKs).
 ```
 
 **Example request:** "Why is orders.q backing up on prod-broker?"
+
+### list-queue-subscriptions
+
+List topic subscriptions attached to a queue. Verifies the queue exists
+before listing — a nonexistent queue is reported as an error, never as an
+empty list, so "queue has no subscriptions" and "queue does not exist" are
+never confused.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target event broker alias. |
+| `msgVpnName` | string | yes | The Message VPN containing the queue. |
+| `queueName` | string | yes | The queue to list subscriptions for. |
+| `maxResults` | integer | no | Max subscriptions to return (default 100, max 500). |
+
+**Returns:** step-keyed envelope, steps `queue` (existence check) and
+`subscriptions` (array of subscription records as returned by the event
+broker).
+
+```json
+{ "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q" }
+```
+
+**Example request:** "What topics is orders.q subscribed to on prod-broker?"
 
 ---
 
@@ -971,7 +998,8 @@ Annotations: `readOnly: false`, `destructive: true`.
 ### create-queue
 
 Create a queue in a VPN. Fails if one with the same name already exists in the
-VPN.
+VPN. A newly created queue has no topic subscriptions and will not attract any
+messages — call `create-queue-subscription` next to give it one.
 
 Annotations: `readOnly: false`, `destructive: false`.
 
@@ -1015,7 +1043,9 @@ Annotations: `readOnly: false`, `destructive: true`.
 
 ### delete-queue
 
-**Destructive.** Delete a queue and discard any messages still spooled on it.
+**Destructive.** Delete a queue, discard any messages still spooled on it, and
+remove any topic subscriptions attached to it — there is no separate step to
+detach subscriptions first.
 
 Annotations: `readOnly: false`, `destructive: true`.
 
@@ -1032,6 +1062,53 @@ Annotations: `readOnly: false`, `destructive: true`.
 ```
 
 **Example request:** "Delete orders.q from the default VPN on prod-broker." (The tool description instructs the agent to confirm before acting.)
+
+### create-queue-subscription
+
+Add a topic subscription to a queue. A queue with no subscriptions attracts no
+messages regardless of its other settings — call this immediately after
+`create-queue` if the queue needs to receive traffic. Fails if the queue
+already has this exact subscription, or if the queue does not exist.
+
+Annotations: `readOnly: false`, `destructive: false`.
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target event broker alias. |
+| `msgVpnName` | string | yes | The VPN containing the queue. |
+| `queueName` | string | yes | The queue to add the subscription to. |
+| `subscriptionTopic` | string | yes | The topic to subscribe to. Accepts Solace wildcards (`>` for multi-level, `*` for single-level). |
+
+**Returns:** step-keyed envelope, step `createQueueSubscription`.
+
+```json
+{ "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "subscriptionTopic": "orders/>" }
+```
+
+**Example request:** "Subscribe orders.q to orders/> on prod-broker." (The tool description instructs the agent to confirm before acting.)
+
+### delete-queue-subscription
+
+**Destructive.** Remove a topic subscription from a queue. Removal is silent:
+the event broker raises no error and gives no further signal — messages
+matching this topic simply stop arriving at the queue.
+
+Annotations: `readOnly: false`, `destructive: true`.
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `broker` | string | yes | Target event broker alias. |
+| `msgVpnName` | string | yes | The VPN containing the queue. |
+| `queueName` | string | yes | The queue to remove the subscription from. |
+| `subscriptionTopic` | string | yes | The topic of the subscription to remove. Must match an existing subscription's topic exactly, including any wildcards. |
+
+**Returns:** step-keyed envelope, step `deleteQueueSubscription`.
+
+```json
+{ "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "subscriptionTopic": "orders/>" }
+```
+
+**Example request:** "Remove the orders/> subscription from orders.q on prod-broker." (The tool description instructs the agent to confirm before acting.)
 
 ### create-topic-endpoint
 

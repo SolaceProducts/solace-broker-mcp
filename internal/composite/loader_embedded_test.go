@@ -59,14 +59,15 @@ func findStep(tool *CompositeTool, id string) *Step {
 // already imports composite, so the reverse would cycle) — update
 // deliberately, same convention as wantToolCount above.
 var createOrUpdateWriteTools = map[string]bool{
-	"create-message-vpn":    true,
-	"update-message-vpn":    true,
-	"create-queue":          true,
-	"update-queue":          true,
-	"create-topic-endpoint": true,
-	"update-topic-endpoint": true,
-	"create-rdp":            true,
-	"update-rdp":            true,
+	"create-message-vpn":        true,
+	"update-message-vpn":        true,
+	"create-queue":              true,
+	"update-queue":              true,
+	"create-queue-subscription": true,
+	"create-topic-endpoint":     true,
+	"update-topic-endpoint":     true,
+	"create-rdp":                true,
+	"update-rdp":                true,
 }
 
 func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
@@ -77,7 +78,7 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 
 	t.Run("count", func(t *testing.T) {
 		// Exact count guards against silent drops and accidental additions — update deliberately.
-		const wantToolCount = 34
+		const wantToolCount = 37
 		if len(tools) != wantToolCount {
 			t.Errorf("tool count: got %d, want %d", len(tools), wantToolCount)
 		}
