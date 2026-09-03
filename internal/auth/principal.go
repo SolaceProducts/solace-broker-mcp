@@ -144,8 +144,12 @@ func extraString(ctx context.Context, info *sdkauth.TokenInfo, key string) strin
 	s, isString := v.(string)
 	if !isString {
 		// ErrorContext, not Error: the correlation slog handler reads the ID
-		// off the record's context, so this joins to the request whose audit
-		// line shows the <verifier-bug> sentinel.
+		// off the record's context, so this record carries one at all rather
+		// than none. It is the same ID the audit line showing <verifier-bug>
+		// carries, which is what makes them joinable — but note that ID is
+		// session-scoped, not per-request, in stateful streamable HTTP (see
+		// the caveat in tools/register.go), so it narrows the search to a
+		// session rather than to the one request.
 		slog.ErrorContext(ctx, "internal: TokenInfo.Extra has unexpected type — verifier contract violation",
 			slog.String("key", key),
 			slog.String("got_type", fmt.Sprintf("%T", v)))
@@ -183,8 +187,9 @@ func PrincipalFrom(ctx context.Context) Principal {
 // Registration order matters. AddReceivingMiddleware wraps the current
 // handler, so the LAST middleware registered runs FIRST; this one must be
 // registered after any middleware that reads the principal (today
-// tools.WithListFiltering). cmd/server does that, and
-// TestPrincipalReachesListFiltering pins it.
+// tools.WithListFiltering). cmd/server expresses that order in one place,
+// installRequestMiddleware, which TestPrincipalReachesListFiltering calls
+// directly so a reorder there fails the test.
 func PrincipalMiddleware() mcp.Middleware {
 	return func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {

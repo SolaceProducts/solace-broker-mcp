@@ -18,9 +18,13 @@
 // because AddReceivingMiddleware wraps the current handler — so the last
 // registration is the outermost and runs first, and the filter reads the
 // principal the middleware installs. Nothing in the type system enforces
-// that; reordering two statements in main() would silently strip identity
-// from every tools/list audit record while leaving all other tests green.
-// This test pins the order against the real wiring.
+// that, and reordering the two statements would silently strip identity from
+// every tools/list audit record while leaving all other tests green.
+//
+// The order lives in exactly one function, installRequestMiddleware, and this
+// test calls it. That is the whole point: the first version of this test
+// registered the middlewares itself, so it proved its own ordering rather than
+// production's and passed with main() wired either way.
 
 package main
 
@@ -33,7 +37,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/tools"
@@ -63,9 +66,11 @@ func TestPrincipalReachesListFiltering(t *testing.T) {
 	tools.RegisterWithServer(mgr, server, pool, true, policyFrom(t, cfg), "groups")
 	tools.RegisterListBrokers(server, pool)
 
-	// Exactly the order main() uses.
-	installToolListFiltering(server, cfg, policyFrom(t, cfg), "groups")
-	server.AddReceivingMiddleware(auth.PrincipalMiddleware())
+	// The production wiring function itself, not a copy of its body. Calling
+	// it is what makes this test guard main()'s order: an earlier version
+	// registered the two middlewares here and so passed no matter how main()
+	// ordered them (raised in review on PR #369).
+	installRequestMiddleware(server, cfg, policyFrom(t, cfg), "groups")
 
 	verifier := func(ctx context.Context, token string, r *http.Request) (*sdkauth.TokenInfo, error) {
 		return &sdkauth.TokenInfo{

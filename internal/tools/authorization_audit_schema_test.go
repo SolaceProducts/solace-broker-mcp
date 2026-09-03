@@ -151,7 +151,7 @@ func requestMissingClaimWithCorrelation() *mcp.CallToolRequest {
 	}
 }
 
-// ctxWithPrincipal stands in for auth.InjectPrincipal: identity comes from the
+// ctxWithPrincipal stands in for auth.PrincipalMiddleware: identity comes from the
 // Principal on ctx, not req.Extra.TokenInfo (SOL-152087), so tests asserting
 // identity fields must seed ctx the way the middleware would.
 func ctxWithPrincipal(ctx context.Context, req *mcp.CallToolRequest) context.Context {

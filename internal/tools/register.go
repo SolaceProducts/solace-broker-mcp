@@ -172,7 +172,7 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 		var callToolHandler mcp.ToolHandler = func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			start := time.Now()
 			// Per-invocation audit identity (SOL-149606), projected from the
-			// Principal auth.InjectPrincipal attached to ctx (SOL-152087).
+			// Principal auth.PrincipalMiddleware attached to ctx (SOL-152087).
 			// Absent in disabled mode and under test scaffolding.
 			id := NewIdentityFromPrincipal(auth.PrincipalFrom(ctx))
 

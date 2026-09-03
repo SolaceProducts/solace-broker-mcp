@@ -890,6 +890,29 @@ func installToolListFiltering(server *mcp.Server, cfg *config.ServerConfig, poli
 	slog.Info("tools/list filtering is enabled")
 }
 
+// installRequestMiddleware registers the MCP receiving middleware every request
+// passes through, in the order they must run.
+//
+// The order is load-bearing, and this function is the only place it is
+// expressed. AddReceivingMiddleware wraps the current handler, so the LAST
+// registration is the outermost and runs FIRST: the caller Principal must be
+// attached before WithListFiltering reads it. Swapping these two statements
+// would silently strip identity from every tools/list audit record while
+// leaving the rest of the suite green, so TestPrincipalReachesListFiltering
+// calls THIS function — not a copy of its body — and fails if they are
+// reordered.
+func installRequestMiddleware(server *mcp.Server, cfg *config.ServerConfig, policy *authz.Policy, groupsClaimName string) {
+	// Narrow tools/list to what each caller may invoke. Off by default; when
+	// off, AddReceivingMiddleware is never called and dispatch is unchanged.
+	installToolListFiltering(server, cfg, policy, groupsClaimName)
+
+	// Attach the caller Principal every audit site reads (SOL-152087). Last,
+	// so it is outermost — see the order note above. Unconditional: in auth
+	// mode "disabled" no request carries a token, so the middleware attaches
+	// nothing and audit lines keep their no-identity shape.
+	server.AddReceivingMiddleware(auth.PrincipalMiddleware())
+}
+
 // logStartupBanners emits the boot-time WARN banners: auth-mode signal,
 // static-cleartext exposure, and OAuth plaintext-listener acknowledgement.
 func logStartupBanners(cfg *config.ServerConfig) {
@@ -1143,19 +1166,7 @@ func main() {
 		}
 	}
 
-	// Narrow tools/list to what each caller may invoke. Off by default; when
-	// off, AddReceivingMiddleware is never called and dispatch is unchanged.
-	installToolListFiltering(server, cfg, policy, groupsClaimName)
-
-	// Attach the caller Principal every audit site reads (SOL-152087).
-	// Registered LAST on purpose: AddReceivingMiddleware wraps the current
-	// handler, so the last registration is the outermost and runs first —
-	// which it must, because WithListFiltering above reads the principal.
-	// TestPrincipalReachesListFiltering pins that order against this wiring.
-	// Unconditional: in auth mode "disabled" no request carries a token, so
-	// the middleware attaches nothing and audit lines keep their no-identity
-	// shape.
-	server.AddReceivingMiddleware(auth.PrincipalMiddleware())
+	installRequestMiddleware(server, cfg, policy, groupsClaimName)
 
 	slog.Info("all tools registered")
 
