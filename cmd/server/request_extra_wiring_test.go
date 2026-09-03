@@ -15,11 +15,26 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/tools"
+	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const postureRequestExtraEnabled = "request extra middleware is enabled"
@@ -55,4 +70,193 @@ func TestInstallRequestMiddleware_LogsRequestExtraEnabled(t *testing.T) {
 	if found != 1 {
 		t.Fatalf("found %d %q lines, want 1:\n%s", found, postureRequestExtraEnabled, buf.String())
 	}
+}
+
+// The two request-scoped records this test observes, named by msg. Neither is
+// interesting in itself here — they are simply the emit sites that log through
+// ctx, and so reveal which request's correlation ID the ctx is carrying.
+const (
+	msgToolListFilter       = "tool list filter"
+	msgVerifierContractViolation = "internal: TokenInfo.Extra has unexpected type — verifier contract violation"
+)
+
+// syncBuffer is a mutex-guarded log sink. The plain bytes.Buffer the other
+// wiring tests use is fine when everything logs on the caller's goroutine, but
+// this test drives a live SDK session, so a stray write from a transport
+// goroutine would otherwise be a data race under -race.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
+// TestInstallRequestMiddleware_RequestExtraRunsBeforeEveryEmitSite pins that
+// auth.RequestExtraMiddleware is registered LAST in installRequestMiddleware,
+// which is what makes it outermost and run FIRST.
+//
+// Why an ordering test and not just the comment: every middleware registered
+// inside it logs through the correlation slog handler, which reads the ID off
+// the record's ctx. If the Extra.Header copy runs after any of them, that one
+// keeps reporting the ID of the POST that opened the session — for the
+// session's whole life — while sites below it report the current one. Records
+// that disagree about which request they describe are worse than records that
+// are uniformly stale, and no unit test of any single middleware can see it.
+//
+// Both middleware currently registered inside it are checked, by the record
+// each one emits, and both are required present so the test cannot pass
+// vacuously. Two sites rather than one because they pin different edges:
+// tools.WithListFiltering's audit record, and PrincipalMiddleware's
+// non-string-claim ERROR. The filter alone would not pin the second — moving
+// the copy to sit between the two leaves the filter's record fresh and only
+// the ERROR stale, which is the mutation that motivated adding it. The third
+// edge, Principal before the filter, is TestPrincipalReachesListFiltering.
+//
+// This enumerates emit sites, so it does not automatically cover middleware
+// added to installRequestMiddleware later. Anything new registered inside the
+// Extra.Header copy that logs through ctx needs its record added here.
+func TestInstallRequestMiddleware_RequestExtraRunsBeforeEveryEmitSite(t *testing.T) {
+	sink := &syncBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(correlation.NewSlogHandler(
+		slog.NewJSONHandler(sink, &slog.HandlerOptions{Level: slog.LevelDebug}))))
+	defer slog.SetDefault(prev)
+
+	cfg := makeEnabledConfig()
+	on := true
+	cfg.MCPClientAuth.ToolAuthorization.FilterToolsList = &on
+
+	pool := semp.NewBrokerPool(cfg, nil)
+	t.Cleanup(pool.Close)
+	mgr := tools.NewToolManager(pool)
+	server := newTestServer()
+	tools.RegisterWithServer(mgr, server, pool, true, policyFrom(t, cfg), "groups")
+	tools.RegisterListBrokers(server, pool)
+
+	// The production wiring function itself, not a copy of its body — the same
+	// reason TestPrincipalReachesListFiltering calls it.
+	installRequestMiddleware(server, cfg, policyFrom(t, cfg), "groups")
+
+	// jti is deliberately not a string: that is what makes PrincipalMiddleware
+	// emit its ERROR, giving this test a second ctx-logging site to observe.
+	verifier := func(ctx context.Context, token string, r *http.Request) (*sdkauth.TokenInfo, error) {
+		return &sdkauth.TokenInfo{
+			UserID:     "auth0|ordering",
+			Expiration: time.Now().Add(time.Hour),
+			Extra: map[string]any{
+				"iss":                         "https://idp.ordering.example",
+				"client_id":                   "ordering-client",
+				"jti":                         42,
+				authz.TokenInfoExtraKeyGroups: []string{"Ops"},
+			},
+		}, nil
+	}
+
+	// correlation.Middleware is in the chain exactly as production composes it.
+	// Without it the session's frozen ctx would carry no ID at all, and a
+	// regression would show up as a missing field rather than as the stale ID
+	// an operator would actually be handed.
+	handler := correlation.Middleware(
+		sdkauth.RequireBearerToken(verifier, nil)(
+			mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)))
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	current := &atomic.Pointer[string]{}
+	initializeID, listID := "corr-id-of-initialize", "corr-id-of-tools-list"
+	current.Store(&initializeID)
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "c", Version: "0"}, nil)
+	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{
+		Endpoint:   ts.URL,
+		HTTPClient: &http.Client{Transport: &correlatedBearer{id: current}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+
+	// From here the POST carries a different ID than the one that opened the
+	// session — the whole point of the test.
+	current.Store(&listID)
+	if _, err := session.ListTools(context.Background(), nil); err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	// Records are matched by the ID they carry, not by when they were written.
+	// A byte offset taken after Connect looks equivalent and is not: the
+	// initialized notification's record can land after it, and the test then
+	// fails on a record belonging to a POST it never meant to inspect.
+	logged := sink.String()
+	filterIDs := correlationIDsOf(t, logged, msgToolListFilter)
+	principalIDs := correlationIDsOf(t, logged, msgVerifierContractViolation)
+
+	// One tools/list in the whole run, so exactly one filter record, and it
+	// must name that request.
+	if len(filterIDs) != 1 {
+		t.Fatalf("want exactly 1 %q record, got %d:\n%s", msgToolListFilter, len(filterIDs), logged)
+	}
+	if filterIDs[0] != listID {
+		t.Errorf("%q record has correlation_id %q, want %q — it reported the POST that opened the session, so auth.RequestExtraMiddleware did not run before tools.WithListFiltering. It must be registered LAST in installRequestMiddleware.",
+			msgToolListFilter, filterIDs[0], listID)
+	}
+
+	// Vacuity guard first: with no such record at all the ID assertion below
+	// would fail for the wrong reason and point at the wrong culprit.
+	if len(principalIDs) == 0 {
+		t.Fatalf("no %q record at all; the test proves nothing without it:\n%s",
+			msgVerifierContractViolation, logged)
+	}
+	// PrincipalMiddleware emits on every message, so this asserts on the ID
+	// rather than on a count: the tools/list one must name tools/list. If it
+	// named the session's first POST instead, none would carry listID.
+	if !slices.Contains(principalIDs, listID) {
+		t.Errorf("no %q record carries correlation_id %q (saw %q) — auth.RequestExtraMiddleware did not run before auth.PrincipalMiddleware. It must be registered LAST in installRequestMiddleware.",
+			msgVerifierContractViolation, listID, principalIDs)
+	}
+}
+
+// correlationIDsOf returns the correlation_id of every record whose msg is
+// exactly want, in order. A record missing the field yields "", which fails
+// the caller's comparison with the same meaning as a stale ID: the site did
+// not see this request.
+func correlationIDsOf(t *testing.T, logged, want string) []string {
+	t.Helper()
+	var ids []string
+	for _, line := range strings.Split(strings.TrimRight(logged, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("non-JSON log line %q: %v", line, err)
+		}
+		if msg, _ := rec["msg"].(string); msg != want {
+			continue
+		}
+		id, _ := rec["correlation_id"].(string)
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// correlatedBearer sets a fixed bearer token and a correlation ID the test
+// swaps between requests, so one session can present a different ID per POST.
+type correlatedBearer struct{ id *atomic.Pointer[string] }
+
+func (c *correlatedBearer) RoundTrip(r *http.Request) (*http.Response, error) {
+	clone := r.Clone(r.Context())
+	clone.Header.Set("Authorization", "Bearer ordering-token")
+	clone.Header.Set("X-Correlation-ID", *c.id.Load())
+	return http.DefaultTransport.RoundTrip(clone)
 }
