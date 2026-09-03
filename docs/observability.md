@@ -515,7 +515,12 @@ which you own.** The server does not itself persist or sign events.
 > composite-executor, and per-SEMP-attempt spans are still the proposed design (later stories),
 > so flipping the flag today exports a resource, the token-exchange span, and nothing else yet.
 > Sampling and propagation are live; the rest of this section stays **[Planned]** until those
-> stories land._
+> stories land. **A consequence of shipping only one span first:** the default sampler samples
+> everything (see Sampling below), and until Story 26's SEMP-layer spans exist, most calls have
+> no upstream span to attach to — so a token exchange not triggered from an already-sampled agent
+> trace exports as its own single-span root trace, one per (uncached) token exchange, rather than
+> nested inside a larger request trace. Self-correcting once Story 26 lands; worth knowing before
+> then if trace volume looks higher than the request volume suggests._
 
 OpenTelemetry spans at each hop of a request, exported over OTLP, enabled with
 `OBS_TRACING_ENABLED` (never automatic; you opt in after deploying a collector).
@@ -578,6 +583,13 @@ logs, audit, and spans and the four surfaces cannot disagree about why a call fa
 values match OTel's `error.type` semantics. If your trace backend or trace-based SLOs key off
 the dotted `error.type`, tell us in your feedback, because this is the kind of thing that is
 cheap to change now and expensive after the freeze.
+
+**Enabling `OBS_TRACING_ENABLED` exports authentication-event content to your collector.**
+Every `tokenexchange.Exchange` span carries a correlation ID, a timestamp, and the outcome of
+that authentication attempt (including whether it was a cache hit), which now travels to
+wherever `OTEL_EXPORTER_OTLP_ENDPOINT` points — a system that may sit outside this deployment's
+own residency or audit-scope boundary. Worth one line in your own data-flow review before
+pointing this at a collector you don't operate.
 
 ### Resource Attributes
 
@@ -888,9 +900,9 @@ the review.
    **What we still want from you:** can your access review resolve `sub` to a human at review
    time, including for a deprovisioned user? If it cannot, say so and we will add
    `principal.preferred_username` in a later minor.
-4. **Trace span names and span kinds.** Beyond `semp.attempt`, we intend to follow OTel HTTP
-   conventions. If your trace backend or trace-based SLOs key off specific span names or
-   `SpanKind` values, tell us what you expect.
+4. **Trace span names and span kinds.** Beyond `tokenexchange.Exchange` and `semp.attempt`, we
+   intend to follow OTel HTTP conventions. If your trace backend or trace-based SLOs key off
+   specific span names or `SpanKind` values, tell us what you expect.
 5. **The `outcome` / `error_type` split.** We have settled on three `outcome` values with the
    cause in a separate `error_type` of ten values, rather than folding causes into `outcome`.
    Does that split match how your SIEM queries distinguish failures, and do the ten
