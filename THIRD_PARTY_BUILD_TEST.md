@@ -196,11 +196,11 @@ All five come from one repository, pinned to a single commit.
 
 | Action | Ref | Owner |
 |---|---|---|
-| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `6c01e11` | Solace |
-| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `6c01e11` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-db-sync` | `6c01e11` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `6c01e11` | Solace |
-| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `6c01e11` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `ba836c7` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `ba836c7` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-db-sync` | `ba836c7` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `ba836c7` | Solace |
+| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `ba836c7` | Solace |
 
 `6c01e11` is a branch commit, not a tag, so there is no release to record beside
 it. The repository itself is Apache-2.0. Re-pinned 2026-08-31 by the Dependabot
