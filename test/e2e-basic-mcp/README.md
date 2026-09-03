@@ -27,7 +27,7 @@ docker compose -f test/e2e-basic-mcp/docker-compose.yml down -v
 ```
 
 `run-all.sh` builds the MCP server and the Go agent, applies the base fixtures to
-both brokers, runs all three scenarios, and cleans up the fixtures and server on
+both brokers, runs all four scenarios, and cleans up the fixtures and server on
 exit (via an `EXIT` trap). It assumes the brokers are already up — run the
 `setup-brokers.sh` step above first.
 
@@ -43,6 +43,8 @@ test/e2e-basic-mcp/
 ├── test-standalone.sh      # Scenario 1: raw curl MCP protocol tests
 ├── test-agent.sh           # Scenario 2: builds and runs the Go MCP-SDK agent
 ├── test-negative-paths.sh  # Scenario 3: structured-error envelope contract (SOL-150767)
+├── test-throttling.sh      # Scenario 4: rate limiter + in-flight cap (SOL-153444)
+├── test-throttling-analysis.sh  # Self-test of scenario 4's record arithmetic (no Docker, ~1s)
 ├── agent/                  # Go MCP-SDK client program (own go.mod)
 └── bin/                    # Built binaries + pidfile (gitignored)
 ```
@@ -74,6 +76,33 @@ The extras are local to this suite — other suites' server configs stay minimal
   itself is unit-tested in
   `internal/semp/resilience/` — this scenario is the "we drove it once" smoke
   on the envelope contract, not a comprehensive negative matrix.
+- **Scenario 4 — Throttling (`test-throttling.sh`).** SOL-153444. Proves
+  `semp.request_min_interval` and `semp.max_concurrent_per_broker` are honored
+  end to end against a real broker, which until now was covered only by unit
+  tests against an `httptest` server. It runs four phases, restarting the MCP
+  server with different limits each time, and measures what the broker actually
+  receives through `semp-tap` (a recording reverse proxy, sources in
+  `../e2e-common/semp-tap`) placed in front of broker-a behind a dedicated
+  `broker-throttle` alias:
+
+  | Phase | `request_min_interval` | `max_concurrent_per_broker` | Tap delay | Asserts |
+  | --- | --- | --- | --- | --- |
+  | pacer | `200ms` | `10` (slack) | 0 | every gap ≥ floor, and the aggregate span matches the interval |
+  | cap | `0s` | `2` | 150ms | peak in-flight == 2 |
+  | pacer-control | `0s` | `10` (slack) | 0 | the inverse of the pacer phase |
+  | cap-control | `0s` | `10` (slack) | 150ms | the inverse of the cap phase |
+
+  Each control differs from the phase it validates in exactly one variable, so a
+  green control means that specific assertion is live. They are the ticket's
+  "sanity-check the assertion" step, kept as real always-on CI assertions rather
+  than manual ones, so they cannot rot. Read
+  `semp-tap`'s package comment before touching an assertion: the measurement
+  window is `[request received → response headers returned]`, matching where
+  `Sender.Do` drops its semaphore slot, and it is not the same as full
+  body-proxy completion.
+
+  This scenario runs last because it takes over port `9090` from the shared
+  server the earlier scenarios use.
 
 ## Fixtures
 
@@ -118,8 +147,12 @@ Distinct from `e2e-monitoring` so both suites can run concurrently:
 | ------------- | ------------- | -------------- |
 | SEMP broker-a | 8080          | 8090           |
 | SEMP broker-b | 8082          | 8092           |
+| semp-tap      | 8084          | (not used)     |
 | SMF broker-a  | (not exposed) | 55655          |
 | SMF broker-b  | (not exposed) | 55656          |
+
+`semp-tap` is a host-side process, not a container: the throttling scenario's
+recording reverse proxy (`SEMP_TAP_PORT` in `.env`).
 
 The MCP server listens on `9090` (override with `MCP_PORT`). All broker ports are
 override-able via `.env` (`BROKER_A_SEMP_PORT`, `BROKER_B_SEMP_PORT`).

@@ -184,6 +184,7 @@ jobs:
         run: |
           go vet ./...
           (cd test/e2e-common/broker-driver && go vet ./...)
+          (cd test/e2e-common/semp-tap && go vet ./...)
 
       - name: Test
         # -race enables the Go race detector to catch data races on shared state (e.g. BrokerPool).
@@ -247,6 +248,32 @@ jobs:
           docker logs solace-e2e-a 2>&1 | tail -100
           echo "=== solace-e2e-b ==="
           docker logs solace-e2e-b 2>&1 | tail -100
+
+      # The throttling scenario's verdict is a claim about timing, so on failure
+      # the raw evidence has to come back with it. The records are the arrival
+      # and header-return timestamps the assertions were computed from, and the
+      # per-phase configs say which limits were actually in force (they carry
+      # only ${VAR} placeholders, never resolved credentials).
+      #
+      # Deliberately not the MCP server log. This step fires on ANY failure in
+      # the job, not just this scenario's, so tailing the server log here would
+      # publish it to the Actions log for scenarios that never asked for it, and
+      # the suite has not needed it until now.
+      - name: Throttling scenario evidence (on failure)
+        if: failure()
+        run: |
+          for f in test/e2e-basic-mcp/bin/throttle-record-*.csv; do
+            [ -e "$f" ] || continue
+            echo "=== $f ($(wc -l < "$f") requests) ==="
+            cat "$f"
+          done
+          for f in test/e2e-basic-mcp/bin/mcp-config-throttle-*.yaml; do
+            [ -e "$f" ] || continue
+            echo "=== $f ==="
+            cat "$f"
+          done
+          echo "=== semp-tap log ==="
+          tail -100 test/e2e-basic-mcp/bin/semp-tap.log 2>/dev/null || echo "no tap log"
 
       - name: Tear down brokers
         if: always()

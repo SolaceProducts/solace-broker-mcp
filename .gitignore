@@ -80,3 +80,7 @@ product-chat.md
 
 # Built E2E agent binary.
 test/e2e/agent/agent
+
+# semp-tap builds into a suite's gitignored bin/ via build_semp_tap, but a bare
+# `go build` inside its own module drops the binary next to the source.
+test/e2e-common/semp-tap/semp-tap
