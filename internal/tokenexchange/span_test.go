@@ -316,6 +316,13 @@ func TestExchange_Span_CancelledCallerClassifiesAsCancelled(t *testing.T) {
 	if got := attr(t, span, "outcome"); got != "cancelled" {
 		t.Errorf("outcome = %v, want %q", got, "cancelled")
 	}
+	// The stated rule (Exchange's doc comment): SetStatus(codes.Error, ...)
+	// fires only when outcome is "error", never on "cancelled" — making
+	// SetStatus unconditional would leave this test green without this
+	// assertion (flagged by review).
+	if got := span.Status().Code; got != codes.Unset {
+		t.Errorf("span status code = %v, want codes.Unset — SetStatus must not be called on a cancelled span", got)
+	}
 }
 
 // TestExchange_Span_CallerDeadlineClassifiesAsCancelledNotError is the
@@ -358,6 +365,9 @@ func TestExchange_Span_CallerDeadlineClassifiesAsCancelledNotError(t *testing.T)
 	span := findSpan(t, sr, "tokenexchange.Exchange")
 	if got := attr(t, span, "outcome"); got != "cancelled" {
 		t.Errorf("outcome = %v, want %q — a caller-side deadline is the caller leaving, not the exchange failing", got, "cancelled")
+	}
+	if got := span.Status().Code; got != codes.Unset {
+		t.Errorf("span status code = %v, want codes.Unset — SetStatus must not be called on a cancelled span", got)
 	}
 }
 
@@ -412,8 +422,8 @@ func TestExchange_Span_DetachedCallCarriesParentForFutureRetrySpans(t *testing.T
 	}
 }
 
-// TestExchange_Span_WorksWithoutInstallingATracer confirms Exchange's return
-// value is unaffected by whatever the process's current global tracer
+// TestExchange_ReturnValueUnaffectedByGlobalTracerState confirms Exchange's
+// return value is unaffected by whatever the process's current global tracer
 // provider happens to be — this test deliberately does not call
 // withRecordingTracer, so it runs against either the real no-op default (the
 // production state before cmd/server wires internal/observability/tracing,
@@ -422,7 +432,17 @@ func TestExchange_Span_DetachedCallCarriesParentForFutureRetrySpans(t *testing.T
 // see forwardingProcessor's doc for why this package's tests cannot force
 // "no provider was ever installed" once any test has installed one). Either
 // way, span creation must never affect the token or error Exchange returns.
-func TestExchange_Span_WorksWithoutInstallingATracer(t *testing.T) {
+//
+// Named for what it actually checks, not for AC6 (review flagged the
+// original name as claiming more than the assertions cover): this cannot
+// reliably assert IsRecording()==false, because by the time this test runs
+// in the suite an earlier test may have already installed the shared
+// recording provider (forwardingProcessor's doc explains why that, once
+// installed, stays installed for the rest of the binary). AC6 itself — a
+// disabled tracer provider is a true no-op — is covered at the provider
+// level by TestNew_Disabled_ReturnsNilAndTouchesNothing in
+// internal/observability/tracing.
+func TestExchange_ReturnValueUnaffectedByGlobalTracerState(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, successJSON("exchanged-tok", 3600))
@@ -436,5 +456,141 @@ func TestExchange_Span_WorksWithoutInstallingATracer(t *testing.T) {
 	}
 	if tok == nil || tok.Value != "exchanged-tok" {
 		t.Fatalf("tok = %v, want a token with Value %q", tok, "exchanged-tok")
+	}
+}
+
+// panicCache is a cache.TokenCache whose Get always panics — a stand-in for
+// an unexpected failure inside Exchange's own body, to prove the deferred
+// span-closing block records it correctly before letting it propagate.
+type panicCache struct{}
+
+func (panicCache) Get(context.Context, string) (cache.GetResult, error) {
+	panic("boom")
+}
+func (panicCache) Put(context.Context, string, cache.CachedCredential) (cache.PutResult, error) {
+	return cache.PutResult{}, nil
+}
+func (panicCache) Delete(context.Context, string) (cache.DeleteResult, error) {
+	return cache.DeleteResult{}, nil
+}
+func (panicCache) Close() error { return nil }
+
+// TestExchange_Span_PanicRecordsErrorThenRepanics is the direct proof for
+// the panic-recovery fix in Exchange's own deferred span-closing block: a
+// panic between tracer.Start and that defer must not close the span
+// reporting outcome=success right before taking the process down (flagged
+// by review — the named return err is never populated by an unwound panic,
+// so without this fix the span would misreport the worst kind of failure as
+// a clean success). The panic must still propagate afterward — recovering
+// here is for span fidelity only, not to swallow it.
+func TestExchange_Span_PanicRecordsErrorThenRepanics(t *testing.T) {
+	sr := withRecordingTracer(t)
+
+	e := newTestExchanger(t, "http://unused.invalid")
+	e.cache = panicCache{}
+
+	func() {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("Exchange() did not panic; want the panic to propagate past the span-closing defer, not be swallowed")
+			}
+		}()
+		_, _ = e.Exchange(context.Background(), validInput())
+	}()
+
+	span := findSpan(t, sr, "tokenexchange.Exchange")
+	if got := attr(t, span, "outcome"); got != "error" {
+		t.Errorf("outcome = %v, want %q", got, "error")
+	}
+	if got := span.Status().Code; got != codes.Error {
+		t.Errorf("span status code = %v, want codes.Error", got)
+	}
+	var sawException bool
+	for _, ev := range span.Events() {
+		if ev.Name == "exception" {
+			sawException = true
+		}
+	}
+	if !sawException {
+		t.Error("span has no recorded exception event for the panic")
+	}
+}
+
+// TestExchange_Span_FollowerIsSelfDescribingViaWinnerAttributes exercises the
+// path no test previously reached (flagged by review): two concurrent
+// callers sharing one singleflight key, so this recorder holds two
+// "tokenexchange.Exchange" spans at once — findSpan's "exactly one" scan
+// cannot be used here, hence the singleflight_role attribute itself is the
+// discriminator. Confirms the follower's span carries the winner's own
+// trace/span IDs, so an operator can pivot from a follower's span to the
+// trace that actually did the IdP work — this SDK's Span has no AddLink
+// method to attach a real span Link after the span has already started
+// (see Exchange's doc comment on singleflight_role for why).
+func TestExchange_Span_FollowerIsSelfDescribingViaWinnerAttributes(t *testing.T) {
+	sr := withRecordingTracer(t)
+
+	gate := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		<-gate
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, successJSON("shared-tok", 3600))
+	}))
+	defer srv.Close()
+	e := newTestExchanger(t, srv.URL)
+
+	input := validInput()
+	const n = 2
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			_, errs[idx] = e.Exchange(context.Background(), input)
+		}(i)
+	}
+
+	// Brief pause to let both goroutines queue up in singleflight under the
+	// same key before either's IdP call is allowed to complete — same
+	// pattern as TestExchange_MultipleCallersCollapseIntoOneIdPCall in
+	// exchange_test.go.
+	time.Sleep(50 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("goroutine %d: Exchange: %v", i, err)
+		}
+	}
+
+	var winnerSpan, followerSpan sdktrace.ReadOnlySpan
+	for _, s := range sr.Ended() {
+		if s.Name() != "tokenexchange.Exchange" || !hasAttr(s, "singleflight_role") {
+			continue
+		}
+		switch attr(t, s, "singleflight_role") {
+		case "winner":
+			winnerSpan = s
+		case "follower":
+			followerSpan = s
+		}
+	}
+	if winnerSpan == nil {
+		t.Fatal("no span with singleflight_role=\"winner\" found among the ended spans")
+	}
+	if followerSpan == nil {
+		t.Fatal("no span with singleflight_role=\"follower\" found — the two callers never shared one singleflight call")
+	}
+
+	if got, want := attr(t, followerSpan, "winner_trace_id"), winnerSpan.SpanContext().TraceID().String(); got != want {
+		t.Errorf("follower's winner_trace_id = %v, want %q (the winner's own trace)", got, want)
+	}
+	if got, want := attr(t, followerSpan, "winner_span_id"), winnerSpan.SpanContext().SpanID().String(); got != want {
+		t.Errorf("follower's winner_span_id = %v, want %q (the winner's own span)", got, want)
+	}
+	if hasAttr(winnerSpan, "winner_trace_id") || hasAttr(winnerSpan, "winner_span_id") {
+		t.Error("the winner's own span should not carry winner_trace_id/winner_span_id — those point elsewhere only on a follower")
 	}
 }
