@@ -34,15 +34,51 @@ prompt-injected one — an MCP client calling `ToolManager.CallTool`
 |---|---|---|
 | Malformed/malicious tool params reach a handler (Tampering) | JSON-Schema validation on input (`internal/tools/validation.go:33`) and output (`internal/tools/manager.go:208`) before/after every handler call; panics caught by `withRecovery` (`internal/tools/register.go:62`) | Mitigated — structural only, see below |
 | Caller targets an unauthorized broker via `injectBrokerParam` (Elevation of Privilege) | Broker resolution is strict against the configured pool — no fallback to an arbitrary host (`internal/semp/pool.go:105-108`) | Mitigated for *targeting*; not for *authorization* — see §6 |
-| Destructive tool invoked without genuine human confirmation (Elevation of Privilege) | `enable_write_tools` (default false) gates registration server-side (`internal/tools/register.go:157-161,196-198`) — a destructive tool literally cannot be called when off | Mitigated for the on/off switch |
+| Destructive tool invoked without genuine human confirmation (Elevation of Privilege) | `enable_write_tools` (default false) gates registration server-side (the `isWriteTool` check in `RegisterWithServer`, `internal/tools/register.go`) — a destructive tool literally cannot be called when off | Mitigated for the on/off switch |
 | Destructive tool invoked *while write tools are on*, without confirmation | None. Confirmation is prose in the tool description; `manager.go:181-186` only logs a WARNING and proceeds | **No mitigation — accepted risk** |
 | SEMP response content used to prompt-inject the calling LLM (Tampering via the LLM) | None. Raw JSON flows verbatim into `StructuredContent`/`TextContent` (`internal/composite/executor.go:763`, `internal/tools/manager.go:208-224`); output validation checks shape, never content | **No mitigation — accepted risk** |
-| Chatty/malicious LLM exhausts server or broker resources (DoS) | Per-broker semaphore + rate limiter bound outbound load (`internal/semp/broker.go:75-76`); request body capped (`cmd/server/main.go:219-228`) | Mitigated per-broker |
-| One client starves every other legitimate caller of the *same* broker (DoS) | None — no per-client/per-caller rate limit or concurrency cap exists anywhere in the codebase | **No mitigation — accepted risk** |
+| Chatty/malicious LLM exhausts server or broker resources (DoS) | Per-broker semaphore + rate limiter bound outbound load (`internal/semp/broker.go:112-113`), shared fairly across callers by `semp.fair_scheduling`; request body capped by `limitRequestBody` (`cmd/server/main.go`) | Mitigated per-broker |
+| One client starves every other legitimate caller of the *same* broker (DoS) | `semp.fair_scheduling` (default on) shares each broker's pace round-robin instead of FIFO, over two rotation levels: OIDC `sub` at the outer level, that subject's MCP sessions at the inner one (`internal/semp/resilience/scheduler.go`, key stamped at `internal/tools/register.go`). A subject therefore gets one turn per lap however many sessions it opens, so sessions cannot be minted for a larger share. In-flight slots are capped nested: `max(1, ceil(max_concurrent_per_broker / active subjects))` per subject, and within that, `max(1, ceil(subject allowance / that subject's sessions))` per session — the session level matters most, because under `client_credentials` there is one subject and the subject level alone would be the whole cap. The last free slot is withheld from a holder whenever a peer is queued and holds none, at both levels. Measured against a stub broker: a caller at 20-way concurrency drops from ~95% of the pace to ~50% (the without-fairness figure is measured by the kill-switch comparison test) | Mitigated, with limits — see below |
 | Caller identity attribution for audit (Repudiation) | Every call logs `sub`/`iss`/`client_id`/`jti` via `Identity.LogValue` (`internal/tools/identity.go:72-82`), success and failure paths, including panics | Mitigated when auth is enabled |
 | No client auth at all (Spoofing/Repudiation collapse) | `mcp_client_auth.mode: disabled` is a supported, operator-chosen server mode (`internal/config/config.go:82`) — no identity is ever recorded in that mode | **No mitigation — accepted risk, operator-chosen** |
 | Authz-denied error leaking policy shape to a probing LLM (Info Disclosure) | Deny message is deliberately uninformative and identical whether the tool doesn't exist, the group lacks a grant, or the claim is missing (`internal/tools/authorization.go:36-38`) | Mitigated |
 | A page in the operator's browser drives broker tooling via `/mcp` (CSRF / Elevation of Privilege) | `http.NewCrossOriginProtection` wraps the endpoint outside auth (`cmd/server/main.go:293,333`): a non-safe request (POST/DELETE) with `Sec-Fetch-Site` other than `same-origin`/`none`, or an `Origin` whose host ≠ `Host`, gets 403 and a WARN log before any token validation runs. On by default, no config. Two SDK defaults sit behind it as further layers: an unconditional `Content-Type: application/json` check that forces a preflight, and DNS-rebinding/localhost protection. Requests with neither header pass as non-browser traffic — how every shipped client (Claude Code, SAM's Python backend, Go SDK e2e client) reaches the endpoint | Mitigated — one client unverified, see below |
+
+**Caller fairness: what is mitigated, and what is not.** The row above closes
+the case it names — one caller can no longer take a broker's whole pace while
+others queue behind it — but four limits are deliberate and should not be read
+past.
+
+1. **Per process, not per cluster.** `deploy/kubernetes/deployment.yaml` sets
+   `replicas: 2`, and `service.yaml`'s `sessionAffinity: ClientIP` is bypassed
+   by any ingress, gateway, or mesh. Callers landing on different pods each get
+   a full per-broker budget. Not a regression — that is already true — but this
+   is not a global quota.
+2. **A newly arrived caller waits for a completion, not for a reserved slot.**
+   The last-slot reservation fires only while some peer is queued and holds no
+   slots (SOL-153441 decision A). So a caller arriving into a saturated broker
+   waits for one in-flight request to finish; nothing is held in reserve for a
+   caller that has not arrived. Conditioning it that way rather than on mere
+   contention is deliberate — reserving whenever two callers are active idles
+   one of the ten default slots any time both are busy, a 10% capacity loss
+   protecting nobody — and it gives the same one-completion bound at no cost.
+3. **Fairness is between callers, not within one.** A single agent session's own
+   fan-out — one `list-*` over a large VPN is hundreds of SEMP requests — still
+   queues behind itself. Where a client multiplexes many end users over one MCP
+   session and one `client_credentials` token, those users share one bucket,
+   because nothing distinguishes them on the wire.
+4. **Queue depth is still unbounded.** Fairness makes the queue explicit without
+   capping it. What bounds it is `semp.max_queue_wait` (SOL-153442), in time
+   rather than in depth. Per-caller *bookkeeping* is bounded: state is created
+   on enqueue and deleted once a caller has nothing queued and nothing in
+   flight, so it scales with concurrent work, not with callers ever seen.
+5. **`semp.request_min_interval: 0` removes pace fairness.** With throttling
+   off there is no pace to share and only the per-subject in-flight ceiling
+   remains. A deployment that disables throttling should not count this row as
+   mitigated.
+6. **`semp.fair_scheduling: false` disables it outright.** The kill switch
+   restores the previous first-come-first-served admission. The setting is
+   reported on the `config loaded` startup line so a pod's mode is auditable.
 
 **Cross-origin protection: what is verified, and the one client that isn't.**
 The row above holds for any client that sends neither `Origin` nor
@@ -241,7 +277,7 @@ a gap, not an exception."*
 |---|---|---|---|
 | 1 | MCP client → server | Destructive tools execute with no server-side confirmation gate once `enable_write_tools` is on | All write deployments |
 | 2 | MCP client → server | SEMP response content flows to the LLM with no content sanitization — indirect prompt-injection surface | All deployments |
-| 3 | MCP client → server | No per-client/per-caller rate limit — one caller can starve all others of a shared broker | All deployments |
+| 3 | ~~MCP client → server~~ | ~~No per-client/per-caller rate limit — one caller can starve all others of a shared broker~~ Resolved under SOL-153441 (`semp.fair_scheduling`, default on) | ~~All deployments~~ Residual: fairness is per pod, not cluster-wide; callers multiplexed over one MCP session and one token share a bucket; and it is inert under `request_min_interval: 0` or `fair_scheduling: false` — see §1 |
 | 4 | MCP client → server | `mcp_client_auth.mode: disabled` records no identity at all | Operator-chosen, disabled-auth deployments |
 | 5 | Server → broker | No compensation/rollback on a failed multi-step write | Currently unreachable (all write tools are single-step) |
 | 6 | Server → broker | `insecure_skip_verify` needs no opt-in gate outside production (oauth) mode | Dev/non-oauth deployments |

@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/logging/sanitize"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/auth"
 	"github.com/hashicorp/go-retryablehttp"
 )
@@ -78,12 +79,18 @@ func (e *RetriesExhaustedError) Error() string {
 // Unwrap returns the underlying error so errors.Is/As can traverse the chain.
 func (e *RetriesExhaustedError) Unwrap() error { return e.Err }
 
-// Admission stages, reported on BrokerBusyError.Stage. Do gates every request
-// on two queues in sequence, and which one ran out of budget is the first thing
-// an operator needs: the rate-limiter gate points at semp.request_min_interval
-// (arrival rate exceeds the configured pace), the concurrency gate points at
-// semp.max_concurrent_per_broker or at a broker slow enough that in-flight
-// requests are holding their slots.
+// Admission stages, reported on BrokerBusyError.Stage. Every request is gated
+// on two per-broker resources — the request pace and the in-flight cap — and
+// which one was the binding constraint is the first thing an operator needs:
+// rate_limit points at semp.request_min_interval (arrival rate exceeds the
+// configured pace), concurrency points at semp.max_concurrent_per_broker or at
+// a broker slow enough that in-flight requests are holding their slots.
+//
+// With semp.fair_scheduling off the two are sequential gates and the stage is
+// whichever one the request was parked on. With it on (the default) the
+// scheduler resolves both in one wait and the stage is the constraint that was
+// holding the request up, derived live — see Scheduler.Stage. Same vocabulary
+// and same operator meaning either way.
 const (
 	AdmissionStageRateLimit   = "rate_limit"
 	AdmissionStageConcurrency = "concurrency"
@@ -101,12 +108,14 @@ const (
 // streamable connections alive). Sustained saturation was therefore an
 // indefinite hang with no signal.
 type BrokerBusyError struct {
-	// Stage is AdmissionStageRateLimit or AdmissionStageConcurrency — which of
-	// Do's two admission gates the budget expired at.
+	// Stage is AdmissionStageRateLimit or AdmissionStageConcurrency — which
+	// per-broker resource the request was still waiting on when the budget
+	// expired.
 	Stage string
 
-	// Waited is the time spent trying to be admitted, measured from entry to
-	// Do across both gates. Slightly exceeds MaxWait by scheduling jitter.
+	// Waited is the total time spent trying to be admitted, measured from entry
+	// to Do rather than per resource. Slightly exceeds MaxWait by scheduling
+	// jitter.
 	Waited time.Duration
 
 	// MaxWait is the configured semp.max_queue_wait that was exceeded. Upper
@@ -140,6 +149,12 @@ type Sender struct {
 	// saturation warning. 0 disables the signal, which is the zero value and
 	// therefore the default for any Sender built without WithSaturationEvents.
 	slowAdmissionAfter time.Duration
+	// scheduler, when non-nil, owns both admission gates and shares the
+	// broker's pace fairly across callers (SOL-153441). nil restores the two
+	// plain channel gates below, which is what semp.fair_scheduling: false
+	// selects. Shared per-broker with sem and rateLimiter, and not owned here —
+	// semp.BrokerClient.Close stops it.
+	scheduler *Scheduler
 }
 
 // Option customizes a Sender at construction. Options are applied after the
@@ -167,6 +182,22 @@ func WithSaturationEvents(slowAfter time.Duration) Option {
 			d.slowAdmissionAfter = slowAfter
 		}
 	}
+}
+
+// WithScheduler installs the broker's fair admission scheduler, which takes
+// over both admission gates (SOL-153441).
+//
+// The scheduler must be the one built alongside this Sender's semaphore and
+// rate limiter, and must be shared by both of the broker's protocol Senders —
+// the same sharing requirement, for the same reason, as sem and limiter
+// themselves. A Sender-private scheduler would give each protocol its own
+// fairness rotation and its own view of the in-flight cap.
+//
+// A nil scheduler leaves fair scheduling off, which is what
+// semp.fair_scheduling: false wires. That path is byte-identical to the
+// pre-SOL-153441 two-gate admission.
+func WithScheduler(s *Scheduler) Option {
+	return func(d *Sender) { d.scheduler = s }
 }
 
 // New creates a Sender configured for a specific broker. It sets up
@@ -321,7 +352,14 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 // A zero budget disables the bound: `expired` stays nil, and a receive on a nil
 // channel blocks forever, so both selects fall back to waiting on the caller's
 // context exactly as they did before.
-func (d *Sender) admit(ctx context.Context) error {
+//
+// When a fair scheduler is installed (SOL-153441) it owns both gates instead,
+// and admit returns the Waiter that holds the resulting slot. The budget, the
+// saturation trip wire, the shed vocabulary, and the caller-deadline precedence
+// are identical on both paths: only who decides the order of admission changes.
+// A nil Waiter means the unscheduled path, whose slot is released straight off
+// the semaphore.
+func (d *Sender) admit(ctx context.Context) (*Waiter, error) {
 	start := time.Now()
 
 	// One timer for both gates, so the budget carries across rather than
@@ -368,6 +406,10 @@ func (d *Sender) admit(ctx context.Context) error {
 		slow = slowTimer.C
 	}
 
+	if d.scheduler != nil {
+		return d.admitScheduled(ctx, start, expired, slow)
+	}
+
 	// Rate limit: wait for the per-broker interval before sending a new request.
 	// This does NOT apply to retries — retryablehttp handles those internally
 	// with jittered backoff (RateLimitLinearJitterBackoff). During failure
@@ -386,9 +428,9 @@ rateLimitGate:
 				slog.String("broker", d.brokerURL))
 			break rateLimitGate
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-expired:
-			return d.shed(ctx, AdmissionStageRateLimit, start)
+			return nil, d.shed(ctx, AdmissionStageRateLimit, start)
 		case <-slow:
 			d.warnSlowAdmission(ctx, AdmissionStageRateLimit, start)
 			slow = nil
@@ -405,16 +447,103 @@ concurrencyGate:
 		case d.sem <- struct{}{}:
 			break concurrencyGate
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-expired:
-			return d.shed(ctx, AdmissionStageConcurrency, start)
+			return nil, d.shed(ctx, AdmissionStageConcurrency, start)
 		case <-slow:
 			d.warnSlowAdmission(ctx, AdmissionStageConcurrency, start)
 			slow = nil
 		}
 	}
 
-	return nil
+	return nil, nil
+}
+
+// admitScheduled is the fair-scheduling counterpart of the two gates above. The
+// scheduler resolves both at once — a granted Waiter already holds its
+// in-flight slot — so there is one wait here rather than two, sharing the same
+// budget timer and the same saturation trip wire.
+//
+// The stage reported to an operator is not fixed per gate here, because there
+// is no longer a gate boundary to read it off. The scheduler records why a
+// waiter was last passed over — no pace available, or no slot available under
+// the per-caller ceiling — and that is what shed and the saturation warning
+// name. It answers the same operator question the two-gate version did: which
+// knob is the constraint.
+//
+// Abandon on every non-grant exit is what keeps the queue and the slot
+// accounting honest. It also resolves the grant race: if the scheduler reserved
+// a slot for this waiter microseconds before the context ended, Abandon hands
+// that slot straight back instead of leaking it.
+func (d *Sender) admitScheduled(ctx context.Context, start time.Time, expired, slow <-chan time.Time) (*Waiter, error) {
+	key, stamped := CallerKeyFrom(ctx)
+	if !stamped {
+		// Unreachable on today's paths: the tools/call closure stamps every
+		// request that can reach a broker. WARN rather than DEBUG because if it
+		// ever does fire, a new call path is bypassing that closure and every
+		// request on it shares one fairness bucket regardless of who sent it —
+		// which is a silent loss of the guarantee, and not something to leave
+		// discoverable only by a test a future author has to think to extend.
+		slog.Warn("fair scheduler: request carries no caller key, using the shared bucket",
+			slog.String("broker", d.brokerURL),
+			slog.String("operation", operationID(ctx)))
+	}
+	w := d.scheduler.Enqueue(key)
+	for {
+		select {
+		case <-w.Granted():
+			if err := w.Err(); err != nil {
+				// The broker client is being closed underneath this request.
+				// Reported as a BrokerBusyError rather than passed through,
+				// because that type already means exactly what happened here:
+				// the request was never sent, so it is safe to repeat even if
+				// it was a write, and the caller gets retryable: true plus a
+				// retry-after hint. ErrSchedulerStopped reaching the tools
+				// layer unclassified would instead render as a generic,
+				// non-retryable internal error — and this fires on every
+				// rolling restart, which the shipped manifests do routinely
+				// with two replicas, where a retry lands on a pod that is not
+				// draining.
+				if errors.Is(err, ErrSchedulerStopped) {
+					slog.Debug("fair scheduler: request released by shutdown before it was sent",
+						slog.String("broker", d.brokerURL),
+						slog.String("operation", operationID(ctx)))
+					return nil, &BrokerBusyError{
+						Stage:   AdmissionStageConcurrency,
+						Waited:  time.Since(start),
+						MaxWait: d.maxQueueWait,
+					}
+				}
+				return nil, err
+			}
+			slog.Debug("fair scheduler: request admitted",
+				slog.String("broker", d.brokerURL),
+				slog.Duration("queued", time.Since(start)))
+			return w, nil
+		case <-ctx.Done():
+			d.scheduler.Abandon(w)
+			return nil, ctx.Err()
+		case <-expired:
+			stage := d.scheduler.Stage(w)
+			d.scheduler.Abandon(w)
+			return nil, d.shed(ctx, stage, start)
+		case <-slow:
+			d.warnSlowAdmission(ctx, d.scheduler.Stage(w), start)
+			slow = nil
+		}
+	}
+}
+
+// releaseAdmission returns the in-flight slot admit acquired. A non-nil Waiter
+// came from the scheduler and must be released through it, so the per-caller
+// in-flight count drops in the same critical section as the semaphore; a nil
+// one came from the plain gate and is released straight off the semaphore.
+func (d *Sender) releaseAdmission(w *Waiter) {
+	if w != nil {
+		d.scheduler.Release(w)
+		return
+	}
+	<-d.sem
 }
 
 // warnSlowAdmission reports a request that is still queued for admission after
@@ -429,12 +558,15 @@ concurrencyGate:
 //
 // brokerURL was sanitized once in New; stage, the threshold and the durations
 // are server-generated. operationID is the caller's opaque request identifier,
-// logged the same way shed logs it.
+// logged the same way shed logs it. caller_sub (SOL-153441 review) lets an
+// operator correlate this wait with a specific caller during a fairness
+// incident, without exposing more than the audit log already does.
 func (d *Sender) warnSlowAdmission(ctx context.Context, stage string, start time.Time) {
 	slog.Warn("broker admission slow: request still waiting to be admitted",
 		slog.String("broker", d.brokerURL),
 		slog.String("operation", operationID(ctx)),
 		slog.String("stage", stage),
+		slog.String("caller_sub", callerSubjectForLog(ctx)),
 		slog.Duration("waited", time.Since(start)),
 		slog.Duration("threshold", d.slowAdmissionAfter),
 		slog.Duration("max_queue_wait", d.maxQueueWait))
@@ -447,6 +579,20 @@ func operationID(ctx context.Context) string {
 		return id
 	}
 	return "unknown"
+}
+
+// callerSubjectForLog reads the caller key stamped on ctx and projects its
+// Subject the same way the audit log does (SOL-153441 review): sanitized and
+// capped at 256 bytes by sanitize.Claim, never CallerKey's own raw field. An
+// operator triaging a fairness incident needs to correlate "who is being
+// throttled right now" across log lines without this package re-exposing the
+// untruncated claim CallerKey.LogValue deliberately withholds. An unstamped or
+// empty-subject context (disabled/static auth mode) reports the same
+// "<absent>" sentinel Identity uses, so the field name stays present and its
+// absence reads the same way everywhere.
+func callerSubjectForLog(ctx context.Context) string {
+	key, _ := CallerKeyFrom(ctx)
+	return sanitize.NormalizeAbsent(sanitize.Claim(key.Subject))
 }
 
 // shed builds the BrokerBusyError for an expired admission budget and logs the
@@ -484,12 +630,14 @@ func (d *Sender) shed(ctx context.Context, stage string, start time.Time) error 
 	// and it is the signal an operator alerts on to decide whether to raise
 	// semp.max_concurrent_per_broker, lower semp.request_min_interval, or add
 	// broker capacity. brokerURL was sanitized once in New; stage and the
-	// durations are server-generated, so nothing here is broker- or
-	// caller-sourced text.
+	// durations are server-generated. caller_sub is the same sanitized,
+	// 256-byte-capped projection the audit log uses (SOL-153441 review) — the
+	// only caller-sourced text here, and never CallerKey's raw field.
 	slog.Warn("request shed: broker admission bound exceeded",
 		slog.String("broker", d.brokerURL),
 		slog.String("operation", operationID(ctx)),
 		slog.String("stage", stage),
+		slog.String("caller_sub", callerSubjectForLog(ctx)),
 		slog.Duration("waited", waited),
 		slog.Duration("max_queue_wait", d.maxQueueWait))
 
@@ -503,10 +651,11 @@ func (d *Sender) shed(ctx context.Context, stage string, start time.Time) error 
 // When the request cannot be admitted within semp.max_queue_wait it returns a
 // BrokerBusyError and never reaches the broker (see admit).
 func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
-	if err := d.admit(ctx); err != nil {
+	admitted, err := d.admit(ctx)
+	if err != nil {
 		return nil, err
 	}
-	defer func() { <-d.sem }()
+	defer d.releaseAdmission(admitted)
 
 	// Bound the whole retry chain (all attempts + backoffs), not just each
 	// attempt, so a slow or degraded broker cannot pin resources for its full

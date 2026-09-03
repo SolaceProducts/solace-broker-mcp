@@ -133,7 +133,7 @@ func TestAdmit_SlowAtRateLimitGate_WarnsDuringTheWait(t *testing.T) {
 	sender := newSaturationSender(t, nil, NewRateLimiter(blockedInterval), sem)
 
 	done := make(chan error, 1)
-	go func() { done <- sender.admit(context.Background()) }()
+	go func() { _, err := sender.admit(context.Background()); done <- err }()
 
 	// Wait for the warning to appear, polling rather than sleeping a fixed
 	// span so the test is not tuned to a particular machine's speed.
@@ -168,7 +168,7 @@ func TestAdmit_SlowAtConcurrencyGate_WarnsWithConcurrencyStage(t *testing.T) {
 	sender := newSaturationSender(t, nil, NewRateLimiter(0), fullSemaphore(t))
 
 	done := make(chan error, 1)
-	go func() { done <- sender.admit(context.Background()) }()
+	go func() { _, err := sender.admit(context.Background()); done <- err }()
 
 	waitForLogLine(t, logs, slowAdmissionMsg, 1)
 
@@ -204,7 +204,7 @@ func TestAdmit_SlowAtConcurrencyGate_StillWaitsForASlotThenAdmits(t *testing.T) 
 	sender := newSaturationSender(t, nil, NewRateLimiter(0), sem)
 
 	done := make(chan error, 1)
-	go func() { done <- sender.admit(context.Background()) }()
+	go func() { _, err := sender.admit(context.Background()); done <- err }()
 
 	waitForLogLine(t, logs, slowAdmissionMsg, 1)
 
@@ -243,7 +243,7 @@ func TestAdmit_SlowAdmission_WarnsOnlyOnce(t *testing.T) {
 	logs := captureLogs(t)
 	sender := newSaturationSender(t, nil, NewRateLimiter(blockedInterval), NewSemaphore(1))
 
-	go func() { _ = sender.admit(context.Background()) }()
+	go func() { _, _ = sender.admit(context.Background()) }()
 
 	waitForLogLine(t, logs, slowAdmissionMsg, 1)
 	// Stay parked well past several more threshold periods.
@@ -262,7 +262,7 @@ func TestAdmit_SlowThenShed_LogsBothSignals(t *testing.T) {
 	budget := 4 * slowAdmissionThreshold
 	sender := newSaturationSender(t, durPtr(budget), NewRateLimiter(blockedInterval), NewSemaphore(1))
 
-	err := sender.admit(context.Background())
+	_, err := sender.admit(context.Background())
 
 	var busy *BrokerBusyError
 	if !errors.As(err, &busy) {
@@ -283,7 +283,7 @@ func TestAdmit_SaturationEventsDisabled_NeverWarns(t *testing.T) {
 	logs := captureLogs(t)
 	sender := newAdmissionSenderWithOpts(t, nil, NewRateLimiter(blockedInterval), NewSemaphore(1))
 
-	go func() { _ = sender.admit(context.Background()) }()
+	go func() { _, _ = sender.admit(context.Background()) }()
 	time.Sleep(6 * slowAdmissionThreshold)
 
 	if n := len(logs.matching(t, slowAdmissionMsg)); n != 0 {
@@ -297,7 +297,7 @@ func TestAdmit_FastAdmission_DoesNotWarn(t *testing.T) {
 	logs := captureLogs(t)
 	sender := newSaturationSender(t, nil, NewRateLimiter(0), NewSemaphore(1))
 
-	if err := sender.admit(context.Background()); err != nil {
+	if _, err := sender.admit(context.Background()); err != nil {
 		t.Fatalf("admit() error = %v, want nil", err)
 	}
 

@@ -998,10 +998,16 @@ func main() {
 	_ = level.UnmarshalText([]byte(cfg.LogLevel))
 	slog.SetDefault(slog.New(newSlogHandler(level)))
 
+	// fair_scheduling is reported for the same reason the observability flags
+	// below are: it is documented as a kill switch for a production incident,
+	// so an operator who throws it needs to confirm it took effect, and anyone
+	// reading logs afterwards needs to know which mode the pod ran in. Safe to
+	// dereference — applyDefaults fills it (SOL-153441).
 	slog.Info("config loaded",
 		slog.Int("broker_count", len(cfg.BrokerAliases())),
 		slog.Int("port", cfg.Port),
-		slog.String("log_level", cfg.LogLevel))
+		slog.String("log_level", cfg.LogLevel),
+		slog.Bool("fair_scheduling", *cfg.SEMP.FairScheduling))
 
 	// One-line summary of which observability capabilities are enabled, so
 	// operators can confirm the door-closing defaults and any OBS_* overrides

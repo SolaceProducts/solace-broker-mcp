@@ -50,8 +50,13 @@ type BrokerClient struct {
 	// sem is the broker's shared in-flight cap, held by both protocol clients'
 	// Senders. Retained here so InFlight can read its occupancy; the Senders
 	// own acquiring and releasing slots, and nothing here touches it.
-	sem   resilience.Semaphore
-	alias string // broker alias (for error messages)
+	sem resilience.Semaphore
+	// scheduler is the broker's fair admission scheduler, or nil when
+	// semp.fair_scheduling is off. Owned here: Close() is its single stop site,
+	// exactly as it is for rateLimiter, and stopping it is what ends its
+	// dispatcher goroutine.
+	scheduler *resilience.Scheduler
+	alias     string // broker alias (for error messages)
 }
 
 // InFlight reports how many requests are currently in flight to this broker and
@@ -106,14 +111,55 @@ func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *conf
 	}
 	sem := resilience.NewSemaphore(sempCfg.MaxConcurrentPerBroker)
 	limiter := resilience.NewRateLimiter(*sempCfg.RequestMinInterval)
+
+	// Fair admission scheduling (SOL-153441). Built here, alongside sem and
+	// limiter, because it takes over both and must be the single instance the
+	// broker's two protocol Senders share — a per-protocol scheduler would give
+	// each its own fairness rotation and its own view of the in-flight cap,
+	// which is the same defect class as a per-protocol semaphore (SOL-150116)
+	// or limiter (SOL-152401).
+	//
+	// A nil FairScheduling leaves fair scheduling off. This is NOT the same
+	// reading as MaxQueueWait's, and it is worth being precise about why,
+	// because the two look alike and are not: MaxQueueWait: nil means 0 means
+	// "unbounded", which is a legal configured value. FairScheduling has no
+	// legal nil — applyDefaults fills it with true, and only true and false are
+	// configurable.
+	//
+	// So nil here means exactly one thing: a SEMPConfig built by hand, which is
+	// to say a test. Production cannot reach it — line 113 above dereferences
+	// RequestMinInterval unconditionally, so a config that skipped
+	// applyDefaults panics before ever getting here.
+	//
+	// Off is the deliberate choice for that case. Roughly thirty
+	// direct-construction tests across this package, sempv1, sempv2 and
+	// test/integration build a SEMPConfig without this field; defaulting them
+	// ON would silently move every one of them onto the scheduled admission
+	// path and change what they exercise. Tests that want the scheduler set the
+	// field, and fair_scheduling_test.go pins both readings.
+	//
+	// The startup line in cmd/server/main.go logs the effective value, so a
+	// deployment that somehow lost the default is visible rather than silent.
+	var scheduler *resilience.Scheduler
+	if sempCfg.FairScheduling != nil && *sempCfg.FairScheduling {
+		scheduler = resilience.NewScheduler(sem, limiter, sempCfg.MaxConcurrentPerBroker)
+		opts = append(append([]resilience.Option(nil), opts...), resilience.WithScheduler(scheduler))
+	}
+	stopAll := func() {
+		if scheduler != nil {
+			scheduler.Stop()
+		}
+		limiter.Stop()
+	}
+
 	sempV1Client, err := sempv1.NewHTTPClient(brokerCfg, sempCfg, sem, limiter, authn, jar, opts...)
 	if err != nil {
-		limiter.Stop()
+		stopAll()
 		return nil, fmt.Errorf("creating SEMPv1 client for broker %q: %w", alias, err)
 	}
 	sempV2Client, err := sempv2.NewHTTPClient(brokerCfg, sempCfg, sem, limiter, authn, jar, opts...)
 	if err != nil {
-		limiter.Stop()
+		stopAll()
 		return nil, fmt.Errorf("creating SEMPv2 client for broker %q: %w", alias, err)
 	}
 	return &BrokerClient{
@@ -122,6 +168,7 @@ func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *conf
 		authenticator: authn,
 		rateLimiter:   limiter,
 		sem:           sem,
+		scheduler:     scheduler,
 		alias:         alias,
 	}, nil
 }
@@ -138,11 +185,24 @@ func (b *BrokerClient) SEMPv2() sempv2.Client {
 	return b.sempV2Client
 }
 
-// Close releases the broker's shared rate limiter. It is the single stop site:
-// the limiter is created once per broker and both protocol clients only read
-// from it, so there is nothing per-client left to release. Safe to call more
-// than once.
+// Close releases the broker's shared admission resources: the fair scheduler,
+// when one is installed, and then the rate limiter. It is the single stop site
+// for both — each is created once per broker and the protocol clients only use
+// them, so there is nothing per-client left to release. Safe to call more than
+// once.
+//
+// Stopping the scheduler is not optional bookkeeping. It runs a dispatcher
+// goroutine that would otherwise outlive the broker client, and it releases
+// every waiter still parked in the admission queue with ErrSchedulerStopped —
+// a stopped ticker does not close its channel, so without that a caller who set
+// no deadline would block for the life of the process.
+//
+// Ordered scheduler-then-limiter so no waiter can be handed a tick from a
+// limiter that is about to stop.
 func (b *BrokerClient) Close() {
+	if b.scheduler != nil {
+		b.scheduler.Stop()
+	}
 	b.rateLimiter.Stop()
 }
 
