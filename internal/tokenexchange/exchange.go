@@ -21,17 +21,141 @@ import (
 	"log/slog"
 	"runtime/debug"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	oteltrace "go.opentelemetry.io/otel/trace"
+
 	"github.com/SolaceProducts/solace-broker-mcp/internal/idpclient"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
 	"github.com/sony/gobreaker/v2"
 )
 
+// tracer names every span this package creates (SOL-153333, Story 50). A
+// package-scoped handle is the idiomatic OTel Go form: it resolves to
+// whatever tracer provider is globally installed at the time a span is
+// actually started, not at package-init time, so it works correctly
+// whenever main() wires the real provider (internal/observability/tracing)
+// before serving any requests, and is a safe no-op otherwise.
+var tracer = otel.Tracer("solace-broker-mcp/tokenexchange")
+
+// exchangeGroupResult is what the singleflight group's func returns and
+// every caller sharing that call — winner and followers alike — receives
+// back through DoChan's channel. winnerSpanCtx is always the WINNER's own
+// captured span context (see the DoChan call site), which is how a
+// follower's caller learns which trace actually did the IdP work: it
+// compares its own captured span context's TraceID and SpanID against this
+// one (both, not SpanID alone — a SpanID collision across two different
+// traces is astronomically unlikely but cheap to also rule out, since the
+// TraceID is already in hand).
+type exchangeGroupResult struct {
+	tok           *Token
+	winnerSpanCtx oteltrace.SpanContext
+}
+
 // Exchange performs an RFC 8693 token exchange against the configured IdP.
 // It checks the cache first; on a miss, concurrent calls with the same
 // (subjectToken, brokerAlias) pair are collapsed into a single IdP
 // round-trip via singleflight, and the result is cached for future calls.
-func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, error) {
+//
+// Every call gets its own span (SOL-153333, Story 50), created from ctx so
+// it is a child of whichever SEMP-layer span is active where
+// OAuthAuthenticator.AddAuth called in (internal/semp/auth/oauth.go) — not a
+// sibling preceding it. correlation_id joins the span to the same request's
+// logs and audit records (docs/observability.md's committed span-attribute
+// set). cache_hit distinguishes a served-from-cache call from one that
+// required (or waited on) a live IdP round trip; outcome follows the shared
+// success/error/cancelled vocabulary (ADR-009), and a failed span's status
+// is set accordingly so trace backends that key error views off span status
+// (not a vendor-specific attribute) surface it correctly.
+//
+// error_type is deliberately NOT set on outcome=error: that closed set is
+// scoped to tool invocation outcomes (internal/tools/manager.go), and none
+// of its values describe a token-exchange failure mode (rate-limited,
+// circuit-open, retries-exhausted, …). This is a documented, deliberate
+// exception to "error_type accompanies every outcome=error" — see
+// docs/observability.md's span-attribute table. span.RecordError carries
+// the actual cause instead.
+func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token, err error) {
+	ctx, span := tracer.Start(ctx, "tokenexchange.Exchange")
+	corrID := correlation.From(ctx)
+	cacheHit := false
+	// singleflightRole and winnerSpanCtx are set below only on the path that
+	// actually reaches the singleflight group (a cache miss) — empty/invalid
+	// otherwise, and omitted from the span in that case. winnerSpanCtx is
+	// valid only when singleflightRole == "follower".
+	var singleflightRole string
+	var winnerSpanCtx oteltrace.SpanContext
+	defer func() {
+		// A panic between tracer.Start and here would otherwise close this
+		// span reporting outcome=success (err is still nil — Go does not
+		// populate named returns on an unwound panic) right before the
+		// panic itself takes the process down, which is the worst possible
+		// direction for the error to point (flagged by review). Recovering
+		// here only to record the span accurately, then re-panicking,
+		// preserves Exchange's existing panic-propagates contract — this is
+		// about span fidelity, not resources; nothing here is leaked either
+		// way since span.End() below always runs before the re-panic.
+		//
+		// Sharing the rest of this block with the normal-return path (rather
+		// than a separate branch that rebuilds the same attribute set) means
+		// a panic after singleflightRole/winnerSpanCtx are already set still
+		// reports them — the fix's own rationale calls that attribute
+		// load-bearing, and a duplicated branch had silently dropped it
+		// (flagged by review).
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panicked (%T)", r)
+			defer panic(r)
+		}
+		// Guards the work below, not span.End(): a non-recording span (the
+		// default — tracing off, or this trace unsampled) still needs
+		// closing, but building attribute values and evaluating
+		// exchangeOutcome for a span nothing will read is pure waste on a
+		// path every token exchange goes through (flagged by review).
+		if span.IsRecording() {
+			outcome := exchangeOutcome(err)
+			attrs := []attribute.KeyValue{
+				attribute.String("correlation_id", corrID),
+				attribute.Bool("cache_hit", cacheHit),
+				attribute.String("outcome", outcome),
+			}
+			if singleflightRole != "" {
+				attrs = append(attrs, attribute.String("singleflight_role", singleflightRole))
+				if singleflightRole == "follower" {
+					// A real span Link, not just the two ID attributes below:
+					// AddLink DOES work post-start on this SDK version
+					// (trace.Span.AddLink, sdk/trace's recordingSpan
+					// implementation) — an earlier revision of this comment
+					// claimed otherwise and was wrong (flagged by review).
+					// The real limitation is narrower: a link added after
+					// the span started cannot influence this span's own head
+					// sampling decision, since that decision already ran at
+					// tracer.Start above. The two ID attributes stay
+					// alongside the link because most trace-backend UIs
+					// don't render a link's target inline the way an
+					// attribute value renders in a table.
+					span.AddLink(oteltrace.Link{SpanContext: winnerSpanCtx})
+					attrs = append(attrs,
+						attribute.String("winner_trace_id", winnerSpanCtx.TraceID().String()),
+						attribute.String("winner_span_id", winnerSpanCtx.SpanID().String()))
+				}
+			}
+			span.SetAttributes(attrs...)
+			// Neither RecordError nor SetStatus fires on cancelled: the
+			// caller left, the exchange itself did not fail — matching
+			// outcome's own error/cancelled distinction above. RecordError
+			// used to fire on both, which several trace-backend UIs render
+			// as an error regardless of span status (flagged by review) —
+			// exactly the miscategorization this split exists to prevent.
+			if err != nil && outcome == "error" {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, "")
+			}
+		}
+		span.End()
+	}()
+
 	// A caller who is already done gets its own error, never a token. This is
 	// the cheap early exit: it skips the key hash and the cache round-trip for
 	// a caller that cannot use the answer.
@@ -47,7 +171,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	// treats a Get error as a warning and falls through to a full IdP exchange,
 	// so a cache-level rejection would make a dead caller do *more* work.
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", errCallerAbandoned, err)
 	}
 
 	key := computeDeduplicationKey(input.DedupKeyInput())
@@ -76,10 +200,11 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 			// emits no cache-outcome line at all, which is correct — the closing
 			// line in AddAuth names the cancellation.
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return nil, fmt.Errorf("%w: %w", errCallerAbandoned, err)
 			}
 			slog.DebugContext(ctx, "using cached broker token",
 				slog.String("broker", input.BrokerAlias))
+			cacheHit = true
 			return &Token{
 				Value:     gr.Entry.Value,
 				ExpiresAt: gr.Entry.ExpiresAt,
@@ -104,17 +229,36 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 	// because it's per-caller observability: a caller that cancelled
 	// mid-exchange must not see "exchange succeeded" attributed to its
 	// request. The Put log is per-exchange and stays inside with the Put.
-	// The winner's correlation ID travels into the detached exchange as a
-	// plain string, never as a context: passing the caller's ctx down would
-	// invite re-coupling its cancellation to the shared call, which is the
-	// regression the Background() root below exists to prevent. The value
-	// read here already passed the correlation middleware's sanitization —
-	// re-seeding it via correlation.With below preserves "the middleware is
-	// the sole producer of ID values"; never seed With from any other source.
-	corrID := correlation.From(ctx)
+	// The winner's correlation ID (corrID, captured at the top of Exchange)
+	// travels into the detached exchange as a plain string, never as a
+	// context: passing the caller's ctx down would invite re-coupling its
+	// cancellation to the shared call, which is the regression the
+	// Background() root below exists to prevent. It already passed the
+	// correlation middleware's sanitization — re-seeding it via
+	// correlation.With below preserves "the middleware is the sole producer
+	// of ID values"; never seed With from any other source.
+
+	// callerSpanCtx is THIS call's own span context (Exchange's own span,
+	// started above) — the actual WINNER's only if this particular call
+	// happens to win the singleflight race below; every other caller
+	// sharing the same key captures its own distinct value here too, and
+	// singleflight runs only the winner's closure. Renamed from
+	// winnerSpanCtx (flagged by review: that name read as a tautology
+	// against exchangeGroupResult.winnerSpanCtx below, which really is
+	// always the resolved winner's, not merely this caller's own).
+	//
+	// Captured the same way corrID is, and for the same reason: the
+	// singleflight closure below runs detached from any caller's context, on
+	// a goroutine singleflight owns, so it cannot read a live parent span off
+	// ctx. This SpanContext (not the ctx itself) is a plain, immutable value —
+	// re-attaching it later carries no cancellation, matching corrID's own
+	// value-not-context handling. It seeds the shared exchange's span
+	// hierarchy so Story 27's future retry-attempt spans nest under THIS
+	// call's own span above, rather than under nothing.
+	callerSpanCtx := oteltrace.SpanContextFromContext(ctx)
 
 	start := e.nowFunc()
-	ch := e.group.DoChan(key, func() (_ interface{}, err error) {
+	ch := e.group.DoChan(key, func() (val interface{}, err error) {
 		// singleflight runs this on its OWN goroutine, which none of the
 		// request-path recover() nets cover — and DoChan re-raises an escaping
 		// panic via `go panic(e)`, which is unrecoverable and takes down the
@@ -134,10 +278,17 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 					slog.String("broker", input.BrokerAlias),
 					slog.String("panic_type", fmt.Sprintf("%T", r)),
 					slog.String("stack", string(debug.Stack())))
+				val = exchangeGroupResult{winnerSpanCtx: callerSpanCtx}
 				err = fmt.Errorf("token exchange panicked (%T)", r)
 			}
 		}()
-		return e.runProtectedExchange(key, input, corrID)
+		tok, err := e.runProtectedExchange(key, input, corrID, callerSpanCtx)
+		// Only the caller whose closure singleflight actually runs (the
+		// winner) reaches this line, so every other caller sharing this
+		// result receives the winner's own span identity here, not its own
+		// (flagged by review: a follower's span had no trace-level pointer
+		// to the work that actually served it).
+		return exchangeGroupResult{tok: tok, winnerSpanCtx: callerSpanCtx}, err
 	})
 
 	// abandonedByCaller records a caller that left before taking a result, and
@@ -170,7 +321,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 			slog.String("waited", e.nowFunc().Sub(start).String()),
 			slog.String("cause", cause.Error()),
 			slog.String("via", via))
-		return nil, cause
+		return nil, fmt.Errorf("%w: %w", errCallerAbandoned, cause)
 	}
 
 	select {
@@ -196,6 +347,28 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 		// or gate rejection, and a follower waiting on another caller, report
 		// time with no IdP call behind it at all.
 		elapsed := e.nowFunc().Sub(start)
+
+		// One checked assertion, used for both the role classification here
+		// and the token extraction below (flagged by review — an unchecked
+		// second assertion of the same value was 30 lines apart). Sets the
+		// outer singleflightRole/winnerSpanCtx that Exchange's own deferred
+		// span-closing block reads — see exchangeGroupResult's doc for why
+		// the comparison is by TraceID+SpanID rather than by the whole
+		// SpanContext (which isn't comparable with ==; TraceState holds a
+		// slice internally). Computed before the res.Err branch below so a
+		// follower's span is self-describing on the error path too, not
+		// only on success.
+		groupResult, _ := res.Val.(exchangeGroupResult)
+		if groupResult.winnerSpanCtx.IsValid() {
+			if groupResult.winnerSpanCtx.TraceID() == callerSpanCtx.TraceID() &&
+				groupResult.winnerSpanCtx.SpanID() == callerSpanCtx.SpanID() {
+				singleflightRole = "winner"
+			} else {
+				singleflightRole = "follower"
+				winnerSpanCtx = groupResult.winnerSpanCtx
+			}
+		}
+
 		if res.Err != nil {
 			// Map the breaker's open-state rejection (returned by Execute
 			// without the func running) onto our own sentinel before
@@ -214,7 +387,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 			return nil, err
 		}
 
-		tok := res.Val.(*Token)
+		tok := groupResult.tok
 
 		slog.DebugContext(ctx, "broker token exchange completed",
 			slog.String("broker", input.BrokerAlias),
@@ -237,7 +410,12 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (*Token, 
 //
 // gateCheck runs FIRST, before the breaker — a gated call records no
 // breaker outcome and makes no IdP round-trip, regardless of breaker state.
-func (e *Exchanger) runProtectedExchange(key string, input ExchangeInput, corrID string) (*Token, error) {
+//
+// parentSpanCtx is the winning caller's own Exchange span, captured before
+// the singleflight detach (SOL-153333) — threaded through so Story 27's
+// future retry-attempt spans have a real parent to nest under instead of
+// none at all.
+func (e *Exchanger) runProtectedExchange(key string, input ExchangeInput, corrID string, parentSpanCtx oteltrace.SpanContext) (*Token, error) {
 	if e.gateCheck() {
 		return nil, &ExchangeError{
 			Sentinel: ErrExchangeRateLimited,
@@ -245,22 +423,32 @@ func (e *Exchanger) runProtectedExchange(key string, input ExchangeInput, corrID
 		}
 	}
 	if e.breaker == nil {
-		return e.runExchangeOnce(key, input, corrID)
+		return e.runExchangeOnce(key, input, corrID, parentSpanCtx)
 	}
 	return e.breaker.Execute(func() (*Token, error) {
-		return e.runExchangeOnce(key, input, corrID)
+		return e.runExchangeOnce(key, input, corrID, parentSpanCtx)
 	})
 }
 
 // runExchangeOnce performs the detached, retry-bounded IdP call, classifies the
 // outcome, and caches a success. This is the unit the breaker measures.
-func (e *Exchanger) runExchangeOnce(key string, input ExchangeInput, corrID string) (*Token, error) {
+func (e *Exchanger) runExchangeOnce(key string, input ExchangeInput, corrID string, parentSpanCtx oteltrace.SpanContext) (*Token, error) {
 	// Detach from the caller's context so one caller's cancellation does not
 	// abort the shared IdP call for all singleflight waiters. The explicit
 	// timeout bounds the whole retry chain independently — httpClient.Timeout
 	// bounds each attempt, chainDeadline bounds attempts + backoffs together.
 	exchCtx, cancel := context.WithTimeout(context.Background(), e.chainDeadline)
 	defer cancel()
+
+	// Re-attach the winning caller's span (not their cancellation — see
+	// corrID's own re-seed just below for why the two are handled the same
+	// way) so any span this detached call creates parents to it. IsValid
+	// guards the case where tracing is off or the caller had no active span;
+	// ContextWithSpanContext on an invalid SpanContext would otherwise plant
+	// a span-less "remote" marker for nothing.
+	if parentSpanCtx.IsValid() {
+		exchCtx = oteltrace.ContextWithSpanContext(exchCtx, parentSpanCtx)
+	}
 
 	// Re-seed ONLY the correlation ID onto the detached context so the log
 	// lines below can be joined to the request that triggered this exchange
@@ -319,6 +507,41 @@ func (e *Exchanger) runExchangeOnce(key string, input ExchangeInput, corrID stri
 	}
 
 	return tok, nil
+}
+
+// errCallerAbandoned marks every path in Exchange where the CALLER's own
+// context ended the call, rather than the exchange itself failing — the
+// entry guard, the cache-hit re-check, and both abandonedByCaller branches
+// all wrap their returned error with it. exchangeOutcome checks for this
+// sentinel, not for context.Canceled or context.DeadlineExceeded directly:
+// a caller's own deadline (for example the SEMP retry budget in
+// internal/semp/resilience/sender.go, which wraps the ctx that flows into
+// AddAuth and then here) surfaces as DeadlineExceeded exactly the way the
+// exchange's own internal chain-deadline timeout would, and those two must
+// classify differently — one is the caller leaving, the other is the
+// exchange failing. Classifying by WHERE an error originated, rather than
+// by its Go type, is what makes that distinction possible; an earlier
+// revision of this file classified by type alone (DeadlineExceeded =>
+// error, unconditionally) and misattributed a caller's own timeout to the
+// exchange every time. errors.Is still finds the original context.Canceled
+// or context.DeadlineExceeded under this wrapper, so nothing downstream
+// that already checks for those (internal/semp/auth/oauth.go:125, and this
+// package's own tests) is affected.
+var errCallerAbandoned = errors.New("token exchange: caller's context ended before a result was available")
+
+// exchangeOutcome classifies Exchange's result onto the shared
+// success/error/cancelled span vocabulary (ADR-009, SOL-153333). See
+// errCallerAbandoned's doc for why this checks that sentinel rather than
+// pattern-matching context.Canceled / context.DeadlineExceeded directly.
+func exchangeOutcome(err error) string {
+	switch {
+	case err == nil:
+		return "success"
+	case errors.Is(err, errCallerAbandoned):
+		return "cancelled"
+	default:
+		return "error"
+	}
 }
 
 // mapCircuitOpen converts gobreaker's open-state sentinels into our own

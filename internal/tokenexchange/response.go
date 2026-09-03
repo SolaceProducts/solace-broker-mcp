@@ -70,6 +70,13 @@ func (e *Exchanger) parseIdPResponse(resp *http.Response, now time.Time) (*Token
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		if ct := responseMediaType(resp); ct != "" && ct != "application/json" {
+			if len(ct) > maxEchoedFieldLen {
+				return nil, &ExchangeError{
+					Sentinel:   ErrInvalidResponse,
+					Message:    fmt.Sprintf("token exchange invalid response: IdP returned HTTP %d with an oversized Content-Type (%d bytes) — possible SSO/proxy interception", resp.StatusCode, len(ct)),
+					HTTPStatus: resp.StatusCode,
+				}
+			}
 			return nil, &ExchangeError{
 				Sentinel:   ErrInvalidResponse,
 				Message:    fmt.Sprintf("token exchange invalid response: IdP returned HTTP %d with Content-Type %q (expected application/json — possible SSO/proxy interception)", resp.StatusCode, ct),
@@ -126,6 +133,12 @@ func (e *Exchanger) parseSuccessBody(body []byte, now time.Time) (*Token, error)
 	}
 
 	if !strings.EqualFold(sr.TokenType, "Bearer") {
+		if len(sr.TokenType) > maxEchoedFieldLen {
+			return nil, &ExchangeError{
+				Sentinel: ErrInvalidResponse,
+				Message:  fmt.Sprintf("token exchange invalid response: IdP returned an oversized token_type (%d bytes), expected \"Bearer\"", len(sr.TokenType)),
+			}
+		}
 		return nil, &ExchangeError{
 			Sentinel: ErrInvalidResponse,
 			Message:  fmt.Sprintf("token exchange invalid response: IdP returned token_type %q, expected \"Bearer\" — the MCP server only supports Bearer tokens", sr.TokenType),
@@ -134,6 +147,12 @@ func (e *Exchanger) parseSuccessBody(body []byte, now time.Time) (*Token, error)
 
 	// issued_token_type is RFC 8693-specific; RFC 7523 responses don't include it.
 	if e.grantType == GrantTypeTokenExchange && sr.IssuedTokenType != URNTokenTypeAccessToken {
+		if len(sr.IssuedTokenType) > maxEchoedFieldLen {
+			return nil, &ExchangeError{
+				Sentinel: ErrInvalidResponse,
+				Message:  fmt.Sprintf("token exchange invalid response: IdP returned an oversized issued_token_type (%d bytes), expected %q", len(sr.IssuedTokenType), URNTokenTypeAccessToken),
+			}
+		}
 		return nil, &ExchangeError{
 			Sentinel: ErrInvalidResponse,
 			Message:  fmt.Sprintf("token exchange invalid response: IdP returned issued_token_type %q, expected %q — the IdP may be misconfigured to issue a different token type", sr.IssuedTokenType, URNTokenTypeAccessToken),
@@ -236,13 +255,23 @@ func parseRetryAfter(headerValues []string, now time.Time) retryAfterResult {
 // configured token lifetimes.
 const maxExpiresInSeconds int64 = 100 * 365 * 24 * 3600 // ~100 years
 
-// Cap prevents log-line bloat from a misbehaving IdP's error code.
-const maxErrorCodeLen = 64
+// Cap prevents log-line and span bloat from a misbehaving IdP echoing an
+// oversized value back in one of the four fields this package embeds
+// verbatim into an ExchangeError.Message: the error code and the
+// Content-Type header here, and token_type / issued_token_type in
+// parseSuccessBody. The Content-Type case is the largest channel of the
+// four — it comes from a response HEADER, not the body, so maxResponseBody
+// never bounds it, and this repo's HTTP client sets no
+// MaxResponseHeaderBytes, leaving Go's own 10 MiB default as the only
+// upstream limit (flagged by review). span.RecordError copies Message into
+// the span's exception event with no length limit of its own on any of the
+// four, so this is the only cap any of them get.
+const maxEchoedFieldLen = 64
 
 func classifyClientError(body []byte, statusCode int) error {
 	var er errorResponse
 	if err := json.Unmarshal(body, &er); err == nil && er.Error != "" {
-		if len(er.Error) > maxErrorCodeLen {
+		if len(er.Error) > maxEchoedFieldLen {
 			return &ExchangeError{
 				Sentinel:   ErrInvalidResponse,
 				Message:    fmt.Sprintf("token exchange invalid response: IdP returned HTTP %d with oversized error code (%d bytes) — not a standard OAuth error", statusCode, len(er.Error)),

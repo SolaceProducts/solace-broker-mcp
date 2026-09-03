@@ -114,11 +114,13 @@ func (a *OAuthAuthenticator) AddAuth(ctx context.Context, req *http.Request) err
 // same failure at ERROR with the full diagnostics, so repeating them here would
 // log one failure twice.
 //
-// A cancelled caller does not get an ExchangeError — Exchange returns the bare
-// context error from its entry guard, its cache-hit re-check, and the select
-// that notices the caller left — so that case is read separately. It is
-// ordinary traffic, not an edge case: any client that disconnects mid-request
-// arrives here.
+// A cancelled caller does not get an ExchangeError — Exchange wraps the
+// context error with its own errCallerAbandoned sentinel at its entry guard,
+// its cache-hit re-check, and the select that notices the caller left, but
+// errors.Is still finds context.Canceled / context.DeadlineExceeded through
+// that wrapper, so that case is read separately here. It is ordinary
+// traffic, not an edge case: any client that disconnects mid-request arrives
+// here.
 func (a *OAuthAuthenticator) logUnavailable(ctx context.Context, err error) {
 	reason := "unknown"
 	var exchErr *tokenexchange.ExchangeError
