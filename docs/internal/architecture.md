@@ -23,7 +23,7 @@ them there, not here.
 cmd/server/                     Entry point — config load, HTTP chain (recovery→body-limit→correlation→auth), MCP startup, tool registration
 internal/
 ├── auth/                       Inbound client auth: OIDC/JWT verifier, static dev token, disabled mode; raw subject-token capture for hop-2
-│                               (principal.go is a skeleton — Principal is empty, no writer yet; SOL-151278)
+│                               (principal.go carries the canonical caller Principal; PrincipalMiddleware populates it per request; SOL-152087)
 ├── banner/                     Operator-facing startup/validation banners (auth mode, OAuth guards, cleartext warnings)
 ├── config/                     YAML config, ${VAR} env substitution, validation, broker alias canonicalization
 │                               (observability.go loads OBS_* flags + tunables)
@@ -172,10 +172,14 @@ Identity crosses two hops:
   (pass-through, no auth), `static` (constant-time compare against a dev token,
   returns a fixed `dev-user`; dev/test only, `middleware.go:102`), or `oauth`
   (OIDC signature/`iss`/`aud`/`exp` verification against the issuer's JWKS,
-  `middleware.go:141`). Validated claims land on `req.Extra.TokenInfo`; each
-  tool handler builds a **log-only** audit `Identity` from them
-  (`internal/tools/identity.go:104`, carrying `sub`/`iss`/`client_id`/`jti`
-  only — no access level or scope).
+  `middleware.go:141`). Validated claims land on `req.Extra.TokenInfo`, from
+  which `auth.PrincipalMiddleware` builds the canonical caller `Principal`
+  once per request and attaches it to the context. Each audit site projects a
+  **log-only** `Identity` off that principal via `auth.PrincipalFrom(ctx)`
+  (`internal/tools/identity.go`, carrying `sub`/`iss`/`client_id`/`jti` only —
+  no access level or scope). Population is MCP receiving middleware rather
+  than HTTP middleware because a tool handler's context descends from the POST
+  that established the session, not the current one.
 
 - **Hop 2 (outbound, GATED):** for brokers with `auth.mode: oauth`, the raw
   subject token captured at `internal/auth/raw_subject_token.go:59` is exchanged

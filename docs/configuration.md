@@ -279,6 +279,18 @@ A caller whose groups grant nothing receives a normal response containing only t
 
 As on the call path, the caller's actual group names are never logged.
 
+Two reserved values can appear in place of a claim on any of these identity
+fields, and they mean different things:
+
+| Value | Meaning | What to do |
+|---|---|---|
+| `<absent>` | The identity provider did not issue that claim. Normal for `client_id` and `jti` on a spartan IdP, and for every optional claim in `static` mode. | Nothing, unless you expected the claim — then check the IdP's claim mapper. |
+| `<verifier-bug>` | This server put a non-string value where a string was expected. A defect in the server, never a property of the token. | Report it. An `ERROR` record naming the offending claim and its Go type is emitted on the same request, and carries the same `correlation_id`. |
+
+The identity fields are those of the token presented on **that** request, so a
+client that refreshes its access token mid-session produces records naming
+each token in turn.
+
 **Audit logging.** Every gated tool invocation emits a single structured log line with `msg: "tool authorization"` before dispatching the underlying tool call. The line carries the caller identity fields the server already logs (`sub`, `iss`, `client_id`, `jti`, `correlation_id`) plus authorization-specific fields:
 
 | Field | On allow | On deny |

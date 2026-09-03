@@ -55,6 +55,39 @@ func TestClaim_capsAt256Bytes(t *testing.T) {
 	}
 }
 
+// TestNormalizeAbsent carries the table from the previous unexported
+// tools.normalizeAbsent (SOL-149606) unchanged: blank collapses to the
+// sentinel, anything else passes through.
+func TestNormalizeAbsent(t *testing.T) {
+	cases := map[string]string{
+		"":          AbsentSentinel,
+		"   ":       AbsentSentinel,
+		"\t":        AbsentSentinel,
+		"x":         "x",
+		"auth0|123": "auth0|123",
+	}
+	for in, want := range cases {
+		if got := NormalizeAbsent(in); got != want {
+			t.Errorf("NormalizeAbsent(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestAbsentSentinel_valueAndDistinctness pins the string SIEM rules grep for
+// and its distinctness from the verifier-bug sentinel: consumers rely on
+// telling "claim missing" from "code bug".
+func TestAbsentSentinel_valueAndDistinctness(t *testing.T) {
+	if AbsentSentinel != "<absent>" {
+		t.Errorf("AbsentSentinel = %q, want %q", AbsentSentinel, "<absent>")
+	}
+	if AbsentSentinel == VerifierBugSentinel {
+		t.Fatal("AbsentSentinel must differ from VerifierBugSentinel")
+	}
+	if NormalizeAbsent(VerifierBugSentinel) != VerifierBugSentinel {
+		t.Error("NormalizeAbsent must pass the verifier-bug sentinel through unchanged")
+	}
+}
+
 // TestClaim_stripsBidiAndFormatChars pins the CWE-1007 audit-spoofing
 // defense: a malicious IdP issues a sub with a RIGHT-TO-LEFT OVERRIDE
 // between "alice" and "nimda". Without the Cf-category strip, the bytes

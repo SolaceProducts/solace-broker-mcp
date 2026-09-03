@@ -77,6 +77,9 @@ func NewAuthMiddleware(cfg *config.ServerConfig, httpClient *http.Client, next h
 	// which the future OAuth Authenticator relies on as the subject_token
 	// for RFC 8693 exchange. See SOL-150797 and
 	// docs/superpowers/plans/oauth-token-exchange/2026-06-21-SOL-150797-T3-raw-subject-token.md.
+	//
+	// The caller Principal is NOT installed here: this chain's context does
+	// not reach a tool handler per request (see PrincipalMiddleware).
 	return middleware(InjectRawSubjectToken(next)), nil
 }
 

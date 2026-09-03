@@ -32,6 +32,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
@@ -82,6 +83,30 @@ func parseAuthzRecord(t *testing.T, buf *bytes.Buffer) map[string]any {
 // hasKey reports whether the record has a top-level attribute under key.
 // Negative-assertion tests use this to check that absent-by-schema fields
 // truly are absent — not present-with-zero-value.
+// assertRecordIdentity asserts the four identity fields carry the fixture's
+// values. Presence alone is not enough: the failure mode that matters is a
+// record with the right shape naming the wrong caller, which the previous
+// hasKey loops accepted.
+func assertRecordIdentity(t *testing.T, rec map[string]any, kind, wantJTI string) {
+	t.Helper()
+	want := map[string]string{
+		"sub":       "alice",
+		"iss":       "https://idp.example.com",
+		"client_id": "cursor-ide",
+		"jti":       wantJTI,
+	}
+	for k, v := range want {
+		got, ok := rec[k]
+		if !ok {
+			t.Errorf("identity field %q missing from %s record", k, kind)
+			continue
+		}
+		if got != v {
+			t.Errorf("%s record: %s = %v, want %q", kind, k, got, v)
+		}
+	}
+}
+
 func hasKey(record map[string]any, key string) bool {
 	_, ok := record[key]
 	return ok
@@ -126,6 +151,17 @@ func requestMissingClaimWithCorrelation() *mcp.CallToolRequest {
 	}
 }
 
+// ctxWithPrincipal stands in for auth.PrincipalMiddleware: identity comes from the
+// Principal on ctx, not req.Extra.TokenInfo (SOL-152087), so tests asserting
+// identity fields must seed ctx the way the middleware would.
+func ctxWithPrincipal(ctx context.Context, req *mcp.CallToolRequest) context.Context {
+	var info *sdkauth.TokenInfo
+	if req.Extra != nil {
+		info = req.Extra.TokenInfo
+	}
+	return auth.WithPrincipal(ctx, auth.NewPrincipal(ctx, info))
+}
+
 // TestAuditEvent_Allow_EmitsInfoWithFullSchema pins the complete allow
 // record: level, decision, matched-groups triplet, identity, correlation
 // ID, and — as negative assertions — the absence of every field that
@@ -143,8 +179,9 @@ func TestAuditEvent_Allow_EmitsInfoWithFullSchema(t *testing.T) {
 		"groups",
 		newRecordingHandler().handler(),
 	)
-	ctx := correlation.With(context.Background(), "corr-allow")
-	if _, err := wrapped(ctx, requestWithGroupsAndCorrelation([]string{"Ops"})); err != nil {
+	req := requestWithGroupsAndCorrelation([]string{"Ops"})
+	ctx := ctxWithPrincipal(correlation.With(context.Background(), "corr-allow"), req)
+	if _, err := wrapped(ctx, req); err != nil {
 		t.Fatalf("wrapper returned error: %v", err)
 	}
 
@@ -169,11 +206,7 @@ func TestAuditEvent_Allow_EmitsInfoWithFullSchema(t *testing.T) {
 	if got := rec["matched_groups_truncated"]; got != false {
 		t.Errorf("matched_groups_truncated = %v, want false", got)
 	}
-	for _, k := range []string{"sub", "iss", "client_id", "jti"} {
-		if !hasKey(rec, k) {
-			t.Errorf("identity field %q missing from allow record", k)
-		}
-	}
+	assertRecordIdentity(t, rec, "allow", "jti-audit-1")
 	if rec["correlation_id"] != "corr-allow" {
 		t.Errorf("correlation_id = %v, want %q (stamped by correlation slog handler, not by the wrapper)", rec["correlation_id"], "corr-allow")
 	}
@@ -207,8 +240,9 @@ func TestAuditEvent_Deny_EmitsWarnWithNotPermittedAndNoCallerGroups(t *testing.T
 		"groups",
 		newRecordingHandler().handler(),
 	)
-	ctx := correlation.With(context.Background(), "corr-deny")
-	if _, err := wrapped(ctx, requestWithGroupsAndCorrelation([]string{"OtherGroup"})); err != nil {
+	req := requestWithGroupsAndCorrelation([]string{"OtherGroup"})
+	ctx := ctxWithPrincipal(correlation.With(context.Background(), "corr-deny"), req)
+	if _, err := wrapped(ctx, req); err != nil {
 		t.Fatalf("wrapper returned error: %v", err)
 	}
 
@@ -233,11 +267,7 @@ func TestAuditEvent_Deny_EmitsWarnWithNotPermittedAndNoCallerGroups(t *testing.T
 	if got := rec["matched_groups_truncated"]; got != false {
 		t.Errorf("matched_groups_truncated = %v, want false", got)
 	}
-	for _, k := range []string{"sub", "iss", "client_id", "jti"} {
-		if !hasKey(rec, k) {
-			t.Errorf("identity field %q missing from deny record", k)
-		}
-	}
+	assertRecordIdentity(t, rec, "deny", "jti-audit-1")
 	if rec["correlation_id"] != "corr-deny" {
 		t.Errorf("correlation_id = %v, want %q", rec["correlation_id"], "corr-deny")
 	}
@@ -269,8 +299,9 @@ func TestAuditEvent_MissingClaim_EmitsWarnWithExpectedClaimAndNoMatchedGroupsFie
 		"groups",
 		newRecordingHandler().handler(),
 	)
-	ctx := correlation.With(context.Background(), "corr-miss")
-	if _, err := wrapped(ctx, requestMissingClaimWithCorrelation()); err != nil {
+	req := requestMissingClaimWithCorrelation()
+	ctx := ctxWithPrincipal(correlation.With(context.Background(), "corr-miss"), req)
+	if _, err := wrapped(ctx, req); err != nil {
 		t.Fatalf("wrapper returned error: %v", err)
 	}
 
@@ -288,11 +319,7 @@ func TestAuditEvent_MissingClaim_EmitsWarnWithExpectedClaimAndNoMatchedGroupsFie
 	if rec["expected_claim"] != "groups" {
 		t.Errorf("expected_claim = %v, want %q", rec["expected_claim"], "groups")
 	}
-	for _, k := range []string{"sub", "iss", "client_id", "jti"} {
-		if !hasKey(rec, k) {
-			t.Errorf("identity field %q missing from missing-claim record", k)
-		}
-	}
+	assertRecordIdentity(t, rec, "missing-claim", "jti-audit-2")
 	if rec["correlation_id"] != "corr-miss" {
 		t.Errorf("correlation_id = %v, want %q", rec["correlation_id"], "corr-miss")
 	}
@@ -331,7 +358,8 @@ func TestAuditEvent_MissingClaim_SanitizesExpectedClaim(t *testing.T) {
 		"groups\u200d",
 		newRecordingHandler().handler(),
 	)
-	if _, err := wrapped(context.Background(), requestMissingClaimWithCorrelation()); err != nil {
+	missingReq := requestMissingClaimWithCorrelation()
+	if _, err := wrapped(ctxWithPrincipal(context.Background(), missingReq), missingReq); err != nil {
 		t.Fatalf("wrapper returned error: %v", err)
 	}
 
@@ -437,7 +465,8 @@ func TestAuditEvent_MatchedGroupsBounding(t *testing.T) {
 				t.Fatalf("NewPolicy: %v", err)
 			}
 			wrapped := withAuthorization(policy, "list-queues", "groups", newRecordingHandler().handler())
-			if _, err := wrapped(context.Background(), requestWithGroupsAndCorrelation(groups)); err != nil {
+			boundReq := requestWithGroupsAndCorrelation(groups)
+	if _, err := wrapped(ctxWithPrincipal(context.Background(), boundReq), boundReq); err != nil {
 				t.Fatalf("wrapper returned error: %v", err)
 			}
 
