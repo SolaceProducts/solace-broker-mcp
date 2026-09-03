@@ -49,9 +49,11 @@ capability headings carry the same tag:
 | Audit trail | **[Planned]** | Only the capability gate exists today; event emission lands in a later story. |
 | Distributed tracing | **[Interim — provider wired, no spans yet]** | Tracer provider and OTLP export are live behind `OBS_TRACING_ENABLED`; no code creates a span yet. See [Distributed Tracing](#distributed-tracing--interim-provider-wired-spans-not-yet-emitted). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
+| Resource attributes | **[Implemented]** | Shared identity resource on metrics and traces, plus the committed subset on every log line. See [Resource Attributes](#resource-attributes--implemented). |
 
 Present-tense wording in a **[Planned]** section describes the **target** behavior under
-review, not what the current build emits. Only the **[Implemented]** capability is live today.
+review, not what the current build emits. Only capabilities tagged **[Implemented]** — more
+than one now — are live today.
 
 ---
 
@@ -634,6 +636,12 @@ sharing a hostname. Most Kubernetes deployments need neither this nor `POD_NAME`
 configuration: `deploy/kubernetes/deployment.yaml` already wires `POD_NAME` via the downward
 API.
 
+**The process hostname is what gets exported when neither override is set.** Outside
+Kubernetes (or with `POD_NAME` unset), `service.instance.id` falls all the way through to
+`os.Hostname()` — which can carry internal topology (a bare-metal or VM name your network team
+recognizes) that now travels off-box on every span and appears on `target_info`. Set
+`observability.service_instance_id` explicitly if that's not a value you want to export.
+
 **Known limitation:** `service_name` and `service_instance_id` always win over the standard
 `OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES` environment variables, because config always
 has a value for both (a real one, or the stated default) by the time the shared resource is
@@ -650,6 +658,15 @@ renamed the semantic-convention key ahead of this story landing; the SDK's own
 renamed key, so keeping the older name here would have shipped an attribute the SDK's own
 semantic-convention package no longer recognizes on day one. Disclosed as a deliberate
 deviation from the FD text, not a silent one — see the SOL-152425 PR description.
+
+**The old and new spellings can both reach the resource at once.** This package only ever
+writes `deployment.environment.name`, but `resource.Default()`'s own environment-variable
+detection still honors `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=...` under the *old*
+key — nothing rejects it. Set that variable under the old spelling and the merged resource
+carries both keys with independent values; `target_info` shows both, and `SlogAttrs` mirrors
+only the new one, so logs and metrics can disagree about which environment a pod is in. Use
+`observability.deployment_environment` instead of the environment variable to avoid the
+ambiguity entirely.
 
 **How to query them, per egress.** These are resource attributes, not per-series labels, so
 they arrive differently on each of the two metric egresses:
@@ -966,7 +983,7 @@ need to spend review time on them:
   questions. `server_address` is the OTel-conventional host, which is what correlates this
   service with everything else OTel-instrumented in your estate; `broker` is your configured
   alias, which is what dashboards and alerts group by. Neither is redundant.
-- **`region` is now `cloud.region`.** See [Resource Attributes](#resource-attributes).
+- **`region` is now `cloud.region`.** See [Resource Attributes](#resource-attributes--implemented).
 - **OTLP metrics push has its own flag, `OBS_METRICS_OTLP_ENABLED`.** We considered activating
   push as soon as `OTEL_EXPORTER_OTLP_ENDPOINT` was set, which would be tidier and would match
   what your collectors already configure. We rejected it: that variable is frequently set
