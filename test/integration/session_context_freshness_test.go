@@ -485,15 +485,23 @@ func TestHandlerContext_ConcurrentCallsOnSameSessionAreIsolated(t *testing.T) {
 		t.Fatalf("handler ran %d time(s), want 2", len(got))
 	}
 
+	// want is consumed as each observation is matched, so duplicate
+	// observations (e.g. {A, A} or {B, B}) cannot pass by both satisfying
+	// membership in the same unconsumed entry.
 	want := map[handlerObservation]struct{}{
 		{token: tokenA, corr: corrA}: {},
 		{token: tokenB, corr: corrB}: {},
 	}
 	for _, obs := range got {
 		if _, ok := want[obs]; !ok {
-			t.Errorf("handler ctx saw token=%q correlation_id=%q; want each in-flight POST's own pair ({%q, %q} and {%q, %q}), not the session-init {%q, %q} and not the sibling call",
+			t.Errorf("handler ctx saw token=%q correlation_id=%q; want each in-flight POST's own pair ({%q, %q} and {%q, %q}), not the session-init {%q, %q}, not the sibling call, and not a duplicate of an already-seen pair",
 				obs.token, obs.corr, tokenA, corrA, tokenB, corrB, tokenInit, corrInit)
+			continue
 		}
+		delete(want, obs)
+	}
+	if len(want) != 0 {
+		t.Errorf("handler ctx never saw expected pair(s) %v; got=%v", want, got)
 	}
 }
 
