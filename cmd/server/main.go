@@ -49,6 +49,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/hooks"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/tracing"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
@@ -60,6 +61,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/tools/sempv1/redundancy"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1290,10 +1292,42 @@ func main() {
 	// Metrics endpoint: a second listener on its own port, only when enabled.
 	// Registered before SetInitialized so a bind failure shows on the first
 	// /readyz check. The provider's flush is registered as a shutdown hook.
+	var metricsProvider *metrics.Provider
 	if metrics.Enabled(cfg.Observability) {
 		if provider := startMetricsEndpoint(cfg, readiness); provider != nil {
 			shutdownHooks.Register("metrics_provider", provider.Shutdown)
+			metricsProvider = provider
 		}
+	}
+
+	// Tracing (SOL-152420): does nothing when disabled, or installs the real
+	// OTLP-exporting provider when enabled — tracing.New handles both
+	// branches internally. The self-observation counters register against
+	// the metrics provider's meter provider when one exists (nil otherwise);
+	// either way they keep counting, and the periodic INFO fallback
+	// (Decision #12) covers the no-meter-provider case. A build failure here
+	// is non-fatal: tracing has no listener and no readiness surface of its
+	// own, so the server keeps serving without it.
+	var meterProviderForTracing *sdkmetric.MeterProvider
+	if metricsProvider != nil {
+		meterProviderForTracing = metricsProvider.MeterProvider()
+	}
+	tracerProvider, err := tracing.New(cfg.Observability, meterProviderForTracing)
+	if err != nil {
+		// No err.Error(): tracing.New wraps otlptracegrpc.New, whose returned
+		// error can echo back OTEL_EXPORTER_OTLP_HEADERS or a malformed
+		// endpoint URL — operator-supplied, unaudited text that
+		// conventionally carries a collector auth token
+		// (docs/internal/secure-logging-rules.md Rule 5), same reasoning as
+		// the shutdown-hook failure log below. That covers this err value;
+		// it does not by itself close the class, since the SDK's env-var
+		// parsing can log the same material through its own global
+		// error/log channel before this error even exists — tracing.New
+		// routes that channel into slog with no raw text (see
+		// installOTelDiagnostics), which is the other half of this.
+		slog.Error("tracing unavailable: provider build failed")
+	} else if tracerProvider != nil {
+		shutdownHooks.Register("tracer_provider", tracerProvider.Shutdown)
 	}
 
 	// Startup is complete and the serving goroutine has been launched:

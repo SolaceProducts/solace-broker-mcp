@@ -12,10 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package tracing is the home for distributed tracing. Skeleton
-// (SOL-151278): only the capability gate exists today; the OpenTelemetry
-// tracer setup and span instrumentation land in a later story. The v1 default
-// is OFF (door-closing policy) — operators opt in.
+// Package tracing wires OpenTelemetry distributed tracing: a tracer provider
+// with OTLP export, self-observation counters, and (when metrics are off) a
+// periodic INFO fallback (SOL-152420, Story 25). Span instrumentation at the
+// MCP entry, executor, and SEMP layers lands in later stories (26, 27, 40, 47,
+// 50), which create spans via the global tracer this package installs. The v1
+// default is OFF (door-closing policy) — operators opt in.
+//
+// Resource attributes: New does not yet carry the shared identity resource
+// (service.name, deployment.environment, cloud.region, …) the FD describes.
+// Story 14 (SOL-152091), which this story was to share a resource with,
+// shipped without constructing one, and those identity fields don't exist on
+// config.ObservabilityConfig yet either — both are Story 34's scope
+// (SOL-152425), which retrofits both providers onto one shared resource with
+// the anti-drift test. Until Story 34 lands, this provider uses
+// resource.Default() (SDK auto-detection only).
 package tracing
 
 import "github.com/SolaceProducts/solace-broker-mcp/internal/config"

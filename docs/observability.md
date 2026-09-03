@@ -47,7 +47,7 @@ capability headings carry the same tag:
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
 | Metrics | **[Planned]** | The `/metrics` endpoint and instruments are not yet wired; the names and labels here are the proposal under review. |
 | Audit trail | **[Planned]** | Only the capability gate exists today; event emission lands in a later story. |
-| Distributed tracing | **[Planned]** | OTLP export is not yet wired. |
+| Distributed tracing | **[Interim — provider wired, no spans yet]** | Tracer provider and OTLP export are live behind `OBS_TRACING_ENABLED`; no code creates a span yet. See [Distributed Tracing](#distributed-tracing--interim-provider-wired-spans-not-yet-emitted). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
 
 Present-tense wording in a **[Planned]** section describes the **target** behavior under
@@ -278,16 +278,61 @@ flat-zero series is your evidence that no audit event was lost. Alert on any inc
 | `mcp_otel_metrics_exported_total` | Counter | none | Solace |
 | `mcp_otel_metrics_dropped_total` | Counter | `reason` | Solace |
 
-Self-observation for the two OTLP exporters: the span pair when tracing is enabled
-(`OBS_TRACING_ENABLED`), the metric pair when OTLP metrics push is enabled
-(`OBS_METRICS_OTLP_ENABLED`, not `OBS_METRICS_ENABLED`, which governs the scrape surface
-alone; see [Metrics](#metrics--planned)). `reason` is a closed set on both: `queue_full`,
+Self-observation for the two OTLP exporters, but the span pair's reach depends on **both**
+flags, not just one. The counters are always registered in-process while tracing is enabled
+(`OBS_TRACING_ENABLED`); they reach this scrape surface only when a meter provider also exists
+to register them against, i.e. only when `OBS_METRICS_ENABLED` is **also** on. Tracing on with
+metrics off keeps the totals in-process only — reported solely by the periodic
+`event=otel_self_stats` INFO log (see [Distributed
+Tracing](#distributed-tracing--interim-provider-wired-spans-not-yet-emitted)) — so an alert on
+`mcp_otel_spans_dropped_total` sees a permanently absent series in that mode, which reads as
+healthy rather than as "not exposed here." The metric pair's own flag is OTLP metrics push
+(`OBS_METRICS_OTLP_ENABLED`, not `OBS_METRICS_ENABLED`, which governs the scrape surface alone;
+see [Metrics](#metrics--planned)). `reason` is a closed set on both: `queue_full`,
 `export_timeout`, `export_error`, `shutdown`.
+
+**`queue_full` is reserved but currently inert on the span pair** (SOL-152420): the OTel Go
+SDK's batch span processor drops queue-overflow spans against an internal counter with no
+public accessor, so there is no supported way to surface that specific reason from outside the
+SDK today. The value stays in the schema for forward compatibility; do not alert on it as if it
+were live. `export_timeout`, `export_error`, and `shutdown` are all live and distinguish real
+causes: a gRPC-status timeout from the exporter, any other export failure (including a refused
+connection), and an in-progress export that didn't finish flushing before shutdown's deadline,
+respectively — `shutdown` counts one event per incomplete drain, not one per dropped span, since
+the SDK doesn't report how many spans it failed to flush.
 
 **These live on the scrape surface deliberately.** Diagnosing a broken push must not depend on
 the push working, so you can answer "is our OTLP export landing?" from Prometheus even when the
 collector is the thing that is down. The scrape path and the push path fail independently by
 design.
+
+### `otel self stats` — periodic, when metrics are off
+
+The fallback for the span pair above when there is no meter provider to register it against —
+tracing on, metrics off, **or** metrics configured but its provider failing to build; that
+second case is why the trigger is "no meter provider", not simply `OBS_METRICS_ENABLED: false`.
+With no `/metrics` surface to read span-export health from, this periodic `INFO` line is the
+only signal.
+
+Emitted every `observability.otel_self_stats_interval_s` (default `60`). One reading fires
+immediately on startup, same as [`broker in-flight
+occupancy`](#broker-in-flight-occupancy--periodic-per-broker), so turning tracing on
+mid-incident does not cost a full interval of silence.
+
+| Field | Meaning |
+|---|---|
+| `event` | Always `otel_self_stats` — filter on this, not on the message text. |
+| `spans_exported_total` | Successfully exported so far. |
+| `spans_dropped_queue_full_total` | Reserved, currently always `0` — see the `queue_full` note above; the SDK exposes no counter for this. |
+| `spans_dropped_export_timeout_total` | A gRPC-status timeout from the exporter. |
+| `spans_dropped_export_error_total` | Any other export failure, including a refused connection. |
+| `spans_dropped_shutdown_total` | An in-progress export that didn't finish flushing before shutdown's deadline — one event per incomplete drain, not one per dropped span. |
+
+These are the exact field names, not the metric names above: flattened per-reason fields
+(`spans_dropped_export_timeout_total`), not a single `reason`-labelled field. A query built by
+substituting the metric schema's label value into a field name (e.g. guessing
+`spans_dropped_total{reason="export_timeout"}` has a log-line equivalent of the same shape)
+matches nothing.
 
 ### Trace Exemplars
 
@@ -461,10 +506,14 @@ which you own.** The server does not itself persist or sign events.
 
 ---
 
-## Distributed Tracing — [Planned]
+## Distributed Tracing — [Interim: provider wired, spans not yet emitted]
 
-> _Status: **[Planned]**. OTLP export is not yet wired; the following spans, attributes, and
-> export protocol are the proposed design._
+> _Status: **[Interim]** (SOL-152420). The tracer provider, OTLP export, and self-observation
+> counters are wired and live behind `OBS_TRACING_ENABLED`. Nothing creates an application span
+> yet — the HTTP-boundary, tool-dispatcher, composite-executor, and per-SEMP-attempt spans below
+> are still the proposed design (later stories) — so flipping the flag today exports a resource
+> and no spans. Sampling and propagation are live; the rest of this section stays **[Planned]**
+> until those stories land._
 
 OpenTelemetry spans at each hop of a request, exported over OTLP, enabled with
 `OBS_TRACING_ENABLED` (never automatic; you opt in after deploying a collector).
