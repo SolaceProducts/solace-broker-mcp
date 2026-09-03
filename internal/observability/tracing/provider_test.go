@@ -17,6 +17,7 @@ package tracing
 import (
 	"context"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -79,6 +80,8 @@ func TestNew_Disabled_ReturnsNilAndTouchesNothing(t *testing.T) {
 // ParentBased(AlwaysSample()) — sample everything — see New's doc comment).
 func TestNew_Enabled_SamplesByDefault(t *testing.T) {
 	withRestoredGlobalTracer(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
+	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
 
 	cfg := config.ObservabilityConfig{TracingEnabled: true, MetricsEnabled: true, OTelSelfStatsIntervalS: 60}
 	p, err := New(cfg, nil)
@@ -112,6 +115,8 @@ func TestNew_Enabled_SamplesByDefault(t *testing.T) {
 // connection to a collector that was never there.
 func TestNew_Enabled_Shutdown_RespectsTimeoutBound(t *testing.T) {
 	withRestoredGlobalTracer(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
+	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
 
 	cfg := config.ObservabilityConfig{TracingEnabled: true, MetricsEnabled: true, OTelSelfStatsIntervalS: 60}
 	p, err := New(cfg, nil)
@@ -155,13 +160,27 @@ func TestProvider_Shutdown_ActuallyDrainsTheTracerProvider(t *testing.T) {
 		t.Fatalf("net.Listen() error = %v", err)
 	}
 	defer ln.Close()
+	// t.Cleanup must be called from the test's own goroutine, not this
+	// accept loop (flagged by review) — collect accepted conns under a mutex
+	// and register one cleanup from here instead.
+	var mu sync.Mutex
+	var conns []net.Conn
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	})
 	go func() {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			t.Cleanup(func() { _ = conn.Close() })
+			mu.Lock()
+			conns = append(conns, conn)
+			mu.Unlock()
 		}
 	}()
 
@@ -193,6 +212,8 @@ func TestProvider_Shutdown_ActuallyDrainsTheTracerProvider(t *testing.T) {
 // not fail just because a real meter provider was supplied.
 func TestNew_MetricsEnabled_RegistersInstrumentsWithoutError(t *testing.T) {
 	withRestoredGlobalTracer(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
+	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
 
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
@@ -217,6 +238,8 @@ func TestNew_MetricsEnabled_RegistersInstrumentsWithoutError(t *testing.T) {
 // server at startup.
 func TestNew_NonPositiveSelfStatsInterval_DoesNotPanic(t *testing.T) {
 	withRestoredGlobalTracer(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
+	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
 
 	cfg := config.ObservabilityConfig{TracingEnabled: true, MetricsEnabled: false, OTelSelfStatsIntervalS: 0}
 	p, err := New(cfg, nil)
@@ -247,6 +270,8 @@ func TestProvider_Shutdown_NilReceiver(t *testing.T) {
 // logging on a timer after shutdown completes.
 func TestProvider_Shutdown_StopsSelfStatsEmitter(t *testing.T) {
 	withRestoredGlobalTracer(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
+	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
 	buf := captureLogs(t)
 
 	cfg := config.ObservabilityConfig{TracingEnabled: true, MetricsEnabled: false, OTelSelfStatsIntervalS: 1}
@@ -291,6 +316,18 @@ func TestNew_Enabled_ExportTimeoutClassifiedAgainstRealExporter(t *testing.T) {
 		t.Fatalf("net.Listen() error = %v", err)
 	}
 	defer ln.Close()
+	// t.Cleanup must be called from the test's own goroutine, not this
+	// accept loop (flagged by review) — collect accepted conns under a mutex
+	// and register one cleanup from here instead.
+	var mu sync.Mutex
+	var conns []net.Conn
+	t.Cleanup(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	})
 	go func() {
 		for {
 			conn, err := ln.Accept()
@@ -299,7 +336,9 @@ func TestNew_Enabled_ExportTimeoutClassifiedAgainstRealExporter(t *testing.T) {
 			}
 			// Accept and hold the connection open; never write a response,
 			// so the exporter's own request eventually times out.
-			t.Cleanup(func() { _ = conn.Close() })
+			mu.Lock()
+			conns = append(conns, conn)
+			mu.Unlock()
 		}
 	}()
 
