@@ -12,7 +12,7 @@ itself**, and which are **not compiled into the shipped binary**.
 > Legal checklist, which asks for a "list of all used 3rd party products used at
 > build and test time" alongside the release list.
 
-**Generated** 2026-08-31; the GitHub Actions section was refreshed 2026-08-07
+**Generated** 2026-09-03; the GitHub Actions section was refreshed 2026-08-07
 when Guardian enrollment re-pinned every action to a commit SHA, and again
 2026-08-14 when the Dependabot `github-actions` group update moved the five
 `solace-public-workflows` actions to a newer commit on the same branch. Every
@@ -196,15 +196,15 @@ All five come from one repository, pinned to a single commit.
 
 | Action | Ref | Owner |
 |---|---|---|
-| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `6c01e11` | Solace |
-| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `6c01e11` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-db-sync` | `6c01e11` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `6c01e11` | Solace |
-| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `6c01e11` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `ba836c7` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `ba836c7` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-db-sync` | `ba836c7` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `ba836c7` | Solace |
+| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `ba836c7` | Solace |
 
-`6c01e11` is a branch commit, not a tag, so there is no release to record beside
-it. The repository itself is Apache-2.0. Re-pinned 2026-08-31 by the Dependabot
-`github-actions` group update (#350); the prior pin was `7ffc795`.
+`ba836c7` is a branch commit, not a tag, so there is no release to record beside
+it. The repository itself is Apache-2.0. Re-pinned 2026-09-03 by the Dependabot
+`github-actions` group update (#373); the prior pin was `6c01e11`.
 
 Two entries have been dropped from this table, both by the reverse-direction
 check rather than by anyone remembering to look.
