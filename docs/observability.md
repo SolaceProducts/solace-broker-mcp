@@ -284,6 +284,16 @@ Self-observation for the two OTLP exporters: the span pair when tracing is enabl
 alone; see [Metrics](#metrics--planned)). `reason` is a closed set on both: `queue_full`,
 `export_timeout`, `export_error`, `shutdown`.
 
+**`queue_full` is reserved but currently inert on the span pair** (SOL-152420): the OTel Go
+SDK's batch span processor drops queue-overflow spans against an internal counter with no
+public accessor, so there is no supported way to surface that specific reason from outside the
+SDK today. The value stays in the schema for forward compatibility; do not alert on it as if it
+were live. `export_timeout`, `export_error`, and `shutdown` are all live and distinguish real
+causes: a gRPC-status timeout from the exporter, any other export failure (including a refused
+connection), and an in-progress export that didn't finish flushing before shutdown's deadline,
+respectively — `shutdown` counts one event per incomplete drain, not one per dropped span, since
+the SDK doesn't report how many spans it failed to flush.
+
 **These live on the scrape surface deliberately.** Diagnosing a broken push must not depend on
 the push working, so you can answer "is our OTLP export landing?" from Prometheus even when the
 collector is the thing that is down. The scrape path and the push path fail independently by
@@ -461,10 +471,14 @@ which you own.** The server does not itself persist or sign events.
 
 ---
 
-## Distributed Tracing — [Planned]
+## Distributed Tracing — [Interim: provider wired, spans not yet emitted]
 
-> _Status: **[Planned]**. OTLP export is not yet wired; the following spans, attributes, and
-> export protocol are the proposed design._
+> _Status: **[Interim]** (SOL-152420). The tracer provider, OTLP export, and self-observation
+> counters are wired and live behind `OBS_TRACING_ENABLED`. Nothing creates an application span
+> yet — the HTTP-boundary, tool-dispatcher, composite-executor, and per-SEMP-attempt spans below
+> are still the proposed design (later stories) — so flipping the flag today exports a resource
+> and no spans. Sampling and propagation are live; the rest of this section stays **[Planned]**
+> until those stories land._
 
 OpenTelemetry spans at each hop of a request, exported over OTLP, enabled with
 `OBS_TRACING_ENABLED` (never automatic; you opt in after deploying a collector).
