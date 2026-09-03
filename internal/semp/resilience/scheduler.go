@@ -535,12 +535,26 @@ func (s *Scheduler) Release(w *Waiter) {
 // keep reporting it after the pace became the real constraint again, which
 // points the operator at max_concurrent_per_broker when the knob that matters
 // is request_min_interval.
+//
+// Checks both slot levels, not just the subject's. A waiter can be held up by
+// its own session's ceiling or last-slot reservation while the subject itself
+// still has room — sessionEligibleLocked exists precisely because the subject
+// bound alone gives no protection between sessions of one subject. Reporting
+// only the subject check would call that case "rate_limit" and point the
+// operator at request_min_interval when the knob that actually frees the
+// waiter is max_concurrent_per_broker (or the session sharing it).
 func (s *Scheduler) Stage(w *Waiter) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	subj := s.subjects[w.key.Subject]
-	if subj != nil && !s.eligibleLocked(subj) {
+	if subj == nil {
+		return AdmissionStageRateLimit
+	}
+	if !s.eligibleLocked(subj) {
+		return AdmissionStageConcurrency
+	}
+	if cs := subj.sessions[w.key.Session]; cs != nil && !s.sessionEligibleLocked(subj, cs) {
 		return AdmissionStageConcurrency
 	}
 	return AdmissionStageRateLimit

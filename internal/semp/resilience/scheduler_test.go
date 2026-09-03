@@ -1525,3 +1525,37 @@ func TestScheduler_StageNamesTheBindingGate(t *testing.T) {
 		s.Release(fresh)
 	})
 }
+
+// A waiter can be blocked by its own session's ceiling while its subject, as a
+// whole, still has headroom — a sibling session under the same subject just
+// hasn't used its share. The subject-only check that used to be Stage's whole
+// implementation would call this "rate_limit" and point an operator at
+// request_min_interval, when the knob that actually frees the waiter is
+// max_concurrent_per_broker (shared unevenly within one subject).
+func TestScheduler_StageNamesSessionLevelGate(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const limit = 4
+		s := newTestScheduler(t, limit)
+
+		// One subject, two sessions: ceiling(4) split two ways is 2 each.
+		a1 := grant(t, s, CallerKey{Subject: "S", Session: "a"})
+		a2 := grant(t, s, CallerKey{Subject: "S", Session: "a"})
+		b1 := grant(t, s, CallerKey{Subject: "S", Session: "b"})
+
+		// Session "a" now holds its own ceiling (2 of 2), but the subject is
+		// nowhere near its ceiling (3 of 4 in flight) — the subject-only check
+		// alone would see room and miss it.
+		a3 := s.Enqueue(CallerKey{Subject: "S", Session: "a"})
+		time.Sleep(3 * testInterval)
+		synctest.Wait()
+		if got := s.Stage(a3); got != AdmissionStageConcurrency {
+			t.Errorf("stage for a waiter blocked on its own session's ceiling = %q, want %q",
+				got, AdmissionStageConcurrency)
+		}
+
+		s.Abandon(a3)
+		s.Release(a1)
+		s.Release(a2)
+		s.Release(b1)
+	})
+}
