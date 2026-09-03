@@ -518,9 +518,11 @@ which you own.** The server does not itself persist or sign events.
 > stories land. **A consequence of shipping only one span first:** the default sampler samples
 > everything (see Sampling below), and until Story 26's SEMP-layer spans exist, most calls have
 > no upstream span to attach to — so a token exchange not triggered from an already-sampled agent
-> trace exports as its own single-span root trace, one per (uncached) token exchange, rather than
-> nested inside a larger request trace. Self-correcting once Story 26 lands; worth knowing before
-> then if trace volume looks higher than the request volume suggests._
+> trace exports as its own single-span root trace, one per token exchange — cache hits included,
+> since `tracer.Start` runs before the cache lookup — rather than nested inside a larger request
+> trace. Cache hits are the large majority of exchanges, so budget from the *total* call rate, not
+> a live-round-trip rate. Self-correcting once Story 26 lands; worth knowing before then if trace
+> volume looks higher than the request volume suggests._
 
 OpenTelemetry spans at each hop of a request, exported over OTLP, enabled with
 `OBS_TRACING_ENABLED` (never automatic; you opt in after deploying a collector).
@@ -562,7 +564,9 @@ names beyond the two above, and span kinds, are open items in this review (see
 | `error_type` | Why the call failed; present on `outcome: error` only, same ten values | Solace |
 | `retry.decision` | The retry decision on a SEMP attempt | Solace |
 | `retry.exhausted` | `true` on the final attempt when retries are exhausted | Solace |
-| `cache_hit` | `tokenexchange.Exchange` only: true when served from cache, false when a live IdP round trip was needed (or waited on) | Solace |
+| `cache_hit` | `tokenexchange.Exchange` only: true when served from cache, false when a live IdP round trip was needed (or waited on). **Isolating actual live round trips needs `singleflight_role="winner"` too** — a follower also reports `cache_hit=false` despite doing no IdP work itself, so filtering on `cache_hit` alone counts one winner plus every follower waiting on it | Solace |
+| `singleflight_role` | `tokenexchange.Exchange` only, absent on a cache hit: `winner` (this call ran the live IdP round trip) or `follower` (this call shared another's result) | Solace |
+| `winner_trace_id` / `winner_span_id` | `tokenexchange.Exchange` only, present on a `follower` span only: the winner's own IDs, so an operator can pivot from a follower's span to the trace that actually did the IdP work. The follower span also carries a span `Link` to the same span | Solace |
 
 `outcome` and `error_type` carry the **same vocabulary here as on the metric labels and the
 audit record**, which is the point of a single vocabulary: filter a dashboard by
@@ -586,10 +590,14 @@ cheap to change now and expensive after the freeze.
 
 **Enabling `OBS_TRACING_ENABLED` exports authentication-event content to your collector.**
 Every `tokenexchange.Exchange` span carries a correlation ID, a timestamp, and the outcome of
-that authentication attempt (including whether it was a cache hit), which now travels to
-wherever `OTEL_EXPORTER_OTLP_ENDPOINT` points — a system that may sit outside this deployment's
-own residency or audit-scope boundary. Worth one line in your own data-flow review before
-pointing this at a collector you don't operate.
+that authentication attempt — `cache_hit`, `singleflight_role`, and (on a follower)
+`winner_trace_id` / `winner_span_id` besides — which now travels to wherever
+`OTEL_EXPORTER_OTLP_ENDPOINT` points, a system that may sit outside this deployment's own
+residency or audit-scope boundary. **A failed exchange exports more than that summary:** the
+span's exception event carries the error text verbatim, and for a transport failure that
+includes the IdP token endpoint's hostname and resolved network address (from the underlying
+`*url.Error`) — infrastructure topology, not just an authentication outcome. Worth one line in
+your own data-flow review before pointing this at a collector you don't operate.
 
 ### Resource Attributes
 
@@ -685,7 +693,7 @@ small enough to group by on a dashboard while still carrying the detail an inves
 |---|---|
 | `success` | The call completed successfully. |
 | `error` | The call failed. The cause is in `error_type`, except on the `tokenexchange.Exchange` span, which never sets it — see [Span Attributes](#span-attributes). A `context.DeadlineExceeded` timeout is classified here. |
-| `cancelled` | The caller cancelled the request. **Reserved in the schema now for tool-invocation `outcome`; emitted from a later release (Story 42, v1.x).** |
+| `cancelled` | The caller cancelled the request. **Reserved in the schema now for tool-invocation `outcome`; emitted from a later release (Story 42, v1.x) — already emitted today on the `tokenexchange.Exchange` span, see the exception below.** |
 
 **Exception — the token-exchange span (SOL-153333, Story 50) already emits `cancelled`, ahead of the tool-invocation level above.** That span classifies by *where* the error originated, not by Go error type alone: a caller's own context ending the call (`context.Canceled` **or** `context.DeadlineExceeded` — for example the SEMP retry budget in `internal/semp/resilience/sender.go` expiring while the exchange waits) is `cancelled`, while a `context.DeadlineExceeded` from the exchange's *own* internal retry-chain deadline is `error`, per the general rule above. Classifying every `DeadlineExceeded` as `error` regardless of source would misattribute a caller's own timeout to the exchange.
 
