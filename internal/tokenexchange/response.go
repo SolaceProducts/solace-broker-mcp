@@ -70,6 +70,13 @@ func (e *Exchanger) parseIdPResponse(resp *http.Response, now time.Time) (*Token
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		if ct := responseMediaType(resp); ct != "" && ct != "application/json" {
+			if len(ct) > maxEchoedFieldLen {
+				return nil, &ExchangeError{
+					Sentinel:   ErrInvalidResponse,
+					Message:    fmt.Sprintf("token exchange invalid response: IdP returned HTTP %d with an oversized Content-Type (%d bytes) — possible SSO/proxy interception", resp.StatusCode, len(ct)),
+					HTTPStatus: resp.StatusCode,
+				}
+			}
 			return nil, &ExchangeError{
 				Sentinel:   ErrInvalidResponse,
 				Message:    fmt.Sprintf("token exchange invalid response: IdP returned HTTP %d with Content-Type %q (expected application/json — possible SSO/proxy interception)", resp.StatusCode, ct),
@@ -249,11 +256,16 @@ func parseRetryAfter(headerValues []string, now time.Time) retryAfterResult {
 const maxExpiresInSeconds int64 = 100 * 365 * 24 * 3600 // ~100 years
 
 // Cap prevents log-line and span bloat from a misbehaving IdP echoing an
-// oversized value back in one of the fields this package embeds verbatim
-// into an ExchangeError.Message — the error code here, and token_type /
-// issued_token_type in parseSuccessBody. span.RecordError copies Message
-// into the span's exception event with no length limit of its own
-// (flagged by review), so this is the only cap any of the three get.
+// oversized value back in one of the four fields this package embeds
+// verbatim into an ExchangeError.Message: the error code and the
+// Content-Type header here, and token_type / issued_token_type in
+// parseSuccessBody. The Content-Type case is the largest channel of the
+// four — it comes from a response HEADER, not the body, so maxResponseBody
+// never bounds it, and this repo's HTTP client sets no
+// MaxResponseHeaderBytes, leaving Go's own 10 MiB default as the only
+// upstream limit (flagged by review). span.RecordError copies Message into
+// the span's exception event with no length limit of its own on any of the
+// four, so this is the only cap any of them get.
 const maxEchoedFieldLen = 64
 
 func classifyClientError(body []byte, statusCode int) error {

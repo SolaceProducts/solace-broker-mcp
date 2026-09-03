@@ -181,6 +181,43 @@ func TestParseIdPResponse_NonJSONContentTypeReturnsInvalidResponse(t *testing.T)
 	}
 }
 
+// T04b: An oversized Content-Type media type (> maxEchoedFieldLen bytes) is
+// reported without echoing it into the message — same cap and reasoning as
+// T20's error-code cap. This channel is the widest of the four capped
+// fields: it comes from a response HEADER, not the body, so maxResponseBody
+// (T03) never bounds it.
+func TestParseIdPResponse_OversizedContentTypeOmitsValue(t *testing.T) {
+	t.Parallel()
+
+	e, err := New(validParams(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	longType := "x/" + strings.Repeat("a", maxEchoedFieldLen+1)
+	resp := &http.Response{
+		StatusCode: 200,
+		Header:     http.Header{"Content-Type": []string{longType}},
+		Body:       io.NopCloser(strings.NewReader("<html>Login page</html>")),
+	}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	tok, err := e.parseIdPResponse(resp, now)
+
+	if tok != nil {
+		t.Errorf("tok = %v, want nil", tok)
+	}
+	if !errors.Is(err, ErrInvalidResponse) {
+		t.Errorf("errors.Is(err, ErrInvalidResponse) = false, want true; err = %v", err)
+	}
+	if !strings.Contains(err.Error(), "oversized Content-Type") {
+		t.Errorf("err.Error() = %q, want it to contain \"oversized Content-Type\"", err.Error())
+	}
+	if strings.Contains(err.Error(), longType) {
+		t.Errorf("err.Error() = %q, want it to NOT contain the oversized raw value", err.Error())
+	}
+}
+
 // T05: A missing Content-Type header bypasses the content-type guard; if the
 // body is valid JSON the call succeeds.
 func TestParseIdPResponse_MissingContentTypeBypassesGuard(t *testing.T) {
