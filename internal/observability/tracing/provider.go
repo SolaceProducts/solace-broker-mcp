@@ -99,6 +99,16 @@ func New(cfg config.ObservabilityConfig, meterProvider *sdkmetric.MeterProvider,
 	if !cfg.TracingEnabled {
 		return nil, nil
 	}
+	if res == nil {
+		// Matches metrics.New's own guard (internal/observability/metrics):
+		// sdktrace.WithResource(nil) silently overrides the SDK's own
+		// resource.Default(), collapsing every exported span's identity to
+		// zero attributes with no error anywhere — exactly what this
+		// parameter exists to prevent (flagged by review). Placed after the
+		// flag-off early return so the disabled-tracing (nil, nil) contract
+		// is unaffected by callers that never pass a resource in that case.
+		return nil, fmt.Errorf("tracing: res must not be nil (pass sdkresource.Default() if identity doesn't matter)")
+	}
 
 	// Before anything else: otlptracegrpc.New's own env-var parsing can log
 	// through the OTel SDK's global error/log channel, which by default

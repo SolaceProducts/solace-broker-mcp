@@ -76,6 +76,36 @@ func TestNew_Disabled_ReturnsNilAndTouchesNothing(t *testing.T) {
 	}
 }
 
+// TestNew_Disabled_NilResourceStillReturnsNilNil confirms the nil-resource
+// guard added below sits AFTER the !cfg.TracingEnabled early return: a
+// disabled caller that passes no resource at all (main.go never builds one
+// when tracing is off) must still get the flag-off (nil, nil) contract, not
+// the guard's error.
+func TestNew_Disabled_NilResourceStillReturnsNilNil(t *testing.T) {
+	p, err := New(config.ObservabilityConfig{TracingEnabled: false}, nil, nil)
+	if err != nil {
+		t.Fatalf("New(disabled, nil resource) error = %v, want nil", err)
+	}
+	if p != nil {
+		t.Fatalf("New(disabled, nil resource) Provider = %v, want nil", p)
+	}
+}
+
+// TestNew_NilResourceIsRejected pins the guard in New (SOL-152425), matching
+// metrics.New's own: passing nil silently overrides the SDK's own
+// resource.Default() and collapses every exported span's identity to zero
+// attributes with no error anywhere — exactly the identity loss this
+// parameter exists to prevent. A caller with no opinion on identity must
+// pass sdkresource.Default() explicitly, not nil.
+func TestNew_NilResourceIsRejected(t *testing.T) {
+	withRestoredGlobalTracer(t)
+
+	cfg := config.ObservabilityConfig{TracingEnabled: true, MetricsEnabled: true}
+	if _, err := New(cfg, nil, nil); err == nil {
+		t.Fatal("New(enabled, nil resource) error = nil, want an error")
+	}
+}
+
 // TestNew_Enabled_SamplesByDefault pins that a non-nil *Provider is returned
 // and that the globally-installed tracer actually samples (the v1 default is
 // ParentBased(AlwaysSample()) — sample everything — see New's doc comment).
