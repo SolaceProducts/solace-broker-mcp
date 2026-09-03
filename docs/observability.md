@@ -506,14 +506,16 @@ which you own.** The server does not itself persist or sign events.
 
 ---
 
-## Distributed Tracing — [Interim: provider wired, spans not yet emitted]
+## Distributed Tracing — [Interim: provider and one span wired]
 
-> _Status: **[Interim]** (SOL-152420). The tracer provider, OTLP export, and self-observation
-> counters are wired and live behind `OBS_TRACING_ENABLED`. Nothing creates an application span
-> yet — the HTTP-boundary, tool-dispatcher, composite-executor, and per-SEMP-attempt spans below
-> are still the proposed design (later stories) — so flipping the flag today exports a resource
-> and no spans. Sampling and propagation are live; the rest of this section stays **[Planned]**
-> until those stories land._
+> _Status: **[Interim]** (SOL-152420, SOL-153333). The tracer provider, OTLP export, and
+> self-observation counters are wired and live behind `OBS_TRACING_ENABLED` (Story 25). One
+> application span exists today — `tokenexchange.Exchange`, wrapping the OAuth token-exchange
+> call (Story 50) — described under [Spans](#spans) below. The HTTP-boundary, tool-dispatcher,
+> composite-executor, and per-SEMP-attempt spans are still the proposed design (later stories),
+> so flipping the flag today exports a resource, the token-exchange span, and nothing else yet.
+> Sampling and propagation are live; the rest of this section stays **[Planned]** until those
+> stories land._
 
 OpenTelemetry spans at each hop of a request, exported over OTLP, enabled with
 `OBS_TRACING_ENABLED` (never automatic; you opt in after deploying a collector).
@@ -531,13 +533,19 @@ OpenTelemetry spans at each hop of a request, exported over OTLP, enabled with
 
 ### Spans
 
-A successful end-to-end call produces spans at the HTTP boundary, the tool dispatcher, the
-composite executor, and each SEMP attempt. Named spans:
+A successful end-to-end call will eventually produce spans at the HTTP boundary, the tool
+dispatcher, the composite executor, and each SEMP attempt (Story 26, not yet landed). Named
+spans today:
 
-- `semp.attempt`: one per SEMP request attempt.
+- `tokenexchange.Exchange`: one per call to the OAuth token exchange (Story 50, SOL-153333) —
+  a cache hit, a singleflight follower, and the singleflight winner triggering a live IdP round
+  trip each get their own span. Child of whichever span is active where
+  `OAuthAuthenticator.AddAuth` is called (a future SEMP-per-attempt span once Story 26 lands;
+  today, whatever the caller's own context carries).
+- `semp.attempt`: one per SEMP request attempt (Story 26, not yet landed).
 
 Other span names follow the OpenTelemetry HTTP semantic conventions where applicable. Span
-names beyond `semp.attempt`, and span kinds, are open items in this review (see
+names beyond the two above, and span kinds, are open items in this review (see
 [Open Items for This Review](#open-items-for-this-review), item 4).
 
 ### Span Attributes
@@ -549,11 +557,20 @@ names beyond `semp.attempt`, and span kinds, are open items in this review (see
 | `error_type` | Why the call failed; present on `outcome: error` only, same ten values | Solace |
 | `retry.decision` | The retry decision on a SEMP attempt | Solace |
 | `retry.exhausted` | `true` on the final attempt when retries are exhausted | Solace |
+| `cache_hit` | `tokenexchange.Exchange` only: true when served from cache, false when a live IdP round trip was needed (or waited on) | Solace |
 
 `outcome` and `error_type` carry the **same vocabulary here as on the metric labels and the
 audit record**, which is the point of a single vocabulary: filter a dashboard by
 `error_type="broker_init_error"` and you can carry that predicate into the trace backend and
 the SIEM unchanged, with no translation table.
+
+**Exception: `tokenexchange.Exchange` never sets `error_type`, even on `outcome: error`.** The
+ten-value `error_type` set above is scoped to tool-invocation outcomes and has no value
+describing a token-exchange failure mode (rate-limited, circuit-open, retries-exhausted,
+transport, request-build). The span still carries the actual cause via the span's recorded
+exception event and its status (`codes.Error`), just not through this shared field. A future
+story may extend the vocabulary or give token-exchange failures their own attribute; until then,
+do not expect `error_type` on this span.
 
 **On the span, the key is `error_type`, not the OTel-conventional `error.type`.** This is a
 deliberate exception to the preceding naming rule, taken so the key is identical across metrics,
@@ -655,7 +672,9 @@ by on a dashboard while still carrying the detail an investigation needs.
 |---|---|
 | `success` | The call completed successfully. |
 | `error` | The call failed. The cause is in `error_type`. A `context.DeadlineExceeded` timeout is classified here. |
-| `cancelled` | The caller cancelled the request. **Reserved in the schema now; emitted from a later release.** |
+| `cancelled` | The caller cancelled the request. **Reserved in the schema now for tool-invocation `outcome`; emitted from a later release (Story 42, v1.x).** |
+
+**Exception — the token-exchange span (SOL-153333, Story 50) already emits `cancelled`, ahead of the tool-invocation level above.** That span classifies by *where* the error originated, not by Go error type alone: a caller's own context ending the call (`context.Canceled` **or** `context.DeadlineExceeded` — for example the SEMP retry budget in `internal/semp/resilience/sender.go` expiring while the exchange waits) is `cancelled`, while a `context.DeadlineExceeded` from the exchange's *own* internal retry-chain deadline is `error`, per the general rule above. Classifying every `DeadlineExceeded` as `error` regardless of source would misattribute a caller's own timeout to the exchange.
 
 ### `error_type`
 
