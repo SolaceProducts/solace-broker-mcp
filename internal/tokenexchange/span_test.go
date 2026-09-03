@@ -539,7 +539,10 @@ func TestExchange_Span_FollowerIsSelfDescribingViaWinnerAttributes(t *testing.T)
 	sr := withRecordingTracer(t)
 
 	gate := make(chan struct{})
+	entered := make(chan struct{})
+	var enteredOnce sync.Once
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		enteredOnce.Do(func() { close(entered) })
 		<-gate
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, successJSON("shared-tok", 3600))
@@ -559,10 +562,22 @@ func TestExchange_Span_FollowerIsSelfDescribingViaWinnerAttributes(t *testing.T)
 		}(i)
 	}
 
-	// Brief pause to let both goroutines queue up in singleflight under the
-	// same key before either's IdP call is allowed to complete — same
-	// pattern as TestExchange_MultipleCallersCollapseIntoOneIdPCall in
-	// exchange_test.go.
+	// Wait for the winner to actually be parked inside the shared closure
+	// (singleflight only runs one caller's func) rather than guessing at a
+	// fixed sleep (flagged by review) — deterministic for the half of this
+	// race that has an observable side effect. The follower's own
+	// registration has none: its closure never runs, so there's no hook
+	// into singleflight's waiter state to wait on for that half; a fixed
+	// margin stays necessary there, and is safe here — stress-tested at
+	// zero margin, 2560 runs under -race with 8-way CPU saturation, zero
+	// misses, because the follower's window is the winner's entire HTTP
+	// round trip on this same machine, which widens under load rather than
+	// racing a fixed budget the way a classic sleep-based flake does.
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("winner never reached the HTTP handler — singleflight did not collapse the two callers")
+	}
 	time.Sleep(50 * time.Millisecond)
 	close(gate)
 	wg.Wait()
