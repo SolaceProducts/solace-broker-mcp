@@ -83,9 +83,15 @@ func New(cfg config.ObservabilityConfig, serviceVersion string) (*sdkresource.Re
 		attrs = append(attrs, semconv.CloudRegion(cfg.CloudRegion))
 	}
 
+	// sdkresource.Default().SchemaURL(), not the pinned semconv.SchemaURL:
+	// Merge fails with ErrSchemaURLConflict when the two resources' schema
+	// URLs differ and neither is empty (flagged by review). Building this
+	// resource's schema URL from the SDK's own default removes the implicit
+	// "this pin must track the SDK's internal semconv version" coupling
+	// entirely, rather than relying on it happening to match today.
 	res, err := sdkresource.Merge(
 		sdkresource.Default(),
-		sdkresource.NewWithAttributes(semconv.SchemaURL, attrs...),
+		sdkresource.NewWithAttributes(sdkresource.Default().SchemaURL(), attrs...),
 	)
 	if err != nil {
 		return nil, err
