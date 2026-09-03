@@ -137,7 +137,7 @@ listen_address: %s
 				// default so later tests don't inherit a logger bound to the
 				// closed pipe.
 				prev := slog.Default()
-				slog.SetDefault(slog.New(newSlogHandler(slog.LevelInfo)))
+				slog.SetDefault(slog.New(newSlogHandler(slog.LevelInfo, nil)))
 				t.Cleanup(func() { slog.SetDefault(prev) })
 
 				logStartupBanners(cfg)

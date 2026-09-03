@@ -599,24 +599,57 @@ includes the IdP token endpoint's hostname and resolved network address (from th
 `*url.Error`) — infrastructure topology, not just an authentication outcome. Worth one line in
 your own data-flow review before pointing this at a collector you don't operate.
 
-### Resource Attributes
+### Resource Attributes — [Implemented]
+
+> _Status: **[Implemented]** (SOL-152425, Story 34). Constructed once by
+> `internal/observability/resource` and shared by the metrics meter provider (SOL-152091) and
+> the tracer provider (SOL-152420) — one construction site, so the two cannot disagree. Also
+> mirrored (the `service.name` / `deployment.environment.name` / `cloud.region` subset only)
+> onto every log line from immediately after config loads onward — the handful of log lines
+> emitted before config loads (the process banner and the config-load attempt itself) have no
+> identity to attach, since it's derived from config. The **OTLP push** query guidance below
+> describes that future egress (Story 46, not yet landed); the scrape (`target_info`) path is
+> live today._
 
 Set from server configuration on **both** metrics and spans, so an aggregated dashboard can
 tell instances apart without a label duplicated onto every series. All five follow the
 OpenTelemetry resource semantic conventions
 (https://opentelemetry.io/docs/specs/semconv/resource/).
 
-| Attribute | Source |
-|---|---|
-| `service.name` | config |
-| `service.version` | build-time injection |
-| `service.instance.id` | config, or the pod name |
-| `deployment.environment` | config, when set |
-| `cloud.region` | config, when set |
+| Attribute | Source | Config key |
+|---|---|---|
+| `service.name` | config, default `solace-broker-mcp` | `observability.service_name` |
+| `service.version` | build-time injection | — |
+| `service.instance.id` | config, else the pod name (Kubernetes downward API), else the process hostname | `observability.service_instance_id` |
+| `deployment.environment.name` | config, when set | `observability.deployment_environment` |
+| `cloud.region` | config, when set | `observability.cloud_region` |
 
 An earlier draft called this attribute `region` and flagged the OTel name as a possible
 change. **It is now `cloud.region`**: where OTel publishes a convention we adopt it, and
 `cloud.region` is what a multi-broker aggregator expects to pivot on.
+
+**`service_instance_id` is an override for the (uncommon) case where neither the pod name nor
+the hostname identifies the instance usefully** — for example, several bare-metal instances
+sharing a hostname. Most Kubernetes deployments need neither this nor `POD_NAME`
+configuration: `deploy/kubernetes/deployment.yaml` already wires `POD_NAME` via the downward
+API.
+
+**Known limitation:** `service_name` and `service_instance_id` always win over the standard
+`OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES` environment variables, because config always
+has a value for both (a real one, or the stated default) by the time the shared resource is
+built, and this package's own attributes take precedence in the merge. `deployment_environment`
+and `cloud_region` do **not** have this problem — config leaves them genuinely empty when
+unset, so the standard `OTEL_RESOURCE_ATTRIBUTES` entries for those two reach the resource
+unopposed. An operator who wants `OTEL_SERVICE_NAME` or an `OTEL_RESOURCE_ATTRIBUTES`
+`service.instance.id` honored should use `observability.service_name` /
+`observability.service_instance_id` instead, for now.
+
+**`deployment.environment.name`, not the FD's original `deployment.environment`.** OTel
+renamed the semantic-convention key ahead of this story landing; the SDK's own
+`resource.Default()` (which this attribute set is merged with) is already built against the
+renamed key, so keeping the older name here would have shipped an attribute the SDK's own
+semantic-convention package no longer recognizes on day one. Disclosed as a deliberate
+deviation from the FD text, not a silent one — see the SOL-152425 PR description.
 
 **How to query them, per egress.** These are resource attributes, not per-series labels, so
 they arrive differently on each of the two metric egresses:
@@ -627,8 +660,8 @@ they arrive differently on each of the two metric egresses:
   `mcp_tool_invocation_total * on (instance, job) group_left(service_name, cloud_region) target_info`.
 - **OTLP push.** Resource attributes are **not promoted to labels by default**. If you ingest
   our OTLP metrics straight into Prometheus, set `promote_resource_attributes` to include
-  `service.name`, `service.instance.id`, `deployment.environment`, and `cloud.region`, or the
-  same dashboard will show empty variable drop-down lists.
+  `service.name`, `service.instance.id`, `deployment.environment.name`, and `cloud.region`, or
+  the same dashboard will show empty variable drop-down lists.
 
 ---
 

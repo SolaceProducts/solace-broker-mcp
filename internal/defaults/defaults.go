@@ -31,6 +31,12 @@ const DefaultPort = 9090
 // lets operators network-policy scraping independently of MCP traffic.
 const DefaultMetricsBindAddress = ":9091"
 
+// DefaultServiceName is the OTel service.name resource attribute (SOL-152425,
+// Story 34) when observability.service_name is unset — the identity a
+// multi-broker, multi-service aggregator (e.g. Solace Insights) shows for
+// this process absent an operator override.
+const DefaultServiceName = "solace-broker-mcp"
+
 // DefaultLoopbackListenAddress is the host the MCP server binds to when
 // listen_address is unset and mcp_client_auth.mode is not oauth. Loopback-only
 // by default keeps the dev auth modes (disabled, static) unreachable from the

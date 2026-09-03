@@ -74,6 +74,14 @@ spec:
           env:
             - name: CONFIG_FILE
               value: /etc/mcp-server/config.yaml
+            # service.instance.id (SOL-152425, Story 34): the pod name is what
+            # differentiates one replica's metrics/traces/logs from another in
+            # an aggregator. The downward API is the only way to get it — a pod
+            # does not otherwise know its own name.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
           envFrom:
             - secretRef:
                 name: solace-broker-mcp

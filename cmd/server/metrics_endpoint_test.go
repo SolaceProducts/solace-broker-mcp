@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	sdkresource "go.opentelemetry.io/otel/sdk/resource"
+
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/hooks"
@@ -46,7 +48,7 @@ func TestStartMetricsEndpoint_BindFailureIsUnready(t *testing.T) {
 	defer occupied.Close()
 
 	readiness := health.NewReadinessState()
-	provider := startMetricsEndpoint(metricsConfig(occupied.Addr().String()), readiness)
+	provider := startMetricsEndpoint(metricsConfig(occupied.Addr().String()), readiness, sdkresource.Default())
 	if provider != nil {
 		t.Error("expected a nil provider when the listener fails to bind")
 	}
@@ -64,7 +66,7 @@ func TestStartMetricsEndpoint_BindFailureIsUnready(t *testing.T) {
 // A successful bind must return the provider and leave /readyz ready.
 func TestStartMetricsEndpoint_SuccessIsReady(t *testing.T) {
 	readiness := health.NewReadinessState()
-	provider := startMetricsEndpoint(metricsConfig("127.0.0.1:0"), readiness)
+	provider := startMetricsEndpoint(metricsConfig("127.0.0.1:0"), readiness, sdkresource.Default())
 	if provider == nil {
 		t.Fatal("expected a non-nil provider on a successful bind")
 	}
@@ -80,7 +82,7 @@ func TestStartMetricsEndpoint_SuccessIsReady(t *testing.T) {
 // The provider's Shutdown must satisfy the shutdown-hook contract (SOL-153884):
 // registrable on a hooks.Registry and run cleanly, well within RunAll's budget.
 func TestMetricsProvider_ShutdownHook(t *testing.T) {
-	provider, err := metrics.New(version.Version())
+	provider, err := metrics.New(version.Version(), sdkresource.Default())
 	if err != nil {
 		t.Fatalf("metrics.New: %v", err)
 	}

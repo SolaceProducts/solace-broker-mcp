@@ -35,6 +35,18 @@ type Provider struct {
 	tp          *sdktrace.TracerProvider
 	stats       *exportStats
 	stopEmitter func()
+	resource    *sdkresource.Resource
+}
+
+// Resource returns the identity resource this provider was built with, so a
+// caller (or a test) can confirm it matches the metrics provider's own
+// resource (SOL-152425, Story 34's anti-drift guarantee). A nil receiver
+// (the flag-off return from New) returns nil.
+func (p *Provider) Resource() *sdkresource.Resource {
+	if p == nil {
+		return nil
+	}
+	return p.resource
 }
 
 // New builds the tracer provider and installs it as the global OTel tracer
@@ -76,7 +88,14 @@ type Provider struct {
 // surfaces dark if metrics is configured on but its provider failed to
 // build (confirmed by review — see cmd/server/main.go's metricsProvider
 // wiring).
-func New(cfg config.ObservabilityConfig, meterProvider *sdkmetric.MeterProvider) (*Provider, error) {
+//
+// res is the shared identity resource (SOL-152425, Story 34) — the SAME
+// resource.Resource the metrics meter provider (Story 14) uses, constructed
+// once by internal/observability/resource. Passing two independently built
+// resources here and in metrics.New would defeat the anti-drift guarantee
+// this story exists to provide; see cmd/server/main.go for where it's built
+// and threaded to both.
+func New(cfg config.ObservabilityConfig, meterProvider *sdkmetric.MeterProvider, res *sdkresource.Resource) (*Provider, error) {
 	if !cfg.TracingEnabled {
 		return nil, nil
 	}
@@ -99,17 +118,13 @@ func New(cfg config.ObservabilityConfig, meterProvider *sdkmetric.MeterProvider)
 		return nil, fmt.Errorf("create OTLP trace exporter: %w", err)
 	}
 
-	// resource.Default() only: the shared identity resource (service.name,
-	// deployment.environment, cloud.region, …) this provider is meant to
-	// share with Story 14's meter provider is Story 34's scope. See the
-	// package doc comment (tracing.go) for why that isn't wired yet.
 	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithResource(sdkresource.Default()),
+		sdktrace.WithResource(res),
 		sdktrace.WithBatcher(&countingExporter{next: baseExporter, stats: stats}),
 	)
 	otel.SetTracerProvider(tp)
 
-	p := &Provider{tp: tp, stats: stats, stopEmitter: func() {}}
+	p := &Provider{tp: tp, stats: stats, stopEmitter: func() {}, resource: res}
 	if meterProvider == nil {
 		interval := time.Duration(cfg.OTelSelfStatsIntervalS) * time.Second
 		if interval <= 0 {
