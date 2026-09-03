@@ -76,7 +76,7 @@ func TestNew_Disabled_ReturnsNilAndTouchesNothing(t *testing.T) {
 
 // TestNew_Enabled_SamplesByDefault pins that a non-nil *Provider is returned
 // and that the globally-installed tracer actually samples (the v1 default is
-// parentbased_traceidratio at arg 1.0 — see New's doc comment).
+// ParentBased(AlwaysSample()) — sample everything — see New's doc comment).
 func TestNew_Enabled_SamplesByDefault(t *testing.T) {
 	withRestoredGlobalTracer(t)
 

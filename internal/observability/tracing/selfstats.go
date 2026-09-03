@@ -23,15 +23,18 @@ import (
 )
 
 // startSelfStatsEmitter starts the periodic INFO fallback (Decision #12):
-// when tracing is on and metrics are off, there is no /metrics surface to
-// read span-export health from, so this goroutine logs the current totals on
-// a timer instead. Reports once immediately so an operator who flips tracing
-// on mid-incident does not wait a full interval for the first reading — same
-// rationale as health.StartOccupancyReporter.
+// when there is no meter provider to register the export counters against,
+// there is no /metrics surface to read span-export health from, so this
+// goroutine logs the current totals on a timer instead. Reports once
+// immediately so an operator who flips tracing on mid-incident does not wait
+// a full interval for the first reading — same rationale as
+// health.StartOccupancyReporter.
 //
 // Returns a stop function that halts the goroutine and waits for it to exit;
 // stop is idempotent. Call only when the caller has already checked
-// interval > 0 and TracingEnabled && !MetricsEnabled (provider.go).
+// interval > 0 and meterProvider == nil (provider.go) — that condition
+// covers metrics being off and metrics being configured but its provider
+// failing to build, not just cfg.MetricsEnabled being false.
 func startSelfStatsEmitter(interval time.Duration, stats *exportStats) (stop func()) {
 	done := make(chan struct{})
 	var exited sync.WaitGroup
