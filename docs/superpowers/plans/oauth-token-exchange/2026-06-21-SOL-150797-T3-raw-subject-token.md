@@ -7,6 +7,10 @@
 **Predecessors**: SOL-150794 (Authenticator interface), SOL-150795 (SEMP clients consume Authenticator), SOL-150796 (broker_oauth config schema + Hop 1/Hop 2 alignment guard)
 
 > **Superseded (writer path) by SOL-153935**: HTTP inject deleted; Extra.Header → handler ctx via RequestExtraMiddleware.
+> The `InjectRawSubjectToken` symbol this doc describes below no longer exists —
+> capture now happens in `internal/auth/request_extra.go` (`applyRequestExtra`,
+> called from `RequestExtraMiddleware`). Everything past this banner describes
+> the deleted design; read it as history, not current code.
 
 ---
 

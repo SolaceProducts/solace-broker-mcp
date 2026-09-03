@@ -21,6 +21,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -37,7 +39,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const postureRequestExtraEnabled = "request extra middleware is enabled"
+const postureRequestExtraEnabled = "request extra middleware is installed (always on)"
 
 // TestInstallRequestMiddleware_LogsRequestExtraEnabled pins that production
 // wiring always installs the Extra.Header → handler ctx middleware. The SDK
@@ -76,7 +78,7 @@ func TestInstallRequestMiddleware_LogsRequestExtraEnabled(t *testing.T) {
 // interesting in itself here — they are simply the emit sites that log through
 // ctx, and so reveal which request's correlation ID the ctx is carrying.
 const (
-	msgToolListFilter       = "tool list filter"
+	msgToolListFilter            = "tool list filter"
 	msgVerifierContractViolation = "internal: TokenInfo.Extra has unexpected type — verifier contract violation"
 )
 
@@ -259,4 +261,138 @@ func (c *correlatedBearer) RoundTrip(r *http.Request) (*http.Response, error) {
 	clone.Header.Set("Authorization", "Bearer ordering-token")
 	clone.Header.Set("X-Correlation-ID", *c.id.Load())
 	return http.DefaultTransport.RoundTrip(clone)
+}
+
+// requestExtraStubHandler is a minimal tools.ToolHandler, standing in for the
+// unexported stubHandler used inside internal/tools. handleFn lets the test
+// observe whatever the real production middleware chain left on ctx.
+type requestExtraStubHandler struct {
+	name     string
+	handleFn func(ctx context.Context, tc *tools.ToolContext, params map[string]any) (*tools.ToolResult, error)
+}
+
+func (h *requestExtraStubHandler) Metadata() tools.Metadata {
+	return tools.Metadata{
+		Name:        h.name,
+		Description: "A test tool",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		OutputSchema: map[string]any{
+			"type":                 "object",
+			"additionalProperties": map[string]any{"type": "object"},
+		},
+		Annotations: tools.Annotations{ReadOnly: true},
+	}
+}
+
+func (h *requestExtraStubHandler) Handle(ctx context.Context, tc *tools.ToolContext, params map[string]any) (*tools.ToolResult, error) {
+	return h.handleFn(ctx, tc, params)
+}
+
+// fixedHeaderTripper sets a fixed set of headers on every outbound request.
+type fixedHeaderTripper struct{ headers map[string]string }
+
+func (f *fixedHeaderTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	clone := r.Clone(r.Context())
+	for k, v := range f.headers {
+		clone.Header.Set(k, v)
+	}
+	return http.DefaultTransport.RoundTrip(clone)
+}
+
+// disabledCorrelationConfig loads a minimal ServerConfig (auth mode
+// "disabled", one broker so the tool manager can resolve it) and forces the
+// correlation capability off, regardless of the environment the test runs
+// in.
+func disabledCorrelationConfig(t *testing.T) *config.ServerConfig {
+	t.Helper()
+	cfgYAML := "mcp_client_auth:\n  mode: disabled\nbrokers:\n" +
+		"  dev:\n    url: http://localhost:8081\n    auth:\n      mode: basic\n      username: admin\n      password: admin\n"
+	cfgPath := filepath.Join(t.TempDir(), "broker-config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0o600); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+	cfg, err := config.LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	cfg.Observability.CorrelationIDEnabled = false
+	return cfg
+}
+
+// TestInstallRequestMiddleware_CorrelationDisabled_ClientHeaderNotStamped is
+// the regression test for the blocking bug flagged in PR #371 review
+// (Andrea, solace-aross): with OBS_CORRELATION_ID_ENABLED off,
+// correlation.Middleware is never wired onto the HTTP /mcp endpoint (see
+// buildMCPEndpoint), so a client that supplies its own X-Correlation-ID or
+// traceparent must not have it stamped onto the JSON-RPC handler ctx by
+// auth.RequestExtraMiddleware either — otherwise the documented "capability
+// off → no correlation_id anywhere" invariant (asserted in cmd/server/main.go,
+// internal/tools/register.go, correlation.Middleware, and
+// internal/semp/correlationhdr) is false.
+//
+// This drives a real request through installRequestMiddleware's production
+// wiring — no correlation.Middleware in the HTTP chain, matching what
+// buildMCPEndpoint does when the capability is off — and asserts
+// correlation.From(ctx) == "" inside the tool handler even though the client
+// sent both a traceparent and an X-Correlation-ID.
+func TestInstallRequestMiddleware_CorrelationDisabled_ClientHeaderNotStamped(t *testing.T) {
+	cfg := disabledCorrelationConfig(t)
+
+	pool := semp.NewBrokerPool(cfg, nil)
+	t.Cleanup(pool.Close)
+	mgr := tools.NewToolManager(pool)
+
+	var gotCorr string
+	var ran bool
+	h := &requestExtraStubHandler{name: "correlation-disabled-tool"}
+	h.handleFn = func(ctx context.Context, _ *tools.ToolContext, _ map[string]any) (*tools.ToolResult, error) {
+		ran = true
+		gotCorr = correlation.From(ctx)
+		return &tools.ToolResult{StructuredContent: map[string]any{"ok": true}}, nil
+	}
+	mgr.Register(h)
+
+	server := newTestServer()
+	tools.RegisterWithServer(mgr, server, pool, true, nil, "")
+
+	// The production wiring function itself. correlationEnabled is derived
+	// inside installRequestMiddleware from cfg.Observability, which
+	// disabledCorrelationConfig forced off above.
+	installRequestMiddleware(server, cfg, nil, "")
+
+	// No correlation.Middleware in the HTTP chain — this models the
+	// capability-off path in buildMCPEndpoint exactly.
+	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
+	ts := httptest.NewServer(streamable)
+	defer ts.Close()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "c", Version: "0"}, nil)
+	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{
+		Endpoint: ts.URL,
+		HTTPClient: &http.Client{Transport: &fixedHeaderTripper{headers: map[string]string{
+			correlation.HeaderCorrelationID: "client-supplied-corr-id",
+			correlation.HeaderTraceparent:   "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+		}}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+
+	if _, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      h.name,
+		Arguments: map[string]any{"broker": "dev"},
+	}); err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+
+	if !ran {
+		t.Fatal("tool handler never ran")
+	}
+	if gotCorr != "" {
+		t.Errorf("correlation.From(ctx) = %q, want empty — the capability is off, so a client-supplied X-Correlation-ID/traceparent must not reach the handler ctx", gotCorr)
+	}
 }

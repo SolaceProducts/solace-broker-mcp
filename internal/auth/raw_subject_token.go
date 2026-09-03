@@ -32,9 +32,9 @@
 // (signature, issuer, audience, expiry). Hop 2 reads it without
 // re-validating.
 //
-// Disabled mode has no hop 2 oauth. RequestExtraMiddleware still runs and
-// may stamp an unvalidated Authorization if the client sent one; nothing
-// exchanges it.
+// Disabled mode has no hop 2 oauth. No request there carries a validated
+// TokenInfo, so RequestExtraMiddleware's TokenInfo != nil gate means it never
+// stamps a raw subject token on that path either.
 package auth
 
 import (

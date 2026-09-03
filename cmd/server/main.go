@@ -916,10 +916,15 @@ func installRequestMiddleware(server *mcp.Server, cfg *config.ServerConfig, poli
 	// correlation.From see this request, not initialize (SOL-153935). Last, so
 	// it is outermost and runs first: everything above logs through the
 	// correlation slog handler, which reads the ID off ctx, so the ID must be
-	// refreshed before any of them run. Always on — hop 2 and correlation.From
-	// have no other per-POST pipe.
-	server.AddReceivingMiddleware(auth.RequestExtraMiddleware())
-	slog.Info("request extra middleware is enabled")
+	// refreshed before any of them run. Registration is always on — hop 2 and
+	// correlation.From have no other per-POST pipe — but the correlation copy
+	// inside it is gated on correlationEnabled: with the capability off, the
+	// HTTP correlation.Middleware is never wired (see buildMCPEndpoint), so a
+	// client-supplied traceparent/X-Correlation-ID must not reach ctx here
+	// either, or the capability-off invariant would be false.
+	correlationEnabled := correlation.Enabled(cfg.Observability)
+	server.AddReceivingMiddleware(auth.RequestExtraMiddleware(correlationEnabled))
+	slog.Info("request extra middleware is installed (always on)")
 }
 
 // logStartupBanners emits the boot-time WARN banners: auth-mode signal,

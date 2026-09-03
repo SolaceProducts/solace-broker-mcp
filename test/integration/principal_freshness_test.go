@@ -93,7 +93,7 @@ func TestPrincipalFreshness_AuditLineNamesTheCallingToken(t *testing.T) {
 	// Same order as installRequestMiddleware registers them: Extra.Header last
 	// so it is outermost and refreshes ctx before the principal is built.
 	server.AddReceivingMiddleware(auth.PrincipalMiddleware())
-	server.AddReceivingMiddleware(auth.RequestExtraMiddleware())
+	server.AddReceivingMiddleware(auth.RequestExtraMiddleware(true))
 
 	mcpHandler := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return server }, nil)

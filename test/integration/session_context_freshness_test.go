@@ -108,7 +108,7 @@ func registerFreshnessTool(t *testing.T, h *metaStubHandler) *mcp.Server {
 	mgr := tools.NewToolManager(pool)
 	mgr.Register(h)
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	server.AddReceivingMiddleware(auth.RequestExtraMiddleware())
+	server.AddReceivingMiddleware(auth.RequestExtraMiddleware(true))
 	tools.RegisterWithServer(mgr, server, pool, true, nil, "")
 	return server
 }

@@ -37,6 +37,14 @@ func makeEnabledConfig() *config.ServerConfig {
 				},
 			},
 		},
+		// Matches the production default (ON): LoadConfig would set this via
+		// envBool(envObsCorrelationIDEnabled, true, ...), but this literal
+		// bypasses LoadConfig, so it must be set explicitly. Several wiring
+		// tests (e.g. TestInstallRequestMiddleware_RequestExtraRunsBeforeEveryEmitSite)
+		// depend on correlation IDs actually flowing through
+		// auth.RequestExtraMiddleware, which installRequestMiddleware now gates
+		// on cfg.Observability.CorrelationIDEnabled (SOL-153935 correlation-gating fix).
+		Observability: config.ObservabilityConfig{CorrelationIDEnabled: true},
 	}
 }
 
