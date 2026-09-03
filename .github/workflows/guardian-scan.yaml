@@ -8,7 +8,8 @@ name: Guardian Scan
 #
 # DAG: build (image) and the two FOSSA jobs run in parallel; prisma runs after
 # build; guardian-gate runs after fossa-vuln + prisma (trunk only); gate
-# aggregates everything.
+# aggregates everything; update-manifest records the merge in the release
+# manifest (trunk only).
 #
 # Convention: `setup` computes every derived value as a string output; each job
 # maps the ones it needs into `env:` and references `${{ env.* }}` rather than
@@ -353,3 +354,69 @@ jobs:
             echo "::error::guardian-gate = $R_GATE"; fail=1
           fi
           [ "$fail" -eq 0 ] && echo "Guardian scan passed." || exit 1
+
+  # Records the merge in the release manifest Guardian's scheduled scan reads to
+  # pick a revision and an image. A blocked gate leaves the row at the previous
+  # commit.
+  #
+  # Default-branch pushes only. `github.event_name` in a called workflow is the
+  # CALLER's event, so release.yml's tag push also arrives here as `push` — the
+  # ref_name check, not the event check, is what excludes it.
+  #
+  # `id-token: write` below is why release-readiness-check.yaml and release.yml
+  # carry that scope: a reusable workflow's permissions must be a subset of its
+  # caller's, enforced at run creation even though this job never runs there.
+  update-manifest:
+    name: Update release manifest
+    needs: [setup, gate]
+    if: ${{ github.event_name == 'push' && github.ref_name == github.event.repository.default_branch }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write    # OIDC assume-role for the manifest table
+      packages: read     # cicd-helper pulls the private maas-build-actions image
+    env:
+      FULL_VERSION: ${{ needs.setup.outputs.full_version }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::868978040651:role/github-solace-cloud-manifest-rw
+          aws-region: us-east-1
+
+      # `version` is read back as a FOSSA revision, so it must be the string the
+      # FOSSA jobs above stamp — a branch name resolves to nothing.
+      #
+      # `image_tag` is the moving `dev` tag from the daily unstable build, not a
+      # per-commit one. That build runs on a schedule and skips when its immutable
+      # per-commit tag already exists, so a tag derived from this merge's SHA would
+      # usually name something never pushed. The cost is that this row's version
+      # and its image can be up to a day apart.
+      #
+      # Both matter: without `prisma_cloud` the container scan is skipped, and
+      # without `image_tag` there is no image to resolve. A pull that 404s is not
+      # a partial result — the scan fetcher discards a product's FOSSA output too
+      # unless every enabled scanner succeeded.
+      #
+      # This is a put, not a merge: the item is replaced wholesale on every
+      # merge, so anything meant to survive has to be listed here.
+      - name: Write solace-cloud-manifest entry
+        uses: SolaceDev/solace-public-workflows/.github/actions/cicd-helper@3e95ae9f28bf20a10a16cbfabc01a12276378e7d
+        with:
+          rc_step: add_item_from_json_to_dynamodb_table
+          ddb_table_name: solace-cloud-manifest
+          ddb_partition_key: squad
+          ddb_sort_key: repository
+          ddb_item_to_be_added: |
+            {
+              "squad": "ebp-dax",
+              "repository": "${{ github.event.repository.name }}",
+              "prisma_cloud": {
+                "enabled": ["dev"]
+              },
+              "dev": {
+                "sha": "${{ github.sha }}",
+                "version": "${{ env.FULL_VERSION }}",
+                "image_tag": "dev"
+              }
+            }
