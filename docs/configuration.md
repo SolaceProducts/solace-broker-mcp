@@ -419,7 +419,7 @@ still waiting on:
 | `stage` | What it means | Where to look |
 |---|---|---|
 | `rate_limit` | Requests are arriving faster than the configured pace sustains | Raise the request rate ceiling by lowering `semp.request_min_interval`, or reduce how many callers share the broker |
-| `concurrency` | Every in-flight slot is occupied, typically by requests waiting on a slow broker | Raise `semp.max_concurrent_per_broker`, or investigate broker health — a slot is held for a request's whole retry chain |
+| `concurrency` | A slot rule is holding the request back — either every in-flight slot is occupied (typically requests waiting on a slow broker), or your caller's fair share of the per-broker cap is used up while other callers hold the rest | Raise `semp.max_concurrent_per_broker`, or investigate broker health — a slot is held for a request's whole retry chain |
 
 The default of `30s` is set to break hangs, not to shed load. The two gates give
 it different amounts of room, so size it against whichever one your deployment
