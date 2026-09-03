@@ -45,7 +45,10 @@ var tracer = otel.Tracer("solace-broker-mcp/tokenexchange")
 // back through DoChan's channel. winnerSpanCtx is always the WINNER's own
 // captured span context (see the DoChan call site), which is how a
 // follower's caller learns which trace actually did the IdP work: it
-// compares its own captured span context's SpanID against this one.
+// compares its own captured span context's TraceID and SpanID against this
+// one (both, not SpanID alone — a SpanID collision across two different
+// traces is astronomically unlikely but cheap to also rule out, since the
+// TraceID is already in hand).
 type exchangeGroupResult struct {
 	tok           *Token
 	winnerSpanCtx oteltrace.SpanContext
@@ -78,11 +81,12 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 	ctx, span := tracer.Start(ctx, "tokenexchange.Exchange")
 	corrID := correlation.From(ctx)
 	cacheHit := false
-	// singleflightRole is set below only on the path that actually reaches
-	// the singleflight group (a cache miss) — empty otherwise, and omitted
-	// from the span in that case.
+	// singleflightRole and winnerSpanCtx are set below only on the path that
+	// actually reaches the singleflight group (a cache miss) — empty/invalid
+	// otherwise, and omitted from the span in that case. winnerSpanCtx is
+	// valid only when singleflightRole == "follower".
 	var singleflightRole string
-	var winnerTraceID, winnerSpanID string
+	var winnerSpanCtx oteltrace.SpanContext
 	defer func() {
 		// A panic between tracer.Start and here would otherwise close this
 		// span reporting outcome=success (err is still nil — Go does not
@@ -92,17 +96,17 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 		// here only to record the span accurately, then re-panicking,
 		// preserves Exchange's existing panic-propagates contract — this is
 		// about span fidelity, not resources; nothing here is leaked either
-		// way since span.End() below already runs on every return path.
+		// way since span.End() below always runs before the re-panic.
+		//
+		// Sharing the rest of this block with the normal-return path (rather
+		// than a separate branch that rebuilds the same attribute set) means
+		// a panic after singleflightRole/winnerSpanCtx are already set still
+		// reports them — the fix's own rationale calls that attribute
+		// load-bearing, and a duplicated branch had silently dropped it
+		// (flagged by review).
 		if r := recover(); r != nil {
-			span.SetAttributes(
-				attribute.String("correlation_id", corrID),
-				attribute.Bool("cache_hit", cacheHit),
-				attribute.String("outcome", "error"),
-			)
-			span.RecordError(fmt.Errorf("panicked (%T)", r))
-			span.SetStatus(codes.Error, "")
-			span.End()
-			panic(r)
+			err = fmt.Errorf("panicked (%T)", r)
+			defer panic(r)
 		}
 		// Guards the work below, not span.End(): a non-recording span (the
 		// default — tracing off, or this trace unsampled) still needs
@@ -119,28 +123,34 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 			if singleflightRole != "" {
 				attrs = append(attrs, attribute.String("singleflight_role", singleflightRole))
 				if singleflightRole == "follower" {
-					// No native span link: this span was already started
-					// above, before the winner is known, and this SDK's
-					// Span has no way to add a link after the fact — Link
-					// is constructor-only (WithLinks). These two IDs are the
-					// fallback that still lets an operator pivot from this
-					// span to the trace that actually did the IdP work.
+					// A real span Link, not just the two ID attributes below:
+					// AddLink DOES work post-start on this SDK version
+					// (trace.Span.AddLink, sdk/trace's recordingSpan
+					// implementation) — an earlier revision of this comment
+					// claimed otherwise and was wrong (flagged by review).
+					// The real limitation is narrower: a link added after
+					// the span started cannot influence this span's own head
+					// sampling decision, since that decision already ran at
+					// tracer.Start above. The two ID attributes stay
+					// alongside the link because most trace-backend UIs
+					// don't render a link's target inline the way an
+					// attribute value renders in a table.
+					span.AddLink(oteltrace.Link{SpanContext: winnerSpanCtx})
 					attrs = append(attrs,
-						attribute.String("winner_trace_id", winnerTraceID),
-						attribute.String("winner_span_id", winnerSpanID))
+						attribute.String("winner_trace_id", winnerSpanCtx.TraceID().String()),
+						attribute.String("winner_span_id", winnerSpanCtx.SpanID().String()))
 				}
 			}
 			span.SetAttributes(attrs...)
-			if err != nil {
+			// Neither RecordError nor SetStatus fires on cancelled: the
+			// caller left, the exchange itself did not fail — matching
+			// outcome's own error/cancelled distinction above. RecordError
+			// used to fire on both, which several trace-backend UIs render
+			// as an error regardless of span status (flagged by review) —
+			// exactly the miscategorization this split exists to prevent.
+			if err != nil && outcome == "error" {
 				span.RecordError(err)
-				// Not set on cancelled: the caller left, the exchange itself
-				// did not fail — matching outcome's own error/cancelled
-				// distinction above. Unset (the zero value) is otherwise
-				// correct for success, so this only ever moves toward
-				// codes.Error, never away from it.
-				if outcome == "error" {
-					span.SetStatus(codes.Error, "")
-				}
+				span.SetStatus(codes.Error, "")
 			}
 		}
 		span.End()
@@ -219,16 +229,24 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 	// because it's per-caller observability: a caller that cancelled
 	// mid-exchange must not see "exchange succeeded" attributed to its
 	// request. The Put log is per-exchange and stays inside with the Put.
-	// The winner's correlation ID travels into the detached exchange as a
-	// plain string, never as a context: passing the caller's ctx down would
-	// invite re-coupling its cancellation to the shared call, which is the
-	// regression the Background() root below exists to prevent. The value
-	// read here already passed the correlation middleware's sanitization —
-	// re-seeding it via correlation.With below preserves "the middleware is
-	// the sole producer of ID values"; never seed With from any other source.
-	// Same value as corrID above (correlation.From(ctx) does not change
-	// mid-call); not re-read, just reused under its established name here.
+	// The winner's correlation ID (corrID, captured at the top of Exchange)
+	// travels into the detached exchange as a plain string, never as a
+	// context: passing the caller's ctx down would invite re-coupling its
+	// cancellation to the shared call, which is the regression the
+	// Background() root below exists to prevent. It already passed the
+	// correlation middleware's sanitization — re-seeding it via
+	// correlation.With below preserves "the middleware is the sole producer
+	// of ID values"; never seed With from any other source.
 
+	// callerSpanCtx is THIS call's own span context (Exchange's own span,
+	// started above) — the actual WINNER's only if this particular call
+	// happens to win the singleflight race below; every other caller
+	// sharing the same key captures its own distinct value here too, and
+	// singleflight runs only the winner's closure. Renamed from
+	// winnerSpanCtx (flagged by review: that name read as a tautology
+	// against exchangeGroupResult.winnerSpanCtx below, which really is
+	// always the resolved winner's, not merely this caller's own).
+	//
 	// Captured the same way corrID is, and for the same reason: the
 	// singleflight closure below runs detached from any caller's context, on
 	// a goroutine singleflight owns, so it cannot read a live parent span off
@@ -237,7 +255,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 	// value-not-context handling. It seeds the shared exchange's span
 	// hierarchy so Story 27's future retry-attempt spans nest under THIS
 	// call's own span above, rather than under nothing.
-	winnerSpanCtx := oteltrace.SpanContextFromContext(ctx)
+	callerSpanCtx := oteltrace.SpanContextFromContext(ctx)
 
 	start := e.nowFunc()
 	ch := e.group.DoChan(key, func() (val interface{}, err error) {
@@ -260,18 +278,17 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 					slog.String("broker", input.BrokerAlias),
 					slog.String("panic_type", fmt.Sprintf("%T", r)),
 					slog.String("stack", string(debug.Stack())))
-				val = exchangeGroupResult{winnerSpanCtx: winnerSpanCtx}
+				val = exchangeGroupResult{winnerSpanCtx: callerSpanCtx}
 				err = fmt.Errorf("token exchange panicked (%T)", r)
 			}
 		}()
-		tok, err := e.runProtectedExchange(key, input, corrID, winnerSpanCtx)
-		// winnerSpanCtx here is THIS goroutine's own captured value — only
-		// the caller whose closure singleflight actually ran (the winner)
-		// reaches this line, so every other caller sharing this result
-		// receives the winner's own span identity, not its own (flagged by
-		// review: a follower's span had no trace-level pointer to the work
-		// that actually served it).
-		return exchangeGroupResult{tok: tok, winnerSpanCtx: winnerSpanCtx}, err
+		tok, err := e.runProtectedExchange(key, input, corrID, callerSpanCtx)
+		// Only the caller whose closure singleflight actually runs (the
+		// winner) reaches this line, so every other caller sharing this
+		// result receives the winner's own span identity here, not its own
+		// (flagged by review: a follower's span had no trace-level pointer
+		// to the work that actually served it).
+		return exchangeGroupResult{tok: tok, winnerSpanCtx: callerSpanCtx}, err
 	})
 
 	// abandonedByCaller records a caller that left before taking a result, and
@@ -331,20 +348,24 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 		// time with no IdP call behind it at all.
 		elapsed := e.nowFunc().Sub(start)
 
-		// Sets the outer singleflightRole/winnerTraceID/winnerSpanID that
-		// Exchange's own deferred span-closing block reads — see
-		// exchangeGroupResult's doc for why the comparison is by SpanID
-		// rather than by the whole SpanContext (which isn't comparable with
-		// ==; TraceState holds a slice internally). Computed before the
-		// res.Err branch below so a follower's span is self-describing on
-		// the error path too, not only on success.
-		if groupResult, ok := res.Val.(exchangeGroupResult); ok && groupResult.winnerSpanCtx.IsValid() {
-			if groupResult.winnerSpanCtx.SpanID() == winnerSpanCtx.SpanID() {
+		// One checked assertion, used for both the role classification here
+		// and the token extraction below (flagged by review — an unchecked
+		// second assertion of the same value was 30 lines apart). Sets the
+		// outer singleflightRole/winnerSpanCtx that Exchange's own deferred
+		// span-closing block reads — see exchangeGroupResult's doc for why
+		// the comparison is by TraceID+SpanID rather than by the whole
+		// SpanContext (which isn't comparable with ==; TraceState holds a
+		// slice internally). Computed before the res.Err branch below so a
+		// follower's span is self-describing on the error path too, not
+		// only on success.
+		groupResult, _ := res.Val.(exchangeGroupResult)
+		if groupResult.winnerSpanCtx.IsValid() {
+			if groupResult.winnerSpanCtx.TraceID() == callerSpanCtx.TraceID() &&
+				groupResult.winnerSpanCtx.SpanID() == callerSpanCtx.SpanID() {
 				singleflightRole = "winner"
 			} else {
 				singleflightRole = "follower"
-				winnerTraceID = groupResult.winnerSpanCtx.TraceID().String()
-				winnerSpanID = groupResult.winnerSpanCtx.SpanID().String()
+				winnerSpanCtx = groupResult.winnerSpanCtx
 			}
 		}
 
@@ -366,7 +387,7 @@ func (e *Exchanger) Exchange(ctx context.Context, input ExchangeInput) (_ *Token
 			return nil, err
 		}
 
-		tok := res.Val.(exchangeGroupResult).tok
+		tok := groupResult.tok
 
 		slog.DebugContext(ctx, "broker token exchange completed",
 			slog.String("broker", input.BrokerAlias),

@@ -152,6 +152,17 @@ func hasAttr(span sdktrace.ReadOnlySpan, key string) bool {
 	return false
 }
 
+// hasExceptionEvent reports whether span.RecordError added an "exception"
+// event to span.
+func hasExceptionEvent(span sdktrace.ReadOnlySpan) bool {
+	for _, ev := range span.Events() {
+		if ev.Name == "exception" {
+			return true
+		}
+	}
+	return false
+}
+
 // TestExchange_Span_LiveCallIsChildOfCallersActiveSpan is the direct AC
 // proof: "a trace including a live (non-cached) token-exchange call has a
 // distinct child span nested under the SEMP-layer span active at the call
@@ -282,14 +293,7 @@ func TestExchange_Span_ErrorRecordsOutcomeAndException(t *testing.T) {
 	if got := attr(t, span, "outcome"); got != "error" {
 		t.Errorf("outcome = %v, want %q", got, "error")
 	}
-	events := span.Events()
-	var sawException bool
-	for _, ev := range events {
-		if ev.Name == "exception" {
-			sawException = true
-		}
-	}
-	if !sawException {
+	if !hasExceptionEvent(span) {
 		t.Error("span has no recorded exception event; RecordError should have added one")
 	}
 	if got := span.Status().Code; got != codes.Error {
@@ -322,6 +326,13 @@ func TestExchange_Span_CancelledCallerClassifiesAsCancelled(t *testing.T) {
 	// assertion (flagged by review).
 	if got := span.Status().Code; got != codes.Unset {
 		t.Errorf("span status code = %v, want codes.Unset — SetStatus must not be called on a cancelled span", got)
+	}
+	// A cancelled call is the caller leaving, not the exchange failing — an
+	// exception event on this span would read as an error in trace-backend
+	// UIs that key off event presence rather than span status (flagged by
+	// review).
+	if hasExceptionEvent(span) {
+		t.Error("span has a recorded exception event; RecordError must not be called on a cancelled span")
 	}
 }
 
@@ -368,6 +379,9 @@ func TestExchange_Span_CallerDeadlineClassifiesAsCancelledNotError(t *testing.T)
 	}
 	if got := span.Status().Code; got != codes.Unset {
 		t.Errorf("span status code = %v, want codes.Unset — SetStatus must not be called on a cancelled span", got)
+	}
+	if hasExceptionEvent(span) {
+		t.Error("span has a recorded exception event; RecordError must not be called on a cancelled span")
 	}
 }
 
@@ -506,13 +520,7 @@ func TestExchange_Span_PanicRecordsErrorThenRepanics(t *testing.T) {
 	if got := span.Status().Code; got != codes.Error {
 		t.Errorf("span status code = %v, want codes.Error", got)
 	}
-	var sawException bool
-	for _, ev := range span.Events() {
-		if ev.Name == "exception" {
-			sawException = true
-		}
-	}
-	if !sawException {
+	if !hasExceptionEvent(span) {
 		t.Error("span has no recorded exception event for the panic")
 	}
 }
@@ -592,5 +600,22 @@ func TestExchange_Span_FollowerIsSelfDescribingViaWinnerAttributes(t *testing.T)
 	}
 	if hasAttr(winnerSpan, "winner_trace_id") || hasAttr(winnerSpan, "winner_span_id") {
 		t.Error("the winner's own span should not carry winner_trace_id/winner_span_id — those point elsewhere only on a follower")
+	}
+
+	// The real span Link, not just the two ID attributes above — AddLink
+	// does work post-start on this SDK version (an earlier comment claimed
+	// otherwise and was wrong, per review).
+	links := followerSpan.Links()
+	if len(links) != 1 {
+		t.Fatalf("follower span has %d links, want exactly 1", len(links))
+	}
+	if got, want := links[0].SpanContext.TraceID(), winnerSpan.SpanContext().TraceID(); got != want {
+		t.Errorf("follower span's link TraceID = %s, want %s (the winner's own trace)", got, want)
+	}
+	if got, want := links[0].SpanContext.SpanID(), winnerSpan.SpanContext().SpanID(); got != want {
+		t.Errorf("follower span's link SpanID = %s, want %s (the winner's own span)", got, want)
+	}
+	if len(winnerSpan.Links()) != 0 {
+		t.Error("the winner's own span should carry no links — only a follower links back to the winner")
 	}
 }
