@@ -146,13 +146,13 @@ assert the rest by hand before proceeding:
 If any check fails, the promotion is malformed — fix before proceeding.
 
 **A6. Draft the human-readable release-notes summary.** The published GitHub Release should be
-*skimmable*, not the verbatim (deliberately verbose) CHANGELOG block. The pipeline runs on the tag
+*skimmable*, not the verbatim CHANGELOG block. The pipeline runs on the tag
 with no LLM available, so the summary must be authored here and committed in the release PR:
 `.github/scripts/extract-release-notes.sh` publishes `.github/release-notes/vX.Y.Z.md` when present
 and otherwise falls back to the raw block. Write that file:
 - Draft **from the promoted `## [X.Y.Z]` block only** — condense each entry to 1–2 sentences,
   grouped by the same categories (`Added`/`Changed`/`Fixed`/`Security`/…), dropping rationale and
-  implementation detail. The verbose CHANGELOG remains the source of truth.
+  implementation detail. The CHANGELOG remains the source of truth.
 - Do not introduce facts absent from the block; do not restate the release gate — the script still
   enforces "the CHANGELOG section exists and has real entries" independently of this file.
 
