@@ -29,6 +29,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
 )
 
 // deploymentEnvironmentNameKey names the current OTel semantic-convention key
@@ -108,7 +109,7 @@ func serviceName(cfg config.ObservabilityConfig) string {
 	if cfg.ServiceName != "" {
 		return cfg.ServiceName
 	}
-	return "solace-broker-mcp"
+	return defaults.DefaultServiceName
 }
 
 // instanceID returns, in order: cfg.ServiceInstanceID (an explicit operator
