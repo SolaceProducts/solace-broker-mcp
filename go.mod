@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/getkin/kin-openapi v0.147.0
+	github.com/go-logr/logr v1.4.4
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/maypok86/otter/v2 v2.3.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
@@ -25,7 +26,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect

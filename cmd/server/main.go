@@ -1314,11 +1314,17 @@ func main() {
 	}
 	tracerProvider, err := tracing.New(cfg.Observability, meterProviderForTracing)
 	if err != nil {
-		// No err.Error(): tracing.New wraps otlptracegrpc.New, whose failure
-		// can echo back OTEL_EXPORTER_OTLP_HEADERS or a malformed endpoint
-		// URL — operator-supplied, unaudited text that conventionally
-		// carries a collector auth token (docs/internal/secure-logging-rules.md
-		// Rule 5), same reasoning as the shutdown-hook failure log below.
+		// No err.Error(): tracing.New wraps otlptracegrpc.New, whose returned
+		// error can echo back OTEL_EXPORTER_OTLP_HEADERS or a malformed
+		// endpoint URL — operator-supplied, unaudited text that
+		// conventionally carries a collector auth token
+		// (docs/internal/secure-logging-rules.md Rule 5), same reasoning as
+		// the shutdown-hook failure log below. That covers this err value;
+		// it does not by itself close the class, since the SDK's env-var
+		// parsing can log the same material through its own global
+		// error/log channel before this error even exists — tracing.New
+		// routes that channel into slog with no raw text (see
+		// installOTelDiagnostics), which is the other half of this.
 		slog.Error("tracing unavailable: provider build failed")
 	} else if tracerProvider != nil {
 		shutdownHooks.Register("tracer_provider", tracerProvider.Shutdown)

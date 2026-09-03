@@ -81,6 +81,12 @@ func New(cfg config.ObservabilityConfig, meterProvider *sdkmetric.MeterProvider)
 		return nil, nil
 	}
 
+	// Before anything else: otlptracegrpc.New's own env-var parsing can log
+	// through the OTel SDK's global error/log channel, which by default
+	// prints straight to stderr, unrouted and unredacted (flagged by
+	// review — see installOTelDiagnostics).
+	installOTelDiagnostics()
+
 	stats := newExportStats()
 	if meterProvider != nil {
 		if err := stats.registerInstruments(meterProvider); err != nil {
