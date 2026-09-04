@@ -49,6 +49,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/hooks"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/resource"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/tracing"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
@@ -62,6 +63,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 	"gopkg.in/yaml.v3"
 )
 
@@ -90,25 +92,45 @@ func redactSecretAttr(_ []string, a slog.Attr) slog.Attr {
 // See docs/secure-logging-rules.md Rule 3.
 //
 // The level parameter controls the minimum level emitted. main() calls this
-// twice: once at INFO to bootstrap logging before LoadConfig runs (so config
-// loading itself can emit logs), then again with the user-configured level
-// from cfg.LogLevel after validation.
-func newSlogHandler(level slog.Level) slog.Handler {
+// three times: once (at ERROR) for the standalone --health probe path, once at
+// INFO to bootstrap logging before LoadConfig runs (so config loading itself
+// can emit logs), then again with the user-configured level from cfg.LogLevel
+// after validation.
+//
+// identityAttrs are the resource-derived default attributes (SOL-152425, Story
+// 34: service.name and, when configured, deployment.environment.name and
+// cloud.region — see internal/observability/resource.SlogAttrs) bound onto
+// every line this handler emits. nil for the first two call sites, which run
+// before cfg (and so the identity resource) exists; non-nil for the
+// post-LoadConfig call, which is the only one with an identity to attach.
+func newSlogHandler(level slog.Level, identityAttrs []slog.Attr) slog.Handler {
 	jsonHandler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 		Level:       level,
 		ReplaceAttr: redactSecretAttr,
 	})
 
-	// Wrap the JSON handler so every request-scoped log line carries a
-	// correlation_id attribute (SOL-151280). The wrapper is installed
-	// unconditionally; gating is transitive: correlation.From(ctx) returns "" when
-	// the correlation middleware is not wired (OBS_CORRELATION_ID_ENABLED off) or
-	// for startup/non-request logs, so no correlation_id is emitted and output
-	// matches today exactly. This also covers the pre-config bootstrap handler,
-	// which is built before cfg is available and so cannot consult Enabled(cfg).
-	// Redaction is preserved: the wrapper delegates Handle to jsonHandler, which
-	// still owns and runs the ReplaceAttr filter above.
-	return correlation.NewSlogHandler(jsonHandler)
+	// Bind the identity attributes at the root, below (before) the
+	// correlation wrapper: they are static for the process's lifetime, so
+	// slog's own WithAttrs is sufficient — no per-record decorator logic like
+	// correlation_id's needs, since these values never vary by request.
+	// ReplaceAttr above still runs over every attribute a derived handler
+	// emits, these included.
+	var base slog.Handler = jsonHandler
+	if len(identityAttrs) > 0 {
+		base = jsonHandler.WithAttrs(identityAttrs)
+	}
+
+	// Wrap so every request-scoped log line carries a correlation_id
+	// attribute (SOL-151280). The wrapper is installed unconditionally;
+	// gating is transitive: correlation.From(ctx) returns "" when the
+	// correlation middleware is not wired (OBS_CORRELATION_ID_ENABLED off) or
+	// for startup/non-request logs, so no correlation_id is emitted and
+	// output matches today exactly. This also covers the pre-config
+	// bootstrap handler, which is built before cfg is available and so
+	// cannot consult Enabled(cfg). Redaction is preserved: the wrapper
+	// delegates Handle to base, which still owns and runs the ReplaceAttr
+	// filter above.
+	return correlation.NewSlogHandler(base)
 }
 
 // buildMux creates the HTTP route multiplexer with basic routes.
@@ -548,10 +570,13 @@ func startServer(srv *http.Server, tlsCertFile, tlsKeyFile string) <-chan error 
 // instrument registration, or nil if the provider failed to build or the
 // listener failed to bind (both surface on /readyz).
 //
+// res is the shared identity resource (SOL-152425, Story 34); see
+// resource.New's caller in main() for where it's built.
+//
 // The caller registers the returned provider's Shutdown as a shutdown hook, so
 // the meter provider is flushed on graceful shutdown.
-func startMetricsEndpoint(cfg *config.ServerConfig, readiness *health.ReadinessState) *metrics.Provider {
-	provider, err := metrics.New(version.Version())
+func startMetricsEndpoint(cfg *config.ServerConfig, readiness *health.ReadinessState, res *sdkresource.Resource) *metrics.Provider {
+	provider, err := metrics.New(version.Version(), res)
 	if err != nil {
 		slog.Error("metrics endpoint unavailable: provider build failed", slog.String("error", err.Error()))
 		readiness.RegisterListener("metrics_endpoint", func() error { return err })
@@ -959,7 +984,7 @@ func main() {
 		// reachable from here is covered by the ReplaceAttr redaction safety net
 		// (secure-logging Rule 3) rather than bypassing it. The probe's own output
 		// goes to stderr directly via healthExitCode, unaffected by this level.
-		slog.SetDefault(slog.New(newSlogHandler(slog.LevelError)))
+		slog.SetDefault(slog.New(newSlogHandler(slog.LevelError, nil)))
 
 		hc := healthConfigFromFile()
 		port := defaults.DefaultPort
@@ -979,7 +1004,7 @@ func main() {
 	//    validates it. UnmarshalText is infallible here because validate() in
 	//    the config package already proved cfg.LogLevel is one of the valid
 	//    level names.
-	slog.SetDefault(slog.New(newSlogHandler(slog.LevelInfo)))
+	slog.SetDefault(slog.New(newSlogHandler(slog.LevelInfo, nil)))
 
 	slog.Info("server starting", slog.String("version", version.Version()))
 
@@ -1002,6 +1027,33 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Shared identity resource (SOL-152425, Story 34): one construction site
+	// for the default slog attributes, the metrics meter provider, and the
+	// tracer provider (both further down in main), so none of the three can
+	// disagree about which instance emitted a log line, a series, or a span.
+	// Built immediately after cfg loads and applied to slog right away (still
+	// at bootstrap-INFO — see the interim SetDefault below), so it reaches
+	// logStartupBanners next, not just the "config loaded" line after it: an
+	// insecure-mode banner is exactly the kind of line an aggregator needs
+	// attributed to an instance. A build failure is not fatal —
+	// sdkresource.Default() alone is a safe (merely less identifying)
+	// fallback, and refusing to serve MCP traffic over an identity-attribute
+	// problem would be a bad trade.
+	res, err := resource.New(cfg.Observability, version.Version())
+	if err != nil {
+		slog.Error("observability identity resource unavailable; falling back to SDK defaults",
+			slog.String("error", err.Error()))
+		res = sdkresource.Default()
+	}
+	identityAttrs := resource.SlogAttrs(res)
+
+	// Interim reconfigure: still bootstrap-INFO (cfg.LogLevel isn't applied
+	// until below), but now carrying the identity attributes, so
+	// logStartupBanners next — and everything after it — has them. Avoids
+	// leaving the pre-identity bootstrap handler in place for even one more
+	// line.
+	slog.SetDefault(slog.New(newSlogHandler(slog.LevelInfo, identityAttrs)))
+
 	// Loud, refactor-robust signal of the configured client auth mode.
 	// MUST run before the slog handler gets reconfigured to the user log
 	// level — at this point the bootstrap handler is at INFO, so WARN
@@ -1010,10 +1062,11 @@ func main() {
 	logStartupBanners(cfg)
 
 	// Reconfigure slog with the user-configured level. cfg.LogLevel is
-	// validated and normalized to one of debug/info/warn/error.
+	// validated and normalized to one of debug/info/warn/error. Same
+	// identityAttrs as above — only the level changes here.
 	var level slog.Level
 	_ = level.UnmarshalText([]byte(cfg.LogLevel))
-	slog.SetDefault(slog.New(newSlogHandler(level)))
+	slog.SetDefault(slog.New(newSlogHandler(level, identityAttrs)))
 
 	// fair_scheduling is reported for the same reason the observability flags
 	// below are: it is documented as a kill switch for a production incident,
@@ -1294,7 +1347,7 @@ func main() {
 	// /readyz check. The provider's flush is registered as a shutdown hook.
 	var metricsProvider *metrics.Provider
 	if metrics.Enabled(cfg.Observability) {
-		if provider := startMetricsEndpoint(cfg, readiness); provider != nil {
+		if provider := startMetricsEndpoint(cfg, readiness, res); provider != nil {
 			shutdownHooks.Register("metrics_provider", provider.Shutdown)
 			metricsProvider = provider
 		}
@@ -1307,12 +1360,14 @@ func main() {
 	// either way they keep counting, and the periodic INFO fallback
 	// (Decision #12) covers the no-meter-provider case. A build failure here
 	// is non-fatal: tracing has no listener and no readiness surface of its
-	// own, so the server keeps serving without it.
+	// own, so the server keeps serving without it. Passed the SAME res as
+	// metrics above (SOL-152425): this is the anti-drift guarantee — one
+	// resource, not two independently constructed ones that could disagree.
 	var meterProviderForTracing *sdkmetric.MeterProvider
 	if metricsProvider != nil {
 		meterProviderForTracing = metricsProvider.MeterProvider()
 	}
-	tracerProvider, err := tracing.New(cfg.Observability, meterProviderForTracing)
+	tracerProvider, err := tracing.New(cfg.Observability, meterProviderForTracing, res)
 	if err != nil {
 		// No err.Error(): tracing.New wraps otlptracegrpc.New, whose returned
 		// error can echo back OTEL_EXPORTER_OTLP_HEADERS or a malformed

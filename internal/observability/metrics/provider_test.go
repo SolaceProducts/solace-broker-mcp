@@ -24,6 +24,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 )
 
 // update regenerates the golden fixture. Regenerating is a deliberate,
@@ -67,7 +69,7 @@ func mcpFamilies(body string) string {
 // TestGoldenSchema pins the published mcp_* schema. A version bump that changes
 // rendering fails here before it can break a customer dashboard.
 func TestGoldenSchema(t *testing.T) {
-	p, err := New(testVersion)
+	p, err := New(testVersion, sdkresource.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +95,7 @@ func TestGoldenSchema(t *testing.T) {
 // TestScrapeCounterIncrements proves mcp_metrics_scrape_total rises by one per
 // served scrape, so support can confirm Prometheus is actually scraping.
 func TestScrapeCounterIncrements(t *testing.T) {
-	p, err := New(testVersion)
+	p, err := New(testVersion, sdkresource.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +127,7 @@ func scrapeCounterValue(t *testing.T, body string) int {
 
 // TestProviderAccessors covers the meter-provider accessors and a clean shutdown.
 func TestProviderAccessors(t *testing.T) {
-	p, err := New(testVersion)
+	p, err := New(testVersion, sdkresource.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,6 +139,17 @@ func TestProviderAccessors(t *testing.T) {
 	}
 	if err := p.Shutdown(context.Background()); err != nil {
 		t.Errorf("Shutdown() = %v, want nil", err)
+	}
+}
+
+// TestNew_NilResourceIsRejected pins the guard in New (SOL-152425): passing
+// nil silently overrides the SDK's own resource.Default() and collapses
+// target_info to zero labels with no error anywhere — exactly the identity
+// loss this parameter exists to prevent. A caller with no opinion on
+// identity must pass sdkresource.Default() explicitly, not nil.
+func TestNew_NilResourceIsRejected(t *testing.T) {
+	if _, err := New(testVersion, nil); err == nil {
+		t.Fatal("New(_, nil) error = nil, want an error")
 	}
 }
 

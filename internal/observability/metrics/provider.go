@@ -30,6 +30,7 @@ import (
 	otlprom "go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/schema"
 )
@@ -42,6 +43,7 @@ type Provider struct {
 	exporter      *otlprom.Exporter
 	meterProvider *sdkmetric.MeterProvider
 	scrapeCounter metric.Int64Counter
+	resource      *sdkresource.Resource
 }
 
 // instrumentScope names the meter that owns the server's own instruments.
@@ -50,7 +52,28 @@ const instrumentScope = "github.com/SolaceProducts/solace-broker-mcp"
 // New builds the metrics provider: one registry holding both the OTel
 // instruments (via the exporter) and the client_golang runtime collectors.
 // buildVersion labels the mcp_build_info gauge.
-func New(buildVersion string) (*Provider, error) {
+//
+// res is the shared identity resource (SOL-152425, Story 34) — the same
+// resource.Resource the tracer provider (Story 25) uses, constructed once by
+// internal/observability/resource so metrics and traces cannot disagree
+// about which instance emitted them. It surfaces on the scrape endpoint via
+// target_info (WithoutTargetInfo is deliberately not passed to otlprom.New),
+// which is why res being nil is a caller error, not a silently-tolerated
+// "no identity" case — every real caller has one to pass (see
+// cmd/server/main.go); tests that don't care about identity can pass
+// sdkresource.Default() or any other non-nil resource.
+func New(buildVersion string, res *sdkresource.Resource) (*Provider, error) {
+	if res == nil {
+		// Enforces the doc comment above: sdkmetric.WithResource(nil)
+		// silently overrides the SDK's own resource.Default(), collapsing
+		// target_info to zero labels with no error anywhere — exactly the
+		// identity loss this parameter exists to prevent. Every real caller
+		// has a resource to pass (cmd/server/main.go always builds one, at
+		// worst falling back to sdkresource.Default() itself); a test that
+		// doesn't care about identity should pass sdkresource.Default()
+		// explicitly, not nil.
+		return nil, fmt.Errorf("metrics: res must not be nil (pass sdkresource.Default() if identity doesn't matter)")
+	}
 	registry := promclient.NewRegistry()
 
 	// Free Go-runtime and process numbers (memory, goroutines, FDs)
@@ -69,13 +92,15 @@ func New(buildVersion string) (*Provider, error) {
 		return nil, fmt.Errorf("create prometheus exporter: %w", err)
 	}
 
-	// Single instrument root: all metrics register against this.
-	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
+	// Single instrument root: all metrics register against this. WithResource
+	// is what makes target_info carry the shared identity attributes.
+	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter), sdkmetric.WithResource(res))
 
 	p := &Provider{
 		registry:      registry,
 		exporter:      exporter,
 		meterProvider: meterProvider,
+		resource:      res,
 	}
 	if err := p.registerInstruments(buildVersion); err != nil {
 		return nil, err
@@ -131,6 +156,13 @@ func (p *Provider) registerInstruments(buildVersion string) error {
 // MeterProvider returns the single meter provider all instruments register against.
 func (p *Provider) MeterProvider() *sdkmetric.MeterProvider {
 	return p.meterProvider
+}
+
+// Resource returns the identity resource this provider was built with, so a
+// caller (or a test) can confirm it matches the tracer provider's own
+// resource (SOL-152425, Story 34's anti-drift guarantee).
+func (p *Provider) Resource() *sdkresource.Resource {
+	return p.resource
 }
 
 // Meter returns a named meter for creating instruments.

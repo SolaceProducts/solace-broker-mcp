@@ -235,6 +235,15 @@ func TestObservability_NumericDefaults(t *testing.T) {
 	if o.MetricsBindAddress != defaults.DefaultMetricsBindAddress {
 		t.Errorf("MetricsBindAddress = %q, want %q", o.MetricsBindAddress, defaults.DefaultMetricsBindAddress)
 	}
+	if o.ServiceName != defaults.DefaultServiceName {
+		t.Errorf("ServiceName = %q, want %q", o.ServiceName, defaults.DefaultServiceName)
+	}
+	if o.DeploymentEnvironment != "" {
+		t.Errorf("DeploymentEnvironment = %q, want empty (omitted, not defaulted)", o.DeploymentEnvironment)
+	}
+	if o.CloudRegion != "" {
+		t.Errorf("CloudRegion = %q, want empty (omitted, not defaulted)", o.CloudRegion)
+	}
 }
 
 // TestObservability_NumericFromYAML proves the numeric tunables parse from the
@@ -252,6 +261,10 @@ observability:
   otel_self_stats_interval_s: ${OTEL_INTERVAL}
   shutdown_drain_delay_s: 7
   metrics_bind_address: ${METRICS_ADDR}
+  service_name: my-mcp
+  service_instance_id: my-instance-1
+  deployment_environment: production
+  cloud_region: us-east-1
 `
 	cfg, err := LoadConfig(writeTemp(t, yamlBody))
 	if err != nil {
@@ -273,6 +286,23 @@ observability:
 	}
 	if o.MetricsBindAddress != "0.0.0.0:9099" {
 		t.Errorf("MetricsBindAddress = %q, want 0.0.0.0:9099 (from ${METRICS_ADDR})", o.MetricsBindAddress)
+	}
+	if o.ServiceName != "my-mcp" {
+		t.Errorf("ServiceName = %q, want %q", o.ServiceName, "my-mcp")
+	}
+	// The only surface where the yaml:"service_instance_id" tag itself is
+	// exercised — every other test sets ServiceInstanceID directly on a
+	// struct literal, so a typo'd or renamed tag would compile and pass
+	// everywhere else while silently dropping an operator's override
+	// (flagged by review).
+	if o.ServiceInstanceID != "my-instance-1" {
+		t.Errorf("ServiceInstanceID = %q, want %q", o.ServiceInstanceID, "my-instance-1")
+	}
+	if o.DeploymentEnvironment != "production" {
+		t.Errorf("DeploymentEnvironment = %q, want %q", o.DeploymentEnvironment, "production")
+	}
+	if o.CloudRegion != "us-east-1" {
+		t.Errorf("CloudRegion = %q, want %q", o.CloudRegion, "us-east-1")
 	}
 }
 
