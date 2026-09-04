@@ -262,6 +262,7 @@ observability:
   shutdown_drain_delay_s: 7
   metrics_bind_address: ${METRICS_ADDR}
   service_name: my-mcp
+  service_instance_id: my-instance-1
   deployment_environment: production
   cloud_region: us-east-1
 `
@@ -288,6 +289,14 @@ observability:
 	}
 	if o.ServiceName != "my-mcp" {
 		t.Errorf("ServiceName = %q, want %q", o.ServiceName, "my-mcp")
+	}
+	// The only surface where the yaml:"service_instance_id" tag itself is
+	// exercised — every other test sets ServiceInstanceID directly on a
+	// struct literal, so a typo'd or renamed tag would compile and pass
+	// everywhere else while silently dropping an operator's override
+	// (flagged by review).
+	if o.ServiceInstanceID != "my-instance-1" {
+		t.Errorf("ServiceInstanceID = %q, want %q", o.ServiceInstanceID, "my-instance-1")
 	}
 	if o.DeploymentEnvironment != "production" {
 		t.Errorf("DeploymentEnvironment = %q, want %q", o.DeploymentEnvironment, "production")
