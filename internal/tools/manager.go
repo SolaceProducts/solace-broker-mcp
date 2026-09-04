@@ -171,6 +171,10 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	start := time.Now()
 	var brokerAlias, errorType string
 	var toolErr error
+	// desiredOutcome carries the SEMP audit fields for a desired-state noop
+	// (SOL-153341) to logToolResult without threading them through toolErr —
+	// see the classifyDesiredStateOutcome branch below for why.
+	var desiredOutcome *desiredStateOutcome
 
 	defer func() {
 		// Panic detection: this defer runs during unwinding, before the
@@ -183,7 +187,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 			errorType = "panic"
 			toolErr = panicError{}
 		}
-		logToolResult(ctx, name, &brokerAlias, start, &errorType, &toolErr, id)
+		logToolResult(ctx, name, &brokerAlias, start, &errorType, &toolErr, desiredOutcome, id)
 	}()
 
 	// Deliberately still a protocol-level error, not a buildLocalErrorResult
@@ -261,8 +265,28 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	}
 	toolResult, handleErr := handler.Handle(ctx, tc, handlerParams)
 	if handleErr != nil {
-		errorType = "execution_error"
 		toolErr = fmt.Errorf("executing tool %q: %w", name, handleErr)
+		// SOL-153341: ALREADY_EXISTS on a create and NOT_FOUND on a delete
+		// both mean the desired state already holds — for an idempotent
+		// workflow that's success, not failure. Checked before the generic
+		// execution_error branch so these two cases never reach it. toolErr
+		// is cleared back to nil here, not just left set: a non-nil toolErr
+		// means "the call failed" to every other consumer in this codebase
+		// that infers from it — including SOL-152086's per-tool metrics,
+		// which key outcome=error off exactly that signal — and this isn't a
+		// failure. The SEMP fields logToolResult still needs travel via
+		// desiredOutcome instead of toolErr; see its outcome-keyed branch.
+		if outcome := classifyDesiredStateOutcome(handleErr); outcome != nil {
+			if outcome.Outcome == "exists_unchanged" {
+				errorType = errorTypeNoopExists
+			} else {
+				errorType = errorTypeNoopAbsent
+			}
+			desiredOutcome = outcome
+			toolErr = nil
+			return buildDesiredStateResult(outcome), nil
+		}
+		errorType = "execution_error"
 		return m.buildErrorResult(toolErr, brokerAlias), nil
 	}
 
@@ -326,21 +350,33 @@ func stripBrokerParam(params map[string]any) map[string]any {
 }
 
 // logToolResult is called via defer to log every tool invocation. On success
-// (toolErr is nil) it logs at INFO. On failure it logs at ERROR with the
-// error type and, for SEMP errors, the HTTP status and operation.
+// (errorType is empty) it logs at INFO. A desired-state noop (SOL-153341 —
+// errorType is one of the errorTypeNoop* values) also logs at INFO, with a
+// "desired_state" field, since the ticket defines it as success, not
+// failure. Any other failure logs at ERROR with the error type and, for SEMP
+// errors, the HTTP status and operation.
+//
+// Dispatch is keyed on *errorType, not *toolErr's nilness: a non-nil toolErr
+// means "the call failed" everywhere else a consumer might infer from it —
+// including SOL-152086's per-tool metrics, which key outcome=error off
+// exactly that signal — so CallTool clears toolErr back to nil for a
+// desired-state noop, and the SEMP audit fields for that case travel via the
+// outcome parameter instead. errorType and toolErr are otherwise always set
+// together (both empty/nil, or both non-empty/non-nil) on every other path.
 //
 // A free function rather than a ToolManager method so every tool emits the
 // same audit line, including standalone tools registered outside the manager
-// (list-brokers in register.go). The broker attr is omitted when *broker is
-// empty, which also covers brokerless tools.
+// (list-brokers in register.go, describe-semp-schema) — neither produces a
+// desiredStateOutcome, so both pass nil for outcome. The broker attr is
+// omitted when *broker is empty, which also covers brokerless tools.
 //
 // The id argument carries per-invocation audit identity (SOL-149606). It is
 // passed through slog.Any so Identity.LogValue is invoked once at emit time
 // — in disabled mode the LogValuer returns an empty group, so the JSON
 // handler emits no identity key at all (byte-identical to pre-SOL-149606
 // log lines).
-func logToolResult(ctx context.Context, tool string, broker *string, start time.Time, errorType *string, toolErr *error, id Identity) {
-	if *toolErr == nil {
+func logToolResult(ctx context.Context, tool string, broker *string, start time.Time, errorType *string, toolErr *error, outcome *desiredStateOutcome, id Identity) {
+	if *errorType == "" {
 		attrs := make([]slog.Attr, 0, 5)
 		attrs = append(attrs, slog.String("tool", tool))
 		// Omit the broker attr when empty (brokerless tools like
@@ -354,6 +390,46 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 			slog.String("status", "success"),
 			slog.Duration("duration", time.Since(start)),
 			slog.Any("", id))
+		slog.LogAttrs(ctx, slog.LevelInfo, "tool invoked", attrs...)
+		return
+	}
+
+	// SOL-153341: a desired-state noop (ALREADY_EXISTS on a create, NOT_FOUND
+	// on a delete) is not a failure, and logging it at ERROR would page
+	// dashboards/alerts on something the ticket explicitly defines as
+	// success. Logged at INFO instead, with a "desired_state" field
+	// distinguishing it from an ordinary success line — named to avoid
+	// colliding with the unrelated, closed three-value "outcome" vocabulary
+	// docs/observability.md defines for metrics/audit/traces (see that doc's
+	// Outcome Vocabulary section) — so anyone reading the audit trail can
+	// still see that SEMP returned ALREADY_EXISTS/NOT_FOUND rather than a
+	// fresh create/delete.
+	if *errorType == errorTypeNoopExists || *errorType == errorTypeNoopAbsent {
+		desiredState := "exists_unchanged"
+		if *errorType == errorTypeNoopAbsent {
+			desiredState = "already_absent"
+		}
+		attrs := make([]slog.Attr, 0, 8)
+		attrs = append(attrs, slog.String("tool", tool))
+		if *broker != "" {
+			attrs = append(attrs, slog.String("broker", *broker))
+		}
+		attrs = append(attrs,
+			slog.String("status", "success"),
+			slog.String("desired_state", desiredState),
+			slog.Duration("duration", time.Since(start)),
+			slog.Any("", id))
+		if outcome != nil {
+			// outcome.Detail is sempErr.Error() — one of the audited types
+			// (see the comment on the ERROR branch below) whose Error()
+			// renders only broker- or server-generated text, so it's safe to
+			// log verbatim here too.
+			attrs = append(attrs,
+				slog.String("detail", outcome.Detail),
+				slog.Int("semp_code", outcome.SEMPCode),
+				slog.String("semp_status", outcome.SEMPStatus),
+				slog.String("operation", outcome.Operation))
+		}
 		slog.LogAttrs(ctx, slog.LevelInfo, "tool invoked", attrs...)
 		return
 	}

@@ -385,6 +385,11 @@ test_annotations() {
 # Creating an object that already exists surfaces the broker's translated error
 # through the wire: isError=true with the parsed SEMP HTTP status, not a raw
 # transport failure.
+# SOL-153341, AC1/AC5/AC6: a duplicate create is a non-failure, distinguishable
+# from a real error — isError=false, with an outcome/changed pair an agent can
+# read without reconciling against the broker. Before SOL-153341 this asserted
+# the opposite (isError=true, HTTP 400) — that was the exact case the ticket
+# reclassifies, so this test's own assertions had to flip, not just its fixture.
 test_error_translation() {
     local broker="broker-a"
     local name="e2e-config-vpn-$broker"
@@ -397,10 +402,12 @@ test_error_translation() {
     resp=$(mcp_call_tool "create-message-vpn" \
         "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:$n,msgVpnConfig:{enabled:false}}')") \
         || { log_fail "error-xlate: transport failure on duplicate create"; return 1; }
-    assert_json_field "$resp" ".result.isError" "true" \
-        "error-xlate: duplicate create returns isError=true" || return 1
-    assert_json_field "$resp" ".result.structuredContent.status" "400" \
-        "error-xlate: duplicate create surfaces HTTP 400" || return 1
+    assert_json_field "$resp" ".result.isError // false" "false" \
+        "error-xlate: duplicate create returns isError=false (non-failure, SOL-153341)" || return 1
+    assert_json_field "$resp" ".result.structuredContent.outcome" "exists_unchanged" \
+        "error-xlate: duplicate create reports outcome=exists_unchanged" || return 1
+    assert_json_field "$resp" ".result.structuredContent.changed" "false" \
+        "error-xlate: duplicate create reports changed=false" || return 1
     text=$(jq -r '.result.content[0].text // ""' <<<"$resp" | tr '[:upper:]' '[:lower:]')
     assert_contains "$text" "exist" \
         "error-xlate: message reports the object already exists" || return 1
@@ -408,6 +415,49 @@ test_error_translation() {
     call_tool_ok "delete-message-vpn" \
         "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:$n}')" \
         "error-xlate: cleanup delete [$broker]" || return 1
+}
+
+# SOL-153341, AC2: deleting an object that does not exist is a non-failure too.
+test_delete_nonexistent_is_noop() {
+    local broker="broker-a"
+    local name="e2e-config-vpn-missing-$broker"
+    local resp
+
+    resp=$(mcp_call_tool "delete-message-vpn" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:$n}')") \
+        || { log_fail "error-xlate: transport failure on delete of nonexistent VPN"; return 1; }
+    assert_json_field "$resp" ".result.isError // false" "false" \
+        "error-xlate: deleting a nonexistent VPN returns isError=false (non-failure, SOL-153341)" || return 1
+    assert_json_field "$resp" ".result.structuredContent.outcome" "already_absent" \
+        "error-xlate: delete of nonexistent VPN reports outcome=already_absent" || return 1
+}
+
+# SOL-153341, AC3: NOT_FOUND on a create still IS a real error (isError=true)
+# when what's missing is a parent, not the object being created — and the
+# message names the parent's type in plain language rather than surfacing
+# "Cannot enter <mode>: not found" CLI jargon. Also proves the non-failure
+# reclassification above didn't accidentally swallow a genuine error case.
+# Uses create-rdp against a nonexistent VPN specifically: it's live-confirmed
+# to use the "bare" message shape (no instance name — "Cannot enter
+# message-vpn mode: not found."), the harder of the two shapes to translate
+# correctly, and a different one than test_error_translation's create-message-vpn
+# case exercises above.
+test_create_missing_parent_is_real_error() {
+    local vpn="e2e-config-missing-parent-vpn"
+    local resp text
+
+    resp=$(mcp_call_tool "create-rdp" \
+        "$(jq -nc --arg v "$vpn" '{broker:"broker-a",msgVpnName:$v,restDeliveryPointName:"whatever"}')") \
+        || { log_fail "error-xlate: transport failure on create against a missing parent VPN"; return 1; }
+    assert_json_field "$resp" ".result.isError" "true" \
+        "error-xlate: create against a missing parent VPN returns isError=true (a real error, not a noop)" || return 1
+    text=$(jq -r '.result.content[0].text // ""' <<<"$resp" | tr '[:upper:]' '[:lower:]')
+    assert_contains "$text" "message vpn" \
+        "error-xlate: message names the missing parent's type" || return 1
+    if [[ "$text" == *"cannot enter"* ]]; then
+        log_fail "error-xlate: message still shows raw CLI-mode jargon: $text"
+        return 1
+    fi
 }
 
 # ── Per-broker wrappers (run_test calls no-arg functions) ─────────────────────
@@ -444,5 +494,7 @@ run_test "Cross-broker isolation (queue)"       test_cross_broker_isolation
 run_test "Cross-broker isolation (RDP)"         test_rdp_cross_broker_isolation
 run_test "Annotations (tools/list)"             test_annotations
 run_test "Error translation (duplicate create)" test_error_translation
+run_test "Error translation (delete nonexistent is a noop)" test_delete_nonexistent_is_noop
+run_test "Error translation (missing parent is a real error)" test_create_missing_parent_is_real_error
 
 print_summary "Config-tool tests"
