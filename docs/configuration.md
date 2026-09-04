@@ -97,6 +97,8 @@ brokers:
       password: "${BROKER_PASSWORD}"
 ```
 
+**If `url` points through a reverse proxy or ingress rather than directly at the event broker's SEMP port**, that intermediary must not normalize or decode a percent-encoded `/` (`%2F`) in the request path before forwarding. Some SEMP path segments — for example a queue's topic subscription — can themselves contain `/`, sent percent-encoded so the broker sees it as a single path segment; a normalizing proxy that decodes it first splits the segment and the request 404s. This is a property of the deployment topology, not something the server can detect or work around.
+
 ## Event Broker OAuth (Hop 2)
 
 Configured under the top-level `broker_oauth` key. Required when any event broker uses `auth.mode: oauth` — obtains the event-broker-bound token by exchanging the calling agent's Hop 1 token (RFC 8693 token exchange) against an identity provider (IdP).

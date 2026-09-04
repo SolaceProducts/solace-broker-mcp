@@ -201,8 +201,8 @@ These tools create, update, and delete event broker configuration objects via th
 | `create-queue` | No | Create a queue in a VPN. |
 | `update-queue` | **Yes** | Partially update a queue's attributes (for example, `egressEnabled`, spool quota, redelivery limit). Service-affecting: disabling egress halts delivery; lowering a spool quota can evict messages. |
 | `delete-queue` | **Yes** | Delete a queue, discard any messages still spooled on it, and remove any topic subscriptions attached to it. |
-| `create-queue-subscription` | No | Add a topic subscription to a queue (Solace wildcards `>`/`*` accepted). A queue with none attracts no messages. |
-| `delete-queue-subscription` | **Yes** | Remove a topic subscription from a queue. Silent: no error, messages matching the topic simply stop arriving. |
+| `create-queue-subscription` | No | Add a topic subscription to a queue (Solace wildcards `>`/`*` accepted — pass the literal characters, not an HTML-escaped form such as `&gt;`). A queue with none attracts no messages. |
+| `delete-queue-subscription` | **Yes** | Remove a topic subscription from a queue. A successful removal is silent (no error, matching messages simply stop arriving); the call itself still fails normally if the subscription doesn't exist. |
 | `create-topic-endpoint` | No | Create a topic endpoint in a VPN. |
 | `update-topic-endpoint` | **Yes** | Partially update a topic endpoint's attributes. Service-affecting: disabling egress halts delivery; lowering a spool quota can evict messages. |
 | `delete-topic-endpoint` | **Yes** | Delete a topic endpoint and discard any messages still spooled on it. |

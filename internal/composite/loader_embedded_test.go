@@ -54,10 +54,13 @@ func findStep(tool *CompositeTool, id string) *Step {
 // delete-queue-messages) also declares one, but resolves to a genuinely
 // empty schema ({"properties": {}} in the spec) — a real, permanent
 // difference from create/update's full-resource body, not a resolution
-// failure. Keep this list in sync with writeToolIdentifierFields in
-// internal/tools/composite_handler.go (can't import it directly: tools
-// already imports composite, so the reverse would cycle) — update
-// deliberately, same convention as wantToolCount above.
+// failure. This is a distinct map from writeToolIdentifierFields in
+// internal/tools/composite_handler.go — same underlying set of tools, kept
+// as two lists because tools already imports composite, so the reverse
+// import would cycle. writeToolIdentifierFields' own completeness is now
+// enforced by internal/tools' TestWriteToolIdentifierFields_CoversEveryEligibleWriteTool;
+// this list has no equivalent check and still needs a deliberate update
+// alongside it, same convention as wantToolCount above.
 var createOrUpdateWriteTools = map[string]bool{
 	"create-message-vpn":        true,
 	"update-message-vpn":        true,

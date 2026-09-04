@@ -263,6 +263,24 @@ test_queue_subscription_roundtrip() {
         '(.subscriptions.data | map(.subscriptionTopic) | index("foo/*/bar")) != null' "true" \
         "list-queue-subscriptions [$broker]: foo/*/bar still present (untouched by the other topic's delete)" || return 1
 
+    # AC4: list-queue-subscriptions must stay permissive for a real, existing
+    # queue that simply has no subscriptions left (isError absent, empty
+    # array) — the preflight exists to distinguish "queue missing" from
+    # "queue has no subscriptions", not to reject the latter. Delete the
+    # remaining topic first so this is a real empty-list case, not just the
+    # nonexistent-queue path already covered elsewhere.
+    call_tool_ok "delete-queue-subscription" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,subscriptionTopic:"foo/*/bar"}')" \
+        "delete-queue-subscription [$broker]: foo/*/bar" || return 1
+
+    resp=$(mcp_call_tool "list-queue-subscriptions" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,maxResults:500}')") || return 1
+    assert_json_field "$resp" ".result.isError // false" "false" \
+        "list-queue-subscriptions [$broker]: real queue with zero subscriptions is not an error" || return 1
+    content=$(extract_content "$resp")
+    assert_json_field "$content" '(.subscriptions.data | length)' "0" \
+        "list-queue-subscriptions [$broker]: real queue with zero subscriptions returns an empty list" || return 1
+
     call_tool_ok "delete-queue" \
         "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n}')" \
         "queue-subscription: delete-queue [$broker]" || return 1
@@ -404,6 +422,7 @@ test_rdp_roundtrip_b()   { test_rdp_roundtrip broker-b; }
 test_queue_subscription_roundtrip_a() { test_queue_subscription_roundtrip broker-a; }
 test_queue_subscription_roundtrip_b() { test_queue_subscription_roundtrip broker-b; }
 test_list_queue_subscriptions_nonexistent_queue_a() { test_list_queue_subscriptions_nonexistent_queue broker-a; }
+test_list_queue_subscriptions_nonexistent_queue_b() { test_list_queue_subscriptions_nonexistent_queue broker-b; }
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
@@ -419,7 +438,8 @@ run_test "RDP round-trip (broker-a)"            test_rdp_roundtrip_a
 run_test "RDP round-trip (broker-b)"            test_rdp_roundtrip_b
 run_test "Queue-subscription round-trip (broker-a)" test_queue_subscription_roundtrip_a
 run_test "Queue-subscription round-trip (broker-b)" test_queue_subscription_roundtrip_b
-run_test "list-queue-subscriptions on nonexistent queue" test_list_queue_subscriptions_nonexistent_queue_a
+run_test "list-queue-subscriptions on nonexistent queue (broker-a)" test_list_queue_subscriptions_nonexistent_queue_a
+run_test "list-queue-subscriptions on nonexistent queue (broker-b)" test_list_queue_subscriptions_nonexistent_queue_b
 run_test "Cross-broker isolation (queue)"       test_cross_broker_isolation
 run_test "Cross-broker isolation (RDP)"         test_rdp_cross_broker_isolation
 run_test "Annotations (tools/list)"             test_annotations

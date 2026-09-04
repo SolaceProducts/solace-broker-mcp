@@ -390,9 +390,8 @@ flip for slow ACKs).
 ### list-queue-subscriptions
 
 List topic subscriptions attached to a queue. Verifies the queue exists
-before listing — a nonexistent queue is reported as an error, never as an
-empty list, so "queue has no subscriptions" and "queue does not exist" are
-never confused.
+before listing, so a nonexistent queue is reported as an error rather than
+an empty list.
 
 **Parameters:**
 
@@ -1077,7 +1076,7 @@ Annotations: `readOnly: false`, `destructive: false`.
 | `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The VPN containing the queue. |
 | `queueName` | string | yes | The queue to add the subscription to. |
-| `subscriptionTopic` | string | yes | The topic to subscribe to. Accepts Solace wildcards (`>` for multi-level, `*` for single-level). |
+| `subscriptionTopic` | string | yes | The topic to subscribe to. Accepts Solace wildcards (`>` for multi-level, `*` for single-level). Pass the literal characters — some LLM clients have been observed HTML-escaping `>` to `&gt;` in a tool call, which silently creates a different (wrong) subscription. |
 
 **Returns:** step-keyed envelope, step `createQueueSubscription`.
 
@@ -1089,9 +1088,10 @@ Annotations: `readOnly: false`, `destructive: false`.
 
 ### delete-queue-subscription
 
-**Destructive.** Remove a topic subscription from a queue. Removal is silent:
-the event broker raises no error and gives no further signal — messages
-matching this topic simply stop arriving at the queue.
+**Destructive.** Remove a topic subscription from a queue. A successful
+removal is silent: the event broker raises no error and gives no further
+signal that matching messages have stopped arriving. The call itself can
+still fail normally (for example, if the subscription doesn't exist).
 
 Annotations: `readOnly: false`, `destructive: true`.
 
@@ -1100,7 +1100,7 @@ Annotations: `readOnly: false`, `destructive: true`.
 | `broker` | string | yes | Target event broker alias. |
 | `msgVpnName` | string | yes | The VPN containing the queue. |
 | `queueName` | string | yes | The queue to remove the subscription from. |
-| `subscriptionTopic` | string | yes | The topic of the subscription to remove. Must match an existing subscription's topic exactly, including any wildcards. |
+| `subscriptionTopic` | string | yes | The topic of the subscription to remove. Must match an existing subscription's topic exactly, including any wildcards. Pass the literal characters — some LLM clients have been observed HTML-escaping `>` to `&gt;` in a tool call, which won't match the real subscription. |
 
 **Returns:** step-keyed envelope, step `deleteQueueSubscription`.
 

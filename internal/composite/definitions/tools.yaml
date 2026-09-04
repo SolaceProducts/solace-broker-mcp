@@ -24,6 +24,18 @@
 #   in the description (e.g., "Returns up to 100 by default (max 500 via maxResults)").
 #   These values are defined as constants in executor.go (defaultMax, capMax) —
 #   keep descriptions in sync if those constants change.
+# - Preflight existence checks: a "list children of X" tool whose only SEMP
+#   operation is a collection GET under a named parent (e.g. .../queues/{q}/subscriptions)
+#   inherits SEMP's own ambiguity: a missing parent returns 200 with an empty
+#   list, identical in shape to "parent exists, has no children." If that
+#   ambiguity would mislead an agent (SOL-153868's list-queue-subscriptions is
+#   the reference case), add a sequential preflight step (a single GET on the
+#   parent itself, minimal select) before the list step — Execute's sequential
+#   short-circuit (executor.go) means the preflight's own NOT_FOUND aborts the
+#   call with no extra code. Not every such tool needs this (e.g.
+#   list-client-subscriptions predates the convention and doesn't have one) —
+#   apply it going forward, and bring existing tools into line as a separate,
+#   deliberate change rather than incidentally.
 
 tools:
   - name: get-rdp-status
@@ -1105,16 +1117,19 @@ tools:
   - name: delete-queue-subscription
     description: >
       BEFORE INVOKING THIS TOOL, obtain explicit user confirmation, restating
-      the target (broker, VPN, queue name, topic) and that the subscription
-      will be permanently removed. The confirmation MUST come as a separate
-      user reply received AFTER you state the target and effect — do not
-      treat the user's original request as a pre-confirmation, even if it
-      implies intent.
+      the target (broker, VPN, queue name, topic) and that the queue will
+      silently stop attracting messages matching that topic — no error is
+      raised, messages simply stop arriving. The confirmation MUST come as a
+      separate user reply received AFTER you state the target and effect —
+      do not treat the user's original request as a pre-confirmation, even
+      if it implies intent.
       Remove a topic subscription from a queue. Requires msgVpnName,
       queueName, and subscriptionTopic to identify the subscription to
-      remove. Removal is silent: the broker raises no error and gives no
-      further signal — messages matching this topic simply stop arriving at
-      the queue.
+      remove. A successful removal is silent: the broker raises no error and
+      gives no further signal that messages matching this topic have stopped
+      arriving. The call itself can still fail — for example, NOT_FOUND if
+      the subscription does not exist — and that failure does surface
+      normally.
     annotations:
       readOnly: false
       destructive: true
@@ -1146,9 +1161,8 @@ tools:
       List topic subscriptions attached to a queue. Returns up to 100 by
       default (max 500 via maxResults). Use this to see which topics route
       messages into a queue, or to verify a subscription was added or
-      removed. Verifies the queue exists before listing — a nonexistent
-      queue is reported as an error, never as an empty list, so "queue has
-      no subscriptions" and "queue does not exist" are never confused.
+      removed. Verifies the queue exists before listing, so a nonexistent
+      queue is reported as an error rather than an empty list.
     annotations:
       readOnly: true
     parameters:
