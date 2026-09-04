@@ -205,9 +205,9 @@ func auditLines(t *testing.T, buf *bytes.Buffer, tool string) []map[string]any {
 // TestPanicAuditedAsError covers the audit half of SOL-150685: CallTool's
 // deferred audit log runs during panic unwinding, before withRecovery's
 // recover fires. toolErr is still nil at that point, so without panic
-// detection the success branch emits "status": "success" at INFO for an
+// detection the success branch emits "outcome": "success" at INFO for an
 // invocation that panicked — misclassifying panics on the surface that feeds
-// dashboards and SLOs. The audit line must instead report status=error with
+// dashboards and SLOs. The audit line must instead report outcome=error with
 // error_type=panic, and no success line may appear.
 func TestPanicAuditedAsError(t *testing.T) {
 	var logBuf bytes.Buffer
@@ -249,8 +249,8 @@ func TestPanicAuditedAsError(t *testing.T) {
 	if len(audits) != 1 {
 		t.Fatalf("expected exactly 1 audit line for panic-tool, got %d: %s", len(audits), logBuf.String())
 	}
-	if got := audits[0]["status"]; got != "error" {
-		t.Errorf("audit status = %v, want %q (a panic must never audit as success)", got, "error")
+	if got := audits[0]["outcome"]; got != "error" {
+		t.Errorf("audit outcome = %v, want %q (a panic must never audit as success)", got, "error")
 	}
 	if got := audits[0]["error_type"]; got != "panic" {
 		t.Errorf("audit error_type = %v, want %q", got, "panic")
@@ -303,8 +303,8 @@ func TestListBrokersEmitsAuditLog(t *testing.T) {
 	if len(audits) != 1 {
 		t.Fatalf("expected exactly 1 audit line for list-brokers, got %d: %s", len(audits), logBuf.String())
 	}
-	if got := audits[0]["status"]; got != "success" {
-		t.Errorf("audit status = %v, want %q", got, "success")
+	if got := audits[0]["outcome"]; got != "success" {
+		t.Errorf("audit outcome = %v, want %q", got, "success")
 	}
 	// list-brokers resolves no broker; the audit line must omit the field
 	// rather than carry an empty value.
@@ -402,8 +402,8 @@ func TestCallToolHandler_OmittedArguments_AuditedAndValidated(t *testing.T) {
 	if len(audits) != 1 {
 		t.Fatalf("expected exactly 1 audit line for test-tool, got %d: %s", len(audits), logBuf.String())
 	}
-	if got := audits[0]["status"]; got != "error" {
-		t.Errorf("audit status = %v, want %q", got, "error")
+	if got := audits[0]["outcome"]; got != "error" {
+		t.Errorf("audit outcome = %v, want %q", got, "error")
 	}
 	if got := audits[0]["error_type"]; got != "missing_broker" {
 		t.Errorf("audit error_type = %v, want %q (omitted arguments must reach normal validation, not a bespoke parse-error type)", got, "missing_broker")
@@ -493,8 +493,8 @@ func TestCallToolHandler_MalformedArguments_AuditedAsError(t *testing.T) {
 	if len(audits) != 1 {
 		t.Fatalf("expected exactly 1 audit line for test-tool, got %d: %s", len(audits), logBuf.String())
 	}
-	if got := audits[0]["status"]; got != "error" {
-		t.Errorf("audit status = %v, want %q", got, "error")
+	if got := audits[0]["outcome"]; got != "error" {
+		t.Errorf("audit outcome = %v, want %q", got, "error")
 	}
 	if got := audits[0]["error_type"]; got != "bad_request" {
 		t.Errorf("audit error_type = %v, want %q", got, "bad_request")

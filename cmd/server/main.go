@@ -1305,7 +1305,7 @@ func main() {
 	// Register authenticated MCP endpoint. buildMCPEndpoint wraps the body
 	// limit on the outside so it bounds the request before any layer buffers
 	// it; see buildMCPEndpoint for the full layer order and 413 rationale.
-	mux.Handle("/mcp", buildMCPEndpoint(authedHandler, correlationEnabled))
+	mux.Handle("/mcp", tools.ActiveRequestsMiddleware(buildMCPEndpoint(authedHandler, correlationEnabled)))
 
 	registerMetadataRoutes(mux, cfg)
 
@@ -1350,6 +1350,11 @@ func main() {
 		if provider := startMetricsEndpoint(cfg, readiness, res); provider != nil {
 			shutdownHooks.Register("metrics_provider", provider.Shutdown)
 			metricsProvider = provider
+			if toolMetrics, err := provider.ToolMetrics(); err != nil {
+				slog.Error("tool metrics unavailable", slog.String("error", err.Error()))
+			} else {
+				tools.SetToolMetrics(toolMetrics)
+			}
 		}
 	}
 

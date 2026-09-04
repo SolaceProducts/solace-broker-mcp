@@ -340,6 +340,8 @@ func stripBrokerParam(params map[string]any) map[string]any {
 // handler emits no identity key at all (byte-identical to pre-SOL-149606
 // log lines).
 func logToolResult(ctx context.Context, tool string, broker *string, start time.Time, errorType *string, toolErr *error, id Identity) {
+	dur := time.Since(start)
+
 	if *toolErr == nil {
 		attrs := make([]slog.Attr, 0, 5)
 		attrs = append(attrs, slog.String("tool", tool))
@@ -351,10 +353,13 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 			attrs = append(attrs, slog.String("broker", *broker))
 		}
 		attrs = append(attrs,
-			slog.String("status", "success"),
-			slog.Duration("duration", time.Since(start)),
+			slog.String("outcome", "success"),
+			slog.Duration("duration", dur),
 			slog.Any("", id))
 		slog.LogAttrs(ctx, slog.LevelInfo, "tool invoked", attrs...)
+
+		// Record tool invocation and duration metrics on the success path
+		toolMetrics.Load().Record(ctx, tool, *broker, "success", "", dur)
 		return
 	}
 
@@ -420,9 +425,9 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 
 	attrs := []slog.Attr{
 		slog.String("tool", tool),
-		slog.String("status", "error"),
+		slog.String("outcome", "error"),
 		slog.String("error_type", *errorType),
-		slog.Duration("duration", time.Since(start)),
+		slog.Duration("duration", dur),
 		slog.String("detail", detail),
 		slog.Any("", id),
 	}
@@ -446,6 +451,9 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 	}
 
 	slog.LogAttrs(ctx, slog.LevelError, "tool invoked", attrs...)
+
+	// Record tool invocation and duration metrics on the error path
+	toolMetrics.Load().Record(ctx, tool, *broker, "error", *errorType, dur)
 }
 
 // classifyBrokerError translates a BrokerPool resolution failure into the

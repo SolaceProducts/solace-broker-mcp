@@ -182,6 +182,10 @@ func (p *Provider) Handler() http.Handler {
 	})
 }
 
+func (p *Provider) ToolMetrics() (*ToolMetrics, error) {
+	return NewToolMetrics(p.Meter(instrumentScope))
+}
+
 // Shutdown flushes and stops the meter provider. cmd/server registers it as a
 // shutdown hook (SOL-153884).
 func (p *Provider) Shutdown(ctx context.Context) error {

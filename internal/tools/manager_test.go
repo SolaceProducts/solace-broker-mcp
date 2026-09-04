@@ -704,7 +704,7 @@ func TestCallTool_SanitizesResponseButPreservesLogDetail(t *testing.T) {
 		if json.Unmarshal([]byte(line), &fields) != nil {
 			continue
 		}
-		if fields["msg"] != "tool invoked" || fields["status"] != "error" {
+		if fields["msg"] != "tool invoked" || fields["outcome"] != "error" {
 			continue
 		}
 		found = true
@@ -771,7 +771,7 @@ func TestCallTool_SEMPv2BodyFallbackNotLoggedRaw(t *testing.T) {
 		if json.Unmarshal([]byte(line), &fields) != nil {
 			continue
 		}
-		if fields["msg"] != "tool invoked" || fields["status"] != "error" {
+		if fields["msg"] != "tool invoked" || fields["outcome"] != "error" {
 			continue
 		}
 		found = true
@@ -1269,8 +1269,8 @@ func TestCallTool_logsIdentityFields_success(t *testing.T) {
 		}
 	})
 
-	if logged["status"] != "success" {
-		t.Errorf("status = %v, want success", logged["status"])
+	if logged["outcome"] != "success" {
+		t.Errorf("outcome = %v, want success", logged["outcome"])
 	}
 	assertIdentityFields(t, logged, map[string]string{
 		"sub":       "auth0|abc123",
@@ -1290,8 +1290,8 @@ func TestCallTool_logsIdentityFields_error(t *testing.T) {
 			map[string]any{"msgVpnName": "default"}, idFixture())
 	})
 
-	if logged["status"] != "error" {
-		t.Errorf("status = %v, want error", logged["status"])
+	if logged["outcome"] != "error" {
+		t.Errorf("outcome = %v, want error", logged["outcome"])
 	}
 	assertIdentityFields(t, logged, map[string]string{
 		"sub":       "auth0|abc123",
@@ -1357,8 +1357,8 @@ func TestCallTool_disabledMode_emitsNoIdentityFields(t *testing.T) {
 		}
 	}
 	// Sanity: existing fields are still emitted.
-	if logged["status"] != "success" {
-		t.Errorf("status = %v, want success", logged["status"])
+	if logged["outcome"] != "success" {
+		t.Errorf("outcome = %v, want success", logged["outcome"])
 	}
 	if logged["tool"] != "test-tool" {
 		t.Errorf("tool = %v, want test-tool", logged["tool"])

@@ -190,8 +190,8 @@ func TestDescribeSempSchema_EmitsAuditLog(t *testing.T) {
 	if len(audits) != 1 {
 		t.Fatalf("expected exactly 1 audit line for describe-semp-schema, got %d: %s", len(audits), logBuf.String())
 	}
-	if got := audits[0]["status"]; got != "success" {
-		t.Errorf("audit status = %v, want %q", got, "success")
+	if got := audits[0]["outcome"]; got != "success" {
+		t.Errorf("audit outcome = %v, want %q", got, "success")
 	}
 	// describe-semp-schema resolves no broker; the audit line must omit the field.
 	if _, present := audits[0]["broker"]; present {
