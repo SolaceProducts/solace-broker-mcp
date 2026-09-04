@@ -29,6 +29,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -49,10 +50,17 @@ const metaKeyCorrelationID = "correlation_id"
 
 // withRecovery wraps an SDK tool handler so a panic anywhere below the SDK
 // boundary becomes a sanitized error result instead of killing the process.
-// The SDK (go-sdk v1.5.0) invokes tool handlers on a goroutine of its own
+// The SDK (go-sdk v1.7.0) invokes tool handlers on a goroutine of its own
 // with no recover() — net/http's per-connection recovery cannot catch a
 // panic on another goroutine — so without this wrapper a single panicking
 // handler takes down the whole server (SOL-150685).
+//
+// A recovered panic logs at ERROR with event="panic_recovered" and increments
+// mcp_panic_recovered_total{boundary="tool"} (SOL-154037), the counter shared
+// with recovery.HTTPMiddleware, so one alert covers both recovery nets. The
+// result the agent gets back is unchanged by that telemetry: an application
+// error (IsError, generic message, retryable=false) over a successful call, per
+// the MCP spec's convention — deliberately not a protocol-level error.
 //
 // This wrapper is the single chokepoint through which EVERY tool result flows
 // back to the SDK — success, tool error, and panic-recovered alike — so it is
@@ -80,9 +88,17 @@ func withRecovery(toolName string, h mcp.ToolHandler) mcp.ToolHandler {
 				// value, and the agent sees only the generic message below,
 				// matching the unknown-error branch of buildErrorMessage.
 				slog.Error("tool handler panicked",
+					slog.String("event", "panic_recovered"),
 					slog.String("tool", toolName),
 					slog.String("panic_type", fmt.Sprintf("%T", r)),
 					slog.String("stack", string(debug.Stack())))
+
+				// mcp_panic_recovered_total{boundary="tool"} (SOL-154037):
+				// the same counter recovery.HTTPMiddleware increments, so one
+				// alert covers both recovery nets. A no-op when metrics are
+				// disabled; recovery itself stays unconditional.
+				panics.Recovered(ctx, panics.BoundaryTool)
+
 				result = &mcp.CallToolResult{
 					StructuredContent: map[string]any{
 						"error":     serverInternalErrorMessage,

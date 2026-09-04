@@ -45,7 +45,7 @@ capability headings carry the same tag:
 | Capability | Status | Notes |
 |---|---|---|
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
-| Metrics | **[Planned]** | The `/metrics` endpoint and instruments are not yet wired; the names and labels here are the proposal under review. |
+| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, the OTLP export-health counters, and `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)). Assume any other metric below is not yet emitted. |
 | Audit trail | **[Planned]** | Only the capability gate exists today; event emission lands in a later story. |
 | Distributed tracing | **[Interim — provider wired, no spans yet]** | Tracer provider and OTLP export are live behind `OBS_TRACING_ENABLED`; no code creates a span yet. See [Distributed Tracing](#distributed-tracing--interim-provider-wired-spans-not-yet-emitted). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
@@ -284,6 +284,44 @@ broker state, not per attempt.
 
 Increments if an audit event cannot be written (see [Audit Delivery](#audit-delivery)). A
 flat-zero series is your evidence that no audit event was lost. Alert on any increase.
+
+### Panic Recovery — [Implemented]
+
+> _Unlike the rest of this section, this counter **is** wired in the current build. It is
+> emitted on `/metrics` whenever `OBS_METRICS_ENABLED` is on._
+
+| Metric | Type | Labels | Basis |
+|---|---|---|---|
+| `mcp_panic_recovered_total` | Counter | `boundary` | Solace |
+
+One counter for both of the server's request-path panic nets, separated by `boundary`
+rather than split into two metric names, so a single alert covers both:
+
+- `http` — the HTTP middleware wrapping the whole mux. The panicking request gets a clean
+  `500`; the process keeps serving.
+- `tool` — the MCP tool-dispatch wrapper. The panicking call gets a sanitized tool result
+  (`isError: true`, `retryable: false`) over a successful MCP call, per the spec's
+  application-error convention.
+
+**Cardinality:** 2. `boundary` is a closed set of exactly those two values, closed by the
+type system rather than by convention: the label value is unreachable outside the package
+that owns the counter, so a future recovery site cannot widen this series set without a
+deliberate change there and a matching row here.
+
+A recovered panic is a bug that reached production, not a load condition. **Alert on any
+increase**, on either boundary. Each increment is paired with an `event=panic_recovered`
+ERROR log carrying the panic's Go type and a stack trace — the counter tells you it
+happened, the log tells you where. The same `event` value also marks the three panic nets
+outside the request path (worker goroutines, token exchange, the OTLP self-stats loop),
+which this counter does not cover — so a log-based alert has wider reach than this metric.
+
+`http.ErrAbortHandler` is exempt on the `http` boundary. `net/http` uses it as a
+"client went away, say nothing" sentinel, and the MCP streamable/SSE path raises it on
+ordinary client disconnect; counting it would make a panic alert fire on routine teardown.
+
+Recovery is unconditional and does not depend on this counter. With `OBS_METRICS_ENABLED`
+off, no instrument is registered, both recovery sites still recover and still log, and the
+increment is a no-op.
 
 ### OTLP Export Health
 
