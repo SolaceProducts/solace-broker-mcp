@@ -161,18 +161,23 @@ refused by tool authorization never reaches one, so it is absent here and counte
 
 - `tool`: the MCP tool name (kebab-case, for example `get-broker-status`). Bounded by the
   number of tools the server exposes.
-- `broker`: the broker alias from your configuration. Bounded by the number of configured
-  brokers.
+- `broker`: the configured broker alias, canonicalized to your configured casing. Bounded by
+  the number of configured brokers plus two sentinels — `none` (a brokerless or pre-resolution
+  call) and `unknown` (an alias that is not configured). The log line keeps the raw alias the
+  caller typed; only the metric label is canonicalized, so a typo cannot mint a new series.
 - `outcome`: see [The Outcome Vocabulary](#the-outcome-vocabulary).
-- `error_type`: the failure cause, from the eleven values in
+- `error_type`: the failure cause, from the twelve values in
   [`error_type`](#error_type). Empty on any non-error outcome.
 - Histogram buckets (seconds): `0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10`.
 
-**Cardinality:** `error_type` is non-empty only on the error path, so the series per `tool` and
-`broker` is bounded at `success (1) + cancelled (1) + error x 11 = 13`, not the 36 a naive
-product of the two label domains would suggest. That 13 is the worst case once every outcome
-is emitted; until `cancelled` ships (see [The Outcome Vocabulary](#the-outcome-vocabulary)) you
-will observe 12. All domains are finite (CI enforcement planned for GA).
+**Cardinality:** all label domains are finite. `error_type` is non-empty only on the error
+path and is drawn from the closed set of twelve values above; `outcome` is one of three; and
+`broker` is bounded to the configured aliases plus the `none`/`unknown` sentinels. The series
+count is not a clean product of these domains, because several error types only ever occur
+before a broker is resolved — `bad_request`, `missing_broker`, `not_found`, and
+`unknown_broker` appear only with `broker=none` or `broker=unknown`, never against a configured
+alias — so the real total is well under the naive product. CI enforcement of the closed sets is
+planned for GA.
 
 ### SEMP Requests (RED, per Attempt)
 
@@ -563,7 +568,7 @@ names beyond the two above, and span kinds, are open items in this review (see
 |---|---|---|
 | `correlation_id` | The shared request ID, joining the trace to logs and audit | Solace |
 | `outcome` | The result; the same three values used as a metric label and an audit field | Solace |
-| `error_type` | Why the call failed; present on `outcome: error` only, same eleven values | Solace |
+| `error_type` | Why the call failed; present on `outcome: error` only, same twelve values | Solace |
 | `retry.decision` | The retry decision on a SEMP attempt | Solace |
 | `retry.exhausted` | `true` on the final attempt when retries are exhausted | Solace |
 | `cache_hit` | `tokenexchange.Exchange` only: true when served from cache, false when a live IdP round trip was needed (or waited on). **Isolating actual live round trips needs `singleflight_role="winner"` too** — a follower also reports `cache_hit=false` despite doing no IdP work itself, so filtering on `cache_hit` alone counts one winner plus every follower waiting on it | Solace |
@@ -749,11 +754,12 @@ small enough to group by on a dashboard while still carrying the detail an inves
 
 ### `error_type`
 
-Present only on `outcome: error`, drawn from a closed set of eleven values:
+Present only on `outcome: error`, drawn from a closed set of twelve values:
 
 | Value | Meaning |
 |---|---|
 | `panic` | An unexpected failure was caught by the recovery layer and returned as a clean error. |
+| `bad_request` | The tool arguments could not be parsed as a JSON object. |
 | `unknown_tool` | The requested tool is not registered. |
 | `missing_broker` | No broker was named on a call that requires one. |
 | `unknown_broker` | The named broker is not configured. |
@@ -761,9 +767,9 @@ Present only on `outcome: error`, drawn from a closed set of eleven values:
 | `validation_error` | The arguments failed input validation. |
 | `execution_error` | The tool ran and failed. |
 | `nil_result` | The tool returned no result. |
+| `not_found` | The requested item does not exist (for example, an unknown SEMP operation passed to describe-semp-schema). |
 | `output_validation_error` | The tool's output failed schema validation. |
 | `marshal_error` | The result could not be serialized. |
-| `broker_permission_denied` | The broker rejected the operation as not permitted for the authenticated identity. |
 
 Notes:
 

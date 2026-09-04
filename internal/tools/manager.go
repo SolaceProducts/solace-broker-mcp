@@ -183,7 +183,12 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 			errorType = "panic"
 			toolErr = panicError{}
 		}
+
+		// The log line uses the raw alias for diagnostics; while the metric
+		// label is canonicalized to a bounded set.
 		logToolResult(ctx, name, &brokerAlias, start, &errorType, &toolErr, id)
+
+		recordToolInvocation(ctx, name, canonicalBrokerLabel(m.pool, brokerAlias), start, errorType, toolErr)
 	}()
 
 	// Deliberately still a protocol-level error, not a buildLocalErrorResult
@@ -357,9 +362,6 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 			slog.Duration("duration", dur),
 			slog.Any("", id))
 		slog.LogAttrs(ctx, slog.LevelInfo, "tool invoked", attrs...)
-
-		// Record tool invocation and duration metrics on the success path
-		toolMetrics.Load().Record(ctx, tool, *broker, "success", "", dur)
 		return
 	}
 
@@ -451,9 +453,6 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 	}
 
 	slog.LogAttrs(ctx, slog.LevelError, "tool invoked", attrs...)
-
-	// Record tool invocation and duration metrics on the error path
-	toolMetrics.Load().Record(ctx, tool, *broker, "error", *errorType, dur)
 }
 
 // classifyBrokerError translates a BrokerPool resolution failure into the

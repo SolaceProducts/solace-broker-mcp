@@ -337,6 +337,7 @@ instead of writability flags) and 'raw' (the definition verbatim, larger).
 				toolErr = panicError{}
 			}
 			logToolResult(ctx, describeSempSchemaToolName, &brokerAlias, start, &errorType, &toolErr, id)
+			recordToolInvocation(ctx, describeSempSchemaToolName, brokerLabelNone, start, errorType, toolErr)
 		}()
 
 		var args map[string]any

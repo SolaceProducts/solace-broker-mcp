@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 )
 
@@ -143,5 +144,50 @@ func TestActiveRequestsMiddleware_PanicStillDecrements(t *testing.T) {
 
 	if after := activeRequests(t, p); after != 0 {
 		t.Errorf("gauge after panicking request = %v, want 0", after)
+	}
+}
+
+// TestCallTool_UnknownBrokerMetricLabelCanonicalized proves the broker metric
+// label is bounded on the error path: an unconfigured alias records the fixed
+// "unknown" sentinel, not the raw caller-supplied string, so typos cannot mint
+// unbounded series. The raw alias still reaches the user-facing error result.
+func TestCallTool_UnknownBrokerMetricLabelCanonicalized(t *testing.T) {
+	p, err := metrics.New("v-test", sdkresource.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm, err := p.ToolMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	SetToolMetrics(tm)
+	t.Cleanup(func() { SetToolMetrics(nil) })
+
+	mgr := NewToolManager(newTestPool(t))
+	mgr.Register(newStubHandler("test-tool"))
+
+	// "Nope" is not a configured broker; resolution fails with unknown_broker.
+	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
+		"broker":     "Nope",
+		"msgVpnName": "default",
+	}, Identity{})
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	// The raw alias is preserved for the caller to see their own mistake.
+	if text := result.Content[0].(*mcp.TextContent).Text; !strings.Contains(text, "Nope") {
+		t.Errorf("user-facing error dropped the raw alias; got: %s", text)
+	}
+
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+
+	const want = `mcp_tool_invocation_total{broker="unknown",error_type="unknown_broker",outcome="error",tool="test-tool"} 1`
+	if !strings.Contains(body, want) {
+		t.Errorf("metric missing canonical broker label.\nwant line: %s\n--- got ---\n%s", want, body)
+	}
+	if strings.Contains(body, `broker="Nope"`) {
+		t.Errorf("raw caller alias leaked into the metric label:\n%s", body)
 	}
 }

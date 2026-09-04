@@ -223,6 +223,7 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 					errorType := "bad_request"
 					toolErr := fmt.Errorf("parsing tool arguments: %w", err)
 					logToolResult(ctx, reg.name, &brokerAlias, start, &errorType, &toolErr, id)
+					recordToolInvocation(ctx, reg.name, brokerLabelNone, start, errorType, toolErr)
 					return buildLocalErrorResult(errors.New("tool arguments must be a JSON object")), nil
 				}
 			}
@@ -315,6 +316,7 @@ func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool) {
 					toolErr = panicError{}
 				}
 				logToolResult(ctx, "list-brokers", &brokerAlias, start, &errorType, &toolErr, id)
+				recordToolInvocation(ctx, "list-brokers", brokerLabelNone, start, errorType, toolErr)
 			}()
 
 			aliases := pool.Aliases()
