@@ -5,9 +5,10 @@
 > freeze at GA. After GA we commit to only ever *adding* to this schema, never renaming, so
 > the time to change a name is now. See [How to Give Feedback](#how-to-give-feedback).
 >
-> **Metrics, audit, and tracing are not emitted by the current build.** Only their feature
-> flags exist today: there is no `/metrics` handler, no audit emission, and no OTLP
-> exporter. Those sections are written in the present tense of the *proposed* design,
+> **Most of the metrics and trace surface is not emitted by the current build.** See the
+> [Implementation Status](#implementation-status) table for what is live; anything marked
+> **[Planned]** has a feature flag and nothing behind it. Those sections are written in the
+> present tense of the *proposed* design,
 > because the design is what you are being asked to review. Read them as a specification,
 > not as a description of a running system, and do not point a dashboard or SIEM query at
 > them until the corresponding signal ships.
@@ -46,7 +47,7 @@ capability headings carry the same tag:
 |---|---|---|
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
 | Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, the OTLP export-health counters, and `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)). Assume any other metric below is not yet emitted. |
-| Audit trail | **[Planned]** | Only the capability gate exists today; event emission lands in a later story. |
+| Audit trail | **[Interim — `operation` records only]** | Destructive tool calls emit an `operation` record behind `OBS_AUDIT_LOG_ENABLED` (default off). The authentication and denial record types, and the `mcp_audit_events_dropped_total` counter, are not emitted yet. See [Audit Trail](#audit-trail--interim--operation-records-only). |
 | Distributed tracing | **[Interim — provider wired, no spans yet]** | Tracer provider and OTLP export are live behind `OBS_TRACING_ENABLED`; no code creates a span yet. See [Distributed Tracing](#distributed-tracing--interim-provider-wired-spans-not-yet-emitted). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
 | Resource attributes | **[Implemented]** | Shared identity resource on metrics and traces, plus the committed subset on every log line. See [Resource Attributes](#resource-attributes--implemented). |
@@ -441,10 +442,15 @@ present, once the metrics endpoint is wired, for diagnosing memory pressure and 
 
 ---
 
-## Audit Trail — [Planned]
+## Audit Trail — [Interim — `operation` records only]
 
-> _Status: **[Planned]**. Only the capability gate exists today; audit-event emission lands in
-> a later story. The following fields and delivery behavior are the proposed schema._
+> _Status: **[Interim]** (SOL-152090, SOL-152096). `operation` records for destructive tool
+> calls are emitted today behind `OBS_AUDIT_LOG_ENABLED`, and the whole record schema below
+> is enforced in code by one constructor. The other record types are part of that schema and
+> accepted by the constructor, but nothing emits them yet: `auth_success`, `auth_failure` and
+> `authz_denied` land with SOL-152097, `broker_authz_denied` with SOL-153332. `audit_drop` is
+> emitted. Write your SIEM rules against the schema; expect the non-`operation` record types
+> to start appearing rather than to change shape._
 
 One JSON event is emitted per **state-changing** operation (for example `disconnect-client`,
 `delete-queue`, broker shutdown), at completion, with the outcome known. Read-only calls are
@@ -453,6 +459,27 @@ enabled with `OBS_AUDIT_LOG_ENABLED`.
 
 Every event carries a top-level `"event": "audit"` tag so your log shipper can route the
 audit sub-stream to a dedicated SIEM index.
+
+**One `operation` record per call, not a started/completed pair.** The record is written when
+the call finishes, so it carries the outcome and duration without your having to join two
+records. A recovered panic still produces one, carrying `outcome: error`,
+`error_type: panic`, and `panic_recovered: true` — a destructive handler that crashed may
+already have changed the broker, so its absence must never read as "nothing was attempted".
+
+**"One record per call" bounds the `operation` type, not the total.** A call the broker
+denies at hop 2 produces its `operation` record *and* a `broker_authz_denied` record
+(SOL-153332), because execution had already started. Match on `audit_event_type` rather than
+counting records per `correlation_id`.
+
+**With `OBS_AUDIT_LOG_ENABLED` off**, a destructive call instead logs the pre-flip
+`executing destructive operation` WARN it always has, and no audit record is written. The
+capability is inert when off, not degraded.
+
+**Set your log level to `INFO` or lower.** An `operation` record is emitted at `INFO`. On a
+server running at `WARN` or above it would be filtered out, so the server detects that case
+and emits an `audit_drop` record (which is `WARN`, and therefore survives) rather than
+letting the audit trail disappear silently. A stream of drops with no operation records means
+the log level, not the flag.
 
 ### Event Fields
 
@@ -622,9 +649,15 @@ broker operation. The event rides the server's structured JSON log stream on std
 `"event": "audit"`; your log shipper filters on the tag and routes it.
 
 If the local sink backpressures, the event is **dropped rather than buffered**, and every
-drop is counted in `mcp_audit_events_dropped_total` and recorded as a JSON record carrying
-`"event": "audit"` and `"audit_event_type": "audit_drop"`, so a gap is visible, never
-silent.
+drop is recorded as a JSON record carrying `"event": "audit"` and
+`"audit_event_type": "audit_drop"`, so a gap is visible, never silent. Three things produce a
+drop today: the log handler refusing the write, the record's level being filtered out by the
+server's configured log level, and arguments that could not be canonicalized for hashing.
+
+> **The `mcp_audit_events_dropped_total` counter is not registered yet.** The `audit_drop`
+> *record* ships now, with no dependency; the counter that makes drops dashboard-visible
+> waits on the audit instruments being registered against the meter provider. Alert on the
+> record until then.
 
 `"event"` stays constant at `"audit"` on every record, drops included, precisely so the one
 filter your shipper routes on cannot miss them — a drop notice that fell outside the audit

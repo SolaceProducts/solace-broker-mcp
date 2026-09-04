@@ -366,6 +366,12 @@ var levelByType = map[EventType]slog.Level{
 // Returns an error, never a partial record: a record that does not satisfy the
 // table is not written at all. Callers that cannot proceed should emit a drop
 // notice rather than a malformed record.
+//
+// Contract on the returned errors: callers log them VERBATIM (see
+// internal/tools/manager.go's emitOperationAudit), so they must never embed
+// caller-supplied free text. They name fields, record types, and
+// closed-vocabulary values only — never Tool, Broker, ArgumentsHash, or
+// anything derived from tool arguments. Keep it that way when adding a rule.
 func NewEvent(ctx context.Context, f Fields) (Event, error) {
 	r, ok := applicabilityByType[f.Type]
 	if !ok {

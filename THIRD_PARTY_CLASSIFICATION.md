@@ -65,6 +65,7 @@ no approval required.
 | `github.com/go-openapi/jsonpointer` | Apache-2.0 |
 | `github.com/go-openapi/swag/jsonname` | Apache-2.0 |
 | `github.com/google/jsonschema-go/jsonschema` | MIT |
+| `github.com/gowebpki/jcs` | Apache-2.0 |
 | `github.com/maypok86/otter/v2` | Apache-2.0 |
 | `github.com/modelcontextprotocol/go-sdk` | Apache-2.0 |
 | `github.com/oasdiff/yaml` | MIT |
