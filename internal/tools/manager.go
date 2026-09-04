@@ -261,8 +261,23 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	}
 	toolResult, handleErr := handler.Handle(ctx, tc, handlerParams)
 	if handleErr != nil {
-		errorType = "execution_error"
 		toolErr = fmt.Errorf("executing tool %q: %w", name, handleErr)
+		// SOL-153341: ALREADY_EXISTS on a create and NOT_FOUND on a delete
+		// both mean the desired state already holds — for an idempotent
+		// workflow that's success, not failure. Checked before the generic
+		// execution_error branch so these two cases never reach it; toolErr
+		// stays set to the real underlying error (not nil) so logToolResult
+		// can still classify and log the SEMP fields, just at INFO instead of
+		// ERROR — see its outcome-keyed branch below.
+		if outcome := classifyDesiredStateOutcome(handleErr); outcome != nil {
+			if outcome.Outcome == "exists_unchanged" {
+				errorType = errorTypeNoopExists
+			} else {
+				errorType = errorTypeNoopAbsent
+			}
+			return buildDesiredStateResult(outcome), nil
+		}
+		errorType = "execution_error"
 		return m.buildErrorResult(toolErr, brokerAlias), nil
 	}
 
@@ -326,8 +341,11 @@ func stripBrokerParam(params map[string]any) map[string]any {
 }
 
 // logToolResult is called via defer to log every tool invocation. On success
-// (toolErr is nil) it logs at INFO. On failure it logs at ERROR with the
-// error type and, for SEMP errors, the HTTP status and operation.
+// (toolErr is nil) it logs at INFO. A desired-state noop (SOL-153341 —
+// toolErr is non-nil, but errorType is one of the errorTypeNoop* values)
+// also logs at INFO, with an "outcome" field, since the ticket defines it as
+// success, not failure. Any other failure logs at ERROR with the error type
+// and, for SEMP errors, the HTTP status and operation.
 //
 // A free function rather than a ToolManager method so every tool emits the
 // same audit line, including standalone tools registered outside the manager
@@ -354,6 +372,44 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 			slog.String("status", "success"),
 			slog.Duration("duration", time.Since(start)),
 			slog.Any("", id))
+		slog.LogAttrs(ctx, slog.LevelInfo, "tool invoked", attrs...)
+		return
+	}
+
+	// SOL-153341: a desired-state noop (ALREADY_EXISTS on a create, NOT_FOUND
+	// on a delete) still has a non-nil toolErr — CallTool keeps it set so this
+	// function can still classify and log the SEMP fields below — but it is
+	// not a failure, and logging it at ERROR would page dashboards/alerts on
+	// something the ticket explicitly defines as success. Logged at INFO
+	// instead, with an "outcome" field distinguishing it from an ordinary
+	// success line, so anyone reading the audit trail can still see that SEMP
+	// returned ALREADY_EXISTS/NOT_FOUND rather than a fresh create/delete.
+	if *errorType == errorTypeNoopExists || *errorType == errorTypeNoopAbsent {
+		outcome := "exists_unchanged"
+		if *errorType == errorTypeNoopAbsent {
+			outcome = "already_absent"
+		}
+		attrs := make([]slog.Attr, 0, 8)
+		attrs = append(attrs, slog.String("tool", tool))
+		if *broker != "" {
+			attrs = append(attrs, slog.String("broker", *broker))
+		}
+		attrs = append(attrs,
+			slog.String("status", "success"),
+			slog.String("outcome", outcome),
+			slog.Duration("duration", time.Since(start)),
+			slog.Any("", id))
+		var sempv2Err *sempv2.SEMPError
+		if errors.As(*toolErr, &sempv2Err) {
+			// sempv2.SEMPError is one of the audited types (see the comment on
+			// the ERROR branch below) — its Error() renders only broker- or
+			// server-generated text, so it's safe to log verbatim here too.
+			attrs = append(attrs,
+				slog.String("detail", sempv2Err.Error()),
+				slog.Int("semp_code", sempv2Err.SEMPCode),
+				slog.String("semp_status", sempv2Err.SEMPStatus),
+				slog.String("operation", sempv2Err.Operation))
+		}
 		slog.LogAttrs(ctx, slog.LevelInfo, "tool invoked", attrs...)
 		return
 	}

@@ -646,6 +646,153 @@ func TestCallTool_SEMPErrorWrapped(t *testing.T) {
 	}
 }
 
+// TestCallTool_DesiredStateOutcome_AlreadyExists verifies the AC1/AC5/AC6
+// path of SOL-153341 end to end through CallTool: a duplicate create
+// (ALREADY_EXISTS) comes back as a non-failure — IsError: false — with the
+// outcome/changed fields an agent needs to tell "already done" from
+// "failed" without reconciling against the broker, and the "tool invoked"
+// audit line logs it at INFO (not ERROR) with an "outcome" field, per the
+// design note that this must not page dashboards keyed on error level.
+func TestCallTool_DesiredStateOutcome_AlreadyExists(t *testing.T) {
+	var buf bytes.Buffer
+	old := slog.Default()
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(logger)
+	defer slog.SetDefault(old)
+
+	mgr := NewToolManager(newTestPool(t))
+
+	handler := newStubHandler("create-queue-subscription")
+	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		return nil, &sempv2.SEMPError{
+			Operation:   "createMsgVpnQueueSubscription",
+			StatusCode:  400,
+			Description: "Problem with POST: Subscription foo/*/bar already exists.",
+			SEMPCode:    10,
+			SEMPStatus:  "ALREADY_EXISTS",
+		}
+	}
+	mgr.Register(handler)
+
+	result, err := mgr.CallTool(context.Background(), "create-queue-subscription", map[string]any{
+		"broker":     "dev",
+		"msgVpnName": "default",
+	}, Identity{})
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	if result.IsError {
+		t.Fatal("expected IsError to be false — ALREADY_EXISTS on a create is a non-failure")
+	}
+
+	sc, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("StructuredContent type = %T, want map[string]any", result.StructuredContent)
+	}
+	if sc["outcome"] != "exists_unchanged" {
+		t.Errorf("outcome = %v, want exists_unchanged", sc["outcome"])
+	}
+	if sc["changed"] != false {
+		t.Errorf("changed = %v, want false", sc["changed"])
+	}
+
+	var foundInfo, foundError bool
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var fields map[string]any
+		if json.Unmarshal([]byte(line), &fields) != nil || fields["msg"] != "tool invoked" {
+			continue
+		}
+		if fields["status"] == "error" {
+			foundError = true
+		}
+		if fields["status"] == "success" && fields["outcome"] == "exists_unchanged" {
+			foundInfo = true
+		}
+	}
+	if foundError {
+		t.Errorf("found a status=error \"tool invoked\" line; want none — log:\n%s", buf.String())
+	}
+	if !foundInfo {
+		t.Errorf("did not find a status=success outcome=exists_unchanged \"tool invoked\" line; log:\n%s", buf.String())
+	}
+}
+
+// TestCallTool_DesiredStateOutcome_AlreadyAbsent is the AC2 counterpart:
+// NOT_FOUND on a delete is a non-failure too.
+func TestCallTool_DesiredStateOutcome_AlreadyAbsent(t *testing.T) {
+	mgr := NewToolManager(newTestPool(t))
+
+	handler := newStubHandler("delete-queue")
+	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		return nil, &sempv2.SEMPError{
+			Operation:   "deleteMsgVpnQueue",
+			StatusCode:  400,
+			Description: "Could not find match for queue mcp-subdel-test-q",
+			SEMPCode:    6,
+			SEMPStatus:  "NOT_FOUND",
+		}
+	}
+	mgr.Register(handler)
+
+	result, err := mgr.CallTool(context.Background(), "delete-queue", map[string]any{
+		"broker":     "dev",
+		"msgVpnName": "default",
+	}, Identity{})
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	if result.IsError {
+		t.Fatal("expected IsError to be false — NOT_FOUND on a delete is a non-failure")
+	}
+
+	sc, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("StructuredContent type = %T, want map[string]any", result.StructuredContent)
+	}
+	if sc["outcome"] != "already_absent" {
+		t.Errorf("outcome = %v, want already_absent", sc["outcome"])
+	}
+	if sc["changed"] != false {
+		t.Errorf("changed = %v, want false", sc["changed"])
+	}
+}
+
+// TestCallTool_ParentNotFound_NamesTheParent verifies the AC3 path end to
+// end: NOT_FOUND on a create names the missing parent's type in plain
+// language, rather than surfacing "Cannot enter <mode>: not found" CLI
+// jargon to the agent. Still a hard failure — IsError: true — since a
+// missing parent is a real error, not a desired-state noop.
+func TestCallTool_ParentNotFound_NamesTheParent(t *testing.T) {
+	mgr := NewToolManager(newTestPool(t))
+
+	handler := newStubHandler("create-queue-subscription")
+	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
+		return nil, &sempv2.SEMPError{
+			Operation:   "createMsgVpnQueueSubscription",
+			StatusCode:  400,
+			Description: "Problem with POST: Cannot enter queue mode: not found.",
+			SEMPCode:    6,
+			SEMPStatus:  "NOT_FOUND",
+		}
+	}
+	mgr.Register(handler)
+
+	result, err := mgr.CallTool(context.Background(), "create-queue-subscription", map[string]any{
+		"broker":     "dev",
+		"msgVpnName": "default",
+	}, Identity{})
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError to be true — a missing parent is a real error, not a noop")
+	}
+	text := result.Content[0].(*mcp.TextContent).Text
+	if !strings.Contains(text, "queue") || strings.Contains(text, "Cannot enter") {
+		t.Errorf("text = %q, want the CLI-mode jargon translated to plain language", text)
+	}
+}
+
 // TestCallTool_SanitizesResponseButPreservesLogDetail verifies the sanitization
 // boundary: the agent-facing result has internal detail (IP, filesystem path)
 // redacted, while the full unsanitized error is preserved server-side as the

@@ -156,6 +156,63 @@ func TestBuildSEMPv2Message(t *testing.T) {
 
 		// The description is run through sanitizeBrokerText.
 		{"description is sanitized", &sempv2.SEMPError{StatusCode: 400, Description: "connect to 10.0.0.1 failed"}, "connect to [ip] failed"},
+
+		// Parent-naming (SOL-153341, AC3). All four descriptions below are
+		// verbatim strings captured live against a real broker. The shape a
+		// given create command uses does NOT track its parent's object type:
+		// create-queue and create-rdp produce different shapes for the exact
+		// same "missing message-vpn" situation.
+		{
+			"NOT_FOUND on create, parent named inline (create-queue against a missing VPN)",
+			&sempv2.SEMPError{Operation: "createMsgVpnQueue", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Problem with POST: Cannot enter mode for message-vpn lkiri-no-such-vpn: not found."},
+			`The Message VPN "lkiri-no-such-vpn" does not exist.`,
+		},
+		{
+			"NOT_FOUND on create, parent named inline (create-topic-endpoint against a missing VPN)",
+			&sempv2.SEMPError{Operation: "createMsgVpnTopicEndpoint", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Problem with POST: Cannot enter mode for message-vpn lkiri-no-such-vpn-3: not found."},
+			`The Message VPN "lkiri-no-such-vpn-3" does not exist.`,
+		},
+		{
+			"NOT_FOUND on create, parent type only, same missing-VPN situation, different shape (create-rdp)",
+			&sempv2.SEMPError{Operation: "createMsgVpnRestDeliveryPoint", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Problem with POST: Cannot enter message-vpn mode: not found."},
+			"The Message VPN does not exist.",
+		},
+		{
+			"NOT_FOUND on create, parent type only (create-queue-subscription against a missing queue)",
+			&sempv2.SEMPError{Operation: "createMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Problem with POST: Cannot enter queue mode: not found."},
+			"The queue does not exist.",
+		},
+		{
+			// From the ticket's own fixtures — not independently re-verified live
+			// in this repo, unlike the four above, but included since the shape
+			// (bare "X mode") is already covered by the queue/message-vpn cases.
+			"NOT_FOUND on create, parent type only (rest-delivery-point, from the ticket's own report)",
+			&sempv2.SEMPError{Operation: "createMsgVpnRestDeliveryPointQueueBinding", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Problem with POST: Cannot enter rest-delivery-point mode: not found."},
+			"The REST Delivery Point does not exist.",
+		},
+		{
+			// NOT_FOUND on a non-create op is untouched by the translation —
+			// the missing object there is the target itself, not a parent, and
+			// already gets a good, already-instance-named broker message.
+			"NOT_FOUND on a get (not a create) is not translated",
+			&sempv2.SEMPError{Operation: "getMsgVpnQueue", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Could not find match for queue lkiri-does-not-exist-q"},
+			"Could not find match for queue lkiri-does-not-exist-q",
+		},
+		{
+			// A mode word this codebase hasn't seen live (parentModeFriendlyNames
+			// has no entry) falls back to the raw broker text unchanged, rather
+			// than guessing a translation.
+			"NOT_FOUND on create, unrecognized mode word falls back to raw text",
+			&sempv2.SEMPError{Operation: "createMsgVpnTopicEndpointSomethingFuture", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Problem with POST: Cannot enter topic-endpoint mode: not found."},
+			"Problem with POST: Cannot enter topic-endpoint mode: not found.",
+		},
 	}
 
 	for _, tt := range tests {
@@ -164,6 +221,111 @@ func TestBuildSEMPv2Message(t *testing.T) {
 				t.Errorf("%s: got %q, want %q", tt.name, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestClassifyDesiredStateOutcome(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       error
+		wantOutcome string // "" means want nil
+	}{
+		{
+			"ALREADY_EXISTS on create -> exists_unchanged",
+			&sempv2.SEMPError{Operation: "createMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "ALREADY_EXISTS", SEMPCode: 10,
+				Description: "Problem with POST: Subscription foo/*/bar already exists."},
+			"exists_unchanged",
+		},
+		{
+			"NOT_FOUND on delete -> already_absent",
+			&sempv2.SEMPError{Operation: "deleteMsgVpnQueue", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Could not find match for queue mcp-subdel-test-q"},
+			"already_absent",
+		},
+		{
+			"ALREADY_EXISTS on create, SEMPStatus omitted, falls back to SEMPCode 10",
+			&sempv2.SEMPError{Operation: "createMsgVpn", StatusCode: 400, SEMPCode: 10,
+				Description: "Unable to create message VPN 'default': already exists."},
+			"exists_unchanged",
+		},
+		{
+			"NOT_FOUND on delete, SEMPStatus omitted, falls back to SEMPCode 6",
+			&sempv2.SEMPError{Operation: "deleteMsgVpnQueue", StatusCode: 400, SEMPCode: 6},
+			"already_absent",
+		},
+		{
+			// Regression guard: NOT_FOUND on a GET must never classify as a
+			// noop — it's a real error the caller needs to see, not an
+			// idempotent-replay signal. This is exactly the fixture
+			// TestCallTool_SEMPErrorWrapped already exercises end to end.
+			"NOT_FOUND on a get is not classified",
+			&sempv2.SEMPError{Operation: "getMsgVpnQueue", StatusCode: 404, SEMPStatus: "NOT_FOUND", SEMPCode: 6},
+			"",
+		},
+		{
+			"ALREADY_EXISTS on an update is not classified (not a create)",
+			&sempv2.SEMPError{Operation: "updateMsgVpnQueue", StatusCode: 400, SEMPStatus: "ALREADY_EXISTS", SEMPCode: 10},
+			"",
+		},
+		{
+			"NOT_FOUND on a create is not classified (missing parent, not a noop)",
+			&sempv2.SEMPError{Operation: "createMsgVpnRestDeliveryPoint", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6},
+			"",
+		},
+		{
+			"ALREADY_EXISTS on a delete is not classified",
+			&sempv2.SEMPError{Operation: "deleteMsgVpnQueue", StatusCode: 400, SEMPStatus: "ALREADY_EXISTS", SEMPCode: 10},
+			"",
+		},
+		{
+			"a non-SEMP error is not classified",
+			errors.New("boom"),
+			"",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := classifyDesiredStateOutcome(tt.input)
+			if tt.wantOutcome == "" {
+				if got != nil {
+					t.Fatalf("got %+v, want nil", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("got nil, want outcome %q", tt.wantOutcome)
+			}
+			if got.Outcome != tt.wantOutcome {
+				t.Errorf("Outcome = %q, want %q", got.Outcome, tt.wantOutcome)
+			}
+			if got.Message == "" {
+				t.Error("Message is empty, want a non-empty agent-facing message")
+			}
+		})
+	}
+}
+
+func TestBuildDesiredStateResult(t *testing.T) {
+	result := buildDesiredStateResult(&desiredStateOutcome{
+		Outcome: "exists_unchanged",
+		Message: "Subscription foo/*/bar already exists.",
+	})
+	if result.IsError {
+		t.Error("IsError = true, want false — this is the mechanism behind AC1/AC2's 'reported as a non-failure'")
+	}
+	sc, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("StructuredContent type = %T, want map[string]any", result.StructuredContent)
+	}
+	if sc["outcome"] != "exists_unchanged" {
+		t.Errorf("outcome = %v, want exists_unchanged", sc["outcome"])
+	}
+	if sc["changed"] != false {
+		t.Errorf("changed = %v, want false", sc["changed"])
+	}
+	if sc["message"] != "Subscription foo/*/bar already exists." {
+		t.Errorf("message = %v, want the broker's own text", sc["message"])
 	}
 }
 
@@ -272,6 +434,16 @@ func TestBuildErrorMessage(t *testing.T) {
 			"broker-eu-prod",
 			"Queue not found",
 			[]string{"Verify the name is correct."},
+		},
+		// SOL-153341 AC4 (descoped): MAX_NUM_SUBSCRIPTIONS_EXCEEDED (403) gets the
+		// same generic hint as MAX_NUM_EXCEEDED (135) — no scope or count claim,
+		// see translatedErrorCodes' doc comment for why.
+		{
+			"sempv2 code 403 (max subscriptions) yields generic limit hint",
+			&sempv2.SEMPError{StatusCode: 400, SEMPCode: 403, Description: "max num subscriptions exceeded"},
+			"broker-eu-prod",
+			"max num subscriptions exceeded",
+			[]string{"A configured maximum was reached."},
 		},
 		// Code 72 (permission denied) with a known alias: message is replaced with
 		// an alias-tagged line and the generic role/VPN-scope hint is suppressed.
