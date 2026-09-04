@@ -45,7 +45,7 @@ capability headings carry the same tag:
 | Capability | Status | Notes |
 |---|---|---|
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
-| Metrics | **[Planned]** | The `/metrics` endpoint and instruments are not yet wired; the names and labels here are the proposal under review. |
+| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, the OTLP export-health counters, and `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)). Assume any other metric below is not yet emitted. |
 | Audit trail | **[Planned]** | Only the capability gate exists today; event emission lands in a later story. |
 | Distributed tracing | **[Interim — provider wired, no spans yet]** | Tracer provider and OTLP export are live behind `OBS_TRACING_ENABLED`; no code creates a span yet. See [Distributed Tracing](#distributed-tracing--interim-provider-wired-spans-not-yet-emitted). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
@@ -107,10 +107,15 @@ avoid. Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_
 
 ---
 
-## Metrics — [Planned]
+## Metrics — [Planned, with exceptions]
 
-> _Status: **[Planned]**. The `/metrics` endpoint and instruments are not yet wired in the
-> build; the following names, types, and labels are the proposal under review._
+> _Status: **[Planned, with exceptions]**. Most instrument names, types, and labels below
+> are the proposal under review, not yet wired in the build. Wired and emitted today: the
+> `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`,
+> `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`,
+> `mcp_tool_invocation_duration_seconds`, the OTLP export-health counters, and
+> `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)). Assume
+> any other metric below is not yet emitted._
 
 All metrics are served on the `/metrics` endpoint in Prometheus text exposition
 format, behind `OBS_METRICS_ENABLED`. One exception: whether the authentication-failure
@@ -285,6 +290,64 @@ broker state, not per attempt.
 Increments if an audit event cannot be written (see [Audit Delivery](#audit-delivery)). A
 flat-zero series is your evidence that no audit event was lost. Alert on any increase.
 
+### Panic Recovery — [Implemented]
+
+> _Unlike the rest of this section, this counter **is** wired in the current build. It is
+> emitted on `/metrics` whenever `OBS_METRICS_ENABLED` is on._
+
+| Metric | Type | Labels | Basis |
+|---|---|---|---|
+| `mcp_panic_recovered_total` | Counter | `boundary` | Solace |
+
+One counter for the two panic nets that guard a request's own goroutine, separated by
+`boundary` rather than split into two metric names, so a single alert covers both:
+
+- `http` — the HTTP middleware wrapping the whole mux. The panicking request gets a clean
+  `500`; the process keeps serving.
+- `tool` — the MCP tool-dispatch wrapper. The panicking call gets a sanitized tool result
+  (`isError: true`, `retryable: false`) over a successful MCP call, per the spec's
+  application-error convention.
+
+**Cardinality:** 2. Neither label value can be named from outside the package that owns the
+counter, which exposes one recording function per boundary and no way to pass an arbitrary
+one. A future recovery site cannot widen this series set without a deliberate change there
+and a matching row here.
+
+**Both series are published at zero from startup**, before anything panics. A counter that
+appeared only on its first increment would defeat the alert below: PromQL's `increase()`
+needs two samples in the window, so the sample that creates a series is only a baseline and
+a process's first panic would pass unnoticed. Seeding also means a flat zero reads as
+"nothing panicked" rather than "No data", and makes `absent(mcp_panic_recovered_total)` a
+usable alert for "metrics are on but the counter was never wired".
+
+A recovered panic is a bug that reached production, not a load condition. **Alert on any
+increase**, on either boundary. Each increment is paired with an `event=panic_recovered`
+ERROR log carrying the panic's Go type and a stack trace — the counter tells you it
+happened, the log tells you where.
+
+**What this counter does not cover.** Only panics on the request's own goroutine. A panic
+on a goroutine a handler *spawns* is recovered somewhere else and is not counted, even
+though it happened during a request:
+
+| Site | Where it fires |
+|---|---|
+| `internal/safego` | Fan-out workers in the broker-status, queue-metrics and discard-stats handlers, and in the composite executor |
+| `internal/tokenexchange` | The singleflight goroutine that performs the IdP round trip |
+| `internal/observability/tracing` | The periodic OTLP self-stats loop (genuinely off the request path) |
+
+All three log `event=panic_recovered` and convert the panic into an error, which then
+returns through the handler normally — so the tool-dispatch net never sees it and
+`boundary="tool"` does not move. **An alert on the log attribute has wider reach than an
+alert on this metric.** Use the metric for the paging signal and the log for coverage.
+
+`http.ErrAbortHandler` is exempt on the `http` boundary. `net/http` uses it as a
+"client went away, say nothing" sentinel, and the MCP streamable/SSE path raises it on
+ordinary client disconnect; counting it would make a panic alert fire on routine teardown.
+
+Recovery is unconditional and does not depend on this counter. With `OBS_METRICS_ENABLED`
+off, no instrument is registered, both recovery sites still recover and still log, and the
+increment is a no-op.
+
 ### OTLP Export Health
 
 | Metric | Type | Labels | Basis |
@@ -304,7 +367,7 @@ Tracing](#distributed-tracing--interim-provider-wired-spans-not-yet-emitted)) �
 `mcp_otel_spans_dropped_total` sees a permanently absent series in that mode, which reads as
 healthy rather than as "not exposed here." The metric pair's own flag is OTLP metrics push
 (`OBS_METRICS_OTLP_ENABLED`, not `OBS_METRICS_ENABLED`, which governs the scrape surface alone;
-see [Metrics](#metrics--planned)). `reason` is a closed set on both: `queue_full`,
+see [Metrics](#metrics--planned-with-exceptions)). `reason` is a closed set on both: `queue_full`,
 `export_timeout`, `export_error`, `shutdown`.
 
 **`queue_full` is reserved but currently inert on the span pair** (SOL-152420): the OTel Go
@@ -1006,7 +1069,7 @@ need to spend review time on them:
   cluster-wide for other services, so an upgrade could silently start egressing telemetry from
   a Solace pod that nobody asked to export. An explicit capability flag keeps the decision
   yours, and it keeps this signal inside the same `OBS_*` model as every other capability. See
-  [Metrics](#metrics--planned).
+  [Metrics](#metrics--planned-with-exceptions).
 
 ---
 

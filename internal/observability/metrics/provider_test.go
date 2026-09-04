@@ -27,6 +27,8 @@ import (
 	"time"
 
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
+
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics"
 )
 
 // update regenerates the golden fixture. Regenerating is a deliberate,
@@ -69,6 +71,16 @@ func mcpFamilies(body string) string {
 
 // TestGoldenSchema pins the published mcp_* schema. A version bump that changes
 // rendering fails here before it can break a customer dashboard.
+//
+// mcp_panic_recovered_total (SOL-154037) is registered against this provider so
+// its published shape is pinned here too. Registering is enough: panics.Register
+// seeds both boundary series at zero, so a healthy process exposes them without
+// ever having panicked. That is what the fixture pins — the OTel-to-Prometheus
+// rendering of mcp.panic.recovered into mcp_panic_recovered_total, the counter
+// type, both boundary label values, and the HELP text. The instrument lives in
+// internal/observability/panics because its call sites reach it as process state
+// rather than through a provider; the golden file is still the contract for how
+// it appears on the wire.
 func TestGoldenSchema(t *testing.T) {
 	p, err := New(testVersion, sdkresource.Default())
 	if err != nil {
@@ -87,6 +99,9 @@ func TestGoldenSchema(t *testing.T) {
 	tm.IncActive(context.Background())
 	tm.DecActive(context.Background())
 
+	if err := panics.Register(p.MeterProvider()); err != nil {
+		t.Fatalf("panics.Register() error = %v", err)
+	}
 	got := mcpFamilies(scrapePlainText(t, p))
 
 	golden := filepath.Join("testdata", "metrics_golden.txt")

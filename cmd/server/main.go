@@ -49,6 +49,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/hooks"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/resource"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/tracing"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
@@ -1194,6 +1195,24 @@ func main() {
 			slog.Error("tool metrics unavailable", slog.String("error", tmErr.Error()))
 		} else {
 			toolMetrics = tm
+		}
+	}
+
+	// mcp_panic_recovered_total{boundary} (SOL-154037): the one counter both
+	// request-path recovery nets increment — recovery.HTTPMiddleware (wrapped
+	// around the mux by buildRootHandler below) and withRecovery (installed by
+	// RegisterWithServer below). Both reach it as process state rather than
+	// through a parameter; see the package doc on internal/observability/panics
+	// for why. Registered here, immediately after the provider itself is
+	// built and well before tool registration, the mux, or startServer below
+	// — so there is no window in which a request could be served before the
+	// counter exists. With no provider (metrics off, or its build failed)
+	// the counter is never registered and both sites' increments are no-ops.
+	// Recovery itself is unconditional either way, so a failure here costs a
+	// signal, not a safety net.
+	if metricsProvider != nil {
+		if err := panics.Register(metricsProvider.MeterProvider()); err != nil {
+			slog.Error("panic counter unavailable: registration failed", slog.String("error", err.Error()))
 		}
 	}
 
