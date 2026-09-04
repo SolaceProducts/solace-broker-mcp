@@ -26,6 +26,13 @@ import (
 // reader. Each test that asserts counts must call it, because the registered
 // instrument is package state: a test reusing a previous test's reader would see
 // that test's totals.
+//
+// This package cannot import internal/observability/panics/panicstest — that
+// package imports panics, and this file is package panics (white-box, for
+// direct access to the unexported counter below), so importing it back would be
+// a real import cycle, not a style choice. panicstest.InstallReader /
+// panicstest.Counts carry the equivalent logic for every other package's tests;
+// keep this copy and that one in sync by hand.
 func newTestReader(t *testing.T) *sdkmetric.ManualReader {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
@@ -38,7 +45,8 @@ func newTestReader(t *testing.T) *sdkmetric.ManualReader {
 }
 
 // countsByBoundary collects mcp.panic.recovered and returns its value per
-// boundary label. An absent metric yields an empty map.
+// boundary label. An absent metric yields an empty map. See newTestReader on
+// why this is not panicstest.Counts.
 func countsByBoundary(t *testing.T, reader *sdkmetric.ManualReader) map[string]int64 {
 	t.Helper()
 	var rm metricdata.ResourceMetrics

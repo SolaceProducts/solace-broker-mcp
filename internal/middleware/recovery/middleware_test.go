@@ -25,10 +25,7 @@ import (
 	"strings"
 	"testing"
 
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
-
-	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics/panicstest"
 )
 
 // panicHandler returns a handler that always panics with the given value.
@@ -311,54 +308,6 @@ func TestHTTPMiddleware_CleanPathWrites500(t *testing.T) {
 	}
 }
 
-// newPanicCounterReader installs a fresh mcp.panic.recovered counter against a
-// manual reader and returns the reader. The counter is process-level state (see
-// the package doc on internal/observability/panics), so every test that reads it
-// registers its own provider — which rebinds the global — and must not run in
-// parallel.
-//
-// The provider is deliberately NOT shut down on cleanup. This package cannot
-// unregister the global, so shutting it down would leave the process pointing at
-// a dead provider for the rest of the run; leaving it live keeps a later stray
-// increment harmless whatever order the tests execute in (-shuffle included).
-// A ManualReader holds no goroutines or connections, so nothing leaks by not
-// stopping it.
-func newPanicCounterReader(t *testing.T) *sdkmetric.ManualReader {
-	t.Helper()
-	reader := sdkmetric.NewManualReader()
-	if err := panics.Register(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))); err != nil {
-		t.Fatalf("panics.Register() error = %v", err)
-	}
-	return reader
-}
-
-// panicCountsByBoundary collects mcp.panic.recovered from reader and returns its
-// value per boundary label. An absent metric yields an empty map.
-func panicCountsByBoundary(t *testing.T, reader *sdkmetric.ManualReader) map[string]int64 {
-	t.Helper()
-	var rm metricdata.ResourceMetrics
-	if err := reader.Collect(context.Background(), &rm); err != nil {
-		t.Fatalf("Collect() error = %v", err)
-	}
-	got := map[string]int64{}
-	for _, sm := range rm.ScopeMetrics {
-		for _, m := range sm.Metrics {
-			if m.Name != "mcp.panic.recovered" {
-				continue
-			}
-			sum, ok := m.Data.(metricdata.Sum[int64])
-			if !ok {
-				t.Fatalf("mcp.panic.recovered data = %#v, want a Sum[int64]", m.Data)
-			}
-			for _, dp := range sum.DataPoints {
-				v, _ := dp.Attributes.Value("boundary")
-				got[v.AsString()] += dp.Value
-			}
-		}
-	}
-	return got
-}
-
 // TestHTTPMiddleware_IncrementsPanicCounter is the metrics half of SOL-154037 on
 // the HTTP boundary: a recovered panic must increment
 // mcp_panic_recovered_total{boundary="http"}, the series an SRE alerts on, while
@@ -366,11 +315,11 @@ func panicCountsByBoundary(t *testing.T, reader *sdkmetric.ManualReader) map[str
 // response assertions belong here on purpose — the ticket is telemetry-only, so
 // adding the counter must not have moved the status code or the body.
 func TestHTTPMiddleware_IncrementsPanicCounter(t *testing.T) {
-	reader := newPanicCounterReader(t)
+	reader := panicstest.InstallReader(t)
 
 	rec := drive(HTTPMiddleware(panicHandler("boom")))
 
-	got := panicCountsByBoundary(t, reader)
+	got := panicstest.Counts(t, reader)
 	if got["http"] != 1 {
 		t.Errorf(`mcp_panic_recovered_total{boundary="http"} = %d, want 1 (counts = %v)`, got["http"], got)
 	}
@@ -390,13 +339,16 @@ func TestHTTPMiddleware_IncrementsPanicCounter(t *testing.T) {
 // zero, which is what makes a flat-zero graph real evidence that nothing
 // panicked.
 func TestHTTPMiddleware_NoPanicNoCount(t *testing.T) {
-	reader := newPanicCounterReader(t)
+	reader := panicstest.InstallReader(t)
 
 	_ = drive(HTTPMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})))
 
-	got := panicCountsByBoundary(t, reader)
+	got := panicstest.Counts(t, reader)
+	if len(got) != 2 {
+		t.Fatalf("counts = %v, want both boundaries present", got)
+	}
 	if got["http"] != 0 || got["tool"] != 0 {
 		t.Errorf("counts = %v, want both boundaries at 0 for a request that did not panic", got)
 	}
@@ -407,7 +359,7 @@ func TestHTTPMiddleware_NoPanicNoCount(t *testing.T) {
 // client disconnect, not a bug; counting it would make a panic alert fire on
 // routine SSE teardown on /mcp.
 func TestHTTPMiddleware_ErrAbortHandlerNotCounted(t *testing.T) {
-	reader := newPanicCounterReader(t)
+	reader := panicstest.InstallReader(t)
 
 	handler := HTTPMiddleware(panicHandler(http.ErrAbortHandler))
 	func() {
@@ -416,7 +368,11 @@ func TestHTTPMiddleware_ErrAbortHandlerNotCounted(t *testing.T) {
 			httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil))
 	}()
 
-	if got := panicCountsByBoundary(t, reader); got["http"] != 0 {
+	got := panicstest.Counts(t, reader)
+	if len(got) != 2 {
+		t.Fatalf("counts = %v, want both boundaries present", got)
+	}
+	if got["http"] != 0 {
 		t.Errorf(`boundary="http" = %d, want 0: http.ErrAbortHandler is a client abort, not a recovered panic (counts = %v)`, got["http"], got)
 	}
 }

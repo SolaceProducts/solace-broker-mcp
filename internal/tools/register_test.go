@@ -25,11 +25,8 @@ import (
 	"strings"
 	"testing"
 
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
-
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
-	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics/panicstest"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -343,33 +340,6 @@ func findLogLine(t *testing.T, buf *bytes.Buffer, want string) map[string]any {
 	return found[0]
 }
 
-// panicCountsByBoundary collects mcp.panic.recovered from reader and returns its
-// value per boundary label. An absent metric yields an empty map.
-func panicCountsByBoundary(t *testing.T, reader *sdkmetric.ManualReader) map[string]int64 {
-	t.Helper()
-	var rm metricdata.ResourceMetrics
-	if err := reader.Collect(context.Background(), &rm); err != nil {
-		t.Fatalf("Collect() error = %v", err)
-	}
-	got := map[string]int64{}
-	for _, sm := range rm.ScopeMetrics {
-		for _, m := range sm.Metrics {
-			if m.Name != "mcp.panic.recovered" {
-				continue
-			}
-			sum, ok := m.Data.(metricdata.Sum[int64])
-			if !ok {
-				t.Fatalf("mcp.panic.recovered data = %#v, want a Sum[int64]", m.Data)
-			}
-			for _, dp := range sum.DataPoints {
-				v, _ := dp.Attributes.Value("boundary")
-				got[v.AsString()] += dp.Value
-			}
-		}
-	}
-	return got
-}
-
 // TestPanicIncrementsPanicCounter is the metrics half of SOL-154037 on the tool
 // boundary: a panicking handler must increment
 // mcp_panic_recovered_total{boundary="tool"} on the same counter the HTTP
@@ -378,14 +348,8 @@ func panicCountsByBoundary(t *testing.T, reader *sdkmetric.ManualReader) map[str
 // graph mean "nothing panicked" rather than "nothing ran".
 func TestPanicIncrementsPanicCounter(t *testing.T) {
 	// Not parallel: the panic counter is process-level state (see the package
-	// doc on internal/observability/panics). Registering rebinds the global, and
-	// the provider is deliberately left running — this package cannot unregister
-	// the global, so shutting it down would point the rest of the run at a dead
-	// provider. A ManualReader holds no goroutines, so nothing leaks.
-	reader := sdkmetric.NewManualReader()
-	if err := panics.Register(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))); err != nil {
-		t.Fatalf("panics.Register() error = %v", err)
-	}
+	// doc on internal/observability/panics and panicstest.InstallReader).
+	reader := panicstest.InstallReader(t)
 
 	pool := newRegTestPool(t)
 	mgr := NewToolManager(pool)
@@ -417,15 +381,15 @@ func TestPanicIncrementsPanicCounter(t *testing.T) {
 	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "ok-tool", Arguments: args}); err != nil {
 		t.Fatalf("CallTool(ok-tool): %v", err)
 	}
-	if got := panicCountsByBoundary(t, reader); got["tool"] != 0 {
-		t.Fatalf(`boundary="tool" = %d after a successful call, want 0 (counts = %v)`, got["tool"], got)
+	if got := panicstest.Counts(t, reader); len(got) != 2 || got["tool"] != 0 {
+		t.Fatalf(`boundary="tool" = %d after a successful call, want 0 with both boundaries present (counts = %v)`, got["tool"], got)
 	}
 
 	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "panic-tool", Arguments: args}); err != nil {
 		t.Fatalf("CallTool(panic-tool): %v", err)
 	}
 
-	got := panicCountsByBoundary(t, reader)
+	got := panicstest.Counts(t, reader)
 	if got["tool"] != 1 {
 		t.Errorf(`mcp_panic_recovered_total{boundary="tool"} = %d, want 1 (counts = %v)`, got["tool"], got)
 	}

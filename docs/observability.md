@@ -107,10 +107,14 @@ avoid. Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_
 
 ---
 
-## Metrics — [Planned]
+## Metrics — [Planned, with exceptions]
 
-> _Status: **[Planned]**. The `/metrics` endpoint and instruments are not yet wired in the
-> build; the following names, types, and labels are the proposal under review._
+> _Status: **[Planned, with exceptions]**. Most instrument names, types, and labels below
+> are the proposal under review, not yet wired in the build. Wired and emitted today: the
+> `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`,
+> `mcp_metrics_scrape_total`, the OTLP export-health counters, and
+> `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)). Assume
+> any other metric below is not yet emitted._
 
 All metrics are served on the `/metrics` endpoint in Prometheus text exposition
 format, behind `OBS_METRICS_ENABLED`. One exception: whether the authentication-failure
@@ -362,7 +366,7 @@ Tracing](#distributed-tracing--interim-provider-wired-spans-not-yet-emitted)) �
 `mcp_otel_spans_dropped_total` sees a permanently absent series in that mode, which reads as
 healthy rather than as "not exposed here." The metric pair's own flag is OTLP metrics push
 (`OBS_METRICS_OTLP_ENABLED`, not `OBS_METRICS_ENABLED`, which governs the scrape surface alone;
-see [Metrics](#metrics--planned)). `reason` is a closed set on both: `queue_full`,
+see [Metrics](#metrics--planned-with-exceptions)). `reason` is a closed set on both: `queue_full`,
 `export_timeout`, `export_error`, `shutdown`.
 
 **`queue_full` is reserved but currently inert on the span pair** (SOL-152420): the OTel Go
@@ -1064,7 +1068,7 @@ need to spend review time on them:
   cluster-wide for other services, so an upgrade could silently start egressing telemetry from
   a Solace pod that nobody asked to export. An explicit capability flag keeps the decision
   yours, and it keeps this signal inside the same `OBS_*` model as every other capability. See
-  [Metrics](#metrics--planned).
+  [Metrics](#metrics--planned-with-exceptions).
 
 ---
 
