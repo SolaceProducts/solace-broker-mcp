@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
@@ -50,13 +51,24 @@ func TestSharedResource_BothProvidersPreserveTheResourceTheyAreGiven(t *testing.
 	if err != nil {
 		t.Fatalf("metrics.New() error = %v", err)
 	}
-	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = mp.Shutdown(ctx)
+	})
 
+	// TracingEnabled: true means the OTLP gRPC exporter can attempt a flush
+	// against the default endpoint on shutdown — bounded so that has a
+	// ceiling rather than an unbounded wait (flagged by review).
 	tp, err := tracing.New(config.ObservabilityConfig{TracingEnabled: true, MetricsEnabled: true}, mp.MeterProvider(), res)
 	if err != nil {
 		t.Fatalf("tracing.New() error = %v", err)
 	}
-	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = tp.Shutdown(ctx)
+	})
 
 	if mp.Resource() != res {
 		t.Error("metrics.Provider.Resource() is not the exact resource passed to New — it was copied or replaced")
