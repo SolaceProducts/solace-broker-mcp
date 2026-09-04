@@ -35,6 +35,23 @@ import (
 // lists mean the same policy, not the same Go value.
 var sensitiveKeySubstrings = []string{"password", "token", "secret", "authorization", "credential", "api_key", "private_key"}
 
+// auditOnlySensitiveKeySubstrings extends the mirror above for a shape that
+// matters to a hashed SEMPv2 argument but has no equivalent in a log
+// attribute key: certificate/key *content* fields. Reachable today —
+// update-message-vpn's msgVpnConfig is bare `type: object` with no
+// additionalProperties:false, so MsgVpn.replicationBridgeAuthenticationClientCertContent
+// (a PEM private key) reaches this hash unconstrained. sensitiveKeySubstrings'
+// api_key/private_key entries are snake_case and do not match SEMPv2's
+// camelCase field names, but that separator mismatch is not the fix here —
+// no shipped tool exposes a field actually named apiKey or privateKey. The
+// miss is a missing term, not a missing case-fold, so it is fixed by adding
+// terms rather than normalizing separators.
+//
+// Kept as a second list rather than folded into sensitiveKeySubstrings so
+// that var stays a byte-identical mirror of cmd/server's redactedKeys —
+// diffing the two files for drift stays meaningful.
+var auditOnlySensitiveKeySubstrings = []string{"certcontent", "keytab", "passphrase"}
+
 // redactedPlaceholder replaces a sensitive value before hashing. Fixed rather
 // than derived from the original value, so that two calls differing only in a
 // redacted field's value — for example a broker's replication bridge password
@@ -87,11 +104,16 @@ func redactValue(v any) any {
 	}
 }
 
-// isSensitiveKey reports whether key matches sensitiveKeySubstrings,
-// case-insensitively.
+// isSensitiveKey reports whether key matches sensitiveKeySubstrings or
+// auditOnlySensitiveKeySubstrings, case-insensitively.
 func isSensitiveKey(key string) bool {
 	lower := strings.ToLower(key)
 	for _, s := range sensitiveKeySubstrings {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	for _, s := range auditOnlySensitiveKeySubstrings {
 		if strings.Contains(lower, s) {
 			return true
 		}

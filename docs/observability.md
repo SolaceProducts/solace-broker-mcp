@@ -497,6 +497,7 @@ records means your log level, not your flag.
 | `broker` | The broker targeted | string |
 | `outcome` | The result; see [The Outcome Vocabulary](#the-outcome-vocabulary) | string |
 | `error_type` | Why an operation failed; present on `outcome: error` only. Five of the twelve values reach an audit record, see [`error_type`](#error_type) | string (closed set) |
+| `panic_recovered` | On `operation` only: present and `true` when a destructive handler crashed and was recovered (`outcome: error`, `error_type: panic`) | boolean |
 | `arguments_hash` | SHA-256 over an RFC 8785 (JCS) canonicalization of the call arguments | hex string |
 | `correlation_id` | Join key to logs, traces, and the broker-side entry | string |
 | `reason` | Why authentication or authorization failed; present on `auth_failure`, `authz_denied`, and `broker_authz_denied` | string (closed set, one per record type) |
@@ -518,15 +519,15 @@ not belong to a request.
 Reading the table: **yes** means always present, **opt** means present when there is a value
 (see the notes below each column's meaning of that), and **—** means never present.
 
-| `audit_event_type` | `outcome` | `error_type` | `reason` | `tool` | `arguments_hash` | `started_at_utc`, `duration_ms` | `broker` | `principal.sub`, `agent_client_id` | `dropped_audit_event_type` |
-|---|---|---|---|---|---|---|---|---|---|
-| `operation` | yes | on `error` only | — | yes | yes | yes | yes | opt | — |
-| `auth_success` | — | — | — | — | — | — | — | opt | — |
-| `auth_failure` | — | — | yes | — | — | — | — | opt | — |
-| `authz_denied` | — | — | yes | yes | — | — | — | opt | — |
-| `broker_authz_denied` | — | — | yes | yes | — | — | yes | opt | — |
-| `broker_auth_retry` | `success` or `error` | — | — | — | — | opt | yes | opt | — |
-| `audit_drop` | — | — | — | opt | — | — | opt | — | opt |
+| `audit_event_type` | `outcome` | `error_type` | `reason` | `tool` | `arguments_hash` | `started_at_utc`, `duration_ms` | `broker` | `principal.sub`, `agent_client_id` | `dropped_audit_event_type` | `panic_recovered` |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `operation` | yes | on `error` only | — | yes | yes | yes | yes | opt | — | opt |
+| `auth_success` | — | — | — | — | — | — | — | opt | — | — |
+| `auth_failure` | — | — | yes | — | — | — | — | opt | — | — |
+| `authz_denied` | — | — | yes | yes | — | — | — | opt | — | — |
+| `broker_authz_denied` | — | — | yes | yes | — | — | yes | opt | — | — |
+| `broker_auth_retry` | `success` or `error` | — | — | — | — | opt | yes | opt | — | — |
+| `audit_drop` | — | — | — | opt | — | — | opt | — | opt | — |
 
 - **The identity columns are `opt`, not `yes`.** `principal.sub` and `agent_client_id` are
   present whenever a principal was authenticated, and absent when there is none to name —

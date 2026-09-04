@@ -770,8 +770,25 @@ func TestHashArgsForAudit_unhashableArgumentsEmitADrop(t *testing.T) {
 		t.Errorf("hashArgsForAudit returned %q for unhashable arguments; an empty string is what "+
 			"suppresses an operation record whose arguments_hash would stand for nothing", hash)
 	}
-	if got := len(ofType(records, audit.EventAuditDrop)); got != 1 {
+	drops := ofType(records, audit.EventAuditDrop)
+	if got := len(drops); got != 1 {
 		t.Fatalf("want exactly one audit_drop when the arguments cannot be hashed, got %d:\n%v", got, records)
+	}
+	// The drop must name what was lost — mutation-verified elsewhere
+	// (TestEmitDrop_carriesAttribution) that this is not free: deleting the
+	// attribution fields from EmitDrop's call leaves this assertion the only
+	// thing that would notice on this call site specifically.
+	for _, check := range []struct {
+		key  string
+		want string
+	}{
+		{"dropped_audit_event_type", "operation"},
+		{"tool", "delete-queue"},
+		{"broker", "dev"},
+	} {
+		if got := drops[0][check.key]; got != check.want {
+			t.Errorf("audit_drop %s = %v, want %q", check.key, got, check.want)
+		}
 	}
 	// The failure detail must name the Go type only: the wrapped encoding/json
 	// error renders the offending value, and that value is a tool argument.

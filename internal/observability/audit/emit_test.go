@@ -257,6 +257,39 @@ func TestEmitDrop_writesTheNotice(t *testing.T) {
 	}
 }
 
+// TestEmitDrop_carriesAttribution pins that DropContext's fields actually
+// reach the record: mutation-verified — deleting DroppedEventType/Tool/Broker
+// from EmitDrop's Fields literal left every other test in this package and
+// internal/tools green, which is exactly the regression this test exists to
+// catch on the one record type whose whole job is to explain a gap in the
+// audit trail.
+func TestEmitDrop_carriesAttribution(t *testing.T) {
+	records := captureRecords(t, slog.LevelDebug, func() {
+		EmitDrop(context.Background(), DropContext{
+			DroppedEventType: EventOperation,
+			Tool:             "delete-queue",
+			Broker:           "dev",
+		})
+	})
+
+	if len(records) != 1 {
+		t.Fatalf("wrote %d record(s), want 1: %v", len(records), records)
+	}
+	rec := records[0]
+	for _, check := range []struct {
+		key  string
+		want string
+	}{
+		{"dropped_audit_event_type", string(EventOperation)},
+		{"tool", "delete-queue"},
+		{"broker", "dev"},
+	} {
+		if got := rec[check.key]; got != check.want {
+			t.Errorf("%s = %v, want %q", check.key, got, check.want)
+		}
+	}
+}
+
 // TestEmit_honoursReplaceAttr pins that audit records go through the server's
 // configured handler, not around it. The handler is where this repo's
 // redaction safety net lives, and a record written past it would be the one

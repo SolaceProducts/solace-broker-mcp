@@ -284,9 +284,15 @@ func TestHashArgs_doesNotMutateCaller(t *testing.T) {
 // digest that no log line would ever have carried.
 func TestRedactSensitive_matchesRuleThreeKeys(t *testing.T) {
 	t.Parallel()
-	// api_key and private_key are snake_case literal substrings, matching Rule
-	// 3 and cmd/server's redactedKeys exactly — a camelCase apiKey/privateKey
-	// is a known gap in that shared pattern, not something to fix here.
+	// api_key and private_key are snake_case literal substrings, matching
+	// Rule 3 and cmd/server's redactedKeys exactly. A camelCase
+	// apiKey/privateKey not matching is a known gap in that specific
+	// separator, narrowly: no shipped SEMPv2 tool argument is actually named
+	// apiKey or privateKey, so it is unreachable. That narrow gap is NOT
+	// blanket clearance for other camelCase secrets to go unmatched — see
+	// TestRedactSensitive_reachableCertContentField for a term that is both
+	// camelCase AND reachable, which is why it is a separate entry in
+	// auditOnlySensitiveKeySubstrings rather than "the same known gap."
 	cases := []string{
 		"password", "Password", "brokerPassword",
 		"token", "authToken", "Authorization",
@@ -304,6 +310,30 @@ func TestRedactSensitive_matchesRuleThreeKeys(t *testing.T) {
 				t.Errorf("RedactSensitive() touched an unrelated key: msgVpnName = %v", got["msgVpnName"])
 			}
 		})
+	}
+}
+
+// TestRedactSensitive_reachableCertContentField pins the field
+// sensitiveKeySubstrings' Rule-3 mirror cannot catch, but a real destructive
+// tool call can reach: update-message-vpn's msgVpnConfig is bare
+// `type: object` with no additionalProperties:false, so
+// replicationBridgeAuthenticationClientCertContent — a PEM containing a
+// private key — reaches hashArgsForAudit unconstrained. Unlike the
+// api_key/private_key separator gap above, this one is reachable in
+// production today, which is why it is fixed by adding "certcontent" to
+// auditOnlySensitiveKeySubstrings rather than left as a documented gap.
+func TestRedactSensitive_reachableCertContentField(t *testing.T) {
+	t.Parallel()
+	const key = "replicationBridgeAuthenticationClientCertContent"
+	got := RedactSensitive(map[string]any{
+		key:          "-----BEGIN PRIVATE KEY-----\nMII...\n-----END PRIVATE KEY-----",
+		"msgVpnName": "default",
+	})
+	if got[key] != redactedPlaceholder {
+		t.Errorf("RedactSensitive()[%q] = %v, want %q", key, got[key], redactedPlaceholder)
+	}
+	if got["msgVpnName"] != "default" {
+		t.Errorf("RedactSensitive() touched an unrelated key: msgVpnName = %v", got["msgVpnName"])
 	}
 }
 
