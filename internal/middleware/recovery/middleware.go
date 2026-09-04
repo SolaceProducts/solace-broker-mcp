@@ -104,15 +104,6 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 					slog.String("panic_type", fmt.Sprintf("%T", rec)),
 					slog.String("stack", string(debug.Stack())))
 
-				// mcp_panic_recovered_total{boundary="http"} (SOL-154037): the
-				// alertable signal. The log above says what happened; this says
-				// that it happened, to something watching from outside the
-				// process. A no-op when metrics are disabled — recovery itself
-				// stays unconditional either way. Raised AFTER the
-				// ErrAbortHandler re-raise above, so a client disconnect never
-				// counts as a panic.
-				panics.Recovered(r.Context(), panics.BoundaryHTTP)
-
 				// Best-effort 500, but only when the response is NOT yet committed.
 				// Once a handler has committed a status and written body bytes the
 				// response is on the wire and CANNOT be un-sent: WriteHeader would
@@ -126,6 +117,20 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 					rw.WriteHeader(http.StatusInternalServerError)
 					_, _ = rw.Write([]byte(internalErrorBody))
 				}
+
+				// mcp_panic_recovered_total{boundary="http"} (SOL-154037): the
+				// alertable signal. The log above says what happened; this says
+				// that it happened, to something watching from outside the
+				// process. A no-op when metrics are disabled — recovery itself
+				// stays unconditional either way.
+				//
+				// Deliberately LAST. recover() has already consumed the original
+				// panic, so a second panic raised in this deferred function would
+				// unwind past it; running the caller's response first means a
+				// telemetry fault could only cost a metric, never the response.
+				// Recorded AFTER the ErrAbortHandler re-raise above, so a client
+				// disconnect never counts as a panic.
+				panics.RecoveredHTTP(r.Context())
 			}
 		}()
 		next.ServeHTTP(rw, r)

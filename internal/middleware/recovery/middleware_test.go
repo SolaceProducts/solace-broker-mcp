@@ -386,8 +386,9 @@ func TestHTTPMiddleware_IncrementsPanicCounter(t *testing.T) {
 }
 
 // TestHTTPMiddleware_NoPanicNoCount pins that the counter measures panics, not
-// requests: a handler that returns normally leaves the series absent, so a
-// flat-zero graph is real evidence that nothing panicked.
+// requests: a handler that returns normally leaves both series at their seeded
+// zero, which is what makes a flat-zero graph real evidence that nothing
+// panicked.
 func TestHTTPMiddleware_NoPanicNoCount(t *testing.T) {
 	reader := newPanicCounterReader(t)
 
@@ -395,8 +396,9 @@ func TestHTTPMiddleware_NoPanicNoCount(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})))
 
-	if got := panicCountsByBoundary(t, reader); len(got) != 0 {
-		t.Errorf("counts = %v, want none for a request that did not panic", got)
+	got := panicCountsByBoundary(t, reader)
+	if got["http"] != 0 || got["tool"] != 0 {
+		t.Errorf("counts = %v, want both boundaries at 0 for a request that did not panic", got)
 	}
 }
 
@@ -414,7 +416,7 @@ func TestHTTPMiddleware_ErrAbortHandlerNotCounted(t *testing.T) {
 			httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil))
 	}()
 
-	if got := panicCountsByBoundary(t, reader); len(got) != 0 {
-		t.Errorf("counts = %v, want none: http.ErrAbortHandler is a client abort, not a recovered panic", got)
+	if got := panicCountsByBoundary(t, reader); got["http"] != 0 {
+		t.Errorf(`boundary="http" = %d, want 0: http.ErrAbortHandler is a client abort, not a recovered panic (counts = %v)`, got["http"], got)
 	}
 }

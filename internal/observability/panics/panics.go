@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package panics owns mcp_panic_recovered_total{boundary}, the single counter
-// both request-path panic nets increment when they trap a panic:
+// incremented by the two recovery nets that guard a request's OWN goroutine:
 // recovery.HTTPMiddleware (internal/middleware/recovery, boundary "http") and
 // withRecovery (internal/tools, boundary "tool").
 //
@@ -21,6 +21,20 @@
 // log line an operator had to know to grep for; nothing outside the process
 // could alert on it (SOL-154037, closing the outstanding acceptance criteria of
 // SOL-151286 and SOL-151287).
+//
+// # What this counter does NOT cover
+//
+// Only panics on the request's own goroutine. A panic on a goroutine a handler
+// SPAWNS is recovered elsewhere and is not counted here, even though it happens
+// during a request: internal/safego (the fan-out workers in the brokerstatus,
+// queuemetrics and discardstats handlers and in the composite executor) and
+// internal/tokenexchange (the singleflight goroutine) both recover and convert
+// the panic into an error, which then returns through the handler normally, so
+// withRecovery's recover never fires. Those sites log event="panic_recovered"
+// but do not increment this counter. An alert on the log attribute therefore has
+// wider reach than an alert on this metric; docs/observability.md says so too.
+// Widening the counter to cover them means adding a boundary here and a row
+// there — deliberately, not by accident.
 //
 // # Why the counter is package state and not a parameter
 //
@@ -38,8 +52,9 @@
 // telemetry (slog.Default()) for the same reason.
 //
 // Register is called once, from cmd/server/main.go, when metrics are enabled.
-// Until then — and permanently when OBS_METRICS_ENABLED is false — Recovered is
-// a no-op. Recovery itself is unconditional and never depends on this package.
+// Until then — and permanently when OBS_METRICS_ENABLED is false — the record
+// functions are no-ops. Recovery itself is unconditional and never depends on
+// this package.
 package panics
 
 import (
@@ -49,23 +64,16 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
 
-// Boundary names the recovery net that trapped the panic. Its label value is an
-// unexported field, so no package outside this one can construct a third value:
-// mcp_panic_recovered_total's two-series cardinality bound is a compiler
-// guarantee, not a convention a reviewer has to police. Adding a boundary means
-// adding a var here and a row to docs/observability.md, which is the point.
-type Boundary struct{ name string }
-
-var (
-	// BoundaryHTTP is recovery.HTTPMiddleware: a panic on an HTTP handler's own
-	// goroutine, converted to a clean 500.
-	BoundaryHTTP = Boundary{name: "http"}
-	// BoundaryTool is withRecovery in internal/tools: a panic on the SDK's
-	// tool-handler goroutine, converted to an IsError tool result.
-	BoundaryTool = Boundary{name: "tool"}
+// The two boundary label values. They are unexported, and the only way to record
+// against either is RecoveredHTTP or RecoveredTool, so no caller can name a
+// third: mcp_panic_recovered_total's two-series cardinality bound is a property
+// of this package's API, not a convention a reviewer has to police. Adding a
+// boundary means adding a function here and a row in docs/observability.md.
+const (
+	boundaryHTTP = "http"
+	boundaryTool = "tool"
 )
 
 // instrumentScope names the meter that owns this instrument, matching the
@@ -73,19 +81,28 @@ var (
 const instrumentScope = "github.com/SolaceProducts/solace-broker-mcp"
 
 // counter holds the registered instrument, or nil before Register runs. It is
-// an atomic pointer because Register happens on the startup goroutine while
-// Recovered is called from request goroutines; a plain field would be a data
-// race even though the write happens once.
+// an atomic pointer because Register happens on the startup goroutine while the
+// record functions are called from request goroutines; a plain field would be a
+// data race even though the write happens once.
 var counter atomic.Pointer[metric.Int64Counter]
 
-// Register creates mcp_panic_recovered_total{boundary} against meterProvider
-// and installs it as the counter Recovered increments. Call it once at startup,
-// only when metrics are enabled; cmd/server/main.go owns that gate.
+// Register creates mcp_panic_recovered_total{boundary} against meterProvider and
+// installs it as the counter the record functions increment. Call it once at
+// startup, only when metrics are enabled; cmd/server/main.go owns that gate.
 //
-// A nil meterProvider is a caller error rather than a silent no-op: the only
-// way to get one here is to call Register when metrics are off, which the
-// caller is supposed to decide, not this package.
-func Register(meterProvider *sdkmetric.MeterProvider) error {
+// It seeds both series at zero before returning. That is not cosmetic: an OTel
+// counter renders no series at all until it has a data point, and PromQL's
+// rate/increase need two samples in the window, so the sample that CREATES a
+// series is only a baseline. Without the seed, `increase(...) > 0` — the alert
+// docs/observability.md prescribes — would not fire on a process's first panic,
+// which for a bug that reached production is the case that matters most. Seeding
+// also makes a flat zero mean "nothing panicked" instead of "No data", and makes
+// absent() a usable "the counter was never wired" alert.
+//
+// A nil meterProvider is a caller error rather than a silent no-op: the only way
+// to get one here is to call Register when metrics are off, which the caller is
+// supposed to decide, not this package.
+func Register(meterProvider metric.MeterProvider) error {
 	if meterProvider == nil {
 		return fmt.Errorf("panics: meterProvider must not be nil (do not call Register when metrics are disabled)")
 	}
@@ -97,23 +114,28 @@ func Register(meterProvider *sdkmetric.MeterProvider) error {
 		return fmt.Errorf("register mcp_panic_recovered_total: %w", err)
 	}
 	counter.Store(&c)
+
+	ctx := context.Background()
+	record(ctx, boundaryHTTP, 0)
+	record(ctx, boundaryTool, 0)
 	return nil
 }
 
-// Recovered records one recovered panic at boundary. It is a no-op when
-// Register has not run (metrics disabled), so a recovery site can call it
-// unconditionally without knowing whether metrics are on.
-//
-// Boundary's unexported field means the only value a caller can pass that this
-// package did not define is the zero Boundary, which is dropped rather than
-// recorded as an empty label. Every real call site passes a package var.
-func Recovered(ctx context.Context, boundary Boundary) {
-	if boundary.name == "" {
-		return
-	}
+// RecoveredHTTP records one panic trapped by recovery.HTTPMiddleware. It is a
+// no-op when Register has not run (metrics disabled), so the recovery site can
+// call it unconditionally without knowing whether metrics are on.
+func RecoveredHTTP(ctx context.Context) { record(ctx, boundaryHTTP, 1) }
+
+// RecoveredTool records one panic trapped by withRecovery in internal/tools.
+// It is a no-op when Register has not run (metrics disabled).
+func RecoveredTool(ctx context.Context) { record(ctx, boundaryTool, 1) }
+
+// record adds n to the counter for boundary, doing nothing until Register has
+// installed an instrument.
+func record(ctx context.Context, boundary string, n int64) {
 	c := counter.Load()
 	if c == nil {
 		return
 	}
-	(*c).Add(ctx, 1, metric.WithAttributes(attribute.String("boundary", boundary.name)))
+	(*c).Add(ctx, n, metric.WithAttributes(attribute.String("boundary", boundary)))
 }

@@ -22,15 +22,14 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
-// newTestReader installs a fresh counter against a manual reader and returns
-// the reader. Each test that asserts counts must call it, because the
-// registered instrument is package state: a test that reused a previous test's
-// reader would read that test's totals.
+// newTestReader installs a fresh counter against a manual reader and returns the
+// reader. Each test that asserts counts must call it, because the registered
+// instrument is package state: a test reusing a previous test's reader would see
+// that test's totals.
 func newTestReader(t *testing.T) *sdkmetric.ManualReader {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
 	t.Cleanup(func() { counter.Store(nil) })
 	if err := Register(mp); err != nil {
 		t.Fatalf("Register() error = %v", err)
@@ -39,8 +38,7 @@ func newTestReader(t *testing.T) *sdkmetric.ManualReader {
 }
 
 // countsByBoundary collects mcp.panic.recovered and returns its value per
-// boundary label. An absent metric yields an empty map, which is how a
-// never-incremented counter reads.
+// boundary label. An absent metric yields an empty map.
 func countsByBoundary(t *testing.T, reader *sdkmetric.ManualReader) map[string]int64 {
 	t.Helper()
 	var rm metricdata.ResourceMetrics
@@ -69,6 +67,25 @@ func countsByBoundary(t *testing.T, reader *sdkmetric.ManualReader) map[string]i
 	return got
 }
 
+// TestRegister_SeedsBothSeriesAtZero is the alertability guarantee. An OTel
+// counter renders nothing until it has a data point, and PromQL's increase()
+// needs two samples in the window, so a series created BY the first panic makes
+// that panic invisible to `increase(...) > 0` — the alert the schema prescribes,
+// on exactly the event it exists for. Seeding at registration is what makes the
+// first panic in a process's life fire the alert, and what makes a flat zero
+// mean "nothing panicked" rather than "No data".
+func TestRegister_SeedsBothSeriesAtZero(t *testing.T) {
+	reader := newTestReader(t)
+
+	got := countsByBoundary(t, reader)
+	if len(got) != 2 {
+		t.Fatalf("series after Register = %v, want both boundaries present at zero", got)
+	}
+	if got["http"] != 0 || got["tool"] != 0 {
+		t.Errorf("seeded values = %v, want both 0", got)
+	}
+}
+
 // TestRecovered_CountsPerBoundary is the AC-level proof that the two recovery
 // nets land on one counter, separated by the boundary label rather than by two
 // different metric names.
@@ -76,9 +93,9 @@ func TestRecovered_CountsPerBoundary(t *testing.T) {
 	reader := newTestReader(t)
 	ctx := context.Background()
 
-	Recovered(ctx, BoundaryHTTP)
-	Recovered(ctx, BoundaryTool)
-	Recovered(ctx, BoundaryTool)
+	RecoveredHTTP(ctx)
+	RecoveredTool(ctx)
+	RecoveredTool(ctx)
 
 	got := countsByBoundary(t, reader)
 	if len(got) != 2 {
@@ -103,45 +120,33 @@ func TestRecovered_RecordsOnCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	Recovered(ctx, BoundaryHTTP)
+	RecoveredHTTP(ctx)
 
 	if got := countsByBoundary(t, reader); got["http"] != 1 {
 		t.Errorf(`boundary="http" = %d, want 1 on a cancelled context (counts = %v)`, got["http"], got)
 	}
 }
 
-// TestRecovered_ZeroBoundaryIsDropped covers the one invalid value the type
-// system cannot rule out. Boundary's field is unexported, so no other package
-// can name a third boundary, but `var b Boundary` still compiles; that must not
-// record an empty label and create a third series.
-func TestRecovered_ZeroBoundaryIsDropped(t *testing.T) {
-	reader := newTestReader(t)
-
-	var unset Boundary
-	Recovered(context.Background(), unset)
-
-	if got := countsByBoundary(t, reader); len(got) != 0 {
-		t.Errorf("counts = %v, want none (the zero Boundary must not widen cardinality)", got)
-	}
-}
-
 // TestRecovered_NoOpBeforeRegister covers the OBS_METRICS_ENABLED=false case:
-// with no meter provider ever supplied, a recovery site still calls Recovered
-// on every panic and must neither panic nor record. The recovery nets
-// themselves are unconditional, so this is the normal state with metrics off.
+// with no meter provider ever supplied, a recovery site still calls these on
+// every panic and must neither panic nor record. The recovery nets themselves
+// are unconditional, so this is the normal state with metrics off.
 func TestRecovered_NoOpBeforeRegister(t *testing.T) {
 	counter.Store(nil)
 	t.Cleanup(func() { counter.Store(nil) })
 
-	Recovered(context.Background(), BoundaryHTTP)
-	Recovered(context.Background(), BoundaryTool)
+	RecoveredHTTP(context.Background())
+	RecoveredTool(context.Background())
 }
 
 // TestRegister_NilMeterProviderIsRejected pins that Register refuses a nil
-// provider rather than quietly leaving the counter unregistered. The only way
-// to reach it is calling Register with metrics disabled, which is the caller's
-// gate to get right.
+// provider rather than quietly leaving the counter unregistered. The only way to
+// reach it is calling Register with metrics disabled, which is the caller's gate
+// to get right.
 func TestRegister_NilMeterProviderIsRejected(t *testing.T) {
+	counter.Store(nil)
+	t.Cleanup(func() { counter.Store(nil) })
+
 	if err := Register(nil); err == nil {
 		t.Fatal("Register(nil) error = nil, want an error")
 	}

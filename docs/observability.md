@@ -294,8 +294,8 @@ flat-zero series is your evidence that no audit event was lost. Alert on any inc
 |---|---|---|---|
 | `mcp_panic_recovered_total` | Counter | `boundary` | Solace |
 
-One counter for both of the server's request-path panic nets, separated by `boundary`
-rather than split into two metric names, so a single alert covers both:
+One counter for the two panic nets that guard a request's own goroutine, separated by
+`boundary` rather than split into two metric names, so a single alert covers both:
 
 - `http` — the HTTP middleware wrapping the whole mux. The panicking request gets a clean
   `500`; the process keeps serving.
@@ -303,17 +303,37 @@ rather than split into two metric names, so a single alert covers both:
   (`isError: true`, `retryable: false`) over a successful MCP call, per the spec's
   application-error convention.
 
-**Cardinality:** 2. `boundary` is a closed set of exactly those two values, closed by the
-type system rather than by convention: the label value is unreachable outside the package
-that owns the counter, so a future recovery site cannot widen this series set without a
-deliberate change there and a matching row here.
+**Cardinality:** 2. Neither label value can be named from outside the package that owns the
+counter, which exposes one recording function per boundary and no way to pass an arbitrary
+one. A future recovery site cannot widen this series set without a deliberate change there
+and a matching row here.
+
+**Both series are published at zero from startup**, before anything panics. A counter that
+appeared only on its first increment would defeat the alert below: PromQL's `increase()`
+needs two samples in the window, so the sample that creates a series is only a baseline and
+a process's first panic would pass unnoticed. Seeding also means a flat zero reads as
+"nothing panicked" rather than "No data", and makes `absent(mcp_panic_recovered_total)` a
+usable alert for "metrics are on but the counter was never wired".
 
 A recovered panic is a bug that reached production, not a load condition. **Alert on any
 increase**, on either boundary. Each increment is paired with an `event=panic_recovered`
 ERROR log carrying the panic's Go type and a stack trace — the counter tells you it
-happened, the log tells you where. The same `event` value also marks the three panic nets
-outside the request path (worker goroutines, token exchange, the OTLP self-stats loop),
-which this counter does not cover — so a log-based alert has wider reach than this metric.
+happened, the log tells you where.
+
+**What this counter does not cover.** Only panics on the request's own goroutine. A panic
+on a goroutine a handler *spawns* is recovered somewhere else and is not counted, even
+though it happened during a request:
+
+| Site | Where it fires |
+|---|---|
+| `internal/safego` | Fan-out workers in the broker-status, queue-metrics and discard-stats handlers, and in the composite executor |
+| `internal/tokenexchange` | The singleflight goroutine that performs the IdP round trip |
+| `internal/observability/tracing` | The periodic OTLP self-stats loop (genuinely off the request path) |
+
+All three log `event=panic_recovered` and convert the panic into an error, which then
+returns through the handler normally — so the tool-dispatch net never sees it and
+`boundary="tool"` does not move. **An alert on the log attribute has wider reach than an
+alert on this metric.** Use the metric for the paging signal and the log for coverage.
 
 `http.ErrAbortHandler` is exempt on the `http` boundary. `net/http` uses it as a
 "client went away, say nothing" sentinel, and the MCP streamable/SSE path raises it on

@@ -417,8 +417,8 @@ func TestPanicIncrementsPanicCounter(t *testing.T) {
 	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "ok-tool", Arguments: args}); err != nil {
 		t.Fatalf("CallTool(ok-tool): %v", err)
 	}
-	if got := panicCountsByBoundary(t, reader); len(got) != 0 {
-		t.Fatalf("counts = %v after a successful call, want none", got)
+	if got := panicCountsByBoundary(t, reader); got["tool"] != 0 {
+		t.Fatalf(`boundary="tool" = %d after a successful call, want 0 (counts = %v)`, got["tool"], got)
 	}
 
 	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "panic-tool", Arguments: args}); err != nil {

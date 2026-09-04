@@ -93,12 +93,6 @@ func withRecovery(toolName string, h mcp.ToolHandler) mcp.ToolHandler {
 					slog.String("panic_type", fmt.Sprintf("%T", r)),
 					slog.String("stack", string(debug.Stack())))
 
-				// mcp_panic_recovered_total{boundary="tool"} (SOL-154037):
-				// the same counter recovery.HTTPMiddleware increments, so one
-				// alert covers both recovery nets. A no-op when metrics are
-				// disabled; recovery itself stays unconditional.
-				panics.Recovered(ctx, panics.BoundaryTool)
-
 				result = &mcp.CallToolResult{
 					StructuredContent: map[string]any{
 						"error":     serverInternalErrorMessage,
@@ -108,6 +102,19 @@ func withRecovery(toolName string, h mcp.ToolHandler) mcp.ToolHandler {
 					IsError: true,
 				}
 				err = nil
+
+				// mcp_panic_recovered_total{boundary="tool"} (SOL-154037):
+				// the same counter recovery.HTTPMiddleware increments, so one
+				// alert covers both recovery nets. A no-op when metrics are
+				// disabled; recovery itself stays unconditional.
+				//
+				// Deliberately after the result is built. recover() has already
+				// consumed the original panic, and the SDK runs this handler on
+				// a goroutine with no recover() of its own, so a second panic
+				// raised here would kill the process — the exact failure
+				// withRecovery exists to prevent. Building the caller's result
+				// first means a telemetry fault could only cost a metric.
+				panics.RecoveredTool(ctx)
 			}
 			// Stamp the correlation ID onto the result on the way out. This
 			// runs after both the normal return AND the panic-recovery branch
