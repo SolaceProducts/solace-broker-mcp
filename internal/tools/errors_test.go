@@ -435,15 +435,23 @@ func TestBuildErrorMessage(t *testing.T) {
 			"Queue not found",
 			[]string{"Verify the name is correct."},
 		},
-		// SOL-153341 AC4 (descoped): MAX_NUM_SUBSCRIPTIONS_EXCEEDED (403) gets the
-		// same generic hint as MAX_NUM_EXCEEDED (135) — no scope or count claim,
-		// see translatedErrorCodes' doc comment for why.
+		// SOL-153341 AC4 (descoped): neither 135 nor 403 names which limit was
+		// hit or its current count — see translatedErrorCodes' doc comment for
+		// why each hint instead says plainly that the scope is unknown, and why
+		// the two hints name different scope pairs (per-VPN vs. per-queue).
+		{
+			"sempv2 code 135 (max num exceeded) yields generic limit hint",
+			&sempv2.SEMPError{StatusCode: 400, SEMPCode: 135, Description: "max num queues exceeded"},
+			"broker-eu-prod",
+			"max num queues exceeded",
+			[]string{"A configured maximum was reached; this tool can't tell whether the limit is broker-wide or per-VPN."},
+		},
 		{
 			"sempv2 code 403 (max subscriptions) yields generic limit hint",
 			&sempv2.SEMPError{StatusCode: 400, SEMPCode: 403, Description: "max num subscriptions exceeded"},
 			"broker-eu-prod",
 			"max num subscriptions exceeded",
-			[]string{"A configured maximum was reached."},
+			[]string{"A configured maximum was reached; this tool can't tell whether the limit is broker-wide or per-queue."},
 		},
 		// Code 72 (permission denied) with a known alias: message is replaced with
 		// an alias-tagged line and the generic role/VPN-scope hint is suppressed.

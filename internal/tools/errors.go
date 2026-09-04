@@ -48,15 +48,19 @@ type codeInfo struct {
 // Note that the comRc_t code corresponds to the SEMPv2 error.code / SEMPv1 reasonCode.
 //
 // 135 (MAX_NUM_EXCEEDED) and 403 (MAX_NUM_SUBSCRIPTIONS_EXCEEDED) deliberately
-// share the same generic hint rather than naming which limit was hit or its
-// current count (SOL-153341 AC4, descoped after review with the ticket
-// owner). Two broker-source findings drove that: subscription creation
-// checks a broker-wide total and a per-queue total with `||`
-// (adQueueCommand.cpp / moTypeHdlrQendpt.cpp) and the broker itself doesn't
-// retain which side tripped, so a confident per-object-type claim would be a
-// guess; and an accurate broker-wide count for the other limit families
-// (queues, endpoints, REST delivery points) has no single SEMP call — it
-// would mean enumerating every VPN. Scoping and live counts are tracked as a
+// stop short of naming which limit was hit or its current count (SOL-153341
+// AC4, descoped after review with the ticket owner) — each hint instead says
+// plainly that the tool can't tell, so a caller doesn't mistake silence for
+// certainty and act on the wrong scope. The two hints differ because the
+// broker-source finding differs per code: subscription creation (403) checks
+// a broker-wide total and a per-queue total with `||`
+// (adQueueCommand.cpp / moTypeHdlrQendpt.cpp), and the broker itself doesn't
+// retain which side tripped, so a confident claim there would be a guess
+// between broker-wide and per-queue; the other limit families 135 covers
+// (queues, endpoints, REST delivery points) are broker-wide totals allocated
+// per-VPN, and an accurate broker-wide count has no single SEMP call — it
+// would mean enumerating every VPN — so the guess there is between
+// broker-wide and per-VPN. Scoping and live counts are tracked as a
 // follow-up spike rather than guessed at or built at real per-error cost here.
 var translatedErrorCodes = map[int]codeInfo{
 	6:   {hint: "Verify the name is correct."},
@@ -66,11 +70,11 @@ var translatedErrorCodes = map[int]codeInfo{
 	27:  {hint: "Check the request/query syntax."},
 	72:  {hint: "Credentials lack permission; check the management role/VPN scope."},
 	89:  {hint: "Not allowed in the object's current state."},
-	135: {hint: "A configured maximum was reached."},
+	135: {hint: "A configured maximum was reached; this tool can't tell whether the limit is broker-wide or per-VPN."},
 	228: {hint: "Supply all required fields for this object."},
 	229: {hint: "Retry shortly.", retryable: true},
 	256: {hint: "Drain or remove contained objects before deleting."},
-	403: {hint: "A configured maximum was reached."}, // MAX_NUM_SUBSCRIPTIONS_EXCEEDED
+	403: {hint: "A configured maximum was reached; this tool can't tell whether the limit is broker-wide or per-queue."}, // MAX_NUM_SUBSCRIPTIONS_EXCEEDED
 }
 
 // errorTypeNoopExists and errorTypeNoopAbsent are the errorType values
