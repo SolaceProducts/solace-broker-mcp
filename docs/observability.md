@@ -97,7 +97,7 @@ not rename what is already there.
 Two independent versions are published, so your queries can pin to a version and detect drift:
 
 - `metrics_schema` (current: **1.0**), surfaced by the `mcp_schema_version` metric.
-- `audit_schema` (current: **1.0**), surfaced as the `audit_schema_version` field on every audit
+- `audit_schema` (current: **1.1**), surfaced as the `audit_schema_version` field on every audit
   event **and** as a label on `mcp_schema_version`, so both versions are discoverable from a
   scrape without ingesting audit events.
 
@@ -500,7 +500,8 @@ records means your log level, not your flag.
 | `arguments_hash` | SHA-256 over an RFC 8785 (JCS) canonicalization of the call arguments | hex string |
 | `correlation_id` | Join key to logs, traces, and the broker-side entry | string |
 | `reason` | Why authentication or authorization failed; present on `auth_failure`, `authz_denied`, and `broker_authz_denied` | string (closed set, one per record type) |
-| `audit_schema_version` | The schema version, for query pinning | string (`1.0`) |
+| `dropped_audit_event_type` | On `audit_drop` only: which `audit_event_type` could not be built or written | string (same closed set as `audit_event_type`) |
+| `audit_schema_version` | The schema version, for query pinning | string (`1.1`) |
 
 **`audit_event_type`** is a closed set of seven: `operation` (a state-changing tool call),
 `auth_success`, `auth_failure`, `authz_denied`, `broker_authz_denied`, `broker_auth_retry`,
@@ -517,15 +518,15 @@ not belong to a request.
 Reading the table: **yes** means always present, **opt** means present when there is a value
 (see the notes below each column's meaning of that), and **—** means never present.
 
-| `audit_event_type` | `outcome` | `error_type` | `reason` | `tool` | `arguments_hash` | `started_at_utc`, `duration_ms` | `broker` | `principal.sub`, `agent_client_id` |
-|---|---|---|---|---|---|---|---|---|
-| `operation` | yes | on `error` only | — | yes | yes | yes | yes | opt |
-| `auth_success` | — | — | — | — | — | — | — | opt |
-| `auth_failure` | — | — | yes | — | — | — | — | opt |
-| `authz_denied` | — | — | yes | yes | — | — | — | opt |
-| `broker_authz_denied` | — | — | yes | yes | — | — | yes | opt |
-| `broker_auth_retry` | `success` or `error` | — | — | — | — | opt | yes | opt |
-| `audit_drop` | — | — | — | — | — | — | — | — |
+| `audit_event_type` | `outcome` | `error_type` | `reason` | `tool` | `arguments_hash` | `started_at_utc`, `duration_ms` | `broker` | `principal.sub`, `agent_client_id` | `dropped_audit_event_type` |
+|---|---|---|---|---|---|---|---|---|---|
+| `operation` | yes | on `error` only | — | yes | yes | yes | yes | opt | — |
+| `auth_success` | — | — | — | — | — | — | — | opt | — |
+| `auth_failure` | — | — | yes | — | — | — | — | opt | — |
+| `authz_denied` | — | — | yes | yes | — | — | — | opt | — |
+| `broker_authz_denied` | — | — | yes | yes | — | — | yes | opt | — |
+| `broker_auth_retry` | `success` or `error` | — | — | — | — | opt | yes | opt | — |
+| `audit_drop` | — | — | — | opt | — | — | opt | — | opt |
 
 - **The identity columns are `opt`, not `yes`.** `principal.sub` and `agent_client_id` are
   present whenever a principal was authenticated, and absent when there is none to name —
@@ -550,10 +551,16 @@ outside the table, so two emission sites cannot produce two shapes of the same r
   `broker` that refused — the only column in which the two rows differ. A hop-2 denial
   **coexists** with the call's `operation` record rather than suppressing it, because
   execution had already started by the time the broker refused.
-- **`audit_drop` is a notice, not an outcome.** It reports that a record could not be written,
-  and carries only the common fields — not even the principal, since there is no surviving
-  record for it to describe. It is emitted at `ERROR`, above every other record type, so that
-  it survives the log level that suppressed whatever it is reporting.
+- **`audit_drop` is a notice, not an outcome.** It reports that a record could not be written.
+  It carries no principal, `outcome`, or `arguments_hash` — there is no surviving record for it
+  to describe, and it must never become a second place raw arguments could leak. It carries
+  `tool`, `broker`, and `dropped_audit_event_type` when the call site knows them, so a
+  reviewer working inside the audit stream (`event="audit"`) can attribute the gap without
+  joining to the operational log line — necessary at `log_level: warn` or above, where a
+  successful call's own `tool invoked` line is filtered out but the drop, at `ERROR`, is not.
+  All three are optional: a drop can happen before any of them is known. It is emitted at
+  `ERROR`, above every other record type, so that it survives the log level that suppressed
+  whatever it is reporting.
 
 **Time fields carry their zone or unit in the name:** `_utc` for an instant, `_ms` for a
 duration. Hence `timestamp_utc` and `started_at_utc` alongside `duration_ms`. Names freeze at
@@ -583,22 +590,41 @@ so an auditor can recompute it from the same arguments to prove a recorded event
 to a specific call, without the raw argument values ever being stored.
 
 **Reproducing the hash.** The digest is over the `arguments` object of the `tools/call`
-request exactly as received, including the `broker` parameter. A call that sent no `arguments`
-field hashes as the empty object `{}`. Any conformant RFC 8785 implementation reproduces it —
-for example, in Python:
+request with two changes applied first, both of which an auditor must reproduce to get the
+same digest:
+
+1. **`broker` is removed.** The parameter is auto-injected into every tool's schema
+   (`internal/tools/register.go`) rather than being part of the tool's own arguments, and
+   broker aliases resolve case-insensitively — so if `broker` stayed in the digest, a call
+   sent as `"broker": "PROD"` and one sent as `"broker": "prod"` against the same broker would
+   hash differently despite being the same operation. Removing it before hashing means the
+   digest cannot be salted by the caller's casing; the record's own `broker` field (always the
+   *configured* casing) is the place to look for which broker a call targeted.
+2. **A value on the [Never-Log list](internal/secure-logging-rules.md) is replaced with the
+   fixed placeholder `[REDACTED]`, recursively.** A key matches by the same case-insensitive
+   substring test as the `ReplaceAttr` net on log output — `password`, `token`, `secret`,
+   `authorization`, `credential`, `api_key`, `private_key` — because at least one composite
+   tool (`update-message-vpn`) accepts a free-form config object with no schema constraint on
+   its keys, and the bundled SEMPv2 spec exposes password fields on that exact operation. The
+   placeholder is fixed rather than derived from the original value, so changing a redacted
+   field's value does not change the digest — a digest that varied with a secret's value would
+   itself be a comparison oracle over that secret.
+
+A call that sends no `arguments` field, or one whose remaining arguments are empty after
+`broker` is removed, hashes as the empty object `{}`. Any conformant RFC 8785 implementation
+reproduces the rest — for example, in Python:
 
 ```python
 # pip install rfc8785
 import hashlib, rfc8785
+arguments.pop("broker", None)
+# redact any key matching the patterns above to "[REDACTED]", recursively, first
 print(hashlib.sha256(rfc8785.dumps(arguments)).hexdigest())
 ```
 
-**Recompute from the request, not from the record.** Broker aliases resolve
-case-insensitively, and the record's `broker` field carries the alias in its *configured*
-casing while the digest covers the `broker` value **as the caller typed it**. A caller who
-sent `"broker": "PROD"` against a broker configured as `prod` produces a record reading
-`broker: prod` whose digest is over `"broker":"PROD"`. Reproduce the hash from the original
-`tools/call` arguments; join to the record on `correlation_id`.
+Join a record to its originating request on `correlation_id`; recomputing the hash from the
+original `tools/call` arguments (after the two transforms above) confirms it corresponds to
+that specific call.
 
 The server uses [`github.com/gowebpki/jcs`](https://github.com/gowebpki/jcs) (Apache-2.0)
 rather than a hand-rolled canonicaliser, deliberately. Number serialisation, Unicode

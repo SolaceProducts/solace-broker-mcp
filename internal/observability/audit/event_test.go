@@ -361,11 +361,24 @@ func TestNewEvent_fieldApplicability(t *testing.T) {
 		},
 		{"broker_auth_retry rejects tool", Fields{Type: EventBrokerAuthRetry, Outcome: OutcomeSuccess, Broker: "prod-1", Tool: "delete-queue"}, "tool must not be set"},
 
-		// audit_drop carries only the common fields.
-		{"audit_drop is valid", Fields{Type: EventAuditDrop}, ""},
-		{"audit_drop rejects tool", Fields{Type: EventAuditDrop, Tool: "delete-queue"}, "tool must not be set"},
+		// audit_drop carries the common fields plus optional attribution:
+		// tool, broker, and dropped_audit_event_type — see EventAuditDrop's
+		// row in applicabilityByType for why those three and nothing else.
+		{"audit_drop is valid with no attribution", Fields{Type: EventAuditDrop}, ""},
+		{"audit_drop accepts tool", Fields{Type: EventAuditDrop, Tool: "delete-queue"}, ""},
+		{"audit_drop accepts broker", Fields{Type: EventAuditDrop, Broker: "prod-1"}, ""},
+		{
+			"audit_drop accepts dropped_audit_event_type",
+			Fields{Type: EventAuditDrop, DroppedEventType: EventOperation},
+			"",
+		},
+		{
+			"audit_drop rejects an unknown dropped_audit_event_type",
+			Fields{Type: EventAuditDrop, DroppedEventType: "operation_v2"},
+			"not a known audit_event_type",
+		},
 		{"audit_drop rejects outcome", Fields{Type: EventAuditDrop, Outcome: OutcomeError}, "outcome must not be set"},
-		{"audit_drop rejects broker", Fields{Type: EventAuditDrop, Broker: "prod-1"}, "broker must not be set"},
+		{"audit_drop rejects arguments_hash", Fields{Type: EventAuditDrop, ArgumentsHash: testHash}, "arguments_hash must not be set"},
 
 		// The discriminator itself.
 		{"unknown type is rejected", Fields{Type: "operation_v2"}, "unknown audit_event_type"},

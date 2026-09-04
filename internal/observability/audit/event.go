@@ -185,16 +185,17 @@ const (
 
 // rules is one row of the field-applicability table.
 type rules struct {
-	outcome         applicability
-	allowedOutcomes map[Outcome]struct{} // nil means "every Outcome"
-	errorType       applicability
-	reason          applicability
-	reasonVocab     map[string]struct{}
-	tool            applicability
-	argumentsHash   applicability
-	broker          applicability
-	timing          applicability // started_at / duration_ms
-	identity        applicability // principal.sub / agent_client_id
+	outcome          applicability
+	allowedOutcomes  map[Outcome]struct{} // nil means "every Outcome"
+	errorType        applicability
+	reason           applicability
+	reasonVocab      map[string]struct{}
+	tool             applicability
+	argumentsHash    applicability
+	broker           applicability
+	timing           applicability // started_at / duration_ms
+	identity         applicability // principal.sub / agent_client_id
+	droppedEventType applicability // audit_drop only; see EventAuditDrop's row
 }
 
 // allOutcomes is the unrestricted outcome set: success, error, cancelled.
@@ -266,8 +267,18 @@ var applicabilityByType = map[EventType]rules{
 	},
 	EventAuditDrop: {
 		outcome: fieldForbidden, errorType: fieldForbidden, reason: fieldForbidden,
-		tool: fieldForbidden, argumentsHash: fieldForbidden,
-		broker: fieldForbidden, timing: fieldForbidden, identity: fieldForbidden,
+		// tool and broker are optional, not required: a drop can happen before
+		// either is known (a hash failure knows both; a future call site might
+		// not), and admitting them here — rather than a general-purpose
+		// payload — is deliberately narrow, since a drop record must never
+		// become a second place raw arguments could leak. droppedEventType
+		// names the record type that could not be built or written, so a
+		// reviewer working inside the audit stream (event="audit") can see
+		// what kind of gap this is without a level filter defeating the join
+		// to the operational log line (docs/observability.md).
+		tool: fieldOptional, argumentsHash: fieldForbidden,
+		broker: fieldOptional, timing: fieldForbidden, identity: fieldForbidden,
+		droppedEventType: fieldOptional,
 	},
 }
 
@@ -304,6 +315,9 @@ type Fields struct {
 	// PanicRecovered marks a record whose error came from a recovered panic.
 	// Only meaningful with Outcome OutcomeError and ErrorType "panic".
 	PanicRecovered bool
+	// DroppedEventType names the audit_event_type of the record that could
+	// not be built or written. EventAuditDrop only.
+	DroppedEventType EventType
 	// Timestamp is when the record was created. Zero means "now"; tests set it
 	// to make output deterministic.
 	Timestamp time.Time
@@ -423,6 +437,9 @@ func NewEvent(ctx context.Context, f Fields) (Event, error) {
 		}
 	}
 
+	if f.DroppedEventType != "" {
+		attrs = append(attrs, slog.String("dropped_audit_event_type", string(f.DroppedEventType)))
+	}
 	if f.Tool != "" {
 		attrs = append(attrs, slog.String("tool", f.Tool))
 	}
@@ -517,6 +534,15 @@ func validate(f Fields, r rules) error {
 		}
 	}
 
+	if err := checkPresence("dropped_audit_event_type", f.DroppedEventType != "", r.droppedEventType, f.Type); err != nil {
+		return err
+	}
+	if f.DroppedEventType != "" {
+		if _, ok := applicabilityByType[f.DroppedEventType]; !ok {
+			return fmt.Errorf("audit: dropped_audit_event_type %q is not a known audit_event_type; must be one of %v",
+				f.DroppedEventType, EventTypes())
+		}
+	}
 	if err := checkPresence("tool", f.Tool != "", r.tool, f.Type); err != nil {
 		return err
 	}

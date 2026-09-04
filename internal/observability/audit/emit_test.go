@@ -137,7 +137,7 @@ func TestAuditDrop_survivesEveryConfigurableLogLevel(t *testing.T) {
 	// Mirrors internal/config.validLogLevels: debug, info, warn, error.
 	for _, level := range []slog.Level{slog.LevelDebug, slog.LevelInfo, slog.LevelWarn, slog.LevelError} {
 		t.Run(level.String(), func(t *testing.T) {
-			records := captureRecords(t, level, func() { EmitDrop(context.Background()) })
+			records := captureRecords(t, level, func() { EmitDrop(context.Background(), DropContext{}) })
 			if len(records) != 1 {
 				t.Fatalf("the drop notice did not survive log level %s (%d record(s)). "+
 					"Every configurable level must let it through, or an operator on that "+
@@ -231,7 +231,7 @@ func TestEmit_survivesAPanickingHandler(t *testing.T) {
 			}()
 			withLogger(t, tc.handler, func() {
 				Emit(context.Background(), e)
-				EmitDrop(context.Background())
+				EmitDrop(context.Background(), DropContext{})
 			})
 		})
 	}
@@ -241,7 +241,7 @@ func TestEmit_survivesAPanickingHandler(t *testing.T) {
 // build a valid record at all — a failed canonicalization, or a record the
 // constructor rejected.
 func TestEmitDrop_writesTheNotice(t *testing.T) {
-	records := captureRecords(t, slog.LevelDebug, func() { EmitDrop(context.Background()) })
+	records := captureRecords(t, slog.LevelDebug, func() { EmitDrop(context.Background(), DropContext{}) })
 
 	if len(records) != 1 {
 		t.Fatalf("wrote %d record(s), want 1: %v", len(records), records)
@@ -297,7 +297,7 @@ func TestEmit_honoursReplaceAttr(t *testing.T) {
 // contradicting the rule that a drop notice must survive every level an
 // operator can actually set.
 func TestEmit_respectsTheConfiguredLevel(t *testing.T) {
-	records := captureRecords(t, slog.LevelError+4, func() { EmitDrop(context.Background()) })
+	records := captureRecords(t, slog.LevelError+4, func() { EmitDrop(context.Background(), DropContext{}) })
 	if len(records) != 0 {
 		t.Errorf("wrote %d record(s) below the configured level: %v", len(records), records)
 	}

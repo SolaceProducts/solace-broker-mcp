@@ -19,9 +19,85 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/gowebpki/jcs"
 )
+
+// sensitiveKeySubstrings mirrors cmd/server's redactedKeys — the same
+// case-insensitive substring match docs/internal/secure-logging-rules.md
+// Rule 3 applies as a ReplaceAttr safety net on log output — applied here to
+// a hash's pre-image instead. Nothing about arguments_hash's own emitted
+// attribute matches Rule 3's key patterns (the key is "arguments_hash"), so
+// that net cannot reach a secret-shaped value baked into the digest; this is
+// the control for that gap. Kept as its own copy rather than importing
+// cmd/server's var: this package must not depend on cmd/server, and the two
+// lists mean the same policy, not the same Go value.
+var sensitiveKeySubstrings = []string{"password", "token", "secret", "authorization", "credential", "api_key", "private_key"}
+
+// redactedPlaceholder replaces a sensitive value before hashing. Fixed rather
+// than derived from the original value, so that two calls differing only in a
+// redacted field's value — for example a broker's replication bridge password
+// changing — hash identically instead of leaking a comparison oracle over the
+// secret.
+const redactedPlaceholder = "[REDACTED]"
+
+// RedactSensitive returns a copy of args with the value of any key matching
+// sensitiveKeySubstrings replaced by redactedPlaceholder, recursively through
+// nested maps and slices — the shape a free-form SEMP config object argument
+// (for example update-message-vpn's msgVpnConfig, which the composite schema
+// leaves as an unconstrained object) can take. Call this before HashArgs on
+// any argument map that reached the wire from outside this process; nothing
+// else stands between such a value and the audit stream's arguments_hash
+// digest.
+func RedactSensitive(args map[string]any) map[string]any {
+	redacted, ok := redactValue(args).(map[string]any)
+	if !ok {
+		// args is declared map[string]any, so redactValue's map branch always
+		// returns one; this exists only so a future refactor that breaks that
+		// invariant fails loudly instead of returning a nil map that would
+		// hash as {} regardless of the real arguments.
+		return map[string]any{}
+	}
+	return redacted
+}
+
+// redactValue walks v, replacing the value of any map key matching
+// sensitiveKeySubstrings and recursing into maps and slices.
+func redactValue(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(val))
+		for k, item := range val {
+			if isSensitiveKey(k) {
+				out[k] = redactedPlaceholder
+				continue
+			}
+			out[k] = redactValue(item)
+		}
+		return out
+	case []any:
+		out := make([]any, len(val))
+		for i, item := range val {
+			out[i] = redactValue(item)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+// isSensitiveKey reports whether key matches sensitiveKeySubstrings,
+// case-insensitively.
+func isSensitiveKey(key string) bool {
+	lower := strings.ToLower(key)
+	for _, s := range sensitiveKeySubstrings {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	return false
+}
 
 // HashArgs returns the lowercase hex SHA-256 (FIPS 180-4) of the RFC 8785
 // (JSON Canonicalization Scheme) form of args.

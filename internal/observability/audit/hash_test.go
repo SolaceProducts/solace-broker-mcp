@@ -273,3 +273,95 @@ func TestHashArgs_doesNotMutateCaller(t *testing.T) {
 		t.Errorf("HashArgs mutated the caller's nested map: %#v", args["a"])
 	}
 }
+
+// TestRedactSensitive_matchesRuleThreeKeys pins the key list against
+// cmd/server's own redactedKeys (docs/internal/secure-logging-rules.md Rule
+// 3): every key shape that net redacts on log output must also be redacted
+// here, case-insensitively and by substring, or a value could reach the audit
+// digest that no log line would ever have carried.
+func TestRedactSensitive_matchesRuleThreeKeys(t *testing.T) {
+	t.Parallel()
+	// api_key and private_key are snake_case literal substrings, matching Rule
+	// 3 and cmd/server's redactedKeys exactly — a camelCase apiKey/privateKey
+	// is a known gap in that shared pattern, not something to fix here.
+	cases := []string{
+		"password", "Password", "brokerPassword",
+		"token", "authToken", "Authorization",
+		"secret", "clientSecret",
+		"credential", "credentials",
+		"api_key", "private_key",
+	}
+	for _, key := range cases {
+		t.Run(key, func(t *testing.T) {
+			got := RedactSensitive(map[string]any{key: "hunter2", "msgVpnName": "default"})
+			if got[key] != redactedPlaceholder {
+				t.Errorf("RedactSensitive()[%q] = %v, want %q", key, got[key], redactedPlaceholder)
+			}
+			if got["msgVpnName"] != "default" {
+				t.Errorf("RedactSensitive() touched an unrelated key: msgVpnName = %v", got["msgVpnName"])
+			}
+		})
+	}
+}
+
+// TestRedactSensitive_recursesThroughNestedShapes pins that redaction is not
+// top-level only: a free-form SEMP config object argument (the shape that
+// motivates this function) nests a password field inside another object, or
+// inside a list of objects.
+func TestRedactSensitive_recursesThroughNestedShapes(t *testing.T) {
+	t.Parallel()
+	got := RedactSensitive(map[string]any{
+		"msgVpnConfig": map[string]any{
+			"replicationBridgeAuthenticationBasicPassword": "hunter2",
+			"msgVpnName": "default",
+		},
+		"bridges": []any{
+			map[string]any{"remoteAuthenticationBasicPassword": "hunter3"},
+		},
+	})
+	nested, ok := got["msgVpnConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("msgVpnConfig = %#v, want a map", got["msgVpnConfig"])
+	}
+	if nested["replicationBridgeAuthenticationBasicPassword"] != redactedPlaceholder {
+		t.Errorf("nested password = %v, want %q", nested["replicationBridgeAuthenticationBasicPassword"], redactedPlaceholder)
+	}
+	if nested["msgVpnName"] != "default" {
+		t.Errorf("nested non-secret key touched: msgVpnName = %v", nested["msgVpnName"])
+	}
+	bridges, ok := got["bridges"].([]any)
+	if !ok || len(bridges) != 1 {
+		t.Fatalf("bridges = %#v, want a one-element slice", got["bridges"])
+	}
+	bridge, ok := bridges[0].(map[string]any)
+	if !ok || bridge["remoteAuthenticationBasicPassword"] != redactedPlaceholder {
+		t.Errorf("bridge[0] = %#v, want remoteAuthenticationBasicPassword redacted", bridges[0])
+	}
+}
+
+// TestRedactSensitive_placeholderIsFixed pins that the placeholder does not
+// vary with the original value — a value-derived placeholder (e.g. a hash of
+// the secret) would itself be a comparison oracle over the secret it exists
+// to hide.
+func TestRedactSensitive_placeholderIsFixed(t *testing.T) {
+	t.Parallel()
+	a := RedactSensitive(map[string]any{"password": "hunter2"})
+	b := RedactSensitive(map[string]any{"password": "a-completely-different-value"})
+	if a["password"] != b["password"] {
+		t.Errorf("placeholder varies with the input value: %v vs %v", a["password"], b["password"])
+	}
+}
+
+// TestRedactSensitive_doesNotMutateCaller mirrors
+// TestHashArgs_doesNotMutateCaller: hashArgsForAudit calls this on the same
+// map CallTool hands the handler, so a mutating implementation would corrupt
+// the arguments a destructive tool actually executes with.
+func TestRedactSensitive_doesNotMutateCaller(t *testing.T) {
+	t.Parallel()
+	nested := map[string]any{"password": "hunter2"}
+	args := map[string]any{"a": nested}
+	_ = RedactSensitive(args)
+	if args["a"].(map[string]any)["password"] != "hunter2" {
+		t.Errorf("RedactSensitive mutated the caller's nested map: %#v", args["a"])
+	}
+}

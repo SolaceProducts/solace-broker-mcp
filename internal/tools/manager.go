@@ -316,12 +316,16 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	// Destructive tools are the audit surface (SOL-152096). This is the same
 	// gate the pre-flip WARN stood at — after broker resolution and input
 	// validation — so enabling the audit log changes the FORM of the signal,
-	// not which calls produce one. Arguments are hashed here, while they are
-	// still the validated map the handler is about to receive; the record
+	// not which calls produce one. Arguments are hashed here, from
+	// handlerParams — the validated map the handler is about to receive, with
+	// "broker" already stripped and any Never-Log-shaped key redacted to a
+	// fixed placeholder before hashing (hashArgsForAudit). Hashing this map
+	// rather than the raw params also means the digest cannot be salted by the
+	// caller's broker casing, since "broker" is never part of it. The record
 	// itself is emitted from the defer, once the outcome is known.
 	if rt.annotations.Destructive != nil && *rt.annotations.Destructive {
 		if m.auditLog {
-			auditArgsHash = hashArgsForAudit(ctx, name, brokerAlias, params)
+			auditArgsHash = hashArgsForAudit(ctx, name, brokerAlias, handlerParams)
 		} else {
 			// Pre-flip behaviour, byte-identical, so the capability is inert
 			// when its flag is off.
@@ -389,13 +393,22 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 // An empty return tells CallTool's defer to emit no operation record: a record
 // whose arguments_hash stands for nothing is worse than a visible gap.
 //
+// args is redacted (audit.RedactSensitive) before hashing: some composite
+// tools accept a free-form config object with no schema constraint on its
+// keys (e.g. update-message-vpn's msgVpnConfig, whose bundled SEMPv2 spec
+// exposes replication-bridge password fields), so nothing upstream of this
+// call guarantees args is free of a value on the Never-Log list. The emitted
+// attribute key is "arguments_hash", which matches none of Rule 3's
+// ReplaceAttr patterns, so that log-line safety net cannot reach a secret
+// baked into the digest — this redaction is the only control for it.
+//
 // Extracted from CallTool because the failure branch is unreachable from the
 // wire — arguments always arrive from json.Unmarshal, and a value that could
 // defeat json.Marshal is rejected by input-schema validation first — so a test
 // can only reach it here. Defensive code nothing can exercise is
 // indistinguishable from code that does not work.
 func hashArgsForAudit(ctx context.Context, tool, broker string, args map[string]any) string {
-	hash, err := audit.HashArgs(args)
+	hash, err := audit.HashArgs(audit.RedactSensitive(args))
 	if err == nil {
 		return hash
 	}
@@ -407,7 +420,7 @@ func hashArgsForAudit(ctx context.Context, tool, broker string, args map[string]
 		slog.String("tool", tool),
 		slog.String("broker", broker),
 		slog.String("detail", fmt.Sprintf("%T", err)))
-	audit.EmitDrop(ctx)
+	audit.EmitDrop(ctx, audit.DropContext{DroppedEventType: audit.EventOperation, Tool: tool, Broker: broker})
 	return ""
 }
 
@@ -455,7 +468,7 @@ func emitOperationAudit(ctx context.Context, tool, broker, argsHash string, star
 			slog.String("tool", tool),
 			slog.String("broker", broker),
 			slog.String("detail", err.Error()))
-		audit.EmitDrop(ctx)
+		audit.EmitDrop(ctx, audit.DropContext{DroppedEventType: audit.EventOperation, Tool: tool, Broker: broker})
 		return
 	}
 	audit.Emit(ctx, event)

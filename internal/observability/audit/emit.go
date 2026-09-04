@@ -44,28 +44,58 @@ func Emit(ctx context.Context, e Event) {
 		return
 	}
 	// A drop notice that itself dropped has nothing left to report to, and
-	// re-entering here would recurse.
+	// re-entering here would recurse. e.Type() is the only attribution
+	// available here — Event exposes rendered attrs, not the original
+	// Fields — so this path carries no Tool/Broker even when the record that
+	// failed to write had them.
 	if e.Type() == EventAuditDrop {
 		return
 	}
-	EmitDrop(ctx)
+	EmitDrop(ctx, DropContext{DroppedEventType: e.Type()})
+}
+
+// DropContext is best-effort attribution for an EmitDrop call. Every field is
+// optional — carry only what the call site actually knows; the zero value
+// reports a plain, unattributed gap.
+type DropContext struct {
+	// DroppedEventType names the audit_event_type of the record that could
+	// not be built or written.
+	DroppedEventType EventType
+	// Tool and Broker are the same values the missing record would have
+	// carried. Admitting exactly these two fields on a drop record — never a
+	// general-purpose payload — is what EventAuditDrop's row in
+	// applicabilityByType enforces; a drop record must never become a second
+	// place raw arguments could leak.
+	Tool   string
+	Broker string
 }
 
 // EmitDrop writes the notice that an audit record could not be produced or
-// written. Callers that cannot build a valid record — a failed
-// canonicalization, a record the constructor rejected — use this so the gap is
-// visible in the audit stream rather than inferred from its absence.
+// written, with whatever attribution dctx carries. Callers that cannot build a
+// valid record — a failed canonicalization, a record the constructor rejected
+// — use this so the gap is visible in the audit stream rather than inferred
+// from its absence.
 //
-// The drop record carries only the common fields: it reports that a record is
-// missing, and there is no surviving record for it to describe. It keeps
-// event="audit" deliberately, since a notice that fell outside the customer's
-// audit filter would go unseen in precisely the situation it exists to report.
-func EmitDrop(ctx context.Context) {
-	drop, err := NewEvent(ctx, Fields{Type: EventAuditDrop})
+// The drop record carries only common fields plus DroppedEventType/Tool/Broker
+// from dctx: it reports that a record is missing, and admits just enough
+// context to be actionable inside the audit stream itself
+// (docs/observability.md, "event=audit" is the routing predicate customers are
+// told captures everything) without becoming a second place raw arguments
+// could leak. It keeps event="audit" deliberately, since a notice that fell
+// outside the customer's audit filter would go unseen in precisely the
+// situation it exists to report.
+func EmitDrop(ctx context.Context, dctx DropContext) {
+	drop, err := NewEvent(ctx, Fields{
+		Type:             EventAuditDrop,
+		DroppedEventType: dctx.DroppedEventType,
+		Tool:             dctx.Tool,
+		Broker:           dctx.Broker,
+	})
 	if err != nil {
-		// Unreachable: a drop record has no fields that can fail validation.
-		// Swallowed rather than panicking, because audit emission must never
-		// take down the operation it is describing.
+		// Unreachable in production: DroppedEventType is always either empty
+		// or one of this package's own EventType constants, its only two
+		// legitimate values. Swallowed rather than panicking, because audit
+		// emission must never take down the operation it is describing.
 		return
 	}
 	_ = write(ctx, drop)

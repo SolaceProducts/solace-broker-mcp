@@ -152,7 +152,11 @@ func TestDestructiveCall_emitsExactlyOneOperationRecord(t *testing.T) {
 	}
 	rec := ops[0]
 
-	wantHash, err := audit.HashArgs(args)
+	// The digest is over what the handler actually receives — args minus
+	// "broker" — not the raw tools/call arguments; see
+	// TestDestructiveCall_hashExcludesBrokerAndRedactsSensitiveArguments for
+	// why (broker-casing invariance and Never-Log redaction).
+	wantHash, err := audit.HashArgs(audit.RedactSensitive(map[string]any{"msgVpnName": "default"}))
 	if err != nil {
 		t.Fatalf("HashArgs: %v", err)
 	}
@@ -213,6 +217,94 @@ func TestDestructiveCall_emitsExactlyOneOperationRecord(t *testing.T) {
 	// error_type is present only on a failure.
 	if _, present := rec["error_type"]; present {
 		t.Errorf("successful operation record carries error_type = %v", rec["error_type"])
+	}
+}
+
+// TestDestructiveCall_hashIsInvariantToBrokerCasing pins that two calls
+// differing only in the caller's casing of "broker" produce the same
+// arguments_hash. Broker aliases resolve case-insensitively and the record's
+// own broker field always carries the configured casing, so if "broker" were
+// still part of the digest these two calls — the same operation on the same
+// broker — would hash differently, defeating the "recompute and compare"
+// promise the digest exists for. Fixed by excluding "broker" from the hashed
+// map entirely (CallTool hashes handlerParams, not the raw params).
+func TestDestructiveCall_hashIsInvariantToBrokerCasing(t *testing.T) {
+	mgr := auditTestManager(t, true)
+
+	hashFor := func(brokerCasing string) string {
+		records := captureAudit(t, slog.LevelDebug, func() {
+			if _, err := mgr.CallTool(auditCtx(t), "delete-queue",
+				map[string]any{"broker": brokerCasing, "msgVpnName": "default"}, idFixture()); err != nil {
+				t.Fatalf("CallTool: %v", err)
+			}
+		})
+		ops := ofType(records, audit.EventOperation)
+		if len(ops) != 1 {
+			t.Fatalf("emitted %d operation record(s), want exactly 1:\n%v", len(ops), records)
+		}
+		hash, _ := ops[0]["arguments_hash"].(string)
+		return hash
+	}
+
+	lower := hashFor("dev")
+	upper := hashFor("DEV")
+	if lower == "" || upper == "" {
+		t.Fatalf("empty arguments_hash: lower=%q upper=%q", lower, upper)
+	}
+	if lower != upper {
+		t.Errorf(`arguments_hash for "broker": "dev" (%s) != "broker": "DEV" (%s); the digest is `+
+			"still salted by the caller's casing", lower, upper)
+	}
+}
+
+// TestDestructiveCall_hashRedactsSensitiveArguments pins the other half of the
+// same fix: a value on the Never-Log list must not reach the digest's
+// pre-image, even though nothing upstream of hashArgsForAudit constrains the
+// composite schema's keys. Two checks: changing the secret's value must not
+// change the digest (proof the value itself has no influence, not just that
+// it looks different from the raw hash), and the digest must match what
+// hashing the redacted map directly produces (proof of the exact placeholder,
+// not merely "some" redaction).
+func TestDestructiveCall_hashRedactsSensitiveArguments(t *testing.T) {
+	mgr := auditTestManager(t, true)
+
+	hashFor := func(secretValue string) string {
+		records := captureAudit(t, slog.LevelDebug, func() {
+			if _, err := mgr.CallTool(auditCtx(t), "delete-queue", map[string]any{
+				"broker":     "dev",
+				"msgVpnName": "default",
+				// Not a real tool parameter — stubHandler's schema has no
+				// additionalProperties:false, so this reaches hashArgsForAudit
+				// exactly as a free-form config object's password field would.
+				"replicationBridgeAuthenticationBasicPassword": secretValue,
+			}, idFixture()); err != nil {
+				t.Fatalf("CallTool: %v", err)
+			}
+		})
+		ops := ofType(records, audit.EventOperation)
+		if len(ops) != 1 {
+			t.Fatalf("emitted %d operation record(s), want exactly 1:\n%v", len(ops), records)
+		}
+		hash, _ := ops[0]["arguments_hash"].(string)
+		return hash
+	}
+
+	got := hashFor("hunter2")
+	// Two different real secret values must hash identically — proof the
+	// digest depends on the placeholder, not the value redaction replaced.
+	if other := hashFor("a-completely-different-password"); got != other {
+		t.Errorf("arguments_hash changed with the redacted field's value (%s vs %s); "+
+			"a value on the Never-Log list is still reaching the digest", got, other)
+	}
+	want, err := audit.HashArgs(map[string]any{
+		"msgVpnName": "default",
+		"replicationBridgeAuthenticationBasicPassword": "[REDACTED]",
+	})
+	if err != nil {
+		t.Fatalf("HashArgs: %v", err)
+	}
+	if got != want {
+		t.Errorf("arguments_hash = %s, want %s (the digest computed from the redacted map)", got, want)
 	}
 }
 
@@ -408,14 +500,18 @@ func TestAuditRecord_hashIdentifiesTheArguments(t *testing.T) {
 		t.Errorf("different arguments produced the same arguments_hash %q", first)
 	}
 
-	// And the digest an auditor recomputes from the wire arguments matches.
+	// And the digest an auditor recomputes from the wire arguments matches,
+	// once they apply the same two transforms production does: drop "broker"
+	// and redact any Never-Log-shaped key (see
+	// TestDestructiveCall_hashIsInvariantToBrokerCasing and
+	// TestDestructiveCall_hashRedactsSensitiveArguments for why).
 	args := map[string]any{"broker": "dev", "msgVpnName": "default"}
-	want, err := audit.HashArgs(args)
+	want, err := audit.HashArgs(audit.RedactSensitive(map[string]any{"msgVpnName": "default"}))
 	if err != nil {
 		t.Fatalf("HashArgs: %v", err)
 	}
 	if got := hashFor(t, args); got != want {
-		t.Errorf("arguments_hash = %q, want %q — an auditor recomputing from the same arguments would not match", got, want)
+		t.Errorf("arguments_hash = %q, want %q — an auditor recomputing from the same arguments (minus broker) would not match", got, want)
 	}
 }
 

@@ -24,5 +24,8 @@ package schema
 const MetricsSchemaVersion = "1.0"
 
 // AuditSchemaVersion is stamped onto every audit-log record the server emits.
-// V1 baseline. Bump on any backwards-incompatible change to the audit shape.
-const AuditSchemaVersion = "1.0"
+// Bump the minor component on an additive change (a new field), the major
+// component on anything else — see docs/observability.md, "The schema is
+// additive-only within a major version". 1.1 (SOL-152090): audit_drop gained
+// the optional dropped_audit_event_type, tool, and broker fields.
+const AuditSchemaVersion = "1.1"
