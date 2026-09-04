@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv1"
@@ -40,9 +41,10 @@ import (
 //
 // All public methods are safe for concurrent use.
 type ToolManager struct {
-	pool  *semp.BrokerPool
-	mu    sync.RWMutex
-	tools map[string]*registeredTool
+	pool    *semp.BrokerPool
+	mu      sync.RWMutex
+	tools   map[string]*registeredTool
+	metrics *metrics.ToolMetrics // nil when metrics are disabled; all uses are nil-safe
 }
 
 // registeredTool is what Register() stores for one tool: the handler plus
@@ -81,8 +83,9 @@ func NewToolManager(pool *semp.BrokerPool) *ToolManager {
 // NewToolManagerFromComposite creates a ToolManager and registers a
 // CompositeToolHandler for each composite tool definition. This is the
 // standard factory for YAML-driven tools.
-func NewToolManagerFromComposite(pool *semp.BrokerPool, tools []composite.CompositeTool, executor *composite.CompositeExecutor) *ToolManager {
+func NewToolManagerFromComposite(pool *semp.BrokerPool, tools []composite.CompositeTool, executor *composite.CompositeExecutor, tm *metrics.ToolMetrics) *ToolManager {
 	mgr := NewToolManager(pool)
+	mgr.metrics = tm
 	for i := range tools {
 		mgr.Register(NewCompositeToolHandler(tools[i], executor))
 	}
@@ -169,7 +172,8 @@ func (m *ToolManager) Handlers() []ToolHandler {
 // internal composite-tool steps — to mirror disabled-mode log shape.
 func (m *ToolManager) CallTool(ctx context.Context, name string, params map[string]any, id Identity) (result *mcp.CallToolResult, err error) {
 	start := time.Now()
-	var brokerAlias, errorType string
+	var brokerAlias string
+	var errorType metrics.ErrorType
 	var toolErr error
 
 	defer func() {
@@ -180,10 +184,14 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		// success (SOL-150685). Invariant for new return paths: set toolErr,
 		// or return a non-nil result.
 		if toolErr == nil && result == nil {
-			errorType = "panic"
+			errorType = metrics.ErrorTypePanic
 			toolErr = panicError{}
 		}
+
+		// The log line uses the raw alias for diagnostics; the metric label is
+		// canonicalized to a bounded set.
 		logToolResult(ctx, name, &brokerAlias, start, &errorType, &toolErr, id)
+		recordToolInvocation(ctx, m.metrics, name, canonicalBrokerLabel(m.pool, brokerAlias), start, errorType, toolErr)
 	}()
 
 	// Deliberately still a protocol-level error, not a buildLocalErrorResult
@@ -200,7 +208,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	// separate map lookup for the validators.
 	rt, err := m.lookup(name)
 	if err != nil {
-		errorType = "unknown_tool"
+		errorType = metrics.ErrorTypeUnknownTool
 		toolErr = err
 		return nil, err
 	}
@@ -209,7 +217,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	// Extract and resolve broker.
 	brokerAlias, _ = params["broker"].(string)
 	if brokerAlias == "" {
-		errorType = "missing_broker"
+		errorType = metrics.ErrorTypeMissingBroker
 		toolErr = fmt.Errorf("broker parameter is required; available brokers: %s",
 			strings.Join(m.pool.Aliases(), ", "))
 		return buildLocalErrorResult(toolErr), nil
@@ -218,13 +226,13 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	v1Client, err := m.pool.GetSEMPv1(brokerAlias)
 	if err != nil {
 		errorType, toolErr = m.classifyBrokerError(brokerAlias, err)
-		return m.buildBrokerResolutionErrorResult(errorType, toolErr, brokerAlias), nil
+		return m.buildBrokerResolutionErrorResult(string(errorType), toolErr, brokerAlias), nil
 	}
 
 	v2Client, err := m.pool.GetSEMPv2(brokerAlias)
 	if err != nil {
 		errorType, toolErr = m.classifyBrokerError(brokerAlias, err)
-		return m.buildBrokerResolutionErrorResult(errorType, toolErr, brokerAlias), nil
+		return m.buildBrokerResolutionErrorResult(string(errorType), toolErr, brokerAlias), nil
 	}
 
 	// Resolution succeeded — switch the locally-tracked alias to the display
@@ -241,7 +249,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 
 	// Validate parameters against the handler's input schema.
 	if _, err := validateAgainstCompiledSchema(handlerParams, rt.input, "parameter validation failed"); err != nil {
-		errorType = "validation_error"
+		errorType = metrics.ErrorTypeValidationError
 		toolErr = err
 		return buildLocalErrorResult(toolErr), nil
 	}
@@ -261,7 +269,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	}
 	toolResult, handleErr := handler.Handle(ctx, tc, handlerParams)
 	if handleErr != nil {
-		errorType = "execution_error"
+		errorType = metrics.ErrorTypeExecutionError
 		toolErr = fmt.Errorf("executing tool %q: %w", name, handleErr)
 		return m.buildErrorResult(toolErr, brokerAlias), nil
 	}
@@ -273,7 +281,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	// retryable=false signal instead of a protocol error it might mistake for
 	// "nothing happened, safe to retry" (SOL-152980).
 	if toolResult == nil || toolResult.StructuredContent == nil {
-		errorType = "nil_result"
+		errorType = metrics.ErrorTypeNilResult
 		toolErr = fmt.Errorf("tool %q returned nil result", name)
 		return buildLocalErrorResult(toolErr), nil
 	}
@@ -283,7 +291,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	// marshalling it a second time.
 	resultJSON, err := validateAgainstCompiledSchema(toolResult.StructuredContent, rt.output, "output validation failed")
 	if err != nil {
-		errorType = "output_validation_error"
+		errorType = metrics.ErrorTypeOutputValidationError
 		toolErr = fmt.Errorf("tool %q output validation: %w", name, err)
 		return buildLocalErrorResult(toolErr), nil
 	}
@@ -294,7 +302,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	// without a second reflection-based marshal of the same value.
 	var indented bytes.Buffer
 	if err := json.Indent(&indented, resultJSON, "", "  "); err != nil {
-		errorType = "marshal_error"
+		errorType = metrics.ErrorTypeMarshalError
 		toolErr = fmt.Errorf("marshalling result for %q: %w", name, err)
 		return buildLocalErrorResult(toolErr), nil
 	}
@@ -331,28 +339,32 @@ func stripBrokerParam(params map[string]any) map[string]any {
 //
 // A free function rather than a ToolManager method so every tool emits the
 // same audit line, including standalone tools registered outside the manager
-// (list-brokers in register.go). The broker attr is omitted when *broker is
-// empty, which also covers brokerless tools.
+// (list-brokers in register.go). Brokerless tools log broker=none, matching the
+// metric label.
 //
 // The id argument carries per-invocation audit identity (SOL-149606). It is
 // passed through slog.Any so Identity.LogValue is invoked once at emit time
 // — in disabled mode the LogValuer returns an empty group, so the JSON
 // handler emits no identity key at all (byte-identical to pre-SOL-149606
 // log lines).
-func logToolResult(ctx context.Context, tool string, broker *string, start time.Time, errorType *string, toolErr *error, id Identity) {
+func logToolResult(ctx context.Context, tool string, broker *string, start time.Time, errorType *metrics.ErrorType, toolErr *error, id Identity) {
+	dur := time.Since(start)
+
+	// Brokerless tools and pre-resolution failures carry no alias; the field
+	// shows "none" so the log line matches the metric label rather than
+	// omitting the field.
+	brokerLabel := *broker
+	if brokerLabel == "" {
+		brokerLabel = brokerLabelNone
+	}
+
 	if *toolErr == nil {
 		attrs := make([]slog.Attr, 0, 5)
 		attrs = append(attrs, slog.String("tool", tool))
-		// Omit the broker attr when empty (brokerless tools like
-		// list-brokers), mirroring the error branch below. CallTool
-		// successes always carry a resolved broker, keeping the existing
-		// line shape byte-identical.
-		if *broker != "" {
-			attrs = append(attrs, slog.String("broker", *broker))
-		}
+		attrs = append(attrs, slog.String("broker", brokerLabel))
 		attrs = append(attrs,
-			slog.String("status", "success"),
-			slog.Duration("duration", time.Since(start)),
+			slog.String("outcome", "success"),
+			slog.Duration("duration", dur),
 			slog.Any("", id))
 		slog.LogAttrs(ctx, slog.LevelInfo, "tool invoked", attrs...)
 		return
@@ -420,14 +432,12 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 
 	attrs := []slog.Attr{
 		slog.String("tool", tool),
-		slog.String("status", "error"),
-		slog.String("error_type", *errorType),
-		slog.Duration("duration", time.Since(start)),
+		slog.String("broker", brokerLabel),
+		slog.String("outcome", "error"),
+		slog.String("error_type", string(*errorType)),
+		slog.Duration("duration", dur),
 		slog.String("detail", detail),
 		slog.Any("", id),
-	}
-	if *broker != "" {
-		attrs = append(attrs, slog.String("broker", *broker))
 	}
 
 	switch {
@@ -464,10 +474,10 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 // today only the unknown-alias case is reachable, but Story 5 (rate limit /
 // retry decorators) and future OAuth token-exchange will introduce real
 // init failures that should not be reported as "unknown broker".
-func (m *ToolManager) classifyBrokerError(alias string, err error) (string, error) {
+func (m *ToolManager) classifyBrokerError(alias string, err error) (metrics.ErrorType, error) {
 	if errors.Is(err, semp.ErrUnknownBroker) {
-		return "unknown_broker", fmt.Errorf("unknown broker %q; available brokers: %s",
+		return metrics.ErrorTypeUnknownBroker, fmt.Errorf("unknown broker %q; available brokers: %s",
 			alias, strings.Join(m.pool.Aliases(), ", "))
 	}
-	return "broker_init_error", fmt.Errorf("connecting to broker %q: %w", alias, err)
+	return metrics.ErrorTypeBrokerInitError, fmt.Errorf("connecting to broker %q: %w", alias, err)
 }

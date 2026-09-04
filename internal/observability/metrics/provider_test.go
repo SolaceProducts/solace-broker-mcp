@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 )
@@ -73,6 +74,19 @@ func TestGoldenSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// The tool-RED instruments and the in-flight gauge only render after they
+	// are observed, so drive one deterministic sample of each. Fixed labels and
+	// a fixed 5ms duration keep the fixture stable. The gauge is incremented and
+	// decremented to surface its series at a resting value of 0.
+	tm, err := p.ToolMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm.Record(context.Background(), "test-tool", "test-broker", "success", "", 5*time.Millisecond)
+	tm.IncActive(context.Background())
+	tm.DecActive(context.Background())
+
 	got := mcpFamilies(scrapePlainText(t, p))
 
 	golden := filepath.Join("testdata", "metrics_golden.txt")

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -272,7 +273,7 @@ func trimAttributes(def map[string]any, defs map[string]any) []map[string]any {
 
 // RegisterDescribeSempSchema registers describe-semp-schema as a standalone tool —
 // same shape as RegisterListBrokers, no broker resolution, no policy wrapping.
-func RegisterDescribeSempSchema(server *mcp.Server, fsys fs.FS) error {
+func RegisterDescribeSempSchema(server *mcp.Server, fsys fs.FS, tm *metrics.ToolMetrics) error {
 	reg, err := buildSempSchemaMap(fsys)
 	if err != nil {
 		return fmt.Errorf("building semp schema map: %w", err)
@@ -328,28 +329,30 @@ instead of writability flags) and 'raw' (the definition verbatim, larger).
 		// audit line. Panic contract: both result and toolErr nil at defer
 		// time means a panic is unwinding.
 		start := time.Now()
-		var brokerAlias, errorType string
+		var brokerAlias string
+		var errorType metrics.ErrorType
 		var toolErr error
 		id := NewIdentityFromPrincipal(auth.PrincipalFrom(ctx))
 		defer func() {
 			if toolErr == nil && result == nil {
-				errorType = "panic"
+				errorType = metrics.ErrorTypePanic
 				toolErr = panicError{}
 			}
 			logToolResult(ctx, describeSempSchemaToolName, &brokerAlias, start, &errorType, &toolErr, id)
+			recordToolInvocation(ctx, tm, describeSempSchemaToolName, brokerLabelNone, start, errorType, toolErr)
 		}()
 
 		var args map[string]any
 		if len(req.Params.Arguments) > 0 {
 			if uErr := json.Unmarshal(req.Params.Arguments, &args); uErr != nil {
-				errorType = "bad_request"
+				errorType = metrics.ErrorTypeBadRequest
 				toolErr = fmt.Errorf("parsing tool arguments: %w", uErr)
 				return nil, toolErr
 			}
 		}
 		operation, _ := args["operation"].(string)
 		if operation == "" {
-			errorType = "bad_request"
+			errorType = metrics.ErrorTypeBadRequest
 			toolErr = fmt.Errorf("missing required parameter 'operation'")
 			return nil, toolErr
 		}
@@ -358,20 +361,20 @@ instead of writability flags) and 'raw' (the definition verbatim, larger).
 			view = "trimmed"
 		}
 		if view != "trimmed" && view != "raw" {
-			errorType = "bad_request"
+			errorType = metrics.ErrorTypeBadRequest
 			toolErr = fmt.Errorf("invalid view %q; expected 'trimmed' or 'raw'", view)
 			return nil, toolErr
 		}
 
 		structured, dErr := reg.describe(operation, view)
 		if dErr != nil {
-			errorType = "not_found"
+			errorType = metrics.ErrorTypeNotFound
 			toolErr = dErr
 			return nil, toolErr
 		}
 		resultJSON, mErr := json.MarshalIndent(structured, "", "  ")
 		if mErr != nil {
-			errorType = "marshal_error"
+			errorType = metrics.ErrorTypeMarshalError
 			toolErr = fmt.Errorf("marshalling schema slice: %w", mErr)
 			return nil, toolErr
 		}

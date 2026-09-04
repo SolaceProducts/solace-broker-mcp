@@ -528,12 +528,16 @@ func crossOriginProtection(next http.Handler) http.Handler {
 // (correlation.From then returns ""). Cross-origin protection is unconditional:
 // there is no scenario in which disabling it is the right call, so it takes no
 // config flag.
-func buildMCPEndpoint(authedHandler http.Handler, correlationEnabled bool) http.Handler {
+//
+// The active-requests gauge sits outermost so it counts every /mcp request,
+// including ones rejected below (413/403/401). No-op when tm is nil.
+func buildMCPEndpoint(authedHandler http.Handler, correlationEnabled bool, tm *metrics.ToolMetrics) http.Handler {
 	endpoint := crossOriginProtection(authedHandler)
 	if correlationEnabled {
 		endpoint = correlation.Middleware(endpoint)
 	}
-	return limitRequestBody(endpoint, defaults.MaxMCPRequestBytes)
+	endpoint = limitRequestBody(endpoint, defaults.MaxMCPRequestBytes)
+	return tools.ActiveRequestsMiddleware(tm, endpoint)
 }
 
 // startServer starts httpServer in a background goroutine and returns a channel
@@ -575,14 +579,7 @@ func startServer(srv *http.Server, tlsCertFile, tlsKeyFile string) <-chan error 
 //
 // The caller registers the returned provider's Shutdown as a shutdown hook, so
 // the meter provider is flushed on graceful shutdown.
-func startMetricsEndpoint(cfg *config.ServerConfig, readiness *health.ReadinessState, res *sdkresource.Resource) *metrics.Provider {
-	provider, err := metrics.New(version.Version(), res)
-	if err != nil {
-		slog.Error("metrics endpoint unavailable: provider build failed", slog.String("error", err.Error()))
-		readiness.RegisterListener("metrics_endpoint", func() error { return err })
-		return nil
-	}
-
+func serveMetricsEndpoint(cfg *config.ServerConfig, readiness *health.ReadinessState, provider *metrics.Provider) {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", provider.Handler())
 	srv := newHTTPServer(cfg.Observability.MetricsBindAddress, mux)
@@ -594,8 +591,7 @@ func startMetricsEndpoint(cfg *config.ServerConfig, readiness *health.ReadinessS
 		slog.Error("metrics endpoint failed to bind",
 			slog.String("addr", srv.Addr), slog.String("error", err.Error()))
 		readiness.RegisterListener("metrics_endpoint", func() error { return err })
-		_ = provider.Shutdown(context.Background())
-		return nil
+		return
 	}
 
 	// Holds the listener's current state: empty while it serves, or the error if
@@ -615,8 +611,6 @@ func startMetricsEndpoint(cfg *config.ServerConfig, readiness *health.ReadinessS
 			serveErr.Store(&e)
 		}
 	}()
-
-	return provider
 }
 
 // drainAndShutdown performs the SIGTERM graceful-drain sequence (SOL-151288).
@@ -1187,11 +1181,27 @@ func main() {
 		Version: version.Version(),
 	}, nil)
 
+	// Build the metrics provider before the manager and the /mcp listener, so the
+	// recorder is wired before any request is served. nil when off or the build
+	// fails (recorder methods are nil-safe); the listener starts later.
+	var metricsProvider *metrics.Provider
+	var toolMetrics *metrics.ToolMetrics
+	var metricsBuildErr error
+	if metrics.Enabled(cfg.Observability) {
+		if metricsProvider, metricsBuildErr = metrics.New(version.Version(), res); metricsBuildErr != nil {
+			slog.Error("metrics provider build failed", slog.String("error", metricsBuildErr.Error()))
+		} else if tm, tmErr := metricsProvider.ToolMetrics(); tmErr != nil {
+			slog.Error("tool metrics unavailable", slog.String("error", tmErr.Error()))
+		} else {
+			toolMetrics = tm
+		}
+	}
+
 	// 8. Create the tool manager and register every tool the server exposes.
 	// All registrations happen in one block so the log line below is a
 	// reliable phase boundary — anything before it is registered, anything
 	// after it sees a fully-loaded server.
-	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor)
+	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor, toolMetrics)
 	registerSEMPv1Tools(mgr)
 	registerMixedTools(mgr)
 
@@ -1226,12 +1236,12 @@ func main() {
 	// list-brokers is registered directly (no broker resolution needed) and
 	// takes no policy — the RBAC exemption is expressed structurally at this
 	// API surface.
-	tools.RegisterListBrokers(server, pool)
+	tools.RegisterListBrokers(server, pool, toolMetrics)
 
 	// describe-semp-schema is a discovery tool over the embedded SEMPv2 OpenAPI
 	// spec. Registered outside mgr like list-brokers — no broker resolution,
 	// no policy wrapping.
-	if err := tools.RegisterDescribeSempSchema(server, specs.FS); err != nil {
+	if err := tools.RegisterDescribeSempSchema(server, specs.FS, toolMetrics); err != nil {
 		slog.Error("failed to register describe-semp-schema tool",
 			slog.String("error", err.Error()))
 		os.Exit(1)
@@ -1305,7 +1315,7 @@ func main() {
 	// Register authenticated MCP endpoint. buildMCPEndpoint wraps the body
 	// limit on the outside so it bounds the request before any layer buffers
 	// it; see buildMCPEndpoint for the full layer order and 413 rationale.
-	mux.Handle("/mcp", buildMCPEndpoint(authedHandler, correlationEnabled))
+	mux.Handle("/mcp", buildMCPEndpoint(authedHandler, correlationEnabled, toolMetrics))
 
 	registerMetadataRoutes(mux, cfg)
 
@@ -1342,15 +1352,14 @@ func main() {
 
 	serverErr := startServer(httpServer, cfg.TLSCertFile, cfg.TLSKeyFile)
 
-	// Metrics endpoint: a second listener on its own port, only when enabled.
-	// Registered before SetInitialized so a bind failure shows on the first
-	// /readyz check. The provider's flush is registered as a shutdown hook.
-	var metricsProvider *metrics.Provider
-	if metrics.Enabled(cfg.Observability) {
-		if provider := startMetricsEndpoint(cfg, readiness, res); provider != nil {
-			shutdownHooks.Register("metrics_provider", provider.Shutdown)
-			metricsProvider = provider
-		}
+	// Metrics endpoint: start the listener for the provider built above,
+	// registered before SetInitialized so a bind or build failure shows on the
+	// first /readyz check. The provider's flush is a shutdown hook.
+	if metricsProvider != nil {
+		serveMetricsEndpoint(cfg, readiness, metricsProvider)
+		shutdownHooks.Register("metrics_provider", metricsProvider.Shutdown)
+	} else if metricsBuildErr != nil {
+		readiness.RegisterListener("metrics_endpoint", func() error { return metricsBuildErr })
 	}
 
 	// Tracing (SOL-152420): does nothing when disabled, or installs the real

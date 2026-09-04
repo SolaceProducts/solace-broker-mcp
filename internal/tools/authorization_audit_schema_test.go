@@ -123,10 +123,10 @@ func requestWithGroupsAndCorrelation(groups []string) *mcp.CallToolRequest {
 			TokenInfo: &sdkauth.TokenInfo{
 				UserID: "alice",
 				Extra: map[string]any{
-					"iss":                          "https://idp.example.com",
-					"client_id":                    "cursor-ide",
-					"jti":                          "jti-audit-1",
-					authz.TokenInfoExtraKeyGroups:  groups,
+					"iss":                         "https://idp.example.com",
+					"client_id":                   "cursor-ide",
+					"jti":                         "jti-audit-1",
+					authz.TokenInfoExtraKeyGroups: groups,
 				},
 			},
 		},
@@ -466,7 +466,7 @@ func TestAuditEvent_MatchedGroupsBounding(t *testing.T) {
 			}
 			wrapped := withAuthorization(policy, "list-queues", "groups", newRecordingHandler().handler())
 			boundReq := requestWithGroupsAndCorrelation(groups)
-	if _, err := wrapped(ctxWithPrincipal(context.Background(), boundReq), boundReq); err != nil {
+			if _, err := wrapped(ctxWithPrincipal(context.Background(), boundReq), boundReq); err != nil {
 				t.Fatalf("wrapper returned error: %v", err)
 			}
 

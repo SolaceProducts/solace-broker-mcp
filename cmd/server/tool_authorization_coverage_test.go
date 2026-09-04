@@ -62,7 +62,7 @@ func gatedAndExposedTools(t *testing.T) (gated []string, exposed []*mcp.Tool) {
 	}
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "solace-broker-mcp", Version: "test"}, nil)
-	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, composite.NewCompositeExecutor(operations))
+	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, composite.NewCompositeExecutor(operations), nil)
 
 	// This package's own unexported functions, so a native tool added later is
 	// picked up here automatically.
@@ -72,8 +72,8 @@ func gatedAndExposedTools(t *testing.T) (gated []string, exposed []*mcp.Tool) {
 	// Policy nil: whether a tool gets wrapped depends on where it was registered,
 	// not on any grant, so a compiled policy would change nothing here.
 	tools.RegisterWithServer(mgr, server, pool, true, nil, "")
-	tools.RegisterListBrokers(server, pool)
-	if err := tools.RegisterDescribeSempSchema(server, specs.FS); err != nil {
+	tools.RegisterListBrokers(server, pool, nil)
+	if err := tools.RegisterDescribeSempSchema(server, specs.FS, nil); err != nil {
 		t.Fatalf("RegisterDescribeSempSchema: %v", err)
 	}
 

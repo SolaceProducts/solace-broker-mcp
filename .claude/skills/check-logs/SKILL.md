@@ -61,7 +61,7 @@ For each file, check for the following violations in order of severity:
 
 #### LOW — Best practice
 
-- [ ] **L-01: Missing required fields** — Tool invocation logs without all required fields (tool, broker, status, duration_ms)
+- [ ] **L-01: Missing required fields** — Tool invocation logs without all required fields (tool, broker, outcome, duration_ms)
 - [ ] **L-02: Unstructured fmt.Print** — Any `fmt.Printf`, `fmt.Println` used for logging purposes
 
 ### Step 4: Report findings

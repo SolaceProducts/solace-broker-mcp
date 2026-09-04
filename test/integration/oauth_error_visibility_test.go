@@ -272,7 +272,7 @@ func oauthCallToolAndCaptureDetail(t *testing.T, mgr *tools.ToolManager, ctx con
 		if json.Unmarshal(line, &m) != nil {
 			continue
 		}
-		if m["msg"] == "tool invoked" && m["status"] == "error" {
+		if m["msg"] == "tool invoked" && m["outcome"] == "error" {
 			detail, _ = m["detail"].(string)
 		}
 	}

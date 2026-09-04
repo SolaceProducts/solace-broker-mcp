@@ -64,7 +64,7 @@ func TestPrincipalReachesListFiltering(t *testing.T) {
 	mgr := tools.NewToolManager(pool)
 	server := newTestServer()
 	tools.RegisterWithServer(mgr, server, pool, true, policyFrom(t, cfg), "groups")
-	tools.RegisterListBrokers(server, pool)
+	tools.RegisterListBrokers(server, pool, nil)
 
 	// The production wiring function itself, not a copy of its body. Calling
 	// it is what makes this test guard main()'s order: an earlier version

@@ -1,9 +1,29 @@
 # HELP mcp_build_info Server build info; always 1, labelled with the version.
 # TYPE mcp_build_info gauge
 mcp_build_info{version="v1.2.3-test"} 1
+# HELP mcp_http_active_requests Number of in-flight HTTP requests
+# TYPE mcp_http_active_requests gauge
+mcp_http_active_requests 0
 # HELP mcp_metrics_scrape_total Number of /metrics scrapes served.
 # TYPE mcp_metrics_scrape_total counter
 mcp_metrics_scrape_total 1
 # HELP mcp_schema_version Observability schema versions; always 1, labelled with each schema.
 # TYPE mcp_schema_version gauge
 mcp_schema_version{audit_schema="1.0",metrics_schema="1.0"} 1
+# HELP mcp_tool_invocation_duration_seconds Duration of tool invocation in seconds
+# TYPE mcp_tool_invocation_duration_seconds histogram
+mcp_tool_invocation_duration_seconds_bucket{broker="test-broker",error_type="",outcome="success",tool="test-tool",le="0.001"} 0
+mcp_tool_invocation_duration_seconds_bucket{broker="test-broker",error_type="",outcome="success",tool="test-tool",le="0.005"} 1
+mcp_tool_invocation_duration_seconds_bucket{broker="test-broker",error_type="",outcome="success",tool="test-tool",le="0.01"} 1
+mcp_tool_invocation_duration_seconds_bucket{broker="test-broker",error_type="",outcome="success",tool="test-tool",le="0.05"} 1
+mcp_tool_invocation_duration_seconds_bucket{broker="test-broker",error_type="",outcome="success",tool="test-tool",le="0.1"} 1
+mcp_tool_invocation_duration_seconds_bucket{broker="test-broker",error_type="",outcome="success",tool="test-tool",le="0.5"} 1
+mcp_tool_invocation_duration_seconds_bucket{broker="test-broker",error_type="",outcome="success",tool="test-tool",le="1"} 1
+mcp_tool_invocation_duration_seconds_bucket{broker="test-broker",error_type="",outcome="success",tool="test-tool",le="5"} 1
+mcp_tool_invocation_duration_seconds_bucket{broker="test-broker",error_type="",outcome="success",tool="test-tool",le="10"} 1
+mcp_tool_invocation_duration_seconds_bucket{broker="test-broker",error_type="",outcome="success",tool="test-tool",le="+Inf"} 1
+mcp_tool_invocation_duration_seconds_sum{broker="test-broker",error_type="",outcome="success",tool="test-tool"} 0.005
+mcp_tool_invocation_duration_seconds_count{broker="test-broker",error_type="",outcome="success",tool="test-tool"} 1
+# HELP mcp_tool_invocation_total Number of tool invocations.
+# TYPE mcp_tool_invocation_total counter
+mcp_tool_invocation_total{broker="test-broker",error_type="",outcome="success",tool="test-tool"} 1

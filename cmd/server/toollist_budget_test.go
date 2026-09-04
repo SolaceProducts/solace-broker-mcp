@@ -75,12 +75,12 @@ func registeredServer(t *testing.T, enableWriteTools bool) *mcp.Server {
 	executor := composite.NewCompositeExecutor(operations)
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "solace-broker-mcp", Version: "test"}, nil)
-	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor)
+	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor, nil)
 	registerSEMPv1Tools(mgr)
 	registerMixedTools(mgr)
 	tools.RegisterWithServer(mgr, server, pool, enableWriteTools, nil, "")
-	tools.RegisterListBrokers(server, pool)
-	if err := tools.RegisterDescribeSempSchema(server, specs.FS); err != nil {
+	tools.RegisterListBrokers(server, pool, nil)
+	if err := tools.RegisterDescribeSempSchema(server, specs.FS, nil); err != nil {
 		t.Fatalf("RegisterDescribeSempSchema: %v", err)
 	}
 	return server
