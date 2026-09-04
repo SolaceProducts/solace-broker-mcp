@@ -336,7 +336,7 @@ instead of writability flags) and 'raw' (the definition verbatim, larger).
 				errorType = "panic"
 				toolErr = panicError{}
 			}
-			logToolResult(ctx, describeSempSchemaToolName, &brokerAlias, start, &errorType, &toolErr, id)
+			logToolResult(ctx, describeSempSchemaToolName, &brokerAlias, start, &errorType, &toolErr, nil, id)
 		}()
 
 		var args map[string]any

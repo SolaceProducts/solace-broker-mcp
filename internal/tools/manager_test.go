@@ -651,8 +651,11 @@ func TestCallTool_SEMPErrorWrapped(t *testing.T) {
 // (ALREADY_EXISTS) comes back as a non-failure — IsError: false — with the
 // outcome/changed fields an agent needs to tell "already done" from
 // "failed" without reconciling against the broker, and the "tool invoked"
-// audit line logs it at INFO (not ERROR) with an "outcome" field, per the
-// design note that this must not page dashboards keyed on error level.
+// audit line logs it at INFO (not ERROR) with a "desired_state" field, per
+// the design note that this must not page dashboards keyed on error level.
+// Checks the actual "level" JSON key, not just status/desired_state — those
+// two string values are unchanged by the log level itself, so only "level"
+// can prove the line didn't log at ERROR.
 func TestCallTool_DesiredStateOutcome_AlreadyExists(t *testing.T) {
 	var buf bytes.Buffer
 	old := slog.Default()
@@ -705,7 +708,10 @@ func TestCallTool_DesiredStateOutcome_AlreadyExists(t *testing.T) {
 		if fields["status"] == "error" {
 			foundError = true
 		}
-		if fields["status"] == "success" && fields["outcome"] == "exists_unchanged" {
+		if fields["status"] == "success" && fields["desired_state"] == "exists_unchanged" {
+			if fields["level"] != "INFO" {
+				t.Errorf("level = %v, want INFO — a desired-state noop must not log at ERROR", fields["level"])
+			}
 			foundInfo = true
 		}
 	}
@@ -713,13 +719,23 @@ func TestCallTool_DesiredStateOutcome_AlreadyExists(t *testing.T) {
 		t.Errorf("found a status=error \"tool invoked\" line; want none — log:\n%s", buf.String())
 	}
 	if !foundInfo {
-		t.Errorf("did not find a status=success outcome=exists_unchanged \"tool invoked\" line; log:\n%s", buf.String())
+		t.Errorf("did not find a status=success desired_state=exists_unchanged \"tool invoked\" line; log:\n%s", buf.String())
 	}
 }
 
 // TestCallTool_DesiredStateOutcome_AlreadyAbsent is the AC2 counterpart:
-// NOT_FOUND on a delete is a non-failure too.
+// NOT_FOUND on a delete is a non-failure too. Also verifies the "tool
+// invoked" audit line logs at INFO with a "desired_state" field, the same
+// claim TestCallTool_DesiredStateOutcome_AlreadyExists checks — this variant
+// had no logging assertion at all before, so the delete-side path went
+// unverified for the one thing the design note says matters most.
 func TestCallTool_DesiredStateOutcome_AlreadyAbsent(t *testing.T) {
+	var buf bytes.Buffer
+	old := slog.Default()
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(logger)
+	defer slog.SetDefault(old)
+
 	mgr := NewToolManager(newTestPool(t))
 
 	handler := newStubHandler("delete-queue")
@@ -754,6 +770,29 @@ func TestCallTool_DesiredStateOutcome_AlreadyAbsent(t *testing.T) {
 	}
 	if sc["changed"] != false {
 		t.Errorf("changed = %v, want false", sc["changed"])
+	}
+
+	var foundInfo, foundError bool
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var fields map[string]any
+		if json.Unmarshal([]byte(line), &fields) != nil || fields["msg"] != "tool invoked" {
+			continue
+		}
+		if fields["status"] == "error" {
+			foundError = true
+		}
+		if fields["status"] == "success" && fields["desired_state"] == "already_absent" {
+			if fields["level"] != "INFO" {
+				t.Errorf("level = %v, want INFO — a desired-state noop must not log at ERROR", fields["level"])
+			}
+			foundInfo = true
+		}
+	}
+	if foundError {
+		t.Errorf("found a status=error \"tool invoked\" line; want none — log:\n%s", buf.String())
+	}
+	if !foundInfo {
+		t.Errorf("did not find a status=success desired_state=already_absent \"tool invoked\" line; log:\n%s", buf.String())
 	}
 }
 

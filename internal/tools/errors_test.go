@@ -22,9 +22,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/composite/definitions"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/tokenexchange"
 )
 
@@ -303,6 +306,57 @@ func TestClassifyDesiredStateOutcome(t *testing.T) {
 				t.Error("Message is empty, want a non-empty agent-facing message")
 			}
 		})
+	}
+}
+
+// TestClassifyDesiredStateOutcome_WriteOperationsHaveExpectedPrefix guards
+// the invariant classifyDesiredStateOutcome's doc comment claims but, before
+// this test, only checked by manual grep: every config/action (write)
+// operation referenced by the real, embedded tools.yaml catalog has an
+// operationId starting with create/update/delete/do. Same pattern as
+// write_tool_drift_test.go and loader_embedded_test.go — load the real
+// catalog and specs, assert a structural property against them — so a
+// future operation that violates this convention fails CI instead of
+// silently never getting classified as a desired-state noop (no crash, no
+// test failure, just quietly missing coverage for that one operation).
+func TestClassifyDesiredStateOutcome_WriteOperationsHaveExpectedPrefix(t *testing.T) {
+	operations, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatalf("ParseSpecs: %v", err)
+	}
+	realTools, err := composite.LoadTools(definitions.FS, "tools.yaml")
+	if err != nil {
+		t.Fatalf("LoadTools: %v", err)
+	}
+
+	wantPrefixes := []string{"create", "update", "delete", "do"}
+	for _, tool := range realTools {
+		for _, step := range tool.Steps {
+			// A monitor step never fails with ALREADY_EXISTS/NOT_FOUND in the
+			// sense classifyDesiredStateOutcome cares about; only config/
+			// action steps are write operations this invariant applies to.
+			if !strings.HasPrefix(step.Operation, "config/") && !strings.HasPrefix(step.Operation, "action/") {
+				continue
+			}
+			op, ok := operations[step.Operation]
+			if !ok {
+				t.Errorf("%s step %s: operation %q not found in the real specs", tool.Name, step.ID, step.Operation)
+				continue
+			}
+			hasExpectedPrefix := false
+			for _, prefix := range wantPrefixes {
+				if strings.HasPrefix(op.ID, prefix) {
+					hasExpectedPrefix = true
+					break
+				}
+			}
+			if !hasExpectedPrefix {
+				t.Errorf("%s step %s: operation id %q starts with none of %v — "+
+					"classifyDesiredStateOutcome would never classify a duplicate-create "+
+					"or delete-of-missing-object failure on this operation as a "+
+					"desired-state noop", tool.Name, step.ID, op.ID, wantPrefixes)
+			}
+		}
 	}
 }
 

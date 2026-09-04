@@ -245,6 +245,18 @@ func (m *ToolManager) buildErrorResult(err error, brokerAlias string) *mcp.CallT
 type desiredStateOutcome struct {
 	Outcome string // "exists_unchanged" | "already_absent"
 	Message string
+
+	// SEMPCode, SEMPStatus, Operation, and Detail mirror the underlying SEMP
+	// error's audit fields. manager.go's CallTool clears toolErr back to nil
+	// for this outcome — a non-nil toolErr means "the call failed" to every
+	// other consumer in this codebase, including SOL-152086's per-tool
+	// metrics, which infer outcome=error from exactly that signal — so
+	// logToolResult reads these fields from here instead of re-deriving them
+	// from toolErr.
+	SEMPCode   int
+	SEMPStatus string
+	Operation  string
+	Detail     string
 }
 
 // classifyDesiredStateOutcome reports whether err is a SEMP error that,
@@ -280,13 +292,21 @@ func classifyDesiredStateOutcome(err error) *desiredStateOutcome {
 	switch {
 	case isSEMPStatus(sempErr, "ALREADY_EXISTS", 10) && strings.HasPrefix(sempErr.Operation, "create"):
 		return &desiredStateOutcome{
-			Outcome: "exists_unchanged",
-			Message: buildSEMPv2Message(sempErr),
+			Outcome:    "exists_unchanged",
+			Message:    buildSEMPv2Message(sempErr),
+			SEMPCode:   sempErr.SEMPCode,
+			SEMPStatus: sempErr.SEMPStatus,
+			Operation:  sempErr.Operation,
+			Detail:     sempErr.Error(),
 		}
 	case isSEMPStatus(sempErr, "NOT_FOUND", 6) && strings.HasPrefix(sempErr.Operation, "delete"):
 		return &desiredStateOutcome{
-			Outcome: "already_absent",
-			Message: buildSEMPv2Message(sempErr),
+			Outcome:    "already_absent",
+			Message:    buildSEMPv2Message(sempErr),
+			SEMPCode:   sempErr.SEMPCode,
+			SEMPStatus: sempErr.SEMPStatus,
+			Operation:  sempErr.Operation,
+			Detail:     sempErr.Error(),
 		}
 	}
 	return nil
@@ -602,7 +622,12 @@ func translateParentNotFound(description string) string {
 	}
 	capitalized := strings.ToUpper(friendly[:1]) + friendly[1:]
 	if instance != "" {
-		return fmt.Sprintf("%s %q does not exist.", capitalized, instance)
+		// Routed through sanitizeBrokerText like every other broker-derived
+		// agent-facing string in this file, even though instance is, today,
+		// just an echo of the caller-supplied name — not broker-internal
+		// data. Keeps this function from being a silent exception to that
+		// otherwise-universal invariant if that ever stops being true.
+		return fmt.Sprintf("%s %q does not exist.", capitalized, sanitizeBrokerText(instance))
 	}
 	return fmt.Sprintf("%s does not exist.", capitalized)
 }
