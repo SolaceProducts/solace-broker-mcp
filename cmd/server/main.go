@@ -45,6 +45,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/idpclient"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/middleware/recovery"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/oauth/cache"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/hooks"
@@ -1220,7 +1221,13 @@ func main() {
 	// All registrations happen in one block so the log line below is a
 	// reliable phase boundary — anything before it is registered, anything
 	// after it sees a fully-loaded server.
-	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor, toolMetrics)
+	// The audit log is the manager's only observability dependency beyond
+	// metrics: with it on, a destructive tool call emits an audit record
+	// instead of the bare WARN (SOL-152096). Off by default, per the
+	// door-closing policy.
+	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor,
+		tools.WithToolMetrics(toolMetrics),
+		tools.WithAuditLog(audit.Enabled(cfg.Observability)))
 	registerSEMPv1Tools(mgr)
 	registerMixedTools(mgr)
 

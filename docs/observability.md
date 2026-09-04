@@ -5,9 +5,10 @@
 > freeze at GA. After GA we commit to only ever *adding* to this schema, never renaming, so
 > the time to change a name is now. See [How to Give Feedback](#how-to-give-feedback).
 >
-> **Metrics, audit, and tracing are not emitted by the current build.** Only their feature
-> flags exist today: there is no `/metrics` handler, no audit emission, and no OTLP
-> exporter. Those sections are written in the present tense of the *proposed* design,
+> **Most of the metrics and trace surface is not emitted by the current build.** See the
+> [Implementation Status](#implementation-status) table for what is live; anything marked
+> **[Planned]** has a feature flag and nothing behind it. Those sections are written in the
+> present tense of the *proposed* design,
 > because the design is what you are being asked to review. Read them as a specification,
 > not as a description of a running system, and do not point a dashboard or SIEM query at
 > them until the corresponding signal ships.
@@ -46,7 +47,7 @@ capability headings carry the same tag:
 |---|---|---|
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
 | Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, the OTLP export-health counters, and `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)). Assume any other metric below is not yet emitted. |
-| Audit trail | **[Planned]** | Only the capability gate exists today; event emission lands in a later story. |
+| Audit trail | **[Interim — `operation` records only]** | Destructive tool calls emit an `operation` record behind `OBS_AUDIT_LOG_ENABLED` (default off). The authentication and denial record types, and the `mcp_audit_events_dropped_total` counter, are not emitted yet. See [Audit Trail](#audit-trail--interim--operation-records-only). |
 | Distributed tracing | **[Interim — provider wired, no spans yet]** | Tracer provider and OTLP export are live behind `OBS_TRACING_ENABLED`; no code creates a span yet. See [Distributed Tracing](#distributed-tracing--interim-provider-wired-spans-not-yet-emitted). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
 | Resource attributes | **[Implemented]** | Shared identity resource on metrics and traces, plus the committed subset on every log line. See [Resource Attributes](#resource-attributes--implemented). |
@@ -96,7 +97,7 @@ not rename what is already there.
 Two independent versions are published, so your queries can pin to a version and detect drift:
 
 - `metrics_schema` (current: **1.0**), surfaced by the `mcp_schema_version` metric.
-- `audit_schema` (current: **1.0**), surfaced as the `audit_schema_version` field on every audit
+- `audit_schema` (current: **1.1**), surfaced as the `audit_schema_version` field on every audit
   event **and** as a label on `mcp_schema_version`, so both versions are discoverable from a
   scrape without ingesting audit events.
 
@@ -441,10 +442,15 @@ present, once the metrics endpoint is wired, for diagnosing memory pressure and 
 
 ---
 
-## Audit Trail — [Planned]
+## Audit Trail — [Interim — `operation` records only]
 
-> _Status: **[Planned]**. Only the capability gate exists today; audit-event emission lands in
-> a later story. The following fields and delivery behavior are the proposed schema._
+> _Status: **[Interim]** (SOL-152090, SOL-152096). `operation` records for destructive tool
+> calls are emitted today behind `OBS_AUDIT_LOG_ENABLED`, and the whole record schema below
+> is enforced in code by one constructor. The other record types are part of that schema and
+> accepted by the constructor, but nothing emits them yet: `auth_success`, `auth_failure` and
+> `authz_denied` land with SOL-152097, `broker_authz_denied` with SOL-153332. `audit_drop` is
+> emitted. Write your SIEM rules against the schema; expect the non-`operation` record types
+> to start appearing rather than to change shape._
 
 One JSON event is emitted per **state-changing** operation (for example `disconnect-client`,
 `delete-queue`, broker shutdown), at completion, with the outcome known. Read-only calls are
@@ -453,6 +459,28 @@ enabled with `OBS_AUDIT_LOG_ENABLED`.
 
 Every event carries a top-level `"event": "audit"` tag so your log shipper can route the
 audit sub-stream to a dedicated SIEM index.
+
+**One `operation` record per call, not a started/completed pair.** The record is written when
+the call finishes, so it carries the outcome and duration without your having to join two
+records. A recovered panic still produces one, carrying `outcome: error`,
+`error_type: panic`, and `panic_recovered: true` — a destructive handler that crashed may
+already have changed the broker, so its absence must never read as "nothing was attempted".
+
+**"One record per call" bounds the `operation` type, not the total.** A call the broker
+denies at hop 2 produces its `operation` record *and* a `broker_authz_denied` record
+(SOL-153332), because execution had already started. Match on `audit_event_type` rather than
+counting records per `correlation_id`.
+
+**With `OBS_AUDIT_LOG_ENABLED` off**, a destructive call instead logs the pre-flip
+`executing destructive operation` WARN it always has, and no audit record is written. The
+capability is inert when off, not degraded.
+
+**Set `log_level` to `info` or lower.** An `operation` record is emitted at `INFO`, so on a
+server running at `warn` or `error` it is filtered out before it reaches the log. The server
+detects that and emits an `audit_drop` record instead. The drop is emitted at `ERROR`, the
+highest level `log_level` accepts, so it survives **every** supported log level — including
+the one that suppressed the record it is reporting. A stream of drops with no `operation`
+records means your log level, not your flag.
 
 ### Event Fields
 
@@ -468,35 +496,72 @@ audit sub-stream to a dedicated SIEM index.
 | `tool` | The MCP tool invoked | string |
 | `broker` | The broker targeted | string |
 | `outcome` | The result; see [The Outcome Vocabulary](#the-outcome-vocabulary) | string |
-| `error_type` | Why an operation failed; present on `outcome: error` only | string (closed set) |
+| `error_type` | Why an operation failed; present on `outcome: error` only. Five of the twelve values reach an audit record, see [`error_type`](#error_type) | string (closed set) |
+| `panic_recovered` | On `operation` only: present and `true` when a destructive handler crashed and was recovered (`outcome: error`, `error_type: panic`) | boolean |
 | `arguments_hash` | SHA-256 over an RFC 8785 (JCS) canonicalization of the call arguments | hex string |
 | `correlation_id` | Join key to logs, traces, and the broker-side entry | string |
-| `reason` | Why authentication or authorization failed; present on `auth_failure` and `authz_denied` | string (closed set) |
-| `audit_schema_version` | The schema version, for query pinning | string (`1.0`) |
+| `reason` | Why authentication or authorization failed; present on `auth_failure`, `authz_denied`, and `broker_authz_denied` | string (closed set, one per record type) |
+| `dropped_audit_event_type` | On `audit_drop` only: which `audit_event_type` could not be built or written | string (same closed set as `audit_event_type`) |
+| `audit_schema_version` | The schema version, for query pinning | string (`1.1`) |
 
-**`audit_event_type`** is a closed set of six: `operation` (a state-changing tool call),
-`auth_success`, `auth_failure`, `authz_denied`, `broker_auth_retry`, and `audit_drop`.
+**`audit_event_type`** is a closed set of seven: `operation` (a state-changing tool call),
+`auth_success`, `auth_failure`, `authz_denied`, `broker_authz_denied`, `broker_auth_retry`,
+and `audit_drop`.
 
 **Which fields appear on which record.** Not every field is on every record, so a SIEM author
-can tell record kinds apart from field presence alone. `event`, `audit_event_type`,
-`timestamp_utc`, `correlation_id`, and `audit_schema_version` are on all six.
+can tell record kinds apart from field presence alone.
 
-| `audit_event_type` | `outcome` | `error_type` | `reason` | `tool`, `arguments_hash`, `started_at_utc`, `duration_ms` | `broker` | `principal.sub`, `agent_client_id` |
-|---|---|---|---|---|---|---|
-| `operation` | yes | on `error` only | — | yes | yes | yes |
-| `auth_success` | — | — | — | — | — | yes |
-| `auth_failure` | — | — | yes | — | — | see following note |
-| `authz_denied` | — | — | yes | `tool` only | — | yes |
-| `broker_auth_retry` | `success` or `error` | — | — | — | yes | yes |
-| `audit_drop` | — | — | — | — | — | — |
+`event`, `audit_event_type`, `timestamp_utc`, and `audit_schema_version` are on all seven.
+`correlation_id` is on all seven **when the request carries one** — it is omitted rather than
+written empty, so it is absent with `OBS_CORRELATION_ID_ENABLED` off and on records that do
+not belong to a request.
+
+Reading the table: **yes** means always present, **opt** means present when there is a value
+(see the notes below each column's meaning of that), and **—** means never present.
+
+| `audit_event_type` | `outcome` | `error_type` | `reason` | `tool` | `arguments_hash` | `started_at_utc`, `duration_ms` | `broker` | `principal.sub`, `agent_client_id` | `dropped_audit_event_type` | `panic_recovered` |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `operation` | yes | on `error` only | — | yes | yes | yes | yes | opt | — | opt |
+| `auth_success` | — | — | — | — | — | — | — | opt | — | — |
+| `auth_failure` | — | — | yes | — | — | — | — | opt | — | — |
+| `authz_denied` | — | — | yes | yes | — | — | — | opt | — | — |
+| `broker_authz_denied` | — | — | yes | yes | — | — | yes | opt | — | — |
+| `broker_auth_retry` | `success` or `error` | — | — | — | — | opt | yes | opt | — | — |
+| `audit_drop` | — | — | — | opt | — | — | opt | — | opt | — |
+
+- **The identity columns are `opt`, not `yes`.** `principal.sub` and `agent_client_id` are
+  present whenever a principal was authenticated, and absent when there is none to name —
+  with `mcp_client_auth.mode: disabled` no token is verified, so no record in that deployment
+  carries them. **Do not use the absence of `principal.sub` to discriminate a record kind.**
+  `agent_client_id` is additionally absent when the IdP issued no `client_id` claim.
+- **`started_at_utc` and `duration_ms` are `opt` on `broker_auth_retry`.** They are permitted
+  and may appear once that record type has an emitter.
+
+This table is enforced, not merely documented. A single constructor
+(`internal/observability/audit`.`NewEvent`) builds every record and rejects any combination
+outside the table, so two emission sites cannot produce two shapes of the same record kind.
 
 - **`auth_success` and `auth_failure` carry no `outcome`.** The record type already says what
   happened, so one predicate does the job of two.
 - **On `auth_failure` the principal is unknown by definition**, since authentication is what
   failed. `principal.sub` and `agent_client_id` appear only when the token parsed far enough to
   yield them: an expired or audience-mismatched token does, a malformed or absent one does not.
-- **`audit_drop` is a notice, not an outcome.** It reports that a record could not be written,
-  and carries only the five common fields.
+- **`authz_denied` and `broker_authz_denied` are the two hops of the same question.**
+  `authz_denied` is this server refusing an authenticated caller the tool they asked for.
+  `broker_authz_denied` is the broker refusing the exchanged identity, so it also names the
+  `broker` that refused — the only column in which the two rows differ. A hop-2 denial
+  **coexists** with the call's `operation` record rather than suppressing it, because
+  execution had already started by the time the broker refused.
+- **`audit_drop` is a notice, not an outcome.** It reports that a record could not be written.
+  It carries no principal, `outcome`, or `arguments_hash` — there is no surviving record for it
+  to describe, and it must never become a second place raw arguments could leak. It carries
+  `tool`, `broker`, and `dropped_audit_event_type` when the call site knows them, so a
+  reviewer working inside the audit stream (`event="audit"`) can attribute the gap without
+  joining to the operational log line — necessary at `log_level: warn` or above, where a
+  successful call's own `tool invoked` line is filtered out but the drop, at `ERROR`, is not.
+  All three are optional: a drop can happen before any of them is known. It is emitted at
+  `ERROR`, above every other record type, so that it survives the log level that suppressed
+  whatever it is reporting.
 
 **Time fields carry their zone or unit in the name:** `_utc` for an instant, `_ms` for a
 duration. Hence `timestamp_utc` and `started_at_utc` alongside `duration_ms`. Names freeze at
@@ -518,11 +583,59 @@ only `sub` is written to the audit event. A human-readable username (`preferred_
 **deliberately omitted in v1**: it is directly identifying PII that would land in an
 append-only store. Adding it later is a pure addition (see open item 3).
 
-**`arguments_hash`.** SHA-256 (FIPS 180-4) over an RFC 8785 JSON Canonicalization Scheme
-form of the arguments (keys sorted, insignificant whitespace removed, nulls preserved). The
-hash is deterministic, so an auditor can recompute it from the same arguments to prove a
-recorded event corresponds to a specific call, without the raw argument values ever being
-stored.
+**`arguments_hash`.** Lowercase hex SHA-256 (FIPS 180-4) over the
+[RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) JSON Canonicalization Scheme (JCS) form of
+the arguments (keys sorted recursively by UTF-16 code unit, ES6 number serialisation,
+insignificant whitespace removed, array order and nulls preserved). The hash is deterministic,
+so an auditor can recompute it from the same arguments to prove a recorded event corresponds
+to a specific call, without the raw argument values ever being stored.
+
+**Reproducing the hash.** The digest is over the `arguments` object of the `tools/call`
+request with two changes applied first, both of which an auditor must reproduce to get the
+same digest:
+
+1. **`broker` is removed.** The parameter is auto-injected into every tool's schema
+   (`internal/tools/register.go`) rather than being part of the tool's own arguments, and
+   broker aliases resolve case-insensitively — so if `broker` stayed in the digest, a call
+   sent as `"broker": "PROD"` and one sent as `"broker": "prod"` against the same broker would
+   hash differently despite being the same operation. Removing it before hashing means the
+   digest cannot be salted by the caller's casing; the record's own `broker` field (always the
+   *configured* casing) is the place to look for which broker a call targeted.
+2. **A value on the [Never-Log list](internal/secure-logging-rules.md) is replaced with the
+   fixed placeholder `[REDACTED]`, recursively.** A key matches by the same case-insensitive
+   substring test as the `ReplaceAttr` net on log output — `password`, `token`, `secret`,
+   `authorization`, `credential`, `api_key`, `private_key` — because at least one composite
+   tool (`update-message-vpn`) accepts a free-form config object with no schema constraint on
+   its keys, and the bundled SEMPv2 spec exposes password fields on that exact operation. The
+   placeholder is fixed rather than derived from the original value, so changing a redacted
+   field's value does not change the digest — a digest that varied with a secret's value would
+   itself be a comparison oracle over that secret.
+
+A call that sends no `arguments` field, or one whose remaining arguments are empty after
+`broker` is removed, hashes as the empty object `{}`. Any conformant RFC 8785 implementation
+reproduces the rest — for example, in Python:
+
+```python
+# pip install rfc8785
+import hashlib, rfc8785
+arguments.pop("broker", None)
+# redact any key matching the patterns above to "[REDACTED]", recursively, first
+print(hashlib.sha256(rfc8785.dumps(arguments)).hexdigest())
+```
+
+Join a record to its originating request on `correlation_id`; recomputing the hash from the
+original `tools/call` arguments (after the two transforms above) confirms it corresponds to
+that specific call.
+
+The server uses [`github.com/gowebpki/jcs`](https://github.com/gowebpki/jcs) (Apache-2.0)
+rather than a hand-rolled canonicaliser, deliberately. Number serialisation, Unicode
+handling, and recursive key ordering are where a home-grown implementation goes subtly wrong,
+and the failure mode is a hash your tooling cannot reproduce and our tests would not catch.
+
+**The schema is additive-only within a major version.** Fields are added, never renamed or
+removed, and closed sets (`audit_event_type`, `outcome`, `error_type`, `reason`) only grow.
+An additive change bumps the minor `audit_schema_version`; anything else bumps the major. Pin
+your queries to `audit_schema_version` and a new field will not break them.
 
 ### Authentication Events
 
@@ -562,6 +675,25 @@ The caller's actual group memberships are deliberately **not** recorded on a den
 separation-of-duties measure. `reason` tells you why without disclosing the caller's
 entitlements to whoever reads the audit stream.
 
+**Broker-side denial has its own record type: `broker_authz_denied`.** Authorization is
+checked twice on a state-changing call. Hop 1 is this server deciding whether the caller may
+use the tool. Hop 2 is the broker deciding whether the exchanged human identity may perform
+the SEMP operation, and a refusal there emits `audit_event_type: broker_authz_denied`
+carrying `tool`, `broker`, the principal, and a single-value closed `reason` set:
+
+| `reason` | Meaning |
+|---|---|
+| `permission_denied` | The broker refused the exchanged identity the SEMP operation behind this tool. |
+
+The two hops read differently in a query, deliberately. A hop-1 denial means nothing was
+attempted. A hop-2 denial means the call *ran* and the broker stopped it, so it comes with an
+`operation` record of its own carrying `outcome: error`. **Do not write a query that assumes
+one audit record per call** — a hop-2 denial produces two, and both are correct. Match on
+`audit_event_type` instead of counting.
+
+> **Not emitted yet.** The record type is part of the schema and the constructor accepts it,
+> so a SIEM rule can be written against it today. The emission site ships with SOL-153332.
+
 ### Audit Delivery
 
 Delivery is **non-blocking by design**: writing an audit event never stalls or fails the
@@ -569,9 +701,15 @@ broker operation. The event rides the server's structured JSON log stream on std
 `"event": "audit"`; your log shipper filters on the tag and routes it.
 
 If the local sink backpressures, the event is **dropped rather than buffered**, and every
-drop is counted in `mcp_audit_events_dropped_total` and recorded as a JSON record carrying
-`"event": "audit"` and `"audit_event_type": "audit_drop"`, so a gap is visible, never
-silent.
+drop is recorded as a JSON record carrying `"event": "audit"` and
+`"audit_event_type": "audit_drop"`, so a gap is visible, never silent. Three things produce a
+drop today: the log handler refusing the write, the record's level being filtered out by the
+server's configured log level, and arguments that could not be canonicalized for hashing.
+
+> **The `mcp_audit_events_dropped_total` counter is not registered yet.** The `audit_drop`
+> *record* ships now, with no dependency; the counter that makes drops dashboard-visible
+> waits on the audit instruments being registered against the meter provider. Alert on the
+> record until then.
 
 `"event"` stays constant at `"audit"` on every record, drops included, precisely so the one
 filter your shipper routes on cannot miss them — a drop notice that fell outside the audit
@@ -653,7 +791,7 @@ audit record**, which is the point of a single vocabulary: filter a dashboard by
 the SIEM unchanged, with no translation table.
 
 **Exception: `tokenexchange.Exchange` never sets `error_type`, even on `outcome: error`.** The
-ten-value `error_type` set above is scoped to tool-invocation outcomes and has no value
+twelve-value `error_type` set above is scoped to tool-invocation outcomes and has no value
 describing a token-exchange failure mode (rate-limited, circuit-open, retries-exhausted,
 transport, request-build). The span still carries the actual cause via the span's recorded
 exception event and its status (`codes.Error`), just not through this shared field. A future
@@ -836,14 +974,39 @@ Present only on `outcome: error`, drawn from a closed set of twelve values:
 | `missing_broker` | No broker was named on a call that requires one. |
 | `unknown_broker` | The named broker is not configured. |
 | `broker_init_error` | The broker is configured but could not be initialized. |
+| `bad_request` | The request itself was malformed — unparseable `arguments`, or a missing or invalid parameter on a tool that validates its own input. |
 | `validation_error` | The arguments failed input validation. |
+| `not_found` | The requested item does not exist (for example, an unknown SEMP operation passed to `describe-semp-schema`). |
 | `execution_error` | The tool ran and failed. |
 | `nil_result` | The tool returned no result. |
 | `not_found` | The requested item does not exist (for example, an unknown SEMP operation passed to describe-semp-schema). |
 | `output_validation_error` | The tool's output failed schema validation. |
 | `marshal_error` | The result could not be serialized. |
 
+**Only five of these reach an audit record.** The twelve values above are the full vocabulary
+for the tool-invocation **metric** and for the `tool invoked` log line. An `operation` audit
+record is written only for a call that actually reached the tool, so only the failures that
+can happen at or after dispatch appear on one:
+
+| Reaches an `operation` audit record | Never appears on an audit record |
+|---|---|
+| `execution_error`, `nil_result`, `output_validation_error`, `marshal_error`, `panic` | `unknown_tool`, `missing_broker`, `unknown_broker`, `broker_init_error`, `validation_error`, `bad_request`, `not_found` |
+
+The right-hand column is every way a call is rejected **before** anything is attempted
+against a broker: an unregistered tool, an absent or unresolvable broker, arguments that
+failed schema validation, or a request whose `arguments` were not valid JSON. Those are
+recorded as an ERROR `tool invoked` line in the operational log, not in the audit stream,
+because no state changed and there is nothing for a compliance reviewer to review. A SIEM
+rule matching `event="audit"` with `error_type: validation_error` will never fire; query the
+operational stream for those.
+
 Notes:
+
+- **If you saw an earlier draft listing ten values, this supersedes it.** `bad_request` and
+  `not_found` are emitted by the two tools that handle their own dispatch — `list-brokers` and
+  `describe-semp-schema` — plus the argument-parsing guard ahead of every tool. They were
+  omitted from earlier drafts that enumerated only the main tool-dispatch path. Nothing about
+  the emitted records changed; the list was incomplete.
 
 - The metric label is `outcome`, not `status`, precisely so metrics, audit, and spans share
   one join key. `error_type` follows the OTel semantic-convention pattern of pairing a small
@@ -858,7 +1021,10 @@ Notes:
 - **Authorization denial is not an `outcome` value.** Like failed authentication, it is a
   separate signal: the `authz_denied` audit event and the `mcp_authz_denied_total` metric,
   whose closed `reason` set (`missing_claim`, `not_permitted`) is authorization throughout.
-  A denied call produces no `operation` record at all.
+  A call denied at hop 1 produces no `operation` record at all. A call denied by the *broker*
+  at hop 2 is different: it produces a `broker_authz_denied` record **and** an `operation`
+  record, because execution had already started. See
+  [Authentication Events](#authentication-events).
 - **Load-shedding / saturation is not an `outcome` value** either; it is a separate signal.
   It ships today as log lines (see
   [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only))
@@ -1041,8 +1207,8 @@ the review.
    intend to follow OTel HTTP conventions. If your trace backend or trace-based SLOs key off
    specific span names or `SpanKind` values, tell us what you expect.
 5. **The `outcome` / `error_type` split.** We have settled on three `outcome` values with the
-   cause in a separate `error_type` of ten values, rather than folding causes into `outcome`.
-   Does that split match how your SIEM queries distinguish failures, and do the ten
+   cause in a separate `error_type` of twelve values, rather than folding causes into `outcome`.
+   Does that split match how your SIEM queries distinguish failures, and do the twelve
    `error_type` values cover how you classify them? If you would separate something we have
    merged — a `timeout` distinct from other errors, say — now is the time.
 6. **Authorization denials — the signal is decided, the vocabulary is what we want checked.**

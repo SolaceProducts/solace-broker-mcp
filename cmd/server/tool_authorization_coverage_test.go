@@ -62,7 +62,7 @@ func gatedAndExposedTools(t *testing.T) (gated []string, exposed []*mcp.Tool) {
 	}
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "solace-broker-mcp", Version: "test"}, nil)
-	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, composite.NewCompositeExecutor(operations), nil)
+	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, composite.NewCompositeExecutor(operations))
 
 	// This package's own unexported functions, so a native tool added later is
 	// picked up here automatically.
