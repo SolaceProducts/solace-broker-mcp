@@ -73,11 +73,14 @@ var hashGoldens = []struct {
 		want:      "22a64e4706f978b672fb5b6b629a1abfa6bf06e21f707f7ae7ae92cfbf572c59",
 	},
 	{
-		// Go's encoding/json escapes <, > and & to <, > and & by
+		// Go's encoding/json escapes <, > and & to \u003c, \u003e and \u0026 by
 		// default. RFC 8785 does not. If that escaping ever leaked into the
 		// digest, every hash over an argument containing one of those
 		// characters would be unreproducible by any conformant implementation —
-		// and nothing else in this suite would notice.
+		// and nothing else in this suite would notice. canonical and want below
+		// use the literal characters, which is what proves the escaping did not
+		// leak: HashArgs re-parses json.Marshal's escaped output through
+		// jcs.Transform, which normalizes it away per RFC 8785 before hashing.
 		name:      "Go's HTML escaping does not reach the digest",
 		args:      map[string]any{"k": "a<b&c>d"},
 		canonical: `{"k":"a<b&c>d"}`,
