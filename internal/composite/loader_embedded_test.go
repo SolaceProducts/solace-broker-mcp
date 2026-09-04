@@ -249,6 +249,29 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 			t.Errorf("forEachKey: got %q, want %q", step.ForEachKey, "msgVpnName")
 		}
 	})
+
+	// Spot-check the create/delete asymmetry for queue subscriptions against
+	// the shipped catalog (SOL-153868 PR #374, bczoma): subscriptionTopic is
+	// deliberately omitted from create-queue-subscription's step args so
+	// constructRequestBody spreads it into the POST body instead, but IS a
+	// step arg on delete-queue-subscription, where it's a path segment.
+	// loader_queue_subscription_test.go pins this against a hand-copied YAML
+	// fixture, which stays green even if a future tools.yaml edit reintroduces
+	// the arg — this checks the real embedded definition instead.
+	t.Run("spot/create-queue-subscription", func(t *testing.T) {
+		tool := findTool(tools, "create-queue-subscription")
+		if tool == nil {
+			t.Fatal("tool not found")
+			return
+		}
+		if len(tool.Steps) == 0 {
+			t.Fatal("no steps")
+			return
+		}
+		if _, ok := tool.Steps[0].Args["subscriptionTopic"]; ok {
+			t.Error("subscriptionTopic must not be a step arg on create — it belongs in the request body")
+		}
+	})
 }
 
 // TestLoadTools_ListVPNs_RetainsDiscoveryFields pins that list-vpns keeps
