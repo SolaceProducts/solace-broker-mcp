@@ -98,6 +98,20 @@ var hashGoldens = []struct {
 		canonical: `{"i":100,"n":1.5}`,
 		want:      "78462c33540c988fabc936ab9f3a1df4ad9e81a13b777be7bd9def29ddc7524d",
 	},
+	{
+		// The second independent leg under the RFC 8785 dependency. Go already
+		// sorts ASCII map keys, so most cases above would survive removing the
+		// canonicaliser entirely; number formatting would not. RFC 8785
+		// mandates ES6 JSON.stringify semantics — 1e+30 rather than
+		// 1000000000000000000000000000000, the shortest round-tripping form of
+		// a denormal, an integral float as "1" and not "1.0" — and that is
+		// exactly what a customer's Python or Java implementation will produce.
+		// A divergence here is the cross-language reproduction promise broken.
+		name:      "ES6 number formatting, not Go's",
+		args:      map[string]any{"big": 1e30, "small": 5e-324, "whole": float64(1)},
+		canonical: `{"big":1e+30,"small":5e-324,"whole":1}`,
+		want:      "c4a5b58619478cd23f9f041bcf9936e3acf8e26d0e2960c1df5f859de5e17487",
+	},
 }
 
 func TestHashArgs_goldens(t *testing.T) {

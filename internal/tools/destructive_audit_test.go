@@ -389,30 +389,37 @@ func TestAuditRecord_hashIdentifiesTheArguments(t *testing.T) {
 // failure mode most likely to bite an operator: enabling the audit log on a
 // server whose level is above INFO. Without this the audit trail would vanish
 // silently, which is the one thing an audit trail must not do.
+// Covers both levels an operator can configure above the operation record's
+// INFO. "error" is the one that matters: it is the highest level
+// config.validLogLevels allows, so if the drop notice does not survive it,
+// enabling the audit log on such a server erases the audit trail with no
+// signal whatsoever.
 func TestAuditRecord_levelFilteredCallEmitsADrop(t *testing.T) {
-	mgr := auditTestManager(t, true)
+	for _, level := range []slog.Level{slog.LevelWarn, slog.LevelError} {
+		t.Run(level.String(), func(t *testing.T) {
+			mgr := auditTestManager(t, true)
+			records := captureAudit(t, level, func() {
+				if _, err := mgr.CallTool(auditCtx(t), "delete-queue",
+					map[string]any{"broker": "dev", "msgVpnName": "default"}, idFixture()); err != nil {
+					t.Fatalf("CallTool: %v", err)
+				}
+			})
 
-	// ERROR only: above the operation record's INFO, below the drop's WARN...
-	// which is also filtered here, so assert on the harsher setting where the
-	// drop itself survives: WARN.
-	records := captureAudit(t, slog.LevelWarn, func() {
-		if _, err := mgr.CallTool(auditCtx(t), "delete-queue",
-			map[string]any{"broker": "dev", "msgVpnName": "default"}, idFixture()); err != nil {
-			t.Fatalf("CallTool: %v", err)
-		}
-	})
-
-	if got := len(ofType(records, audit.EventOperation)); got != 0 {
-		t.Errorf("an INFO operation record survived a WARN level filter (%d record(s))", got)
-	}
-	drops := ofType(records, audit.EventAuditDrop)
-	if len(drops) != 1 {
-		t.Fatalf("want exactly one audit_drop record when the operation record is filtered out, got %d:\n%v", len(drops), records)
-	}
-	// The drop must stay inside the customer's event="audit" filter — it is
-	// the one record that says audit records are missing.
-	if drops[0]["event"] != audit.EventValue {
-		t.Errorf("drop record event = %v, want %q", drops[0]["event"], audit.EventValue)
+			if got := len(ofType(records, audit.EventOperation)); got != 0 {
+				t.Errorf("an INFO operation record survived a %s level filter (%d record(s))", level, got)
+			}
+			drops := ofType(records, audit.EventAuditDrop)
+			if len(drops) != 1 {
+				t.Fatalf("at log level %s: want exactly one audit_drop record when the operation "+
+					"record is filtered out, got %d. Zero means a silently missing audit trail:\n%v",
+					level, len(drops), records)
+			}
+			// The drop must stay inside the customer's event="audit" filter —
+			// it is the one record that says audit records are missing.
+			if drops[0]["event"] != "audit" {
+				t.Errorf("drop record event = %v, want the literal %q", drops[0]["event"], "audit")
+			}
+		})
 	}
 }
 

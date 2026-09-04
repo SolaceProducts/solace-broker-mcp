@@ -32,9 +32,10 @@ import (
 //
 // Two failure modes are covered. The handler can reject the record. And the
 // handler can be filtering out the record's level: an operation record is INFO,
-// so a server running at WARN would otherwise erase its audit trail the moment
-// an operator enabled the audit log. A drop record is WARN, so it survives
-// exactly the level filter that suppressed the record it reports.
+// so a server running above INFO would otherwise erase its audit trail the
+// moment an operator enabled the audit log. A drop record is ERROR, the highest
+// level an operator may configure, so it survives every supported log level —
+// including the one that suppressed the record it reports.
 //
 // The Logger's own level check is replicated rather than skipped: without it,
 // this would write records the operator's configured level says to suppress.

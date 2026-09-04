@@ -94,29 +94,56 @@ func TestEmit_writesTheRecord(t *testing.T) {
 }
 
 // TestEmit_levelFilteredRecordBecomesADrop is the failure mode most likely to
-// reach an operator: enabling the audit log on a server running above INFO.
-// The operation record cannot be written, so a drop record is — at WARN, which
-// survives the same filter.
+// reach an operator: enabling the audit log on a server whose log level is
+// above INFO. The operation record cannot be written, so a drop record is.
+//
+// Both levels an operator can configure above INFO are covered, and "error"
+// is the one that matters: at WARN the drop would survive whatever level it
+// was assigned, so a WARN-only test would pass against a drop record that
+// silently disappears on a supported configuration.
 func TestEmit_levelFilteredRecordBecomesADrop(t *testing.T) {
-	e, err := NewEvent(context.Background(), validOperation())
-	if err != nil {
-		t.Fatalf("NewEvent: %v", err)
-	}
-	records := captureRecords(t, slog.LevelWarn, func() { Emit(context.Background(), e) })
+	for _, level := range []slog.Level{slog.LevelWarn, slog.LevelError} {
+		t.Run(level.String(), func(t *testing.T) {
+			e, err := NewEvent(context.Background(), validOperation())
+			if err != nil {
+				t.Fatalf("NewEvent: %v", err)
+			}
+			records := captureRecords(t, level, func() { Emit(context.Background(), e) })
 
-	if len(records) != 1 {
-		t.Fatalf("wrote %d record(s), want exactly the drop: %v", len(records), records)
+			if len(records) != 1 {
+				t.Fatalf("at log level %s wrote %d record(s), want exactly the drop notice. "+
+					"Zero means the audit trail vanishes silently on a supported log level: %v",
+					level, len(records), records)
+			}
+			if records[0]["audit_event_type"] != string(EventAuditDrop) {
+				t.Errorf("audit_event_type = %v, want %q", records[0]["audit_event_type"], EventAuditDrop)
+			}
+			// The drop must stay inside the customer's event="audit" filter: a
+			// notice that fell outside it would go unseen in exactly the
+			// situation it reports.
+			if records[0]["event"] != "audit" {
+				t.Errorf("drop record event = %v, want the literal %q", records[0]["event"], "audit")
+			}
+		})
 	}
-	if records[0]["audit_event_type"] != string(EventAuditDrop) {
-		t.Errorf("audit_event_type = %v, want %q", records[0]["audit_event_type"], EventAuditDrop)
-	}
-	// The drop must stay inside the customer's event="audit" filter: a notice
-	// that fell outside it would go unseen in exactly the situation it reports.
-	if records[0]["event"] != EventValue {
-		t.Errorf("drop record event = %v, want %q", records[0]["event"], EventValue)
-	}
-	if records[0]["level"] != "WARN" {
-		t.Errorf("drop record level = %v, want WARN so it outlives the filter that suppressed the record it reports", records[0]["level"])
+}
+
+// TestAuditDrop_survivesEveryConfigurableLogLevel is the invariant behind that
+// choice, asserted directly against the levels config.validLogLevels allows.
+// A drop notice below the highest configurable level is a promise the docs
+// make and the code would break.
+func TestAuditDrop_survivesEveryConfigurableLogLevel(t *testing.T) {
+	t.Parallel()
+	// Mirrors internal/config.validLogLevels: debug, info, warn, error.
+	for _, level := range []slog.Level{slog.LevelDebug, slog.LevelInfo, slog.LevelWarn, slog.LevelError} {
+		t.Run(level.String(), func(t *testing.T) {
+			records := captureRecords(t, level, func() { EmitDrop(context.Background()) })
+			if len(records) != 1 {
+				t.Fatalf("the drop notice did not survive log level %s (%d record(s)). "+
+					"Every configurable level must let it through, or an operator on that "+
+					"level loses the audit trail with no signal at all.", level, len(records))
+			}
+		})
 	}
 }
 
@@ -207,10 +234,12 @@ func TestEmit_honoursReplaceAttr(t *testing.T) {
 // past the operator's log level. It reads the handler directly to see the
 // write error, which would otherwise be an easy place to skip the level check
 // slog.Logger normally applies.
+//
+// Asserted above the highest configurable level, so it constrains Emit without
+// contradicting the rule that a drop notice must survive every level an
+// operator can actually set.
 func TestEmit_respectsTheConfiguredLevel(t *testing.T) {
-	// An audit_drop is WARN, so an ERROR-only handler must suppress it, and
-	// the suppression must not itself produce output.
-	records := captureRecords(t, slog.LevelError, func() { EmitDrop(context.Background()) })
+	records := captureRecords(t, slog.LevelError+4, func() { EmitDrop(context.Background()) })
 	if len(records) != 0 {
 		t.Errorf("wrote %d record(s) below the configured level: %v", len(records), records)
 	}

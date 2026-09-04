@@ -475,11 +475,12 @@ counting records per `correlation_id`.
 `executing destructive operation` WARN it always has, and no audit record is written. The
 capability is inert when off, not degraded.
 
-**Set your log level to `INFO` or lower.** An `operation` record is emitted at `INFO`. On a
-server running at `WARN` or above it would be filtered out, so the server detects that case
-and emits an `audit_drop` record (which is `WARN`, and therefore survives) rather than
-letting the audit trail disappear silently. A stream of drops with no operation records means
-the log level, not the flag.
+**Set `log_level` to `info` or lower.** An `operation` record is emitted at `INFO`, so on a
+server running at `warn` or `error` it is filtered out before it reaches the log. The server
+detects that and emits an `audit_drop` record instead. The drop is emitted at `ERROR`, the
+highest level `log_level` accepts, so it survives **every** supported log level — including
+the one that suppressed the record it is reporting. A stream of drops with no `operation`
+records means your log level, not your flag.
 
 ### Event Fields
 
@@ -506,18 +507,33 @@ the log level, not the flag.
 and `audit_drop`.
 
 **Which fields appear on which record.** Not every field is on every record, so a SIEM author
-can tell record kinds apart from field presence alone. `event`, `audit_event_type`,
-`timestamp_utc`, `correlation_id`, and `audit_schema_version` are on all seven.
+can tell record kinds apart from field presence alone.
 
-| `audit_event_type` | `outcome` | `error_type` | `reason` | `tool`, `arguments_hash`, `started_at_utc`, `duration_ms` | `broker` | `principal.sub`, `agent_client_id` |
-|---|---|---|---|---|---|---|
-| `operation` | yes | on `error` only | — | yes | yes | yes |
-| `auth_success` | — | — | — | — | — | yes |
-| `auth_failure` | — | — | yes | — | — | see following note |
-| `authz_denied` | — | — | yes | `tool` only | — | yes |
-| `broker_authz_denied` | — | — | yes | `tool` only | yes | yes |
-| `broker_auth_retry` | `success` or `error` | — | — | — | yes | yes |
-| `audit_drop` | — | — | — | — | — | — |
+`event`, `audit_event_type`, `timestamp_utc`, and `audit_schema_version` are on all seven.
+`correlation_id` is on all seven **when the request carries one** — it is omitted rather than
+written empty, so it is absent with `OBS_CORRELATION_ID_ENABLED` off and on records that do
+not belong to a request.
+
+Reading the table: **yes** means always present, **opt** means present when there is a value
+(see the notes below each column's meaning of that), and **—** means never present.
+
+| `audit_event_type` | `outcome` | `error_type` | `reason` | `tool` | `arguments_hash` | `started_at_utc`, `duration_ms` | `broker` | `principal.sub`, `agent_client_id` |
+|---|---|---|---|---|---|---|---|---|
+| `operation` | yes | on `error` only | — | yes | yes | yes | yes | opt |
+| `auth_success` | — | — | — | — | — | — | — | opt |
+| `auth_failure` | — | — | yes | — | — | — | — | opt |
+| `authz_denied` | — | — | yes | yes | — | — | — | opt |
+| `broker_authz_denied` | — | — | yes | yes | — | — | yes | opt |
+| `broker_auth_retry` | `success` or `error` | — | — | — | — | opt | yes | opt |
+| `audit_drop` | — | — | — | — | — | — | — | — |
+
+- **The identity columns are `opt`, not `yes`.** `principal.sub` and `agent_client_id` are
+  present whenever a principal was authenticated, and absent when there is none to name —
+  with `mcp_client_auth.mode: disabled` no token is verified, so no record in that deployment
+  carries them. **Do not use the absence of `principal.sub` to discriminate a record kind.**
+  `agent_client_id` is additionally absent when the IdP issued no `client_id` claim.
+- **`started_at_utc` and `duration_ms` are `opt` on `broker_auth_retry`.** They are permitted
+  and may appear once that record type has an emitter.
 
 This table is enforced, not merely documented. A single constructor
 (`internal/observability/audit`.`NewEvent`) builds every record and rejects any combination
@@ -535,7 +551,9 @@ outside the table, so two emission sites cannot produce two shapes of the same r
   **coexists** with the call's `operation` record rather than suppressing it, because
   execution had already started by the time the broker refused.
 - **`audit_drop` is a notice, not an outcome.** It reports that a record could not be written,
-  and carries only the five common fields.
+  and carries only the common fields — not even the principal, since there is no surviving
+  record for it to describe. It is emitted at `ERROR`, above every other record type, so that
+  it survives the log level that suppressed whatever it is reporting.
 
 **Time fields carry their zone or unit in the name:** `_utc` for an instant, `_ms` for a
 duration. Hence `timestamp_utc` and `started_at_utc` alongside `duration_ms`. Names freeze at
@@ -574,6 +592,13 @@ for example, in Python:
 import hashlib, rfc8785
 print(hashlib.sha256(rfc8785.dumps(arguments)).hexdigest())
 ```
+
+**Recompute from the request, not from the record.** Broker aliases resolve
+case-insensitively, and the record's `broker` field carries the alias in its *configured*
+casing while the digest covers the `broker` value **as the caller typed it**. A caller who
+sent `"broker": "PROD"` against a broker configured as `prod` produces a record reading
+`broker: prod` whose digest is over `"broker":"PROD"`. Reproduce the hash from the original
+`tools/call` arguments; join to the record on `correlation_id`.
 
 The server uses [`github.com/gowebpki/jcs`](https://github.com/gowebpki/jcs) (Apache-2.0)
 rather than a hand-rolled canonicaliser, deliberately. Number serialisation, Unicode

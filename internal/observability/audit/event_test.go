@@ -81,6 +81,43 @@ func validOperation() Fields {
 	}
 }
 
+// TestWireConstants_areFrozenLiterals pins the two strings every customer's
+// log pipeline is configured against.
+//
+// Deliberately spelled as literals, not as EventValue and Message. Every other
+// assertion in this package compares the emitted record against the constant,
+// so renaming the constant renames the expectation with it and the whole suite
+// stays green — while every SIEM route in the field silently stops matching.
+// These two lines are the only thing standing between a one-character rename
+// and a customer's audit stream going dark.
+func TestWireConstants_areFrozenLiterals(t *testing.T) {
+	t.Parallel()
+	if EventValue != "audit" {
+		t.Errorf("EventValue = %q, want %q. Customers select the audit sub-stream with the "+
+			"single predicate event=\"audit\"; changing it breaks every deployed routing rule.", EventValue, "audit")
+	}
+	if Message != "audit" {
+		t.Errorf("Message = %q, want %q. It is a routing anchor for pipelines that key off msg.", Message, "audit")
+	}
+}
+
+// TestEmittedRecord_carriesTheFrozenLiterals is the same guarantee one level
+// out: the bytes on the wire, not just the constants.
+func TestEmittedRecord_carriesTheFrozenLiterals(t *testing.T) {
+	t.Parallel()
+	e, err := NewEvent(context.Background(), validOperation())
+	if err != nil {
+		t.Fatalf("NewEvent: %v", err)
+	}
+	rec := render(t, e)
+	if rec["event"] != "audit" {
+		t.Errorf("emitted event = %v, want the literal %q", rec["event"], "audit")
+	}
+	if rec["msg"] != "audit" {
+		t.Errorf("emitted msg = %v, want the literal %q", rec["msg"], "audit")
+	}
+}
+
 // TestEventTypes_closedSetIsSeven pins the discriminator vocabulary.
 //
 // The count is asserted against len(EventTypes()) and the members against an
@@ -557,8 +594,12 @@ func TestNewEvent_absentCorrelationIDIsOmitted(t *testing.T) {
 // instant, _ms for a duration", and they freeze at GA.
 func TestNewEvent_timingFields(t *testing.T) {
 	t.Parallel()
+	// A non-zero nanosecond component deliberately: with a whole-second
+	// fixture, dropping to time.RFC3339 renders identically and the assertion
+	// would not notice. Sub-second ordering within a burst of calls is what an
+	// auditor reconstructs a sequence from.
 	f := validOperation()
-	f.StartedAt = time.Date(2026, 9, 4, 15, 4, 5, 0, time.FixedZone("EDT", -4*3600))
+	f.StartedAt = time.Date(2026, 9, 4, 15, 4, 5, 123456789, time.FixedZone("EDT", -4*3600))
 	f.Duration = 1500 * time.Millisecond
 
 	e, err := NewEvent(context.Background(), f)
@@ -566,14 +607,96 @@ func TestNewEvent_timingFields(t *testing.T) {
 		t.Fatalf("NewEvent: %v", err)
 	}
 	rec := render(t, e)
-	if got, want := rec["started_at_utc"], "2026-09-04T19:04:05Z"; got != want {
-		t.Errorf("started_at_utc = %v, want %q (RFC 3339, normalised to UTC)", got, want)
+	if got, want := rec["started_at_utc"], "2026-09-04T19:04:05.123456789Z"; got != want {
+		t.Errorf("started_at_utc = %v, want %q (RFC 3339 with sub-second precision, normalised to UTC)", got, want)
 	}
 	if got, want := rec["duration_ms"], float64(1500); got != want {
 		t.Errorf("duration_ms = %v, want %v", got, want)
 	}
 	if _, present := rec["started_at"]; present {
 		t.Error("record carries started_at; the frozen field name is started_at_utc")
+	}
+}
+
+// TestNewEvent_timestampKeepsSubSecondPrecision pins the same property on the
+// record's own instant. Two audit records written within the same second must
+// remain orderable from the field alone.
+func TestNewEvent_timestampKeepsSubSecondPrecision(t *testing.T) {
+	t.Parallel()
+	f := validOperation()
+	f.Timestamp = time.Date(2026, 9, 4, 19, 4, 5, 987654321, time.UTC)
+
+	e, err := NewEvent(context.Background(), f)
+	if err != nil {
+		t.Fatalf("NewEvent: %v", err)
+	}
+	if got, want := render(t, e)["timestamp_utc"], "2026-09-04T19:04:05.987654321Z"; got != want {
+		t.Errorf("timestamp_utc = %v, want %q", got, want)
+	}
+}
+
+// TestNewEvent_absentClientIDOmitsAgentClientID covers the realistic partial
+// case: a token that verified but carried no client_id claim. The principal is
+// present, so principal.sub is written; agent_client_id must be omitted rather
+// than written empty, which a SIEM would index as a real, blank agent.
+func TestNewEvent_absentClientIDOmitsAgentClientID(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ctx = auth.WithPrincipal(ctx, auth.NewPrincipal(ctx, &sdkauth.TokenInfo{
+		UserID: testSub,
+		Extra:  map[string]any{"iss": "https://example.auth0.com/"},
+	}))
+
+	e, err := NewEvent(ctx, validOperation())
+	if err != nil {
+		t.Fatalf("NewEvent: %v", err)
+	}
+	rec := render(t, e)
+	if _, present := rec["agent_client_id"]; present {
+		t.Errorf("agent_client_id = %#v; the IdP issued no client_id, so the key must be omitted", rec["agent_client_id"])
+	}
+	principal, ok := rec["principal"].(map[string]any)
+	if !ok || principal["sub"] != testSub {
+		t.Errorf("principal = %#v; the caller is still known and must be named", rec["principal"])
+	}
+}
+
+// TestNewEvent_operationAttributeOrder is a golden on the whole record: the
+// exact keys, in emission order, for a fully-populated operation record.
+//
+// Every other assertion here decodes to a map and checks fields it names, so
+// none of them notices a field that should not be there, or a reordering. For
+// a schema that freezes at GA, "what exactly does this record contain" is the
+// assertion a reviewer actually wants, and a diff here is a deliberate
+// schema decision rather than an accident.
+func TestNewEvent_operationAttributeOrder(t *testing.T) {
+	t.Parallel()
+	f := validOperation()
+	f.Outcome = OutcomeError
+	f.ErrorType = "panic"
+	f.PanicRecovered = true
+
+	e, err := NewEvent(correlation.With(ctxWithPrincipal(t), "corr-123"), f)
+	if err != nil {
+		t.Fatalf("NewEvent: %v", err)
+	}
+
+	var got []string
+	for _, a := range e.Attrs() {
+		got = append(got, a.Key)
+	}
+	want := []string{
+		"event", "audit_event_type", "audit_schema_version", "timestamp_utc",
+		"correlation_id", "principal", "agent_client_id",
+		"tool", "broker", "arguments_hash",
+		"outcome", "error_type", "panic_recovered",
+		"started_at_utc", "duration_ms",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("audit record shape changed.\n got: %v\nwant: %v\n"+
+			"A new, removed, or reordered field is an audit-schema change: update "+
+			"docs/observability.md and check whether schema.AuditSchemaVersion must be bumped.",
+			got, want)
 	}
 }
 
@@ -690,9 +813,14 @@ func TestNewEvent_rejectionYieldsNoRecord(t *testing.T) {
 	}
 }
 
-// TestNewEvent_levels pins where each record type lands. Denials and drops are
-// WARN because they want attention; an operation record is INFO regardless of
+// TestNewEvent_levels pins where each record type lands. Denials are WARN
+// because they want attention; an operation record is INFO regardless of
 // outcome, since outcome carries the meaning.
+//
+// audit_drop is ERROR, and that is not an editorial choice: "error" is the
+// highest level an operator may configure, so a drop notice below it would be
+// filtered out on a supported configuration — producing the exact silence the
+// notice exists to prevent. See levelByType and TestEmit_levelFilteredRecordBecomesADrop.
 func TestNewEvent_levels(t *testing.T) {
 	t.Parallel()
 	want := map[EventType]slog.Level{
@@ -702,7 +830,7 @@ func TestNewEvent_levels(t *testing.T) {
 		EventAuthzDenied:       slog.LevelWarn,
 		EventBrokerAuthzDenied: slog.LevelWarn,
 		EventBrokerAuthRetry:   slog.LevelInfo,
-		EventAuditDrop:         slog.LevelWarn,
+		EventAuditDrop:         slog.LevelError,
 	}
 	for typ, level := range want {
 		if got := levelByType[typ]; got != level {

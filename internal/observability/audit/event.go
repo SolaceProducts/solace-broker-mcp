@@ -333,15 +333,22 @@ func (e Event) Attrs() []slog.Attr {
 	return out
 }
 
-// levelByType is the emission level per record type. Denials and drops are
-// WARN because they want an operator's attention; an operation record is INFO
-// regardless of outcome, since outcome carries the meaning and the operational
-// "tool invoked" line already reports failures at ERROR.
+// levelByType is the emission level per record type. Denials are WARN because
+// they want an operator's attention; an operation record is INFO regardless of
+// outcome, since outcome carries the meaning and the operational "tool
+// invoked" line already reports failures at ERROR.
 //
 // An operation record at INFO means audit records vanish if the server's log
-// level is above INFO. That is a drop, and it is reported as one — see
-// Emit's Enabled check — rather than being left to silently erase the audit
-// trail.
+// level is above INFO. That is a drop, and it is reported as one — see Emit's
+// Enabled check — rather than being left to silently erase the audit trail.
+//
+// EventAuditDrop is ERROR, and that choice is load-bearing rather than
+// editorial. "error" is the highest level an operator may configure
+// (config.validLogLevels), so a drop notice at ERROR survives EVERY supported
+// log level. At WARN it would not: a server at log_level=error would filter
+// out the operation record AND the notice reporting it, producing exactly the
+// total silence the notice exists to prevent, on a configuration we support.
+// The record is also honestly an error condition — an audit record was lost.
 var levelByType = map[EventType]slog.Level{
 	EventOperation:         slog.LevelInfo,
 	EventAuthSuccess:       slog.LevelInfo,
@@ -349,7 +356,7 @@ var levelByType = map[EventType]slog.Level{
 	EventAuthzDenied:       slog.LevelWarn,
 	EventBrokerAuthzDenied: slog.LevelWarn,
 	EventBrokerAuthRetry:   slog.LevelInfo,
-	EventAuditDrop:         slog.LevelWarn,
+	EventAuditDrop:         slog.LevelError,
 }
 
 // NewEvent validates f against the field-applicability table for f.Type and
