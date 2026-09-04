@@ -36,10 +36,8 @@ const (
 	brokerLabelUnknown = "unknown"
 )
 
-// canonicalBrokerLabel maps a caller-supplied alias to a bounded metric label:
-// the configured display name (case-insensitive match, the same lookup the
-// success path uses), or a fixed sentinel when the alias is empty or not
-// configured.
+// canonicalBrokerLabel maps an alias to a bounded metric label: the configured
+// display name, or a sentinel when the alias is empty or unconfigured.
 func canonicalBrokerLabel(pool *semp.BrokerPool, alias string) string {
 	if alias == "" {
 		return brokerLabelNone
@@ -50,10 +48,9 @@ func canonicalBrokerLabel(pool *semp.BrokerPool, alias string) string {
 	return brokerLabelUnknown
 }
 
-// recordToolInvocation records the RED metrics for one invocation on tm (nil-safe
-// when metrics are disabled). It is a sibling to logToolResult, kept separate so
-// the metric label (metricBroker, canonical) can differ from the logged broker
-// (raw). outcome is derived from toolErr; errorType is attached only on error.
+// recordToolInvocation records the RED metrics for one invocation on tm
+// (nil-safe). Kept separate from logToolResult so the metric broker label
+// (canonical) can differ from the logged one (raw).
 func recordToolInvocation(ctx context.Context, tm *metrics.ToolMetrics, tool, metricBroker string, start time.Time, errorType metrics.ErrorType, toolErr error) {
 	outcome := metrics.OutcomeSuccess
 	et := metrics.ErrorType("")

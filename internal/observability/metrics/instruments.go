@@ -36,10 +36,9 @@ const (
 	OutcomeCancelled Outcome = "cancelled"
 )
 
-// ErrorType is the failure cause carried on an error outcome, a closed set.
-// Empty on any non-error outcome. Keeping it a named type with exported consts
-// lets the compiler catch a mistyped value and bounds the metric label's
-// cardinality by construction.
+// ErrorType is the failure cause on an error outcome, a closed set. Empty on
+// non-error outcomes. A named type with consts keeps typos from compiling and
+// bounds the label's cardinality.
 type ErrorType string
 
 const (
@@ -71,19 +70,16 @@ var knownErrorTypes = map[ErrorType]bool{
 }
 
 // ToolMetrics holds the per-tool RED instruments: an invocation counter, a
-// duration histogram, and an unlabelled in-flight HTTP request gauge. Every
-// method is nil-receiver-safe, so a disabled server (nil *ToolMetrics) records
-// nothing at the cost of one nil check.
+// duration histogram, and an unlabelled in-flight gauge. Every method is
+// nil-safe, so a disabled server (nil) records nothing.
 type ToolMetrics struct {
 	invocations    metric.Int64Counter
 	duration       metric.Float64Histogram
 	activeRequests metric.Int64UpDownCounter
 }
 
-// NewToolMetrics registers the RED instruments against meter. The published
-// Prometheus names are derived by the exporter from the instrument name and
-// unit (ADR-008): mcp_tool_invocation_total, mcp_tool_invocation_duration_seconds,
-// and mcp_http_active_requests.
+// NewToolMetrics registers the RED instruments. The exporter derives the
+// published Prometheus names from the instrument name and unit (ADR-008).
 func NewToolMetrics(meter metric.Meter) (*ToolMetrics, error) {
 	invocations, err := meter.Int64Counter(
 		"mcp.tool.invocation",
@@ -112,10 +108,9 @@ func NewToolMetrics(meter metric.Meter) (*ToolMetrics, error) {
 	return &ToolMetrics{invocations: invocations, duration: duration, activeRequests: activeRequests}, nil
 }
 
-// Record observes one tool invocation on the counter and the duration histogram
-// with matching labels. A non-empty errorType outside the closed set is coerced
-// to ErrorTypeOther so a caller cannot mint an unbounded series. No-op on a nil
-// receiver.
+// Record observes one invocation on the counter and histogram with matching
+// labels. An errorType outside the closed set is coerced to ErrorTypeOther.
+// No-op on a nil receiver.
 func (t *ToolMetrics) Record(ctx context.Context, tool, broker string, outcome Outcome, errorType ErrorType, dur time.Duration) {
 	if t == nil {
 		return

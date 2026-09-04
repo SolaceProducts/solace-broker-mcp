@@ -529,9 +529,8 @@ func crossOriginProtection(next http.Handler) http.Handler {
 // there is no scenario in which disabling it is the right call, so it takes no
 // config flag.
 //
-// The active-requests gauge sits OUTERMOST so it counts every request on /mcp,
-// including ones rejected (413/403/401) by the layers below — the gauge is a
-// capacity signal, not an accepted-work count. No-op when tm is nil.
+// The active-requests gauge sits outermost so it counts every /mcp request,
+// including ones rejected below (413/403/401). No-op when tm is nil.
 func buildMCPEndpoint(authedHandler http.Handler, correlationEnabled bool, tm *metrics.ToolMetrics) http.Handler {
 	endpoint := crossOriginProtection(authedHandler)
 	if correlationEnabled {
@@ -1182,12 +1181,9 @@ func main() {
 		Version: version.Version(),
 	}, nil)
 
-	// Build the metrics provider before the tool manager and the /mcp listener,
-	// so the RED recorder is wired before any request can be served (avoids a
-	// startup window that records nothing). toolMetrics is nil when metrics are
-	// off or the provider fails to build; every recorder method is nil-safe. The
-	// /metrics listener itself starts later (serveMetricsEndpoint), registered
-	// before SetInitialized.
+	// Build the metrics provider before the manager and the /mcp listener, so the
+	// recorder is wired before any request is served. nil when off or the build
+	// fails (recorder methods are nil-safe); the listener starts later.
 	var metricsProvider *metrics.Provider
 	var toolMetrics *metrics.ToolMetrics
 	var metricsBuildErr error
@@ -1356,11 +1352,9 @@ func main() {
 
 	serverErr := startServer(httpServer, cfg.TLSCertFile, cfg.TLSKeyFile)
 
-	// Metrics endpoint: a second listener on its own port. The provider was
-	// built above (before the tool manager); here we start its listener,
-	// registered before SetInitialized so a bind failure shows on the first
-	// /readyz check. The provider's flush is registered as a shutdown hook. A
-	// build failure surfaces on /readyz too.
+	// Metrics endpoint: start the listener for the provider built above,
+	// registered before SetInitialized so a bind or build failure shows on the
+	// first /readyz check. The provider's flush is a shutdown hook.
 	if metricsProvider != nil {
 		serveMetricsEndpoint(cfg, readiness, metricsProvider)
 		shutdownHooks.Register("metrics_provider", metricsProvider.Shutdown)

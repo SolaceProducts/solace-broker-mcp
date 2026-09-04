@@ -22,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 
 	promclient "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -44,6 +45,10 @@ type Provider struct {
 	meterProvider *sdkmetric.MeterProvider
 	scrapeCounter metric.Int64Counter
 	resource      *sdkresource.Resource
+
+	toolMetricsOnce sync.Once
+	toolMetrics     *ToolMetrics
+	toolMetricsErr  error
 }
 
 // instrumentScope names the meter that owns the server's own instruments.
@@ -182,8 +187,14 @@ func (p *Provider) Handler() http.Handler {
 	})
 }
 
+// ToolMetrics returns the per-tool RED instruments, registering them once on
+// first call and returning the same set thereafter, so repeated calls don't
+// re-register instruments against the meter.
 func (p *Provider) ToolMetrics() (*ToolMetrics, error) {
-	return NewToolMetrics(p.Meter(instrumentScope))
+	p.toolMetricsOnce.Do(func() {
+		p.toolMetrics, p.toolMetricsErr = NewToolMetrics(p.Meter(instrumentScope))
+	})
+	return p.toolMetrics, p.toolMetricsErr
 }
 
 // Shutdown flushes and stops the meter provider. cmd/server registers it as a
