@@ -113,7 +113,7 @@ func TestToolInvokedLine_golden(t *testing.T) {
 					map[string]any{"msgVpnName": "default"}, id)
 			},
 			want: []string{
-				`{"time":"T","level":"ERROR","msg":"tool invoked","tool":"test-tool","outcome":"error","error_type":"missing_broker","duration":1500000,"detail":"*errors.errorString",` + identity + `}`,
+				`{"time":"T","level":"ERROR","msg":"tool invoked","tool":"test-tool","broker":"none","outcome":"error","error_type":"missing_broker","duration":1500000,"detail":"*errors.errorString",` + identity + `}`,
 			},
 		},
 		{
@@ -153,7 +153,7 @@ func TestToolInvokedLine_golden(t *testing.T) {
 					map[string]any{"msgVpnName": "default"}, id)
 			},
 			want: []string{
-				`{"time":"T","level":"ERROR","msg":"tool invoked","tool":"test-tool","outcome":"error","error_type":"missing_broker","duration":1500000,"detail":"*errors.errorString"}`,
+				`{"time":"T","level":"ERROR","msg":"tool invoked","tool":"test-tool","broker":"none","outcome":"error","error_type":"missing_broker","duration":1500000,"detail":"*errors.errorString"}`,
 			},
 		},
 	}

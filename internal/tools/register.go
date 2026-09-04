@@ -28,6 +28,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -220,10 +221,10 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 					// gets a separate, static message rather than the
 					// wrapped decode error.
 					var brokerAlias string
-					errorType := "bad_request"
+					errorType := metrics.ErrorTypeBadRequest
 					toolErr := fmt.Errorf("parsing tool arguments: %w", err)
 					logToolResult(ctx, reg.name, &brokerAlias, start, &errorType, &toolErr, id)
-					recordToolInvocation(ctx, reg.name, brokerLabelNone, start, errorType, toolErr)
+					recordToolInvocation(ctx, mgr.metrics, reg.name, brokerLabelNone, start, errorType, toolErr)
 					return buildLocalErrorResult(errors.New("tool arguments must be a JSON object")), nil
 				}
 			}
@@ -276,7 +277,7 @@ func toMCPAnnotations(a Annotations) *mcp.ToolAnnotations {
 // RegisterListBrokers registers a list-brokers discovery tool that returns all
 // configured broker aliases. This is a standalone tool, not a ToolHandler
 // implementation — it does not call SEMP or require broker resolution.
-func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool) {
+func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool, tm *metrics.ToolMetrics) {
 	server.AddTool(
 		&mcp.Tool{
 			Name:        "list-brokers",
@@ -307,23 +308,24 @@ func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool) {
 			// CallTool's defer: error returns set toolErr, the success
 			// return sets result, both nil means a panic is unwinding.
 			start := time.Now()
-			var brokerAlias, errorType string
+			var brokerAlias string
+			var errorType metrics.ErrorType
 			var toolErr error
 			id := NewIdentityFromPrincipal(auth.PrincipalFrom(ctx))
 			defer func() {
 				if toolErr == nil && result == nil {
-					errorType = "panic"
+					errorType = metrics.ErrorTypePanic
 					toolErr = panicError{}
 				}
 				logToolResult(ctx, "list-brokers", &brokerAlias, start, &errorType, &toolErr, id)
-				recordToolInvocation(ctx, "list-brokers", brokerLabelNone, start, errorType, toolErr)
+				recordToolInvocation(ctx, tm, "list-brokers", brokerLabelNone, start, errorType, toolErr)
 			}()
 
 			aliases := pool.Aliases()
 			structured := map[string]any{"brokers": aliases}
 			resultJSON, mErr := json.MarshalIndent(structured, "", "  ")
 			if mErr != nil {
-				errorType = "marshal_error"
+				errorType = metrics.ErrorTypeMarshalError
 				toolErr = fmt.Errorf("marshalling broker list: %w", mErr)
 				return nil, toolErr
 			}

@@ -160,7 +160,7 @@ func TestDescribeSempSchema_EmitsAuditLog(t *testing.T) {
 	defer slog.SetDefault(oldLogger)
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	if err := RegisterDescribeSempSchema(server, specs.FS); err != nil {
+	if err := RegisterDescribeSempSchema(server, specs.FS, nil); err != nil {
 		t.Fatalf("RegisterDescribeSempSchema: %v", err)
 	}
 
@@ -193,9 +193,10 @@ func TestDescribeSempSchema_EmitsAuditLog(t *testing.T) {
 	if got := audits[0]["outcome"]; got != "success" {
 		t.Errorf("audit outcome = %v, want %q", got, "success")
 	}
-	// describe-semp-schema resolves no broker; the audit line must omit the field.
-	if _, present := audits[0]["broker"]; present {
-		t.Errorf("audit line carries broker field for brokerless tool: %v", audits[0])
+	// describe-semp-schema resolves no broker; the audit line carries the "none"
+	// sentinel, matching the metric label rather than omitting the field.
+	if got := audits[0]["broker"]; got != "none" {
+		t.Errorf("audit broker = %v, want %q", got, "none")
 	}
 }
 

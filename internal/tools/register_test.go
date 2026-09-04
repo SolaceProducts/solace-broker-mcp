@@ -177,7 +177,7 @@ func TestRegisterListBrokers(t *testing.T) {
 	pool := newRegTestPool(t)
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
 
-	RegisterListBrokers(server, pool)
+	RegisterListBrokers(server, pool, nil)
 	// No panic = registered successfully.
 }
 
@@ -276,7 +276,7 @@ func TestListBrokersEmitsAuditLog(t *testing.T) {
 
 	pool := newRegTestPool(t)
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	RegisterListBrokers(server, pool)
+	RegisterListBrokers(server, pool, nil)
 
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -306,10 +306,10 @@ func TestListBrokersEmitsAuditLog(t *testing.T) {
 	if got := audits[0]["outcome"]; got != "success" {
 		t.Errorf("audit outcome = %v, want %q", got, "success")
 	}
-	// list-brokers resolves no broker; the audit line must omit the field
-	// rather than carry an empty value.
-	if _, present := audits[0]["broker"]; present {
-		t.Errorf("audit line carries broker field for brokerless tool: %v", audits[0])
+	// list-brokers resolves no broker; the audit line carries the "none"
+	// sentinel, matching the metric label rather than omitting the field.
+	if got := audits[0]["broker"]; got != "none" {
+		t.Errorf("audit broker = %v, want %q", got, "none")
 	}
 }
 
@@ -534,7 +534,7 @@ func TestListBrokers_ResponseContainsOnlyAliases(t *testing.T) {
 	defer pool.Close()
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	RegisterListBrokers(server, pool)
+	RegisterListBrokers(server, pool, nil)
 
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -941,7 +941,7 @@ func TestRegisterListBrokers_NeverComposesWithAuthorization(t *testing.T) {
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
 	RegisterWithServer(mgr, server, pool, true, policy, "groups")
-	RegisterListBrokers(server, pool)
+	RegisterListBrokers(server, pool, nil)
 
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()

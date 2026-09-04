@@ -335,7 +335,7 @@ func TestClassifyBrokerError_BrokerInitError_SuppressesUnvouchedText(t *testing.
 		t.Fatalf("errorType = %q, want %q", errorType, "broker_init_error")
 	}
 
-	result := m.buildBrokerResolutionErrorResult(errorType, toolErr, "prod")
+	result := m.buildBrokerResolutionErrorResult(string(errorType), toolErr, "prod")
 	text := callToolResultText(t, result, nil)
 
 	if strings.Contains(text, "10.1.2.3") || strings.Contains(text, "connection refused") {

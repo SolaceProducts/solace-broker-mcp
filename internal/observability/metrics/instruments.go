@@ -17,24 +17,80 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	"time"
 )
 
+// Outcome is the result of a tool invocation: a closed set shared by the metric
+// label, the log field, the audit event, and the span attribute so they cannot
+// disagree.
+type Outcome string
+
+const (
+	OutcomeSuccess Outcome = "success"
+	OutcomeError   Outcome = "error"
+	// OutcomeCancelled is reserved; the classification that produces it is wired
+	// by a later story.
+	OutcomeCancelled Outcome = "cancelled"
+)
+
+// ErrorType is the failure cause carried on an error outcome, a closed set.
+// Empty on any non-error outcome. Keeping it a named type with exported consts
+// lets the compiler catch a mistyped value and bounds the metric label's
+// cardinality by construction.
+type ErrorType string
+
+const (
+	ErrorTypePanic                 ErrorType = "panic"
+	ErrorTypeBadRequest            ErrorType = "bad_request"
+	ErrorTypeUnknownTool           ErrorType = "unknown_tool"
+	ErrorTypeMissingBroker         ErrorType = "missing_broker"
+	ErrorTypeUnknownBroker         ErrorType = "unknown_broker"
+	ErrorTypeBrokerInitError       ErrorType = "broker_init_error"
+	ErrorTypeValidationError       ErrorType = "validation_error"
+	ErrorTypeExecutionError        ErrorType = "execution_error"
+	ErrorTypeNilResult             ErrorType = "nil_result"
+	ErrorTypeNotFound              ErrorType = "not_found"
+	ErrorTypeOutputValidationError ErrorType = "output_validation_error"
+	ErrorTypeMarshalError          ErrorType = "marshal_error"
+	// ErrorTypeOther is the sentinel Record coerces any value outside the closed
+	// set to, so an unexpected string can never mint a new series.
+	ErrorTypeOther ErrorType = "other"
+)
+
+// knownErrorTypes is the closed set Record validates against. The empty string
+// (non-error outcomes) is valid and handled separately.
+var knownErrorTypes = map[ErrorType]bool{
+	ErrorTypePanic: true, ErrorTypeBadRequest: true, ErrorTypeUnknownTool: true,
+	ErrorTypeMissingBroker: true, ErrorTypeUnknownBroker: true, ErrorTypeBrokerInitError: true,
+	ErrorTypeValidationError: true, ErrorTypeExecutionError: true, ErrorTypeNilResult: true,
+	ErrorTypeNotFound: true, ErrorTypeOutputValidationError: true, ErrorTypeMarshalError: true,
+	ErrorTypeOther: true,
+}
+
+// ToolMetrics holds the per-tool RED instruments: an invocation counter, a
+// duration histogram, and an unlabelled in-flight HTTP request gauge. Every
+// method is nil-receiver-safe, so a disabled server (nil *ToolMetrics) records
+// nothing at the cost of one nil check.
 type ToolMetrics struct {
 	invocations    metric.Int64Counter
 	duration       metric.Float64Histogram
 	activeRequests metric.Int64UpDownCounter
 }
 
+// NewToolMetrics registers the RED instruments against meter. The published
+// Prometheus names are derived by the exporter from the instrument name and
+// unit (ADR-008): mcp_tool_invocation_total, mcp_tool_invocation_duration_seconds,
+// and mcp_http_active_requests.
 func NewToolMetrics(meter metric.Meter) (*ToolMetrics, error) {
 	invocations, err := meter.Int64Counter(
 		"mcp.tool.invocation",
 		metric.WithDescription("Number of tool invocations."),
 		metric.WithUnit("1"))
 	if err != nil {
-		return nil, fmt.Errorf("register mcp_tool_invocation: %w", err)
+		return nil, fmt.Errorf("register mcp_tool_invocation_total: %w", err)
 	}
 
 	duration, err := meter.Float64Histogram(
@@ -56,33 +112,40 @@ func NewToolMetrics(meter metric.Meter) (*ToolMetrics, error) {
 	return &ToolMetrics{invocations: invocations, duration: duration, activeRequests: activeRequests}, nil
 }
 
-func (t *ToolMetrics) Record(ctx context.Context, tool, broker, outcome, errorType string, dur time.Duration) {
+// Record observes one tool invocation on the counter and the duration histogram
+// with matching labels. A non-empty errorType outside the closed set is coerced
+// to ErrorTypeOther so a caller cannot mint an unbounded series. No-op on a nil
+// receiver.
+func (t *ToolMetrics) Record(ctx context.Context, tool, broker string, outcome Outcome, errorType ErrorType, dur time.Duration) {
 	if t == nil {
 		return
+	}
+	if errorType != "" && !knownErrorTypes[errorType] {
+		errorType = ErrorTypeOther
 	}
 	opts := metric.WithAttributes(
 		attribute.String("tool", tool),
 		attribute.String("broker", broker),
-		attribute.String("outcome", outcome),
-		attribute.String("error_type", errorType),
+		attribute.String("outcome", string(outcome)),
+		attribute.String("error_type", string(errorType)),
 	)
 
 	t.invocations.Add(ctx, 1, opts)
 	t.duration.Record(ctx, dur.Seconds(), opts)
 }
 
+// IncActive increments the in-flight HTTP request gauge. No-op on a nil receiver.
 func (t *ToolMetrics) IncActive(ctx context.Context) {
 	if t == nil {
 		return
 	}
-
 	t.activeRequests.Add(ctx, 1)
 }
 
+// DecActive decrements the in-flight HTTP request gauge. No-op on a nil receiver.
 func (t *ToolMetrics) DecActive(ctx context.Context) {
 	if t == nil {
 		return
 	}
-
 	t.activeRequests.Add(ctx, -1)
 }

@@ -27,10 +27,10 @@ import (
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 )
 
-// TestCallTool_PanicRecordsErrorMetric verifies the recovered-panic path records
-// the invocation counter with outcome="error" and error_type="panic" — a panic
-// is an error distinguished by its cause, never its own outcome value.
-func TestCallTool_PanicRecordsErrorMetric(t *testing.T) {
+// newMetricsManager builds a ToolManager wired to a real metrics provider and
+// returns both so a test can drive invocations and scrape the result.
+func newMetricsManager(t *testing.T) (*ToolManager, *metrics.Provider) {
+	t.Helper()
 	p, err := metrics.New("v-test", sdkresource.Default())
 	if err != nil {
 		t.Fatal(err)
@@ -39,40 +39,14 @@ func TestCallTool_PanicRecordsErrorMetric(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	SetToolMetrics(tm)
-	t.Cleanup(func() { SetToolMetrics(nil) })
-
 	mgr := NewToolManager(newTestPool(t))
-	handler := newStubHandler("test-tool")
-	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
-		panic("boom")
-	}
-	mgr.Register(handler)
-
-	// CallTool re-panics after its deferred logToolResult runs (the recover
-	// lives in the registration wrapper, not here), so swallow it. The metric
-	// is recorded during the deferred unwind, before the re-panic.
-	func() {
-		defer func() { _ = recover() }()
-		_, _ = mgr.CallTool(context.Background(), "test-tool", map[string]any{
-			"broker":     "dev",
-			"msgVpnName": "default",
-		}, Identity{})
-	}()
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil)
-	p.Handler().ServeHTTP(rec, req)
-
-	const want = `mcp_tool_invocation_total{broker="dev",error_type="panic",outcome="error",tool="test-tool"} 1`
-	if !strings.Contains(rec.Body.String(), want) {
-		t.Errorf("scrape missing panic series.\nwant line: %s\n--- got ---\n%s", want, rec.Body.String())
-	}
+	mgr.metrics = tm
+	return mgr, p
 }
 
 // activeRequests scrapes the provider and returns the current value of the
-// unlabelled mcp_http_active_requests gauge, or 0 if the series is absent.
-func activeRequests(t *testing.T, p *metrics.Provider) float64 {
+// unlabelled mcp_http_active_requests gauge and whether the series was present.
+func activeRequests(t *testing.T, p *metrics.Provider) (float64, bool) {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	p.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil))
@@ -82,91 +56,51 @@ func activeRequests(t *testing.T, p *metrics.Provider) float64 {
 			if _, err := fmt.Sscanf(rest, "%g", &v); err != nil {
 				t.Fatalf("parse gauge value from %q: %v", line, err)
 			}
-			return v
+			return v, true
 		}
 	}
-	return 0
+	return 0, false
 }
 
-// TestActiveRequestsMiddleware_IncDecAroundRequest verifies the gauge reads 1
-// while the wrapped handler runs and returns to 0 once it completes.
-func TestActiveRequestsMiddleware_IncDecAroundRequest(t *testing.T) {
-	p, err := metrics.New("v-test", sdkresource.Default())
-	if err != nil {
-		t.Fatal(err)
-	}
-	tm, err := p.ToolMetrics()
-	if err != nil {
-		t.Fatal(err)
-	}
-	SetToolMetrics(tm)
-	t.Cleanup(func() { SetToolMetrics(nil) })
-
-	var during float64
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		during = activeRequests(t, p) // read while "in flight"
-	})
-	ActiveRequestsMiddleware(next).ServeHTTP(
-		httptest.NewRecorder(), httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/mcp", nil))
-
-	if during != 1 {
-		t.Errorf("gauge during request = %v, want 1", during)
-	}
-	if after := activeRequests(t, p); after != 0 {
-		t.Errorf("gauge after request = %v, want 0", after)
-	}
-}
-
-// TestActiveRequestsMiddleware_PanicStillDecrements verifies the deferred
-// decrement runs even when the wrapped handler panics, so a crashing request
-// cannot leak an in-flight count.
-func TestActiveRequestsMiddleware_PanicStillDecrements(t *testing.T) {
-	p, err := metrics.New("v-test", sdkresource.Default())
-	if err != nil {
-		t.Fatal(err)
-	}
-	tm, err := p.ToolMetrics()
-	if err != nil {
-		t.Fatal(err)
-	}
-	SetToolMetrics(tm)
-	t.Cleanup(func() { SetToolMetrics(nil) })
-
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// TestCallTool_PanicRecordsErrorMetric verifies the recovered-panic path records
+// the invocation counter with outcome="error" and error_type="panic" — a panic
+// is an error distinguished by its cause, never its own outcome value.
+func TestCallTool_PanicRecordsErrorMetric(t *testing.T) {
+	mgr, p := newMetricsManager(t)
+	handler := newStubHandler("test-tool")
+	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
 		panic("boom")
-	})
+	}
+	mgr.Register(handler)
 
+	// CallTool re-panics after its deferred recording runs (the recover lives in
+	// the registration wrapper), so swallow it. The metric is recorded during
+	// the deferred unwind, before the re-panic.
 	func() {
 		defer func() { _ = recover() }()
-		ActiveRequestsMiddleware(next).ServeHTTP(
-			httptest.NewRecorder(), httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/mcp", nil))
+		_, _ = mgr.CallTool(context.Background(), "test-tool", map[string]any{
+			"broker":     "dev",
+			"msgVpnName": "default",
+		}, Identity{})
 	}()
 
-	if after := activeRequests(t, p); after != 0 {
-		t.Errorf("gauge after panicking request = %v, want 0", after)
+	rec := httptest.NewRecorder()
+	p.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil))
+
+	const want = `mcp_tool_invocation_total{broker="dev",error_type="panic",outcome="error",tool="test-tool"} 1`
+	if !strings.Contains(rec.Body.String(), want) {
+		t.Errorf("scrape missing panic series.\nwant line: %s\n--- got ---\n%s", want, rec.Body.String())
 	}
 }
 
 // TestCallTool_UnknownBrokerMetricLabelCanonicalized proves the broker metric
 // label is bounded on the error path: an unconfigured alias records the fixed
-// "unknown" sentinel, not the raw caller-supplied string, so typos cannot mint
-// unbounded series. The raw alias still reaches the user-facing error result.
+// "unknown" sentinel, not the raw caller-supplied string, while the raw alias
+// still reaches the user-facing error result.
 func TestCallTool_UnknownBrokerMetricLabelCanonicalized(t *testing.T) {
-	p, err := metrics.New("v-test", sdkresource.Default())
-	if err != nil {
-		t.Fatal(err)
-	}
-	tm, err := p.ToolMetrics()
-	if err != nil {
-		t.Fatal(err)
-	}
-	SetToolMetrics(tm)
-	t.Cleanup(func() { SetToolMetrics(nil) })
-
-	mgr := NewToolManager(newTestPool(t))
+	mgr, p := newMetricsManager(t)
 	mgr.Register(newStubHandler("test-tool"))
 
-	// "Nope" is not a configured broker; resolution fails with unknown_broker.
 	result, err := mgr.CallTool(context.Background(), "test-tool", map[string]any{
 		"broker":     "Nope",
 		"msgVpnName": "default",
@@ -174,7 +108,6 @@ func TestCallTool_UnknownBrokerMetricLabelCanonicalized(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected nil protocol error, got: %v", err)
 	}
-	// The raw alias is preserved for the caller to see their own mistake.
 	if text := result.Content[0].(*mcp.TextContent).Text; !strings.Contains(text, "Nope") {
 		t.Errorf("user-facing error dropped the raw alias; got: %s", text)
 	}
@@ -189,5 +122,77 @@ func TestCallTool_UnknownBrokerMetricLabelCanonicalized(t *testing.T) {
 	}
 	if strings.Contains(body, `broker="Nope"`) {
 		t.Errorf("raw caller alias leaked into the metric label:\n%s", body)
+	}
+}
+
+// TestActiveRequestsMiddleware_IncDecAroundRequest verifies the gauge reads 1
+// while the wrapped handler runs and returns to 0 once it completes.
+func TestActiveRequestsMiddleware_IncDecAroundRequest(t *testing.T) {
+	_, p := newMetricsManager(t)
+	tm, err := p.ToolMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var during float64
+	var seen bool
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		during, seen = activeRequests(t, p) // read while "in flight"
+	})
+	ActiveRequestsMiddleware(tm, next).ServeHTTP(
+		httptest.NewRecorder(), httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/mcp", nil))
+
+	if !seen || during != 1 {
+		t.Errorf("gauge during request = %v (seen=%v), want 1", during, seen)
+	}
+	if after, _ := activeRequests(t, p); after != 0 {
+		t.Errorf("gauge after request = %v, want 0", after)
+	}
+}
+
+// TestActiveRequestsMiddleware_PanicStillDecrements verifies the deferred
+// decrement runs even when the wrapped handler panics. The gauge is asserted to
+// read 1 inside the handler before it panics, so a middleware that incremented
+// nothing would fail here rather than pass vacuously.
+func TestActiveRequestsMiddleware_PanicStillDecrements(t *testing.T) {
+	_, p := newMetricsManager(t)
+	tm, err := p.ToolMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var during float64
+	var seen bool
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		during, seen = activeRequests(t, p)
+		panic("boom")
+	})
+
+	func() {
+		defer func() { _ = recover() }()
+		ActiveRequestsMiddleware(tm, next).ServeHTTP(
+			httptest.NewRecorder(), httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/mcp", nil))
+	}()
+
+	if !seen || during != 1 {
+		t.Errorf("gauge inside panicking handler = %v (seen=%v), want 1", during, seen)
+	}
+	if after, _ := activeRequests(t, p); after != 0 {
+		t.Errorf("gauge after panicking request = %v, want 0", after)
+	}
+}
+
+// TestActiveRequestsMiddleware_DisabledNoOp verifies the default disabled path:
+// a nil recorder makes the middleware a transparent pass-through with no panic
+// and no gauge writes.
+func TestActiveRequestsMiddleware_DisabledNoOp(t *testing.T) {
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true })
+
+	ActiveRequestsMiddleware(nil, next).ServeHTTP(
+		httptest.NewRecorder(), httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/mcp", nil))
+
+	if !called {
+		t.Error("wrapped handler was not called through the disabled middleware")
 	}
 }
