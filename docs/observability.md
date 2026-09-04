@@ -45,7 +45,7 @@ capability headings carry the same tag:
 | Capability | Status | Notes |
 |---|---|---|
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
-| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, the OTLP export-health counters, and `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)). Assume any other metric below is not yet emitted. |
+| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, the OTLP export-health counters, and `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)). Assume any other metric below is not yet emitted. |
 | Audit trail | **[Planned]** | Only the capability gate exists today; event emission lands in a later story. |
 | Distributed tracing | **[Interim — provider wired, no spans yet]** | Tracer provider and OTLP export are live behind `OBS_TRACING_ENABLED`; no code creates a span yet. See [Distributed Tracing](#distributed-tracing--interim-provider-wired-spans-not-yet-emitted). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
@@ -112,7 +112,8 @@ avoid. Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_
 > _Status: **[Planned, with exceptions]**. Most instrument names, types, and labels below
 > are the proposal under review, not yet wired in the build. Wired and emitted today: the
 > `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`,
-> `mcp_metrics_scrape_total`, the OTLP export-health counters, and
+> `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`,
+> `mcp_tool_invocation_duration_seconds`, the OTLP export-health counters, and
 > `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)). Assume
 > any other metric below is not yet emitted._
 
