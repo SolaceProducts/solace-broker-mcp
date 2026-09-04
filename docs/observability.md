@@ -144,9 +144,18 @@ share one meter provider.
   version and the schema versions it was built against.
 - `mcp_metrics_scrape_total` answers "is Prometheus actually scraping this instance?"
 - `mcp_http_active_requests` is the in-flight request gauge, for separating a capacity
-  problem from a tail-latency problem.
+  problem from a tail-latency problem. It counts requests on `/mcp` only, and increments on
+  request entry before authentication — so it includes requests later rejected with 401/403/413.
+  A spike can therefore mean rejected traffic, not accepted work.
 
 **Cardinality:** trivial (one series each, plus one per label value on the info metrics).
+
+**Exposure.** The `/metrics` endpoint is unauthenticated and unencrypted, and defaults to a
+wildcard bind (`:9091`, all interfaces). Restrict it with a NetworkPolicy, or bind it to
+loopback for a co-located sidecar scraper. The series it exposes are low-sensitivity (build
+version, schema versions, and — once tools run — tool names already public in
+`docs/tools-reference.md`, broker aliases, and usage timing), but the listener is absent
+entirely unless `OBS_METRICS_ENABLED` is set.
 
 ### Tool Invocations (RED)
 
@@ -568,7 +577,7 @@ names beyond the two above, and span kinds, are open items in this review (see
 |---|---|---|
 | `correlation_id` | The shared request ID, joining the trace to logs and audit | Solace |
 | `outcome` | The result; the same three values used as a metric label and an audit field | Solace |
-| `error_type` | Why the call failed; present on `outcome: error` only, same twelve values | Solace |
+| `error_type` | Why the call failed; present on `outcome: error` only, the same [`error_type`](#error_type) vocabulary (spans carry the subset raised on the request path) | Solace |
 | `retry.decision` | The retry decision on a SEMP attempt | Solace |
 | `retry.exhausted` | `true` on the final attempt when retries are exhausted | Solace |
 | `cache_hit` | `tokenexchange.Exchange` only: true when served from cache, false when a live IdP round trip was needed (or waited on). **Isolating actual live round trips needs `singleflight_role="winner"` too** — a follower also reports `cache_hit=false` despite doing no IdP work itself, so filtering on `cache_hit` alone counts one winner plus every follower waiting on it | Solace |
