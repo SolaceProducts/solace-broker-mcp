@@ -457,6 +457,143 @@ func TestAuditRecord_levelFilteredCallEmitsADrop(t *testing.T) {
 	}
 }
 
+// TestOperationRecord_reachableErrorTypes pins which of the twelve error_type
+// values can actually appear on an audit record.
+//
+// docs/observability.md now tells customers that only five of them do, and
+// that a SIEM rule matching event="audit" with, say, error_type=validation_error
+// will never fire. That is a claim about where the destructive gate sits
+// relative to each failure, and prose cannot hold it: moving the gate, or
+// adding a failure mode after it, silently makes the document wrong for
+// someone writing compliance queries against it.
+//
+// Each case drives the real CallTool path with the audit log on and asserts
+// whether an operation record appears at all.
+func TestOperationRecord_reachableErrorTypes(t *testing.T) {
+	yes := true
+	destructive := Annotations{Destructive: &yes}
+
+	cases := []struct {
+		name string
+		// wantErrorType is the error_type the tool path computes.
+		wantErrorType string
+		// wantAudited is whether an operation audit record is emitted.
+		wantAudited bool
+		tool        string
+		args        map[string]any
+		register    func(mgr *ToolManager)
+	}{
+		{
+			name: "unknown_tool is rejected before the gate", wantErrorType: "unknown_tool", wantAudited: false,
+			tool: "no-such-tool", args: map[string]any{"broker": "dev"},
+		},
+		{
+			name: "missing_broker is rejected before the gate", wantErrorType: "missing_broker", wantAudited: false,
+			tool: "delete-queue", args: map[string]any{"msgVpnName": "default"},
+			register: func(mgr *ToolManager) {
+				h := newStubHandler("delete-queue")
+				h.annotations = destructive
+				mgr.Register(h)
+			},
+		},
+		{
+			name: "unknown_broker is rejected before the gate", wantErrorType: "unknown_broker", wantAudited: false,
+			tool: "delete-queue", args: map[string]any{"broker": "not-configured", "msgVpnName": "default"},
+			register: func(mgr *ToolManager) {
+				h := newStubHandler("delete-queue")
+				h.annotations = destructive
+				mgr.Register(h)
+			},
+		},
+		{
+			name: "validation_error is rejected before the gate", wantErrorType: "validation_error", wantAudited: false,
+			tool: "delete-queue", args: map[string]any{"broker": "dev"}, // msgVpnName is required
+			register: func(mgr *ToolManager) {
+				h := newStubHandler("delete-queue")
+				h.annotations = destructive
+				mgr.Register(h)
+			},
+		},
+		{
+			name: "execution_error happens after the gate", wantErrorType: "execution_error", wantAudited: true,
+			tool: "delete-queue", args: map[string]any{"broker": "dev", "msgVpnName": "default"},
+			register: func(mgr *ToolManager) {
+				h := newStubHandler("delete-queue")
+				h.annotations = destructive
+				h.handleFn = func(context.Context, *ToolContext, map[string]any) (*ToolResult, error) {
+					return nil, errors.New("broker refused")
+				}
+				mgr.Register(h)
+			},
+		},
+		{
+			name: "nil_result happens after the gate", wantErrorType: "nil_result", wantAudited: true,
+			tool: "delete-queue", args: map[string]any{"broker": "dev", "msgVpnName": "default"},
+			register: func(mgr *ToolManager) {
+				h := newStubHandler("delete-queue")
+				h.annotations = destructive
+				h.handleFn = func(context.Context, *ToolContext, map[string]any) (*ToolResult, error) {
+					return nil, nil
+				}
+				mgr.Register(h)
+			},
+		},
+		{
+			name: "output_validation_error happens after the gate", wantErrorType: "output_validation_error", wantAudited: true,
+			tool: "delete-queue", args: map[string]any{"broker": "dev", "msgVpnName": "default"},
+			register: func(mgr *ToolManager) {
+				h := newStubHandler("delete-queue")
+				h.annotations = destructive
+				// The stub's output schema requires object-valued properties.
+				h.handleFn = func(context.Context, *ToolContext, map[string]any) (*ToolResult, error) {
+					return &ToolResult{StructuredContent: map[string]any{"step1": "not-an-object"}}, nil
+				}
+				mgr.Register(h)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr := NewToolManager(newTestPool(t), WithAuditLog(true))
+			if tc.register != nil {
+				tc.register(mgr)
+			}
+			records := captureAudit(t, slog.LevelDebug, func() {
+				_, _ = mgr.CallTool(auditCtx(t), tc.tool, tc.args, idFixture())
+			})
+
+			var sawErrorType string
+			for _, rec := range records {
+				if rec["msg"] == "tool invoked" {
+					sawErrorType, _ = rec["error_type"].(string)
+				}
+			}
+			if sawErrorType != tc.wantErrorType {
+				t.Fatalf("the tool path computed error_type=%q, want %q. This case no longer "+
+					"exercises the failure it names.", sawErrorType, tc.wantErrorType)
+			}
+
+			ops := ofType(records, audit.EventOperation)
+			switch {
+			case tc.wantAudited && len(ops) != 1:
+				t.Errorf("error_type=%q produced %d operation record(s), want 1. "+
+					"docs/observability.md lists it as reaching an audit record.", tc.wantErrorType, len(ops))
+			case !tc.wantAudited && len(ops) != 0:
+				t.Errorf("error_type=%q produced %d operation record(s), want 0. "+
+					"docs/observability.md tells customers this value never appears on an audit "+
+					"record, so either the gate moved or the document is now wrong.",
+					tc.wantErrorType, len(ops))
+			}
+			if tc.wantAudited && len(ops) == 1 {
+				if got := ops[0]["error_type"]; got != tc.wantErrorType {
+					t.Errorf("audit record error_type = %v, want %q", got, tc.wantErrorType)
+				}
+			}
+		})
+	}
+}
+
 // TestAuditRecord_constructorRejectionEmitsADrop covers the branch that is the
 // whole safety net under the error_type drift guard.
 //
