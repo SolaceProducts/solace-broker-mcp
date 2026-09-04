@@ -73,7 +73,22 @@ func EmitDrop(ctx context.Context) {
 
 // write delivers one record and reports whether it reached the handler.
 // Separate from Emit so the drop path can reuse it without recursing.
-func write(ctx context.Context, e Event) bool {
+//
+// A panicking handler counts as a drop, not as a failed operation. This
+// package promises that writing an audit record never fails the broker
+// operation it describes, and without this recover that promise is only true
+// for handlers that return errors politely: a panic out of Enabled or Handle
+// would unwind through CallTool's defer to withRecovery, which reports the
+// call to the agent as failed. A destructive tool that had already mutated the
+// broker would then be told it had not. The recursion this could feed is
+// already bounded — Emit refuses to report a drop about a drop — so a handler
+// that panics on every record degrades to two swallowed panics.
+func write(ctx context.Context, e Event) (delivered bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			delivered = false
+		}
+	}()
 	h := slog.Default().Handler()
 	if !h.Enabled(ctx, e.Level()) {
 		return false

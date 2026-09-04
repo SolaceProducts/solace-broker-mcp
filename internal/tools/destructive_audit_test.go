@@ -35,6 +35,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
@@ -80,6 +81,11 @@ func ofType(records []map[string]any, typ audit.EventType) []map[string]any {
 	return out
 }
 
+// auditHandlerDelay is how long the destructive stub sleeps. It gives
+// duration_ms a floor to be asserted against — generous enough that a loaded
+// CI runner cannot round it below 1ms, short enough not to slow the suite.
+const auditHandlerDelay = 15 * time.Millisecond
+
 // auditTestManager builds a manager holding a read-only tool, a destructive
 // tool, and a destructive tool whose handler fails, with the audit capability
 // set as asked.
@@ -91,6 +97,12 @@ func auditTestManager(t *testing.T, auditEnabled bool) *ToolManager {
 	destructive := newStubHandler("delete-queue")
 	yes := true
 	destructive.annotations = Annotations{Destructive: &yes}
+	// Sleeps so duration_ms has a measurable floor to assert against. Without
+	// it a hardcoded zero duration passes every presence check.
+	destructive.handleFn = func(context.Context, *ToolContext, map[string]any) (*ToolResult, error) {
+		time.Sleep(auditHandlerDelay)
+		return &ToolResult{StructuredContent: map[string]any{"step1": map[string]any{"ok": true}}}, nil
+	}
 	mgr.Register(destructive)
 
 	failing := newStubHandler("delete-queue-failing")
@@ -127,6 +139,7 @@ func TestDestructiveCall_emitsExactlyOneOperationRecord(t *testing.T) {
 	mgr := auditTestManager(t, true)
 	args := map[string]any{"broker": "dev", "msgVpnName": "default"}
 
+	callStart := time.Now()
 	records := captureAudit(t, slog.LevelDebug, func() {
 		if _, err := mgr.CallTool(auditCtx(t), "delete-queue", args, idFixture()); err != nil {
 			t.Fatalf("CallTool: %v", err)
@@ -168,8 +181,29 @@ func TestDestructiveCall_emitsExactlyOneOperationRecord(t *testing.T) {
 	if _, present := rec["started_at_utc"]; !present {
 		t.Error("record carries no started_at_utc")
 	}
-	if _, present := rec["duration_ms"]; !present {
-		t.Error("record carries no duration_ms")
+	// A real lower bound, not merely "present" or "non-negative": the handler
+	// below sleeps, so a hardcoded or unwired duration reads as 0 and fails
+	// here. duration_ms is what a reviewer uses to see how long a destructive
+	// call actually ran, and a constant would tell them nothing while passing
+	// any presence check.
+	durationMs, ok := rec["duration_ms"].(float64)
+	if !ok {
+		t.Fatalf("duration_ms = %#v, want a number", rec["duration_ms"])
+	}
+	if durationMs < 1 {
+		t.Errorf("duration_ms = %v, but the handler slept %s. The field is not carrying this "+
+			"call's measured elapsed time.", durationMs, auditHandlerDelay)
+	}
+	startedAt, ok := rec["started_at_utc"].(string)
+	if !ok {
+		t.Fatalf("started_at_utc = %#v, want a string", rec["started_at_utc"])
+	}
+	started, parseErr := time.Parse(time.RFC3339Nano, startedAt)
+	if parseErr != nil {
+		t.Errorf("started_at_utc %q is not RFC 3339: %v", startedAt, parseErr)
+	} else if started.Before(callStart) || started.After(time.Now()) {
+		t.Errorf("started_at_utc %s is outside the window the call actually ran in "+
+			"(%s..now); it is not this call's start time", startedAt, callStart.Format(time.RFC3339Nano))
 	}
 	// reason belongs to the denial and authentication record types. Setting it
 	// here would put an authorization vocabulary on an operation record.
@@ -420,6 +454,142 @@ func TestAuditRecord_levelFilteredCallEmitsADrop(t *testing.T) {
 				t.Errorf("drop record event = %v, want the literal %q", drops[0]["event"], "audit")
 			}
 		})
+	}
+}
+
+// TestAuditRecord_constructorRejectionEmitsADrop covers the branch that is the
+// whole safety net under the error_type drift guard.
+//
+// If a new error_type reaches this path without being added to the audit
+// vocabulary, the constructor rejects the record and this drop notice is the
+// ONLY thing that tells an operator a destructive call went unrecorded.
+// Without a test, deleting that EmitDrop leaves the suite green and turns a
+// loud gap into a silent one.
+//
+// The rejection is forced through the real CallTool path by a destructive tool
+// whose handler panics in a way that lands an error_type the vocabulary does
+// not contain — see emitOperationAuditRejects below for the direct case.
+func TestAuditRecord_constructorRejectionEmitsADrop(t *testing.T) {
+	records := captureAudit(t, slog.LevelDebug, func() {
+		// A broker value the applicability table requires but that is empty
+		// makes NewEvent reject the operation record. Driving the helper
+		// directly is deliberate: CallTool cannot reach the destructive gate
+		// without a resolved broker, so this branch has no route through it.
+		emitOperationAudit(auditCtx(t), "delete-queue", "", "hash", time.Now(), "", nil)
+	})
+
+	if got := len(ofType(records, audit.EventOperation)); got != 0 {
+		t.Errorf("a record the constructor rejected was emitted anyway (%d)", got)
+	}
+	drops := ofType(records, audit.EventAuditDrop)
+	if len(drops) != 1 {
+		t.Fatalf("want exactly one audit_drop when the constructor rejects the record, got %d. "+
+			"Without it, a destructive call goes unrecorded with no signal at all:\n%v", len(drops), records)
+	}
+	if drops[0]["event"] != "audit" {
+		t.Errorf("drop record event = %v, want the literal %q", drops[0]["event"], "audit")
+	}
+}
+
+// TestAuditRecord_rejectionDetailNamesNoArguments pins the secure-logging
+// contract the rejection path depends on: it logs audit.NewEvent's error text
+// verbatim, which is safe only while that text names fields and
+// closed-vocabulary values and never argument-derived material.
+func TestAuditRecord_rejectionDetailNamesNoArguments(t *testing.T) {
+	const secretTool = "delete-queue-SENSITIVE"
+	records := captureAudit(t, slog.LevelDebug, func() {
+		emitOperationAudit(auditCtx(t), secretTool, "", "SECRET-HASH-VALUE", time.Now(), "", nil)
+	})
+
+	for _, rec := range records {
+		detail, ok := rec["detail"].(string)
+		if !ok {
+			continue
+		}
+		for _, forbidden := range []string{secretTool, "SECRET-HASH-VALUE"} {
+			if strings.Contains(detail, forbidden) {
+				t.Errorf("the rejection detail carries %q. audit.NewEvent's errors are logged "+
+					"verbatim, so they must never interpolate Tool, Broker or ArgumentsHash: %s",
+					forbidden, detail)
+			}
+		}
+	}
+}
+
+// TestHashArgsForAudit_unhashableArgumentsEmitADrop covers the other
+// drop-notice call site: arguments that cannot be canonicalized.
+//
+// Driven directly rather than through CallTool because the branch is
+// unreachable from the wire: arguments always arrive from json.Unmarshal, and
+// a value that could defeat json.Marshal (a channel here) is rejected by input
+// schema validation before the destructive gate. Verified — routing this same
+// map through CallTool produces error_type=validation_error and never reaches
+// the hash. This test is therefore the only thing holding the branch.
+func TestHashArgsForAudit_unhashableArgumentsEmitADrop(t *testing.T) {
+	args := map[string]any{"broker": "dev", "bad": make(chan int)}
+
+	var hash string
+	records := captureAudit(t, slog.LevelDebug, func() {
+		hash = hashArgsForAudit(auditCtx(t), "delete-queue", "dev", args)
+	})
+
+	if hash != "" {
+		t.Errorf("hashArgsForAudit returned %q for unhashable arguments; an empty string is what "+
+			"suppresses an operation record whose arguments_hash would stand for nothing", hash)
+	}
+	if got := len(ofType(records, audit.EventAuditDrop)); got != 1 {
+		t.Fatalf("want exactly one audit_drop when the arguments cannot be hashed, got %d:\n%v", got, records)
+	}
+	// The failure detail must name the Go type only: the wrapped encoding/json
+	// error renders the offending value, and that value is a tool argument.
+	for _, rec := range records {
+		detail, ok := rec["detail"].(string)
+		if !ok {
+			continue
+		}
+		if strings.Contains(detail, "chan") && !strings.HasPrefix(detail, "*") {
+			t.Errorf("the hash-failure detail carries the encoding/json message rather than the "+
+				"Go type, so a tool argument could reach the log: %s", detail)
+		}
+	}
+}
+
+// TestHashArgsForAudit_returnsTheReproducibleDigest is the happy path: the
+// value an auditor recomputes.
+func TestHashArgsForAudit_returnsTheReproducibleDigest(t *testing.T) {
+	args := map[string]any{"broker": "dev", "msgVpnName": "default"}
+	want, err := audit.HashArgs(args)
+	if err != nil {
+		t.Fatalf("HashArgs: %v", err)
+	}
+	if got := hashArgsForAudit(auditCtx(t), "delete-queue", "dev", args); got != want {
+		t.Errorf("hashArgsForAudit = %q, want %q", got, want)
+	}
+}
+
+// TestUnhashableArgumentsAreRejectedBeforeTheGate documents why the branch
+// above needs a direct test: the wire path never reaches it.
+func TestUnhashableArgumentsAreRejectedBeforeTheGate(t *testing.T) {
+	mgr := auditTestManager(t, true)
+	args := map[string]any{"broker": "dev", "msgVpnName": "default", "bad": make(chan int)}
+
+	records := captureAudit(t, slog.LevelDebug, func() {
+		_, _ = mgr.CallTool(auditCtx(t), "delete-queue", args, idFixture())
+	})
+
+	if got := len(ofType(records, audit.EventOperation)); got != 0 {
+		t.Errorf("an operation record was emitted for a call rejected at validation (%d)", got)
+	}
+	var sawValidationError bool
+	for _, rec := range records {
+		if rec["msg"] == "tool invoked" && rec["error_type"] == "validation_error" {
+			sawValidationError = true
+		}
+	}
+	if !sawValidationError {
+		t.Errorf("expected the call to be rejected at input validation, before the destructive "+
+			"gate. If this changed, hashArgsForAudit's failure branch is now reachable from the "+
+			"wire and needs an end-to-end test:\n%v", records)
 	}
 }
 

@@ -31,6 +31,7 @@
 package tools
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -47,6 +48,84 @@ import (
 // errorTypeVar is the local variable every emit site assigns to before handing
 // it to logToolResult.
 const errorTypeVar = "errorType"
+
+// emitFunc is the funnel every error_type passes through. Checking its call
+// sites is what stops a new emit site from escaping this guard simply by
+// naming its local something other than errorType.
+const emitFunc = "logToolResult"
+
+// emitErrorTypeArg is the position of the error_type argument in a
+// logToolResult call: (ctx, tool, broker, start, errorType, toolErr, id).
+const emitErrorTypeArg = 4
+
+// checkEmitCallSite requires every logToolResult call to pass &errorType.
+//
+// The scan below is keyed on the variable NAME, which is a real limitation: a
+// new emit site whose local is called anything else contributes nothing and
+// nothing else would notice. Rather than pretend to do full dataflow analysis,
+// this fails loudly on the shape it cannot follow, and names the fix.
+func checkEmitCallSite(t *testing.T, fset *token.FileSet, file string, call *ast.CallExpr) {
+	t.Helper()
+	if len(call.Args) <= emitErrorTypeArg {
+		t.Errorf("%s: %s is called with %d arguments; this guard reads the error_type at index %d. "+
+			"If the signature changed, update emitErrorTypeArg.", position(fset, call), emitFunc, len(call.Args), emitErrorTypeArg)
+		return
+	}
+	arg := call.Args[emitErrorTypeArg]
+	unary, ok := arg.(*ast.UnaryExpr)
+	if !ok || unary.Op != token.AND {
+		t.Errorf("%s: %s receives an error_type argument this guard cannot follow (%T). "+
+			"Pass &%s, or extend the scanner.", position(fset, arg), emitFunc, arg, errorTypeVar)
+		return
+	}
+	ident, ok := unary.X.(*ast.Ident)
+	if !ok || ident.Name != errorTypeVar {
+		t.Errorf("%s: %s receives &%s rather than &%s. This guard finds values by scanning "+
+			"assignments to a variable of that name, so this emit site's error_type values are "+
+			"never checked against audit.ErrorTypes(). Rename the local, or extend the scanner.",
+			position(fset, arg), emitFunc, exprName(unary.X), errorTypeVar)
+	}
+}
+
+// exprName renders an expression for a failure message.
+func exprName(expr ast.Expr) string {
+	if ident, ok := expr.(*ast.Ident); ok {
+		return ident.Name
+	}
+	return fmt.Sprintf("%T", expr)
+}
+
+// collectDeclaredErrorTypes handles `var errorType = "x"`, which is a DeclStmt
+// rather than an AssignStmt and was invisible to the first version of this
+// scanner.
+func collectDeclaredErrorTypes(t *testing.T, fset *token.FileSet, file string, decl *ast.DeclStmt,
+	found map[string]string, byFile map[string]int) {
+	t.Helper()
+	gen, ok := decl.Decl.(*ast.GenDecl)
+	if !ok || gen.Tok != token.VAR {
+		return
+	}
+	for _, spec := range gen.Specs {
+		vs, ok := spec.(*ast.ValueSpec)
+		if !ok {
+			continue
+		}
+		for i, name := range vs.Names {
+			if name.Name != errorTypeVar || i >= len(vs.Values) {
+				continue
+			}
+			value, ok := stringConstant(vs.Values[i])
+			if !ok {
+				t.Errorf("%s: errorType is declared from an expression the drift guard cannot "+
+					"read (%T)", position(fset, vs.Values[i]), vs.Values[i])
+				continue
+			}
+			if record(fset, vs.Values[i], value, found) {
+				byFile[file]++
+			}
+		}
+	}
+}
 
 // contributingFiles are the files known to compute an error_type. Each must
 // still contribute at least one value.
@@ -125,12 +204,22 @@ func TestErrorTypeVocabularyMatchesAuditConstructor(t *testing.T) {
 // discovered from the assignments themselves rather than hardcoded, so adding
 // a second classifier helper is covered automatically.
 //
-// The scanner FAILS THE TEST on any assignment whose value it cannot read,
-// rather than skipping it. Skipping was the original hole: an error_type
-// introduced through a named constant is invisible to a literal-only scan, so
-// a thirteenth value could ship and be silently rejected by the constructor at
-// runtime while this test stayed green. Anything unreadable is now a loud
-// failure telling the author to extend the scanner.
+// The scanner FAILS THE TEST rather than skipping, on three shapes it cannot
+// follow: an assignment whose value it cannot read, a call to a function that
+// does not exist in this package, and a logToolResult call that passes
+// anything other than &errorType. Skipping was the original hole — an
+// error_type introduced through a named constant was invisible to a
+// literal-only scan, so a thirteenth value could ship, be silently rejected by
+// the constructor at runtime, and leave this test green.
+//
+// What it still cannot do, stated plainly: it finds values by NAME, scanning
+// assignments to a variable called errorType. It does no dataflow analysis. A
+// value that reaches the emit funnel by some route none of the three checks
+// above can see would go unchecked. The consequence is bounded rather than
+// silent — the constructor rejects the unknown value and an audit_drop record
+// tells the operator a destructive call went unrecorded (see
+// TestAuditRecord_constructorRejectionEmitsADrop) — but this test is the first
+// line, not the only one.
 //
 // Scanning the whole package directory rather than a fixed file list is
 // deliberate: a new emit site in a new file is exactly the drift this guards.
@@ -160,6 +249,25 @@ func scanErrorTypeLiterals(t *testing.T) (map[string]string, map[string]int) {
 		files[name] = file
 	}
 
+	// Pass 0: every logToolResult call site must pass the variable this
+	// scanner tracks. That call is the funnel every error_type goes through,
+	// so a new emit site whose local is named something else — which the
+	// name-keyed scan below would not see at all — is caught here instead of
+	// going silently unchecked.
+	for name, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if fn, ok := call.Fun.(*ast.Ident); !ok || fn.Name != emitFunc {
+				return true
+			}
+			checkEmitCallSite(t, fset, name, call)
+			return true
+		})
+	}
+
 	// Pass 1: every assignment to errorType. Records literal and named-constant
 	// values directly, and remembers which functions feed the variable.
 	found := make(map[string]string)
@@ -168,13 +276,35 @@ func scanErrorTypeLiterals(t *testing.T) (map[string]string, map[string]int) {
 
 	for name, file := range files {
 		ast.Inspect(file, func(n ast.Node) bool {
-			stmt, ok := n.(*ast.AssignStmt)
-			if !ok {
-				return true
+			switch node := n.(type) {
+			case *ast.AssignStmt:
+				collectAssignedErrorTypes(t, fset, name, node, found, byFile, classifiers)
+			case *ast.DeclStmt:
+				// `var errorType = "x"` is a DeclStmt, not an AssignStmt, and
+				// was invisible to the earlier scanner.
+				collectDeclaredErrorTypes(t, fset, name, node, found, byFile)
 			}
-			collectAssignedErrorTypes(t, fset, name, stmt, found, byFile, classifiers)
 			return true
 		})
+	}
+
+	// Every function named as feeding errorType must actually exist in this
+	// package, or its returns are never scanned and its values go unchecked.
+	declared := make(map[string]struct{})
+	for _, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			if fn, ok := n.(*ast.FuncDecl); ok {
+				declared[fn.Name.Name] = struct{}{}
+			}
+			return true
+		})
+	}
+	for name := range classifiers {
+		if _, ok := declared[name]; !ok {
+			t.Errorf("errorType is assigned from %s(...), which is not declared in this package, "+
+				"so its error_type values are never scanned. Resolve it, or assign from a value "+
+				"this guard can read.", name)
+		}
 	}
 
 	// Pass 2: the first result of every return in each function discovered

@@ -496,7 +496,7 @@ records means your log level, not your flag.
 | `tool` | The MCP tool invoked | string |
 | `broker` | The broker targeted | string |
 | `outcome` | The result; see [The Outcome Vocabulary](#the-outcome-vocabulary) | string |
-| `error_type` | Why an operation failed; present on `outcome: error` only | string (closed set) |
+| `error_type` | Why an operation failed; present on `outcome: error` only. Five of the twelve values reach an audit record, see [`error_type`](#error_type) | string (closed set) |
 | `arguments_hash` | SHA-256 over an RFC 8785 (JCS) canonicalization of the call arguments | hex string |
 | `correlation_id` | Join key to logs, traces, and the broker-side entry | string |
 | `reason` | Why authentication or authorization failed; present on `auth_failure`, `authz_denied`, and `broker_authz_denied` | string (closed set, one per record type) |
@@ -764,7 +764,7 @@ audit record**, which is the point of a single vocabulary: filter a dashboard by
 the SIEM unchanged, with no translation table.
 
 **Exception: `tokenexchange.Exchange` never sets `error_type`, even on `outcome: error`.** The
-ten-value `error_type` set above is scoped to tool-invocation outcomes and has no value
+twelve-value `error_type` set above is scoped to tool-invocation outcomes and has no value
 describing a token-exchange failure mode (rate-limited, circuit-open, retries-exhausted,
 transport, request-build). The span still carries the actual cause via the span's recorded
 exception event and its status (`codes.Error`), just not through this shared field. A future
@@ -955,6 +955,23 @@ Present only on `outcome: error`, drawn from a closed set of twelve values:
 | `not_found` | The requested item does not exist (for example, an unknown SEMP operation passed to describe-semp-schema). |
 | `output_validation_error` | The tool's output failed schema validation. |
 | `marshal_error` | The result could not be serialized. |
+
+**Only five of these reach an audit record.** The twelve values above are the full vocabulary
+for the tool-invocation **metric** and for the `tool invoked` log line. An `operation` audit
+record is written only for a call that actually reached the tool, so only the failures that
+can happen at or after dispatch appear on one:
+
+| Reaches an `operation` audit record | Never appears on an audit record |
+|---|---|
+| `execution_error`, `nil_result`, `output_validation_error`, `marshal_error`, `panic` | `unknown_tool`, `missing_broker`, `unknown_broker`, `broker_init_error`, `validation_error`, `bad_request`, `not_found` |
+
+The right-hand column is every way a call is rejected **before** anything is attempted
+against a broker: an unregistered tool, an absent or unresolvable broker, arguments that
+failed schema validation, or a request whose `arguments` were not valid JSON. Those are
+recorded as an ERROR `tool invoked` line in the operational log, not in the audit stream,
+because no state changed and there is nothing for a compliance reviewer to review. A SIEM
+rule matching `event="audit"` with `error_type: validation_error` will never fire; query the
+operational stream for those.
 
 Notes:
 
@@ -1163,8 +1180,8 @@ the review.
    intend to follow OTel HTTP conventions. If your trace backend or trace-based SLOs key off
    specific span names or `SpanKind` values, tell us what you expect.
 5. **The `outcome` / `error_type` split.** We have settled on three `outcome` values with the
-   cause in a separate `error_type` of ten values, rather than folding causes into `outcome`.
-   Does that split match how your SIEM queries distinguish failures, and do the ten
+   cause in a separate `error_type` of twelve values, rather than folding causes into `outcome`.
+   Does that split match how your SIEM queries distinguish failures, and do the twelve
    `error_type` values cover how you classify them? If you would separate something we have
    merged — a `timeout` distinct from other errors, say — now is the time.
 6. **Authorization denials — the signal is decided, the vocabulary is what we want checked.**

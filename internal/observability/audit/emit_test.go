@@ -179,6 +179,64 @@ func TestEmit_dropNoticeDoesNotRecurse(t *testing.T) {
 	}
 }
 
+// panickingHandler panics from whichever method the test selects, standing in
+// for a badly-behaved handler in the chain.
+type panickingHandler struct{ inEnabled bool }
+
+func (h panickingHandler) Enabled(context.Context, slog.Level) bool {
+	if h.inEnabled {
+		panic("handler.Enabled panicked")
+	}
+	return true
+}
+
+func (h panickingHandler) Handle(context.Context, slog.Record) error {
+	panic("handler.Handle panicked")
+}
+func (h panickingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h panickingHandler) WithGroup(string) slog.Handler      { return h }
+
+// TestEmit_survivesAPanickingHandler pins the promise this package makes:
+// writing an audit record never fails the operation it describes.
+//
+// Without the recover in write, a panic out of Enabled or Handle unwinds
+// through CallTool's defer to withRecovery, which reports the call to the agent
+// as failed. A destructive tool that had already mutated the broker would then
+// be told it had not — the worst possible outcome for the caller, caused by
+// the logging of the record rather than by the operation.
+func TestEmit_survivesAPanickingHandler(t *testing.T) {
+	e, err := NewEvent(context.Background(), validOperation())
+	if err != nil {
+		t.Fatalf("NewEvent: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		handler slog.Handler
+	}{
+		{"panic in Handle", panickingHandler{}},
+		{"panic in Enabled", panickingHandler{inEnabled: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The panicking handler must actually be installed as the default,
+			// or this test asserts nothing: Emit reads slog.Default() at emit
+			// time, so a handler that is merely constructed is never called.
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("audit.Emit propagated a handler panic (%v). Audit emission must "+
+						"never take down the operation it is describing: this panic would unwind "+
+						"through CallTool's defer to withRecovery, which reports a destructive "+
+						"call that already changed the broker as having failed.", r)
+				}
+			}()
+			withLogger(t, tc.handler, func() {
+				Emit(context.Background(), e)
+				EmitDrop(context.Background())
+			})
+		})
+	}
+}
+
 // TestEmitDrop_writesTheNotice covers the path callers take when they cannot
 // build a valid record at all — a failed canonicalization, or a record the
 // constructor rejected.

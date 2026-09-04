@@ -311,20 +311,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	// itself is emitted from the defer, once the outcome is known.
 	if rt.annotations.Destructive != nil && *rt.annotations.Destructive {
 		if m.auditLog {
-			hash, hashErr := audit.HashArgs(params)
-			if hashErr != nil {
-				// The Go type only, never the message: the wrapped
-				// encoding/json error renders the offending value, and that
-				// value is a tool argument — the one thing an audit record
-				// must never carry (docs/internal/secure-logging-rules.md).
-				slog.ErrorContext(ctx, "audit: could not hash tool arguments; recording a drop instead of an operation record",
-					slog.String("tool", name),
-					slog.String("broker", brokerAlias),
-					slog.String("detail", fmt.Sprintf("%T", hashErr)))
-				audit.EmitDrop(ctx)
-			} else {
-				auditArgsHash = hash
-			}
+			auditArgsHash = hashArgsForAudit(ctx, name, brokerAlias, params)
 		} else {
 			// Pre-flip behaviour, byte-identical, so the capability is inert
 			// when its flag is off.
@@ -385,6 +372,33 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		Content:           []mcp.Content{&mcp.TextContent{Text: indented.String()}},
 		IsError:           toolResult.IsError,
 	}, nil
+}
+
+// hashArgsForAudit computes the arguments_hash for a destructive call, or
+// returns "" after recording a drop when the arguments cannot be canonicalized.
+// An empty return tells CallTool's defer to emit no operation record: a record
+// whose arguments_hash stands for nothing is worse than a visible gap.
+//
+// Extracted from CallTool because the failure branch is unreachable from the
+// wire — arguments always arrive from json.Unmarshal, and a value that could
+// defeat json.Marshal is rejected by input-schema validation first — so a test
+// can only reach it here. Defensive code nothing can exercise is
+// indistinguishable from code that does not work.
+func hashArgsForAudit(ctx context.Context, tool, broker string, args map[string]any) string {
+	hash, err := audit.HashArgs(args)
+	if err == nil {
+		return hash
+	}
+	// The Go type only, never the message: the wrapped encoding/json error
+	// renders the offending value, and that value is a tool argument — the one
+	// thing an audit record must never carry
+	// (docs/internal/secure-logging-rules.md).
+	slog.ErrorContext(ctx, "audit: could not hash tool arguments; recording a drop instead of an operation record",
+		slog.String("tool", tool),
+		slog.String("broker", broker),
+		slog.String("detail", fmt.Sprintf("%T", err)))
+	audit.EmitDrop(ctx)
+	return ""
 }
 
 // emitOperationAudit builds and emits the single operation audit record for
