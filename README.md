@@ -35,14 +35,14 @@ A Model Context Protocol (MCP) server for Solace event brokers, built with Go us
 
 ## Overview
 
-solace-broker-mcp is an HTTP service that exposes Solace event broker management and monitoring to AI assistants through MCP. The server provides 40 tools: 24 read-only tools that query event broker status, inspect queues, diagnose client issues, and monitor message traffic, plus 16 optional write and action tools (off by default) for operational actions and configuration. It uses the Solace Element Management Protocol (SEMP) v1 and v2 APIs.
+solace-broker-mcp is an HTTP service that exposes Solace event broker management and monitoring to AI assistants through MCP. The server provides 43 tools: 25 read-only tools that query event broker status, inspect queues, diagnose client issues, and monitor message traffic, plus 18 optional write and action tools (off by default) for operational actions and configuration. It uses the Solace Element Management Protocol (SEMP) v1 and v2 APIs.
 
 MCP-compatible clients, for example, Claude Code, invoke these tools using natural language. The AI assistant translates requests into tool calls. The server handles authentication, rate limiting, retries, and response formatting.
 
 ## Features
 
-- **24 read-only monitoring tools** — Event broker status, Message VPNs, queues, clients, REST Delivery Points, bridges, Kafka Receivers/Senders, and SEMPv2 schema introspection
-- **16 optional write and action tools** — Disconnect clients, delete queued messages, reset statistics, and create, update, or delete Message VPNs, queues, topic endpoints, and REST Delivery Points; gated behind `enable_write_tools` (off by default)
+- **25 read-only monitoring tools** — Event broker status, Message VPNs, queues, clients, REST Delivery Points, bridges, Kafka Receivers/Senders, and SEMPv2 schema introspection
+- **18 optional write and action tools** — Disconnect clients, delete queued messages, reset statistics, and create, update, or delete Message VPNs, queues, queue subscriptions, topic endpoints, and REST Delivery Points; gated behind `enable_write_tools` (off by default)
 - **Client authentication** — Development mode (no authentication), static bearer tokens, or OAuth 2.1/OpenID Connect (OIDC) with JSON Web Token (JWT) validation
 - **Claim-based tool authorization** — Under OAuth mode, gate individual MCP tools by a configurable OIDC claim carrying the caller's group or role memberships (`groups` by default); `list-brokers` stays exempt so callers can always discover configured event brokers
 - **Multi-event-broker configuration** — Connect to multiple event brokers and address them by configured alias
@@ -69,7 +69,7 @@ The server implements the MCP HTTP transport specification and exposes event bro
 │                  │                    │   Broker MCP Server      │                      │                  │
 │   AI Agent       │ ────────────────▶ │                          │  ──────────────────▶ │  Solace          │
 │  (Claude Code,   │   JSON-RPC         │  • Auth (OAuth / token)  │   HTTP(S) /SEMP      │  Event           │
-│  Claude Desktop) │   + Bearer JWT     │  • 24 read + 16 write    │                      │  Broker(s)       │
+│  Claude Desktop) │   + Bearer JWT     │  • 25 read + 18 write    │                      │  Broker(s)       │
 │                  │                    │  • Rate-limit + retry    │                      │                  │
 │                  │ ◀──────────────── │  • SEMP client pool      │ ◀──────────────────  │                  │
 └──────────────────┘                    └──────────────────────────┘  basic/bearer/oauth  └──────────────────┘
@@ -87,23 +87,23 @@ The server exposes read-only tools grouped by what they inspect, plus write tool
 | Event broker status | `get-broker-status`, `get-redundancy-status` | Snapshot of version, uptime, resources, spool, and high availability (HA) and mate-link state |
 | Replication | `get-replication-status` | Replication role, sync eligibility, bridge status, transaction mode, and queued-message counts |
 | Message VPN | `list-vpns`, `get-vpn-status`, `get-message-rates` | List VPNs, check per-VPN service status, read message and byte rates |
-| Queues | `list-queues`, `get-queue-metrics` | List queues with cumulative spooled count and throughput; drill into a single queue for authoritative current depth, spool, and rates |
+| Queues | `list-queues`, `get-queue-metrics`, `list-queue-subscriptions` | List queues with cumulative spooled count and throughput; drill into a single queue for authoritative current depth, spool, and rates; list a queue's topic subscriptions |
 | Clients | `list-clients`, `get-client-details`, `list-client-subscriptions`, `list-slow-subscribers` | List connections, inspect per-client rates and discards, list subscriptions, filter for slow-subscriber-flagged clients |
 | REST Delivery Points | `list-rdps`, `get-rdp-status` | List RDPs; inspect bindings, REST consumers, and last failure reason |
 | Bridges | `list-bridges`, `get-bridge-status` | List bridges with inbound/outbound connection state; inspect a single bridge's connection establisher and failure category |
 | Kafka | `list-kafka-receivers`, `get-kafka-receiver-status`, `list-kafka-senders`, `get-kafka-sender-status` | List Kafka Receivers/Senders with up/down status; inspect a single receiver's or sender's topic/queue-binding status |
 | Discards | `get-discard-stats`, `list-queue-discards` | Event-broker-wide and per-VPN discard aggregates; per-queue discard counters |
 | Actions | `delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats` | One tool per operational action. Destructive tools (`delete-queue-messages`, `disconnect-client`) are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; the `clear-*-stats` tools are non-destructive. |
-| Management | `create-message-vpn`, `update-message-vpn`, `delete-message-vpn`, `create-queue`, `update-queue`, `delete-queue`, `create-topic-endpoint`, `update-topic-endpoint`, `delete-topic-endpoint`, `create-rdp`, `update-rdp`, `delete-rdp` | Create, update, and delete Config API objects (Message VPNs, queues, topic endpoints, REST Delivery Points). `delete-*` and the service-affecting `update-*` tools are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; `create-*` is additive and not annotated. |
+| Management | `create-message-vpn`, `update-message-vpn`, `delete-message-vpn`, `create-queue`, `update-queue`, `delete-queue`, `create-queue-subscription`, `delete-queue-subscription`, `create-topic-endpoint`, `update-topic-endpoint`, `delete-topic-endpoint`, `create-rdp`, `update-rdp`, `delete-rdp` | Create, update, and delete Config API objects (Message VPNs, queues, queue subscriptions, topic endpoints, REST Delivery Points). `delete-*` and the service-affecting `update-*` tools are annotated `destructiveHint` so clients can prompt before invocation, and their descriptions ask the model to confirm; `create-*` is additive and not annotated. |
 
-**The action and management tools are write tools, gated behind `enable_write_tools: true` in the configuration (default off; not registered in `tools/list` when disabled).** That's 16 write tools in total (four action, 12 management), on top of the 24 read-only tools.
+**The action and management tools are write tools, gated behind `enable_write_tools: true` in the configuration (default off; not registered in `tools/list` when disabled).** That's 18 write tools in total (four action, 14 management), on top of the 25 read-only tools.
 
 > **Confirmation is not enforced.** `enable_write_tools` is the only enforced control. `destructiveHint` and the confirmation text in tool descriptions are hints, not enforced by the MCP protocol; whether the user is actually prompted depends on the client and the model.
 
 ## Guides
 
 - [User Guide](docs/user-guide.md) — overview, tools reference, deployment, and troubleshooting
-- [Tools Reference](docs/tools-reference.md) — per-tool parameters, output schema, and example invocations for all 40 tools
+- [Tools Reference](docs/tools-reference.md) — per-tool parameters, output schema, and example invocations for all 43 tools
 - [Examples](docs/examples.md) — Claude Desktop configuration, natural-language queries, and multi-event-broker setup
 - [Configuration](docs/configuration.md) — server settings, event broker configuration, client authentication, and rate-limit/retry settings
 - [Authentication](docs/authentication.md) — OAuth/OIDC and static token setup for MCP clients

@@ -42,7 +42,7 @@ The server resolves variables at startup. The `.env` file loads automatically be
 | `tls_key_file` | — | none | Path to TLS private key (PEM). |
 | `tls_terminated_upstream` | — | `false` | Opt in to a plaintext listener while `mcp_client_auth.mode: oauth`. Acknowledges that TLS is terminated by an upstream proxy/ingress. Ignored in the dev modes. |
 | `log_level` | — | `info` | Log verbosity: `debug`, `info`, `warn`, `error`. |
-| `enable_write_tools` | — | `false` | When `true`, register every tool that is not read-only (16 in total): the four action API tools (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`) plus the 12 Config API management tools (`create`/`update`/`delete` for `message-vpn`, `queue`, `topic-endpoint`, and `rdp`). This includes the non-destructive stats-reset tools (which still mutate event broker state) and provisioning tools such as `delete-message-vpn`. When `false`, those tools are skipped at registration and never appear in `tools/list`. Secure-by-default for trial / dev deployments. |
+| `enable_write_tools` | — | `false` | When `true`, register every tool that is not read-only (18 in total): the four action API tools (`delete-queue-messages`, `clear-queue-stats`, `disconnect-client`, `clear-client-stats`) plus the 14 Config API management tools (`create`/`update`/`delete` for `message-vpn`, `queue`, `topic-endpoint`, and `rdp`, plus `create`/`delete` for `queue-subscription`). This includes the non-destructive stats-reset tools (which still mutate event broker state) and provisioning tools such as `delete-message-vpn`. When `false`, those tools are skipped at registration and never appear in `tools/list`. Secure-by-default for trial / dev deployments. |
 
 **TLS:** Provide both `tls_cert_file` and `tls_key_file` together — providing only one is a startup error. When both are set, the server starts with HTTPS; when neither is set, plain HTTP.
 
@@ -96,6 +96,8 @@ brokers:
       username: "${BROKER_USERNAME}"
       password: "${BROKER_PASSWORD}"
 ```
+
+**If `url` points through a reverse proxy or ingress rather than directly at the event broker's SEMP port**, that intermediary must not normalize or decode a percent-encoded `/` (`%2F`) in the request path before forwarding. Some SEMP path segments — for example a queue's topic subscription — can themselves contain `/`, sent percent-encoded so the broker sees it as a single path segment; a normalizing proxy that decodes it first splits the segment and the request 404s. This is a property of the deployment topology, not something the server can detect or work around.
 
 ## Event Broker OAuth (Hop 2)
 
@@ -247,7 +249,7 @@ mcp_client_auth:
         - list-vpns
 ```
 
-The benefit is context, not access control: an AI agent handed tools it will be denied spends context on their descriptions and schemas, and tends to misreport the cause when a call is refused. A caller in a narrow role can drop from approximately 24 tools to two or three.
+The benefit is context, not access control: an AI agent handed tools it will be denied spends context on their descriptions and schemas, and tends to misreport the cause when a call is refused. A caller in a narrow role can drop from approximately 25 tools to two or three.
 
 **This is not an access control.** `tools/call` remains the only authorization boundary, and it is enforced identically whether filtering is on or off. A tool absent from the list is still callable by name — the server resolves tool calls against the full registered set, not against whatever a previous list returned. Filtering changes what a caller *sees*, never what they may *do*.
 

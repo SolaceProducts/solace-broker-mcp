@@ -214,6 +214,97 @@ test_rdp_roundtrip() {
     assert_listed "$broker" "list-rdps" "$name" "false" || return 1
 }
 
+# ── Queue-subscription round-trip (SOL-153868) ───────────────────────────────
+# create-queue-subscription / list-queue-subscriptions / delete-queue-subscription
+# on a queue owned by this test. Covers two wildcard topics (multi-level '>'
+# and single-level '*') since queue-subscription is the first tool in this
+# codebase to put an arbitrary topic string — potentially containing '/' — into
+# a SEMP path segment (delete) or request body (create). Absence after delete
+# is asserted positively (a second list call), not inferred from the delete
+# call returning success: removing a subscription raises no broker error and
+# the failure mode is silent (messages simply stop arriving).
+test_queue_subscription_roundtrip() {
+    local broker="$1"
+    local name="e2e-config-queue-sub-$broker"
+    local resp content
+
+    call_tool_ok "create-queue" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,queueConfig:{accessType:"non-exclusive"}}')" \
+        "queue-subscription: create-queue [$broker]" || return 1
+
+    call_tool_ok "create-queue-subscription" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,subscriptionTopic:"ABC/>"}')" \
+        "create-queue-subscription [$broker]: ABC/>" || return 1
+    call_tool_ok "create-queue-subscription" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,subscriptionTopic:"foo/*/bar"}')" \
+        "create-queue-subscription [$broker]: foo/*/bar" || return 1
+
+    resp=$(mcp_call_tool "list-queue-subscriptions" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,maxResults:500}')") || return 1
+    content=$(extract_content "$resp")
+    assert_json_field "$content" \
+        '(.subscriptions.data | map(.subscriptionTopic) | index("ABC/>")) != null' "true" \
+        "list-queue-subscriptions [$broker]: ABC/> present after create" || return 1
+    assert_json_field "$content" \
+        '(.subscriptions.data | map(.subscriptionTopic) | index("foo/*/bar")) != null' "true" \
+        "list-queue-subscriptions [$broker]: foo/*/bar present after create" || return 1
+
+    call_tool_ok "delete-queue-subscription" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,subscriptionTopic:"ABC/>"}')" \
+        "delete-queue-subscription [$broker]: ABC/>" || return 1
+
+    resp=$(mcp_call_tool "list-queue-subscriptions" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,maxResults:500}')") || return 1
+    content=$(extract_content "$resp")
+    assert_json_field "$content" \
+        '(.subscriptions.data | map(.subscriptionTopic) | index("ABC/>")) == null' "true" \
+        "list-queue-subscriptions [$broker]: ABC/> absent after delete (asserted positively)" || return 1
+    assert_json_field "$content" \
+        '(.subscriptions.data | map(.subscriptionTopic) | index("foo/*/bar")) != null' "true" \
+        "list-queue-subscriptions [$broker]: foo/*/bar still present (untouched by the other topic's delete)" || return 1
+
+    # AC4: list-queue-subscriptions must stay permissive for a real, existing
+    # queue that simply has no subscriptions left (isError absent, empty
+    # array) — the preflight exists to distinguish "queue missing" from
+    # "queue has no subscriptions", not to reject the latter. Delete the
+    # remaining topic first so this is a real empty-list case, not just the
+    # nonexistent-queue path already covered elsewhere.
+    call_tool_ok "delete-queue-subscription" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,subscriptionTopic:"foo/*/bar"}')" \
+        "delete-queue-subscription [$broker]: foo/*/bar" || return 1
+
+    resp=$(mcp_call_tool "list-queue-subscriptions" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n,maxResults:500}')") || return 1
+    assert_json_field "$resp" ".result.isError // false" "false" \
+        "list-queue-subscriptions [$broker]: real queue with zero subscriptions is not an error" || return 1
+    content=$(extract_content "$resp")
+    assert_json_field "$content" '(.subscriptions.data | length)' "0" \
+        "list-queue-subscriptions [$broker]: real queue with zero subscriptions returns an empty list" || return 1
+
+    call_tool_ok "delete-queue" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n}')" \
+        "queue-subscription: delete-queue [$broker]" || return 1
+}
+
+# list-queue-subscriptions on a queue that was never created must fail, not
+# report an empty list — the exact confusion SOL-153868 exists to prevent.
+# Wording of the broker's own error (verified live: "Could not find match for
+# queue <name>") is deliberately not asserted here — that string is this
+# suite's own broker's prose, not part of the tool's contract, and pinning it
+# would make this test brittle to a SEMP version bump for no behavioral
+# benefit. Only the isError contract, which the tool does control, is pinned.
+test_list_queue_subscriptions_nonexistent_queue() {
+    local broker="$1"
+    local name="e2e-config-queue-sub-missing-$broker"
+    local resp
+
+    resp=$(mcp_call_tool "list-queue-subscriptions" \
+        "$(jq -nc --arg b "$broker" --arg n "$name" '{broker:$b,msgVpnName:"default",queueName:$n}')") \
+        || { log_fail "list-queue-subscriptions [$broker]: transport failure on nonexistent queue"; return 1; }
+    assert_json_field "$resp" ".result.isError" "true" \
+        "list-queue-subscriptions [$broker]: nonexistent queue reports isError=true, not an empty list" || return 1
+}
+
 # ── Cross-cutting ────────────────────────────────────────────────────────────
 
 # A create/delete on broker-a's fixture must leave broker-b untouched. Uses one
@@ -268,20 +359,24 @@ test_annotations() {
     resp=$(mcp_request "$sid" '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}') || return 1
 
     for t in create-message-vpn create-queue create-topic-endpoint create-rdp \
+             create-queue-subscription \
              update-message-vpn delete-message-vpn update-queue delete-queue \
-             update-topic-endpoint delete-topic-endpoint update-rdp delete-rdp; do
+             update-topic-endpoint delete-topic-endpoint update-rdp delete-rdp \
+             delete-queue-subscription; do
         assert_json_field "$resp" "([.result.tools[].name] | index(\"$t\")) != null" "true" \
             "annotations: $t advertised in tools/list" || return 1
         assert_json_field "$resp" "(.result.tools[] | select(.name==\"$t\") | .annotations.readOnlyHint) // false" "false" \
             "annotations: $t readOnlyHint=false" || return 1
     done
 
-    for t in create-message-vpn create-queue create-topic-endpoint create-rdp; do
+    for t in create-message-vpn create-queue create-topic-endpoint create-rdp \
+             create-queue-subscription; do
         assert_json_field "$resp" "(.result.tools[] | select(.name==\"$t\") | .annotations.destructiveHint) // false" "false" \
             "annotations: $t destructiveHint=false" || return 1
     done
     for t in update-message-vpn delete-message-vpn update-queue delete-queue \
-             update-topic-endpoint delete-topic-endpoint update-rdp delete-rdp; do
+             update-topic-endpoint delete-topic-endpoint update-rdp delete-rdp \
+             delete-queue-subscription; do
         assert_json_field "$resp" "(.result.tools[] | select(.name==\"$t\") | .annotations.destructiveHint) // false" "true" \
             "annotations: $t destructiveHint=true" || return 1
     done
@@ -324,6 +419,10 @@ test_te_roundtrip_a()    { test_te_roundtrip broker-a; }
 test_te_roundtrip_b()    { test_te_roundtrip broker-b; }
 test_rdp_roundtrip_a()   { test_rdp_roundtrip broker-a; }
 test_rdp_roundtrip_b()   { test_rdp_roundtrip broker-b; }
+test_queue_subscription_roundtrip_a() { test_queue_subscription_roundtrip broker-a; }
+test_queue_subscription_roundtrip_b() { test_queue_subscription_roundtrip broker-b; }
+test_list_queue_subscriptions_nonexistent_queue_a() { test_list_queue_subscriptions_nonexistent_queue broker-a; }
+test_list_queue_subscriptions_nonexistent_queue_b() { test_list_queue_subscriptions_nonexistent_queue broker-b; }
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
@@ -337,6 +436,10 @@ run_test "Topic-endpoint round-trip (broker-a)" test_te_roundtrip_a
 run_test "Topic-endpoint round-trip (broker-b)" test_te_roundtrip_b
 run_test "RDP round-trip (broker-a)"            test_rdp_roundtrip_a
 run_test "RDP round-trip (broker-b)"            test_rdp_roundtrip_b
+run_test "Queue-subscription round-trip (broker-a)" test_queue_subscription_roundtrip_a
+run_test "Queue-subscription round-trip (broker-b)" test_queue_subscription_roundtrip_b
+run_test "list-queue-subscriptions on nonexistent queue (broker-a)" test_list_queue_subscriptions_nonexistent_queue_a
+run_test "list-queue-subscriptions on nonexistent queue (broker-b)" test_list_queue_subscriptions_nonexistent_queue_b
 run_test "Cross-broker isolation (queue)"       test_cross_broker_isolation
 run_test "Cross-broker isolation (RDP)"         test_rdp_cross_broker_isolation
 run_test "Annotations (tools/list)"             test_annotations

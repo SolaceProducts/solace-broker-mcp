@@ -30,14 +30,15 @@ import (
 // per-step schema automatically — confirmed directly against the embedded
 // spec for every write tool (SOL-152947), not assumed.
 var writeToolIdentifierFields = map[string][]string{
-	"create-message-vpn":    {"msgVpnName"},
-	"update-message-vpn":    {"msgVpnName"},
-	"create-queue":          {"msgVpnName", "queueName"},
-	"update-queue":          {"msgVpnName", "queueName"},
-	"create-topic-endpoint": {"msgVpnName", "topicEndpointName"},
-	"update-topic-endpoint": {"msgVpnName", "topicEndpointName"},
-	"create-rdp":            {"msgVpnName", "restDeliveryPointName"},
-	"update-rdp":            {"msgVpnName", "restDeliveryPointName"},
+	"create-message-vpn":        {"msgVpnName"},
+	"update-message-vpn":        {"msgVpnName"},
+	"create-queue":              {"msgVpnName", "queueName"},
+	"update-queue":              {"msgVpnName", "queueName"},
+	"create-queue-subscription": {"msgVpnName", "queueName", "subscriptionTopic"},
+	"create-topic-endpoint":     {"msgVpnName", "topicEndpointName"},
+	"update-topic-endpoint":     {"msgVpnName", "topicEndpointName"},
+	"create-rdp":                {"msgVpnName", "restDeliveryPointName"},
+	"update-rdp":                {"msgVpnName", "restDeliveryPointName"},
 }
 
 // callsConfigOrActionOperation reports whether any step of tool calls a

@@ -15,6 +15,8 @@
 package tools
 
 import (
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
@@ -200,6 +202,87 @@ func TestWriteToolIdentifierFields_ResolveAgainstRealResponseFields(t *testing.T
 					"additionalProperties:false forbids it, which no real response could ever satisfy",
 					name, field, op.ID, op.ResponseFields, field)
 			}
+		}
+	}
+}
+
+// TestWriteToolIdentifierFields_CoversEveryEligibleWriteTool is the reverse of
+// the test above: every write tool whose first step's operation resolves
+// real ResponseFields (i.e. isn't a delete/action op falling back to
+// SempMetaOnlyResponse) must have an entry in writeToolIdentifierFields, or
+// its generated output schema silently drops the "the response must name its
+// own resource" requirement every other create/update tool gets.
+//
+// Verified by mutation during review (SOL-153868 PR #374, bczoma): deleting
+// create-queue-subscription's entry left `go test ./cmd/server/...
+// ./internal/tools/... ./internal/composite/...` fully green — nothing else
+// catches a missing entry. Mirrors the pattern in
+// cmd/server/tool_authorization_coverage_test.go's
+// TestEveryRegisteredToolIsGatedOrExempt for the authorization registry.
+func TestWriteToolIdentifierFields_CoversEveryEligibleWriteTool(t *testing.T) {
+	operations, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatalf("ParseSpecs: %v", err)
+	}
+	realTools, err := composite.LoadTools(definitions.FS, "tools.yaml")
+	if err != nil {
+		t.Fatalf("LoadTools: %v", err)
+	}
+
+	var missing []string
+	for _, tool := range realTools {
+		if !callsConfigOrActionOperation(tool) || len(tool.Steps) == 0 {
+			continue
+		}
+		op, ok := operations[tool.Steps[0].Operation]
+		if !ok || op.ResponseFields == nil {
+			continue // delete/action ops resolve no ResponseFields (SempMetaOnlyResponse) — correctly excluded
+		}
+		if _, ok := writeToolIdentifierFields[tool.Name]; !ok {
+			missing = append(missing, tool.Name)
+		}
+	}
+
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		t.Errorf("write tool(s) whose response resolves real data but have no writeToolIdentifierFields "+
+			"entry: %v — add one, matching every other create/update tool, or their output schema silently "+
+			"drops the requirement that the response names its own resource", missing)
+	}
+}
+
+// TestWriteToolIdentifierFields_TargetsStepZero pins an assumption
+// composite_handler.go's outputSchema() hard-codes: every writeToolIdentifierFields
+// entry is attached to Steps[0]. True for every write tool today (none has a
+// preflight step ahead of its write step), but SOL-153868 introduced the
+// first preflight-then-list *shape* in this catalog (list-queue-subscriptions
+// — read-only, not itself in this map). A future write tool built the same
+// way would attach its identifier fields to the preflight step's schema
+// instead of the write step's, silently. This fails loudly instead, the day
+// a writeToolIdentifierFields entry's tool has its config/action step
+// anywhere but index 0.
+func TestWriteToolIdentifierFields_TargetsStepZero(t *testing.T) {
+	realTools, err := composite.LoadTools(definitions.FS, "tools.yaml")
+	if err != nil {
+		t.Fatalf("LoadTools: %v", err)
+	}
+	byName := make(map[string]composite.CompositeTool, len(realTools))
+	for _, tl := range realTools {
+		byName[tl.Name] = tl
+	}
+
+	for name := range writeToolIdentifierFields {
+		tool, ok := byName[name]
+		if !ok || len(tool.Steps) == 0 {
+			continue // reported by TestWriteToolIdentifierFields_ResolveAgainstRealResponseFields above
+		}
+		step := tool.Steps[0]
+		if !strings.HasPrefix(step.Operation, "config/") && !strings.HasPrefix(step.Operation, "action/") {
+			t.Errorf("%s: writeToolIdentifierFields attaches to step %q (operation %q), which "+
+				"composite_handler.go's outputSchema() assumes is the write step — but it isn't a "+
+				"config/action operation. If this tool has a preflight step ahead of its write step, "+
+				"the identifier fields are being attached to the wrong step's schema",
+				name, step.ID, step.Operation)
 		}
 	}
 }
