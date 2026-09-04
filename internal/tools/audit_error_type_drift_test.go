@@ -99,7 +99,7 @@ func exprName(expr ast.Expr) string {
 // rather than an AssignStmt and was invisible to the first version of this
 // scanner.
 func collectDeclaredErrorTypes(t *testing.T, fset *token.FileSet, file string, decl *ast.DeclStmt,
-	found map[string]string, byFile map[string]int) {
+	found map[string]string, byFile map[string]int, imports map[string]string, pkgCache map[string]map[string]string) {
 	t.Helper()
 	gen, ok := decl.Decl.(*ast.GenDecl)
 	if !ok || gen.Tok != token.VAR {
@@ -114,7 +114,7 @@ func collectDeclaredErrorTypes(t *testing.T, fset *token.FileSet, file string, d
 			if name.Name != errorTypeVar || i >= len(vs.Values) {
 				continue
 			}
-			value, ok := stringConstant(vs.Values[i])
+			value, ok := stringConstant(t, vs.Values[i], imports, pkgCache)
 			if !ok {
 				t.Errorf("%s: errorType is declared from an expression the drift guard cannot "+
 					"read (%T)", position(fset, vs.Values[i]), vs.Values[i])
@@ -268,6 +268,15 @@ func scanErrorTypeLiterals(t *testing.T) (map[string]string, map[string]int) {
 		})
 	}
 
+	// imports resolves a package qualifier (e.g. "metrics" in
+	// metrics.ErrorTypePanic) to its import path, so stringConstant can follow
+	// a cross-package named constant — the shape every error_type value took
+	// on once SOL-152091 introduced the typed metrics.ErrorType vocabulary.
+	// pkgCache memoizes each resolved package's own constants so a directory
+	// is parsed once no matter how many selector expressions reference it.
+	imports := buildImportMap(files)
+	pkgCache := make(map[string]map[string]string)
+
 	// Pass 1: every assignment to errorType. Records literal and named-constant
 	// values directly, and remembers which functions feed the variable.
 	found := make(map[string]string)
@@ -278,11 +287,11 @@ func scanErrorTypeLiterals(t *testing.T) (map[string]string, map[string]int) {
 		ast.Inspect(file, func(n ast.Node) bool {
 			switch node := n.(type) {
 			case *ast.AssignStmt:
-				collectAssignedErrorTypes(t, fset, name, node, found, byFile, classifiers)
+				collectAssignedErrorTypes(t, fset, name, node, found, byFile, classifiers, imports, pkgCache)
 			case *ast.DeclStmt:
 				// `var errorType = "x"` is a DeclStmt, not an AssignStmt, and
 				// was invisible to the earlier scanner.
-				collectDeclaredErrorTypes(t, fset, name, node, found, byFile)
+				collectDeclaredErrorTypes(t, fset, name, node, found, byFile, imports, pkgCache)
 			}
 			return true
 		})
@@ -319,7 +328,7 @@ func scanErrorTypeLiterals(t *testing.T) (map[string]string, map[string]int) {
 			if _, feeds := classifiers[fn.Name.Name]; !feeds {
 				return true
 			}
-			collectClassifierErrorTypes(t, fset, name, fn, found, byFile)
+			collectClassifierErrorTypes(t, fset, name, fn, found, byFile, imports, pkgCache)
 			return true
 		})
 	}
@@ -334,7 +343,8 @@ func scanErrorTypeLiterals(t *testing.T) (map[string]string, map[string]int) {
 // A call on the right-hand side is not a value; it names a function whose
 // results are scanned in pass 2. Anything else is unreadable and fails.
 func collectAssignedErrorTypes(t *testing.T, fset *token.FileSet, file string, stmt *ast.AssignStmt,
-	found map[string]string, byFile map[string]int, classifiers map[string]struct{}) {
+	found map[string]string, byFile map[string]int, classifiers map[string]struct{},
+	imports map[string]string, pkgCache map[string]map[string]string) {
 	t.Helper()
 	for i, lhs := range stmt.Lhs {
 		ident, ok := lhs.(*ast.Ident)
@@ -357,7 +367,7 @@ func collectAssignedErrorTypes(t *testing.T, fset *token.FileSet, file string, s
 				"Extend calleeName, or this emit site's values go unchecked.", position(fset, rhs))
 			continue
 		}
-		value, ok := stringConstant(rhs)
+		value, ok := stringConstant(t, rhs, imports, pkgCache)
 		if !ok {
 			t.Errorf("%s: errorType is assigned from an expression the drift guard cannot read "+
 				"(%T). Extend stringConstant, or this value can ship without being added to "+
@@ -373,14 +383,14 @@ func collectAssignedErrorTypes(t *testing.T, fset *token.FileSet, file string, s
 // collectClassifierErrorTypes records the first result of every return in a
 // function whose return value feeds errorType.
 func collectClassifierErrorTypes(t *testing.T, fset *token.FileSet, file string, fn *ast.FuncDecl,
-	found map[string]string, byFile map[string]int) {
+	found map[string]string, byFile map[string]int, imports map[string]string, pkgCache map[string]map[string]string) {
 	t.Helper()
 	ast.Inspect(fn, func(n ast.Node) bool {
 		ret, ok := n.(*ast.ReturnStmt)
 		if !ok || len(ret.Results) == 0 {
 			return true
 		}
-		value, ok := stringConstant(ret.Results[0])
+		value, ok := stringConstant(t, ret.Results[0], imports, pkgCache)
 		if !ok {
 			t.Errorf("%s: %s returns an error_type the drift guard cannot read (%T)",
 				position(fset, ret.Results[0]), fn.Name.Name, ret.Results[0])
@@ -406,12 +416,18 @@ func calleeName(call *ast.CallExpr) (string, bool) {
 }
 
 // stringConstant reads an expression that is a string constant, whether
-// written inline or named.
+// written inline, named in this package, or named in another package of this
+// module reached through a selector (metrics.ErrorTypePanic).
 //
-// The named case is the one the original scanner missed: `errorType =
+// The local-Ident case is the one the original scanner missed: `errorType =
 // errTypeTimeout` where errTypeTimeout is a package constant looked exactly
-// like an unreadable expression and was silently skipped.
-func stringConstant(expr ast.Expr) (string, bool) {
+// like an unreadable expression and was silently skipped. The SelectorExpr
+// case is the one SOL-152091 opened: once error_type values became typed
+// metrics.ErrorType constants instead of bare string literals, every emit
+// site in this package took that shape, and without this case the scanner
+// would fail on all of them, not just a new one.
+func stringConstant(t *testing.T, expr ast.Expr, imports map[string]string, pkgCache map[string]map[string]string) (string, bool) {
+	t.Helper()
 	switch node := expr.(type) {
 	case *ast.BasicLit:
 		return unquoteString(node)
@@ -428,10 +444,121 @@ func stringConstant(expr ast.Expr) (string, bool) {
 			if name.Name != node.Name || i >= len(spec.Values) {
 				continue
 			}
-			return stringConstant(spec.Values[i])
+			return stringConstant(t, spec.Values[i], imports, pkgCache)
 		}
+	case *ast.SelectorExpr:
+		pkgIdent, ok := node.X.(*ast.Ident)
+		if !ok {
+			return "", false
+		}
+		importPath, ok := imports[pkgIdent.Name]
+		if !ok {
+			return "", false
+		}
+		dir, ok := resolveModuleDir(importPath)
+		if !ok {
+			return "", false
+		}
+		consts, cached := pkgCache[dir]
+		if !cached {
+			consts = packageConstants(t, dir)
+			pkgCache[dir] = consts
+		}
+		value, ok := consts[node.Sel.Name]
+		return value, ok
 	}
 	return "", false
+}
+
+// buildImportMap resolves every package qualifier used across the scanned
+// files (e.g. "metrics") to its import path, merging all files' imports into
+// one map. A single merged map is safe here — this is a small, hand-written
+// guard test, not a general-purpose tool, and nothing in this package aliases
+// two different import paths to the same name.
+func buildImportMap(files map[string]*ast.File) map[string]string {
+	imports := make(map[string]string)
+	for _, file := range files {
+		for _, imp := range file.Imports {
+			path, err := strconv.Unquote(imp.Path.Value)
+			if err != nil {
+				continue
+			}
+			name := path[strings.LastIndex(path, "/")+1:]
+			if imp.Name != nil {
+				name = imp.Name.Name
+			}
+			imports[name] = path
+		}
+	}
+	return imports
+}
+
+// modulePath is this module's own path, the only prefix resolveModuleDir
+// knows how to turn into a directory on disk — a third-party import selector
+// (there are none in this package's error_type assignments today) falls
+// through as unreadable rather than guessing at $GOPATH or the module cache.
+const modulePath = "github.com/SolaceProducts/solace-broker-mcp/"
+
+// resolveModuleDir maps an in-module import path to the directory it lives in
+// on disk, relative to this test's own working directory (internal/tools).
+func resolveModuleDir(importPath string) (string, bool) {
+	if !strings.HasPrefix(importPath, modulePath) {
+		return "", false
+	}
+	return filepath.Join("../..", importPath[len(modulePath):]), true
+}
+
+// packageConstants parses every non-test .go file in dir and returns a map of
+// top-level const name to its string value, for consts declared directly from
+// a string literal — typed (`ErrorTypePanic ErrorType = "panic"`) or not.
+// Fails the test rather than returning an empty map on a read or parse error:
+// this scanner has no legitimate reason to be pointed at a directory it
+// cannot read, so a failure here means resolveModuleDir or an import path is
+// wrong, not that the target package has no constants.
+func packageConstants(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading %s (resolved for a cross-package error_type constant): %v", dir, err)
+	}
+	fset := token.NewFileSet()
+	consts := make(map[string]string)
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", path, err)
+		}
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, constName := range vs.Names {
+					if i >= len(vs.Values) {
+						continue
+					}
+					lit, ok := vs.Values[i].(*ast.BasicLit)
+					if !ok {
+						continue
+					}
+					if value, ok := unquoteString(lit); ok {
+						consts[constName.Name] = value
+					}
+				}
+			}
+		}
+	}
+	return consts
 }
 
 // unquoteString unwraps a string BasicLit.

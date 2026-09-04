@@ -103,7 +103,17 @@ func NewToolManager(pool *semp.BrokerPool, opts ...ManagerOption) *ToolManager {
 		tools: make(map[string]*registeredTool),
 	}
 	for _, opt := range opts {
-		opt(mgr)
+		// A nil ManagerOption panics if called directly, unlike a nil
+		// *metrics.ToolMetrics or a false bool — so treat it as a no-op
+		// rather than letting every caller guard against it. This is what
+		// let `NewToolManagerFromComposite(pool, tools, executor, nil)`
+		// panic here at construction time when the parameter grew from one
+		// concrete pointer to variadic options: the old call sites' `nil`
+		// meant "no metrics" and now means "no option", which should do
+		// nothing, not crash.
+		if opt != nil {
+			opt(mgr)
+		}
 	}
 	return mgr
 }
