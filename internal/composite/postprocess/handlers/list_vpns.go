@@ -53,7 +53,9 @@ func init() {
 //     version-independent. Previous implementations (before the real-clients
 //     fan-out step) inferred this from `msgVpnConnections <= 1` on the empirical
 //     invariant that the reserved `#client` shows up as exactly one connection
-//     per enabled+up VPN. That invariant is no longer load-bearing.
+//     per enabled+up VPN. That invariant is no longer load-bearing: the count
+//     is consulted only to skip the probe at exactly 0 (SOL-154166), where "no
+//     connections" implies "no clients" on any broker version, never at 1.
 //
 // down/standby/zeroConnection are all gated on enabled==true so a disabled VPN
 // (which typically reports state=="down") lands in disabledCount only, and the
@@ -139,9 +141,14 @@ func ListVpns(stepResults map[string]map[string]any) (map[string]any, error) {
 // A row present in byKey with a non-empty data[] means the broker had a client
 // whose clientUsername did not match the reserved `#*` prefix. Missing key or
 // empty data[] means "no real client" — the VPN is enabled+up but no user
-// clients are connected. A key can be missing legitimately when forEachIf
-// filtered the row out (disabled/down VPNs), but those branches never call
-// this function; when this fires and finds nothing, that IS the signal.
+// clients are connected.
+//
+// A missing key is equally a "no real client" signal, and is expected for two
+// reasons: forEachIf filters out disabled/down/standby rows (whose branches
+// never reach this function), and since SOL-154166 it also filters out an
+// enabled+up VPN whose msgVpnConnections is 0. The latter does reach here, and
+// false is the right answer: zero connections means no clients of any kind, so
+// the probe that was skipped would have come back empty.
 func hasRealClient(byKey map[string]any, vpnName string) bool {
 	entry, ok := byKey[vpnName].(map[string]any)
 	if !ok {
