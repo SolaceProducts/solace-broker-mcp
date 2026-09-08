@@ -13,7 +13,7 @@ mcp_panic_recovered_total{boundary="http"} 0
 mcp_panic_recovered_total{boundary="tool"} 0
 # HELP mcp_schema_version Observability schema versions; always 1, labelled with each schema.
 # TYPE mcp_schema_version gauge
-mcp_schema_version{audit_schema="1.0",metrics_schema="1.0"} 1
+mcp_schema_version{audit_schema="1.1",metrics_schema="1.0"} 1
 # HELP mcp_tool_invocation_duration_seconds Duration of tool invocation in seconds
 # TYPE mcp_tool_invocation_duration_seconds histogram
 mcp_tool_invocation_duration_seconds_bucket{broker="test-broker",error_type="",outcome="success",tool="test-tool",le="0.001"} 0
