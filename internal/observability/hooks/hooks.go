@@ -51,6 +51,22 @@ func (r *Registry) Register(name string, fn func(context.Context) error) {
 	r.hooks = append(r.hooks, namedHook{name: name, fn: fn})
 }
 
+// Names returns the name of every hook registered so far, in registration
+// order (SOL-153965). Production code has no need for this — RunAll doesn't
+// care what a hook is called — it exists so a wiring test can assert what
+// cmd/server actually registered without exercising RunAll's own shutdown
+// behavior. A nil *Registry returns nil, matching RunAll's own nil-safety.
+func (r *Registry) Names() []string {
+	if r == nil {
+		return nil
+	}
+	names := make([]string, len(r.hooks))
+	for i, h := range r.hooks {
+		names[i] = h.name
+	}
+	return names
+}
+
 // RunAll runs every registered hook concurrently, returning once they all
 // finish or ctx's deadline passes. Each hook gets ctx directly, so every hook
 // gets the full budget regardless of how many others are registered. A slow
