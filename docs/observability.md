@@ -48,7 +48,7 @@ capability headings carry the same tag:
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
 | Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, the OTLP export-health counters, and `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)). Assume any other metric below is not yet emitted. |
 | Audit trail | **[Interim — all record types except `broker_authz_denied`]** | Destructive tool calls emit an `operation` record behind `OBS_AUDIT_LOG_ENABLED` (default off). `auth_success`, `auth_failure`, `authz_denied`, and `broker_auth_retry` also emit today (SOL-152097). `broker_authz_denied` and the `mcp_audit_events_dropped_total` counter are not emitted yet. See [Audit Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied). |
-| Distributed tracing | **[Interim — provider wired, no spans yet]** | Tracer provider and OTLP export are live behind `OBS_TRACING_ENABLED`; no code creates a span yet. See [Distributed Tracing](#distributed-tracing--interim-provider-wired-spans-not-yet-emitted). |
+| Distributed tracing | **[Interim — request-path spans wired, per-attempt spans pending]** | Tracer provider, OTLP export, W3C context propagation, and spans at the HTTP boundary, the tool dispatcher, the composite executor, and each SEMP call are live behind `OBS_TRACING_ENABLED`. Per-*attempt* spans and the retry attributes are still pending (Story 27). See [Distributed Tracing](#distributed-tracing--interim-request-path-spans-wired). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
 | Resource attributes | **[Implemented]** | Shared identity resource on metrics and traces, plus the committed subset on every log line. See [Resource Attributes](#resource-attributes--implemented). |
 
@@ -371,7 +371,7 @@ flags, not just one. The counters are always registered in-process while tracing
 to register them against, i.e. only when `OBS_METRICS_ENABLED` is **also** on. Tracing on with
 metrics off keeps the totals in-process only — reported solely by the periodic
 `event=otel_self_stats` INFO log (see [Distributed
-Tracing](#distributed-tracing--interim-provider-wired-spans-not-yet-emitted)) — so an alert on
+Tracing](#distributed-tracing--interim-request-path-spans-wired)) — so an alert on
 `mcp_otel_spans_dropped_total` sees a permanently absent series in that mode, which reads as
 healthy rather than as "not exposed here." The metric pair's own flag is OTLP metrics push
 (`OBS_METRICS_OTLP_ENABLED`, not `OBS_METRICS_ENABLED`, which governs the scrape surface alone;
@@ -765,23 +765,22 @@ which you own.** The server does not itself persist or sign events.
 
 ---
 
-## Distributed Tracing — [Interim: provider and one span wired]
+## Distributed Tracing — [Interim: request-path spans wired]
 
-> _Status: **[Interim]** (SOL-152420, SOL-153333). The tracer provider, OTLP export, and
-> self-observation counters are wired and live behind `OBS_TRACING_ENABLED` (Story 25). One
-> application span exists today — `tokenexchange.Exchange`, wrapping the OAuth token-exchange
-> call (Story 50) — described under [Spans](#spans) below. The HTTP-boundary, tool-dispatcher,
-> composite-executor, and per-SEMP-attempt spans are still the proposed design (later stories),
-> so flipping the flag today exports a resource, the token-exchange span, and nothing else yet.
-> Sampling and propagation are live; the rest of this section stays **[Planned]** until those
-> stories land. **A consequence of shipping only one span first:** the default sampler samples
-> everything (see Sampling below), and until Story 26's SEMP-layer spans exist, most calls have
-> no upstream span to attach to — so a token exchange not triggered from an already-sampled agent
-> trace exports as its own single-span root trace, one per token exchange — cache hits included,
-> since `tracer.Start` runs before the cache lookup — rather than nested inside a larger request
-> trace. Cache hits are the large majority of exchanges, so budget from the *total* call rate, not
-> a live-round-trip rate. Self-correcting once Story 26 lands; worth knowing before then if trace
-> volume looks higher than the request volume suggests._
+> _Status: **[Interim]** (SOL-152420, SOL-153333, SOL-152421). The tracer provider, OTLP
+> export, and self-observation counters are wired and live behind `OBS_TRACING_ENABLED`
+> (Story 25). Story 26 (SOL-152421) adds the request-path spans — the HTTP boundary, the tool
+> dispatcher, the composite executor, and one span per SEMP call — and installs the W3C Trace
+> Context propagator, so a trace started by your AI agent now continues unbroken into this
+> server. Enabling the flag today therefore exports a real four-or-more-span trace per tool
+> call, not a single-span root. **Still pending:** per-*attempt* SEMP spans and the
+> `retry.decision` / `retry.exhausted` attributes (Story 27, SOL-152422) — the `semp.request`
+> span shipped today covers a whole retry chain, so a call that retried three times is one span,
+> not three; and trace exemplars linking metric buckets to these traces (Story 47, SOL-152419),
+> which depend on the SEMP histogram that is itself still [Planned]. Span names
+> beyond `tokenexchange.Exchange` and `semp.attempt`, and span kinds, remain open items for
+> pilot input (item 4) — the names shipped in Story 26 are listed under
+> [Spans](#spans) and can still change on your feedback._
 
 OpenTelemetry spans at each hop of a request, exported over OTLP, enabled with
 `OBS_TRACING_ENABLED` (never automatic; you opt in after deploying a collector).
@@ -799,20 +798,64 @@ OpenTelemetry spans at each hop of a request, exported over OTLP, enabled with
 
 ### Spans
 
-A successful end-to-end call will eventually produce spans at the HTTP boundary, the tool
-dispatcher, the composite executor, and each SEMP attempt (Story 26, not yet landed). Named
-spans today:
+A successful end-to-end tool call produces four spans in one trace, nested in this order
+(Story 26, SOL-152421):
+
+| Span | `SpanKind` | One per |
+|---|---|---|
+| `POST /mcp` | Server | inbound HTTP request to the MCP endpoint |
+| `tools.CallTool` | Internal | tool invocation dispatched to a handler |
+| `composite.Execute` | Internal | composite-tool execution (absent for a native SEMPv1 tool) |
+| `semp.request` | Client | SEMP call to the broker, **covering its whole retry chain** |
+
+The entry span's name follows the OTel HTTP server convention `{method} {route}`, and its HTTP
+attributes come from `otelhttp`'s own semantic-convention implementation. The other three follow
+the `<package>.<Function>` shape `tokenexchange.Exchange` established.
+
+**The SSE notification stream is deliberately not traced.** The MCP streamable transport opens a
+long-lived `GET /mcp` for server-to-client messages, held open for the whole session. Spanning it
+would produce a span lasting as long as the session — reported only when the session ends, lost
+entirely if the pod is killed first, and long enough to swamp any latency view computed from
+entry-span duration. So `GET` is filtered out and you will see no span for that stream. MCP
+requests travel over `POST`, which is what the entry span covers; a `DELETE` session teardown is
+short-lived and is traced.
+
+Two further named spans:
 
 - `tokenexchange.Exchange`: one per call to the OAuth token exchange (Story 50, SOL-153333) —
   a cache hit, a singleflight follower, and the singleflight winner triggering a live IdP round
-  trip each get their own span. Child of whichever span is active where
-  `OAuthAuthenticator.AddAuth` is called (a future SEMP-per-attempt span once Story 26 lands;
-  today, whatever the caller's own context carries).
-- `semp.attempt`: one per SEMP request attempt (Story 26, not yet landed).
+  trip each get their own span. Child of the `semp.request` span whose `AddAuth` triggered it.
+- `semp.attempt`: one per SEMP request *attempt* (Story 27, SOL-152422, not yet landed). This
+  is the span that will distinguish a call that succeeded first time from one that succeeded on
+  its third attempt. Until it lands, `semp.request` is the finest SEMP granularity available,
+  and a retry is invisible in the trace — check `mcp_semp_request_total` (also [Planned]) or the
+  Sender's own log lines. **`semp.request` is deliberately not named `semp.attempt`:** naming a
+  whole retry chain "attempt" would mislabel it and leave Story 27 no name to use.
 
-Other span names follow the OpenTelemetry HTTP semantic conventions where applicable. Span
-names beyond the two above, and span kinds, are open items in this review (see
-[Open Items for This Review](#open-items-for-this-review), item 4).
+Span names, and span kinds, remain open items in this review (see
+[Open Items for This Review](#open-items-for-this-review), item 4) — including the four above.
+They are what ships today, not a commitment frozen ahead of your feedback.
+
+**Every tool dispatch produces a `tools.CallTool` span, including the tools that do not run
+through the tool manager.** `list-brokers` and `describe-semp-schema` are registered directly
+against the MCP server, and an unparseable `arguments` payload is rejected before dispatch —
+all three bypass the tool manager and so emit their own audit record, metric, and span. They
+carry the same `tool` / `outcome` / `error_type` / `broker` attributes as any other dispatch,
+which is what keeps the metric-to-trace pivot total: without it `list-brokers` would appear in
+every dashboard and in no trace, and `bad_request` and `not_found` would be metric-only values
+of a vocabulary this document describes as shared by all three signals.
+
+**A hop-1 denial produces only the entry span.** When this server's own authorization refuses a
+call, it short-circuits before dispatch — authorization is composed outside the tool-dispatch
+instrumentation — so there is no `tools.CallTool` span. That is by design, not a gap: the denial
+is recorded as an `authz_denied` audit event instead (Story 23). Do not read a lone `POST /mcp`
+span with a 403 as a broken trace.
+
+**A hop-2 denial looks completely different, and that is correct.** When the *broker* refuses the
+SEMP request (Story 49, SOL-153332), dispatch has already happened, so you get the full
+hierarchy — entry, dispatcher, executor, and the `semp.request` span that carries the failure.
+The two denial cases are distinguishable in a trace by shape alone: one span versus four. That
+distinction is the point, since they have different causes and different remedies.
 
 ### Span Attributes
 
@@ -820,7 +863,12 @@ names beyond the two above, and span kinds, are open items in this review (see
 |---|---|---|
 | `correlation_id` | The shared request ID, joining the trace to logs and audit | Solace |
 | `outcome` | The result; the same three values used as a metric label and an audit field | Solace |
-| `error_type` | Why the call failed; present on `outcome: error` only, the same [`error_type`](#error_type) vocabulary (spans carry the subset raised on the request path) | Solace |
+| `error_type` | Why the call failed; present on `outcome: error` only, the same [`error_type`](#error_type) vocabulary — the whole set, including the values raised by the dispatch paths that do not run through the tool manager (`bad_request`, `not_found`) | Solace |
+| `tool` | The tool name, on `tools.CallTool` and `composite.Execute`; same value as the `tool` metric label | Solace |
+| `broker` | The broker, on `tools.CallTool`; the **same canonical label the `broker` metric label uses** — the configured alias in its configured casing, or the `none`/`unknown` sentinel when no broker was named or the named one is not configured. Deliberately not the raw value the caller sent, which would be unbounded, untrusted input and would break the metric-to-trace join on casing alone | Solace |
+| `semp.version` | `v1` or `v2`, on `semp.request` | Solace |
+| `semp.operation` | The SEMPv2 operationId (e.g. `getMsgVpnQueue`), on `semp.request` for v2 only — SEMPv1 has no operationId | Solace |
+| `composite.steps` | Declared step count, on `composite.Execute` | Solace |
 | `retry.decision` | The retry decision on a SEMP attempt | Solace |
 | `retry.exhausted` | `true` on the final attempt when retries are exhausted | Solace |
 | `cache_hit` | `tokenexchange.Exchange` only: true when served from cache, false when a live IdP round trip was needed (or waited on). **Isolating actual live round trips needs `singleflight_role="winner"` too** — a follower also reports `cache_hit=false` despite doing no IdP work itself, so filtering on `cache_hit` alone counts one winner plus every follower waiting on it | Solace |
@@ -831,6 +879,48 @@ names beyond the two above, and span kinds, are open items in this review (see
 audit record**, which is the point of a single vocabulary: filter a dashboard by
 `error_type="broker_init_error"` and you can carry that predicate into the trace backend and
 the SIEM unchanged, with no translation table.
+
+This is enforced, not merely intended: a test drives one real tool call and asserts that all
+four shared keys — `tool`, `broker`, `outcome`, `error_type` — hold identical values on the
+span and on the `mcp_tool_invocation_total` series that call produced. Nothing in the type
+system couples the two, since the span writes an attribute and the metric writes a Prometheus
+label from a different call site, so the two can drift while each surface still looks healthy
+on its own. `correlation_id` is span-only by design: it is per-request, and as a metric label
+it would be unbounded.
+
+**Which spans carry which.** Every span in the table above **except the entry span** carries
+`outcome`. `POST /mcp` is produced by `otelhttp` and carries the HTTP semantic-convention
+attributes plus `correlation_id`; there is no `outcome` on it. **A trace-backend filter of
+`outcome = "error"` therefore misses every failure that produced only an entry span** — the 403
+cross-origin rejection, the 413 body-limit rejection, and a hop-1 authorization denial (see
+below), none of which reach the tool dispatcher. Select those on
+`http.response.status_code` instead, and **not** on the span status: following the OTel server
+convention, `otelhttp` sets the status to `Error` only for 5xx, so a 403 or 413 entry span has
+status `Unset`. Only
+`tools.CallTool` carries `error_type`: the twelve-value set is scoped to tool-invocation outcomes,
+and the executor and SEMP layers have no value in it that describes an orchestration or
+transport failure — the same reasoning that exempts `tokenexchange.Exchange` below. Those spans
+report `outcome: error` and an `Error` span status, and the classification for the call as a
+whole sits on the dispatch span above them. `error_type` is absent, never empty, on a
+successful call, so a filter on it cannot match a success.
+
+**A panicked call is never reported as a success.** Go does not populate named return
+values when a panic unwinds a frame, so a span that derives its `outcome` from the returned
+error would close as `outcome: success` on the way out of a panic — pointing an investigation
+in exactly the wrong direction at exactly the worst moment. Every span on the request path
+therefore recovers in its own deferred close, records `outcome: error`, and re-panics so the
+failure still reaches the recovery layer above it (`tools.CallTool` gets there differently: its
+audit defer already infers a panic from both the result and the error being nil, and rewrites
+`error_type` to `panic`, which the span defer then reports because it runs afterwards). Pinned
+by test in each layer.
+
+**Span status carries no error text.** A failed span is marked with status code `Error` and an
+**empty description**, and no exception event is recorded. This is deliberate: a broker error can
+quote the response body, and a span travels to whatever collector
+`OTEL_EXPORTER_OTLP_ENDPOINT` names — which may sit outside this deployment's residency
+boundary. `error_type` carries everything needed to classify the failure; the full detail stays
+in the audit record, inside your own log pipeline. (`tokenexchange.Exchange` is the exception and
+does record its exception verbatim — see the warning at the end of this section.)
 
 **Exception: `tokenexchange.Exchange` never sets `error_type`, even on `outcome: error`.** The
 twelve-value `error_type` set above is scoped to tool-invocation outcomes and has no value
@@ -846,6 +936,25 @@ logs, audit, and spans and the four surfaces cannot disagree about why a call fa
 values match OTel's `error.type` semantics. If your trace backend or trace-based SLOs key off
 the dotted `error.type`, tell us in your feedback, because this is the kind of thing that is
 cheap to change now and expensive after the freeze.
+
+**Enabling `OBS_TRACING_ENABLED` exports client network identity to your collector.** The entry
+span carries `otelhttp`'s standard OTel HTTP server attributes, and two of them —
+`client.address` and `network.peer.address` — are the **caller's IP address**, alongside
+`user_agent.original`. An IP address is personal data under GDPR and comparable regimes, so this
+is a category of export worth naming rather than discovering: it now travels to wherever
+`OTEL_EXPORTER_OTLP_ENDPOINT` points, on a per-request basis, and your collector's retention
+becomes its retention. What is **not** exported: the `Authorization` header, cookies, and the URL query string (the
+span records `url.path`, never `url.query`). That is enforced by test rather than asserted in
+prose — a request carrying a bearer token, a session cookie and a secret-looking query
+parameter is driven through the middleware, and the entry span's attribute keys are checked
+against an explicit allowlist, so a future `otelhttp` bump that widens the set fails here
+rather than reaching your collector. Drop `client.address` and `network.peer.address` at your
+collector if your data-flow review would rather not hold them.
+
+**Two address attributes, only one of them attested.** `client.address` is taken from the first
+element of `X-Forwarded-For` verbatim, with no validation and no trusted-proxy handling, so any
+caller can set it to any value. `network.peer.address` is the real transport peer. Use
+`network.peer.address` for anything forensic and treat `client.address` as a hint.
 
 **Enabling `OBS_TRACING_ENABLED` exports authentication-event content to your collector.**
 Every `tokenexchange.Exchange` span carries a correlation ID, a timestamp, and the outcome of
@@ -1011,7 +1120,6 @@ Present only on `outcome: error`, drawn from a closed set of twelve values:
 | Value | Meaning |
 |---|---|
 | `panic` | An unexpected failure was caught by the recovery layer and returned as a clean error. |
-| `bad_request` | The tool arguments could not be parsed as a JSON object. |
 | `unknown_tool` | The requested tool is not registered. |
 | `missing_broker` | No broker was named on a call that requires one. |
 | `unknown_broker` | The named broker is not configured. |
@@ -1021,7 +1129,6 @@ Present only on `outcome: error`, drawn from a closed set of twelve values:
 | `not_found` | The requested item does not exist (for example, an unknown SEMP operation passed to `describe-semp-schema`). |
 | `execution_error` | The tool ran and failed. |
 | `nil_result` | The tool returned no result. |
-| `not_found` | The requested item does not exist (for example, an unknown SEMP operation passed to describe-semp-schema). |
 | `output_validation_error` | The tool's output failed schema validation. |
 | `marshal_error` | The result could not be serialized. |
 
@@ -1245,9 +1352,15 @@ the review.
    **What we still want from you:** can your access review resolve `sub` to a human at review
    time, including for a deprovisioned user? If it cannot, say so and we will add
    `principal.preferred_username` in a later minor.
-4. **Trace span names and span kinds.** Beyond `tokenexchange.Exchange` and `semp.attempt`, we
-   intend to follow OTel HTTP conventions. If your trace backend or trace-based SLOs key off
-   specific span names or `SpanKind` values, tell us what you expect.
+4. **Trace span names and span kinds.** Story 26 has now shipped four names —
+   `POST /mcp` (Server), `tools.CallTool` (Internal), `composite.Execute` (Internal), and
+   `semp.request` (Client) — listed under [Spans](#spans). They ship so you have something
+   concrete to react to, not because they are frozen: renaming a span is cheap now and expensive
+   after the freeze. If your trace backend or trace-based SLOs key off specific span names or
+   `SpanKind` values, tell us what you expect. Two specifics we would most like checked: whether
+   `semp.request` covering a whole retry chain (with per-attempt `semp.attempt` spans nested
+   inside it once Story 27 lands) matches how you would query retries, and whether you expect
+   `tools.CallTool` to be `Internal` or `Server`.
 5. **The `outcome` / `error_type` split.** We have settled on three `outcome` values with the
    cause in a separate `error_type` of twelve values, rather than folding causes into `outcome`.
    Does that split match how your SIEM queries distinguish failures, and do the twelve
