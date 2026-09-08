@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/composite"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
@@ -45,6 +46,29 @@ type ToolManager struct {
 	mu      sync.RWMutex
 	tools   map[string]*registeredTool
 	metrics *metrics.ToolMetrics // nil when metrics are disabled; all uses are nil-safe
+	// auditLog mirrors audit.Enabled(cfg.Observability) at construction. When
+	// false the manager behaves exactly as it did before SOL-152096: the
+	// destructive-operation WARN, and no audit record.
+	auditLog bool
+}
+
+// ManagerOption configures a ToolManager at construction. Variadic so the
+// existing constructor calls — including every test that builds a manager —
+// keep working unchanged.
+type ManagerOption func(*ToolManager)
+
+// WithToolMetrics wires the per-tool RED metrics recorder (SOL-152086, SOL-152091)
+// into the manager. Pass nil, or omit this option, when metrics are disabled — all
+// uses of the recorder are nil-safe.
+func WithToolMetrics(tm *metrics.ToolMetrics) ManagerOption {
+	return func(m *ToolManager) { m.metrics = tm }
+}
+
+// WithAuditLog turns audit-record emission on for destructive tool calls.
+// Pass audit.Enabled(cfg.Observability); the capability is off by default
+// (door-closing policy), and off means inert, not degraded.
+func WithAuditLog(enabled bool) ManagerOption {
+	return func(m *ToolManager) { m.auditLog = enabled }
 }
 
 // registeredTool is what Register() stores for one tool: the handler plus
@@ -73,19 +97,32 @@ type registeredTool struct {
 
 // NewToolManager creates a ToolManager that resolves broker clients from the
 // given pool. Tools are registered via Register() before use.
-func NewToolManager(pool *semp.BrokerPool) *ToolManager {
-	return &ToolManager{
+func NewToolManager(pool *semp.BrokerPool, opts ...ManagerOption) *ToolManager {
+	mgr := &ToolManager{
 		pool:  pool,
 		tools: make(map[string]*registeredTool),
 	}
+	for _, opt := range opts {
+		// A nil ManagerOption panics if called directly, unlike a nil
+		// *metrics.ToolMetrics or a false bool — so treat it as a no-op
+		// rather than letting every caller guard against it. This is what
+		// let `NewToolManagerFromComposite(pool, tools, executor, nil)`
+		// panic here at construction time when the parameter grew from one
+		// concrete pointer to variadic options: the old call sites' `nil`
+		// meant "no metrics" and now means "no option", which should do
+		// nothing, not crash.
+		if opt != nil {
+			opt(mgr)
+		}
+	}
+	return mgr
 }
 
 // NewToolManagerFromComposite creates a ToolManager and registers a
 // CompositeToolHandler for each composite tool definition. This is the
 // standard factory for YAML-driven tools.
-func NewToolManagerFromComposite(pool *semp.BrokerPool, tools []composite.CompositeTool, executor *composite.CompositeExecutor, tm *metrics.ToolMetrics) *ToolManager {
-	mgr := NewToolManager(pool)
-	mgr.metrics = tm
+func NewToolManagerFromComposite(pool *semp.BrokerPool, tools []composite.CompositeTool, executor *composite.CompositeExecutor, opts ...ManagerOption) *ToolManager {
+	mgr := NewToolManager(pool, opts...)
 	for i := range tools {
 		mgr.Register(NewCompositeToolHandler(tools[i], executor))
 	}
@@ -175,6 +212,11 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	var brokerAlias string
 	var errorType metrics.ErrorType
 	var toolErr error
+	// auditArgsHash is set only for a destructive call with the audit log on,
+	// and only once the arguments have been validated. Its presence is what
+	// tells the defer to emit the operation record, so a call that never
+	// reached the destructive gate emits none.
+	var auditArgsHash string
 
 	defer func() {
 		// Panic detection: this defer runs during unwinding, before the
@@ -192,6 +234,23 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		// canonicalized to a bounded set.
 		logToolResult(ctx, name, &brokerAlias, start, &errorType, &toolErr, id)
 		recordToolInvocation(ctx, m.metrics, name, canonicalBrokerLabel(m.pool, brokerAlias), start, errorType, toolErr)
+
+		// One operation record per destructive call, emitted here so it
+		// carries the outcome — including a recovered panic, which reaches
+		// this defer the same way the log line above does. Emitted after the
+		// operational line, and from the same place, so the two cannot name
+		// different callers or disagree about how the call ended.
+		if auditArgsHash != "" {
+			// audit.Event.ErrorType is a plain string (its own closed
+			// vocabulary, checked against errorTypeVocabulary in
+			// internal/observability/audit); metrics.ErrorType is the
+			// analogous typed vocabulary for the metrics label. Both are
+			// spelled the same way for every value this package emits, but
+			// they are two independent types, so the value crosses the
+			// package boundary as a string rather than assuming one
+			// vocabulary is a subtype of the other.
+			emitOperationAudit(ctx, name, brokerAlias, auditArgsHash, start, string(errorType), toolErr)
+		}
 	}()
 
 	// Deliberately still a protocol-level error, not a buildLocalErrorResult
@@ -254,12 +313,27 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		return buildLocalErrorResult(toolErr), nil
 	}
 
-	// Log warning for destructive tools.
+	// Destructive tools are the audit surface (SOL-152096). This is the same
+	// gate the pre-flip WARN stood at — after broker resolution and input
+	// validation — so enabling the audit log changes the FORM of the signal,
+	// not which calls produce one. Arguments are hashed here, from
+	// handlerParams — the validated map the handler is about to receive, with
+	// "broker" already stripped and any Never-Log-shaped key redacted to a
+	// fixed placeholder before hashing (hashArgsForAudit). Hashing this map
+	// rather than the raw params also means the digest cannot be salted by the
+	// caller's broker casing, since "broker" is never part of it. The record
+	// itself is emitted from the defer, once the outcome is known.
 	if rt.annotations.Destructive != nil && *rt.annotations.Destructive {
-		slog.Warn("executing destructive operation",
-			slog.String("tool", name),
-			slog.String("broker", brokerAlias),
-			slog.Any("", id))
+		if m.auditLog {
+			auditArgsHash = hashArgsForAudit(ctx, name, brokerAlias, handlerParams)
+		} else {
+			// Pre-flip behaviour, byte-identical, so the capability is inert
+			// when its flag is off.
+			slog.Warn("executing destructive operation",
+				slog.String("tool", name),
+				slog.String("broker", brokerAlias),
+				slog.Any("", id))
+		}
 	}
 
 	// Execute.
@@ -312,6 +386,92 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		Content:           []mcp.Content{&mcp.TextContent{Text: indented.String()}},
 		IsError:           toolResult.IsError,
 	}, nil
+}
+
+// hashArgsForAudit computes the arguments_hash for a destructive call, or
+// returns "" after recording a drop when the arguments cannot be canonicalized.
+// An empty return tells CallTool's defer to emit no operation record: a record
+// whose arguments_hash stands for nothing is worse than a visible gap.
+//
+// args is redacted (audit.RedactSensitive) before hashing: some composite
+// tools accept a free-form config object with no schema constraint on its
+// keys (e.g. update-message-vpn's msgVpnConfig, whose bundled SEMPv2 spec
+// exposes replication-bridge password fields), so nothing upstream of this
+// call guarantees args is free of a value on the Never-Log list. The emitted
+// attribute key is "arguments_hash", which matches none of Rule 3's
+// ReplaceAttr patterns, so that log-line safety net cannot reach a secret
+// baked into the digest — this redaction is the only control for it.
+//
+// Extracted from CallTool because the failure branch is unreachable from the
+// wire — arguments always arrive from json.Unmarshal, and a value that could
+// defeat json.Marshal is rejected by input-schema validation first — so a test
+// can only reach it here. Defensive code nothing can exercise is
+// indistinguishable from code that does not work.
+func hashArgsForAudit(ctx context.Context, tool, broker string, args map[string]any) string {
+	hash, err := audit.HashArgs(audit.RedactSensitive(args))
+	if err == nil {
+		return hash
+	}
+	// The Go type only, never the message: the wrapped encoding/json error
+	// renders the offending value, and that value is a tool argument — the one
+	// thing an audit record must never carry
+	// (docs/internal/secure-logging-rules.md).
+	slog.ErrorContext(ctx, "audit: could not hash tool arguments; recording a drop instead of an operation record",
+		slog.String("tool", tool),
+		slog.String("broker", broker),
+		slog.String("detail", fmt.Sprintf("%T", err)))
+	audit.EmitDrop(ctx, audit.DropContext{DroppedEventType: audit.EventOperation, Tool: tool, Broker: broker})
+	return ""
+}
+
+// emitOperationAudit builds and emits the single operation audit record for
+// one destructive tool call (SOL-152096).
+//
+// "Exactly one audit event per destructive tool call" bounds THIS record type,
+// not the total number of audit records the call can produce: a hop-2 broker
+// denial (SOL-153332) adds a broker_authz_denied record that coexists with
+// this one, because execution had already started when the broker refused. The
+// invariant here is one operation record per call, with no started/completed
+// pair to join.
+//
+// Identity is not passed in. audit.NewEvent reads the principal from ctx, the
+// same canonical source logToolResult's Identity was projected from
+// (SOL-152087), so the two records name one caller by construction rather than
+// by two call sites agreeing.
+func emitOperationAudit(ctx context.Context, tool, broker, argsHash string, start time.Time, errorType string, toolErr error) {
+	fields := audit.Fields{
+		Type:          audit.EventOperation,
+		Outcome:       audit.OutcomeSuccess,
+		Tool:          tool,
+		Broker:        broker,
+		ArgumentsHash: argsHash,
+		StartedAt:     start,
+		Duration:      time.Since(start),
+	}
+	if toolErr != nil {
+		fields.Outcome = audit.OutcomeError
+		fields.ErrorType = errorType
+		// A recovered panic is outcome=error with error_type=panic; there is
+		// no panic outcome. The extra flag is what lets a reviewer separate a
+		// crash from a handled failure without parsing the message.
+		fields.PanicRecovered = errorType == "panic"
+	}
+
+	event, err := audit.NewEvent(ctx, fields)
+	if err != nil {
+		// The constructor refused the record, so there is nothing valid to
+		// write: say the record is missing rather than let its absence read as
+		// "no destructive call happened". err.Error() is safe to log — it is
+		// written by the audit package and names only field names and
+		// closed-vocabulary values, never argument data.
+		slog.ErrorContext(ctx, "audit: operation record rejected by the schema constructor; recording a drop",
+			slog.String("tool", tool),
+			slog.String("broker", broker),
+			slog.String("detail", err.Error()))
+		audit.EmitDrop(ctx, audit.DropContext{DroppedEventType: audit.EventOperation, Tool: tool, Broker: broker})
+		return
+	}
+	audit.Emit(ctx, event)
 }
 
 // panicError is the sentinel toolErr recorded when an invocation ends in a
