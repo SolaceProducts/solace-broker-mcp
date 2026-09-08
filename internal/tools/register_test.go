@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics/panicstest"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -177,7 +178,7 @@ func TestRegisterListBrokers(t *testing.T) {
 	pool := newRegTestPool(t)
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
 
-	RegisterListBrokers(server, pool)
+	RegisterListBrokers(server, pool, nil)
 	// No panic = registered successfully.
 }
 
@@ -205,9 +206,9 @@ func auditLines(t *testing.T, buf *bytes.Buffer, tool string) []map[string]any {
 // TestPanicAuditedAsError covers the audit half of SOL-150685: CallTool's
 // deferred audit log runs during panic unwinding, before withRecovery's
 // recover fires. toolErr is still nil at that point, so without panic
-// detection the success branch emits "status": "success" at INFO for an
+// detection the success branch emits "outcome": "success" at INFO for an
 // invocation that panicked — misclassifying panics on the surface that feeds
-// dashboards and SLOs. The audit line must instead report status=error with
+// dashboards and SLOs. The audit line must instead report outcome=error with
 // error_type=panic, and no success line may appear.
 func TestPanicAuditedAsError(t *testing.T) {
 	var logBuf bytes.Buffer
@@ -241,16 +242,35 @@ func TestPanicAuditedAsError(t *testing.T) {
 	defer session.Close()
 
 	args := map[string]any{"broker": "dev", "msgVpnName": "default"}
-	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "panic-tool", Arguments: args}); err != nil {
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "panic-tool", Arguments: args})
+	if err != nil {
 		t.Fatalf("CallTool: %v", err)
+	}
+
+	// The result the agent actually receives. A recovered tool panic is an
+	// APPLICATION error, not a protocol error: the call returns HTTP 200 with
+	// IsError set, per the MCP spec's convention (architecture-reviewed
+	// 2026-09-04, SOL-154037). Asserting it here is what keeps that contract
+	// from drifting; the test previously discarded the result entirely.
+	assertPanicResultShape(t, res)
+
+	// event="panic_recovered" is the attribute every other recovery site in the
+	// codebase emits (recovery/middleware.go, safego, tokenexchange,
+	// tracing/selfstats). An alert keyed on it must fire for tool panics too.
+	panicLog := findLogLine(t, &logBuf, "tool handler panicked")
+	if got := panicLog["event"]; got != "panic_recovered" {
+		t.Errorf(`panic log event = %v, want "panic_recovered"`, got)
+	}
+	if got := panicLog["tool"]; got != "panic-tool" {
+		t.Errorf("panic log tool = %v, want %q", got, "panic-tool")
 	}
 
 	audits := auditLines(t, &logBuf, "panic-tool")
 	if len(audits) != 1 {
 		t.Fatalf("expected exactly 1 audit line for panic-tool, got %d: %s", len(audits), logBuf.String())
 	}
-	if got := audits[0]["status"]; got != "error" {
-		t.Errorf("audit status = %v, want %q (a panic must never audit as success)", got, "error")
+	if got := audits[0]["outcome"]; got != "error" {
+		t.Errorf("audit outcome = %v, want %q (a panic must never audit as success)", got, "error")
 	}
 	if got := audits[0]["error_type"]; got != "panic" {
 		t.Errorf("audit error_type = %v, want %q", got, "panic")
@@ -261,6 +281,120 @@ func TestPanicAuditedAsError(t *testing.T) {
 	// The raw panic value is unaudited text and must not reach the audit line.
 	if containsStr(logBuf.String(), "simulated handler bug") {
 		t.Errorf("raw panic value leaked into logs: %s", logBuf.String())
+	}
+}
+
+// assertPanicResultShape pins what an agent receives when a tool handler panics:
+// a sanitized application error, never the panic's own text. This ticket is
+// telemetry-only (SOL-154037), so these assertions exist to prove the response
+// did NOT change while the counter and the event tag were added.
+func assertPanicResultShape(t *testing.T, res *mcp.CallToolResult) {
+	t.Helper()
+	if res == nil {
+		t.Fatal("CallTool result = nil, want a CallToolResult with IsError set")
+	}
+	if !res.IsError {
+		t.Errorf("result.IsError = false, want true (a recovered panic is an application error)")
+	}
+	if len(res.Content) != 1 {
+		t.Fatalf("result.Content = %#v, want exactly one text block", res.Content)
+	}
+	text, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("result.Content[0] = %#v, want *mcp.TextContent", res.Content[0])
+	}
+	if text.Text != serverInternalErrorMessage {
+		t.Errorf("result content text = %q, want the generic server-internal message %q", text.Text, serverInternalErrorMessage)
+	}
+	structured, ok := res.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("result.StructuredContent = %#v, want a map", res.StructuredContent)
+	}
+	if got := structured["retryable"]; got != false {
+		t.Errorf(`result.StructuredContent["retryable"] = %v, want false (a handler bug does not fix itself on retry)`, got)
+	}
+	if got := structured["error"]; got != serverInternalErrorMessage {
+		t.Errorf(`result.StructuredContent["error"] = %v, want the generic server-internal message`, got)
+	}
+}
+
+// findLogLine returns the single JSON log record in buf whose msg equals want.
+func findLogLine(t *testing.T, buf *bytes.Buffer, want string) map[string]any {
+	t.Helper()
+	var found []map[string]any
+	for _, raw := range strings.Split(buf.String(), "\n") {
+		if raw == "" {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+			t.Fatalf("non-JSON log line %q: %v", raw, err)
+		}
+		if entry["msg"] == want {
+			found = append(found, entry)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("expected exactly 1 %q log line, got %d: %s", want, len(found), buf.String())
+	}
+	return found[0]
+}
+
+// TestPanicIncrementsPanicCounter is the metrics half of SOL-154037 on the tool
+// boundary: a panicking handler must increment
+// mcp_panic_recovered_total{boundary="tool"} on the same counter the HTTP
+// boundary uses, so one alert covers both recovery nets. A tool that returns
+// normally must leave the series untouched, which is what makes a flat-zero
+// graph mean "nothing panicked" rather than "nothing ran".
+func TestPanicIncrementsPanicCounter(t *testing.T) {
+	// Not parallel: the panic counter is process-level state (see the package
+	// doc on internal/observability/panics and panicstest.InstallReader).
+	reader := panicstest.InstallReader(t)
+
+	pool := newRegTestPool(t)
+	mgr := NewToolManager(pool)
+
+	panicking := newStubHandler("panic-tool")
+	panicking.handleFn = func(_ context.Context, _ *ToolContext, _ map[string]any) (*ToolResult, error) {
+		panic("simulated handler bug")
+	}
+	mgr.Register(panicking)
+	mgr.Register(newStubHandler("ok-tool"))
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+	RegisterWithServer(mgr, server, pool, true, nil, "")
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go func() {
+		_ = server.Run(ctx, serverTransport)
+	}()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1.0"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer session.Close()
+
+	args := map[string]any{"broker": "dev", "msgVpnName": "default"}
+	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "ok-tool", Arguments: args}); err != nil {
+		t.Fatalf("CallTool(ok-tool): %v", err)
+	}
+	if got := panicstest.Counts(t, reader); len(got) != 2 || got["tool"] != 0 {
+		t.Fatalf(`boundary="tool" = %d after a successful call, want 0 with both boundaries present (counts = %v)`, got["tool"], got)
+	}
+
+	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "panic-tool", Arguments: args}); err != nil {
+		t.Fatalf("CallTool(panic-tool): %v", err)
+	}
+
+	got := panicstest.Counts(t, reader)
+	if got["tool"] != 1 {
+		t.Errorf(`mcp_panic_recovered_total{boundary="tool"} = %d, want 1 (counts = %v)`, got["tool"], got)
+	}
+	if got["http"] != 0 {
+		t.Errorf(`a tool-boundary panic incremented boundary="http" (%d); the two boundaries must stay distinct`, got["http"])
 	}
 }
 
@@ -276,7 +410,7 @@ func TestListBrokersEmitsAuditLog(t *testing.T) {
 
 	pool := newRegTestPool(t)
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	RegisterListBrokers(server, pool)
+	RegisterListBrokers(server, pool, nil)
 
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -303,13 +437,13 @@ func TestListBrokersEmitsAuditLog(t *testing.T) {
 	if len(audits) != 1 {
 		t.Fatalf("expected exactly 1 audit line for list-brokers, got %d: %s", len(audits), logBuf.String())
 	}
-	if got := audits[0]["status"]; got != "success" {
-		t.Errorf("audit status = %v, want %q", got, "success")
+	if got := audits[0]["outcome"]; got != "success" {
+		t.Errorf("audit outcome = %v, want %q", got, "success")
 	}
-	// list-brokers resolves no broker; the audit line must omit the field
-	// rather than carry an empty value.
-	if _, present := audits[0]["broker"]; present {
-		t.Errorf("audit line carries broker field for brokerless tool: %v", audits[0])
+	// list-brokers resolves no broker; the audit line carries the "none"
+	// sentinel, matching the metric label rather than omitting the field.
+	if got := audits[0]["broker"]; got != "none" {
+		t.Errorf("audit broker = %v, want %q", got, "none")
 	}
 }
 
@@ -402,8 +536,8 @@ func TestCallToolHandler_OmittedArguments_AuditedAndValidated(t *testing.T) {
 	if len(audits) != 1 {
 		t.Fatalf("expected exactly 1 audit line for test-tool, got %d: %s", len(audits), logBuf.String())
 	}
-	if got := audits[0]["status"]; got != "error" {
-		t.Errorf("audit status = %v, want %q", got, "error")
+	if got := audits[0]["outcome"]; got != "error" {
+		t.Errorf("audit outcome = %v, want %q", got, "error")
 	}
 	if got := audits[0]["error_type"]; got != "missing_broker" {
 		t.Errorf("audit error_type = %v, want %q (omitted arguments must reach normal validation, not a bespoke parse-error type)", got, "missing_broker")
@@ -493,8 +627,8 @@ func TestCallToolHandler_MalformedArguments_AuditedAsError(t *testing.T) {
 	if len(audits) != 1 {
 		t.Fatalf("expected exactly 1 audit line for test-tool, got %d: %s", len(audits), logBuf.String())
 	}
-	if got := audits[0]["status"]; got != "error" {
-		t.Errorf("audit status = %v, want %q", got, "error")
+	if got := audits[0]["outcome"]; got != "error" {
+		t.Errorf("audit outcome = %v, want %q", got, "error")
 	}
 	if got := audits[0]["error_type"]; got != "bad_request" {
 		t.Errorf("audit error_type = %v, want %q", got, "bad_request")
@@ -534,7 +668,7 @@ func TestListBrokers_ResponseContainsOnlyAliases(t *testing.T) {
 	defer pool.Close()
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
-	RegisterListBrokers(server, pool)
+	RegisterListBrokers(server, pool, nil)
 
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -941,7 +1075,7 @@ func TestRegisterListBrokers_NeverComposesWithAuthorization(t *testing.T) {
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
 	RegisterWithServer(mgr, server, pool, true, policy, "groups")
-	RegisterListBrokers(server, pool)
+	RegisterListBrokers(server, pool, nil)
 
 	ctx := context.Background()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()

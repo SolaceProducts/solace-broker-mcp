@@ -172,10 +172,11 @@ func (p Params) LogValue() slog.Value {
 	)
 }
 
-// ExchangeInput are the per-call inputs to Exchange. Subject token comes
-// from ctx via Hop 1's InjectRawSubjectToken middleware (see
-// internal/auth.RawSubjectTokenFromContext) and is extracted by the
-// per-broker Authenticator (T6) before the call to Exchange.
+// ExchangeInput are the per-call inputs to Exchange. The subject token comes
+// from handler ctx via internal/auth.RawSubjectTokenFromContext; receiving
+// middleware (RequestExtraMiddleware) copies Extra.Header Bearer onto that ctx
+// on each JSON-RPC POST. It is extracted by the per-broker Authenticator (T6)
+// before the call to Exchange.
 type ExchangeInput struct {
 	// SubjectToken is the inbound JWT to exchange. Hashed into the
 	// singleflight key but never logged or otherwise echoed.

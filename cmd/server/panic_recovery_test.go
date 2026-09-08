@@ -109,7 +109,7 @@ func TestChainOrder_CorrelationInsideRecovery(t *testing.T) {
 	// Assemble /mcp through the SAME function main() uses, so a production
 	// reorder of the route-local chain breaks this test.
 	mux := buildMux(health.NewReadinessState())
-	mux.Handle("/mcp", buildMCPEndpoint(authedHandler, cfg.CorrelationIDEnabled))
+	mux.Handle("/mcp", buildMCPEndpoint(authedHandler, cfg.CorrelationIDEnabled, nil))
 	mux.HandleFunc("/panic", func(http.ResponseWriter, *http.Request) {
 		panic("boom")
 	})

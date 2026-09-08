@@ -28,7 +28,7 @@ These must never appear in log output, in any environment:
 |---|---|
 | Server startup | port, broker_count, broker alias list (`[]string`), auth_mode, log_level |
 | Server shutdown | reason (signal, error) |
-| Tool invocation | tool name, broker alias, status, duration_ms |
+| Tool invocation | tool name, broker alias, outcome, duration_ms |
 | Tool error | tool name, broker alias, error_type, http_status |
 | Broker connection created | broker alias, URL |
 | Config loaded | broker_count, port |

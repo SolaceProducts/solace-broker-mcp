@@ -12,10 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package tracing is the home for distributed tracing. Skeleton
-// (SOL-151278): only the capability gate exists today; the OpenTelemetry
-// tracer setup and span instrumentation land in a later story. The v1 default
-// is OFF (door-closing policy) — operators opt in.
+// Package tracing wires OpenTelemetry distributed tracing: a tracer provider
+// with OTLP export, self-observation counters, and (when metrics are off) a
+// periodic INFO fallback (SOL-152420, Story 25). Span instrumentation at the
+// MCP entry, executor, and SEMP layers lands in later stories (26, 27, 40, 47,
+// 50), which create spans via the global tracer this package installs. The v1
+// default is OFF (door-closing policy) — operators opt in.
+//
+// Resource attributes: New's caller (cmd/server/main.go) builds one shared
+// identity resource.Resource via internal/observability/resource and passes
+// it to both this provider and the metrics meter provider (Story 14,
+// SOL-152091) — one construction site, so metrics and traces cannot disagree
+// about which instance emitted them (SOL-152425, Story 34).
 package tracing
 
 import "github.com/SolaceProducts/solace-broker-mcp/internal/config"

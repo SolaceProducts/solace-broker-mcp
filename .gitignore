@@ -74,6 +74,12 @@ watch-my-prs-notes.md
 watch-for-prs-notes.md
 .claude/review-balance-history.tsv
 
+# Session scratch from /andrea-sweep: phase-by-phase run notes (Jira
+# project/custom-field config, worktree layout, per-finding scan decisions).
+# Local working notes, not repo content — landed in a PR once by accident
+# (SOL-154037 review) via a stray `git add -A` during conflict resolution.
+sweep-notes.md
+
 # Generated reports and captured transcripts. Never repo content.
 pr-activity-report.pdf
 product-chat.md

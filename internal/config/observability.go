@@ -70,6 +70,23 @@ type ObservabilityConfig struct {
 	// its endpoint set so no new traffic is routed to a draining pod (SOL-151288).
 	// Defaulted to DefaultShutdownDrainDelayS; a non-positive value re-defaults.
 	ShutdownDrainDelayS int `yaml:"shutdown_drain_delay_s"`
+
+	// Identity fields (SOL-152425, Story 34): wired into the single OTel
+	// resource.Resource shared by the meter provider (Story 14) and the
+	// tracer provider (Story 25), and into the default slog attributes. See
+	// internal/observability/resource. ServiceName defaults to
+	// "solace-broker-mcp" when empty. ServiceInstanceID falls back to the
+	// Kubernetes-downward-API pod name, then the process hostname, when
+	// empty — an explicit override for the (uncommon) case where neither
+	// identifies the instance usefully (e.g. bare-metal instances that share
+	// a hostname). DeploymentEnvironment and CloudRegion are omitted from the
+	// resource (and from logs) when empty — there is no meaningful default
+	// for either, and an empty value is not the same question as "not
+	// configured".
+	ServiceName           string `yaml:"service_name"`
+	ServiceInstanceID     string `yaml:"service_instance_id"`
+	DeploymentEnvironment string `yaml:"deployment_environment"`
+	CloudRegion           string `yaml:"cloud_region"`
 }
 
 // Observability env var names. Capability on/off switches; the v1 defaults
@@ -137,4 +154,9 @@ func applyObservabilityDefaults(cfg *ServerConfig) {
 	if o.MetricsBindAddress == "" {
 		o.MetricsBindAddress = defaults.DefaultMetricsBindAddress
 	}
+	if o.ServiceName == "" {
+		o.ServiceName = defaults.DefaultServiceName
+	}
+	// DeploymentEnvironment and CloudRegion are deliberately NOT defaulted:
+	// empty means "omit this attribute", not "use a placeholder value".
 }

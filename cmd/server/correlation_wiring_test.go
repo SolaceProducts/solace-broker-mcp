@@ -51,7 +51,7 @@ func (c *correlationRecorder) ServeHTTP(_ http.ResponseWriter, r *http.Request) 
 func TestBuildMCPEndpoint_CorrelationWiringOrder(t *testing.T) {
 	t.Run("enabled: inner handler sees a non-empty correlation ID", func(t *testing.T) {
 		rec := &correlationRecorder{}
-		endpoint := buildMCPEndpoint(rec, true)
+		endpoint := buildMCPEndpoint(rec, true, nil)
 
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 		endpoint.ServeHTTP(httptest.NewRecorder(), req)
@@ -69,7 +69,7 @@ func TestBuildMCPEndpoint_CorrelationWiringOrder(t *testing.T) {
 
 	t.Run("disabled: inner handler sees an empty correlation ID", func(t *testing.T) {
 		rec := &correlationRecorder{}
-		endpoint := buildMCPEndpoint(rec, false)
+		endpoint := buildMCPEndpoint(rec, false, nil)
 
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 		endpoint.ServeHTTP(httptest.NewRecorder(), req)
@@ -100,7 +100,7 @@ func TestBuildMCPEndpoint_CorrelationWiringOrder(t *testing.T) {
 	// relative to correlation.
 	t.Run("oversized request is rejected with 413 and never reaches the inner handler", func(t *testing.T) {
 		rec := &correlationRecorder{}
-		endpoint := buildMCPEndpoint(rec, true)
+		endpoint := buildMCPEndpoint(rec, true, nil)
 
 		// limitRequestBody rejects on declared ContentLength alone, so a real
 		// oversized body is unnecessary; declaring one past the cap is enough.

@@ -335,7 +335,7 @@ func TestClassifyBrokerError_BrokerInitError_SuppressesUnvouchedText(t *testing.
 		t.Fatalf("errorType = %q, want %q", errorType, "broker_init_error")
 	}
 
-	result := m.buildBrokerResolutionErrorResult(errorType, toolErr, "prod")
+	result := m.buildBrokerResolutionErrorResult(string(errorType), toolErr, "prod")
 	text := callToolResultText(t, result, nil)
 
 	if strings.Contains(text, "10.1.2.3") || strings.Contains(text, "connection refused") {
@@ -666,6 +666,13 @@ func TestCallTool_DesiredStateOutcome_AlreadyExists(t *testing.T) {
 	mgr := NewToolManager(newTestPool(t))
 
 	handler := newStubHandler("create-queue-subscription")
+	// The default stub schema (additionalProperties: {"type":"object"}) only
+	// admits object-valued properties — it would reject the noop's own
+	// string/bool fields. This test is about CallTool's classification and
+	// logging, not schema shape (that's covered by
+	// TestCompositeToolHandler_OutputSchema_RealCatalogAdmitsDesiredStateNoop),
+	// so use a fully permissive schema here.
+	handler.outputSch = map[string]any{"type": "object"}
 	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
 		return nil, &sempv2.SEMPError{
 			Operation:   "createMsgVpnQueueSubscription",
@@ -692,11 +699,14 @@ func TestCallTool_DesiredStateOutcome_AlreadyExists(t *testing.T) {
 	if !ok {
 		t.Fatalf("StructuredContent type = %T, want map[string]any", result.StructuredContent)
 	}
-	if sc["outcome"] != "exists_unchanged" {
-		t.Errorf("outcome = %v, want exists_unchanged", sc["outcome"])
+	if sc["outcome"] != "already_exists" {
+		t.Errorf("outcome = %v, want already_exists", sc["outcome"])
 	}
 	if sc["changed"] != false {
 		t.Errorf("changed = %v, want false", sc["changed"])
+	}
+	if v, ok := sc["attributes_verified"]; !ok || v != false {
+		t.Errorf("attributes_verified = %v (present=%v), want false present=true", v, ok)
 	}
 
 	var foundInfo, foundError bool
@@ -705,10 +715,10 @@ func TestCallTool_DesiredStateOutcome_AlreadyExists(t *testing.T) {
 		if json.Unmarshal([]byte(line), &fields) != nil || fields["msg"] != "tool invoked" {
 			continue
 		}
-		if fields["status"] == "error" {
+		if fields["outcome"] == "error" {
 			foundError = true
 		}
-		if fields["status"] == "success" && fields["desired_state"] == "exists_unchanged" {
+		if fields["outcome"] == "success" && fields["desired_state"] == "already_exists" {
 			if fields["level"] != "INFO" {
 				t.Errorf("level = %v, want INFO — a desired-state noop must not log at ERROR", fields["level"])
 			}
@@ -716,10 +726,10 @@ func TestCallTool_DesiredStateOutcome_AlreadyExists(t *testing.T) {
 		}
 	}
 	if foundError {
-		t.Errorf("found a status=error \"tool invoked\" line; want none — log:\n%s", buf.String())
+		t.Errorf("found an outcome=error \"tool invoked\" line; want none — log:\n%s", buf.String())
 	}
 	if !foundInfo {
-		t.Errorf("did not find a status=success desired_state=exists_unchanged \"tool invoked\" line; log:\n%s", buf.String())
+		t.Errorf("did not find an outcome=success desired_state=already_exists \"tool invoked\" line; log:\n%s", buf.String())
 	}
 }
 
@@ -739,6 +749,10 @@ func TestCallTool_DesiredStateOutcome_AlreadyAbsent(t *testing.T) {
 	mgr := NewToolManager(newTestPool(t))
 
 	handler := newStubHandler("delete-queue")
+	// See the same note in TestCallTool_DesiredStateOutcome_AlreadyExists —
+	// this test isn't about schema shape, so use a permissive schema rather
+	// than the default, which would reject the noop's string/bool fields.
+	handler.outputSch = map[string]any{"type": "object"}
 	handler.handleFn = func(ctx context.Context, tc *ToolContext, params map[string]any) (*ToolResult, error) {
 		return nil, &sempv2.SEMPError{
 			Operation:   "deleteMsgVpnQueue",
@@ -771,6 +785,9 @@ func TestCallTool_DesiredStateOutcome_AlreadyAbsent(t *testing.T) {
 	if sc["changed"] != false {
 		t.Errorf("changed = %v, want false", sc["changed"])
 	}
+	if _, ok := sc["attributes_verified"]; ok {
+		t.Errorf("attributes_verified present = %v, want absent for an already_absent outcome", sc["attributes_verified"])
+	}
 
 	var foundInfo, foundError bool
 	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
@@ -778,10 +795,10 @@ func TestCallTool_DesiredStateOutcome_AlreadyAbsent(t *testing.T) {
 		if json.Unmarshal([]byte(line), &fields) != nil || fields["msg"] != "tool invoked" {
 			continue
 		}
-		if fields["status"] == "error" {
+		if fields["outcome"] == "error" {
 			foundError = true
 		}
-		if fields["status"] == "success" && fields["desired_state"] == "already_absent" {
+		if fields["outcome"] == "success" && fields["desired_state"] == "already_absent" {
 			if fields["level"] != "INFO" {
 				t.Errorf("level = %v, want INFO — a desired-state noop must not log at ERROR", fields["level"])
 			}
@@ -789,10 +806,10 @@ func TestCallTool_DesiredStateOutcome_AlreadyAbsent(t *testing.T) {
 		}
 	}
 	if foundError {
-		t.Errorf("found a status=error \"tool invoked\" line; want none — log:\n%s", buf.String())
+		t.Errorf("found an outcome=error \"tool invoked\" line; want none — log:\n%s", buf.String())
 	}
 	if !foundInfo {
-		t.Errorf("did not find a status=success desired_state=already_absent \"tool invoked\" line; log:\n%s", buf.String())
+		t.Errorf("did not find an outcome=success desired_state=already_absent \"tool invoked\" line; log:\n%s", buf.String())
 	}
 }
 
@@ -890,7 +907,7 @@ func TestCallTool_SanitizesResponseButPreservesLogDetail(t *testing.T) {
 		if json.Unmarshal([]byte(line), &fields) != nil {
 			continue
 		}
-		if fields["msg"] != "tool invoked" || fields["status"] != "error" {
+		if fields["msg"] != "tool invoked" || fields["outcome"] != "error" {
 			continue
 		}
 		found = true
@@ -957,7 +974,7 @@ func TestCallTool_SEMPv2BodyFallbackNotLoggedRaw(t *testing.T) {
 		if json.Unmarshal([]byte(line), &fields) != nil {
 			continue
 		}
-		if fields["msg"] != "tool invoked" || fields["status"] != "error" {
+		if fields["msg"] != "tool invoked" || fields["outcome"] != "error" {
 			continue
 		}
 		found = true
@@ -1455,8 +1472,8 @@ func TestCallTool_logsIdentityFields_success(t *testing.T) {
 		}
 	})
 
-	if logged["status"] != "success" {
-		t.Errorf("status = %v, want success", logged["status"])
+	if logged["outcome"] != "success" {
+		t.Errorf("outcome = %v, want success", logged["outcome"])
 	}
 	assertIdentityFields(t, logged, map[string]string{
 		"sub":       "auth0|abc123",
@@ -1476,8 +1493,8 @@ func TestCallTool_logsIdentityFields_error(t *testing.T) {
 			map[string]any{"msgVpnName": "default"}, idFixture())
 	})
 
-	if logged["status"] != "error" {
-		t.Errorf("status = %v, want error", logged["status"])
+	if logged["outcome"] != "error" {
+		t.Errorf("outcome = %v, want error", logged["outcome"])
 	}
 	assertIdentityFields(t, logged, map[string]string{
 		"sub":       "auth0|abc123",
@@ -1543,8 +1560,8 @@ func TestCallTool_disabledMode_emitsNoIdentityFields(t *testing.T) {
 		}
 	}
 	// Sanity: existing fields are still emitted.
-	if logged["status"] != "success" {
-		t.Errorf("status = %v, want success", logged["status"])
+	if logged["outcome"] != "success" {
+		t.Errorf("outcome = %v, want success", logged["outcome"])
 	}
 	if logged["tool"] != "test-tool" {
 		t.Errorf("tool = %v, want test-tool", logged["tool"])

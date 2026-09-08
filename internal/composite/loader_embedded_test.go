@@ -54,19 +54,23 @@ func findStep(tool *CompositeTool, id string) *Step {
 // delete-queue-messages) also declares one, but resolves to a genuinely
 // empty schema ({"properties": {}} in the spec) — a real, permanent
 // difference from create/update's full-resource body, not a resolution
-// failure. Keep this list in sync with writeToolIdentifierFields in
-// internal/tools/composite_handler.go (can't import it directly: tools
-// already imports composite, so the reverse would cycle) — update
-// deliberately, same convention as wantToolCount above.
+// failure. This is a distinct map from writeToolIdentifierFields in
+// internal/tools/composite_handler.go — same underlying set of tools, kept
+// as two lists because tools already imports composite, so the reverse
+// import would cycle. writeToolIdentifierFields' own completeness is now
+// enforced by internal/tools' TestWriteToolIdentifierFields_CoversEveryEligibleWriteTool;
+// this list has no equivalent check and still needs a deliberate update
+// alongside it, same convention as wantToolCount above.
 var createOrUpdateWriteTools = map[string]bool{
-	"create-message-vpn":    true,
-	"update-message-vpn":    true,
-	"create-queue":          true,
-	"update-queue":          true,
-	"create-topic-endpoint": true,
-	"update-topic-endpoint": true,
-	"create-rdp":            true,
-	"update-rdp":            true,
+	"create-message-vpn":        true,
+	"update-message-vpn":        true,
+	"create-queue":              true,
+	"update-queue":              true,
+	"create-queue-subscription": true,
+	"create-topic-endpoint":     true,
+	"update-topic-endpoint":     true,
+	"create-rdp":                true,
+	"update-rdp":                true,
 }
 
 func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
@@ -77,7 +81,7 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 
 	t.Run("count", func(t *testing.T) {
 		// Exact count guards against silent drops and accidental additions — update deliberately.
-		const wantToolCount = 34
+		const wantToolCount = 37
 		if len(tools) != wantToolCount {
 			t.Errorf("tool count: got %d, want %d", len(tools), wantToolCount)
 		}
@@ -243,6 +247,29 @@ func TestLoadTools_EmbeddedDefinitions(t *testing.T) {
 		}
 		if step.ForEachKey != "msgVpnName" {
 			t.Errorf("forEachKey: got %q, want %q", step.ForEachKey, "msgVpnName")
+		}
+	})
+
+	// Spot-check the create/delete asymmetry for queue subscriptions against
+	// the shipped catalog (SOL-153868 PR #374, bczoma): subscriptionTopic is
+	// deliberately omitted from create-queue-subscription's step args so
+	// constructRequestBody spreads it into the POST body instead, but IS a
+	// step arg on delete-queue-subscription, where it's a path segment.
+	// loader_queue_subscription_test.go pins this against a hand-copied YAML
+	// fixture, which stays green even if a future tools.yaml edit reintroduces
+	// the arg — this checks the real embedded definition instead.
+	t.Run("spot/create-queue-subscription", func(t *testing.T) {
+		tool := findTool(tools, "create-queue-subscription")
+		if tool == nil {
+			t.Fatal("tool not found")
+			return
+		}
+		if len(tool.Steps) == 0 {
+			t.Fatal("no steps")
+			return
+		}
+		if _, ok := tool.Steps[0].Args["subscriptionTopic"]; ok {
+			t.Error("subscriptionTopic must not be a step arg on create — it belongs in the request body")
 		}
 	})
 }

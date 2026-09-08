@@ -146,10 +146,11 @@ func extraString(ctx context.Context, info *sdkauth.TokenInfo, key string) strin
 		// ErrorContext, not Error: the correlation slog handler reads the ID
 		// off the record's context, so this record carries one at all rather
 		// than none. It is the same ID the audit line showing <verifier-bug>
-		// carries, which is what makes them joinable — but note that ID is
-		// session-scoped, not per-request, in stateful streamable HTTP (see
-		// the caveat in tools/register.go), so it narrows the search to a
-		// session rather than to the one request.
+		// carries, which is what makes them joinable, and since SOL-153935 it
+		// is this request's ID rather than the session's first — provided
+		// RequestExtraMiddleware is registered outermost, which
+		// installRequestMiddleware in cmd/server is the single place to
+		// express.
 		slog.ErrorContext(ctx, "internal: TokenInfo.Extra has unexpected type — verifier contract violation",
 			slog.String("key", key),
 			slog.String("got_type", fmt.Sprintf("%T", v)))

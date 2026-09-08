@@ -490,6 +490,7 @@ type SEMPConfig struct {
 	RequestTimeoutDuration time.Duration  `yaml:"request_timeout_duration"`  // HTTP request timeout for SEMP calls (e.g., "30s")
 	RequestMinInterval     *time.Duration `yaml:"request_min_interval"`      // minimum spacing between SEMP requests; 0 = no throttle
 	MaxQueueWait           *time.Duration `yaml:"max_queue_wait"`            // max wait for admission (rate-limiter tick + in-flight slot); 0 = unbounded
+	FairScheduling         *bool          `yaml:"fair_scheduling"`           // share the broker's pace fairly across callers; default true. Kill switch, not a capacity knob
 	Retries                *int           `yaml:"retries"`                   // max retry attempts for a failed SEMP call; 0 = no retries
 	RetryMinInterval       time.Duration  `yaml:"retry_min_interval"`        // starting backoff before the first retry (must be > 0)
 	RetryMaxInterval       time.Duration  `yaml:"retry_max_interval"`        // cap on retry backoff, must be >= RetryMinInterval
@@ -714,6 +715,15 @@ func applyDefaults(cfg *ServerConfig) {
 	if cfg.SEMP.MaxQueueWait == nil {
 		def := defaults.DefaultMaxQueueWait
 		cfg.SEMP.MaxQueueWait = &def
+	}
+	// FairScheduling is a pointer for a different reason from the three
+	// durations above: its default is TRUE, and a plain bool cannot tell
+	// "operator omitted the field" from "operator wrote false", so an omitted
+	// field would silently disable the feature. Defaulted here, so downstream
+	// code dereferences without a nil check.
+	if cfg.SEMP.FairScheduling == nil {
+		def := defaults.DefaultFairScheduling
+		cfg.SEMP.FairScheduling = &def
 	}
 	if cfg.SEMP.Retries == nil {
 		def := defaults.DefaultRetries

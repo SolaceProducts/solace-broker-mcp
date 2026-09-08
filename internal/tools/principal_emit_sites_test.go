@@ -162,7 +162,7 @@ func TestEmitSite_toolInvoked_badArguments_carriesPrincipal(t *testing.T) {
 // emits its own audit line because it bypasses ToolManager.CallTool.
 func TestEmitSite_listBrokers_carriesPrincipal(t *testing.T) {
 	session, buf := sessionWithPrincipal(t, func(s *mcp.Server, _ *ToolManager) {
-		RegisterListBrokers(s, newRegTestPool(t))
+		RegisterListBrokers(s, newRegTestPool(t), nil)
 	})
 
 	if _, err := session.CallTool(context.Background(),
@@ -181,7 +181,7 @@ func TestEmitSite_listBrokers_carriesPrincipal(t *testing.T) {
 // that emits its own audit line.
 func TestEmitSite_describeSempSchema_carriesPrincipal(t *testing.T) {
 	session, buf := sessionWithPrincipal(t, func(s *mcp.Server, _ *ToolManager) {
-		if err := RegisterDescribeSempSchema(s, specs.FS); err != nil {
+		if err := RegisterDescribeSempSchema(s, specs.FS, nil); err != nil {
 			t.Fatalf("RegisterDescribeSempSchema: %v", err)
 		}
 	})

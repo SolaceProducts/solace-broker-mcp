@@ -28,7 +28,10 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -47,10 +50,17 @@ const metaKeyCorrelationID = "correlation_id"
 
 // withRecovery wraps an SDK tool handler so a panic anywhere below the SDK
 // boundary becomes a sanitized error result instead of killing the process.
-// The SDK (go-sdk v1.5.0) invokes tool handlers on a goroutine of its own
+// The SDK (go-sdk v1.7.0) invokes tool handlers on a goroutine of its own
 // with no recover() — net/http's per-connection recovery cannot catch a
 // panic on another goroutine — so without this wrapper a single panicking
 // handler takes down the whole server (SOL-150685).
+//
+// A recovered panic logs at ERROR with event="panic_recovered" and increments
+// mcp_panic_recovered_total{boundary="tool"} (SOL-154037), the counter shared
+// with recovery.HTTPMiddleware, so one alert covers both recovery nets. The
+// result the agent gets back is unchanged by that telemetry: an application
+// error (IsError, generic message, retryable=false) over a successful call, per
+// the MCP spec's convention — deliberately not a protocol-level error.
 //
 // This wrapper is the single chokepoint through which EVERY tool result flows
 // back to the SDK — success, tool error, and panic-recovered alike — so it is
@@ -59,13 +69,14 @@ const metaKeyCorrelationID = "correlation_id"
 // result kinds carry it; when the capability is off correlation.From(ctx)
 // returns "" and no Meta key is added.
 //
-// Which ID that is, corrected: a tool handler's context descends from the POST
-// that established the session, not the one carrying this call, so
-// correlation.From(ctx) yields the session's first ID for the session's life,
-// while the X-Correlation-ID response header is per request. This comment
-// claimed the opposite and was measured wrong under SOL-152087. Not addressed
-// here. Only the SDK's per-message RequestExtra tracks the current request,
-// which is where the caller Principal is built (auth.PrincipalMiddleware).
+// Which ID that is: a tool handler's context descends from the POST that
+// established the session, not the one carrying this call, so it does not
+// inherit the HTTP context correlation.Middleware seeded — that was measured
+// under SOL-152087. Only the SDK's per-message RequestExtra tracks the current
+// request, so SOL-153935 copies Extra.Header onto each handler ctx
+// (auth.RequestExtraMiddleware), shadowing the frozen value. HTTP
+// correlation.Middleware still creates and echoes the ID; correlation.From(ctx)
+// here now yields this POST's.
 func withRecovery(toolName string, h mcp.ToolHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
 		defer func() {
@@ -77,9 +88,11 @@ func withRecovery(toolName string, h mcp.ToolHandler) mcp.ToolHandler {
 				// value, and the agent sees only the generic message below,
 				// matching the unknown-error branch of buildErrorMessage.
 				slog.Error("tool handler panicked",
+					slog.String("event", "panic_recovered"),
 					slog.String("tool", toolName),
 					slog.String("panic_type", fmt.Sprintf("%T", r)),
 					slog.String("stack", string(debug.Stack())))
+
 				result = &mcp.CallToolResult{
 					StructuredContent: map[string]any{
 						"error":     serverInternalErrorMessage,
@@ -89,6 +102,19 @@ func withRecovery(toolName string, h mcp.ToolHandler) mcp.ToolHandler {
 					IsError: true,
 				}
 				err = nil
+
+				// mcp_panic_recovered_total{boundary="tool"} (SOL-154037):
+				// the same counter recovery.HTTPMiddleware increments, so one
+				// alert covers both recovery nets. A no-op when metrics are
+				// disabled; recovery itself stays unconditional.
+				//
+				// Deliberately after the result is built. recover() has already
+				// consumed the original panic, and the SDK runs this handler on
+				// a goroutine with no recover() of its own, so a second panic
+				// raised here would kill the process — the exact failure
+				// withRecovery exists to prevent. Building the caller's result
+				// first means a telemetry fault could only cost a metric.
+				panics.RecoveredTool(ctx)
 			}
 			// Stamp the correlation ID onto the result on the way out. This
 			// runs after both the normal return AND the panic-recovery branch
@@ -176,6 +202,22 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 			// Absent in disabled mode and under test scaffolding.
 			id := NewIdentityFromPrincipal(auth.PrincipalFrom(ctx))
 
+			// Charge this request's broker traffic to its caller, for fair
+			// admission scheduling (SOL-153441). This closure is the single
+			// stamping site and that is provable: ToolManager.CallTool is the
+			// only production caller of BrokerPool.GetSEMPv1/GetSEMPv2, and
+			// this is the only production caller of CallTool. list-brokers and
+			// describe-semp-schema are registered separately and never resolve
+			// a broker, so they need no key.
+			//
+			// Carried on the context rather than threaded as a parameter: the
+			// only consumer is the Sender, and threading it would touch every
+			// native tool, the composite executor, and both protocol clients to
+			// move one value. Context-carried request state reaching the Sender
+			// is the established pattern here — OperationIDKey, retryStateKey,
+			// WithRetrySafe/WithRetryUnsafe all arrive the same way.
+			ctx = resilience.WithCallerKey(ctx, callerKeyFromRequest(req))
+
 			// req.Params.Arguments carries omitempty on the wire, so a client
 			// can send tools/call with no arguments field at all — treat that
 			// the same as {} rather than failing json.Unmarshal on a nil/empty
@@ -202,9 +244,10 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 					// gets a separate, static message rather than the
 					// wrapped decode error.
 					var brokerAlias string
-					errorType := "bad_request"
+					errorType := metrics.ErrorTypeBadRequest
 					toolErr := fmt.Errorf("parsing tool arguments: %w", err)
 					logToolResult(ctx, reg.name, &brokerAlias, start, &errorType, &toolErr, nil, id)
+					recordToolInvocation(ctx, mgr.metrics, reg.name, brokerLabelNone, start, errorType, toolErr)
 					return buildLocalErrorResult(errors.New("tool arguments must be a JSON object")), nil
 				}
 			}
@@ -257,7 +300,7 @@ func toMCPAnnotations(a Annotations) *mcp.ToolAnnotations {
 // RegisterListBrokers registers a list-brokers discovery tool that returns all
 // configured broker aliases. This is a standalone tool, not a ToolHandler
 // implementation — it does not call SEMP or require broker resolution.
-func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool) {
+func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool, tm *metrics.ToolMetrics) {
 	server.AddTool(
 		&mcp.Tool{
 			Name:        "list-brokers",
@@ -288,22 +331,24 @@ func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool) {
 			// CallTool's defer: error returns set toolErr, the success
 			// return sets result, both nil means a panic is unwinding.
 			start := time.Now()
-			var brokerAlias, errorType string
+			var brokerAlias string
+			var errorType metrics.ErrorType
 			var toolErr error
 			id := NewIdentityFromPrincipal(auth.PrincipalFrom(ctx))
 			defer func() {
 				if toolErr == nil && result == nil {
-					errorType = "panic"
+					errorType = metrics.ErrorTypePanic
 					toolErr = panicError{}
 				}
 				logToolResult(ctx, "list-brokers", &brokerAlias, start, &errorType, &toolErr, nil, id)
+				recordToolInvocation(ctx, tm, "list-brokers", brokerLabelNone, start, errorType, toolErr)
 			}()
 
 			aliases := pool.Aliases()
 			structured := map[string]any{"brokers": aliases}
 			resultJSON, mErr := json.MarshalIndent(structured, "", "  ")
 			if mErr != nil {
-				errorType = "marshal_error"
+				errorType = metrics.ErrorTypeMarshalError
 				toolErr = fmt.Errorf("marshalling broker list: %w", mErr)
 				return nil, toolErr
 			}

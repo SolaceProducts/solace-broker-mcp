@@ -45,13 +45,15 @@ capability headings carry the same tag:
 | Capability | Status | Notes |
 |---|---|---|
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
-| Metrics | **[Planned]** | The `/metrics` endpoint and instruments are not yet wired; the names and labels here are the proposal under review. |
+| Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, the OTLP export-health counters, and `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)). Assume any other metric below is not yet emitted. |
 | Audit trail | **[Planned]** | Only the capability gate exists today; event emission lands in a later story. |
-| Distributed tracing | **[Planned]** | OTLP export is not yet wired. |
+| Distributed tracing | **[Interim — provider wired, no spans yet]** | Tracer provider and OTLP export are live behind `OBS_TRACING_ENABLED`; no code creates a span yet. See [Distributed Tracing](#distributed-tracing--interim-provider-wired-spans-not-yet-emitted). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
+| Resource attributes | **[Implemented]** | Shared identity resource on metrics and traces, plus the committed subset on every log line. See [Resource Attributes](#resource-attributes--implemented). |
 
 Present-tense wording in a **[Planned]** section describes the **target** behavior under
-review, not what the current build emits. Only the **[Implemented]** capability is live today.
+review, not what the current build emits. Only capabilities tagged **[Implemented]** — more
+than one now — are live today.
 
 ---
 
@@ -105,10 +107,15 @@ avoid. Pin dashboards to `mcp_schema_version` and SIEM queries to `audit_schema_
 
 ---
 
-## Metrics — [Planned]
+## Metrics — [Planned, with exceptions]
 
-> _Status: **[Planned]**. The `/metrics` endpoint and instruments are not yet wired in the
-> build; the following names, types, and labels are the proposal under review._
+> _Status: **[Planned, with exceptions]**. Most instrument names, types, and labels below
+> are the proposal under review, not yet wired in the build. Wired and emitted today: the
+> `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`,
+> `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`,
+> `mcp_tool_invocation_duration_seconds`, the OTLP export-health counters, and
+> `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)). Assume
+> any other metric below is not yet emitted._
 
 All metrics are served on the `/metrics` endpoint in Prometheus text exposition
 format, behind `OBS_METRICS_ENABLED`. One exception: whether the authentication-failure
@@ -142,9 +149,18 @@ share one meter provider.
   version and the schema versions it was built against.
 - `mcp_metrics_scrape_total` answers "is Prometheus actually scraping this instance?"
 - `mcp_http_active_requests` is the in-flight request gauge, for separating a capacity
-  problem from a tail-latency problem.
+  problem from a tail-latency problem. It counts requests on `/mcp` only, and increments on
+  request entry before authentication — so it includes requests later rejected with 401/403/413.
+  A spike can therefore mean rejected traffic, not accepted work.
 
 **Cardinality:** trivial (one series each, plus one per label value on the info metrics).
+
+**Exposure.** The `/metrics` endpoint is unauthenticated and unencrypted, and defaults to a
+wildcard bind (`:9091`, all interfaces). Restrict it with a NetworkPolicy, or bind it to
+loopback for a co-located sidecar scraper. The series it exposes are low-sensitivity (build
+version, schema versions, and — once tools run — tool names already public in
+`docs/tools-reference.md`, broker aliases, and usage timing), but the listener is absent
+entirely unless `OBS_METRICS_ENABLED` is set.
 
 ### Tool Invocations (RED)
 
@@ -159,18 +175,23 @@ refused by tool authorization never reaches one, so it is absent here and counte
 
 - `tool`: the MCP tool name (kebab-case, for example `get-broker-status`). Bounded by the
   number of tools the server exposes.
-- `broker`: the broker alias from your configuration. Bounded by the number of configured
-  brokers.
+- `broker`: the configured broker alias, canonicalized to your configured casing. Bounded by
+  the number of configured brokers plus two sentinels — `none` (a brokerless or pre-resolution
+  call) and `unknown` (an alias that is not configured). The log line keeps the raw alias the
+  caller typed; only the metric label is canonicalized, so a typo cannot mint a new series.
 - `outcome`: see [The Outcome Vocabulary](#the-outcome-vocabulary).
-- `error_type`: the failure cause, from the ten values in
+- `error_type`: the failure cause, from the twelve values in
   [`error_type`](#error_type). Empty on any non-error outcome.
 - Histogram buckets (seconds): `0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10`.
 
-**Cardinality:** `error_type` is non-empty only on the error path, so the series per `tool` and
-`broker` is bounded at `success (1) + cancelled (1) + error x 10 = 12`, not the 33 a naive
-product of the two label domains would suggest. That 12 is the worst case once every outcome
-is emitted; until `cancelled` ships (see [The Outcome Vocabulary](#the-outcome-vocabulary)) you
-will observe 11. All domains are finite (CI enforcement planned for GA).
+**Cardinality:** all label domains are finite. `error_type` is non-empty only on the error
+path and is drawn from the closed set of twelve values above; `outcome` is one of three; and
+`broker` is bounded to the configured aliases plus the `none`/`unknown` sentinels. The series
+count is not a clean product of these domains, because several error types only ever occur
+before a broker is resolved — `bad_request`, `missing_broker`, `not_found`, and
+`unknown_broker` appear only with `broker=none` or `broker=unknown`, never against a configured
+alias — so the real total is well under the naive product. CI enforcement of the closed sets is
+planned for GA.
 
 ### SEMP Requests (RED, per Attempt)
 
@@ -269,6 +290,64 @@ broker state, not per attempt.
 Increments if an audit event cannot be written (see [Audit Delivery](#audit-delivery)). A
 flat-zero series is your evidence that no audit event was lost. Alert on any increase.
 
+### Panic Recovery — [Implemented]
+
+> _Unlike the rest of this section, this counter **is** wired in the current build. It is
+> emitted on `/metrics` whenever `OBS_METRICS_ENABLED` is on._
+
+| Metric | Type | Labels | Basis |
+|---|---|---|---|
+| `mcp_panic_recovered_total` | Counter | `boundary` | Solace |
+
+One counter for the two panic nets that guard a request's own goroutine, separated by
+`boundary` rather than split into two metric names, so a single alert covers both:
+
+- `http` — the HTTP middleware wrapping the whole mux. The panicking request gets a clean
+  `500`; the process keeps serving.
+- `tool` — the MCP tool-dispatch wrapper. The panicking call gets a sanitized tool result
+  (`isError: true`, `retryable: false`) over a successful MCP call, per the spec's
+  application-error convention.
+
+**Cardinality:** 2. Neither label value can be named from outside the package that owns the
+counter, which exposes one recording function per boundary and no way to pass an arbitrary
+one. A future recovery site cannot widen this series set without a deliberate change there
+and a matching row here.
+
+**Both series are published at zero from startup**, before anything panics. A counter that
+appeared only on its first increment would defeat the alert below: PromQL's `increase()`
+needs two samples in the window, so the sample that creates a series is only a baseline and
+a process's first panic would pass unnoticed. Seeding also means a flat zero reads as
+"nothing panicked" rather than "No data", and makes `absent(mcp_panic_recovered_total)` a
+usable alert for "metrics are on but the counter was never wired".
+
+A recovered panic is a bug that reached production, not a load condition. **Alert on any
+increase**, on either boundary. Each increment is paired with an `event=panic_recovered`
+ERROR log carrying the panic's Go type and a stack trace — the counter tells you it
+happened, the log tells you where.
+
+**What this counter does not cover.** Only panics on the request's own goroutine. A panic
+on a goroutine a handler *spawns* is recovered somewhere else and is not counted, even
+though it happened during a request:
+
+| Site | Where it fires |
+|---|---|
+| `internal/safego` | Fan-out workers in the broker-status, queue-metrics and discard-stats handlers, and in the composite executor |
+| `internal/tokenexchange` | The singleflight goroutine that performs the IdP round trip |
+| `internal/observability/tracing` | The periodic OTLP self-stats loop (genuinely off the request path) |
+
+All three log `event=panic_recovered` and convert the panic into an error, which then
+returns through the handler normally — so the tool-dispatch net never sees it and
+`boundary="tool"` does not move. **An alert on the log attribute has wider reach than an
+alert on this metric.** Use the metric for the paging signal and the log for coverage.
+
+`http.ErrAbortHandler` is exempt on the `http` boundary. `net/http` uses it as a
+"client went away, say nothing" sentinel, and the MCP streamable/SSE path raises it on
+ordinary client disconnect; counting it would make a panic alert fire on routine teardown.
+
+Recovery is unconditional and does not depend on this counter. With `OBS_METRICS_ENABLED`
+off, no instrument is registered, both recovery sites still recover and still log, and the
+increment is a no-op.
+
 ### OTLP Export Health
 
 | Metric | Type | Labels | Basis |
@@ -278,16 +357,61 @@ flat-zero series is your evidence that no audit event was lost. Alert on any inc
 | `mcp_otel_metrics_exported_total` | Counter | none | Solace |
 | `mcp_otel_metrics_dropped_total` | Counter | `reason` | Solace |
 
-Self-observation for the two OTLP exporters: the span pair when tracing is enabled
-(`OBS_TRACING_ENABLED`), the metric pair when OTLP metrics push is enabled
-(`OBS_METRICS_OTLP_ENABLED`, not `OBS_METRICS_ENABLED`, which governs the scrape surface
-alone; see [Metrics](#metrics--planned)). `reason` is a closed set on both: `queue_full`,
+Self-observation for the two OTLP exporters, but the span pair's reach depends on **both**
+flags, not just one. The counters are always registered in-process while tracing is enabled
+(`OBS_TRACING_ENABLED`); they reach this scrape surface only when a meter provider also exists
+to register them against, i.e. only when `OBS_METRICS_ENABLED` is **also** on. Tracing on with
+metrics off keeps the totals in-process only — reported solely by the periodic
+`event=otel_self_stats` INFO log (see [Distributed
+Tracing](#distributed-tracing--interim-provider-wired-spans-not-yet-emitted)) — so an alert on
+`mcp_otel_spans_dropped_total` sees a permanently absent series in that mode, which reads as
+healthy rather than as "not exposed here." The metric pair's own flag is OTLP metrics push
+(`OBS_METRICS_OTLP_ENABLED`, not `OBS_METRICS_ENABLED`, which governs the scrape surface alone;
+see [Metrics](#metrics--planned-with-exceptions)). `reason` is a closed set on both: `queue_full`,
 `export_timeout`, `export_error`, `shutdown`.
+
+**`queue_full` is reserved but currently inert on the span pair** (SOL-152420): the OTel Go
+SDK's batch span processor drops queue-overflow spans against an internal counter with no
+public accessor, so there is no supported way to surface that specific reason from outside the
+SDK today. The value stays in the schema for forward compatibility; do not alert on it as if it
+were live. `export_timeout`, `export_error`, and `shutdown` are all live and distinguish real
+causes: a gRPC-status timeout from the exporter, any other export failure (including a refused
+connection), and an in-progress export that didn't finish flushing before shutdown's deadline,
+respectively — `shutdown` counts one event per incomplete drain, not one per dropped span, since
+the SDK doesn't report how many spans it failed to flush.
 
 **These live on the scrape surface deliberately.** Diagnosing a broken push must not depend on
 the push working, so you can answer "is our OTLP export landing?" from Prometheus even when the
 collector is the thing that is down. The scrape path and the push path fail independently by
 design.
+
+### `otel self stats` — periodic, when metrics are off
+
+The fallback for the span pair above when there is no meter provider to register it against —
+tracing on, metrics off, **or** metrics configured but its provider failing to build; that
+second case is why the trigger is "no meter provider", not simply `OBS_METRICS_ENABLED: false`.
+With no `/metrics` surface to read span-export health from, this periodic `INFO` line is the
+only signal.
+
+Emitted every `observability.otel_self_stats_interval_s` (default `60`). One reading fires
+immediately on startup, same as [`broker in-flight
+occupancy`](#broker-in-flight-occupancy--periodic-per-broker), so turning tracing on
+mid-incident does not cost a full interval of silence.
+
+| Field | Meaning |
+|---|---|
+| `event` | Always `otel_self_stats` — filter on this, not on the message text. |
+| `spans_exported_total` | Successfully exported so far. |
+| `spans_dropped_queue_full_total` | Reserved, currently always `0` — see the `queue_full` note above; the SDK exposes no counter for this. |
+| `spans_dropped_export_timeout_total` | A gRPC-status timeout from the exporter. |
+| `spans_dropped_export_error_total` | Any other export failure, including a refused connection. |
+| `spans_dropped_shutdown_total` | An in-progress export that didn't finish flushing before shutdown's deadline — one event per incomplete drain, not one per dropped span. |
+
+These are the exact field names, not the metric names above: flattened per-reason fields
+(`spans_dropped_export_timeout_total`), not a single `reason`-labelled field. A query built by
+substituting the metric schema's label value into a field name (e.g. guessing
+`spans_dropped_total{reason="export_timeout"}` has a log-line equivalent of the same shape)
+matches nothing.
 
 ### Trace Exemplars
 
@@ -461,10 +585,23 @@ which you own.** The server does not itself persist or sign events.
 
 ---
 
-## Distributed Tracing — [Planned]
+## Distributed Tracing — [Interim: provider and one span wired]
 
-> _Status: **[Planned]**. OTLP export is not yet wired; the following spans, attributes, and
-> export protocol are the proposed design._
+> _Status: **[Interim]** (SOL-152420, SOL-153333). The tracer provider, OTLP export, and
+> self-observation counters are wired and live behind `OBS_TRACING_ENABLED` (Story 25). One
+> application span exists today — `tokenexchange.Exchange`, wrapping the OAuth token-exchange
+> call (Story 50) — described under [Spans](#spans) below. The HTTP-boundary, tool-dispatcher,
+> composite-executor, and per-SEMP-attempt spans are still the proposed design (later stories),
+> so flipping the flag today exports a resource, the token-exchange span, and nothing else yet.
+> Sampling and propagation are live; the rest of this section stays **[Planned]** until those
+> stories land. **A consequence of shipping only one span first:** the default sampler samples
+> everything (see Sampling below), and until Story 26's SEMP-layer spans exist, most calls have
+> no upstream span to attach to — so a token exchange not triggered from an already-sampled agent
+> trace exports as its own single-span root trace, one per token exchange — cache hits included,
+> since `tracer.Start` runs before the cache lookup — rather than nested inside a larger request
+> trace. Cache hits are the large majority of exchanges, so budget from the *total* call rate, not
+> a live-round-trip rate. Self-correcting once Story 26 lands; worth knowing before then if trace
+> volume looks higher than the request volume suggests._
 
 OpenTelemetry spans at each hop of a request, exported over OTLP, enabled with
 `OBS_TRACING_ENABLED` (never automatic; you opt in after deploying a collector).
@@ -482,13 +619,19 @@ OpenTelemetry spans at each hop of a request, exported over OTLP, enabled with
 
 ### Spans
 
-A successful end-to-end call produces spans at the HTTP boundary, the tool dispatcher, the
-composite executor, and each SEMP attempt. Named spans:
+A successful end-to-end call will eventually produce spans at the HTTP boundary, the tool
+dispatcher, the composite executor, and each SEMP attempt (Story 26, not yet landed). Named
+spans today:
 
-- `semp.attempt`: one per SEMP request attempt.
+- `tokenexchange.Exchange`: one per call to the OAuth token exchange (Story 50, SOL-153333) —
+  a cache hit, a singleflight follower, and the singleflight winner triggering a live IdP round
+  trip each get their own span. Child of whichever span is active where
+  `OAuthAuthenticator.AddAuth` is called (a future SEMP-per-attempt span once Story 26 lands;
+  today, whatever the caller's own context carries).
+- `semp.attempt`: one per SEMP request attempt (Story 26, not yet landed).
 
 Other span names follow the OpenTelemetry HTTP semantic conventions where applicable. Span
-names beyond `semp.attempt`, and span kinds, are open items in this review (see
+names beyond the two above, and span kinds, are open items in this review (see
 [Open Items for This Review](#open-items-for-this-review), item 4).
 
 ### Span Attributes
@@ -497,14 +640,25 @@ names beyond `semp.attempt`, and span kinds, are open items in this review (see
 |---|---|---|
 | `correlation_id` | The shared request ID, joining the trace to logs and audit | Solace |
 | `outcome` | The result; the same three values used as a metric label and an audit field | Solace |
-| `error_type` | Why the call failed; present on `outcome: error` only, same ten values | Solace |
+| `error_type` | Why the call failed; present on `outcome: error` only, the same [`error_type`](#error_type) vocabulary (spans carry the subset raised on the request path) | Solace |
 | `retry.decision` | The retry decision on a SEMP attempt | Solace |
 | `retry.exhausted` | `true` on the final attempt when retries are exhausted | Solace |
+| `cache_hit` | `tokenexchange.Exchange` only: true when served from cache, false when a live IdP round trip was needed (or waited on). **Isolating actual live round trips needs `singleflight_role="winner"` too** — a follower also reports `cache_hit=false` despite doing no IdP work itself, so filtering on `cache_hit` alone counts one winner plus every follower waiting on it | Solace |
+| `singleflight_role` | `tokenexchange.Exchange` only, absent on a cache hit: `winner` (this call ran the live IdP round trip) or `follower` (this call shared another's result) | Solace |
+| `winner_trace_id` / `winner_span_id` | `tokenexchange.Exchange` only, present on a `follower` span only: the winner's own IDs, so an operator can pivot from a follower's span to the trace that actually did the IdP work. The follower span also carries a span `Link` to the same span | Solace |
 
 `outcome` and `error_type` carry the **same vocabulary here as on the metric labels and the
 audit record**, which is the point of a single vocabulary: filter a dashboard by
 `error_type="broker_init_error"` and you can carry that predicate into the trace backend and
 the SIEM unchanged, with no translation table.
+
+**Exception: `tokenexchange.Exchange` never sets `error_type`, even on `outcome: error`.** The
+ten-value `error_type` set above is scoped to tool-invocation outcomes and has no value
+describing a token-exchange failure mode (rate-limited, circuit-open, retries-exhausted,
+transport, request-build). The span still carries the actual cause via the span's recorded
+exception event and its status (`codes.Error`), just not through this shared field. A future
+story may extend the vocabulary or give token-exchange failures their own attribute; until then,
+do not expect `error_type` on this span.
 
 **On the span, the key is `error_type`, not the OTel-conventional `error.type`.** This is a
 deliberate exception to the preceding naming rule, taken so the key is identical across metrics,
@@ -513,24 +667,83 @@ values match OTel's `error.type` semantics. If your trace backend or trace-based
 the dotted `error.type`, tell us in your feedback, because this is the kind of thing that is
 cheap to change now and expensive after the freeze.
 
-### Resource Attributes
+**Enabling `OBS_TRACING_ENABLED` exports authentication-event content to your collector.**
+Every `tokenexchange.Exchange` span carries a correlation ID, a timestamp, and the outcome of
+that authentication attempt — `cache_hit`, `singleflight_role`, and (on a follower)
+`winner_trace_id` / `winner_span_id` besides — which now travels to wherever
+`OTEL_EXPORTER_OTLP_ENDPOINT` points, a system that may sit outside this deployment's own
+residency or audit-scope boundary. **A failed exchange exports more than that summary:** the
+span's exception event carries the error text verbatim, and for a transport failure that
+includes the IdP token endpoint's hostname and resolved network address (from the underlying
+`*url.Error`) — infrastructure topology, not just an authentication outcome. Worth one line in
+your own data-flow review before pointing this at a collector you don't operate.
+
+### Resource Attributes — [Implemented]
+
+> _Status: **[Implemented]** (SOL-152425, Story 34). Constructed once by
+> `internal/observability/resource` and shared by the metrics meter provider (SOL-152091) and
+> the tracer provider (SOL-152420) — one construction site, so the two cannot disagree. Also
+> mirrored (the `service.name` / `deployment.environment.name` / `cloud.region` subset only)
+> onto every log line from immediately after config loads onward — the handful of log lines
+> emitted before config loads (the process banner and the config-load attempt itself) have no
+> identity to attach, since it's derived from config. The **OTLP push** query guidance below
+> describes that future egress (Story 46, not yet landed); the scrape (`target_info`) path is
+> live today._
 
 Set from server configuration on **both** metrics and spans, so an aggregated dashboard can
 tell instances apart without a label duplicated onto every series. All five follow the
 OpenTelemetry resource semantic conventions
 (https://opentelemetry.io/docs/specs/semconv/resource/).
 
-| Attribute | Source |
-|---|---|
-| `service.name` | config |
-| `service.version` | build-time injection |
-| `service.instance.id` | config, or the pod name |
-| `deployment.environment` | config, when set |
-| `cloud.region` | config, when set |
+| Attribute | Source | Config key |
+|---|---|---|
+| `service.name` | config, default `solace-broker-mcp` | `observability.service_name` |
+| `service.version` | build-time injection | — |
+| `service.instance.id` | config, else the pod name (Kubernetes downward API), else the process hostname | `observability.service_instance_id` |
+| `deployment.environment.name` | config, when set | `observability.deployment_environment` |
+| `cloud.region` | config, when set | `observability.cloud_region` |
 
 An earlier draft called this attribute `region` and flagged the OTel name as a possible
 change. **It is now `cloud.region`**: where OTel publishes a convention we adopt it, and
 `cloud.region` is what a multi-broker aggregator expects to pivot on.
+
+**`service_instance_id` is an override for the (uncommon) case where neither the pod name nor
+the hostname identifies the instance usefully** — for example, several bare-metal instances
+sharing a hostname. Most Kubernetes deployments need neither this nor `POD_NAME`
+configuration: `deploy/kubernetes/deployment.yaml` already wires `POD_NAME` via the downward
+API.
+
+**The process hostname is what gets exported when neither override is set.** Outside
+Kubernetes (or with `POD_NAME` unset), `service.instance.id` falls all the way through to
+`os.Hostname()` — which can carry internal topology (a bare-metal or VM name your network team
+recognizes) that now travels off-box on every span and appears on `target_info`. Set
+`observability.service_instance_id` explicitly if that's not a value you want to export.
+
+**Known limitation:** `service_name` and `service_instance_id` always win over the standard
+`OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES` environment variables, because config always
+has a value for both (a real one, or the stated default) by the time the shared resource is
+built, and this package's own attributes take precedence in the merge. `deployment_environment`
+and `cloud_region` do **not** have this problem — config leaves them genuinely empty when
+unset, so the standard `OTEL_RESOURCE_ATTRIBUTES` entries for those two reach the resource
+unopposed. An operator who wants `OTEL_SERVICE_NAME` or an `OTEL_RESOURCE_ATTRIBUTES`
+`service.instance.id` honored should use `observability.service_name` /
+`observability.service_instance_id` instead, for now.
+
+**`deployment.environment.name`, not the FD's original `deployment.environment`.** OTel
+renamed the semantic-convention key ahead of this story landing; the SDK's own
+`resource.Default()` (which this attribute set is merged with) is already built against the
+renamed key, so keeping the older name here would have shipped an attribute the SDK's own
+semantic-convention package no longer recognizes on day one. Disclosed as a deliberate
+deviation from the FD text, not a silent one — see the SOL-152425 PR description.
+
+**The old and new spellings can both reach the resource at once.** This package only ever
+writes `deployment.environment.name`, but `resource.Default()`'s own environment-variable
+detection still honors `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=...` under the *old*
+key — nothing rejects it. Set that variable under the old spelling and the merged resource
+carries both keys with independent values; `target_info` shows both, and `SlogAttrs` mirrors
+only the new one, so logs and metrics can disagree about which environment a pod is in. Use
+`observability.deployment_environment` instead of the environment variable to avoid the
+ambiguity entirely.
 
 **How to query them, per egress.** These are resource attributes, not per-series labels, so
 they arrive differently on each of the two metric egresses:
@@ -541,8 +754,8 @@ they arrive differently on each of the two metric egresses:
   `mcp_tool_invocation_total * on (instance, job) group_left(service_name, cloud_region) target_info`.
 - **OTLP push.** Resource attributes are **not promoted to labels by default**. If you ingest
   our OTLP metrics straight into Prometheus, set `promote_resource_attributes` to include
-  `service.name`, `service.instance.id`, `deployment.environment`, and `cloud.region`, or the
-  same dashboard will show empty variable drop-down lists.
+  `service.name`, `service.instance.id`, `deployment.environment.name`, and `cloud.region`, or
+  the same dashboard will show empty variable drop-down lists.
 
 ---
 
@@ -599,22 +812,26 @@ A single `outcome` vocabulary is shared across metrics, the audit trail, and tra
 same call reads the same way in all three and you can join on one key.
 
 `outcome` answers "what happened". A companion attribute, `error_type`, answers "why", and is
-present only when `outcome` is `error`. Splitting the two keeps `outcome` small enough to group
-by on a dashboard while still carrying the detail an investigation needs.
+present only when `outcome` is `error` — except on the `tokenexchange.Exchange` span, which
+never sets it (see [Span Attributes](#span-attributes)). Splitting the two keeps `outcome`
+small enough to group by on a dashboard while still carrying the detail an investigation needs.
 
 | Value | Meaning |
 |---|---|
 | `success` | The call completed successfully. |
-| `error` | The call failed. The cause is in `error_type`. A `context.DeadlineExceeded` timeout is classified here. |
-| `cancelled` | The caller cancelled the request. **Reserved in the schema now; emitted from a later release.** |
+| `error` | The call failed. The cause is in `error_type`, except on the `tokenexchange.Exchange` span, which never sets it — see [Span Attributes](#span-attributes). A `context.DeadlineExceeded` timeout is classified here. |
+| `cancelled` | The caller cancelled the request. **Reserved in the schema now for tool-invocation `outcome`; emitted from a later release (Story 42, v1.x) — already emitted today on the `tokenexchange.Exchange` span, see the exception below.** |
+
+**Exception — the token-exchange span (SOL-153333, Story 50) already emits `cancelled`, ahead of the tool-invocation level above.** That span classifies by *where* the error originated, not by Go error type alone: a caller's own context ending the call (`context.Canceled` **or** `context.DeadlineExceeded` — for example the SEMP retry budget in `internal/semp/resilience/sender.go` expiring while the exchange waits) is `cancelled`, while a `context.DeadlineExceeded` from the exchange's *own* internal retry-chain deadline is `error`, per the general rule above. Classifying every `DeadlineExceeded` as `error` regardless of source would misattribute a caller's own timeout to the exchange.
 
 ### `error_type`
 
-Present only on `outcome: error`, drawn from a closed set of ten values:
+Present only on `outcome: error`, drawn from a closed set of twelve values:
 
 | Value | Meaning |
 |---|---|
 | `panic` | An unexpected failure was caught by the recovery layer and returned as a clean error. |
+| `bad_request` | The tool arguments could not be parsed as a JSON object. |
 | `unknown_tool` | The requested tool is not registered. |
 | `missing_broker` | No broker was named on a call that requires one. |
 | `unknown_broker` | The named broker is not configured. |
@@ -622,6 +839,7 @@ Present only on `outcome: error`, drawn from a closed set of ten values:
 | `validation_error` | The arguments failed input validation. |
 | `execution_error` | The tool ran and failed. |
 | `nil_result` | The tool returned no result. |
+| `not_found` | The requested item does not exist (for example, an unknown SEMP operation passed to describe-semp-schema). |
 | `output_validation_error` | The tool's output failed schema validation. |
 | `marshal_error` | The result could not be serialized. |
 
@@ -646,6 +864,20 @@ Notes:
   [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only))
   and is planned as a metric in a later release (see
   [Planned for a Later Release](#planned-for-a-later-release-not-frozen-in-this-review)).
+- **A desired-state noop (SOL-153341) reads `outcome=success`, plus a separate
+  `desired_state` field — never a fourth `outcome` value.** Creating an object that already
+  exists, or deleting one that's already gone, is success by this ticket's own definition, not
+  a distinct kind of outcome — so the "tool invoked" log line for these two cases carries
+  `outcome=success` like any other success, with `desired_state` (`already_exists` or
+  `already_absent`) alongside it distinguishing "this was a no-op" from an ordinary fresh
+  create/delete. `desired_state` is deliberately not named `outcome`: the write tool's own
+  structured *result* also has a field literally called `outcome` with these same two values
+  (plus `changed` and, for `already_exists`, `attributes_verified` — see the tool
+  descriptions), but that is a different namespace — the tool's own output schema, not this
+  shared telemetry vocabulary — and the two must not be confused when grepping logs versus
+  reading a tool result. A monitor that alerted on `ERROR`-level volume for these two cases
+  before this ticket should switch to a rule on `desired_state` instead; see the CHANGELOG
+  entry for the full operator-visible effect.
 
 ---
 
@@ -819,9 +1051,9 @@ the review.
    **What we still want from you:** can your access review resolve `sub` to a human at review
    time, including for a deprovisioned user? If it cannot, say so and we will add
    `principal.preferred_username` in a later minor.
-4. **Trace span names and span kinds.** Beyond `semp.attempt`, we intend to follow OTel HTTP
-   conventions. If your trace backend or trace-based SLOs key off specific span names or
-   `SpanKind` values, tell us what you expect.
+4. **Trace span names and span kinds.** Beyond `tokenexchange.Exchange` and `semp.attempt`, we
+   intend to follow OTel HTTP conventions. If your trace backend or trace-based SLOs key off
+   specific span names or `SpanKind` values, tell us what you expect.
 5. **The `outcome` / `error_type` split.** We have settled on three `outcome` values with the
    cause in a separate `error_type` of ten values, rather than folding causes into `outcome`.
    Does that split match how your SIEM queries distinguish failures, and do the ten
@@ -844,14 +1076,14 @@ need to spend review time on them:
   questions. `server_address` is the OTel-conventional host, which is what correlates this
   service with everything else OTel-instrumented in your estate; `broker` is your configured
   alias, which is what dashboards and alerts group by. Neither is redundant.
-- **`region` is now `cloud.region`.** See [Resource Attributes](#resource-attributes).
+- **`region` is now `cloud.region`.** See [Resource Attributes](#resource-attributes--implemented).
 - **OTLP metrics push has its own flag, `OBS_METRICS_OTLP_ENABLED`.** We considered activating
   push as soon as `OTEL_EXPORTER_OTLP_ENDPOINT` was set, which would be tidier and would match
   what your collectors already configure. We rejected it: that variable is frequently set
   cluster-wide for other services, so an upgrade could silently start egressing telemetry from
   a Solace pod that nobody asked to export. An explicit capability flag keeps the decision
   yours, and it keeps this signal inside the same `OBS_*` model as every other capability. See
-  [Metrics](#metrics--planned).
+  [Metrics](#metrics--planned-with-exceptions).
 
 ---
 

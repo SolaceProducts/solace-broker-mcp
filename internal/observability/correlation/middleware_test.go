@@ -208,6 +208,52 @@ func TestGenerate_ValidUUIDv7(t *testing.T) {
 	}
 }
 
+// TestFromHeader pins the no-generate contract used by RequestExtraMiddleware:
+// usable inbound headers yield an ID; missing or unusable headers yield ok=false
+// rather than a fresh UUIDv7.
+func TestFromHeader(t *testing.T) {
+	t.Parallel()
+	t.Run("nil header", func(t *testing.T) {
+		t.Parallel()
+		if id, ok := FromHeader(nil); ok || id != "" {
+			t.Errorf("FromHeader(nil) = %q, %v; want \"\", false", id, ok)
+		}
+	})
+	t.Run("empty header", func(t *testing.T) {
+		t.Parallel()
+		if id, ok := FromHeader(http.Header{}); ok || id != "" {
+			t.Errorf("FromHeader(empty) = %q, %v; want \"\", false", id, ok)
+		}
+	})
+	t.Run("X-Correlation-ID", func(t *testing.T) {
+		t.Parallel()
+		h := make(http.Header)
+		h.Set(headerCorrelationID, "client-id")
+		id, ok := FromHeader(h)
+		if !ok || id != "client-id" {
+			t.Errorf("FromHeader(X-Correlation-ID) = %q, %v; want client-id, true", id, ok)
+		}
+	})
+	t.Run("traceparent wins", func(t *testing.T) {
+		t.Parallel()
+		h := make(http.Header)
+		h.Set(headerTraceparent, validTraceparent)
+		h.Set(headerCorrelationID, "client-id")
+		id, ok := FromHeader(h)
+		if !ok || id != validTraceID {
+			t.Errorf("FromHeader(traceparent) = %q, %v; want %q, true", id, ok, validTraceID)
+		}
+	})
+	t.Run("invalid X-Correlation-ID", func(t *testing.T) {
+		t.Parallel()
+		h := make(http.Header)
+		h.Set(headerCorrelationID, "id\ninjected")
+		if id, ok := FromHeader(h); ok {
+			t.Errorf("FromHeader(invalid) = %q, true; want false (must not generate)", id)
+		}
+	})
+}
+
 // TestFrom_Absent pins that From returns "" when no ID is on the context —
 // the contract dependent code relies on when the capability is off (middleware
 // not wired).
@@ -295,6 +341,61 @@ func TestMiddleware_EndToEndPropagation(t *testing.T) {
 			t.Errorf("downstream saw %q, want a generated UUIDv7", string(body))
 		}
 	})
+}
+
+// TestMiddleware_StampsResolvedIDOnInboundHeader pins that the resolved ID is
+// written onto the inbound X-Correlation-ID before next runs, equal to the
+// response echo. That is how Extra.Header sees a generated ID (SOL-153935).
+// A client-supplied header is replaced with the sanitized resolved value.
+// Authorization is left unchanged.
+func TestMiddleware_StampsResolvedIDOnInboundHeader(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		headers map[string]string
+	}{
+		{"omitted both headers", nil},
+		{"from X-Correlation-ID", map[string]string{headerCorrelationID: "client-supplied-id"}},
+		{"trimmed X-Correlation-ID", map[string]string{headerCorrelationID: "  padded-id  "}},
+		{"from traceparent", map[string]string{headerTraceparent: validTraceparent}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			const authz = "Bearer leave-me-alone"
+			var inboundID, ctxID string
+			var inboundAuth string
+			handler := Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				inboundID = r.Header.Get(headerCorrelationID)
+				inboundAuth = r.Header.Get("Authorization")
+				ctxID = From(r.Context())
+			}))
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
+			for k, v := range tc.headers {
+				req.Header.Set(k, v)
+			}
+			req.Header.Set("Authorization", authz)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			echoed := rec.Header().Get(headerCorrelationID)
+			if echoed == "" {
+				t.Fatalf("response %s is empty", headerCorrelationID)
+			}
+			if inboundID != echoed {
+				t.Errorf("inbound %s = %q, want the echoed response value %q", headerCorrelationID, inboundID, echoed)
+			}
+			if inboundID != ctxID {
+				t.Errorf("inbound %s = %q, want the handler ctx ID %q", headerCorrelationID, inboundID, ctxID)
+			}
+			if inboundAuth != authz {
+				t.Errorf("inbound Authorization = %q, want %q (must not be mutated)", inboundAuth, authz)
+			}
+			if tc.headers == nil && !isUUIDv7(inboundID) {
+				t.Errorf("generated inbound ID = %q, want a UUIDv7", inboundID)
+			}
+		})
+	}
 }
 
 // TestMiddleware_SetsResponseHeader pins that Middleware echoes the resolved

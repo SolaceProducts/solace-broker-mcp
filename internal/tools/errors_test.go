@@ -231,59 +231,67 @@ func TestClassifyDesiredStateOutcome(t *testing.T) {
 	tests := []struct {
 		name        string
 		input       error
-		wantOutcome string // "" means want nil
+		wantOutcome DesiredState // "" means want nil
+		wantMessage string       // "" means don't check beyond non-empty
 	}{
 		{
-			"ALREADY_EXISTS on create -> exists_unchanged",
-			&sempv2.SEMPError{Operation: "createMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "ALREADY_EXISTS", SEMPCode: 10,
+			name: "ALREADY_EXISTS on create -> already_exists",
+			input: &sempv2.SEMPError{Operation: "createMsgVpnQueueSubscription", StatusCode: 400, SEMPStatus: "ALREADY_EXISTS", SEMPCode: 10,
 				Description: "Problem with POST: Subscription foo/*/bar already exists."},
-			"exists_unchanged",
+			wantOutcome: DesiredStateAlreadyExists,
 		},
 		{
-			"NOT_FOUND on delete -> already_absent",
-			&sempv2.SEMPError{Operation: "deleteMsgVpnQueue", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+			name: "NOT_FOUND on delete, target missing -> already_absent",
+			input: &sempv2.SEMPError{Operation: "deleteMsgVpnQueue", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
 				Description: "Could not find match for queue mcp-subdel-test-q"},
-			"already_absent",
+			wantOutcome: DesiredStateAlreadyAbsent,
 		},
 		{
-			"ALREADY_EXISTS on create, SEMPStatus omitted, falls back to SEMPCode 10",
-			&sempv2.SEMPError{Operation: "createMsgVpn", StatusCode: 400, SEMPCode: 10,
+			// Review finding (SOL-153341): a delete under a missing PARENT
+			// classifies the same as a delete of a missing TARGET — both are
+			// already_absent — but before the fix, the message was left as
+			// raw CLI jargon. Pins that the widened buildSEMPv2Message gate
+			// now translates it to plain language instead.
+			name: "NOT_FOUND on delete, parent missing -> already_absent with translated message",
+			input: &sempv2.SEMPError{Operation: "deleteMsgVpnQueue", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6,
+				Description: "Problem with DELETE: Cannot enter mode for message-vpn no-such-vpn: not found."},
+			wantOutcome: DesiredStateAlreadyAbsent,
+			wantMessage: `The Message VPN "no-such-vpn" does not exist.`,
+		},
+		{
+			name: "ALREADY_EXISTS on create, SEMPStatus omitted, falls back to SEMPCode 10",
+			input: &sempv2.SEMPError{Operation: "createMsgVpn", StatusCode: 400, SEMPCode: 10,
 				Description: "Unable to create message VPN 'default': already exists."},
-			"exists_unchanged",
+			wantOutcome: DesiredStateAlreadyExists,
 		},
 		{
-			"NOT_FOUND on delete, SEMPStatus omitted, falls back to SEMPCode 6",
-			&sempv2.SEMPError{Operation: "deleteMsgVpnQueue", StatusCode: 400, SEMPCode: 6},
-			"already_absent",
+			name:        "NOT_FOUND on delete, SEMPStatus omitted, falls back to SEMPCode 6",
+			input:       &sempv2.SEMPError{Operation: "deleteMsgVpnQueue", StatusCode: 400, SEMPCode: 6},
+			wantOutcome: DesiredStateAlreadyAbsent,
 		},
 		{
 			// Regression guard: NOT_FOUND on a GET must never classify as a
 			// noop — it's a real error the caller needs to see, not an
 			// idempotent-replay signal. This is exactly the fixture
 			// TestCallTool_SEMPErrorWrapped already exercises end to end.
-			"NOT_FOUND on a get is not classified",
-			&sempv2.SEMPError{Operation: "getMsgVpnQueue", StatusCode: 404, SEMPStatus: "NOT_FOUND", SEMPCode: 6},
-			"",
+			name:  "NOT_FOUND on a get is not classified",
+			input: &sempv2.SEMPError{Operation: "getMsgVpnQueue", StatusCode: 404, SEMPStatus: "NOT_FOUND", SEMPCode: 6},
 		},
 		{
-			"ALREADY_EXISTS on an update is not classified (not a create)",
-			&sempv2.SEMPError{Operation: "updateMsgVpnQueue", StatusCode: 400, SEMPStatus: "ALREADY_EXISTS", SEMPCode: 10},
-			"",
+			name:  "ALREADY_EXISTS on an update is not classified (not a create)",
+			input: &sempv2.SEMPError{Operation: "updateMsgVpnQueue", StatusCode: 400, SEMPStatus: "ALREADY_EXISTS", SEMPCode: 10},
 		},
 		{
-			"NOT_FOUND on a create is not classified (missing parent, not a noop)",
-			&sempv2.SEMPError{Operation: "createMsgVpnRestDeliveryPoint", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6},
-			"",
+			name:  "NOT_FOUND on a create is not classified (missing parent, not a noop)",
+			input: &sempv2.SEMPError{Operation: "createMsgVpnRestDeliveryPoint", StatusCode: 400, SEMPStatus: "NOT_FOUND", SEMPCode: 6},
 		},
 		{
-			"ALREADY_EXISTS on a delete is not classified",
-			&sempv2.SEMPError{Operation: "deleteMsgVpnQueue", StatusCode: 400, SEMPStatus: "ALREADY_EXISTS", SEMPCode: 10},
-			"",
+			name:  "ALREADY_EXISTS on a delete is not classified",
+			input: &sempv2.SEMPError{Operation: "deleteMsgVpnQueue", StatusCode: 400, SEMPStatus: "ALREADY_EXISTS", SEMPCode: 10},
 		},
 		{
-			"a non-SEMP error is not classified",
-			errors.New("boom"),
-			"",
+			name:  "a non-SEMP error is not classified",
+			input: errors.New("boom"),
 		},
 	}
 
@@ -304,6 +312,16 @@ func TestClassifyDesiredStateOutcome(t *testing.T) {
 			}
 			if got.Message == "" {
 				t.Error("Message is empty, want a non-empty agent-facing message")
+			}
+			if tt.wantMessage != "" && got.Message != tt.wantMessage {
+				t.Errorf("Message = %q, want %q", got.Message, tt.wantMessage)
+			}
+			// AttributesVerified is always false today (existence-only,
+			// ticket owner's ruling on AC1) — pin it so a future change that
+			// starts setting it true doesn't do so silently without also
+			// updating this test to reflect real verification.
+			if got.AttributesVerified {
+				t.Error("AttributesVerified = true, want false — classification never compares attributes (see doc comment)")
 			}
 		})
 	}
@@ -360,26 +378,68 @@ func TestClassifyDesiredStateOutcome_WriteOperationsHaveExpectedPrefix(t *testin
 	}
 }
 
-func TestBuildDesiredStateResult(t *testing.T) {
-	result := buildDesiredStateResult(&desiredStateOutcome{
-		Outcome: "exists_unchanged",
+// TestDesiredStateStructuredContent_AlreadyExists pins the AC1 shape and,
+// specifically, that attributes_verified is present and false — the field
+// that makes the existence-only limit explicit rather than implied by the
+// outcome value's name (SOL-153341 review, AC1 ruling).
+func TestDesiredStateStructuredContent_AlreadyExists(t *testing.T) {
+	sc := desiredStateStructuredContent(&desiredStateOutcome{
+		Outcome: DesiredStateAlreadyExists,
 		Message: "Subscription foo/*/bar already exists.",
 	})
-	if result.IsError {
-		t.Error("IsError = true, want false — this is the mechanism behind AC1/AC2's 'reported as a non-failure'")
-	}
-	sc, ok := result.StructuredContent.(map[string]any)
-	if !ok {
-		t.Fatalf("StructuredContent type = %T, want map[string]any", result.StructuredContent)
-	}
-	if sc["outcome"] != "exists_unchanged" {
-		t.Errorf("outcome = %v, want exists_unchanged", sc["outcome"])
+	if sc["outcome"] != "already_exists" {
+		t.Errorf("outcome = %v, want already_exists", sc["outcome"])
 	}
 	if sc["changed"] != false {
 		t.Errorf("changed = %v, want false", sc["changed"])
 	}
 	if sc["message"] != "Subscription foo/*/bar already exists." {
 		t.Errorf("message = %v, want the broker's own text", sc["message"])
+	}
+	if v, ok := sc["attributes_verified"]; !ok || v != false {
+		t.Errorf("attributes_verified = %v (present=%v), want false present=true", v, ok)
+	}
+}
+
+// TestDesiredStateStructuredContent_AlreadyAbsent pins that
+// attributes_verified is absent for a delete outcome — deletion has no
+// attribute-match question, so the field would be a meaningless always-false
+// on every delete rather than a real caveat (see DesiredStateAlreadyAbsent's
+// doc comment).
+func TestDesiredStateStructuredContent_AlreadyAbsent(t *testing.T) {
+	sc := desiredStateStructuredContent(&desiredStateOutcome{
+		Outcome: DesiredStateAlreadyAbsent,
+		Message: "Queue mcp-subdel-test-q does not exist.",
+	})
+	if sc["outcome"] != "already_absent" {
+		t.Errorf("outcome = %v, want already_absent", sc["outcome"])
+	}
+	if sc["changed"] != false {
+		t.Errorf("changed = %v, want false", sc["changed"])
+	}
+	if _, ok := sc["attributes_verified"]; ok {
+		t.Errorf("attributes_verified present = %v, want absent for an already_absent outcome", sc["attributes_verified"])
+	}
+}
+
+// TestDesiredStateOutcomeSchema_AcceptsBothOutcomes pins that the schema
+// desiredStateOutcomeSchema declares actually admits what
+// desiredStateStructuredContent produces for both outcomes — the exact gap
+// the review found (the noop shape violated the tool's declared output
+// schema because nothing checked the two stayed in sync).
+func TestDesiredStateOutcomeSchema_AcceptsBothOutcomes(t *testing.T) {
+	compiled, err := compileSchema(desiredStateOutcomeSchema())
+	if err != nil {
+		t.Fatalf("compileSchema: %v", err)
+	}
+	for _, outcome := range []*desiredStateOutcome{
+		{Outcome: DesiredStateAlreadyExists, Message: "already exists"},
+		{Outcome: DesiredStateAlreadyAbsent, Message: "already absent"},
+	} {
+		sc := desiredStateStructuredContent(outcome)
+		if _, err := validateAgainstCompiledSchema(sc, compiled, "x"); err != nil {
+			t.Errorf("outcome %q: desiredStateOutcomeSchema rejects desiredStateStructuredContent's own output: %v", outcome.Outcome, err)
+		}
 	}
 }
 

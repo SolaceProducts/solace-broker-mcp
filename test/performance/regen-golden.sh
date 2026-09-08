@@ -199,6 +199,11 @@ fi
 echo "   pinned RDP: $rdp_name"
 
 echo "== 4. fidelity -capture (alias=$broker_alias vpn=$vpn rdp=$rdp_name)"
+# A checkout that has never captured fixtures has no fidelity/golden/ yet —
+# that's the normal state of a fresh clone (see the fixtures-manifest.sh
+# preflight above), so create it rather than letting fidelity -capture fail
+# staging its first golden file into a directory that was never made.
+mkdir -p "$here/fidelity/golden"
 "$bin/fidelity" -mcp-url http://localhost:9090 -broker "$broker_alias" -vpn "$vpn" -rdp "$rdp_name" \
   -golden-dir "$here/fidelity/golden" -capture 2>&1 | tee "$runs/regen.log"
 

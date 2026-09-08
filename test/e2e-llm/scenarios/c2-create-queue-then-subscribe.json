@@ -1,0 +1,25 @@
+{
+  "_doc": "C2 chained-write reproduction of SOL-153868's reported customer failure: create a queue, then subscribe it to a wildcard topic, using only MCP tools. Turn 1: both create-queue and create-queue-subscription are gated tools, so the agent must ask for confirmation, not call either yet. Turn 2 'yes': the agent must call BOTH tools (expected_tools_all_of) — this is the acceptance criterion the ticket explicitly says only an LLM-driven run can prove, because the original defect was an improvised call, not a broken real one. ground_truth.shell independently confirms the subscription actually exists via SEMPv2 monitor, not just that the agent claimed success. teardown.cmd drops the queue, which cascades the subscription with it. KNOWN FLAKE, unrelated to the tools under test: sonnet-5 sometimes HTML-entity-escapes the wildcard character in subscriptionTopic when constructing the create-queue-subscription call ('ABC/&gt;' instead of 'ABC/>') — the call succeeds and the tool does exactly what it was asked, so the broker ends up with a real but wrong subscription, which this scenario's ground_truth correctly fails. Measured 2/9 pass across two flake-check batches (0/4 before a parameter-description mitigation was added, 2/5 after — the mitigation helped but did not eliminate it). The tool-chaining behavior this scenario exists to prove passed 9/9 in the same runs (create-queue-subscription was always the tool called, never improvised or skipped); only the exact-topic ground truth is affected. Root cause is model/CLI-side argument construction, not this server — see the SOL-153868 refinement doc's follow-up note before assuming a server-side regression from a red run here.",
+  "prompt": "Create a new queue named e2e-llm-c2-queue in VPN $BROKER_VPN on $BROKER, then add a topic subscription for ABC/> to it so it starts receiving that traffic.",
+  "teardown": {"cmd": "delete_queue_on_current_broker e2e-llm-c2-queue"},
+  "expected_no_mutating_tools": true,
+  "required_substrings_any_of": [
+    "create-queue", "create the queue", "subscription", "confirm", "would you like", "shall i", "proceed"
+  ],
+  "followup": {
+    "prompt": "yes, go ahead with both",
+    "expected_tools_all_of": [
+      "mcp__solace-broker__create-queue",
+      "mcp__solace-broker__create-queue-subscription"
+    ],
+    "required_substrings_any_of": ["created", "subscribed", "added", "abc/>", "e2e-llm-c2-queue"],
+    "forbidden_substrings": [
+      "failed to create", "could not create", "failed to add", "could not add",
+      "no tool", "not available", "does not support"
+    ],
+    "ground_truth": {
+      "shell": "semp_curl -sf \"$BROKER_URL/SEMP/v2/__private_monitor__/msgVpns/$BROKER_VPN/queues/e2e-llm-c2-queue/subscriptions\" | jq -r '.data[].subscriptionTopic'",
+      "expect_stdout_regex": "ABC/>"
+    }
+  }
+}

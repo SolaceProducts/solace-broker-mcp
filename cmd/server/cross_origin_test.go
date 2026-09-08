@@ -92,7 +92,7 @@ func TestBuildMCPEndpoint_CrossOriginProtection(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := &correlationRecorder{}
-			endpoint := buildMCPEndpoint(rec, true)
+			endpoint := buildMCPEndpoint(rec, true, nil)
 
 			req := httptest.NewRequestWithContext(context.Background(), tt.method, "/mcp", nil)
 			if tt.origin != "" {
@@ -159,7 +159,7 @@ func TestTruncateForLog(t *testing.T) {
 // still return 403 — but a 403 with no ID, which this catches.
 func TestBuildMCPEndpoint_CrossOriginRejectionCarriesCorrelationID(t *testing.T) {
 	t.Run("enabled: 403 carries a correlation ID", func(t *testing.T) {
-		endpoint := buildMCPEndpoint(&correlationRecorder{}, true)
+		endpoint := buildMCPEndpoint(&correlationRecorder{}, true, nil)
 
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 		req.Header.Set("Origin", "https://evil.example.net")
@@ -176,7 +176,7 @@ func TestBuildMCPEndpoint_CrossOriginRejectionCarriesCorrelationID(t *testing.T)
 	})
 
 	t.Run("disabled: 403 carries no correlation ID", func(t *testing.T) {
-		endpoint := buildMCPEndpoint(&correlationRecorder{}, false)
+		endpoint := buildMCPEndpoint(&correlationRecorder{}, false, nil)
 
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/mcp", nil)
 		req.Header.Set("Origin", "https://evil.example.net")

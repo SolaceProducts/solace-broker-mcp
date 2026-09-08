@@ -27,6 +27,27 @@ import (
 
 func boolPtr(b bool) *bool { return &b }
 
+// strictOutputSchema extracts the strict step-keyed schema from a write
+// tool's declared OutputSchema, unwrapping the oneOf widening (SOL-153341)
+// hasDesiredStateEligibleStep tools get so they can also return
+// {outcome, changed, message[, attributes_verified]} — see outputSchema().
+// Returns schema unchanged when it isn't oneOf-wrapped (a tool with no
+// create-/delete-prefixed step, e.g. update-* or a monitor tool), so
+// existing assertions about the strict shape don't need to know about the
+// widening either way.
+func strictOutputSchema(t *testing.T, schema map[string]any) map[string]any {
+	t.Helper()
+	oneOf, ok := schema["oneOf"].([]any)
+	if !ok {
+		return schema
+	}
+	strict, ok := oneOf[0].(map[string]any)
+	if !ok {
+		t.Fatalf("oneOf[0] type = %T, want map[string]any", oneOf[0])
+	}
+	return strict
+}
+
 // mockClient implements sempv2.Client for testing.
 type mockClient struct {
 	mu        sync.Mutex
@@ -283,7 +304,7 @@ func TestCompositeToolHandler_OutputSchema_WriteToolIsStrict(t *testing.T) {
 	executor := composite.NewCompositeExecutor(operations)
 	handler := NewCompositeToolHandler(writeTestTool(), executor)
 
-	schema := handler.Metadata().OutputSchema
+	schema := strictOutputSchema(t, handler.Metadata().OutputSchema)
 	if schema["additionalProperties"] != false {
 		t.Fatalf("top-level additionalProperties = %v, want false for a write tool", schema["additionalProperties"])
 	}
@@ -336,7 +357,7 @@ func TestCompositeToolHandler_OutputSchema_DeleteToolStaysUsable(t *testing.T) {
 	executor := composite.NewCompositeExecutor(operations)
 	handler := NewCompositeToolHandler(deleteTestTool(), executor)
 
-	schema := handler.Metadata().OutputSchema
+	schema := strictOutputSchema(t, handler.Metadata().OutputSchema)
 	props, ok := schema["properties"].(map[string]any)
 	if !ok {
 		t.Fatal("expected top-level properties map")
@@ -378,7 +399,7 @@ func TestCompositeToolHandler_OutputSchema_RealCatalogWiring(t *testing.T) {
 		return composite.CompositeTool{}
 	}
 
-	writeSchema := NewCompositeToolHandler(find("create-queue"), executor).Metadata().OutputSchema
+	writeSchema := strictOutputSchema(t, NewCompositeToolHandler(find("create-queue"), executor).Metadata().OutputSchema)
 	if writeSchema["additionalProperties"] != false {
 		t.Errorf("create-queue (real catalog): additionalProperties = %v, want false", writeSchema["additionalProperties"])
 	}
@@ -387,6 +408,59 @@ func TestCompositeToolHandler_OutputSchema_RealCatalogWiring(t *testing.T) {
 	addProps, ok := monitorSchema["additionalProperties"].(map[string]any)
 	if !ok || addProps["type"] != "object" {
 		t.Errorf("list-queues (real catalog): expected the unchanged generic envelope, got additionalProperties=%v", monitorSchema["additionalProperties"])
+	}
+}
+
+// TestCompositeToolHandler_OutputSchema_RealCatalogAdmitsDesiredStateNoop is
+// the regression test for the SOL-153341 review's blocking finding: a
+// duplicate create / delete-of-missing-object result used to violate the
+// declared output schema outright (missing the required step key, carrying
+// properties additionalProperties:false forbade), and a validating MCP
+// client would reject the whole CallToolResult before the agent ever saw
+// outcome/changed/message. Validates the actual desiredStateStructuredContent
+// payload against the real, compiled schema for both a create tool
+// (DesiredStateAlreadyExists, with attributes_verified) and a delete tool
+// (DesiredStateAlreadyAbsent, without it) — not a synthetic schema, the one
+// tools/list actually advertises.
+func TestCompositeToolHandler_OutputSchema_RealCatalogAdmitsDesiredStateNoop(t *testing.T) {
+	operations, err := sempv2.ParseSpecs(specs.FS)
+	if err != nil {
+		t.Fatalf("ParseSpecs: %v", err)
+	}
+	realTools, err := composite.LoadTools(definitions.FS, "tools.yaml")
+	if err != nil {
+		t.Fatalf("LoadTools: %v", err)
+	}
+	executor := composite.NewCompositeExecutor(operations)
+
+	find := func(name string) composite.CompositeTool {
+		t.Helper()
+		for _, tool := range realTools {
+			if tool.Name == name {
+				return tool
+			}
+		}
+		t.Fatalf("tool %q not found in the real catalog", name)
+		return composite.CompositeTool{}
+	}
+
+	tests := []struct {
+		toolName string
+		outcome  *desiredStateOutcome
+	}{
+		{"create-queue", &desiredStateOutcome{Outcome: DesiredStateAlreadyExists, Message: "Queue already exists.", AttributesVerified: false}},
+		{"delete-queue", &desiredStateOutcome{Outcome: DesiredStateAlreadyAbsent, Message: "Queue does not exist."}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.toolName, func(t *testing.T) {
+			schema := NewCompositeToolHandler(find(tt.toolName), executor).Metadata().OutputSchema
+			if _, ok := schema["oneOf"]; !ok {
+				t.Fatalf("%s: expected the declared schema to be oneOf-widened for a desired-state-eligible tool", tt.toolName)
+			}
+			if err := ValidateOutput(desiredStateStructuredContent(tt.outcome), schema); err != nil {
+				t.Errorf("%s: real declared schema rejects the noop payload it must admit: %v", tt.toolName, err)
+			}
+		})
 	}
 }
 

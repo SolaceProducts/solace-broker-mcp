@@ -49,6 +49,9 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/hooks"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/resource"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/tracing"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
@@ -60,6 +63,8 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/tools/sempv1/redundancy"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 	"gopkg.in/yaml.v3"
 )
 
@@ -88,25 +93,45 @@ func redactSecretAttr(_ []string, a slog.Attr) slog.Attr {
 // See docs/secure-logging-rules.md Rule 3.
 //
 // The level parameter controls the minimum level emitted. main() calls this
-// twice: once at INFO to bootstrap logging before LoadConfig runs (so config
-// loading itself can emit logs), then again with the user-configured level
-// from cfg.LogLevel after validation.
-func newSlogHandler(level slog.Level) slog.Handler {
+// three times: once (at ERROR) for the standalone --health probe path, once at
+// INFO to bootstrap logging before LoadConfig runs (so config loading itself
+// can emit logs), then again with the user-configured level from cfg.LogLevel
+// after validation.
+//
+// identityAttrs are the resource-derived default attributes (SOL-152425, Story
+// 34: service.name and, when configured, deployment.environment.name and
+// cloud.region — see internal/observability/resource.SlogAttrs) bound onto
+// every line this handler emits. nil for the first two call sites, which run
+// before cfg (and so the identity resource) exists; non-nil for the
+// post-LoadConfig call, which is the only one with an identity to attach.
+func newSlogHandler(level slog.Level, identityAttrs []slog.Attr) slog.Handler {
 	jsonHandler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 		Level:       level,
 		ReplaceAttr: redactSecretAttr,
 	})
 
-	// Wrap the JSON handler so every request-scoped log line carries a
-	// correlation_id attribute (SOL-151280). The wrapper is installed
-	// unconditionally; gating is transitive: correlation.From(ctx) returns "" when
-	// the correlation middleware is not wired (OBS_CORRELATION_ID_ENABLED off) or
-	// for startup/non-request logs, so no correlation_id is emitted and output
-	// matches today exactly. This also covers the pre-config bootstrap handler,
-	// which is built before cfg is available and so cannot consult Enabled(cfg).
-	// Redaction is preserved: the wrapper delegates Handle to jsonHandler, which
-	// still owns and runs the ReplaceAttr filter above.
-	return correlation.NewSlogHandler(jsonHandler)
+	// Bind the identity attributes at the root, below (before) the
+	// correlation wrapper: they are static for the process's lifetime, so
+	// slog's own WithAttrs is sufficient — no per-record decorator logic like
+	// correlation_id's needs, since these values never vary by request.
+	// ReplaceAttr above still runs over every attribute a derived handler
+	// emits, these included.
+	var base slog.Handler = jsonHandler
+	if len(identityAttrs) > 0 {
+		base = jsonHandler.WithAttrs(identityAttrs)
+	}
+
+	// Wrap so every request-scoped log line carries a correlation_id
+	// attribute (SOL-151280). The wrapper is installed unconditionally;
+	// gating is transitive: correlation.From(ctx) returns "" when the
+	// correlation middleware is not wired (OBS_CORRELATION_ID_ENABLED off) or
+	// for startup/non-request logs, so no correlation_id is emitted and
+	// output matches today exactly. This also covers the pre-config
+	// bootstrap handler, which is built before cfg is available and so
+	// cannot consult Enabled(cfg). Redaction is preserved: the wrapper
+	// delegates Handle to base, which still owns and runs the ReplaceAttr
+	// filter above.
+	return correlation.NewSlogHandler(base)
 }
 
 // buildMux creates the HTTP route multiplexer with basic routes.
@@ -504,12 +529,16 @@ func crossOriginProtection(next http.Handler) http.Handler {
 // (correlation.From then returns ""). Cross-origin protection is unconditional:
 // there is no scenario in which disabling it is the right call, so it takes no
 // config flag.
-func buildMCPEndpoint(authedHandler http.Handler, correlationEnabled bool) http.Handler {
+//
+// The active-requests gauge sits outermost so it counts every /mcp request,
+// including ones rejected below (413/403/401). No-op when tm is nil.
+func buildMCPEndpoint(authedHandler http.Handler, correlationEnabled bool, tm *metrics.ToolMetrics) http.Handler {
 	endpoint := crossOriginProtection(authedHandler)
 	if correlationEnabled {
 		endpoint = correlation.Middleware(endpoint)
 	}
-	return limitRequestBody(endpoint, defaults.MaxMCPRequestBytes)
+	endpoint = limitRequestBody(endpoint, defaults.MaxMCPRequestBytes)
+	return tools.ActiveRequestsMiddleware(tm, endpoint)
 }
 
 // startServer starts httpServer in a background goroutine and returns a channel
@@ -546,16 +575,12 @@ func startServer(srv *http.Server, tlsCertFile, tlsKeyFile string) <-chan error 
 // instrument registration, or nil if the provider failed to build or the
 // listener failed to bind (both surface on /readyz).
 //
+// res is the shared identity resource (SOL-152425, Story 34); see
+// resource.New's caller in main() for where it's built.
+//
 // The caller registers the returned provider's Shutdown as a shutdown hook, so
 // the meter provider is flushed on graceful shutdown.
-func startMetricsEndpoint(cfg *config.ServerConfig, readiness *health.ReadinessState) *metrics.Provider {
-	provider, err := metrics.New(version.Version())
-	if err != nil {
-		slog.Error("metrics endpoint unavailable: provider build failed", slog.String("error", err.Error()))
-		readiness.RegisterListener("metrics_endpoint", func() error { return err })
-		return nil
-	}
-
+func serveMetricsEndpoint(cfg *config.ServerConfig, readiness *health.ReadinessState, provider *metrics.Provider) {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", provider.Handler())
 	srv := newHTTPServer(cfg.Observability.MetricsBindAddress, mux)
@@ -567,8 +592,7 @@ func startMetricsEndpoint(cfg *config.ServerConfig, readiness *health.ReadinessS
 		slog.Error("metrics endpoint failed to bind",
 			slog.String("addr", srv.Addr), slog.String("error", err.Error()))
 		readiness.RegisterListener("metrics_endpoint", func() error { return err })
-		_ = provider.Shutdown(context.Background())
-		return nil
+		return
 	}
 
 	// Holds the listener's current state: empty while it serves, or the error if
@@ -588,8 +612,6 @@ func startMetricsEndpoint(cfg *config.ServerConfig, readiness *health.ReadinessS
 			serveErr.Store(&e)
 		}
 	}()
-
-	return provider
 }
 
 // drainAndShutdown performs the SIGTERM graceful-drain sequence (SOL-151288).
@@ -894,22 +916,37 @@ func installToolListFiltering(server *mcp.Server, cfg *config.ServerConfig, poli
 //
 // The order is load-bearing, and this function is the only place it is
 // expressed. AddReceivingMiddleware wraps the current handler, so the LAST
-// registration is the outermost and runs FIRST: the caller Principal must be
-// attached before WithListFiltering reads it. Swapping these two statements
-// would silently strip identity from every tools/list audit record while
-// leaving the rest of the suite green, so TestPrincipalReachesListFiltering
-// calls THIS function — not a copy of its body — and fails if they are
-// reordered.
+// registration is the outermost and runs FIRST. Reordering these statements
+// would silently strip identity from every tools/list audit record, or pin
+// every record to the session's first correlation ID, while leaving the rest
+// of the suite green — so TestPrincipalReachesListFiltering and
+// TestInstallRequestMiddleware_LogsRequestExtraEnabled call THIS function,
+// not a copy of its body.
 func installRequestMiddleware(server *mcp.Server, cfg *config.ServerConfig, policy *authz.Policy, groupsClaimName string) {
 	// Narrow tools/list to what each caller may invoke. Off by default; when
 	// off, AddReceivingMiddleware is never called and dispatch is unchanged.
 	installToolListFiltering(server, cfg, policy, groupsClaimName)
 
-	// Attach the caller Principal every audit site reads (SOL-152087). Last,
-	// so it is outermost — see the order note above. Unconditional: in auth
-	// mode "disabled" no request carries a token, so the middleware attaches
-	// nothing and audit lines keep their no-identity shape.
+	// Attach the caller Principal every audit site reads (SOL-152087). After
+	// the filter, so it runs first and the filter can read what it attaches.
+	// Unconditional: in auth mode "disabled" no request carries a token, so
+	// the middleware attaches nothing and audit lines keep their no-identity
+	// shape.
 	server.AddReceivingMiddleware(auth.PrincipalMiddleware())
+
+	// Copy this POST's Extra.Header onto the JSON-RPC handler ctx so hop 2 and
+	// correlation.From see this request, not initialize (SOL-153935). Last, so
+	// it is outermost and runs first: everything above logs through the
+	// correlation slog handler, which reads the ID off ctx, so the ID must be
+	// refreshed before any of them run. Registration is always on — hop 2 and
+	// correlation.From have no other per-POST pipe — but the correlation copy
+	// inside it is gated on correlationEnabled: with the capability off, the
+	// HTTP correlation.Middleware is never wired (see buildMCPEndpoint), so a
+	// client-supplied traceparent/X-Correlation-ID must not reach ctx here
+	// either, or the capability-off invariant would be false.
+	correlationEnabled := correlation.Enabled(cfg.Observability)
+	server.AddReceivingMiddleware(auth.RequestExtraMiddleware(correlationEnabled))
+	slog.Info("request extra middleware is installed (always on)")
 }
 
 // logStartupBanners emits the boot-time WARN banners: auth-mode signal,
@@ -942,7 +979,7 @@ func main() {
 		// reachable from here is covered by the ReplaceAttr redaction safety net
 		// (secure-logging Rule 3) rather than bypassing it. The probe's own output
 		// goes to stderr directly via healthExitCode, unaffected by this level.
-		slog.SetDefault(slog.New(newSlogHandler(slog.LevelError)))
+		slog.SetDefault(slog.New(newSlogHandler(slog.LevelError, nil)))
 
 		hc := healthConfigFromFile()
 		port := defaults.DefaultPort
@@ -962,7 +999,7 @@ func main() {
 	//    validates it. UnmarshalText is infallible here because validate() in
 	//    the config package already proved cfg.LogLevel is one of the valid
 	//    level names.
-	slog.SetDefault(slog.New(newSlogHandler(slog.LevelInfo)))
+	slog.SetDefault(slog.New(newSlogHandler(slog.LevelInfo, nil)))
 
 	slog.Info("server starting", slog.String("version", version.Version()))
 
@@ -985,6 +1022,33 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Shared identity resource (SOL-152425, Story 34): one construction site
+	// for the default slog attributes, the metrics meter provider, and the
+	// tracer provider (both further down in main), so none of the three can
+	// disagree about which instance emitted a log line, a series, or a span.
+	// Built immediately after cfg loads and applied to slog right away (still
+	// at bootstrap-INFO — see the interim SetDefault below), so it reaches
+	// logStartupBanners next, not just the "config loaded" line after it: an
+	// insecure-mode banner is exactly the kind of line an aggregator needs
+	// attributed to an instance. A build failure is not fatal —
+	// sdkresource.Default() alone is a safe (merely less identifying)
+	// fallback, and refusing to serve MCP traffic over an identity-attribute
+	// problem would be a bad trade.
+	res, err := resource.New(cfg.Observability, version.Version())
+	if err != nil {
+		slog.Error("observability identity resource unavailable; falling back to SDK defaults",
+			slog.String("error", err.Error()))
+		res = sdkresource.Default()
+	}
+	identityAttrs := resource.SlogAttrs(res)
+
+	// Interim reconfigure: still bootstrap-INFO (cfg.LogLevel isn't applied
+	// until below), but now carrying the identity attributes, so
+	// logStartupBanners next — and everything after it — has them. Avoids
+	// leaving the pre-identity bootstrap handler in place for even one more
+	// line.
+	slog.SetDefault(slog.New(newSlogHandler(slog.LevelInfo, identityAttrs)))
+
 	// Loud, refactor-robust signal of the configured client auth mode.
 	// MUST run before the slog handler gets reconfigured to the user log
 	// level — at this point the bootstrap handler is at INFO, so WARN
@@ -993,15 +1057,22 @@ func main() {
 	logStartupBanners(cfg)
 
 	// Reconfigure slog with the user-configured level. cfg.LogLevel is
-	// validated and normalized to one of debug/info/warn/error.
+	// validated and normalized to one of debug/info/warn/error. Same
+	// identityAttrs as above — only the level changes here.
 	var level slog.Level
 	_ = level.UnmarshalText([]byte(cfg.LogLevel))
-	slog.SetDefault(slog.New(newSlogHandler(level)))
+	slog.SetDefault(slog.New(newSlogHandler(level, identityAttrs)))
 
+	// fair_scheduling is reported for the same reason the observability flags
+	// below are: it is documented as a kill switch for a production incident,
+	// so an operator who throws it needs to confirm it took effect, and anyone
+	// reading logs afterwards needs to know which mode the pod ran in. Safe to
+	// dereference — applyDefaults fills it (SOL-153441).
 	slog.Info("config loaded",
 		slog.Int("broker_count", len(cfg.BrokerAliases())),
 		slog.Int("port", cfg.Port),
-		slog.String("log_level", cfg.LogLevel))
+		slog.String("log_level", cfg.LogLevel),
+		slog.Bool("fair_scheduling", *cfg.SEMP.FairScheduling))
 
 	// One-line summary of which observability capabilities are enabled, so
 	// operators can confirm the door-closing defaults and any OBS_* overrides
@@ -1111,11 +1182,45 @@ func main() {
 		Version: version.Version(),
 	}, nil)
 
+	// Build the metrics provider before the manager and the /mcp listener, so the
+	// recorder is wired before any request is served. nil when off or the build
+	// fails (recorder methods are nil-safe); the listener starts later.
+	var metricsProvider *metrics.Provider
+	var toolMetrics *metrics.ToolMetrics
+	var metricsBuildErr error
+	if metrics.Enabled(cfg.Observability) {
+		if metricsProvider, metricsBuildErr = metrics.New(version.Version(), res); metricsBuildErr != nil {
+			slog.Error("metrics provider build failed", slog.String("error", metricsBuildErr.Error()))
+		} else if tm, tmErr := metricsProvider.ToolMetrics(); tmErr != nil {
+			slog.Error("tool metrics unavailable", slog.String("error", tmErr.Error()))
+		} else {
+			toolMetrics = tm
+		}
+	}
+
+	// mcp_panic_recovered_total{boundary} (SOL-154037): the one counter both
+	// request-path recovery nets increment — recovery.HTTPMiddleware (wrapped
+	// around the mux by buildRootHandler below) and withRecovery (installed by
+	// RegisterWithServer below). Both reach it as process state rather than
+	// through a parameter; see the package doc on internal/observability/panics
+	// for why. Registered here, immediately after the provider itself is
+	// built and well before tool registration, the mux, or startServer below
+	// — so there is no window in which a request could be served before the
+	// counter exists. With no provider (metrics off, or its build failed)
+	// the counter is never registered and both sites' increments are no-ops.
+	// Recovery itself is unconditional either way, so a failure here costs a
+	// signal, not a safety net.
+	if metricsProvider != nil {
+		if err := panics.Register(metricsProvider.MeterProvider()); err != nil {
+			slog.Error("panic counter unavailable: registration failed", slog.String("error", err.Error()))
+		}
+	}
+
 	// 8. Create the tool manager and register every tool the server exposes.
 	// All registrations happen in one block so the log line below is a
 	// reliable phase boundary — anything before it is registered, anything
 	// after it sees a fully-loaded server.
-	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor)
+	mgr := tools.NewToolManagerFromComposite(pool, compositeTools, executor, toolMetrics)
 	registerSEMPv1Tools(mgr)
 	registerMixedTools(mgr)
 
@@ -1150,12 +1255,12 @@ func main() {
 	// list-brokers is registered directly (no broker resolution needed) and
 	// takes no policy — the RBAC exemption is expressed structurally at this
 	// API surface.
-	tools.RegisterListBrokers(server, pool)
+	tools.RegisterListBrokers(server, pool, toolMetrics)
 
 	// describe-semp-schema is a discovery tool over the embedded SEMPv2 OpenAPI
 	// spec. Registered outside mgr like list-brokers — no broker resolution,
 	// no policy wrapping.
-	if err := tools.RegisterDescribeSempSchema(server, specs.FS); err != nil {
+	if err := tools.RegisterDescribeSempSchema(server, specs.FS, toolMetrics); err != nil {
 		slog.Error("failed to register describe-semp-schema tool",
 			slog.String("error", err.Error()))
 		os.Exit(1)
@@ -1229,7 +1334,7 @@ func main() {
 	// Register authenticated MCP endpoint. buildMCPEndpoint wraps the body
 	// limit on the outside so it bounds the request before any layer buffers
 	// it; see buildMCPEndpoint for the full layer order and 413 rationale.
-	mux.Handle("/mcp", buildMCPEndpoint(authedHandler, correlationEnabled))
+	mux.Handle("/mcp", buildMCPEndpoint(authedHandler, correlationEnabled, toolMetrics))
 
 	registerMetadataRoutes(mux, cfg)
 
@@ -1266,13 +1371,46 @@ func main() {
 
 	serverErr := startServer(httpServer, cfg.TLSCertFile, cfg.TLSKeyFile)
 
-	// Metrics endpoint: a second listener on its own port, only when enabled.
-	// Registered before SetInitialized so a bind failure shows on the first
-	// /readyz check. The provider's flush is registered as a shutdown hook.
-	if metrics.Enabled(cfg.Observability) {
-		if provider := startMetricsEndpoint(cfg, readiness); provider != nil {
-			shutdownHooks.Register("metrics_provider", provider.Shutdown)
-		}
+	// Metrics endpoint: start the listener for the provider built above,
+	// registered before SetInitialized so a bind or build failure shows on the
+	// first /readyz check. The provider's flush is a shutdown hook.
+	if metricsProvider != nil {
+		serveMetricsEndpoint(cfg, readiness, metricsProvider)
+		shutdownHooks.Register("metrics_provider", metricsProvider.Shutdown)
+	} else if metricsBuildErr != nil {
+		readiness.RegisterListener("metrics_endpoint", func() error { return metricsBuildErr })
+	}
+
+	// Tracing (SOL-152420): does nothing when disabled, or installs the real
+	// OTLP-exporting provider when enabled — tracing.New handles both
+	// branches internally. The self-observation counters register against
+	// the metrics provider's meter provider when one exists (nil otherwise);
+	// either way they keep counting, and the periodic INFO fallback
+	// (Decision #12) covers the no-meter-provider case. A build failure here
+	// is non-fatal: tracing has no listener and no readiness surface of its
+	// own, so the server keeps serving without it. Passed the SAME res as
+	// metrics above (SOL-152425): this is the anti-drift guarantee — one
+	// resource, not two independently constructed ones that could disagree.
+	var meterProviderForTracing *sdkmetric.MeterProvider
+	if metricsProvider != nil {
+		meterProviderForTracing = metricsProvider.MeterProvider()
+	}
+	tracerProvider, err := tracing.New(cfg.Observability, meterProviderForTracing, res)
+	if err != nil {
+		// No err.Error(): tracing.New wraps otlptracegrpc.New, whose returned
+		// error can echo back OTEL_EXPORTER_OTLP_HEADERS or a malformed
+		// endpoint URL — operator-supplied, unaudited text that
+		// conventionally carries a collector auth token
+		// (docs/internal/secure-logging-rules.md Rule 5), same reasoning as
+		// the shutdown-hook failure log below. That covers this err value;
+		// it does not by itself close the class, since the SDK's env-var
+		// parsing can log the same material through its own global
+		// error/log channel before this error even exists — tracing.New
+		// routes that channel into slog with no raw text (see
+		// installOTelDiagnostics), which is the other half of this.
+		slog.Error("tracing unavailable: provider build failed")
+	} else if tracerProvider != nil {
+		shutdownHooks.Register("tracer_provider", tracerProvider.Shutdown)
 	}
 
 	// Startup is complete and the serving goroutine has been launched:

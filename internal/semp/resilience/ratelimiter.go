@@ -62,6 +62,16 @@ func NewRateLimiter(interval time.Duration) *RateLimiter {
 // C returns the channel a Sender receives from before admitting a request.
 func (r *RateLimiter) C() <-chan time.Time { return r.c }
 
+// Enabled reports whether throttling is actually on — that is, whether C()
+// carries a running ticker rather than the closed channel a non-positive
+// interval yields.
+//
+// This distinction is invisible to Sender.Do, which only ever selects on the
+// channel and falls straight through when it is closed. It is essential to the
+// Scheduler, which runs a dispatcher loop: looping on a closed channel would
+// burn a full core per broker for the life of the process.
+func (r *RateLimiter) Enabled() bool { return r.ticker != nil }
+
 // Stop releases the underlying ticker. Safe on a limiter with throttling
 // disabled, and safe to call more than once. Owned by BrokerClient.Close(),
 // which is the single stop site for the broker's limiter.

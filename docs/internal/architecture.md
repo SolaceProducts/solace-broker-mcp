@@ -45,7 +45,7 @@ internal/
 ├── semp/                       BrokerPool + BrokerClient — lazy per-broker client creation, thread-safe (RWMutex)
 │   ├── auth/                   Broker (outbound) auth: basic / bearer / oauth Authenticator implementations
 │   ├── correlationhdr/         Writes correlation ID (X-Correlation-ID + traceparent) onto outbound SEMP requests
-│   ├── resilience/             Sender: method-aware retries, cookie jar; reads the broker's shared rate limiter + in-flight cap
+│   ├── resilience/             Sender: method-aware retries, cookie jar; admission via the broker's fair Scheduler over its shared rate limiter + in-flight cap
 │   ├── sempv1/                 SEMPv1 client — XML envelope protocol
 │   └── sempv2/                 SEMPv2 client — HTTP + embedded OpenAPI specs (private monitor + private config)
 │       └── specs/              Embedded Swagger JSON: private monitor (reads) + private config (writes)
@@ -86,7 +86,7 @@ graph TB
 
     subgraph "internal/auth + identity"
         VERIFY["middleware.go<br/>bearer verify, claims → TokenInfo"]
-        RAWTOK["raw_subject_token.go<br/>capture raw JWT for hop 2"]
+        RAWTOK["request_extra.go<br/>capture raw JWT for hop 2 (SOL-153935)"]
         IDENT["tools/identity.go<br/>log-only audit Identity"]
     end
 
@@ -179,10 +179,23 @@ Identity crosses two hops:
   (`internal/tools/identity.go`, carrying `sub`/`iss`/`client_id`/`jti` only —
   no access level or scope). Population is MCP receiving middleware rather
   than HTTP middleware because a tool handler's context descends from the POST
-  that established the session, not the current one.
+  that established the session, not the current one. `auth.RequestExtraMiddleware`
+  (`internal/auth/request_extra.go`) is what makes that possible: it copies the
+  current message's `Extra.Header` onto the handler ctx (raw bearer for hop 2,
+  and the correlation ID when `OBS_CORRELATION_ID_ENABLED` is on), so hop 2 and
+  `correlation.From` see this POST rather than the `initialize` snapshot the
+  stateful streamable session froze (SOL-153935). `installRequestMiddleware`
+  in `cmd/server/main.go` registers it LAST among the MCP receiving
+  middlewares, so `AddReceivingMiddleware`'s LIFO wrapping makes it outermost
+  and it runs FIRST — every other receiving middleware (list filtering,
+  `PrincipalMiddleware`) must see the refreshed ctx before it runs. That
+  ordering is pinned by
+  `TestInstallRequestMiddleware_RequestExtraRunsBeforeEveryEmitSite`
+  (`cmd/server/request_extra_wiring_test.go`).
 
 - **Hop 2 (outbound, GATED):** for brokers with `auth.mode: oauth`, the raw
-  subject token captured at `internal/auth/raw_subject_token.go:59` is exchanged
+  subject token captured by `auth.RequestExtraMiddleware`
+  (`internal/auth/request_extra.go:66`) is exchanged
   (RFC 8693, `internal/tokenexchange/exchange.go:30`) for a broker-scoped token,
   cached and singleflight-deduped. Hop 2 is built only when `Hop2OAuthActive()`
   is true (`cmd/server/main.go`); under `basic`/`bearer` broker auth a shared
@@ -279,8 +292,8 @@ The executor supports two `result.strategy` values:
 
 Write tools are **registered only when `enable_write_tools` is true** (default
 false). The gate is a single check at registration
-(`internal/tools/register.go:149`, `isWriteTool` = `!ReadOnly`,
-`register.go:181`): a write tool that isn't registered never appears in
+(the `isWriteTool` check in `RegisterWithServer`, `isWriteTool` = `!ReadOnly`,
+`internal/tools/register.go`): a write tool that isn't registered never appears in
 `tools/list` and cannot be invoked. This gates **every** state-changing tool —
 destructive or not — so a default deployment exposes only the read set.
 
@@ -350,7 +363,7 @@ sequenceDiagram
 
 | Signal | Status | Notes |
 |---|---|---|
-| **Correlation ID** | Implemented | `/mcp` middleware resolves traceparent → `X-Correlation-ID` → generated UUIDv7 (`internal/observability/correlation/middleware.go:97`); stamped on every request-scoped slog record and echoed on the response header; propagated to the broker via `internal/semp/correlationhdr/correlationhdr.go:48`; also stamped on `CallToolResult.Meta` (`internal/tools/register.go`). Default ON. |
+| **Correlation ID** | Implemented | `/mcp` middleware resolves traceparent → `X-Correlation-ID` → generated UUIDv7 (`internal/observability/correlation/middleware.go:97`); stamped on every request-scoped slog record and echoed on the response header; the resolved ID is also written back onto the inbound `X-Correlation-ID` request header before `next` runs, so the SDK's per-message `Extra.Header` carries it even when the client generated none. Propagated to the broker via `internal/semp/correlationhdr/correlationhdr.go:48`; also stamped on `CallToolResult.Meta` (`internal/tools/register.go`). Default ON. |
 | **Health / readiness** | Implemented | `/livez`, `/health`, `/readyz` (readiness decoupled from broker per ADR-004; `internal/observability/health/readiness.go`). |
 | **Audit log** | Skeleton | Capability gate only (`internal/observability/audit/audit.go:27`); record emission not yet implemented. Default OFF. |
 | **Metrics** | Skeleton | Capability gate only (`internal/observability/metrics/metrics.go:27`); instruments/export not yet implemented. Default OFF. |
@@ -360,6 +373,18 @@ sequenceDiagram
 Middleware ordering on `/mcp` (outermost first): panic recovery → body-limit →
 correlation → auth. Correlation sits **outside** auth so a 401 still gets an ID;
 body-limit sits outside correlation so a 413 does not (`cmd/server/main.go`).
+
+That HTTP-layer order is separate from — and does not by itself guarantee —
+the MCP *receiving*-middleware order `installRequestMiddleware` builds inside
+the SDK server (`server.AddReceivingMiddleware`, LIFO: last registered runs
+first). There, `auth.RequestExtraMiddleware` must be registered LAST so it is
+outermost and refreshes the handler ctx (bearer, correlation ID) before
+`tools.WithListFiltering` and `auth.PrincipalMiddleware` run; see the Hop 1
+section above and `cmd/server/request_extra_wiring_test.go`. When
+`OBS_CORRELATION_ID_ENABLED` is off, `auth.RequestExtraMiddleware` itself skips
+the correlation copy (it does not just rely on the HTTP layer omitting
+`correlation.Middleware`), so a client-supplied `traceparent`/`X-Correlation-ID`
+cannot revive a correlation ID while the capability is off.
 
 ---
 
@@ -373,7 +398,7 @@ sequenceDiagram
     participant HC as Sender + HTTPClient<br/>(prod-us)
     participant Broker as Solace Broker<br/>(prod-us)
 
-    Note over Pool,HC: Same BrokerClient instance<br/>Shared in-flight semaphore + rate limiter + TCP pool<br/>(created lazily on first call)
+    Note over Pool,HC: Same BrokerClient instance<br/>Shared in-flight semaphore + rate limiter + admission scheduler + TCP pool<br/>(created lazily on first call)<br/>Pace is shared round-robin per caller (semp.fair_scheduling)
 
     par User A tool call
         A->>Pool: GetSempV2("prod-us")
@@ -461,8 +486,9 @@ cap is per broker.
 | **Composite Executor** | Tool definitions, steps, templates, result strategies | Brokers, HTTP, auth | `internal/composite/executor.go` |
 | **postprocess handlers** | Step result maps → summary | HTTP, brokers, MCP protocol | `internal/composite/postprocess/` |
 | **BrokerPool** | Map of configs, lazy client creation, RWMutex | Tools, MCP protocol, HTTP details | `internal/semp/pool.go` |
-| **BrokerClient** | SEMPv1 + SEMPv2 clients, authenticator; wires the cookie jar (basic auth only) and the shared per-broker in-flight semaphore and rate limiter at construction, then hands them downstream. Owns the rate limiter's lifetime — `Close()` is its single stop site | Tools, steps, MCP protocol | `internal/semp/broker.go:26` |
-| **resilience Sender** | Rate limiting, method-aware retry, in-flight cap, auth-failure re-auth | Tools, brokers by name, MCP protocol | `internal/semp/resilience/` |
+| **BrokerClient** | SEMPv1 + SEMPv2 clients, authenticator; wires the cookie jar (basic auth only) and the shared per-broker in-flight semaphore, rate limiter and admission scheduler at construction, then hands them downstream. Owns the lifetime of both the rate limiter and the scheduler — `Close()` is the single stop site for each, and stopping the scheduler is what ends its dispatcher goroutine and releases parked waiters | Tools, steps, MCP protocol | `internal/semp/broker.go:26` |
+| **resilience Sender** | Rate limiting, method-aware retry, in-flight cap, admission bound and shedding, auth-failure re-auth | Tools, brokers by name, MCP protocol | `internal/semp/resilience/` |
+| **resilience Scheduler** | Per-broker fair admission: round-robin over per-caller queues for the pace, per-caller ceiling and last-slot reservation for in-flight slots, caller-state lifecycle | Who a caller *is* (it receives an opaque key), HTTP, retries, brokers by name | `internal/semp/resilience/scheduler.go` |
 | **Broker Authenticator** | basic / bearer / oauth outbound auth | Tools, MCP protocol | `internal/semp/auth/` |
 | **sempv2.HTTPClient** | HTTP calls, auth headers, JSON parsing, correlation header | Tools, brokers, MCP protocol | `internal/semp/sempv2/client.go` |
 | **sempv1.HTTPClient** | SEMPv1 XML envelope, correlation header | Tools, brokers, MCP protocol | `internal/semp/sempv1/client.go` |

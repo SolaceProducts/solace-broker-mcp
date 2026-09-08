@@ -12,7 +12,7 @@ itself**, and which are **not compiled into the shipped binary**.
 > Legal checklist, which asks for a "list of all used 3rd party products used at
 > build and test time" alongside the release list.
 
-**Generated** 2026-09-03; the GitHub Actions section was refreshed 2026-08-07
+**Generated** 2026-09-04; the GitHub Actions section was refreshed 2026-08-07
 when Guardian enrollment re-pinned every action to a commit SHA, and again
 2026-08-14 when the Dependabot `github-actions` group update moved the five
 `solace-public-workflows` actions to a newer commit on the same branch. Every
@@ -178,8 +178,8 @@ note spells out.
 | `docker/metadata-action` | `dc80280` | v6.2.0 | Apache-2.0 | [license](https://github.com/docker/metadata-action/blob/v6.2.0/LICENSE) |
 | `docker/setup-buildx-action` | `37fe631` | v4.3.0 | Apache-2.0 | [license](https://github.com/docker/setup-buildx-action/blob/v4.3.0/LICENSE) |
 | `docker/setup-qemu-action` | `96fe6ef` | v4.2.0 | Apache-2.0 | [license](https://github.com/docker/setup-qemu-action/blob/v4.2.0/LICENSE) |
-| `github/codeql-action/analyze` | `ff2f1c6` | v4.37.7 | MIT | [license](https://github.com/github/codeql-action/blob/v4.37.7/LICENSE) |
-| `github/codeql-action/init` | `ff2f1c6` | v4.37.7 | MIT | [license](https://github.com/github/codeql-action/blob/v4.37.7/LICENSE) |
+| `github/codeql-action/analyze` | `db488dd` | v4.37.8 | MIT | [license](https://github.com/github/codeql-action/blob/v4.37.8/LICENSE) |
+| `github/codeql-action/init` | `db488dd` | v4.37.8 | MIT | [license](https://github.com/github/codeql-action/blob/v4.37.8/LICENSE) |
 | `golangci/golangci-lint-action` | `ba0d7d2` | v9.3.0 | MIT | [license](https://github.com/golangci/golangci-lint-action/blob/v9.3.0/LICENSE) |
 | `softprops/action-gh-release` | `3d0d988` | v3.0.2 | MIT | [license](https://github.com/softprops/action-gh-release/blob/v3.0.2/LICENSE) |
 

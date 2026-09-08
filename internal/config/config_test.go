@@ -3944,6 +3944,100 @@ func TestReadResolvedConfigFile_ResolvesVarsFromEnvFile(t *testing.T) {
 	}
 }
 
+// semp.fair_scheduling shares a broker's pace across callers (SOL-153441) and
+// defaults to TRUE, which is why the field has to be a pointer.
+//
+// This is the opposite direction from every other pointer field in SEMPConfig.
+// Those exist so an operator's explicit 0 survives defaulting; this one exists
+// because a plain bool cannot tell "omitted" from "false", so an omitted field
+// would silently disable the feature for every deployment that never mentions
+// it — which is all of them.
+func TestLoadConfig_FairScheduling_DefaultsToEnabled(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SEMP.FairScheduling == nil {
+		t.Fatal("fair_scheduling was left nil by applyDefaults; downstream code dereferences it")
+	}
+	if !*cfg.SEMP.FairScheduling {
+		t.Error("fair_scheduling defaulted to false: omitting the field must not disable " +
+			"fairness, or no deployment gets it without opting in")
+	}
+	if *cfg.SEMP.FairScheduling != defaults.DefaultFairScheduling {
+		t.Errorf("fair_scheduling = %v, want the package default %v",
+			*cfg.SEMP.FairScheduling, defaults.DefaultFairScheduling)
+	}
+}
+
+// The kill switch has to actually switch off. An operator reaching for this
+// during an incident must not have it silently re-enabled by defaulting.
+func TestLoadConfig_FairScheduling_ExplicitFalseHonored(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+semp:
+  fair_scheduling: false
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SEMP.FairScheduling == nil {
+		t.Fatal("fair_scheduling was nil after being set explicitly to false")
+	}
+	if *cfg.SEMP.FairScheduling {
+		t.Error("an explicit fair_scheduling: false was overwritten by the default; the " +
+			"kill switch does not work")
+	}
+}
+
+// And explicit true is honored, so the shipped config files that state it
+// mean what they say.
+func TestLoadConfig_FairScheduling_ExplicitTrueHonored(t *testing.T) {
+	yaml := `
+mcp_client_auth:
+  mode: static
+  dev_token: test
+semp:
+  fair_scheduling: true
+brokers:
+  dev:
+    url: "http://localhost:8080"
+    auth:
+      mode: basic
+      username: admin
+      password: secret
+`
+	cfg, err := LoadConfig(writeTemp(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SEMP.FairScheduling == nil || !*cfg.SEMP.FairScheduling {
+		t.Errorf("expected fair_scheduling true, got %v", cfg.SEMP.FairScheduling)
+	}
+}
+
 // semp.max_queue_wait bounds how long a request waits for admission before it
 // is shed (SOL-153442). Omitted, it must take the default; the pointer type is
 // what lets applyDefaults tell "omitted" from an operator's explicit 0.

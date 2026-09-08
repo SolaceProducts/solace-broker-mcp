@@ -169,6 +169,12 @@ semp:
   # Max wait for admission (pacing + in-flight slot) before a request is
   # rejected instead of queued. 0 waits indefinitely.
   max_queue_wait: 30s
+  # Share each broker's pace round-robin across callers instead of
+  # first-come-first-served, so one caller's burst cannot starve another.
+  # A kill switch, not a capacity control: it reslices the budget set by
+  # request_min_interval and max_concurrent_per_broker rather than adding to
+  # it, and a single active caller still gets all of it. Leave it on.
+  fair_scheduling: true
   retries: 10
   retry_min_interval: 3s
   retry_max_interval: 30s

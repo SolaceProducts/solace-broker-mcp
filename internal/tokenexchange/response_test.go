@@ -181,6 +181,43 @@ func TestParseIdPResponse_NonJSONContentTypeReturnsInvalidResponse(t *testing.T)
 	}
 }
 
+// T04b: An oversized Content-Type media type (> maxEchoedFieldLen bytes) is
+// reported without echoing it into the message — same cap and reasoning as
+// T20's error-code cap. This channel is the widest of the four capped
+// fields: it comes from a response HEADER, not the body, so maxResponseBody
+// (T03) never bounds it.
+func TestParseIdPResponse_OversizedContentTypeOmitsValue(t *testing.T) {
+	t.Parallel()
+
+	e, err := New(validParams(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	longType := "x/" + strings.Repeat("a", maxEchoedFieldLen+1)
+	resp := &http.Response{
+		StatusCode: 200,
+		Header:     http.Header{"Content-Type": []string{longType}},
+		Body:       io.NopCloser(strings.NewReader("<html>Login page</html>")),
+	}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	tok, err := e.parseIdPResponse(resp, now)
+
+	if tok != nil {
+		t.Errorf("tok = %v, want nil", tok)
+	}
+	if !errors.Is(err, ErrInvalidResponse) {
+		t.Errorf("errors.Is(err, ErrInvalidResponse) = false, want true; err = %v", err)
+	}
+	if !strings.Contains(err.Error(), "oversized Content-Type") {
+		t.Errorf("err.Error() = %q, want it to contain \"oversized Content-Type\"", err.Error())
+	}
+	if strings.Contains(err.Error(), longType) {
+		t.Errorf("err.Error() = %q, want it to NOT contain the oversized raw value", err.Error())
+	}
+}
+
 // T05: A missing Content-Type header bypasses the content-type guard; if the
 // body is valid JSON the call succeeds.
 func TestParseIdPResponse_MissingContentTypeBypassesGuard(t *testing.T) {
@@ -453,6 +490,66 @@ func TestParseSuccessBody_IssuedTokenTypeExactMatchRequired(t *testing.T) {
 	}
 }
 
+// T12b: An oversized token_type (> maxEchoedFieldLen bytes) is reported
+// without echoing it into the message — the same cap and reasoning as the
+// error-code cap (T20 in this file): span.RecordError copies Message
+// verbatim into the span's exception event with no length limit of its own.
+func TestParseSuccessBody_OversizedTokenTypeOmitsValue(t *testing.T) {
+	t.Parallel()
+
+	e, err := New(validParams(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	longType := strings.Repeat("a", maxEchoedFieldLen+1)
+	body := fmt.Sprintf(`{"access_token":"tok","token_type":%q,"issued_token_type":"urn:ietf:params:oauth:token-type:access_token","expires_in":3600}`, longType)
+
+	tok, err := e.parseSuccessBody([]byte(body), now)
+
+	if tok != nil {
+		t.Errorf("tok = %v, want nil", tok)
+	}
+	if !errors.Is(err, ErrInvalidResponse) {
+		t.Errorf("errors.Is(err, ErrInvalidResponse) = false, want true; err = %v", err)
+	}
+	if !strings.Contains(err.Error(), "oversized token_type") {
+		t.Errorf("err.Error() = %q, want it to contain \"oversized token_type\"", err.Error())
+	}
+	if strings.Contains(err.Error(), longType) {
+		t.Errorf("err.Error() = %q, want it to NOT contain the oversized raw value", err.Error())
+	}
+}
+
+// T12c: An oversized issued_token_type is reported the same way as an
+// oversized token_type (T12b) — same cap, same reasoning.
+func TestParseSuccessBody_OversizedIssuedTokenTypeOmitsValue(t *testing.T) {
+	t.Parallel()
+
+	e, err := New(validParams(t)) // sets GrantTypeTokenExchange
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	longType := strings.Repeat("a", maxEchoedFieldLen+1)
+	body := fmt.Sprintf(`{"access_token":"tok","token_type":"Bearer","issued_token_type":%q,"expires_in":3600}`, longType)
+
+	tok, err := e.parseSuccessBody([]byte(body), now)
+
+	if tok != nil {
+		t.Errorf("tok = %v, want nil", tok)
+	}
+	if !errors.Is(err, ErrInvalidResponse) {
+		t.Errorf("errors.Is(err, ErrInvalidResponse) = false, want true; err = %v", err)
+	}
+	if !strings.Contains(err.Error(), "oversized issued_token_type") {
+		t.Errorf("err.Error() = %q, want it to contain \"oversized issued_token_type\"", err.Error())
+	}
+	if strings.Contains(err.Error(), longType) {
+		t.Errorf("err.Error() = %q, want it to NOT contain the oversized raw value", err.Error())
+	}
+}
+
 // T13: The issued_token_type check is skipped for any grant type other than
 // GrantTypeTokenExchange (e.g. jwt-bearer / Entra OBO flows that don't return
 // issued_token_type at all).
@@ -711,19 +808,19 @@ func TestParseIdPResponse_ThreexxAndFivexxReturnExchangeTransport(t *testing.T) 
 	}
 }
 
-// T20: An oversized error code (> maxErrorCodeLen bytes) routes to
+// T20: An oversized error code (> maxEchoedFieldLen bytes) routes to
 // ErrInvalidResponse (non-retryable — the IdP is misbehaving or the
 // response is intercepted, neither of which a retry will fix) and
 // prevents log-line bloat by omitting the oversized code from the
-// message. A code at exactly maxErrorCodeLen bytes routes to
+// message. A code at exactly maxEchoedFieldLen bytes routes to
 // ErrExchangeRejected with the full code.
 func TestClassifyClientError_OversizedErrorCodeReturnsInvalidResponse(t *testing.T) {
 	t.Parallel()
 
-	longCode := strings.Repeat("a", maxErrorCodeLen+1) // 65 bytes
+	longCode := strings.Repeat("a", maxEchoedFieldLen+1) // 65 bytes
 	body := fmt.Sprintf(`{"error":%q}`, longCode)
 
-	exactCode := strings.Repeat("b", maxErrorCodeLen) // 64 bytes
+	exactCode := strings.Repeat("b", maxEchoedFieldLen) // 64 bytes
 	exactBody := fmt.Sprintf(`{"error":%q}`, exactCode)
 
 	errOver := classifyClientError([]byte(body), 400)

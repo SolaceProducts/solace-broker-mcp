@@ -87,7 +87,7 @@ func TestNewSlogHandler_RedactsInRenderedOutput(t *testing.T) {
 	// sink, and we don't want to change the signature for a test. The swap is
 	// scoped and restored via defer.
 	buf := captureStderr(t, func() {
-		logger := slog.New(newSlogHandler(slog.LevelInfo))
+		logger := slog.New(newSlogHandler(slog.LevelInfo, nil))
 		logger.Info("msg", slog.String("password", sentinel), slog.String("username", "alice"))
 	})
 
@@ -104,6 +104,36 @@ func TestNewSlogHandler_RedactsInRenderedOutput(t *testing.T) {
 	// Sanity-check that the emitted line is still valid JSON.
 	if !json.Valid([]byte(firstLine(buf))) {
 		t.Fatalf("output is not valid JSON:\n%s", buf)
+	}
+}
+
+// TestNewSlogHandler_IdentityAttrs pins the identityAttrs parameter
+// (SOL-152425, Story 34): every line carries them when non-nil, and none do
+// when nil (the two bootstrap/health-probe call sites, which run before cfg
+// — and so the identity resource — exists).
+func TestNewSlogHandler_IdentityAttrs(t *testing.T) {
+	identity := []slog.Attr{
+		slog.String("service.name", "test-service"),
+		slog.String("deployment.environment.name", "test-env"),
+	}
+
+	buf := captureStderr(t, func() {
+		logger := slog.New(newSlogHandler(slog.LevelInfo, identity))
+		logger.Info("msg")
+	})
+	if !strings.Contains(buf, `"service.name":"test-service"`) {
+		t.Fatalf("expected service.name in output, got:\n%s", buf)
+	}
+	if !strings.Contains(buf, `"deployment.environment.name":"test-env"`) {
+		t.Fatalf("expected deployment.environment.name in output, got:\n%s", buf)
+	}
+
+	bufNil := captureStderr(t, func() {
+		logger := slog.New(newSlogHandler(slog.LevelInfo, nil))
+		logger.Info("msg")
+	})
+	if strings.Contains(bufNil, "service.name") {
+		t.Fatalf("nil identityAttrs must add nothing, got:\n%s", bufNil)
 	}
 }
 

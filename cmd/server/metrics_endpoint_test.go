@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	sdkresource "go.opentelemetry.io/otel/sdk/resource"
+
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/hooks"
@@ -34,9 +36,10 @@ func metricsConfig(bindAddr string) *config.ServerConfig {
 	}
 }
 
-// A bind failure must surface on /readyz as "metrics_endpoint: <err>" and the
-// provider must not be returned, since the endpoint is not serving.
-func TestStartMetricsEndpoint_BindFailureIsUnready(t *testing.T) {
+// A bind failure must surface on /readyz as "metrics_endpoint: <err>". The
+// provider is built separately now (before the tool manager); serveMetricsEndpoint
+// only starts the listener.
+func TestServeMetricsEndpoint_BindFailureIsUnready(t *testing.T) {
 	// Occupy an address so the metrics listener cannot bind to it.
 	var lc net.ListenConfig
 	occupied, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
@@ -45,11 +48,14 @@ func TestStartMetricsEndpoint_BindFailureIsUnready(t *testing.T) {
 	}
 	defer occupied.Close()
 
-	readiness := health.NewReadinessState()
-	provider := startMetricsEndpoint(metricsConfig(occupied.Addr().String()), readiness)
-	if provider != nil {
-		t.Error("expected a nil provider when the listener fails to bind")
+	provider, err := metrics.New(version.Version(), sdkresource.Default())
+	if err != nil {
+		t.Fatalf("metrics.New: %v", err)
 	}
+	defer provider.Shutdown(context.Background())
+
+	readiness := health.NewReadinessState()
+	serveMetricsEndpoint(metricsConfig(occupied.Addr().String()), readiness, provider)
 
 	readiness.SetInitialized()
 	_, ready, reason := readiness.Evaluate()
@@ -61,14 +67,16 @@ func TestStartMetricsEndpoint_BindFailureIsUnready(t *testing.T) {
 	}
 }
 
-// A successful bind must return the provider and leave /readyz ready.
-func TestStartMetricsEndpoint_SuccessIsReady(t *testing.T) {
-	readiness := health.NewReadinessState()
-	provider := startMetricsEndpoint(metricsConfig("127.0.0.1:0"), readiness)
-	if provider == nil {
-		t.Fatal("expected a non-nil provider on a successful bind")
+// A successful bind must leave /readyz ready.
+func TestServeMetricsEndpoint_SuccessIsReady(t *testing.T) {
+	provider, err := metrics.New(version.Version(), sdkresource.Default())
+	if err != nil {
+		t.Fatalf("metrics.New: %v", err)
 	}
 	defer provider.Shutdown(context.Background())
+
+	readiness := health.NewReadinessState()
+	serveMetricsEndpoint(metricsConfig("127.0.0.1:0"), readiness, provider)
 
 	readiness.SetInitialized()
 	status, ready, reason := readiness.Evaluate()
@@ -80,7 +88,7 @@ func TestStartMetricsEndpoint_SuccessIsReady(t *testing.T) {
 // The provider's Shutdown must satisfy the shutdown-hook contract (SOL-153884):
 // registrable on a hooks.Registry and run cleanly, well within RunAll's budget.
 func TestMetricsProvider_ShutdownHook(t *testing.T) {
-	provider, err := metrics.New(version.Version())
+	provider, err := metrics.New(version.Version(), sdkresource.Default())
 	if err != nil {
 		t.Fatalf("metrics.New: %v", err)
 	}

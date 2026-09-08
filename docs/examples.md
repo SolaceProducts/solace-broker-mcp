@@ -106,7 +106,7 @@ parameters. Representative queries and the shape they return:
 | "Why is orders.q backing up?" | `get-queue-metrics` | envelope `{ "queueMetrics": { "spooledMsgCount": ..., "txUnackedMsgCount": ..., "bindCount": ... } }` |
 | "Are there slow subscribers on the default VPN?" | `list-slow-subscribers` | envelope `{ "slowSubscribers": [ ... ] }` (empty array if none) |
 | "Are we dropping messages anywhere?" | `get-discard-stats` | `{ "clientDiscards": {...}, "spoolDiscards": {...} }` |
-| "Create a queue orders.q in the default VPN" | `create-queue` | envelope `{ "createQueue": { ... } }` (agent confirms first; write tool) |
+| "Create a queue orders.q in the default VPN, then subscribe it to orders/>" | `create-queue` then `create-queue-subscription` | a bare `create-queue` alone leaves the queue inert — it attracts no messages until a subscription is added |
 
 Read-only tools return their event broker data in a step-keyed envelope. See
 [Tools Reference → Output](tools-reference.md#output-the-step-keyed-envelope).
@@ -144,6 +144,7 @@ request). Replace `prod-broker` with one of your configured aliases (from
 ```json
 { "name": "list-queues", "arguments": { "broker": "prod-broker", "msgVpnName": "default" } }
 { "name": "get-queue-metrics", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q" } }
+{ "name": "list-queue-subscriptions", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q" } }
 ```
 
 **Clients**
@@ -191,6 +192,8 @@ create or are left unchanged on update:
 { "name": "create-queue", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "queueConfig": { "ingressEnabled": true, "egressEnabled": true } } }
 { "name": "update-queue", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "queueConfig": { "egressEnabled": false } } }
 { "name": "delete-queue", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q" } }
+{ "name": "create-queue-subscription", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "subscriptionTopic": "orders/>" } }
+{ "name": "delete-queue-subscription", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "queueName": "orders.q", "subscriptionTopic": "orders/>" } }
 { "name": "create-topic-endpoint", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te", "topicEndpointConfig": { "ingressEnabled": true, "egressEnabled": true } } }
 { "name": "update-topic-endpoint", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te", "topicEndpointConfig": { "egressEnabled": false } } }
 { "name": "delete-topic-endpoint", "arguments": { "broker": "prod-broker", "msgVpnName": "default", "topicEndpointName": "orders.te" } }

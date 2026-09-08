@@ -36,7 +36,7 @@ Read the file or function the user specified. Understand what it does, what even
 For each function, identify events that belong in the Always-Log list from the rules:
 
 - Server startup/shutdown
-- Tool invocations (tool name, broker alias, status, duration_ms)
+- Tool invocations (tool name, broker alias, outcome, duration_ms)
 - Tool errors (tool name, broker alias, error_type, http_status)
 - Broker connections created (broker alias, URL)
 - Config loaded (broker_count, port)
@@ -76,7 +76,7 @@ Show the user the changes with clear explanation of what each log line captures 
 slog.Info("tool invoked",
     slog.String("tool", toolName),
     slog.String("broker", brokerAlias),
-    slog.String("status", "success"),
+    slog.String("outcome", "success"),
     slog.Duration("duration", elapsed))
 
 // Error with structured context — no raw err.Error() from external source
