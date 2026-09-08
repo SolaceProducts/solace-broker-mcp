@@ -708,7 +708,15 @@ label from a different call site, so the two can drift while each surface still 
 on its own. `correlation_id` is span-only by design: it is per-request, and as a metric label
 it would be unbounded.
 
-**Which spans carry which.** Every span in the table above carries `outcome`. Only
+**Which spans carry which.** Every span in the table above **except the entry span** carries
+`outcome`. `POST /mcp` is produced by `otelhttp` and carries the HTTP semantic-convention
+attributes plus `correlation_id`; there is no `outcome` on it. **A trace-backend filter of
+`outcome = "error"` therefore misses every failure that produced only an entry span** — the 403
+cross-origin rejection, the 413 body-limit rejection, and a hop-1 authorization denial (see
+below), none of which reach the tool dispatcher. Select those on
+`http.response.status_code` instead, and **not** on the span status: following the OTel server
+convention, `otelhttp` sets the status to `Error` only for 5xx, so a 403 or 413 entry span has
+status `Unset`. Only
 `tools.CallTool` carries `error_type`: the twelve-value set is scoped to tool-invocation outcomes,
 and the executor and SEMP layers have no value in it that describes an orchestration or
 transport failure — the same reasoning that exempts `tokenexchange.Exchange` below. Those spans
@@ -755,10 +763,18 @@ span carries `otelhttp`'s standard OTel HTTP server attributes, and two of them 
 `user_agent.original`. An IP address is personal data under GDPR and comparable regimes, so this
 is a category of export worth naming rather than discovering: it now travels to wherever
 `OTEL_EXPORTER_OTLP_ENDPOINT` points, on a per-request basis, and your collector's retention
-becomes its retention. What is **not** exported, verified by test rather than by assumption: the
-`Authorization` header, cookies, and the URL query string (the span records `url.path`, not
-`url.query`). Drop `client.address` and `network.peer.address` at your collector if your data-flow
-review would rather not hold them.
+becomes its retention. What is **not** exported: the `Authorization` header, cookies, and the URL query string (the
+span records `url.path`, never `url.query`). That is enforced by test rather than asserted in
+prose — a request carrying a bearer token, a session cookie and a secret-looking query
+parameter is driven through the middleware, and the entry span's attribute keys are checked
+against an explicit allowlist, so a future `otelhttp` bump that widens the set fails here
+rather than reaching your collector. Drop `client.address` and `network.peer.address` at your
+collector if your data-flow review would rather not hold them.
+
+**Two address attributes, only one of them attested.** `client.address` is taken from the first
+element of `X-Forwarded-For` verbatim, with no validation and no trusted-proxy handling, so any
+caller can set it to any value. `network.peer.address` is the real transport peer. Use
+`network.peer.address` for anything forensic and treat `client.address` as a hint.
 
 **Enabling `OBS_TRACING_ENABLED` exports authentication-event content to your collector.**
 Every `tokenexchange.Exchange` span carries a correlation ID, a timestamp, and the outcome of
@@ -1141,7 +1157,7 @@ the review.
    `tools.CallTool` to be `Internal` or `Server`.
 5. **The `outcome` / `error_type` split.** We have settled on three `outcome` values with the
    cause in a separate `error_type` of twelve values, rather than folding causes into `outcome`.
-   Does that split match how your SIEM queries distinguish failures, and do the ten
+   Does that split match how your SIEM queries distinguish failures, and do the twelve
    `error_type` values cover how you classify them? If you would separate something we have
    merged — a `timeout` distinct from other errors, say — now is the time.
 6. **Authorization denials — the signal is decided, the vocabulary is what we want checked.**

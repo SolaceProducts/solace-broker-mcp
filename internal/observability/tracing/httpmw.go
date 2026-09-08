@@ -16,6 +16,7 @@ package tracing
 
 import (
 	"net/http"
+	"strings"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
@@ -38,6 +39,28 @@ import (
 //
 // route is a compile-time constant from the caller, never request-derived, so
 // it cannot be a cardinality or injection vector.
+// isNotificationStream reports whether r is the MCP server-to-client SSE
+// stream rather than a request, so the entry span can skip it.
+//
+// That stream stays open for the whole session, so spanning it holds one span
+// open for hours: unexported until the session ends, lost entirely if the
+// process dies first, and carrying a duration that swamps any latency view
+// built on entry-span duration.
+//
+// Matched on the method AND the Accept header, not the method alone. The
+// streamable transport identifies this stream by requesting
+// `Accept: text/event-stream` on a GET — that is how the server knows to open a
+// stream at all, so it is a protocol requirement rather than an implementation
+// detail. Keying on `GET` alone would mean that if the transport ever carried
+// requests over GET, tracing would go dark for them with no error and nothing
+// failing. Requests travel over POST today (`Accept: application/json,
+// text/event-stream`, so the method check is what excludes them here), and a
+// short-lived DELETE teardown is traced.
+func isNotificationStream(r *http.Request) bool {
+	return r.Method == http.MethodGet &&
+		strings.Contains(r.Header.Get("Accept"), "text/event-stream")
+}
+
 func HTTPMiddleware(route string, next http.Handler) http.Handler {
 	stamped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// otelhttp has started the entry span by now, and correlation.Middleware
@@ -52,15 +75,8 @@ func HTTPMiddleware(route string, next http.Handler) http.Handler {
 	})
 
 	return otelhttp.NewHandler(stamped, route,
-		// Skip the SSE notification stream. On /mcp a GET opens the
-		// server-to-client channel and stays open for the whole session, so
-		// otelhttp would hold one span open for hours: unexported until the
-		// session ends, lost entirely if the process dies, and a duration that
-		// swamps any latency view built on entry-span duration. MCP requests
-		// travel over POST, which is what this traces; a DELETE teardown is
-		// short-lived and still traced.
 		otelhttp.WithFilter(func(r *http.Request) bool {
-			return r.Method != http.MethodGet
+			return !isNotificationStream(r)
 		}),
 		otelhttp.WithSpanNameFormatter(func(operation string, r *http.Request) string {
 			// OTel convention is "{method} {route}"; otelhttp's own default

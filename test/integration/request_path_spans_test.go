@@ -29,6 +29,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -366,6 +367,40 @@ func TestRequestPathSpans_HierarchyAndVocabulary(t *testing.T) {
 		t.Errorf("semp.request kind = %v, want Client (outbound call)", sempSpan.SpanKind())
 	}
 
+	// The attributes that make a span identifiable, each previously asserted
+	// nowhere. semp.operation is what distinguishes one SEMP span from the next
+	// in a trace, and it carries a security argument — the spec operationId,
+	// never the resolved URL, whose path parameters interpolate customer
+	// topology (VPN and queue names). That argument had no regression guard, so
+	// a well-meaning change to "make the span more useful" by recording the URL
+	// would not have failed anything.
+	for _, want := range []struct {
+		span       sdktrace.ReadOnlySpan
+		key, value string
+	}{
+		{executor, "tool", "span-probe-tool"},
+		{sempSpan, "semp.version", "v2"},
+		{sempSpan, "semp.operation", "getMsgVpn"},
+		{sempSpan, "http.request.method", http.MethodGet},
+	} {
+		if got, _ := spanAttr(want.span, want.key); got != want.value {
+			t.Errorf("%s %s = %q, want %q", want.span.Name(), want.key, got, want.value)
+		}
+	}
+	if steps, ok := intSpanAttr(executor, "composite.steps"); !ok || steps != 1 {
+		t.Errorf("composite.Execute composite.steps = %d (present: %v), want 1", steps, ok)
+	}
+	// No attribute may carry the resolved URL or the broker's address: path
+	// params interpolate customer topology, and a span exports offsite.
+	for _, s := range []sdktrace.ReadOnlySpan{dispatch, executor, sempSpan} {
+		for _, kv := range s.Attributes() {
+			if v := kv.Value.String(); strings.Contains(v, broker.URL) || strings.Contains(v, "/SEMP/") {
+				t.Errorf("%s attribute %s = %q exports the resolved SEMP URL; %s must carry the operationId only",
+					s.Name(), kv.Key, v, "semp.operation")
+			}
+		}
+	}
+
 	// The join key to this call's audit record and log lines.
 	corrID, ok := spanAttr(dispatch, "correlation_id")
 	if !ok || corrID == "" {
@@ -385,24 +420,28 @@ func TestRequestPathSpans_HierarchyAndVocabulary(t *testing.T) {
 	}
 }
 
-// documentedErrorTypes is the closed error_type vocabulary, built from the
-// metrics.ErrorType consts so that this test and the metric label can never
-// disagree about what the set is. ErrorTypeOther is omitted on purpose: it is
-// the coercion sentinel, never a classification a span should report.
-var documentedErrorTypes = map[metrics.ErrorType]bool{
-	metrics.ErrorTypePanic:                 true,
-	metrics.ErrorTypeBadRequest:            true,
-	metrics.ErrorTypeUnknownTool:           true,
-	metrics.ErrorTypeMissingBroker:         true,
-	metrics.ErrorTypeUnknownBroker:         true,
-	metrics.ErrorTypeBrokerInitError:       true,
-	metrics.ErrorTypeValidationError:       true,
-	metrics.ErrorTypeExecutionError:        true,
-	metrics.ErrorTypeNilResult:             true,
-	metrics.ErrorTypeNotFound:              true,
-	metrics.ErrorTypeOutputValidationError: true,
-	metrics.ErrorTypeMarshalError:          true,
-}
+// documentedErrorTypes is the closed error_type vocabulary a span may report,
+// derived from metrics.AllErrorTypes rather than re-listed here. An earlier
+// version of this file hand-wrote the set beside a comment claiming it was
+// derived; it was not, and a const added to the type while this copy lagged
+// produced `other` on the metric and the real value on the span for the same
+// call, with nothing failing in CI. Deriving it removes that class of drift
+// instead of documenting it.
+//
+// ErrorTypeOther is dropped on purpose: it is the sentinel Record coerces an
+// off-vocabulary value to, so a span reporting it would mean the classifier
+// produced something the closed set does not cover — a failure, not a valid
+// value.
+var documentedErrorTypes = func() map[metrics.ErrorType]bool {
+	m := map[metrics.ErrorType]bool{}
+	for _, et := range metrics.AllErrorTypes() {
+		if et == metrics.ErrorTypeOther {
+			continue
+		}
+		m[et] = true
+	}
+	return m
+}()
 
 // TestRequestPathSpans_ErrorVocabulary pins the other half: a failed call
 // reports outcome=error with the cause in error_type, from the closed set of
@@ -430,12 +469,13 @@ func TestRequestPathSpans_ErrorVocabulary(t *testing.T) {
 	if !ok {
 		t.Fatalf("outcome=error span has no error_type; attrs: %v", dispatch.Attributes())
 	}
-	// Checked against the metrics.ErrorType consts rather than a list copied
-	// into this file, so the span vocabulary cannot drift from the metric's:
-	// adding a value in one place without the other fails here. ErrorTypeOther
-	// is excluded deliberately — it is the sentinel Record coerces an
-	// off-vocabulary value to, so a span carrying it would mean the classifier
-	// produced something the closed set does not cover.
+	// Membership only: this asserts the one value THIS path produced is in the
+	// vocabulary, not that the vocabulary itself is complete. Completeness is
+	// enforced where the set is declared —
+	// metrics.TestAllErrorTypes_CoversEveryDeclaredConst parses the const block
+	// so a new const cannot be added without updating the set, and
+	// TestErrorTypeVocabulary_MatchesDocumentedTable below holds the docs to
+	// the same source.
 	if !documentedErrorTypes[metrics.ErrorType(gotType)] {
 		t.Errorf("error_type = %q, which is not one of the documented metrics.ErrorType values", gotType)
 	}
@@ -550,8 +590,20 @@ func TestRequestPathSpans_NoEntrySpanWhenTracingDisabled(t *testing.T) {
 // and a duration that swamps any latency view built on entry-span duration.
 // HTTPMiddleware filters GET for that reason.
 //
-// The assertion is that no span outlives the request that made it — measured
-// while the session is still open, which is exactly when the leak was visible.
+// Asserted as "no span is ever STARTED for the stream", deliberately not as
+// "every started span has ended".
+//
+// The latter is how the defect was originally found, but it does not survive as
+// an assertion: it samples started-minus-ended at one instant with the session
+// still open, and the transport's own notification POSTs can legitimately be in
+// flight right then. That makes it a timing flake whose message would read "a
+// long-lived stream is being spanned" — the most misleading possible diagnostic
+// for a race. Closing the session first would remove the race and the value
+// together, since a leaked stream span ends at close and the check would pass
+// with the bug present.
+//
+// The started-span check has neither problem: if the filter stops matching, a
+// span for the stream is created immediately and deterministically.
 func TestRequestPathSpans_SSEStreamIsNotSpanned(t *testing.T) {
 	sr := recordRequestPathSpans(t)
 	broker := fakeBroker(t)
@@ -559,25 +611,30 @@ func TestRequestPathSpans_SSEStreamIsNotSpanned(t *testing.T) {
 
 	callProbeTool(t, session)
 
-	ended := make(map[trace.SpanID]bool, len(sr.Ended()))
-	for _, e := range sr.Ended() {
-		ended[e.SpanContext().SpanID()] = true
-	}
-	for _, st := range sr.Started() {
-		if !ended[st.SpanContext().SpanID()] {
-			t.Errorf("span %q is still open while the session is: a long-lived stream must not be spanned",
-				st.Name())
-		}
-	}
 	for _, st := range sr.Started() {
 		if st.Name() == "GET /mcp" {
-			t.Error("the SSE notification stream was spanned")
+			t.Error("the SSE notification stream was spanned: it stays open for the whole session, so its span would be reported only at session end, lost entirely if the process died first, and long enough to swamp any latency view built on entry-span duration")
 		}
 	}
-	// Guard against the filter over-matching into a no-op middleware.
+	// Guard against the filter over-matching into a no-op middleware: the
+	// request POSTs must still be traced.
 	if len(sr.Ended()) == 0 {
 		t.Fatal("no spans at all; the filter is rejecting everything")
 	}
+	if _, ok := findSpan(sr, "POST /mcp"); !ok {
+		t.Error("no POST /mcp entry span: the filter is excluding requests, not just the stream")
+	}
+}
+
+// findSpan returns the last ended span with the given name.
+func findSpan(sr *tracetest.SpanRecorder, name string) (sdktrace.ReadOnlySpan, bool) {
+	var found sdktrace.ReadOnlySpan
+	for _, s := range sr.Ended() {
+		if s.Name() == name {
+			found = s
+		}
+	}
+	return found, found != nil
 }
 
 // toolMetricSeries scrapes p and returns the label sets of every
@@ -801,4 +858,119 @@ func TestRequestPathSpans_BypassDispatchSitesSpan(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestErrorTypeVocabulary_MatchesDocumentedTable holds docs/observability.md to
+// the same source as the code.
+//
+// The error_type table is what an operator actually reads before writing a
+// dashboard filter, and it is the copy of this vocabulary furthest from the
+// consts — so it is the one that drifts. It already had: the table said twelve
+// values while two other paragraphs in the same file still said ten, and a row
+// for `broker_permission_denied` survived a merge that did not add the const,
+// documenting a value Record would have coerced to `other`.
+//
+// Parsing the table rather than duplicating it means the doc and the code move
+// together, which is what SOL-152421's own note assumes when it says this
+// vocabulary's test "will fail when Story 49 lands — by design".
+func TestErrorTypeVocabulary_MatchesDocumentedTable(t *testing.T) {
+	const docPath = "../../docs/observability.md"
+	doc, err := os.ReadFile(docPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", docPath, err)
+	}
+
+	// The table under the error_type heading: rows are `| `value` | meaning |`.
+	// Anchored on the sentence that introduces it so another table's rows
+	// cannot be picked up instead.
+	// Anchored on the section heading, not on the prose that introduces the
+	// table: "drawn from a closed set of" also appears above the authz_denied
+	// `reason` table, and anchoring there swept in every table between the two.
+	body := string(doc)
+	anchor := strings.Index(body, "### `error_type`")
+	if anchor == -1 {
+		t.Fatal("could not find the `### `error_type`` heading in docs/observability.md; if it was renamed, update this anchor")
+	}
+	rest := body[anchor:]
+	end := strings.Index(rest, "\nNotes:")
+	if end == -1 {
+		t.Fatal("could not find the end of the error_type table (expected a following \"Notes:\" block)")
+	}
+
+	// Anchored on the full row shape — a backticked value in the FIRST cell,
+	// followed by the cell separator — so the prose that follows the table
+	// (which cites several of these values inline) cannot be read as rows. A
+	// whitespace-delimited scan did exactly that, and reported a value of
+	// "execution_error`," from a sentence.
+	rowValue := regexp.MustCompile("(?m)^\\| `([a-z_]+)` \\|")
+	documented := map[string]bool{}
+	rowCount := 0
+	for _, m := range rowValue.FindAllStringSubmatch(rest[:end], -1) {
+		rowCount++
+		documented[m[1]] = true
+	}
+	// Row count, not just the set: merging two branches that each reworded a
+	// row left this table with fourteen rows and twelve distinct values, which
+	// a set comparison alone reads as correct.
+	if rowCount != len(documented) {
+		t.Errorf("error_type table has %d rows but %d distinct values: a value is documented twice", rowCount, len(documented))
+	}
+	if len(documented) == 0 {
+		t.Fatal("parsed no rows from the error_type table; this test cannot protect anything")
+	}
+
+	want := map[string]bool{}
+	for et := range documentedErrorTypes {
+		want[string(et)] = true
+	}
+
+	for value := range want {
+		if !documented[value] {
+			t.Errorf("error_type %q is in the code vocabulary but has no row in the docs/observability.md table: an operator reading the docs would not know it can appear", value)
+		}
+	}
+	for value := range documented {
+		if !want[value] {
+			t.Errorf("the docs/observability.md error_type table documents %q, which is not in metrics.AllErrorTypes: nothing can emit it, and Record would coerce it to %q",
+				value, metrics.ErrorTypeOther)
+		}
+	}
+
+	// The prose count has to agree with the rows, since the two drifted before.
+	countWord := map[int]string{10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen", 14: "fourteen"}[len(want)]
+	if countWord == "" {
+		t.Fatalf("no spelled-out word known for %d values; extend countWord", len(want))
+	}
+	if wrong := regexp.MustCompile(`closed set of (\w+) values`).FindAllStringSubmatch(body, -1); wrong != nil {
+		for _, m := range wrong {
+			if m[1] != countWord {
+				t.Errorf("docs/observability.md says %q but the vocabulary has %d values (%q)", m[0], len(want), countWord)
+			}
+		}
+	}
+	// Several phrasings, because each of these has drifted at least once:
+	// "twelve-value `error_type` set", "`error_type` of twelve values", "the
+	// twelve `error_type` values", and "ten-value `error_type` vocabulary" —
+	// the last two were still saying "ten" while the table said twelve.
+	for _, pattern := range []string{
+		`(\w+)-value \x60error_type\x60 (?:set|vocabulary)`,
+		`\x60error_type\x60 of (\w+) values`,
+		`the (\w+)\s+\x60error_type\x60 values`,
+	} {
+		for _, m := range regexp.MustCompile(pattern).FindAllStringSubmatch(body, -1) {
+			if m[1] != countWord {
+				t.Errorf("docs/observability.md says %q but the vocabulary has %d values (%q)", strings.Join(strings.Fields(m[0]), " "), len(want), countWord)
+			}
+		}
+	}
+}
+
+// intSpanAttr reads an int-valued span attribute.
+func intSpanAttr(s sdktrace.ReadOnlySpan, key string) (int64, bool) {
+	for _, kv := range s.Attributes() {
+		if string(kv.Key) == key {
+			return kv.Value.AsInt64(), true
+		}
+	}
+	return 0, false
 }

@@ -244,21 +244,27 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 					// itself — never text derived from client input — so it
 					// gets a separate, static message rather than the
 					// wrapped decode error.
+					//
+					// The span comes FIRST and its context is threaded into
+					// the audit and metric calls below, exactly as at the other
+					// three dispatch sites. Ordered the other way round, the
+					// log line and the metric are emitted while the request
+					// context still carries only the entry span, so a Story 47
+					// exemplar on this failure links to `POST /mcp` rather than
+					// to the dispatch span whose tool/outcome/error_type it is
+					// describing (SOL-152421).
+					//
+					// Started with the request's own start time so the span
+					// covers the dispatch rather than reading as instantaneous,
+					// and only on this branch — the success path below gets its
+					// span from CallTool itself.
 					var brokerAlias string
 					errorType := metrics.ErrorTypeBadRequest
 					toolErr := fmt.Errorf("parsing tool arguments: %w", err)
+
+					ctx, span := tracer.Start(ctx, dispatchSpanName, trace.WithTimestamp(start))
 					logToolResult(ctx, reg.name, &brokerAlias, start, &errorType, &toolErr, id)
 					recordToolInvocation(ctx, mgr.metrics, reg.name, brokerLabelNone, start, errorType, toolErr)
-
-					// And the span, for the same reason (SOL-152421): this
-					// return never reaches CallTool, so without it
-					// `bad_request` is a metric-only value of a vocabulary
-					// documented as shared by all three signals. Started
-					// with the request's own start time so the span covers
-					// the dispatch rather than reading as instantaneous;
-					// created only on this branch, since the success path
-					// below gets its span from CallTool itself.
-					_, span := tracer.Start(ctx, dispatchSpanName, trace.WithTimestamp(start))
 					endDispatchSpan(ctx, span, reg.name, brokerLabelNone, errorType, toolErr)
 
 					return buildLocalErrorResult(errors.New("tool arguments must be a JSON object")), nil
@@ -349,10 +355,9 @@ func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool, tm *metrics.
 			var toolErr error
 			id := NewIdentityFromPrincipal(auth.PrincipalFrom(ctx))
 
-			// ...and, for the same reason, its own dispatch span: this tool
+			// ...and its own dispatch span, for the same reason: this tool
 			// would otherwise appear in every dashboard and in no trace
-			// (SOL-152421). Registered before the audit defer so it runs
-			// after it and sees the panic rewrite below.
+			// (SOL-152421). dispatch.finish emits all three signals in order.
 			ctx, span := tracer.Start(ctx, dispatchSpanName)
 			defer func() {
 				endDispatchSpan(ctx, span, "list-brokers", brokerLabelNone, errorType, toolErr)

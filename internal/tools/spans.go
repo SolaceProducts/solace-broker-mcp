@@ -39,26 +39,34 @@ const dispatchSpanName = "tools.CallTool"
 
 // endDispatchSpan writes the dispatch-span attributes and closes span.
 //
-// Shared because FOUR sites dispatch a tool call: ToolManager.CallTool, and
-// three that bypass it — list-brokers and describe-semp-schema (both
-// registered directly against the MCP server), and the argument-parse failure
-// in the instrumented closure in register.go. Those three already emit their
-// own audit line and metric for the same reason, each noting that it bypasses
-// CallTool. A span missing from any of them breaks the promise ADR-009 exists
-// for: the metric series carries a `tool` and an `error_type`, an operator
-// carries those values into the trace backend unchanged, and finds nothing —
-// so `list-brokers` would appear in every dashboard and no trace, and
-// `bad_request` / `not_found` would be metric-only values of a vocabulary
-// documented as shared by all three signals.
+// Shared by FOUR dispatch sites: ToolManager.CallTool, and three that bypass it
+// — list-brokers and describe-semp-schema, both registered directly against the
+// MCP server, and the argument-parse failure in the instrumented closure in
+// register.go. Every one owes a span, for the same reason each already emits
+// its own audit line and metric: the metric series carries a `tool` and an
+// `error_type`, an operator carries those values into the trace backend
+// unchanged, and a missing span means they find nothing.
+//
+// **Each site must register its deferred call to this BEFORE the defer that
+// emits the log line, the metric and the audit record**, so LIFO runs the span
+// last — after a recovered panic has been reclassified, so every signal reports
+// the same cause. The straight-line argument-parse site has no defer to order
+// against and instead starts its span first, threading the returned context
+// into the emission calls.
+//
+// Folding all of it into one seam that owns the ordering was tried and
+// reverted: internal/tools/audit_error_type_drift_test.go (SOL-152090) scans
+// this package for `logToolResult(..., &errorType, ...)` as the funnel every
+// error_type value passes through, and a seam holding the variable behind a
+// struct field hides both that call and the `panic` reclassification from it.
+// The ordering is enforced behaviourally instead, by the panic case of
+// TestRequestPathSpans_SpanAndMetricAgreeOnTheSameCall and by
+// TestDispatch_AuditAndMetricSeeTheDispatchSpanInContext.
 //
 // brokerLabel must be the canonical metric label, never a raw caller-supplied
-// alias: the raw value is unbounded, untrusted input that would egress to the
-// collector, and it would break the join on caller casing alone.
-//
-// Register the deferred call to this BEFORE the audit/metric defer at each
-// site, so it runs after that one (LIFO) and therefore observes the errorType
-// a recovered panic rewrites. Reversed, the span reports nothing while the
-// metric and the audit record both report `panic`.
+// alias: for an unresolved broker the raw value is whatever string the caller
+// typed, so it is unbounded, untrusted input that would egress to the
+// collector, and it breaks the span-to-metric join on caller casing alone.
 func endDispatchSpan(ctx context.Context, span trace.Span, tool, brokerLabel string, errorType metrics.ErrorType, toolErr error) {
 	// IsRecording guard: a non-recording span still needs End(), but building
 	// attributes nothing reads is waste on every tool call.

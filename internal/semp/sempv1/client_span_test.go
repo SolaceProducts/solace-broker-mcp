@@ -24,6 +24,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
@@ -104,6 +105,11 @@ func TestExecute_PanicMarksSpanAsErrorAndRepanics(t *testing.T) {
 	}
 	if attrs["outcome"] != "error" {
 		t.Errorf("span outcome = %q, want %q: a panicked call must not be exported as a success", attrs["outcome"], "error")
+	}
+	// SpanKind was pinned for v2 only; an outbound call must report Client at
+	// both versions or a backend renders it as internal work.
+	if got := span.SpanKind(); got != trace.SpanKindClient {
+		t.Errorf("semp.request kind = %v, want Client (outbound call)", got)
 	}
 	if attrs["semp.version"] != "v1" {
 		t.Errorf("semp.version = %q, want v1 (the attribute set must still be recorded on the panic path)", attrs["semp.version"])

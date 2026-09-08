@@ -16,6 +16,7 @@ package tools
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"testing"
 
@@ -23,6 +24,7 @@ import (
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2/specs"
 )
@@ -125,5 +127,103 @@ func TestDescribeSempSchema_EmitsDispatchSpan(t *testing.T) {
 				t.Errorf("span broker = %q, want %q", attrs["broker"], brokerLabelNone)
 			}
 		})
+	}
+}
+
+// spanIDCapturingHandler records the span that was in context each time the
+// "tool invoked" audit line was emitted. slog passes the caller's context
+// through to the handler, which makes it the one place a test can observe which
+// span a dispatch site actually had in context at emission time.
+type spanIDCapturingHandler struct {
+	slog.Handler
+	mu      sync.Mutex
+	spanIDs []string
+}
+
+func (h *spanIDCapturingHandler) Handle(ctx context.Context, r slog.Record) error {
+	if r.Message == "tool invoked" {
+		h.mu.Lock()
+		h.spanIDs = append(h.spanIDs, trace.SpanContextFromContext(ctx).SpanID().String())
+		h.mu.Unlock()
+	}
+	return nil
+}
+
+func (h *spanIDCapturingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *spanIDCapturingHandler) captured() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.spanIDs...)
+}
+
+// TestDispatch_AuditAndMetricSeeTheDispatchSpanInContext pins the ordering half
+// of the dispatch seam, which attribute assertions cannot reach.
+//
+// dispatch.finish emits the audit record, the metric, and the span from one
+// context, and that context has to be the span-carrying one — otherwise the
+// audit line and the metric are recorded while only the caller's context is in
+// scope, and a Story 47 exemplar attaches to the wrong span (or, off an HTTP
+// request, to no span at all). Every attribute VALUE is identical either way,
+// which is exactly why this went unnoticed: the earlier version of the
+// argument-parse branch recorded both signals before starting its span, and the
+// cross-signal test passed regardless because it only compared values.
+//
+// Driven through the argument-parse failure because that is the branch that had
+// it wrong — a straight-line return that could not express the deferred
+// ordering the other three sites used.
+func TestDispatch_AuditAndMetricSeeTheDispatchSpanInContext(t *testing.T) {
+	sr := recordSpans(t)
+
+	capture := &spanIDCapturingHandler{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(capture))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	pool := newRegTestPool(t)
+	mgr := NewToolManager(pool)
+	mgr.Register(newStubHandler("ordering-probe"))
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)
+	RegisterWithServer(mgr, server, pool, true, nil, "")
+
+	ctx := context.Background()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	go func() { _ = server.Run(ctx, serverTransport) }()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1.0"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+
+	// Valid JSON that is not an object: the instrumented closure's unmarshal
+	// into map[string]any fails and it returns before reaching CallTool.
+	if _, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "ordering-probe",
+		Arguments: []any{"not", "an", "object"},
+	}); err != nil {
+		t.Fatalf("CallTool returned a protocol error: %v", err)
+	}
+
+	var dispatchSpan sdktrace.ReadOnlySpan
+	for _, s := range sr.Ended() {
+		if s.Name() == dispatchSpanName {
+			dispatchSpan = s
+		}
+	}
+	if dispatchSpan == nil {
+		t.Fatalf("no %q span for the argument-parse failure", dispatchSpanName)
+	}
+
+	ids := capture.captured()
+	if len(ids) != 1 {
+		t.Fatalf("captured %d \"tool invoked\" audit lines, want 1: %v", len(ids), ids)
+	}
+	want := dispatchSpan.SpanContext().SpanID().String()
+	if ids[0] != want {
+		t.Errorf("the audit record was emitted with span %s in context, but the dispatch span describing it is %s — the span must be started and its context threaded BEFORE the audit and metric calls, or their exemplars link to the wrong span",
+			ids[0], want)
 	}
 }

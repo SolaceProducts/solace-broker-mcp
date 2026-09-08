@@ -337,8 +337,7 @@ instead of writability flags) and 'raw' (the definition verbatim, larger).
 		// ...and its own dispatch span, for the same reason (SOL-152421):
 		// without it neither this tool nor the `not_found` error_type it
 		// raises ever appears in a trace, though both appear in the metrics.
-		// Registered before the audit defer so it runs after it and sees the
-		// panic rewrite below.
+		// dispatch.finish emits all three signals in order.
 		ctx, span := tracer.Start(ctx, dispatchSpanName)
 		defer func() {
 			endDispatchSpan(ctx, span, describeSempSchemaToolName, brokerLabelNone, errorType, toolErr)
