@@ -1324,7 +1324,12 @@ func main() {
 	// Wrap MCP handler with auth middleware. Cross-origin protection wraps
 	// this from the OUTSIDE, in buildMCPEndpoint — see that function for why
 	// it sits outside auth rather than around mcpHandler here.
-	authedHandler, err := auth.NewAuthMiddleware(cfg, nil, mcpHandler)
+	//
+	// The audit hook (SOL-152097) is the one wiring point for auth_success/
+	// auth_failure emission — audit.NewAuthHook reads the same
+	// OBS_AUDIT_LOG_ENABLED flag as tools.WithAuditLog above, so this and the
+	// destructive-op audit trail turn on and off together.
+	authedHandler, err := auth.NewAuthMiddleware(cfg, nil, mcpHandler, audit.NewAuthHook(audit.Enabled(cfg.Observability)))
 	if err != nil {
 		slog.Error("failed to create auth middleware", slog.String("error", err.Error()))
 		os.Exit(1)
