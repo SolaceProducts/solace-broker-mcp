@@ -88,17 +88,24 @@ if (( port_start < 1 || last_port > 65535 )); then
   echo "port range $port_start..$last_port is outside 1..65535 — lower -n or -port-start" >&2
   exit 2
 fi
-# The mock's control endpoint is a fixed :19000, which falls inside the broker
-# range from -n 920 (18081 + 919). A collision there does not fail loudly: the
-# broker on that port answers /_mock/config instead of SEMP, so the run 404s on
-# one broker and reads as a broker fault — the same non-loud class this file's
-# header enumerates.
-mock_control_port=19000
-if (( port_start <= mock_control_port && last_port >= mock_control_port )); then
-  echo "port range $port_start..$last_port spans the mock's control port $mock_control_port" >&2
-  echo "lower -n, or move the range with -port-start (the mock also needs -config-port moved)" >&2
-  exit 2
-fi
+# Two fixed ports must stay outside the broker range, and a collision with
+# either is not loud: the broker on that port answers something other than
+# SEMP, so the run 404s on one broker and reads as a broker fault — the same
+# non-loud class this file's header enumerates.
+#
+#   19000  the mock's control endpoint, inside the range from -n 920
+#   9090   the MCP server itself, reachable with a low -port-start
+for reserved in 19000 9090; do
+  if (( port_start <= reserved && last_port >= reserved )); then
+    case "$reserved" in
+      19000) what="the mock's control port" ;;
+      9090)  what="the MCP server's port" ;;
+    esac
+    echo "port range $port_start..$last_port spans $what ($reserved)" >&2
+    echo "lower -n, or move the range with -port-start" >&2
+    exit 2
+  fi
+done
 
 if ! [[ "$prefix" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
   # Broker aliases end up as YAML mapping keys and in URLs; keep them to the

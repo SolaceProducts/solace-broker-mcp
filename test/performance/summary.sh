@@ -64,6 +64,17 @@ window_from_record() {
 
 load_start="" load_end="" window_source=""
 
+# Reject an unrecognised flag rather than letting it fall through to the bare
+# epoch branch. A typo'd `--window-form` used to be read as an epoch: `date`
+# and the arithmetic both errored on stderr, the provenance line vanished, and
+# the report still exited 0 with whole-run-only numbers — the operator got no
+# signal their window had been dropped.
+if [[ "${1:-}" == -* && "${1:-}" != "--window-from" ]]; then
+  echo "unknown option: $1" >&2
+  echo "usage: $0 <runs-dir> [--window-from <dir-or-record> | <from_epoch> <to_epoch>]" >&2
+  exit 2
+fi
+
 if [[ "${1:-}" == "--window-from" ]]; then
   src="${2:?--window-from needs a run directory or a run-record path}"
   # Accept either a run directory or a record inside one, so the operator can
@@ -86,11 +97,37 @@ if [[ "${1:-}" == "--window-from" ]]; then
     exit 2
   fi
   shift 2
-elif [[ -n "${1:-}" && -n "${2:-}" ]]; then
+elif [[ -n "${1:-}" ]]; then
+  # A window is two epochs or nothing. A single trailing argument used to be
+  # discarded in silence, which is the same failure as a typo'd flag: the
+  # operator asked for a window and got a whole-run report with no complaint.
+  if [[ -z "${2:-}" ]]; then
+    echo "a bare window needs two epochs (<from> <to>); got one argument: $1" >&2
+    echo "or use --window-from <dir-or-record>, which reads them from a run record" >&2
+    exit 2
+  fi
+  for arg in "$1" "$2"; do
+    if ! [[ "$arg" =~ ^[0-9]+$ ]]; then
+      echo "window epochs must be integer seconds, got: $arg" >&2
+      exit 2
+    fi
+  done
+  if (( $1 >= $2 )); then
+    echo "window start ($1) must be before its end ($2)" >&2
+    exit 2
+  fi
   load_start="$1"
   load_end="$2"
   window_source="command-line arguments (unverified)"
   shift 2
+fi
+
+# Anything left over was not understood. Silently ignoring it is how a
+# mistyped invocation produces a confident report of the wrong window.
+if (( $# > 0 )); then
+  echo "unexpected extra argument(s): $*" >&2
+  echo "usage: $0 <runs-dir> [--window-from <dir-or-record> | <from_epoch> <to_epoch>]" >&2
+  exit 2
 fi
 
 # Nothing given: fall back to whatever a record in this directory stamped.
@@ -147,11 +184,25 @@ roll() {
       bc = ix[bf]
       rc = ix[rf]
       ec = ix["epoch"]
+      wc = ix["wall"]
       # A CSV predating the epoch column simply has no window; the whole-run
       # lines below are unchanged either way.
       windowable = (ec && from > 0 && to > 0)
       next
     }
+    # A named column that is not in this CSV is a harness/producer mismatch,
+    # reported as such. Falling through to "(no samples)" would read as an idle
+    # process, which is a real and very different state.
+    #
+    # A flag rather than a bare `exit`: in awk, exit still runs the END block,
+    # so exiting here printed the mismatch line AND a "(no samples)" line
+    # under it. Caught by lib.test.sh, which is why that assertion is there.
+    NR==2 && (!bc || !rc) {
+      printf "  %-5s (column %s not in this CSV — header/producer mismatch)\n",
+             L, (bc ? rf : bf)
+      mismatch = 1
+    }
+    mismatch { exit }
     !bc || !rc { next }
     $bc == "NA" || $bc == "ENDED" || $bc == "" { next }
     {
@@ -178,6 +229,7 @@ roll() {
       }
     }
     END {
+      if (mismatch) exit
       if (n == 0) { printf "  %-5s (no samples)\n", L; exit }
       printf "  %-5s cpu:  min=%5.1f%%   avg=%5.1f%%   max=%5.1f%%   (out of 100%% box)\n",
              L, box_min, box_sum/n, box_max
@@ -253,25 +305,36 @@ if [[ -r "$mock_only_csv" ]]; then
   echo
 fi
 
-# loadgen-metrics.csv layout (from loadgen-sampler.sh):
-# 1 t_sec 2 wall 3 lg_cpu 4 lg_res_kb 5 loadavg1 6 sys_cpu_used_pct 7 sys_mem_used_kb 8 tcp_established 9 tcp_time_wait
-# There's no lg_cpu_pct_of_box column, so compute it from CLK_TCK * nproc via .info.
+# loadgen-metrics.csv, from loadgen-sampler.sh. Columns are resolved by header
+# name here for the same reason they are everywhere else in this file.
+#
+# There is no lg_cpu_pct_of_box column, so it is computed from CLK_TCK * nproc
+# via .info. There is also no epoch column, so this block reports the whole run
+# only — the load box's own CPU is a property of the rig rather than of the
+# product under test, so it has not been worth an extra column. If that changes,
+# give loadgen-sampler.sh an epoch column and this block can window like roll()
+# does.
 if [[ -r "$lg_csv" ]]; then
   info="$lg_csv.info"
   ncores=$(awk -F= '/^cores_logical/ {print $2; exit}' "$info" 2>/dev/null || echo 1)
   mem=$(info_mem "$info")
   echo "-- loadgen-metrics.csv --"
   awk -F, -v n="$ncores" -v mem="$mem" '
-    NR==1 { next }
-    $3 == "ENDED" || $3 == "NA" || $3 == "" { next }
+    NR==1 {
+      for (i = 1; i <= NF; i++) { gsub(/^[ \t]+|[ \t]+$/, "", $i); ix[$i] = i }
+      cc = ix["lg_cpu"]; rc = ix["lg_res_kb"]; ec = ix["tcp_established"]
+      next
+    }
+    !cc || !rc { next }
+    $cc == "ENDED" || $cc == "NA" || $cc == "" { next }
     {
       k++
       # lg CPU is reported as % of one core; divide by ncores for % of box.
-      box = ($3 + 0) / n
-      res = $4 + 0
+      box = ($cc + 0) / n
+      res = $rc + 0
       box_sum += box; if (box > box_max) box_max = box; if (box_min == "" || box < box_min) box_min = box
       res_sum += res; if (res > res_max) res_max = res; if (res_min == "" || res < res_min) res_min = res
-      if ($8+0 > est_max) est_max = $8+0
+      if (ec && $ec+0 > est_max) est_max = $ec+0
     }
     END {
       if (k == 0) { print "  (no samples)"; exit }

@@ -46,8 +46,16 @@
 # 202 ports, and a poll loop that shelled out per port would spend more time in
 # `ss` than the port takes to clear.
 perf_first_held_port() {
-  local ports="$*"
-  ss -ltn 2>/dev/null | awk -v want="$ports" '
+  local ports="$*" listing
+  # Capture ss separately rather than piping it, so a present-but-failing ss
+  # (no /proc/net, restricted namespace) is distinguishable from "no listeners".
+  # Piping it made both cases produce empty input, which the caller read as
+  # "every port free" — the exact indistinguishability this guard is for.
+  if ! listing=$(ss -ltn 2>/dev/null); then
+    echo "ss failed — cannot determine which ports are listening" >&2
+    return 2
+  fi
+  printf '%s\n' "$listing" | awk -v want="$ports" '
     BEGIN { n = split(want, w, " "); for (i = 1; i <= n; i++) order[i] = w[i] }
     $1 != "LISTEN" { next }
     {
@@ -79,6 +87,26 @@ perf_first_held_port() {
 perf_wait_ports_free() {
   local timeout_s=$1; shift
 
+  # Validate the timeout before using it in arithmetic. It comes from
+  # PORT_WAIT_SECS, so a plausible fat-finger ("60s") otherwise produced two
+  # raw `value too great for base` errors, left $deadline unset, and degraded
+  # the guard to a single poll — bash internals instead of the deliberate
+  # diagnostic this function exists to give.
+  if ! [[ "$timeout_s" =~ ^[0-9]+$ ]]; then
+    echo "PORT_WAIT_SECS must be a non-negative integer number of seconds, got: $timeout_s" >&2
+    return 1
+  fi
+
+  # The opt-out comes FIRST, before the ss probe. An explicit zero is the
+  # operator saying "I know what is on this box, do not check", and it has to
+  # work on a box that has no ss — which is precisely the box the branch below
+  # tells them to use it on. Checking ss first made that instruction a dead
+  # end.
+  if (( timeout_s == 0 )); then
+    echo "   PORT_WAIT_SECS=0 — skipping the port-free check"
+    return 0
+  fi
+
   # Fail closed if we cannot look. An `ss` that is missing or broken makes
   # perf_first_held_port print nothing, which is indistinguishable from "every
   # port is free" — so the guard that exists because a sweep point was lost to
@@ -90,18 +118,18 @@ perf_wait_ports_free() {
     return 1
   fi
 
-  # An explicit zero is the operator saying "I know what is on this box, do not
-  # check". Distinct from the fail-closed path above: one is a decision, the
-  # other is a missing tool.
-  if (( timeout_s == 0 )); then
-    echo "   PORT_WAIT_SECS=0 — skipping the port-free check"
-    return 0
-  fi
-
   local deadline=$((SECONDS + timeout_s))
-  local held announced=0
+  local held rc announced=0
   while :; do
-    held=$(perf_first_held_port "$@") || return 0
+    rc=0
+    held=$(perf_first_held_port "$@") || rc=$?
+    # rc 1 = every port free. rc 2 = ss could not tell us, which is
+    # fail-closed: starting on an unverifiable box is what lost a sweep point.
+    (( rc == 1 )) && return 0
+    if (( rc > 1 )); then
+      echo "   refusing to start without a usable port check (set PORT_WAIT_SECS=0 to override)" >&2
+      return 1
+    fi
     if (( SECONDS >= deadline )); then
       echo "port $held still has a listener after ${timeout_s}s — refusing to start:" >&2
       ss -ltnp 2>/dev/null | awk -v p="$held" '$1=="LISTEN" { c=split($4,a,":"); if (a[c]==p) print "   " $0 }' >&2
@@ -314,7 +342,11 @@ perf_record_fixtures() {
   # own tree: a capture taken from a dirty checkout is not the commit it names.
   local k v
   for k in captured_at capture_commit capture_dirty broker_alias vpn rdp; do
-    v=$(awk -v key="$k" 'index($0, "# " key ": ") == 1 { print substr($0, length(key) + 5); exit }' "$manifest")
+    # sub() rather than substr() with a computed offset: there is no arithmetic
+    # to get wrong. (The old offset was correct, and perf_or_unknown's trim made
+    # an off-by-one invisible anyway — which is exactly why it was not worth a
+    # test to pin. Removing the computation beats asserting it.)
+    v=$(awk -v key="$k" 'index($0, "# " key ": ") == 1 { sub("^# " key ": ", ""); print; exit }' "$manifest")
     perf_record_kv "$record" "fixtures_$k" "$(perf_or_unknown "$v")"
   done
   return 0
@@ -392,7 +424,7 @@ perf_record_admission() {
     if [[ -n "$val" ]]; then
       perf_record_kv "$record" "semp_$key" "$val"
       perf_record_kv "$record" "semp_${key}_source" config-file
-    elif [[ -r "$config_used" ]] && grep -qE "^[[:space:]]*$key:" "$config_used"; then
+    elif [[ -r "$config_used" ]] && perf_semp_block "$config_used" | grep -qE "^[[:space:]]*$key:"; then
       # The key is in the file but the narrow reader could not extract it — a
       # shape it does not handle (nesting, flow style, an anchor). Recording
       # `unreported-server-default` here would be a lie about provenance: the
@@ -407,6 +439,20 @@ perf_record_admission() {
     fi
   done
   return 0
+}
+
+# perf_semp_block <config> — the lines of the top-level `semp:` block.
+#
+# The presence probe in perf_record_admission has to be scoped the same way the
+# value reader is. Grepping the whole file would let a same-named key under
+# another top-level mapping (brokers:, say) mark a setting `config-file-unparsed`
+# when it is genuinely a server default — the wrong _source, which is the exact
+# class of error the _source scheme exists to prevent.
+perf_semp_block() {
+  awk '
+    /^[^[:space:]#]/ { in_semp = ($0 ~ /^semp:[[:space:]]*$/); next }
+    in_semp { print }
+  ' "$1"
 }
 
 # perf_yaml_semp_value <config> <key> — the value of one scalar key inside the

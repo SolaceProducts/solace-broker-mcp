@@ -79,8 +79,9 @@ func main() {
 }
 
 // csvHeader is the CSV's column contract. lib.sh's fd/thread peak reader and
-// summary.sh both index these columns positionally, so a new column goes on
-// the end and never in the middle.
+// summary.sh both resolve these columns by name from the header row, so
+// reordering them is safe and *renaming* one is the breaking change. Adding a
+// column is free. Do not re-encode a position in a consumer.
 var csvHeader = []string{"t_sec", "wall_ts", "rss_kb", "vm_kb", "threads", "open_fds"}
 
 func run(ctx context.Context, pid int, interval, duration time.Duration, outPath string, quiet bool) error {

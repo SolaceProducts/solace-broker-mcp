@@ -192,7 +192,11 @@ EOF
 # preflight check reports the missing manifest properly.
 cmd_vpn() {
   [[ -f "$manifest" ]] || return 0
-  sed -n 's/^# vpn: //p' "$manifest" | head -1
+  # awk, not `sed | head`: a head that closes the pipe SIGPIPEs sed, and under
+  # `pipefail` that makes this function return non-zero on success. Benign here
+  # today (one matching line), but the shape is the one lib.sh removed for
+  # writing a malformed field, and leaving an instance behind reads as sanction.
+  awk '/^# vpn: / { sub(/^# vpn: /, ""); print; exit }' "$manifest"
 }
 
 # cmd_rdp prints the RDP name the capture pinned, for the same reason cmd_vpn
@@ -202,7 +206,7 @@ cmd_vpn() {
 # default in each script is how they would.
 cmd_rdp() {
   [[ -f "$manifest" ]] || return 0
-  sed -n 's/^# rdp: //p' "$manifest" | head -1
+  awk '/^# rdp: / { sub(/^# rdp: /, ""); print; exit }' "$manifest"
 }
 
 case "${1:-}" in

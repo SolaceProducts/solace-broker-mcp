@@ -30,9 +30,13 @@ trap 'rm -rf "$tmp"' EXIT
 
 pass=0
 fail=0
+skip=0
 
-ok()  { printf '  ok    %s\n' "$1"; pass=$((pass + 1)); }
-bad() { printf '  FAIL  %s\n' "$1"; fail=$((fail + 1)); }
+ok()   { printf '  ok    %s\n' "$1"; pass=$((pass + 1)); }
+bad()  { printf '  FAIL  %s\n' "$1"; fail=$((fail + 1)); }
+# Counted, not just printed. A section that skips silently looks like coverage
+# in CI output, which is worse than a visible gap.
+skip() { printf '  skip  %s\n' "$1"; skip=$((skip + 1)); }
 
 # indent <file> [max] — awk, not `sed | head`: a head that closes the pipe
 # early SIGPIPEs its producer, and under `pipefail` that aborts this script, so
@@ -73,7 +77,13 @@ make_sampler_csv() { # <path> [--no-epoch]
       if (( i < 6 )); then
         row="$((i*5)),$(date -d "@$e" +%H:%M:%S),16.0,1.0,80000,70000,60000,NA,NA,NA,NA,NA,0.5,900000"
       else
-        row="$((i*5)),$(date -d "@$e" +%H:%M:%S),8$i.0,50.0,190000,180000,170000,NA,NA,NA,NA,NA,7.5,1200000"
+        # The loaded samples deliberately differ from each other. With all six
+        # identical, the load-phase *average* was insensitive to which of them
+        # fell inside the window, so a slipped inclusive bound was caught only
+        # by the sample count. These six average to exactly 51.0, and any
+        # off-by-one at either edge moves that number.
+        box=$(awk -v k="$i" 'BEGIN { split("46 48 50 52 54 56", v, " "); print v[k-5] ".0" }')
+        row="$((i*5)),$(date -d "@$e" +%H:%M:%S),8$i.0,$box,190000,180000,170000,NA,NA,NA,NA,NA,7.5,1200000"
       fi
       [[ "$no_epoch" == "--no-epoch" ]] && echo "$row" || echo "$row,$e"
     done
@@ -100,11 +110,12 @@ make_sampler_csv "$run_a/sampler.csv"
 out=$("$here/summary.sh" "$run_a")
 
 contains "the whole-run average is still reported, and is the diluted one" \
-  "$out" "avg= 25.5%"
-contains "a labelled load-phase average is reported alongside it" \
-  "$out" "load-phase  avg= 50.0%"
-contains "the load-phase line reports its maximum" \
-  "$out" "max= 50.0%"
+  "$out" "avg= 26.0%"
+# Anchored to the load-phase line as a whole, not to a bare "max=" needle: the
+# whole-run line above also prints a max, so a needle of "max= 56.0%" alone
+# matched the wrong line and survived deleting the load-phase max entirely.
+contains "a labelled load-phase mean AND maximum are reported alongside it" \
+  "$out" "load-phase  avg= 51.0%   max= 56.0%"
 contains "the load-phase line says how many samples fell inside the window" \
   "$out" "(6 of 12 samples"
 contains "the window's source record is named, so an archived report is traceable" \
@@ -118,8 +129,14 @@ contains "the source record's role and start time are named" \
 # Pull the two averages by pattern, not by field index: the report pads with
 # multiple spaces ("min=  1.0%"), so awk splits "avg=" and its value into
 # separate fields and a positional read lands on the wrong one.
+# awk over a here-string, not `printf | sed …;q`: a sed that quits early
+# SIGPIPEs printf, and under `pipefail` that aborts this script inside an
+# assignment — the same hazard indent() above exists to avoid. Latent only
+# because the report currently fits the pipe buffer.
 avg_of() { # <line-pattern>
-  printf '%s\n' "$out" | sed -n "/$1/{s/.*avg=[[:space:]]*\([0-9.]*\)%.*/\1/p;q}"
+  awk -v pat="$1" 'index($0, pat) && match($0, /avg=[ ]*[0-9.]+%/) {
+    v = substr($0, RSTART, RLENGTH); gsub(/avg=|[ ]|%/, "", v); print v; exit
+  }' <<<"$out"
 }
 whole=$(avg_of 'mcp   cpu:  min=')
 phase=$(avg_of 'load-phase')
@@ -137,7 +154,7 @@ make_sampler_csv "$run_b/sampler.csv"
 out=$("$here/summary.sh" "$run_b")
 contains "no run record: says the window is not stamped" "$out" "load phase: not stamped"
 lacks    "no run record: prints no load-phase figure"    "$out" "load-phase  avg="
-contains "no run record: the whole-run figure is unchanged" "$out" "avg= 25.5%"
+contains "no run record: the whole-run figure is unchanged" "$out" "avg= 26.0%"
 
 # A run directory from before this change: 14 columns, no epoch. It must read
 # exactly as it did before, and must NOT sprout a load-phase line even when a
@@ -146,7 +163,7 @@ run_c="$tmp/run-c"
 mkdir -p "$run_c"
 make_sampler_csv "$run_c/sampler.csv" --no-epoch
 out=$("$here/summary.sh" "$run_c" $((BASE + 30)) $((BASE + 55)))
-contains "pre-epoch CSV: the whole-run figure still reports" "$out" "avg= 25.5%"
+contains "pre-epoch CSV: the whole-run figure still reports" "$out" "avg= 26.0%"
 lacks    "pre-epoch CSV: no load-phase line is invented"     "$out" "load-phase  avg="
 
 # A window that misses every sample must say so rather than print a figure
@@ -158,13 +175,71 @@ out=$("$here/summary.sh" "$run_d" $((BASE + 9000)) $((BASE + 9100)))
 contains "a window matching no samples says so" "$out" "no samples inside the stamped window"
 lacks    "a window matching no samples prints no average" "$out" "load-phase  avg="
 
+echo "== summary.sh resolves CSV columns by header name"
+
+# The whole point of resolving by name is that a column's position may move.
+# Every fixture above uses the canonical order, so hardcoding bc=4/rc=5/ec=15
+# back into roll() would pass all of them — this is the fixture that stops it.
+run_e="$tmp/run-e"
+mkdir -p "$run_e"
+# Same data, header and every row reordered: epoch first, then the mcp columns
+# in a different order. The reported numbers must not change.
+awk -F, 'BEGIN { OFS="," }
+  { print $15, $2, $1, $4, $3, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14 }' \
+  "$run_a/sampler.csv" >"$run_e/sampler.csv"
+cp "$run_a/sampler.csv.info" "$run_e/sampler.csv.info"
+cp "$run_a/run-record.mcp" "$run_e/run-record.mcp"
+out=$("$here/summary.sh" "$run_e")
+contains "a reordered header still yields the same whole-run figure" "$out" "avg= 26.0%"
+contains "a reordered header still yields the same load-phase figure" \
+  "$out" "load-phase  avg= 51.0%   max= 56.0%"
+contains "and still finds epoch, so the window still applies" "$out" "(6 of 12 samples"
+
+# A column the report needs but the CSV does not have is a producer/consumer
+# mismatch. It must say so, not fall through to "(no samples)", which is a real
+# and very different state (an idle process).
+run_f="$tmp/run-f"
+mkdir -p "$run_f"
+sed '1s/mcp_cpu_pct_of_box/mcp_cpu_pct_renamed/' "$run_a/sampler.csv" >"$run_f/sampler.csv"
+cp "$run_a/sampler.csv.info" "$run_f/sampler.csv.info"
+out=$("$here/summary.sh" "$run_f")
+contains "a renamed column is reported as a header mismatch" \
+  "$out" "column mcp_cpu_pct_of_box not in this CSV"
+lacks    "and is not passed off as an idle process" "$out" "mcp   (no samples)"
+
+echo "== summary.sh's mem.csv block"
+
+run_g="$tmp/run-g"
+mkdir -p "$run_g"
+cat >"$run_g/sampler.csv" <<'CSV'
+t_sec,wall,mcp_cpu,mcp_cpu_pct_of_box,mcp_rss_kb,mcp_pss_kb,mcp_uss_kb,mock_cpu,mock_cpu_pct_of_box,mock_rss_kb,mock_pss_kb,mock_uss_kb,loadavg1,sys_mem_used_kb,epoch
+5,10:00:05,16.0,1.0,80000,70000,60000,NA,NA,NA,NA,NA,0.5,900000,1788878005
+CSV
+printf 'host=fixture\ncores_logical=16\nmem_total_kb=16777216\nmode=mcp-only\n' >"$run_g/sampler.csv.info"
+# A trailing unreadable fd sample, which is what a process winding down
+# produces. `end=` must report that, not the last readable value.
+cat >"$run_g/mem.csv" <<'CSV'
+t_sec,wall_ts,rss_kb,vm_kb,threads,open_fds
+0.000,x,80000,900000,14,42
+1.000,x,190000,900000,58,913
+2.000,x,150000,900000,31,NA
+CSV
+printf 'nofile_effective_soft=1048576\n' >"$run_g/run-record.mcp"
+out=$("$here/summary.sh" "$run_g")
+contains "mem.csv peaks are reported"              "$out" "peak=913"
+contains "thread peak too"                          "$out" "peak=58"
+contains "a trailing unreadable fd sample reports end=NA, not a stale value" \
+  "$out" "fds:  end=NA"
+lacks    "and does not report the last readable sample as the end" "$out" "end=120"
+contains "the descriptor limit is shown next to the peak" "$out" "limit=1048576"
+
 echo "== summary.sh --window-from"
 
 out=$("$here/summary.sh" "$run_b" --window-from "$run_a")
-contains "--window-from a run directory finds its record" "$out" "load-phase  avg= 50.0%"
+contains "--window-from a run directory finds its record" "$out" "load-phase  avg= 51.0%"
 contains "--window-from names the record it read"          "$out" "run-record.mcp"
 out=$("$here/summary.sh" "$run_b" --window-from "$run_a/run-record.mcp")
-contains "--window-from a record path works too" "$out" "load-phase  avg= 50.0%"
+contains "--window-from a record path works too" "$out" "load-phase  avg= 51.0%"
 
 rc=0
 "$here/summary.sh" "$run_a" --window-from "$run_b" >/dev/null 2>&1 || rc=$?
@@ -242,10 +317,16 @@ semp:
 YAML
 perf_record_admission "$rec" "$tmp/mcp.log" "$tmp/cfg-bare.yaml" 2>/dev/null
 got=$(cat "$rec")
-contains "a setting nobody wrote down reads unknown"     "$got" "semp_max_queue_wait=unknown"
-contains "and is labelled unreported-server-default"     "$got" "semp_max_queue_wait_source=unreported-server-default"
-lacks    "no server default is ever written as a value"  "$got" "semp_request_min_interval=100ms"
-lacks    "no in-flight default is ever written as a value" "$got" "semp_max_concurrent_per_broker=10"
+# The real invariant is that the VALUE reads unknown for every setting the
+# harness cannot establish — asserted positively, per key. The previous form
+# was `lacks "…=100ms"`, which no code path could ever emit (100ms appears
+# nowhere but a prose comment), so it could not fail.
+for key in max_concurrent_per_broker request_min_interval max_queue_wait; do
+  eq "an unestablished semp.$key reads unknown, never its server default" \
+    "$(awk -F= -v k="semp_$key" '$1 == k {print $2; exit}' "$rec")" "unknown"
+  eq "and semp.$key is labelled unreported-server-default" \
+    "$(awk -F= -v k="semp_${key}_source" '$1 == k {print $2; exit}' "$rec")" "unreported-server-default"
+done
 
 # A server that never logged the line, versus one that logged it without the
 # field. Collapsing those into one `unknown` would let a log-schema change
@@ -276,6 +357,87 @@ perf_record_admission "$rec" "$tmp/mcp.log" "$tmp/cfg-flow.yaml" 2>/dev/null
 got=$(cat "$rec")
 contains "an unparseable-but-present setting reads unknown" "$got" "semp_max_queue_wait=unknown"
 contains "and is labelled config-file-unparsed, not a default" "$got" "semp_max_queue_wait_source=config-file-unparsed"
+
+# --- perf_record_fixtures ----------------------------------------------------
+
+echo "== perf_record_fixtures reads the manifest's provenance header"
+
+# These fields are how a run names the capture it replayed, and they had no
+# test at all. The assertions are on the extracted values — the actual
+# contract — rather than on the extraction mechanism: the reader strips a
+# literal prefix with sub(), so there is no offset arithmetic left to pin, and
+# the values below are what a consumer reads.
+cat >"$tmp/fixtures.manifest" <<'MANIFEST'
+# perf fixtures manifest — written by regen-golden.sh. Local only, not committed.
+# run_id: 20260901T100000Z
+# captured_at: 2026-09-01T10:00:00Z
+# capture_commit: 0123456789abcdef0123456789abcdef01234567
+# capture_dirty: false
+# broker_alias: lab-broker-a
+# vpn: lab_vpn_one
+# rdp: lab_rdp_one
+0000000000000000000000000000000000000000000000000000000000000000  mock-semp/canned/a.json
+1111111111111111111111111111111111111111111111111111111111111111  fidelity/golden/b.json
+MANIFEST
+rec="$tmp/rec-fixtures"
+: >"$rec"
+perf_record_fixtures "$rec" "$tmp"
+field() { awk -F= -v k="$1" '$1 == k {print $2; exit}' "$rec"; }
+eq "captured_at is read exactly, with no leading or trailing character" \
+  "$(field fixtures_captured_at)" "2026-09-01T10:00:00Z"
+eq "capture_commit likewise"      "$(field fixtures_capture_commit)" "0123456789abcdef0123456789abcdef01234567"
+eq "capture_dirty is read"        "$(field fixtures_capture_dirty)"  "false"
+eq "broker_alias is read"         "$(field fixtures_broker_alias)"   "lab-broker-a"
+eq "vpn is read"                  "$(field fixtures_vpn)"            "lab_vpn_one"
+eq "rdp is read"                  "$(field fixtures_rdp)"            "lab_rdp_one"
+eq "the fixture files are counted, not the comment lines" \
+  "$(field fixtures_files)" "2"
+if [[ "$(field fixtures_manifest_sha256)" == "$(sha256sum "$tmp/fixtures.manifest" | cut -d' ' -f1)" ]]; then
+  ok "the manifest hash pins the whole fixture set in one field"
+else
+  bad "fixtures_manifest_sha256 does not match the manifest's actual hash"
+fi
+
+rec="$tmp/rec-nofixtures"
+: >"$rec"
+perf_record_fixtures "$rec" "$tmp/nonexistent-dir"
+eq "an absent manifest reads unknown rather than empty" \
+  "$(awk -F= '/^fixtures_manifest_sha256=/ {print $2; exit}' "$rec")" "unknown"
+
+echo "== perf_stamp_load_start/_end share one clock read"
+
+# run.sh stamps two records for one load phase. Without the optional epoch
+# argument the two `date` calls could disagree by a second, and summary.sh
+# reads whichever record its glob yields first — so the window a run reports
+# would depend on directory order.
+ra="$tmp/stamp-a" rb="$tmp/stamp-b"
+: >"$ra"; : >"$rb"
+shared=$(date +%s)
+perf_stamp_load_start "$ra" "$shared"
+perf_stamp_load_start "$rb" "$shared"
+perf_stamp_load_end "$ra" "$((shared + 60))"
+perf_stamp_load_end "$rb" "$((shared + 60))"
+eq "both records carry the identical load_start_epoch" \
+  "$(awk -F= '/^load_start_epoch=/ {print $2}' "$ra")" \
+  "$(awk -F= '/^load_start_epoch=/ {print $2}' "$rb")"
+eq "both records carry the identical load_end_epoch" \
+  "$(awk -F= '/^load_end_epoch=/ {print $2}' "$ra")" \
+  "$(awk -F= '/^load_end_epoch=/ {print $2}' "$rb")"
+eq "the supplied epoch is used verbatim, not re-read" \
+  "$(awk -F= '/^load_start_epoch=/ {print $2}' "$ra")" "$shared"
+eq "load_window_source records that a runner stamped it" \
+  "$(awk -F= '/^load_window_source=/ {print $2}' "$ra")" "runner-stamped"
+
+# Omitting the argument must still work — run-loadgen.sh stamps one record and
+# passes none.
+rc="$tmp/stamp-c"
+: >"$rc"
+perf_stamp_load_start "$rc"
+if [[ "$(awk -F= '/^load_start_epoch=/ {print $2}' "$rc")" =~ ^[0-9]{10}$ ]]; then
+  ok "with no argument it reads the clock itself"
+else
+  bad "the default (no-argument) stamp path did not record an epoch"
+fi
 
 # --- perf_record_fd_peak -----------------------------------------------------
 
@@ -333,7 +495,7 @@ eq "columns are found by name, not position" \
 echo "== perf_first_held_port"
 
 if ! command -v ss >/dev/null 2>&1; then
-  echo "  skip  port checks (ss not installed)"
+  skip "port checks (ss not installed)"
 else
   # Two listeners, so the "first held in the caller's order" contract is
   # actually exercised rather than trivially satisfied.
@@ -375,7 +537,7 @@ PY
     perf_wait_ports_free 0 "$port_a" >/dev/null 2>&1 || rc=$?
     eq "a zero timeout skips the check deliberately" "$rc" "0"
   else
-    echo "  skip  port checks (could not bind fixture listeners)"
+    skip "port checks (could not bind fixture listeners)"
   fi
   kill "$helper" 2>/dev/null || true
   wait "$helper" 2>/dev/null || true
@@ -433,5 +595,9 @@ fi
 eq "the requested value is recorded verbatim" "$PERF_NOFILE_REQUESTED" "4096"
 
 echo
-echo "$pass passed, $fail failed"
+if (( skip )); then
+  echo "$pass passed, $fail failed, $skip skipped"
+else
+  echo "$pass passed, $fail failed"
+fi
 [[ "$fail" -eq 0 ]]
