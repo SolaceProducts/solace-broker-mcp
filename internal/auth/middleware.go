@@ -28,6 +28,7 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/authz"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/idpclient"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/schema"
 	"github.com/coreos/go-oidc/v3/oidc"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
@@ -144,7 +145,7 @@ func auditMissingBearerToken(hook AuthAuditHook, next http.Handler) http.Handler
 		if _, ok := parseBearerToken(authHeader); !ok {
 			reason := ClassifyAuthFailure(nil)
 			if authHeader != "" {
-				reason = "invalid_token"
+				reason = schema.AuthFailureReasonInvalidToken
 			}
 			reportAuthFailure(r.Context(), hook, reason, "", "")
 		}

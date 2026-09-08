@@ -16,50 +16,32 @@ package auth
 
 import (
 	"errors"
-	"sort"
 	"strings"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/schema"
 	"github.com/coreos/go-oidc/v3/oidc"
 )
 
-// authFailureReasonVocabulary is the closed set ClassifyAuthFailure returns
-// from, and the single source of truth for it: internal/observability/audit
-// cannot import this package's unexported identifiers to check against, and
-// this package cannot import that one (AuthAuditHook's doc explains why), so
-// audit/event_test.go asserts its own authFailureReasons map matches
-// AuthFailureReasons() exactly, the same drift guard
-// internal/tools/audit_error_type_drift_test.go uses for error_type.
-var authFailureReasonVocabulary = []string{
-	"invalid_token",
-	"expired",
-	"audience_mismatch",
-	"signature_invalid",
-	"missing",
-}
-
-// AuthFailureReasons returns the closed reason vocabulary ClassifyAuthFailure
-// draws from, sorted, as a fresh slice the caller may mutate. SOL-152099 is
-// expected to call this for its mcp_auth_failure_total{reason} counter's
-// label pre-registration, rather than hardcoding the five values a second
-// time.
-func AuthFailureReasons() []string {
-	out := make([]string, len(authFailureReasonVocabulary))
-	copy(out, authFailureReasonVocabulary)
-	sort.Strings(out)
-	return out
-}
-
-// ClassifyAuthFailure maps an auth-rejection error to the closed reason
-// vocabulary the auth_failure audit record carries (SOL-152097): one of
-// invalid_token, expired, audience_mismatch, signature_invalid, missing.
+// ClassifyAuthFailure maps an auth-rejection error to schema.AuthFailureReason,
+// the closed vocabulary the auth_failure audit record and the
+// mcp_auth_failure_total{reason} counter both carry (SOL-152097).
+//
+// The vocabulary itself is owned by internal/observability/schema, not by this
+// package (SOL-154163): the five values are output schema, and a leaf package
+// both this package and internal/observability/{audit,metrics} can import is
+// the only owner that needs no drift guard. There IS an import-cycle
+// constraint in play, but only in one direction — internal/observability/audit
+// imports this package for identity (auth.PrincipalFrom), so this package
+// cannot import that one back (see AuthAuditHook's doc). It never blocked
+// importing schema, which imports nothing of ours.
 //
 // Story 24 (SOL-152099, "coordinate with" — not a Jira dependency of this
 // story, but the ticket that needed this same classification) is expected to
-// call this exact function for its mcp_auth_failure_total{reason} counter
-// labels, so the metric and the audit record read from one place and cannot
-// drift into disagreeing about why a token was rejected — the point ADR-009
-// makes about metric/log/audit consistency elsewhere in this codebase. Add a
-// case here, never a second classifier, if a new failure shape needs one.
+// call this exact function for its counter labels, so the metric and the audit
+// record read from one classifier and cannot drift into disagreeing about why
+// a token was rejected — the point ADR-009 makes about metric/log/audit
+// consistency elsewhere in this codebase. Add a case here, never a second
+// classifier, if a new failure shape needs one.
 //
 // err should be the richest error available at the point of rejection — the
 // value verifier.Verify (or an equivalent claim/subject check) returned
@@ -69,9 +51,9 @@ func AuthFailureReasons() []string {
 //
 // nil classifies as "missing": a caller with no error to classify has nothing
 // to reject the token over except its absence.
-func ClassifyAuthFailure(err error) string {
+func ClassifyAuthFailure(err error) schema.AuthFailureReason {
 	if err == nil {
-		return "missing"
+		return schema.AuthFailureReasonMissing
 	}
 
 	// TokenExpiredError is go-oidc's one exported category (see
@@ -79,14 +61,14 @@ func ClassifyAuthFailure(err error) string {
 	// exact and survives a message-text change upstream.
 	var expired *oidc.TokenExpiredError
 	if errors.As(err, &expired) {
-		return "expired"
+		return schema.AuthFailureReasonExpired
 	}
 
 	// errNoSubject: RFC 9068 §2.2 makes sub hard-required (buildTokenInfo);
 	// a token that verified but omits it is rejected for what it is missing,
 	// not for being malformed.
 	if errors.Is(err, errNoSubject) {
-		return "missing"
+		return schema.AuthFailureReasonMissing
 	}
 
 	// go-oidc does not export types for these two checks (see
@@ -105,13 +87,13 @@ func ClassifyAuthFailure(err error) string {
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, "expected audience"):
-		return "audience_mismatch"
+		return schema.AuthFailureReasonAudienceMismatch
 	case strings.Contains(msg, "failed to verify signature"):
-		return "signature_invalid"
+		return schema.AuthFailureReasonSignatureInvalid
 	default:
 		// Catch-all: malformed JWT, unparseable claims, issuer mismatch, a
 		// static dev-token mismatch, and anything else this function does
 		// not (yet) have a more specific bucket for.
-		return "invalid_token"
+		return schema.AuthFailureReasonInvalidToken
 	}
 }
