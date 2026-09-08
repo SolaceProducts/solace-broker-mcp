@@ -28,6 +28,7 @@ import (
 
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/panics"
 )
 
@@ -82,7 +83,7 @@ func mcpFamilies(body string) string {
 // rather than through a provider; the golden file is still the contract for how
 // it appears on the wire.
 func TestGoldenSchema(t *testing.T) {
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +125,7 @@ func TestGoldenSchema(t *testing.T) {
 // TestScrapeCounterIncrements proves mcp_metrics_scrape_total rises by one per
 // served scrape, so support can confirm Prometheus is actually scraping.
 func TestScrapeCounterIncrements(t *testing.T) {
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +157,7 @@ func scrapeCounterValue(t *testing.T, body string) int {
 
 // TestProviderAccessors covers the meter-provider accessors and a clean shutdown.
 func TestProviderAccessors(t *testing.T) {
-	p, err := New(testVersion, sdkresource.Default())
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +178,7 @@ func TestProviderAccessors(t *testing.T) {
 // loss this parameter exists to prevent. A caller with no opinion on
 // identity must pass sdkresource.Default() explicitly, not nil.
 func TestNew_NilResourceIsRejected(t *testing.T) {
-	if _, err := New(testVersion, nil); err == nil {
+	if _, err := New(testVersion, nil, config.ObservabilityConfig{}); err == nil {
 		t.Fatal("New(_, nil) error = nil, want an error")
 	}
 }

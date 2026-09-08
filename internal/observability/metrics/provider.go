@@ -21,6 +21,7 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
 
@@ -33,6 +34,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/schema"
 )
 
@@ -67,7 +69,14 @@ const instrumentScope = "github.com/SolaceProducts/solace-broker-mcp"
 // "no identity" case — every real caller has one to pass (see
 // cmd/server/main.go); tests that don't care about identity can pass
 // sdkresource.Default() or any other non-nil resource.
-func New(buildVersion string, res *sdkresource.Resource) (*Provider, error) {
+//
+// cfg.MetricsOTLPEnabled (SOL-152418, Story 46) attaches a second reader — an
+// OTLP push exporter — to the SAME meter provider the Prometheus exporter
+// reads from, so both egresses observe one instrument set and share res. A
+// zero-value config.ObservabilityConfig{} (every test that doesn't care about
+// OTLP) leaves the OTLP reader out entirely, byte-for-byte the pre-Story-46
+// construction.
+func New(buildVersion string, res *sdkresource.Resource, cfg config.ObservabilityConfig) (*Provider, error) {
 	if res == nil {
 		// Enforces the doc comment above: sdkmetric.WithResource(nil)
 		// silently overrides the SDK's own resource.Default(), collapsing
@@ -81,7 +90,11 @@ func New(buildVersion string, res *sdkresource.Resource) (*Provider, error) {
 	}
 	registry := promclient.NewRegistry()
 
-	// Free Go-runtime and process numbers (memory, goroutines, FDs)
+	// Free Go-runtime and process numbers (memory, goroutines, FDs). These
+	// register directly on the client_golang registry, never through the OTel
+	// SDK pipeline below — which is what keeps them off the OTLP egress (Story
+	// 46's own scope note): the OTLP reader only ever sees what passes through
+	// meterProvider's Meter(...), and these two collectors never do.
 	registry.MustRegister(
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
@@ -97,9 +110,64 @@ func New(buildVersion string, res *sdkresource.Resource) (*Provider, error) {
 		return nil, fmt.Errorf("create prometheus exporter: %w", err)
 	}
 
+	// readers always carries the Prometheus exporter; the OTLP reader joins it
+	// conditionally. Both must be passed to sdkmetric.NewMeterProvider in one
+	// call — the SDK does not support adding a reader after construction —
+	// which is also why otlpStats (below) is built in two steps: the reader
+	// needs to exist before the MeterProvider does, but its own counters can
+	// only register against the MeterProvider once built.
+	readers := []sdkmetric.Option{sdkmetric.WithReader(exporter)}
+
+	var otlpStatsInstance *otlpStats
+	if cfg.MetricsOTLPEnabled {
+		otlpStatsInstance = newOTLPStats()
+		otlpReader, err := newOTLPReader(context.Background(), otlpStatsInstance)
+		if err != nil {
+			// Verified against the real exporter (v1.46.0): a malformed
+			// OTEL_EXPORTER_OTLP_ENDPOINT does NOT reach this branch —
+			// otlpmetricgrpc.New defers endpoint validation to connection
+			// time (via the same gRPC lazy-dial otlptracegrpc.New uses) and
+			// logs a parse failure through the global channel instead of
+			// returning one, which is exactly the leak oteldiag.Install
+			// closes. This branch is defensive for a future SDK version or
+			// option that does return synchronously; kept rather than
+			// removed on that basis, disclosed as effectively untested
+			// rather than pretended otherwise.
+			//
+			// No err.Error(): newOTLPReader wraps otlpmetricgrpc.New, whose
+			// returned error can echo back OTEL_EXPORTER_OTLP_HEADERS or a
+			// malformed endpoint URL — operator-supplied, unaudited text that
+			// conventionally carries a collector auth token
+			// (docs/internal/secure-logging-rules.md Rule 5), same reasoning
+			// as tracing's identical otlptracegrpc.New guard. That covers
+			// this err value; oteldiag.Install (called inside newOTLPReader,
+			// before this call can fail) is the other half, closing the
+			// SDK's own global-channel leak for the same construction.
+			//
+			// Service continuity over strict correctness here too: a
+			// malformed OTLP endpoint override must not take down the
+			// Prometheus scrape, which is the capability with no further
+			// opt-in gate once metrics are on at all.
+			// validateMetricsOTLPCoherence (config package) already caught
+			// the "OTLP on, metrics off" case at config load; this is a
+			// narrower, rarer construction failure the coherence check
+			// cannot see.
+			slog.Error("OTLP metrics egress unavailable: exporter build failed")
+			otlpStatsInstance = nil
+		} else {
+			readers = append(readers, sdkmetric.WithReader(otlpReader))
+		}
+	}
+
 	// Single instrument root: all metrics register against this. WithResource
 	// is what makes target_info carry the shared identity attributes.
-	meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter), sdkmetric.WithResource(res))
+	meterProvider := sdkmetric.NewMeterProvider(append(readers, sdkmetric.WithResource(res))...)
+
+	if otlpStatsInstance != nil {
+		if err := otlpStatsInstance.registerInstruments(meterProvider); err != nil {
+			return nil, err
+		}
+	}
 
 	p := &Provider{
 		registry:      registry,
@@ -175,6 +243,16 @@ func (p *Provider) Meter(name string) metric.Meter {
 	return p.meterProvider.Meter(name)
 }
 
+// ForceFlush flushes every reader attached at construction — the Prometheus
+// exporter (a no-op; it is pulled, not pushed) and, when MetricsOTLPEnabled
+// was set, the OTLP push reader (SOL-152418, Story 46). Exists so a caller
+// (a test, or an operator-triggered pre-shutdown flush) can force an
+// immediate OTLP push rather than waiting for the reader's own periodic
+// interval.
+func (p *Provider) ForceFlush(ctx context.Context) error {
+	return p.meterProvider.ForceFlush(ctx)
+}
+
 // Handler serves the registry in Prometheus/OpenMetrics format for /metrics,
 // counting each scrape via mcp_metrics_scrape_total. EnableOpenMetrics is
 // required so a later change can emit exemplars.
@@ -199,6 +277,21 @@ func (p *Provider) ToolMetrics() (*ToolMetrics, error) {
 
 // Shutdown flushes and stops the meter provider. cmd/server registers it as a
 // shutdown hook (SOL-153884).
+//
+// This flushes every reader attached at construction, the OTLP reader
+// (SOL-152418, Story 46) included when MetricsOTLPEnabled was set — the SDK
+// shuts down all of a MeterProvider's readers from one Shutdown call
+// (go.opentelemetry.io/otel/sdk/metric@v1.46.0 config.go's readerSignals),
+// sequentially, sharing ctx's one deadline. That is deliberately NOT a second,
+// separately-registered shutdown hook: this method is already registered
+// against the Story 48 registry as "metrics_provider"
+// (cmd/server/main.go's registerShutdownHooks), and a second hook flushing
+// the OTLP reader again would either race this call over the same reader
+// (both are goroutines under hooks.Registry.RunAll) or, since the SDK's
+// per-reader shutdown is idempotent, just return ErrReaderShutdown
+// harmlessly on whichever hook loses the race — correct, but pure noise. One
+// hook, one shared budget, no race, is the simpler and equally-bounded
+// alternative.
 func (p *Provider) Shutdown(ctx context.Context) error {
 	return p.meterProvider.Shutdown(ctx)
 }

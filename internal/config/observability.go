@@ -49,6 +49,14 @@ type ObservabilityConfig struct {
 	AuditLogEnabled         bool `yaml:"-"`
 	TracingEnabled          bool `yaml:"-"`
 	SaturationEventsEnabled bool `yaml:"-"`
+	// MetricsOTLPEnabled turns on the OTLP push egress alongside the Prometheus
+	// scrape (SOL-152418, Story 46): both read from the same meter provider, so
+	// enabling this adds a second consumer of the existing instruments rather
+	// than a second set of them. Meaningless with MetricsEnabled off — the
+	// meter provider is the shared root, so validateMetricsOTLPCoherence
+	// rejects that combination at config load rather than silently doing
+	// nothing.
+	MetricsOTLPEnabled bool `yaml:"-"`
 	// AuthFailureCounterEnabled follows MetricsEnabled unless its own env var
 	// (OBS_AUTH_FAILURE_COUNTER_ENABLED) is explicitly set. The auth-failure
 	// counter is a metric, so it makes no sense to emit it while metrics are
@@ -99,6 +107,7 @@ const (
 	envObsTracingEnabled            = "OBS_TRACING_ENABLED"
 	envObsSaturationEventsEnabled   = "OBS_SATURATION_EVENTS_ENABLED"
 	envObsAuthFailureCounterEnabled = "OBS_AUTH_FAILURE_COUNTER_ENABLED"
+	envObsMetricsOTLPEnabled        = "OBS_METRICS_OTLP_ENABLED"
 )
 
 // applyObservabilityEnv populates the capability flags on cfg from the OBS_*
@@ -114,6 +123,7 @@ func applyObservabilityEnv(cfg *ServerConfig) {
 	o.AuditLogEnabled = envBool(envObsAuditLogEnabled, false, "observability")
 	o.TracingEnabled = envBool(envObsTracingEnabled, false, "observability")
 	o.SaturationEventsEnabled = envBool(envObsSaturationEventsEnabled, false, "observability")
+	o.MetricsOTLPEnabled = envBool(envObsMetricsOTLPEnabled, false, "observability")
 
 	// Auth-failure counter follows metrics unless its own var is explicitly
 	// set. LookupEnv distinguishes "unset" (follow metrics) from "set to

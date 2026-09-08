@@ -15,11 +15,7 @@
 package tracing
 
 import (
-	"log/slog"
-	"sync/atomic"
-
-	"github.com/go-logr/logr"
-	"go.opentelemetry.io/otel"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/oteldiag"
 )
 
 // installOTelDiagnostics routes the OTel SDK's own internal error handler
@@ -38,38 +34,13 @@ import (
 //
 // Must be called before the first SDK call that can trigger either channel,
 // which is otlptracegrpc.New itself — not merely before
-// otel.SetTracerProvider, which runs later. Deliberately reports no error
-// text, attribute values, or keys-and-values: the whole point is that this
-// channel cannot be trusted to carry only safe material, so nothing it
-// carries is logged, only the fact that it fired. One line per call to New
-// is enough to make the condition visible to an operator without echoing
-// whatever novel case triggered it next time.
+// otel.SetTracerProvider, which runs later.
+//
+// Delegates to internal/observability/oteldiag (SOL-152418, Story 46
+// extracted the implementation so metrics' own otlpmetricgrpc.New — the
+// identical leak surface — can install the same suppression independently
+// of whether tracing is even enabled). This wrapper, and this package's own
+// tests against it, stay in place unchanged.
 func installOTelDiagnostics() {
-	sink := &otelDiagnosticSink{}
-	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(error) { sink.warn() }))
-	otel.SetLogger(logr.New(sink))
+	oteldiag.Install()
 }
-
-// otelDiagnosticSink is a logr.LogSink that discards everything it is given
-// and emits a single fixed slog.Warn the first time it is called. See
-// installOTelDiagnostics for why no argument it receives is ever logged.
-type otelDiagnosticSink struct {
-	reported atomic.Bool
-}
-
-func (s *otelDiagnosticSink) warn() {
-	if s.reported.CompareAndSwap(false, true) {
-		slog.Warn("otel sdk emitted an internal diagnostic on its own error/log channel; suppressed here because that channel is not audited for OTLP headers or endpoint credentials — see docs/observability.md")
-	}
-}
-
-func (s *otelDiagnosticSink) Init(logr.RuntimeInfo)      {}
-func (s *otelDiagnosticSink) Enabled(int) bool           { return true }
-func (s *otelDiagnosticSink) Info(int, string, ...any)   { s.warn() }
-func (s *otelDiagnosticSink) Error(error, string, ...any) { s.warn() }
-
-// WithValues and WithName return the same sink rather than a derived one:
-// there are no per-call values to carry since nothing this sink receives is
-// ever logged.
-func (s *otelDiagnosticSink) WithValues(...any) logr.LogSink { return s }
-func (s *otelDiagnosticSink) WithName(string) logr.LogSink   { return s }

@@ -136,6 +136,14 @@ Setting `OBS_METRICS_OTLP_ENABLED=true` while `OBS_METRICS_ENABLED` is false fai
 load with an explicit error rather than emitting nothing quietly, because both egresses
 share one meter provider.
 
+**Temporality is always cumulative, explicitly forced regardless of environment.** This server
+sets it in code rather than relying on the SDK's own default (which happens to already be
+cumulative) or on whatever `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` a customer may
+have set cluster-wide for other services. This matters because Prometheus's own OTLP receiver
+needs the experimental `otlp-deltatocumulative` feature flag to accept delta at all — shipping,
+or silently inheriting, delta would break the exact interop this egress exists to provide for a
+customer who points it at their own Prometheus.
+
 ### Server and Scrape Health
 
 | Metric | Type | Labels | Basis |
@@ -439,6 +447,12 @@ Standard `go_*` and `process_*` collectors from the Prometheus Go client library
 garbage-collection timing, memory stats, file descriptors, CPU. These names are upstream
 Prometheus conventions, not Solace-defined, and are listed here only so you know they will be
 present, once the metrics endpoint is wired, for diagnosing memory pressure and goroutine leaks.
+
+**Absent from the OTLP push egress (SOL-152418, Story 46).** These two collectors register
+directly against the Prometheus `client_golang` registry, never through the OTel meter provider
+the `mcp_*` instruments share — so the OTLP reader, which only observes what passes through that
+meter provider, never sees them. An OTLP-native APM ingesting this server's pushed metrics will
+not show `go_*`/`process_*` panels; that gap is structural; not a bug to report.
 
 ---
 
@@ -841,8 +855,9 @@ your own data-flow review before pointing this at a collector you don't operate.
 > onto every log line from immediately after config loads onward — the handful of log lines
 > emitted before config loads (the process banner and the config-load attempt itself) have no
 > identity to attach, since it's derived from config. The **OTLP push** query guidance below
-> describes that future egress (Story 46, not yet landed); the scrape (`target_info`) path is
-> live today._
+> describes that egress (SOL-152418, Story 46) — both it and the scrape (`target_info`) path
+> are live today, sharing this same resource by construction (both readers attach to the one
+> meter provider Story 14 built)._
 
 Set from server configuration on **both** metrics and spans, so an aggregated dashboard can
 tell instances apart without a label duplicated onto every series. All five follow the

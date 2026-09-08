@@ -1190,7 +1190,7 @@ func main() {
 	var toolMetrics *metrics.ToolMetrics
 	var metricsBuildErr error
 	if metrics.Enabled(cfg.Observability) {
-		if metricsProvider, metricsBuildErr = metrics.New(version.Version(), res); metricsBuildErr != nil {
+		if metricsProvider, metricsBuildErr = metrics.New(version.Version(), res, cfg.Observability); metricsBuildErr != nil {
 			slog.Error("metrics provider build failed", slog.String("error", metricsBuildErr.Error()))
 		} else if tm, tmErr := metricsProvider.ToolMetrics(); tmErr != nil {
 			slog.Error("tool metrics unavailable", slog.String("error", tmErr.Error()))

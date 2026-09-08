@@ -38,6 +38,7 @@ func clearObsEnv(t *testing.T) {
 		envObsTracingEnabled,
 		envObsSaturationEventsEnabled,
 		envObsAuthFailureCounterEnabled,
+		envObsMetricsOTLPEnabled,
 	}
 	for _, name := range vars {
 		if prev, ok := os.LookupEnv(name); ok {
@@ -89,6 +90,7 @@ func TestObservability_FlagDefaults(t *testing.T) {
 		{"TracingEnabled", o.TracingEnabled, false},
 		{"SaturationEventsEnabled", o.SaturationEventsEnabled, false},
 		{"AuthFailureCounterEnabled", o.AuthFailureCounterEnabled, false},
+		{"MetricsOTLPEnabled", o.MetricsOTLPEnabled, false},
 	}
 	for _, c := range checks {
 		if c.got != c.want {
@@ -115,6 +117,24 @@ func TestObservability_EnvOverridesBothDirections(t *testing.T) {
 	}
 	if !cfg.Observability.MetricsEnabled {
 		t.Error("OBS_METRICS_ENABLED=true should turn metrics ON")
+	}
+}
+
+// TestObservability_MetricsOTLPEnabled_EnvOverride proves OBS_METRICS_OTLP_ENABLED
+// is read independently of OBS_METRICS_ENABLED — unlike the auth-failure
+// counter, it does not follow metrics; it is validated against metrics
+// separately (see TestValidate_MetricsOTLPRequiresMetricsEnabled), not
+// defaulted from it.
+func TestObservability_MetricsOTLPEnabled_EnvOverride(t *testing.T) {
+	t.Setenv("OBS_METRICS_ENABLED", "true")
+	t.Setenv("OBS_METRICS_OTLP_ENABLED", "true")
+
+	cfg, err := LoadConfig(writeTemp(t, obsYAML))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Observability.MetricsOTLPEnabled {
+		t.Error("OBS_METRICS_OTLP_ENABLED=true should turn the OTLP egress ON")
 	}
 }
 
