@@ -4,7 +4,7 @@ This file lists the third-party components compiled into the `solace-broker-mcp`
 binary, with their versions and licenses. It is the human-readable OSS compliance
 inventory that accompanies the release.
 
-**Generated** 2026-09-04 with
+**Generated** 2026-09-08 with
 [`go-licenses`](https://github.com/google/go-licenses) against `./cmd/server`:
 
 ```bash
@@ -82,6 +82,7 @@ under MPL-2.0.
 | `github.com/xeipuuv/gojsonschema` | v1.2.0 | Apache-2.0 | [license](https://github.com/xeipuuv/gojsonschema/blob/v1.2.0/LICENSE-APACHE-2.0.txt) |
 | `github.com/yosida95/uritemplate/v3` | v3.0.2 | BSD-3-Clause | [license](https://github.com/yosida95/uritemplate/blob/v3.0.2/LICENSE) |
 | `go.opentelemetry.io/auto/sdk` | v1.2.1 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go-instrumentation/blob/sdk/v1.2.1/sdk/LICENSE) |
+| `go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc` | v1.46.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/exporters/otlp/otlpmetric/otlpmetricgrpc/v1.46.0/exporters/otlp/otlpmetric/otlpmetricgrpc/LICENSE) |
 | `go.opentelemetry.io/otel` | v1.46.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/v1.46.0/LICENSE) |
 | `go.opentelemetry.io/otel/exporters/otlp/otlptrace` | v1.46.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/exporters/otlp/otlptrace/v1.46.0/exporters/otlp/otlptrace/LICENSE) |
 | `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc` | v1.46.0 | Apache-2.0 | [license](https://github.com/open-telemetry/opentelemetry-go/blob/exporters/otlp/otlptrace/otlptracegrpc/v1.46.0/exporters/otlp/otlptrace/otlptracegrpc/LICENSE) |
