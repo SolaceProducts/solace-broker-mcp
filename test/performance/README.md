@@ -48,13 +48,19 @@ and the per-command headers in `mock-semp/main.go`, `loadgen/main.go`,
 mock-semp/        replayer: pretends to be N brokers on 18081..18081+N-1
 loadgen/          concurrent MCP tool caller, prints throughput/latency/errors
 fidelity/         hard gate: compares tool output vs fidelity/golden/*.json
-memsampler/       polls /proc/<pid>/status, writes CSV
+memsampler/       polls /proc/<pid>/status + /proc/<pid>/fd, writes CSV
 sampler.sh        CPU + RSS/PSS/USS for MCP + mock + box totals, CSV
 loadgen-sampler.sh   loadgen-side connection/goroutine counters
 summary.sh        prints a one-page rollup of a run directory
+lib.sh            shared helpers: run record, load-phase stamps, port waits,
+                  descriptor limit (sourced by the run scripts, never run)
 
 broker-config.mock.yaml   MCP config pointing at mock-semp (50 brokers)
 broker-config.real.yaml   MCP config pointing at the real lab broker
+
+gen-mock-config.sh      generates an MCP config for N mock brokers (N > 50)
+gen-mock-config.test.sh self-test for the generator
+lib.test.sh             self-test for lib.sh + summary.sh's rollup
 
 build.sh          builds mock-semp, loadgen, fidelity, memsampler, mcp-server into ./bin/
 run.sh            single-host smoke run (mock + MCP + loadgen on one box)
@@ -68,13 +74,14 @@ fidelity/golden/      expected tool output     ─┘ regen-golden.sh writes bot
 fixtures.manifest     what the last capture produced (gitignored)
 ```
 
-Artifacts land in `bin/runs/<timestamp>[-<tag>]/`.
+Artifacts land in `bin/runs/<timestamp>[-<tag>]/`, including a `run-record.*`
+per role — see [The run record](#the-run-record).
 
 ## Ports
 
 | port | who | notes |
 |---|---|---|
-| `9090` | MCP server | health at `/health`; `run.sh` refuses to start if occupied |
+| `9090` | MCP server | health at `/health`; the run scripts wait up to `PORT_WAIT_SECS` (default 60) for a previous run to release it, then fail naming it |
 | `18081..18081+N-1` | mock-semp broker ports | one per fake broker; default N=50 → `18081..18130`. In split-host mode Box A binds `0.0.0.0` so Box B can reach these over the LAN |
 | `19000` | mock-semp control endpoint | `POST /_mock/config` for per-port latency / error injection; `GET /_mock/hits` reports per-rule SEMP counts and `POST /_mock/hits` reports and zeroes them. Bound to localhost by default (separate from `-listen-addr`) so opening broker ports to the LAN doesn't also expose the injection knob |
 
@@ -110,6 +117,10 @@ Key env knobs (full list in `run.sh` header):
 | `BROKER_ALIAS` | `broker-01` | fidelity `-broker`; must exist in `broker-config.mock.yaml` |
 | `VPN` | from `fixtures.manifest` | fidelity `-vpn`; defaults to the VPN the goldens were captured against. Set it only to override |
 | `RDP` | from `fixtures.manifest` | fidelity/loadgen `-rdp`; the RDP the capture pinned. The mock serves `get-rdp-status` for that RDP only |
+| `BROKERS` | 50 | mock broker count and `loadgen -broker-count`. Above 50 the committed config runs out of aliases — generate one with `gen-mock-config.sh` |
+| `PORT_WAIT_SECS` | 60 | how long to wait for a port a previous run still holds |
+| `NOFILE` | 1048576 | descriptor limit to request; falls back to the hard limit. Both requested and granted are recorded |
+| `RIG_NOTE` | — | free-text note about this host, recorded verbatim in the run record |
 
 ## Split-host run
 
@@ -151,6 +162,274 @@ firing loadgen.
 | `BROKER_ALIAS` | `broker-01` | fidelity `-broker`; must exist in `broker-config.mock.yaml` |
 | `VPN` | from `fixtures.manifest` | fidelity `-vpn`; defaults to the VPN the goldens were captured against. Set it only to override |
 | `RDP` | from `fixtures.manifest` | fidelity/loadgen `-rdp`; the RDP the capture pinned |
+| `PORT_WAIT_SECS` | 60 | how long to wait for a mock port (or `:19000`) a previous run still holds |
+| `NOFILE` | 1048576 | descriptor limit to request; falls back to the hard limit. This is the box that needs it — one outbound socket per `CLIENTS` session |
+| `RIG_NOTE` | — | free-text note about this host, recorded verbatim in the run record |
+
+`run-mcp.sh` (Box B) takes `PORT_WAIT_SECS`, `NOFILE` and `RIG_NOTE` too, with
+the same meanings and defaults, alongside its own `MOCK_HOST`, `DURATION` and
+`CONFIG_FILE` — full contract in the script header. `RIG_NOTE` matters most
+there: Box B is the rig whose CPU and RSS a campaign actually compares.
+
+## Running the self-tests
+
+None of these needs a broker, a server, fixtures or a network — they run in a
+`mktemp` dir in a couple of seconds:
+
+```
+./lib.test.sh              # lib.sh: run record, _source labels, port wait,
+                           # and summary.sh's load-phase windowing
+./gen-mock-config.test.sh  # the N-broker config generator
+go test ./memsampler/      # the /proc parse and the descriptor count
+```
+
+`lib.test.sh` is the one that covers the numbers a campaign is compared on. Its
+sampler fixture is deliberately bimodal — six idle samples, then six loaded
+ones — so a windowing bug cannot pass by accident: the whole-run and
+load-phase averages sit 25 points apart, and one assertion requires them to
+stay that way.
+
+## The run record
+
+Every run directory gets a machine-readable record of what produced it, one
+per role:
+
+```
+run-record.mcp        the box that ran MCP        (run.sh, run-mcp.sh)
+run-record.loadgen    the box that drove the load (run.sh, run-loadgen.sh)
+```
+
+One record per box, never a merged one. The two halves of a split-host run
+have different rigs — Box A carries the mock and the load generator, Box B the
+MCP server — and merging them would need a channel between the boxes that this
+harness deliberately does not have. `run.sh` writes both into its single run
+directory, so a consumer reads a single-host run the same way it reads the two
+halves of a split-host one.
+
+Format is one `key=value` per line with `#` comments, the same shape the
+`.info` sidecars use and `summary.sh` already parses with `awk -F=`. It carries:
+
+| group | fields |
+|---|---|
+| rig | `host`, `kernel`, `arch`, `cores_logical`, `cores_physical`, `cpu_model`, `mem_total_kb`, plus `instance_type` / `availability_zone` on EC2 and `rig_note` when `RIG_NOTE` is set |
+| code | `commit`, `commit_dirty`, and a `<binary>_sha256` for every binary the run executed |
+| fixtures | `fixtures_manifest_sha256`, `fixtures_files`, `fixtures_captured_at`, `fixtures_capture_commit`, `fixtures_capture_dirty`, `fixtures_vpn`, `fixtures_rdp`, `fixtures_broker_alias` |
+| admission | `semp_max_concurrent_per_broker`, `semp_request_min_interval`, `semp_max_queue_wait`, `semp_fair_scheduling`, each with a `_source` |
+| descriptors | `nofile_requested`, `nofile_granted`, `nofile_effective_soft`, `nofile_effective_hard`, `fd_peak`, `threads_peak` |
+| workload | `clients`, `duration`, `tools`, `broker_count`, `vpn`, `rdp`, `latency_ms`, `total_rps`, the error-injection knobs |
+| load phase | `load_start_epoch`, `load_end_epoch`, `load_window_source` |
+
+The governing rule is that **an absent field is honest and a guessed one is a
+trap**. Anything the harness cannot establish is either omitted (EC2 fields on
+a devserver: the metadata call simply fails there, which is the expected answer
+for "not EC2", not an error) or written as the literal `unknown`. A later
+comparison will trust whatever is written here.
+
+> **These records are internal.** The fixture fields name a real lab appliance
+> — `fixtures_vpn`, `fixtures_rdp` and `fixtures_broker_alias` are copied
+> straight out of `fixtures.manifest`, which is gitignored for exactly that
+> reason — and the rig fields name the host. The records live under the
+> gitignored `bin/runs/`, so nothing commits them, but they are meant to be
+> shared between engineers and archived: do not paste one into a public issue,
+> PR or page. Each record repeats this in its own header so a copied file
+> carries the warning with it.
+
+### Why the admission settings carry a `_source`
+
+Four settings move admission behaviour, and two of them post-date the first
+full measurement pass, so a run that does not record them cannot be compared
+with one that does: `semp.max_queue_wait` and `semp.fair_scheduling`.
+
+Recording them is not as simple as parsing the config, because **unset is not
+off**. The defaults are a 100 ms pacer, 10 in-flight slots, a 30 s admission
+bound, and fair scheduling **on**. A plain YAML parse of a config that relies
+on any of those would leave the field blank, which the next reader takes for
+"no throttle".
+
+So each field says where its value came from:
+
+| `_source` | meaning |
+|---|---|
+| `server-log` | the server reported its own effective value on its `config loaded` startup line |
+| `config-file` | the value was written explicitly in the config this run used (copied into the run directory as `broker-config.used.yaml`) |
+| `unreported-server-default` | not written down and not reported, so the server applied its default and the harness cannot prove which. The value reads `unknown` |
+| `server-log-absent` | the server never logged its `config loaded` line — it did not start, or it is an older build. Value reads `unknown` |
+| `server-log-schema-changed` | the line is there but the field is not on it. The harness's one coupling to the server's log output has broken and `lib.sh`'s reader needs updating; it warns on stderr as well. Value reads `unknown` |
+| `config-file-unparsed` | the key *is* in the config but `lib.sh`'s narrow reader could not extract it (a nesting or flow-style shape it does not handle). Value reads `unknown`, and it warns — recording `unreported-server-default` here would be a lie about provenance, which is in the same family as a wrong value |
+
+The last three exist so that a broken reader is distinguishable from an absent
+value. Collapsing them into one `unknown` would let a server log-schema change
+silently degrade every future run with no signal — and the whole reason this
+field is read from the log is that it *is* obtainable.
+
+Today only `fair_scheduling` reads `server-log` — it is published there
+deliberately, as a kill switch an operator has to be able to confirm took
+effect. The other three read `config-file` for any config that sets them (the
+committed `broker-config.mock.yaml` sets two of the three) and
+`unreported-server-default` otherwise. Putting all four on the `config loaded`
+line is a one-line server change that would make every run read `server-log`;
+it is production surface, so it is not in this harness.
+
+### The pacer setting changed with this suite
+
+`broker-config.mock.yaml` now sets `semp.request_min_interval: 0s`. It
+previously set `1ms` under a comment claiming the pacer was disabled, which was
+wrong: only `0s` disables it — `NewRateLimiter` returns a closed channel for a
+non-positive interval and builds no ticker, whereas **any** positive value
+builds a real ticker per broker. At `1ms` every broker carried a 1000 req/s
+admission ceiling that nobody knew was there.
+
+Two consequences worth knowing before comparing anything:
+
+- Throughput figures measured **before** this change were taken with that
+  1 ms per-broker pacer in place, and are not directly comparable with figures
+  taken after it. Those older runs also predate the run record, so nothing in
+  their artifacts reveals the setting — the only way to know is the commit they
+  were taken at.
+- The measured cost of `1ms` versus `0s` under load is below the noise floor,
+  so this is a correctness-of-description fix rather than a performance one.
+  Do not expect the numbers to move much; expect them to be *describable*.
+
+## Reading CPU: whole run vs load phase
+
+`summary.sh` reports MCP CPU twice:
+
+```
+  mcp   cpu:  min=  1.0%   avg= 26.8%   max= 55.0%   (out of 100% box)
+  mcp   cpu:  load-phase  avg= 52.5%   max= 55.0%   (6 of 12 samples, 10:33:50..10:34:15)
+```
+
+**Use the load-phase figure.** The whole-run average is diluted by however long
+the server sat idle before the load started — the fidelity gate, and in a
+split-host run the wait for the other box. That dilution is unstated and
+varies per run, so the whole-run average of two runs is not a comparison of
+anything. It is kept because older run directories only have that number.
+
+The window is *stamped*, not inferred: the runner that starts the load writes
+`load_start_epoch` and `load_end_epoch` into the record, and `summary.sh`
+windows the sampler CSV on `sampler.csv`'s `epoch` column. Inferring the
+boundary from a CPU threshold would use the metric to define the window it is
+measured over, and would break on exactly the runs that matter — an idle-pacer
+arm and a CPU-saturated arm look nothing alike.
+
+The split-host **MCP box cannot stamp its own window**: the load runs on the
+other box and the two share no channel. Its record says so
+(`load_window_source=split-host-load-on-other-box`) and its summary reports the
+whole-run figure only. `run-loadgen.sh` prints the command to window it after
+the fact, and both run directories are archived together anyway:
+
+```
+./summary.sh <box-b-run-dir> --window-from <box-a-run-dir>
+```
+
+`--window-from` takes the load box's run directory (or a path straight to its
+record), reads the window out of it, and names that record in the report — so a
+windowed figure in an archived summary stays traceable to the run that measured
+the window. A bare `<from_epoch> <to_epoch>` pair still works and is marked
+`unverified` in the output, because a mistyped epoch otherwise yields a
+plausible number rather than an error.
+
+## More than 50 brokers
+
+`broker-config.mock.yaml` hand-lists 50 aliases. `mock-semp -listen-count` and
+`loadgen -broker-count` both already scale well past that, so the config was
+the only thing capping the broker count. Generate one:
+
+```
+./gen-mock-config.sh -n 200 -o broker-config.gen200.yaml
+
+# split-host
+Box A:  BROKERS=200 ./run-loadgen.sh http://<box-b>:9090
+Box B:  CONFIG_FILE=./broker-config.gen200.yaml MOCK_HOST=<box-a> ./run-mcp.sh
+
+# single host
+BROKERS=200 CONFIG_FILE=./broker-config.gen200.yaml ./run.sh
+```
+
+The generated aliases are byte-identical to the ones `loadgen` generates —
+it builds `<prefix>-%02d`, which is a *minimum* width, so `broker-09` and
+`broker-200` both come out right and a "tidier" `%03d` would rename all 99 of
+the first brokers. That mismatch does not fail loudly: every call 404s at the
+mock and the run reads like a server fault. `gen-mock-config.test.sh` asserts
+it at one, two and three digits, checks the three `${...}` placeholders survive
+verbatim (MCP hard-fails on an unset one), and anchors the whole output shape
+against the committed 50-broker config, which it must reproduce byte for byte.
+
+Generated configs are gitignored (`broker-config.gen*.yaml`) and the generator
+refuses to write over the committed `broker-config.mock.yaml`.
+
+## Descriptor limits
+
+The run scripts raise `RLIMIT_NOFILE` to a flat generous value (`NOFILE`,
+default 1048576, falling back to the hard limit) before launching anything, and
+record what was requested, what the shell was granted, and what the server
+process itself ended up with — read from `/proc/<pid>/limits`, not from the
+launching shell, because the two diverge across a re-exec and the process's own
+view is the one that constrains the run.
+
+Nothing in this suite, `cmd/` or `deploy/` raised it before, which left the
+ceiling varying with whatever the operator's login shell handed it: a
+result-moving input that was invisible in the output.
+
+Where the descriptors go:
+
+- **MCP box.** Each broker gets two protocol clients, each with a transport
+  sized `MaxConnsPerHost` = `MaxIdleConnsPerHost` = `max_concurrent_per_broker`.
+  In-flight is capped per broker by the shared semaphore, so concurrent sockets
+  stay at or below the cap — but the two idle pools are separate and each holds
+  up to the cap for `IdleConnTimeout` (90 s), so open descriptors can reach
+  *twice* the cap per broker under a protocol-alternating workload.
+- **Load box.** Every `loadgen` session is one socket, which dominates a
+  2000-caller run. That is a property of the rig, not of the product, which is
+  why the two boxes keep separate records.
+
+The limit is deliberately flat rather than computed from the broker count and
+the concurrency cap: the arithmetic above is fragile and the descriptors are
+free. `memsampler` records the peak count actually reached (`fd_peak` in the
+record, `open_fds` per sample in `mem.csv`), so a run that came close to its
+ceiling is visible afterwards instead of being a mystery.
+
+### Sampler columns
+
+`mem.csv`, from `memsampler`, one row per second against the MCP process:
+
+```
+t_sec, wall_ts, rss_kb, vm_kb, threads, open_fds
+```
+
+`open_fds` counts the entries in `/proc/<pid>/fd`, and reads `NA` when that
+directory could not be read (another user's process, or the process exiting
+between the two reads) — `NA` rather than `0`, because "no descriptors" and "we
+could not look" are different facts and a `0` in a run record would be believed.
+
+Descriptors are sampled from `/proc` and **not** scraped off `/metrics`, for two
+reasons, the second being the stronger: the Go runtime and process collectors on
+`/metrics` carry no scrape test or golden-file exclusion yet, and collecting
+them at all requires running with `OBS_METRICS_ENABLED` on — which changes the
+thing under test (a histogram observation per tool invocation, plus a scrape
+listener) and makes the numbers non-comparable with every run measured so far,
+all of which had it off. Reading `/proc` costs nothing and perturbs nothing.
+What it does not give is the goroutine count and GC internals; the soak's pass
+criteria (RSS drift, threads flat, descriptors flat) do not need them, and
+`GODEBUG=gctrace=1` answers "was that memory collectable garbage?" for free.
+
+`sampler.csv`, from `sampler.sh`, every 5 s, covering both processes plus box
+totals:
+
+```
+t_sec, wall, mcp_cpu, mcp_cpu_pct_of_box, mcp_rss_kb, mcp_pss_kb, mcp_uss_kb,
+mock_cpu, mock_cpu_pct_of_box, mock_rss_kb, mock_pss_kb, mock_uss_kb,
+loadavg1, sys_mem_used_kb, epoch
+```
+
+`epoch` is the last column and is what `summary.sh` windows on: `t_sec` is
+relative to the sampler's own start and `wall` carries no date, so neither can
+be compared with a stamp taken by another process. It was appended rather than
+inserted, so every existing column index still holds.
+
+There is deliberately no descriptor column in `sampler.csv`. `memsampler` is
+already per-process and already carries `threads`, so the count belongs there;
+a second one here would be one nobody reconciles with the first.
 
 ## Fidelity gate
 
@@ -304,7 +583,11 @@ Doing them together matters: self-changing fields (uptime, memory percentages,
 disk usage) drift with wall-clock time, so canned and goldens taken hours
 apart cannot match exact-mode comparison even when replaying the same data.
 It finishes by writing `fixtures.manifest` — a sha256 per file plus the
-capture time, broker alias, VPN, and the RDP the capture pinned (`# rdp:`).
+capture time, the commit the capture was taken at (`# capture_commit:`, and
+`# capture_dirty:` for whether that tree was clean), the broker alias, the VPN,
+and the RDP the capture pinned (`# rdp:`). The run record copies that
+provenance forward, so a run can name both the fixture set and the code that
+produced it.
 That last one is not just provenance: `mock-semp` serves `get-rdp-status` for
 that RDP alone, so `run.sh` and `run-loadgen.sh` read it back
 (`./fixtures-manifest.sh rdp`) to pass `-rdp` to `fidelity` and `loadgen`. A
