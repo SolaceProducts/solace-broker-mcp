@@ -176,6 +176,20 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	var errorType metrics.ErrorType
 	var toolErr error
 
+	// The tool-dispatch span (SOL-152421). The reassigned ctx is what every
+	// layer below receives — threading context.Background() anywhere below
+	// detaches their spans and silently yields zero exemplars for Story 47.
+	ctx, span := tracer.Start(ctx, dispatchSpanName)
+
+	// Registered BEFORE the audit defer below, so it runs AFTER it (LIFO).
+	// Load-bearing: that defer rewrites errorType/toolErr for a recovered
+	// panic, and the span must report the same classification the audit does.
+	// canonicalBrokerLabel for the same reason the metric uses it — see
+	// endDispatchSpan.
+	defer func() {
+		endDispatchSpan(ctx, span, name, canonicalBrokerLabel(m.pool, brokerAlias), errorType, toolErr)
+	}()
+
 	defer func() {
 		// Panic detection: this defer runs during unwinding, before the
 		// recover in withRecovery fires. Every error return below sets

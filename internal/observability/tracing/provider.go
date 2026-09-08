@@ -22,6 +22,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -133,6 +134,15 @@ func New(cfg config.ObservabilityConfig, meterProvider *sdkmetric.MeterProvider,
 		sdktrace.WithBatcher(&countingExporter{next: baseExporter, stats: stats}),
 	)
 	otel.SetTracerProvider(tp)
+
+	// OTel's global default propagator is a NO-OP: without this, otelhttp
+	// extracts nothing, every entry span starts a new root, and an
+	// agent-initiated trace breaks at this server's edge with no error to say
+	// so — hence propagator_test.go. TraceContext only, not a composite with
+	// Baggage: baggage carries arbitrary upstream key-values this server has no
+	// redaction policy for. After the early return, so tracing off leaves the
+	// global propagator untouched (SOL-152421).
+	otel.SetTextMapPropagator(propagation.TraceContext{})
 
 	p := &Provider{tp: tp, stats: stats, stopEmitter: func() {}, resource: res}
 	if meterProvider == nil {

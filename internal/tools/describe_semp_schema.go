@@ -333,6 +333,17 @@ instead of writability flags) and 'raw' (the definition verbatim, larger).
 		var errorType metrics.ErrorType
 		var toolErr error
 		id := NewIdentityFromPrincipal(auth.PrincipalFrom(ctx))
+
+		// ...and its own dispatch span, for the same reason (SOL-152421):
+		// without it neither this tool nor the `not_found` error_type it
+		// raises ever appears in a trace, though both appear in the metrics.
+		// Registered before the audit defer so it runs after it and sees the
+		// panic rewrite below.
+		ctx, span := tracer.Start(ctx, dispatchSpanName)
+		defer func() {
+			endDispatchSpan(ctx, span, describeSempSchemaToolName, brokerLabelNone, errorType, toolErr)
+		}()
+
 		defer func() {
 			if toolErr == nil && result == nil {
 				errorType = metrics.ErrorTypePanic
