@@ -18,3 +18,8 @@ mock-semp/canned/sanitize.local.tsv
 # against a fixed max_concurrent_per_broker; the run scripts copy whichever one
 # they used into the run directory, which is where the provenance belongs.
 broker-config.run*.yaml
+
+# Generated N-broker configs from gen-mock-config.sh. One per broker count, and
+# nobody should commit a 200-broker broker list — regenerate it instead. The
+# generator refuses to write over the committed broker-config.mock.yaml.
+broker-config.gen*.yaml
