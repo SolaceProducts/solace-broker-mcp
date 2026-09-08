@@ -607,7 +607,12 @@ same digest:
    `authorization`, `credential`, `api_key`, `private_key` — because at least one composite
    tool (`update-message-vpn`) accepts a free-form config object with no schema constraint on
    its keys, and the bundled SEMPv2 spec exposes password fields on that exact operation. The
-   placeholder is fixed rather than derived from the original value, so changing a redacted
+   digest also redacts three terms with no log-attribute equivalent — `certcontent`, `keytab`,
+   `passphrase` — covering certificate/key *content* fields such as
+   `replicationBridgeAuthenticationClientCertContent`, a PEM private key the same operation
+   accepts. These three are audit-only: the seven-pattern list above stays a byte-identical
+   mirror of `cmd/server`'s own redaction list, so diffing the two for drift stays meaningful.
+   The placeholder is fixed rather than derived from the original value, so changing a redacted
    field's value does not change the digest — a digest that varied with a secret's value would
    itself be a comparison oracle over that secret.
 
@@ -618,9 +623,20 @@ reproduces the rest — for example, in Python:
 ```python
 # pip install rfc8785
 import hashlib, rfc8785
+
+SENSITIVE = ("password", "token", "secret", "authorization", "credential", "api_key",
+             "private_key", "certcontent", "keytab", "passphrase")
+
+def redact(value):
+    if isinstance(value, dict):
+        return {k: "[REDACTED]" if any(s in k.lower() for s in SENSITIVE) else redact(v)
+                for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact(v) for v in value]
+    return value
+
 arguments.pop("broker", None)
-# redact any key matching the patterns above to "[REDACTED]", recursively, first
-print(hashlib.sha256(rfc8785.dumps(arguments)).hexdigest())
+print(hashlib.sha256(rfc8785.dumps(redact(arguments))).hexdigest())
 ```
 
 Join a record to its originating request on `correlation_id`; recomputing the hash from the
