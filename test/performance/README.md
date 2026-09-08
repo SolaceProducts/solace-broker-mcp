@@ -225,6 +225,11 @@ a devserver: the metadata call simply fails there, which is the expected answer
 for "not EC2", not an error) or written as the literal `unknown`. A later
 comparison will trust whatever is written here.
 
+One formatting note, since the record is meant to be read with `awk -F=`: a
+value containing `=` would read back truncated at the first one, so `=` is
+substituted with `:` on write and the substitution is reported on stderr. In
+practice this only ever affects `RIG_NOTE`, the one free-text field.
+
 > **These records are internal.** The fixture fields name a real lab appliance
 > — `fixtures_vpn`, `fixtures_rdp` and `fixtures_broker_alias` are copied
 > straight out of `fixtures.manifest`, which is gitignored for exactly that

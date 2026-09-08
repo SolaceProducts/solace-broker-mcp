@@ -671,7 +671,22 @@ perf_record_kv "$rec" rig_note "line one
 semp_fair_scheduling=false"
 eq "a value containing a newline stays one field" "$(wc -l <"$rec")" "1"
 lacks "and cannot forge a second field" "$(cat "$rec")" $'\n'"semp_fair_scheduling=false"
-contains "the value is flattened, not dropped" "$(cat "$rec")" "line one semp_fair_scheduling=false"
+# Doubly defused now: the newline is flattened AND the '=' is substituted, so
+# the injected text cannot even take the shape of a key=value pair.
+contains "the value is flattened, not dropped" "$(cat "$rec")" "line one semp_fair_scheduling:false"
+eq "and the flattened line holds exactly one '=' — the real separator" \
+  "$(awk -F= '{print NF}' "$rec")" "2"
+
+# '=' is the record's field separator, so a value containing one used to read
+# back truncated at the first — RIG_NOTE="instance=m5.large" became "instance".
+# Reported by Copilot on this PR.
+rec="$tmp/rec-eq"
+: >"$rec"
+perf_record_kv "$rec" rig_note "instance=m5.large, tuned=yes" 2>/dev/null
+eq "a value containing '=' survives the documented awk -F= reader intact" \
+  "$(awk -F= '/^rig_note=/ {print $2}' "$rec")" "instance:m5.large, tuned:yes"
+eq "and the line still has exactly one '=' before the value" \
+  "$(awk -F= '{print NF}' "$rec")" "2"
 
 rec="$tmp/rec-long"
 : >"$rec"
@@ -696,6 +711,15 @@ echo "== perf_raise_nofile refuses to run where it would not take effect"
 rc=0
 ( perf_raise_nofile 4096 ) >/dev/null 2>&1 || rc=$?
 eq "called in a subshell, it fails rather than silently doing nothing" "$rc" "1"
+
+# NOFILE is operator input and reaches an arithmetic comparison, where bash
+# reads a non-numeric word as a variable name — so it aborted the whole runner
+# under `set -u` from inside a library. Reported by Copilot on this PR.
+for bad_nofile in abc 0 -1 "12 34"; do
+  rc=0
+  perf_raise_nofile "$bad_nofile" >/dev/null 2>&1 || rc=$?
+  eq "a non-numeric or non-positive NOFILE ($bad_nofile) is rejected, not passed to arithmetic" "$rc" "1"
+done
 
 perf_raise_nofile 4096
 if [[ -n "${PERF_NOFILE_REQUESTED:-}" && -n "${PERF_NOFILE_GRANTED:-}" ]]; then

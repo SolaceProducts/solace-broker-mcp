@@ -171,6 +171,15 @@ perf_raise_nofile() {
     return 1
   fi
   local want=${1:-1048576}
+  # NOFILE is operator input and reaches an arithmetic comparison below, where
+  # bash treats a non-numeric word as a variable name — so `NOFILE=abc` aborted
+  # the whole runner under `set -u` with "abc: unbound variable", from inside a
+  # library, several steps before anything measured. Validate it here where the
+  # message can name the variable.
+  if ! [[ "$want" =~ ^[0-9]+$ ]] || (( want < 1 )); then
+    echo "NOFILE must be a positive integer number of descriptors, got: $want" >&2
+    return 1
+  fi
   local hard target
   hard=$(ulimit -Hn)
   target=$want
@@ -211,6 +220,17 @@ perf_record_kv() {
   value=${value//$'\n'/ }
   value=${value//$'\r'/ }
   value=${value//$'\t'/ }
+  # '=' is the field separator. The record's documented format is one
+  # key=value per line, read with `awk -F=`, so a value containing '=' reads
+  # back truncated at the first one — RIG_NOTE="instance=m5.large" became
+  # "instance". Substituted rather than rejected, because losing the note
+  # entirely is worse than losing one character, and warned rather than
+  # silently altered, because a provenance file that quietly rewrites what it
+  # was told is the opposite of the point.
+  if [[ "$value" == *=* ]]; then
+    echo "   note: '=' in the value of $2 replaced with ':' to keep the record parseable" >&2
+    value=${value//=/:}
+  fi
   printf '%s=%s\n' "$2" "${value:0:200}" >>"$1"
 }
 
