@@ -2186,21 +2186,25 @@ func TestExchange_ChainDeadlineFiresMidRetry(t *testing.T) {
 func TestExchange_CacheStoreLogsNameTheirOutcome(t *testing.T) {
 	cases := []struct {
 		name string
-		// clockSkew large enough to drive the derived TTL non-positive
-		// exercises the dropped path; zero skew stores normally.
-		clockSkew time.Duration
+		// expiresIn drives which branch runs. A lifetime at or under
+		// defaults.DefaultTokenExpirySkew leaves the parsed ExpiresAt in the
+		// past, so the derived TTL is non-positive and the cache refuses the
+		// write; anything comfortably above it stores normally. expires_in
+		// must stay positive either way — a non-positive one is rejected by
+		// response validation before Put is ever reached.
+		expiresIn int64
 		wantMsg   string
 		wantLevel slog.Level
 	}{
 		{
 			name:      "stored",
-			clockSkew: 0,
+			expiresIn: 3600,
 			wantMsg:   "broker token cached",
 			wantLevel: slog.LevelDebug,
 		},
 		{
 			name:      "dropped for short remaining lifetime",
-			clockSkew: time.Hour,
+			expiresIn: 5,
 			wantMsg:   "broker token not cached: remaining lifetime too short after clock-skew adjustment",
 			wantLevel: slog.LevelWarn,
 		},
@@ -2213,19 +2217,15 @@ func TestExchange_CacheStoreLogsNameTheirOutcome(t *testing.T) {
 
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				// A positive expires_in: a non-positive one is rejected by
-				// response validation before Put is ever reached, so the
-				// skew above is what drives the drop.
-				fmt.Fprint(w, successJSON("exchanged-token", 60))
+				fmt.Fprint(w, successJSON("exchanged-token", tc.expiresIn))
 			}))
 			defer srv.Close()
 
 			p := validParams(t)
 			p.TokenURL = srv.URL
 			p.Cache = cachetest.WithConfig(t, cache.CacheConfig{
-				MaxSize:   100,
-				ClockSkew: tc.clockSkew,
-				MaxTTL:    time.Hour,
+				MaxSize: 100,
+				MaxTTL:  time.Hour,
 			})
 			e, err := New(p)
 			if err != nil {
@@ -2256,6 +2256,111 @@ func TestExchange_CacheStoreLogsNameTheirOutcome(t *testing.T) {
 			}
 			if !found {
 				t.Errorf("no record with message %q", tc.wantMsg)
+			}
+		})
+	}
+}
+
+// ---------- SOL-154165: the expiry skew is subtracted exactly once ----------
+
+// TestExchange_ExpirySkewSubtractedOnce is the regression test for SOL-154165.
+// The 30s safety margin belongs to token parsing, which hands the cache an
+// ExpiresAt that has ALREADY had it deducted. When the cache deducted it a
+// second time, the effective lifetime became expires_in - 60s: every token was
+// cached 30s short of its usable life, and any IdP issuing tokens at or below a
+// 60-second lifetime got a cache that stored nothing at all.
+//
+// The boundary this pins is expires_in vs. DefaultTokenExpirySkew (30s), not
+// twice it: a token is cacheable exactly while it still has usable life left
+// after one deduction.
+//
+// Exercised through the real Exchanger and the real cache, with the same cache
+// config main.go builds, because that wiring is where the two deductions met —
+// a cache test alone cannot see it, and the pre-fix code passed every one.
+//
+// Not parallel: captureLogs swaps the process-global default logger.
+func TestExchange_ExpirySkewSubtractedOnce(t *testing.T) {
+	// Real clock, deliberately: the cache derives its TTL from time.Now()
+	// internally, so a pinned nowFunc would put every ExpiresAt in the past.
+	const (
+		msgStored  = "broker token cached"
+		msgDropped = "broker token not cached: remaining lifetime too short after clock-skew adjustment"
+	)
+
+	cases := []struct {
+		name      string
+		expiresIn int64
+		wantMsg   string
+	}{
+		// Comfortably long-lived: cached before and after the fix.
+		{name: "one hour", expiresIn: 3600, wantMsg: msgStored},
+		// Just above the pre-fix cliff, where the double deduction still
+		// left something (30s and 1s respectively) so the damage did not
+		// show up as a refused write. Here to fence the boundary from
+		// above: every case either side of 60 must be stored.
+		{name: "ninety seconds", expiresIn: 90, wantMsg: msgStored},
+		{name: "sixty-one seconds", expiresIn: 61, wantMsg: msgStored},
+		// The pre-fix cliff: 60 - 30 - 30 = 0 dropped the token. One
+		// deduction leaves 30s of usable life, so it must be stored.
+		{name: "sixty seconds at the pre-fix cliff", expiresIn: 60, wantMsg: msgStored},
+		// 1s of usable life is still usable life; the cache must keep it.
+		{name: "thirty-one seconds", expiresIn: 31, wantMsg: msgStored},
+		// At and below the single skew the token is already unusable at
+		// issuance — dropping it is the documented, intended trade-off
+		// (defaults.DefaultTokenExpirySkew), and stays correct after the fix.
+		{name: "thirty seconds is fully consumed by the skew", expiresIn: 30, wantMsg: msgDropped},
+		{name: "five seconds", expiresIn: 5, wantMsg: msgDropped},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			records, restore := captureLogs(t)
+			defer restore()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, successJSON("exchanged-token", tc.expiresIn))
+			}))
+			defer srv.Close()
+
+			p := validParams(t)
+			p.TokenURL = srv.URL
+			// Mirrors newTokenExchanger in cmd/server/main.go.
+			p.Cache = cachetest.WithConfig(t, cache.CacheConfig{
+				MaxSize: defaults.DefaultOAuthCacheMaxSize,
+				MaxTTL:  defaults.DefaultMaxOAuthTokenTTL,
+			})
+			e, err := New(p)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			issuedAt := time.Now()
+			tok, err := e.Exchange(context.Background(), validInput())
+			if err != nil {
+				t.Fatalf("Exchange: %v", err)
+			}
+
+			// The token handed back carries ONE deduction. Asserting this
+			// alongside the cache outcome is what separates "the cache stopped
+			// double-deducting" from "the parser stopped deducting at all" —
+			// the latter would also make every case above store, while quietly
+			// removing the safety margin the skew exists to provide.
+			wantExpiry := issuedAt.Add(time.Duration(tc.expiresIn)*time.Second - defaults.DefaultTokenExpirySkew)
+			if drift := tok.ExpiresAt.Sub(wantExpiry); drift < -5*time.Second || drift > 5*time.Second {
+				t.Errorf("tok.ExpiresAt = %v, want ~%v (expires_in minus exactly one %v skew); drift %v",
+					tok.ExpiresAt, wantExpiry, defaults.DefaultTokenExpirySkew, drift)
+			}
+
+			var got []string
+			for _, rec := range records() {
+				if rec.Message == msgStored || rec.Message == msgDropped {
+					got = append(got, rec.Message)
+				}
+			}
+			if len(got) != 1 || got[0] != tc.wantMsg {
+				t.Errorf("cache-store outcome for expires_in=%d: got %q, want exactly [%q]",
+					tc.expiresIn, got, tc.wantMsg)
 			}
 		})
 	}

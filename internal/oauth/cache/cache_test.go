@@ -19,8 +19,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -48,9 +50,8 @@ func newTestCache(t *testing.T, cfg CacheConfig) TokenCache {
 }
 
 var defaultCfg = CacheConfig{
-	MaxSize:   100,
-	ClockSkew: 0,
-	MaxTTL:    time.Hour,
+	MaxSize: 100,
+	MaxTTL:  time.Hour,
 }
 
 // T1: Get returns only fresh tokens.
@@ -198,7 +199,7 @@ func TestDelete_Idempotent(t *testing.T) {
 // T5: Concurrent access under -race flag.
 func TestConcurrentAccess(t *testing.T) {
 	t.Parallel()
-	c := newTestCache(t, CacheConfig{MaxSize: 1000, ClockSkew: 0, MaxTTL: time.Hour})
+	c := newTestCache(t, CacheConfig{MaxSize: 1000, MaxTTL: time.Hour})
 	ctx := context.Background()
 
 	const n = 50
@@ -237,10 +238,11 @@ func TestConcurrentAccess(t *testing.T) {
 	wg.Wait()
 }
 
-// T6: TTL normal case — token with ExpiresAt well beyond clockSkew is returned immediately.
+// T6: TTL normal case — a token with a comfortably future ExpiresAt is
+// returned immediately.
 func TestTTL_NormalCase(t *testing.T) {
 	t.Parallel()
-	c := newTestCache(t, CacheConfig{MaxSize: 100, ClockSkew: 30 * time.Second, MaxTTL: 24 * time.Hour})
+	c := newTestCache(t, CacheConfig{MaxSize: 100, MaxTTL: 24 * time.Hour})
 	ctx := context.Background()
 
 	tok := CachedCredential{Value: "v", ExpiresAt: time.Now().Add(2 * time.Minute)}
@@ -260,7 +262,7 @@ func TestTTL_NormalCase(t *testing.T) {
 // T7: TTL MaxTTL cap — token with long ExpiresAt is capped to MaxTTL but still positive.
 func TestTTL_MaxTTLCap(t *testing.T) {
 	t.Parallel()
-	c := newTestCache(t, CacheConfig{MaxSize: 100, ClockSkew: 30 * time.Second, MaxTTL: time.Minute})
+	c := newTestCache(t, CacheConfig{MaxSize: 100, MaxTTL: time.Minute})
 	ctx := context.Background()
 
 	tok := CachedCredential{Value: "v", ExpiresAt: time.Now().Add(time.Hour)}
@@ -277,27 +279,298 @@ func TestTTL_MaxTTLCap(t *testing.T) {
 	}
 }
 
-// T8: TTL within skew margin — token expiring within clockSkew window is not stored.
-func TestTTL_WithinSkewMargin(t *testing.T) {
+// T8 (SOL-154165): the cache deducts no safety margin of its own. ExpiresAt
+// arrives with the producer's clock skew already applied, so the admission
+// boundary is ExpiresAt itself: any remaining lifetime, however short, is
+// stored, and only an entry at or past ExpiresAt is refused.
+//
+// The short-but-positive case is the regression guard. The cache used to
+// subtract a second 30s skew here, which refused entries like this one — the
+// defect that made the cache stop retaining anything for a short-lived-token
+// IdP.
+//
+// Admitting an arbitrarily short lifetime is only safe because Get enforces
+// ExpiresAt itself; TestGet_NeverServesPastExpiresAt covers what that guard
+// is load-bearing for.
+func TestTTL_NoMarginBeyondExpiresAt(t *testing.T) {
 	t.Parallel()
-	c := newTestCache(t, CacheConfig{MaxSize: 100, ClockSkew: 30 * time.Second, MaxTTL: 24 * time.Hour})
+
+	cases := []struct {
+		name      string
+		remaining time.Duration
+		want      PutStatus
+	}{
+		{name: "well within lifetime", remaining: 2 * time.Minute, want: PutStored},
+		// Shorter than the 30s skew the producer already applied, and
+		// shorter still than the 60s the double deduction demanded.
+		{name: "seconds of lifetime left", remaining: 20 * time.Second, want: PutStored},
+		{name: "two seconds of lifetime left", remaining: 2 * time.Second, want: PutStored},
+		{name: "already at expiry", remaining: 0, want: PutDroppedTTL},
+		{name: "already past expiry", remaining: -time.Second, want: PutDroppedTTL},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := newTestCache(t, CacheConfig{MaxSize: 100, MaxTTL: 24 * time.Hour})
+			ctx := context.Background()
+
+			tok := CachedCredential{Value: "v", ExpiresAt: time.Now().Add(tc.remaining)}
+			pr, err := c.Put(ctx, "k", tok)
+			if err != nil {
+				t.Fatalf("Put: %v", err)
+			}
+			if pr.Status != tc.want {
+				t.Errorf("Put status: got %v, want %v", pr.Status, tc.want)
+			}
+
+			// Put's status and what Get can see must agree, or Put reported
+			// Stored on an entry the backend never retained.
+			wantGet := GetHit
+			if tc.want == PutDroppedTTL {
+				wantGet = GetMiss
+			}
+			res, err := c.Get(ctx, "k")
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			if res.Status != wantGet {
+				t.Errorf("Get status: got %v, want %v", res.Status, wantGet)
+			}
+		})
+	}
+}
+
+// TestGet_NeverServesPastExpiresAt pins the one contract a credential cache
+// cannot get wrong: an entry at or past its ExpiresAt is never handed back,
+// whatever the backend does with it.
+//
+// This is not a theoretical guard. Otter installs a computed expiry only when
+// it is strictly positive and a fresh node starts out marked "never expires",
+// so a TTL that decays to zero between Put's guard and Otter's write used to
+// leave the entry IMMORTAL rather than evicted — the exact inverse of the
+// intended behavior. Measured before the fix: every one of ~13000 entries
+// admitted with a sliver of life left was still served indefinitely afterwards.
+//
+// Reaching that window means Put's admission check and Otter's expiry
+// calculator must read the clock either side of the entry's expiry. Rather than
+// race a sub-microsecond lifetime and hope, the clock seam makes it exact: the
+// first read (Put's guard) sees the entry alive, every later read (the
+// calculator, then Get) sees it expired.
+//
+// Both halves of the fix are asserted, because either alone satisfies the
+// first: Get must not serve the entry, AND the backend must not still hold it.
+// The retention check is what pins the 1ns floor — without it the entry is
+// merely masked by Get's check while occupying capacity forever.
+func TestGet_NeverServesPastExpiresAt(t *testing.T) {
+	t.Parallel()
+
+	o, err := newOtterTokenCache(CacheConfig{MaxSize: 100, MaxTTL: time.Hour})
+	if err != nil {
+		t.Fatalf("newOtterTokenCache: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := o.Close(); err != nil {
+			t.Logf("Close: %v", err)
+		}
+	})
 	ctx := context.Background()
 
-	tok := CachedCredential{Value: "v", ExpiresAt: time.Now().Add(20 * time.Second)}
-	pr, err := c.Put(ctx, "k", tok)
+	base := time.Now()
+	expiresAt := base.Add(time.Second)
+	var reads atomic.Int64
+	o.now = func() time.Time {
+		if reads.Add(1) == 1 {
+			return base // Put's guard: one second of life left.
+		}
+		return base.Add(time.Hour) // decayed past expiry by the time of the write.
+	}
+
+	pr, err := o.Put(ctx, "k", CachedCredential{Value: "v", ExpiresAt: expiresAt})
 	if err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	if pr.Status != PutDroppedTTL {
-		t.Errorf("expected PutDroppedTTL, got %v", pr.Status)
+	// Put admitted it on the strength of the first clock read. That is the
+	// premise of the test, not the thing under test — if it ever stops holding,
+	// the window below is no longer being exercised.
+	if pr.Status != PutStored {
+		t.Fatalf("Put status: got %v, want PutStored; the admission window this test guards was not entered", pr.Status)
+	}
+	if n := reads.Load(); n < 2 {
+		t.Fatalf("clock was read %d times, want at least 2 (Put's guard and the expiry calculator); the calculator no longer consults it", n)
 	}
 
-	res, err := c.Get(ctx, "k")
+	res, err := o.Get(ctx, "k")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	if res.Status != GetMiss {
-		t.Error("expected GetMiss for token within clock skew margin")
+		t.Errorf("Get: got %v, want GetMiss — an entry past its ExpiresAt was handed back", res.Status)
+	}
+	if _, present := o.cache.GetIfPresent("k"); present {
+		t.Error("the backend still holds the entry after its expiry: a zero TTL was installed as 'never expires' instead of being floored to a short one")
+	}
+}
+
+// TestDeriveTTL_DeductsNoSkew pins the arithmetic behind T8 to the nanosecond:
+// the installed TTL is the raw remaining lifetime, capped at MaxTTL, with
+// nothing subtracted. deriveTTL takes its clock as a parameter precisely so
+// this can be exact — there is no tolerance for a re-introduced deduction of
+// any size to hide inside.
+func TestDeriveTTL_DeductsNoSkew(t *testing.T) {
+	t.Parallel()
+
+	const maxTTL = time.Hour
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name      string
+		remaining time.Duration
+		want      time.Duration
+	}{
+		{name: "one nanosecond", remaining: time.Nanosecond, want: time.Nanosecond},
+		{name: "one second", remaining: time.Second, want: time.Second},
+		// 30s and 60s are the values the double deduction destroyed: with a
+		// 30s skew applied here they derived 0s and 30s instead.
+		{name: "thirty seconds", remaining: 30 * time.Second, want: 30 * time.Second},
+		{name: "sixty seconds", remaining: 60 * time.Second, want: 60 * time.Second},
+		{name: "ten minutes", remaining: 10 * time.Minute, want: 10 * time.Minute},
+		{name: "capped at maxTTL", remaining: 24 * time.Hour, want: maxTTL},
+		{name: "at expiry", remaining: 0, want: 0},
+		{name: "past expiry", remaining: -time.Minute, want: 0},
+		{name: "a century past expiry", remaining: -100 * 365 * 24 * time.Hour, want: 0},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := deriveTTL(now, now.Add(tc.remaining), maxTTL); got != tc.want {
+				t.Errorf("deriveTTL(now, now+%v, %v) = %v, want exactly %v",
+					tc.remaining, maxTTL, got, tc.want)
+			}
+		})
+	}
+
+	// A zero-value ExpiresAt is the one input that SATURATES: Time.Sub clamps
+	// to minDuration rather than wrapping, and only year-1 does that (a mere
+	// century back is -876000h, nowhere near the -2562047h47m limit, so the
+	// row above does not reach this case).
+	//
+	// It has to be pinned separately because it needs an absolute expiresAt,
+	// not an offset. It is the input the pre-fix signature got catastrophically
+	// wrong: subtracting the skew from minDuration UNDERFLOWED to a large
+	// positive duration, which min() then clamped to maxTTL — so an
+	// epoch-zero credential was retained for the full 24h in production
+	// instead of being dropped. With nothing subtracted there is nothing to
+	// underflow, and it must stay dropped.
+	t.Run("zero-value expiry saturates and is dropped", func(t *testing.T) {
+		t.Parallel()
+		var zeroTime time.Time
+		if got := deriveTTL(now, zeroTime, maxTTL); got != 0 {
+			t.Errorf("deriveTTL(now, time.Time{}, %v) = %v, want exactly 0", maxTTL, got)
+		}
+		// Pins the premise: if Sub ever stopped saturating here, the case above
+		// would silently stop covering the underflow it exists for.
+		if got := zeroTime.Sub(now); got != time.Duration(math.MinInt64) {
+			t.Errorf("time.Time{}.Sub(now) = %v, want minDuration; this case no longer saturates", got)
+		}
+	})
+}
+
+// TestGet_RefusesEntryTheBackendStillHolds pins Get's freshness check by the
+// only means that isolates it: an entry Otter is still holding, refused anyway
+// because it is past its own ExpiresAt. Both subtests assert the entry is still
+// present in the backend afterwards, so the miss provably comes from the check
+// and not from eviction.
+//
+// Read the clock semantics carefully before touching this. Time.Before compares
+// the MONOTONIC readings alone when both operands carry one, ignoring the wall
+// clock entirely. Advancing a fake clock with start.Add(d) moves the monotonic
+// reading too, so it models d of elapsed time — NOT a wall-clock step. A test
+// written that way passes against a plain time.Sleep and proves nothing about
+// clock jumps. The two cases below therefore keep the clock families straight:
+// the first is the elapsed-time path that runs in production, the second strips
+// the monotonic readings (time.Time.Round(0)) to reach the wall-clock
+// comparison, which is the path a future producer with a JWT `exp` or a
+// JSON-round-tripped expiry would take.
+func TestGet_RefusesEntryTheBackendStillHolds(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// expiresAt is what gets cached; nowAfter is what o.now returns for the
+		// second lookup. Both are built from the same start instant.
+		expiresAt func(start time.Time) time.Time
+		nowAfter  func(start time.Time) time.Time
+	}{
+		{
+			// Production shape: both operands carry monotonic readings, so the
+			// comparison is monotonic and this is an elapsed-time scenario.
+			name:      "monotonic operands, time elapsed past the expiry",
+			expiresAt: func(start time.Time) time.Time { return start.Add(time.Hour) },
+			nowAfter:  func(start time.Time) time.Time { return start.Add(2 * time.Hour) },
+		},
+		{
+			// Round(0) strips the monotonic reading from both sides, so Before
+			// falls back to comparing wall clocks. This is reason 3 in Get's
+			// doc comment, and the only case here that exercises it.
+			name: "wall-clock operands, clock stepped past the expiry",
+			expiresAt: func(start time.Time) time.Time {
+				return start.Add(time.Hour).Round(0)
+			},
+			nowAfter: func(start time.Time) time.Time {
+				return start.Round(0).Add(2 * time.Hour)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			o, err := newOtterTokenCache(CacheConfig{MaxSize: 100, MaxTTL: time.Hour})
+			if err != nil {
+				t.Fatalf("newOtterTokenCache: %v", err)
+			}
+			t.Cleanup(func() {
+				if err := o.Close(); err != nil {
+					t.Logf("Close: %v", err)
+				}
+			})
+			ctx := context.Background()
+
+			// An hour of real life, so Otter's own timer holds the entry
+			// throughout and cannot be what produces the miss below.
+			start := time.Now()
+			pr, err := o.Put(ctx, "k", CachedCredential{Value: "v", ExpiresAt: tc.expiresAt(start)})
+			if err != nil {
+				t.Fatalf("Put: %v", err)
+			}
+			if pr.Status != PutStored {
+				t.Fatalf("Put status: got %v, want PutStored", pr.Status)
+			}
+			if res, err := o.Get(ctx, "k"); err != nil || res.Status != GetHit {
+				t.Fatalf("Get before expiry: status=%v err=%v, want GetHit", res.Status, err)
+			}
+
+			o.now = func() time.Time { return tc.nowAfter(start) }
+
+			res, err := o.Get(ctx, "k")
+			if err != nil {
+				t.Fatalf("Get after expiry: %v", err)
+			}
+			if res.Status != GetMiss {
+				t.Errorf("Get after expiry: got %v, want GetMiss — an entry past its ExpiresAt was handed back because the backend's own timer had not fired yet", res.Status)
+			}
+			// Confirms the miss came from the freshness check rather than from
+			// eviction; without this the test would pass for the wrong reason.
+			if _, present := o.cache.GetIfPresent("k"); !present {
+				t.Error("the backend dropped the entry, so this test no longer isolates Get's freshness check")
+			}
+		})
 	}
 }
 
@@ -350,7 +623,7 @@ func TestPut_OverwritesExistingKey(t *testing.T) {
 // T12: MaxSize=0 returns an error at construction.
 func TestNewTokenCache_ErrorOnMaxSizeZero(t *testing.T) {
 	t.Parallel()
-	_, err := NewTokenCache(CacheConfig{MaxSize: 0, ClockSkew: 0, MaxTTL: time.Hour})
+	_, err := NewTokenCache(CacheConfig{MaxSize: 0, MaxTTL: time.Hour})
 	if err == nil {
 		t.Fatal("expected error for MaxSize=0, got nil")
 	}
@@ -362,7 +635,7 @@ func TestNewTokenCache_ErrorOnMaxSizeZero(t *testing.T) {
 // Fail loud at construction instead.
 func TestNewTokenCache_ErrorOnMaxTTLZero(t *testing.T) {
 	t.Parallel()
-	_, err := NewTokenCache(CacheConfig{MaxSize: 100, ClockSkew: 0, MaxTTL: 0})
+	_, err := NewTokenCache(CacheConfig{MaxSize: 100, MaxTTL: 0})
 	if err == nil {
 		t.Fatal("expected error for MaxTTL=0, got nil")
 	}
@@ -370,20 +643,9 @@ func TestNewTokenCache_ErrorOnMaxTTLZero(t *testing.T) {
 
 func TestNewTokenCache_ErrorOnMaxTTLNegative(t *testing.T) {
 	t.Parallel()
-	_, err := NewTokenCache(CacheConfig{MaxSize: 100, ClockSkew: 0, MaxTTL: -time.Second})
+	_, err := NewTokenCache(CacheConfig{MaxSize: 100, MaxTTL: -time.Second})
 	if err == nil {
 		t.Fatal("expected error for negative MaxTTL, got nil")
-	}
-}
-
-// T12b: A negative ClockSkew is a wiring bug — it would extend the effective
-// TTL past the token's real ExpiresAt, serving already-expired credentials
-// after Otter's sweeper hasn't caught up yet.
-func TestNewTokenCache_ErrorOnClockSkewNegative(t *testing.T) {
-	t.Parallel()
-	_, err := NewTokenCache(CacheConfig{MaxSize: 100, ClockSkew: -time.Second, MaxTTL: time.Hour})
-	if err == nil {
-		t.Fatal("expected error for negative ClockSkew, got nil")
 	}
 }
 
@@ -499,11 +761,83 @@ func TestGetResult_LogValueDoesNotLeakToken(t *testing.T) {
 	}
 }
 
+// TestCachedCredential_RenderersRedactTheToken pins the credential-redaction
+// contract on CachedCredential's three renderers. Each one exists solely to
+// keep Value out of output, and each is reached by a different formatting path
+// — %v and %s go through String, %#v goes through GoString, and slog resolves
+// LogValue rather than either of them — so a leak plugged in one is
+// still open in the others. None of the three was exercised by a test, which
+// is precisely how such a leak returns unnoticed.
+//
+// See docs/internal/secure-logging-rules.md. If this fails, fix the renderer,
+// not this test.
+func TestCachedCredential_RenderersRedactTheToken(t *testing.T) {
+	t.Parallel()
+
+	const secret = "SUPER-SECRET-BEARER-TOKEN-VALUE"
+	expiresAt := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	c := CachedCredential{Value: secret, ExpiresAt: expiresAt}
+
+	var logged bytes.Buffer
+	slog.New(slog.NewJSONHandler(&logged, nil)).Info("m", "cred", c)
+
+	// %v and %s both resolve through Stringer, so %v stands for both.
+	renderings := map[string]string{
+		"String()":      c.String(),
+		"GoString()":    c.GoString(),
+		"%v":            fmt.Sprintf("%v", c),
+		"%#v":           fmt.Sprintf("%#v", c),
+		"slog LogValue": logged.String(),
+	}
+
+	for path, got := range renderings {
+		if strings.Contains(got, secret) {
+			t.Errorf("%s leaks the token value: %s", path, got)
+		}
+		// A renderer that emits nothing useful is not redaction done well —
+		// the expiry is the one field that makes these lines diagnosable.
+		if !strings.Contains(got, "2026") {
+			t.Errorf("%s dropped the expiry, leaving nothing diagnosable: %s", path, got)
+		}
+	}
+}
+
+// TestPutResult_LogValueDoesNotReflectTheStruct is the Put-side counterpart to
+// TestGetResult_LogValueDoesNotLeakToken. PutResult carries no credential
+// today, so the guard is the shape rather than a secret: slog must render the
+// declared status group and not reflect over the struct, which is what would
+// silently surface a future field.
+func TestPutResult_LogValueDoesNotReflectTheStruct(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("m", slog.Any("cache_result", PutResult{Status: PutDroppedTTL}))
+
+	if got := buf.String(); !strings.Contains(got, `"cache_result":{"status":"dropped_ttl"}`) {
+		t.Errorf("emitted %s, want a status group rendering dropped_ttl", strings.TrimSpace(got))
+	}
+}
+
+// TestStatusString_UnknownValue covers the default arms of both Stringers. A
+// status added later without a String case must still render as something a
+// reader can trace back to an enum, never as a bare integer that reads like an
+// exit code.
+func TestStatusString_UnknownValue(t *testing.T) {
+	t.Parallel()
+
+	if got, want := GetStatus(99).String(), "GetStatus(99)"; got != want {
+		t.Errorf("GetStatus(99).String() = %q, want %q", got, want)
+	}
+	if got, want := PutStatus(99).String(), "PutStatus(99)"; got != want {
+		t.Errorf("PutStatus(99).String() = %q, want %q", got, want)
+	}
+}
+
 // TestNewTokenCache_ValidationFirstFailureWins pins the caller-observable
 // contract that when multiple CacheConfig fields are invalid, the constructor
-// reports only the FIRST failing field, in the fixed order MaxSize → MaxTTL →
-// ClockSkew. Callers rely on this to fix misconfiguration one field at a time
-// without the error message swimming around as they patch each field.
+// reports only the FIRST failing field, in the fixed order MaxSize → MaxTTL.
+// Callers rely on this to fix misconfiguration one field at a time without the
+// error message swimming around as they patch each field.
 //
 // The assertion is deliberately loose on wording — it only checks that the
 // expected field name appears in the error. The exact phrasing is not part of
@@ -517,19 +851,14 @@ func TestNewTokenCache_ValidationFirstFailureWins(t *testing.T) {
 		wantField string
 	}{
 		{
-			name:      "all three invalid, MaxSize reported first",
-			cfg:       CacheConfig{MaxSize: 0, MaxTTL: 0, ClockSkew: -time.Second},
+			name:      "both invalid, MaxSize reported first",
+			cfg:       CacheConfig{MaxSize: 0, MaxTTL: 0},
 			wantField: "MaxSize",
 		},
 		{
-			name:      "MaxTTL and ClockSkew invalid, MaxTTL reported first",
-			cfg:       CacheConfig{MaxSize: 100, MaxTTL: 0, ClockSkew: -time.Second},
+			name:      "only MaxTTL invalid, MaxTTL reported",
+			cfg:       CacheConfig{MaxSize: 100, MaxTTL: -time.Second},
 			wantField: "MaxTTL",
-		},
-		{
-			name:      "only ClockSkew invalid, ClockSkew reported",
-			cfg:       CacheConfig{MaxSize: 100, MaxTTL: time.Hour, ClockSkew: -time.Second},
-			wantField: "ClockSkew",
 		},
 	}
 
@@ -560,7 +889,7 @@ func TestNewTokenCache_ValidationFirstFailureWins(t *testing.T) {
 // retention window.
 func TestPut_MaxTTLCapPreservesCallerExpiresAt(t *testing.T) {
 	t.Parallel()
-	c := newTestCache(t, CacheConfig{MaxSize: 100, ClockSkew: 0, MaxTTL: time.Hour})
+	c := newTestCache(t, CacheConfig{MaxSize: 100, MaxTTL: time.Hour})
 	ctx := context.Background()
 
 	callerExpiry := time.Now().Add(48 * time.Hour)
@@ -604,7 +933,7 @@ func TestClose_ReturnsNil(t *testing.T) {
 // assertion below is only that the test itself completes cleanly.
 func TestConcurrentAccess_IncludesDelete(t *testing.T) {
 	t.Parallel()
-	c := newTestCache(t, CacheConfig{MaxSize: 1000, ClockSkew: 0, MaxTTL: time.Hour})
+	c := newTestCache(t, CacheConfig{MaxSize: 1000, MaxTTL: time.Hour})
 	ctx := context.Background()
 
 	const n = 50

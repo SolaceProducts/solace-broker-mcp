@@ -850,10 +850,12 @@ func newTokenExchanger(oauthCfg *config.BrokerOAuthConfig) (*tokenexchange.Excha
 	if err != nil {
 		return nil, fmt.Errorf("creating IdP HTTP client: %w", err)
 	}
+	// No clock skew is passed: DefaultTokenExpirySkew is already deducted from
+	// every token's ExpiresAt when the IdP response is parsed, and the cache
+	// treats ExpiresAt as the true expiry (see cache.CachedCredential).
 	tokenCache, err := cache.NewTokenCache(cache.CacheConfig{
-		MaxSize:   defaults.DefaultOAuthCacheMaxSize,
-		ClockSkew: defaults.DefaultTokenExpirySkew,
-		MaxTTL:    defaults.DefaultMaxOAuthTokenTTL,
+		MaxSize: defaults.DefaultOAuthCacheMaxSize,
+		MaxTTL:  defaults.DefaultMaxOAuthTokenTTL,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating token cache: %w", err)
