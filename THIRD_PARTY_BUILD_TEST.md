@@ -12,15 +12,16 @@ itself**, and which are **not compiled into the shipped binary**.
 > Legal checklist, which asks for a "list of all used 3rd party products used at
 > build and test time" alongside the release list.
 
-**Generated** 2026-09-04; the GitHub Actions section was refreshed 2026-08-07
-when Guardian enrollment re-pinned every action to a commit SHA, and again
+**Generated** 2026-09-08; the GitHub Actions section was refreshed 2026-08-07
+when Guardian enrollment re-pinned every action to a commit SHA, again
 2026-08-14 when the Dependabot `github-actions` group update moved the five
-`solace-public-workflows` actions to a newer commit on the same branch. Every
-license in the following tables was read from the component's own license file or
-from the GitHub API for its source repository, at the ref in use rather than at
-the default branch. None was inferred from a package name or carried over from
-another row. See [Rebuilding This File](#rebuilding-this-file) for how to
-regenerate it.
+`solace-public-workflows` actions to a newer commit on the same branch, again
+2026-09-03 (#373), and again 2026-09-08 (#383), each time re-pinning the same
+five actions. Every license in the following tables was read from the
+component's own license file or from the GitHub API for its source
+repository, at the ref in use rather than at the default branch. None was
+inferred from a package name or carried over from another row. See
+[Rebuilding This File](#rebuilding-this-file) for how to regenerate it.
 
 Kept honest by `.github/scripts/build-test-licenses-check.sh`, which fails CI
 when this file stops matching what the repository actually uses. See
@@ -196,15 +197,15 @@ All five come from one repository, pinned to a single commit.
 
 | Action | Ref | Owner |
 |---|---|---|
-| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `ba836c7` | Solace |
-| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `ba836c7` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-db-sync` | `ba836c7` | Solace |
-| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `ba836c7` | Solace |
-| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `ba836c7` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/fossa-guard` | `6527948` | Solace |
+| `SolaceDev/solace-public-workflows/.github/actions/sca/sca-scan` | `6527948` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-db-sync` | `6527948` | Solace |
+| `SolaceDev/solace-public-workflows/guardian-vulnerability-gate` | `6527948` | Solace |
+| `SolaceDev/solace-public-workflows/prisma-cloud-scan` | `6527948` | Solace |
 
-`ba836c7` is a branch commit, not a tag, so there is no release to record beside
-it. The repository itself is Apache-2.0. Re-pinned 2026-09-03 by the Dependabot
-`github-actions` group update (#373); the prior pin was `6c01e11`.
+`6527948` is a branch commit, not a tag, so there is no release to record beside
+it. The repository itself is Apache-2.0. Re-pinned 2026-09-08 by the Dependabot
+`github-actions` group update (#383); the prior pin was `ba836c7`.
 
 Two entries have been dropped from this table, both by the reverse-direction
 check rather than by anyone remembering to look.

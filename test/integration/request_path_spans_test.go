@@ -216,7 +216,15 @@ func tracedSession(t *testing.T, h tools.ToolHandler, brokerURL string, tracingE
 func tracedSessionWith(t *testing.T, h tools.ToolHandler, brokerURL string, tracingEnabled bool, tm *metrics.ToolMetrics) *mcp.ClientSession {
 	t.Helper()
 	pool := spanPoolFor(t, brokerURL)
-	mgr := tools.NewToolManagerFromComposite(pool, nil, nil, tm)
+	// tools.WithToolMetrics rather than a positional argument: the constructor
+	// moved to variadic ManagerOptions in SOL-152090. A nil tm would be a nil
+	// option, which the constructor treats as a no-op, so it is omitted
+	// instead.
+	var opts []tools.ManagerOption
+	if tm != nil {
+		opts = append(opts, tools.WithToolMetrics(tm))
+	}
+	mgr := tools.NewToolManagerFromComposite(pool, nil, nil, opts...)
 	mgr.Register(h)
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1.0"}, nil)

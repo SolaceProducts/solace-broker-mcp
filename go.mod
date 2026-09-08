@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/getkin/kin-openapi v0.147.0
 	github.com/go-logr/logr v1.4.4
+	github.com/gowebpki/jcs v1.0.1
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/maypok86/otter/v2 v2.3.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0

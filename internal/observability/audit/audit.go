@@ -12,10 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package audit is the home for the server's audit log. Skeleton
-// (SOL-151278): only the capability gate exists today; the audit-record
-// emission lands in a later story. The v1 default is OFF (door-closing
-// policy) — operators opt in. Emitted records will carry
+// Package audit owns the server's audit-record schema.
+//
+// docs/observability.md is the customer-facing authority on that schema; this
+// package is its executable form. NewEvent (event.go) is the single
+// constructor, and it enforces the field-applicability table rather than
+// leaving each emission site to reproduce it — the reason a reviewer's query
+// can rely on record shape, and the reason two emitters cannot drift into two
+// shapes of the same record. HashArgs (hash.go) is the only way arguments
+// reach a record: as an RFC 8785 SHA-256 digest, never as values.
+//
+// The v1 default is OFF (door-closing policy) — operators opt in with
+// OBS_AUDIT_LOG_ENABLED, checked through Enabled below. Every record carries
 // schema.AuditSchemaVersion.
 package audit
 
