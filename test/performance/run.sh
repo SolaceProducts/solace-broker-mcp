@@ -36,6 +36,17 @@
 #   RDP          fidelity/loadgen -rdp (default: the RDP recorded in fixtures.manifest;
 #                the mock serves get-rdp-status for that RDP only)
 #   BROKER_USERNAME / BROKER_PASSWORD  (default perf/perf; mock accepts anything non-empty)
+#   BROKERS      number of mock brokers, and loadgen -broker-count (default 50).
+#                Above 50 the committed config runs out of aliases, so generate
+#                one to match:
+#                  ./gen-mock-config.sh -n 120 -o broker-config.gen120.yaml
+#                  BROKERS=120 CONFIG_FILE=./broker-config.gen120.yaml ./run.sh
+#   PORT_WAIT_SECS  how long to wait for a port held by a previous sweep point
+#                to be released before giving up (default 60)
+#   NOFILE       descriptor limit to request (default 1048576; falls back to the
+#                hard limit, and both are recorded)
+#   RIG_NOTE     free-text note about this host, recorded verbatim in the run
+#                record
 
 set -euo pipefail
 
@@ -44,6 +55,14 @@ repo_root="$(cd "$here/../.." && pwd)"
 bin="$here/bin"
 runs="$bin/runs/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$runs"
+
+# shellcheck source=lib.sh
+source "$here/lib.sh"
+# Single host, so both halves of the run live in one directory — but still two
+# records, one per role, so a consumer reads a single-host run the same way it
+# reads the two halves of a split-host one.
+mcp_record="$runs/run-record.mcp"
+lg_record="$runs/run-record.loadgen"
 
 CLIENTS="${CLIENTS:-32}"
 DURATION="${DURATION:-60s}"
@@ -59,6 +78,8 @@ ERROR_STATUSES="${ERROR_STATUSES:-503:70,429:20,500:10}"
 # how it drifted from regen-golden.sh's.
 BROKER_ALIAS="${BROKER_ALIAS:-broker-01}"
 CONFIG_FILE="${CONFIG_FILE:-$here/broker-config.mock.yaml}"
+BROKERS="${BROKERS:-50}"
+PORT_WAIT_SECS="${PORT_WAIT_SECS:-60}"
 
 # Fail loud on a bad path. Silently falling back to the committed config would
 # make every run measure the interval that file happens to ship, and a sweep
@@ -83,12 +104,42 @@ for b in "${required_bins[@]}"; do
   fi
 done
 
-if ss -tln 2>/dev/null | grep -q ":9090 "; then
-  echo "port 9090 already in use — another MCP is running:" >&2
-  ss -tlnp 2>/dev/null | grep ":9090 " >&2
-  echo "kill it before running this script." >&2
+# A non-numeric or zero BROKERS would build an empty port list and hand
+# mock-semp a -listen-count it rejects several steps later. Catch it here,
+# where the message can name the variable.
+if ! [[ "$BROKERS" =~ ^[0-9]+$ ]] || (( BROKERS < 1 )); then
+  echo "BROKERS must be a positive integer, got: $BROKERS" >&2
   exit 2
 fi
+
+mock_start=18081
+mock_count="$BROKERS"
+
+# Wait for every port this run needs rather than aborting on a held one. A
+# back-to-back sweep point was lost this way: the previous point's server still
+# held :9090 when the next one started. An immediate abort turns a two-second
+# wait into a missing data point; starting anyway would measure the previous
+# process. Bounded, and the failure names the port it waited on.
+#
+# "Free" means no listener, not no socket: a TIME_WAIT socket does not block a
+# bind with SO_REUSEADDR, so waiting for every socket to clear would wait for
+# something that never happens. See perf_first_held_port.
+#
+# The mock's whole port range is covered, not just its first port — a previous
+# run with a larger BROKERS leaves the tail bound while 18081 is already free.
+mock_ports=()
+for (( p = mock_start; p < mock_start + mock_count; p++ )); do mock_ports+=("$p"); done
+perf_wait_ports_free "$PORT_WAIT_SECS" 9090 19000 "${mock_ports[@]}" || exit 2
+
+# Raise the descriptor limit before anything is launched, so both the server
+# and the mock inherit it. Nothing in this suite, cmd/ or deploy/ raised
+# RLIMIT_NOFILE before, which left it varying with whatever the login shell
+# handed the operator — a result-moving input that was invisible in the output.
+# On a single host this shell's limit covers the server's two idle pools per
+# broker AND the load generator's inbound sessions, which is the larger of the
+# two by far at high client counts.
+perf_raise_nofile "${NOFILE:-1048576}"
+echo "== 0. descriptor limit: requested $PERF_NOFILE_REQUESTED, granted $PERF_NOFILE_GRANTED"
 
 # Fixture preflight. The canned responses and goldens are lab captures kept
 # out of git, so "absent" is the normal state of a fresh clone — fail here
@@ -122,6 +173,33 @@ fi
 # check is delegated rather than duplicated here: a bash copy of the valid
 # names would drift the first time a tool is added.
 "$bin/loadgen" -validate-only -tools "$TOOLS" -vpn "$VPN" -rdp "$RDP"
+
+# Records first: a run that dies in startup should still say what it was.
+perf_record_begin "$mcp_record" mcp "$runs"
+perf_record_rig "$mcp_record"
+perf_record_code "$mcp_record" "$repo_root" "$bin" mcp-server memsampler
+perf_record_fixtures "$mcp_record" "$here"
+perf_record_kv "$mcp_record" config_file "$CONFIG_FILE"
+perf_record_kv "$mcp_record" nofile_requested "$PERF_NOFILE_REQUESTED"
+perf_record_kv "$mcp_record" nofile_granted "$PERF_NOFILE_GRANTED"
+
+perf_record_begin "$lg_record" loadgen "$runs"
+perf_record_rig "$lg_record"
+perf_record_code "$lg_record" "$repo_root" "$bin" loadgen mock-semp fidelity
+perf_record_fixtures "$lg_record" "$here"
+perf_record_comment "$lg_record" "workload"
+perf_record_kv "$lg_record" clients "$CLIENTS"
+perf_record_kv "$lg_record" duration "$DURATION"
+perf_record_kv "$lg_record" tools "$TOOLS"
+perf_record_kv "$lg_record" broker_count "$BROKERS"
+perf_record_kv "$lg_record" vpn "$VPN"
+perf_record_kv "$lg_record" rdp "$RDP"
+perf_record_kv "$lg_record" latency_ms "$LATENCY_MS"
+perf_record_kv "$lg_record" error_rate "$ERROR_RATE"
+perf_record_kv "$lg_record" error_count "$ERROR_COUNT"
+perf_record_kv "$lg_record" error_statuses "$ERROR_STATUSES"
+perf_record_kv "$lg_record" nofile_requested "$PERF_NOFILE_REQUESTED"
+perf_record_kv "$lg_record" nofile_granted "$PERF_NOFILE_GRANTED"
 
 mock_pid= mcp_pid= mem_pid= top_pid=
 # kill_tree signals a pid (and its process group if reachable) and waits for
@@ -185,8 +263,6 @@ wait_for_tcp() {
   return 1
 }
 
-mock_start=18081
-mock_count=50
 echo "== 1. mock-semp on :$mock_start..$((mock_start + mock_count - 1)) (default-latency-ms=$LATENCY_MS)"
 # mock-semp reads canned/ from disk at startup (auto-located next to the
 # binary), so it replays whatever the last capture produced — no rebuild
@@ -264,6 +340,13 @@ setsid bash -c "cd '$repo_root' && CONFIG_FILE='$CONFIG_FILE' exec '$bin/mcp-ser
 mcp_pid=$!
 wait_for_http "http://localhost:9090/health" mcp-server
 
+# The server has now reported its own effective configuration, so record the
+# four settings that move admission behaviour and the limit the process
+# actually runs under.
+perf_record_kv "$mcp_record" mcp_pid "$mcp_pid"
+perf_record_admission "$mcp_record" "$runs/mcp.log" "$runs/broker-config.used.yaml"
+perf_record_proc_nofile "$mcp_record" "$mcp_pid"
+
 echo "== 3. fidelity gate (exact mode; broker=$BROKER_ALIAS vpn=$VPN rdp=$RDP; exclusions in fidelity/exclusions.txt)"
 # BROKER_ALIAS + VPN must match how the goldens were captured; the mock
 # replays canned bytes regardless of the alias in the request path, so
@@ -306,6 +389,12 @@ top_secs=$(awk -v d="$DURATION" 'BEGIN {
   if (match(d, /^([0-9.]+)h$/, m)) { print int(m[1]*3600); exit }
   print 90  # fallback if duration is unparseable
 }')
+# Small tail buffer, the same one run-loadgen.sh gives its samplers. The
+# samplers start just before loadgen does, so an exactly-DURATION window ends a
+# few seconds before the load does and clips the tail off the load-phase
+# figures. The extra idle samples land in the whole-run average, which is the
+# diluted number this change exists to stop anyone relying on.
+top_secs=$(( top_secs + 10 ))
 echo "== 4b. sampler alongside MCP+mock (~${top_secs}s at 5s intervals)"
 "$here/sampler.sh" "$runs/sampler.csv" 5 "$top_secs" >"$runs/sampler.log" 2>&1 &
 top_pid=$!
@@ -314,10 +403,37 @@ inject_note="no error injection"
 if awk -v r="$ERROR_RATE" 'BEGIN { exit !(r+0 > 0) }'; then
   inject_note="inject rate=$ERROR_RATE count=$ERROR_COUNT/port statuses=$ERROR_STATUSES"
 fi
-echo "== 5. loadgen ($CLIENTS clients, $DURATION, tools=$TOOLS; $inject_note)"
-"$bin/loadgen" -mcp-url http://localhost:9090 -broker-count 50 \
+echo "== 5. loadgen ($CLIENTS clients, $DURATION, tools=$TOOLS, broker-count=$BROKERS; $inject_note)"
+# Stamp the load window into both records. summary.sh windows the sampler CSV
+# on it so the reported CPU is the load phase, not the load phase averaged
+# together with the idle stretch the fidelity gate ran in. Stamped by the
+# runner that starts the load, never inferred from the samples.
+# One clock read for both records: four independent `date +%s` calls could
+# leave the two files disagreeing by a second, and summary.sh reads whichever
+# record its glob happens to yield first — so the window a run reports would
+# depend on directory order.
+load_start_epoch=$(date +%s)
+perf_stamp_load_start "$mcp_record" "$load_start_epoch"
+perf_stamp_load_start "$lg_record" "$load_start_epoch"
+lg_rc=0
+"$bin/loadgen" -mcp-url http://localhost:9090 -broker-count "$BROKERS" \
   -clients "$CLIENTS" -duration "$DURATION" -tools "$TOOLS" \
   -vpn "$VPN" -rdp "$RDP" \
-  | tee "$runs/loadgen.log"
+  | tee "$runs/loadgen.log" || lg_rc=$?
+load_end_epoch=$(date +%s)
+perf_stamp_load_end "$mcp_record" "$load_end_epoch"
+perf_stamp_load_end "$lg_record" "$load_end_epoch"
+
+# Peaks are only knowable once the samplers have stopped.
+# `|| true`: a provenance write failing before the load starts is a fair
+# abort, but failing after a completed run would discard the report for a
+# measurement that is already safely in the CSVs.
+wait "$mem_pid" 2>/dev/null || true
+wait "$top_pid" 2>/dev/null || true
+perf_record_fd_peak "$mcp_record" "$runs/mem.csv" || true
 
 echo "== done"
+echo
+"$here/summary.sh" "$runs" || true
+echo "run records: $mcp_record, $lg_record"
+exit "$lg_rc"

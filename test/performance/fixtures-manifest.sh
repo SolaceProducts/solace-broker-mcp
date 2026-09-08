@@ -86,6 +86,11 @@ cmd_write() {
     echo "# Do not edit: the run scripts verify these hashes and will fail on a mismatch."
     echo "# run_id: $(date -u +%Y%m%dT%H%M%SZ)"
     echo "# captured_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    # The commit the capture was taken at. Two captures of the same broker from
+    # different commits can differ in what the tools select, so a run record
+    # that names the fixture set should be able to name the code that made it.
+    echo "# capture_commit: $(git -C "$here" rev-parse HEAD 2>/dev/null || echo unknown)"
+    echo "# capture_dirty: $( [[ -n "$(git -C "$here" status --porcelain 2>/dev/null)" ]] && echo true || echo false )"
     echo "# broker_alias: ${BROKER_ALIAS:-unknown}"
     echo "# vpn: ${VPN:-unknown}"
     echo "# rdp: ${RDP_NAME:-unknown}"

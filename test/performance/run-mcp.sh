@@ -15,6 +15,12 @@
 #                  used is copied into the run directory so the numbers stay
 #                  traceable to it.
 #   BROKER_USERNAME / BROKER_PASSWORD   (default perf/perf; mock accepts anything)
+#   PORT_WAIT_SECS how long to wait for :9090 to be released by a previous
+#                  sweep point before giving up (default 60)
+#   NOFILE         descriptor limit to request for the server (default 1048576;
+#                  falls back to the hard limit, and both are recorded)
+#   RIG_NOTE       free-text note about this host, recorded verbatim in the run
+#                  record. For a box that cannot describe itself.
 
 set -euo pipefail
 
@@ -24,12 +30,17 @@ bin="$here/bin"
 runs="$bin/runs/$(date +%Y%m%d-%H%M%S)-mcp"
 mkdir -p "$runs"
 
+# shellcheck source=lib.sh
+source "$here/lib.sh"
+record="$runs/run-record.mcp"
+
 : "${MOCK_HOST:?MOCK_HOST unset — set to the Box A LAN IP, e.g. MOCK_HOST=198.51.100.30}"
 export MOCK_HOST
 export BROKER_USERNAME="${BROKER_USERNAME:-perf}"
 export BROKER_PASSWORD="${BROKER_PASSWORD:-perf}"
 DURATION="${DURATION:-90s}"
 CONFIG_FILE="${CONFIG_FILE:-$here/broker-config.mock.yaml}"
+PORT_WAIT_SECS="${PORT_WAIT_SECS:-60}"
 
 # Fail loud on a bad path. Silently falling back to the committed config would
 # make every run measure the interval that file happens to ship, and a sweep
@@ -49,12 +60,26 @@ for b in memsampler mcp-server; do
   fi
 done
 
-if ss -tln 2>/dev/null | grep -q ":9090 "; then
-  echo "port 9090 already in use — another MCP is running:" >&2
-  ss -tlnp 2>/dev/null | grep ":9090 " >&2
-  echo "kill it before running this script." >&2
-  exit 2
-fi
+# Wait for the port rather than aborting on it. A back-to-back sweep point was
+# lost this way: the previous point's MCP still held :9090 when the next one
+# started, and an immediate abort turns a two-second wait into a missing data
+# point in the middle of a sweep. Bounded — a port held past the timeout is a
+# stuck process, not a slow one — and starting anyway is not an option, because
+# the run would then measure the previous server.
+perf_wait_ports_free "$PORT_WAIT_SECS" 9090 || exit 2
+
+# Raise the descriptor limit before anything is launched, so the server
+# inherits it. Nothing in this suite, cmd/ or deploy/ raised RLIMIT_NOFILE
+# before, which means it silently varied with whatever the login shell handed
+# the operator — a result-moving input that was invisible in the output.
+#
+# Two idle connection pools per broker, each holding up to
+# max_concurrent_per_broker for IdleConnTimeout, put the server's own
+# descriptor use at up to twice the cap per broker under a protocol-alternating
+# workload. The load generator's inbound sessions are one socket each and
+# dominate a 2000-caller run, but those land on the load box, not this one.
+perf_raise_nofile "${NOFILE:-1048576}"
+echo "== 0. descriptor limit: requested $PERF_NOFILE_REQUESTED, granted $PERF_NOFILE_GRANTED"
 
 # Confirm Box A's mock is reachable before spinning MCP; a silent
 # unreachable-mock reads as a broken MCP in the load run.
@@ -101,6 +126,19 @@ wait_for_http() {
   return 1
 }
 
+# The run record is what makes this run comparable with the next one. Written
+# before MCP starts so a run that dies during startup still says what it was.
+perf_record_begin "$record" mcp "$runs"
+perf_record_rig "$record"
+perf_record_code "$record" "$repo_root" "$bin" mcp-server memsampler
+perf_record_fixtures "$record" "$here"
+perf_record_comment "$record" "workload (driven from the load box; this box only holds MCP up)"
+perf_record_kv "$record" hold_duration "$DURATION"
+perf_record_kv "$record" mock_host "$MOCK_HOST"
+perf_record_kv "$record" config_file "$CONFIG_FILE"
+perf_record_kv "$record" nofile_requested "$PERF_NOFILE_REQUESTED"
+perf_record_kv "$record" nofile_granted "$PERF_NOFILE_GRANTED"
+
 echo "== 1. MCP server on :9090 (config: $CONFIG_FILE, MOCK_HOST=$MOCK_HOST)"
 # Keep the exact config alongside the numbers it produced. Recording only the
 # filename is not enough: the per-run copies are local and get overwritten.
@@ -112,6 +150,20 @@ setsid bash -c "cd '$repo_root' && CONFIG_FILE='$CONFIG_FILE' exec '$bin/mcp-ser
   >"$runs/mcp.log" 2>&1 &
 mcp_pid=$!
 wait_for_http "http://localhost:9090/health" mcp-server
+
+# Now that the server has reported its own effective configuration, record the
+# four settings that move admission behaviour, and the descriptor limit the
+# process actually runs under (its own /proc view, not this shell's — the two
+# diverge across a re-exec).
+perf_record_kv "$record" mcp_pid "$mcp_pid"
+perf_record_admission "$record" "$runs/mcp.log" "$runs/broker-config.used.yaml"
+perf_record_proc_nofile "$record" "$mcp_pid"
+
+# This box drives no load, so it cannot stamp the load window: the load runs on
+# the other box and the two share no channel by design. Say so in the record
+# rather than inferring a boundary — a guessed window would poison every later
+# comparison, and both run directories are archived together anyway.
+perf_no_load_window "$record" split-host-load-on-other-box
 
 # Convert Go duration to seconds for the samplers.
 top_secs=$(awk -v d="$DURATION" 'BEGIN {
@@ -138,5 +190,13 @@ wait "$mem_pid" 2>/dev/null || true
 wait "$top_pid" 2>/dev/null || true
 
 echo "== done"
+
+# Peaks are only knowable once the samplers have stopped.
+# `|| true`: a provenance write failing before the load starts is a fair
+# abort, but failing after a completed run would discard the report for a
+# measurement that is already safely in the CSVs.
+perf_record_fd_peak "$record" "$runs/mem.csv" || true
+
 echo
 "$here/summary.sh" "$runs" || true
+echo "run record: $record"
