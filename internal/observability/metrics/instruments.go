@@ -54,6 +54,13 @@ const (
 	ErrorTypeNotFound              ErrorType = "not_found"
 	ErrorTypeOutputValidationError ErrorType = "output_validation_error"
 	ErrorTypeMarshalError          ErrorType = "marshal_error"
+	// ErrorTypeBrokerPermissionDenied marks a hop-2 (broker-side) authorization
+	// denial: SEMPv1's ErrorKindPermission or SEMPv2's error code 72, classified
+	// at the tools layer (SOL-153332, Story 49). Distinct from
+	// ErrorTypeExecutionError so a compliance reviewer can tell "the broker
+	// refused the exchanged identity" apart from every other handler failure
+	// without inspecting the SEMP error body.
+	ErrorTypeBrokerPermissionDenied ErrorType = "broker_permission_denied"
 	// ErrorTypeOther is the sentinel Record coerces any value outside the closed
 	// set to, so an unexpected string can never mint a new series.
 	ErrorTypeOther ErrorType = "other"
@@ -66,16 +73,18 @@ var knownErrorTypes = map[ErrorType]bool{
 	ErrorTypeMissingBroker: true, ErrorTypeUnknownBroker: true, ErrorTypeBrokerInitError: true,
 	ErrorTypeValidationError: true, ErrorTypeExecutionError: true, ErrorTypeNilResult: true,
 	ErrorTypeNotFound: true, ErrorTypeOutputValidationError: true, ErrorTypeMarshalError: true,
-	ErrorTypeOther: true,
+	ErrorTypeBrokerPermissionDenied: true,
+	ErrorTypeOther:                  true,
 }
 
 // ToolMetrics holds the per-tool RED instruments: an invocation counter, a
 // duration histogram, and an unlabelled in-flight gauge. Every method is
 // nil-safe, so a disabled server (nil) records nothing.
 type ToolMetrics struct {
-	invocations    metric.Int64Counter
-	duration       metric.Float64Histogram
-	activeRequests metric.Int64UpDownCounter
+	invocations       metric.Int64Counter
+	duration          metric.Float64Histogram
+	activeRequests    metric.Int64UpDownCounter
+	brokerAuthzDenied metric.Int64Counter
 }
 
 // NewToolMetrics registers the RED instruments. The exporter derives the
@@ -105,7 +114,23 @@ func NewToolMetrics(meter metric.Meter) (*ToolMetrics, error) {
 		return nil, fmt.Errorf("register mcp_http_active_requests: %w", err)
 	}
 
-	return &ToolMetrics{invocations: invocations, duration: duration, activeRequests: activeRequests}, nil
+	// mcp_broker_authz_denied_total (SOL-153332, Story 49): a hop-2 counterpart
+	// to hop-1's mcp_authz_denied_total, counting a broker-side permission
+	// denial rather than an MCP-server-side one.
+	brokerAuthzDenied, err := meter.Int64Counter(
+		"mcp.broker.authz_denied",
+		metric.WithDescription("Number of tool calls denied by broker-side (hop-2) authorization."),
+		metric.WithUnit("1"))
+	if err != nil {
+		return nil, fmt.Errorf("register mcp_broker_authz_denied_total: %w", err)
+	}
+
+	return &ToolMetrics{
+		invocations:       invocations,
+		duration:          duration,
+		activeRequests:    activeRequests,
+		brokerAuthzDenied: brokerAuthzDenied,
+	}, nil
 }
 
 // Record observes one invocation on the counter and histogram with matching
@@ -143,4 +168,19 @@ func (t *ToolMetrics) DecActive(ctx context.Context) {
 		return
 	}
 	t.activeRequests.Add(ctx, -1)
+}
+
+// RecordBrokerAuthzDenied increments mcp_broker_authz_denied_total for one
+// hop-2 (broker-side) authorization denial (SOL-153332, Story 49). No-op on a
+// nil receiver — metrics disabled records nothing, same as every other method
+// here.
+func (t *ToolMetrics) RecordBrokerAuthzDenied(ctx context.Context, tool, broker, reason string) {
+	if t == nil {
+		return
+	}
+	t.brokerAuthzDenied.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("tool", tool),
+		attribute.String("broker", broker),
+		attribute.String("reason", reason),
+	))
 }

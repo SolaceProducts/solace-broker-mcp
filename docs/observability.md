@@ -181,12 +181,12 @@ refused by tool authorization never reaches one, so it is absent here and counte
   call) and `unknown` (an alias that is not configured). The log line keeps the raw alias the
   caller typed; only the metric label is canonicalized, so a typo cannot mint a new series.
 - `outcome`: see [The Outcome Vocabulary](#the-outcome-vocabulary).
-- `error_type`: the failure cause, from the twelve values in
+- `error_type`: the failure cause, from the thirteen values in
   [`error_type`](#error_type). Empty on any non-error outcome.
 - Histogram buckets (seconds): `0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10`.
 
 **Cardinality:** all label domains are finite. `error_type` is non-empty only on the error
-path and is drawn from the closed set of twelve values above; `outcome` is one of three; and
+path and is drawn from the closed set of thirteen values above; `outcome` is one of three; and
 `broker` is bounded to the configured aliases plus the `none`/`unknown` sentinels. The series
 count is not a clean product of these domains, because several error types only ever occur
 before a broker is resolved — `bad_request`, `missing_broker`, `not_found`, and
@@ -281,6 +281,28 @@ broker state, not per attempt.
   than zero.
 
 **Cardinality:** `|tool| x 2`.
+
+### Broker Authorization Denials
+
+| Metric | Type | Labels | Basis |
+|---|---|---|---|
+| `mcp_broker_authz_denied_total` | Counter | `tool`, `broker`, `reason` | Solace |
+
+The hop-2 counterpart to `mcp_authz_denied_total` above: a broker-side (SEMP) permission
+denial rather than an MCP-server-side one (SOL-153332, Story 49).
+
+- `reason` is a closed set of one today: `permission_denied`. Same value as the
+  `broker_authz_denied` audit record's `reason`, from the same classification, so the metric
+  and the audit stream cannot disagree.
+- `broker` **is** a label here, unlike on `mcp_authz_denied_total` — a hop-2 denial always
+  names the broker that refused.
+- Unlike a hop-1 denial, a hop-2 denial happens *after* the handler ran, so it also produces a
+  `mcp_tool_invocation_total` sample with `error_type: broker_permission_denied` and, for a
+  destructive call, an `operation` audit record. This counter exists anyway so a hop-2 denial
+  is queryable by its specific cause without filtering `mcp_tool_invocation_total` on a label
+  value.
+
+**Cardinality:** `|tool| x |broker| x 1`.
 
 ### Audit Pipeline Health
 
@@ -448,7 +470,7 @@ present, once the metrics endpoint is wired, for diagnosing memory pressure and 
 > calls are emitted today behind `OBS_AUDIT_LOG_ENABLED`, and the whole record schema below
 > is enforced in code by one constructor. The other record types are part of that schema and
 > accepted by the constructor, but nothing emits them yet: `auth_success`, `auth_failure` and
-> `authz_denied` land with SOL-152097, `broker_authz_denied` with SOL-153332. `audit_drop` is
+> `authz_denied` land with SOL-152097. `broker_authz_denied` ships as of SOL-153332. `audit_drop` is
 > emitted. Write your SIEM rules against the schema; expect the non-`operation` record types
 > to start appearing rather than to change shape._
 
@@ -496,7 +518,7 @@ records means your log level, not your flag.
 | `tool` | The MCP tool invoked | string |
 | `broker` | The broker targeted | string |
 | `outcome` | The result; see [The Outcome Vocabulary](#the-outcome-vocabulary) | string |
-| `error_type` | Why an operation failed; present on `outcome: error` only. Five of the twelve values reach an audit record, see [`error_type`](#error_type) | string (closed set) |
+| `error_type` | Why an operation failed; present on `outcome: error` only. Six of the thirteen values reach an audit record, see [`error_type`](#error_type) | string (closed set) |
 | `panic_recovered` | On `operation` only: present and `true` when a destructive handler crashed and was recovered (`outcome: error`, `error_type: panic`) | boolean |
 | `arguments_hash` | SHA-256 over an RFC 8785 (JCS) canonicalization of the call arguments | hex string |
 | `correlation_id` | Join key to logs, traces, and the broker-side entry | string |
@@ -707,8 +729,9 @@ attempted. A hop-2 denial means the call *ran* and the broker stopped it, so it 
 one audit record per call** — a hop-2 denial produces two, and both are correct. Match on
 `audit_event_type` instead of counting.
 
-> **Not emitted yet.** The record type is part of the schema and the constructor accepts it,
-> so a SIEM rule can be written against it today. The emission site ships with SOL-153332.
+> **Emitted as of SOL-153332.** Classified at the tools layer from SEMPv1's `ErrorKindPermission`
+> and SEMPv2's error code 72 — no new broker-response parsing needed, since both were already
+> classified there for the agent-facing error message.
 
 ### Audit Delivery
 
@@ -807,7 +830,7 @@ audit record**, which is the point of a single vocabulary: filter a dashboard by
 the SIEM unchanged, with no translation table.
 
 **Exception: `tokenexchange.Exchange` never sets `error_type`, even on `outcome: error`.** The
-twelve-value `error_type` set above is scoped to tool-invocation outcomes and has no value
+thirteen-value `error_type` set above is scoped to tool-invocation outcomes and has no value
 describing a token-exchange failure mode (rate-limited, circuit-open, retries-exhausted,
 transport, request-build). The span still carries the actual cause via the span's recorded
 exception event and its status (`codes.Error`), just not through this shared field. A future
@@ -980,7 +1003,7 @@ small enough to group by on a dashboard while still carrying the detail an inves
 
 ### `error_type`
 
-Present only on `outcome: error`, drawn from a closed set of twelve values:
+Present only on `outcome: error`, drawn from a closed set of thirteen values:
 
 | Value | Meaning |
 |---|---|
@@ -998,15 +1021,16 @@ Present only on `outcome: error`, drawn from a closed set of twelve values:
 | `not_found` | The requested item does not exist (for example, an unknown SEMP operation passed to describe-semp-schema). |
 | `output_validation_error` | The tool's output failed schema validation. |
 | `marshal_error` | The result could not be serialized. |
+| `broker_permission_denied` | The broker refused the exchanged identity the SEMP operation behind this tool (a hop-2 denial, SOL-153332, Story 49) — paired with the `broker_authz_denied` audit event. |
 
-**Only five of these reach an audit record.** The twelve values above are the full vocabulary
+**Only six of these reach an audit record.** The thirteen values above are the full vocabulary
 for the tool-invocation **metric** and for the `tool invoked` log line. An `operation` audit
 record is written only for a call that actually reached the tool, so only the failures that
 can happen at or after dispatch appear on one:
 
 | Reaches an `operation` audit record | Never appears on an audit record |
 |---|---|
-| `execution_error`, `nil_result`, `output_validation_error`, `marshal_error`, `panic` | `unknown_tool`, `missing_broker`, `unknown_broker`, `broker_init_error`, `validation_error`, `bad_request`, `not_found` |
+| `execution_error`, `nil_result`, `output_validation_error`, `marshal_error`, `panic`, `broker_permission_denied` | `unknown_tool`, `missing_broker`, `unknown_broker`, `broker_init_error`, `validation_error`, `bad_request`, `not_found` |
 
 The right-hand column is every way a call is rejected **before** anything is attempted
 against a broker: an unregistered tool, an absent or unresolvable broker, arguments that
@@ -1223,8 +1247,8 @@ the review.
    intend to follow OTel HTTP conventions. If your trace backend or trace-based SLOs key off
    specific span names or `SpanKind` values, tell us what you expect.
 5. **The `outcome` / `error_type` split.** We have settled on three `outcome` values with the
-   cause in a separate `error_type` of twelve values, rather than folding causes into `outcome`.
-   Does that split match how your SIEM queries distinguish failures, and do the twelve
+   cause in a separate `error_type` of thirteen values, rather than folding causes into `outcome`.
+   Does that split match how your SIEM queries distinguish failures, and do the thirteen
    `error_type` values cover how you classify them? If you would separate something we have
    merged — a `timeout` distinct from other errors, say — now is the time.
 6. **Authorization denials — the signal is decided, the vocabulary is what we want checked.**

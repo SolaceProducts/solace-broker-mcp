@@ -1,3 +1,6 @@
+# HELP mcp_broker_authz_denied_total Number of tool calls denied by broker-side (hop-2) authorization.
+# TYPE mcp_broker_authz_denied_total counter
+mcp_broker_authz_denied_total{broker="test-broker",reason="permission_denied",tool="test-tool"} 1
 # HELP mcp_build_info Server build info; always 1, labelled with the version.
 # TYPE mcp_build_info gauge
 mcp_build_info{version="v1.2.3-test"} 1

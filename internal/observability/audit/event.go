@@ -103,27 +103,30 @@ const (
 // diverge, so adding a value there without adding it here breaks the build
 // rather than silently shipping a record the constructor rejects.
 //
-// Per-site provenance (verified against internal/tools at SOL-152090):
+// Per-site provenance (verified against internal/tools at SOL-152090; grown
+// by one at SOL-153332, Story 49):
 //
 //	manager.go              panic, unknown_tool, missing_broker,
 //	                        unknown_broker, broker_init_error,
 //	                        validation_error, execution_error, nil_result,
-//	                        output_validation_error, marshal_error
+//	                        output_validation_error, marshal_error,
+//	                        broker_permission_denied
 //	register.go             bad_request, panic, marshal_error
 //	describe_semp_schema.go bad_request, not_found, panic, marshal_error
 var errorTypeVocabulary = map[string]struct{}{
-	"panic":                   {},
-	"unknown_tool":            {},
-	"missing_broker":          {},
-	"unknown_broker":          {},
-	"broker_init_error":       {},
-	"validation_error":        {},
-	"execution_error":         {},
-	"nil_result":              {},
-	"output_validation_error": {},
-	"marshal_error":           {},
-	"bad_request":             {},
-	"not_found":               {},
+	"panic":                    {},
+	"unknown_tool":             {},
+	"missing_broker":           {},
+	"unknown_broker":           {},
+	"broker_init_error":        {},
+	"validation_error":         {},
+	"execution_error":          {},
+	"nil_result":               {},
+	"output_validation_error":  {},
+	"marshal_error":            {},
+	"broker_permission_denied": {},
+	"bad_request":              {},
+	"not_found":                {},
 }
 
 // ErrorTypes returns the closed error_type vocabulary, sorted, as a fresh
