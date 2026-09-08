@@ -755,7 +755,7 @@ func TestWithListFiltering_ListedImpliesCallable(t *testing.T) {
 func callableUnderAuthorization(t *testing.T, policy *authz.Policy, tool string, groups []string) bool {
 	t.Helper()
 	rec := newRecordingHandler()
-	wrapped := withAuthorization(policy, tool, "groups", rec.handler())
+	wrapped := withAuthorization(policy, tool, "groups", false, rec.handler())
 	if _, err := wrapped(context.Background(), requestWithGroups(groups)); err != nil {
 		t.Fatalf("withAuthorization errored for %q: %v", tool, err)
 	}

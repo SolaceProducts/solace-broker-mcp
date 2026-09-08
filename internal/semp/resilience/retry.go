@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
 	"github.com/hashicorp/go-retryablehttp"
 )
 
@@ -64,6 +65,7 @@ type retryStateKey struct{}
 // concurrent requests to the same Sender are safe.
 type retryState struct {
 	auth401Retried   bool   // true after first 401 re-auth attempt
+	authRecovered    bool   // true iff the most recent response was non-401 after a 401 (flips back to false on another 401; see checkRetry)
 	other5xxRetried  bool   // true after first non-429/503 5xx retry
 	transientRetried int    // count of 429/503 retries taken (capped at maxTransientRetries)
 	method           string // HTTP method captured at Do() time for idempotency check
@@ -226,7 +228,25 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 	// request, so re-authenticating and retrying cannot duplicate a side effect.
 	// Gating it would turn a token expiring mid-request into a hard failure for
 	// exactly the write operations that most need to complete.
+	//
+	// This function only ever SETS state.auth401Retried; it never decides or
+	// emits the broker_auth_retry audit record (SOL-152097). checkRetry can run
+	// many more times after a 401 is recovered — a 503 working through the
+	// transient cap, a second 401, a connection error — and several paths that
+	// matter (a transport error, ctx cancellation during backoff, prepareRetry's
+	// AddAuth itself failing) never re-enter checkRetry at all. Deciding the
+	// outcome here, mid-chain, either double-emits or silently drops the record
+	// depending on which of those paths the chain happens to take next. The
+	// decision is made exactly once, from the chain's actual final result, by
+	// Sender.Do's auditBrokerAuthRetryOutcome after d.retryClient.Do returns.
 	if resp.StatusCode == http.StatusUnauthorized { // 401
+		// Any 401 — first or persisted — means the credential problem is
+		// unresolved as of this attempt. Cleared here rather than only ever
+		// set once below, so a chain that recovers and then hits a fresh 401
+		// (state.authRecovered would otherwise still read true from the
+		// earlier non-401 response) reports the persisted failure it actually
+		// ended in, not the transient recovery partway through.
+		state.authRecovered = false
 		if !state.auth401Retried {
 			state.auth401Retried = true
 			// The authenticator decides both retry and re-auth; relay ReAuth
@@ -245,6 +265,19 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 		slog.Warn("auth failure: 401 persisted after recovery attempt",
 			slog.String("broker", d.brokerURL))
 		return false, nil
+	}
+
+	// Reached only for a non-401 response. Once a 401 retry has happened for
+	// this request (auth401Retried), any later non-401 response means the
+	// credential problem is resolved as of this attempt — independent of
+	// whether this particular response goes on to be retried or is itself
+	// terminal, which the switch below (and ultimately Do's own return)
+	// decides separately. auditBrokerAuthRetryOutcome reads this flag rather
+	// than re-deriving the same fact from the chain's final resp/err, because
+	// a later retry cap (transient 429/503, other-5xx) exhausting routes
+	// through errorHandler, which nils out resp — see that function's doc.
+	if state.auth401Retried {
+		state.authRecovered = true
 	}
 
 	// Past 401, every remaining retry path replays a request the broker may
@@ -319,4 +352,77 @@ func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error)
 // fire only on responses that were genuinely retry candidates.
 func retryableStatus(code int) bool {
 	return code == http.StatusTooManyRequests || code >= 500
+}
+
+// auditBrokerAuthRetryOutcome decides and emits the broker_auth_retry record
+// (SOL-152097) exactly once, at Sender.Do's true terminal point — after the
+// whole retry chain (every attempt, including any 429/503/other-5xx retries
+// that followed a 401 recovery) has concluded one way or another. Called from
+// Do after d.retryClient.Do(retryReq) returns.
+//
+// This cannot be decided from inside checkRetry: that function can run many
+// more times after a 401 is recovered, and several paths that matter —a
+// transport error, ctx cancellation during backoff, prepareRetry's AddAuth
+// itself failing on the re-auth — never re-enter checkRetry at all, so a
+// decision made there either double-emits (a 401 that recovers into a 503
+// which then exhausts its own retry cap and finally 401s again) or silently
+// drops the record on the paths that skip checkRetry entirely.
+//
+// state.auth401Retried is the only gate: false means this request never saw a
+// 401, so there is nothing to report. Once true, outcome comes from
+// state.authRecovered — maintained inside checkRetry as the credential status
+// of the most recently observed response (cleared on a 401, set on a non-401
+// that follows one — see checkRetry) — rather than from Do's own final
+// resp/err. Those two do not carry the fact reliably: a chain that recovers
+// the 401 and then exhausts a *later* retry cap (the maxTransientRetries cap
+// on 429/503, or the other-5xx one-retry limit) routes through errorHandler,
+// which returns a nil *http.Response on every populated path — so resp != nil
+// would always be false on exactly the chains where the two most commonly
+// diverge, and every one of them would misreport a resolved credential as
+// unresolved. outcome is success when the credential problem was resolved as
+// of the chain's last real response, whatever this call's own final
+// disposition turns out to be — a separate question the caller's returned
+// error answers — and error otherwise: a persisted or recurring 401, a
+// transport failure, a context cancellation, or the re-auth attempt itself
+// failing inside prepareRetry.
+func (d *Sender) auditBrokerAuthRetryOutcome(ctx context.Context) {
+	state := getRetryState(ctx)
+	if !state.auth401Retried {
+		return
+	}
+	outcome := audit.OutcomeError
+	if state.authRecovered {
+		outcome = audit.OutcomeSuccess
+	}
+	d.auditBrokerAuthRetry(ctx, outcome)
+}
+
+// auditBrokerAuthRetry emits a broker_auth_retry record (SOL-152097), gated
+// by d.auditLog (mirrors tools.WithAuditLog's own gate — off is inert, not
+// degraded). outcome reports whether the 401 recovery attempt resolved the
+// authentication failure for this request: OutcomeSuccess once a later
+// response is no longer itself a 401, OutcomeError when the authenticator
+// declined to retry at all or the 401 persisted after the attempt.
+func (d *Sender) auditBrokerAuthRetry(ctx context.Context, outcome audit.Outcome) {
+	if !d.auditLog {
+		return
+	}
+	event, err := audit.NewEvent(ctx, audit.Fields{
+		Type:    audit.EventBrokerAuthRetry,
+		Outcome: outcome,
+		Broker:  d.brokerAlias,
+	})
+	if err != nil {
+		// Same build-or-drop shape as every other emission site in this
+		// codebase (see internal/tools/manager.go's emitOperationAudit):
+		// the constructor rejected the record, so there is nothing valid to
+		// write — say so via a drop rather than let the record's absence
+		// read as "no 401 recovery was attempted".
+		slog.ErrorContext(ctx, "audit: broker_auth_retry record rejected by the schema constructor; recording a drop",
+			slog.String("broker", d.brokerAlias),
+			slog.String("detail", err.Error()))
+		audit.EmitDrop(ctx, audit.DropContext{DroppedEventType: audit.EventBrokerAuthRetry, Broker: d.brokerAlias})
+		return
+	}
+	audit.Emit(ctx, event)
 }
