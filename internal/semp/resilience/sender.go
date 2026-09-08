@@ -26,6 +26,7 @@ import (
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/logging/sanitize"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/auth"
 	"github.com/hashicorp/go-retryablehttp"
 )
@@ -155,6 +156,11 @@ type Sender struct {
 	// selects. Shared per-broker with sem and rateLimiter, and not owned here —
 	// semp.BrokerClient.Close stops it.
 	scheduler *Scheduler
+	// sempMetrics, when non-nil, records one sample per attempt via a transport
+	// wrapper (see WithMetrics). nil is the disabled-metrics default.
+	sempMetrics *metrics.SEMPMetrics
+	api         string // protocol version label: "v1" or "v2"
+	brokerAlias string // operator's configured alias, for the broker label
 }
 
 // Option customizes a Sender at construction. Options are applied after the
@@ -198,6 +204,24 @@ func WithSaturationEvents(slowAfter time.Duration) Option {
 // pre-SOL-153441 two-gate admission.
 func WithScheduler(s *Scheduler) Option {
 	return func(d *Sender) { d.scheduler = s }
+}
+
+// WithMetrics records one SEMP sample per attempt against recorder, tagged with
+// the broker alias. A nil recorder leaves recording off, which is the
+// disabled-metrics default, so no transport wrapper is installed and no sample
+// is emitted. The protocol version label is set by WithAPI, because the two
+// clients share this option but report different versions.
+func WithMetrics(recorder *metrics.SEMPMetrics, brokerAlias string) Option {
+	return func(d *Sender) {
+		d.sempMetrics = recorder
+		d.brokerAlias = brokerAlias
+	}
+}
+
+// WithAPI sets the protocol version label ("v1" or "v2"). Each client sets its
+// own; it has no effect when metrics are off.
+func WithAPI(api string) Option {
+	return func(d *Sender) { d.api = api }
 }
 
 // New creates a Sender configured for a specific broker. It sets up
@@ -326,6 +350,22 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 
 	for _, opt := range opts {
 		opt(d)
+	}
+
+	// Wrap the transport so each attempt is recorded once. Off unless WithMetrics
+	// supplied a recorder. httpClient is the same pointer held by retryClient, so
+	// swapping its transport here takes effect for every attempt.
+	if d.sempMetrics != nil {
+		base := httpClient.Transport
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		httpClient.Transport = &metricsTransport{
+			base:        base,
+			recorder:    d.sempMetrics,
+			api:         d.api,
+			brokerAlias: d.brokerAlias,
+		}
 	}
 
 	return d

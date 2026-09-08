@@ -25,6 +25,7 @@ import (
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/health"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv1"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
@@ -76,6 +77,18 @@ type BrokerPool struct {
 	// (SOL-153443). Copied by value at construction: these are load-time flags
 	// that never change afterwards.
 	obs config.ObservabilityConfig
+	// sempMetrics records per-attempt SEMP metrics; nil when metrics are off.
+	// Passed to every BrokerClient this pool creates (see WithSEMPMetrics).
+	sempMetrics *metrics.SEMPMetrics
+}
+
+// PoolOption customizes a BrokerPool at construction.
+type PoolOption func(*BrokerPool)
+
+// WithSEMPMetrics wires the per-attempt SEMP recorder into every BrokerClient
+// the pool creates. A nil recorder (metrics off) leaves recording inert.
+func WithSEMPMetrics(recorder *metrics.SEMPMetrics) PoolOption {
+	return func(p *BrokerPool) { p.sempMetrics = recorder }
 }
 
 // NewBrokerPool creates a BrokerPool from the server configuration. No
@@ -87,14 +100,18 @@ type BrokerPool struct {
 //
 // exchanger is the process-wide token exchanger for OAuth brokers. Pass
 // nil when no broker uses OAuth.
-func NewBrokerPool(cfg *config.ServerConfig, exchanger *tokenexchange.Exchanger) *BrokerPool {
-	return &BrokerPool{
+func NewBrokerPool(cfg *config.ServerConfig, exchanger *tokenexchange.Exchanger, opts ...PoolOption) *BrokerPool {
+	p := &BrokerPool{
 		clients:   make(map[string]*BrokerClient),
 		src:       cfg,
 		sempCfg:   &cfg.SEMP,
 		exchanger: exchanger,
 		obs:       cfg.Observability,
 	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
 // senderOptions builds the resilience options every BrokerClient this pool
@@ -172,7 +189,10 @@ func (p *BrokerPool) getOrCreate(alias string) (*BrokerClient, error) {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownBroker, alias)
 	}
 
-	client, err := NewBrokerClient(cfg.DisplayName(), cfg, p.sempCfg, p.exchanger, p.senderOptions()...)
+	// The broker label is the display alias, resolved here where it is known.
+	// A nil recorder makes WithMetrics inert, so this is safe when metrics are off.
+	opts := append(p.senderOptions(), resilience.WithMetrics(p.sempMetrics, cfg.DisplayName()))
+	client, err := NewBrokerClient(cfg.DisplayName(), cfg, p.sempCfg, p.exchanger, opts...)
 	if err != nil {
 		return nil, err
 	}

@@ -70,6 +70,7 @@ type retryState struct {
 	retrySafe        bool   // caller-declared semantic idempotency (see WithRetrySafe)
 	retryUnsafe      bool   // caller-declared semantic NON-idempotency (see WithRetryUnsafe)
 	needsReauth      bool   // true when the next retry should re-run AddAuth (set on 401)
+	attempt          int    // 1-based try counter, bumped by the recording transport
 }
 
 // retrySafeKey is the context key for the caller-declared retry-safe marker.
@@ -142,6 +143,15 @@ func getRetryState(ctx context.Context) *retryState {
 		return s
 	}
 	return &retryState{}
+}
+
+// nextAttempt bumps and returns the 1-based try counter on the per-request
+// retry state. The recording transport calls it once per attempt. The state
+// pointer is shared across a request's tries, so the count runs 1, 2, 3.
+func nextAttempt(ctx context.Context) int {
+	s := getRetryState(ctx)
+	s.attempt++
+	return s.attempt
 }
 
 // checkRetry is the custom retry policy for retryablehttp. It implements:

@@ -99,6 +99,22 @@ func TestGoldenSchema(t *testing.T) {
 	tm.IncActive(context.Background())
 	tm.DecActive(context.Background())
 
+	// One fixed SEMP sample so the two mcp_semp_request families render. Fixed
+	// labels and a 5ms duration keep the fixture stable.
+	sm, err := p.SEMPMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sm.Record(context.Background(), SEMPRequest{
+		API:       "v2",
+		Broker:    "test-broker",
+		Operation: "getMsgVpnQueue",
+		Method:    "GET",
+		Status:    "200",
+		Address:   "broker.example.com",
+		Attempt:   1,
+	}, 5*time.Millisecond)
+
 	if err := panics.Register(p.MeterProvider()); err != nil {
 		t.Fatalf("panics.Register() error = %v", err)
 	}
