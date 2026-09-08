@@ -76,7 +76,11 @@ if [[ "${1:-}" == -* && "${1:-}" != "--window-from" ]]; then
 fi
 
 if [[ "${1:-}" == "--window-from" ]]; then
-  src="${2:?--window-from needs a run directory or a run-record path}"
+  if [[ -z "${2:-}" ]]; then
+    echo "--window-from needs a run directory or a run-record path" >&2
+    exit 2
+  fi
+  src="$2"
   # Accept either a run directory or a record inside one, so the operator can
   # paste whichever path they have to hand.
   if [[ -d "$src" ]]; then
@@ -188,6 +192,12 @@ roll() {
       # A CSV predating the epoch column simply has no window; the whole-run
       # lines below are unchanged either way.
       windowable = (ec && from > 0 && to > 0)
+      # Decided here, from the header alone, and inside this block because it
+      # ends with `next` — a separate NR==1 rule below would never be reached.
+      # Deciding it from the header also means a CSV with a valid header and
+      # zero data rows reports the mismatch, rather than falling through to
+      # "(no samples)", which reads as an idle process: a real, different state.
+      if (!bc || !rc) mismatch = 1
       next
     }
     # A named column that is not in this CSV is a harness/producer mismatch,
@@ -197,13 +207,7 @@ roll() {
     # A flag rather than a bare `exit`: in awk, exit still runs the END block,
     # so exiting here printed the mismatch line AND a "(no samples)" line
     # under it. Caught by lib.test.sh, which is why that assertion is there.
-    NR==2 && (!bc || !rc) {
-      printf "  %-5s (column %s not in this CSV — header/producer mismatch)\n",
-             L, (bc ? rf : bf)
-      mismatch = 1
-    }
     mismatch { exit }
-    !bc || !rc { next }
     $bc == "NA" || $bc == "ENDED" || $bc == "" { next }
     {
       n++
@@ -224,12 +228,25 @@ roll() {
         w_n++
         w_sum += box
         if (box > w_max) w_max = box
-        if (w_first == "") w_first = $2
-        w_last = $2
+        # The wall column, resolved by name like every other column here. This
+        # read was $2 until round 3 caught it: on a reordered header it printed
+        # whatever happened to sit in column 2 into the window-bounds field,
+        # which is the only part of the load-phase line that says which samples
+        # were averaged. Falls back to t_sec when the CSV carries no wall column.
+        if (wc) { if (w_first == "") w_first = $wc; w_last = $wc }
+        else    { if (w_first == "") w_first = $1 "s"; w_last = $1 "s" }
       }
     }
     END {
-      if (mismatch) exit
+      # Decided at NR==1 from the header alone, so a CSV with a valid header
+      # and zero data rows reports the mismatch too rather than falling through
+      # to "(no samples)", which reads as an idle process — a real and very
+      # different state.
+      if (mismatch) {
+        printf "  %-5s (column %s not in this CSV — header/producer mismatch)\n",
+               L, (bc ? rf : bf)
+        exit
+      }
       if (n == 0) { printf "  %-5s (no samples)\n", L; exit }
       printf "  %-5s cpu:  min=%5.1f%%   avg=%5.1f%%   max=%5.1f%%   (out of 100%% box)\n",
              L, box_min, box_sum/n, box_max

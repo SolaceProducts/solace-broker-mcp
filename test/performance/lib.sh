@@ -450,7 +450,16 @@ perf_record_admission() {
 # class of error the _source scheme exists to prevent.
 perf_semp_block() {
   awk '
-    /^[^[:space:]#]/ { in_semp = ($0 ~ /^semp:[[:space:]]*$/); next }
+    # Strip a trailing comment before matching: `semp:  # the pacer` is a legal
+    # and unremarkable thing to write, and an exact-match on the raw line made
+    # the entire block invisible — so every setting in it was reported as a
+    # server default when it was written down. A wrong _source is the class of
+    # error the _source scheme exists to prevent.
+    /^[^[:space:]#]/ {
+      l = $0; sub(/#.*/, "", l); sub(/[[:space:]]+$/, "", l)
+      in_semp = (l == "semp:")
+      next
+    }
     in_semp { print }
   ' "$1"
 }
@@ -464,8 +473,14 @@ perf_semp_block() {
 # nesting or lists, the right answer is for the server to report the value.
 perf_yaml_semp_value() {
   awk -v want="$2" '
-    # Leaving the semp block: any key at column 0.
-    /^[^[:space:]#]/ { in_semp = ($0 ~ /^semp:[[:space:]]*$/) ; next }
+    # Leaving the semp block: any key at column 0. A trailing comment on the
+    # `semp:` line itself is stripped before matching, for the same reason
+    # perf_semp_block does it.
+    /^[^[:space:]#]/ {
+      l = $0; sub(/#.*/, "", l); sub(/[[:space:]]+$/, "", l)
+      in_semp = (l == "semp:")
+      next
+    }
     !in_semp { next }
     {
       line = $0

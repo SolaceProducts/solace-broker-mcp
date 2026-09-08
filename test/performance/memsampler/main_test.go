@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The parse is the only place in this tool where a wrong answer is silent. A
@@ -285,18 +286,43 @@ func TestCountOpenFDsChildProcessIsNotCorrected(t *testing.T) {
 		_, _ = cmd.Process.Wait()
 	})
 	pid := cmd.Process.Pid
+	fdDir := fmt.Sprintf("/proc/%d/fd", pid)
+
+	// Wait for the child's descriptor table to settle before comparing.
+	//
+	// A freshly started process is still closing the loader's descriptors, so
+	// sampling it once and comparing against a second read taken a moment
+	// later compares two different instants — which made this test flake (a
+	// 4-vs-3 disagreement on one run in seven). Poll until two consecutive
+	// direct reads agree, then compare that settled count against the
+	// function's answer.
+	var settled int
+	for attempt := 0; attempt < 50; attempt++ {
+		first, err := os.ReadDir(fdDir)
+		if err != nil {
+			t.Fatalf("reading %s: %v", fdDir, err)
+		}
+		second, err := os.ReadDir(fdDir)
+		if err != nil {
+			t.Fatalf("reading %s: %v", fdDir, err)
+		}
+		if len(first) == len(second) {
+			settled = len(first)
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if settled == 0 {
+		t.Skip("the child's descriptor table never settled; nothing to compare against")
+	}
 
 	got, err := countOpenFDs(pid)
 	if err != nil {
 		t.Fatalf("countOpenFDs(%d): %v", pid, err)
 	}
-	names, err := os.ReadDir(fmt.Sprintf("/proc/%d/fd", pid))
-	if err != nil {
-		t.Fatalf("reading /proc/%d/fd: %v", pid, err)
-	}
-	if got != len(names) {
+	if got != settled {
 		t.Errorf("countOpenFDs(child) = %d, want %d (no correction applies to another process)",
-			got, len(names))
+			got, settled)
 	}
 }
 

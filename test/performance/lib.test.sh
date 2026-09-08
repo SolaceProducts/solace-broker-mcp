@@ -194,6 +194,16 @@ contains "a reordered header still yields the same whole-run figure" "$out" "avg
 contains "a reordered header still yields the same load-phase figure" \
   "$out" "load-phase  avg= 51.0%   max= 56.0%"
 contains "and still finds epoch, so the window still applies" "$out" "(6 of 12 samples"
+# The window-bounds field is the only part of the load-phase line that says
+# WHICH samples were averaged, and it was read positionally long after every
+# other column had been converted — so on a reordered header it printed an
+# unrelated column. Assert it looks like a wall clock.
+if printf '%s\n' "$out" | grep -q 'load-phase.*samples, [0-9][0-9]:[0-9][0-9]:[0-9][0-9]\.\.[0-9][0-9]:[0-9][0-9]:[0-9][0-9])'; then
+  ok "a reordered header still reports wall-clock window bounds, not another column"
+else
+  bad "the load-phase window bounds are not wall-clock times on a reordered header"
+  printf '%s\n' "$out" | awk '/load-phase/ { print "        " $0 }'
+fi
 
 # A column the report needs but the CSV does not have is a producer/consumer
 # mismatch. It must say so, not fall through to "(no samples)", which is a real
@@ -244,6 +254,42 @@ contains "--window-from a record path works too" "$out" "load-phase  avg= 51.0%"
 rc=0
 "$here/summary.sh" "$run_a" --window-from "$run_b" >/dev/null 2>&1 || rc=$?
 eq "--window-from a directory with no stamped window fails loudly" "$rc" "2"
+
+echo "== summary.sh rejects a window it cannot trust"
+
+# Each of these paths exists because a mistyped invocation used to produce a
+# confident report of the wrong window — or of no window, silently. Table-driven
+# so the next person adding a form adds a row.
+#   <label> | <expected needle in stderr> | <args...>
+while IFS='|' read -r label needle args; do
+  [[ -n "$label" ]] || continue
+  rc=0
+  err=$("$here/summary.sh" "$run_a" $args 2>&1 >/dev/null) || rc=$?
+  if [[ "$rc" != 2 ]]; then
+    bad "$label (rc=$rc, want 2)"
+  elif [[ "$err" != *"$needle"* ]]; then
+    bad "$label — rejected, but the message did not say why (wanted: $needle)"
+  else
+    ok "$label"
+  fi
+done <<TABLE
+a typo'd flag is rejected, not read as an epoch|unknown option|--window-form $run_a
+an unknown option is rejected|unknown option|--bogus
+--window-from with no value is rejected|needs a run directory|--window-from
+a single epoch is rejected, not silently dropped|needs two epochs|1788878030
+a trailing extra argument is rejected|unexpected extra|1788878030 1788878055 EXTRA
+a non-numeric epoch is rejected|must be integer seconds|abc 1788878055
+a reversed window is rejected|must be before its end|1788878055 1788878030
+an empty window is rejected|must be before its end|1788878030 1788878030
+--window-from a path that is not a record is rejected|no load window stamped|--window-from $tmp/cfg-full.yaml
+TABLE
+
+# And the two valid forms must still be accepted.
+for form in "$((BASE + 30)) $((BASE + 55))" "--window-from $run_a"; do
+  rc=0
+  "$here/summary.sh" "$run_a" $form >/dev/null 2>&1 || rc=$?
+  eq "the valid form [$form] is accepted" "$rc" "0"
+done
 
 # --- perf_yaml_semp_value ----------------------------------------------------
 
@@ -344,6 +390,37 @@ perf_record_admission "$rec" "$tmp/mcp-noschema.log" "$tmp/cfg-full.yaml" 2>/dev
 contains "a config-loaded line without the field is labelled server-log-schema-changed" \
   "$(cat "$rec")" "semp_fair_scheduling_source=server-log-schema-changed"
 
+# The presence probe has to be scoped to the semp: block, exactly as the value
+# reader is. Unscoped, a same-named key under another top-level mapping makes a
+# genuine server default read `config-file-unparsed` — the wrong provenance,
+# which is the class of error the whole _source scheme exists to prevent.
+rec="$tmp/rec-elsewhere"
+: >"$rec"
+cat >"$tmp/cfg-key-under-brokers.yaml" <<'YAML'
+semp:
+  max_concurrent_per_broker: 10
+brokers:
+  broker-01: { url: "http://x:1" }
+  max_queue_wait: 9s
+YAML
+perf_record_admission "$rec" "$tmp/mcp.log" "$tmp/cfg-key-under-brokers.yaml" 2>/dev/null
+eq "a same-named key outside semp: does not make a default read config-file-unparsed" \
+  "$(awk -F= '/^semp_max_queue_wait_source=/ {print $2; exit}' "$rec")" \
+  "unreported-server-default"
+
+# A `semp:` line carrying a trailing comment must not hide the whole block.
+rec="$tmp/rec-semp-comment"
+: >"$rec"
+cat >"$tmp/cfg-semp-comment.yaml" <<'YAML'
+semp:  # the pacer lives in here
+  request_min_interval: 100ms
+YAML
+perf_record_admission "$rec" "$tmp/mcp.log" "$tmp/cfg-semp-comment.yaml" 2>/dev/null
+eq "a trailing comment on the semp: line does not hide the block" \
+  "$(awk -F= '/^semp_request_min_interval=/ {print $2; exit}' "$rec")" "100ms"
+eq "and the value is correctly sourced to the config file" \
+  "$(awk -F= '/^semp_request_min_interval_source=/ {print $2; exit}' "$rec")" "config-file"
+
 # A shape the narrow reader cannot handle must not be reported as "nobody wrote
 # it down". A wrong _source is in the same family as a wrong value.
 rec="$tmp/rec-unparsed"
@@ -412,7 +489,12 @@ echo "== perf_stamp_load_start/_end share one clock read"
 # would depend on directory order.
 ra="$tmp/stamp-a" rb="$tmp/stamp-b"
 : >"$ra"; : >"$rb"
-shared=$(date +%s)
+# A fixed sentinel in the past, NOT `date +%s`. With the live clock as the
+# sentinel, an implementation that ignored the argument and re-read the clock
+# passed whenever both reads landed in the same second — so this assertion,
+# which guards the fix for two records disagreeing about their window, could
+# not fail. A literal makes any re-read wrong by years.
+shared=1769000000
 perf_stamp_load_start "$ra" "$shared"
 perf_stamp_load_start "$rb" "$shared"
 perf_stamp_load_end "$ra" "$((shared + 60))"
@@ -545,6 +627,35 @@ PY
   rc=0
   perf_wait_ports_free 1 19181 >/dev/null 2>&1 || rc=$?
   eq "the wait succeeds immediately when the port is free" "$rc" "0"
+
+  # A present-but-FAILING ss (no /proc/net, a restricted namespace) is the
+  # third state: not "no listeners", but "cannot tell". Reading it as free is
+  # what lets a run measure the previous point's server, which is the whole
+  # reason this guard exists. Stub ss on PATH inside a subshell so the real one
+  # is untouched.
+  stub="$tmp/stub"
+  mkdir -p "$stub"
+  printf '#!/bin/sh\nexit 3\n' >"$stub/ss"
+  chmod +x "$stub/ss"
+
+  rc=0
+  ( PATH="$stub:$PATH"; perf_first_held_port 19181 ) >/dev/null 2>&1 || rc=$?
+  eq "a failing ss reports 'cannot tell' (rc=2), not 'free' (rc=1)" "$rc" "2"
+
+  rc=0
+  werr2="$tmp/wait-stub.err"
+  ( PATH="$stub:$PATH"; perf_wait_ports_free 1 19181 ) >/dev/null 2>"$werr2" || rc=$?
+  eq "and the wait then refuses to start rather than proceeding" "$rc" "1"
+  # The exit code alone is not enough: with the fail-closed branch removed the
+  # loop simply times out and also returns 1 — the right code for the wrong
+  # reason. Only the fail-closed branch says why.
+  contains "and says it refused because the port check was unusable" \
+    "$(cat "$werr2")" "refusing to start without a usable port check"
+
+  # The documented escape hatch has to work on exactly that box.
+  rc=0
+  ( PATH="$stub:$PATH"; perf_wait_ports_free 0 19181 ) >/dev/null 2>&1 || rc=$?
+  eq "PORT_WAIT_SECS=0 still opts out when ss is unusable" "$rc" "0"
 fi
 
 # --- perf_record_kv / perf_or_unknown ---------------------------------------
