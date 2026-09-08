@@ -724,8 +724,10 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	// Decided exactly once, here, at the request's true terminal point —
 	// after every attempt this call made, not from inside checkRetry (SOL-152097;
 	// see auditBrokerAuthRetryOutcome's doc for why). A no-op unless this
-	// request's chain actually saw a 401.
-	d.auditBrokerAuthRetryOutcome(ctx, resp, err)
+	// request's chain actually saw a 401. Reads state.authRecovered rather than
+	// this call's own resp/err — see that function's doc for why the two are
+	// unreliable here.
+	d.auditBrokerAuthRetryOutcome(ctx)
 
 	if err != nil {
 		if cancel != nil {

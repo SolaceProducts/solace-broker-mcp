@@ -387,10 +387,13 @@ func TestAuthHook_NoBearerToken_ReportsMissing(t *testing.T) {
 	assertSingleFailure(t, hook, authFailureCall{reason: "missing", sub: "", clientID: ""})
 }
 
-// TestAuthHook_MalformedAuthorizationHeader_ReportsMissing pins the same gap
-// for a header present but not bearer-shaped (a Basic-scheme value, say) —
-// parseBearerToken's ok=false covers this too, not just an absent header.
-func TestAuthHook_MalformedAuthorizationHeader_ReportsMissing(t *testing.T) {
+// TestAuthHook_MalformedAuthorizationHeader_ReportsInvalidToken pins the
+// other shape parseBearerToken's ok=false covers — a header present but not
+// bearer-shaped (a Basic-scheme value, say) — and that it classifies
+// separately from an absent header: "invalid_token", not "missing". Folding
+// both into "missing" would inflate an unauthenticated-probe count with
+// callers who presented something, just not a bearer token.
+func TestAuthHook_MalformedAuthorizationHeader_ReportsInvalidToken(t *testing.T) {
 	cfg := &config.ServerConfig{
 		Port: 9090,
 		MCPClientAuth: config.MCPClientAuthConfig{
@@ -413,7 +416,7 @@ func TestAuthHook_MalformedAuthorizationHeader_ReportsMissing(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
 	}
-	assertSingleFailure(t, hook, authFailureCall{reason: "missing", sub: "", clientID: ""})
+	assertSingleFailure(t, hook, authFailureCall{reason: "invalid_token", sub: "", clientID: ""})
 }
 
 // TestAuthHook_ValidBearerToken_DoesNotDoubleReportMissing pins the negative

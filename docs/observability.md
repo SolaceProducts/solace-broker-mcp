@@ -47,7 +47,7 @@ capability headings carry the same tag:
 |---|---|---|
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
 | Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, the OTLP export-health counters, and `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)). Assume any other metric below is not yet emitted. |
-| Audit trail | **[Interim — `operation` records only]** | Destructive tool calls emit an `operation` record behind `OBS_AUDIT_LOG_ENABLED` (default off). `auth_success`, `auth_failure`, `authz_denied`, and `broker_auth_retry` also emit today (SOL-152097). `broker_authz_denied` and the `mcp_audit_events_dropped_total` counter are not emitted yet. See [Audit Trail](#audit-trail--interim--operation-records-only). |
+| Audit trail | **[Interim — all record types except `broker_authz_denied`]** | Destructive tool calls emit an `operation` record behind `OBS_AUDIT_LOG_ENABLED` (default off). `auth_success`, `auth_failure`, `authz_denied`, and `broker_auth_retry` also emit today (SOL-152097). `broker_authz_denied` and the `mcp_audit_events_dropped_total` counter are not emitted yet. See [Audit Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied). |
 | Distributed tracing | **[Interim — provider wired, no spans yet]** | Tracer provider and OTLP export are live behind `OBS_TRACING_ENABLED`; no code creates a span yet. See [Distributed Tracing](#distributed-tracing--interim-provider-wired-spans-not-yet-emitted). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
 | Resource attributes | **[Implemented]** | Shared identity resource on metrics and traces, plus the committed subset on every log line. See [Resource Attributes](#resource-attributes--implemented). |
@@ -256,9 +256,16 @@ broker state, not per attempt.
 |---|---|---|---|
 | `mcp_auth_failure_total` | Counter | `reason` | Solace |
 
-- `reason` is a closed set: `invalid_token`, `expired`, `audience_mismatch`,
-  `signature_invalid` (a token-signing or JWKS-rotation failure, distinct from a malformed
-  token), `missing`.
+- `reason` is a closed set of five:
+
+  | `reason` | Meaning |
+  |---|---|
+  | `invalid_token` | Catch-all: a malformed or unparseable JWT, an issuer mismatch, a static dev-token mismatch, or an `Authorization` header present but not bearer-shaped (wrong scheme, empty value). |
+  | `expired` | The token's `exp` claim has passed. |
+  | `audience_mismatch` | The token's audience does not match what this server expects. |
+  | `signature_invalid` | A token-signing or JWKS-rotation failure, distinct from a malformed token. |
+  | `missing` | No `Authorization` header was presented at all, or a token that verified fully but omitted the required `sub` claim (an IdP misconfiguration, not an absent caller) — both land here rather than getting a sixth value. |
+
 - The values are deliberately coarse so no token content is ever exposed as a label.
 - There is no `broker` label. Authentication happens at the HTTP boundary, before any broker
   is selected, so there is no broker in scope to name. Use the resource attributes on
@@ -442,7 +449,7 @@ present, once the metrics endpoint is wired, for diagnosing memory pressure and 
 
 ---
 
-## Audit Trail — [Interim — `operation` records only]
+## Audit Trail — [Interim — all record types except `broker_authz_denied`]
 
 > _Status: **[Interim]** (SOL-152090, SOL-152096, SOL-152097). `operation` records for
 > destructive tool calls are emitted today behind `OBS_AUDIT_LOG_ENABLED`, and the whole
@@ -673,6 +680,14 @@ field:
   exhausts its own retry cap is `outcome: success` here even though the call itself ultimately
   fails; join on `correlation_id` to the call's own `operation` record (or its absence, for a
   read-only call) to see the call's actual disposition.
+
+**Volume note: `auth_success` and `auth_failure` do not follow the "one record per
+destructive call" rate above.** Each is emitted once per authenticated or rejected
+request to `/mcp` — every JSON-RPC POST, not only the destructive ones — so size SIEM
+ingest against request volume, not destructive-call volume. `auth_failure{reason=missing}`
+in particular is emitted before any authentication succeeds, so an unauthenticated caller
+(a load-balancer probe, a scripted request loop) can trigger it with no rate limit of its
+own; size retention for that one `reason` value with that in mind.
 
 This keeps failed **authentication** a distinct, queryable signal rather than folding it
 into a generic error, so a query like "show me every rejected credential" stays clean.

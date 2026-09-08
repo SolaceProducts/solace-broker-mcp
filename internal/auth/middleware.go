@@ -120,20 +120,33 @@ func NewTokenVerifier(cfg *config.ServerConfig, httpClient *http.Client, hook Au
 // auditMissingBearerToken wraps next (the chain RequireBearerToken produced)
 // with a peek at the Authorization header, so a request that never reaches
 // our TokenVerifier at all — no bearer token presented — still produces an
-// auth_failure record (SOL-152097, reason "missing"). Uses parseBearerToken,
-// the same helper RequestExtraMiddleware uses, which already mirrors go-sdk's
-// own bearer-extraction check (raw_subject_token.go) rather than a second,
+// auth_failure record (SOL-152097). Uses parseBearerToken, the same helper
+// RequestExtraMiddleware uses, which already mirrors go-sdk's own
+// bearer-extraction check (raw_subject_token.go) rather than a second,
 // independent copy of that parsing — the one thing this must never disagree
 // with. This wrapper only ever adds a record alongside the SDK's own 401,
 // never changes whether a request is accepted: it always calls next
 // regardless of what it observes.
+//
+// reason distinguishes two shapes parseBearerToken folds into one bool: no
+// Authorization header at all classifies as "missing" (nothing was
+// presented to reject); a header present but not parseable as a bearer token
+// — wrong scheme, malformed, an empty value after "Bearer" — classifies as
+// "invalid_token", because there is a token-shaped problem to name rather
+// than an absence. Conflating the two would inflate an "unauthenticated
+// probe" alert on `reason: missing` with callers who did present something.
 func auditMissingBearerToken(hook AuthAuditHook, next http.Handler) http.Handler {
 	if hook == nil {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := parseBearerToken(r.Header.Get("Authorization")); !ok {
-			reportAuthFailure(r.Context(), hook, ClassifyAuthFailure(nil), "", "")
+		authHeader := r.Header.Get("Authorization")
+		if _, ok := parseBearerToken(authHeader); !ok {
+			reason := ClassifyAuthFailure(nil)
+			if authHeader != "" {
+				reason = "invalid_token"
+			}
+			reportAuthFailure(r.Context(), hook, reason, "", "")
 		}
 		next.ServeHTTP(w, r)
 	})

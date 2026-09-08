@@ -360,6 +360,58 @@ func TestBrokerAuthRetry_401Then503ThenSuccess(t *testing.T) {
 	}
 }
 
+// TestBrokerAuthRetry_401Then503Exhausted pins the regression a follow-up
+// review found: a 401 that recovers into a broker overload (503) which then
+// exhausts its own maxTransientRetries cap routes through errorHandler, which
+// returns a nil *http.Response on every populated path (see errorHandler).
+// Deciding the outcome from Do's own final resp/err would read that nil as
+// "never recovered" and misreport outcome=error — the exact chain on which
+// the pre-fix code and the doc's own contract ("outcome answers whether the
+// credential problem got resolved, not whether the call succeeded")
+// disagreed. The credential problem was resolved by the second request; the
+// call's own final disposition (a RetriesExhaustedError) is a separate
+// question this record does not answer.
+func TestBrokerAuthRetry_401Then503Exhausted(t *testing.T) {
+	var requestCount atomic.Int32
+	sender, server := newAuthRetryTestSender(t, func(w http.ResponseWriter, r *http.Request) {
+		if requestCount.Add(1) == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}, "basic", 10, true)
+	defer server.Close()
+
+	req := newGetRequest(t, server.URL)
+	records := captureAuditRecords(t, func() {
+		resp, err := sender.Do(context.Background(), req)
+		if resp != nil {
+			resp.Body.Close()
+		}
+		if err == nil {
+			t.Fatal("Do() unexpectedly succeeded despite the transient-retry cap")
+		}
+		var exhausted *RetriesExhaustedError
+		if !errors.As(err, &exhausted) {
+			t.Fatalf("Do() error = %v, want a *RetriesExhaustedError", err)
+		}
+	})
+
+	// 1 initial 401, plus maxTransientRetries retried 503s, plus the 503 that
+	// finally hits the cap and is not retried again.
+	wantRequests := int32(1 + maxTransientRetries + 1)
+	if got := requestCount.Load(); got != wantRequests {
+		t.Fatalf("expected %d requests (1 401, then %d 503s), got %d", wantRequests, maxTransientRetries+1, got)
+	}
+	retries := ofRetryType(records, audit.EventBrokerAuthRetry)
+	if len(retries) != 1 {
+		t.Fatalf("want exactly 1 broker_auth_retry record for a 401->503 (exhausted) chain, got %d:\n%v", len(retries), records)
+	}
+	if got := retries[0]["outcome"]; got != string(audit.OutcomeSuccess) {
+		t.Errorf("outcome = %v, want %q — the credential problem was resolved even though the call itself exhausted its transient-retry cap", got, audit.OutcomeSuccess)
+	}
+}
+
 // erroringTransportAfterN wraps a transport, failing every request from the
 // Nth one (1-indexed) onward with a plain connection-shaped error. Used to
 // force a transport error on the retried request after a 401 recovery — a
