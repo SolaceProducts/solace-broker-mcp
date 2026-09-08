@@ -337,8 +337,13 @@ instead of writability flags) and 'raw' (the definition verbatim, larger).
 		// ...and its own dispatch span, for the same reason (SOL-152421):
 		// without it neither this tool nor the `not_found` error_type it
 		// raises ever appears in a trace, though both appear in the metrics.
-		// dispatch.finish emits all three signals in order.
 		ctx, span := tracer.Start(ctx, dispatchSpanName)
+
+		// Registered BEFORE the emission defer below, so LIFO runs it AFTER
+		// that one — once a recovered panic has been reclassified, so the span
+		// reports the same cause the log line and the metric do. Reversed, the
+		// span reports nothing while both of them say `panic`. See
+		// endDispatchSpan for the full rationale.
 		defer func() {
 			endDispatchSpan(ctx, span, describeSempSchemaToolName, brokerLabelNone, errorType, toolErr)
 		}()

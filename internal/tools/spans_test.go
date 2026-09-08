@@ -158,9 +158,9 @@ func (h *spanIDCapturingHandler) captured() []string {
 }
 
 // TestDispatch_AuditAndMetricSeeTheDispatchSpanInContext pins the ordering half
-// of the dispatch seam, which attribute assertions cannot reach.
+// of dispatch instrumentation, which attribute assertions cannot reach.
 //
-// dispatch.finish emits the audit record, the metric, and the span from one
+// Every dispatch site emits its audit line, its metric and its span from one
 // context, and that context has to be the span-carrying one — otherwise the
 // audit line and the metric are recorded while only the caller's context is in
 // scope, and a Story 47 exemplar attaches to the wrong span (or, off an HTTP

@@ -357,8 +357,14 @@ func RegisterListBrokers(server *mcp.Server, pool *semp.BrokerPool, tm *metrics.
 
 			// ...and its own dispatch span, for the same reason: this tool
 			// would otherwise appear in every dashboard and in no trace
-			// (SOL-152421). dispatch.finish emits all three signals in order.
+			// (SOL-152421).
 			ctx, span := tracer.Start(ctx, dispatchSpanName)
+
+			// Registered BEFORE the emission defer below, so LIFO runs it
+			// AFTER that one — once a recovered panic has been reclassified,
+			// so the span reports the same cause the log line and the metric
+			// do. Reversed, the span reports nothing while both of them say
+			// `panic`. See endDispatchSpan for the full rationale.
 			defer func() {
 				endDispatchSpan(ctx, span, "list-brokers", brokerLabelNone, errorType, toolErr)
 			}()

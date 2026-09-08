@@ -18,6 +18,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -39,14 +41,38 @@ import (
 // span filter, and nothing would fail in CI from the merge of the adding story
 // until someone compared the two signals for one call by hand.
 func TestAllErrorTypes_CoversEveryDeclaredConst(t *testing.T) {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "instruments.go", nil, 0)
+	// Every non-test file in the package, not just instruments.go. All the
+	// ErrorType consts live in that one file today, so parsing it alone would
+	// hold — but the day one is declared in another file of package metrics, a
+	// single-file parse passes while allErrorTypes lags, which is exactly the
+	// divergence this test exists to prevent.
+	//
+	// Globbed and parsed file by file rather than with parser.ParseDir, which
+	// is deprecated as of Go 1.25 (along with ast.Package). Test files are
+	// skipped: allErrorTypes is production vocabulary, and a const declared in
+	// a _test.go file is not part of it.
+	paths, err := filepath.Glob("*.go")
 	if err != nil {
-		t.Fatalf("parsing instruments.go: %v", err)
+		t.Fatalf("globbing package files: %v", err)
+	}
+	fset := token.NewFileSet()
+	var parsed []*ast.File
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", path, err)
+		}
+		parsed = append(parsed, file)
+	}
+	if len(parsed) == 0 {
+		t.Fatal("globbed no non-test .go files; this test cannot protect anything")
 	}
 
 	declared := map[string]bool{}
-	ast.Inspect(file, func(n ast.Node) bool {
+	inspect := func(n ast.Node) bool {
 		spec, ok := n.(*ast.ValueSpec)
 		if !ok {
 			return true
@@ -63,9 +89,12 @@ func TestAllErrorTypes_CoversEveryDeclaredConst(t *testing.T) {
 			declared[name.Name] = true
 		}
 		return true
-	})
+	}
+	for _, file := range parsed {
+		ast.Inspect(file, inspect)
+	}
 	if len(declared) == 0 {
-		t.Fatal("parsed no ErrorType consts from instruments.go; this test cannot protect anything")
+		t.Fatal("parsed no ErrorType consts from package metrics; this test cannot protect anything")
 	}
 
 	// Map the enumerated values back to their const names by value, so the
