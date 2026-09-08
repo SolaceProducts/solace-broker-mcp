@@ -251,15 +251,15 @@ func parseStatus(data string) (procSample, error) {
 		switch key {
 		case "VmRSS":
 			if s.rssKB, err = parseKB(val); err != nil {
-				return procSample{}, fmt.Errorf("VmRSS %q: %w", val, err)
+				return procSample{}, fmt.Errorf("parsing VmRSS %q: %w", val, err)
 			}
 		case "VmSize":
 			if s.vmKB, err = parseKB(val); err != nil {
-				return procSample{}, fmt.Errorf("VmSize %q: %w", val, err)
+				return procSample{}, fmt.Errorf("parsing VmSize %q: %w", val, err)
 			}
 		case "Threads":
 			if s.threads, err = strconv.Atoi(val); err != nil {
-				return procSample{}, fmt.Errorf("Threads %q: %w", val, err)
+				return procSample{}, fmt.Errorf("parsing Threads %q: %w", val, err)
 			}
 		}
 	}

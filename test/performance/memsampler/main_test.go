@@ -15,6 +15,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -270,12 +271,17 @@ func TestCountOpenFDsSelfExcludesItsOwnHandle(t *testing.T) {
 // would under-report every real run of this tool by one — which is the whole
 // point of keying it on the pid.
 func TestCountOpenFDsChildProcessIsNotCorrected(t *testing.T) {
-	cmd := exec.Command("sleep", "30")
+	// CommandContext, not Command: the repo lints for it (noctx), and the
+	// context also guarantees the child dies with the test rather than
+	// outliving a panic.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sleep", "30")
 	if err := cmd.Start(); err != nil {
 		t.Skipf("cannot start a child process to sample: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
+		cancel()
 		_, _ = cmd.Process.Wait()
 	})
 	pid := cmd.Process.Pid
