@@ -113,7 +113,7 @@ func Test_OIDCJWKSRefreshTimeout(t *testing.T) {
 		},
 	}
 
-	middleware, err := auth.NewAuthMiddleware(cfg, shortClient, dummyHandler)
+	middleware, err := auth.NewAuthMiddleware(cfg, shortClient, dummyHandler, nil)
 	if err != nil {
 		t.Fatalf("failed to create middleware: %v", err)
 	}
@@ -225,7 +225,7 @@ func Test_OIDCJWKSRefreshTimeout_SSLCertFile(t *testing.T) {
 		},
 	}
 
-	middleware, err := auth.NewAuthMiddleware(cfg, shortClient, dummyHandler)
+	middleware, err := auth.NewAuthMiddleware(cfg, shortClient, dummyHandler, nil)
 	if err != nil {
 		t.Fatalf("failed to create middleware: %v", err)
 	}

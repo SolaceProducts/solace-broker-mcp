@@ -277,7 +277,7 @@ func RegisterWithServer(mgr *ToolManager, server *mcp.Server, pool *semp.BrokerP
 		// correlation-ID stamping and panic containment. Nil policy skips
 		// the wrapper entirely — dispatch is byte-identical to pre-RBAC.
 		if policy != nil {
-			callToolHandler = withAuthorization(policy, reg.name, groupsClaimName, callToolHandler)
+			callToolHandler = withAuthorization(policy, reg.name, groupsClaimName, mgr.auditLog, callToolHandler)
 		}
 
 		server.AddTool(mcpTool, withRecovery(reg.name, callToolHandler))

@@ -155,6 +155,18 @@ type Sender struct {
 	// selects. Shared per-broker with sem and rateLimiter, and not owned here —
 	// semp.BrokerClient.Close stops it.
 	scheduler *Scheduler
+	// auditLog mirrors tools.ToolManager.auditLog: audit.Enabled(cfg.Observability)
+	// at construction (SOL-152097). False is inert, not degraded — checkRetry's
+	// 401 handling is byte-identical either way, it just also emits a
+	// broker_auth_retry record when true.
+	auditLog bool
+	// brokerAlias is the broker's configured (display) alias, for the
+	// broker_auth_retry audit record's Broker field. Distinct from brokerURL:
+	// that field is the sanitized connection URL, kept for the existing
+	// logging-context WARNs in checkRetry, while an audit record's Broker
+	// field is documented (docs/observability.md, event.go's Fields.Broker)
+	// as the alias in its display casing, matching every other emission site.
+	brokerAlias string
 }
 
 // Option customizes a Sender at construction. Options are applied after the
@@ -198,6 +210,24 @@ func WithSaturationEvents(slowAfter time.Duration) Option {
 // pre-SOL-153441 two-gate admission.
 func WithScheduler(s *Scheduler) Option {
 	return func(d *Sender) { d.scheduler = s }
+}
+
+// WithAuditLog turns on the broker_auth_retry audit record checkRetry emits
+// on a 401 recovery attempt (SOL-152097). Pass audit.Enabled(cfg.Observability)
+// — the same flag and read site tools.WithAuditLog uses for the destructive-op
+// audit trail (SOL-152096); false is the default and is fully inert, matching
+// that option's contract.
+func WithAuditLog(enabled bool) Option {
+	return func(d *Sender) { d.auditLog = enabled }
+}
+
+// WithBrokerAlias sets the broker's configured (display) alias, used only as
+// the broker_auth_retry audit record's Broker field. Every production
+// construction site (semp.NewBrokerClient) supplies this; a Sender built
+// without it simply cannot name a broker on that record — see
+// auditBrokerAuthRetry.
+func WithBrokerAlias(alias string) Option {
+	return func(d *Sender) { d.brokerAlias = alias }
 }
 
 // New creates a Sender configured for a specific broker. It sets up
@@ -690,6 +720,15 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	}
 
 	resp, err := d.retryClient.Do(retryReq)
+
+	// Decided exactly once, here, at the request's true terminal point —
+	// after every attempt this call made, not from inside checkRetry (SOL-152097;
+	// see auditBrokerAuthRetryOutcome's doc for why). A no-op unless this
+	// request's chain actually saw a 401. Reads state.authRecovered rather than
+	// this call's own resp/err — see that function's doc for why the two are
+	// unreliable here.
+	d.auditBrokerAuthRetryOutcome(ctx)
+
 	if err != nil {
 		if cancel != nil {
 			cancel()
