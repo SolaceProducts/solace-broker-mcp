@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/schema"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 )
 
@@ -59,8 +60,15 @@ type AuthAuditHook interface {
 	// TokenInfo the verifier is about to return to the SDK.
 	Success(ctx context.Context, info *sdkauth.TokenInfo)
 	// Failure is called once a token is rejected. reason is one of
-	// ClassifyAuthFailure's return values. sub and clientID are best-effort
-	// attribution: both "" unless the token parsed far enough to yield them.
+	// ClassifyAuthFailure's return values, as a plain string:
+	// schema.AuthFailureReason is a string type, and an implementor's job is
+	// to record the value it is handed, not to re-derive it, so this
+	// signature deliberately does not name the vocabulary type. Widening it
+	// to schema.AuthFailureReason would buy no safety here (the value is
+	// already classified by the only classifier) and would move an interface
+	// SOL-152099 is also going to implement. sub and clientID are
+	// best-effort attribution: both "" unless the token parsed far enough to
+	// yield them.
 	Failure(ctx context.Context, reason, sub, clientID string)
 }
 
@@ -72,12 +80,16 @@ func reportAuthSuccess(ctx context.Context, hook AuthAuditHook, info *sdkauth.To
 	hook.Success(ctx, info)
 }
 
-// reportAuthFailure calls hook.Failure when hook is non-nil.
-func reportAuthFailure(ctx context.Context, hook AuthAuditHook, reason, sub, clientID string) {
+// reportAuthFailure calls hook.Failure when hook is non-nil. It takes the
+// classified schema.AuthFailureReason and is the ONE place that widens it to
+// the plain string AuthAuditHook.Failure accepts, so every call site upstream
+// of here stays typed and no site has to decide for itself whether a bare
+// string is acceptable.
+func reportAuthFailure(ctx context.Context, hook AuthAuditHook, reason schema.AuthFailureReason, sub, clientID string) {
 	if hook == nil {
 		return
 	}
-	hook.Failure(ctx, reason, sub, clientID)
+	hook.Failure(ctx, string(reason), sub, clientID)
 }
 
 // bestEffortIdentity extracts sub and client_id from claims that decoded as
