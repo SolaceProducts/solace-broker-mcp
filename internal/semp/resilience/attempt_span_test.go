@@ -27,6 +27,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/attemptspan"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
 )
 
@@ -559,19 +560,19 @@ func TestNew_DoesNotMutateTheCallersHTTPClient(t *testing.T) {
 	first := newTestSender(t, httpClient, bearerAuth(t), 1)
 	second := newTestSender(t, httpClient, bearerAuth(t), 1)
 
-	if _, wrapped := httpClient.Transport.(*attemptTransport); wrapped {
+	if _, wrapped := httpClient.Transport.(*attemptspan.Transport); wrapped {
 		t.Error("New replaced the caller's own Transport; it must wrap a copy of the client instead")
 	}
 
-	// Each Sender got its own attemptTransport over the caller's transport —
-	// one layer each, not one nested inside the other.
+	// Each Sender got its own attempt-span transport over the caller's
+	// transport — one layer each, not one nested inside the other.
 	for name, d := range map[string]*Sender{"first": first, "second": second} {
-		at, ok := d.retryClient.HTTPClient.Transport.(*attemptTransport)
+		at, ok := d.retryClient.HTTPClient.Transport.(*attemptspan.Transport)
 		if !ok {
-			t.Fatalf("%s Sender: retry client transport is %T, want *attemptTransport", name, d.retryClient.HTTPClient.Transport)
+			t.Fatalf("%s Sender: retry client transport is %T, want *attemptspan.Transport", name, d.retryClient.HTTPClient.Transport)
 		}
-		if _, nested := at.base.(*attemptTransport); nested {
-			t.Errorf("%s Sender: attemptTransport is nested inside another; every attempt would be "+
+		if _, nested := at.Base.(*attemptspan.Transport); nested {
+			t.Errorf("%s Sender: the attempt-span transport is nested inside another; every attempt would be "+
 				"counted twice and carry two spans", name)
 		}
 		if d.retryClient.HTTPClient.Timeout != httpClient.Timeout {
@@ -586,16 +587,17 @@ func TestNew_DoesNotMutateTheCallersHTTPClient(t *testing.T) {
 // http.Client.CloseIdleConnections reaches the transport by type assertion, so
 // a wrapper without the method makes the call a silent no-op — and retryablehttp
 // calls it on every failure path to stop a chain that just went wrong from
-// leaving connections in the pool. Because attemptTransport is installed
-// unconditionally, losing this would disable that hygiene on the default
-// configuration for every broker, with nothing failing.
+// leaving connections in the pool. Because the attempt-span transport is
+// installed unconditionally, losing this would disable that hygiene on the
+// default configuration for every broker, with nothing failing.
 func TestAttemptTransport_ForwardsCloseIdleConnections(t *testing.T) {
 	var closed int
 	inner := &closeIdleRecorder{closed: &closed}
 
-	// The full production chain: attemptTransport over metricsTransport over
-	// the real transport. Both wrappers have to relay or the chain breaks.
-	tr := &attemptTransport{base: &metricsTransport{base: inner}}
+	// The full production chain: the attempt-span transport over
+	// metricsTransport over the real transport. Both wrappers have to relay
+	// or the chain breaks.
+	tr := newAttemptTransport(&metricsTransport{base: inner})
 	client := &http.Client{Transport: tr}
 	client.CloseIdleConnections()
 
@@ -623,7 +625,7 @@ func (c *closeIdleRecorder) CloseIdleConnections() { *c.closed++ }
 //
 // The counter used to be bumped by metricsTransport, which is installed only
 // when metrics are on — so tracing alone would have reported every attempt as
-// attempt 1. attemptTransport owns it now and is always installed.
+// attempt 1. The attempt-span transport owns it now and is always installed.
 func TestAttemptNumber_AgreesWithTheMetricLabelSource(t *testing.T) {
 	state := &retryState{}
 	ctx := context.WithValue(context.Background(), retryStateKey{}, state)
@@ -631,7 +633,7 @@ func TestAttemptNumber_AgreesWithTheMetricLabelSource(t *testing.T) {
 	if got := attemptNumber(ctx); got != 1 {
 		t.Errorf("attemptNumber before any attempt = %d, want 1", got)
 	}
-	state.attempt = 3
+	state.spanState.Attempt = 3
 	if got := attemptNumber(ctx); got != 3 {
 		t.Errorf("attemptNumber = %d, want 3 (the counter's value, not a fresh bump)", got)
 	}
@@ -653,10 +655,10 @@ func TestAttemptSpans_UntracedWhenSenderDoIsBypassed(t *testing.T) {
 	sr := recordSpans(t)
 
 	var reached bool
-	tr := &attemptTransport{base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	tr := newAttemptTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		reached = true
 		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Request: req}, nil
-	})}
+	}))
 
 	ctx, parent := otel.Tracer("test").Start(context.Background(), "semp.request")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://broker.invalid/test", nil)
@@ -686,9 +688,9 @@ func TestAttemptSpans_RedirectHopsAreNotNewAttempts(t *testing.T) {
 	sr := recordSpans(t)
 
 	state := &retryState{}
-	tr := &attemptTransport{base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	tr := newAttemptTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Request: req}, nil
-	})}
+	}))
 
 	ctx, parent := otel.Tracer("test").Start(
 		context.WithValue(context.Background(), retryStateKey{}, state), "semp.request")
@@ -707,10 +709,10 @@ func TestAttemptSpans_RedirectHopsAreNotNewAttempts(t *testing.T) {
 	_ = resp.Body.Close()
 	parent.End()
 
-	if state.attempt != 0 {
-		t.Errorf("attempt counter = %d after a redirect hop, want 0", state.attempt)
+	if state.spanState.Attempt != 0 {
+		t.Errorf("attempt counter = %d after a redirect hop, want 0", state.spanState.Attempt)
 	}
-	if state.attemptSpan != nil {
+	if state.spanState.Span != nil {
 		t.Error("a redirect hop parked an attempt span; a second one would overwrite and leak it")
 	}
 	if got := attemptSpans(sr, parent.SpanContext().TraceID()); len(got) != 0 {
@@ -728,12 +730,12 @@ func TestCloseDanglingAttemptSpan_ExportsAnUndecidedSpan(t *testing.T) {
 
 	ctx, parent := otel.Tracer("test").Start(context.Background(), "semp.request")
 	_, span := tracer.Start(ctx, attemptSpanName)
-	state := &retryState{attempt: 1, attemptSpan: span}
+	state := &retryState{spanState: attemptspan.State{Attempt: 1, Span: span}}
 
 	state.closeDanglingAttemptSpan()
 	parent.End()
 
-	if state.attemptSpan != nil {
+	if state.spanState.Span != nil {
 		t.Error("attemptSpan is still parked after the backstop ran")
 	}
 	spans := attemptSpans(sr, parent.SpanContext().TraceID())

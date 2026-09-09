@@ -48,7 +48,7 @@ capability headings carry the same tag:
 | Correlation ID | **[Implemented]** | Wired and on by default (`OBS_CORRELATION_ID_ENABLED`). |
 | Metrics | **[Planned, with exceptions]** | Most instrument names and labels here are still the proposal under review. Wired and emitted today: the `/metrics` endpoint itself, `mcp_build_info`, `mcp_schema_version`, `mcp_metrics_scrape_total`, `mcp_http_active_requests`, `mcp_tool_invocation_total`, `mcp_tool_invocation_duration_seconds`, `mcp_semp_request_total`, `mcp_semp_request_duration_seconds`, the OTLP export-health counters, `mcp_panic_recovered_total` (see [Panic Recovery](#panic-recovery--implemented)), and the `go_*`/`process_*` runtime collectors (see [Go Runtime and Process Metrics](#go-runtime-and-process-metrics)). Assume any other metric below is not yet emitted. |
 | Audit trail | **[Interim — all record types except `broker_authz_denied`]** | Destructive tool calls emit an `operation` record behind `OBS_AUDIT_LOG_ENABLED` (default off). `auth_success`, `auth_failure`, `authz_denied`, and `broker_auth_retry` also emit today (SOL-152097). `broker_authz_denied` and the `mcp_audit_events_dropped_total` counter are not emitted yet. See [Audit Trail](#audit-trail--interim--all-record-types-except-broker_authz_denied). |
-| Distributed tracing | **[Interim — request-path and per-attempt spans wired, exemplars pending]** | Tracer provider, OTLP export, W3C context propagation, and spans at the HTTP boundary, the tool dispatcher, the composite executor, each SEMP call, each SEMP *attempt*, and each token-exchange attempt are live behind `OBS_TRACING_ENABLED`, with the retry attributes on the attempt spans. Trace exemplars are still pending (Story 47). See [Distributed Tracing](#distributed-tracing--interim-request-path-spans-wired). |
+| Distributed tracing | **[Interim — request-path and per-attempt spans wired, exemplars pending]** | Tracer provider, OTLP export, W3C context propagation, and spans at the HTTP boundary, the tool dispatcher, the composite executor, each SEMP call, each SEMP *attempt*, and each token-exchange attempt are live behind `OBS_TRACING_ENABLED`, with the retry attributes on the attempt spans. Trace exemplars are still pending (Story 47). See [Distributed Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired-exemplars-pending). |
 | Saturation visibility | **[Interim — logs only]** | Shipped as structured log lines behind `OBS_SATURATION_EVENTS_ENABLED`, **not** as the metric this schema describes. See [Load and Saturation Visibility](#load-and-saturation-visibility--interim--logs-only). |
 | Resource attributes | **[Implemented]** | Shared identity resource on metrics and traces, plus the committed subset on every log line. See [Resource Attributes](#resource-attributes--implemented). |
 
@@ -218,6 +218,15 @@ recorded per retry attempt so you can see retry storms and per-broker latency.
   `attempt` (the retry attempt as an integer string, `"1"`, `"2"`, ...). `attempt` is on the
   **counter only**: the histogram omits it so its bucket series are not multiplied by the
   retry cap. Retry-storm detection reads the counter.
+- **Upgrade note (SOL-152422):** before this release, `attempt` read `"1"` for every
+  attempt whenever metrics were on and tracing was off — the metrics transport kept its
+  own counter that a bug left permanently at 1, so retried traffic was invisible to this
+  label. This release gives the counter a single owner shared with the trace spans, and
+  `attempt` now reflects the real try number. A dashboard or recording rule written
+  against the old behaviour — one that assumes `attempt="1"` matches all series, or that
+  never saw a retry-storm alert fire on this metric — should be revisited: it was reading
+  a value that could never change, and a rule tuned against that will now see real
+  variation for the first time.
 - **The duration is the time to the response's first byte for one attempt.** It excludes the
   MCP-side admission wait (rate limiting and the in-flight cap) and the response-body read,
   and it excludes retry backoff between attempts — so it is broker round-trip latency, not
@@ -385,7 +394,7 @@ flags, not just one. The counters are always registered in-process while tracing
 to register them against, i.e. only when `OBS_METRICS_ENABLED` is **also** on. Tracing on with
 metrics off keeps the totals in-process only — reported solely by the periodic
 `event=otel_self_stats` INFO log (see [Distributed
-Tracing](#distributed-tracing--interim-request-path-spans-wired)) — so an alert on
+Tracing](#distributed-tracing--interim-request-path-and-per-attempt-spans-wired-exemplars-pending)) — so an alert on
 `mcp_otel_spans_dropped_total` sees a permanently absent series in that mode, which reads as
 healthy rather than as "not exposed here." The metric pair's own flag is OTLP metrics push
 (`OBS_METRICS_OTLP_ENABLED`, not `OBS_METRICS_ENABLED`, which governs the scrape surface alone;
@@ -815,7 +824,7 @@ which you own.** The server does not itself persist or sign events.
 
 ---
 
-## Distributed Tracing — [Interim: request-path spans wired]
+## Distributed Tracing — [Interim: request-path and per-attempt spans wired, exemplars pending]
 
 > _Status: **[Interim]** (SOL-152420, SOL-153333, SOL-152421, SOL-152422). The tracer provider,
 > OTLP export, and self-observation counters are wired and live behind `OBS_TRACING_ENABLED`
@@ -939,7 +948,7 @@ distinction is the point, since they have different causes and different remedie
 | `attempt` | The 1-based try number, on `semp.attempt` and `tokenexchange.attempt`. On `semp.attempt` it is the **same value as the `attempt` label** on `mcp_semp_request_total`, read from one counter so the two cannot drift; the token-exchange attempts have no counterpart metric | Solace |
 | `http.response.status_code` | The status that attempt got, on `semp.attempt` and `tokenexchange.attempt`. Absent — never zero — when the attempt got no response at all (a connection error) | Solace |
 | `retry.decision` | Whether the retry policy chose to retry after this attempt, on `semp.attempt` and `tokenexchange.attempt`. **This is the decision the server acted on, not a re-reading of the status code**, so it can legitimately be `false` on a 503: a request the caller declared non-idempotent, or one on a non-idempotent method, is never replayed. A `true` alongside `retry.exhausted` means the policy wanted to retry and had nothing left | Solace |
-| `retry.exhausted` | `true` on the final attempt when a retry allowance ran out; absent otherwise. It means one thing: the policy stopped because something it was counting was already spent. On `semp.attempt` that covers all four allowances — the configured `semp.retries`, the internal 429/503 sub-cap (which fires well below `semp.retries`, and is how a real broker-overload episode usually ends), the once-only replay of a non-429/503 5xx, and the once-only 401 re-auth. **Absent when nothing ran out**, even though the call still failed: a replay the policy refused because the caller declared the request non-idempotent, a context that ended, a status never retried at all, or an auth mode that could not recover the first 401. Those need a different remedy from a bigger budget, which is why they are distinguishable | Solace |
+| `retry.exhausted` | `true` on the final attempt when a retry allowance ran out; absent otherwise. It means one thing: the policy stopped because something it was counting was already spent. On `semp.attempt` that covers all four allowances — the configured `semp.retries`, the internal 429/503 sub-cap (which fires well below `semp.retries`, and is how a real broker-overload episode usually ends), the once-only replay of a non-429/503 5xx, and the once-only 401 re-auth. **Absent when nothing ran out**, even though the call still failed: a replay the policy refused because the caller declared the request non-idempotent, a context that ended, a status never retried at all, or an auth mode that could not recover the first 401. Those need a different remedy from a bigger budget, which is why they are distinguishable. **On `tokenexchange.attempt` it means only that the IdP client's configured retry count (`MaxRetries`) was spent** — that path has no sub-cap, no non-idempotency guard, and no 401 re-auth allowance, so the four SEMP allowances and the four SEMP exclusions above do not apply. Raise the IdP retry setting, not `semp.retries` | Solace |
 | `cache_hit` | `tokenexchange.Exchange` only: true when served from cache, false when a live IdP round trip was needed (or waited on). **Isolating actual live round trips needs `singleflight_role="winner"` too** — a follower also reports `cache_hit=false` despite doing no IdP work itself, so filtering on `cache_hit` alone counts one winner plus every follower waiting on it | Solace |
 | `singleflight_role` | `tokenexchange.Exchange` only, absent on a cache hit: `winner` (this call ran the live IdP round trip) or `follower` (this call shared another's result) | Solace |
 | `winner_trace_id` / `winner_span_id` | `tokenexchange.Exchange` only, present on a `follower` span only: the winner's own IDs, so an operator can pivot from a follower's span to the trace that actually did the IdP work. The follower span also carries a span `Link` to the same span | Solace |

@@ -28,6 +28,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/attemptspan"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
 )
 
@@ -412,9 +413,9 @@ func TestAttemptSpans_RedirectHopsAreNotNewAttempts(t *testing.T) {
 	sr := recordSpans(t)
 
 	state := &attemptSpanState{retryMax: 2}
-	rec := &attemptSpanRecorder{inner: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	rec := newAttemptSpanTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Request: req}, nil
-	})}
+	}))
 
 	ctx, parent := otel.Tracer("test").Start(
 		context.WithValue(context.Background(), attemptSpanKey{}, state), "tokenexchange.Exchange")
@@ -431,10 +432,10 @@ func TestAttemptSpans_RedirectHopsAreNotNewAttempts(t *testing.T) {
 	_ = resp.Body.Close()
 	parent.End()
 
-	if state.attempt != 0 {
-		t.Errorf("attempt counter = %d after a redirect hop, want 0", state.attempt)
+	if state.spanState.Attempt != 0 {
+		t.Errorf("attempt counter = %d after a redirect hop, want 0", state.spanState.Attempt)
 	}
-	if state.span != nil {
+	if state.spanState.Span != nil {
 		t.Error("a redirect hop parked an attempt span; a second one would overwrite and leak it")
 	}
 	if got := attemptSpans(sr, parent.SpanContext().TraceID()); len(got) != 0 {
@@ -450,10 +451,10 @@ func TestAttemptSpans_UntracedWithoutSeededState(t *testing.T) {
 	sr := recordSpans(t)
 
 	var reached bool
-	rec := &attemptSpanRecorder{inner: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	rec := newAttemptSpanTransport(roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		reached = true
 		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Request: req}, nil
-	})}
+	}))
 
 	ctx, parent := otel.Tracer("test").Start(context.Background(), "tokenexchange.Exchange")
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://idp.invalid/token", nil)
@@ -485,12 +486,12 @@ func TestCloseDanglingSpan_ExportsAnUndecidedSpan(t *testing.T) {
 
 	ctx, parent := otel.Tracer("test").Start(context.Background(), "tokenexchange.Exchange")
 	_, span := tracer.Start(ctx, attemptSpanName)
-	state := &attemptSpanState{attempt: 1, span: span}
+	state := &attemptSpanState{spanState: attemptspan.State{Attempt: 1, Span: span}}
 
 	state.closeDanglingSpan()
 	parent.End()
 
-	if state.span != nil {
+	if state.spanState.Span != nil {
 		t.Error("span is still parked after the backstop ran")
 	}
 	spans := attemptSpans(sr, parent.SpanContext().TraceID())

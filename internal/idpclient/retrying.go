@@ -20,10 +20,8 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	oteltrace "go.opentelemetry.io/otel/trace"
 
-	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/correlation"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/attemptspan"
 	"github.com/hashicorp/go-retryablehttp"
 )
 
@@ -121,7 +119,7 @@ func NewRetryingHTTPClient(retry RetryOptions, opts ...Option) (*http.Client, er
 	// one span per attempt. Preserves the inner client's Timeout —
 	// retryablehttp calls c.HTTPClient.Do on every attempt, which applies
 	// inner.Timeout.
-	inner.Transport = &attemptSpanRecorder{inner: &attemptsRecorder{inner: inner.Transport}}
+	inner.Transport = newAttemptSpanTransport(&attemptCountTransport{inner: inner.Transport})
 
 	rc := retryablehttp.NewClient()
 	rc.HTTPClient = inner
@@ -145,7 +143,7 @@ func NewRetryingHTTPClient(retry RetryOptions, opts ...Option) (*http.Client, er
 	// the inner per-attempt transport. It is also the one place that can see the
 	// whole chain finish, which is where the dangling-span backstop belongs.
 	std := rc.StandardClient()
-	std.Transport = &attemptSpanSeeder{inner: std.Transport, retryMax: retry.MaxRetries}
+	std.Transport = &attemptSpanSeedTransport{inner: std.Transport, retryMax: retry.MaxRetries}
 
 	return std, nil
 }
@@ -154,15 +152,19 @@ func NewRetryingHTTPClient(retry RetryOptions, opts ...Option) (*http.Client, er
 // parsed sentinels — the token-exchange package owns sentinel classification
 // separately (see internal/tokenexchange/response.go).
 //
-// The named returns exist for the deferred endAttemptSpan call: the span for
+// The named return exists for the deferred endAttemptSpan call: the span for
 // the attempt that just finished is tagged with the decision THIS function
 // returns, never with one re-derived from the status code at the span site
 // (SOL-152422). Re-deriving would let the span disagree with the retry the
 // client actually performed — a 500 answered while ctx is already done reports
 // no retry here, and a status-derived attribute would claim one.
+//
+// checkErr is returned but never consulted by endAttemptSpan: this policy has
+// no equivalent of SEMP's sub-caps, so nothing here is derived from the
+// error, only from ctx.Err() and the response — see retriesExhausted.
 func checkRetry(ctx context.Context, resp *http.Response, err error) (retry bool, checkErr error) {
 	defer func() {
-		endAttemptSpan(ctx, resp, retry, checkErr)
+		endAttemptSpan(ctx, resp, retry)
 	}()
 
 	if ctx.Err() != nil {
@@ -227,15 +229,15 @@ func AttemptsFromContext(ctx context.Context) int {
 	return 0
 }
 
-// attemptsRecorder is a RoundTripper wrapper that increments the counter
+// attemptCountTransport is a RoundTripper wrapper that increments the counter
 // on ctx (attached via WithAttemptsCounter) on every RoundTrip call. Placed
 // on the inner *http.Client so retryablehttp's per-attempt c.HTTPClient.Do
 // walks through it exactly once per attempt.
-type attemptsRecorder struct {
+type attemptCountTransport struct {
 	inner http.RoundTripper
 }
 
-func (a *attemptsRecorder) RoundTrip(req *http.Request) (*http.Response, error) {
+func (a *attemptCountTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if c, ok := req.Context().Value(attemptsKey{}).(*int); ok && c != nil {
 		*c++
 	}
@@ -243,55 +245,55 @@ func (a *attemptsRecorder) RoundTrip(req *http.Request) (*http.Response, error) 
 }
 
 // CloseIdleConnections forwards to the wrapped transport. See
-// forwardCloseIdleConnections for why every wrapper in the chain has to.
-func (a *attemptsRecorder) CloseIdleConnections() {
-	forwardCloseIdleConnections(a.inner)
-}
-
-// forwardCloseIdleConnections calls CloseIdleConnections on rt when it has one.
-//
-// Required, not politeness. http.Client.CloseIdleConnections reaches the
-// transport by type assertion on an unexported `closeIdler` interface, so any
-// wrapper in the chain that omits the method turns the call into a silent
-// no-op — and retryablehttp calls it at three points that all mean "this chain
-// went wrong, do not reuse these connections": a request-body rewind failure,
-// the context ending during backoff, and a deferred call on every failure path
-// before ErrorHandler.
-func forwardCloseIdleConnections(rt http.RoundTripper) {
-	type closeIdler interface{ CloseIdleConnections() }
-	if c, ok := rt.(closeIdler); ok {
-		c.CloseIdleConnections()
-	}
+// attemptspan.ForwardCloseIdleConnections for why every wrapper in the chain
+// has to — shared with internal/semp/resilience rather than duplicated, per
+// review.
+func (a *attemptCountTransport) CloseIdleConnections() {
+	attemptspan.ForwardCloseIdleConnections(a.inner)
 }
 
 // attemptSpanKey is the context key for the per-request attempt-span state.
-// Unexported, and seeded only by attemptSpanSeeder, so no caller can plant a
-// state this package would then write spans into.
+// Unexported, and seeded only by attemptSpanSeedTransport, so no caller can
+// plant a state this package would then write spans into.
 type attemptSpanKey struct{}
 
 // attemptSpanState is the per-request state the attempt spans need. One
-// instance per logical request, created by attemptSpanSeeder and shared by
-// every attempt of that request.
+// instance per logical request, created by attemptSpanSeedTransport and
+// shared by every attempt of that request.
+//
+// The shared half — the attempt counter and the parked span — lives in
+// attemptspan.State, which internal/semp/resilience's retryState also
+// carries (SOL-152422 review: the two packages had near-identical copies).
+// retryMax stays local: this policy has no equivalent of SEMP's sub-caps, so
+// retriesExhausted here is a genuinely different derivation, not a shared
+// one with two callers.
+//
+// spanState.Attempt is the ONLY counter that feeds the `attempt` span
+// attribute. It is a separate counter from attemptCountTransport's — that one
+// backs WithAttemptsCounter/AttemptsFromContext and, by design, also counts
+// redirect hops, which are not new attempts and never get a span (see
+// Transport.RoundTrip in package attemptspan). The two are expected to
+// disagree whenever a redirect occurs; that is not a bug to reconcile.
 //
 // No lock: retryablehttp drives one request's whole loop on a single goroutine,
 // and the transport wrapper and CheckRetry both run there in sequence.
 type attemptSpanState struct {
-	// attempt is the 1-based counter for the try now in flight. Separate from
-	// the WithAttemptsCounter counter on purpose: that one is opt-in, is read
-	// by the exchange layer to classify exhaustion, and counts redirect hops,
-	// where this one counts retry attempts.
-	attempt int
+	spanState attemptspan.State
 	// retryMax is the client's configured retry allowance, captured at
 	// construction so retriesExhausted can tell "wanted to retry" from "had
 	// nothing left to retry with".
 	retryMax int
-	// span is the span opened for the attempt now in flight, parked here so
-	// checkRetry can tag it with its own decision and close it. nil between
-	// attempts.
-	span oteltrace.Span
 }
 
-// attemptSpanSeeder is the outermost RoundTripper on the returned client. It
+// closeDanglingSpan ends an attempt span that was opened but never closed by
+// checkRetry, so it is exported (undecided) rather than dropped. See
+// attemptSpanSeedTransport for why this is a backstop and not a normal path.
+// Delegates to attemptspan.State.CloseDangling rather than duplicating it.
+func (s *attemptSpanState) closeDanglingSpan() {
+	s.spanState.CloseDangling()
+}
+
+// attemptSpanSeedTransport is the outermost RoundTripper on the returned client. It
 // runs once per logical request — retryablehttp's own RoundTripper is inside
 // it and owns the retry loop — and does two things:
 //
@@ -302,12 +304,12 @@ type attemptSpanState struct {
 //     should be left open; an unended span is dropped entirely rather than
 //     exported, so being wrong here would cost the attempt its place in the
 //     trace.
-type attemptSpanSeeder struct {
+type attemptSpanSeedTransport struct {
 	inner    http.RoundTripper
 	retryMax int
 }
 
-func (s *attemptSpanSeeder) RoundTrip(req *http.Request) (*http.Response, error) {
+func (s *attemptSpanSeedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	state := &attemptSpanState{retryMax: s.retryMax}
 	// Deferred rather than placed after the call so it also covers a panic
 	// unwinding through the retry loop.
@@ -317,108 +319,46 @@ func (s *attemptSpanSeeder) RoundTrip(req *http.Request) (*http.Response, error)
 }
 
 // CloseIdleConnections forwards to the wrapped transport. See
-// forwardCloseIdleConnections.
-func (s *attemptSpanSeeder) CloseIdleConnections() {
-	forwardCloseIdleConnections(s.inner)
+// attemptspan.ForwardCloseIdleConnections.
+func (s *attemptSpanSeedTransport) CloseIdleConnections() {
+	attemptspan.ForwardCloseIdleConnections(s.inner)
 }
 
-// attemptSpanRecorder opens one span per HTTP attempt. A sibling of
-// attemptsRecorder, composed the same way and for the same reason: it sits on
-// the inner *http.Client, which retryablehttp calls exactly once per attempt.
-//
-// The span is deliberately not ended here. `retry.decision` has to come from
-// checkRetry's actual decision, and retryablehttp calls CheckRetry only after
-// the transport has returned, so the handle is parked on the shared state and
-// closed there.
-type attemptSpanRecorder struct {
-	inner http.RoundTripper
-}
-
-// RoundTrip opens the attempt span and runs the try inside it.
-//
-// Redirect hops (req.Response != nil) are passed straight through: a redirect
-// is not a new retry attempt, and a second Start for the same attempt would
-// overwrite the parked handle and leak the first span. (attemptsRecorder does
-// count hops; that is pre-existing behaviour of a different counter and is left
-// alone here.)
-//
-// A request with no seeded state did not come through the client
-// NewRetryingHTTPClient returns — a test wiring retryablehttp by hand, say — and
-// is passed through untraced rather than given a span nothing will ever close.
-func (a *attemptSpanRecorder) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.Response != nil {
-		return a.inner.RoundTrip(req)
+// newAttemptSpanTransport wraps base in the shared attemptspan.Transport,
+// seeded from this request's attemptSpanState (attemptSpanSeedTransport plants it
+// under attemptSpanKey). A sibling of attemptCountTransport, composed the same
+// way and for the same reason: it sits on the inner *http.Client, which
+// retryablehttp calls exactly once per attempt.
+func newAttemptSpanTransport(base http.RoundTripper) *attemptspan.Transport {
+	return &attemptspan.Transport{
+		Base:     base,
+		Tracer:   tracer,
+		SpanName: attemptSpanName,
+		GetState: func(ctx context.Context) *attemptspan.State {
+			s, ok := ctx.Value(attemptSpanKey{}).(*attemptSpanState)
+			if !ok || s == nil {
+				return nil
+			}
+			return &s.spanState
+		},
 	}
-	state, ok := req.Context().Value(attemptSpanKey{}).(*attemptSpanState)
-	if !ok || state == nil {
-		return a.inner.RoundTrip(req)
-	}
-
-	state.attempt++
-	// The span goes into the context the inner transport sees, so the attempt
-	// is the active span for the duration of the try and anything instrumented
-	// below this layer later nests under it rather than under the whole chain.
-	ctx, span := tracer.Start(req.Context(), attemptSpanName, oteltrace.WithSpanKind(oteltrace.SpanKindClient))
-	state.span = span
-
-	return a.inner.RoundTrip(req.WithContext(ctx))
 }
 
-// CloseIdleConnections forwards to the wrapped transport, so the relay reaches
-// the real *http.Transport below attemptsRecorder. See
-// forwardCloseIdleConnections.
-func (a *attemptSpanRecorder) CloseIdleConnections() {
-	forwardCloseIdleConnections(a.inner)
-}
-
-// endAttemptSpan closes the span attemptSpanRecorder opened, tagging it with
-// the decision checkRetry is about to return. Called from checkRetry's own
-// defer so it fires on every exit of that function.
+// endAttemptSpan closes the span the attempt-span transport opened, tagging
+// it with the decision checkRetry is about to return. Called from
+// checkRetry's own defer so it fires on every exit of that function.
 //
-// A nil parked span means the request never went through
-// attemptSpanRecorder, or checkRetry ran twice for one attempt (which
-// retryablehttp does when a Request carries a responseHandler — this package
-// sets none). Both are no-ops.
-func endAttemptSpan(ctx context.Context, resp *http.Response, retry bool, checkErr error) {
+// A nil parked span means the request never went through the attempt-span
+// transport, or checkRetry ran twice for one attempt (which retryablehttp
+// does when a Request carries a responseHandler — this package sets none).
+// Both are no-ops, handled by attemptspan.Finish.
+func endAttemptSpan(ctx context.Context, resp *http.Response, retry bool) {
 	state, ok := ctx.Value(attemptSpanKey{}).(*attemptSpanState)
-	if !ok || state == nil || state.span == nil {
+	if !ok || state == nil {
 		return
 	}
-	span := state.span
-	// Cleared before End so a second call cannot end the same span twice, and
-	// so the seeder's backstop sees nothing left to close.
-	state.span = nil
-
-	// IsRecording guard: a non-recording span (tracing off, or this trace
-	// unsampled) still needs End(), but building attributes nothing will read is
-	// waste on a path every token exchange goes through.
-	if span.IsRecording() {
-		attrs := []attribute.KeyValue{
-			attribute.Int("attempt", state.attempt),
-			attribute.Bool("retry.decision", retry),
-		}
-		// Omitted rather than written empty when absent, matching every other
-		// span and audit record. Note the limitation documented on
-		// attemptSpanName: on this path the ID is the singleflight WINNER's.
-		if id := correlation.From(ctx); id != "" {
-			attrs = append(attrs, attribute.String("correlation_id", id))
-		}
-		// Absent on a connection error, where there was no response at all.
-		if resp != nil {
-			attrs = append(attrs, attribute.Int("http.response.status_code", resp.StatusCode))
-		}
-		if retriesExhausted(state.retryMax, state.attempt, retry) {
-			attrs = append(attrs, attribute.Bool("retry.exhausted", true))
-		}
-		span.SetAttributes(attrs...)
-	}
-
-	// No `outcome` attribute and no error span status, deliberately. An attempt
-	// is not a call: a 503 that was retried and then succeeded is a normal step
-	// of a healthy exchange, and reporting it as outcome=error would put an
-	// error span under a successful `tokenexchange.Exchange` on every retried
-	// exchange. The call's outcome lives on that parent span.
-	span.End()
+	exhausted := retriesExhausted(state.retryMax, state.spanState.Attempt, retry)
+	attemptspan.Finish(ctx, &state.spanState, resp, retry, exhausted)
 }
 
 // retriesExhausted reports whether the retry allowance ran out on this attempt.
@@ -428,24 +368,12 @@ func endAttemptSpan(ctx context.Context, resp *http.Response, retry bool, checkE
 // on, and this attribute is what tells the two apart in a trace.
 //
 // A decision NOT to retry is never exhaustion — this policy has no equivalent
-// of the SEMP transient cap, so every terminal "no" here is a policy decision
-// (2xx/3xx/4xx) or a context that ended, not a budget running out. That is why
-// this takes no checkRetry error, where the SEMP version does.
+// of SEMP's sub-caps (a transient-retry cap, a once-only non-429/503 5xx
+// replay, a once-only 401 re-auth), so every terminal "no" here is a policy
+// decision (2xx/3xx/4xx) or a context that ended, not a budget running out.
+// This derivation stays local to this package rather than moving into
+// attemptspan: the two policies are genuinely different, not one rule with
+// two callers — see that package's doc comment.
 func retriesExhausted(retryMax, attempt int, retry bool) bool {
 	return retry && attempt > retryMax
-}
-
-// closeDanglingSpan ends an attempt span that was opened but never closed by
-// checkRetry, so it is exported (undecided) rather than dropped. See
-// attemptSpanSeeder for why this is a backstop and not a normal path.
-//
-// No attributes are written: a span reaching here has no decision to report,
-// and inventing one would be exactly the re-derivation this design forbids.
-func (s *attemptSpanState) closeDanglingSpan() {
-	if s.span == nil {
-		return
-	}
-	span := s.span
-	s.span = nil
-	span.End()
 }

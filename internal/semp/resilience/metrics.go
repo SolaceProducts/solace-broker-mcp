@@ -19,13 +19,14 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/attemptspan"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 )
 
 // metricsTransport wraps an http.RoundTripper to record one SEMP sample per
 // attempt. retryablehttp calls the transport once per try, so this is the one
 // place that sees every attempt. Installed only when metrics are on, inside the
-// always-present attemptTransport (see New).
+// always-present attempt-span transport (see newAttemptTransport, New).
 type metricsTransport struct {
 	base        http.RoundTripper
 	recorder    *metrics.SEMPMetrics
@@ -38,10 +39,11 @@ type metricsTransport struct {
 // (req.Response != nil) are passed through without recording — they are not
 // new SEMP attempts.
 //
-// The attempt number is read, not incremented: attemptTransport owns the
-// counter and has already bumped it for this try (SOL-152422). Reading one
-// counter is what keeps this metric label and the `attempt` attribute on the
-// `semp.attempt` span from ever drifting apart.
+// The attempt number is read, not incremented: the attempt-span transport
+// (newAttemptTransport) owns the counter and has already bumped it for this
+// try (SOL-152422). Reading one counter is what keeps this metric label and
+// the `attempt` attribute on the `semp.attempt` span from ever drifting
+// apart.
 func (t *metricsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.Response != nil {
 		return t.base.RoundTrip(req)
@@ -78,9 +80,10 @@ func (t *metricsTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 }
 
 // CloseIdleConnections forwards to the wrapped transport, so the relay from
-// attemptTransport above it reaches the real *http.Transport below. See
-// attemptTransport.CloseIdleConnections for why a wrapper that omits this
-// silently disables retryablehttp's post-failure connection hygiene.
+// the attempt-span transport above it reaches the real *http.Transport
+// below. See attemptspan.Transport.CloseIdleConnections for why a wrapper
+// that omits this silently disables retryablehttp's post-failure connection
+// hygiene.
 func (t *metricsTransport) CloseIdleConnections() {
-	forwardCloseIdleConnections(t.base)
+	attemptspan.ForwardCloseIdleConnections(t.base)
 }

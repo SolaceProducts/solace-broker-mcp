@@ -377,11 +377,12 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 
 	// Wrap the transport so each attempt is seen exactly once.
 	//
-	// Two wrappers, outermost first: attemptTransport always (it owns the
-	// attempt counter and the `semp.attempt` span, SOL-152422), and inside it
-	// metricsTransport only when WithMetrics supplied a recorder. That order is
-	// required, not stylistic — metricsTransport reads the counter
-	// attemptTransport has just bumped, and the order is pinned by the sempv2
+	// Two wrappers, outermost first: the attempt-span transport
+	// (newAttemptTransport) always — it owns the attempt counter and the
+	// `semp.attempt` span, SOL-152422 — and inside it metricsTransport only
+	// when WithMetrics supplied a recorder. That order is required, not
+	// stylistic — metricsTransport reads the counter the attempt-span
+	// transport has just bumped, and the order is pinned by the sempv2
 	// metric-label tests.
 	//
 	// The wrappers go on a shallow COPY of the caller's client rather than on
@@ -415,7 +416,7 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 		}
 	}
 	wrapped := *httpClient
-	wrapped.Transport = &attemptTransport{base: base}
+	wrapped.Transport = newAttemptTransport(base)
 	retryClient.HTTPClient = &wrapped
 
 	return d
@@ -772,13 +773,14 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	ctx = context.WithValue(ctx, retryStateKey{}, state)
 	req = req.WithContext(ctx)
 
-	// Backstop for the attempt span's lifecycle (SOL-152422). attemptTransport
-	// opens the span and checkRetry closes it, and on today's retryablehttp
-	// every dispatch is followed by a CheckRetry call, so nothing is left open
-	// here — see closeDanglingAttemptSpan for why that makes this call site
-	// unpinnable by test, and what it bounds if a future library version
-	// changes. Deferred rather than placed after retryClient.Do so it also runs
-	// while a panic unwinds.
+	// Backstop for the attempt span's lifecycle (SOL-152422). The
+	// attemptspan.Transport newAttemptTransport builds opens the span and
+	// checkRetry closes it, and on today's retryablehttp every dispatch is
+	// followed by a CheckRetry call, so nothing is left open here — see
+	// closeDanglingAttemptSpan for why that makes this call site unpinnable by
+	// test, and what it bounds if a future library version changes. Deferred
+	// rather than placed after retryClient.Do so it also runs while a panic
+	// unwinds.
 	defer state.closeDanglingAttemptSpan()
 
 	retryReq, err := retryablehttp.FromRequest(req)

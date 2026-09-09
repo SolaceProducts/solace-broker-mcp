@@ -23,8 +23,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"go.opentelemetry.io/otel/trace"
-
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/attemptspan"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
 	"github.com/hashicorp/go-retryablehttp"
 )
@@ -79,11 +78,23 @@ type retryState struct {
 	retrySafe        bool   // caller-declared semantic idempotency (see WithRetrySafe)
 	retryUnsafe      bool   // caller-declared semantic NON-idempotency (see WithRetryUnsafe)
 	needsReauth      bool   // true when the next retry should re-run AddAuth (set on 401)
-	attempt          int    // 1-based try counter, bumped by attemptTransport
-	// attemptSpan is the span attemptTransport opened for the attempt now in
-	// flight, parked here so checkRetry can tag it with the decision it
-	// returns and close it (see attempt_span.go). nil between attempts.
-	attemptSpan trace.Span
+	// spanState is the attempt counter and the span parked for the attempt
+	// now in flight, shared with internal/idpclient via the attemptspan
+	// package (SOL-152422; see attempt_span.go). The counter it holds
+	// (spanState.Attempt) is the SAME counter metricsTransport reads for its
+	// `attempt` metric label — see attemptNumber — and is expected to agree
+	// with it exactly, unlike idpclient's separate WithAttemptsCounter, which
+	// also counts redirect hops.
+	spanState attemptspan.State
+}
+
+// closeDanglingAttemptSpan ends an attempt span that was opened but never
+// closed by checkRetry, so it is exported (undecided) rather than dropped.
+// See attemptspan.State.CloseDangling for why this is a backstop and not a
+// normal path. Delegates rather than duplicating: the shared logic lives in
+// the attemptspan package so SEMP and idpclient cannot drift.
+func (s *retryState) closeDanglingAttemptSpan() {
+	s.spanState.CloseDangling()
 }
 
 // retrySafeKey is the context key for the caller-declared retry-safe marker.
@@ -169,20 +180,20 @@ func getRetryStateOrNil(ctx context.Context) *retryState {
 }
 
 // attemptNumber reports the 1-based try counter for the attempt now in flight.
-// attemptTransport is the counter's single owner and bumps it once per attempt
-// (see attempt_span.go); every other reader — metricsTransport's `attempt`
-// label, the attempt span's `attempt` attribute — reads it here so the two can
-// never disagree.
+// the attemptspan.Transport newAttemptTransport builds is the counter's single
+// owner and bumps it once per attempt (see attempt_span.go); every other
+// reader — metricsTransport's `attempt` label, the attempt span's `attempt`
+// attribute — reads it here so the two can never disagree.
 //
 // Returns 1 when no state is on the context (Sender.Do was bypassed) or the
 // counter has not been bumped: the attempt is real but uncounted, and reporting
 // it as attempt 1 is closer to the truth than reporting attempt 0.
 func attemptNumber(ctx context.Context) int {
 	s := getRetryStateOrNil(ctx)
-	if s == nil || s.attempt == 0 {
+	if s == nil || s.spanState.Attempt == 0 {
 		return 1
 	}
-	return s.attempt
+	return s.spanState.Attempt
 }
 
 // checkRetry is the custom retry policy for retryablehttp. It implements:
@@ -196,9 +207,9 @@ func attemptNumber(ctx context.Context) int {
 //   - All other status codes (4xx): no retry
 //
 // The named returns exist for the deferred endAttemptSpan call below, which
-// closes the attempt span attemptTransport opened and tags it with the decision
-// this function actually returns (SOL-152422). Deferring it once here, rather
-// than editing each of the many exits, is what guarantees the span reports the
+// closes the attempt span the attempt-span transport opened and tags it with
+// the decision this function actually returns (SOL-152422). Deferring it once
+// here, rather than editing each of the many exits, is what guarantees the span reports the
 // real decision on every path — including the two sentinel-error exits, which a
 // span site reading only the status code would misreport.
 func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error) (retry bool, checkErr error) {
