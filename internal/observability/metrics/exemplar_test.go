@@ -310,6 +310,18 @@ func TestExemplars_OnlyASampledSpanProducesOne(t *testing.T) {
 
 	// "The histogram is otherwise unchanged": every case must have produced the
 	// same series, labels and values as the sampled one.
+	//
+	// This comparison is correct only because none of the t.Run subtests above
+	// calls t.Parallel — stripped is written inside them and read here, after
+	// the loop. Guard that rather than assume it: if a future author adds
+	// t.Parallel to this table (a natural thing to do), the parent reaches
+	// this point before any subtest body has run, want and got are both "",
+	// and every comparison below passes silently instead of catching anything.
+	if got, want := len(stripped), len(cases)*len(exemplarFamilies); got != want {
+		t.Fatalf("stripped has %d entries, want %d — a subtest did not record, "+
+			"so the comparison below is vacuous", got, want)
+	}
+
 	const reference = "tracing_on_and_sampled"
 	for _, tc := range cases {
 		if tc.name == reference {

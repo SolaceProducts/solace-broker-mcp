@@ -448,7 +448,17 @@ otherwise perfectly healthy, and none of them is visible from the scrape itself:
 - **Your Prometheus must negotiate OpenMetrics to receive them.** Exemplars are not part of the
   older Prometheus text exposition format. Recent Prometheus versions request OpenMetrics by
   default; if yours does not, exemplars will be silently absent from an otherwise healthy
-  scrape.
+  scrape. To confirm by hand:
+
+  ```
+  curl -H 'Accept: application/openmetrics-text; version=1.0.0; charset=utf-8' \
+    http://<host>:<metrics-port>/metrics
+  ```
+
+  Success looks like an exemplar appended as a `# {trace_id="…",span_id="…"} <value>
+  <timestamp>` suffix on a bucket line. A plain `curl` with no `Accept` header returns the
+  older text exposition and shows none — that result on its own is not a defect, only a
+  scraper that has not asked for OpenMetrics.
 - **An exemplar can only point at a *sampled* trace.** Under a low `OTEL_TRACES_SAMPLER_ARG`
   most buckets carry no exemplar. That is expected, not a gap. Raise the sampler argument if
   exemplar coverage matters to you more than collector volume; it is a sampling trade-off, not
