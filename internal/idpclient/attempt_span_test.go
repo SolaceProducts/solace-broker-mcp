@@ -218,20 +218,24 @@ func TestAttemptSpans_ExhaustedOnTheFinalAttempt(t *testing.T) {
 	}
 }
 
-// TestAttemptSpans_RetryDecisionIsCheckRetrysNotRederivedFromStatus is the
-// mutation-proof for the "not re-derived" criterion on this path.
+// TestAttemptSpans_CancelledDuringDispatchIsNeverRetried is an end-to-end
+// check that a context already done by the time checkRetry runs stops the
+// retry loop, whatever status the server eventually answers with.
 //
-// The context is already done when the response arrives, so checkRetry returns
-// no-retry on a 500 — the one status this policy otherwise always retries. An
-// implementation that read the status code at the span site would report
-// retry.decision=true and claim a retry the client never performed.
-func TestAttemptSpans_RetryDecisionIsCheckRetrysNotRederivedFromStatus(t *testing.T) {
+// It is NOT the mutation-proof for the "not re-derived from status" AC —
+// see TestCheckRetry_DoesNotRederiveDecisionFromStatus for that. Cancelling
+// the client's context here races the transport's own read of the response,
+// and in practice the transport aborts the request before the 500 status is
+// ever parsed: client.Do returns with a nil *http.Response and a "context
+// canceled" error, so checkRetry's ctx guard is the only thing this test can
+// exercise. A status-rederiving implementation would ALSO see no status in
+// that case and return the same false — so this test cannot tell the two
+// implementations apart, only that a cancelled call is never retried at all.
+func TestAttemptSpans_CancelledDuringDispatchIsNeverRetried(t *testing.T) {
 	sr := recordSpans(t)
 
 	cancelled := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		// Cancel the caller's context, then answer with the most retryable
-		// status there is. checkRetry's ctx guard runs first and wins.
 		close(cancelled)
 		<-time.After(20 * time.Millisecond)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -267,12 +271,60 @@ func TestAttemptSpans_RetryDecisionIsCheckRetrysNotRederivedFromStatus(t *testin
 	}
 	attrs := spanAttrs(spans[0])
 	if got := attrs["retry.decision"]; got != false {
-		t.Errorf("retry.decision = %v, want false: the context was already done, so checkRetry refused to "+
-			"retry. A span reporting true is re-deriving the attribute from the response instead of "+
-			"reading the decision the client acted on", got)
+		t.Errorf("retry.decision = %v, want false: the context was already done, so checkRetry refused to retry", got)
 	}
 	if _, present := attrs["retry.exhausted"]; present {
 		t.Error("retry.exhausted is set on a call the caller cancelled; nothing ran out")
+	}
+}
+
+// TestCheckRetry_DoesNotRederiveDecisionFromStatus is the actual
+// mutation-proof for the "not re-derived" AC on the IdP path (SOL-152422
+// review: the end-to-end version above cannot distinguish the two
+// implementations, because the response never survives to the span site).
+//
+// Calling checkRetry directly lets the response arrive as far as the policy
+// is concerned — resp is a real *http.Response carrying 500, the one status
+// this policy otherwise always retries — while the context is already done.
+// checkRetry's own ctx guard must win regardless: retry.decision reports
+// false, and the span still carries the status the response actually had.
+// An implementation that re-derived the decision from resp.StatusCode at the
+// span site would report retry.decision=true here, which is exactly the
+// divergence this test exists to catch.
+func TestCheckRetry_DoesNotRederiveDecisionFromStatus(t *testing.T) {
+	sr := recordSpans(t)
+
+	ctx, parent := otel.Tracer("test").Start(context.Background(), "tokenexchange.Exchange")
+	cancelCtx, cancel := context.WithCancel(ctx)
+	cancel() // already done before checkRetry ever sees it
+
+	state := &attemptSpanState{retryMax: 2}
+	_, span := tracer.Start(cancelCtx, attemptSpanName)
+	state.spanState.Span = span
+	stateCtx := context.WithValue(cancelCtx, attemptSpanKey{}, state)
+
+	retry, checkErr := checkRetry(stateCtx, &http.Response{StatusCode: http.StatusInternalServerError}, nil)
+	parent.End()
+
+	if retry {
+		t.Error("retry = true, want false: the context was already done, so checkRetry must refuse to retry " +
+			"regardless of the 500 — a status-rederiving implementation would get this wrong")
+	}
+	if checkErr == nil {
+		t.Error("checkErr = nil, want ctx.Err() surfaced")
+	}
+
+	spans := attemptSpans(sr, parent.SpanContext().TraceID())
+	if len(spans) != 1 {
+		t.Fatalf("got %d %s spans, want 1", len(spans), attemptSpanName)
+	}
+	attrs := spanAttrs(spans[0])
+	if got := attrs["retry.decision"]; got != false {
+		t.Errorf("retry.decision = %v, want false", got)
+	}
+	if got := attrs["http.response.status_code"]; got != int64(http.StatusInternalServerError) {
+		t.Errorf("http.response.status_code = %v, want %d: the response reached the span site even though "+
+			"the decision it carries is false, which is what makes the pairing observable", got, http.StatusInternalServerError)
 	}
 }
 

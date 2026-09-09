@@ -218,15 +218,15 @@ recorded per retry attempt so you can see retry storms and per-broker latency.
   `attempt` (the retry attempt as an integer string, `"1"`, `"2"`, ...). `attempt` is on the
   **counter only**: the histogram omits it so its bucket series are not multiplied by the
   retry cap. Retry-storm detection reads the counter.
-- **Upgrade note (SOL-152422):** before this release, `attempt` read `"1"` for every
-  attempt whenever metrics were on and tracing was off — the metrics transport kept its
-  own counter that a bug left permanently at 1, so retried traffic was invisible to this
-  label. This release gives the counter a single owner shared with the trace spans, and
-  `attempt` now reflects the real try number. A dashboard or recording rule written
-  against the old behaviour — one that assumes `attempt="1"` matches all series, or that
-  never saw a retry-storm alert fire on this metric — should be revisited: it was reading
-  a value that could never change, and a rule tuned against that will now see real
-  variation for the first time.
+- **No operator-visible change (SOL-152422):** `attempt` already reflected the real try
+  number before this release — the metrics transport owned the counter and bumped it on
+  every attempt, with or without tracing. This release moves ownership of that counter to
+  the new `semp.attempt` span, and the metric now reads it rather than bumping it. The
+  values on the wire are unchanged; what changed is that the metric's `attempt` label and
+  the span's `attempt` attribute are now backed by the same counter and cannot drift
+  against each other. (A *tracing-only* deployment, metrics off, is where a naive design
+  could have gone wrong — a span-local counter would have read `1` on every attempt — and
+  that hazard is the one this design avoids, not a regression that shipped.)
 - **The duration is the time to the response's first byte for one attempt.** It excludes the
   MCP-side admission wait (rate limiting and the in-flight cap) and the response-body read,
   and it excludes retry backoff between attempts — so it is broker round-trip latency, not
