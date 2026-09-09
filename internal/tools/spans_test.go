@@ -36,6 +36,17 @@ var (
 	installSpanTracer  sync.Once
 )
 
+// Callers of this MUST NOT call t.Parallel. The recorder is shared and reset
+// per test (only the first otel.SetTracerProvider is honored, so the provider
+// cannot be swapped per test), so two tests recording spans concurrently would
+// race on Reset and on Ended.
+//
+// Unlike internal/semp/sempv2, this package DOES have t.Parallel tests
+// (describe_semp_schema_test.go, audit_error_type_drift_test.go). They are safe
+// today only because none of them records spans, and because Go resumes a
+// package's parallel tests only after every sequential top-level test has
+// finished. Adding t.Parallel to a span-recording test here is what would break
+// it — flakily, and only under some orderings.
 func recordSpans(t *testing.T) *tracetest.SpanRecorder {
 	t.Helper()
 	installSpanTracer.Do(func() {

@@ -47,6 +47,38 @@ const (
 	sempDurationFamily = "mcp_semp_request_duration_seconds"
 )
 
+// exemplarFamily is one published metric family and the fully-qualified sample
+// names its scrape lines carry, so the assertions read the same whether the
+// family renders as three suffixed series (a histogram) or one (a counter).
+type exemplarFamily struct {
+	name  string
+	names []string
+}
+
+func histogramFamily(base string) exemplarFamily {
+	return exemplarFamily{name: base, names: []string{base + "_bucket", base + "_sum", base + "_count"}}
+}
+
+func counterFamily(name string) exemplarFamily {
+	return exemplarFamily{name: name, names: []string{name}}
+}
+
+// exemplarFamilies is every family that carries an exemplar, and the single
+// place that list is spelled out.
+//
+// The two `_total` counters are here deliberately. The exporter attaches
+// exemplars to a monotonic sum as well as a histogram
+// (exporters/prometheus@v0.68.0/exporter.go, addSumMetric → addExemplars), and
+// docs/observability.md tells operators so — so the claim is held to a test
+// rather than to a reading of the exporter. Leaving them out let a
+// `context.Background()` at either counter observation site pass unnoticed.
+var exemplarFamilies = []exemplarFamily{
+	histogramFamily(toolDurationFamily),
+	histogramFamily(sempDurationFamily),
+	counterFamily("mcp_tool_invocation_total"),
+	counterFamily("mcp_semp_request_total"),
+}
+
 // Fixed sample values, so every case in a table produces byte-identical
 // histogram output and the only difference left to observe is the exemplar.
 const exemplarSampleDuration = 7 * time.Millisecond
@@ -58,8 +90,11 @@ const exemplarSampleDuration = 7 * time.Millisecond
 //
 // Matched by label name, never by position: the exporter builds the exemplar
 // label set from a Go map, so trace_id and span_id come out in either order
-// (observed both ways in one scrape).
-var exemplarTraceIDRe = regexp.MustCompile(`# \{[^}]*\btrace_id="([0-9a-f]+)"`)
+// (observed both ways in one scrape). `*` not `+` on the hex, deliberately: an
+// OTEL_METRICS_EXEMPLAR_FILTER=always_on scrape with no span on the context
+// emits `trace_id=""`, and an exemplar that links nowhere has to be visible to
+// these assertions rather than read as no exemplar at all.
+var exemplarTraceIDRe = regexp.MustCompile(`# \{[^}]*\btrace_id="([0-9a-f]*)"`)
 
 // scrapeOpenMetrics does one scrape that negotiates OpenMetrics, which is the
 // only representation that carries exemplars (D4). The header is the whole
@@ -82,15 +117,16 @@ func scrapeOpenMetrics(t *testing.T, p *Provider) string {
 	return rec.Body.String()
 }
 
-// familyLines returns the sample lines of one histogram family (_bucket, _sum,
-// _count), exemplar suffix included.
-func familyLines(body, family string) []string {
+// lines returns f's sample lines from a scrape body, exemplar suffix included,
+// sorted so two scrapes compare regardless of the exporter's emission order.
+func (f exemplarFamily) lines(body string) []string {
 	var out []string
 	for _, line := range strings.Split(body, "\n") {
-		if strings.HasPrefix(line, family+"_bucket{") ||
-			strings.HasPrefix(line, family+"_sum{") ||
-			strings.HasPrefix(line, family+"_count{") {
-			out = append(out, line)
+		for _, name := range f.names {
+			if strings.HasPrefix(line, name+"{") {
+				out = append(out, line)
+				break
+			}
 		}
 	}
 	sort.Strings(out)
@@ -110,11 +146,13 @@ func withoutExemplars(lines []string) []string {
 	return out
 }
 
-// exemplarTraceIDs returns the trace_id of every exemplar on the given family's
-// sample lines.
-func exemplarTraceIDs(body, family string) []string {
+// exemplarTraceIDs returns the trace_id of every exemplar on f's sample lines.
+// A present-but-empty trace_id counts, and comes back as "": that is what an
+// OTEL_METRICS_EXEMPLAR_FILTER=always_on scrape emits with no span on the
+// context, and reporting it as "no exemplar" would hide it.
+func (f exemplarFamily) exemplarTraceIDs(body string) []string {
 	var out []string
-	for _, line := range familyLines(body, family) {
+	for _, line := range f.lines(body) {
 		if m := exemplarTraceIDRe.FindStringSubmatch(line); m != nil {
 			out = append(out, m[1])
 		}
@@ -150,22 +188,29 @@ func recordOneOfEach(t *testing.T, p *Provider, ctx context.Context) {
 // TestExemplars_OnlyASampledSpanProducesOne is the story's central assertion,
 // and its negative cases are load-bearing rather than decorative.
 //
-// Four contexts reach the same two recorders:
+// Four contexts reach the same two recorders, and every exemplarFamilies entry
+// is checked for each:
 //
 //   - a sampled span (tracing on, sampler admits) — must produce an exemplar
-//     whose trace_id is that span's, on BOTH histograms;
+//     whose trace_id is that span's;
 //   - an unsampled span (tracing on, low OTEL_TRACES_SAMPLER_ARG) — must
 //     produce none. This is the documented sampling interaction, not a defect;
 //   - an explicit no-op tracer provider (OBS_TRACING_ENABLED off) — none;
 //   - the process-global tracer provider, which in this test binary is the
-//     no-op one nothing has replaced — none. Guarded below, so it cannot
-//     quietly become a fifth "sampled" case and pass for the wrong reason.
+//     API default nothing has replaced, exactly as tracing.New leaves it when
+//     the flag is off — none. Guarded below, so it cannot quietly become a
+//     fifth "sampled" case and pass for the wrong reason.
 //
-// Every case's exemplar-stripped histogram output is then compared against the
-// sampled case's. Identical output is the proof of two separate acceptance
-// criteria at once: metrics gained no dependency on tracing being enabled, and
-// exemplars added no label key and no series (which is also why Story 14's
-// golden file needs no regeneration).
+// Every case's exemplar-stripped output is then compared against the sampled
+// case's. Identical output is the proof of two separate acceptance criteria at
+// once: metrics gained no dependency on tracing being enabled, and exemplars
+// added no label key and no series (which is also why Story 14's golden file
+// needs no regeneration). It is the only assertion here that catches a label
+// key added conditionally on a span being present.
+//
+// All four cases run at the SDK's default exemplar filter. The env var that
+// overrides it is covered by
+// TestExemplars_ExemplarFilterEnvVarOverridesTheDefault.
 func TestExemplars_OnlyASampledSpanProducesOne(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -230,51 +275,52 @@ func TestExemplars_OnlyASampledSpanProducesOne(t *testing.T) {
 			}
 
 			body := scrapeOpenMetrics(t, p)
-			for _, family := range []string{toolDurationFamily, sempDurationFamily} {
-				lines := familyLines(body, family)
+			for _, family := range exemplarFamilies {
+				lines := family.lines(body)
 				if len(lines) == 0 {
 					t.Fatalf("%s: no sample lines in scrape — nothing was recorded, so "+
-						"an absent exemplar proves nothing:\n%s", family, body)
+						"an absent exemplar proves nothing:\n%s", family.name, body)
 				}
 
-				got := exemplarTraceIDs(body, family)
+				got := family.exemplarTraceIDs(body)
 				switch {
 				case !tc.wantExemplar:
 					if len(got) != 0 {
-						t.Errorf("%s: got exemplar trace_ids %v, want none", family, got)
+						t.Errorf("%s: got exemplar trace_ids %q, want none", family.name, got)
 					}
 				case len(got) == 0:
-					t.Errorf("%s: no exemplar on any bucket, want one carrying trace_id %q\n%s",
-						family, traceID, strings.Join(lines, "\n"))
+					t.Errorf("%s: no exemplar on any series, want one carrying trace_id %q\n%s",
+						family.name, traceID, strings.Join(lines, "\n"))
 				default:
-					// One exemplar per bucket, and only the bucket the sample
-					// landed in has one — so exactly one here, and it must be
-					// this span's trace, not merely some trace.
+					// One exemplar per series, and only the series the sample
+					// landed in has one — and it must be this span's trace, not
+					// merely some trace.
 					for _, id := range got {
 						if id != traceID {
 							t.Errorf("%s: exemplar trace_id = %q, want the recorded span's %q",
-								family, id, traceID)
+								family.name, id, traceID)
 						}
 					}
 				}
 
-				stripped[tc.name+"|"+family] = withoutExemplars(lines)
+				stripped[tc.name+"|"+family.name] = withoutExemplars(lines)
 			}
 		})
 	}
 
 	// "The histogram is otherwise unchanged": every case must have produced the
-	// same series, labels and bucket counts as the sampled one.
+	// same series, labels and values as the sampled one.
 	const reference = "tracing_on_and_sampled"
 	for _, tc := range cases {
 		if tc.name == reference {
 			continue
 		}
-		for _, family := range []string{toolDurationFamily, sempDurationFamily} {
+		for _, f := range exemplarFamilies {
+			family := f.name
 			want := strings.Join(stripped[reference+"|"+family], "\n")
 			got := strings.Join(stripped[tc.name+"|"+family], "\n")
 			if got != want {
-				t.Errorf("%s: %s histogram differs from the sampled case beyond its exemplars.\n"+
+				t.Errorf("%s: %s differs from the sampled case beyond its exemplars.\n"+
 					"--- %s ---\n%s\n--- %s ---\n%s", tc.name, family, tc.name, got, reference, want)
 			}
 		}
@@ -319,21 +365,110 @@ func TestExemplars_AbsentFromPlainTextScrape(t *testing.T) {
 
 	// Same provider, same recorded samples, both representations — so the
 	// difference observed is the representation and nothing else.
-	if got := exemplarTraceIDs(scrapeOpenMetrics(t, p), toolDurationFamily); len(got) == 0 {
+	if got := histogramFamily(toolDurationFamily).exemplarTraceIDs(scrapeOpenMetrics(t, p)); len(got) == 0 {
 		t.Fatal("no exemplar under OpenMetrics, so the plain-text assertion below is vacuous")
 	}
 
 	plain := scrapePlainText(t, p)
-	for _, family := range []string{toolDurationFamily, sempDurationFamily} {
-		lines := familyLines(plain, family)
+	for _, family := range exemplarFamilies {
+		lines := family.lines(plain)
 		if len(lines) == 0 {
-			t.Fatalf("%s: no sample lines in the plain-text scrape:\n%s", family, plain)
+			t.Fatalf("%s: no sample lines in the plain-text scrape:\n%s", family.name, plain)
 		}
 		for _, line := range lines {
 			if strings.Contains(line, " # ") {
 				t.Errorf("%s: plain-text scrape carries an exemplar, which would make "+
-					"Story 14's golden file non-deterministic:\n%s", family, line)
+					"Story 14's golden file non-deterministic:\n%s", family.name, line)
 			}
 		}
+	}
+}
+
+// TestExemplars_ExemplarFilterEnvVarOverridesTheDefault pins the one control
+// that turns this story's guarantee off, and the one that makes it lie.
+//
+// metrics.New passes no WithExemplarFilter (provider.go), so the SDK reads
+// OTEL_METRICS_EXEMPLAR_FILTER itself and defaults to trace_based
+// (sdk/metric config.go). Honouring that env var rather than pinning the filter
+// in code is deliberate and matches how the tracer provider treats
+// OTEL_TRACES_SAMPLER — the standard OTel environment contract is the
+// operator's, and silently ignoring an explicit always_off would be its own
+// defect. But it makes two behaviours worth pinning, because both would
+// otherwise be discovered as a support ticket:
+//
+//   - always_off: a sampled span produces NO exemplar. This is the second
+//     cause of "my exemplars are missing", alongside a low sampler argument,
+//     and neither is visible from the scrape.
+//   - always_on: an exemplar is attached with NO span on the context, carrying
+//     an empty trace_id — a Grafana link to nothing. This is why
+//     docs/observability.md scopes its "tracing off means no exemplars"
+//     statement to the default filter instead of stating it absolutely.
+//
+// Not parallel, and none of its subtests are: t.Setenv forbids it, and the
+// filter is read once when the meter provider is constructed, so the variable
+// has to be set before New. Go resumes a package's parallel tests only after
+// every sequential top-level test has finished, so nothing here races the
+// t.Parallel tests elsewhere in this package.
+func TestExemplars_ExemplarFilterEnvVarOverridesTheDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		filter       string
+		sampledSpan  bool
+		wantExemplar bool
+		wantTraceID  string
+	}{
+		{name: "always_off_suppresses_a_sampled_span", filter: "always_off", sampledSpan: true, wantExemplar: false},
+		{name: "always_on_attaches_one_with_no_span", filter: "always_on", sampledSpan: false, wantExemplar: true, wantTraceID: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("OTEL_METRICS_EXEMPLAR_FILTER", tc.filter)
+
+			// After the Setenv, so the meter provider reads it.
+			p, err := New(testVersion, sdkresource.Default())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			ctx := context.Background()
+			if tc.sampledSpan {
+				var span trace.Span
+				ctx, span = sdkTracer(t, sdktrace.AlwaysSample()).Start(ctx, "exemplar-test-span")
+				if !span.SpanContext().IsSampled() {
+					t.Fatal("span not sampled despite AlwaysSample(): this case proves nothing")
+				}
+				defer span.End()
+			}
+			recordOneOfEach(t, p, ctx)
+
+			body := scrapeOpenMetrics(t, p)
+			for _, family := range exemplarFamilies {
+				lines := family.lines(body)
+				if len(lines) == 0 {
+					t.Fatalf("%s: no sample lines in scrape — nothing was recorded, so "+
+						"whatever this case observes about exemplars proves nothing:\n%s",
+						family.name, body)
+				}
+
+				got := family.exemplarTraceIDs(body)
+				if !tc.wantExemplar {
+					if len(got) != 0 {
+						t.Errorf("%s: OTEL_METRICS_EXEMPLAR_FILTER=%s still produced exemplar "+
+							"trace_ids %q, want none", family.name, tc.filter, got)
+					}
+					continue
+				}
+				if len(got) == 0 {
+					t.Errorf("%s: OTEL_METRICS_EXEMPLAR_FILTER=%s produced no exemplar, want one\n%s",
+						family.name, tc.filter, strings.Join(lines, "\n"))
+					continue
+				}
+				for _, id := range got {
+					if id != tc.wantTraceID {
+						t.Errorf("%s: exemplar trace_id = %q, want %q",
+							family.name, id, tc.wantTraceID)
+					}
+				}
+			}
+		})
 	}
 }

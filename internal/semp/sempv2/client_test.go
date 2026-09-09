@@ -200,16 +200,29 @@ func newMetricsClient(t *testing.T, handler http.HandlerFunc, retries int, recor
 	return client, server
 }
 
-// scrapeMetrics returns the provider's /metrics body.
+// scrapeMetrics returns the provider's /metrics body in the default plain-text
+// exposition (no Accept header negotiated).
 func scrapeMetrics(t *testing.T, p *metrics.Provider) string {
+	t.Helper()
+	return scrapeMetricsAccepting(t, p, "").Body.String()
+}
+
+// scrapeMetricsAccepting does one scrape with the given Accept header ("" to
+// send none) and returns the whole recorder, so a caller that cares which
+// representation it got back can inspect Content-Type — which the exemplar
+// tests must, since exemplars ride only the OpenMetrics one.
+func scrapeMetricsAccepting(t *testing.T, p *metrics.Provider, accept string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequestWithContext(context.Background(), "GET", "/metrics", nil)
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	}
 	p.Handler().ServeHTTP(rec, req)
 	if rec.Code != 200 {
 		t.Fatalf("scrape status = %d, want 200", rec.Code)
 	}
-	return rec.Body.String()
+	return rec
 }
 
 func testQueueOp(t *testing.T) *sempv2.Operation {

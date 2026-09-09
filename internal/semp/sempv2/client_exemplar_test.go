@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -33,26 +32,27 @@ import (
 // exemplars to.
 const sempDurationFamily = "mcp_semp_request_duration_seconds"
 
-// scrapeExemplarBearing returns the bucket lines of one metric family, split
-// into those carrying an exemplar and all of them. The OpenMetrics Accept
-// header is the load-bearing part: exemplars appear in no other
-// representation, so a plain-text response would make every assertion below
-// vacuous, and is failed loudly rather than tolerated (D4).
+// openMetricsAccept is the header that selects the only exposition carrying
+// exemplars (D4). Sending it is load-bearing rather than incidental: against a
+// plain-text response every exemplar assertion here would pass vacuously.
+const openMetricsAccept = `application/openmetrics-text; version=1.0.0; charset=utf-8`
+
+// scrapeExemplarBearing returns the bucket lines of one histogram family that
+// carry an exemplar, and fails the test rather than returning an empty slice
+// when a premise those lines rest on does not hold — a scrape that came back
+// as plain text, or a family with no bucket lines at all (an absence proves
+// nothing about exemplars when nothing was recorded).
 //
-// Duplicated from internal/tools/exemplar_test.go on purpose — a shared
-// non-test helper package reports 0% coverage against the 85% gate (see
-// internal/observability/panics/panicstest), which is a poor trade for a dozen
-// lines.
+// Its counterpart in internal/tools/exemplar_test.go is a deliberate
+// duplicate: the two packages own the two observation call sites and cannot
+// share a test helper without a non-test package, which would report 0%
+// coverage against the 85% gate (see internal/observability/panics/panicstest).
+// The scrape itself is NOT duplicated — that comes from this package's own
+// scrapeMetricsAccepting.
 func scrapeExemplarBearing(t *testing.T, p *metrics.Provider, family string) (withExemplar, all []string) {
 	t.Helper()
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil)
-	req.Header.Set("Accept", `application/openmetrics-text; version=1.0.0; charset=utf-8`)
-	p.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("scrape status = %d, want 200; body:\n%s", rec.Code, rec.Body.String())
-	}
+	rec := scrapeMetricsAccepting(t, p, openMetricsAccept)
 	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "openmetrics-text") {
 		t.Fatalf("handler did not serve OpenMetrics: Content-Type = %q — exemplars appear "+
 			"in no other representation, so this test would prove nothing", ct)
@@ -66,6 +66,12 @@ func scrapeExemplarBearing(t *testing.T, p *metrics.Provider, family string) (wi
 		if strings.Contains(line, " # ") {
 			withExemplar = append(withExemplar, line)
 		}
+	}
+	if len(all) == 0 {
+		t.Fatalf("no %s_bucket lines in the scrape. Most likely the histogram recorded "+
+			"nothing, so an absent exemplar would prove nothing — but check the exposition "+
+			"too: an exporter that switched to native histograms emits no _bucket lines at "+
+			"all, and the first explanation would then be the wrong one.", family)
 	}
 	return withExemplar, all
 }
@@ -137,10 +143,6 @@ func TestExecute_LatencyBucketCarriesTheRequestSpansTraceID(t *testing.T) {
 	wantTraceID := request.SpanContext().TraceID().String()
 
 	withExemplar, all := scrapeExemplarBearing(t, prov, sempDurationFamily)
-	if len(all) == 0 {
-		t.Fatalf("no %s_bucket lines in the scrape — the histogram recorded nothing, "+
-			"so an absent exemplar proves nothing", sempDurationFamily)
-	}
 
 	// One exemplar per bucket, and each attempt landed in one bucket of its own
 	// series, so both attempts must be represented.

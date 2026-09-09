@@ -442,7 +442,8 @@ The two latency histograms (`mcp_tool_invocation_duration_seconds` and
 enabled, so a slow bucket on a Grafana panel links straight to the trace that produced it and
 you skip correlating by timestamp. The matching `_total` counters carry them too.
 
-Three things to know, because all three look like bugs otherwise:
+Four things to know. Each is a reason exemplars can be missing from a scrape that is
+otherwise perfectly healthy, and none of them is visible from the scrape itself:
 
 - **Your Prometheus must negotiate OpenMetrics to receive them.** Exemplars are not part of the
   older Prometheus text exposition format. Recent Prometheus versions request OpenMetrics by
@@ -455,6 +456,14 @@ Three things to know, because all three look like bugs otherwise:
 - **With `OBS_TRACING_ENABLED` off, the histograms are unchanged and simply carry no
   exemplars.** Metrics do not depend on tracing being on: same series, same label keys, same
   bucket counts either way.
+- **`OTEL_METRICS_EXEMPLAR_FILTER` overrides all of the above.** This server ships no default
+  of its own and honors the standard OpenTelemetry SDK contract, whose default is
+  `trace_based` — attach an exemplar when a sampled span is active, and otherwise not. That
+  is the behavior the three points above describe. Setting `always_off` suppresses every
+  exemplar even under full sampling, and it is the second thing to check when exemplars are
+  missing. Setting `always_on` is **not recommended**: it attaches an exemplar even when no
+  span was active, carrying an empty `trace_id` that links nowhere, which a Grafana panel
+  renders as a dead link.
 
 Exemplars add no new label keys and no new series.
 
