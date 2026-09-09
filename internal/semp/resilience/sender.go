@@ -375,20 +375,35 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 		opt(d)
 	}
 
-	// Wrap the transport so each attempt is recorded once. Off unless WithMetrics
-	// supplied a recorder. httpClient is the same pointer held by retryClient, so
-	// swapping its transport here takes effect for every attempt.
-	if d.sempMetrics != nil {
+	// Wrap the transport so each attempt is seen exactly once. httpClient is the
+	// same pointer held by retryClient, so swapping its transport here takes
+	// effect for every attempt.
+	//
+	// Two wrappers, outermost first: attemptTransport always (it owns the
+	// attempt counter and the `semp.attempt` span, SOL-152422), and inside it
+	// metricsTransport only when WithMetrics supplied a recorder. That order is
+	// required, not stylistic — metricsTransport reads the counter
+	// attemptTransport has just bumped.
+	//
+	// Skipped when this client's transport is already wrapped. Every production
+	// path gives each protocol client its own *http.Client (sempv1.New,
+	// sempv2.New), so this only fires if a caller shares one between two
+	// Senders, where re-wrapping would double-count every attempt and nest a
+	// second attempt span inside the first.
+	if _, wrapped := httpClient.Transport.(*attemptTransport); !wrapped {
 		base := httpClient.Transport
 		if base == nil {
 			base = http.DefaultTransport
 		}
-		httpClient.Transport = &metricsTransport{
-			base:        base,
-			recorder:    d.sempMetrics,
-			api:         d.api,
-			brokerAlias: d.brokerAlias,
+		if d.sempMetrics != nil {
+			base = &metricsTransport{
+				base:        base,
+				recorder:    d.sempMetrics,
+				api:         d.api,
+				brokerAlias: d.brokerAlias,
+			}
 		}
+		httpClient.Transport = &attemptTransport{base: base}
 	}
 
 	return d
@@ -737,12 +752,22 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	// so the non-idempotent method guard can fire even on connection errors
 	// (where resp is nil and resp.Request.Method is unavailable), and the
 	// caller's idempotency markers (WithRetrySafe / WithRetryUnsafe).
-	ctx = context.WithValue(ctx, retryStateKey{}, &retryState{
+	state := &retryState{
 		method:      req.Method,
 		retrySafe:   isRetrySafe(ctx),
 		retryUnsafe: isRetryUnsafe(ctx),
-	})
+	}
+	ctx = context.WithValue(ctx, retryStateKey{}, state)
 	req = req.WithContext(ctx)
+
+	// Backstop for the attempt span's lifecycle (SOL-152422). attemptTransport
+	// opens the span and checkRetry closes it, and on today's retryablehttp
+	// every dispatch is followed by a CheckRetry call, so nothing should be left
+	// open here. Deferred anyway, and deferred rather than placed after
+	// retryClient.Do so it also covers a panic: an unended span is never
+	// exported at all, so the cost of being wrong is losing the attempt from the
+	// trace entirely rather than seeing one with a missing attribute.
+	defer state.closeDanglingAttemptSpan()
 
 	retryReq, err := retryablehttp.FromRequest(req)
 	if err != nil {

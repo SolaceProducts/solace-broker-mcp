@@ -817,21 +817,20 @@ which you own.** The server does not itself persist or sign events.
 
 ## Distributed Tracing — [Interim: request-path spans wired]
 
-> _Status: **[Interim]** (SOL-152420, SOL-153333, SOL-152421). The tracer provider, OTLP
-> export, and self-observation counters are wired and live behind `OBS_TRACING_ENABLED`
+> _Status: **[Interim]** (SOL-152420, SOL-153333, SOL-152421, SOL-152422). The tracer provider,
+> OTLP export, and self-observation counters are wired and live behind `OBS_TRACING_ENABLED`
 > (Story 25). Story 26 (SOL-152421) adds the request-path spans — the HTTP boundary, the tool
 > dispatcher, the composite executor, and one span per SEMP call — and installs the W3C Trace
-> Context propagator, so a trace started by your AI agent now continues unbroken into this
-> server. Enabling the flag today therefore exports a real four-or-more-span trace per tool
-> call, not a single-span root. Trace exemplars linking the latency histogram buckets to these
-> traces are live as well (Story 47, SOL-152419) — see
-> [Trace Exemplars](#trace-exemplars--implemented). **Still pending:** per-*attempt* SEMP spans
-> and the `retry.decision` / `retry.exhausted` attributes (Story 27, SOL-152422) — the
-> `semp.request` span shipped today covers a whole retry chain, so a call that retried three
-> times is one span, not three. Span names
-> beyond `tokenexchange.Exchange` and `semp.attempt`, and span kinds, remain open items for
-> pilot input (item 4) — the names shipped in Story 26 are listed under
-> [Spans](#spans) and can still change on your feedback._
+> server. Story 27 (SOL-152422) adds the per-*attempt* spans below those: one `semp.attempt`
+> per SEMP try and one `tokenexchange.attempt` per IdP try, each carrying the
+> `retry.decision` the retry policy actually made and `retry.exhausted` on the attempt where
+> the allowance ran out. A call that retried three times is now three attempt spans under one
+> `semp.request`, not one opaque span. Enabling the flag today therefore exports a real
+> five-or-more-span trace per tool call, not a single-span root. Trace exemplars linking the
+> latency histogram buckets to these traces are live as well (Story 47, SOL-152419) — see
+> [Trace Exemplars](#trace-exemplars--implemented). Span names and span kinds remain open items
+> for pilot input (item 4) — the names shipped so far are listed under [Spans](#spans) and can
+> still change on your feedback._
 
 OpenTelemetry spans at each hop of a request, exported over OTLP, enabled with
 `OBS_TRACING_ENABLED` (never automatic; you opt in after deploying a collector).
@@ -859,6 +858,10 @@ A successful end-to-end tool call produces four spans in one trace, nested in th
 | `composite.Execute` | Internal | composite-tool execution (absent for a native SEMPv1 tool) |
 | `semp.request` | Client | SEMP call to the broker, **covering its whole retry chain** |
 
+Plus one `semp.attempt` span under `semp.request` per attempt that call made — one on a call
+that succeeded first time, three on a call that took three tries (Story 27, SOL-152422; see
+below).
+
 The entry span's name follows the OTel HTTP server convention `{method} {route}`, and its HTTP
 attributes come from `otelhttp`'s own semantic-convention implementation. The other three follow
 the `<package>.<Function>` shape `tokenexchange.Exchange` established.
@@ -871,18 +874,30 @@ entry-span duration. So `GET` is filtered out and you will see no span for that 
 requests travel over `POST`, which is what the entry span covers; a `DELETE` session teardown is
 short-lived and is traced.
 
-Two further named spans:
+Three further named spans:
 
 - `tokenexchange.Exchange`: one per call to the OAuth token exchange (Story 50, SOL-153333) —
   a cache hit, a singleflight follower, and the singleflight winner triggering a live IdP round
   trip each get their own span. Child of the `semp.request` span whose `AddAuth` triggered it.
-- `semp.attempt`: one per SEMP request *attempt* (Story 27, SOL-152422, not yet landed). This
-  is the span that will distinguish a call that succeeded first time from one that succeeded on
-  its third attempt. Until it lands, `semp.request` is the finest SEMP granularity available,
-  and a retry is invisible in the trace — check `mcp_semp_request_total`, whose `attempt` label
-  counts them (SOL-152093, emitted today), or the
-  Sender's own log lines. **`semp.request` is deliberately not named `semp.attempt`:** naming a
-  whole retry chain "attempt" would mislabel it and leave Story 27 no name to use.
+- `semp.attempt` (Client): one per SEMP request *attempt* (Story 27, SOL-152422), child of the
+  `semp.request` span covering that chain. This is the span that distinguishes a call that
+  succeeded first time from one that succeeded on its third attempt: read `attempt`,
+  `http.response.status_code`, `retry.decision` and `retry.exhausted` down the siblings and the
+  shape of a retry storm is legible at a glance. **`semp.request` is deliberately not named
+  `semp.attempt`:** naming a whole retry chain "attempt" would mislabel it.
+- `tokenexchange.attempt` (Client): one per HTTP attempt of a live IdP token exchange
+  (Story 27, SOL-152422), child of the `tokenexchange.Exchange` span of the caller that
+  actually ran the exchange. **Two limitations to know about, both consequences of the
+  exchange running detached from any one caller so that a cancellation cannot abort work
+  others are waiting on:**
+  - A **deduped caller sees no attempt spans.** Concurrent identical exchanges collapse into
+    one IdP round trip, and the attempts hang off the winner's span. A follower's
+    `tokenexchange.Exchange` span has no attempt children; follow its
+    `singleflight_role="follower"`, its `winner_trace_id` / `winner_span_id`, or its span
+    `Link` to reach the trace that holds them.
+  - `correlation_id` **on these spans is the winner's**, so it identifies the request that
+    triggered the exchange, not necessarily the request you are looking at. This is weaker
+    than the SEMP path, where every attempt carries that request's own ID.
 
 Span names, and span kinds, remain open items in this review (see
 [Open Items for This Review](#open-items-for-this-review), item 4) — including the four above.
@@ -921,8 +936,10 @@ distinction is the point, since they have different causes and different remedie
 | `semp.version` | `v1` or `v2`, on `semp.request` | Solace |
 | `semp.operation` | The SEMPv2 operationId (e.g. `getMsgVpnQueue`), on `semp.request` for v2 only — SEMPv1 has no operationId | Solace |
 | `composite.steps` | Declared step count, on `composite.Execute` | Solace |
-| `retry.decision` | The retry decision on a SEMP attempt | Solace |
-| `retry.exhausted` | `true` on the final attempt when retries are exhausted | Solace |
+| `attempt` | The 1-based try number, on `semp.attempt` and `tokenexchange.attempt`; the **same value as the `attempt` metric label** on `mcp_semp_request_total`, read from one counter so the two cannot drift | Solace |
+| `http.response.status_code` | The status that attempt got, on `semp.attempt` and `tokenexchange.attempt`. Absent — never zero — when the attempt got no response at all (a connection error) | Solace |
+| `retry.decision` | Whether the retry policy chose to retry after this attempt, on `semp.attempt` and `tokenexchange.attempt`. **This is the decision the server acted on, not a re-reading of the status code**, so it can legitimately be `false` on a 503: a request the caller declared non-idempotent, or one on a non-idempotent method, is never replayed. A `true` with `retry.exhausted` means the policy wanted to retry and had nothing left | Solace |
+| `retry.exhausted` | `true` on the final attempt when the retry allowance ran out; absent otherwise. On `semp.attempt` that is either the configured `semp.retries` running out or the internal 429/503 sub-cap being reached — the latter is how a real broker-overload episode usually ends. **Absent when the policy simply refused to replay** (a non-idempotent request): nothing ran out, and the two cases have different remedies | Solace |
 | `cache_hit` | `tokenexchange.Exchange` only: true when served from cache, false when a live IdP round trip was needed (or waited on). **Isolating actual live round trips needs `singleflight_role="winner"` too** — a follower also reports `cache_hit=false` despite doing no IdP work itself, so filtering on `cache_hit` alone counts one winner plus every follower waiting on it | Solace |
 | `singleflight_role` | `tokenexchange.Exchange` only, absent on a cache hit: `winner` (this call ran the live IdP round trip) or `follower` (this call shared another's result) | Solace |
 | `winner_trace_id` / `winner_span_id` | `tokenexchange.Exchange` only, present on a `follower` span only: the winner's own IDs, so an operator can pivot from a follower's span to the trace that actually did the IdP work. The follower span also carries a span `Link` to the same span | Solace |
@@ -939,6 +956,13 @@ system couples the two, since the span writes an attribute and the metric writes
 label from a different call site, so the two can drift while each surface still looks healthy
 on its own. `correlation_id` is span-only by design: it is per-request, and as a metric label
 it would be unbounded.
+
+**The two attempt spans deliberately carry no `outcome`.** An attempt is not a call: a 503 that
+was retried and then succeeded is a normal step of a healthy call, so tagging it
+`outcome: error` would place an error span under a successful `semp.request` on every retried
+call and inflate any error view a backend builds from that filter. `retry.decision` and
+`http.response.status_code` describe an attempt; the call's outcome is on the parent span. For
+the same reason their span status is left `Unset`.
 
 **Which spans carry which.** Every span in the table above **except the entry span** carries
 `outcome`. `POST /mcp` is produced by `otelhttp` and carries the HTTP semantic-convention
@@ -1432,9 +1456,9 @@ the review.
    concrete to react to, not because they are frozen: renaming a span is cheap now and expensive
    after the freeze. If your trace backend or trace-based SLOs key off specific span names or
    `SpanKind` values, tell us what you expect. Two specifics we would most like checked: whether
-   `semp.request` covering a whole retry chain (with per-attempt `semp.attempt` spans nested
-   inside it once Story 27 lands) matches how you would query retries, and whether you expect
-   `tools.CallTool` to be `Internal` or `Server`.
+   `semp.request` covering a whole retry chain, with per-attempt `semp.attempt` spans nested
+   inside it (Story 27, now shipped), matches how you would query retries, and whether you
+   expect `tools.CallTool` to be `Internal` or `Server`.
 5. **The `outcome` / `error_type` split.** We have settled on three `outcome` values with the
    cause in a separate `error_type` of twelve values, rather than folding causes into `outcome`.
    Does that split match how your SIEM queries distinguish failures, and do the twelve

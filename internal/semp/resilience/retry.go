@@ -23,6 +23,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/audit"
 	"github.com/hashicorp/go-retryablehttp"
 )
@@ -61,9 +63,13 @@ type retryStateKey struct{}
 // retryState tracks per-request retry decisions to enforce the retry caps: the
 // "retry once" limits for 401 re-auth (auth401Retried) and non-429/503 5xx
 // (other5xxRetried), plus the maxTransientRetries cap for 429/503
-// (transientRetried). It also carries attempt, the 1-based try counter read by
-// the recording transport. Each Do() call creates its own instance via context,
+// (transientRetried). It also carries attempt, the 1-based try counter, and the
+// in-flight attempt span. Each Do() call creates its own instance via context,
 // so concurrent requests to the same Sender are safe.
+//
+// Every field is written and read on the single goroutine driving
+// retryablehttp's Do loop for that request — the transport wrapper, checkRetry
+// and prepareRetry all run there, in sequence — so no field needs a lock.
 type retryState struct {
 	auth401Retried   bool   // true after first 401 re-auth attempt
 	authRecovered    bool   // true iff the most recent response was non-401 after a 401 (flips back to false on another 401; see checkRetry)
@@ -73,7 +79,11 @@ type retryState struct {
 	retrySafe        bool   // caller-declared semantic idempotency (see WithRetrySafe)
 	retryUnsafe      bool   // caller-declared semantic NON-idempotency (see WithRetryUnsafe)
 	needsReauth      bool   // true when the next retry should re-run AddAuth (set on 401)
-	attempt          int    // 1-based try counter, bumped by the recording transport
+	attempt          int    // 1-based try counter, bumped by attemptTransport
+	// attemptSpan is the span attemptTransport opened for the attempt now in
+	// flight, parked here so checkRetry can tag it with the decision it
+	// returns and close it (see attempt_span.go). nil between attempts.
+	attemptSpan trace.Span
 }
 
 // retrySafeKey is the context key for the caller-declared retry-safe marker.
@@ -148,17 +158,30 @@ func getRetryState(ctx context.Context) *retryState {
 	return &retryState{}
 }
 
-// nextAttempt bumps and returns the 1-based try counter on the per-request
-// retry state. The recording transport calls it once per attempt. The state
-// pointer is shared across a request's tries, so the count runs 1, 2, 3.
-// If no state is on the context (Sender.Do was bypassed), returns 1 — the
-// attempt is real but uncounted.
-func nextAttempt(ctx context.Context) int {
-	s, ok := ctx.Value(retryStateKey{}).(*retryState)
-	if !ok {
+// getRetryStateOrNil returns the per-request retryState on ctx, or nil when
+// there is none. Unlike getRetryState it does NOT substitute a fresh state:
+// callers that only observe a request (the transport wrapper, the attempt span)
+// must be able to tell "no chain to attribute this to" apart from "a chain
+// whose caps all happen to be at zero".
+func getRetryStateOrNil(ctx context.Context) *retryState {
+	s, _ := ctx.Value(retryStateKey{}).(*retryState)
+	return s
+}
+
+// attemptNumber reports the 1-based try counter for the attempt now in flight.
+// attemptTransport is the counter's single owner and bumps it once per attempt
+// (see attempt_span.go); every other reader — metricsTransport's `attempt`
+// label, the attempt span's `attempt` attribute — reads it here so the two can
+// never disagree.
+//
+// Returns 1 when no state is on the context (Sender.Do was bypassed) or the
+// counter has not been bumped: the attempt is real but uncounted, and reporting
+// it as attempt 1 is closer to the truth than reporting attempt 0.
+func attemptNumber(ctx context.Context) int {
+	s := getRetryStateOrNil(ctx)
+	if s == nil || s.attempt == 0 {
 		return 1
 	}
-	s.attempt++
 	return s.attempt
 }
 
@@ -171,7 +194,18 @@ func nextAttempt(ctx context.Context) int {
 //   - Other 5xx: retry once only (likely a bug, not transient)
 //   - Connection errors: delegate to retryablehttp's default policy
 //   - All other status codes (4xx): no retry
-func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error) (bool, error) {
+//
+// The named returns exist for the deferred endAttemptSpan call below, which
+// closes the attempt span attemptTransport opened and tags it with the decision
+// this function actually returns (SOL-152422). Deferring it once here, rather
+// than editing each of the many exits, is what guarantees the span reports the
+// real decision on every path — including the two sentinel-error exits, which a
+// span site reading only the status code would misreport.
+func (d *Sender) checkRetry(ctx context.Context, resp *http.Response, err error) (retry bool, checkErr error) {
+	defer func() {
+		endAttemptSpan(ctx, d.retryClient.RetryMax, resp, retry, checkErr)
+	}()
+
 	// Context cancellation: never retry.
 	if ctx.Err() != nil {
 		return false, ctx.Err()

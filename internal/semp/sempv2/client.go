@@ -183,8 +183,9 @@ func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string
 	//
 	// `semp.request`, NOT `semp.attempt`: this delegates to
 	// resilience.Sender.Do, which retries internally, so this span covers the
-	// whole chain. The reserved `semp.attempt` name is left free for Story 27
-	// (SOL-152422), which instruments inside the Sender and nests under this.
+	// whole chain. The Sender opens one `semp.attempt` child of this span per
+	// try (SOL-152422, internal/semp/resilience/attempt_span.go), which is where
+	// per-attempt status and retry decisions live.
 	//
 	// op.ID and the method, never the resolved URL: path params interpolate
 	// customer topology, and a span exports offsite.

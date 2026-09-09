@@ -24,7 +24,8 @@ import (
 
 // metricsTransport wraps an http.RoundTripper to record one SEMP sample per
 // attempt. retryablehttp calls the transport once per try, so this is the one
-// place that sees every attempt. Installed only when metrics are on.
+// place that sees every attempt. Installed only when metrics are on, inside the
+// always-present attemptTransport (see New).
 type metricsTransport struct {
 	base        http.RoundTripper
 	recorder    *metrics.SEMPMetrics
@@ -36,11 +37,16 @@ type metricsTransport struct {
 // number. A try that gets no response records an empty status. Redirect hops
 // (req.Response != nil) are passed through without recording — they are not
 // new SEMP attempts.
+//
+// The attempt number is read, not incremented: attemptTransport owns the
+// counter and has already bumped it for this try (SOL-152422). Reading one
+// counter is what keeps this metric label and the `attempt` attribute on the
+// `semp.attempt` span from ever drifting apart.
 func (t *metricsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.Response != nil {
 		return t.base.RoundTrip(req)
 	}
-	attempt := nextAttempt(req.Context())
+	attempt := attemptNumber(req.Context())
 
 	start := time.Now()
 	resp, err := t.base.RoundTrip(req)
