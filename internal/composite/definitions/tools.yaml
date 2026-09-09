@@ -223,11 +223,10 @@ tools:
       that are down or have no active connections. The response summary counts
       enabled VPNs in state == "down" under downCount and enabled+up VPNs with
       no non-reserved client connected under zeroConnectionCount — derived by
-      probing each enabled+up VPN unless it reports exactly zero connections
-      for a client whose clientUsername does not match Solace's reserved `#*`
-      prefix; a VPN reporting zero connections has no clients and is counted
-      without a probe, while one with no connection count at all is probed
-      rather than assumed empty. Standby VPNs are excluded from both.
+      probing each enabled+up VPN for a client whose clientUsername does not
+      match Solace's reserved `#*` prefix, unless the VPN reports exactly zero
+      connections; a VPN with no connection count at all is probed rather than
+      assumed empty. Standby VPNs are excluded from both.
       Admin-disabled VPNs land in disabledCount only and are excluded from
       downCount and zeroConnectionCount. For per-service TLS status and AMQP
       support, use get-vpn-status.
