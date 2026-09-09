@@ -375,21 +375,49 @@ func New(httpClient *http.Client, sempCfg *config.SEMPConfig, authn auth.Authent
 		opt(d)
 	}
 
-	// Wrap the transport so each attempt is recorded once. Off unless WithMetrics
-	// supplied a recorder. httpClient is the same pointer held by retryClient, so
-	// swapping its transport here takes effect for every attempt.
+	// Wrap the transport so each attempt is seen exactly once.
+	//
+	// Two wrappers, outermost first: the attempt-span transport
+	// (newAttemptTransport) always — it owns the attempt counter and the
+	// `semp.attempt` span, SOL-152422 — and inside it metricsTransport only
+	// when WithMetrics supplied a recorder. That order is required, not
+	// stylistic — metricsTransport reads the counter the attempt-span
+	// transport has just bumped, and the order is pinned by the sempv2
+	// metric-label tests.
+	//
+	// The wrappers go on a shallow COPY of the caller's client rather than on
+	// the client itself. The copy is cheap (four fields, none with internal
+	// state) and carries Timeout, Jar and CheckRedirect through unchanged, so
+	// the retry loop behaves identically. What it buys is that New no longer
+	// mutates an object its caller owns:
+	//
+	//   - Two Senders built over one *http.Client each get their own correct
+	//     chain. Mutating in place instead had to skip the second Sender's
+	//     wrapping to avoid double-counting every attempt, which silently
+	//     dropped that Sender's SEMP metrics if only it had WithMetrics — the
+	//     same class of defect (a signal present only because an unrelated
+	//     feature happened to be on) that SOL-152422 exists to fix.
+	//   - A caller that installs its own RoundTripper before calling New keeps
+	//     the client it configured; this composes over it rather than
+	//     rewriting it.
+	//
+	// Production gives each protocol client its own *http.Client anyway
+	// (sempv1.New, sempv2.New), so this is about not depending on that.
+	base := httpClient.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
 	if d.sempMetrics != nil {
-		base := httpClient.Transport
-		if base == nil {
-			base = http.DefaultTransport
-		}
-		httpClient.Transport = &metricsTransport{
+		base = &metricsTransport{
 			base:        base,
 			recorder:    d.sempMetrics,
 			api:         d.api,
 			brokerAlias: d.brokerAlias,
 		}
 	}
+	wrapped := *httpClient
+	wrapped.Transport = newAttemptTransport(base)
+	retryClient.HTTPClient = &wrapped
 
 	return d
 }
@@ -737,12 +765,23 @@ func (d *Sender) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	// so the non-idempotent method guard can fire even on connection errors
 	// (where resp is nil and resp.Request.Method is unavailable), and the
 	// caller's idempotency markers (WithRetrySafe / WithRetryUnsafe).
-	ctx = context.WithValue(ctx, retryStateKey{}, &retryState{
+	state := &retryState{
 		method:      req.Method,
 		retrySafe:   isRetrySafe(ctx),
 		retryUnsafe: isRetryUnsafe(ctx),
-	})
+	}
+	ctx = context.WithValue(ctx, retryStateKey{}, state)
 	req = req.WithContext(ctx)
+
+	// Backstop for the attempt span's lifecycle (SOL-152422). The
+	// attemptspan.Transport newAttemptTransport builds opens the span and
+	// checkRetry closes it, and on today's retryablehttp every dispatch is
+	// followed by a CheckRetry call, so nothing is left open here — see
+	// closeDanglingAttemptSpan for why that makes this call site unpinnable by
+	// test, and what it bounds if a future library version changes. Deferred
+	// rather than placed after retryClient.Do so it also runs while a panic
+	// unwinds.
+	defer state.closeDanglingAttemptSpan()
 
 	retryReq, err := retryablehttp.FromRequest(req)
 	if err != nil {

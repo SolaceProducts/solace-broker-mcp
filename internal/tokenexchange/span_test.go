@@ -88,9 +88,16 @@ var (
 // convention (none of these tests call t.Parallel()), not by a lock — a
 // test that leaves a detached background call running past its own return
 // (the way TestExchange_DetachedCallWarmsCacheAfterCallerBails in
-// exchange_test.go deliberately does) is a real hazard the moment such a
-// call creates its own span (Story 27, not yet built): that span would land
-// in whichever recorder is installed by then, not necessarily this test's.
+// exchange_test.go deliberately does) is a real hazard now that such a call
+// DOES create its own spans: the `tokenexchange.attempt` spans the retrying
+// HTTP client emits per IdP attempt (SOL-152422) would land in whichever
+// recorder is installed by then, not necessarily this test's. Two things
+// keep that latent rather than live: the detached-call tests build their
+// exchanger with a plain *http.Client, which has no attempt-span wrapper at
+// all, and the tests that do use the retrying client wait for every caller
+// to return before they finish. Anything asserting on attempt spans should
+// scope its query by trace ID (see attempt_span_test.go) rather than by span
+// name alone.
 func withRecordingTracer(t *testing.T) *tracetest.SpanRecorder {
 	t.Helper()
 	installSharedTracer.Do(func() {
@@ -391,28 +398,37 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
-// TestExchange_Span_DetachedCallCarriesParentForFutureRetrySpans is the
-// direct proof behind the SpanContext-capture-before-detach mechanism
-// (winnerSpanCtx in Exchange, re-attached via oteltrace.ContextWithSpanContext
-// in runExchangeOnce): a span created from the request context doExchange
-// builds — standing in for a Story 27 retry-attempt span, not yet built —
-// must come back parented to the Exchange span, in the same trace, not a
-// disconnected root. Breaking the capture (an invalid SpanContext) or the
-// re-attachment (skipping it in runExchangeOnce) each pass every other test
-// in this package silently, since nothing else observes the detached
-// context's span parentage.
-func TestExchange_Span_DetachedCallCarriesParentForFutureRetrySpans(t *testing.T) {
+// detachedParentStandInSpan is a span name used only by the test below. It is
+// deliberately NOT `tokenexchange.attempt` (the real per-attempt span name,
+// SOL-152422) or `semp.attempt`: this test drives a plain *http.Client with no
+// attempt-span wrapper, so a real name here would read as an assertion about
+// the shipped instrumentation when it is an assertion about context plumbing.
+const detachedParentStandInSpan = "test.detached-parent-stand-in"
+
+// TestExchange_Span_DetachedCallCarriesParentForRetrySpans is the direct,
+// isolated proof behind the SpanContext-capture-before-detach mechanism
+// (callerSpanCtx in Exchange, re-attached via oteltrace.ContextWithSpanContext
+// in runExchangeOnce): ANY span created from the request context doExchange
+// builds must come back parented to the Exchange span, in the same trace, not
+// a disconnected root. Breaking the capture (an invalid SpanContext) or the
+// re-attachment (skipping it in runExchangeOnce) would otherwise pass every
+// other test in this package silently.
+//
+// This stays a stand-in span over a plain *http.Client rather than being
+// folded into the real `tokenexchange.attempt` tests in attempt_span_test.go.
+// The two prove different things: those drive the production retrying client
+// end to end and would fail for any number of reasons, while this isolates the
+// one context-plumbing hop and nothing else.
+func TestExchange_Span_DetachedCallCarriesParentForRetrySpans(t *testing.T) {
 	sr := withRecordingTracer(t)
 
 	var standInSpan sdktrace.ReadOnlySpan
 	e := newTestExchanger(t, "http://placeholder.invalid")
 	e.httpClient = &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		// Stands in for a retry-attempt span Story 27 will create from this
-		// same request context.
-		_, standIn := otel.Tracer("story27-stand-in").Start(req.Context(), "semp.attempt")
+		_, standIn := otel.Tracer("detached-parent-stand-in").Start(req.Context(), detachedParentStandInSpan)
 		standIn.End()
 		for _, s := range sr.Ended() {
-			if s.Name() == "semp.attempt" {
+			if s.Name() == detachedParentStandInSpan {
 				standInSpan = s
 			}
 		}
