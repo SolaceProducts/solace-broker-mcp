@@ -35,12 +35,10 @@ import (
 
 // defaultTestConfig is the sensible starting point for most tokenexchange /
 // integration tests: small MaxSize so full-cache paths are cheap to exercise,
-// zero ClockSkew so tests do not need to reason about the safety margin, and
-// a 1-hour MaxTTL that covers any test-generated ExpiresAt.
+// and a 1-hour MaxTTL that covers any test-generated ExpiresAt.
 var defaultTestConfig = cache.CacheConfig{
-	MaxSize:   100,
-	ClockSkew: 0,
-	MaxTTL:    time.Hour,
+	MaxSize: 100,
+	MaxTTL:  time.Hour,
 }
 
 // Default returns a fresh TokenCache with test-friendly defaults and
@@ -54,8 +52,8 @@ func Default(t *testing.T) cache.TokenCache {
 }
 
 // WithConfig is like Default but exposes CacheConfig so tests can exercise
-// specific MaxSize / TTL / skew behavior. Prefer Default when the config
-// does not matter to the test's assertions.
+// specific MaxSize / MaxTTL behavior. Prefer Default when the config does not
+// matter to the test's assertions.
 func WithConfig(t *testing.T, cfg cache.CacheConfig) cache.TokenCache {
 	t.Helper()
 	tc, err := cache.NewTokenCache(cfg)

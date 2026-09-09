@@ -335,17 +335,24 @@ const DefaultRetryMaxInterval = 30 * time.Second
 
 // DefaultTokenExpirySkew is subtracted from the IdP-reported expires_in
 // when computing a token's ExpiresAt. The result is a conservative
-// "use-by" instant — callers (and the future cache) never present a
-// token that might expire mid-flight to the broker.
+// "use-by" instant — callers (and the cache) never present a token that
+// might expire mid-flight to the broker.
+//
+// Subtracted EXACTLY ONCE, in internal/tokenexchange when the IdP response
+// is parsed. Every downstream component — the token cache above all — is a
+// consumer of the already-adjusted ExpiresAt and must deduct nothing further.
+// SOL-154165 was a second deduction inside the cache's own TTL derivation:
+// the effective margin became 60s, so every token was cached 30s short and an
+// IdP issuing 60-second tokens produced a cache that stored nothing.
 //
 // Decided: 30 seconds.
 // Reasoning: a broker-bound SEMP request takes well under 1 second in
 // the common case; 30s gives ~30× headroom for slow networks or
 // queued requests while wasting at most 30s of a token's lifetime.
 // Trade-off: a token with expires_in ≤ 30 is returned with an
-// ExpiresAt in the past, so callers (and the future cache) will
-// consider it immediately stale. Accepted — such short-lived tokens
-// are an IdP misconfiguration for machine-to-machine flows.
+// ExpiresAt in the past, so callers (and the cache) will consider it
+// immediately stale. Accepted — such short-lived tokens are an IdP
+// misconfiguration for machine-to-machine flows.
 const DefaultTokenExpirySkew = 30 * time.Second
 
 // DefaultOAuthCacheMaxSize is the maximum number of entries in the in-memory

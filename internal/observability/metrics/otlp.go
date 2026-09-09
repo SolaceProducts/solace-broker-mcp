@@ -18,6 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"sync/atomic"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
@@ -33,7 +36,18 @@ import (
 // Reason values for mcp_otel_metrics_dropped_total{reason} — a closed set,
 // deliberately spelled identically to tracing's mcp_otel_spans_dropped_total
 // reasons (internal/observability/tracing/stats.go) so the two pairs read as
-// one vocabulary rather than two similar-but-different ones.
+// one vocabulary rather than two similar-but-different ones. Only
+// reasonExportTimeout and reasonExportError have a call site on this pair;
+// the other two are kept for a shared vocabulary, not because either can
+// fire here:
+//
+//   - reasonQueueFull: a PeriodicReader collects into a reused buffer on its
+//     own goroutine and has no queue to overflow, unlike tracing's batch
+//     span processor, where the same value is live.
+//   - reasonShutdown: Provider.Shutdown logs an incomplete flush instead of
+//     counting it — by the time that call could record anything, it has
+//     already torn down the reader the scrape reads from, so a counter
+//     touched there would be unobservable, not merely delayed.
 const (
 	reasonQueueFull     = "queue_full"
 	reasonExportTimeout = "export_timeout"
@@ -181,6 +195,35 @@ func countDataPoints(rm *metricdata.ResourceMetrics) int64 {
 type countingExporter struct {
 	next  sdkmetric.Exporter
 	stats *otlpStats
+
+	// lastWarnAt rate-limits warnDropped below: unix nanoseconds of the last
+	// WARN emitted, so a persistently failing collector logs periodically
+	// rather than once per collection interval.
+	lastWarnAt atomic.Int64
+}
+
+// warnDropInterval bounds how often a failing export logs at WARN. The
+// dropped-total counter already carries the full history; this exists only
+// to keep a real outage from flooding the log at whatever interval
+// collection happens to run.
+const warnDropInterval = 5 * time.Minute
+
+// warnDropped logs at WARN, at most once per warnDropInterval, when an
+// export drops data. Carries only the closed reason value and a count —
+// never err.Error() or the endpoint, both of which can carry collector auth
+// material from OTEL_EXPORTER_OTLP_HEADERS or a credentialed endpoint URL.
+func (e *countingExporter) warnDropped(reason string, n int64) {
+	now := time.Now().UnixNano()
+	last := e.lastWarnAt.Load()
+	if now-last < int64(warnDropInterval) {
+		return
+	}
+	if !e.lastWarnAt.CompareAndSwap(last, now) {
+		return
+	}
+	slog.Warn("OTLP metrics export failed",
+		slog.String("reason", reason),
+		slog.Int64("data_points", n))
 }
 
 // Temporality and Aggregation delegate unchanged: this wrapper only
@@ -213,18 +256,17 @@ func (e *countingExporter) Export(ctx context.Context, rm *metricdata.ResourceMe
 			reason = reasonExportTimeout
 		}
 		e.stats.recordDropped(ctx, reason, n)
+		e.warnDropped(reason, n)
 		return err
 	}
 	e.stats.recordExported(ctx, n)
 	return nil
 }
 
-// ForceFlush and Shutdown delegate to the wrapped exporter. A batch dropped
-// during shutdown is counted by Provider.Shutdown (provider.go), the only
-// caller that knows a shutdown — rather than an ordinary periodic export — is
-// in progress; this method has no visibility into WHY a later call might
-// fail, so it must not guess a reason here (mirrors tracing's
-// countingExporter.Shutdown).
+// ForceFlush and Shutdown delegate to the wrapped exporter, unclassified: an
+// incomplete shutdown flush is logged, not counted, by Provider.Shutdown one
+// layer up — see reasonShutdown's own doc comment for why a counter can't
+// carry this one. Mirrors tracing's countingExporter.Shutdown.
 func (e *countingExporter) ForceFlush(ctx context.Context) error {
 	return e.next.ForceFlush(ctx)
 }
@@ -256,7 +298,7 @@ func cumulativeTemporality(sdkmetric.InstrumentKind) metricdata.Temporality {
 // siblings — no code here reads them explicitly, matching how
 // internal/observability/tracing's otlptracegrpc.New call needs none either.
 //
-// Returns (nil, nil, err) on a construction failure — a malformed endpoint
+// Returns (nil, err) on a construction failure — a malformed endpoint
 // override, for example — rather than failing the whole metrics provider:
 // the Prometheus scrape is the capability with no opt-in gate at the
 // customer-visibility level once metrics are on at all, and a broken OTLP

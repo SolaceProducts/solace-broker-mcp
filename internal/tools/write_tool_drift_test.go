@@ -15,6 +15,7 @@
 package tools
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"testing"
@@ -78,14 +79,24 @@ func TestWriteToolDrift_ValidResponseAccepted(t *testing.T) {
 	}
 }
 
-func TestWriteToolDrift_UnexpectedFieldRejected(t *testing.T) {
+// TestWriteToolDrift_NewerBrokerAttributeAccepted is the regression test for
+// SOL-154164, and the inverse of what this test asserted when SOL-152947 first
+// added it. A broker newer than the embedded 10.26.5 spec legitimately echoes
+// attributes that spec doesn't declare. Output validation runs AFTER the
+// handler has already applied the mutation, so rejecting such a response
+// reports a successful create/update to the agent as IsError — the worst
+// possible outcome for a destructive call. An added attribute is the benign,
+// backward-compatible half of spec drift; the client-breaking half (a renamed,
+// removed, or retyped field a caller depends on) is still caught by the three
+// tests below.
+func TestWriteToolDrift_NewerBrokerAttributeAccepted(t *testing.T) {
 	schema := writeToolDriftTestSetup(t)
 	result := map[string]any{
 		"createQueue": map[string]any{
 			"data": map[string]any{
 				"msgVpnName": "default",
 				"queueName":  "orders",
-				// aBrandNewAttribute simulates a future SEMP release adding an
+				// aBrandNewAttribute simulates a newer SEMP release adding an
 				// attribute the embedded spec (and this generated schema)
 				// doesn't know about yet.
 				"aBrandNewAttribute": "surprise",
@@ -93,8 +104,55 @@ func TestWriteToolDrift_UnexpectedFieldRejected(t *testing.T) {
 			"meta": map[string]any{},
 		},
 	}
+	if err := ValidateOutput(result, schema); err != nil {
+		t.Errorf("expected an attribute a newer broker added to be tolerated, got: %v", err)
+	}
+}
+
+// TestWriteToolDrift_NewerBrokerEnvelopeKeyAccepted is the envelope-level
+// counterpart of the test above: the {"data", "meta", "links"} envelope also
+// arrives verbatim from the broker, so an added envelope key must not fail a
+// mutation that already succeeded either.
+func TestWriteToolDrift_NewerBrokerEnvelopeKeyAccepted(t *testing.T) {
+	schema := writeToolDriftTestSetup(t)
+	result := map[string]any{
+		"createQueue": map[string]any{
+			"data":       map[string]any{"msgVpnName": "default", "queueName": "orders"},
+			"meta":       map[string]any{"responseCode": float64(200)},
+			"warningsNP": []any{"a future envelope key"},
+		},
+	}
+	if err := ValidateOutput(result, schema); err != nil {
+		t.Errorf("expected an envelope key a newer broker added to be tolerated, got: %v", err)
+	}
+}
+
+// TestWriteToolDrift_NonObjectStepRejected pins the floor under SOL-154164's
+// added tolerance: a step result that isn't an object at all — the shape a
+// genuinely broken handler or a non-SEMP response body produces — is still
+// rejected. Tolerating unknown keys must not degrade into tolerating anything.
+func TestWriteToolDrift_NonObjectStepRejected(t *testing.T) {
+	schema := writeToolDriftTestSetup(t)
+	result := map[string]any{"createQueue": "not-an-object"}
 	if err := ValidateOutput(result, schema); err == nil {
-		t.Error("expected rejection for a field not in the spec's response schema, got nil error")
+		t.Error("expected rejection when a step's result is not an object, got nil error")
+	}
+}
+
+// TestWriteToolDrift_UnknownStepKeyRejected pins the other half of that floor.
+// The top-level step-keyed object is built by the executor from this tool's own
+// step IDs (composite.collectSteps), not by the broker, so an unexpected key
+// there means our own result assembly is wrong — that stays strict.
+func TestWriteToolDrift_UnknownStepKeyRejected(t *testing.T) {
+	schema := writeToolDriftTestSetup(t)
+	result := map[string]any{
+		"createQueue": map[string]any{
+			"data": map[string]any{"msgVpnName": "default", "queueName": "orders"},
+		},
+		"someOtherStep": map[string]any{"data": map[string]any{}},
+	}
+	if err := ValidateOutput(result, schema); err == nil {
+		t.Error("expected rejection for a step key the tool definition doesn't declare, got nil error")
 	}
 }
 
@@ -152,6 +210,51 @@ func TestWriteToolDrift_MissingEnvelopeDataRejected(t *testing.T) {
 	}
 }
 
+// TestCallTool_NewerBrokerAttributeIsNotReportedAsFailure reproduces
+// SOL-154164 as the agent actually experiences it, through the real CallTool
+// path (compiled-schema validation, not the ad-hoc ValidateOutput helper) with
+// the real generated create-queue output schema and a destructive annotation.
+// The handler has already mutated the broker by the time validation runs, so
+// the call must come back clean — IsError true here is a successful create
+// reported to the agent as a failure.
+func TestCallTool_NewerBrokerAttributeIsNotReportedAsFailure(t *testing.T) {
+	destructive := true
+	mgr := NewToolManager(newTestPool(t))
+
+	handler := newStubHandler("create-queue")
+	handler.outputSch = writeToolDriftTestSetup(t)
+	handler.annotations = Annotations{ReadOnly: false, Destructive: &destructive}
+	handler.handleFn = func(context.Context, *ToolContext, map[string]any) (*ToolResult, error) {
+		// Exactly what a broker newer than the embedded 10.26.5 spec returns:
+		// the configured resource, plus one attribute that release added.
+		return &ToolResult{StructuredContent: map[string]any{
+			"createQueue": map[string]any{
+				"data": map[string]any{
+					"msgVpnName":         "default",
+					"queueName":          "orders",
+					"aBrandNewAttribute": "surprise",
+				},
+				"meta": map[string]any{"responseCode": float64(200)},
+			},
+		}}, nil
+	}
+	mgr.Register(handler)
+
+	result, err := mgr.CallTool(context.Background(), "create-queue", map[string]any{
+		"broker":     "dev",
+		"msgVpnName": "default",
+	}, Identity{})
+	if err != nil {
+		t.Fatalf("expected nil protocol error, got: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected a non-nil CallToolResult")
+	}
+	if result.IsError {
+		t.Errorf("a successful create was reported to the agent as a failure: %v", result.StructuredContent)
+	}
+}
+
 // TestWriteToolIdentifierFields_ResolveAgainstRealResponseFields guards an
 // invariant composite.BuildStrictOutputSchema relies on but never checks
 // itself: every field name listed in writeToolIdentifierFields must actually
@@ -160,12 +263,10 @@ func TestWriteToolDrift_MissingEnvelopeDataRejected(t *testing.T) {
 // composite.fieldPropertiesSchema builds "properties" from ResponseFields and
 // "required" from this map independently. If the two ever disagree — a typo
 // here, a renamed field in a future spec bump, or a new write tool added with
-// the wrong identifier name — the generated schema ends up requiring a field
-// that additionalProperties:false simultaneously forbids from appearing
-// outside "properties". That schema is self-contradictory: no real broker
-// response could ever satisfy it, and the tool's output validation breaks for
-// every caller, silently, until someone notices in production. This test
-// catches that at CI time instead, against the real embedded catalog.
+// the wrong identifier name — the generated schema requires a field name no
+// broker will ever send, so every response for that tool fails output
+// validation, silently, until someone notices in production. This test catches
+// that at CI time instead, against the real embedded catalog.
 func TestWriteToolIdentifierFields_ResolveAgainstRealResponseFields(t *testing.T) {
 	operations, err := sempv2.ParseSpecs(specs.FS)
 	if err != nil {
@@ -198,8 +299,8 @@ func TestWriteToolIdentifierFields_ResolveAgainstRealResponseFields(t *testing.T
 		for _, field := range identifierFields {
 			if _, present := op.ResponseFields[field]; !present {
 				t.Errorf("%s: identifier field %q is not in operation %q's resolved ResponseFields (%v) — "+
-					"this would make BuildStrictOutputSchema produce a schema that requires %q while "+
-					"additionalProperties:false forbids it, which no real response could ever satisfy",
+					"BuildStrictOutputSchema would require %q of every response while no broker sends a "+
+					"field by that name, so every call to this tool would fail output validation",
 					name, field, op.ID, op.ResponseFields, field)
 			}
 		}

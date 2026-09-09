@@ -48,9 +48,18 @@ type Provider struct {
 	scrapeCounter metric.Int64Counter
 	resource      *sdkresource.Resource
 
+	// otlpStats is nil unless the OTLP reader was attached; Shutdown uses it
+	// to record a shutdown-time drop, so it needs a reference past New's own
+	// scope.
+	otlpStats *otlpStats
+
 	toolMetricsOnce sync.Once
 	toolMetrics     *ToolMetrics
 	toolMetricsErr  error
+
+	sempMetricsOnce sync.Once
+	sempMetrics     *SEMPMetrics
+	sempMetricsErr  error
 }
 
 // instrumentScope names the meter that owns the server's own instruments.
@@ -165,6 +174,11 @@ func New(buildVersion string, res *sdkresource.Resource, cfg config.Observabilit
 
 	if otlpStatsInstance != nil {
 		if err := otlpStatsInstance.registerInstruments(meterProvider); err != nil {
+			// meterProvider already owns the OTLP reader's ticker goroutine
+			// and gRPC connection at this point; every earlier error return
+			// in this function precedes anything being opened, so this is
+			// the one path that must clean up what it started.
+			_ = meterProvider.Shutdown(context.Background())
 			return nil, err
 		}
 	}
@@ -174,6 +188,7 @@ func New(buildVersion string, res *sdkresource.Resource, cfg config.Observabilit
 		exporter:      exporter,
 		meterProvider: meterProvider,
 		resource:      res,
+		otlpStats:     otlpStatsInstance,
 	}
 	if err := p.registerInstruments(buildVersion); err != nil {
 		return nil, err
@@ -275,6 +290,15 @@ func (p *Provider) ToolMetrics() (*ToolMetrics, error) {
 	return p.toolMetrics, p.toolMetricsErr
 }
 
+// SEMPMetrics returns the per-attempt SEMP instruments, registering them once
+// on first call and returning the same set thereafter.
+func (p *Provider) SEMPMetrics() (*SEMPMetrics, error) {
+	p.sempMetricsOnce.Do(func() {
+		p.sempMetrics, p.sempMetricsErr = NewSEMPMetrics(p.Meter(instrumentScope))
+	})
+	return p.sempMetrics, p.sempMetricsErr
+}
+
 // Shutdown flushes and stops the meter provider. cmd/server registers it as a
 // shutdown hook (SOL-153884).
 //
@@ -292,6 +316,20 @@ func (p *Provider) ToolMetrics() (*ToolMetrics, error) {
 // harmlessly on whichever hook loses the race — correct, but pure noise. One
 // hook, one shared budget, no race, is the simpler and equally-bounded
 // alternative.
+//
+// An incomplete OTLP flush logs a WARN rather than incrementing the dropped
+// counter with reasonShutdown: this call has already torn down the reader
+// that backs the scrape by the time it could record anything, so a counter
+// touched here is unobservable, not merely delayed.
 func (p *Provider) Shutdown(ctx context.Context) error {
-	return p.meterProvider.Shutdown(ctx)
+	err := p.meterProvider.Shutdown(ctx)
+	if err != nil && p.otlpStats != nil {
+		// Logged, not counted: by the time this call returns, this same
+		// Shutdown has already torn down the Prometheus reader along with
+		// everything else, so a counter incremented here could never be
+		// scraped — verified directly, not assumed. A log line is the one
+		// channel still live at this point in the process's life.
+		slog.Warn("OTLP metrics flush incomplete at shutdown")
+	}
+	return err
 }

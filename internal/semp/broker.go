@@ -112,6 +112,13 @@ func NewBrokerClient(alias string, brokerCfg *config.BrokerConfig, sempCfg *conf
 	sem := resilience.NewSemaphore(sempCfg.MaxConcurrentPerBroker)
 	limiter := resilience.NewRateLimiter(*sempCfg.RequestMinInterval)
 
+	// alias is already the display-cased name (the pool calls this function
+	// with cfg.DisplayName()), so this is the one place both protocol
+	// Senders learn it for their broker_auth_retry audit record's Broker
+	// field (SOL-152097) — matching the alias every other audit emission
+	// site names a broker by.
+	opts = append(append([]resilience.Option(nil), opts...), resilience.WithBrokerAlias(alias))
+
 	// Fair admission scheduling (SOL-153441). Built here, alongside sem and
 	// limiter, because it takes over both and must be the single instance the
 	// broker's two protocol Senders share — a per-protocol scheduler would give

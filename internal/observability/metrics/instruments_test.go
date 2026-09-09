@@ -87,6 +87,107 @@ mcp_tool_invocation_duration_seconds_count{broker="dev",error_type="",outcome="s
 	}
 }
 
+// sempSample is a fixed SEMPRequest used by the SEMP metric tests.
+var sempSample = SEMPRequest{
+	API:       "v2",
+	Broker:    "dev",
+	Operation: "getMsgVpnQueue",
+	Method:    "GET",
+	Status:    "200",
+	Address:   "broker.example.com",
+	Attempt:   1,
+}
+
+// TestSEMPMetrics_RecordLabels pins the label set on one SEMP attempt: the HTTP
+// semantic-convention keys (dots translated to underscores) and the four
+// Solace labels, with attempt rendered as a string.
+func TestSEMPMetrics_RecordLabels(t *testing.T) {
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sm, err := p.SEMPMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sm.Record(context.Background(), sempSample, 42*time.Millisecond)
+
+	const want = `
+# HELP mcp_semp_request_total Number of SEMP request attempts.
+# TYPE mcp_semp_request_total counter
+mcp_semp_request_total{api="v2",attempt="1",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com"} 1
+`
+	if err := testutil.GatherAndCompare(p.registry, strings.NewReader(want), "mcp_semp_request_total"); err != nil {
+		t.Error(err)
+	}
+}
+
+// TestSEMPMetrics_HistogramBuckets pins the eleven bucket boundaries. A 42ms
+// sample lands in the 0.05s bucket and above, so every bucket from le="0.05" up
+// is cumulative 1.
+func TestSEMPMetrics_HistogramBuckets(t *testing.T) {
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sm, err := p.SEMPMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sm.Record(context.Background(), sempSample, 42*time.Millisecond)
+
+	const want = `
+# HELP mcp_semp_request_duration_seconds Duration of a SEMP request attempt in seconds
+# TYPE mcp_semp_request_duration_seconds histogram
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.005"} 0
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.01"} 0
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.025"} 0
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.05"} 1
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.1"} 1
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.25"} 1
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="0.5"} 1
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="1"} 1
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="2.5"} 1
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="5"} 1
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="10"} 1
+mcp_semp_request_duration_seconds_bucket{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com",le="+Inf"} 1
+mcp_semp_request_duration_seconds_sum{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com"} 0.042
+mcp_semp_request_duration_seconds_count{api="v2",broker="dev",http_request_method="GET",http_response_status_code="200",operation="getMsgVpnQueue",server_address="broker.example.com"} 1
+`
+	if err := testutil.GatherAndCompare(p.registry, strings.NewReader(want), "mcp_semp_request_duration_seconds"); err != nil {
+		t.Error(err)
+	}
+}
+
+// TestSEMPMetrics_EmptyStatusOnNoResponse pins the committed no-response
+// behaviour: a try that got no response records an empty status label rather
+// than a synthetic code.
+func TestSEMPMetrics_EmptyStatusOnNoResponse(t *testing.T) {
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sm, err := p.SEMPMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	noResp := sempSample
+	noResp.Status = ""
+	sm.Record(context.Background(), noResp, time.Millisecond)
+
+	const want = `
+# HELP mcp_semp_request_total Number of SEMP request attempts.
+# TYPE mcp_semp_request_total counter
+mcp_semp_request_total{api="v2",attempt="1",broker="dev",http_request_method="GET",http_response_status_code="",operation="getMsgVpnQueue",server_address="broker.example.com"} 1
+`
+	if err := testutil.GatherAndCompare(p.registry, strings.NewReader(want), "mcp_semp_request_total"); err != nil {
+		t.Error(err)
+	}
+}
+
 // gaugeValue reads the current value of an unlabelled gauge series from the
 // provider's registry. Fails the test if the series is missing or not unique.
 func gaugeValue(t *testing.T, p *Provider, name string) float64 {

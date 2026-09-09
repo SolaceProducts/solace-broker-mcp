@@ -107,15 +107,16 @@ func captureTrace(t *testing.T, fn func()) []traceRecord {
 }
 
 // newTraceAuthenticator wires the real three components against an httptest
-// IdP. clockSkew is a parameter because the refused-cache-write path is only
-// reachable when a token's remaining lifetime falls under it.
-func newTraceAuthenticator(t *testing.T, idpURL string, clockSkew time.Duration) *sempauth.OAuthAuthenticator {
+// IdP. The cache takes no clock skew of its own — the refused-cache-write path
+// is reached by an IdP whose expires_in is at or under
+// defaults.DefaultTokenExpirySkew, which the exchanger deducts at parse time
+// (SOL-154165).
+func newTraceAuthenticator(t *testing.T, idpURL string) *sempauth.OAuthAuthenticator {
 	t.Helper()
 
 	tokenCache := cachetest.WithConfig(t, cache.CacheConfig{
-		MaxSize:   64,
-		ClockSkew: clockSkew,
-		MaxTTL:    time.Hour,
+		MaxSize: 64,
+		MaxTTL:  time.Hour,
 	})
 
 	// The retrying client, because that is what main.go passes. A plain
@@ -169,8 +170,7 @@ func Test_BrokerTokenTrace(t *testing.T) {
 	cases := []struct {
 		name             string
 		idp              http.HandlerFunc
-		clockSkew        time.Duration // zero means a sane default
-		warm             bool          // acquire once before capturing, so the captured run hits the cache
+		warm             bool // acquire once before capturing, so the captured run hits the cache
 		omitSubjectToken bool
 		wantErr          bool
 	}{
@@ -184,12 +184,11 @@ func Test_BrokerTokenTrace(t *testing.T) {
 			warm: true,
 		},
 		{
-			// A one-hour skew leaves a five-second token with a negative
-			// effective lifetime, so the cache refuses it. The acquisition
-			// still succeeds — the token is used, just not stored.
-			name:      "cold: token too short-lived to cache, still attached",
-			idp:       idpIssues(5),
-			clockSkew: time.Hour,
+			// The 30s parse-time expiry skew leaves a five-second token with
+			// a negative effective lifetime, so the cache refuses it. The
+			// acquisition still succeeds — the token is used, just not stored.
+			name: "cold: token too short-lived to cache, still attached",
+			idp:  idpIssues(5),
 		},
 		{
 			name:             "failure: no subject token on the request context",
@@ -225,15 +224,10 @@ func Test_BrokerTokenTrace(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			skew := tc.clockSkew
-			if skew == 0 {
-				skew = 10 * time.Second
-			}
-
 			idp := httptest.NewServer(tc.idp)
 			t.Cleanup(idp.Close)
 
-			auth := newTraceAuthenticator(t, idp.URL, skew)
+			auth := newTraceAuthenticator(t, idp.URL)
 
 			ctx := context.Background()
 			if !tc.omitSubjectToken {
@@ -374,7 +368,7 @@ func Test_BrokerTokenTrace_AttemptCount(t *testing.T) {
 			}))
 			t.Cleanup(idp.Close)
 
-			auth := newTraceAuthenticator(t, idp.URL, 10*time.Second)
+			auth := newTraceAuthenticator(t, idp.URL)
 			ctx := traceCtxWithSubjectToken(t)
 
 			recs := captureTrace(t, func() {
@@ -427,7 +421,7 @@ func Test_BrokerTokenTrace_CancelledCallerNamesTheCause(t *testing.T) {
 	idp := httptest.NewServer(idpIssues(3600))
 	t.Cleanup(idp.Close)
 
-	auth := newTraceAuthenticator(t, idp.URL, 10*time.Second)
+	auth := newTraceAuthenticator(t, idp.URL)
 
 	ctx, cancel := context.WithCancel(traceCtxWithSubjectToken(t))
 	cancel()
@@ -502,7 +496,7 @@ func Test_BrokerTokenTrace_CancelledDuringCacheHitClaimsNothing(t *testing.T) {
 	t.Cleanup(idp.Close)
 
 	inner := cachetest.WithConfig(t, cache.CacheConfig{
-		MaxSize: 8, ClockSkew: 10 * time.Second, MaxTTL: time.Hour,
+		MaxSize: 8, MaxTTL: time.Hour,
 	})
 
 	ctx, cancel := context.WithCancel(traceCtxWithSubjectToken(t))

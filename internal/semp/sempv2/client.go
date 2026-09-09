@@ -33,7 +33,14 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/correlationhdr"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/version"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
+
+// One named tracer per layer (SOL-152421).
+var tracer = otel.Tracer("solace-broker-mcp/semp/sempv2")
 
 // Client executes operations against a Solace broker's SEMPv2 API.
 // Implementations: HTTPClient (real), mock (tests).
@@ -152,6 +159,10 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, s
 
 	baseURL := strings.TrimSuffix(brokerCfg.URL, "/")
 
+	// Tag this client's SEMP metrics as v2. Fresh slice so the append cannot
+	// touch the caller's opts, which NewBrokerClient also passes to the v1 client.
+	opts = append([]resilience.Option{resilience.WithAPI("v2")}, opts...)
+
 	return &HTTPClient{
 		sender:        resilience.New(httpClient, sempCfg, authn, baseURL, sem, limiter, opts...),
 		baseURL:       baseURL,
@@ -167,7 +178,56 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, s
 //
 // Rate limiting is enforced before the request (new requests only, not retries).
 // Retry logic is handled by the shared resilience.Sender.
-func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string]any) (*Result, error) {
+func (c *HTTPClient) Execute(ctx context.Context, op *Operation, args map[string]any) (result *Result, err error) {
+	// One span per logical SEMP call (SOL-152421).
+	//
+	// `semp.request`, NOT `semp.attempt`: this delegates to
+	// resilience.Sender.Do, which retries internally, so this span covers the
+	// whole chain. The reserved `semp.attempt` name is left free for Story 27
+	// (SOL-152422), which instruments inside the Sender and nests under this.
+	//
+	// op.ID and the method, never the resolved URL: path params interpolate
+	// customer topology, and a span exports offsite.
+	// Read op's fields before Start so the defer closes over strings, not over
+	// op. A nil op is a programmer error and still panics — one line earlier
+	// than the buildURL call that used to be first, with the same nil-deref —
+	// but it panics BEFORE a span exists, so the deferred close never runs.
+	// Closing over op instead would deref it inside that defer, after the
+	// recover below has already run, panicking a second time during unwinding
+	// and replacing the original panic value.
+	opID, opMethod := op.ID, op.Method
+	ctx, span := tracer.Start(ctx, "semp.request", trace.WithSpanKind(trace.SpanKindClient))
+	defer func() {
+		// A panic between tracer.Start and here would otherwise close this
+		// span reporting outcome=success — Go does not populate named returns
+		// on an unwound panic, so err is still nil — pointing the error in the
+		// worst possible direction right as the process goes down. Recovering
+		// only to record the outcome accurately and then re-panicking keeps
+		// this function's panic-propagates contract intact; the deferred
+		// panic(r) runs after span.End() below, so nothing is left unclosed.
+		// Same pattern as tokenexchange.Exchange (SOL-153333).
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panicked (%T)", r)
+			defer panic(r)
+		}
+		if span.IsRecording() {
+			outcome := "success"
+			if err != nil {
+				outcome = "error"
+			}
+			span.SetAttributes(
+				attribute.String("semp.version", "v2"),
+				attribute.String("semp.operation", opID),
+				attribute.String("http.request.method", opMethod),
+				attribute.String("outcome", outcome),
+			)
+		}
+		if err != nil {
+			span.SetStatus(codes.Error, "")
+		}
+		span.End()
+	}()
+
 	reqURL, err := c.buildURL(op, args)
 	if err != nil {
 		return nil, err

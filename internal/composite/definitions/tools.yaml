@@ -224,7 +224,9 @@ tools:
       enabled VPNs in state == "down" under downCount and enabled+up VPNs with
       no non-reserved client connected under zeroConnectionCount — derived by
       probing each enabled+up VPN for a client whose clientUsername does not
-      match Solace's reserved `#*` prefix. Standby VPNs are excluded from both.
+      match Solace's reserved `#*` prefix, unless the VPN reports exactly zero
+      connections; a VPN with no connection count at all is probed rather than
+      assumed empty. Standby VPNs are excluded from both.
       Admin-disabled VPNs land in disabledCount only and are excluded from
       downCount and zeroConnectionCount. For per-service TLS status and AMQP
       support, use get-vpn-status.
@@ -275,10 +277,41 @@ tools:
       # VPNs report state==down, and standby VPNs are excluded from the count;
       # calling getMsgVpnClients on either would be wasted work (and hits an
       # admin-disabled service on some brokers).
+      #
+      # The msgVpnConnections term (SOL-154166) drops the probe for a VPN the
+      # vpns step already proved empty: zero connections means no clients of
+      # any kind, so the probe would return no rows, and the handler reads an
+      # absent byKey entry exactly as it reads an empty one — "no real client",
+      # counted under zeroConnectionCount either way. A count of 1 is NOT
+      # skippable: it is indistinguishable between the reserved #client and one
+      # real client, which is what the probe is here to resolve.
+      #
+      # The skip rests on msgVpnConnections being the VPN's total client
+      # connection count across every service, not a subset — otherwise a real
+      # client could hide behind a 0. SEMP describes it as "The current number
+      # of Client connections to the Message VPN", and Solace Insights
+      # documents the same counter as vpn.connections with six per-service
+      # siblings (smf, web, mqtt, rest_incoming, rest_outgoing, amqp). AMQP
+      # being in that family is the part worth naming: it is the one
+      # client-facing service whose SEMP per-service counter sits outside the
+      # msgVpnConnections* family (it is connectionsServiceAmqp), so it is the
+      # service one would suspect of being excluded from the total.
+      #
+      # The term is deliberately written as `ne (index .Item ...) 0.0` rather
+      # than `gt .Item.msgVpnConnections 0.0`:
+      #   - `index` returns the zero value for an absent key, where `.Item.x`
+      #     errors under missingkey=error. A broker row without the field
+      #     therefore falls back to probing (today's behavior) instead of
+      #     failing the whole list-vpns call over a field only needed to skip
+      #     work. `and` short-circuits, so the term is not even reached for
+      #     disabled/down/standby rows.
+      #   - 0.0 (not 0) because SEMP counts arrive as JSON numbers decoded into
+      #     map[string]any, i.e. float64; text/template's comparisons reject a
+      #     float64-vs-int comparison outright.
       - id: real-clients
         operation: monitor/getMsgVpnClients
         forEach: vpns
-        forEachIf: '{{and .Item.enabled (eq .Item.state "up")}}'
+        forEachIf: '{{and .Item.enabled (eq .Item.state "up") (ne (index .Item "msgVpnConnections") 0.0)}}'
         forEachKey: msgVpnName
         args:
           msgVpnName: "{{.Item.msgVpnName}}"
@@ -815,7 +848,9 @@ tools:
       as a pre-confirmation, even if it implies intent.
       Create a Message VPN. Requires msgVpnName to name the new VPN; any
       attribute omitted from msgVpnConfig is set to its broker default. Use this
-      to provision a new VPN. Fails if a VPN with the same name already exists.
+      to provision a new VPN. If a VPN with the same name already exists, this is
+      not an error: the call returns outcome:"already_exists" (existence only —
+      attributes are not compared against msgVpnConfig) instead of failing.
       msgVpnConfig accepts more attributes than listed here; call describe-semp-schema
       (operation: config/createMsgVpn) if you need the full list.
     annotations:
@@ -879,7 +914,8 @@ tools:
       Delete a Message VPN. Requires msgVpnName to identify the VPN to delete.
       This is a destructive operation that removes the VPN and all its
       configuration. The VPN must have no active client connections before
-      deletion.
+      deletion. If the VPN is already gone, this is not an error: the call
+      returns outcome:"already_absent" instead of failing.
     annotations:
       readOnly: false
       destructive: true
@@ -905,8 +941,10 @@ tools:
       a pre-confirmation, even if it implies intent.
       Create a queue in a Message VPN. Requires msgVpnName to identify the VPN
       and queueName to name the new queue; any attribute omitted from queueConfig
-      is set to its broker default. Use this to provision a new queue. Fails if a
-      queue with the same name already exists in the VPN.
+      is set to its broker default. Use this to provision a new queue. If a
+      queue with the same name already exists in the VPN, this is not an error:
+      the call returns outcome:"already_exists" (existence only — attributes
+      are not compared against queueConfig) instead of failing.
       A newly created queue has no topic subscriptions and will not attract any
       messages — call create-queue-subscription next to give it one.
       queueConfig accepts more attributes than listed here; call describe-semp-schema
@@ -988,7 +1026,9 @@ tools:
       identify the queue to delete. This is a destructive operation that removes
       the queue, discards any messages still spooled on it, and removes any
       topic subscriptions attached to it — there is no separate step to detach
-      subscriptions first.
+      subscriptions first. If the queue is already gone — including when the
+      VPN itself no longer exists — this is not an error: the call returns
+      outcome:"already_absent" instead of failing.
     annotations:
       readOnly: false
       destructive: true
@@ -1083,8 +1123,10 @@ tools:
       to (Solace wildcards > and * are accepted). A queue with no
       subscriptions attracts no messages regardless of its other settings —
       call this immediately after create-queue if the queue needs to receive
-      traffic. Fails if the queue already has this exact subscription, or if
-      the queue does not exist.
+      traffic. If the queue already has this exact subscription, this is not
+      an error: the call returns outcome:"already_exists" instead of failing.
+      It still fails if the queue itself does not exist (a missing parent, not
+      a missing subscription).
     annotations:
       readOnly: false
       destructive: false
@@ -1127,9 +1169,9 @@ tools:
       queueName, and subscriptionTopic to identify the subscription to
       remove. A successful removal is silent: the broker raises no error and
       gives no further signal that messages matching this topic have stopped
-      arriving. The call itself can still fail — for example, NOT_FOUND if
-      the subscription does not exist — and that failure does surface
-      normally.
+      arriving. If the subscription (or the queue itself) is already gone,
+      this is not an error either: the call returns outcome:"already_absent"
+      instead of failing.
     annotations:
       readOnly: false
       destructive: true
@@ -1211,8 +1253,10 @@ tools:
       Create a topic endpoint in a Message VPN. Requires msgVpnName to identify
       the VPN and topicEndpointName to name the new topic endpoint; any attribute
       omitted from topicEndpointConfig is set to its broker default. Use this to
-      provision a new topic endpoint. Fails if a topic endpoint with the same
-      name already exists in the VPN.
+      provision a new topic endpoint. If a topic endpoint with the same
+      name already exists in the VPN, this is not an error: the call returns
+      outcome:"already_exists" (existence only — attributes are not compared
+      against topicEndpointConfig) instead of failing.
       topicEndpointConfig accepts more attributes than listed here; call describe-semp-schema
       (operation: config/createMsgVpnTopicEndpoint) if you need the full list.
     annotations:
@@ -1293,7 +1337,9 @@ tools:
       Delete a topic endpoint from a Message VPN. Requires msgVpnName and
       topicEndpointName to identify the topic endpoint to delete. This is a
       destructive operation that removes the topic endpoint and discards any
-      messages still spooled on it.
+      messages still spooled on it. If the topic endpoint is already gone —
+      including when the VPN itself no longer exists — this is not an error:
+      the call returns outcome:"already_absent" instead of failing.
     annotations:
       readOnly: false
       destructive: true
@@ -1327,7 +1373,9 @@ tools:
       omitted from rdpConfig is set to its broker default. Creates only the RDP
       itself — REST consumers and queue bindings are separate resources not managed
       by this tool, so a new RDP is created disabled by default and delivers nothing
-      until those are added. Fails if an RDP with the same name already exists.
+      until those are added. If an RDP with the same name already exists, this
+      is not an error: the call returns outcome:"already_exists" (existence
+      only — attributes are not compared against rdpConfig) instead of failing.
       rdpConfig accepts more attributes than listed here; call describe-semp-schema
       (operation: config/createMsgVpnRestDeliveryPoint) if you need the full list.
     annotations:
@@ -1408,7 +1456,9 @@ tools:
       Delete a REST Delivery Point from a Message VPN. Requires msgVpnName and
       restDeliveryPointName to identify the RDP to delete. This is a destructive
       operation that permanently removes the RDP along with its REST consumers and
-      queue bindings.
+      queue bindings. If the RDP is already gone — including when the VPN itself
+      no longer exists — this is not an error: the call returns
+      outcome:"already_absent" instead of failing.
     annotations:
       readOnly: false
       destructive: true

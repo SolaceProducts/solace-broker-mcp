@@ -155,9 +155,8 @@ func TestWithAuthorization_Allow_PassesThroughToNext(t *testing.T) {
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "get-broker-status"),
 		"get-broker-status",
-		"",
-		rec.handler(),
-	)
+		"", false,
+		rec.handler())
 
 	got, err := wrapped(seeded(requestWithGroups([]string{"Ops"})))
 	if err != nil {
@@ -180,9 +179,8 @@ func TestWithAuthorization_Allow_EmitsInfoAuditWithDistinctDecision(t *testing.T
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "get-broker-status"),
 		"get-broker-status",
-		"",
-		newRecordingHandler().handler(),
-	)
+		"", false,
+		newRecordingHandler().handler())
 	if _, err := wrapped(seeded(requestWithGroups([]string{"Ops"}))); err != nil {
 		t.Fatalf("wrapper returned error: %v", err)
 	}
@@ -216,9 +214,8 @@ func TestWithAuthorization_Deny_ReturnsToolLevelErrorResult(t *testing.T) {
 	wrapped := withAuthorization(
 		emptyPolicy(t),
 		"delete-queue",
-		"",
-		newRecordingHandler().handler(),
-	)
+		"", false,
+		newRecordingHandler().handler())
 
 	got, err := wrapped(seeded(requestWithGroups([]string{"Contractors"})))
 	if err != nil {
@@ -238,9 +235,8 @@ func TestWithAuthorization_Deny_ResultShapeAndMessage(t *testing.T) {
 	wrapped := withAuthorization(
 		emptyPolicy(t),
 		"delete-queue",
-		"",
-		newRecordingHandler().handler(),
-	)
+		"", false,
+		newRecordingHandler().handler())
 	got, _ := wrapped(seeded(requestWithGroups([]string{"Contractors"})))
 
 	sc, ok := got.StructuredContent.(map[string]any)
@@ -268,7 +264,7 @@ func TestWithAuthorization_Deny_ResultShapeAndMessage(t *testing.T) {
 // Deny security invariant: next is not called; the tool never runs.
 func TestWithAuthorization_Deny_DoesNotCallNext(t *testing.T) {
 	rec := newRecordingHandler()
-	wrapped := withAuthorization(emptyPolicy(t), "delete-queue", "", rec.handler())
+	wrapped := withAuthorization(emptyPolicy(t), "delete-queue", "", false, rec.handler())
 
 	_, _ = wrapped(seeded(requestWithGroups([]string{"Contractors"})))
 
@@ -283,7 +279,7 @@ func TestWithAuthorization_Deny_EmitsWarnAuditWithDistinctDecision(t *testing.T)
 	buf, cleanup := captureSlog(t)
 	defer cleanup()
 
-	wrapped := withAuthorization(emptyPolicy(t), "delete-queue", "", newRecordingHandler().handler())
+	wrapped := withAuthorization(emptyPolicy(t), "delete-queue", "", false, newRecordingHandler().handler())
 	_, _ = wrapped(seeded(requestWithGroups([]string{"Contractors"})))
 
 	lines := authzLogLines(t, buf)
@@ -316,9 +312,8 @@ func TestWithAuthorization_MissingClaim_ReturnsToolLevelErrorResult(t *testing.T
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "get-broker-status"),
 		"get-broker-status",
-		"",
-		newRecordingHandler().handler(),
-	)
+		"", false,
+		newRecordingHandler().handler())
 
 	got, err := wrapped(seeded(requestMissingGroupsClaim()))
 	if err != nil {
@@ -346,9 +341,8 @@ func TestWithAuthorization_MissingClaim_DoesNotCallNext(t *testing.T) {
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "get-broker-status"),
 		"get-broker-status",
-		"",
-		rec.handler(),
-	)
+		"", false,
+		rec.handler())
 
 	_, _ = wrapped(seeded(requestMissingGroupsClaim()))
 
@@ -368,9 +362,8 @@ func TestWithAuthorization_MissingClaim_EmitsDistinguishableDecision(t *testing.
 	wrapped := withAuthorization(
 		policyGranting(t, []string{"Ops"}, "get-broker-status"),
 		"get-broker-status",
-		"groups",
-		newRecordingHandler().handler(),
-	)
+		"groups", false,
+		newRecordingHandler().handler())
 	_, _ = wrapped(seeded(requestMissingGroupsClaim()))
 
 	lines := authzLogLines(t, buf)
@@ -412,9 +405,8 @@ func TestWithAuthorization_NilTokenInfo_TreatsAsMissingClaim(t *testing.T) {
 			wrapped := withAuthorization(
 				policyGranting(t, []string{"Ops"}, "get-broker-status"),
 				"get-broker-status",
-				"",
-				rec.handler(),
-			)
+				"", false,
+				rec.handler())
 			// Bare context on purpose: no token means no principal, so
 			// this is the absent path. Do not wrap it in seeded().
 			got, err := wrapped(context.Background(), tc.req)
@@ -454,7 +446,7 @@ func TestAuthzMessages_IdenticalForV1(t *testing.T) {
 // Nil policy is a precondition violation — wrapper must panic (not silently
 // allow). Outer withRecovery converts the panic to a visible 500.
 func TestWithAuthorization_NilPolicy_Panics(t *testing.T) {
-	wrapped := withAuthorization(nil, "get-broker-status", "", newRecordingHandler().handler())
+	wrapped := withAuthorization(nil, "get-broker-status", "", false, newRecordingHandler().handler())
 
 	defer func() {
 		if r := recover(); r == nil {
@@ -470,7 +462,7 @@ func TestWithAuthorization_NilPolicy_Panics(t *testing.T) {
 // return a deny result and the "nil policy is a precondition violation"
 // doc claim would hold on only one input shape.
 func TestWithAuthorization_NilPolicy_PanicsOnMissingClaimBranchToo(t *testing.T) {
-	wrapped := withAuthorization(nil, "get-broker-status", "", newRecordingHandler().handler())
+	wrapped := withAuthorization(nil, "get-broker-status", "", false, newRecordingHandler().handler())
 
 	defer func() {
 		if r := recover(); r == nil {

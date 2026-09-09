@@ -30,6 +30,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 	collectormetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	"google.golang.org/grpc"
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
@@ -129,6 +130,27 @@ func sumValue(t *testing.T, reqs []*collectormetricspb.ExportMetricsServiceReque
 		}
 	}
 	return total, found
+}
+
+// sumTemporality returns the aggregation temporality of the first Sum-typed
+// metric named name found in reqs, so a test can inspect what actually went
+// on the wire rather than just its value.
+func sumTemporality(reqs []*collectormetricspb.ExportMetricsServiceRequest, name string) (metricspb.AggregationTemporality, bool) {
+	for _, req := range reqs {
+		for _, rm := range req.GetResourceMetrics() {
+			for _, sm := range rm.GetScopeMetrics() {
+				for _, m := range sm.GetMetrics() {
+					if m.GetName() != name {
+						continue
+					}
+					if sum := m.GetSum(); sum != nil {
+						return sum.GetAggregationTemporality(), true
+					}
+				}
+			}
+		}
+	}
+	return 0, false
 }
 
 // findResourceAttr returns the string value of key on the Resource attached
@@ -247,6 +269,54 @@ func TestOTLP_CumulativeTemporality(t *testing.T) {
 	}
 }
 
+// TestOTLP_CumulativeTemporality_WinsOverEnvOverride pins what
+// TestOTLP_CumulativeTemporality above cannot: that cumulativeTemporality is
+// actually wired into the exporter via WithTemporalitySelector, not just
+// defined and left unused. Removing that option from newOTLPReader leaves
+// the test above green, since it calls the free function directly — proven
+// by mutation before this test was added. Asserting on the wire, with the
+// one environment variable that would otherwise flip it, is what closes
+// that gap: OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta is a
+// real, live setting a customer might set cluster-wide for an unrelated
+// OTLP-native app sharing this process's environment.
+func TestOTLP_CumulativeTemporality_WinsOverEnvOverride(t *testing.T) {
+	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE", "delta")
+	collector := &fakeOTLPCollector{}
+	startFakeOTLPCollector(t, collector)
+
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsEnabled: true, MetricsOTLPEnabled: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = p.Shutdown(ctx)
+	})
+
+	tm, err := p.ToolMetrics()
+	if err != nil {
+		t.Fatalf("ToolMetrics: %v", err)
+	}
+	tm.Record(context.Background(), "test-tool", "test-broker", OutcomeSuccess, "", time.Millisecond)
+
+	if err := p.ForceFlush(context.Background()); err != nil {
+		t.Fatalf("ForceFlush: %v", err)
+	}
+	if !waitFor(t, 2*time.Second, func() bool { return len(collector.received()) > 0 }) {
+		t.Fatal("fake OTLP collector received nothing within 2s of ForceFlush")
+	}
+
+	got, found := sumTemporality(collector.received(), "mcp.tool.invocation")
+	if !found {
+		t.Fatal("mcp.tool.invocation not found in any OTLP export")
+	}
+	if got != metricspb.AggregationTemporality_AGGREGATION_TEMPORALITY_CUMULATIVE {
+		t.Errorf("aggregation temporality = %v, want CUMULATIVE even with the delta preference env var set"+
+			" (delta breaks Prometheus's OTLP-receiver interop, the exact case this override exists for)", got)
+	}
+}
+
 // TestOTLP_FlagOff_NoOTLPInstrumentsRegistered proves the default-off
 // contract: with MetricsOTLPEnabled false, the OTLP self-observation
 // counters never register at all, so they never appear on a scrape — the
@@ -343,6 +413,39 @@ func TestOTLP_Shutdown_RespectsTimeoutBound(t *testing.T) {
 	_ = p.Shutdown(ctx) // error expected (unreachable / deadline); only the bound is asserted
 	if elapsed := time.Since(start); elapsed > budget+500*time.Millisecond {
 		t.Errorf("Shutdown against a black hole took %s, want bounded near the %s budget", elapsed, budget)
+	}
+}
+
+// TestOTLP_Shutdown_WarnsOnIncompleteFlush pins Provider.Shutdown's WARN on
+// a flush that doesn't finish before ctx's deadline.
+//
+// Not a counter, deliberately: a scrape can never observe an increment made
+// from inside Shutdown, since the same call has already torn down the
+// Prometheus reader by the time it would run (verified directly — pointing
+// this at recordDropped instead and scraping afterward gets
+// metric.ErrReaderShutdown from the reader, not the new series). A log line
+// is the one channel that outlives the pipeline it describes.
+func TestOTLP_Shutdown_WarnsOnIncompleteFlush(t *testing.T) {
+	pointAtBlackHole(t)
+
+	p, err := New(testVersion, sdkresource.Default(), config.ObservabilityConfig{MetricsEnabled: true, MetricsOTLPEnabled: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	buf := &syncBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prev)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if shutdownErr := p.Shutdown(ctx); shutdownErr == nil {
+		t.Fatal("Shutdown against a black hole returned nil; want an incomplete-flush error to warn about")
+	}
+
+	if got := buf.String(); !strings.Contains(got, "OTLP metrics flush incomplete at shutdown") {
+		t.Errorf("no WARN logged for an incomplete shutdown flush:\n%s", got)
 	}
 }
 

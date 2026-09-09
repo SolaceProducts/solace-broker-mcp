@@ -212,11 +212,35 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	var brokerAlias string
 	var errorType metrics.ErrorType
 	var toolErr error
+	// desiredOutcome carries the SEMP audit fields for a desired-state noop
+	// (SOL-153341) to logToolResult without threading them through toolErr —
+	// see the classifyDesiredStateOutcome branch below for why.
+	var desiredOutcome *desiredStateOutcome
 	// auditArgsHash is set only for a destructive call with the audit log on,
 	// and only once the arguments have been validated. Its presence is what
 	// tells the defer to emit the operation record, so a call that never
 	// reached the destructive gate emits none.
 	var auditArgsHash string
+
+	// The tool-dispatch span (SOL-152421). The reassigned ctx is what every
+	// layer below receives — threading context.Background() anywhere below
+	// detaches their spans and silently yields zero exemplars (SOL-152419).
+	// TestCallTool_LatencyBucketCarriesTheDispatchSpansTraceID is what fails if
+	// the observation site below stops seeing this span.
+	ctx, span := tracer.Start(ctx, dispatchSpanName)
+
+	// Registered BEFORE the emission defer below, so LIFO runs it AFTER that
+	// one. Load-bearing: that defer reclassifies a recovered panic, and the
+	// span has to report the same cause the log line and the metric do.
+	// Reversed, the span reports nothing while both of them say `panic`.
+	// Pinned by the panic case of
+	// TestRequestPathSpans_SpanAndMetricAgreeOnTheSameCall.
+	//
+	// canonicalBrokerLabel, not the raw alias, for the same two reasons the
+	// metric uses it — see endDispatchSpan.
+	defer func() {
+		endDispatchSpan(ctx, span, name, canonicalBrokerLabel(m.pool, brokerAlias), errorType, toolErr)
+	}()
 
 	defer func() {
 		// Panic detection: this defer runs during unwinding, before the
@@ -232,7 +256,7 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 
 		// The log line uses the raw alias for diagnostics; the metric label is
 		// canonicalized to a bounded set.
-		logToolResult(ctx, name, &brokerAlias, start, &errorType, &toolErr, id)
+		logToolResult(ctx, name, &brokerAlias, start, &errorType, &toolErr, desiredOutcome, id)
 		recordToolInvocation(ctx, m.metrics, name, canonicalBrokerLabel(m.pool, brokerAlias), start, errorType, toolErr)
 
 		// One operation record per destructive call, emitted here so it
@@ -343,8 +367,40 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 	}
 	toolResult, handleErr := handler.Handle(ctx, tc, handlerParams)
 	if handleErr != nil {
-		errorType = metrics.ErrorTypeExecutionError
 		toolErr = fmt.Errorf("executing tool %q: %w", name, handleErr)
+		// SOL-153341: ALREADY_EXISTS on a create and NOT_FOUND on a delete
+		// both mean the desired state already holds — for an idempotent
+		// workflow that's success, not failure. Checked before the generic
+		// execution_error branch so these two cases never reach it.
+		//
+		// Dispatch here and in logToolResult keys on desiredOutcome != nil,
+		// not on errorType or toolErr's value — so neither is ever set to a
+		// sentinel outside metrics.ErrorType's closed set (SOL-152086):
+		// toolErr goes back to nil (a non-nil toolErr means "the call
+		// failed" to every other consumer that infers from it, including
+		// SOL-152086's per-tool metrics) and errorType is simply never
+		// touched, staying at its zero value.
+		if outcome := classifyDesiredStateOutcome(handleErr); outcome != nil {
+			desiredOutcome = outcome
+			toolErr = nil
+			result, valErr := m.buildValidatedResult(rt, name, desiredStateStructuredContent(outcome), false)
+			if valErr != nil {
+				toolErr = valErr
+				// Literal, direct assignments (not fed from buildValidatedResult's
+				// own return) so audit_error_type_drift_test.go's static scanner
+				// — which resolves errorType only from a literal/named constant
+				// or a classifyBrokerError-shaped call, never from an arbitrary
+				// helper's return — can still verify these two values against
+				// audit.ErrorTypes().
+				if errors.Is(valErr, errOutputSchemaInvalid) {
+					errorType = metrics.ErrorTypeOutputValidationError
+				} else {
+					errorType = metrics.ErrorTypeMarshalError
+				}
+			}
+			return result, nil
+		}
+		errorType = metrics.ErrorTypeExecutionError
 		return m.buildErrorResult(toolErr, brokerAlias), nil
 	}
 
@@ -360,31 +416,61 @@ func (m *ToolManager) CallTool(ctx context.Context, name string, params map[stri
 		return buildLocalErrorResult(toolErr), nil
 	}
 
-	// Validate output against schema. This also gives us the compact JSON
-	// encoding of StructuredContent, which we reuse below instead of
-	// marshalling it a second time.
-	resultJSON, err := validateAgainstCompiledSchema(toolResult.StructuredContent, rt.output, "output validation failed")
-	if err != nil {
-		errorType = metrics.ErrorTypeOutputValidationError
-		toolErr = fmt.Errorf("tool %q output validation: %w", name, err)
-		return buildLocalErrorResult(toolErr), nil
+	result, valErr := m.buildValidatedResult(rt, name, toolResult.StructuredContent, toolResult.IsError)
+	if valErr != nil {
+		toolErr = valErr
+		if errors.Is(valErr, errOutputSchemaInvalid) {
+			errorType = metrics.ErrorTypeOutputValidationError
+		} else {
+			errorType = metrics.ErrorTypeMarshalError
+		}
 	}
+	return result, nil
+}
 
+// errOutputSchemaInvalid and errOutputMarshalFailed distinguish
+// buildValidatedResult's two failure modes via errors.Is, rather than the
+// function returning a metrics.ErrorType directly. audit_error_type_drift_test.go's
+// static scanner resolves every errorType assignment from a literal, a named
+// constant, or the first return value of a classifyBrokerError-shaped
+// function (error_type first, one call feeding one assignment) — a
+// three-way-return helper whose success case has no error_type at all (as
+// buildValidatedResult's does) doesn't fit that shape. Keeping the literal
+// metrics.ErrorType* assignments at the call site, gated on which sentinel
+// wraps toolErr, keeps every emit site scannable.
+var (
+	errOutputSchemaInvalid = errors.New("output validation failed")
+	errOutputMarshalFailed = errors.New("marshalling result failed")
+)
+
+// buildValidatedResult validates structuredContent against rt's compiled
+// output schema, then wraps it in a CallToolResult with the TextContent
+// fallback (the compact JSON validateAgainstCompiledSchema already produced,
+// re-indented — see the comment this replaces for why that avoids a second
+// marshal). This is the one path both a handler's real result and a
+// classifyDesiredStateOutcome noop go through, so the two can never drift
+// out of sync with the declared output schema unnoticed the way the noop
+// path once did (SOL-153341 review: it used to build and return its own
+// CallToolResult directly, bypassing this validation entirely).
+func (m *ToolManager) buildValidatedResult(rt *registeredTool, name string, structuredContent map[string]any, isError bool) (*mcp.CallToolResult, error) {
 	// Re-indent those same bytes for the TextContent fallback — byte-for-byte
-	// what json.MarshalIndent(toolResult.StructuredContent, "", "  ") would
-	// have produced (MarshalIndent is itself Marshal followed by Indent), but
+	// what json.MarshalIndent(structuredContent, "", "  ") would have
+	// produced (MarshalIndent is itself Marshal followed by Indent), but
 	// without a second reflection-based marshal of the same value.
+	resultJSON, err := validateAgainstCompiledSchema(structuredContent, rt.output, "output validation failed")
+	if err != nil {
+		wrapped := fmt.Errorf("tool %q: %w: %w", name, errOutputSchemaInvalid, err)
+		return buildLocalErrorResult(wrapped), wrapped
+	}
 	var indented bytes.Buffer
 	if err := json.Indent(&indented, resultJSON, "", "  "); err != nil {
-		errorType = metrics.ErrorTypeMarshalError
-		toolErr = fmt.Errorf("marshalling result for %q: %w", name, err)
-		return buildLocalErrorResult(toolErr), nil
+		wrapped := fmt.Errorf("tool %q: %w: %w", name, errOutputMarshalFailed, err)
+		return buildLocalErrorResult(wrapped), wrapped
 	}
-
 	return &mcp.CallToolResult{
-		StructuredContent: toolResult.StructuredContent,
+		StructuredContent: structuredContent,
 		Content:           []mcp.Content{&mcp.TextContent{Text: indented.String()}},
-		IsError:           toolResult.IsError,
+		IsError:           isError,
 	}, nil
 }
 
@@ -494,20 +580,34 @@ func stripBrokerParam(params map[string]any) map[string]any {
 }
 
 // logToolResult is called via defer to log every tool invocation. On success
-// (toolErr is nil) it logs at INFO. On failure it logs at ERROR with the
-// error type and, for SEMP errors, the HTTP status and operation.
+// (outcome is nil, toolErr is nil) it logs at INFO. A desired-state noop
+// (SOL-153341 — outcome is non-nil) also logs at INFO, with a "desired_state"
+// field, since the ticket defines it as success, not failure. Any other
+// failure logs at ERROR with the error type and, for SEMP errors, the HTTP
+// status and operation.
+//
+// Dispatch is keyed on outcome and *toolErr's nilness, not on *errorType:
+// CallTool never sets errorType to a desired-state sentinel at all (staying
+// inside metrics.ErrorType's closed set, SOL-152086), and clears toolErr
+// back to nil for a desired-state noop — a non-nil toolErr means "the call
+// failed" everywhere else a consumer might infer from it, including
+// SOL-152086's per-tool metrics, which key outcome=error off exactly that
+// signal. The SEMP audit fields for the noop case travel via the outcome
+// parameter instead of toolErr.
 //
 // A free function rather than a ToolManager method so every tool emits the
 // same audit line, including standalone tools registered outside the manager
-// (list-brokers in register.go). Brokerless tools log broker=none, matching the
-// metric label.
+// (list-brokers in register.go, describe-semp-schema) — neither ever
+// produces a desiredStateOutcome, so both pass nil for outcome. Brokerless
+// tools and pre-resolution failures log broker=none, matching the metric
+// label, rather than omitting the field.
 //
 // The id argument carries per-invocation audit identity (SOL-149606). It is
 // passed through slog.Any so Identity.LogValue is invoked once at emit time
 // — in disabled mode the LogValuer returns an empty group, so the JSON
 // handler emits no identity key at all (byte-identical to pre-SOL-149606
 // log lines).
-func logToolResult(ctx context.Context, tool string, broker *string, start time.Time, errorType *metrics.ErrorType, toolErr *error, id Identity) {
+func logToolResult(ctx context.Context, tool string, broker *string, start time.Time, errorType *metrics.ErrorType, toolErr *error, outcome *desiredStateOutcome, id Identity) {
 	dur := time.Since(start)
 
 	// Brokerless tools and pre-resolution failures carry no alias; the field
@@ -516,6 +616,41 @@ func logToolResult(ctx context.Context, tool string, broker *string, start time.
 	brokerLabel := *broker
 	if brokerLabel == "" {
 		brokerLabel = brokerLabelNone
+	}
+
+	// SOL-153341: a desired-state noop (ALREADY_EXISTS on a create, NOT_FOUND
+	// on a delete) is not a failure, and logging it at ERROR would page
+	// dashboards/alerts on something the ticket explicitly defines as
+	// success. Logged at INFO instead, with a "desired_state" field
+	// distinguishing it from an ordinary success line — named to avoid
+	// colliding with the unrelated, closed three-value "outcome" vocabulary
+	// docs/observability.md defines for metrics/audit/traces (see that doc's
+	// Outcome Vocabulary section; note this line's own "outcome" attr below
+	// is exactly that vocabulary's "success" value, which is why the noop
+	// signal needed a name of its own) — so anyone reading the audit trail
+	// can still see that SEMP returned ALREADY_EXISTS/NOT_FOUND rather than a
+	// fresh create/delete. Checked before the plain-success branch below
+	// since toolErr is nil for this case too — outcome is the discriminator.
+	if outcome != nil {
+		attrs := make([]slog.Attr, 0, 9)
+		attrs = append(attrs, slog.String("tool", tool))
+		attrs = append(attrs, slog.String("broker", brokerLabel))
+		attrs = append(attrs,
+			slog.String("outcome", "success"),
+			slog.String("desired_state", string(outcome.Outcome)),
+			slog.Duration("duration", dur),
+			slog.Any("", id))
+		// outcome.Detail is sempErr.Error() — one of the audited types (see
+		// the comment on the ERROR branch below) whose Error() renders only
+		// broker- or server-generated text, so it's safe to log verbatim
+		// here too.
+		attrs = append(attrs,
+			slog.String("detail", outcome.Detail),
+			slog.Int("semp_code", outcome.SEMPCode),
+			slog.String("semp_status", outcome.SEMPStatus),
+			slog.String("operation", outcome.Operation))
+		slog.LogAttrs(ctx, slog.LevelInfo, "tool invoked", attrs...)
+		return
 	}
 
 	if *toolErr == nil {

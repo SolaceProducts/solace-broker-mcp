@@ -933,6 +933,18 @@ All management tools return a step-keyed envelope whose single key maps to the
 SEMPv2 response: the created or updated object for `create-*`/`update-*`, and an
 empty object for `delete-*`.
 
+**Exception: a duplicate create, or a delete of an object already gone, is not an
+error.** Creating an object that already exists, or deleting one that's already
+absent, both mean the caller's desired state already held — the call comes back
+`isError: false` with a different shape instead of the step-keyed envelope above:
+`{"outcome": "already_exists" | "already_absent", "changed": false, "message": "..."}`.
+`already_exists` additionally carries `attributes_verified: false` — this only
+confirms an object of that name exists, not that its configuration matches the
+request; there is no attribute comparison. `already_absent` covers both an already-gone
+target and a delete under an already-gone parent VPN. A caller that only checks
+`isError` will see either case as an ordinary success; read `outcome` to tell a
+no-op apart from a fresh create/delete.
+
 ### create-message-vpn
 
 Create a Message VPN. Fails if one with the same name already exists.
