@@ -21,6 +21,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,6 +34,50 @@ import (
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/sempv2"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/tools"
 )
+
+// scrapeMetrics renders p's /metrics surface directly, without a real HTTP
+// round trip.
+func scrapeMetrics(t *testing.T, p *metrics.Provider) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/metrics", nil)
+	p.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("scrape status = %d, want 200", rec.Code)
+	}
+	return rec.Body.String()
+}
+
+// droppedExportTimeoutCount extracts mcp_otel_metrics_dropped_total{reason=
+// "export_timeout"}'s current value from a scrape body, or (0, false) if the
+// series isn't there yet.
+func droppedExportTimeoutCount(t *testing.T, body string) (float64, bool) {
+	t.Helper()
+	for _, line := range strings.Split(body, "\n") {
+		if !strings.HasPrefix(line, `mcp_otel_metrics_dropped_total{`) || !strings.Contains(line, `reason="export_timeout"`) {
+			continue
+		}
+		fields := strings.Fields(line)
+		var v float64
+		if _, err := fmt.Sscanf(fields[len(fields)-1], "%f", &v); err != nil {
+			t.Fatalf("parsing dropped-total line %q: %v", line, err)
+		}
+		return v, true
+	}
+	return 0, false
+}
+
+func waitForCondition(t *testing.T, timeout time.Duration, cond func() bool) bool {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return cond()
+}
 
 // TestOTLPMetricsUnreachableCollector_DoesNotDegradeToolCallLatency is
 // SOL-152418 (Story 46)'s own AC: "An unreachable collector must not degrade
@@ -49,6 +94,13 @@ import (
 // (ToolMetrics.Record, an in-memory OTel aggregation write) truly never
 // waits on the same network I/O the periodic OTLP push does on its own,
 // decoupled background goroutine.
+//
+// The timed loop only starts once a real stuck export is already
+// confirmed in flight (the wait on mcp_otel_metrics_dropped_total below),
+// and the same counter must keep advancing across the loop — otherwise the
+// SDK's default 60s collection interval would let this test's own
+// sub-second run finish before the reader ever attempts its first export,
+// proving nothing about the condition the AC actually describes.
 func TestOTLPMetricsUnreachableCollector_DoesNotDegradeToolCallLatency(t *testing.T) {
 	// 192.0.2.0/24 (TEST-NET-1, RFC 5737) is reserved for documentation and
 	// never routes — the same black hole
@@ -61,6 +113,14 @@ func TestOTLPMetricsUnreachableCollector_DoesNotDegradeToolCallLatency(t *testin
 	// the test itself fast; shortening it does not change what is being
 	// proven — the tool-call path must never wait on this timeout at all.
 	t.Setenv("OTEL_METRIC_EXPORT_TIMEOUT", "300")
+	// The SDK's default 60s collection interval means the reader's first
+	// export attempt would never happen inside this test's own (sub-second)
+	// run — proven by measurement, not assumed: the loop below finishes in
+	// ~15ms. Without this, the test passes whether or not a stuck export is
+	// actually in flight while it runs, which is the one condition the AC
+	// asks it to cover. Shortened so a real stuck export exists to measure
+	// against before the timed loop starts.
+	t.Setenv("OTEL_METRIC_EXPORT_INTERVAL", "10")
 
 	broker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -120,6 +180,21 @@ func TestOTLPMetricsUnreachableCollector_DoesNotDegradeToolCallLatency(t *testin
 
 	mgr := tools.NewToolManagerFromComposite(pool, []composite.CompositeTool{tool}, executor, tools.WithToolMetrics(tm))
 
+	// Wait for a real stuck export to exist before measuring anything: with
+	// the 10ms interval above, the reader should already be failing against
+	// the black hole in the background by the time this returns. Without
+	// this wait, the timed loop below could still finish before the
+	// reader's first attempt, proving nothing about the condition the AC
+	// actually asks about.
+	if !waitForCondition(t, 5*time.Second, func() bool {
+		n, found := droppedExportTimeoutCount(t, scrapeMetrics(t, mp))
+		return found && n > 0
+	}) {
+		t.Fatal("mcp_otel_metrics_dropped_total{reason=\"export_timeout\"} never appeared within 5s; " +
+			"the black hole never produced a stuck export to measure against")
+	}
+	droppedBefore, _ := droppedExportTimeoutCount(t, scrapeMetrics(t, mp))
+
 	// A generous per-call ceiling: this is not a tight performance budget,
 	// it is the "did this silently start waiting on OTLP_METRIC_EXPORT
 	// network I/O" tripwire — any of the black hole's timeouts above (300ms
@@ -140,5 +215,19 @@ func TestOTLPMetricsUnreachableCollector_DoesNotDegradeToolCallLatency(t *testin
 		if elapsed > perCallCeiling {
 			t.Errorf("call %d took %s with an unreachable OTLP collector, want under %s — the request path may be waiting on OTLP export", i, elapsed, perCallCeiling)
 		}
+	}
+
+	// Confirms the black hole was still actively failing exports through and
+	// past the loop above, not just once before it started. The per-attempt
+	// timeout (300ms) is longer than the whole 20-call loop (~microseconds
+	// each), so the counter is not expected to have advanced again the
+	// instant the loop ends — waited for, not asserted immediately, exactly
+	// so this doesn't overstate what a single fixed-size loop can prove.
+	if !waitForCondition(t, 2*time.Second, func() bool {
+		n, found := droppedExportTimeoutCount(t, scrapeMetrics(t, mp))
+		return found && n > droppedBefore
+	}) {
+		t.Error("dropped export_timeout count never advanced past its pre-loop value within 2s; " +
+			"the collector may have stopped being unreachable partway through")
 	}
 }
