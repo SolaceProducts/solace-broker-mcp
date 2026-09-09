@@ -51,6 +51,13 @@ func (t *metricsTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		status = strconv.Itoa(resp.StatusCode)
 	}
 
+	// req.Context(), never a fresh one: it carries the caller's `semp.request`
+	// span, and the metrics SDK reads that span off the observation context to
+	// attach the trace exemplar a slow bucket links to (SOL-152419). A bare
+	// context here still records a correct histogram and silently emits no
+	// exemplar, with no error on any surface —
+	// TestExecute_LatencyBucketCarriesTheRequestSpansTraceID (internal/semp/sempv2)
+	// is what catches it, including across a retried attempt.
 	t.recorder.Record(req.Context(), metrics.SEMPRequest{
 		API:       t.api,
 		Broker:    t.brokerAlias,
