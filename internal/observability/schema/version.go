@@ -29,8 +29,11 @@
 package schema
 
 // MetricsSchemaVersion is stamped onto every metrics record the server emits.
-// V1 baseline. Bump on any backwards-incompatible change to the metrics shape.
-const MetricsSchemaVersion = "1.0"
+// Bump the minor component on an additive change (a new metric), the major
+// component on anything else — see docs/observability.md, "The schema is
+// additive-only within a major version". 1.1 (SOL-152093): added the
+// mcp_semp_request_total and mcp_semp_request_duration_seconds families.
+const MetricsSchemaVersion = "1.1"
 
 // AuditSchemaVersion is stamped onto every audit-log record the server emits.
 // Bump the minor component on an additive change (a new field), the major

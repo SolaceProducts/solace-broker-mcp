@@ -29,9 +29,11 @@ import (
 
 	"github.com/SolaceProducts/solace-broker-mcp/internal/config"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/defaults"
+	"github.com/SolaceProducts/solace-broker-mcp/internal/observability/metrics"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/auth"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/semp/resilience"
 	"github.com/SolaceProducts/solace-broker-mcp/internal/version"
+	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 )
 
 // newTestClientWith returns an HTTPClient pointed at srv using the supplied
@@ -81,6 +83,56 @@ func newTestClient(t *testing.T, srv *httptest.Server) *HTTPClient {
 }
 
 const successEnvelope = `<rpc-reply><rpc><show><version/></show></rpc><execute-result code="ok"/></rpc-reply>`
+
+// TestExecute_RecordsSEMPMetric proves a v1 call records one attempt tagged
+// api="v1", operation="SEMPv1", method POST, with the attempt number and status.
+func TestExecute_RecordsSEMPMetric(t *testing.T) {
+	prov, err := metrics.New("vtest", sdkresource.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sm, err := prov.SEMPMetrics()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(successEnvelope))
+	}))
+	defer srv.Close()
+
+	jar, err := resilience.NewSafeCookieJar()
+	if err != nil {
+		t.Fatalf("NewSafeCookieJar: %v", err)
+	}
+	brokerCfg := &config.BrokerConfig{URL: srv.URL, Auth: config.AuthConfig{Mode: config.AuthModeBasic}}
+	retries := 0
+	minInterval := time.Duration(0)
+	sempCfg := &config.SEMPConfig{
+		RequestTimeoutDuration: 2 * time.Second,
+		Retries:                &retries,
+		RequestMinInterval:     &minInterval,
+		RetryMinInterval:       1 * time.Millisecond,
+		RetryMaxInterval:       10 * time.Millisecond,
+	}
+	client, err := NewHTTPClient(brokerCfg, sempCfg, resilience.NewSemaphore(10), resilience.NewRateLimiter(0),
+		auth.NewBasicAuthenticator("user", "pass", jar), jar, resilience.WithMetrics(sm, "test-broker"))
+	if err != nil {
+		t.Fatalf("NewHTTPClient: %v", err)
+	}
+
+	if _, err := client.Execute(context.Background(), `<rpc><show><version/></show></rpc>`); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	prov.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), "GET", "/metrics", nil))
+	body := rec.Body.String()
+	want := `mcp_semp_request_total{api="v1",attempt="1",broker="test-broker",http_request_method="POST",http_response_status_code="200",operation="SEMPv1",server_address="127.0.0.1"} 1`
+	if !strings.Contains(body, want) {
+		t.Errorf("scrape missing series:\n%s\n--- got ---\n%s", want, body)
+	}
+}
 
 // TestExecute_OversizedResponseBody_ReturnsTypedError verifies that a broker
 // (or MITM) streaming more than MaxSEMPResponseBytes fails fast with

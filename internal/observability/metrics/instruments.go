@@ -17,6 +17,7 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -185,4 +186,69 @@ func (t *ToolMetrics) DecActive(ctx context.Context) {
 		return
 	}
 	t.activeRequests.Add(ctx, -1)
+}
+
+// SEMPMetrics holds the two SEMP instruments: a request counter and a duration
+// histogram, both written once per attempt. Methods are safe to call on nil.
+type SEMPMetrics struct {
+	requests metric.Int64Counter
+	duration metric.Float64Histogram
+}
+
+// SEMPRequest is the set of label values for one SEMP request attempt, one
+// field per metric label.
+type SEMPRequest struct {
+	API       string // "v1" or "v2"
+	Broker    string // operator's configured alias
+	Operation string // SEMP operation name
+	Method    string // HTTP request method
+	Status    string // HTTP status as a string; empty on no response (semconv types this int; string carries the no-response case)
+	Address   string // server host
+	Attempt   int    // retry attempt, 1-based
+}
+
+// NewSEMPMetrics registers the two SEMP instruments. The exporter builds their
+// Prometheus names from the instrument name and unit. Buckets start higher than
+// the tool histogram: a SEMP call is a network round-trip.
+func NewSEMPMetrics(meter metric.Meter) (*SEMPMetrics, error) {
+	requests, err := meter.Int64Counter(
+		"mcp.semp.request",
+		metric.WithDescription("Number of SEMP request attempts."),
+		metric.WithUnit("1"))
+	if err != nil {
+		return nil, fmt.Errorf("register mcp_semp_request_total: %w", err)
+	}
+
+	duration, err := meter.Float64Histogram(
+		"mcp.semp.request.duration",
+		metric.WithDescription("Duration of a SEMP request attempt in seconds"),
+		metric.WithExplicitBucketBoundaries(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+		metric.WithUnit("s"))
+	if err != nil {
+		return nil, fmt.Errorf("register mcp_semp_request_duration_seconds: %w", err)
+	}
+
+	return &SEMPMetrics{requests: requests, duration: duration}, nil
+}
+
+// Record writes one attempt to both instruments. HTTP labels use OTel
+// semantic-convention keys; the exporter turns the dots into underscores. Safe
+// to call on nil.
+func (s *SEMPMetrics) Record(ctx context.Context, r SEMPRequest, dur time.Duration) {
+	if s == nil {
+		return
+	}
+	// attempt goes on the counter only; off the histogram it would multiply the
+	// bucket series by the retry cap.
+	base := []attribute.KeyValue{
+		attribute.String("http.request.method", r.Method),
+		attribute.String("http.response.status_code", r.Status),
+		attribute.String("server.address", r.Address),
+		attribute.String("broker", r.Broker),
+		attribute.String("api", r.API),
+		attribute.String("operation", r.Operation),
+	}
+
+	s.requests.Add(ctx, 1, metric.WithAttributes(append(base, attribute.String("attempt", strconv.Itoa(r.Attempt)))...))
+	s.duration.Record(ctx, dur.Seconds(), metric.WithAttributes(base...))
 }

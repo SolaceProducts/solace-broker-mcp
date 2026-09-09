@@ -1138,8 +1138,49 @@ func main() {
 		}()
 	}
 
+	// Must precede pool creation: the SEMP recorder must exist before broker
+	// clients are built. nil when metrics are off or the build fails.
+	var metricsProvider *metrics.Provider
+	var toolMetrics *metrics.ToolMetrics
+	var sempMetrics *metrics.SEMPMetrics
+	var metricsBuildErr error
+	if metrics.Enabled(cfg.Observability) {
+		if metricsProvider, metricsBuildErr = metrics.New(version.Version(), res); metricsBuildErr != nil {
+			slog.Error("metrics provider build failed", slog.String("error", metricsBuildErr.Error()))
+		} else {
+			if tm, tmErr := metricsProvider.ToolMetrics(); tmErr != nil {
+				slog.Error("tool metrics unavailable", slog.String("error", tmErr.Error()))
+			} else {
+				toolMetrics = tm
+			}
+			if sm, smErr := metricsProvider.SEMPMetrics(); smErr != nil {
+				slog.Error("SEMP metrics unavailable", slog.String("error", smErr.Error()))
+			} else {
+				sempMetrics = sm
+			}
+		}
+	}
+
+	// mcp_panic_recovered_total{boundary} (SOL-154037): the one counter both
+	// request-path recovery nets increment — recovery.HTTPMiddleware (wrapped
+	// around the mux by buildRootHandler below) and withRecovery (installed by
+	// RegisterWithServer below). Both reach it as process state rather than
+	// through a parameter; see the package doc on internal/observability/panics
+	// for why. Registered here, immediately after the provider itself is
+	// built and well before tool registration, the mux, or startServer below
+	// — so there is no window in which a request could be served before the
+	// counter exists. With no provider (metrics off, or its build failed)
+	// the counter is never registered and both sites' increments are no-ops.
+	// Recovery itself is unconditional either way, so a failure here costs a
+	// signal, not a safety net.
+	if metricsProvider != nil {
+		if err := panics.Register(metricsProvider.MeterProvider()); err != nil {
+			slog.Error("panic counter unavailable: registration failed", slog.String("error", err.Error()))
+		}
+	}
+
 	// 4. Create broker pool
-	pool := semp.NewBrokerPool(cfg, exchanger)
+	pool := semp.NewBrokerPool(cfg, exchanger, semp.WithSEMPMetrics(sempMetrics))
 	// Release per-broker rate-limiter tickers (and any other client-held
 	// resources) on the normal shutdown path. The defer fires after main()
 	// returns — i.e. after httpServer.Shutdown completes — so no in-flight
@@ -1198,40 +1239,6 @@ func main() {
 		Name:    "solace-broker-mcp",
 		Version: version.Version(),
 	}, nil)
-
-	// Build the metrics provider before the manager and the /mcp listener, so the
-	// recorder is wired before any request is served. nil when off or the build
-	// fails (recorder methods are nil-safe); the listener starts later.
-	var metricsProvider *metrics.Provider
-	var toolMetrics *metrics.ToolMetrics
-	var metricsBuildErr error
-	if metrics.Enabled(cfg.Observability) {
-		if metricsProvider, metricsBuildErr = metrics.New(version.Version(), res); metricsBuildErr != nil {
-			slog.Error("metrics provider build failed", slog.String("error", metricsBuildErr.Error()))
-		} else if tm, tmErr := metricsProvider.ToolMetrics(); tmErr != nil {
-			slog.Error("tool metrics unavailable", slog.String("error", tmErr.Error()))
-		} else {
-			toolMetrics = tm
-		}
-	}
-
-	// mcp_panic_recovered_total{boundary} (SOL-154037): the one counter both
-	// request-path recovery nets increment — recovery.HTTPMiddleware (wrapped
-	// around the mux by buildRootHandler below) and withRecovery (installed by
-	// RegisterWithServer below). Both reach it as process state rather than
-	// through a parameter; see the package doc on internal/observability/panics
-	// for why. Registered here, immediately after the provider itself is
-	// built and well before tool registration, the mux, or startServer below
-	// — so there is no window in which a request could be served before the
-	// counter exists. With no provider (metrics off, or its build failed)
-	// the counter is never registered and both sites' increments are no-ops.
-	// Recovery itself is unconditional either way, so a failure here costs a
-	// signal, not a safety net.
-	if metricsProvider != nil {
-		if err := panics.Register(metricsProvider.MeterProvider()); err != nil {
-			slog.Error("panic counter unavailable: registration failed", slog.String("error", err.Error()))
-		}
-	}
 
 	// 8. Create the tool manager and register every tool the server exposes.
 	// All registrations happen in one block so the log line below is a

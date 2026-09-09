@@ -120,6 +120,10 @@ func NewHTTPClient(brokerCfg *config.BrokerConfig, sempCfg *config.SEMPConfig, s
 
 	baseURL := strings.TrimSuffix(brokerCfg.URL, "/")
 
+	// Tag this client's SEMP metrics as v1. Fresh slice so the append cannot
+	// touch the caller's opts, which NewBrokerClient also passes to the v2 client.
+	opts = append([]resilience.Option{resilience.WithAPI("v1")}, opts...)
+
 	return &HTTPClient{
 		sender:        resilience.New(httpClient, sempCfg, authn, baseURL, sem, limiter, opts...),
 		baseURL:       baseURL,
